@@ -1,0 +1,56 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: gopernicus-postgres
+    restart: always
+    command: postgres -c ssl=off
+    environment:
+      POSTGRES_USER: db_user
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: gopernicus_db
+      PGDATA: /data/postgres
+    volumes:
+      - ./data/postgres-data:/data/postgres
+    ports:
+      - "5432:5432"
+    networks:
+      - gopernicus-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U db_user -d gopernicus_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: gopernicus-redis
+    restart: always
+    command: redis-server --appendonly yes
+    volumes:
+      - ./data/redis-data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - gopernicus-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.54
+    container_name: gopernicus-jaeger
+    restart: always
+    ports:
+      - "16686:16686" # Jaeger UI
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    networks:
+      - gopernicus-network
+
+networks:
+  gopernicus-network:
+    driver: bridge

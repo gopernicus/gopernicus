@@ -1,0 +1,13 @@
+{{define "layout:marketing.text"}}
+{{if .Brand.Name}}{{.Brand.Name}}{{else}}Your Company{{end}}
+================================================================================
+
+{{.Content}}
+
+--------------------------------------------------------------------------------
+You received this email because you subscribed to our mailing list.
+{{if .Brand.UnsubscribeURL}}
+Unsubscribe: {{.Brand.UnsubscribeURL}}
+{{end}}
+{{if .Brand.Address}}{{.Brand.Address}}{{end}}
+{{end}}

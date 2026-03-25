@@ -1,0 +1,9 @@
+Verify your email
+{{if .DisplayName}}
+Hi {{.DisplayName}},
+{{end}}
+Your verification code is: {{.Code}}
+
+This code expires in {{.ExpiresIn}}.
+
+If you didn't create an account, you can safely ignore this email.

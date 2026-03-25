@@ -1,0 +1,30 @@
+# Gopernicus project manifest
+version: "1"
+env_file: .env
+
+features:
+  authentication: gopernicus
+  authorization: gopernicus
+  tenancy: gopernicus
+
+databases:
+  primary:
+    driver: postgres/pgx
+    url_env_var: PRIMARY_POSTGRES_URL
+    domains:
+      auth:
+        [
+          principals,
+          service_accounts,
+          users,
+          api_keys,
+          user_passwords,
+          oauth_accounts,
+          sessions,
+          security_events,
+          verification_tokens,
+          verification_codes,
+        ]
+      rebac: [rebac_relationships, rebac_relationship_metadata, groups,invitations,]
+      tenancy: [tenants]
+      events: [event_outbox]

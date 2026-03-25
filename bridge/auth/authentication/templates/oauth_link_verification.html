@@ -1,0 +1,6 @@
+<h2>Verify account link</h2>
+{{if .DisplayName}}<p>Hi {{.DisplayName}},</p>{{end}}
+<p>Someone is trying to link a <strong>{{.Provider}}</strong> account to your account. To confirm this action, use the verification code below:</p>
+<p style="font-size: 24px; font-weight: bold; letter-spacing: 4px;">{{.Code}}</p>
+<p>This code expires in {{.ExpiresIn}}.</p>
+<p>If you didn't initiate this, you can safely ignore this email. No changes will be made to your account.</p>

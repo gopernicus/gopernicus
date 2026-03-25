@@ -1,0 +1,11 @@
+Verify account link
+{{if .DisplayName}}
+Hi {{.DisplayName}},
+{{end}}
+Someone is trying to link a {{.Provider}} account to your account. To confirm this action, use the verification code below:
+
+{{.Code}}
+
+This code expires in {{.ExpiresIn}}.
+
+If you didn't initiate this, you can safely ignore this email. No changes will be made to your account.
