@@ -33,3 +33,11 @@ type Attribute struct {
 func StringAttribute(key, value string) Attribute {
 	return Attribute{Key: key, Value: value}
 }
+
+// noopSpanFinisher is a no-op implementation of SpanFinisher used when no
+// Tracer is configured. It allows call sites to call span methods unconditionally.
+type noopSpanFinisher struct{}
+
+func (noopSpanFinisher) SetAttributes(...Attribute) {}
+func (noopSpanFinisher) RecordError(error)           {}
+func (noopSpanFinisher) Finish()                     {}

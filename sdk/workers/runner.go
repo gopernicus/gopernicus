@@ -29,8 +29,8 @@ type JobStore[T Job] interface {
 	Complete(ctx context.Context, jobID string, now time.Time) error
 
 	// Fail marks a job as failed. Implementation should handle retry logic
-	// (increment retry_count, check against max retries, dead-letter if exhausted).
-	Fail(ctx context.Context, jobID string, now time.Time, reason string, maxRetries int) error
+	// (increment retry_count, check against max attempts, dead-letter if exhausted).
+	Fail(ctx context.Context, jobID string, now time.Time, reason string, maxAttempts int) error
 }
 
 // ProcessFunc is the business logic for processing a job.
@@ -53,7 +53,7 @@ type PostProcessHook[T Job] func(ctx context.Context, job T, err error) error
 type Runner[T Job] struct {
 	store       JobStore[T]
 	processFunc ProcessFunc[T]
-	maxRetries  int
+	maxAttempts int
 	clock       func() time.Time
 	log         *slog.Logger
 	tracer      Tracer
@@ -65,7 +65,7 @@ type Runner[T Job] struct {
 // Go generics and functional options don't mix cleanly, so we use
 // a non-generic config struct and add hooks via methods on Runner.
 type runnerConfig struct {
-	maxRetries int
+	maxAttempts int
 	clock      func() time.Time
 	tracer     Tracer
 }
@@ -73,9 +73,10 @@ type runnerConfig struct {
 // RunnerOption configures a Runner.
 type RunnerOption func(*runnerConfig)
 
-// WithMaxRetries sets the maximum number of retry attempts.
-func WithMaxRetries(n int) RunnerOption {
-	return func(c *runnerConfig) { c.maxRetries = n }
+// WithMaxAttempts sets the total number of processing attempts (including the first).
+// WithMaxAttempts(3) means try up to 3 times before failing. Default is 3.
+func WithMaxAttempts(n int) RunnerOption {
+	return func(c *runnerConfig) { c.maxAttempts = n }
 }
 
 // WithClock sets a custom clock function for testing.
@@ -98,7 +99,7 @@ func NewRunner[T Job](
 	opts ...RunnerOption,
 ) *Runner[T] {
 	cfg := &runnerConfig{
-		maxRetries: 3,
+		maxAttempts: 3,
 		clock:      func() time.Time { return time.Now().UTC() },
 	}
 	for _, opt := range opts {
@@ -112,7 +113,7 @@ func NewRunner[T Job](
 	return &Runner[T]{
 		store:       store,
 		processFunc: processFunc,
-		maxRetries:  cfg.maxRetries,
+		maxAttempts:  cfg.maxAttempts,
 		clock:       cfg.clock,
 		log:         log,
 		tracer:      cfg.tracer,
@@ -218,45 +219,41 @@ func (r *Runner[T]) work(ctx context.Context) error {
 	return nil
 }
 
+// maybeSpan starts a tracing span if a Tracer is configured, otherwise returns
+// a no-op finisher so call sites need no nil checks.
+func (r *Runner[T]) maybeSpan(ctx context.Context, name string) (context.Context, SpanFinisher) {
+	if r.tracer == nil {
+		return ctx, noopSpanFinisher{}
+	}
+	return r.tracer.StartSpan(ctx, name)
+}
+
 // checkout claims the next available job from the store.
 func (r *Runner[T]) checkout(ctx context.Context, workerID string) (T, error) {
 	var zero T
 
-	if r.tracer != nil {
-		ctx, span := r.tracer.StartSpan(ctx, "job.checkout")
-		defer span.Finish()
+	ctx, span := r.maybeSpan(ctx, "job.checkout")
+	defer span.Finish()
 
-		job, err := r.store.Checkout(ctx, workerID, r.clock())
-		if err != nil {
-			if !errors.Is(err, ErrNoWork) {
-				span.RecordError(err)
-			}
-			return zero, err
+	job, err := r.store.Checkout(ctx, workerID, r.clock())
+	if err != nil {
+		if !errors.Is(err, ErrNoWork) {
+			span.RecordError(err)
 		}
-		span.SetAttributes(StringAttribute("job.id", job.GetID()))
-		return job, nil
+		return zero, err
 	}
-
-	return r.store.Checkout(ctx, workerID, r.clock())
+	span.SetAttributes(StringAttribute("job.id", job.GetID()))
+	return job, nil
 }
 
 // complete marks a job as successfully completed in the store.
 func (r *Runner[T]) complete(ctx context.Context, job T) {
-	if r.tracer != nil {
-		ctx, span := r.tracer.StartSpan(ctx, "job.complete")
-		defer span.Finish()
-		span.SetAttributes(StringAttribute("job.id", job.GetID()))
-
-		if err := r.store.Complete(ctx, job.GetID(), r.clock()); err != nil {
-			span.RecordError(err)
-			r.log.ErrorContext(ctx, "failed to mark job as complete",
-				"job_id", job.GetID(),
-				"error", err)
-		}
-		return
-	}
+	ctx, span := r.maybeSpan(ctx, "job.complete")
+	defer span.Finish()
+	span.SetAttributes(StringAttribute("job.id", job.GetID()))
 
 	if err := r.store.Complete(ctx, job.GetID(), r.clock()); err != nil {
+		span.RecordError(err)
 		r.log.ErrorContext(ctx, "failed to mark job as complete",
 			"job_id", job.GetID(),
 			"error", err)
@@ -270,24 +267,15 @@ func (r *Runner[T]) fail(ctx context.Context, job T, processErr error) {
 		reason = processErr.Error()
 	}
 
-	if r.tracer != nil {
-		ctx, span := r.tracer.StartSpan(ctx, "job.fail")
-		defer span.Finish()
-		span.SetAttributes(
-			StringAttribute("job.id", job.GetID()),
-			StringAttribute("job.status", job.GetStatus()),
-		)
+	ctx, span := r.maybeSpan(ctx, "job.fail")
+	defer span.Finish()
+	span.SetAttributes(
+		StringAttribute("job.id", job.GetID()),
+		StringAttribute("job.status", job.GetStatus()),
+	)
 
-		if err := r.store.Fail(ctx, job.GetID(), r.clock(), reason, r.maxRetries); err != nil {
-			span.RecordError(err)
-			r.log.ErrorContext(ctx, "failed to mark job as failed",
-				"job_id", job.GetID(),
-				"error", err)
-		}
-		return
-	}
-
-	if err := r.store.Fail(ctx, job.GetID(), r.clock(), reason, r.maxRetries); err != nil {
+	if err := r.store.Fail(ctx, job.GetID(), r.clock(), reason, r.maxAttempts); err != nil {
+		span.RecordError(err)
 		r.log.ErrorContext(ctx, "failed to mark job as failed",
 			"job_id", job.GetID(),
 			"error", err)
@@ -296,7 +284,7 @@ func (r *Runner[T]) fail(ctx context.Context, job T, processErr error) {
 
 // processWithRetry handles retry logic with exponential backoff.
 func (r *Runner[T]) processWithRetry(ctx context.Context, job T) (T, error) {
-	maxAttempts := r.maxRetries
+	maxAttempts := r.maxAttempts
 	if maxAttempts <= 0 {
 		maxAttempts = 1
 	}
@@ -320,22 +308,16 @@ func (r *Runner[T]) processWithRetry(ctx context.Context, job T) (T, error) {
 			}
 		}
 
-		// Process with optional tracing
-		if r.tracer != nil {
-			spanCtx, span := r.tracer.StartSpan(ctx, "job.process")
-			span.SetAttributes(
-				StringAttribute("job.id", job.GetID()),
-				StringAttribute("job.status", job.GetStatus()),
-			)
-
-			processedJob, lastErr = r.processFunc(spanCtx, job)
-			if lastErr != nil {
-				span.RecordError(lastErr)
-			}
-			span.Finish()
-		} else {
-			processedJob, lastErr = r.processFunc(ctx, job)
+		spanCtx, span := r.maybeSpan(ctx, "job.process")
+		span.SetAttributes(
+			StringAttribute("job.id", job.GetID()),
+			StringAttribute("job.status", job.GetStatus()),
+		)
+		processedJob, lastErr = r.processFunc(spanCtx, job)
+		if lastErr != nil {
+			span.RecordError(lastErr)
 		}
+		span.Finish()
 
 		if lastErr == nil {
 			return processedJob, nil

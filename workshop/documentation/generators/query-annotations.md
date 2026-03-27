@@ -216,36 +216,47 @@ RETURNING *;
 **bridge.yml** (in the bridge package directory):
 ```yaml
 routes:
-  list:
-    method: GET
+  - func: List
     path: /tenants/{tenant_id}/questions
     middleware:
-      - authenticate
-      - authorize: prefilter(tenant:tenant_id, read)
-  get:
-    method: GET
+      - authenticate: any
+      - rate_limit
+      - authorize:
+          pattern: prefilter
+          permission: read
+
+  - func: Get
     path: /tenants/{tenant_id}/questions/{question_id}
     middleware:
-      - authenticate
-      - authorize: check(read)
-      - with_permissions
-  create:
-    method: POST
+      - authenticate: any
+      - rate_limit
+      - authorize:
+          permission: read
+          param: question_id
+
+  - func: Create
     path: /tenants/{tenant_id}/questions
+    params_to_input:
+      - tenant_id
     middleware:
-      - authenticate
+      - max_body_size: 1048576
+      - authenticate: any
+      - rate_limit
+      - authorize:
+          permission: create
+          param: tenant_id
 
 auth_relations:
-  - tenant(tenant)
-  - owner(user, service_account)
+  - "tenant(tenant)"
+  - "owner(user, service_account)"
 
 auth_permissions:
-  - list(tenant->list)
-  - create(tenant->manage)
-  - read(owner|tenant->read)
-  - update(owner|tenant->manage)
-  - delete(owner|tenant->manage)
-  - manage(owner|tenant->manage)
+  - "list(tenant->list)"
+  - "create(tenant->manage)"
+  - "read(owner|tenant->read)"
+  - "update(owner|tenant->manage)"
+  - "delete(owner|tenant->manage)"
+  - "manage(owner|tenant->manage)"
 ```
 
 ---

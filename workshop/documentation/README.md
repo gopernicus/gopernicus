@@ -52,7 +52,7 @@ Authentication, authorization, and the ReBAC system.
 The `gopernicus generate` pipeline.
 
 - [Overview](generators/overview.md) — What gets generated, what doesn't
-- [Query Annotations](generators/query-annotations.md) — @func, @http:json, @auth, @filter, etc.
+- [Query Annotations](generators/query-annotations.md) — @func, @filter, @order, @fields, @event, etc.
 - [YAML Configuration](generators/yaml-configuration.md) — gopernicus.yml reference
 - [Generated File Map](generators/generated-file-map.md) — Which files are generated vs bootstrap
 

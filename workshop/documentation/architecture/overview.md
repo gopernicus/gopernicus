@@ -207,8 +207,8 @@ entity bridge (e.g., `apikeysbridge`) contains:
   No embedding of a generated type.
 - `bridge.yml` -- YAML configuration that declares routes, ordered middleware
   arrays, and auth schema (`auth_relations`, `auth_permissions`). Protocol
-  annotations (`@http:json`, `@authenticated`, `@authorize`, `@auth.create`,
-  `@with:permissions`) live here, not in queries.sql.
+  concerns (routes, authentication, authorization, permissions) are configured
+  here, not in queries.sql.
 - `routes.go` -- bootstrapped file with `AddHttpRoutes()` (public) that calls
   `addGeneratedRoutes()` from generated.go plus any custom routes.
 - `http.go` -- hand-written custom HTTP handlers.

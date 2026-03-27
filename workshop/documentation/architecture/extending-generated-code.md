@@ -127,37 +127,45 @@ previously lived in `queries.sql` are now here:
 
 ```yaml
 routes:
-  list:
-    method: GET
+  - func: List
     path: /tenants/{tenant_id}/invitations
     middleware:
-      - authenticate
+      - authenticate: any
       - rate_limit
-      - authorize: prefilter(tenant:tenant_id, read)
-  get:
-    method: GET
+      - authorize:
+          pattern: prefilter
+          permission: read
+
+  - func: Get
     path: /tenants/{tenant_id}/invitations/{invitation_id}
     middleware:
-      - authenticate
-      - authorize: check(read)
-      - with_permissions
-  create:
-    method: POST
+      - authenticate: any
+      - rate_limit
+      - authorize:
+          permission: read
+          param: invitation_id
+
+  - func: Create
     path: /tenants/{tenant_id}/invitations
+    params_to_input:
+      - tenant_id
     middleware:
-      - authenticate
-      - authorize: check(create)
       - max_body_size: 1048576
+      - authenticate: any
+      - rate_limit
+      - authorize:
+          permission: create
+          param: tenant_id
 
 auth_relations:
-  - tenant(tenant)
-  - owner(user, service_account)
+  - "tenant(tenant)"
+  - "owner(user, service_account)"
 
 auth_permissions:
-  - list(tenant->list)
-  - create(tenant->manage)
-  - read(owner|tenant->read)
-  - manage(owner|tenant->manage)
+  - "list(tenant->list)"
+  - "create(tenant->manage)"
+  - "read(owner|tenant->read)"
+  - "manage(owner|tenant->manage)"
 ```
 
 Known middleware types: `authenticate`, `authorize`, `rate_limit`,

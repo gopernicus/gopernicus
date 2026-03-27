@@ -79,29 +79,32 @@ auth schema. This replaces the old pattern of putting `@http:json`,
 
 ```yaml
 routes:
-  list:
-    method: GET
+  - func: List
     path: /users
     middleware:
-      - authenticate
+      - authenticate: any
       - rate_limit
-      - authorize: prefilter(read)
-  get:
-    method: GET
+      - authorize:
+          pattern: prefilter
+          permission: read
+
+  - func: Get
     path: /users/{user_id}
     middleware:
-      - authenticate
-      - authorize: check(read)
-      - with_permissions
+      - authenticate: any
+      - rate_limit
+      - authorize:
+          permission: read
+          param: user_id
 
 auth_relations:
-  - owner(user, service_account)
+  - "owner(user, service_account)"
 
 auth_permissions:
-  - list(owner)
-  - read(owner)
-  - update(owner)
-  - delete(owner)
+  - "list(owner)"
+  - "read(owner)"
+  - "update(owner)"
+  - "delete(owner)"
 ```
 
 **Middleware array:** Routes have explicit ordered middleware arrays. Known types:

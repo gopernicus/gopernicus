@@ -24,7 +24,7 @@ func (j mockJob) GetRetryCount() int  { return j.retryCount }
 type mockJobStore struct {
 	checkoutFn func(ctx context.Context, workerID string, now time.Time) (mockJob, error)
 	completeFn func(ctx context.Context, jobID string, now time.Time) error
-	failFn     func(ctx context.Context, jobID string, now time.Time, reason string, maxRetries int) error
+	failFn     func(ctx context.Context, jobID string, now time.Time, reason string, maxAttempts int) error
 }
 
 func (s *mockJobStore) Checkout(ctx context.Context, workerID string, now time.Time) (mockJob, error) {
@@ -41,9 +41,9 @@ func (s *mockJobStore) Complete(ctx context.Context, jobID string, now time.Time
 	return nil
 }
 
-func (s *mockJobStore) Fail(ctx context.Context, jobID string, now time.Time, reason string, maxRetries int) error {
+func (s *mockJobStore) Fail(ctx context.Context, jobID string, now time.Time, reason string, maxAttempts int) error {
 	if s.failFn != nil {
-		return s.failFn(ctx, jobID, now, reason, maxRetries)
+		return s.failFn(ctx, jobID, now, reason, maxAttempts)
 	}
 	return nil
 }
@@ -77,7 +77,7 @@ func TestRunner_BasicLifecycle(t *testing.T) {
 		return job, nil
 	}
 
-	runner := NewRunner(store, process, silentLogger(), WithMaxRetries(1))
+	runner := NewRunner(store, process, silentLogger(), WithMaxAttempts(1))
 
 	// Run via pool
 	pool := NewPool(runner.WorkFunc(), defaultPoolOpts(), WithLogger(silentLogger()))
@@ -111,7 +111,7 @@ func TestRunner_ProcessFailure(t *testing.T) {
 			}
 			return mockJob{id: "job-fail", status: "pending"}, nil
 		},
-		failFn: func(ctx context.Context, jobID string, now time.Time, reason string, maxRetries int) error {
+		failFn: func(ctx context.Context, jobID string, now time.Time, reason string, maxAttempts int) error {
 			failed.Add(1)
 			return nil
 		},
@@ -121,7 +121,7 @@ func TestRunner_ProcessFailure(t *testing.T) {
 		return job, errors.New("process error")
 	}
 
-	runner := NewRunner(store, process, silentLogger(), WithMaxRetries(1))
+	runner := NewRunner(store, process, silentLogger(), WithMaxAttempts(1))
 	pool := NewPool(runner.WorkFunc(), defaultPoolOpts(), WithLogger(silentLogger()))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -168,7 +168,7 @@ func TestRunner_RetryLogic(t *testing.T) {
 		return job, nil
 	}
 
-	runner := NewRunner(store, process, silentLogger(), WithMaxRetries(3))
+	runner := NewRunner(store, process, silentLogger(), WithMaxAttempts(3))
 	pool := NewPool(runner.WorkFunc(), defaultPoolOpts(), WithLogger(silentLogger()))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -203,7 +203,7 @@ func TestRunner_RetryExhaustion(t *testing.T) {
 			}
 			return mockJob{id: "job-exhaust", status: "pending"}, nil
 		},
-		failFn: func(ctx context.Context, jobID string, now time.Time, reason string, maxRetries int) error {
+		failFn: func(ctx context.Context, jobID string, now time.Time, reason string, maxAttempts int) error {
 			failed.Add(1)
 			return nil
 		},
@@ -213,7 +213,7 @@ func TestRunner_RetryExhaustion(t *testing.T) {
 		return job, errors.New("persistent error")
 	}
 
-	runner := NewRunner(store, process, silentLogger(), WithMaxRetries(3))
+	runner := NewRunner(store, process, silentLogger(), WithMaxAttempts(3))
 	pool := NewPool(runner.WorkFunc(), defaultPoolOpts(), WithLogger(silentLogger()))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -245,7 +245,7 @@ func TestRunner_PanicRecovery(t *testing.T) {
 			}
 			return mockJob{id: "job-panic", status: "pending"}, nil
 		},
-		failFn: func(ctx context.Context, jobID string, now time.Time, reason string, maxRetries int) error {
+		failFn: func(ctx context.Context, jobID string, now time.Time, reason string, maxAttempts int) error {
 			failed.Add(1)
 			return nil
 		},
@@ -255,7 +255,7 @@ func TestRunner_PanicRecovery(t *testing.T) {
 		panic("test panic in process")
 	}
 
-	runner := NewRunner(store, process, silentLogger(), WithMaxRetries(1))
+	runner := NewRunner(store, process, silentLogger(), WithMaxAttempts(1))
 	pool := NewPool(runner.WorkFunc(), defaultPoolOpts(), WithLogger(silentLogger()))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -298,7 +298,7 @@ func TestRunner_PreProcessHooks(t *testing.T) {
 		return job, nil
 	}
 
-	runner := NewRunner(store, process, silentLogger(), WithMaxRetries(1))
+	runner := NewRunner(store, process, silentLogger(), WithMaxAttempts(1))
 	runner.AddPreProcessHooks(func(ctx context.Context, job mockJob) error {
 		hookCalled.Store(true)
 		return nil
@@ -348,7 +348,7 @@ func TestRunner_PostProcessHooks(t *testing.T) {
 		return job, nil
 	}
 
-	runner := NewRunner(store, process, silentLogger(), WithMaxRetries(1))
+	runner := NewRunner(store, process, silentLogger(), WithMaxAttempts(1))
 	runner.AddPostProcessHooks(func(ctx context.Context, job mockJob, err error) error {
 		hookMu.Lock()
 		hookErr = err
@@ -397,7 +397,7 @@ func TestRunner_PostProcessHookReceivesError(t *testing.T) {
 			}
 			return mockJob{id: "job-err", status: "pending"}, nil
 		},
-		failFn: func(ctx context.Context, jobID string, now time.Time, reason string, maxRetries int) error {
+		failFn: func(ctx context.Context, jobID string, now time.Time, reason string, maxAttempts int) error {
 			failed.Add(1)
 			return nil
 		},
@@ -408,7 +408,7 @@ func TestRunner_PostProcessHookReceivesError(t *testing.T) {
 		return job, processErr
 	}
 
-	runner := NewRunner(store, process, silentLogger(), WithMaxRetries(1))
+	runner := NewRunner(store, process, silentLogger(), WithMaxAttempts(1))
 	runner.AddPostProcessHooks(func(ctx context.Context, job mockJob, err error) error {
 		hookMu.Lock()
 		capturedErr = err
@@ -557,7 +557,7 @@ func TestRunner_WithTracer(t *testing.T) {
 	}
 
 	runner := NewRunner(store, process, silentLogger(),
-		WithMaxRetries(1),
+		WithMaxAttempts(1),
 		WithTracer(tracer),
 	)
 
