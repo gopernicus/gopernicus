@@ -3,11 +3,8 @@ package emailer
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"strings"
 	"testing"
-
-	"github.com/gopernicus/gopernicus/sdk/notify"
 )
 
 // mockClient is a test implementation of the Client interface.
@@ -24,7 +21,7 @@ func (m *mockClient) Send(ctx context.Context, email Email) error {
 
 func newTestEmailer(t *testing.T, client Client) *Emailer {
 	t.Helper()
-	e, err := New(slog.Default(), client, "default@example.com")
+	e, err := New(client, "default@example.com")
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -188,38 +185,6 @@ func TestSend_ClientError(t *testing.T) {
 	}
 }
 
-func TestNotify(t *testing.T) {
-	var receivedEmail Email
-
-	e := newTestEmailer(t, &mockClient{
-		sendFunc: func(ctx context.Context, email Email) error {
-			receivedEmail = email
-			return nil
-		},
-	})
-
-	err := e.Notify(context.Background(), notify.Notification{
-		Recipient: "user@example.com",
-		Subject:   "Alert",
-		Body:      "Something happened",
-	})
-
-	if err != nil {
-		t.Fatalf("Notify() error = %v", err)
-	}
-	if receivedEmail.To != "user@example.com" {
-		t.Errorf("To = %q, want %q", receivedEmail.To, "user@example.com")
-	}
-	if receivedEmail.Subject != "Alert" {
-		t.Errorf("Subject = %q, want %q", receivedEmail.Subject, "Alert")
-	}
-	if receivedEmail.Text != "Something happened" {
-		t.Errorf("Text = %q, want %q", receivedEmail.Text, "Something happened")
-	}
-	if receivedEmail.HTML != "" {
-		t.Errorf("HTML = %q, want empty (Notify uses plain text)", receivedEmail.HTML)
-	}
-}
 
 func TestStripHTMLTags(t *testing.T) {
 	tests := []struct {

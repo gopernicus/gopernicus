@@ -3,7 +3,6 @@ package ratelimiter_test
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"testing"
 	"time"
 
@@ -48,9 +47,9 @@ func TestAllow_UsesResolver(t *testing.T) {
 		result: ratelimiter.Result{Allowed: true, Remaining: 99},
 	}
 	resolver := ratelimiter.NewDefaultResolver()
-	log := slog.Default()
 
-	limiter := ratelimiter.New(store, resolver, log)
+
+	limiter := ratelimiter.New(store, resolver)
 
 	result, err := limiter.Allow(context.Background(), "user:123", ratelimiter.ResolveRequest{
 		SubjectType: "user",
@@ -73,8 +72,8 @@ func TestAllow_APIKeyOverride(t *testing.T) {
 		result: ratelimiter.Result{Allowed: true},
 	}
 	resolver := ratelimiter.NewDefaultResolver()
-	log := slog.Default()
-	limiter := ratelimiter.New(store, resolver, log)
+
+	limiter := ratelimiter.New(store, resolver)
 
 	customLimit := 42
 	_, _ = limiter.Allow(context.Background(), "key:abc", ratelimiter.ResolveRequest{
@@ -96,8 +95,8 @@ func TestAllowWithLimit_ExplicitLimit(t *testing.T) {
 		result: ratelimiter.Result{Allowed: true, Remaining: 4},
 	}
 	resolver := ratelimiter.NewDefaultResolver()
-	log := slog.Default()
-	limiter := ratelimiter.New(store, resolver, log)
+
+	limiter := ratelimiter.New(store, resolver)
 
 	limit := ratelimiter.PerSecond(5)
 	result, err := limiter.AllowWithLimit(context.Background(), "login:ip", limit)
@@ -118,8 +117,8 @@ func TestAllowWithLimit_ExplicitLimit(t *testing.T) {
 func TestAllow_PropagatesError(t *testing.T) {
 	store := &mockStore{err: errors.New("store error")}
 	resolver := ratelimiter.NewDefaultResolver()
-	log := slog.Default()
-	limiter := ratelimiter.New(store, resolver, log)
+
+	limiter := ratelimiter.New(store, resolver)
 
 	_, err := limiter.Allow(context.Background(), "key", ratelimiter.ResolveRequest{})
 	if err == nil {
@@ -130,8 +129,8 @@ func TestAllow_PropagatesError(t *testing.T) {
 func TestReset(t *testing.T) {
 	store := &mockStore{}
 	resolver := ratelimiter.NewDefaultResolver()
-	log := slog.Default()
-	limiter := ratelimiter.New(store, resolver, log)
+
+	limiter := ratelimiter.New(store, resolver)
 
 	err := limiter.Reset(context.Background(), "key")
 	if err != nil {
@@ -145,8 +144,8 @@ func TestReset(t *testing.T) {
 func TestClose(t *testing.T) {
 	store := &mockStore{closeErr: errors.New("close error")}
 	resolver := ratelimiter.NewDefaultResolver()
-	log := slog.Default()
-	limiter := ratelimiter.New(store, resolver, log)
+
+	limiter := ratelimiter.New(store, resolver)
 
 	err := limiter.Close()
 	if err == nil {
@@ -156,8 +155,8 @@ func TestClose(t *testing.T) {
 
 func TestResolver_Accessor(t *testing.T) {
 	resolver := ratelimiter.NewDefaultResolver()
-	log := slog.Default()
-	limiter := ratelimiter.New(&mockStore{}, resolver, log)
+
+	limiter := ratelimiter.New(&mockStore{}, resolver)
 
 	if limiter.Resolver() == nil {
 		t.Error("Resolver() should return non-nil")

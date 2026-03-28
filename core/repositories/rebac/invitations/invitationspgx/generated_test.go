@@ -16,8 +16,8 @@ import (
 
 	fixtures "github.com/gopernicus/gopernicus/core/testing/fixtures"
 
-	"github.com/gopernicus/gopernicus/infrastructure/testing/pgxfixtures"
-	"github.com/gopernicus/gopernicus/infrastructure/testing/testpgx"
+	"github.com/gopernicus/gopernicus/workshop/testing/pgxfixtures"
+	"github.com/gopernicus/gopernicus/workshop/testing/testpgx"
 	"github.com/gopernicus/gopernicus/sdk/fop"
 	"github.com/gopernicus/gopernicus/sdk/logger"
 )

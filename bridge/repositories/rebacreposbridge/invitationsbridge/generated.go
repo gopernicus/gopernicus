@@ -6,8 +6,8 @@ package invitationsbridge
 import (
 	"context"
 	"fmt"
-	fopb "github.com/gopernicus/gopernicus/bridge/fop"
-	"github.com/gopernicus/gopernicus/bridge/protocol/httpmid"
+	fopb "github.com/gopernicus/gopernicus/bridge/transit/fop"
+	"github.com/gopernicus/gopernicus/bridge/transit/httpmid"
 	"github.com/gopernicus/gopernicus/core/auth/authorization"
 	"github.com/gopernicus/gopernicus/core/repositories/rebac/invitations"
 	"github.com/gopernicus/gopernicus/sdk/errs"

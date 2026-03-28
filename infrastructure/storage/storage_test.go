@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -88,7 +87,7 @@ func (m *mockClient) SignedURL(ctx context.Context, path string, expiry time.Dur
 
 func TestUpload_Success(t *testing.T) {
 	called := false
-	fs := New(slog.Default(), &mockClient{
+	fs := New(&mockClient{
 		uploadFunc: func(ctx context.Context, path string, reader io.Reader) error {
 			called = true
 			if path != "test/file.txt" {
@@ -108,7 +107,7 @@ func TestUpload_Success(t *testing.T) {
 }
 
 func TestUpload_ClientError(t *testing.T) {
-	fs := New(slog.Default(), &mockClient{
+	fs := New(&mockClient{
 		uploadFunc: func(ctx context.Context, path string, reader io.Reader) error {
 			return errors.New("disk full")
 		},
@@ -124,7 +123,7 @@ func TestUpload_ClientError(t *testing.T) {
 }
 
 func TestDownload_Success(t *testing.T) {
-	fs := New(slog.Default(), &mockClient{
+	fs := New(&mockClient{
 		downloadFunc: func(ctx context.Context, path string) (io.ReadCloser, error) {
 			return io.NopCloser(strings.NewReader("file content")), nil
 		},
@@ -143,7 +142,7 @@ func TestDownload_Success(t *testing.T) {
 }
 
 func TestDownload_ClientError(t *testing.T) {
-	fs := New(slog.Default(), &mockClient{
+	fs := New(&mockClient{
 		downloadFunc: func(ctx context.Context, path string) (io.ReadCloser, error) {
 			return nil, ErrObjectNotFound
 		},
@@ -160,7 +159,7 @@ func TestDownload_ClientError(t *testing.T) {
 
 func TestDelete_Success(t *testing.T) {
 	called := false
-	fs := New(slog.Default(), &mockClient{
+	fs := New(&mockClient{
 		deleteFunc: func(ctx context.Context, path string) error {
 			called = true
 			return nil
@@ -177,7 +176,7 @@ func TestDelete_Success(t *testing.T) {
 }
 
 func TestExists_Success(t *testing.T) {
-	fs := New(slog.Default(), &mockClient{
+	fs := New(&mockClient{
 		existsFunc: func(ctx context.Context, path string) (bool, error) {
 			return true, nil
 		},
@@ -193,7 +192,7 @@ func TestExists_Success(t *testing.T) {
 }
 
 func TestList_Success(t *testing.T) {
-	fs := New(slog.Default(), &mockClient{
+	fs := New(&mockClient{
 		listFunc: func(ctx context.Context, prefix string) ([]string, error) {
 			return []string{"a.txt", "b.txt", "c.txt"}, nil
 		},
@@ -209,7 +208,7 @@ func TestList_Success(t *testing.T) {
 }
 
 func TestGetObjectSize_Success(t *testing.T) {
-	fs := New(slog.Default(), &mockClient{
+	fs := New(&mockClient{
 		getObjectSizeFunc: func(ctx context.Context, path string) (int64, error) {
 			return 1024, nil
 		},
@@ -225,7 +224,7 @@ func TestGetObjectSize_Success(t *testing.T) {
 }
 
 func TestDownloadRange_Success(t *testing.T) {
-	fs := New(slog.Default(), &mockClient{
+	fs := New(&mockClient{
 		downloadRangeFunc: func(ctx context.Context, path string, offset, length int64) (io.ReadCloser, error) {
 			if offset != 10 || length != 5 {
 				t.Errorf("offset = %d, length = %d, want 10, 5", offset, length)
@@ -247,7 +246,7 @@ func TestDownloadRange_Success(t *testing.T) {
 }
 
 func TestInitiateResumableUpload_Success(t *testing.T) {
-	fs := New(slog.Default(), &mockClient{
+	fs := New(&mockClient{
 		initiateResumableUploadFunc: func(ctx context.Context, path, contentType string) (string, error) {
 			if path != "uploads/video.mp4" {
 				t.Errorf("path = %q, want %q", path, "uploads/video.mp4")
@@ -269,7 +268,7 @@ func TestInitiateResumableUpload_Success(t *testing.T) {
 }
 
 func TestInitiateResumableUpload_ClientError(t *testing.T) {
-	fs := New(slog.Default(), &mockClient{
+	fs := New(&mockClient{
 		initiateResumableUploadFunc: func(ctx context.Context, path, contentType string) (string, error) {
 			return "", errors.New("backend error")
 		},
@@ -285,7 +284,7 @@ func TestInitiateResumableUpload_ClientError(t *testing.T) {
 }
 
 func TestSignedURL_Success(t *testing.T) {
-	fs := New(slog.Default(), &mockClient{
+	fs := New(&mockClient{
 		signedURLFunc: func(ctx context.Context, path string, expiry time.Duration) (string, error) {
 			if path != "docs/report.pdf" {
 				t.Errorf("path = %q, want %q", path, "docs/report.pdf")
@@ -307,7 +306,7 @@ func TestSignedURL_Success(t *testing.T) {
 }
 
 func TestSignedURL_ClientError(t *testing.T) {
-	fs := New(slog.Default(), &mockClient{
+	fs := New(&mockClient{
 		signedURLFunc: func(ctx context.Context, path string, expiry time.Duration) (string, error) {
 			return "", errors.New("not supported")
 		},

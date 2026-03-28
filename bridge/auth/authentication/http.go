@@ -4,7 +4,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/gopernicus/gopernicus/bridge/protocol/httpmid"
+	"github.com/gopernicus/gopernicus/bridge/transit/httpmid"
 	"github.com/gopernicus/gopernicus/core/auth/authentication"
 	"github.com/gopernicus/gopernicus/infrastructure/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/web"

@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/gopernicus/gopernicus/bridge/protocol/httpmid"
+	"github.com/gopernicus/gopernicus/bridge/transit/httpmid"
 	"github.com/gopernicus/gopernicus/core/auth/authorization"
 	invitationscore "github.com/gopernicus/gopernicus/core/auth/invitations"
 	invitationsrepo "github.com/gopernicus/gopernicus/core/repositories/rebac/invitations"

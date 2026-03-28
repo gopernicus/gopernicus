@@ -65,12 +65,12 @@ test-integration:
 # E2E tests (full HTTP API — requires Docker for testcontainers)
 test-e2e:
 	@echo "Running E2E tests (requires Docker)..."
-	go test -tags=e2e -v -timeout 10m ./testing/e2e/...
+	go test -tags=e2e -v -timeout 10m ./workshop/testing/e2e/...
 
 # Penetration tests (security — requires Docker, slow)
 test-penetration:
 	@echo "Running penetration tests (requires Docker)..."
-	go test -tags=penetration -v -timeout 10m ./testing/penetration/...
+	go test -tags=penetration -v -timeout 10m ./workshop/testing/penetration/...
 
 # All tests (unit + integration + E2E + penetration)
 test-all:
@@ -91,7 +91,7 @@ test-integration-coverage:
 	@echo "Coverage report: coverage-integration.html"
 
 test-e2e-coverage:
-	go test -tags=e2e -coverprofile=coverage-e2e.out -coverpkg=./... -timeout 10m ./testing/e2e/...
+	go test -tags=e2e -coverprofile=coverage-e2e.out -coverpkg=./... -timeout 10m ./workshop/testing/e2e/...
 	go tool cover -html=coverage-e2e.out -o coverage-e2e.html
 	@echo "Coverage report: coverage-e2e.html"
 
@@ -120,7 +120,7 @@ test-security:
 test-security-all:
 	@echo "Running all security tests..."
 	go test -v -run TestSecurity ./...
-	go test -tags=penetration -v -timeout 10m ./testing/penetration/...
+	go test -tags=penetration -v -timeout 10m ./workshop/testing/penetration/...
 
 # ==============================================================================
 # TEST HELP

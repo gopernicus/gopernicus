@@ -15,6 +15,8 @@ type EventHandler func(ctx context.Context, eventType string, payload json.RawMe
 
 // EventRegistry routes events to their handlers based on event type patterns.
 // It supports exact matches, prefix patterns (e.g., "email.*"), and wildcards ("*").
+//
+// Logging is opt-in via WithLogger. When configured, the registry logs handler registrations.
 type EventRegistry struct {
 	mu       sync.RWMutex
 	exact    map[string]EventHandler
@@ -27,13 +29,28 @@ type prefixHandler struct {
 	handler EventHandler
 }
 
+// RegistryOption configures an EventRegistry during construction.
+type RegistryOption func(*EventRegistry)
+
+// WithLogger enables structured logging for the event registry.
+// When set, the registry logs handler registrations.
+func WithLogger(log *slog.Logger) RegistryOption {
+	return func(r *EventRegistry) {
+		r.log = log
+	}
+}
+
 // NewEventRegistry creates a new event handler registry.
-func NewEventRegistry(log *slog.Logger) *EventRegistry {
-	return &EventRegistry{
+// Use WithLogger to enable logging of handler registrations.
+func NewEventRegistry(opts ...RegistryOption) *EventRegistry {
+	r := &EventRegistry{
 		exact:    make(map[string]EventHandler),
 		prefixes: make([]prefixHandler, 0),
-		log:      log,
 	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
 }
 
 // Register registers a handler for the given event type pattern.
@@ -48,13 +65,19 @@ func (r *EventRegistry) Register(pattern string, handler EventHandler) {
 	if strings.HasSuffix(pattern, ".*") {
 		prefix := strings.TrimSuffix(pattern, "*")
 		r.prefixes = append(r.prefixes, prefixHandler{prefix: prefix, handler: handler})
-		r.log.Info("handler registered", "pattern", pattern, "type", "prefix")
+		if r.log != nil {
+			r.log.Info("handler registered", "pattern", pattern, "type", "prefix")
+		}
 	} else if pattern == "*" {
 		r.prefixes = append(r.prefixes, prefixHandler{prefix: "", handler: handler})
-		r.log.Info("handler registered", "pattern", pattern, "type", "wildcard")
+		if r.log != nil {
+			r.log.Info("handler registered", "pattern", pattern, "type", "wildcard")
+		}
 	} else {
 		r.exact[pattern] = handler
-		r.log.Info("handler registered", "pattern", pattern, "type", "exact")
+		if r.log != nil {
+			r.log.Info("handler registered", "pattern", pattern, "type", "exact")
+		}
 	}
 }
 
