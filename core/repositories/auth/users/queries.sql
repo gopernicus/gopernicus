@@ -58,6 +58,7 @@ WHERE email = @email
 ;
 
 -- @func: SetEmailVerified
+-- @event: user.email_verified
 UPDATE users
 SET email_verified = true, updated_at = @updated_at
 WHERE user_id = @user_id

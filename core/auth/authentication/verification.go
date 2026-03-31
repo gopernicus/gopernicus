@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/gopernicus/gopernicus/infrastructure/events"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
@@ -72,15 +71,6 @@ func (a *Authenticator) VerifyEmail(ctx context.Context, email, code string) err
 	a.logSecurityEvent(ctx, user.UserID, SecEventEmailVerified, SecStatusSuccess, map[string]any{
 		"email": email,
 	})
-
-	if err := a.bus.Emit(ctx, EmailVerifiedEvent{
-		BaseEvent: events.NewBaseEvent(EventTypeEmailVerified),
-		UserID:    user.UserID,
-		Email:     email,
-	}); err != nil {
-		a.log.WarnContext(ctx, "failed to emit email verified event",
-			"user_id", user.UserID, "error", err)
-	}
 
 	return nil
 }

@@ -30,48 +30,14 @@ var (
 // =============================================================================
 
 const (
-	OrderByPK            = "event_id"
-	OrderByEventType     = "event_type"
-	OrderByCorrelationID = "correlation_id"
-	OrderByTenantID      = "tenant_id"
-	OrderByAggregateType = "aggregate_type"
-	OrderByAggregateID   = "aggregate_id"
-	OrderByPayload       = "payload"
-	OrderByOccurredAt    = "occurred_at"
-	OrderByStatus        = "status"
-	OrderByPriority      = "priority"
-	OrderByRetryCount    = "retry_count"
-	OrderByMaxRetries    = "max_retries"
-	OrderByWorkerName    = "worker_name"
-	OrderByFailureReason = "failure_reason"
-	OrderByScheduledFor  = "scheduled_for"
-	OrderByCreatedAt     = "created_at"
-	OrderByUpdatedAt     = "updated_at"
-	OrderByStagedAt      = "staged_at"
-	OrderByCompletedAt   = "completed_at"
+	OrderByPK        = "event_id"
+	OrderByCreatedAt = "created_at"
 )
 
 // OrderByFields maps user-facing field names to OrderField definitions.
 var OrderByFields = map[string]fop.OrderField{
-	OrderByPK:            {Column: "event_id"},
-	OrderByEventType:     {Column: "event_type", CastLower: true},
-	OrderByCorrelationID: {Column: "correlation_id", CastLower: true},
-	OrderByTenantID:      {Column: "tenant_id", CastLower: true},
-	OrderByAggregateType: {Column: "aggregate_type", CastLower: true},
-	OrderByAggregateID:   {Column: "aggregate_id", CastLower: true},
-	OrderByPayload:       {Column: "payload"},
-	OrderByOccurredAt:    {Column: "occurred_at"},
-	OrderByStatus:        {Column: "status", CastLower: true},
-	OrderByPriority:      {Column: "priority"},
-	OrderByRetryCount:    {Column: "retry_count"},
-	OrderByMaxRetries:    {Column: "max_retries"},
-	OrderByWorkerName:    {Column: "worker_name", CastLower: true},
-	OrderByFailureReason: {Column: "failure_reason", CastLower: true},
-	OrderByScheduledFor:  {Column: "scheduled_for"},
-	OrderByCreatedAt:     {Column: "created_at"},
-	OrderByUpdatedAt:     {Column: "updated_at"},
-	OrderByStagedAt:      {Column: "staged_at"},
-	OrderByCompletedAt:   {Column: "completed_at"},
+	OrderByPK:        {Column: "event_id"},
+	OrderByCreatedAt: {Column: "created_at"},
 }
 
 // =============================================================================
@@ -86,25 +52,11 @@ const MaxLimitList = 100
 
 // EventOutbox is the database entity.
 type EventOutbox struct {
-	EventID       string          `json:"event_id" db:"event_id"`
-	EventType     string          `json:"event_type" db:"event_type"`
-	CorrelationID string          `json:"correlation_id" db:"correlation_id"`
-	TenantID      *string         `json:"tenant_id" db:"tenant_id"`
-	AggregateType *string         `json:"aggregate_type" db:"aggregate_type"`
-	AggregateID   *string         `json:"aggregate_id" db:"aggregate_id"`
-	Payload       json.RawMessage `json:"payload" db:"payload"`
-	OccurredAt    time.Time       `json:"occurred_at" db:"occurred_at"`
-	Status        string          `json:"status" db:"status"`
-	Priority      int             `json:"priority" db:"priority"`
-	RetryCount    int             `json:"retry_count" db:"retry_count"`
-	MaxRetries    int             `json:"max_retries" db:"max_retries"`
-	WorkerName    *string         `json:"worker_name" db:"worker_name"`
-	FailureReason *string         `json:"failure_reason" db:"failure_reason"`
-	ScheduledFor  time.Time       `json:"scheduled_for" db:"scheduled_for"`
-	CreatedAt     time.Time       `json:"created_at" db:"created_at"`
-	UpdatedAt     time.Time       `json:"updated_at" db:"updated_at"`
-	StagedAt      *time.Time      `json:"staged_at" db:"staged_at"`
-	CompletedAt   *time.Time      `json:"completed_at" db:"completed_at"`
+	EventID   string          `json:"event_id" db:"event_id"`
+	EventType string          `json:"event_type" db:"event_type"`
+	Payload   json.RawMessage `json:"payload" db:"payload"`
+	CreatedAt time.Time       `json:"created_at" db:"created_at"`
+	Published bool            `json:"published" db:"published"`
 }
 
 // =============================================================================
@@ -113,44 +65,14 @@ type EventOutbox struct {
 
 // CreateEventOutbox is the input for creating a event_outbox.
 type CreateEventOutbox struct {
-	EventID       string          `json:"event_id,omitempty"`
-	EventType     string          `json:"event_type,omitempty"`
-	CorrelationID string          `json:"correlation_id,omitempty"`
-	TenantID      *string         `json:"tenant_id,omitempty"`
-	AggregateType *string         `json:"aggregate_type,omitempty"`
-	AggregateID   *string         `json:"aggregate_id,omitempty"`
-	Payload       json.RawMessage `json:"payload,omitempty"`
-	OccurredAt    time.Time       `json:"occurred_at,omitempty"`
-	Status        string          `json:"status,omitempty"`
-	Priority      int             `json:"priority,omitempty"`
-	RetryCount    int             `json:"retry_count,omitempty"`
-	MaxRetries    int             `json:"max_retries,omitempty"`
-	WorkerName    *string         `json:"worker_name,omitempty"`
-	FailureReason *string         `json:"failure_reason,omitempty"`
-	ScheduledFor  time.Time       `json:"scheduled_for,omitempty"`
-	StagedAt      *time.Time      `json:"staged_at,omitempty"`
-	CompletedAt   *time.Time      `json:"completed_at,omitempty"`
+	EventID   string          `json:"event_id,omitempty"`
+	EventType string          `json:"event_type,omitempty"`
+	Payload   json.RawMessage `json:"payload,omitempty"`
 }
 
 // UpdateEventOutbox is the input for updating a event_outbox.
 type UpdateEventOutbox struct {
-	EventType     *string          `json:"event_type,omitempty"`
-	CorrelationID *string          `json:"correlation_id,omitempty"`
-	TenantID      *string          `json:"tenant_id,omitempty"`
-	AggregateType *string          `json:"aggregate_type,omitempty"`
-	AggregateID   *string          `json:"aggregate_id,omitempty"`
-	Payload       *json.RawMessage `json:"payload,omitempty"`
-	OccurredAt    *time.Time       `json:"occurred_at,omitempty"`
-	Status        *string          `json:"status,omitempty"`
-	Priority      *int             `json:"priority,omitempty"`
-	RetryCount    *int             `json:"retry_count,omitempty"`
-	MaxRetries    *int             `json:"max_retries,omitempty"`
-	WorkerName    *string          `json:"worker_name,omitempty"`
-	FailureReason *string          `json:"failure_reason,omitempty"`
-	ScheduledFor  *time.Time       `json:"scheduled_for,omitempty"`
-	UpdatedAt     *time.Time       `json:"updated_at,omitempty"`
-	StagedAt      *time.Time       `json:"staged_at,omitempty"`
-	CompletedAt   *time.Time       `json:"completed_at,omitempty"`
+	Published *bool `json:"published,omitempty"`
 }
 
 // =============================================================================
@@ -159,38 +81,9 @@ type UpdateEventOutbox struct {
 
 // FilterList holds filter criteria for List.
 type FilterList struct {
-	EventID            *string          `json:"event_id,omitempty"`
-	EventType          *string          `json:"event_type,omitempty"`
-	CorrelationID      *string          `json:"correlation_id,omitempty"`
-	TenantID           *string          `json:"tenant_id,omitempty"`
-	AggregateType      *string          `json:"aggregate_type,omitempty"`
-	AggregateID        *string          `json:"aggregate_id,omitempty"`
-	Payload            *json.RawMessage `json:"payload,omitempty"`
-	OccurredAt         *time.Time       `json:"occurred_at,omitempty"`
-	OccurredAtAfter    *time.Time       `json:"occurred_at_after,omitempty"`
-	OccurredAtBefore   *time.Time       `json:"occurred_at_before,omitempty"`
-	Status             *string          `json:"status,omitempty"`
-	Priority           *int             `json:"priority,omitempty"`
-	RetryCount         *int             `json:"retry_count,omitempty"`
-	MaxRetries         *int             `json:"max_retries,omitempty"`
-	WorkerName         *string          `json:"worker_name,omitempty"`
-	FailureReason      *string          `json:"failure_reason,omitempty"`
-	ScheduledFor       *time.Time       `json:"scheduled_for,omitempty"`
-	ScheduledForAfter  *time.Time       `json:"scheduled_for_after,omitempty"`
-	ScheduledForBefore *time.Time       `json:"scheduled_for_before,omitempty"`
-	CreatedAt          *time.Time       `json:"created_at,omitempty"`
-	CreatedAtAfter     *time.Time       `json:"created_at_after,omitempty"`
-	CreatedAtBefore    *time.Time       `json:"created_at_before,omitempty"`
-	UpdatedAt          *time.Time       `json:"updated_at,omitempty"`
-	UpdatedAtAfter     *time.Time       `json:"updated_at_after,omitempty"`
-	UpdatedAtBefore    *time.Time       `json:"updated_at_before,omitempty"`
-	StagedAt           *time.Time       `json:"staged_at,omitempty"`
-	StagedAtAfter      *time.Time       `json:"staged_at_after,omitempty"`
-	StagedAtBefore     *time.Time       `json:"staged_at_before,omitempty"`
-	CompletedAt        *time.Time       `json:"completed_at,omitempty"`
-	CompletedAtAfter   *time.Time       `json:"completed_at_after,omitempty"`
-	CompletedAtBefore  *time.Time       `json:"completed_at_before,omitempty"`
-	SearchTerm         *string          `json:"search_term,omitempty"`
+	EventType  *string `json:"event_type,omitempty"`
+	Published  *bool   `json:"published,omitempty"`
+	SearchTerm *string `json:"search_term,omitempty"`
 
 	// AuthorizedIDs restricts results to the given primary key values.
 	// Set by the bridge layer for prefilter authorization (authorization-scoped listings).
@@ -221,40 +114,12 @@ func GetEventOutboxOrderValue(record EventOutbox, field string) any {
 		return record.EventID
 	case "event_type":
 		return record.EventType
-	case "correlation_id":
-		return record.CorrelationID
-	case "tenant_id":
-		return record.TenantID
-	case "aggregate_type":
-		return record.AggregateType
-	case "aggregate_id":
-		return record.AggregateID
 	case "payload":
 		return record.Payload
-	case "occurred_at":
-		return record.OccurredAt
-	case "status":
-		return record.Status
-	case "priority":
-		return record.Priority
-	case "retry_count":
-		return record.RetryCount
-	case "max_retries":
-		return record.MaxRetries
-	case "worker_name":
-		return record.WorkerName
-	case "failure_reason":
-		return record.FailureReason
-	case "scheduled_for":
-		return record.ScheduledFor
 	case "created_at":
 		return record.CreatedAt
-	case "updated_at":
-		return record.UpdatedAt
-	case "staged_at":
-		return record.StagedAt
-	case "completed_at":
-		return record.CompletedAt
+	case "published":
+		return record.Published
 	default:
 		return record.EventID
 	}

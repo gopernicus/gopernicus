@@ -90,18 +90,6 @@ func TestBaseEvent_MethodChaining(t *testing.T) {
 	}
 }
 
-func TestBaseEvent_ToOutbox(t *testing.T) {
-	e := events.NewBaseEvent("user.created")
-	if e.IsOutbox() {
-		t.Error("new event should not be outbox")
-	}
-
-	e = e.ToOutbox()
-	if !e.IsOutbox() {
-		t.Error("after ToOutbox() should be outbox")
-	}
-}
-
 func TestBaseEvent_DefaultMetadataNil(t *testing.T) {
 	e := events.NewBaseEvent("test")
 

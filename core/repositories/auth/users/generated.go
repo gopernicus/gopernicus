@@ -122,6 +122,12 @@ type FilterList struct {
 // Event structs
 // =============================================================================
 
+// UserEmailVerifiedEvent is emitted by User.
+type UserEmailVerifiedEvent struct {
+	events.BaseEvent
+	UserID string `json:"user_id"`
+}
+
 // =============================================================================
 // Cursor helpers
 // =============================================================================
@@ -275,6 +281,12 @@ func (r *Repository) GetByEmail(ctx context.Context, email string) (User, error)
 func (r *Repository) SetEmailVerified(ctx context.Context, updatedAt time.Time, userID string) error {
 	if err := r.store.SetEmailVerified(ctx, updatedAt, userID); err != nil {
 		return fmt.Errorf("set email verified: %w", err)
+	}
+	if r.bus != nil {
+		r.bus.Emit(ctx, UserEmailVerifiedEvent{
+			BaseEvent: events.NewBaseEvent("user.email_verified"),
+			UserID:    userID,
+		})
 	}
 	return nil
 }

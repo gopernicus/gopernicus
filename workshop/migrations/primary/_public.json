@@ -244,277 +244,6 @@
         }
       ]
     },
-    "event_outbox": {
-      "table_name": "event_outbox",
-      "schema": "public",
-      "primary_key": {
-        "column": "event_id",
-        "columns": [
-          "event_id"
-        ],
-        "db_type": "text",
-        "go_type": "string",
-        "has_default": false
-      },
-      "columns": [
-        {
-          "name": "event_id",
-          "db_type": "text",
-          "go_type": "string",
-          "go_import": "",
-          "is_nullable": false,
-          "is_primary_key": true,
-          "is_foreign_key": false,
-          "has_default": false,
-          "validation_tags": "required"
-        },
-        {
-          "name": "event_type",
-          "db_type": "text",
-          "go_type": "string",
-          "go_import": "",
-          "is_nullable": false,
-          "is_primary_key": false,
-          "is_foreign_key": false,
-          "has_default": false,
-          "validation_tags": "required"
-        },
-        {
-          "name": "correlation_id",
-          "db_type": "text",
-          "go_type": "string",
-          "go_import": "",
-          "is_nullable": false,
-          "is_primary_key": false,
-          "is_foreign_key": false,
-          "has_default": false,
-          "validation_tags": "required"
-        },
-        {
-          "name": "tenant_id",
-          "db_type": "text",
-          "go_type": "*string",
-          "go_import": "",
-          "is_nullable": true,
-          "is_primary_key": false,
-          "is_foreign_key": false,
-          "has_default": false
-        },
-        {
-          "name": "aggregate_type",
-          "db_type": "text",
-          "go_type": "*string",
-          "go_import": "",
-          "is_nullable": true,
-          "is_primary_key": false,
-          "is_foreign_key": false,
-          "has_default": false
-        },
-        {
-          "name": "aggregate_id",
-          "db_type": "text",
-          "go_type": "*string",
-          "go_import": "",
-          "is_nullable": true,
-          "is_primary_key": false,
-          "is_foreign_key": false,
-          "has_default": false
-        },
-        {
-          "name": "payload",
-          "db_type": "jsonb",
-          "go_type": "json.RawMessage",
-          "go_import": "encoding/json",
-          "is_nullable": false,
-          "is_primary_key": false,
-          "is_foreign_key": false,
-          "has_default": false,
-          "validation_tags": "required"
-        },
-        {
-          "name": "occurred_at",
-          "db_type": "timestamptz",
-          "go_type": "time.Time",
-          "go_import": "time",
-          "is_nullable": false,
-          "is_primary_key": false,
-          "is_foreign_key": false,
-          "has_default": false,
-          "validation_tags": "required"
-        },
-        {
-          "name": "status",
-          "db_type": "text",
-          "go_type": "string",
-          "go_import": "",
-          "is_nullable": false,
-          "is_primary_key": false,
-          "is_foreign_key": false,
-          "default_value": "PENDING",
-          "has_default": true,
-          "validation_tags": "required"
-        },
-        {
-          "name": "priority",
-          "db_type": "int4",
-          "go_type": "int",
-          "go_import": "",
-          "is_nullable": false,
-          "is_primary_key": false,
-          "is_foreign_key": false,
-          "default_value": "0",
-          "has_default": true,
-          "precision": 32,
-          "validation_tags": "required"
-        },
-        {
-          "name": "retry_count",
-          "db_type": "int4",
-          "go_type": "int",
-          "go_import": "",
-          "is_nullable": false,
-          "is_primary_key": false,
-          "is_foreign_key": false,
-          "default_value": "0",
-          "has_default": true,
-          "precision": 32,
-          "validation_tags": "required"
-        },
-        {
-          "name": "max_retries",
-          "db_type": "int4",
-          "go_type": "int",
-          "go_import": "",
-          "is_nullable": false,
-          "is_primary_key": false,
-          "is_foreign_key": false,
-          "default_value": "3",
-          "has_default": true,
-          "precision": 32,
-          "validation_tags": "required"
-        },
-        {
-          "name": "worker_name",
-          "db_type": "text",
-          "go_type": "*string",
-          "go_import": "",
-          "is_nullable": true,
-          "is_primary_key": false,
-          "is_foreign_key": false,
-          "has_default": false
-        },
-        {
-          "name": "failure_reason",
-          "db_type": "text",
-          "go_type": "*string",
-          "go_import": "",
-          "is_nullable": true,
-          "is_primary_key": false,
-          "is_foreign_key": false,
-          "has_default": false
-        },
-        {
-          "name": "scheduled_for",
-          "db_type": "timestamptz",
-          "go_type": "time.Time",
-          "go_import": "time",
-          "is_nullable": false,
-          "is_primary_key": false,
-          "is_foreign_key": false,
-          "default_value": "now()",
-          "has_default": true,
-          "validation_tags": "required"
-        },
-        {
-          "name": "created_at",
-          "db_type": "timestamptz",
-          "go_type": "time.Time",
-          "go_import": "time",
-          "is_nullable": false,
-          "is_primary_key": false,
-          "is_foreign_key": false,
-          "default_value": "now()",
-          "has_default": true,
-          "validation_tags": "required"
-        },
-        {
-          "name": "updated_at",
-          "db_type": "timestamptz",
-          "go_type": "time.Time",
-          "go_import": "time",
-          "is_nullable": false,
-          "is_primary_key": false,
-          "is_foreign_key": false,
-          "default_value": "now()",
-          "has_default": true,
-          "validation_tags": "required"
-        },
-        {
-          "name": "staged_at",
-          "db_type": "timestamptz",
-          "go_type": "*time.Time",
-          "go_import": "time",
-          "is_nullable": true,
-          "is_primary_key": false,
-          "is_foreign_key": false,
-          "has_default": false
-        },
-        {
-          "name": "completed_at",
-          "db_type": "timestamptz",
-          "go_type": "*time.Time",
-          "go_import": "time",
-          "is_nullable": true,
-          "is_primary_key": false,
-          "is_foreign_key": false,
-          "has_default": false
-        }
-      ],
-      "foreign_keys": null,
-      "indexes": [
-        {
-          "name": "idx_event_outbox_correlation",
-          "columns": [
-            "correlation_id"
-          ],
-          "unique": false,
-          "method": "btree",
-          "definition": "CREATE INDEX idx_event_outbox_correlation ON public.event_outbox USING btree (correlation_id)"
-        },
-        {
-          "name": "idx_event_outbox_pending",
-          "columns": [
-            "scheduled_for",
-            "priority",
-            "created_at"
-          ],
-          "unique": false,
-          "method": "btree",
-          "predicate": "(status = 'PENDING'::text)",
-          "definition": "CREATE INDEX idx_event_outbox_pending ON public.event_outbox USING btree (scheduled_for, priority DESC, created_at) WHERE (status = 'PENDING'::text)"
-        },
-        {
-          "name": "idx_event_outbox_type",
-          "columns": [
-            "event_type",
-            "status"
-          ],
-          "unique": false,
-          "method": "btree",
-          "definition": "CREATE INDEX idx_event_outbox_type ON public.event_outbox USING btree (event_type, status)"
-        }
-      ],
-      "constraints": [
-        {
-          "name": "event_outbox_status_check",
-          "type": "CHECK",
-          "definition": "CHECK ((status = ANY (ARRAY['PENDING'::text, 'STAGED'::text, 'COMPLETED'::text, 'FAILED'::text, 'DEAD_LETTER'::text])))",
-          "columns": [
-            "status"
-          ]
-        }
-      ]
-    },
     "groups": {
       "table_name": "groups",
       "schema": "public",
@@ -1812,13 +1541,13 @@
         {
           "name": "idx_security_events_email_failures",
           "columns": [
-            "(event_details -\u003e\u003e 'email'::text)",
+            "(event_details ->> 'email'::text)",
             "created_at"
           ],
           "unique": false,
           "method": "btree",
           "predicate": "(((event_type)::text = 'login'::text) AND ((event_status)::text = 'failure'::text))",
-          "definition": "CREATE INDEX idx_security_events_email_failures ON public.security_events USING btree (((event_details -\u003e\u003e 'email'::text)), created_at) WHERE (((event_type)::text = 'login'::text) AND ((event_status)::text = 'failure'::text))"
+          "definition": "CREATE INDEX idx_security_events_email_failures ON public.security_events USING btree (((event_details ->> 'email'::text)), created_at) WHERE (((event_type)::text = 'login'::text) AND ((event_status)::text = 'failure'::text))"
         },
         {
           "name": "idx_security_events_ip_failures",
@@ -3039,6 +2768,363 @@
           "definition": "UNIQUE (token_hash)",
           "columns": [
             "token_hash"
+          ]
+        }
+      ]
+    },
+    "event_outbox": {
+      "table_name": "event_outbox",
+      "schema": "public",
+      "primary_key": {
+        "column": "event_id",
+        "columns": [
+          "event_id"
+        ],
+        "db_type": "text",
+        "go_type": "string",
+        "has_default": false
+      },
+      "columns": [
+        {
+          "name": "event_id",
+          "db_type": "text",
+          "go_type": "string",
+          "go_import": "",
+          "is_nullable": false,
+          "is_primary_key": true,
+          "is_foreign_key": false,
+          "has_default": false,
+          "validation_tags": "required"
+        },
+        {
+          "name": "event_type",
+          "db_type": "text",
+          "go_type": "string",
+          "go_import": "",
+          "is_nullable": false,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "has_default": false,
+          "validation_tags": "required"
+        },
+        {
+          "name": "payload",
+          "db_type": "jsonb",
+          "go_type": "json.RawMessage",
+          "go_import": "encoding/json",
+          "is_nullable": false,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "has_default": false,
+          "validation_tags": "required"
+        },
+        {
+          "name": "created_at",
+          "db_type": "timestamptz",
+          "go_type": "time.Time",
+          "go_import": "time",
+          "is_nullable": false,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "default_value": "now()",
+          "has_default": true,
+          "validation_tags": "required"
+        },
+        {
+          "name": "published",
+          "db_type": "bool",
+          "go_type": "bool",
+          "go_import": "",
+          "is_nullable": false,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "default_value": "false",
+          "has_default": true,
+          "validation_tags": "required"
+        }
+      ],
+      "foreign_keys": null,
+      "indexes": [
+        {
+          "name": "idx_event_outbox_unpublished",
+          "columns": [
+            "created_at"
+          ],
+          "unique": false,
+          "method": "btree",
+          "predicate": "(published = false)",
+          "definition": "CREATE INDEX idx_event_outbox_unpublished ON public.event_outbox USING btree (created_at) WHERE (published = false)"
+        }
+      ],
+      "constraints": null
+    },
+    "job_queue": {
+      "table_name": "job_queue",
+      "schema": "public",
+      "primary_key": {
+        "column": "job_id",
+        "columns": [
+          "job_id"
+        ],
+        "db_type": "text",
+        "go_type": "string",
+        "has_default": false
+      },
+      "columns": [
+        {
+          "name": "job_id",
+          "db_type": "text",
+          "go_type": "string",
+          "go_import": "",
+          "is_nullable": false,
+          "is_primary_key": true,
+          "is_foreign_key": false,
+          "has_default": false,
+          "validation_tags": "required"
+        },
+        {
+          "name": "event_type",
+          "db_type": "text",
+          "go_type": "string",
+          "go_import": "",
+          "is_nullable": false,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "has_default": false,
+          "validation_tags": "required"
+        },
+        {
+          "name": "correlation_id",
+          "db_type": "text",
+          "go_type": "string",
+          "go_import": "",
+          "is_nullable": false,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "has_default": false,
+          "validation_tags": "required"
+        },
+        {
+          "name": "tenant_id",
+          "db_type": "text",
+          "go_type": "*string",
+          "go_import": "",
+          "is_nullable": true,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "has_default": false
+        },
+        {
+          "name": "aggregate_type",
+          "db_type": "text",
+          "go_type": "*string",
+          "go_import": "",
+          "is_nullable": true,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "has_default": false
+        },
+        {
+          "name": "aggregate_id",
+          "db_type": "text",
+          "go_type": "*string",
+          "go_import": "",
+          "is_nullable": true,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "has_default": false
+        },
+        {
+          "name": "payload",
+          "db_type": "jsonb",
+          "go_type": "json.RawMessage",
+          "go_import": "encoding/json",
+          "is_nullable": false,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "has_default": false,
+          "validation_tags": "required"
+        },
+        {
+          "name": "occurred_at",
+          "db_type": "timestamptz",
+          "go_type": "time.Time",
+          "go_import": "time",
+          "is_nullable": false,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "has_default": false,
+          "validation_tags": "required"
+        },
+        {
+          "name": "status",
+          "db_type": "text",
+          "go_type": "string",
+          "go_import": "",
+          "is_nullable": false,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "default_value": "PENDING",
+          "has_default": true,
+          "validation_tags": "required"
+        },
+        {
+          "name": "priority",
+          "db_type": "int4",
+          "go_type": "int",
+          "go_import": "",
+          "is_nullable": false,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "default_value": "0",
+          "has_default": true,
+          "precision": 32,
+          "validation_tags": "required"
+        },
+        {
+          "name": "retry_count",
+          "db_type": "int4",
+          "go_type": "int",
+          "go_import": "",
+          "is_nullable": false,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "default_value": "0",
+          "has_default": true,
+          "precision": 32,
+          "validation_tags": "required"
+        },
+        {
+          "name": "max_retries",
+          "db_type": "int4",
+          "go_type": "int",
+          "go_import": "",
+          "is_nullable": false,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "default_value": "3",
+          "has_default": true,
+          "precision": 32,
+          "validation_tags": "required"
+        },
+        {
+          "name": "worker_name",
+          "db_type": "text",
+          "go_type": "*string",
+          "go_import": "",
+          "is_nullable": true,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "has_default": false
+        },
+        {
+          "name": "failure_reason",
+          "db_type": "text",
+          "go_type": "*string",
+          "go_import": "",
+          "is_nullable": true,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "has_default": false
+        },
+        {
+          "name": "scheduled_for",
+          "db_type": "timestamptz",
+          "go_type": "time.Time",
+          "go_import": "time",
+          "is_nullable": false,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "default_value": "now()",
+          "has_default": true,
+          "validation_tags": "required"
+        },
+        {
+          "name": "created_at",
+          "db_type": "timestamptz",
+          "go_type": "time.Time",
+          "go_import": "time",
+          "is_nullable": false,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "default_value": "now()",
+          "has_default": true,
+          "validation_tags": "required"
+        },
+        {
+          "name": "updated_at",
+          "db_type": "timestamptz",
+          "go_type": "time.Time",
+          "go_import": "time",
+          "is_nullable": false,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "default_value": "now()",
+          "has_default": true,
+          "validation_tags": "required"
+        },
+        {
+          "name": "staged_at",
+          "db_type": "timestamptz",
+          "go_type": "*time.Time",
+          "go_import": "time",
+          "is_nullable": true,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "has_default": false
+        },
+        {
+          "name": "completed_at",
+          "db_type": "timestamptz",
+          "go_type": "*time.Time",
+          "go_import": "time",
+          "is_nullable": true,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "has_default": false
+        }
+      ],
+      "foreign_keys": null,
+      "indexes": [
+        {
+          "name": "idx_job_queue_correlation",
+          "columns": [
+            "correlation_id"
+          ],
+          "unique": false,
+          "method": "btree",
+          "definition": "CREATE INDEX idx_job_queue_correlation ON public.job_queue USING btree (correlation_id)"
+        },
+        {
+          "name": "idx_job_queue_pending",
+          "columns": [
+            "scheduled_for",
+            "priority",
+            "created_at"
+          ],
+          "unique": false,
+          "method": "btree",
+          "predicate": "(status = 'PENDING'::text)",
+          "definition": "CREATE INDEX idx_job_queue_pending ON public.job_queue USING btree (scheduled_for, priority DESC, created_at) WHERE (status = 'PENDING'::text)"
+        },
+        {
+          "name": "idx_job_queue_type",
+          "columns": [
+            "event_type",
+            "status"
+          ],
+          "unique": false,
+          "method": "btree",
+          "definition": "CREATE INDEX idx_job_queue_type ON public.job_queue USING btree (event_type, status)"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "job_queue_status_check",
+          "type": "CHECK",
+          "definition": "CHECK ((status = ANY (ARRAY['PENDING'::text, 'STAGED'::text, 'COMPLETED'::text, 'FAILED'::text, 'DEAD_LETTER'::text])))",
+          "columns": [
+            "status"
           ]
         }
       ]

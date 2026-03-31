@@ -49,9 +49,6 @@ type BaseEvent struct {
 	Tenant  *string `json:"tenant_id,omitempty"`
 	AggType *string `json:"aggregate_type,omitempty"`
 	AggID   *string `json:"aggregate_id,omitempty"`
-
-	// outbox marks this event for persistence to an event outbox table.
-	outbox bool
 }
 
 // Type implements Event.
@@ -133,15 +130,16 @@ func (e BaseEvent) WithAggregate(aggregateType, aggregateID string) BaseEvent {
 	return e
 }
 
-// ToOutbox marks this event for persistence to the event outbox table.
-func (e BaseEvent) ToOutbox() BaseEvent {
-	e.outbox = true
-	return e
-}
+// =============================================================================
+// Outbox Event
+// =============================================================================
 
-// IsOutbox returns true if this event should be persisted to the outbox.
-func (e BaseEvent) IsOutbox() bool {
-	return e.outbox
+// OutboxEvent is a serialized event destined for the transactional outbox.
+// Repositories create these from typed domain events; stores persist them
+// atomically with the business write.
+type OutboxEvent struct {
+	Type    string
+	Payload []byte
 }
 
 // =============================================================================
