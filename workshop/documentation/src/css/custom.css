@@ -1,0 +1,85 @@
+/**
+ * Any CSS included here will be global. The classic template
+ * bundles Infima by default. Infima is a CSS framework designed to
+ * work well for content-centric websites.
+ */
+
+/* You can override the default Infima variables here. */
+:root {
+  --ifm-navbar-height: 70px;
+  --ifm-color-primary: #192d50;
+  --ifm-color-primary-dark: #152848;
+  --ifm-color-primary-darker: #122244;
+  --ifm-color-primary-darkest: #0e1a35;
+  --ifm-color-primary-light: #1c3259;
+  --ifm-color-primary-lighter: #1f3762;
+  --ifm-color-primary-lightest: #26447a;
+  --ifm-color-accent: #d2b063;
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #d2b063;
+  --ifm-color-primary-dark: #c9a455;
+  --ifm-color-primary-darker: #c59f4d;
+  --ifm-color-primary-darkest: #b88c38;
+  --ifm-color-primary-light: #d8b96e;
+  --ifm-color-primary-lighter: #ddc27a;
+  --ifm-color-primary-lightest: #e8d49a;
+  --ifm-color-accent: #192d50;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+}
+
+/* Sidebar section titles (non-clickable separators) */
+.sidebar-section-title {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ifm-color-emphasis-600);
+  margin-top: 1rem;
+  margin-bottom: 0.25rem;
+  padding: 0.25rem 0.75rem;
+  border-top: 1px solid var(--ifm-color-emphasis-200);
+  padding-top: 0.75rem;
+}
+
+.sidebar-section-title:first-child {
+  border-top: none;
+  margin-top: 0;
+  padding-top: 0.25rem;
+}
+
+/* Footer — match brand color scheme */
+.footer--dark {
+  --ifm-footer-background-color: #0e1a35;
+  --ifm-footer-color: rgba(255, 255, 255, 0.8);
+  --ifm-footer-link-color: #d2b063;
+  --ifm-footer-title-color: #fff;
+  border-top: 2px solid #d2b063;
+}
+
+.footer--dark .footer__title {
+  color: #d2b063;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.footer--dark .footer__link-item:hover {
+  color: #e8d49a;
+}
+
+.footer--dark .footer__copyright {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.8rem;
+}
+
+.footer--dark .footer__copyright a {
+  color: #d2b063;
+}
+
+.footer--dark .footer__copyright a:hover {
+  color: #e8d49a;
+}

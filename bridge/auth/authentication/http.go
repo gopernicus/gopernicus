@@ -10,11 +10,11 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
 
-// HttpRoutes registers authentication endpoints on the given route group.
+// AddHttpRoutes registers authentication endpoints on the given route group.
 //
 // authMid is the Authenticate middleware for protected endpoints.
 // Public endpoints (login, register, etc.) don't use it.
-func (b *Bridge) HttpRoutes(group *web.RouteGroup, authMid web.Middleware) {
+func (b *Bridge) AddHttpRoutes(group *web.RouteGroup, authMid web.Middleware) {
 	// Rate limit helper — unauthenticated routes fall back to IP-based keying
 	// via the default auth-aware key function. Limits are set generously to
 	// avoid locking out users behind shared IPs (corporate NAT, VPN) while

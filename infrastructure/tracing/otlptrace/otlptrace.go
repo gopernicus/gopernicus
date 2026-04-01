@@ -7,10 +7,10 @@ import (
 	"context"
 	"fmt"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 
 	"github.com/gopernicus/gopernicus/telemetry"
 )
@@ -39,13 +39,14 @@ func New(ctx context.Context, opts Options) (*telemetry.Provider, error) {
 		return nil, fmt.Errorf("creating OTLP exporter: %w", err)
 	}
 
+	// Use NewSchemaless so resource.Merge never conflicts with whatever
+	// schema version resource.Default() picks up from detectors.
 	res, err := resource.Merge(
 		resource.Default(),
-		resource.NewWithAttributes(
-			semconv.SchemaURL,
-			semconv.ServiceName(opts.ServiceName),
-			semconv.ServiceVersion(opts.ServiceVersion),
-			semconv.DeploymentEnvironmentName(opts.Environment),
+		resource.NewSchemaless(
+			attribute.String("service.name", opts.ServiceName),
+			attribute.String("service.version", opts.ServiceVersion),
+			attribute.String("deployment.environment.name", opts.Environment),
 		),
 	)
 	if err != nil {
