@@ -10,15 +10,10 @@ import (
 	"embed"
 	"fmt"
 	"log/slog"
-
-	"github.com/gopernicus/gopernicus/sdk/notify"
 )
 
-// Compile-time interface checks.
-var (
-	_ Renderer       = (*Emailer)(nil)
-	_ notify.Notifier = (*Emailer)(nil)
-)
+// Compile-time interface check.
+var _ Renderer = (*Emailer)(nil)
 
 // Email represents an email message to be sent.
 type Email struct {
@@ -36,8 +31,11 @@ type Client interface {
 }
 
 // Emailer provides email sending functionality with pluggable clients.
-// It wraps a Client implementation and adds template rendering, logging, and defaults.
+// It wraps a Client implementation and adds template rendering and defaults.
 // Emailer implements both Renderer (for templated emails) and notify.Notifier (for simple alerts).
+//
+// Logging is opt-in via WithLogger. When configured, the emailer logs send failures
+// with recipient and subject context.
 type Emailer struct {
 	log         *slog.Logger
 	client      Client
@@ -47,6 +45,15 @@ type Emailer struct {
 
 // Option configures an Emailer during construction.
 type Option func(*Emailer) error
+
+// WithLogger enables structured logging for email operations.
+// When set, the emailer logs send failures with recipient and subject context.
+func WithLogger(log *slog.Logger) Option {
+	return func(e *Emailer) error {
+		e.log = log
+		return nil
+	}
+}
 
 // WithContentTemplates registers content templates from an embed.FS under a namespace with explicit layer.
 // For example: WithContentTemplates("authentication", authTemplates, LayerCore)
@@ -87,14 +94,14 @@ func WithBranding(branding *Branding) Option {
 //
 // The client parameter determines how emails are actually sent (SendGrid, console logger, etc.).
 // The defaultFrom parameter is used when an email's From field is empty.
-func New(log *slog.Logger, client Client, defaultFrom string, opts ...Option) (*Emailer, error) {
+// Use WithLogger to enable structured logging of send failures.
+func New(client Client, defaultFrom string, opts ...Option) (*Emailer, error) {
 	templateRegistry, err := newTemplateRegistry()
 	if err != nil {
 		return nil, fmt.Errorf("initialize template registry: %w", err)
 	}
 
 	e := &Emailer{
-		log:         log,
 		client:      client,
 		defaultFrom: defaultFrom,
 		templates:   templateRegistry,
@@ -142,17 +149,6 @@ func (e *Emailer) Render(templateName string, data any, opts ...RenderOption) (h
 // notify.Notifier Implementation
 // =============================================================================
 
-// Notify implements notify.Notifier.
-// It converts a Notification into an Email and sends it.
-// The Body becomes the plain text content; no HTML rendering is done.
-func (e *Emailer) Notify(ctx context.Context, n notify.Notification) error {
-	return e.Send(ctx, Email{
-		To:      n.Recipient,
-		Subject: n.Subject,
-		Text:    n.Body,
-	})
-}
-
 // =============================================================================
 // Direct Sending
 // =============================================================================
@@ -174,25 +170,16 @@ func (e *Emailer) Send(ctx context.Context, email Email) error {
 		return fmt.Errorf("email must have either HTML or Text body")
 	}
 
-	e.log.InfoContext(ctx, "sending email",
-		slog.String("to", email.To),
-		slog.String("from", email.From),
-		slog.String("subject", email.Subject),
-	)
-
 	if err := e.client.Send(ctx, email); err != nil {
-		e.log.ErrorContext(ctx, "failed to send email",
-			slog.String("error", err.Error()),
-			slog.String("to", email.To),
-			slog.String("subject", email.Subject),
-		)
+		if e.log != nil {
+			e.log.ErrorContext(ctx, "failed to send email",
+				slog.String("error", err.Error()),
+				slog.String("to", email.To),
+				slog.String("subject", email.Subject),
+			)
+		}
 		return fmt.Errorf("send email: %w", err)
 	}
-
-	e.log.InfoContext(ctx, "email sent successfully",
-		slog.String("to", email.To),
-		slog.String("subject", email.Subject),
-	)
 
 	return nil
 }

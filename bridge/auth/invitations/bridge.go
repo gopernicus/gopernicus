@@ -1,17 +1,17 @@
 // Package invitations provides HTTP handlers for invitation endpoints.
 //
 // It bridges the [invitations.Inviter] to HTTP. Routes are registered
-// via [Bridge.HttpRoutes] onto a [*web.RouteGroup]:
+// via [Bridge.AddHttpRoutes] onto a [*web.RouteGroup]:
 //
 //	ib := invitations.New(log, inviter, authorizer, authenticator, rateLimiter)
 //	group := handler.Group("/invitations")
-//	ib.HttpRoutes(group, authMid)
+//	ib.AddHttpRoutes(group)
 package invitations
 
 import (
 	"log/slog"
 
-	"github.com/gopernicus/gopernicus/bridge/protocol/httpmid"
+	"github.com/gopernicus/gopernicus/bridge/transit/httpmid"
 	"github.com/gopernicus/gopernicus/core/auth/authentication"
 	"github.com/gopernicus/gopernicus/core/auth/authorization"
 	invitationscore "github.com/gopernicus/gopernicus/core/auth/invitations"

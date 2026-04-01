@@ -3,14 +3,13 @@ package events_test
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"testing"
 
 	"github.com/gopernicus/gopernicus/infrastructure/events"
 )
 
 func newTestRegistry() *events.EventRegistry {
-	return events.NewEventRegistry(slog.Default())
+	return events.NewEventRegistry()
 }
 
 // =============================================================================

@@ -41,6 +41,11 @@ type Options struct {
 
 	// BatchSize is the max messages to read per XREADGROUP call.
 	BatchSize int64 `env:"EVENT_BUS_BATCH_SIZE" default:"10"`
+
+	// MaxLen is the approximate maximum number of entries per stream.
+	// When set, Redis trims old entries on each XADD using approximate trimming.
+	// 0 means no trimming (streams grow unbounded).
+	MaxLen int64 `env:"EVENT_BUS_MAX_LEN" default:"0"`
 }
 
 // Bus is a Redis Streams-backed event bus.
@@ -120,6 +125,8 @@ func (b *Bus) Emit(ctx context.Context, event events.Event, opts ...events.EmitO
 	if cfg.Sync {
 		if err := b.rdb.XAdd(ctx, &redis.XAddArgs{
 			Stream: stream,
+			MaxLen: b.cfg.MaxLen,
+			Approx: b.cfg.MaxLen > 0,
 			Values: values,
 		}).Err(); err != nil {
 			return fmt.Errorf("redis xadd: %w", err)
@@ -134,6 +141,8 @@ func (b *Bus) Emit(ctx context.Context, event events.Event, opts ...events.EmitO
 		defer cancel()
 		if err := b.rdb.XAdd(publishCtx, &redis.XAddArgs{
 			Stream: stream,
+			MaxLen: b.cfg.MaxLen,
+			Approx: b.cfg.MaxLen > 0,
 			Values: values,
 		}).Err(); err != nil {
 			b.log.Error("event publish failed",

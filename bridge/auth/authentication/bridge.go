@@ -3,13 +3,13 @@
 // It bridges the [authentication.Authenticator] to HTTP using standard handler
 // signatures and the sdk/web helpers for JSON encode/decode.
 //
-// Routes are registered via [Bridge.HttpRoutes] onto a [*web.RouteGroup].
+// Routes are registered via [Bridge.AddHttpRoutes] onto a [*web.RouteGroup].
 // Includes both web (browser redirect + cookie) and mobile (JSON + flow secret)
 // OAuth flows.
 //
 //	ab := authentication.New(log, cfg, authSvc, rateLimiter)
 //	authGroup := handler.Group("/auth")
-//	ab.HttpRoutes(authGroup, authMid)
+//	ab.AddHttpRoutes(authGroup, authMid)
 package authentication
 
 import (

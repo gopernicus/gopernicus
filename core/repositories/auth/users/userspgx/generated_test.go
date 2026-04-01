@@ -14,12 +14,12 @@ import (
 
 	"github.com/gopernicus/gopernicus/core/repositories/auth/users"
 
-	fixtures "github.com/gopernicus/gopernicus/core/testing/fixtures"
+	fixtures "github.com/gopernicus/gopernicus/workshop/testing/fixtures"
 
-	"github.com/gopernicus/gopernicus/infrastructure/testing/pgxfixtures"
-	"github.com/gopernicus/gopernicus/infrastructure/testing/testpgx"
 	"github.com/gopernicus/gopernicus/sdk/fop"
 	"github.com/gopernicus/gopernicus/sdk/logger"
+	"github.com/gopernicus/gopernicus/workshop/testing/pgxfixtures"
+	"github.com/gopernicus/gopernicus/workshop/testing/testpgx"
 )
 
 // Ensure imports are used.

@@ -60,9 +60,8 @@ func (s *Store) List(ctx context.Context, filter eventoutbox.FilterList, orderBy
 
 	baseSQL := `SELECT *
 FROM public.event_outbox
-WHERE $conditions AND $search`
+WHERE $conditions`
 	baseSQL = replaceFilterPlaceholder(baseSQL, "$conditions", generatedApplyListConditionsFilter(filter, data))
-	baseSQL = replaceFilterPlaceholder(baseSQL, "$search", generatedApplyListSearchFilter(filter, data))
 
 	buf := bytes.NewBufferString(baseSQL)
 
@@ -114,7 +113,7 @@ WHERE $conditions AND $search`
 }
 
 func (s *Store) Get(ctx context.Context, eventID string) (eventoutbox.EventOutbox, error) {
-	query := `SELECT event_id, event_type, correlation_id, tenant_id, aggregate_type, aggregate_id, payload, occurred_at, status, priority, retry_count, max_retries, worker_name, failure_reason, scheduled_for, created_at, updated_at, staged_at, completed_at
+	query := `SELECT event_id, event_type, payload, created_at, published
 FROM public.event_outbox
 WHERE event_id = @event_id`
 
@@ -141,30 +140,15 @@ WHERE event_id = @event_id`
 
 func (s *Store) Create(ctx context.Context, input eventoutbox.CreateEventOutbox) (eventoutbox.EventOutbox, error) {
 	now := time.Now().UTC()
-	query := `INSERT INTO public.event_outbox (event_id, event_type, correlation_id, tenant_id, aggregate_type, aggregate_id, payload, occurred_at, status, priority, retry_count, max_retries, worker_name, failure_reason, scheduled_for, staged_at, completed_at, created_at, updated_at)
-		VALUES (@event_id, @event_type, @correlation_id, @tenant_id, @aggregate_type, @aggregate_id, @payload, @occurred_at, @status, @priority, @retry_count, @max_retries, @worker_name, @failure_reason, @scheduled_for, @staged_at, @completed_at, @_created_at, @_updated_at)
-		RETURNING event_id, event_type, correlation_id, tenant_id, aggregate_type, aggregate_id, payload, occurred_at, status, priority, retry_count, max_retries, worker_name, failure_reason, scheduled_for, created_at, updated_at, staged_at, completed_at`
+	query := `INSERT INTO public.event_outbox (event_id, event_type, payload, created_at)
+		VALUES (@event_id, @event_type, @payload, @_created_at)
+		RETURNING event_id, event_type, payload, created_at, published`
 
 	args := pgx.NamedArgs{
-		"event_id":       input.EventID,
-		"event_type":     input.EventType,
-		"correlation_id": input.CorrelationID,
-		"tenant_id":      input.TenantID,
-		"aggregate_type": input.AggregateType,
-		"aggregate_id":   input.AggregateID,
-		"payload":        input.Payload,
-		"occurred_at":    input.OccurredAt,
-		"status":         input.Status,
-		"priority":       input.Priority,
-		"retry_count":    input.RetryCount,
-		"max_retries":    input.MaxRetries,
-		"worker_name":    input.WorkerName,
-		"failure_reason": input.FailureReason,
-		"scheduled_for":  input.ScheduledFor,
-		"staged_at":      input.StagedAt,
-		"completed_at":   input.CompletedAt,
-		"_created_at":    now,
-		"_updated_at":    now,
+		"event_id":    input.EventID,
+		"event_type":  input.EventType,
+		"payload":     input.Payload,
+		"_created_at": now,
 	}
 
 	rows, err := s.db.Query(ctx, query, args)
@@ -187,79 +171,9 @@ func (s *Store) Update(ctx context.Context, eventID string, input eventoutbox.Up
 		"event_id": eventID,
 	}
 	var setClauses []string
-	if input.EventType != nil {
-		setClauses = append(setClauses, "event_type = @event_type")
-		args["event_type"] = *input.EventType
-	}
-	if input.CorrelationID != nil {
-		setClauses = append(setClauses, "correlation_id = @correlation_id")
-		args["correlation_id"] = *input.CorrelationID
-	}
-	if input.TenantID != nil {
-		setClauses = append(setClauses, "tenant_id = @tenant_id")
-		args["tenant_id"] = *input.TenantID
-	}
-	if input.AggregateType != nil {
-		setClauses = append(setClauses, "aggregate_type = @aggregate_type")
-		args["aggregate_type"] = *input.AggregateType
-	}
-	if input.AggregateID != nil {
-		setClauses = append(setClauses, "aggregate_id = @aggregate_id")
-		args["aggregate_id"] = *input.AggregateID
-	}
-	if input.Payload != nil {
-		setClauses = append(setClauses, "payload = @payload")
-		args["payload"] = *input.Payload
-	}
-	if input.OccurredAt != nil {
-		setClauses = append(setClauses, "occurred_at = @occurred_at")
-		args["occurred_at"] = *input.OccurredAt
-	}
-	if input.Status != nil {
-		setClauses = append(setClauses, "status = @status")
-		args["status"] = *input.Status
-	}
-	if input.Priority != nil {
-		setClauses = append(setClauses, "priority = @priority")
-		args["priority"] = *input.Priority
-	}
-	if input.RetryCount != nil {
-		setClauses = append(setClauses, "retry_count = @retry_count")
-		args["retry_count"] = *input.RetryCount
-	}
-	if input.MaxRetries != nil {
-		setClauses = append(setClauses, "max_retries = @max_retries")
-		args["max_retries"] = *input.MaxRetries
-	}
-	if input.WorkerName != nil {
-		setClauses = append(setClauses, "worker_name = @worker_name")
-		args["worker_name"] = *input.WorkerName
-	}
-	if input.FailureReason != nil {
-		setClauses = append(setClauses, "failure_reason = @failure_reason")
-		args["failure_reason"] = *input.FailureReason
-	}
-	if input.ScheduledFor != nil {
-		setClauses = append(setClauses, "scheduled_for = @scheduled_for")
-		args["scheduled_for"] = *input.ScheduledFor
-	}
-	if input.UpdatedAt != nil {
-		setClauses = append(setClauses, "updated_at = @updated_at")
-		args["updated_at"] = *input.UpdatedAt
-	}
-	if input.StagedAt != nil {
-		setClauses = append(setClauses, "staged_at = @staged_at")
-		args["staged_at"] = *input.StagedAt
-	}
-	if input.CompletedAt != nil {
-		setClauses = append(setClauses, "completed_at = @completed_at")
-		args["completed_at"] = *input.CompletedAt
-	}
-
-	// Auto-set updated_at if not explicitly provided.
-	if input.UpdatedAt == nil {
-		setClauses = append(setClauses, "updated_at = @updated_at")
-		args["updated_at"] = time.Now().UTC()
+	if input.Published != nil {
+		setClauses = append(setClauses, "published = @published")
+		args["published"] = *input.Published
 	}
 
 	if len(setClauses) == 0 {
@@ -268,7 +182,7 @@ func (s *Store) Update(ctx context.Context, eventID string, input eventoutbox.Up
 
 	buf.WriteString(strings.Join(setClauses, ", "))
 	buf.WriteString(" WHERE event_id = @event_id")
-	buf.WriteString(" RETURNING event_id, event_type, correlation_id, tenant_id, aggregate_type, aggregate_id, payload, occurred_at, status, priority, retry_count, max_retries, worker_name, failure_reason, scheduled_for, created_at, updated_at, staged_at, completed_at")
+	buf.WriteString(" RETURNING event_id, event_type, payload, created_at, published")
 
 	rows, err := s.db.Query(ctx, buf.String(), args)
 	if err != nil {
@@ -318,129 +232,13 @@ func replaceFilterPlaceholder(sql, placeholder, fragment string) string {
 
 func generatedApplyListConditionsFilter(filter eventoutbox.FilterList, data pgx.NamedArgs) string {
 	var conditions []string
-	if filter.EventID != nil {
-		conditions = append(conditions, "event_id = @filter_event_id")
-		data["filter_event_id"] = *filter.EventID
-	}
 	if filter.EventType != nil {
 		conditions = append(conditions, "event_type = @filter_event_type")
 		data["filter_event_type"] = *filter.EventType
 	}
-	if filter.CorrelationID != nil {
-		conditions = append(conditions, "correlation_id = @filter_correlation_id")
-		data["filter_correlation_id"] = *filter.CorrelationID
-	}
-	if filter.TenantID != nil {
-		conditions = append(conditions, "tenant_id = @filter_tenant_id")
-		data["filter_tenant_id"] = *filter.TenantID
-	}
-	if filter.AggregateType != nil {
-		conditions = append(conditions, "aggregate_type = @filter_aggregate_type")
-		data["filter_aggregate_type"] = *filter.AggregateType
-	}
-	if filter.AggregateID != nil {
-		conditions = append(conditions, "aggregate_id = @filter_aggregate_id")
-		data["filter_aggregate_id"] = *filter.AggregateID
-	}
-	if filter.Payload != nil {
-		conditions = append(conditions, "payload = @filter_payload")
-		data["filter_payload"] = *filter.Payload
-	}
-	if filter.OccurredAt != nil {
-		conditions = append(conditions, "occurred_at = @filter_occurred_at")
-		data["filter_occurred_at"] = *filter.OccurredAt
-	}
-	if filter.OccurredAtAfter != nil {
-		conditions = append(conditions, "occurred_at >= @filter_occurred_at_after")
-		data["filter_occurred_at_after"] = *filter.OccurredAtAfter
-	}
-	if filter.OccurredAtBefore != nil {
-		conditions = append(conditions, "occurred_at <= @filter_occurred_at_before")
-		data["filter_occurred_at_before"] = *filter.OccurredAtBefore
-	}
-	if filter.Status != nil {
-		conditions = append(conditions, "status = @filter_status")
-		data["filter_status"] = *filter.Status
-	}
-	if filter.Priority != nil {
-		conditions = append(conditions, "priority = @filter_priority")
-		data["filter_priority"] = *filter.Priority
-	}
-	if filter.RetryCount != nil {
-		conditions = append(conditions, "retry_count = @filter_retry_count")
-		data["filter_retry_count"] = *filter.RetryCount
-	}
-	if filter.MaxRetries != nil {
-		conditions = append(conditions, "max_retries = @filter_max_retries")
-		data["filter_max_retries"] = *filter.MaxRetries
-	}
-	if filter.WorkerName != nil {
-		conditions = append(conditions, "worker_name = @filter_worker_name")
-		data["filter_worker_name"] = *filter.WorkerName
-	}
-	if filter.FailureReason != nil {
-		conditions = append(conditions, "failure_reason = @filter_failure_reason")
-		data["filter_failure_reason"] = *filter.FailureReason
-	}
-	if filter.ScheduledFor != nil {
-		conditions = append(conditions, "scheduled_for = @filter_scheduled_for")
-		data["filter_scheduled_for"] = *filter.ScheduledFor
-	}
-	if filter.ScheduledForAfter != nil {
-		conditions = append(conditions, "scheduled_for >= @filter_scheduled_for_after")
-		data["filter_scheduled_for_after"] = *filter.ScheduledForAfter
-	}
-	if filter.ScheduledForBefore != nil {
-		conditions = append(conditions, "scheduled_for <= @filter_scheduled_for_before")
-		data["filter_scheduled_for_before"] = *filter.ScheduledForBefore
-	}
-	if filter.CreatedAt != nil {
-		conditions = append(conditions, "created_at = @filter_created_at")
-		data["filter_created_at"] = *filter.CreatedAt
-	}
-	if filter.CreatedAtAfter != nil {
-		conditions = append(conditions, "created_at >= @filter_created_at_after")
-		data["filter_created_at_after"] = *filter.CreatedAtAfter
-	}
-	if filter.CreatedAtBefore != nil {
-		conditions = append(conditions, "created_at <= @filter_created_at_before")
-		data["filter_created_at_before"] = *filter.CreatedAtBefore
-	}
-	if filter.UpdatedAt != nil {
-		conditions = append(conditions, "updated_at = @filter_updated_at")
-		data["filter_updated_at"] = *filter.UpdatedAt
-	}
-	if filter.UpdatedAtAfter != nil {
-		conditions = append(conditions, "updated_at >= @filter_updated_at_after")
-		data["filter_updated_at_after"] = *filter.UpdatedAtAfter
-	}
-	if filter.UpdatedAtBefore != nil {
-		conditions = append(conditions, "updated_at <= @filter_updated_at_before")
-		data["filter_updated_at_before"] = *filter.UpdatedAtBefore
-	}
-	if filter.StagedAt != nil {
-		conditions = append(conditions, "staged_at = @filter_staged_at")
-		data["filter_staged_at"] = *filter.StagedAt
-	}
-	if filter.StagedAtAfter != nil {
-		conditions = append(conditions, "staged_at >= @filter_staged_at_after")
-		data["filter_staged_at_after"] = *filter.StagedAtAfter
-	}
-	if filter.StagedAtBefore != nil {
-		conditions = append(conditions, "staged_at <= @filter_staged_at_before")
-		data["filter_staged_at_before"] = *filter.StagedAtBefore
-	}
-	if filter.CompletedAt != nil {
-		conditions = append(conditions, "completed_at = @filter_completed_at")
-		data["filter_completed_at"] = *filter.CompletedAt
-	}
-	if filter.CompletedAtAfter != nil {
-		conditions = append(conditions, "completed_at >= @filter_completed_at_after")
-		data["filter_completed_at_after"] = *filter.CompletedAtAfter
-	}
-	if filter.CompletedAtBefore != nil {
-		conditions = append(conditions, "completed_at <= @filter_completed_at_before")
-		data["filter_completed_at_before"] = *filter.CompletedAtBefore
+	if filter.Published != nil {
+		conditions = append(conditions, "published = @filter_published")
+		data["filter_published"] = *filter.Published
 	}
 
 	// Prefilter authorization: restrict to authorized IDs.
@@ -455,28 +253,6 @@ func generatedApplyListConditionsFilter(filter eventoutbox.FilterList, data pgx.
 		return "TRUE"
 	}
 	return strings.Join(conditions, " AND ")
-}
-
-func generatedApplyListSearchFilter(filter eventoutbox.FilterList, data pgx.NamedArgs) string {
-	if filter.SearchTerm == nil || *filter.SearchTerm == "" {
-		return "TRUE"
-	}
-	// ILIKE pattern search.
-	searchPattern := "%" + *filter.SearchTerm + "%"
-	data["search_term"] = searchPattern
-	var searchConditions []string
-	searchConditions = append(searchConditions, "event_type ILIKE @search_term")
-	searchConditions = append(searchConditions, "correlation_id ILIKE @search_term")
-	searchConditions = append(searchConditions, "tenant_id ILIKE @search_term")
-	searchConditions = append(searchConditions, "aggregate_type ILIKE @search_term")
-	searchConditions = append(searchConditions, "aggregate_id ILIKE @search_term")
-	searchConditions = append(searchConditions, "status ILIKE @search_term")
-	searchConditions = append(searchConditions, "worker_name ILIKE @search_term")
-	searchConditions = append(searchConditions, "failure_reason ILIKE @search_term")
-	if len(searchConditions) == 0 {
-		return "TRUE"
-	}
-	return strings.Join(searchConditions, " OR ")
 }
 
 // Ensure imports are used.

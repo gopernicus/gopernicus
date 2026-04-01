@@ -128,7 +128,8 @@ func NewPool(workFunc WorkFunc, cfg Options, opts ...PoolOption) *WorkerPool {
 
 // Start launches worker goroutines and blocks until all workers exit.
 // Cancel the context or call Stop() to initiate graceful shutdown.
-func (wp *WorkerPool) Start(ctx context.Context) error {
+// Critical errors (ErrPoolShutdown) are sent to the Errors() channel.
+func (wp *WorkerPool) Start(ctx context.Context) {
 	wp.startMu.Lock()
 	defer wp.startMu.Unlock()
 
@@ -165,7 +166,6 @@ func (wp *WorkerPool) Start(ctx context.Context) error {
 	wp.running = false
 	wp.stopMu.Unlock()
 
-	return nil
 }
 
 // Stop initiates graceful shutdown. Safe to call multiple times.

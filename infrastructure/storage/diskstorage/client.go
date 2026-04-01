@@ -68,7 +68,7 @@ func (c *Client) securePath(path string) (string, error) {
 func (c *Client) Upload(ctx context.Context, path string, reader io.Reader) error {
 	fullPath, err := c.securePath(path)
 	if err != nil {
-		return fmt.Errorf("disk: %w", errors.Join(storage.ErrUploadFailed, err))
+		return fmt.Errorf("disk: %w", errors.Join(storage.ErrInvalidPath, err))
 	}
 
 	// Create directory structure.
@@ -96,7 +96,7 @@ func (c *Client) Upload(ctx context.Context, path string, reader io.Reader) erro
 func (c *Client) Download(ctx context.Context, path string) (io.ReadCloser, error) {
 	fullPath, err := c.securePath(path)
 	if err != nil {
-		return nil, fmt.Errorf("disk: %w", errors.Join(storage.ErrDownloadFailed, err))
+		return nil, fmt.Errorf("disk: %w", errors.Join(storage.ErrInvalidPath, err))
 	}
 
 	file, err := os.Open(fullPath)
@@ -114,7 +114,7 @@ func (c *Client) Download(ctx context.Context, path string) (io.ReadCloser, erro
 func (c *Client) Delete(ctx context.Context, path string) error {
 	fullPath, err := c.securePath(path)
 	if err != nil {
-		return fmt.Errorf("disk: %w", errors.Join(storage.ErrDeleteFailed, err))
+		return fmt.Errorf("disk: %w", errors.Join(storage.ErrInvalidPath, err))
 	}
 
 	if err := os.Remove(fullPath); err != nil {
@@ -131,7 +131,7 @@ func (c *Client) Delete(ctx context.Context, path string) error {
 func (c *Client) Exists(ctx context.Context, path string) (bool, error) {
 	fullPath, err := c.securePath(path)
 	if err != nil {
-		return false, fmt.Errorf("disk: invalid path: %w", err)
+		return false, fmt.Errorf("disk: %w", errors.Join(storage.ErrInvalidPath, err))
 	}
 
 	_, err = os.Stat(fullPath)
@@ -148,7 +148,7 @@ func (c *Client) Exists(ctx context.Context, path string) (bool, error) {
 func (c *Client) List(ctx context.Context, prefix string) ([]string, error) {
 	fullPrefix, err := c.securePath(prefix)
 	if err != nil {
-		return nil, fmt.Errorf("disk: invalid path: %w", err)
+		return nil, fmt.Errorf("disk: %w", errors.Join(storage.ErrInvalidPath, err))
 	}
 
 	var results []string
@@ -186,7 +186,7 @@ func (c *Client) List(ctx context.Context, prefix string) ([]string, error) {
 func (c *Client) DownloadRange(ctx context.Context, path string, offset, length int64) (io.ReadCloser, error) {
 	fullPath, err := c.securePath(path)
 	if err != nil {
-		return nil, fmt.Errorf("disk: %w", errors.Join(storage.ErrDownloadFailed, err))
+		return nil, fmt.Errorf("disk: %w", errors.Join(storage.ErrInvalidPath, err))
 	}
 
 	file, err := os.Open(fullPath)
@@ -220,7 +220,7 @@ func (c *Client) DownloadRange(ctx context.Context, path string, offset, length 
 func (c *Client) GetObjectSize(ctx context.Context, path string) (int64, error) {
 	fullPath, err := c.securePath(path)
 	if err != nil {
-		return 0, fmt.Errorf("disk: invalid path: %w", err)
+		return 0, fmt.Errorf("disk: %w", errors.Join(storage.ErrInvalidPath, err))
 	}
 
 	info, err := os.Stat(fullPath)

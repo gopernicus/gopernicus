@@ -9,6 +9,16 @@ import (
 	"time"
 )
 
+// Option configures a RateLimiter during construction.
+type Option func(*RateLimiter)
+
+// WithLogger enables structured logging for rate limiter operations.
+func WithLogger(log *slog.Logger) Option {
+	return func(r *RateLimiter) {
+		r.log = log
+	}
+}
+
 // Common errors.
 var (
 	ErrRateLimitExceeded = errors.New("rate limit exceeded")
@@ -57,12 +67,16 @@ type RateLimiter struct {
 }
 
 // New creates a RateLimiter service that wraps a store and resolver.
-func New(store Storer, resolver LimitResolver, log *slog.Logger) *RateLimiter {
-	return &RateLimiter{
+// Use WithLogger to enable structured logging.
+func New(store Storer, resolver LimitResolver, opts ...Option) *RateLimiter {
+	r := &RateLimiter{
 		store:    store,
 		resolver: resolver,
-		log:      log,
 	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
 }
 
 // Allow checks if a request should be allowed, using the resolver to determine the limit.

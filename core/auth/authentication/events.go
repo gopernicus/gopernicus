@@ -18,11 +18,6 @@ const (
 	// link needs email verification.
 	EventTypeOAuthLinkVerificationRequested = "auth.oauth_link_verification_requested"
 
-	// EventTypeEmailVerified is emitted after a user's email is successfully
-	// verified. Subscribers can use this to resolve pending invitations,
-	// grant default permissions, or trigger onboarding flows.
-	EventTypeEmailVerified = "auth.email_verified"
-
 	// EventTypeUserDeletionRequested is emitted when a user deletion is
 	// initiated via [Authenticator.DeleteUser]. Subscribers handle the actual
 	// data cleanup: deleting passwords, OAuth links, verification codes,
@@ -74,17 +69,6 @@ type OAuthLinkVerificationRequestedEvent struct {
 
 func (e OAuthLinkVerificationRequestedEvent) Type() string {
 	return EventTypeOAuthLinkVerificationRequested
-}
-
-// EmailVerifiedEvent is emitted after a user's email is successfully verified.
-type EmailVerifiedEvent struct {
-	events.BaseEvent
-	UserID string `json:"user_id"`
-	Email  string `json:"email"`
-}
-
-func (e EmailVerifiedEvent) Type() string {
-	return EventTypeEmailVerified
 }
 
 // UserDeletionRequestedEvent is emitted when a user deletion is initiated.

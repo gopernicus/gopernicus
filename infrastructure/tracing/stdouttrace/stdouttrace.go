@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"os"
 
+	"go.opentelemetry.io/otel/attribute"
 	otelstdout "go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 
 	"github.com/gopernicus/gopernicus/telemetry"
 )
@@ -39,12 +39,13 @@ func New(opts Options) (*telemetry.Provider, error) {
 		return nil, fmt.Errorf("creating console exporter: %w", err)
 	}
 
+	// Use NewSchemaless so resource.Merge never conflicts with whatever
+	// schema version resource.Default() picks up from detectors.
 	res, err := resource.Merge(
 		resource.Default(),
-		resource.NewWithAttributes(
-			semconv.SchemaURL,
-			semconv.ServiceName(opts.ServiceName),
-			semconv.DeploymentEnvironmentName("development"),
+		resource.NewSchemaless(
+			attribute.String("service.name", opts.ServiceName),
+			attribute.String("deployment.environment.name", "development"),
 		),
 	)
 	if err != nil {

@@ -1,13 +1,12 @@
 -- @database: primary
 
 -- @func: List
--- @filter:conditions *
--- @search: ilike(event_type, correlation_id, tenant_id, aggregate_type, aggregate_id, status, worker_name, failure_reason)
--- @order: *
+-- @filter:conditions event_type, published
+-- @order: created_at
 -- @max: 100
 SELECT *
 FROM event_outbox
-WHERE $conditions AND $search
+WHERE $conditions
 ORDER BY $order
 LIMIT $limit
 ;
@@ -19,14 +18,14 @@ WHERE event_id = @event_id
 ;
 
 -- @func: Create
--- @fields: *,-created_at,-updated_at
+-- @fields: event_id, event_type, payload
 INSERT INTO event_outbox
 ($fields)
 VALUES ($values)
 RETURNING *;
 
 -- @func: Update
--- @fields: *,-event_id,-created_at
+-- @fields: published
 UPDATE event_outbox
 SET $fields
 WHERE event_id = @event_id
@@ -36,4 +35,3 @@ RETURNING *;
 DELETE FROM event_outbox
 WHERE event_id = @event_id
 ;
-

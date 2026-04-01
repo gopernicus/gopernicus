@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/gopernicus/gopernicus/bridge/protocol/httpmid"
+	"github.com/gopernicus/gopernicus/bridge/transit/httpmid"
 	"github.com/gopernicus/gopernicus/core/auth/authorization"
 	invitationscore "github.com/gopernicus/gopernicus/core/auth/invitations"
 	invitationsrepo "github.com/gopernicus/gopernicus/core/repositories/rebac/invitations"
@@ -13,9 +13,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
 
-// HttpRoutes registers invitation endpoints on the given route group.
-//
-// authMid is the Authenticate middleware for protected endpoints.
+// AddHttpRoutes registers invitation endpoints on the given route group.
 func (b *Bridge) AddHttpRoutes(group *web.RouteGroup) {
 	// Create + list — authorized against the target resource in-handler
 	// because resource_type is dynamic (tenant, project, etc.).
