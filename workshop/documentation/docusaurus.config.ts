@@ -12,8 +12,8 @@ const config: Config = {
     v4: true,
   },
 
-  url: "https://gopernicus.com",
-  baseUrl: "/",
+  url: "https://gopernicus.github.io",
+  baseUrl: "/gopernicus/",
 
   organizationName: "gopernicus",
   projectName: "gopernicus",
