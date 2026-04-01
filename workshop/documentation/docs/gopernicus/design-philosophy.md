@@ -21,8 +21,6 @@ The authorization system is inspired by [Google Zanzibar](https://research.googl
 
 I am not affiliated any of the projects mentioned above. These are personal recommendations and I'm sure I owe many more — they were instrumental in getting Gopernicus off the ground.
 
-_— [@jrazmi](https://github.com/jrazmi)_
-
 ## Layer Hierarchy
 
 Code is organized into layers, each in its own top-level directory. The directory names are chosen so that **alphabetical order defines the import rule**.
