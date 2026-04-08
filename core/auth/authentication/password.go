@@ -103,10 +103,11 @@ func (a *Authenticator) InitiatePasswordReset(ctx context.Context, email string,
 	}
 
 	if err := a.repositories.tokens.Create(ctx, VerificationToken{
-		TokenHash: mustHashToken(token),
-		UserID:    user.UserID,
-		Purpose:   PurposePasswordReset,
-		ExpiresAt: time.Now().UTC().Add(a.config.PasswordResetExpiry),
+		Identifier: mustHashToken(token),
+		TokenHash:  mustHashToken(token),
+		UserID:     user.UserID,
+		Purpose:    PurposePasswordReset,
+		ExpiresAt:  time.Now().UTC().Add(a.config.PasswordResetExpiry),
 	}); err != nil {
 		return "", fmt.Errorf("auth password reset: store token: %w", err)
 	}
@@ -157,7 +158,14 @@ func (a *Authenticator) ResetPassword(ctx context.Context, token, newPassword st
 		return fmt.Errorf("auth reset password: hash: %w", err)
 	}
 	if err := a.repositories.passwords.Update(ctx, stored.UserID, hash); err != nil {
-		return fmt.Errorf("auth reset password: update: %w", err)
+		if errors.Is(err, errs.ErrNotFound) {
+			// OAuth-only user with no existing password — create one.
+			if err := a.repositories.passwords.Create(ctx, stored.UserID, hash); err != nil {
+				return fmt.Errorf("auth reset password: create: %w", err)
+			}
+		} else {
+			return fmt.Errorf("auth reset password: update: %w", err)
+		}
 	}
 
 	// Mark verified — reset token proves email ownership.
