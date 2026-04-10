@@ -123,7 +123,8 @@ func (a *Authenticator) sendVerificationCode(ctx context.Context, user User, pur
 //
 // The code is keyed by the user's email — appropriate for signup/email-verify
 // flows where the user may not yet have a session. For in-session destructive
-// flows, use [Authenticator.SendSensitiveOpCode] which keys by user_id.
+// flows, use [Authenticator.IssueVerificationCode] which keys by user_id and
+// supports binding the code to per-operation context.
 func (a *Authenticator) generateAndStoreVerificationCode(ctx context.Context, user User, purpose string) (string, error) {
 	// Delete any existing code for this email/purpose.
 	_ = a.repositories.codes.Delete(ctx, user.Email, purpose)
@@ -148,7 +149,6 @@ func (a *Authenticator) generateAndStoreVerificationCode(ctx context.Context, us
 		DisplayName: user.DisplayName,
 		Code:        code,
 		ExpiresIn:   a.config.VerificationCodeExpiry.String(),
-		Purpose:     purpose,
 	}); err != nil {
 		a.log.WarnContext(ctx, "failed to emit verification code event",
 			"user_id", user.UserID, "error", err)

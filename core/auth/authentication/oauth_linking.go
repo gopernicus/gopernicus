@@ -87,8 +87,10 @@ func (a *Authenticator) LinkOAuthAccount(ctx context.Context, userID, provider, 
 // [ErrCannotRemoveLastMethod].
 //
 // Does NOT require a verification code itself — callers should gate this
-// behind [Authenticator.SendSensitiveOpCode] / [Authenticator.VerifySensitiveOpCode]
-// at the bridge layer for in-session destructive flows.
+// behind [Authenticator.SendUnlinkOAuthCode] / [Authenticator.VerifyUnlinkOAuthCode]
+// at the bridge layer for in-session destructive flows. The verify method
+// also enforces that the code was issued for the same provider being unlinked,
+// so a code issued for "unlink Google" cannot be reused to unlink GitHub.
 func (a *Authenticator) UnlinkOAuthAccount(ctx context.Context, userID, provider string) error {
 	if err := a.requireOAuth(); err != nil {
 		return err

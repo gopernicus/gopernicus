@@ -296,11 +296,40 @@ func (b *Bridge) httpOAuthLinkStart(w http.ResponseWriter, r *http.Request) {
 	web.RespondRedirect(w, r, result.AuthorizationURL, http.StatusTemporaryRedirect)
 }
 
+// httpOAuthUnlinkSendCode handles POST /auth/oauth/unlink/{provider}/send-code.
+//
+// Authenticated. Issues a 6-digit verification code dedicated to the
+// unlink-OAuth flow for the named provider, and emits an
+// [authentication.UnlinkOAuthCodeRequestedEvent] for email delivery. The
+// provider is bound to the code's stored context — a code issued for one
+// provider cannot be used to unlink a different provider, and the binding
+// is enforced at the core layer when the code is verified.
+func (b *Bridge) httpOAuthUnlinkSendCode(w http.ResponseWriter, r *http.Request) {
+	userID := httpmid.GetSubjectID(r.Context())
+	provider := r.PathValue("provider")
+	if provider == "" {
+		web.RespondJSONError(w, web.ErrBadRequest("provider is required"))
+		return
+	}
+
+	if _, err := b.authenticator.SendUnlinkOAuthCode(r.Context(), userID, provider); err != nil {
+		b.log.ErrorContext(r.Context(), "send unlink oauth code failed", "provider", provider, "error", err)
+		web.RespondJSONError(w, httpErrFor(err))
+		return
+	}
+	web.RespondJSON(w, http.StatusOK, SuccessResponse{
+		Success: true,
+		Message: "verification code sent",
+	})
+}
+
 // httpOAuthUnlink handles DELETE /auth/oauth/unlink/{provider}.
 //
 // Authenticated. Requires a verification code in the request body, obtained
-// from POST /auth/sensitive/send-code. The code is validated and consumed
-// before the unlink runs — fail-fast prevents partial state changes.
+// from POST /auth/oauth/unlink/{provider}/send-code. The code is validated
+// and consumed before the unlink runs — fail-fast prevents partial state
+// changes. The verification step also enforces that the code was issued for
+// the same provider being unlinked.
 func (b *Bridge) httpOAuthUnlink(w http.ResponseWriter, r *http.Request) {
 	req, err := web.DecodeJSON[UnlinkOAuthRequest](r)
 	if err != nil {
@@ -311,8 +340,8 @@ func (b *Bridge) httpOAuthUnlink(w http.ResponseWriter, r *http.Request) {
 	userID := httpmid.GetSubjectID(r.Context())
 	provider := r.PathValue("provider")
 
-	if err := b.authenticator.VerifySensitiveOpCode(r.Context(), userID, req.VerificationCode); err != nil {
-		b.log.WarnContext(r.Context(), "unlink OAuth code verification failed", "error", err)
+	if err := b.authenticator.VerifyUnlinkOAuthCode(r.Context(), userID, req.VerificationCode, provider); err != nil {
+		b.log.WarnContext(r.Context(), "unlink OAuth code verification failed", "provider", provider, "error", err)
 		web.RespondJSONError(w, httpErrFor(err))
 		return
 	}
