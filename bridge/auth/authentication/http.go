@@ -1,7 +1,6 @@
 package authentication
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/gopernicus/gopernicus/bridge/transit/httpmid"
@@ -126,16 +125,7 @@ func (b *Bridge) httpVerifyEmail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := b.authenticator.VerifyEmail(r.Context(), req.Email, req.Code); err != nil {
-		switch {
-		case errors.Is(err, authentication.ErrCodeExpired):
-			web.RespondJSONError(w, web.ErrGone("verification code expired").WithCode("verification_code_expired"))
-		case errors.Is(err, authentication.ErrTooManyAttempts):
-			web.RespondJSONError(w, web.ErrForbidden("too many attempts").WithCode("too_many_attempts"))
-		case errors.Is(err, authentication.ErrCodeInvalid):
-			web.RespondJSONError(w, web.ErrBadRequest("invalid verification code").WithCode("verification_code_invalid"))
-		default:
-			web.RespondJSONDomainError(w, err)
-		}
+		web.RespondJSONError(w, httpErrFor(err))
 		return
 	}
 
@@ -192,12 +182,9 @@ func (b *Bridge) httpRefreshToken(w http.ResponseWriter, r *http.Request) {
 
 	result, err := b.authenticator.RefreshToken(r.Context(), refreshToken)
 	if err != nil {
-		if errors.Is(err, authentication.ErrTokenExpired) {
-			web.RespondJSONError(w, web.ErrGone("token expired").WithCode("refresh_token_expired"))
-			return
-		}
-		// ErrTokenReuse intentionally stays generic ("unauthorized").
-		web.RespondJSONDomainError(w, err)
+		// ErrTokenReuse intentionally stays generic ("unauthorized") via httpErrFor's
+		// fallback to ErrFromDomain.
+		web.RespondJSONError(w, httpErrFor(err))
 		return
 	}
 
@@ -252,12 +239,7 @@ func (b *Bridge) httpResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := b.authenticator.ResetPassword(r.Context(), req.Token, req.NewPassword); err != nil {
-		switch {
-		case errors.Is(err, authentication.ErrTokenExpired):
-			web.RespondJSONError(w, web.ErrGone("reset token expired").WithCode("reset_token_expired"))
-		default:
-			web.RespondJSONDomainError(w, err)
-		}
+		web.RespondJSONError(w, httpErrFor(err))
 		return
 	}
 
@@ -282,12 +264,7 @@ func (b *Bridge) httpChangePassword(w http.ResponseWriter, r *http.Request) {
 	sessionID := httpmid.GetSessionID(r.Context())
 
 	if err := b.authenticator.ChangePassword(r.Context(), userID, sessionID, req.CurrentPassword, req.NewPassword, req.RevokeOtherSessions); err != nil {
-		switch {
-		case errors.Is(err, authentication.ErrInvalidCredentials):
-			web.RespondJSONError(w, web.ErrBadRequest("current password is incorrect").WithCode("invalid_credentials"))
-		default:
-			web.RespondJSONDomainError(w, err)
-		}
+		web.RespondJSONError(w, httpErrFor(err))
 		return
 	}
 
