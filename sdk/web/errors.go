@@ -19,6 +19,14 @@ type Error struct {
 
 func (e *Error) Error() string { return e.Message }
 
+// WithCode returns the error with a custom code, overriding the default.
+// Useful when a generic helper (ErrGone, ErrForbidden, etc.) has the right
+// status but the domain needs a more specific code for client error handling.
+func (e *Error) WithCode(code string) *Error {
+	e.Code = code
+	return e
+}
+
 // NewError creates an error with the given status and message.
 func NewError(status int, message string) *Error {
 	return &Error{Status: status, Message: message}
