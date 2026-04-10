@@ -116,6 +116,30 @@ func (r *ResetPasswordRequest) Validate() error {
 	return errs.Err()
 }
 
+// RemovePasswordRequest is the JSON body for POST /auth/password/remove.
+// Requires a verification code obtained from POST /auth/sensitive/send-code.
+type RemovePasswordRequest struct {
+	VerificationCode string `json:"verification_code"`
+}
+
+func (r *RemovePasswordRequest) Validate() error {
+	var errs validation.Errors
+	errs.Add(validation.Required("verification_code", r.VerificationCode))
+	return errs.Err()
+}
+
+// UnlinkOAuthRequest is the JSON body for DELETE /auth/oauth/unlink/{provider}.
+// Requires a verification code obtained from POST /auth/sensitive/send-code.
+type UnlinkOAuthRequest struct {
+	VerificationCode string `json:"verification_code"`
+}
+
+func (r *UnlinkOAuthRequest) Validate() error {
+	var errs validation.Errors
+	errs.Add(validation.Required("verification_code", r.VerificationCode))
+	return errs.Err()
+}
+
 // ---------------------------------------------------------------------------
 // Response types
 // ---------------------------------------------------------------------------

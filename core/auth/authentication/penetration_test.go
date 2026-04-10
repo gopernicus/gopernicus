@@ -127,6 +127,28 @@ func (r *mockPasswordRepo) Update(_ context.Context, userID, hash string) error 
 	return nil
 }
 
+func (r *mockPasswordRepo) DeleteByUserID(_ context.Context, userID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.passwords[userID]; !ok {
+		return errs.ErrNotFound
+	}
+	delete(r.passwords, userID)
+	return nil
+}
+
+func (r *mockPasswordRepo) SetVerified(_ context.Context, userID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	p, ok := r.passwords[userID]
+	if !ok {
+		return errs.ErrNotFound
+	}
+	p.Verified = true
+	r.passwords[userID] = p
+	return nil
+}
+
 type mockSessionRepo struct {
 	mu       sync.Mutex
 	sessions map[string]Session // by SessionID
@@ -781,7 +803,7 @@ func TestAttack_CrossUserSessionAccess(t *testing.T) {
 	if user.Email != "alice@example.com" {
 		t.Fatalf("VULNERABILITY: Session returned wrong user: %s", user.Email)
 	}
-	if session.UserID != aliceLogin.UserID {
+	if session.UserID != aliceLogin.User.UserID {
 		t.Fatal("VULNERABILITY: Session UserID mismatch!")
 	}
 
@@ -863,7 +885,7 @@ func TestAttack_PasswordChangeWithoutSessionRevocation(t *testing.T) {
 	}
 
 	// Change password from device 1 WITHOUT revoking others.
-	err = h.auth.ChangePassword(ctx, login1.UserID, login1.SessionID, "OldPass1!", "NewPass1!", false)
+	err = h.auth.ChangePassword(ctx, login1.User.UserID, login1.SessionID, "OldPass1!", "NewPass1!", false)
 	if err != nil {
 		t.Fatalf("change password: %v", err)
 	}
@@ -883,7 +905,7 @@ func TestAttack_PasswordChangeWithoutSessionRevocation(t *testing.T) {
 		t.Fatalf("login3: %v", err)
 	}
 
-	err = h.auth.ChangePassword(ctx, login3.UserID, login3.SessionID, "NewPass1!", "FinalPass1!", true)
+	err = h.auth.ChangePassword(ctx, login3.User.UserID, login3.SessionID, "NewPass1!", "FinalPass1!", true)
 	if err != nil {
 		t.Fatalf("change password with revocation: %v", err)
 	}
@@ -1091,7 +1113,7 @@ func TestAttack_LogoutSessionIDGuessing(t *testing.T) {
 	}
 
 	// Try to logout with a guessed session ID.
-	err = h.auth.Logout(ctx, loginResult.UserID, "guessed_session_id")
+	err = h.auth.Logout(ctx, loginResult.User.UserID, "guessed_session_id")
 	t.Logf("Logout with guessed ID result: %v", err)
 	t.Log("DEFENDED: Logout requires userID parameter, ensuring the bridge layer " +
 		"passes the authenticated user. Session ID comes from AuthenticateSession, " +

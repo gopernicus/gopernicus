@@ -14,6 +14,7 @@ type passwordRepo interface {
 	Get(ctx context.Context, userID string) (userpasswords.UserPassword, error)
 	Create(ctx context.Context, input userpasswords.CreateUserPassword) (userpasswords.UserPassword, error)
 	Update(ctx context.Context, userID string, input userpasswords.UpdateUserPassword) (userpasswords.UserPassword, error)
+	Delete(ctx context.Context, userID string) error
 	SetVerified(ctx context.Context, updatedAt time.Time, userID string) error
 }
 
@@ -54,6 +55,10 @@ func (s *PasswordSatisfier) Update(ctx context.Context, userID, hash string) err
 		PasswordChangedAt: &now,
 	})
 	return err
+}
+
+func (s *PasswordSatisfier) DeleteByUserID(ctx context.Context, userID string) error {
+	return s.repo.Delete(ctx, userID)
 }
 
 func (s *PasswordSatisfier) SetVerified(ctx context.Context, userID string) error {

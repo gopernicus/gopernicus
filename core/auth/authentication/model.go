@@ -204,6 +204,11 @@ const (
 	PurposeOAuthLink     = "oauth_link"
 	PurposeOAuthState    = "oauth_state"
 	PurposePendingLink   = "pending_oauth_link"
+	// PurposeSensitiveOp gates destructive in-session operations (unlink OAuth,
+	// remove password, etc). The code is keyed by user_id (not email) because
+	// the user is already authenticated and email may change between issuing
+	// and consuming the code.
+	PurposeSensitiveOp = "sensitive_op"
 )
 
 // Security event type constants.
@@ -223,6 +228,9 @@ const (
 	SecEventOAuthLinkVerified  = "oauth_link_verified"
 	SecEventOAuthLinked        = "oauth_linked"
 	SecEventOAuthUnlinked      = "oauth_unlinked"
+	SecEventPasswordRemoved    = "password_removed"
+	SecEventSensitiveOpCodeSent = "sensitive_op_code_sent"
+	SecEventSensitiveOpVerified = "sensitive_op_verified"
 	SecEventAPIKeyAuth         = "apikey_auth"
 	SecEventUserDeleted        = "user_deleted"
 )
@@ -253,6 +261,11 @@ type PasswordRepository interface {
 	GetByUserID(ctx context.Context, userID string) (Password, error)
 	Create(ctx context.Context, userID, hash string) error
 	Update(ctx context.Context, userID, hash string) error
+
+	// DeleteByUserID removes the password row for a user. Used by
+	// [Authenticator.RemovePassword] to support OAuth-only accounts. Returns
+	// [errs.ErrNotFound] if no password row exists.
+	DeleteByUserID(ctx context.Context, userID string) error
 
 	// SetVerified marks a password as verified (credential-level verification).
 	// Called when the user proves email ownership via verification code or

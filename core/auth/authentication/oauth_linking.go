@@ -83,7 +83,12 @@ func (a *Authenticator) LinkOAuthAccount(ctx context.Context, userID, provider, 
 // UnlinkOAuthAccount removes an OAuth provider from a user's account.
 //
 // Prevents unlinking if it's the user's only authentication method
-// (no password and no other OAuth providers).
+// (no password and no other OAuth providers) by returning
+// [ErrCannotRemoveLastMethod].
+//
+// Does NOT require a verification code itself — callers should gate this
+// behind [Authenticator.SendSensitiveOpCode] / [Authenticator.VerifySensitiveOpCode]
+// at the bridge layer for in-session destructive flows.
 func (a *Authenticator) UnlinkOAuthAccount(ctx context.Context, userID, provider string) error {
 	if err := a.requireOAuth(); err != nil {
 		return err
@@ -115,7 +120,7 @@ func (a *Authenticator) UnlinkOAuthAccount(ctx context.Context, userID, provider
 
 	// Don't allow unlinking the last auth method.
 	if !hasPassword && otherProviders == 0 {
-		return ErrCannotUnlinkLastMethod
+		return ErrCannotRemoveLastMethod
 	}
 
 	if err := a.oauthRepo.Delete(ctx, userID, provider); err != nil {

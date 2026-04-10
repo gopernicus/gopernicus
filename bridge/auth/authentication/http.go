@@ -39,6 +39,8 @@ func (b *Bridge) AddHttpRoutes(group *web.RouteGroup, authMid web.Middleware) {
 
 	// Protected routes.
 	group.POST("/password-change", b.httpChangePassword, authMid)
+	group.POST("/password/remove", b.httpRemovePassword, rl("auth:password-remove", ratelimiter.PerMinute(10)), authMid)
+	group.POST("/sensitive/send-code", b.httpSendSensitiveOpCode, rl("auth:sensitive-send", ratelimiter.PerMinute(10)), authMid)
 	group.POST("/logout", b.httpLogout, authMid)
 	group.GET("/me", b.httpMe, sessionMid)
 
@@ -53,7 +55,7 @@ func (b *Bridge) AddHttpRoutes(group *web.RouteGroup, authMid web.Middleware) {
 	// Protected OAuth routes.
 	group.POST("/oauth/link", b.httpOAuthLink, authMid)
 	group.GET("/oauth/link/start/{provider}", b.httpOAuthLinkStart, authMid)
-	group.DELETE("/oauth/unlink/{provider}", b.httpOAuthUnlink, authMid)
+	group.DELETE("/oauth/unlink/{provider}", b.httpOAuthUnlink, rl("auth:oauth-unlink", ratelimiter.PerMinute(10)), authMid)
 	group.GET("/oauth/linked", b.httpOAuthGetLinked, authMid)
 }
 
@@ -272,6 +274,58 @@ func (b *Bridge) httpChangePassword(w http.ResponseWriter, r *http.Request) {
 		Success: true,
 		Message: "password changed",
 	})
+}
+
+// httpSendSensitiveOpCode handles POST /auth/sensitive/send-code.
+//
+// Authenticated. Generates and emails a 6-digit verification code that the
+// user must present on the next request to confirm a destructive operation
+// (remove password, unlink OAuth, etc).
+//
+// Codes are one-shot — issuing a new code invalidates any prior code for the
+// same user. Codes share the same expiry and lockout machinery as other
+// verification codes.
+func (b *Bridge) httpSendSensitiveOpCode(w http.ResponseWriter, r *http.Request) {
+	userID := httpmid.GetSubjectID(r.Context())
+	if _, err := b.authenticator.SendSensitiveOpCode(r.Context(), userID); err != nil {
+		b.log.ErrorContext(r.Context(), "send sensitive op code failed", "error", err)
+		web.RespondJSONError(w, httpErrFor(err))
+		return
+	}
+	web.RespondJSON(w, http.StatusOK, SuccessResponse{
+		Success: true,
+		Message: "verification code sent",
+	})
+}
+
+// httpRemovePassword handles POST /auth/password/remove.
+//
+// Authenticated. Requires a verification code in the request body, obtained
+// from POST /auth/sensitive/send-code. Removes the user's password credential
+// — the user must have at least one linked OAuth account or this returns
+// cannot_remove_last_method.
+func (b *Bridge) httpRemovePassword(w http.ResponseWriter, r *http.Request) {
+	req, err := web.DecodeJSON[RemovePasswordRequest](r)
+	if err != nil {
+		web.RespondJSONError(w, web.ErrValidation(err))
+		return
+	}
+
+	userID := httpmid.GetSubjectID(r.Context())
+
+	if err := b.authenticator.VerifySensitiveOpCode(r.Context(), userID, req.VerificationCode); err != nil {
+		b.log.WarnContext(r.Context(), "remove password code verification failed", "error", err)
+		web.RespondJSONError(w, httpErrFor(err))
+		return
+	}
+
+	if err := b.authenticator.RemovePassword(r.Context(), userID); err != nil {
+		b.log.ErrorContext(r.Context(), "remove password failed", "error", err)
+		web.RespondJSONError(w, httpErrFor(err))
+		return
+	}
+
+	web.RespondNoContent(w)
 }
 
 func (b *Bridge) httpLogout(w http.ResponseWriter, r *http.Request) {

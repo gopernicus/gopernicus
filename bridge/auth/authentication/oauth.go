@@ -296,9 +296,26 @@ func (b *Bridge) httpOAuthLinkStart(w http.ResponseWriter, r *http.Request) {
 	web.RespondRedirect(w, r, result.AuthorizationURL, http.StatusTemporaryRedirect)
 }
 
+// httpOAuthUnlink handles DELETE /auth/oauth/unlink/{provider}.
+//
+// Authenticated. Requires a verification code in the request body, obtained
+// from POST /auth/sensitive/send-code. The code is validated and consumed
+// before the unlink runs — fail-fast prevents partial state changes.
 func (b *Bridge) httpOAuthUnlink(w http.ResponseWriter, r *http.Request) {
+	req, err := web.DecodeJSON[UnlinkOAuthRequest](r)
+	if err != nil {
+		web.RespondJSONError(w, web.ErrValidation(err))
+		return
+	}
+
 	userID := httpmid.GetSubjectID(r.Context())
 	provider := r.PathValue("provider")
+
+	if err := b.authenticator.VerifySensitiveOpCode(r.Context(), userID, req.VerificationCode); err != nil {
+		b.log.WarnContext(r.Context(), "unlink OAuth code verification failed", "error", err)
+		web.RespondJSONError(w, httpErrFor(err))
+		return
+	}
 
 	if err := b.authenticator.UnlinkOAuthAccount(r.Context(), userID, provider); err != nil {
 		b.log.ErrorContext(r.Context(), "unlink OAuth account failed", "error", err)

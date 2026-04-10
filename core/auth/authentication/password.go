@@ -193,3 +193,62 @@ func (a *Authenticator) ResetPassword(ctx context.Context, token, newPassword st
 	a.logSecurityEvent(ctx, stored.UserID, SecEventPasswordReset, SecStatusSuccess, nil)
 	return nil
 }
+
+// RemovePassword deletes the password credential for a user. This is the
+// inverse of [Authenticator.Register]'s password creation.
+//
+// Refuses with [ErrCannotRemoveLastMethod] if the password is the user's only
+// authentication method (no linked OAuth accounts). The user would otherwise
+// be locked out.
+//
+// Refuses with [ErrPasswordNotSet] if the user has no password row.
+//
+// Does NOT require a verification code itself — callers should gate this
+// behind [Authenticator.SendSensitiveOpCode] / [Authenticator.VerifySensitiveOpCode]
+// at the bridge layer. Keeping the verification step out of the core method
+// preserves the same composition pattern used elsewhere (e.g. Login +
+// VerifyEmail are separate primitives).
+//
+// Side effects on success:
+//   - the password row is deleted
+//   - any pending password reset tokens for this user are invalidated, so a
+//     stale reset link cannot recreate the password without the user's consent
+//   - a [SecEventPasswordRemoved] security event is logged
+func (a *Authenticator) RemovePassword(ctx context.Context, userID string) error {
+	// Confirm a password row exists.
+	if _, err := a.repositories.passwords.GetByUserID(ctx, userID); err != nil {
+		if errors.Is(err, errs.ErrNotFound) {
+			return ErrPasswordNotSet
+		}
+		return fmt.Errorf("auth remove password: lookup: %w", err)
+	}
+
+	// Refuse if removing the password would leave the user with no auth method.
+	// OAuth must be configured AND the user must have at least one linked account.
+	if a.oauthRepo == nil {
+		return ErrCannotRemoveLastMethod
+	}
+	accounts, err := a.oauthRepo.GetByUserID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("auth remove password: list oauth accounts: %w", err)
+	}
+	if len(accounts) == 0 {
+		return ErrCannotRemoveLastMethod
+	}
+
+	// Delete the password row.
+	if err := a.repositories.passwords.DeleteByUserID(ctx, userID); err != nil {
+		return fmt.Errorf("auth remove password: delete: %w", err)
+	}
+
+	// Invalidate any pending password reset tokens — a stale reset link should
+	// not be usable to recreate the password without the user re-initiating.
+	if err := a.repositories.tokens.DeleteByUserIDAndPurpose(ctx, userID, PurposePasswordReset); err != nil {
+		a.log.WarnContext(ctx, "failed to clear pending password reset tokens after removal",
+			"user_id", userID, "error", err)
+	}
+
+	a.log.InfoContext(ctx, "password removed", "user_id", userID)
+	a.logSecurityEvent(ctx, userID, SecEventPasswordRemoved, SecStatusSuccess, nil)
+	return nil
+}
