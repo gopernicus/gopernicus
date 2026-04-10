@@ -43,6 +43,11 @@ func Logger(log *slog.Logger) func(http.Handler) http.Handler {
 }
 
 // statusWriter wraps http.ResponseWriter to capture the status code.
+//
+// It forwards Flush() when the underlying writer is a [http.Flusher] and
+// exposes Unwrap() so [http.NewResponseController] can walk to the real
+// writer. Without these, streaming handlers wrapped by Logger would lose
+// access to the flusher and fail (SSE, chunked responses, etc.).
 type statusWriter struct {
 	http.ResponseWriter
 	status      int
@@ -62,4 +67,20 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 		w.wroteHeader = true
 	}
 	return w.ResponseWriter.Write(b)
+}
+
+// Flush implements [http.Flusher] so streaming handlers keep working when
+// this middleware is in the chain. No-op if the underlying writer is not
+// itself a flusher.
+func (w *statusWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Unwrap returns the wrapped writer so callers using
+// [http.NewResponseController] can reach the underlying implementation for
+// hijacking, deadlines, and similar escape hatches.
+func (w *statusWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
