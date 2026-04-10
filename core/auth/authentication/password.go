@@ -204,7 +204,7 @@ func (a *Authenticator) ResetPassword(ctx context.Context, token, newPassword st
 // Refuses with [ErrPasswordNotSet] if the user has no password row.
 //
 // Does NOT require a verification code itself — callers should gate this
-// behind [Authenticator.SendSensitiveOpCode] / [Authenticator.VerifySensitiveOpCode]
+// behind [Authenticator.SendRemovePasswordCode] / [Authenticator.VerifyRemovePasswordCode]
 // at the bridge layer. Keeping the verification step out of the core method
 // preserves the same composition pattern used elsewhere (e.g. Login +
 // VerifyEmail are separate primitives).

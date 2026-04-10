@@ -23,6 +23,14 @@ func AuthTemplates() embed.FS {
 }
 
 // Subscribers handles auth event subscriptions for email delivery.
+//
+// Each sensitive operation gets its own typed handler. Application-defined
+// sensitive operations should follow the same pattern: define your own
+// event type, write your own subscriber that subscribes to it, and register
+// your own template under your own emailer namespace. The framework's
+// IssueVerificationCode / ConsumeVerificationCode primitives provide the
+// reusable crypto/lockout machinery — see
+// workshop/documentation/docs/gopernicus/topics/auth/sensitive-operations.md.
 type Subscribers struct {
 	emailer     *emailer.Emailer
 	log         *slog.Logger
@@ -31,6 +39,7 @@ type Subscribers struct {
 }
 
 // NewSubscribers creates auth email subscribers.
+//
 // frontendURL is the base URL of the frontend app (e.g., "http://localhost:5173")
 // used to construct links in emails (password reset, etc.).
 func NewSubscribers(e *emailer.Emailer, log *slog.Logger, frontendURL string) *Subscribers {
@@ -46,6 +55,8 @@ func (s *Subscribers) Register(bus events.Bus) error {
 		{authentication.EventTypeVerificationCodeRequested, events.TypedHandler(s.handleVerificationCode)},
 		{authentication.EventTypePasswordResetRequested, events.TypedHandler(s.handlePasswordReset)},
 		{authentication.EventTypeOAuthLinkVerificationRequested, events.TypedHandler(s.handleOAuthLinkVerification)},
+		{authentication.EventTypeRemovePasswordCodeRequested, events.TypedHandler(s.handleRemovePasswordCode)},
+		{authentication.EventTypeUnlinkOAuthCodeRequested, events.TypedHandler(s.handleUnlinkOAuthCode)},
 	}
 
 	for _, h := range handlers {
@@ -135,6 +146,50 @@ func (s *Subscribers) handleOAuthLinkVerification(ctx context.Context, e authent
 	})
 	if err != nil {
 		s.log.ErrorContext(ctx, "failed to send oauth link verification email",
+			slog.String("email", e.Email),
+			slog.String("provider", e.Provider),
+			slog.String("error", err.Error()),
+		)
+		return err
+	}
+	return nil
+}
+
+func (s *Subscribers) handleRemovePasswordCode(ctx context.Context, e authentication.RemovePasswordCodeRequestedEvent) error {
+	err := s.emailer.RenderAndSend(ctx, emailer.SendRequest{
+		To:       e.Email,
+		Subject:  "Confirm removal of your password",
+		Template: "authentication:remove_password_verification",
+		Data: map[string]any{
+			"DisplayName": e.DisplayName,
+			"Code":        e.Code,
+			"ExpiresIn":   e.ExpiresIn,
+		},
+	})
+	if err != nil {
+		s.log.ErrorContext(ctx, "failed to send remove password verification email",
+			slog.String("email", e.Email),
+			slog.String("error", err.Error()),
+		)
+		return err
+	}
+	return nil
+}
+
+func (s *Subscribers) handleUnlinkOAuthCode(ctx context.Context, e authentication.UnlinkOAuthCodeRequestedEvent) error {
+	err := s.emailer.RenderAndSend(ctx, emailer.SendRequest{
+		To:       e.Email,
+		Subject:  fmt.Sprintf("Confirm disconnect of %s from your account", e.Provider),
+		Template: "authentication:unlink_oauth_verification",
+		Data: map[string]any{
+			"DisplayName": e.DisplayName,
+			"Provider":    e.Provider,
+			"Code":        e.Code,
+			"ExpiresIn":   e.ExpiresIn,
+		},
+	})
+	if err != nil {
+		s.log.ErrorContext(ctx, "failed to send unlink oauth verification email",
 			slog.String("email", e.Email),
 			slog.String("provider", e.Provider),
 			slog.String("error", err.Error()),

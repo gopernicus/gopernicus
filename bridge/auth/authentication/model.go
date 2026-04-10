@@ -117,7 +117,7 @@ func (r *ResetPasswordRequest) Validate() error {
 }
 
 // RemovePasswordRequest is the JSON body for POST /auth/password/remove.
-// Requires a verification code obtained from POST /auth/sensitive/send-code.
+// Requires a verification code obtained from POST /auth/password/remove/send-code.
 type RemovePasswordRequest struct {
 	VerificationCode string `json:"verification_code"`
 }
@@ -129,7 +129,10 @@ func (r *RemovePasswordRequest) Validate() error {
 }
 
 // UnlinkOAuthRequest is the JSON body for DELETE /auth/oauth/unlink/{provider}.
-// Requires a verification code obtained from POST /auth/sensitive/send-code.
+// Requires a verification code obtained from
+// POST /auth/oauth/unlink/{provider}/send-code. The provider in the URL path
+// must match the provider the code was issued for; mismatches are rejected
+// at the core layer with an invalid-code response.
 type UnlinkOAuthRequest struct {
 	VerificationCode string `json:"verification_code"`
 }

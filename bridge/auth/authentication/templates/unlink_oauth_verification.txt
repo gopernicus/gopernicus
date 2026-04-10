@@ -1,0 +1,15 @@
+Confirm disconnect of {{.Provider}} from your account
+{{if .DisplayName}}
+Hi {{.DisplayName}},
+{{end}}
+You requested to disconnect {{.Provider}} from your account. After this
+change, you won't be able to sign in with {{.Provider}} until you reconnect it.
+
+Use this code to confirm: {{.Code}}
+
+This code expires in {{.ExpiresIn}}.
+
+If you didn't request this change, you can safely ignore this email — your
+{{.Provider}} connection is unchanged. If you keep getting these emails,
+please secure your account by signing out of all sessions and changing your
+password.

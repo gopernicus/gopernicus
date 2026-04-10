@@ -198,17 +198,23 @@ type PendingOAuthLink struct {
 }
 
 // Verification purpose constants.
+//
+// Each sensitive operation has its own purpose so that codes are isolated by
+// the operation they were issued for — a code issued to remove a password
+// cannot be reused to unlink an OAuth account, even within the same session.
+//
+// User-defined sensitive operations should declare their own purpose strings
+// (namespaced to the application) and use [Authenticator.IssueVerificationCode]
+// + [Authenticator.ConsumeVerificationCode] paired with their own typed
+// event. See workshop/documentation/docs/gopernicus/topics/auth/sensitive-operations.md.
 const (
-	PurposeEmailVerify   = "email_verify"
-	PurposePasswordReset = "password_reset"
-	PurposeOAuthLink     = "oauth_link"
-	PurposeOAuthState    = "oauth_state"
-	PurposePendingLink   = "pending_oauth_link"
-	// PurposeSensitiveOp gates destructive in-session operations (unlink OAuth,
-	// remove password, etc). The code is keyed by user_id (not email) because
-	// the user is already authenticated and email may change between issuing
-	// and consuming the code.
-	PurposeSensitiveOp = "sensitive_op"
+	PurposeEmailVerify    = "email_verify"
+	PurposePasswordReset  = "password_reset"
+	PurposeOAuthLink      = "oauth_link"
+	PurposeOAuthState     = "oauth_state"
+	PurposePendingLink    = "pending_oauth_link"
+	PurposeRemovePassword = "remove_password"
+	PurposeUnlinkOAuth    = "unlink_oauth"
 )
 
 // Security event type constants.
@@ -229,10 +235,15 @@ const (
 	SecEventOAuthLinked        = "oauth_linked"
 	SecEventOAuthUnlinked      = "oauth_unlinked"
 	SecEventPasswordRemoved    = "password_removed"
-	SecEventSensitiveOpCodeSent = "sensitive_op_code_sent"
-	SecEventSensitiveOpVerified = "sensitive_op_verified"
-	SecEventAPIKeyAuth         = "apikey_auth"
-	SecEventUserDeleted        = "user_deleted"
+	// Per-op sensitive operation security events. Each named destructive op
+	// emits both a "code sent" and a "code verified" event so the audit trail
+	// captures both the request and the confirmation half of the flow.
+	SecEventRemovePasswordCodeSent     = "remove_password_code_sent"
+	SecEventRemovePasswordCodeVerified = "remove_password_code_verified"
+	SecEventUnlinkOAuthCodeSent        = "unlink_oauth_code_sent"
+	SecEventUnlinkOAuthCodeVerified    = "unlink_oauth_code_verified"
+	SecEventAPIKeyAuth                 = "apikey_auth"
+	SecEventUserDeleted                = "user_deleted"
 )
 
 // Security event status constants.

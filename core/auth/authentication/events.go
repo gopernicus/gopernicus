@@ -18,6 +18,15 @@ const (
 	// link needs email verification.
 	EventTypeOAuthLinkVerificationRequested = "auth.oauth_link_verification_requested"
 
+	// EventTypeRemovePasswordCodeRequested is emitted when an authenticated
+	// user requests a verification code to confirm removing their password.
+	EventTypeRemovePasswordCodeRequested = "auth.remove_password_code_requested"
+
+	// EventTypeUnlinkOAuthCodeRequested is emitted when an authenticated user
+	// requests a verification code to confirm unlinking an OAuth provider.
+	// The event carries the provider so the email body can name it.
+	EventTypeUnlinkOAuthCodeRequested = "auth.unlink_oauth_code_requested"
+
 	// EventTypeUserDeletionRequested is emitted when a user deletion is
 	// initiated via [Authenticator.DeleteUser]. Subscribers handle the actual
 	// data cleanup: deleting passwords, OAuth links, verification codes,
@@ -25,10 +34,10 @@ const (
 	EventTypeUserDeletionRequested = "auth.user_deletion_requested"
 )
 
-// VerificationCodeRequestedEvent is emitted after registration, when a code
-// is resent, or when an authenticated user requests a code to confirm a
-// destructive operation. Subscribers may branch on Purpose to render a
-// different email body — e.g. signup welcome vs "confirm a security change".
+// VerificationCodeRequestedEvent is emitted after registration or when a
+// verification code is resent. Sensitive in-session operations (remove
+// password, unlink OAuth, etc.) emit their own dedicated event types so
+// subscribers can render strongly-typed, context-rich emails per operation.
 type VerificationCodeRequestedEvent struct {
 	events.BaseEvent
 	UserID      string `json:"user_id"`
@@ -36,11 +45,6 @@ type VerificationCodeRequestedEvent struct {
 	DisplayName string `json:"display_name,omitempty"`
 	Code        string `json:"code"`
 	ExpiresIn   string `json:"expires_in"`
-	// Purpose mirrors the [VerificationCode.Purpose] of the stored code
-	// (PurposeEmailVerify, PurposeSensitiveOp, etc). Empty for events emitted
-	// before this field existed; subscribers should treat empty as the default
-	// signup/email-verify case.
-	Purpose string `json:"purpose,omitempty"`
 }
 
 func (e VerificationCodeRequestedEvent) Type() string {
@@ -76,6 +80,40 @@ type OAuthLinkVerificationRequestedEvent struct {
 
 func (e OAuthLinkVerificationRequestedEvent) Type() string {
 	return EventTypeOAuthLinkVerificationRequested
+}
+
+// RemovePasswordCodeRequestedEvent is emitted when an authenticated user
+// requests a verification code to confirm removing their password credential.
+// Subscribers should render an email that names the operation explicitly.
+type RemovePasswordCodeRequestedEvent struct {
+	events.BaseEvent
+	UserID      string `json:"user_id"`
+	Email       string `json:"email"`
+	DisplayName string `json:"display_name,omitempty"`
+	Code        string `json:"code"`
+	ExpiresIn   string `json:"expires_in"`
+}
+
+func (e RemovePasswordCodeRequestedEvent) Type() string {
+	return EventTypeRemovePasswordCodeRequested
+}
+
+// UnlinkOAuthCodeRequestedEvent is emitted when an authenticated user
+// requests a verification code to confirm unlinking an OAuth provider.
+// Provider names the OAuth provider being unlinked so the email body can
+// identify it explicitly to the user.
+type UnlinkOAuthCodeRequestedEvent struct {
+	events.BaseEvent
+	UserID      string `json:"user_id"`
+	Email       string `json:"email"`
+	DisplayName string `json:"display_name,omitempty"`
+	Provider    string `json:"provider"`
+	Code        string `json:"code"`
+	ExpiresIn   string `json:"expires_in"`
+}
+
+func (e UnlinkOAuthCodeRequestedEvent) Type() string {
+	return EventTypeUnlinkOAuthCodeRequested
 }
 
 // UserDeletionRequestedEvent is emitted when a user deletion is initiated.

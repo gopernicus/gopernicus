@@ -39,8 +39,8 @@ func (b *Bridge) AddHttpRoutes(group *web.RouteGroup, authMid web.Middleware) {
 
 	// Protected routes.
 	group.POST("/password-change", b.httpChangePassword, authMid)
-	group.POST("/password/remove", b.httpRemovePassword, rl("auth:password-remove", ratelimiter.PerMinute(10)), authMid)
-	group.POST("/sensitive/send-code", b.httpSendSensitiveOpCode, rl("auth:sensitive-send", ratelimiter.PerMinute(10)), authMid)
+	group.POST("/password/remove/send-code", b.httpRemovePasswordSendCode, rl("auth:remove-password-send", ratelimiter.PerMinute(10)), authMid)
+	group.POST("/password/remove", b.httpRemovePassword, rl("auth:remove-password", ratelimiter.PerMinute(10)), authMid)
 	group.POST("/logout", b.httpLogout, authMid)
 	group.GET("/me", b.httpMe, sessionMid)
 
@@ -55,7 +55,8 @@ func (b *Bridge) AddHttpRoutes(group *web.RouteGroup, authMid web.Middleware) {
 	// Protected OAuth routes.
 	group.POST("/oauth/link", b.httpOAuthLink, authMid)
 	group.GET("/oauth/link/start/{provider}", b.httpOAuthLinkStart, authMid)
-	group.DELETE("/oauth/unlink/{provider}", b.httpOAuthUnlink, rl("auth:oauth-unlink", ratelimiter.PerMinute(10)), authMid)
+	group.POST("/oauth/unlink/{provider}/send-code", b.httpOAuthUnlinkSendCode, rl("auth:unlink-oauth-send", ratelimiter.PerMinute(10)), authMid)
+	group.DELETE("/oauth/unlink/{provider}", b.httpOAuthUnlink, rl("auth:unlink-oauth", ratelimiter.PerMinute(10)), authMid)
 	group.GET("/oauth/linked", b.httpOAuthGetLinked, authMid)
 }
 
@@ -276,19 +277,21 @@ func (b *Bridge) httpChangePassword(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// httpSendSensitiveOpCode handles POST /auth/sensitive/send-code.
+// httpRemovePasswordSendCode handles POST /auth/password/remove/send-code.
 //
-// Authenticated. Generates and emails a 6-digit verification code that the
-// user must present on the next request to confirm a destructive operation
-// (remove password, unlink OAuth, etc).
+// Authenticated. Issues a 6-digit verification code dedicated to the
+// remove-password flow and emits a [authentication.RemovePasswordCodeRequestedEvent]
+// for email delivery. The code must be presented on POST /auth/password/remove
+// to confirm the operation.
 //
-// Codes are one-shot — issuing a new code invalidates any prior code for the
-// same user. Codes share the same expiry and lockout machinery as other
-// verification codes.
-func (b *Bridge) httpSendSensitiveOpCode(w http.ResponseWriter, r *http.Request) {
+// Codes are one-shot per (user, purpose) — issuing a new code invalidates
+// any prior remove-password code for the same user. Verification codes
+// issued for other sensitive operations (e.g. unlink OAuth) cannot be used
+// here, and vice versa, because they're keyed by purpose at the core layer.
+func (b *Bridge) httpRemovePasswordSendCode(w http.ResponseWriter, r *http.Request) {
 	userID := httpmid.GetSubjectID(r.Context())
-	if _, err := b.authenticator.SendSensitiveOpCode(r.Context(), userID); err != nil {
-		b.log.ErrorContext(r.Context(), "send sensitive op code failed", "error", err)
+	if _, err := b.authenticator.SendRemovePasswordCode(r.Context(), userID); err != nil {
+		b.log.ErrorContext(r.Context(), "send remove password code failed", "error", err)
 		web.RespondJSONError(w, httpErrFor(err))
 		return
 	}
@@ -301,9 +304,9 @@ func (b *Bridge) httpSendSensitiveOpCode(w http.ResponseWriter, r *http.Request)
 // httpRemovePassword handles POST /auth/password/remove.
 //
 // Authenticated. Requires a verification code in the request body, obtained
-// from POST /auth/sensitive/send-code. Removes the user's password credential
-// — the user must have at least one linked OAuth account or this returns
-// cannot_remove_last_method.
+// from POST /auth/password/remove/send-code. Removes the user's password
+// credential — the user must have at least one linked OAuth account or this
+// returns cannot_remove_last_method.
 func (b *Bridge) httpRemovePassword(w http.ResponseWriter, r *http.Request) {
 	req, err := web.DecodeJSON[RemovePasswordRequest](r)
 	if err != nil {
@@ -313,7 +316,7 @@ func (b *Bridge) httpRemovePassword(w http.ResponseWriter, r *http.Request) {
 
 	userID := httpmid.GetSubjectID(r.Context())
 
-	if err := b.authenticator.VerifySensitiveOpCode(r.Context(), userID, req.VerificationCode); err != nil {
+	if err := b.authenticator.VerifyRemovePasswordCode(r.Context(), userID, req.VerificationCode); err != nil {
 		b.log.WarnContext(r.Context(), "remove password code verification failed", "error", err)
 		web.RespondJSONError(w, httpErrFor(err))
 		return

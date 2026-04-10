@@ -1,0 +1,7 @@
+<h2>Confirm disconnect of {{.Provider}} from your account</h2>
+{{if .DisplayName}}<p>Hi {{.DisplayName}},</p>{{end}}
+<p>You requested to disconnect <strong>{{.Provider}}</strong> from your account. After this change, you won't be able to sign in with {{.Provider}} until you reconnect it.</p>
+<p>Use this code to confirm:</p>
+<p style="font-size: 24px; font-weight: bold; letter-spacing: 4px;">{{.Code}}</p>
+<p>This code expires in {{.ExpiresIn}}.</p>
+<p>If you didn't request this change, you can safely ignore this email — your {{.Provider}} connection is unchanged. If you keep getting these emails, please secure your account by signing out of all sessions and changing your password.</p>
