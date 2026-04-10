@@ -1,7 +1,6 @@
 package authentication
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/gopernicus/gopernicus/bridge/transit/httpmid"
@@ -40,6 +39,8 @@ func (b *Bridge) AddHttpRoutes(group *web.RouteGroup, authMid web.Middleware) {
 
 	// Protected routes.
 	group.POST("/password-change", b.httpChangePassword, authMid)
+	group.POST("/password/remove", b.httpRemovePassword, rl("auth:password-remove", ratelimiter.PerMinute(10)), authMid)
+	group.POST("/sensitive/send-code", b.httpSendSensitiveOpCode, rl("auth:sensitive-send", ratelimiter.PerMinute(10)), authMid)
 	group.POST("/logout", b.httpLogout, authMid)
 	group.GET("/me", b.httpMe, sessionMid)
 
@@ -54,7 +55,7 @@ func (b *Bridge) AddHttpRoutes(group *web.RouteGroup, authMid web.Middleware) {
 	// Protected OAuth routes.
 	group.POST("/oauth/link", b.httpOAuthLink, authMid)
 	group.GET("/oauth/link/start/{provider}", b.httpOAuthLinkStart, authMid)
-	group.DELETE("/oauth/unlink/{provider}", b.httpOAuthUnlink, authMid)
+	group.DELETE("/oauth/unlink/{provider}", b.httpOAuthUnlink, rl("auth:oauth-unlink", ratelimiter.PerMinute(10)), authMid)
 	group.GET("/oauth/linked", b.httpOAuthGetLinked, authMid)
 }
 
@@ -126,16 +127,7 @@ func (b *Bridge) httpVerifyEmail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := b.authenticator.VerifyEmail(r.Context(), req.Email, req.Code); err != nil {
-		switch {
-		case errors.Is(err, authentication.ErrCodeExpired):
-			web.RespondJSONError(w, web.ErrGone("verification code expired").WithCode("verification_code_expired"))
-		case errors.Is(err, authentication.ErrTooManyAttempts):
-			web.RespondJSONError(w, web.ErrForbidden("too many attempts").WithCode("too_many_attempts"))
-		case errors.Is(err, authentication.ErrCodeInvalid):
-			web.RespondJSONError(w, web.ErrBadRequest("invalid verification code").WithCode("verification_code_invalid"))
-		default:
-			web.RespondJSONDomainError(w, err)
-		}
+		web.RespondJSONError(w, httpErrFor(err))
 		return
 	}
 
@@ -192,12 +184,9 @@ func (b *Bridge) httpRefreshToken(w http.ResponseWriter, r *http.Request) {
 
 	result, err := b.authenticator.RefreshToken(r.Context(), refreshToken)
 	if err != nil {
-		if errors.Is(err, authentication.ErrTokenExpired) {
-			web.RespondJSONError(w, web.ErrGone("token expired").WithCode("refresh_token_expired"))
-			return
-		}
-		// ErrTokenReuse intentionally stays generic ("unauthorized").
-		web.RespondJSONDomainError(w, err)
+		// ErrTokenReuse intentionally stays generic ("unauthorized") via httpErrFor's
+		// fallback to ErrFromDomain.
+		web.RespondJSONError(w, httpErrFor(err))
 		return
 	}
 
@@ -252,12 +241,7 @@ func (b *Bridge) httpResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := b.authenticator.ResetPassword(r.Context(), req.Token, req.NewPassword); err != nil {
-		switch {
-		case errors.Is(err, authentication.ErrTokenExpired):
-			web.RespondJSONError(w, web.ErrGone("reset token expired").WithCode("reset_token_expired"))
-		default:
-			web.RespondJSONDomainError(w, err)
-		}
+		web.RespondJSONError(w, httpErrFor(err))
 		return
 	}
 
@@ -282,12 +266,7 @@ func (b *Bridge) httpChangePassword(w http.ResponseWriter, r *http.Request) {
 	sessionID := httpmid.GetSessionID(r.Context())
 
 	if err := b.authenticator.ChangePassword(r.Context(), userID, sessionID, req.CurrentPassword, req.NewPassword, req.RevokeOtherSessions); err != nil {
-		switch {
-		case errors.Is(err, authentication.ErrInvalidCredentials):
-			web.RespondJSONError(w, web.ErrBadRequest("current password is incorrect").WithCode("invalid_credentials"))
-		default:
-			web.RespondJSONDomainError(w, err)
-		}
+		web.RespondJSONError(w, httpErrFor(err))
 		return
 	}
 
@@ -295,6 +274,58 @@ func (b *Bridge) httpChangePassword(w http.ResponseWriter, r *http.Request) {
 		Success: true,
 		Message: "password changed",
 	})
+}
+
+// httpSendSensitiveOpCode handles POST /auth/sensitive/send-code.
+//
+// Authenticated. Generates and emails a 6-digit verification code that the
+// user must present on the next request to confirm a destructive operation
+// (remove password, unlink OAuth, etc).
+//
+// Codes are one-shot — issuing a new code invalidates any prior code for the
+// same user. Codes share the same expiry and lockout machinery as other
+// verification codes.
+func (b *Bridge) httpSendSensitiveOpCode(w http.ResponseWriter, r *http.Request) {
+	userID := httpmid.GetSubjectID(r.Context())
+	if _, err := b.authenticator.SendSensitiveOpCode(r.Context(), userID); err != nil {
+		b.log.ErrorContext(r.Context(), "send sensitive op code failed", "error", err)
+		web.RespondJSONError(w, httpErrFor(err))
+		return
+	}
+	web.RespondJSON(w, http.StatusOK, SuccessResponse{
+		Success: true,
+		Message: "verification code sent",
+	})
+}
+
+// httpRemovePassword handles POST /auth/password/remove.
+//
+// Authenticated. Requires a verification code in the request body, obtained
+// from POST /auth/sensitive/send-code. Removes the user's password credential
+// — the user must have at least one linked OAuth account or this returns
+// cannot_remove_last_method.
+func (b *Bridge) httpRemovePassword(w http.ResponseWriter, r *http.Request) {
+	req, err := web.DecodeJSON[RemovePasswordRequest](r)
+	if err != nil {
+		web.RespondJSONError(w, web.ErrValidation(err))
+		return
+	}
+
+	userID := httpmid.GetSubjectID(r.Context())
+
+	if err := b.authenticator.VerifySensitiveOpCode(r.Context(), userID, req.VerificationCode); err != nil {
+		b.log.WarnContext(r.Context(), "remove password code verification failed", "error", err)
+		web.RespondJSONError(w, httpErrFor(err))
+		return
+	}
+
+	if err := b.authenticator.RemovePassword(r.Context(), userID); err != nil {
+		b.log.ErrorContext(r.Context(), "remove password failed", "error", err)
+		web.RespondJSONError(w, httpErrFor(err))
+		return
+	}
+
+	web.RespondNoContent(w)
 }
 
 func (b *Bridge) httpLogout(w http.ResponseWriter, r *http.Request) {

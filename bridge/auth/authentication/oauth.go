@@ -36,7 +36,8 @@ func (b *Bridge) httpOAuthInitiate(w http.ResponseWriter, r *http.Request) {
 
 	result, err := b.authenticator.InitiateOAuthFlow(r.Context(), req.Provider, req.RedirectURI, mobileRedirectURI)
 	if err != nil {
-		b.handleOAuthError(w, r, err, "initiate OAuth flow")
+		b.log.ErrorContext(r.Context(), "initiate OAuth flow failed", "error", err)
+		web.RespondJSONError(w, httpErrFor(err))
 		return
 	}
 
@@ -67,7 +68,8 @@ func (b *Bridge) httpOAuthStart(w http.ResponseWriter, r *http.Request) {
 	// Web flow — no mobile redirect URI, no flow secret.
 	result, err := b.authenticator.InitiateOAuthFlow(r.Context(), provider, callbackURI, "")
 	if err != nil {
-		b.handleOAuthError(w, r, err, "initiate OAuth flow")
+		b.log.ErrorContext(r.Context(), "initiate OAuth flow failed", "error", err)
+		web.RespondJSONError(w, httpErrFor(err))
 		return
 	}
 
@@ -187,7 +189,17 @@ func (b *Bridge) httpOAuthMobileCallback(w http.ResponseWriter, r *http.Request)
 
 	result, err := b.authenticator.HandleOAuthCallback(r.Context(), provider, req.Code, req.State, req.FlowSecret)
 	if err != nil {
-		b.handleOAuthError(w, r, err, "mobile OAuth callback")
+		b.log.ErrorContext(r.Context(), "mobile OAuth callback failed", "error", err)
+		// Verification required is a 202 success, not an error: the OAuth identity
+		// matched an existing email and we sent a code to confirm the link.
+		if errors.Is(err, authentication.ErrOAuthVerificationRequired) {
+			web.RespondJSONAccepted(w, SuccessResponse{
+				Success: true,
+				Message: "check your email to verify the account link",
+			})
+			return
+		}
+		web.RespondJSONError(w, httpErrFor(err))
 		return
 	}
 
@@ -211,18 +223,7 @@ func (b *Bridge) httpOAuthVerifyLink(w http.ResponseWriter, r *http.Request) {
 
 	result, err := b.authenticator.VerifyOAuthLink(r.Context(), req.Email, req.Code)
 	if err != nil {
-		switch {
-		case errors.Is(err, authentication.ErrCodeExpired):
-			web.RespondJSONError(w, web.ErrGone("verification code expired"))
-		case errors.Is(err, authentication.ErrTooManyAttempts):
-			web.RespondJSONError(w, web.ErrForbidden("too many attempts"))
-		case errors.Is(err, authentication.ErrCodeInvalid):
-			web.RespondJSONError(w, web.ErrBadRequest("invalid verification code"))
-		case errors.Is(err, authentication.ErrOAuthAccountExists):
-			web.RespondJSONError(w, web.ErrConflict("oauth account already linked"))
-		default:
-			web.RespondJSONDomainError(w, err)
-		}
+		web.RespondJSONError(w, httpErrFor(err))
 		return
 	}
 
@@ -253,7 +254,17 @@ func (b *Bridge) httpOAuthLink(w http.ResponseWriter, r *http.Request) {
 	userID := httpmid.GetSubjectID(r.Context())
 
 	if err := b.authenticator.LinkOAuthAccount(r.Context(), userID, req.Provider, req.Code, req.State); err != nil {
-		b.handleOAuthError(w, r, err, "link OAuth account")
+		b.log.ErrorContext(r.Context(), "link OAuth account failed", "error", err)
+		// Verification required is a 202 success, not an error: we sent a code
+		// to confirm the link before attaching the OAuth identity.
+		if errors.Is(err, authentication.ErrOAuthVerificationRequired) {
+			web.RespondJSONAccepted(w, SuccessResponse{
+				Success: true,
+				Message: "check your email to verify the account link",
+			})
+			return
+		}
+		web.RespondJSONError(w, httpErrFor(err))
 		return
 	}
 
@@ -277,19 +288,38 @@ func (b *Bridge) httpOAuthLinkStart(w http.ResponseWriter, r *http.Request) {
 
 	result, err := b.authenticator.InitiateOAuthFlow(r.Context(), provider, callbackURI, "")
 	if err != nil {
-		b.handleOAuthError(w, r, err, "link OAuth initiation")
+		b.log.ErrorContext(r.Context(), "link OAuth initiation failed", "error", err)
+		web.RespondJSONError(w, httpErrFor(err))
 		return
 	}
 
 	web.RespondRedirect(w, r, result.AuthorizationURL, http.StatusTemporaryRedirect)
 }
 
+// httpOAuthUnlink handles DELETE /auth/oauth/unlink/{provider}.
+//
+// Authenticated. Requires a verification code in the request body, obtained
+// from POST /auth/sensitive/send-code. The code is validated and consumed
+// before the unlink runs — fail-fast prevents partial state changes.
 func (b *Bridge) httpOAuthUnlink(w http.ResponseWriter, r *http.Request) {
+	req, err := web.DecodeJSON[UnlinkOAuthRequest](r)
+	if err != nil {
+		web.RespondJSONError(w, web.ErrValidation(err))
+		return
+	}
+
 	userID := httpmid.GetSubjectID(r.Context())
 	provider := r.PathValue("provider")
 
+	if err := b.authenticator.VerifySensitiveOpCode(r.Context(), userID, req.VerificationCode); err != nil {
+		b.log.WarnContext(r.Context(), "unlink OAuth code verification failed", "error", err)
+		web.RespondJSONError(w, httpErrFor(err))
+		return
+	}
+
 	if err := b.authenticator.UnlinkOAuthAccount(r.Context(), userID, provider); err != nil {
-		b.handleOAuthError(w, r, err, "unlink OAuth account")
+		b.log.ErrorContext(r.Context(), "unlink OAuth account failed", "error", err)
+		web.RespondJSONError(w, httpErrFor(err))
 		return
 	}
 
@@ -317,35 +347,3 @@ func (b *Bridge) httpOAuthGetLinked(w http.ResponseWriter, r *http.Request) {
 	web.RespondJSONOK(w, resp)
 }
 
-// ---------------------------------------------------------------------------
-// Error handling
-// ---------------------------------------------------------------------------
-
-// handleOAuthError converts OAuth errors to HTTP responses.
-func (b *Bridge) handleOAuthError(w http.ResponseWriter, r *http.Request, err error, operation string) {
-	b.log.ErrorContext(r.Context(), "OAuth operation failed", "operation", operation, "error", err)
-
-	switch {
-	case errors.Is(err, authentication.ErrUnsupportedProvider):
-		web.RespondJSONError(w, web.ErrBadRequest("unsupported OAuth provider"))
-	case errors.Is(err, authentication.ErrInvalidOAuthState):
-		web.RespondJSONError(w, web.ErrUnauthorized("invalid or expired OAuth state"))
-	case errors.Is(err, authentication.ErrOAuthAccountNotLinked):
-		web.RespondJSONError(w, web.ErrNotFound("OAuth account not linked"))
-	case errors.Is(err, authentication.ErrCannotUnlinkLastMethod):
-		web.RespondJSONError(w, web.ErrConflict("cannot unlink last authentication method"))
-	case errors.Is(err, authentication.ErrOAuthAccountExists):
-		web.RespondJSONError(w, web.ErrConflict("OAuth account already linked to another user"))
-	case errors.Is(err, authentication.ErrInvalidFlowSecret):
-		web.RespondJSONError(w, web.ErrUnauthorized("invalid or missing flow secret"))
-	case errors.Is(err, authentication.ErrInvalidRedirectURI):
-		web.RespondJSONError(w, web.ErrBadRequest("invalid redirect URI"))
-	case errors.Is(err, authentication.ErrOAuthVerificationRequired):
-		web.RespondJSONAccepted(w, SuccessResponse{
-			Success: true,
-			Message: "check your email to verify the account link",
-		})
-	default:
-		web.RespondJSONDomainError(w, err)
-	}
-}

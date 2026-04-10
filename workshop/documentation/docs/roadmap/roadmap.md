@@ -61,3 +61,8 @@ This page is a work in progress. Items are unordered and unprioritized.
 
 - Additional SQL dialect support beyond PostgreSQL
 - Bring-your-own migrator integration
+
+## Testing
+
+- **Bridge auth handler tests** — `bridge/auth/authentication/` has no `http_test.go`. The handlers (verify-email, change-password, sensitive-op send/verify, remove-password, OAuth unlink, etc.) all interact with the authenticator and a mapper layer, but there is no test bootstrap for them. Bootstrapping requires a fake `Bridge` with stub repos + a real authenticator instance, plus an HTTP test server. The core layer is well covered via the `penetration` test harness, so the bridge handlers are the gap.
+- **Promote `penetration_test.go` harness to a shared `testing.go` helper** — the mocks and `testHarness` in `core/auth/authentication/penetration_test.go` are useful well beyond the penetration tests (they're already used by `sensitive_test.go`). Extracting them into a non-build-tagged helper would let other test files in the package use them without sharing the `penetration` build tag.

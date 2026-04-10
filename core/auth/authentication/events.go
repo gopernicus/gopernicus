@@ -25,8 +25,10 @@ const (
 	EventTypeUserDeletionRequested = "auth.user_deletion_requested"
 )
 
-// VerificationCodeRequestedEvent is emitted after registration or when
-// a verification code is resent.
+// VerificationCodeRequestedEvent is emitted after registration, when a code
+// is resent, or when an authenticated user requests a code to confirm a
+// destructive operation. Subscribers may branch on Purpose to render a
+// different email body — e.g. signup welcome vs "confirm a security change".
 type VerificationCodeRequestedEvent struct {
 	events.BaseEvent
 	UserID      string `json:"user_id"`
@@ -34,6 +36,11 @@ type VerificationCodeRequestedEvent struct {
 	DisplayName string `json:"display_name,omitempty"`
 	Code        string `json:"code"`
 	ExpiresIn   string `json:"expires_in"`
+	// Purpose mirrors the [VerificationCode.Purpose] of the stored code
+	// (PurposeEmailVerify, PurposeSensitiveOp, etc). Empty for events emitted
+	// before this field existed; subscribers should treat empty as the default
+	// signup/email-verify case.
+	Purpose string `json:"purpose,omitempty"`
 }
 
 func (e VerificationCodeRequestedEvent) Type() string {
