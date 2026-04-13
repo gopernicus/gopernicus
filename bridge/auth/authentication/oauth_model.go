@@ -85,7 +85,28 @@ type OAuthCallbackResponse struct {
 	IsNewUser bool          `json:"is_new_user"`
 }
 
-// OAuthAccountResponse is the JSON response for GET /oauth/linked.
+// OAuthAccountResponse is one element of the JSON response for
+// GET /auth/oauth/linked.
+//
+// Stability contract:
+//
+//   - The endpoint returns a top-level JSON array of these objects (NOT an
+//     envelope like {"items": [...]}). Frontends and generated SDKs may bind
+//     directly to []OAuthAccountResponse.
+//   - Field names, JSON tags, and types listed below are stable. Renaming
+//     or removing any of them is a breaking change to all clients.
+//   - Adding new fields is non-breaking and does not require a new endpoint.
+//     Clients should tolerate unknown fields when decoding.
+//   - The order of accounts within the array is not specified and may change.
+//   - "provider" is the canonical lowercase provider name (e.g. "google",
+//     "github") — the same string used in /auth/oauth/unlink/{provider}.
+//   - "provider_email" is the email reported by the OAuth provider at link
+//     time, not necessarily the user's account email.
+//   - "linked_at" is RFC3339 UTC.
+//
+// Future fields should be added below the existing ones to keep the contract
+// reviewable; do not reorder existing fields. Any change to this struct
+// should ship with a corresponding entry in the project changelog.
 type OAuthAccountResponse struct {
 	Provider      string    `json:"provider"`
 	ProviderEmail string    `json:"provider_email"`

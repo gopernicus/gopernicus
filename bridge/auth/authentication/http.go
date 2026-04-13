@@ -6,6 +6,7 @@ import (
 	"github.com/gopernicus/gopernicus/bridge/transit/httpmid"
 	"github.com/gopernicus/gopernicus/core/auth/authentication"
 	"github.com/gopernicus/gopernicus/infrastructure/ratelimiter"
+	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
 
@@ -38,10 +39,10 @@ func (b *Bridge) AddHttpRoutes(group *web.RouteGroup, authMid web.Middleware) {
 	sessionMid := httpmid.Authenticate(b.authenticator, b.log, httpmid.JSONErrors{}, httpmid.WithUserSession())
 
 	// Protected routes.
-	group.POST("/password-change", b.httpChangePassword, authMid)
+	group.POST("/password-change", b.httpChangePassword, rl("auth:password-change", ratelimiter.PerMinute(10)), sessionMid)
 	group.POST("/password/remove/send-code", b.httpRemovePasswordSendCode, rl("auth:remove-password-send", ratelimiter.PerMinute(10)), authMid)
 	group.POST("/password/remove", b.httpRemovePassword, rl("auth:remove-password", ratelimiter.PerMinute(10)), authMid)
-	group.POST("/logout", b.httpLogout, authMid)
+	group.POST("/logout", b.httpLogout, rl("auth:logout", ratelimiter.PerMinute(30)), sessionMid)
 	group.GET("/me", b.httpMe, sessionMid)
 
 	// Public OAuth routes — rate limited.
@@ -76,6 +77,7 @@ func (b *Bridge) httpLogin(w http.ResponseWriter, r *http.Request) {
 		// All login failures return the same 401 to prevent account enumeration.
 		// A 403 for "email not verified" vs 401 for "bad password" would reveal
 		// both that the email exists and its verification state.
+		b.log.WarnContext(r.Context(), "login failed", "error", err)
 		web.RespondJSONError(w, web.ErrUnauthorized("invalid credentials"))
 		return
 	}
@@ -109,11 +111,12 @@ func (b *Bridge) httpRegister(w http.ResponseWriter, r *http.Request) {
 	_, err = b.authenticator.Register(r.Context(), req.Email, req.Password, req.DisplayName)
 	if err != nil {
 		// Register returns nil for duplicate emails (anti-enumeration),
-		// so errors here are genuine failures.
+		// so any non-nil error is a genuine infrastructure failure.
 		b.log.ErrorContext(r.Context(), "registration failed", "error", err)
+		web.RespondJSONError(w, web.ErrInternal("registration failed"))
+		return
 	}
 
-	// Always return the same response to prevent account enumeration.
 	web.RespondJSON(w, http.StatusOK, SuccessResponse{
 		Success: true,
 		Message: "check your email for verification",
@@ -147,12 +150,16 @@ func (b *Bridge) httpResendVerification(w http.ResponseWriter, r *http.Request) 
 
 	_, err = b.authenticator.ResendVerificationCode(r.Context(), req.Email)
 	if err != nil {
-		// Swallow errors to prevent account enumeration. A "not found" or
-		// "already verified" response would reveal whether the email exists.
-		b.log.ErrorContext(r.Context(), "resend verification failed", "error", err)
+		if !errs.IsExpected(err) {
+			// Unexpected errors (DB down, etc.) are genuine failures — return 500.
+			b.log.ErrorContext(r.Context(), "resend verification failed", "error", err)
+			web.RespondJSONError(w, web.ErrInternal("resend verification failed"))
+			return
+		}
+		// Expected domain errors (not found, already verified) are swallowed to
+		// prevent account enumeration.
 	}
 
-	// Always return success regardless of outcome.
 	web.RespondJSON(w, http.StatusOK, SuccessResponse{
 		Success: true,
 		Message: "if the email exists, a verification code has been sent",
@@ -224,10 +231,15 @@ func (b *Bridge) httpInitiatePasswordReset(w http.ResponseWriter, r *http.Reques
 	}
 	_, err = b.authenticator.InitiatePasswordReset(r.Context(), req.Email, resetOpts...)
 	if err != nil {
-		b.log.ErrorContext(r.Context(), "password reset initiation failed", "error", err)
+		if !errs.IsExpected(err) {
+			b.log.ErrorContext(r.Context(), "password reset initiation failed", "error", err)
+			web.RespondJSONError(w, web.ErrInternal("password reset failed"))
+			return
+		}
+		// Expected domain errors (email not found, etc.) are swallowed to
+		// prevent account enumeration.
 	}
 
-	// Always return success to prevent account enumeration.
 	web.RespondJSON(w, http.StatusOK, SuccessResponse{
 		Success: true,
 		Message: "if the email exists, a reset link has been sent",
