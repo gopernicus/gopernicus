@@ -355,6 +355,15 @@ func (b *Bridge) httpOAuthUnlink(w http.ResponseWriter, r *http.Request) {
 	web.RespondNoContent(w)
 }
 
+// httpOAuthGetLinked handles GET /auth/oauth/linked.
+//
+// Authenticated. Returns the OAuth providers currently linked to the
+// caller's account, as a top-level JSON array of [OAuthAccountResponse].
+//
+// The response shape is part of the bridge's API contract — frontend SDKs
+// bind directly to []OAuthAccountResponse. See the doc comment on
+// [OAuthAccountResponse] for the stability rules; any change to the shape
+// should be made there with a corresponding changelog entry.
 func (b *Bridge) httpOAuthGetLinked(w http.ResponseWriter, r *http.Request) {
 	userID := httpmid.GetSubjectID(r.Context())
 
@@ -364,6 +373,8 @@ func (b *Bridge) httpOAuthGetLinked(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// NOTE: This is a top-level array, NOT an envelope. Stability is
+	// documented on OAuthAccountResponse.
 	resp := make([]OAuthAccountResponse, len(accounts))
 	for i, acct := range accounts {
 		resp[i] = OAuthAccountResponse{
