@@ -2,7 +2,11 @@ package authorization
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/gopernicus/gopernicus/infrastructure/cache"
@@ -139,6 +143,58 @@ func (s *CacheStore) GetRelationTargets(ctx context.Context, resourceType, resou
 }
 
 // =============================================================================
+// Lookup Methods (cached)
+// =============================================================================
+
+func (s *CacheStore) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID string) ([]string, error) {
+	key := s.lookupIDsKey(resourceType, relations, subjectType, subjectID)
+
+	if result, found, err := cache.GetJSON[[]string](s.cache, ctx, key); err == nil && found {
+		return result, nil
+	}
+
+	result, err := s.Storer.LookupResourceIDs(ctx, resourceType, relations, subjectType, subjectID)
+	if err != nil {
+		return nil, err
+	}
+
+	_ = cache.SetJSON(s.cache, ctx, key, result, s.ttl)
+	return result, nil
+}
+
+func (s *CacheStore) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string) ([]string, error) {
+	key := s.lookupTargetKey(resourceType, relation, targetType, targetIDs)
+
+	if result, found, err := cache.GetJSON[[]string](s.cache, ctx, key); err == nil && found {
+		return result, nil
+	}
+
+	result, err := s.Storer.LookupResourceIDsByRelationTarget(ctx, resourceType, relation, targetType, targetIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	_ = cache.SetJSON(s.cache, ctx, key, result, s.ttl)
+	return result, nil
+}
+
+func (s *CacheStore) LookupDescendantResourceIDs(ctx context.Context, resourceType, relation, subjectType string, rootIDs []string) ([]string, error) {
+	key := s.lookupDescendantsKey(resourceType, relation, subjectType, rootIDs)
+
+	if result, found, err := cache.GetJSON[[]string](s.cache, ctx, key); err == nil && found {
+		return result, nil
+	}
+
+	result, err := s.Storer.LookupDescendantResourceIDs(ctx, resourceType, relation, subjectType, rootIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	_ = cache.SetJSON(s.cache, ctx, key, result, s.ttl)
+	return result, nil
+}
+
+// =============================================================================
 // Relationship CRUD (pass-through with invalidation)
 // =============================================================================
 
@@ -190,6 +246,31 @@ func (s *CacheStore) targetsKey(resourceType, resourceID, relation string) strin
 	return fmt.Sprintf("%s:targets:%s:%s:%s", s.keyPrefix, resourceType, resourceID, relation)
 }
 
+func (s *CacheStore) lookupIDsKey(resourceType string, relations []string, subjectType, subjectID string) string {
+	sorted := make([]string, len(relations))
+	copy(sorted, relations)
+	sort.Strings(sorted)
+	return fmt.Sprintf("%s:lookup:ids:%s:%s:%s:%s", s.keyPrefix, resourceType, strings.Join(sorted, ","), subjectType, subjectID)
+}
+
+func (s *CacheStore) lookupTargetKey(resourceType, relation, targetType string, targetIDs []string) string {
+	return fmt.Sprintf("%s:lookup:target:%s:%s:%s:%s", s.keyPrefix, resourceType, relation, targetType, hashIDs(targetIDs))
+}
+
+func (s *CacheStore) lookupDescendantsKey(resourceType, relation, subjectType string, rootIDs []string) string {
+	return fmt.Sprintf("%s:lookup:descendants:%s:%s:%s:%s", s.keyPrefix, resourceType, relation, subjectType, hashIDs(rootIDs))
+}
+
+// hashIDs produces a deterministic hash of a set of IDs.
+// IDs are sorted and joined, then hashed with SHA-256 (first 16 hex chars).
+func hashIDs(ids []string) string {
+	sorted := make([]string, len(ids))
+	copy(sorted, ids)
+	sort.Strings(sorted)
+	h := sha256.Sum256([]byte(strings.Join(sorted, ",")))
+	return hex.EncodeToString(h[:8])
+}
+
 // =============================================================================
 // Cache Invalidation
 // =============================================================================
@@ -205,4 +286,12 @@ func (s *CacheStore) invalidateForTuple(ctx context.Context, resourceType, resou
 	_ = s.cache.DeletePattern(ctx, fmt.Sprintf("%s:*:%s:%s:*", s.keyPrefix, resourceType, resourceID))
 	// Invalidate all checks/exists involving this subject.
 	_ = s.cache.DeletePattern(ctx, fmt.Sprintf("%s:*:*:*:*:%s:%s", s.keyPrefix, subjectType, subjectID))
+	// Invalidate lookup caches for this resource type.
+	s.invalidateLookupCaches(ctx, resourceType)
+}
+
+// invalidateLookupCaches removes all cached lookup results for a resource type.
+// Called when any relationship on that resource type is created or deleted.
+func (s *CacheStore) invalidateLookupCaches(ctx context.Context, resourceType string) {
+	_ = s.cache.DeletePattern(ctx, fmt.Sprintf("%s:lookup:*:%s:*", s.keyPrefix, resourceType))
 }

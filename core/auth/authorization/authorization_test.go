@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/infrastructure/cache"
+	"github.com/gopernicus/gopernicus/infrastructure/cache/memorycache"
 	"github.com/gopernicus/gopernicus/sdk/fop"
 )
 
@@ -282,6 +284,71 @@ func testSchema() Schema {
 
 func testAuthorizer(store *mockStorer) *Authorizer {
 	return NewAuthorizer(store, testSchema(), Config{MaxTraversalDepth: 10})
+}
+
+// testSchemaWithSpaces extends testSchema with self-referential space and
+// dashboard resource types for testing the CTE path.
+func testSchemaWithSpaces() Schema {
+	return NewSchema([]ResourceSchema{
+		{Name: "platform", Def: ResourceTypeDef{
+			Relations: map[string]RelationDef{
+				"admin": {AllowedSubjects: []SubjectTypeRef{{Type: "user"}, {Type: "service_account"}}},
+			},
+		}},
+		{Name: "tenant", Def: ResourceTypeDef{
+			Relations: map[string]RelationDef{
+				"owner":  {AllowedSubjects: []SubjectTypeRef{{Type: "user"}}},
+				"admin":  {AllowedSubjects: []SubjectTypeRef{{Type: "user"}, {Type: "service_account"}}},
+				"member": {AllowedSubjects: []SubjectTypeRef{{Type: "user"}, {Type: "service_account"}, {Type: "group", Relation: "member"}}},
+			},
+			Permissions: map[string]PermissionRule{
+				"manage": AnyOf(Direct("owner"), Direct("admin")),
+				"read":   AnyOf(Direct("owner"), Direct("admin"), Direct("member")),
+				"delete": AnyOf(Direct("owner")),
+			},
+		}},
+		{Name: "project", Def: ResourceTypeDef{
+			Relations: map[string]RelationDef{
+				"owner":  {AllowedSubjects: []SubjectTypeRef{{Type: "user"}, {Type: "service_account"}}},
+				"editor": {AllowedSubjects: []SubjectTypeRef{{Type: "user"}, {Type: "service_account"}}},
+				"viewer": {AllowedSubjects: []SubjectTypeRef{{Type: "user"}, {Type: "service_account"}}},
+				"tenant": {AllowedSubjects: []SubjectTypeRef{{Type: "tenant"}}},
+			},
+			Permissions: map[string]PermissionRule{
+				"edit": AnyOf(Direct("owner"), Direct("editor"), Through("tenant", "manage")),
+				"read": AnyOf(Direct("owner"), Direct("editor"), Direct("viewer"), Through("tenant", "read")),
+			},
+		}},
+		{Name: "space", Def: ResourceTypeDef{
+			Relations: map[string]RelationDef{
+				"parent": {AllowedSubjects: []SubjectTypeRef{{Type: "space"}}},
+				"tenant": {AllowedSubjects: []SubjectTypeRef{{Type: "tenant"}}},
+				"owner":  {AllowedSubjects: []SubjectTypeRef{{Type: "user"}}},
+				"editor": {AllowedSubjects: []SubjectTypeRef{{Type: "user"}}},
+				"viewer": {AllowedSubjects: []SubjectTypeRef{{Type: "user"}}},
+			},
+			Permissions: map[string]PermissionRule{
+				"read":   AnyOf(Direct("owner"), Direct("editor"), Direct("viewer"), Through("parent", "read")),
+				"manage": AnyOf(Direct("owner"), Through("parent", "manage")),
+			},
+		}},
+		{Name: "dashboard", Def: ResourceTypeDef{
+			Relations: map[string]RelationDef{
+				"space":  {AllowedSubjects: []SubjectTypeRef{{Type: "space"}}},
+				"owner":  {AllowedSubjects: []SubjectTypeRef{{Type: "user"}}},
+				"editor": {AllowedSubjects: []SubjectTypeRef{{Type: "user"}}},
+				"viewer": {AllowedSubjects: []SubjectTypeRef{{Type: "user"}}},
+			},
+			Permissions: map[string]PermissionRule{
+				"read":   AnyOf(Direct("owner"), Direct("editor"), Direct("viewer"), Through("space", "read")),
+				"manage": AnyOf(Direct("owner"), Through("space", "manage")),
+			},
+		}},
+	})
+}
+
+func testAuthorizerWithSpaces(store Storer) *Authorizer {
+	return NewAuthorizer(store, testSchemaWithSpaces(), Config{MaxTraversalDepth: 10})
 }
 
 // =============================================================================
@@ -1269,5 +1336,643 @@ func TestGetPermissionsForRelation(t *testing.T) {
 		if !permSet[expected] {
 			t.Errorf("expected owner to grant %q", expected)
 		}
+	}
+}
+
+// =============================================================================
+// LookupResources — Direct Relations
+// =============================================================================
+
+func TestLookupResources_DirectRelations(t *testing.T) {
+	store := newMockStorer()
+	// User has owner on proj-1 and viewer on proj-3 out of 5 projects.
+	store.addRelation("project", "proj-1", "owner", "user", "user-1")
+	store.addRelation("project", "proj-3", "viewer", "user", "user-1")
+	// Other projects exist but user has no relation.
+	authz := testAuthorizer(store)
+
+	result, err := authz.LookupResources(context.Background(), Subject{Type: "user", ID: "user-1"}, "read", "project")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Unrestricted {
+		t.Fatal("expected restricted result")
+	}
+	if len(result.IDs) != 2 {
+		t.Fatalf("expected 2 IDs, got %d: %v", len(result.IDs), result.IDs)
+	}
+	idSet := make(map[string]bool)
+	for _, id := range result.IDs {
+		idSet[id] = true
+	}
+	if !idSet["proj-1"] || !idSet["proj-3"] {
+		t.Errorf("expected proj-1 and proj-3, got %v", result.IDs)
+	}
+}
+
+func TestLookupResources_NoAccess(t *testing.T) {
+	store := newMockStorer()
+	authz := testAuthorizer(store)
+
+	result, err := authz.LookupResources(context.Background(), Subject{Type: "user", ID: "user-1"}, "read", "project")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Unrestricted {
+		t.Fatal("expected restricted result")
+	}
+	if result.IDs == nil {
+		t.Fatal("expected non-nil IDs slice")
+	}
+	if len(result.IDs) != 0 {
+		t.Fatalf("expected empty IDs, got %v", result.IDs)
+	}
+}
+
+func TestLookupResources_PlatformAdminBypass(t *testing.T) {
+	store := newMockStorer()
+	store.addRelation("platform", "main", "admin", "user", "admin-1")
+	authz := testAuthorizer(store)
+
+	result, err := authz.LookupResources(context.Background(), Subject{Type: "user", ID: "admin-1"}, "read", "project")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Unrestricted {
+		t.Fatal("expected Unrestricted=true for platform admin")
+	}
+}
+
+// =============================================================================
+// LookupResources — Through Relations (non-self-referential)
+// =============================================================================
+
+func TestLookupResources_ThroughTenantRead(t *testing.T) {
+	store := newMockStorer()
+	// User is tenant member.
+	store.addRelation("tenant", "tenant-1", "member", "user", "user-1")
+	// Projects belong to tenant-1.
+	store.addRelation("project", "proj-1", "tenant", "tenant", "tenant-1")
+	store.addRelation("project", "proj-2", "tenant", "tenant", "tenant-1")
+	authz := testAuthorizer(store)
+
+	result, err := authz.LookupResources(context.Background(), Subject{Type: "user", ID: "user-1"}, "read", "project")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Unrestricted {
+		t.Fatal("expected restricted result")
+	}
+	if len(result.IDs) != 2 {
+		t.Fatalf("expected 2 IDs, got %d: %v", len(result.IDs), result.IDs)
+	}
+}
+
+func TestLookupResources_ThroughTenantManage(t *testing.T) {
+	store := newMockStorer()
+	// User is tenant admin → has "manage" permission on tenant.
+	store.addRelation("tenant", "tenant-1", "admin", "user", "user-1")
+	// Projects in tenant-1.
+	store.addRelation("project", "proj-1", "tenant", "tenant", "tenant-1")
+	store.addRelation("project", "proj-2", "tenant", "tenant", "tenant-1")
+	authz := testAuthorizer(store)
+
+	result, err := authz.LookupResources(context.Background(), Subject{Type: "user", ID: "user-1"}, "edit", "project")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.IDs) != 2 {
+		t.Fatalf("expected 2 IDs, got %d: %v", len(result.IDs), result.IDs)
+	}
+}
+
+func TestLookupResources_MixedDirectAndThrough(t *testing.T) {
+	store := newMockStorer()
+	// Direct viewer on proj-1.
+	store.addRelation("project", "proj-1", "viewer", "user", "user-1")
+	// Tenant member on tenant-2 which has proj-2.
+	store.addRelation("tenant", "tenant-2", "member", "user", "user-1")
+	store.addRelation("project", "proj-2", "tenant", "tenant", "tenant-2")
+	authz := testAuthorizer(store)
+
+	result, err := authz.LookupResources(context.Background(), Subject{Type: "user", ID: "user-1"}, "read", "project")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	idSet := make(map[string]bool)
+	for _, id := range result.IDs {
+		idSet[id] = true
+	}
+	if !idSet["proj-1"] || !idSet["proj-2"] {
+		t.Errorf("expected both proj-1 and proj-2, got %v", result.IDs)
+	}
+}
+
+// =============================================================================
+// LookupResources — Self-Referential Through (CTE path)
+// =============================================================================
+
+func TestLookupResources_SelfRefThrough_ShallowHierarchy(t *testing.T) {
+	store := newMockStorer()
+	// S2 is child of S1 via parent relation.
+	store.addRelation("space", "S2", "parent", "space", "S1")
+	// User has viewer on S1.
+	store.addRelation("space", "S1", "viewer", "user", "U1")
+	// Dashboard D1 is in space S2.
+	store.addRelation("dashboard", "D1", "space", "space", "S2")
+	authz := testAuthorizerWithSpaces(store)
+
+	result, err := authz.LookupResources(context.Background(), Subject{Type: "user", ID: "U1"}, "read", "dashboard")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	idSet := make(map[string]bool)
+	for _, id := range result.IDs {
+		idSet[id] = true
+	}
+	if !idSet["D1"] {
+		t.Errorf("expected D1 in results, got %v", result.IDs)
+	}
+}
+
+func TestLookupResources_SelfRefThrough_DeepHierarchy(t *testing.T) {
+	store := newMockStorer()
+	// Chain: S2→S1, S3→S2, S4→S3, S5→S4.
+	store.addRelation("space", "S2", "parent", "space", "S1")
+	store.addRelation("space", "S3", "parent", "space", "S2")
+	store.addRelation("space", "S4", "parent", "space", "S3")
+	store.addRelation("space", "S5", "parent", "space", "S4")
+	// User viewer on S1.
+	store.addRelation("space", "S1", "viewer", "user", "U1")
+	// Dashboard in S5.
+	store.addRelation("dashboard", "D1", "space", "space", "S5")
+	authz := testAuthorizerWithSpaces(store)
+
+	result, err := authz.LookupResources(context.Background(), Subject{Type: "user", ID: "U1"}, "read", "dashboard")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	idSet := make(map[string]bool)
+	for _, id := range result.IDs {
+		idSet[id] = true
+	}
+	if !idSet["D1"] {
+		t.Errorf("expected D1 in results, got %v", result.IDs)
+	}
+}
+
+func TestLookupResources_SelfRefThrough_NoAccessToParent(t *testing.T) {
+	store := newMockStorer()
+	// S3 child of S2, S2 child of S1.
+	store.addRelation("space", "S2", "parent", "space", "S1")
+	store.addRelation("space", "S3", "parent", "space", "S2")
+	// User viewer on S2 only (NOT S1).
+	store.addRelation("space", "S2", "viewer", "user", "U1")
+	// Dashboard in S3 (child of S2) — should be found.
+	store.addRelation("dashboard", "D1", "space", "space", "S3")
+	// Dashboard in S1 — should NOT be found.
+	store.addRelation("dashboard", "D2", "space", "space", "S1")
+	authz := testAuthorizerWithSpaces(store)
+
+	result, err := authz.LookupResources(context.Background(), Subject{Type: "user", ID: "U1"}, "read", "dashboard")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	idSet := make(map[string]bool)
+	for _, id := range result.IDs {
+		idSet[id] = true
+	}
+	if !idSet["D1"] {
+		t.Errorf("expected D1 (child of S2), got %v", result.IDs)
+	}
+	if idSet["D2"] {
+		t.Errorf("did not expect D2 (in S1 where user has no access), got %v", result.IDs)
+	}
+}
+
+func TestLookupResources_SelfRefThrough_MultipleBranches(t *testing.T) {
+	store := newMockStorer()
+	// S1 has children S2 and S3, S2 has child S4.
+	store.addRelation("space", "S2", "parent", "space", "S1")
+	store.addRelation("space", "S3", "parent", "space", "S1")
+	store.addRelation("space", "S4", "parent", "space", "S2")
+	// User viewer on S1.
+	store.addRelation("space", "S1", "viewer", "user", "U1")
+	// Dashboards in S2, S3, S4.
+	store.addRelation("dashboard", "D1", "space", "space", "S2")
+	store.addRelation("dashboard", "D2", "space", "space", "S3")
+	store.addRelation("dashboard", "D3", "space", "space", "S4")
+	authz := testAuthorizerWithSpaces(store)
+
+	result, err := authz.LookupResources(context.Background(), Subject{Type: "user", ID: "U1"}, "read", "dashboard")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.IDs) != 3 {
+		t.Fatalf("expected 3 dashboard IDs, got %d: %v", len(result.IDs), result.IDs)
+	}
+}
+
+func TestLookupResources_SelfRefThrough_DisjointTrees(t *testing.T) {
+	store := newMockStorer()
+	// Tree 1: S1 → S2.
+	store.addRelation("space", "S2", "parent", "space", "S1")
+	// Tree 2: S5 → S6.
+	store.addRelation("space", "S6", "parent", "space", "S5")
+	// User viewer on S1, owner on S5.
+	store.addRelation("space", "S1", "viewer", "user", "U1")
+	store.addRelation("space", "S5", "owner", "user", "U1")
+	// Dashboards.
+	store.addRelation("dashboard", "D1", "space", "space", "S2")
+	store.addRelation("dashboard", "D2", "space", "space", "S6")
+	authz := testAuthorizerWithSpaces(store)
+
+	result, err := authz.LookupResources(context.Background(), Subject{Type: "user", ID: "U1"}, "read", "dashboard")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	idSet := make(map[string]bool)
+	for _, id := range result.IDs {
+		idSet[id] = true
+	}
+	if !idSet["D1"] || !idSet["D2"] {
+		t.Errorf("expected D1 and D2 from disjoint trees, got %v", result.IDs)
+	}
+}
+
+func TestLookupResources_SelfRefThrough_DirectPlusDescendant(t *testing.T) {
+	store := newMockStorer()
+	// User has direct owner on D1.
+	store.addRelation("dashboard", "D1", "owner", "user", "U1")
+	// User viewer on S1, S1 has child S2, D2 in S2.
+	store.addRelation("space", "S1", "viewer", "user", "U1")
+	store.addRelation("space", "S2", "parent", "space", "S1")
+	store.addRelation("dashboard", "D2", "space", "space", "S2")
+	authz := testAuthorizerWithSpaces(store)
+
+	result, err := authz.LookupResources(context.Background(), Subject{Type: "user", ID: "U1"}, "read", "dashboard")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	idSet := make(map[string]bool)
+	for _, id := range result.IDs {
+		idSet[id] = true
+	}
+	if !idSet["D1"] || !idSet["D2"] {
+		t.Errorf("expected D1 (direct) and D2 (through), got %v", result.IDs)
+	}
+}
+
+func TestLookupResources_SelfRefThrough_EmptyTree(t *testing.T) {
+	store := newMockStorer()
+	// User viewer on S1, but S1 has no children and no dashboards.
+	store.addRelation("space", "S1", "viewer", "user", "U1")
+	authz := testAuthorizerWithSpaces(store)
+
+	result, err := authz.LookupResources(context.Background(), Subject{Type: "user", ID: "U1"}, "read", "dashboard")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Unrestricted {
+		t.Fatal("expected restricted result")
+	}
+	if len(result.IDs) != 0 {
+		t.Fatalf("expected empty IDs, got %v", result.IDs)
+	}
+}
+
+func TestLookupResources_SelfRefThrough_CycleInData(t *testing.T) {
+	store := newMockStorer()
+	// Cycle: S1 parent S2, S2 parent S1.
+	store.addRelation("space", "S1", "parent", "space", "S2")
+	store.addRelation("space", "S2", "parent", "space", "S1")
+	// User viewer on S1.
+	store.addRelation("space", "S1", "viewer", "user", "U1")
+	// Dashboard in S2.
+	store.addRelation("dashboard", "D1", "space", "space", "S2")
+	authz := testAuthorizerWithSpaces(store)
+
+	result, err := authz.LookupResources(context.Background(), Subject{Type: "user", ID: "U1"}, "read", "dashboard")
+	if err != nil {
+		t.Fatalf("unexpected error (should not infinite loop): %v", err)
+	}
+	// Should find D1 via the cycle-safe CTE.
+	idSet := make(map[string]bool)
+	for _, id := range result.IDs {
+		idSet[id] = true
+	}
+	if !idSet["D1"] {
+		t.Errorf("expected D1 despite cycle, got %v", result.IDs)
+	}
+}
+
+// =============================================================================
+// LookupResources — Cycle Detection (non-self-referential)
+// =============================================================================
+
+func TestLookupResources_CycleDetection_CrossType(t *testing.T) {
+	schema := NewSchema([]ResourceSchema{
+		{Name: "a", Def: ResourceTypeDef{
+			Relations: map[string]RelationDef{
+				"b_ref": {AllowedSubjects: []SubjectTypeRef{{Type: "b"}}},
+			},
+			Permissions: map[string]PermissionRule{
+				"read": AnyOf(Through("b_ref", "read")),
+			},
+		}},
+		{Name: "b", Def: ResourceTypeDef{
+			Relations: map[string]RelationDef{
+				"a_ref": {AllowedSubjects: []SubjectTypeRef{{Type: "a"}}},
+			},
+			Permissions: map[string]PermissionRule{
+				"read": AnyOf(Through("a_ref", "read")),
+			},
+		}},
+	})
+	store := newMockStorer()
+	authz := NewAuthorizer(store, schema, Config{MaxTraversalDepth: 10})
+
+	result, err := authz.LookupResources(context.Background(), Subject{Type: "user", ID: "U1"}, "read", "a")
+	if err != nil {
+		t.Fatalf("unexpected error (should not loop): %v", err)
+	}
+	if result.Unrestricted {
+		t.Fatal("expected restricted result")
+	}
+	if len(result.IDs) != 0 {
+		t.Fatalf("expected empty IDs, got %v", result.IDs)
+	}
+}
+
+// =============================================================================
+// LookupDescendantResourceIDs (direct store method tests)
+// =============================================================================
+
+func TestLookupDescendantResourceIDs_LinearChain(t *testing.T) {
+	store := newMockStorer()
+	store.addRelation("space", "S2", "parent", "space", "S1")
+	store.addRelation("space", "S3", "parent", "space", "S2")
+	store.addRelation("space", "S4", "parent", "space", "S3")
+
+	ids, err := store.LookupDescendantResourceIDs(context.Background(), "space", "parent", "space", []string{"S1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ids) != 3 {
+		t.Fatalf("expected 3 descendants, got %d: %v", len(ids), ids)
+	}
+	idSet := make(map[string]bool)
+	for _, id := range ids {
+		idSet[id] = true
+	}
+	for _, expected := range []string{"S2", "S3", "S4"} {
+		if !idSet[expected] {
+			t.Errorf("expected %s in descendants", expected)
+		}
+	}
+}
+
+func TestLookupDescendantResourceIDs_BranchingTree(t *testing.T) {
+	store := newMockStorer()
+	store.addRelation("space", "S2", "parent", "space", "S1")
+	store.addRelation("space", "S3", "parent", "space", "S1")
+	store.addRelation("space", "S4", "parent", "space", "S2")
+	store.addRelation("space", "S5", "parent", "space", "S2")
+
+	ids, err := store.LookupDescendantResourceIDs(context.Background(), "space", "parent", "space", []string{"S1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ids) != 4 {
+		t.Fatalf("expected 4 descendants, got %d: %v", len(ids), ids)
+	}
+}
+
+func TestLookupDescendantResourceIDs_MultipleRoots(t *testing.T) {
+	store := newMockStorer()
+	// Tree 1: S1 → S2.
+	store.addRelation("space", "S2", "parent", "space", "S1")
+	// Tree 2: S5 → S6.
+	store.addRelation("space", "S6", "parent", "space", "S5")
+
+	ids, err := store.LookupDescendantResourceIDs(context.Background(), "space", "parent", "space", []string{"S1", "S5"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 descendants, got %d: %v", len(ids), ids)
+	}
+	idSet := make(map[string]bool)
+	for _, id := range ids {
+		idSet[id] = true
+	}
+	if !idSet["S2"] || !idSet["S6"] {
+		t.Errorf("expected S2 and S6, got %v", ids)
+	}
+}
+
+func TestLookupDescendantResourceIDs_EmptyRoots(t *testing.T) {
+	store := newMockStorer()
+
+	ids, err := store.LookupDescendantResourceIDs(context.Background(), "space", "parent", "space", []string{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("expected no descendants for empty roots, got %v", ids)
+	}
+}
+
+func TestLookupDescendantResourceIDs_NoDescendants(t *testing.T) {
+	store := newMockStorer()
+
+	ids, err := store.LookupDescendantResourceIDs(context.Background(), "space", "parent", "space", []string{"S1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("expected no descendants, got %v", ids)
+	}
+}
+
+func TestLookupDescendantResourceIDs_DataCycle(t *testing.T) {
+	store := newMockStorer()
+	store.addRelation("space", "S2", "parent", "space", "S1")
+	store.addRelation("space", "S1", "parent", "space", "S2")
+
+	ids, err := store.LookupDescendantResourceIDs(context.Background(), "space", "parent", "space", []string{"S1"})
+	if err != nil {
+		t.Fatalf("unexpected error (should not infinite loop): %v", err)
+	}
+	// Should find S2 (and possibly S1 again via cycle detection).
+	idSet := make(map[string]bool)
+	for _, id := range ids {
+		idSet[id] = true
+	}
+	if !idSet["S2"] {
+		t.Errorf("expected S2 in descendants, got %v", ids)
+	}
+}
+
+// =============================================================================
+// Cache Tests
+// =============================================================================
+
+// countingStorer wraps mockStorer and counts calls to lookup methods.
+type countingStorer struct {
+	*mockStorer
+	lookupResourceIDsCalls              int
+	lookupResourceIDsByRelationCalls    int
+	lookupDescendantResourceIDsCalls    int
+	createRelationshipsCalls            int
+	deleteRelationshipCalls             int
+}
+
+func newCountingStorer() *countingStorer {
+	return &countingStorer{mockStorer: newMockStorer()}
+}
+
+func (c *countingStorer) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID string) ([]string, error) {
+	c.lookupResourceIDsCalls++
+	return c.mockStorer.LookupResourceIDs(ctx, resourceType, relations, subjectType, subjectID)
+}
+
+func (c *countingStorer) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string) ([]string, error) {
+	c.lookupResourceIDsByRelationCalls++
+	return c.mockStorer.LookupResourceIDsByRelationTarget(ctx, resourceType, relation, targetType, targetIDs)
+}
+
+func (c *countingStorer) LookupDescendantResourceIDs(ctx context.Context, resourceType, relation, subjectType string, rootIDs []string) ([]string, error) {
+	c.lookupDescendantResourceIDsCalls++
+	return c.mockStorer.LookupDescendantResourceIDs(ctx, resourceType, relation, subjectType, rootIDs)
+}
+
+func (c *countingStorer) CreateRelationships(ctx context.Context, relationships []CreateRelationship) error {
+	c.createRelationshipsCalls++
+	return c.mockStorer.CreateRelationships(ctx, relationships)
+}
+
+func (c *countingStorer) DeleteRelationship(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) error {
+	c.deleteRelationshipCalls++
+	return c.mockStorer.DeleteRelationship(ctx, resourceType, resourceID, relation, subjectType, subjectID)
+}
+
+func newTestCache() *cache.Cache {
+	return cache.New(memorycache.New(memorycache.Config{MaxEntries: 1000}))
+}
+
+func TestCacheStore_LookupResourceIDs_CachesResult(t *testing.T) {
+	inner := newCountingStorer()
+	inner.addRelation("project", "proj-1", "owner", "user", "user-1")
+	c := newTestCache()
+	cs := NewCacheStore(inner, c)
+
+	ctx := context.Background()
+	// First call.
+	ids1, err := cs.LookupResourceIDs(ctx, "project", []string{"owner"}, "user", "user-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Second call — should hit cache.
+	ids2, err := cs.LookupResourceIDs(ctx, "project", []string{"owner"}, "user", "user-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if inner.lookupResourceIDsCalls != 1 {
+		t.Fatalf("expected inner store called once, got %d", inner.lookupResourceIDsCalls)
+	}
+	if len(ids1) != 1 || len(ids2) != 1 {
+		t.Fatalf("expected 1 ID each, got %v and %v", ids1, ids2)
+	}
+}
+
+func TestCacheStore_LookupResourceIDs_DifferentArgs_NoCacheHit(t *testing.T) {
+	inner := newCountingStorer()
+	inner.addRelation("project", "proj-1", "owner", "user", "user-1")
+	inner.addRelation("project", "proj-2", "owner", "user", "user-2")
+	c := newTestCache()
+	cs := NewCacheStore(inner, c)
+
+	ctx := context.Background()
+	_, _ = cs.LookupResourceIDs(ctx, "project", []string{"owner"}, "user", "user-1")
+	_, _ = cs.LookupResourceIDs(ctx, "project", []string{"owner"}, "user", "user-2")
+	if inner.lookupResourceIDsCalls != 2 {
+		t.Fatalf("expected 2 store calls for different subjects, got %d", inner.lookupResourceIDsCalls)
+	}
+}
+
+func TestCacheStore_LookupResourceIDsByRelationTarget_CachesResult(t *testing.T) {
+	inner := newCountingStorer()
+	inner.addRelation("project", "proj-1", "tenant", "tenant", "tenant-1")
+	c := newTestCache()
+	cs := NewCacheStore(inner, c)
+
+	ctx := context.Background()
+	_, _ = cs.LookupResourceIDsByRelationTarget(ctx, "project", "tenant", "tenant", []string{"tenant-1"})
+	_, _ = cs.LookupResourceIDsByRelationTarget(ctx, "project", "tenant", "tenant", []string{"tenant-1"})
+	if inner.lookupResourceIDsByRelationCalls != 1 {
+		t.Fatalf("expected 1 store call, got %d", inner.lookupResourceIDsByRelationCalls)
+	}
+}
+
+func TestCacheStore_LookupDescendantResourceIDs_CachesResult(t *testing.T) {
+	inner := newCountingStorer()
+	inner.addRelation("space", "S2", "parent", "space", "S1")
+	c := newTestCache()
+	cs := NewCacheStore(inner, c)
+
+	ctx := context.Background()
+	_, _ = cs.LookupDescendantResourceIDs(ctx, "space", "parent", "space", []string{"S1"})
+	_, _ = cs.LookupDescendantResourceIDs(ctx, "space", "parent", "space", []string{"S1"})
+	if inner.lookupDescendantResourceIDsCalls != 1 {
+		t.Fatalf("expected 1 store call, got %d", inner.lookupDescendantResourceIDsCalls)
+	}
+}
+
+func TestCacheStore_InvalidatesOnCreateRelationship(t *testing.T) {
+	inner := newCountingStorer()
+	inner.addRelation("project", "proj-1", "owner", "user", "user-1")
+	c := newTestCache()
+	cs := NewCacheStore(inner, c)
+
+	ctx := context.Background()
+	// Prime cache.
+	_, _ = cs.LookupResourceIDs(ctx, "project", []string{"owner"}, "user", "user-1")
+	if inner.lookupResourceIDsCalls != 1 {
+		t.Fatalf("expected 1 call after prime, got %d", inner.lookupResourceIDsCalls)
+	}
+
+	// Create relationship invalidates cache.
+	_ = cs.CreateRelationships(ctx, []CreateRelationship{
+		{ResourceType: "project", ResourceID: "proj-2", Relation: "owner", SubjectType: "user", SubjectID: "user-1"},
+	})
+
+	// Next lookup should hit store again.
+	_, _ = cs.LookupResourceIDs(ctx, "project", []string{"owner"}, "user", "user-1")
+	if inner.lookupResourceIDsCalls != 2 {
+		t.Fatalf("expected 2 calls after invalidation, got %d", inner.lookupResourceIDsCalls)
+	}
+}
+
+func TestCacheStore_InvalidatesOnDeleteRelationship(t *testing.T) {
+	inner := newCountingStorer()
+	inner.addRelation("project", "proj-1", "owner", "user", "user-1")
+	c := newTestCache()
+	cs := NewCacheStore(inner, c)
+
+	ctx := context.Background()
+	// Prime cache.
+	_, _ = cs.LookupResourceIDs(ctx, "project", []string{"owner"}, "user", "user-1")
+	if inner.lookupResourceIDsCalls != 1 {
+		t.Fatalf("expected 1 call after prime, got %d", inner.lookupResourceIDsCalls)
+	}
+
+	// Delete relationship invalidates cache.
+	_ = cs.DeleteRelationship(ctx, "project", "proj-1", "owner", "user", "user-1")
+
+	// Next lookup should hit store again.
+	_, _ = cs.LookupResourceIDs(ctx, "project", []string{"owner"}, "user", "user-1")
+	if inner.lookupResourceIDsCalls != 2 {
+		t.Fatalf("expected 2 calls after invalidation, got %d", inner.lookupResourceIDsCalls)
 	}
 }
