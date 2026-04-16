@@ -237,6 +237,9 @@ func (m *mockAuthzStore) LookupResourceIDs(_ context.Context, _ string, _ []stri
 func (m *mockAuthzStore) LookupResourceIDsByRelationTarget(_ context.Context, _, _, _ string, _ []string) ([]string, error) {
 	return nil, m.err
 }
+func (m *mockAuthzStore) LookupDescendantResourceIDs(_ context.Context, _, _, _ string, _ []string) ([]string, error) {
+	return nil, m.err
+}
 
 // =============================================================================
 // Mock event bus
