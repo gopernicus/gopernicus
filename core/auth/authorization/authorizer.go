@@ -507,6 +507,17 @@ func (a *Authorizer) CountByResourceAndRelation(ctx context.Context, resourceTyp
 // This powers the prefilter pattern: first look up authorized IDs, then pass
 // them to the repository as WHERE id = ANY(@authorized_ids).
 func (a *Authorizer) LookupResources(ctx context.Context, subject Subject, permission, resourceType string) (LookupResult, error) {
+	return a.lookupResourcesWithVisited(ctx, subject, permission, resourceType, make(map[string]bool))
+}
+
+func (a *Authorizer) lookupResourcesWithVisited(ctx context.Context, subject Subject, permission, resourceType string, visited map[string]bool) (LookupResult, error) {
+	// Cycle detection for non-self-referential Through chains.
+	key := resourceType + ":" + permission
+	if visited[key] {
+		return LookupResult{IDs: []string{}}, nil
+	}
+	visited[key] = true
+
 	if allowed, err := a.checkPlatformAdmin(ctx, subject); err != nil {
 		return LookupResult{}, err
 	} else if allowed {
@@ -524,7 +535,7 @@ func (a *Authorizer) LookupResources(ctx context.Context, subject Subject, permi
 
 	for _, check := range rules.AnyOf {
 		if check.Through != "" {
-			throughResult, err := a.lookupThrough(ctx, subject, check, resourceType)
+			throughResult, err := a.lookupThrough(ctx, subject, check, resourceType, visited)
 			if err != nil {
 				return LookupResult{}, err
 			}
@@ -561,7 +572,11 @@ func (a *Authorizer) LookupResources(ctx context.Context, subject Subject, permi
 // Example: permission "read" on "post" Through("org", "admin") means:
 //  1. Find all orgs where subject is admin → [org:O1, org:O2]
 //  2. Find all posts that have relation "org" pointing to those orgs
-func (a *Authorizer) lookupThrough(ctx context.Context, subject Subject, check PermissionCheck, resourceType string) (LookupResult, error) {
+//
+// Self-referential Through (target type == resource type, e.g., space → parent → space)
+// is resolved via a recursive CTE instead of Go recursion to avoid infinite loops
+// and to efficiently walk arbitrarily deep trees in a single DB query.
+func (a *Authorizer) lookupThrough(ctx context.Context, subject Subject, check PermissionCheck, resourceType string, visited map[string]bool) (LookupResult, error) {
 	rtDef, ok := a.schema.ResourceTypes[resourceType]
 	if !ok {
 		return LookupResult{IDs: []string{}}, nil
@@ -575,7 +590,39 @@ func (a *Authorizer) lookupThrough(ctx context.Context, subject Subject, check P
 	var ids []string
 
 	for _, ref := range relDef.AllowedSubjects {
-		targetResult, err := a.LookupResources(ctx, subject, check.Permission, ref.Type)
+		// Self-referential Through: the target type is the same as the resource
+		// type (e.g., space.read → Through("parent", "read") where parent points
+		// to another space). Use a recursive CTE to walk the tree in one query
+		// instead of recursing in Go (which would loop infinitely).
+		if ref.Type == resourceType {
+			// First, find root IDs via non-Through rules only on the target type.
+			rootIDs, err := a.lookupDirectOnly(ctx, subject, check.Permission, ref.Type)
+			if err != nil {
+				return LookupResult{}, err
+			}
+			if len(rootIDs) == 0 {
+				continue
+			}
+
+			// Expand: find all descendants of those roots via the recursive CTE.
+			descendantIDs, err := a.store.LookupDescendantResourceIDs(ctx, resourceType, check.Through, ref.Type, rootIDs)
+			if err != nil {
+				return LookupResult{}, err
+			}
+
+			// The roots themselves are already accessible — add descendants + roots
+			// to the "through" result. The roots get picked up by direct checks in
+			// the parent LookupResources call, but descendants only come from here.
+			for _, id := range descendantIDs {
+				if !seen[id] {
+					seen[id] = true
+					ids = append(ids, id)
+				}
+			}
+			continue
+		}
+
+		targetResult, err := a.lookupResourcesWithVisited(ctx, subject, check.Permission, ref.Type, visited)
 		if err != nil {
 			return LookupResult{}, err
 		}
@@ -604,4 +651,35 @@ func (a *Authorizer) lookupThrough(ctx context.Context, subject Subject, check P
 		ids = []string{}
 	}
 	return LookupResult{IDs: ids}, nil
+}
+
+// lookupDirectOnly finds resource IDs where the subject has direct relations
+// for a given permission. Skips all Through checks. Used to find root IDs
+// for self-referential CTE expansion without triggering recursion.
+func (a *Authorizer) lookupDirectOnly(ctx context.Context, subject Subject, permission, resourceType string) ([]string, error) {
+	rules := a.getPermissionRules(resourceType, permission)
+	if len(rules.AnyOf) == 0 {
+		return nil, nil
+	}
+
+	seen := make(map[string]bool)
+	var ids []string
+
+	for _, check := range rules.AnyOf {
+		if check.Through != "" {
+			continue // skip Through — we only want direct relations
+		}
+		directIDs, err := a.store.LookupResourceIDs(ctx, resourceType, []string{check.Relation}, subject.Type, subject.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range directIDs {
+			if !seen[id] {
+				seen[id] = true
+				ids = append(ids, id)
+			}
+		}
+	}
+
+	return ids, nil
 }

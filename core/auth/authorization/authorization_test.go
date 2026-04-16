@@ -185,6 +185,39 @@ func (m *mockStorer) LookupResourceIDsByRelationTarget(_ context.Context, resour
 	return ids, nil
 }
 
+func (m *mockStorer) LookupDescendantResourceIDs(_ context.Context, resourceType, relation, subjectType string, rootIDs []string) ([]string, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	// Walk the relation chain iteratively to simulate the recursive CTE.
+	// Each iteration finds resources whose subject_id is in the current frontier.
+	visited := make(map[string]bool)
+	frontier := make(map[string]bool, len(rootIDs))
+	for _, id := range rootIDs {
+		frontier[id] = true
+	}
+	var ids []string
+	for len(frontier) > 0 {
+		nextFrontier := make(map[string]bool)
+		for key := range m.relations {
+			prefix := resourceType + ":"
+			for parentID := range frontier {
+				suffix := fmt.Sprintf("#%s@%s:%s", relation, subjectType, parentID)
+				if strings.HasPrefix(key, prefix) && strings.HasSuffix(key, suffix) {
+					childID := key[len(prefix) : len(key)-len(suffix)]
+					if !visited[childID] {
+						visited[childID] = true
+						ids = append(ids, childID)
+						nextFrontier[childID] = true
+					}
+				}
+			}
+		}
+		frontier = nextFrontier
+	}
+	return ids, nil
+}
+
 // =============================================================================
 // Test Helpers
 // =============================================================================

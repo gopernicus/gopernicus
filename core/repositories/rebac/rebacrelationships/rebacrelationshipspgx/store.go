@@ -319,3 +319,56 @@ WHERE resource_type = @resource_type
 	}
 	return ids, nil
 }
+
+// LookupDescendantResourceIDs walks a self-referential relation transitively
+// using a recursive CTE. Returns all resource IDs reachable from the given
+// root IDs by following the relation chain.
+func (s *Store) LookupDescendantResourceIDs(ctx context.Context, resourceType, relation, subjectType string, rootIDs []string) ([]string, error) {
+	if len(rootIDs) == 0 {
+		return nil, nil
+	}
+
+	query := `
+WITH RECURSIVE descendants AS (
+	SELECT resource_id
+	FROM rebac_relationships
+	WHERE resource_type = @resource_type
+		AND relation = @relation
+		AND subject_type = @subject_type
+		AND subject_id = ANY(@root_ids)
+	UNION
+	SELECT r.resource_id
+	FROM rebac_relationships r
+	INNER JOIN descendants d ON r.subject_id = d.resource_id
+	WHERE r.resource_type = @resource_type
+		AND r.relation = @relation
+		AND r.subject_type = @subject_type
+)
+SELECT DISTINCT resource_id FROM descendants`
+
+	args := pgx.NamedArgs{
+		"resource_type": resourceType,
+		"relation":      relation,
+		"subject_type":  subjectType,
+		"root_ids":      rootIDs,
+	}
+
+	rows, err := s.db.Query(ctx, query, args)
+	if err != nil {
+		return nil, pgxdb.HandlePgError(err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, pgxdb.HandlePgError(err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, pgxdb.HandlePgError(err)
+	}
+	return ids, nil
+}

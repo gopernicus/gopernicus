@@ -24,6 +24,7 @@ type relationshipRepo interface {
 	ListByResource(ctx context.Context, filter rebacrelationships.FilterListByResource, resourceType, resourceID string, orderBy fop.Order, page fop.PageStringCursor) ([]rebacrelationships.RebacRelationship, fop.Pagination, error)
 	LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID string) ([]string, error)
 	LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string) ([]string, error)
+	LookupDescendantResourceIDs(ctx context.Context, resourceType, relation, subjectType string, rootIDs []string) ([]string, error)
 }
 
 // AuthorizationStoreSatisfier satisfies authorization.Storer using the generated
@@ -183,4 +184,8 @@ func (s *AuthorizationStoreSatisfier) LookupResourceIDs(ctx context.Context, res
 
 func (s *AuthorizationStoreSatisfier) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string) ([]string, error) {
 	return s.repo.LookupResourceIDsByRelationTarget(ctx, resourceType, relation, targetType, targetIDs)
+}
+
+func (s *AuthorizationStoreSatisfier) LookupDescendantResourceIDs(ctx context.Context, resourceType, relation, subjectType string, rootIDs []string) ([]string, error) {
+	return s.repo.LookupDescendantResourceIDs(ctx, resourceType, relation, subjectType, rootIDs)
 }

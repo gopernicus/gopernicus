@@ -31,6 +31,7 @@ type Storer interface {
 	// LookupResources queries (hand-written — recursive CTEs, []string returns).
 	LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID string) ([]string, error)
 	LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string) ([]string, error)
+	LookupDescendantResourceIDs(ctx context.Context, resourceType, relation, subjectType string, rootIDs []string) ([]string, error)
 
 	// gopernicus:start (DO NOT EDIT between markers)
 	List(ctx context.Context, filter FilterList, orderBy fop.Order, page fop.PageStringCursor, forPrevious bool) ([]RebacRelationship, error)
@@ -147,6 +148,14 @@ func (r *Repository) LookupResourceIDsByRelationTarget(ctx context.Context, reso
 	result, err := r.store.LookupResourceIDsByRelationTarget(ctx, resourceType, relation, targetType, targetIDs)
 	if err != nil {
 		return nil, fmt.Errorf("lookup resource ids by relation target: %w", err)
+	}
+	return result, nil
+}
+
+func (r *Repository) LookupDescendantResourceIDs(ctx context.Context, resourceType, relation, subjectType string, rootIDs []string) ([]string, error) {
+	result, err := r.store.LookupDescendantResourceIDs(ctx, resourceType, relation, subjectType, rootIDs)
+	if err != nil {
+		return nil, fmt.Errorf("lookup descendant resource ids: %w", err)
 	}
 	return result, nil
 }
