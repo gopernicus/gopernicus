@@ -210,7 +210,14 @@ func (s *CacheStore) DeleteResourceRelationships(ctx context.Context, resourceTy
 	if err := s.Storer.DeleteResourceRelationships(ctx, resourceType, resourceID); err != nil {
 		return err
 	}
+	// Invalidate all checks/exists/targets for this resource.
 	_ = s.cache.DeletePattern(ctx, s.keyPrefix+":*:"+resourceType+":"+resourceID+":*")
+	// Per-user: we don't know which users are affected, so clear ALL per-user
+	// lookup caches for this resource type.
+	_ = s.cache.DeletePattern(ctx, fmt.Sprintf("%s:lookup:ids:%s:*", s.keyPrefix, resourceType))
+	// Structural: clear target + descendant caches for this resource type.
+	_ = s.cache.DeletePattern(ctx, fmt.Sprintf("%s:lookup:target:%s:*", s.keyPrefix, resourceType))
+	_ = s.cache.DeletePattern(ctx, fmt.Sprintf("%s:lookup:descendants:%s:*", s.keyPrefix, resourceType))
 	return nil
 }
 
@@ -286,12 +293,23 @@ func (s *CacheStore) invalidateForTuple(ctx context.Context, resourceType, resou
 	_ = s.cache.DeletePattern(ctx, fmt.Sprintf("%s:*:%s:%s:*", s.keyPrefix, resourceType, resourceID))
 	// Invalidate all checks/exists involving this subject.
 	_ = s.cache.DeletePattern(ctx, fmt.Sprintf("%s:*:*:*:*:%s:%s", s.keyPrefix, subjectType, subjectID))
-	// Invalidate lookup caches for this resource type.
-	s.invalidateLookupCaches(ctx, resourceType)
+	// Invalidate lookup caches using two-axis targeted invalidation.
+	s.invalidateLookupCaches(ctx, resourceType, subjectType, subjectID)
 }
 
-// invalidateLookupCaches removes all cached lookup results for a resource type.
-// Called when any relationship on that resource type is created or deleted.
-func (s *CacheStore) invalidateLookupCaches(ctx context.Context, resourceType string) {
-	_ = s.cache.DeletePattern(ctx, fmt.Sprintf("%s:lookup:*:%s:*", s.keyPrefix, resourceType))
+// invalidateLookupCaches performs two-axis targeted invalidation of cached
+// lookup results when a relationship changes.
+//
+// Per-user axis: clears all LookupResourceIDs caches for the affected subject
+// across all resource types. Any role change can ripple through Through chains,
+// so all resource types for this user must re-evaluate. Other users are unaffected.
+//
+// Structural axis: clears target and descendant caches for the written resource
+// type. If the graph shape changed for spaces, structural space caches are stale.
+func (s *CacheStore) invalidateLookupCaches(ctx context.Context, resourceType, subjectType, subjectID string) {
+	// Per-user: clear all of this subject's cached LookupResourceIDs results.
+	_ = s.cache.DeletePattern(ctx, fmt.Sprintf("%s:lookup:ids:*:*:%s:%s", s.keyPrefix, subjectType, subjectID))
+	// Structural: clear target + descendant caches for the written resource type.
+	_ = s.cache.DeletePattern(ctx, fmt.Sprintf("%s:lookup:target:%s:*", s.keyPrefix, resourceType))
+	_ = s.cache.DeletePattern(ctx, fmt.Sprintf("%s:lookup:descendants:%s:*", s.keyPrefix, resourceType))
 }
