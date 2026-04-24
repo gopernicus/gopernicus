@@ -46,7 +46,7 @@ func TestGeneratedSecurityEventStore_Create(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestSecurityEvent(t, ctx, db)
+	created := fixtures.CreateTestSecurityEventWithDefaults(t, ctx, db)
 
 	// Verify the record was created and can be retrieved.
 	result, err := store.Get(ctx, created.EventID)
@@ -58,7 +58,7 @@ func TestGeneratedSecurityEventStore_Get(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestSecurityEvent(t, ctx, db)
+	created := fixtures.CreateTestSecurityEventWithDefaults(t, ctx, db)
 
 	t.Run("found", func(t *testing.T) {
 		result, err := store.Get(ctx, created.EventID)
@@ -79,7 +79,7 @@ func TestGeneratedSecurityEventStore_List(t *testing.T) {
 	// Create multiple records.
 	const numRecords = 3
 	for i := 0; i < numRecords; i++ {
-		fixtures.CreateTestSecurityEvent(t, ctx, db)
+		fixtures.CreateTestSecurityEventWithDefaults(t, ctx, db)
 	}
 
 	t.Run("returns all records", func(t *testing.T) {
@@ -117,7 +117,7 @@ func TestGeneratedSecurityEventStore_Delete(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestSecurityEvent(t, ctx, db)
+	created := fixtures.CreateTestSecurityEventWithDefaults(t, ctx, db)
 
 	err := store.Delete(ctx, created.EventID)
 	require.NoError(t, err)

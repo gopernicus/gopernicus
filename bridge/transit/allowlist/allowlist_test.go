@@ -1,10 +1,10 @@
-package authentication
+package allowlist
 
 import (
 	"testing"
 )
 
-func TestOriginMatcher_Canonicalization(t *testing.T) {
+func TestMatcher_Canonicalization(t *testing.T) {
 	tests := []struct {
 		name    string
 		input   string
@@ -78,7 +78,7 @@ func TestOriginMatcher_Canonicalization(t *testing.T) {
 	}
 }
 
-func TestNewOriginMatcher_RejectsInvalid(t *testing.T) {
+func TestNew_RejectsInvalid(t *testing.T) {
 	tests := []struct {
 		name    string
 		origins []string
@@ -99,15 +99,15 @@ func TestNewOriginMatcher_RejectsInvalid(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := NewOriginMatcher(tt.origins)
+			_, err := New(tt.origins)
 			if err == nil {
-				t.Errorf("NewOriginMatcher(%v) expected error, got nil", tt.origins)
+				t.Errorf("New(%v) expected error, got nil", tt.origins)
 			}
 		})
 	}
 }
 
-func TestNewOriginMatcher_AcceptsValid(t *testing.T) {
+func TestNew_AcceptsValid(t *testing.T) {
 	origins := []string{
 		"https://segovia.url.com",
 		"https://dashboards.url.com",
@@ -116,9 +116,9 @@ func TestNewOriginMatcher_AcceptsValid(t *testing.T) {
 		"",
 	}
 
-	m, err := NewOriginMatcher(origins)
+	m, err := New(origins)
 	if err != nil {
-		t.Fatalf("NewOriginMatcher unexpected error: %v", err)
+		t.Fatalf("New unexpected error: %v", err)
 	}
 
 	if m.Empty() {
@@ -130,8 +130,8 @@ func TestNewOriginMatcher_AcceptsValid(t *testing.T) {
 	}
 }
 
-func TestOriginMatcher_Empty(t *testing.T) {
-	m, err := NewOriginMatcher(nil)
+func TestMatcher_Empty(t *testing.T) {
+	m, err := New(nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestOriginMatcher_Empty(t *testing.T) {
 		t.Error("Expected Empty() to be true for nil input")
 	}
 
-	m2, err := NewOriginMatcher([]string{})
+	m2, err := New([]string{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestOriginMatcher_Empty(t *testing.T) {
 		t.Error("Expected Empty() to be true for empty slice")
 	}
 
-	m3, err := NewOriginMatcher([]string{"", "  "})
+	m3, err := New([]string{"", "  "})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -156,8 +156,8 @@ func TestOriginMatcher_Empty(t *testing.T) {
 	}
 }
 
-func TestOriginMatcher_Matches(t *testing.T) {
-	m, err := NewOriginMatcher([]string{
+func TestMatcher_Matches(t *testing.T) {
+	m, err := New([]string{
 		"https://segovia.url.com",
 		"https://dashboards.url.com",
 		"http://localhost:3000",
@@ -233,22 +233,22 @@ func TestOriginMatcher_Matches(t *testing.T) {
 	}
 }
 
-func TestOriginMatcher_MatchesEmpty(t *testing.T) {
-	m, _ := NewOriginMatcher(nil)
+func TestMatcher_MatchesEmpty(t *testing.T) {
+	m, _ := New(nil)
 
 	if m.Matches("https://anything.com") {
 		t.Error("Empty matcher should never match")
 	}
 }
 
-func TestOriginMatcher_OrderPreserved(t *testing.T) {
+func TestMatcher_OrderPreserved(t *testing.T) {
 	origins := []string{
 		"https://first.example.com",
 		"https://second.example.com",
 		"https://third.example.com",
 	}
 
-	m, err := NewOriginMatcher(origins)
+	m, err := New(origins)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -272,9 +272,9 @@ func TestOriginMatcher_OrderPreserved(t *testing.T) {
 	}
 }
 
-func TestOriginMatcher_Default(t *testing.T) {
+func TestMatcher_Default(t *testing.T) {
 	t.Run("returns first origin", func(t *testing.T) {
-		m, _ := NewOriginMatcher([]string{
+		m, _ := New([]string{
 			"https://primary.example.com",
 			"https://secondary.example.com",
 		})
@@ -284,15 +284,15 @@ func TestOriginMatcher_Default(t *testing.T) {
 	})
 
 	t.Run("returns empty for empty matcher", func(t *testing.T) {
-		m, _ := NewOriginMatcher(nil)
+		m, _ := New(nil)
 		if got := m.Default(); got != "" {
 			t.Errorf("Default() = %q, want empty string", got)
 		}
 	})
 }
 
-func TestOriginMatcher_DeduplicatesPreservingOrder(t *testing.T) {
-	m, err := NewOriginMatcher([]string{
+func TestMatcher_DeduplicatesPreservingOrder(t *testing.T) {
+	m, err := New([]string{
 		"https://a.com",
 		"https://b.com",
 		"https://a.com", // duplicate

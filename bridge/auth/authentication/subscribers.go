@@ -32,18 +32,14 @@ func AuthTemplates() embed.FS {
 // reusable crypto/lockout machinery — see
 // workshop/documentation/docs/gopernicus/topics/auth/sensitive-operations.md.
 type Subscribers struct {
-	emailer     *emailer.Emailer
-	log         *slog.Logger
-	frontendURL string
-	subs        []events.Subscription
+	emailer *emailer.Emailer
+	log     *slog.Logger
+	subs    []events.Subscription
 }
 
 // NewSubscribers creates auth email subscribers.
-//
-// frontendURL is the base URL of the frontend app (e.g., "http://localhost:5173")
-// used to construct links in emails (password reset, etc.).
-func NewSubscribers(e *emailer.Emailer, log *slog.Logger, frontendURL string) *Subscribers {
-	return &Subscribers{emailer: e, log: log, frontendURL: frontendURL}
+func NewSubscribers(e *emailer.Emailer, log *slog.Logger) *Subscribers {
+	return &Subscribers{emailer: e, log: log}
 }
 
 // Register subscribes to auth events on the given bus.
@@ -107,8 +103,6 @@ func (s *Subscribers) handlePasswordReset(ctx context.Context, e authentication.
 	var resetLink string
 	if e.ResetURL != "" {
 		resetLink = fmt.Sprintf("%s?token=%s", e.ResetURL, e.Token)
-	} else if s.frontendURL != "" {
-		resetLink = fmt.Sprintf("%s/reset-password?token=%s", s.frontendURL, e.Token)
 	}
 
 	err := s.emailer.RenderAndSend(ctx, emailer.SendRequest{

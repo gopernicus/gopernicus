@@ -46,7 +46,7 @@ func TestGeneratedGroupStore_Create(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestGroup(t, ctx, db)
+	created := fixtures.CreateTestGroupWithDefaults(t, ctx, db)
 
 	// Verify the record was created and can be retrieved.
 	result, err := store.Get(ctx, created.GroupID)
@@ -58,7 +58,7 @@ func TestGeneratedGroupStore_Get(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestGroup(t, ctx, db)
+	created := fixtures.CreateTestGroupWithDefaults(t, ctx, db)
 
 	t.Run("found", func(t *testing.T) {
 		result, err := store.Get(ctx, created.GroupID)
@@ -79,7 +79,7 @@ func TestGeneratedGroupStore_List(t *testing.T) {
 	// Create multiple records.
 	const numRecords = 3
 	for i := 0; i < numRecords; i++ {
-		fixtures.CreateTestGroup(t, ctx, db)
+		fixtures.CreateTestGroupWithDefaults(t, ctx, db)
 	}
 
 	t.Run("returns all records", func(t *testing.T) {
@@ -117,7 +117,7 @@ func TestGeneratedGroupStore_Delete(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestGroup(t, ctx, db)
+	created := fixtures.CreateTestGroupWithDefaults(t, ctx, db)
 
 	err := store.Delete(ctx, created.GroupID)
 	require.NoError(t, err)
@@ -131,7 +131,7 @@ func TestGeneratedGroupStore_SoftDelete(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestGroup(t, ctx, db)
+	created := fixtures.CreateTestGroupWithDefaults(t, ctx, db)
 
 	err := store.SoftDelete(ctx, created.GroupID)
 	require.NoError(t, err)

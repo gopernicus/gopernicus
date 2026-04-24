@@ -78,6 +78,17 @@ The create endpoint supports two modes via the `auto_accept` flag:
 - **`auto_accept: false`** (default) — creates a pending invitation that the recipient must accept
 - **`auto_accept: true`** — if the identifier matches a known user, adds them directly (no invitation created). If unknown, creates an invitation that auto-accepts when the user registers and verifies their email
 
+### Redirect URL Validation
+
+The create request accepts an optional `redirect_url` field specifying where the invitation accept flow should land. This URL must be validated against `ALLOWED_FRONTENDS` before being passed to core — the same origin allow-list used for password reset URLs.
+
+When `ALLOWED_FRONTENDS` is configured, the bridge should:
+- Validate `redirect_url` origin against `allowlist.Matcher`
+- Return `400 invalid redirect_url origin` if validation fails
+- Pass the validated URL to `CreateInput.RedirectURL`
+
+When `ALLOWED_FRONTENDS` is empty (legacy/dev mode), the bridge may skip validation or require explicit opt-in. The `redirect_url` is persisted on the invitation row and included in `InvitationSentEvent` — on resend, the original URL is restored from the row.
+
 The response indicates which path was taken:
 
 ```json

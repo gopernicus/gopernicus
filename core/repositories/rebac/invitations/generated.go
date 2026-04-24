@@ -45,6 +45,7 @@ const (
 	OrderByRecordState       = "record_state"
 	OrderByCreatedAt         = "created_at"
 	OrderByUpdatedAt         = "updated_at"
+	OrderByRedirectURL       = "redirect_url"
 )
 
 // OrderByFields maps user-facing field names to OrderField definitions.
@@ -65,6 +66,7 @@ var OrderByFields = map[string]fop.OrderField{
 	OrderByRecordState:       {Column: "record_state", CastLower: true},
 	OrderByCreatedAt:         {Column: "created_at"},
 	OrderByUpdatedAt:         {Column: "updated_at"},
+	OrderByRedirectURL:       {Column: "redirect_url", CastLower: true},
 }
 
 // =============================================================================
@@ -98,6 +100,7 @@ type Invitation struct {
 	RecordState       string     `json:"record_state" db:"record_state"`
 	CreatedAt         time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt         time.Time  `json:"updated_at" db:"updated_at"`
+	RedirectURL       *string    `json:"redirect_url" db:"redirect_url"`
 }
 
 // =============================================================================
@@ -120,6 +123,7 @@ type CreateInvitation struct {
 	ExpiresAt         time.Time  `json:"expires_at,omitempty"`
 	AcceptedAt        *time.Time `json:"accepted_at,omitempty"`
 	RecordState       string     `json:"record_state,omitempty"`
+	RedirectURL       *string    `json:"redirect_url,omitempty"`
 }
 
 // UpdateInvitation is the input for updating a invitation.
@@ -137,6 +141,7 @@ type UpdateInvitation struct {
 	ExpiresAt         *time.Time `json:"expires_at,omitempty"`
 	AcceptedAt        *time.Time `json:"accepted_at,omitempty"`
 	UpdatedAt         *time.Time `json:"updated_at,omitempty"`
+	RedirectURL       *string    `json:"redirect_url,omitempty"`
 }
 
 // =============================================================================
@@ -169,6 +174,7 @@ type FilterList struct {
 	UpdatedAt         *time.Time `json:"updated_at,omitempty"`
 	UpdatedAtAfter    *time.Time `json:"updated_at_after,omitempty"`
 	UpdatedAtBefore   *time.Time `json:"updated_at_before,omitempty"`
+	RedirectURL       *string    `json:"redirect_url,omitempty"`
 	SearchTerm        *string    `json:"search_term,omitempty"`
 
 	// AuthorizedIDs restricts results to the given primary key values.
@@ -267,6 +273,8 @@ func GetInvitationOrderValue(record Invitation, field string) any {
 		return record.CreatedAt
 	case "updated_at":
 		return record.UpdatedAt
+	case "redirect_url":
+		return record.RedirectURL
 	default:
 		return record.InvitationID
 	}

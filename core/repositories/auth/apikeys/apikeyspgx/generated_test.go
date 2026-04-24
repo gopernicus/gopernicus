@@ -46,7 +46,7 @@ func TestGeneratedAPIKeyStore_Create(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestAPIKey(t, ctx, db)
+	created := fixtures.CreateTestAPIKeyWithDefaults(t, ctx, db)
 
 	// Verify the record was created and can be retrieved.
 	result, err := store.Get(ctx, created.APIKeyID)
@@ -58,7 +58,7 @@ func TestGeneratedAPIKeyStore_Get(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestAPIKey(t, ctx, db)
+	created := fixtures.CreateTestAPIKeyWithDefaults(t, ctx, db)
 
 	t.Run("found", func(t *testing.T) {
 		result, err := store.Get(ctx, created.APIKeyID)
@@ -79,7 +79,7 @@ func TestGeneratedAPIKeyStore_List(t *testing.T) {
 	// Create multiple records.
 	const numRecords = 3
 	for i := 0; i < numRecords; i++ {
-		fixtures.CreateTestAPIKey(t, ctx, db)
+		fixtures.CreateTestAPIKeyWithDefaults(t, ctx, db)
 	}
 
 	t.Run("returns all records", func(t *testing.T) {
@@ -117,7 +117,7 @@ func TestGeneratedAPIKeyStore_Delete(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestAPIKey(t, ctx, db)
+	created := fixtures.CreateTestAPIKeyWithDefaults(t, ctx, db)
 
 	err := store.Delete(ctx, created.APIKeyID)
 	require.NoError(t, err)
@@ -131,7 +131,7 @@ func TestGeneratedAPIKeyStore_SoftDelete(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestAPIKey(t, ctx, db)
+	created := fixtures.CreateTestAPIKeyWithDefaults(t, ctx, db)
 
 	err := store.SoftDelete(ctx, created.APIKeyID)
 	require.NoError(t, err)

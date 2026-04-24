@@ -1,4 +1,4 @@
-package authentication
+package allowlist
 
 import (
 	"fmt"
@@ -6,19 +6,19 @@ import (
 	"strings"
 )
 
-// OriginMatcher validates candidate URLs against a fixed allow-list of origins.
+// Matcher validates candidate URLs against a fixed allow-list of origins.
 // An origin is scheme + host + port. Paths and queries on candidate URLs are
 // ignored; only the origin must match.
-type OriginMatcher struct {
+type Matcher struct {
 	allowed map[string]struct{}
 	order   []string // preserves declaration order for Default() selection
 }
 
-// NewOriginMatcher parses the allow-list. Rejects entries that don't parse or
+// New parses the allow-list. Rejects entries that don't parse or
 // are missing scheme/host. Normalizes: lowercase host, default port by scheme.
 // Insertion order is preserved for deterministic Default() selection.
-func NewOriginMatcher(origins []string) (*OriginMatcher, error) {
-	m := &OriginMatcher{
+func New(origins []string) (*Matcher, error) {
+	m := &Matcher{
 		allowed: make(map[string]struct{}, len(origins)),
 		order:   make([]string, 0, len(origins)),
 	}
@@ -41,13 +41,13 @@ func NewOriginMatcher(origins []string) (*OriginMatcher, error) {
 
 // Empty reports whether no origins are configured. Callers use this to decide
 // whether to run in strict mode (validate) or legacy mode (skip validation).
-func (m *OriginMatcher) Empty() bool {
+func (m *Matcher) Empty() bool {
 	return len(m.allowed) == 0
 }
 
 // Matches reports whether rawURL's origin is in the allow-list. Returns false
 // (not an error) for unparseable input.
-func (m *OriginMatcher) Matches(rawURL string) bool {
+func (m *Matcher) Matches(rawURL string) bool {
 	canon, err := canonicalizeOrigin(rawURL)
 	if err != nil {
 		return false
@@ -58,7 +58,7 @@ func (m *OriginMatcher) Matches(rawURL string) bool {
 
 // Origins returns a copy of the allowed origins in declaration order.
 // Useful for deriving exact redirect URIs from origins + known paths.
-func (m *OriginMatcher) Origins() []string {
+func (m *Matcher) Origins() []string {
 	out := make([]string, len(m.order))
 	copy(out, m.order)
 	return out
@@ -67,7 +67,7 @@ func (m *OriginMatcher) Origins() []string {
 // Default returns the first configured origin, or empty string if none.
 // Use this as a fallback for email links and error redirects when the
 // request doesn't specify an origin.
-func (m *OriginMatcher) Default() string {
+func (m *Matcher) Default() string {
 	if len(m.order) == 0 {
 		return ""
 	}

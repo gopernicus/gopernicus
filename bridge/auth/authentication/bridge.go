@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/gopernicus/gopernicus/bridge/transit/allowlist"
 	"github.com/gopernicus/gopernicus/core/auth/authentication"
 	"github.com/gopernicus/gopernicus/infrastructure/ratelimiter"
 )
@@ -52,7 +53,7 @@ type Bridge struct {
 	refreshTokenExpiry time.Duration
 	callbackPrefix     string
 	mobileRedirectURI  string
-	originMatcher      *OriginMatcher
+	originMatcher      *allowlist.Matcher
 }
 
 // Option configures a [Bridge].
@@ -76,7 +77,7 @@ func WithCallbackBaseURL(url string) Option {
 // WithAllowedFrontends sets the origin allow-list for client-supplied URLs.
 func WithAllowedFrontends(origins []string) Option {
 	return func(b *Bridge) {
-		m, err := NewOriginMatcher(origins)
+		m, err := allowlist.New(origins)
 		if err != nil {
 			panic("authentication: invalid allowed frontends: " + err.Error())
 		}
@@ -86,7 +87,7 @@ func WithAllowedFrontends(origins []string) Option {
 
 // New creates a new authentication bridge.
 func New(log *slog.Logger, cfg Config, authenticator *authentication.Authenticator, rateLimiter *ratelimiter.RateLimiter, opts ...Option) *Bridge {
-	originMatcher, err := NewOriginMatcher(cfg.AllowedFrontends)
+	originMatcher, err := allowlist.New(cfg.AllowedFrontends)
 	if err != nil {
 		panic("authentication: invalid ALLOWED_FRONTENDS: " + err.Error())
 	}

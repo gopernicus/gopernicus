@@ -145,6 +145,8 @@ CREATE TABLE public.invitations (
     -- explicitly accept or decline.
     auto_accept         BOOLEAN      NOT NULL DEFAULT false,
 
+ 
+
     -- Status lifecycle: pending → accepted | declined | cancelled | expired
     invitation_status   VARCHAR(50)  NOT NULL DEFAULT 'pending',
 
@@ -156,6 +158,11 @@ CREATE TABLE public.invitations (
     record_state        VARCHAR(50)  NOT NULL DEFAULT 'active',
     created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+
+    -- Frontend URL for accept flow. Validated at HTTP bridge layer against
+    -- ALLOWED_FRONTENDS; core passes through without validation. NULL means
+    -- subscriber should use its default frontend URL.
+    redirect_url        TEXT,
 
     CONSTRAINT invitations_pk PRIMARY KEY (invitation_id),
     CONSTRAINT invitations_status_check CHECK (invitation_status IN ('pending', 'accepted', 'declined', 'cancelled', 'expired')),

@@ -46,7 +46,7 @@ func TestGeneratedUserStore_Get(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestUser(t, ctx, db)
+	created := fixtures.CreateTestUserWithDefaults(t, ctx, db)
 
 	t.Run("found", func(t *testing.T) {
 		result, err := store.Get(ctx, created.UserID)
@@ -67,7 +67,7 @@ func TestGeneratedUserStore_List(t *testing.T) {
 	// Create multiple records.
 	const numRecords = 3
 	for i := 0; i < numRecords; i++ {
-		fixtures.CreateTestUser(t, ctx, db)
+		fixtures.CreateTestUserWithDefaults(t, ctx, db)
 	}
 
 	t.Run("returns all records", func(t *testing.T) {
@@ -105,7 +105,7 @@ func TestGeneratedUserStore_Delete(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestUser(t, ctx, db)
+	created := fixtures.CreateTestUserWithDefaults(t, ctx, db)
 
 	err := store.Delete(ctx, created.UserID)
 	require.NoError(t, err)
@@ -119,7 +119,7 @@ func TestGeneratedUserStore_SoftDelete(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestUser(t, ctx, db)
+	created := fixtures.CreateTestUserWithDefaults(t, ctx, db)
 
 	err := store.SoftDelete(ctx, created.UserID)
 	require.NoError(t, err)
