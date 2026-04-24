@@ -127,7 +127,7 @@ func (b *Bridge) httpCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := b.createAuthRelationships(r.Context(), record); err != nil {
+	if err := b.createAuthRelationshipsCreate(r.Context(), record); err != nil {
 		b.log.ErrorContext(r.Context(), "create auth relationships", "error", err)
 		web.RespondJSONError(w, web.ErrInternal("create auth relationships"))
 		return
@@ -255,10 +255,11 @@ func (b *Bridge) httpDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // =============================================================================
-// Auth Relationship Creation
+// Auth Relationship Creation (one method per create route — the rels for a
+// nested create may reference fields that are absent on the root-create path).
 // =============================================================================
 
-func (b *Bridge) createAuthRelationships(ctx context.Context, record invitations.Invitation) error {
+func (b *Bridge) createAuthRelationshipsCreate(ctx context.Context, record invitations.Invitation) error {
 	if b.authorizer == nil {
 		return nil
 	}
@@ -319,6 +320,7 @@ type QueryParamsList struct {
 	RecordState       string
 	CreatedAt         string
 	UpdatedAt         string
+	RedirectURL       string
 }
 
 func parseQueryParamsList(r *http.Request) QueryParamsList {
@@ -344,6 +346,7 @@ func parseQueryParamsList(r *http.Request) QueryParamsList {
 		RecordState:       q.Get("record_state"),
 		CreatedAt:         q.Get("created_at"),
 		UpdatedAt:         q.Get("updated_at"),
+		RedirectURL:       q.Get("redirect_url"),
 	}
 }
 
@@ -415,6 +418,9 @@ func parseFilterList(qp QueryParamsList) (invitations.FilterList, error) {
 		}
 		filter.UpdatedAt = &v
 	}
+	if qp.RedirectURL != "" {
+		filter.RedirectURL = &qp.RedirectURL
+	}
 	return filter, nil
 }
 
@@ -446,6 +452,7 @@ type CreateInvitationRequest struct {
 	ExpiresAt         time.Time  `json:"expires_at,omitempty"`
 	AcceptedAt        *time.Time `json:"accepted_at,omitempty"`
 	RecordState       string     `json:"record_state,omitempty"`
+	RedirectURL       *string    `json:"redirect_url,omitempty"`
 }
 
 // Validate checks all field constraints. Called automatically by web.DecodeJSON.
@@ -468,6 +475,7 @@ func (r *CreateInvitationRequest) Validate() error {
 	errs.AddErr("token_hash", validation.MaxLength("token_hash", r.TokenHash, 255))
 	errs.AddErr("invitation_status", validation.MaxLength("invitation_status", r.InvitationStatus, 50))
 	errs.AddErr("record_state", validation.MaxLength("record_state", r.RecordState, 50))
+	errs.AddErr("redirect_url", validation.URLPtr("redirect_url", r.RedirectURL))
 	return errs.Err()
 }
 
@@ -488,6 +496,7 @@ func (r CreateInvitationRequest) ToRepo() (invitations.CreateInvitation, error) 
 		ExpiresAt:         r.ExpiresAt,
 		AcceptedAt:        r.AcceptedAt,
 		RecordState:       r.RecordState,
+		RedirectURL:       r.RedirectURL,
 	}, nil
 }
 
@@ -506,6 +515,7 @@ type UpdateInvitationRequest struct {
 	ExpiresAt         *time.Time `json:"expires_at,omitempty"`
 	AcceptedAt        *time.Time `json:"accepted_at,omitempty"`
 	UpdatedAt         *time.Time `json:"updated_at,omitempty"`
+	RedirectURL       *string    `json:"redirect_url,omitempty"`
 }
 
 // Validate checks all field constraints. Called automatically by web.DecodeJSON.
@@ -521,6 +531,7 @@ func (r *UpdateInvitationRequest) Validate() error {
 	errs.AddErr("invited_by", validation.MaxLengthPtr("invited_by", r.InvitedBy, 255))
 	errs.AddErr("token_hash", validation.MaxLengthPtr("token_hash", r.TokenHash, 255))
 	errs.AddErr("invitation_status", validation.MaxLengthPtr("invitation_status", r.InvitationStatus, 50))
+	errs.AddErr("redirect_url", validation.URLPtr("redirect_url", r.RedirectURL))
 	return errs.Err()
 }
 
@@ -540,6 +551,7 @@ func (r UpdateInvitationRequest) ToRepo() (invitations.UpdateInvitation, error) 
 		ExpiresAt:         r.ExpiresAt,
 		AcceptedAt:        r.AcceptedAt,
 		UpdatedAt:         r.UpdatedAt,
+		RedirectURL:       r.RedirectURL,
 	}, nil
 }
 
@@ -557,7 +569,6 @@ func (b *Bridge) addGeneratedRoutes(group *web.RouteGroup) {
 	group.GET("/invitations", b.httpList,
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeType(b.authorizer, b.log, b.jsonErrors, "invitation", "list"),
 	)
 
 	group.GET("/invitations/{invitation_id}", b.httpGet,

@@ -368,7 +368,6 @@ func (b *Bridge) addGeneratedRoutes(group *web.RouteGroup) {
 	group.GET("/users", b.httpList,
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeType(b.authorizer, b.log, b.jsonErrors, "user", "list"),
 	)
 
 	group.GET("/users/{user_id}", b.httpGet,

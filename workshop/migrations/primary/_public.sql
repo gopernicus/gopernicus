@@ -1,4 +1,4 @@
--- Schema: gopernicus_db.public  reflected at: 2026-03-18 12:41:02
+-- Schema: gopernicus_db.public  reflected at: 2026-04-24 14:18:06
 
 CREATE TABLE public.api_keys (
     api_key_id varchar NOT NULL,
@@ -27,29 +27,12 @@ CREATE INDEX idx_api_keys_service_account ON public.api_keys USING btree (parent
 CREATE TABLE public.event_outbox (
     event_id text NOT NULL,
     event_type text NOT NULL,
-    correlation_id text NOT NULL,
-    tenant_id text,
-    aggregate_type text,
-    aggregate_id text,
     payload jsonb NOT NULL,
-    occurred_at timestamptz NOT NULL,
-    status text NOT NULL DEFAULT PENDING,
-    priority int4 NOT NULL DEFAULT 0,
-    retry_count int4 NOT NULL DEFAULT 0,
-    max_retries int4 NOT NULL DEFAULT 3,
-    worker_name text,
-    failure_reason text,
-    scheduled_for timestamptz NOT NULL DEFAULT now(),
     created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now(),
-    staged_at timestamptz,
-    completed_at timestamptz,
-    PRIMARY KEY (event_id),
-    CONSTRAINT event_outbox_status_check CHECK ((status = ANY (ARRAY['PENDING'::text, 'STAGED'::text, 'COMPLETED'::text, 'FAILED'::text, 'DEAD_LETTER'::text])))
+    published bool NOT NULL DEFAULT false,
+    PRIMARY KEY (event_id)
 );
-CREATE INDEX idx_event_outbox_correlation ON public.event_outbox USING btree (correlation_id);
-CREATE INDEX idx_event_outbox_pending ON public.event_outbox USING btree (scheduled_for, priority DESC, created_at) WHERE (status = 'PENDING'::text);
-CREATE INDEX idx_event_outbox_type ON public.event_outbox USING btree (event_type, status);
+CREATE INDEX idx_event_outbox_unpublished ON public.event_outbox USING btree (created_at) WHERE (published = false);
 
 CREATE TABLE public.groups (
     group_id varchar NOT NULL,
@@ -85,6 +68,7 @@ CREATE TABLE public.invitations (
     record_state varchar(50) NOT NULL DEFAULT active,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
+    redirect_url text,
     PRIMARY KEY (invitation_id),
     CONSTRAINT invitations_identifier_type_check CHECK (((identifier_type)::text = 'email'::text)),
     CONSTRAINT invitations_record_state_check CHECK (((record_state)::text = ANY ((ARRAY['active'::character varying, 'archived'::character varying, 'deleted'::character varying])::text[]))),
@@ -99,6 +83,33 @@ CREATE INDEX idx_invitations_resource ON public.invitations USING btree (resourc
 CREATE INDEX idx_invitations_token ON public.invitations USING btree (token_hash);
 CREATE UNIQUE INDEX idx_invitations_unique_pending ON public.invitations USING btree (resource_type, resource_id, identifier, relation) WHERE (((invitation_status)::text = 'pending'::text) AND ((record_state)::text = 'active'::text));
 CREATE UNIQUE INDEX invitations_token_hash_key ON public.invitations USING btree (token_hash);
+
+CREATE TABLE public.job_queue (
+    job_id text NOT NULL,
+    event_type text NOT NULL,
+    correlation_id text NOT NULL,
+    tenant_id text,
+    aggregate_type text,
+    aggregate_id text,
+    payload jsonb NOT NULL,
+    occurred_at timestamptz NOT NULL,
+    status text NOT NULL DEFAULT PENDING,
+    priority int4 NOT NULL DEFAULT 0,
+    retry_count int4 NOT NULL DEFAULT 0,
+    max_retries int4 NOT NULL DEFAULT 3,
+    worker_name text,
+    failure_reason text,
+    scheduled_for timestamptz NOT NULL DEFAULT now(),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    staged_at timestamptz,
+    completed_at timestamptz,
+    PRIMARY KEY (job_id),
+    CONSTRAINT job_queue_status_check CHECK ((status = ANY (ARRAY['PENDING'::text, 'STAGED'::text, 'COMPLETED'::text, 'FAILED'::text, 'DEAD_LETTER'::text])))
+);
+CREATE INDEX idx_job_queue_correlation ON public.job_queue USING btree (correlation_id);
+CREATE INDEX idx_job_queue_pending ON public.job_queue USING btree (scheduled_for, priority DESC, created_at) WHERE (status = 'PENDING'::text);
+CREATE INDEX idx_job_queue_type ON public.job_queue USING btree (event_type, status);
 
 CREATE TABLE public.oauth_accounts (
     oauth_account_id varchar NOT NULL,

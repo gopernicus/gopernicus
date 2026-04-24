@@ -114,7 +114,7 @@ WHERE $conditions AND $search`
 }
 
 func (s *Store) Get(ctx context.Context, invitationID string) (invitations.Invitation, error) {
-	query := `SELECT invitation_id, resource_type, resource_id, relation, identifier, identifier_type, resolved_subject_id, invited_by, token_hash, auto_accept, invitation_status, expires_at, accepted_at, record_state, created_at, updated_at
+	query := `SELECT invitation_id, resource_type, resource_id, relation, identifier, identifier_type, resolved_subject_id, invited_by, token_hash, auto_accept, invitation_status, expires_at, accepted_at, record_state, created_at, updated_at, redirect_url
 FROM public.invitations
 WHERE invitation_id = @invitation_id`
 
@@ -141,9 +141,9 @@ WHERE invitation_id = @invitation_id`
 
 func (s *Store) Create(ctx context.Context, input invitations.CreateInvitation) (invitations.Invitation, error) {
 	now := time.Now().UTC()
-	query := `INSERT INTO public.invitations (invitation_id, resource_type, resource_id, relation, identifier, identifier_type, resolved_subject_id, invited_by, token_hash, auto_accept, invitation_status, expires_at, accepted_at, record_state, created_at, updated_at)
-		VALUES (@invitation_id, @resource_type, @resource_id, @relation, @identifier, @identifier_type, @resolved_subject_id, @invited_by, @token_hash, @auto_accept, @invitation_status, @expires_at, @accepted_at, @record_state, @_created_at, @_updated_at)
-		RETURNING invitation_id, resource_type, resource_id, relation, identifier, identifier_type, resolved_subject_id, invited_by, token_hash, auto_accept, invitation_status, expires_at, accepted_at, record_state, created_at, updated_at`
+	query := `INSERT INTO public.invitations (invitation_id, resource_type, resource_id, relation, identifier, identifier_type, resolved_subject_id, invited_by, token_hash, auto_accept, invitation_status, expires_at, accepted_at, record_state, redirect_url, created_at, updated_at)
+		VALUES (@invitation_id, @resource_type, @resource_id, @relation, @identifier, @identifier_type, @resolved_subject_id, @invited_by, @token_hash, @auto_accept, @invitation_status, @expires_at, @accepted_at, @record_state, @redirect_url, @_created_at, @_updated_at)
+		RETURNING invitation_id, resource_type, resource_id, relation, identifier, identifier_type, resolved_subject_id, invited_by, token_hash, auto_accept, invitation_status, expires_at, accepted_at, record_state, created_at, updated_at, redirect_url`
 
 	args := pgx.NamedArgs{
 		"invitation_id":       input.InvitationID,
@@ -160,6 +160,7 @@ func (s *Store) Create(ctx context.Context, input invitations.CreateInvitation) 
 		"expires_at":          input.ExpiresAt,
 		"accepted_at":         input.AcceptedAt,
 		"record_state":        input.RecordState,
+		"redirect_url":        input.RedirectURL,
 		"_created_at":         now,
 		"_updated_at":         now,
 	}
@@ -236,6 +237,10 @@ func (s *Store) Update(ctx context.Context, invitationID string, input invitatio
 		setClauses = append(setClauses, "updated_at = @updated_at")
 		args["updated_at"] = *input.UpdatedAt
 	}
+	if input.RedirectURL != nil {
+		setClauses = append(setClauses, "redirect_url = @redirect_url")
+		args["redirect_url"] = *input.RedirectURL
+	}
 
 	// Auto-set updated_at if not explicitly provided.
 	if input.UpdatedAt == nil {
@@ -249,7 +254,7 @@ func (s *Store) Update(ctx context.Context, invitationID string, input invitatio
 
 	buf.WriteString(strings.Join(setClauses, ", "))
 	buf.WriteString(" WHERE invitation_id = @invitation_id")
-	buf.WriteString(" RETURNING invitation_id, resource_type, resource_id, relation, identifier, identifier_type, resolved_subject_id, invited_by, token_hash, auto_accept, invitation_status, expires_at, accepted_at, record_state, created_at, updated_at")
+	buf.WriteString(" RETURNING invitation_id, resource_type, resource_id, relation, identifier, identifier_type, resolved_subject_id, invited_by, token_hash, auto_accept, invitation_status, expires_at, accepted_at, record_state, created_at, updated_at, redirect_url")
 
 	rows, err := s.db.Query(ctx, buf.String(), args)
 	if err != nil {
@@ -347,7 +352,7 @@ WHERE invitation_id = @invitation_id`
 }
 
 func (s *Store) GetByToken(ctx context.Context, tokenHash string, now time.Time) (invitations.Invitation, error) {
-	query := `SELECT invitation_id, resource_type, resource_id, relation, identifier, identifier_type, resolved_subject_id, invited_by, token_hash, auto_accept, invitation_status, expires_at, accepted_at, record_state, created_at, updated_at
+	query := `SELECT invitation_id, resource_type, resource_id, relation, identifier, identifier_type, resolved_subject_id, invited_by, token_hash, auto_accept, invitation_status, expires_at, accepted_at, record_state, created_at, updated_at, redirect_url
 FROM public.invitations
 WHERE token_hash = @token_hash
 AND invitation_status = 'pending'
@@ -682,6 +687,10 @@ func generatedApplyListConditionsFilter(filter invitations.FilterList, data pgx.
 	if filter.UpdatedAtBefore != nil {
 		conditions = append(conditions, "updated_at <= @filter_updated_at_before")
 		data["filter_updated_at_before"] = *filter.UpdatedAtBefore
+	}
+	if filter.RedirectURL != nil {
+		conditions = append(conditions, "redirect_url = @filter_redirect_url")
+		data["filter_redirect_url"] = *filter.RedirectURL
 	}
 
 	// Prefilter authorization: restrict to authorized IDs.

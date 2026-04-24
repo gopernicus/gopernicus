@@ -126,7 +126,7 @@ func (b *Bridge) httpCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := b.createAuthRelationships(r.Context(), record); err != nil {
+	if err := b.createAuthRelationshipsCreate(r.Context(), record); err != nil {
 		b.log.ErrorContext(r.Context(), "create auth relationships", "error", err)
 		web.RespondJSONError(w, web.ErrInternal("create auth relationships"))
 		return
@@ -194,10 +194,11 @@ func (b *Bridge) httpDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // =============================================================================
-// Auth Relationship Creation
+// Auth Relationship Creation (one method per create route — the rels for a
+// nested create may reference fields that are absent on the root-create path).
 // =============================================================================
 
-func (b *Bridge) createAuthRelationships(ctx context.Context, record verificationtokens.VerificationToken) error {
+func (b *Bridge) createAuthRelationshipsCreate(ctx context.Context, record verificationtokens.VerificationToken) error {
 	if b.authorizer == nil {
 		return nil
 	}
@@ -398,13 +399,12 @@ func (b *Bridge) addGeneratedRoutes(group *web.RouteGroup) {
 	group.GET("/verification-tokens", b.httpList,
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeType(b.authorizer, b.log, b.jsonErrors, "verification_token", "list"),
 	)
 
 	group.GET("/verification-tokens/{token_id}", b.httpGet,
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "verification_token", "read", "token_id"),
+		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "token", "read", "token_id"),
 	)
 
 	group.POST("/verification-tokens", b.httpCreate,
@@ -417,13 +417,13 @@ func (b *Bridge) addGeneratedRoutes(group *web.RouteGroup) {
 		httpmid.MaxBodySize(1048576),
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "verification_token", "update", "token_id"),
+		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "token", "update", "token_id"),
 	)
 
 	group.DELETE("/verification-tokens/{token_id}", b.httpDelete,
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "verification_token", "delete", "token_id"),
+		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "token", "delete", "token_id"),
 	)
 
 }

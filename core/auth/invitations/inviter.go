@@ -115,6 +115,7 @@ type CreateInput struct {
 	IdentifierType string // type of identifier: IdentifierTypeEmail, IdentifierTypePhone, etc.
 	InvitedBy      string // principal ID of the inviter
 	AutoAccept     bool   // when true: known user → direct add; unknown user → auto-accept on identifier verification
+	RedirectURL    string // frontend URL for accept flow; validated by HTTP bridge, passed through by core
 }
 
 // CreateResult is the result of creating an invitation.
@@ -186,6 +187,7 @@ func (c *Inviter) addExistingUser(ctx context.Context, input CreateInput, subjec
 			SubjectType:  subjectType,
 			SubjectID:    subjectID,
 			AddedBy:      input.InvitedBy,
+			RedirectURL:  input.RedirectURL,
 		})
 	}
 
@@ -221,6 +223,9 @@ func (c *Inviter) createPendingInvitation(ctx context.Context, input CreateInput
 	}
 	if resolvedSubjectID != "" {
 		createInput.ResolvedSubjectID = &resolvedSubjectID
+	}
+	if input.RedirectURL != "" {
+		createInput.RedirectURL = &input.RedirectURL
 	}
 
 	inv, err := c.invitations.Create(ctx, createInput)
@@ -260,6 +265,7 @@ func (c *Inviter) createPendingInvitation(ctx context.Context, input CreateInput
 			Token:        token,
 			InvitedBy:    input.InvitedBy,
 			AutoAccept:   input.AutoAccept,
+			RedirectURL:  input.RedirectURL,
 		})
 	}
 
@@ -454,6 +460,10 @@ func (c *Inviter) Resend(ctx context.Context, invitationID string) (*invitations
 
 	// Emit event with the new plaintext token.
 	if c.bus != nil {
+		var redirectURL string
+		if inv.RedirectURL != nil {
+			redirectURL = *inv.RedirectURL
+		}
 		c.bus.Emit(ctx, InvitationSentEvent{
 			BaseEvent:    events.NewBaseEvent("invitation.sent"),
 			InvitationID: inv.InvitationID,
@@ -464,6 +474,7 @@ func (c *Inviter) Resend(ctx context.Context, invitationID string) (*invitations
 			Token:        token,
 			InvitedBy:    inv.InvitedBy,
 			AutoAccept:   inv.AutoAccept,
+			RedirectURL:  redirectURL,
 		})
 	}
 

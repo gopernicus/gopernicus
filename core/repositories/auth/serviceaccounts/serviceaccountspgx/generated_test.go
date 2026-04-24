@@ -46,7 +46,7 @@ func TestGeneratedServiceAccountStore_Get(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestServiceAccount(t, ctx, db)
+	created := fixtures.CreateTestServiceAccountWithDefaults(t, ctx, db)
 
 	t.Run("found", func(t *testing.T) {
 		result, err := store.Get(ctx, created.ServiceAccountID)
@@ -67,7 +67,7 @@ func TestGeneratedServiceAccountStore_List(t *testing.T) {
 	// Create multiple records.
 	const numRecords = 3
 	for i := 0; i < numRecords; i++ {
-		fixtures.CreateTestServiceAccount(t, ctx, db)
+		fixtures.CreateTestServiceAccountWithDefaults(t, ctx, db)
 	}
 
 	t.Run("returns all records", func(t *testing.T) {
@@ -105,7 +105,7 @@ func TestGeneratedServiceAccountStore_Delete(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestServiceAccount(t, ctx, db)
+	created := fixtures.CreateTestServiceAccountWithDefaults(t, ctx, db)
 
 	err := store.Delete(ctx, created.ServiceAccountID)
 	require.NoError(t, err)
@@ -119,7 +119,7 @@ func TestGeneratedServiceAccountStore_SoftDelete(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestServiceAccount(t, ctx, db)
+	created := fixtures.CreateTestServiceAccountWithDefaults(t, ctx, db)
 
 	err := store.SoftDelete(ctx, created.ServiceAccountID)
 	require.NoError(t, err)

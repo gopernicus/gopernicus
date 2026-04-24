@@ -77,6 +77,7 @@ func (m *mockInvitationStore) Create(_ context.Context, input invitationsrepo.Cr
 		InvitedBy:         input.InvitedBy,
 		TokenHash:         input.TokenHash,
 		AutoAccept:        input.AutoAccept,
+		RedirectURL:       input.RedirectURL,
 		InvitationStatus:  input.InvitationStatus,
 		ExpiresAt:         input.ExpiresAt,
 		RecordState:       input.RecordState,
@@ -1062,5 +1063,129 @@ func TestResolveOnRegistration_MultipleInvitations(t *testing.T) {
 		if inv.InvitationStatus != "accepted" {
 			t.Fatalf("expected %s to be accepted, got %s", id, inv.InvitationStatus)
 		}
+	}
+}
+
+// =============================================================================
+// RedirectURL Tests
+// =============================================================================
+
+func TestCreate_PropagatesRedirectURL(t *testing.T) {
+	h := newTestHarness(
+		WithUserLookup(func(_ context.Context, _ string) (string, string, error) {
+			return "", "", nil
+		}),
+	)
+
+	redirectURL := "https://example.com/accept"
+	result, err := h.useCase.Create(context.Background(), CreateInput{
+		ResourceType: "tenant",
+		ResourceID:   "t-1",
+		Relation:     "member",
+		Identifier:   "alice@example.com",
+		InvitedBy:    "inviter-1",
+		AutoAccept:   false,
+		RedirectURL:  redirectURL,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Invitation == nil {
+		t.Fatal("expected invitation to be created")
+	}
+
+	// Verify RedirectURL was persisted.
+	if len(h.store.createdInputs) != 1 {
+		t.Fatalf("expected 1 create, got %d", len(h.store.createdInputs))
+	}
+	if h.store.createdInputs[0].RedirectURL == nil || *h.store.createdInputs[0].RedirectURL != redirectURL {
+		t.Fatalf("expected RedirectURL %q in repo input, got %v", redirectURL, h.store.createdInputs[0].RedirectURL)
+	}
+
+	// Verify event carries RedirectURL.
+	var sentEvent InvitationSentEvent
+	for _, e := range h.bus.emitted {
+		if se, ok := e.(InvitationSentEvent); ok {
+			sentEvent = se
+			break
+		}
+	}
+	if sentEvent.InvitationID == "" {
+		t.Fatal("expected InvitationSentEvent to be emitted")
+	}
+	if sentEvent.RedirectURL != redirectURL {
+		t.Fatalf("expected RedirectURL %q in event, got %q", redirectURL, sentEvent.RedirectURL)
+	}
+}
+
+func TestCreate_EmptyRedirectURL(t *testing.T) {
+	h := newTestHarness(
+		WithUserLookup(func(_ context.Context, _ string) (string, string, error) {
+			return "", "", nil
+		}),
+	)
+
+	result, err := h.useCase.Create(context.Background(), CreateInput{
+		ResourceType: "tenant",
+		ResourceID:   "t-1",
+		Relation:     "member",
+		Identifier:   "alice@example.com",
+		InvitedBy:    "inviter-1",
+		AutoAccept:   false,
+		RedirectURL:  "",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Invitation == nil {
+		t.Fatal("expected invitation to be created")
+	}
+
+	// Verify RedirectURL was not set (nil pointer).
+	if len(h.store.createdInputs) != 1 {
+		t.Fatalf("expected 1 create, got %d", len(h.store.createdInputs))
+	}
+	if h.store.createdInputs[0].RedirectURL != nil {
+		t.Fatalf("expected nil RedirectURL for empty input, got %v", h.store.createdInputs[0].RedirectURL)
+	}
+
+	// Verify event carries empty RedirectURL.
+	var sentEvent InvitationSentEvent
+	for _, e := range h.bus.emitted {
+		if se, ok := e.(InvitationSentEvent); ok {
+			sentEvent = se
+			break
+		}
+	}
+	if sentEvent.RedirectURL != "" {
+		t.Fatalf("expected empty RedirectURL in event, got %q", sentEvent.RedirectURL)
+	}
+}
+
+func TestResend_RestoresRedirectURL(t *testing.T) {
+	h := newTestHarness()
+
+	redirectURL := "https://example.com/accept"
+	inv := pendingInvitation("inv-1", "tenant", "t-1", "member", "alice@example.com", "old-hash", false)
+	inv.RedirectURL = &redirectURL
+	h.store.addInvitation(inv)
+
+	_, err := h.useCase.Resend(context.Background(), "inv-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify InvitationSentEvent carries the persisted RedirectURL.
+	if len(h.bus.emitted) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(h.bus.emitted))
+	}
+	sentEvent, ok := h.bus.emitted[0].(InvitationSentEvent)
+	if !ok {
+		t.Fatalf("expected InvitationSentEvent, got %T", h.bus.emitted[0])
+	}
+	if sentEvent.RedirectURL != redirectURL {
+		t.Fatalf("expected RedirectURL %q in resend event, got %q", redirectURL, sentEvent.RedirectURL)
 	}
 }

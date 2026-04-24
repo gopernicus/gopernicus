@@ -55,10 +55,13 @@ result, err := inviter.Create(ctx, invitations.CreateInput{
     IdentifierType: invitations.IdentifierTypeEmail,
     InvitedBy:      currentUserID,
     AutoAccept:     true,
+    RedirectURL:    "https://app.example.com/invitations/accept",
 })
 // result.DirectlyAdded — true if user was added without a pending invitation
 // result.Invitation    — non-nil if a pending invitation was created
 ```
+
+The `RedirectURL` field specifies the frontend URL for the invitation accept flow. This URL is validated at the HTTP bridge layer against `ALLOWED_FRONTENDS` before reaching core — core passes it through without validation and persists it on the invitation record. On resend, the persisted URL is included in the new event.
 
 The behavior depends on two factors: the `AutoAccept` flag and whether the invitee is a known user.
 
@@ -151,10 +154,16 @@ invitations, pagination, err := inviter.ListByIdentifier(ctx, "jane@example.com"
 
 | Event | Emitted when | Payload |
 |---|---|---|
-| `InvitationSentEvent` (`invitation.sent`) | Pending invitation created or resent | InvitationID, ResourceType, ResourceID, Relation, Identifier, Token (plaintext), InvitedBy |
-| `MemberAddedEvent` (`member.added`) | Known user added directly (AutoAccept + user exists) | ResourceType, ResourceID, Relation, SubjectType, SubjectID, AddedBy |
+| `InvitationSentEvent` (`invitation.sent`) | Pending invitation created or resent | InvitationID, ResourceType, ResourceID, Relation, Identifier, Token (plaintext), InvitedBy, RedirectURL |
+| `MemberAddedEvent` (`member.added`) | Known user added directly (AutoAccept + user exists) | ResourceType, ResourceID, Relation, SubjectType, SubjectID, AddedBy, RedirectURL |
 
 The `InvitationSentEvent` is the only time the plaintext token is available. Subscribers should use it to build the invitation link and send the email.
+
+### Per-Invitation Redirect URL
+
+The `RedirectURL` field on `InvitationSentEvent` mirrors the pattern used by password reset (`PasswordResetRequestedEvent.ResetURL`). When set, subscribers should use it as the base URL for the invitation accept link instead of a global default. This enables multi-frontend applications where different frontends share a backend — each invitation routes to the frontend the inviter chose.
+
+If `RedirectURL` is empty, subscribers should fall back to their configured default frontend URL.
 
 ## Token Security
 

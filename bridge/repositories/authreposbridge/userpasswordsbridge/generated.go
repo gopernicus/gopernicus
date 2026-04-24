@@ -127,7 +127,7 @@ func (b *Bridge) httpCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := b.createAuthRelationships(r.Context(), record); err != nil {
+	if err := b.createAuthRelationshipsCreate(r.Context(), record); err != nil {
 		b.log.ErrorContext(r.Context(), "create auth relationships", "error", err)
 		web.RespondJSONError(w, web.ErrInternal("create auth relationships"))
 		return
@@ -195,10 +195,11 @@ func (b *Bridge) httpDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // =============================================================================
-// Auth Relationship Creation
+// Auth Relationship Creation (one method per create route — the rels for a
+// nested create may reference fields that are absent on the root-create path).
 // =============================================================================
 
-func (b *Bridge) createAuthRelationships(ctx context.Context, record userpasswords.UserPassword) error {
+func (b *Bridge) createAuthRelationshipsCreate(ctx context.Context, record userpasswords.UserPassword) error {
 	if b.authorizer == nil {
 		return nil
 	}
@@ -377,13 +378,12 @@ func (b *Bridge) addGeneratedRoutes(group *web.RouteGroup) {
 	group.GET("/user-passwords", b.httpList,
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeType(b.authorizer, b.log, b.jsonErrors, "user_password", "list"),
 	)
 
 	group.GET("/user-passwords/{user_id}", b.httpGet,
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "user_password", "read", "user_id"),
+		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "user", "read", "user_id"),
 	)
 
 	group.POST("/user-passwords", b.httpCreate,
@@ -396,13 +396,13 @@ func (b *Bridge) addGeneratedRoutes(group *web.RouteGroup) {
 		httpmid.MaxBodySize(1048576),
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "user_password", "update", "user_id"),
+		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "user", "update", "user_id"),
 	)
 
 	group.DELETE("/user-passwords/{user_id}", b.httpDelete,
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "user_password", "delete", "user_id"),
+		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "user", "delete", "user_id"),
 	)
 
 }

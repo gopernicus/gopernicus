@@ -46,7 +46,7 @@ func TestGeneratedSessionStore_Create(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestSession(t, ctx, db)
+	created := fixtures.CreateTestSessionWithDefaults(t, ctx, db)
 
 	// Verify the record was created and can be retrieved.
 	result, err := store.Get(ctx, created.SessionID)
@@ -58,7 +58,7 @@ func TestGeneratedSessionStore_Get(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestSession(t, ctx, db)
+	created := fixtures.CreateTestSessionWithDefaults(t, ctx, db)
 
 	t.Run("found", func(t *testing.T) {
 		result, err := store.Get(ctx, created.SessionID)
@@ -79,7 +79,7 @@ func TestGeneratedSessionStore_List(t *testing.T) {
 	// Create multiple records.
 	const numRecords = 3
 	for i := 0; i < numRecords; i++ {
-		fixtures.CreateTestSession(t, ctx, db)
+		fixtures.CreateTestSessionWithDefaults(t, ctx, db)
 	}
 
 	t.Run("returns all records", func(t *testing.T) {
@@ -117,7 +117,7 @@ func TestGeneratedSessionStore_Delete(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestSession(t, ctx, db)
+	created := fixtures.CreateTestSessionWithDefaults(t, ctx, db)
 
 	err := store.Delete(ctx, created.SessionID)
 	require.NoError(t, err)

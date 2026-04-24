@@ -5,6 +5,23 @@ package fixtures
 
 import (
 	"context"
+	"encoding/json"
+	"github.com/gopernicus/gopernicus/core/repositories/auth/apikeys"
+	"github.com/gopernicus/gopernicus/core/repositories/auth/oauthaccounts"
+	"github.com/gopernicus/gopernicus/core/repositories/auth/principals"
+	"github.com/gopernicus/gopernicus/core/repositories/auth/securityevents"
+	"github.com/gopernicus/gopernicus/core/repositories/auth/serviceaccounts"
+	"github.com/gopernicus/gopernicus/core/repositories/auth/sessions"
+	"github.com/gopernicus/gopernicus/core/repositories/auth/userpasswords"
+	"github.com/gopernicus/gopernicus/core/repositories/auth/users"
+	"github.com/gopernicus/gopernicus/core/repositories/auth/verificationcodes"
+	"github.com/gopernicus/gopernicus/core/repositories/auth/verificationtokens"
+	"github.com/gopernicus/gopernicus/core/repositories/events/eventoutbox"
+	"github.com/gopernicus/gopernicus/core/repositories/jobs/jobqueue"
+	"github.com/gopernicus/gopernicus/core/repositories/rebac/groups"
+	"github.com/gopernicus/gopernicus/core/repositories/rebac/invitations"
+	"github.com/gopernicus/gopernicus/core/repositories/rebac/rebacrelationshipmetadata"
+	"github.com/gopernicus/gopernicus/core/repositories/rebac/rebacrelationships"
 	"github.com/gopernicus/gopernicus/core/repositories/tenancy/tenants"
 	"testing"
 	"time"
@@ -20,6 +37,902 @@ var (
 	_ = conversion.Ptr[string]
 	_ = time.Now
 )
+
+// =============================================================================
+// Principal
+// =============================================================================
+
+// CreateTestPrincipal creates a test Principal with valid test data via direct SQL INSERT.
+// Bypasses the repository layer for test isolation.
+func CreateTestPrincipal(t *testing.T, ctx context.Context, db *testpgx.TestPGX) principals.Principal {
+	t.Helper()
+	require.NotNil(t, db)
+
+	// Generate unique ID for unique field values.
+	testUniqueID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+	_ = testUniqueID
+
+	principalID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+
+	// Insert directly via SQL (bypassing repository for test isolation).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO principals (principal_id, principal_type)
+		VALUES ($1, $2)
+	`,
+		principalID,
+		"test_principal_type",
+	)
+	require.NoError(t, err, "failed to insert Principal")
+
+	// Retrieve the created record.
+	var entity principals.Principal
+	err = db.Pool.QueryRow(ctx, `
+		SELECT principal_id, principal_type, created_at
+		FROM principals
+		WHERE principal_id = $1
+	`, principalID).Scan(
+		&entity.PrincipalID,
+		&entity.PrincipalType,
+		&entity.CreatedAt,
+	)
+	require.NoError(t, err, "failed to retrieve created Principal")
+
+	return entity
+}
+
+// CreateTestPrincipalWithDefaults creates a test Principal with auto-created FK dependencies.
+// FK dependencies whose parent table is outside this generation batch are required as parameters.
+func CreateTestPrincipalWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) principals.Principal {
+	t.Helper()
+
+	return CreateTestPrincipal(t, ctx, db)
+}
+
+// =============================================================================
+// ServiceAccount
+// =============================================================================
+
+// CreateTestServiceAccount creates a test ServiceAccount with valid test data via direct SQL INSERT.
+// Bypasses the repository layer for test isolation.
+func CreateTestServiceAccount(t *testing.T, ctx context.Context, db *testpgx.TestPGX, creatorPrincipalID string) serviceaccounts.ServiceAccount {
+	t.Helper()
+	require.NotNil(t, db)
+
+	require.NotEmpty(t, creatorPrincipalID, "creatorPrincipalID is required for ServiceAccount")
+
+	// Generate unique ID for unique field values.
+	testUniqueID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+	_ = testUniqueID
+
+	serviceAccountID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+
+	// Principal inheritance: insert into principals first.
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO principals (principal_id, principal_type, created_at)
+		VALUES ($1, $2, NOW())
+		ON CONFLICT (principal_id) DO NOTHING
+	`, serviceAccountID, "serviceaccount")
+	require.NoError(t, err, "failed to insert principal for ServiceAccount")
+
+	// Insert directly via SQL (bypassing repository for test isolation).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO service_accounts (service_account_id, name, description, creator_principal_id, record_state)
+		VALUES ($1, $2, $3, $4, $5)
+	`,
+		serviceAccountID,
+		"test_name_"+testUniqueID[:8],
+		conversion.Ptr("test_description"),
+		creatorPrincipalID,
+		"active",
+	)
+	require.NoError(t, err, "failed to insert ServiceAccount")
+
+	// Retrieve the created record.
+	var entity serviceaccounts.ServiceAccount
+	err = db.Pool.QueryRow(ctx, `
+		SELECT service_account_id, name, description, creator_principal_id, record_state, created_at, updated_at
+		FROM service_accounts
+		WHERE service_account_id = $1
+	`, serviceAccountID).Scan(
+		&entity.ServiceAccountID,
+		&entity.Name,
+		&entity.Description,
+		&entity.CreatorPrincipalID,
+		&entity.RecordState,
+		&entity.CreatedAt,
+		&entity.UpdatedAt,
+	)
+	require.NoError(t, err, "failed to retrieve created ServiceAccount")
+
+	return entity
+}
+
+// CreateTestServiceAccountWithDefaults creates a test ServiceAccount with auto-created FK dependencies.
+// FK dependencies whose parent table is outside this generation batch are required as parameters.
+func CreateTestServiceAccountWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) serviceaccounts.ServiceAccount {
+	t.Helper()
+
+	parentPrincipal := CreateTestPrincipalWithDefaults(t, ctx, db)
+	creatorPrincipalID := parentPrincipal.PrincipalID
+
+	return CreateTestServiceAccount(t, ctx, db, creatorPrincipalID)
+}
+
+// =============================================================================
+// APIKey
+// =============================================================================
+
+// CreateTestAPIKey creates a test APIKey with valid test data via direct SQL INSERT.
+// Bypasses the repository layer for test isolation.
+func CreateTestAPIKey(t *testing.T, ctx context.Context, db *testpgx.TestPGX, parentServiceAccountID string) apikeys.APIKey {
+	t.Helper()
+	require.NotNil(t, db)
+
+	require.NotEmpty(t, parentServiceAccountID, "parentServiceAccountID is required for APIKey")
+
+	// Generate unique ID for unique field values.
+	testUniqueID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+	_ = testUniqueID
+
+	apiKeyID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+
+	// Insert directly via SQL (bypassing repository for test isolation).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO api_keys (api_key_id, parent_service_account_id, name, key_prefix, key_hash, expires_at, last_used_at, last_used_ip, rate_limit_per_minute, record_state, revoked_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+	`,
+		apiKeyID,
+		parentServiceAccountID,
+		"test_name_"+testUniqueID[:8],
+		"test_key_prefix_"+testUniqueID[:8],
+		"test_key_hash_"+testUniqueID[:8],
+		conversion.Ptr(time.Now().UTC()),
+		conversion.Ptr(time.Now().UTC()),
+		conversion.Ptr("test_last_used_ip"),
+		conversion.Ptr(0),
+		"active",
+		conversion.Ptr(time.Now().UTC()),
+	)
+	require.NoError(t, err, "failed to insert APIKey")
+
+	// Retrieve the created record.
+	var entity apikeys.APIKey
+	err = db.Pool.QueryRow(ctx, `
+		SELECT api_key_id, parent_service_account_id, name, key_prefix, key_hash, expires_at, last_used_at, last_used_ip, rate_limit_per_minute, record_state, revoked_at, created_at, updated_at
+		FROM api_keys
+		WHERE api_key_id = $1
+	`, apiKeyID).Scan(
+		&entity.APIKeyID,
+		&entity.ParentServiceAccountID,
+		&entity.Name,
+		&entity.KeyPrefix,
+		&entity.KeyHash,
+		&entity.ExpiresAt,
+		&entity.LastUsedAt,
+		&entity.LastUsedIp,
+		&entity.RateLimitPerMinute,
+		&entity.RecordState,
+		&entity.RevokedAt,
+		&entity.CreatedAt,
+		&entity.UpdatedAt,
+	)
+	require.NoError(t, err, "failed to retrieve created APIKey")
+
+	return entity
+}
+
+// CreateTestAPIKeyWithDefaults creates a test APIKey with auto-created FK dependencies.
+// FK dependencies whose parent table is outside this generation batch are required as parameters.
+func CreateTestAPIKeyWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) apikeys.APIKey {
+	t.Helper()
+
+	parentServiceAccount := CreateTestServiceAccountWithDefaults(t, ctx, db)
+	parentServiceAccountID := parentServiceAccount.ServiceAccountID
+
+	return CreateTestAPIKey(t, ctx, db, parentServiceAccountID)
+}
+
+// =============================================================================
+// EventOutbox
+// =============================================================================
+
+// CreateTestEventOutbox creates a test EventOutbox with valid test data via direct SQL INSERT.
+// Bypasses the repository layer for test isolation.
+func CreateTestEventOutbox(t *testing.T, ctx context.Context, db *testpgx.TestPGX) eventoutbox.EventOutbox {
+	t.Helper()
+	require.NotNil(t, db)
+
+	// Generate unique ID for unique field values.
+	testUniqueID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+	_ = testUniqueID
+
+	eventID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+
+	// Insert directly via SQL (bypassing repository for test isolation).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO event_outbox (event_id, event_type, payload)
+		VALUES ($1, $2, $3)
+	`,
+		eventID,
+		"test_event_type",
+		json.RawMessage{},
+	)
+	require.NoError(t, err, "failed to insert EventOutbox")
+
+	// Retrieve the created record.
+	var entity eventoutbox.EventOutbox
+	err = db.Pool.QueryRow(ctx, `
+		SELECT event_id, event_type, payload, created_at, published
+		FROM event_outbox
+		WHERE event_id = $1
+	`, eventID).Scan(
+		&entity.EventID,
+		&entity.EventType,
+		&entity.Payload,
+		&entity.CreatedAt,
+		&entity.Published,
+	)
+	require.NoError(t, err, "failed to retrieve created EventOutbox")
+
+	return entity
+}
+
+// CreateTestEventOutboxWithDefaults creates a test EventOutbox with auto-created FK dependencies.
+// FK dependencies whose parent table is outside this generation batch are required as parameters.
+func CreateTestEventOutboxWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) eventoutbox.EventOutbox {
+	t.Helper()
+
+	return CreateTestEventOutbox(t, ctx, db)
+}
+
+// =============================================================================
+// Group
+// =============================================================================
+
+// CreateTestGroup creates a test Group with valid test data via direct SQL INSERT.
+// Bypasses the repository layer for test isolation.
+func CreateTestGroup(t *testing.T, ctx context.Context, db *testpgx.TestPGX, creatorPrincipalID string) groups.Group {
+	t.Helper()
+	require.NotNil(t, db)
+
+	require.NotEmpty(t, creatorPrincipalID, "creatorPrincipalID is required for Group")
+
+	// Generate unique ID for unique field values.
+	testUniqueID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+	_ = testUniqueID
+
+	groupID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+
+	// Insert directly via SQL (bypassing repository for test isolation).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO groups (group_id, name, slug, description, creator_principal_id, record_state)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`,
+		groupID,
+		"test_name_"+testUniqueID[:8],
+		"test_slug_"+testUniqueID[:8],
+		conversion.Ptr("test_description"),
+		creatorPrincipalID,
+		"active",
+	)
+	require.NoError(t, err, "failed to insert Group")
+
+	// Retrieve the created record.
+	var entity groups.Group
+	err = db.Pool.QueryRow(ctx, `
+		SELECT group_id, name, slug, description, creator_principal_id, record_state, created_at, updated_at
+		FROM groups
+		WHERE group_id = $1
+	`, groupID).Scan(
+		&entity.GroupID,
+		&entity.Name,
+		&entity.Slug,
+		&entity.Description,
+		&entity.CreatorPrincipalID,
+		&entity.RecordState,
+		&entity.CreatedAt,
+		&entity.UpdatedAt,
+	)
+	require.NoError(t, err, "failed to retrieve created Group")
+
+	return entity
+}
+
+// CreateTestGroupWithDefaults creates a test Group with auto-created FK dependencies.
+// FK dependencies whose parent table is outside this generation batch are required as parameters.
+func CreateTestGroupWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) groups.Group {
+	t.Helper()
+
+	parentPrincipal := CreateTestPrincipalWithDefaults(t, ctx, db)
+	creatorPrincipalID := parentPrincipal.PrincipalID
+
+	return CreateTestGroup(t, ctx, db, creatorPrincipalID)
+}
+
+// =============================================================================
+// Invitation
+// =============================================================================
+
+// CreateTestInvitation creates a test Invitation with valid test data via direct SQL INSERT.
+// Bypasses the repository layer for test isolation.
+func CreateTestInvitation(t *testing.T, ctx context.Context, db *testpgx.TestPGX) invitations.Invitation {
+	t.Helper()
+	require.NotNil(t, db)
+
+	// Generate unique ID for unique field values.
+	testUniqueID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+	_ = testUniqueID
+
+	invitationID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+
+	// Insert directly via SQL (bypassing repository for test isolation).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO invitations (invitation_id, resource_type, resource_id, relation, identifier, identifier_type, resolved_subject_id, invited_by, token_hash, auto_accept, invitation_status, expires_at, accepted_at, record_state, redirect_url)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+	`,
+		invitationID,
+		"test_resource_type",
+		"test_resource_id_"+testUniqueID[:8],
+		"test_relation_"+testUniqueID[:8],
+		"test_identifier_"+testUniqueID[:8],
+		"test_identifier_type",
+		conversion.Ptr("test_resolved_subject_id"),
+		"test_invited_by_"+testUniqueID[:8],
+		"test_token_hash_"+testUniqueID[:8],
+		false,
+		"test_invitation_status_"+testUniqueID[:8],
+		time.Now().UTC(),
+		conversion.Ptr(time.Now().UTC()),
+		"active",
+		conversion.Ptr("test_redirect_url"),
+	)
+	require.NoError(t, err, "failed to insert Invitation")
+
+	// Retrieve the created record.
+	var entity invitations.Invitation
+	err = db.Pool.QueryRow(ctx, `
+		SELECT invitation_id, resource_type, resource_id, relation, identifier, identifier_type, resolved_subject_id, invited_by, token_hash, auto_accept, invitation_status, expires_at, accepted_at, record_state, created_at, updated_at, redirect_url
+		FROM invitations
+		WHERE invitation_id = $1
+	`, invitationID).Scan(
+		&entity.InvitationID,
+		&entity.ResourceType,
+		&entity.ResourceID,
+		&entity.Relation,
+		&entity.Identifier,
+		&entity.IdentifierType,
+		&entity.ResolvedSubjectID,
+		&entity.InvitedBy,
+		&entity.TokenHash,
+		&entity.AutoAccept,
+		&entity.InvitationStatus,
+		&entity.ExpiresAt,
+		&entity.AcceptedAt,
+		&entity.RecordState,
+		&entity.CreatedAt,
+		&entity.UpdatedAt,
+		&entity.RedirectURL,
+	)
+	require.NoError(t, err, "failed to retrieve created Invitation")
+
+	return entity
+}
+
+// CreateTestInvitationWithDefaults creates a test Invitation with auto-created FK dependencies.
+// FK dependencies whose parent table is outside this generation batch are required as parameters.
+func CreateTestInvitationWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) invitations.Invitation {
+	t.Helper()
+
+	return CreateTestInvitation(t, ctx, db)
+}
+
+// =============================================================================
+// JobQueue
+// =============================================================================
+
+// CreateTestJobQueue creates a test JobQueue with valid test data via direct SQL INSERT.
+// Bypasses the repository layer for test isolation.
+func CreateTestJobQueue(t *testing.T, ctx context.Context, db *testpgx.TestPGX) jobqueue.JobQueue {
+	t.Helper()
+	require.NotNil(t, db)
+
+	// Generate unique ID for unique field values.
+	testUniqueID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+	_ = testUniqueID
+
+	jobID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+
+	// Insert directly via SQL (bypassing repository for test isolation).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO job_queue (job_id, event_type, correlation_id, tenant_id, aggregate_type, aggregate_id, payload, occurred_at, status, priority, retry_count, max_retries, worker_name, failure_reason, scheduled_for, staged_at, completed_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+	`,
+		jobID,
+		"test_event_type",
+		"test_correlation_id_"+testUniqueID[:8],
+		conversion.Ptr("test_tenant_id"),
+		conversion.Ptr("test_aggregate_type"),
+		conversion.Ptr("test_aggregate_id"),
+		json.RawMessage{},
+		time.Now().UTC(),
+		"test_status_"+testUniqueID[:8],
+		0,
+		0,
+		0,
+		conversion.Ptr("test_worker_name"),
+		conversion.Ptr("test_failure_reason"),
+		time.Now().UTC(),
+		conversion.Ptr(time.Now().UTC()),
+		conversion.Ptr(time.Now().UTC()),
+	)
+	require.NoError(t, err, "failed to insert JobQueue")
+
+	// Retrieve the created record.
+	var entity jobqueue.JobQueue
+	err = db.Pool.QueryRow(ctx, `
+		SELECT job_id, event_type, correlation_id, tenant_id, aggregate_type, aggregate_id, payload, occurred_at, status, priority, retry_count, max_retries, worker_name, failure_reason, scheduled_for, created_at, updated_at, staged_at, completed_at
+		FROM job_queue
+		WHERE job_id = $1
+	`, jobID).Scan(
+		&entity.JobID,
+		&entity.EventType,
+		&entity.CorrelationID,
+		&entity.TenantID,
+		&entity.AggregateType,
+		&entity.AggregateID,
+		&entity.Payload,
+		&entity.OccurredAt,
+		&entity.Status,
+		&entity.Priority,
+		&entity.RetryCount,
+		&entity.MaxRetries,
+		&entity.WorkerName,
+		&entity.FailureReason,
+		&entity.ScheduledFor,
+		&entity.CreatedAt,
+		&entity.UpdatedAt,
+		&entity.StagedAt,
+		&entity.CompletedAt,
+	)
+	require.NoError(t, err, "failed to retrieve created JobQueue")
+
+	return entity
+}
+
+// CreateTestJobQueueWithDefaults creates a test JobQueue with auto-created FK dependencies.
+// FK dependencies whose parent table is outside this generation batch are required as parameters.
+func CreateTestJobQueueWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) jobqueue.JobQueue {
+	t.Helper()
+
+	return CreateTestJobQueue(t, ctx, db)
+}
+
+// =============================================================================
+// User
+// =============================================================================
+
+// CreateTestUser creates a test User with valid test data via direct SQL INSERT.
+// Bypasses the repository layer for test isolation.
+func CreateTestUser(t *testing.T, ctx context.Context, db *testpgx.TestPGX) users.User {
+	t.Helper()
+	require.NotNil(t, db)
+
+	// Generate unique ID for unique field values.
+	testUniqueID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+	_ = testUniqueID
+
+	userID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+
+	// Principal inheritance: insert into principals first.
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO principals (principal_id, principal_type, created_at)
+		VALUES ($1, $2, NOW())
+		ON CONFLICT (principal_id) DO NOTHING
+	`, userID, "user")
+	require.NoError(t, err, "failed to insert principal for User")
+
+	// Insert directly via SQL (bypassing repository for test isolation).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO users (user_id, email, display_name, email_verified, last_login_at, record_state)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`,
+		userID,
+		"test_"+testUniqueID[:8]+"@example.com",
+		conversion.Ptr("test_display_name"),
+		false,
+		conversion.Ptr(time.Now().UTC()),
+		"active",
+	)
+	require.NoError(t, err, "failed to insert User")
+
+	// Retrieve the created record.
+	var entity users.User
+	err = db.Pool.QueryRow(ctx, `
+		SELECT user_id, email, display_name, email_verified, last_login_at, record_state, created_at, updated_at
+		FROM users
+		WHERE user_id = $1
+	`, userID).Scan(
+		&entity.UserID,
+		&entity.Email,
+		&entity.DisplayName,
+		&entity.EmailVerified,
+		&entity.LastLoginAt,
+		&entity.RecordState,
+		&entity.CreatedAt,
+		&entity.UpdatedAt,
+	)
+	require.NoError(t, err, "failed to retrieve created User")
+
+	return entity
+}
+
+// CreateTestUserWithDefaults creates a test User with auto-created FK dependencies.
+// FK dependencies whose parent table is outside this generation batch are required as parameters.
+func CreateTestUserWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) users.User {
+	t.Helper()
+
+	return CreateTestUser(t, ctx, db)
+}
+
+// =============================================================================
+// OauthAccount
+// =============================================================================
+
+// CreateTestOauthAccount creates a test OauthAccount with valid test data via direct SQL INSERT.
+// Bypasses the repository layer for test isolation.
+func CreateTestOauthAccount(t *testing.T, ctx context.Context, db *testpgx.TestPGX, parentUserID string) oauthaccounts.OauthAccount {
+	t.Helper()
+	require.NotNil(t, db)
+
+	require.NotEmpty(t, parentUserID, "parentUserID is required for OauthAccount")
+
+	// Generate unique ID for unique field values.
+	testUniqueID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+	_ = testUniqueID
+
+	oauthAccountID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+
+	// Insert directly via SQL (bypassing repository for test isolation).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO oauth_accounts (oauth_account_id, parent_user_id, provider, provider_user_id, provider_email, provider_email_verified, account_verified, access_token, refresh_token, token_expires_at, token_type, scope, id_token, profile_data, linked_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+	`,
+		oauthAccountID,
+		parentUserID,
+		"test_provider_"+testUniqueID[:8],
+		"test_provider_user_id_"+testUniqueID[:8],
+		conversion.Ptr("test_provider_email"),
+		conversion.Ptr(false),
+		false,
+		conversion.Ptr("test_access_token"),
+		conversion.Ptr("test_refresh_token"),
+		conversion.Ptr(time.Now().UTC()),
+		conversion.Ptr("test_token_type"),
+		conversion.Ptr("test_scope"),
+		conversion.Ptr("test_id_token"),
+		conversion.Ptr(json.RawMessage{}),
+		time.Now().UTC(),
+	)
+	require.NoError(t, err, "failed to insert OauthAccount")
+
+	// Retrieve the created record.
+	var entity oauthaccounts.OauthAccount
+	err = db.Pool.QueryRow(ctx, `
+		SELECT oauth_account_id, parent_user_id, provider, provider_user_id, provider_email, provider_email_verified, account_verified, access_token, refresh_token, token_expires_at, token_type, scope, id_token, profile_data, linked_at, created_at, updated_at
+		FROM oauth_accounts
+		WHERE oauth_account_id = $1
+	`, oauthAccountID).Scan(
+		&entity.OauthAccountID,
+		&entity.ParentUserID,
+		&entity.Provider,
+		&entity.ProviderUserID,
+		&entity.ProviderEmail,
+		&entity.ProviderEmailVerified,
+		&entity.AccountVerified,
+		&entity.AccessToken,
+		&entity.RefreshToken,
+		&entity.TokenExpiresAt,
+		&entity.TokenType,
+		&entity.Scope,
+		&entity.IDToken,
+		&entity.ProfileData,
+		&entity.LinkedAt,
+		&entity.CreatedAt,
+		&entity.UpdatedAt,
+	)
+	require.NoError(t, err, "failed to retrieve created OauthAccount")
+
+	return entity
+}
+
+// CreateTestOauthAccountWithDefaults creates a test OauthAccount with auto-created FK dependencies.
+// FK dependencies whose parent table is outside this generation batch are required as parameters.
+func CreateTestOauthAccountWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) oauthaccounts.OauthAccount {
+	t.Helper()
+
+	parentUser := CreateTestUserWithDefaults(t, ctx, db)
+	parentUserID := parentUser.UserID
+
+	return CreateTestOauthAccount(t, ctx, db, parentUserID)
+}
+
+// =============================================================================
+// RebacRelationship
+// =============================================================================
+
+// CreateTestRebacRelationship creates a test RebacRelationship with valid test data via direct SQL INSERT.
+// Bypasses the repository layer for test isolation.
+func CreateTestRebacRelationship(t *testing.T, ctx context.Context, db *testpgx.TestPGX) rebacrelationships.RebacRelationship {
+	t.Helper()
+	require.NotNil(t, db)
+
+	// Generate unique ID for unique field values.
+	testUniqueID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+	_ = testUniqueID
+
+	relationshipID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+
+	// Insert directly via SQL (bypassing repository for test isolation).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO rebac_relationships (relationship_id, resource_type, resource_id, relation, subject_type, subject_id, subject_relation)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`,
+		relationshipID,
+		"test_resource_type",
+		"test_resource_id_"+testUniqueID[:8],
+		"test_relation_"+testUniqueID[:8],
+		"test_subject_type",
+		"test_subject_id_"+testUniqueID[:8],
+		conversion.Ptr("test_subject_relation"),
+	)
+	require.NoError(t, err, "failed to insert RebacRelationship")
+
+	// Retrieve the created record.
+	var entity rebacrelationships.RebacRelationship
+	err = db.Pool.QueryRow(ctx, `
+		SELECT relationship_id, resource_type, resource_id, relation, subject_type, subject_id, subject_relation, created_at
+		FROM rebac_relationships
+		WHERE relationship_id = $1
+	`, relationshipID).Scan(
+		&entity.RelationshipID,
+		&entity.ResourceType,
+		&entity.ResourceID,
+		&entity.Relation,
+		&entity.SubjectType,
+		&entity.SubjectID,
+		&entity.SubjectRelation,
+		&entity.CreatedAt,
+	)
+	require.NoError(t, err, "failed to retrieve created RebacRelationship")
+
+	return entity
+}
+
+// CreateTestRebacRelationshipWithDefaults creates a test RebacRelationship with auto-created FK dependencies.
+// FK dependencies whose parent table is outside this generation batch are required as parameters.
+func CreateTestRebacRelationshipWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) rebacrelationships.RebacRelationship {
+	t.Helper()
+
+	return CreateTestRebacRelationship(t, ctx, db)
+}
+
+// =============================================================================
+// RebacRelationshipMetadata
+// =============================================================================
+
+// CreateTestRebacRelationshipMetadata creates a test RebacRelationshipMetadata with valid test data via direct SQL INSERT.
+// Bypasses the repository layer for test isolation.
+func CreateTestRebacRelationshipMetadata(t *testing.T, ctx context.Context, db *testpgx.TestPGX, relationshipID string) rebacrelationshipmetadata.RebacRelationshipMetadata {
+	t.Helper()
+	require.NotNil(t, db)
+
+	require.NotEmpty(t, relationshipID, "relationshipID is required for RebacRelationshipMetadata")
+
+	// Generate unique ID for unique field values.
+	testUniqueID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+	_ = testUniqueID
+
+	// Insert directly via SQL (bypassing repository for test isolation).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO rebac_relationship_metadata (relationship_id, metadata)
+		VALUES ($1, $2)
+	`,
+		relationshipID,
+		json.RawMessage{},
+	)
+	require.NoError(t, err, "failed to insert RebacRelationshipMetadata")
+
+	// Retrieve the created record.
+	var entity rebacrelationshipmetadata.RebacRelationshipMetadata
+	err = db.Pool.QueryRow(ctx, `
+		SELECT relationship_id, metadata, created_at, updated_at
+		FROM rebac_relationship_metadata
+		WHERE relationship_id = $1
+	`, relationshipID).Scan(
+		&entity.RelationshipID,
+		&entity.Metadata,
+		&entity.CreatedAt,
+		&entity.UpdatedAt,
+	)
+	require.NoError(t, err, "failed to retrieve created RebacRelationshipMetadata")
+
+	return entity
+}
+
+// CreateTestRebacRelationshipMetadataWithDefaults creates a test RebacRelationshipMetadata with auto-created FK dependencies.
+// FK dependencies whose parent table is outside this generation batch are required as parameters.
+func CreateTestRebacRelationshipMetadataWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) rebacrelationshipmetadata.RebacRelationshipMetadata {
+	t.Helper()
+
+	parentRebacRelationship := CreateTestRebacRelationshipWithDefaults(t, ctx, db)
+	relationshipID := parentRebacRelationship.RelationshipID
+
+	return CreateTestRebacRelationshipMetadata(t, ctx, db, relationshipID)
+}
+
+// =============================================================================
+// SecurityEvent
+// =============================================================================
+
+// CreateTestSecurityEvent creates a test SecurityEvent with valid test data via direct SQL INSERT.
+// Bypasses the repository layer for test isolation.
+func CreateTestSecurityEvent(t *testing.T, ctx context.Context, db *testpgx.TestPGX, userID string) securityevents.SecurityEvent {
+	t.Helper()
+	require.NotNil(t, db)
+
+	require.NotEmpty(t, userID, "userID is required for SecurityEvent")
+
+	// Generate unique ID for unique field values.
+	testUniqueID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+	_ = testUniqueID
+
+	eventID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+
+	// Insert directly via SQL (bypassing repository for test isolation).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO security_events (event_id, user_id, event_type, event_status, event_details, ip_address, user_agent)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`,
+		eventID,
+		userID,
+		"test_event_type",
+		"test_event_status_"+testUniqueID[:8],
+		conversion.Ptr(json.RawMessage{}),
+		conversion.Ptr("test_ip_address"),
+		conversion.Ptr("test_user_agent"),
+	)
+	require.NoError(t, err, "failed to insert SecurityEvent")
+
+	// Retrieve the created record.
+	var entity securityevents.SecurityEvent
+	err = db.Pool.QueryRow(ctx, `
+		SELECT event_id, user_id, event_type, event_status, event_details, ip_address, user_agent, created_at
+		FROM security_events
+		WHERE event_id = $1
+	`, eventID).Scan(
+		&entity.EventID,
+		&entity.UserID,
+		&entity.EventType,
+		&entity.EventStatus,
+		&entity.EventDetails,
+		&entity.IpAddress,
+		&entity.UserAgent,
+		&entity.CreatedAt,
+	)
+	require.NoError(t, err, "failed to retrieve created SecurityEvent")
+
+	return entity
+}
+
+// CreateTestSecurityEventWithDefaults creates a test SecurityEvent with auto-created FK dependencies.
+// FK dependencies whose parent table is outside this generation batch are required as parameters.
+func CreateTestSecurityEventWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) securityevents.SecurityEvent {
+	t.Helper()
+
+	parentUser := CreateTestUserWithDefaults(t, ctx, db)
+	userID := parentUser.UserID
+
+	return CreateTestSecurityEvent(t, ctx, db, userID)
+}
+
+// =============================================================================
+// Session
+// =============================================================================
+
+// CreateTestSession creates a test Session with valid test data via direct SQL INSERT.
+// Bypasses the repository layer for test isolation.
+func CreateTestSession(t *testing.T, ctx context.Context, db *testpgx.TestPGX, parentUserID string) sessions.Session {
+	t.Helper()
+	require.NotNil(t, db)
+
+	require.NotEmpty(t, parentUserID, "parentUserID is required for Session")
+
+	// Generate unique ID for unique field values.
+	testUniqueID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+	_ = testUniqueID
+
+	sessionID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+
+	// Insert directly via SQL (bypassing repository for test isolation).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO sessions (session_id, parent_user_id, session_token_hash, refresh_token_hash, rotation_count, last_rotation_at, previous_refresh_token_hash, expires_at, last_used_at, user_agent, ip_address)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+	`,
+		sessionID,
+		parentUserID,
+		"test_session_token_hash_"+testUniqueID[:8],
+		conversion.Ptr("test_refresh_token_hash"),
+		conversion.Ptr(0),
+		conversion.Ptr(time.Now().UTC()),
+		conversion.Ptr("test_previous_refresh_token_hash"),
+		time.Now().UTC(),
+		time.Now().UTC(),
+		conversion.Ptr("test_user_agent"),
+		conversion.Ptr("test_ip_address"),
+	)
+	require.NoError(t, err, "failed to insert Session")
+
+	// Retrieve the created record.
+	var entity sessions.Session
+	err = db.Pool.QueryRow(ctx, `
+		SELECT session_id, parent_user_id, session_token_hash, refresh_token_hash, rotation_count, last_rotation_at, previous_refresh_token_hash, expires_at, last_used_at, user_agent, ip_address, created_at, updated_at
+		FROM sessions
+		WHERE session_id = $1
+	`, sessionID).Scan(
+		&entity.SessionID,
+		&entity.ParentUserID,
+		&entity.SessionTokenHash,
+		&entity.RefreshTokenHash,
+		&entity.RotationCount,
+		&entity.LastRotationAt,
+		&entity.PreviousRefreshTokenHash,
+		&entity.ExpiresAt,
+		&entity.LastUsedAt,
+		&entity.UserAgent,
+		&entity.IpAddress,
+		&entity.CreatedAt,
+		&entity.UpdatedAt,
+	)
+	require.NoError(t, err, "failed to retrieve created Session")
+
+	return entity
+}
+
+// CreateTestSessionWithDefaults creates a test Session with auto-created FK dependencies.
+// FK dependencies whose parent table is outside this generation batch are required as parameters.
+func CreateTestSessionWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) sessions.Session {
+	t.Helper()
+
+	parentUser := CreateTestUserWithDefaults(t, ctx, db)
+	parentUserID := parentUser.UserID
+
+	return CreateTestSession(t, ctx, db, parentUserID)
+}
 
 // =============================================================================
 // Tenant
@@ -78,8 +991,204 @@ func CreateTestTenant(t *testing.T, ctx context.Context, db *testpgx.TestPGX, cr
 
 // CreateTestTenantWithDefaults creates a test Tenant with auto-created FK dependencies.
 // FK dependencies whose parent table is outside this generation batch are required as parameters.
-func CreateTestTenantWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX, creatorPrincipalID string) tenants.Tenant {
+func CreateTestTenantWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) tenants.Tenant {
 	t.Helper()
 
+	parentPrincipal := CreateTestPrincipalWithDefaults(t, ctx, db)
+	creatorPrincipalID := parentPrincipal.PrincipalID
+
 	return CreateTestTenant(t, ctx, db, creatorPrincipalID)
+}
+
+// =============================================================================
+// UserPassword
+// =============================================================================
+
+// CreateTestUserPassword creates a test UserPassword with valid test data via direct SQL INSERT.
+// Bypasses the repository layer for test isolation.
+func CreateTestUserPassword(t *testing.T, ctx context.Context, db *testpgx.TestPGX, userID string) userpasswords.UserPassword {
+	t.Helper()
+	require.NotNil(t, db)
+
+	require.NotEmpty(t, userID, "userID is required for UserPassword")
+
+	// Generate unique ID for unique field values.
+	testUniqueID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+	_ = testUniqueID
+
+	// Insert directly via SQL (bypassing repository for test isolation).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO user_passwords (user_id, password_hash, password_changed_at, password_verified)
+		VALUES ($1, $2, $3, $4)
+	`,
+		userID,
+		"test_password_hash_"+testUniqueID[:8],
+		time.Now().UTC(),
+		false,
+	)
+	require.NoError(t, err, "failed to insert UserPassword")
+
+	// Retrieve the created record.
+	var entity userpasswords.UserPassword
+	err = db.Pool.QueryRow(ctx, `
+		SELECT user_id, password_hash, password_changed_at, password_verified, created_at, updated_at
+		FROM user_passwords
+		WHERE user_id = $1
+	`, userID).Scan(
+		&entity.UserID,
+		&entity.PasswordHash,
+		&entity.PasswordChangedAt,
+		&entity.PasswordVerified,
+		&entity.CreatedAt,
+		&entity.UpdatedAt,
+	)
+	require.NoError(t, err, "failed to retrieve created UserPassword")
+
+	return entity
+}
+
+// CreateTestUserPasswordWithDefaults creates a test UserPassword with auto-created FK dependencies.
+// FK dependencies whose parent table is outside this generation batch are required as parameters.
+func CreateTestUserPasswordWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) userpasswords.UserPassword {
+	t.Helper()
+
+	parentUser := CreateTestUserWithDefaults(t, ctx, db)
+	userID := parentUser.UserID
+
+	return CreateTestUserPassword(t, ctx, db, userID)
+}
+
+// =============================================================================
+// VerificationCode
+// =============================================================================
+
+// CreateTestVerificationCode creates a test VerificationCode with valid test data via direct SQL INSERT.
+// Bypasses the repository layer for test isolation.
+func CreateTestVerificationCode(t *testing.T, ctx context.Context, db *testpgx.TestPGX, userID string) verificationcodes.VerificationCode {
+	t.Helper()
+	require.NotNil(t, db)
+
+	require.NotEmpty(t, userID, "userID is required for VerificationCode")
+
+	// Generate unique ID for unique field values.
+	testUniqueID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+	_ = testUniqueID
+
+	codeID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+
+	// Insert directly via SQL (bypassing repository for test isolation).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO verification_codes (code_id, identifier, code_hash, purpose, user_id, data, attempt_count, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`,
+		codeID,
+		"test_identifier_"+testUniqueID[:8],
+		"test_code_hash_"+testUniqueID[:8],
+		"test_purpose_"+testUniqueID[:8],
+		userID,
+		conversion.Ptr(json.RawMessage{}),
+		0,
+		time.Now().UTC(),
+	)
+	require.NoError(t, err, "failed to insert VerificationCode")
+
+	// Retrieve the created record.
+	var entity verificationcodes.VerificationCode
+	err = db.Pool.QueryRow(ctx, `
+		SELECT code_id, identifier, code_hash, purpose, user_id, data, attempt_count, expires_at, created_at
+		FROM verification_codes
+		WHERE code_id = $1
+	`, codeID).Scan(
+		&entity.CodeID,
+		&entity.Identifier,
+		&entity.CodeHash,
+		&entity.Purpose,
+		&entity.UserID,
+		&entity.Data,
+		&entity.AttemptCount,
+		&entity.ExpiresAt,
+		&entity.CreatedAt,
+	)
+	require.NoError(t, err, "failed to retrieve created VerificationCode")
+
+	return entity
+}
+
+// CreateTestVerificationCodeWithDefaults creates a test VerificationCode with auto-created FK dependencies.
+// FK dependencies whose parent table is outside this generation batch are required as parameters.
+func CreateTestVerificationCodeWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) verificationcodes.VerificationCode {
+	t.Helper()
+
+	parentUser := CreateTestUserWithDefaults(t, ctx, db)
+	userID := parentUser.UserID
+
+	return CreateTestVerificationCode(t, ctx, db, userID)
+}
+
+// =============================================================================
+// VerificationToken
+// =============================================================================
+
+// CreateTestVerificationToken creates a test VerificationToken with valid test data via direct SQL INSERT.
+// Bypasses the repository layer for test isolation.
+func CreateTestVerificationToken(t *testing.T, ctx context.Context, db *testpgx.TestPGX, userID string) verificationtokens.VerificationToken {
+	t.Helper()
+	require.NotNil(t, db)
+
+	require.NotEmpty(t, userID, "userID is required for VerificationToken")
+
+	// Generate unique ID for unique field values.
+	testUniqueID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+	_ = testUniqueID
+
+	tokenID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+
+	// Insert directly via SQL (bypassing repository for test isolation).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO verification_tokens (token_id, token_hash, purpose, identifier, user_id, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`,
+		tokenID,
+		"test_token_hash_"+testUniqueID[:8],
+		"test_purpose_"+testUniqueID[:8],
+		"test_identifier_"+testUniqueID[:8],
+		userID,
+		time.Now().UTC(),
+	)
+	require.NoError(t, err, "failed to insert VerificationToken")
+
+	// Retrieve the created record.
+	var entity verificationtokens.VerificationToken
+	err = db.Pool.QueryRow(ctx, `
+		SELECT token_id, token_hash, purpose, identifier, user_id, expires_at, created_at
+		FROM verification_tokens
+		WHERE token_id = $1
+	`, tokenID).Scan(
+		&entity.TokenID,
+		&entity.TokenHash,
+		&entity.Purpose,
+		&entity.Identifier,
+		&entity.UserID,
+		&entity.ExpiresAt,
+		&entity.CreatedAt,
+	)
+	require.NoError(t, err, "failed to retrieve created VerificationToken")
+
+	return entity
+}
+
+// CreateTestVerificationTokenWithDefaults creates a test VerificationToken with auto-created FK dependencies.
+// FK dependencies whose parent table is outside this generation batch are required as parameters.
+func CreateTestVerificationTokenWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) verificationtokens.VerificationToken {
+	t.Helper()
+
+	parentUser := CreateTestUserWithDefaults(t, ctx, db)
+	userID := parentUser.UserID
+
+	return CreateTestVerificationToken(t, ctx, db, userID)
 }

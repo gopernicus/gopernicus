@@ -46,7 +46,7 @@ func TestGeneratedRebacRelationshipMetadataStore_Create(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestRebacRelationshipMetadata(t, ctx, db)
+	created := fixtures.CreateTestRebacRelationshipMetadataWithDefaults(t, ctx, db)
 
 	// Verify the record was created and can be retrieved.
 	result, err := store.Get(ctx, created.RelationshipID)
@@ -58,7 +58,7 @@ func TestGeneratedRebacRelationshipMetadataStore_Get(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestRebacRelationshipMetadata(t, ctx, db)
+	created := fixtures.CreateTestRebacRelationshipMetadataWithDefaults(t, ctx, db)
 
 	t.Run("found", func(t *testing.T) {
 		result, err := store.Get(ctx, created.RelationshipID)
@@ -79,7 +79,7 @@ func TestGeneratedRebacRelationshipMetadataStore_List(t *testing.T) {
 	// Create multiple records.
 	const numRecords = 3
 	for i := 0; i < numRecords; i++ {
-		fixtures.CreateTestRebacRelationshipMetadata(t, ctx, db)
+		fixtures.CreateTestRebacRelationshipMetadataWithDefaults(t, ctx, db)
 	}
 
 	t.Run("returns all records", func(t *testing.T) {
@@ -117,7 +117,7 @@ func TestGeneratedRebacRelationshipMetadataStore_Delete(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestRebacRelationshipMetadata(t, ctx, db)
+	created := fixtures.CreateTestRebacRelationshipMetadataWithDefaults(t, ctx, db)
 
 	err := store.Delete(ctx, created.RelationshipID)
 	require.NoError(t, err)

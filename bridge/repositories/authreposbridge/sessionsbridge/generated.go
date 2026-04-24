@@ -103,7 +103,7 @@ func (b *Bridge) httpGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	record, err := b.sessionRepository.Get(r.Context(), parentUserID, sessionID)
+	record, err := b.sessionRepository.Get(r.Context(), sessionID, parentUserID)
 	if err != nil {
 		if !errs.IsExpected(err) {
 			b.log.ErrorContext(r.Context(), "unexpected error", "error", err)
@@ -147,7 +147,7 @@ func (b *Bridge) httpCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := b.createAuthRelationships(r.Context(), record); err != nil {
+	if err := b.createAuthRelationshipsCreate(r.Context(), record); err != nil {
 		b.log.ErrorContext(r.Context(), "create auth relationships", "error", err)
 		web.RespondJSONError(w, web.ErrInternal("create auth relationships"))
 		return
@@ -183,7 +183,7 @@ func (b *Bridge) httpUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	record, err := b.sessionRepository.Update(r.Context(), parentUserID, sessionID, input)
+	record, err := b.sessionRepository.Update(r.Context(), sessionID, parentUserID, input)
 	if err != nil {
 		if !errs.IsExpected(err) {
 			b.log.ErrorContext(r.Context(), "unexpected error", "error", err)
@@ -215,7 +215,7 @@ func (b *Bridge) httpDelete(w http.ResponseWriter, r *http.Request) {
 		web.RespondJSONError(w, web.ErrInternal("delete auth relationships"))
 		return
 	}
-	if err := b.sessionRepository.Delete(r.Context(), parentUserID, sessionID); err != nil {
+	if err := b.sessionRepository.Delete(r.Context(), sessionID, parentUserID); err != nil {
 		if !errs.IsExpected(err) {
 			b.log.ErrorContext(r.Context(), "unexpected error", "error", err)
 		}
@@ -227,10 +227,11 @@ func (b *Bridge) httpDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // =============================================================================
-// Auth Relationship Creation
+// Auth Relationship Creation (one method per create route — the rels for a
+// nested create may reference fields that are absent on the root-create path).
 // =============================================================================
 
-func (b *Bridge) createAuthRelationships(ctx context.Context, record sessions.Session) error {
+func (b *Bridge) createAuthRelationshipsCreate(ctx context.Context, record sessions.Session) error {
 	if b.authorizer == nil {
 		return nil
 	}
@@ -497,7 +498,6 @@ func (b *Bridge) addGeneratedRoutes(group *web.RouteGroup) {
 	group.GET("/users/{parent_user_id}/sessions", b.httpList,
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeType(b.authorizer, b.log, b.jsonErrors, "session", "list"),
 	)
 
 	group.GET("/users/{parent_user_id}/sessions/{session_id}", b.httpGet,
@@ -510,7 +510,7 @@ func (b *Bridge) addGeneratedRoutes(group *web.RouteGroup) {
 		httpmid.MaxBodySize(1048576),
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "session", "create", "parent_user_id"),
+		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "parent_user", "create", "parent_user_id"),
 	)
 
 	group.PUT("/users/{parent_user_id}/sessions/{session_id}", b.httpUpdate,
