@@ -139,6 +139,7 @@ type OAuthCallbackResult struct {
 	AccessToken  string
 	RefreshToken string
 	IsNewUser    bool
+	AppOrigin    string // frontend origin from state; empty if not provided at initiation
 }
 
 // OAuthAccount represents an OAuth provider linked to a user.
@@ -179,6 +180,7 @@ type OAuthState struct {
 	MobileRedirectURI string // custom scheme URI for mobile redirect (e.g. myapp://oauth-callback); empty for web flows
 	UserID            string // non-empty when linking to an existing user
 	FlowSecretHash    string // SHA256 hash of flow secret for mobile session binding; empty for web flows
+	AppOrigin         string // frontend origin for post-OAuth redirects; empty falls back to ALLOWED_FRONTENDS[0]
 }
 
 // PendingOAuthLink holds data for an OAuth link awaiting email verification.

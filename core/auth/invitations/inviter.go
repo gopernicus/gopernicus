@@ -259,6 +259,7 @@ func (c *Inviter) createPendingInvitation(ctx context.Context, input CreateInput
 			Identifier:   input.Identifier,
 			Token:        token,
 			InvitedBy:    input.InvitedBy,
+			AutoAccept:   input.AutoAccept,
 		})
 	}
 
@@ -462,6 +463,7 @@ func (c *Inviter) Resend(ctx context.Context, invitationID string) (*invitations
 			Identifier:   inv.Identifier,
 			Token:        token,
 			InvitedBy:    inv.InvitedBy,
+			AutoAccept:   inv.AutoAccept,
 		})
 	}
 

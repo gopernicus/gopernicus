@@ -7,6 +7,13 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
 
+var (
+	errInvalidResetURLOrigin = errors.New("reset_url origin not in allowed list")
+	errResetURLRequired      = errors.New("reset_url is required")
+	errInvalidAppOrigin      = errors.New("app_origin not in allowed list")
+	errAppOriginRequired     = errors.New("app_origin is required")
+)
+
 // httpErrFor maps an authentication domain error to an HTTP error response.
 //
 // Recognized auth sentinels are translated into responses with stable,

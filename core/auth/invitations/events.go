@@ -11,9 +11,10 @@ type InvitationSentEvent struct {
 	ResourceType string `json:"resource_type"`
 	ResourceID   string `json:"resource_id"`
 	Relation     string `json:"relation"`
-	Identifier   string `json:"identifier"` // email address
-	Token        string `json:"token"`       // plaintext token (only available at creation time)
+	Identifier   string `json:"identifier"`  // email address
+	Token        string `json:"token"`        // plaintext token (only available at creation time)
 	InvitedBy    string `json:"invited_by"`
+	AutoAccept   bool   `json:"auto_accept"` // when true, invitation auto-accepts on email verification
 }
 
 func (e InvitationSentEvent) Type() string { return "invitation.sent" }
