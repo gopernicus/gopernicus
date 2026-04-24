@@ -223,12 +223,21 @@ func (b *Bridge) httpInitiatePasswordReset(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// InitiatePasswordReset returns the token for the caller to deliver.
-	// The HTTP response never reveals whether the email exists.
+	// Validate reset_url against the origin allow-list.
 	var resetOpts []authentication.PasswordResetOption
 	if req.ResetURL != "" {
+		if !b.originMatcher.Empty() && !b.originMatcher.Matches(req.ResetURL) {
+			web.RespondJSONError(w, web.ErrValidation(errInvalidResetURLOrigin))
+			return
+		}
 		resetOpts = append(resetOpts, authentication.WithResetURL(req.ResetURL))
+	} else if !b.originMatcher.Empty() {
+		web.RespondJSONError(w, web.ErrValidation(errResetURLRequired))
+		return
 	}
+
+	// InitiatePasswordReset returns the token for the caller to deliver.
+	// The HTTP response never reveals whether the email exists.
 	_, err = b.authenticator.InitiatePasswordReset(r.Context(), req.Email, resetOpts...)
 	if err != nil {
 		if !errs.IsExpected(err) {

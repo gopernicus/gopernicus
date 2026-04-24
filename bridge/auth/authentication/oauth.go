@@ -24,6 +24,17 @@ func (b *Bridge) httpOAuthInitiate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate app_origin against the origin allow-list.
+	if req.AppOrigin != "" {
+		if !b.originMatcher.Empty() && !b.originMatcher.Matches(req.AppOrigin) {
+			web.RespondJSONError(w, web.ErrValidation(errInvalidAppOrigin))
+			return
+		}
+	} else if !b.originMatcher.Empty() {
+		web.RespondJSONError(w, web.ErrValidation(errAppOriginRequired))
+		return
+	}
+
 	// For mobile flows, use the configured mobile redirect URI.
 	var mobileRedirectURI string
 	if req.Mobile {
@@ -34,7 +45,7 @@ func (b *Bridge) httpOAuthInitiate(w http.ResponseWriter, r *http.Request) {
 		mobileRedirectURI = b.mobileRedirectURI
 	}
 
-	result, err := b.authenticator.InitiateOAuthFlow(r.Context(), req.Provider, req.RedirectURI, mobileRedirectURI)
+	result, err := b.authenticator.InitiateOAuthFlow(r.Context(), req.Provider, req.RedirectURI, mobileRedirectURI, req.AppOrigin)
 	if err != nil {
 		b.log.ErrorContext(r.Context(), "initiate OAuth flow failed", "error", err)
 		web.RespondJSONError(w, httpErrFor(err))
@@ -58,15 +69,23 @@ func (b *Bridge) httpOAuthStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Construct callback URL (where OAuth provider will redirect back to).
-	scheme := "http"
-	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
-		scheme = "https"
+	// Validate app_origin query param against the origin allow-list.
+	appOrigin := r.URL.Query().Get("app_origin")
+	if appOrigin != "" {
+		if !b.originMatcher.Empty() && !b.originMatcher.Matches(appOrigin) {
+			web.RespondJSONError(w, web.ErrValidation(errInvalidAppOrigin))
+			return
+		}
+	} else if !b.originMatcher.Empty() {
+		web.RespondJSONError(w, web.ErrValidation(errAppOriginRequired))
+		return
 	}
-	callbackURI := fmt.Sprintf("%s://%s%s/oauth/callback/%s", scheme, r.Host, b.callbackPrefix, provider)
+
+	// Construct callback URL (where OAuth provider will redirect back to).
+	callbackURI := b.buildCallbackURI(r, provider)
 
 	// Web flow — no mobile redirect URI, no flow secret.
-	result, err := b.authenticator.InitiateOAuthFlow(r.Context(), provider, callbackURI, "")
+	result, err := b.authenticator.InitiateOAuthFlow(r.Context(), provider, callbackURI, "", appOrigin)
 	if err != nil {
 		b.log.ErrorContext(r.Context(), "initiate OAuth flow failed", "error", err)
 		web.RespondJSONError(w, httpErrFor(err))
@@ -92,14 +111,11 @@ func (b *Bridge) httpOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	// Web callback — no flow secret (browser redirect can't carry it).
 	result, err := b.authenticator.HandleOAuthCallback(r.Context(), provider, code, state, "")
 	if err != nil {
-		if errors.Is(err, authentication.ErrOAuthVerificationRequired) {
-			var redirectURL string
-			if b.frontendURL != "" {
-				redirectURL = b.frontendURL + "/auth/oauth/verify?provider=" + provider
-			} else {
-				redirectURL = "/auth/oauth/verify?provider=" + provider
-			}
+		// Error paths use first allowed frontend as fallback.
+		fallbackOrigin := b.resolveOrigin("")
 
+		if errors.Is(err, authentication.ErrOAuthVerificationRequired) {
+			redirectURL := fallbackOrigin + "/auth/oauth/verify?provider=" + provider
 			b.log.InfoContext(r.Context(), "OAuth verification required - redirecting",
 				"provider", provider,
 				"redirect_url", redirectURL,
@@ -109,12 +125,7 @@ func (b *Bridge) httpOAuthCallback(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// For web flows, redirect to login with error instead of returning JSON.
-		var redirectURL string
-		if b.frontendURL != "" {
-			redirectURL = b.frontendURL + "/login?error=oauth_failed"
-		} else {
-			redirectURL = "/login?error=oauth_failed"
-		}
+		redirectURL := fallbackOrigin + "/login?error=oauth_failed"
 		b.log.ErrorContext(r.Context(), "OAuth callback failed", "error", err, "provider", provider)
 		web.RespondRedirect(w, r, redirectURL, http.StatusTemporaryRedirect)
 		return
@@ -123,14 +134,9 @@ func (b *Bridge) httpOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	// Set HTTP-only session cookies.
 	b.setSessionCookies(w, result.AccessToken, result.RefreshToken)
 
-	// Redirect to frontend.
-	redirectPath := "/"
-	var redirectURL string
-	if b.frontendURL != "" {
-		redirectURL = b.frontendURL + redirectPath
-	} else {
-		redirectURL = redirectPath
-	}
+	// Redirect to frontend using AppOrigin from state.
+	origin := b.resolveOrigin(result.AppOrigin)
+	redirectURL := origin + "/"
 
 	b.log.InfoContext(r.Context(), "OAuth callback successful - redirecting user",
 		"user_id", result.UserID,
@@ -280,13 +286,21 @@ func (b *Bridge) httpOAuthLinkStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scheme := "http"
-	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
-		scheme = "https"
+	// Validate app_origin query param against the origin allow-list.
+	appOrigin := r.URL.Query().Get("app_origin")
+	if appOrigin != "" {
+		if !b.originMatcher.Empty() && !b.originMatcher.Matches(appOrigin) {
+			web.RespondJSONError(w, web.ErrValidation(errInvalidAppOrigin))
+			return
+		}
+	} else if !b.originMatcher.Empty() {
+		web.RespondJSONError(w, web.ErrValidation(errAppOriginRequired))
+		return
 	}
-	callbackURI := fmt.Sprintf("%s://%s%s/oauth/callback/%s", scheme, r.Host, b.callbackPrefix, provider)
 
-	result, err := b.authenticator.InitiateOAuthFlow(r.Context(), provider, callbackURI, "")
+	callbackURI := b.buildCallbackURI(r, provider)
+
+	result, err := b.authenticator.InitiateOAuthFlow(r.Context(), provider, callbackURI, "", appOrigin)
 	if err != nil {
 		b.log.ErrorContext(r.Context(), "link OAuth initiation failed", "error", err)
 		web.RespondJSONError(w, httpErrFor(err))
