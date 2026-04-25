@@ -172,6 +172,7 @@ type UserResponse struct {
 	Email         string `json:"email"`
 	DisplayName   string `json:"display_name"`
 	EmailVerified bool   `json:"email_verified"`
+	HasPassword   bool   `json:"has_password"`
 }
 
 // SessionResponse is the session portion of the /me response.

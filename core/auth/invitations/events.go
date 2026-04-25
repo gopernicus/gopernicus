@@ -14,7 +14,7 @@ type InvitationSentEvent struct {
 	Identifier   string `json:"identifier"`   // email address
 	Token        string `json:"token"`         // plaintext token (only available at creation time)
 	InvitedBy    string `json:"invited_by"`
-	AutoAccept   bool   `json:"auto_accept"`  // when true, invitation auto-accepts on email verification
+	AutoAccept   bool   `json:"auto_accept"`            // when true, invitation auto-accepts on email verification
 	RedirectURL  string `json:"redirect_url,omitempty"` // validated frontend URL from caller (empty = use subscriber default)
 }
 

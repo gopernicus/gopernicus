@@ -392,12 +392,20 @@ func (b *Bridge) httpMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	hasPassword, err := b.authenticator.HasPassword(ctx, user.UserID)
+	if err != nil {
+		b.log.ErrorContext(ctx, "failed to check password status", "error", err)
+		web.RespondJSONError(w, web.ErrInternal("internal error"))
+		return
+	}
+
 	web.RespondJSON(w, http.StatusOK, MeResponse{
 		User: UserResponse{
 			UserID:        user.UserID,
 			Email:         user.Email,
 			DisplayName:   user.DisplayName,
 			EmailVerified: user.EmailVerified,
+			HasPassword:   hasPassword,
 		},
 		Session: SessionResponse{
 			SessionID: session.SessionID,

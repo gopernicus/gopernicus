@@ -194,6 +194,23 @@ func (a *Authenticator) ResetPassword(ctx context.Context, token, newPassword st
 	return nil
 }
 
+// HasPassword reports whether the user has a password credential set.
+//
+// Returns false if no password row exists for the user, true if one does.
+// This is useful for UI that shows the user's authentication methods —
+// e.g. a "Connected Accounts" settings page that lists password alongside
+// OAuth providers.
+func (a *Authenticator) HasPassword(ctx context.Context, userID string) (bool, error) {
+	_, err := a.repositories.passwords.GetByUserID(ctx, userID)
+	if err != nil {
+		if errors.Is(err, errs.ErrNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("auth has password: %w", err)
+	}
+	return true, nil
+}
+
 // RemovePassword deletes the password credential for a user. This is the
 // inverse of [Authenticator.Register]'s password creation.
 //

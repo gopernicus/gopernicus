@@ -313,4 +313,14 @@ type Storer interface {
 	// relation pointing to any of the given target IDs. Used for through-relation
 	// traversal in LookupResources.
 	LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string) ([]string, error)
+
+	// LookupDescendantResourceIDs returns all resource IDs reachable by walking
+	// a self-referential relation transitively using a recursive CTE.
+	// Used by lookupThrough to resolve Through relations where the target type
+	// equals the current resource type (e.g., space → parent → space).
+	//
+	// Example: Given rootIDs=[S1] with relation="parent" on resourceType="space",
+	// returns all space IDs that have S1 as an ancestor via the parent chain:
+	// S1 ← S2 ← S3 yields [S2, S3].
+	LookupDescendantResourceIDs(ctx context.Context, resourceType, relation, subjectType string, rootIDs []string) ([]string, error)
 }

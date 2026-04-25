@@ -635,3 +635,6 @@ func (m *mockStorer) LookupResourceIDs(_ context.Context, _ string, _ []string, 
 func (m *mockStorer) LookupResourceIDsByRelationTarget(_ context.Context, _, _, _ string, _ []string) ([]string, error) {
 	return nil, nil
 }
+func (m *mockStorer) LookupDescendantResourceIDs(_ context.Context, _, _, _ string, _ []string) ([]string, error) {
+	return nil, nil
+}
