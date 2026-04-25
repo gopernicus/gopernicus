@@ -103,7 +103,7 @@ func (b *Bridge) httpGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	record, err := b.apiKeyRepository.Get(r.Context(), parentServiceAccountID, apiKeyID)
+	record, err := b.apiKeyRepository.Get(r.Context(), apiKeyID, parentServiceAccountID)
 	if err != nil {
 		if !errs.IsExpected(err) {
 			b.log.ErrorContext(r.Context(), "unexpected error", "error", err)
@@ -147,7 +147,7 @@ func (b *Bridge) httpCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := b.createAuthRelationships(r.Context(), record); err != nil {
+	if err := b.createAuthRelationshipsCreate(r.Context(), record); err != nil {
 		b.log.ErrorContext(r.Context(), "create auth relationships", "error", err)
 		web.RespondJSONError(w, web.ErrInternal("create auth relationships"))
 		return
@@ -183,7 +183,7 @@ func (b *Bridge) httpUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	record, err := b.apiKeyRepository.Update(r.Context(), parentServiceAccountID, apiKeyID, input)
+	record, err := b.apiKeyRepository.Update(r.Context(), apiKeyID, parentServiceAccountID, input)
 	if err != nil {
 		if !errs.IsExpected(err) {
 			b.log.ErrorContext(r.Context(), "unexpected error", "error", err)
@@ -210,7 +210,7 @@ func (b *Bridge) httpSoftDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := b.apiKeyRepository.SoftDelete(r.Context(), parentServiceAccountID, apiKeyID); err != nil {
+	if err := b.apiKeyRepository.SoftDelete(r.Context(), apiKeyID, parentServiceAccountID); err != nil {
 		if !errs.IsExpected(err) {
 			b.log.ErrorContext(r.Context(), "unexpected error", "error", err)
 		}
@@ -236,7 +236,7 @@ func (b *Bridge) httpArchive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := b.apiKeyRepository.Archive(r.Context(), parentServiceAccountID, apiKeyID); err != nil {
+	if err := b.apiKeyRepository.Archive(r.Context(), apiKeyID, parentServiceAccountID); err != nil {
 		if !errs.IsExpected(err) {
 			b.log.ErrorContext(r.Context(), "unexpected error", "error", err)
 		}
@@ -262,7 +262,7 @@ func (b *Bridge) httpRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := b.apiKeyRepository.Restore(r.Context(), parentServiceAccountID, apiKeyID); err != nil {
+	if err := b.apiKeyRepository.Restore(r.Context(), apiKeyID, parentServiceAccountID); err != nil {
 		if !errs.IsExpected(err) {
 			b.log.ErrorContext(r.Context(), "unexpected error", "error", err)
 		}
@@ -293,7 +293,7 @@ func (b *Bridge) httpDelete(w http.ResponseWriter, r *http.Request) {
 		web.RespondJSONError(w, web.ErrInternal("delete auth relationships"))
 		return
 	}
-	if err := b.apiKeyRepository.Delete(r.Context(), parentServiceAccountID, apiKeyID); err != nil {
+	if err := b.apiKeyRepository.Delete(r.Context(), apiKeyID, parentServiceAccountID); err != nil {
 		if !errs.IsExpected(err) {
 			b.log.ErrorContext(r.Context(), "unexpected error", "error", err)
 		}
@@ -305,10 +305,11 @@ func (b *Bridge) httpDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // =============================================================================
-// Auth Relationship Creation
+// Auth Relationship Creation (one method per create route — the rels for a
+// nested create may reference fields that are absent on the root-create path).
 // =============================================================================
 
-func (b *Bridge) createAuthRelationships(ctx context.Context, record apikeys.APIKey) error {
+func (b *Bridge) createAuthRelationshipsCreate(ctx context.Context, record apikeys.APIKey) error {
 	if b.authorizer == nil {
 		return nil
 	}
@@ -574,7 +575,6 @@ func (b *Bridge) addGeneratedRoutes(group *web.RouteGroup) {
 	group.GET("/service-accounts/{parent_service_account_id}/api-keys", b.httpList,
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeType(b.authorizer, b.log, b.jsonErrors, "api_key", "list"),
 	)
 
 	group.GET("/service-accounts/{parent_service_account_id}/api-keys/{api_key_id}", b.httpGet,
@@ -587,7 +587,7 @@ func (b *Bridge) addGeneratedRoutes(group *web.RouteGroup) {
 		httpmid.MaxBodySize(1048576),
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "api_key", "create", "parent_service_account_id"),
+		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "parent_service_account", "create", "parent_service_account_id"),
 	)
 
 	group.PUT("/service-accounts/{parent_service_account_id}/api-keys/{api_key_id}", b.httpUpdate,

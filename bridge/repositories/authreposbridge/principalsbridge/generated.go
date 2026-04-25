@@ -126,7 +126,7 @@ func (b *Bridge) httpCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := b.createAuthRelationships(r.Context(), record); err != nil {
+	if err := b.createAuthRelationshipsCreate(r.Context(), record); err != nil {
 		b.log.ErrorContext(r.Context(), "create auth relationships", "error", err)
 		web.RespondJSONError(w, web.ErrInternal("create auth relationships"))
 		return
@@ -194,10 +194,11 @@ func (b *Bridge) httpDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // =============================================================================
-// Auth Relationship Creation
+// Auth Relationship Creation (one method per create route — the rels for a
+// nested create may reference fields that are absent on the root-create path).
 // =============================================================================
 
-func (b *Bridge) createAuthRelationships(ctx context.Context, record principals.Principal) error {
+func (b *Bridge) createAuthRelationshipsCreate(ctx context.Context, record principals.Principal) error {
 	if b.authorizer == nil {
 		return nil
 	}
@@ -352,7 +353,6 @@ func (b *Bridge) addGeneratedRoutes(group *web.RouteGroup) {
 	group.GET("/principals", b.httpList,
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeType(b.authorizer, b.log, b.jsonErrors, "principal", "list"),
 	)
 
 	group.GET("/principals/{principal_id}", b.httpGet,

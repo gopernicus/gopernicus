@@ -46,7 +46,7 @@ func TestGeneratedJobQueueStore_Create(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestJobQueue(t, ctx, db)
+	created := fixtures.CreateTestJobQueueWithDefaults(t, ctx, db)
 
 	// Verify the record was created and can be retrieved.
 	result, err := store.Get(ctx, created.JobID)
@@ -58,7 +58,7 @@ func TestGeneratedJobQueueStore_Get(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestJobQueue(t, ctx, db)
+	created := fixtures.CreateTestJobQueueWithDefaults(t, ctx, db)
 
 	t.Run("found", func(t *testing.T) {
 		result, err := store.Get(ctx, created.JobID)
@@ -79,7 +79,7 @@ func TestGeneratedJobQueueStore_List(t *testing.T) {
 	// Create multiple records.
 	const numRecords = 3
 	for i := 0; i < numRecords; i++ {
-		fixtures.CreateTestJobQueue(t, ctx, db)
+		fixtures.CreateTestJobQueueWithDefaults(t, ctx, db)
 	}
 
 	t.Run("returns all records", func(t *testing.T) {
@@ -117,7 +117,7 @@ func TestGeneratedJobQueueStore_Delete(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestJobQueue(t, ctx, db)
+	created := fixtures.CreateTestJobQueueWithDefaults(t, ctx, db)
 
 	err := store.Delete(ctx, created.JobID)
 	require.NoError(t, err)

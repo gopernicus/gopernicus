@@ -8,6 +8,7 @@ func (b *Bridge) setSessionCookies(w http.ResponseWriter, accessToken, refreshTo
 		Name:     b.sessionCookieName,
 		Value:    accessToken,
 		Path:     cookiePath,
+		Domain:   b.cookieDomain,
 		MaxAge:   int(b.accessTokenExpiry.Seconds()),
 		HttpOnly: true,
 		Secure:   b.cookieSecure,
@@ -18,6 +19,7 @@ func (b *Bridge) setSessionCookies(w http.ResponseWriter, accessToken, refreshTo
 		Name:     b.refreshCookieName,
 		Value:    refreshToken,
 		Path:     cookiePath,
+		Domain:   b.cookieDomain,
 		MaxAge:   int(b.refreshTokenExpiry.Seconds()),
 		HttpOnly: true,
 		Secure:   b.cookieSecure,
@@ -32,11 +34,13 @@ func (b *Bridge) clearSessionCookies(w http.ResponseWriter) {
 }
 
 // clearCookieByName clears a cookie by setting MaxAge to -1.
+// Domain must match the original cookie's Domain or the browser won't clear it.
 func (b *Bridge) clearCookieByName(w http.ResponseWriter, name string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     name,
 		Value:    "",
 		Path:     cookiePath,
+		Domain:   b.cookieDomain,
 		MaxAge:   -1,
 		HttpOnly: true,
 		Secure:   b.cookieSecure,

@@ -14,7 +14,8 @@ import (
 type InitiateOAuthRequest struct {
 	Provider    string `json:"provider"`
 	RedirectURI string `json:"redirect_uri"`
-	Mobile      bool   `json:"mobile"` // when true, generates flow_secret for mobile session binding
+	Mobile      bool   `json:"mobile"`     // when true, generates flow_secret for mobile session binding
+	AppOrigin   string `json:"app_origin"` // frontend origin for post-OAuth redirects
 }
 
 func (r *InitiateOAuthRequest) Validate() error {

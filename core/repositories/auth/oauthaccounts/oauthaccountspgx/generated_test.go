@@ -46,7 +46,7 @@ func TestGeneratedOauthAccountStore_Create(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestOauthAccount(t, ctx, db)
+	created := fixtures.CreateTestOauthAccountWithDefaults(t, ctx, db)
 
 	// Verify the record was created and can be retrieved.
 	result, err := store.Get(ctx, created.OauthAccountID)
@@ -58,7 +58,7 @@ func TestGeneratedOauthAccountStore_Get(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestOauthAccount(t, ctx, db)
+	created := fixtures.CreateTestOauthAccountWithDefaults(t, ctx, db)
 
 	t.Run("found", func(t *testing.T) {
 		result, err := store.Get(ctx, created.OauthAccountID)
@@ -79,7 +79,7 @@ func TestGeneratedOauthAccountStore_List(t *testing.T) {
 	// Create multiple records.
 	const numRecords = 3
 	for i := 0; i < numRecords; i++ {
-		fixtures.CreateTestOauthAccount(t, ctx, db)
+		fixtures.CreateTestOauthAccountWithDefaults(t, ctx, db)
 	}
 
 	t.Run("returns all records", func(t *testing.T) {
@@ -117,7 +117,7 @@ func TestGeneratedOauthAccountStore_Delete(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestOauthAccount(t, ctx, db)
+	created := fixtures.CreateTestOauthAccountWithDefaults(t, ctx, db)
 
 	err := store.Delete(ctx, created.OauthAccountID)
 	require.NoError(t, err)

@@ -18,14 +18,16 @@ ab := authentication.New(log, cfg, authenticator, rateLimiter)
 | Field | Env Var | Default | Purpose |
 |---|---|---|---|
 | `CookieSecure` | `AUTH_COOKIE_SECURE` | `false` | Set `Secure` flag on cookies (forced `true` in production) |
-| `FrontendURL` | `FRONTEND_URL` | | Base URL for OAuth redirects and email links |
+| `CookieDomain` | `AUTH_COOKIE_DOMAIN` | | Cookie `Domain` attribute for cross-subdomain sharing (e.g. `.example.com`) |
+| `CallbackBaseURL` | `AUTH_CALLBACK_BASE_URL` | | Base URL for OAuth callbacks (e.g. `https://api.example.com`). If unset, derived from request headers (vulnerable to injection). |
 | `Environment` | `ENV` | `development` | When `production`, forces cookie secure |
 | `AccessTokenExpiry` | `ACCESS_TOKEN_EXPIRY` | `30m` | JWT access token TTL |
 | `RefreshTokenExpiry` | `REFRESH_TOKEN_EXPIRY` | `720h` | Refresh token TTL |
 | `CallbackPrefix` | `AUTH_CALLBACK_PREFIX` | `/api/v1/auth` | Path prefix for OAuth callback URLs |
 | `MobileRedirectURI` | `OAUTH_MOBILE_REDIRECT_URI` | | Custom scheme URI for mobile OAuth (e.g. `myapp://oauth-callback`) |
+| `AllowedFrontends` | `ALLOWED_FRONTENDS` | | Comma-separated origin allow-list for client-supplied URLs (e.g. `https://app.example.com,https://admin.example.com`). Required in production. |
 
-Options: `WithCookieSecure(bool)`, `WithFrontendURL(string)`.
+Options: `WithCookieSecure(bool)`, `WithCookieDomain(string)`, `WithCallbackBaseURL(string)`, `WithAllowedFrontends([]string)`.
 
 ## Route Registration
 
@@ -104,7 +106,54 @@ Errors are logged server-side for debugging.
 
 ## Session Cookies
 
-Cookies use `HttpOnly`, `SameSite=Lax`, and a configurable `Secure` flag. Cookie names come from the Core authenticator (`SessionTokenName()`, `RefreshTokenName()`), so they stay consistent across the stack.
+Cookies use `HttpOnly`, `SameSite=Lax`, and configurable `Secure` and `Domain` flags. Cookie names come from the Core authenticator (`SessionTokenName()`, `RefreshTokenName()`), so they stay consistent across the stack.
+
+Set `AUTH_COOKIE_DOMAIN` (e.g. `.example.com`) to share sessions across subdomains. When clearing cookies, the same domain must be used or browsers won't delete them.
+
+## Multi-Frontend Support
+
+When running multiple frontends against one auth backend (e.g. main app + admin dashboard on different subdomains), configure:
+
+1. **`ALLOWED_FRONTENDS`** — comma-separated origins. Clients must send `reset_url` (password reset) and `app_origin` (OAuth) in requests; the bridge validates these against the allow-list and uses them for redirects/email links.
+
+2. **`AUTH_COOKIE_DOMAIN`** — parent domain for cross-subdomain session sharing.
+
+3. **`AUTH_CALLBACK_BASE_URL`** — explicit base URL for OAuth callbacks instead of deriving from request headers.
+
+When `ALLOWED_FRONTENDS` is set (strict mode):
+- `reset_url` is required in password reset requests
+- `app_origin` is required in OAuth initiate requests
+- Both are validated against the allow-list
+
+When unset (legacy mode), client-supplied URLs are used without validation (logs a warning at startup).
+
+## OAuth Redirect URI Allowlist
+
+The `POST /oauth/initiate` endpoint accepts a client-supplied `redirect_uri`. To prevent open redirector attacks, configure the core authenticator with an exact-match allowlist. The bridge provides a helper to derive URIs from your configuration:
+
+```go
+// In app wiring, after loading config and before creating authenticator:
+providers := []string{"google", "github"} // your configured providers
+
+redirectURIs := authbridge.BuildAllowedRedirectURIs(
+    cfg.Auth.CallbackBaseURL,  // e.g. "https://api.example.com"
+    cfg.Auth.CallbackPrefix,   // e.g. "/api/v1/auth"
+    providers,
+)
+
+authenticator := authentication.New(
+    authCfg,
+    userRepo,
+    authentication.WithOAuth(providerMap, oauthRepo),
+    authentication.WithAllowedRedirectURIs(redirectURIs...),
+)
+```
+
+`BuildAllowedRedirectURIs` generates two URIs per provider:
+- `{base}{prefix}/oauth/callback/{provider}` — web callback
+- `{base}{prefix}/oauth/mobile-redirect/{provider}` — mobile redirect proxy
+
+If `callbackBaseURL` is empty, returns nil (no allowlist configured).
 
 ## Event Subscribers
 
@@ -119,9 +168,19 @@ Cookies use `HttpOnly`, `SameSite=Lax`, and a configurable `Secure` flag. Cookie
 Construction and registration:
 
 ```go
+// Derive fallback URL for email links from first allowed frontend.
+// In strict mode (ALLOWED_FRONTENDS set), reset_url is required in requests
+// and this fallback is not used. Pass empty string if not needed.
+var frontendURL string
+if len(cfg.Auth.AllowedFrontends) > 0 {
+    frontendURL = cfg.Auth.AllowedFrontends[0]
+}
+
 subs := authbridge.NewSubscribers(emailer, log, frontendURL)
 subs.Register(bus)
 ```
+
+Alternatively, if you already have an `OriginMatcher` instance, use `matcher.Default()` which returns the first origin (canonicalized with explicit port).
 
 Email templates are embedded in the package under `templates/` (HTML + plaintext pairs). Register them with the emailer during app wiring:
 
@@ -139,5 +198,6 @@ emailer.WithContentTemplates("authentication", authbridge.AuthTemplates(), email
 | `model.go` | Request/response types for core auth endpoints |
 | `oauth_model.go` | Request/response types for OAuth endpoints |
 | `cookie.go` | Cookie set/clear helpers |
+| `allowlist.go` | `OriginMatcher` for validating client-supplied URLs |
 | `subscribers.go` | Event subscribers for email delivery |
 | `templates/` | Embedded HTML/text email templates |

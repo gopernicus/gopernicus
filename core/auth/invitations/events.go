@@ -11,10 +11,11 @@ type InvitationSentEvent struct {
 	ResourceType string `json:"resource_type"`
 	ResourceID   string `json:"resource_id"`
 	Relation     string `json:"relation"`
-	Identifier   string `json:"identifier"` // email address
-	Token        string `json:"token"`       // plaintext token (only available at creation time)
+	Identifier   string `json:"identifier"`   // email address
+	Token        string `json:"token"`         // plaintext token (only available at creation time)
 	InvitedBy    string `json:"invited_by"`
-	AutoAccept   bool   `json:"auto_accept"` // true if the invitation auto-resolves on identifier verification
+	AutoAccept   bool   `json:"auto_accept"`            // when true, invitation auto-accepts on email verification
+	RedirectURL  string `json:"redirect_url,omitempty"` // validated frontend URL from caller (empty = use subscriber default)
 }
 
 func (e InvitationSentEvent) Type() string { return "invitation.sent" }
@@ -30,6 +31,7 @@ type MemberAddedEvent struct {
 	SubjectType  string `json:"subject_type"`
 	SubjectID    string `json:"subject_id"`
 	AddedBy      string `json:"added_by"`
+	RedirectURL  string `json:"redirect_url,omitempty"` // validated frontend URL from caller (empty = use subscriber default)
 }
 
 func (e MemberAddedEvent) Type() string { return "member.added" }

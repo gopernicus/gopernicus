@@ -19,7 +19,7 @@ import (
 // Mobile flows are detected by the presence of mobileRedirectURI. When set,
 // a flow secret is generated for session binding to prevent URL scheme
 // interception. For browser-redirect (web) flows, pass an empty string.
-func (a *Authenticator) InitiateOAuthFlow(ctx context.Context, provider, redirectURI, mobileRedirectURI string) (*OAuthFlowResult, error) {
+func (a *Authenticator) InitiateOAuthFlow(ctx context.Context, provider, redirectURI, mobileRedirectURI, appOrigin string) (*OAuthFlowResult, error) {
 	if err := a.requireOAuth(); err != nil {
 		return nil, err
 	}
@@ -79,6 +79,7 @@ func (a *Authenticator) InitiateOAuthFlow(ctx context.Context, provider, redirec
 		RedirectURI:       redirectURI,
 		MobileRedirectURI: mobileRedirectURI,
 		FlowSecretHash:    flowSecretHash,
+		AppOrigin:         appOrigin,
 	}
 
 	if err := a.saveOAuthState(ctx, oauthState); err != nil {
@@ -178,7 +179,7 @@ func (a *Authenticator) HandleOAuthCallback(ctx context.Context, provider, code,
 			}
 		}
 		// Verified — log the user in.
-		return a.oauthLogin(ctx, existing.UserID)
+		return a.oauthLogin(ctx, existing.UserID, oauthState.AppOrigin)
 	}
 	if !errors.Is(err, errs.ErrNotFound) {
 		return nil, fmt.Errorf("auth oauth: lookup account: %w", err)
@@ -196,7 +197,7 @@ func (a *Authenticator) HandleOAuthCallback(ctx context.Context, provider, code,
 	}
 
 	// New user — create account + OAuth link + session.
-	return a.oauthRegister(ctx, userInfo, tokenResp, provider)
+	return a.oauthRegister(ctx, userInfo, tokenResp, provider, oauthState.AppOrigin)
 }
 
 // VerifyOAuthLink completes an OAuth account link after email verification.
@@ -297,8 +298,9 @@ func (a *Authenticator) VerifyOAuthLink(ctx context.Context, email, code string)
 		"provider": pending.Provider,
 	})
 
-	// Create session.
-	return a.oauthLogin(ctx, userID)
+	// Create session. AppOrigin is empty because this verification happens
+	// out-of-band (email code) — the bridge falls back to ALLOWED_FRONTENDS[0].
+	return a.oauthLogin(ctx, userID, "")
 }
 
 // ---------------------------------------------------------------------------
@@ -313,7 +315,7 @@ func (a *Authenticator) requireOAuth() error {
 }
 
 // oauthLogin creates a session for an existing user (OAuth login or link verification).
-func (a *Authenticator) oauthLogin(ctx context.Context, userID string) (*OAuthCallbackResult, error) {
+func (a *Authenticator) oauthLogin(ctx context.Context, userID, appOrigin string) (*OAuthCallbackResult, error) {
 	user, err := a.repositories.users.Get(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("auth oauth: lookup user: %w", err)
@@ -337,6 +339,7 @@ func (a *Authenticator) oauthLogin(ctx context.Context, userID string) (*OAuthCa
 		AccessToken:  result.AccessToken,
 		RefreshToken: result.RefreshToken,
 		IsNewUser:    false,
+		AppOrigin:    appOrigin,
 	}, nil
 }
 
@@ -345,7 +348,7 @@ func (a *Authenticator) oauthLogin(ctx context.Context, userID string) (*OAuthCa
 // If the provider does not report a verified email, the user and OAuth link
 // are still created, but the session is blocked and a verification code is
 // sent so the user can verify immediately.
-func (a *Authenticator) oauthRegister(ctx context.Context, userInfo *oauth.UserInfo, tokenResp *oauth.TokenResponse, provider string) (*OAuthCallbackResult, error) {
+func (a *Authenticator) oauthRegister(ctx context.Context, userInfo *oauth.UserInfo, tokenResp *oauth.TokenResponse, provider, appOrigin string) (*OAuthCallbackResult, error) {
 	user, err := a.repositories.users.Create(ctx, CreateUserInput{
 		Email:         userInfo.Email,
 		DisplayName:   userInfo.Name,
@@ -405,6 +408,7 @@ func (a *Authenticator) oauthRegister(ctx context.Context, userInfo *oauth.UserI
 		AccessToken:  result.AccessToken,
 		RefreshToken: result.RefreshToken,
 		IsNewUser:    true,
+		AppOrigin:    appOrigin,
 	}, nil
 }
 

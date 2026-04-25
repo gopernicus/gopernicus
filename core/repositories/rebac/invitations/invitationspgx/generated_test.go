@@ -46,7 +46,7 @@ func TestGeneratedInvitationStore_Create(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestInvitation(t, ctx, db)
+	created := fixtures.CreateTestInvitationWithDefaults(t, ctx, db)
 
 	// Verify the record was created and can be retrieved.
 	result, err := store.Get(ctx, created.InvitationID)
@@ -58,7 +58,7 @@ func TestGeneratedInvitationStore_Get(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestInvitation(t, ctx, db)
+	created := fixtures.CreateTestInvitationWithDefaults(t, ctx, db)
 
 	t.Run("found", func(t *testing.T) {
 		result, err := store.Get(ctx, created.InvitationID)
@@ -79,7 +79,7 @@ func TestGeneratedInvitationStore_List(t *testing.T) {
 	// Create multiple records.
 	const numRecords = 3
 	for i := 0; i < numRecords; i++ {
-		fixtures.CreateTestInvitation(t, ctx, db)
+		fixtures.CreateTestInvitationWithDefaults(t, ctx, db)
 	}
 
 	t.Run("returns all records", func(t *testing.T) {
@@ -117,7 +117,7 @@ func TestGeneratedInvitationStore_Delete(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestInvitation(t, ctx, db)
+	created := fixtures.CreateTestInvitationWithDefaults(t, ctx, db)
 
 	err := store.Delete(ctx, created.InvitationID)
 	require.NoError(t, err)
@@ -131,7 +131,7 @@ func TestGeneratedInvitationStore_SoftDelete(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestInvitation(t, ctx, db)
+	created := fixtures.CreateTestInvitationWithDefaults(t, ctx, db)
 
 	err := store.SoftDelete(ctx, created.InvitationID)
 	require.NoError(t, err)

@@ -46,7 +46,7 @@ func TestGeneratedVerificationTokenStore_Create(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestVerificationToken(t, ctx, db)
+	created := fixtures.CreateTestVerificationTokenWithDefaults(t, ctx, db)
 
 	// Verify the record was created and can be retrieved.
 	result, err := store.Get(ctx, created.TokenID)
@@ -58,7 +58,7 @@ func TestGeneratedVerificationTokenStore_Get(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestVerificationToken(t, ctx, db)
+	created := fixtures.CreateTestVerificationTokenWithDefaults(t, ctx, db)
 
 	t.Run("found", func(t *testing.T) {
 		result, err := store.Get(ctx, created.TokenID)
@@ -79,7 +79,7 @@ func TestGeneratedVerificationTokenStore_List(t *testing.T) {
 	// Create multiple records.
 	const numRecords = 3
 	for i := 0; i < numRecords; i++ {
-		fixtures.CreateTestVerificationToken(t, ctx, db)
+		fixtures.CreateTestVerificationTokenWithDefaults(t, ctx, db)
 	}
 
 	t.Run("returns all records", func(t *testing.T) {
@@ -117,7 +117,7 @@ func TestGeneratedVerificationTokenStore_Delete(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	created := fixtures.CreateTestVerificationToken(t, ctx, db)
+	created := fixtures.CreateTestVerificationTokenWithDefaults(t, ctx, db)
 
 	err := store.Delete(ctx, created.TokenID)
 	require.NoError(t, err)
