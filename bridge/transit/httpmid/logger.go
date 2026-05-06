@@ -9,6 +9,10 @@ import (
 // Logger returns middleware that logs each HTTP request with timing and status.
 //
 // Log levels: INFO for 2xx/3xx, WARN for 4xx, ERROR for 5xx.
+//
+// The wrapped writer implements RecordError so response helpers (e.g.
+// sdk/web.RespondJSONDomainError) can attach the underlying error string to
+// the request log line without sdk packages having to log on their own.
 func Logger(log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -29,6 +33,10 @@ func Logger(log *slog.Logger) func(http.Handler) http.Handler {
 				attrs = append(attrs, slog.String("client_ip", ip))
 			}
 
+			if sw.err != nil {
+				attrs = append(attrs, slog.String("error", sw.err.Error()))
+			}
+
 			level := slog.LevelInfo
 			switch {
 			case sw.status >= 500:
@@ -42,11 +50,13 @@ func Logger(log *slog.Logger) func(http.Handler) http.Handler {
 	}
 }
 
-// statusWriter wraps http.ResponseWriter to capture the status code.
+// statusWriter wraps http.ResponseWriter to capture the status code and an
+// optional underlying error recorded by response helpers.
 type statusWriter struct {
 	http.ResponseWriter
 	status      int
 	wroteHeader bool
+	err         error
 }
 
 func (w *statusWriter) WriteHeader(code int) {
@@ -62,4 +72,11 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 		w.wroteHeader = true
 	}
 	return w.ResponseWriter.Write(b)
+}
+
+// RecordError stores the underlying error so the request logger can include
+// it on the request log line. Satisfies the writer-side contract relied on by
+// sdk/web response helpers.
+func (w *statusWriter) RecordError(err error) {
+	w.err = err
 }

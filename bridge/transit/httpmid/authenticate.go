@@ -46,6 +46,20 @@ type APIKeyAuthenticator interface {
 	AuthenticateAPIKey(ctx context.Context, key string) (serviceAccountID string, err error)
 }
 
+// APIKeyPrincipalResolver optionally resolves the effective principal for an
+// API key. When a service account is configured to act as its owning user,
+// the resolver returns the user principal instead of the service account.
+//
+// If the authenticator implements this interface, checkAPIKey calls it after
+// AuthenticateAPIKey succeeds. If not implemented, the service account is used
+// as the principal (existing behavior).
+type APIKeyPrincipalResolver interface {
+	// ResolveAPIKeyPrincipal returns the effective principal for authentication.
+	// For normal service accounts, returns {Type: "service_account", ID: saID}.
+	// For personal service accounts (act_as_user=true), returns {Type: "user", ID: ownerUserID}.
+	ResolveAPIKeyPrincipal(ctx context.Context, serviceAccountID string) (authentication.Principal, error)
+}
+
 // ---------------------------------------------------------------------------
 // Middleware options
 // ---------------------------------------------------------------------------
@@ -242,8 +256,28 @@ func checkAPIKey(
 		}
 	}
 
-	ctx = SetSubject(ctx, fmt.Sprintf("service_account:%s", serviceAccountID))
-	ctx = SetSubjectType(ctx, SubjectTypeServiceAccount)
+	// Resolve effective principal. If the authenticator implements
+	// APIKeyPrincipalResolver, use it to potentially translate the service
+	// account to its owning user (for personal API keys).
+	principal := authentication.Principal{Type: "service_account", ID: serviceAccountID}
+	if resolver, ok := authenticator.(APIKeyPrincipalResolver); ok {
+		p, err := resolver.ResolveAPIKeyPrincipal(ctx, serviceAccountID)
+		if err != nil {
+			return nil, &authFailure{
+				kind:    authFailInternal,
+				err:     err,
+				message: "principal resolution failed",
+			}
+		}
+		principal = p
+	}
+
+	ctx = SetSubject(ctx, fmt.Sprintf("%s:%s", principal.Type, principal.ID))
+	if principal.Type == "user" {
+		ctx = SetSubjectType(ctx, SubjectTypeUser)
+	} else {
+		ctx = SetSubjectType(ctx, SubjectTypeServiceAccount)
+	}
 	return ctx, nil
 }
 

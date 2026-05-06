@@ -335,6 +335,19 @@ type APIKeyRepository interface {
 	GetByHash(ctx context.Context, hash string) (APIKey, error)
 }
 
+// ServiceAccountPrincipal holds the principal resolution info for a service account.
+type ServiceAccountPrincipal struct {
+	ActAsUser   bool
+	OwnerUserID string // populated when ActAsUser is true
+}
+
+// ServiceAccountPrincipalRepository provides principal resolution info for
+// service accounts. Used by [Authenticator.ResolveAPIKeyPrincipal] to support
+// personal API keys that act as their owning user.
+type ServiceAccountPrincipalRepository interface {
+	GetPrincipalInfo(ctx context.Context, serviceAccountID string) (ServiceAccountPrincipal, error)
+}
+
 // SecurityEventRepository stores security-related events for audit trails.
 // Only Create is required — the auth package is a write-only producer.
 // Full CRUD (list, filter, delete) is handled by generated repository code.

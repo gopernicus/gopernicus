@@ -41,6 +41,7 @@ type Storer interface {
 	List(ctx context.Context, filter FilterList, orderBy fop.Order, page fop.PageStringCursor, forPrevious bool) ([]ServiceAccount, error)
 	Get(ctx context.Context, serviceAccountID string) (ServiceAccount, error)
 	Update(ctx context.Context, serviceAccountID string, input UpdateServiceAccount) (ServiceAccount, error)
+	GetPrincipalInfo(ctx context.Context, serviceAccountID string) (GetPrincipalInfoResult, error)
 	SoftDelete(ctx context.Context, serviceAccountID string) error
 	Archive(ctx context.Context, serviceAccountID string) error
 	Restore(ctx context.Context, serviceAccountID string) error

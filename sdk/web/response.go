@@ -38,15 +38,34 @@ func RespondJSONAccepted(w http.ResponseWriter, v any) error {
 	return RespondJSON(w, http.StatusAccepted, v)
 }
 
+// errorRecorder is implemented by response writers that want to capture the
+// underlying domain error for downstream observability (e.g. the request
+// logger middleware). Defining it here keeps sdk/web from importing bridge
+// packages while still allowing transport-level loggers to surface the error.
+type errorRecorder interface {
+	RecordError(err error)
+}
+
 // RespondJSONDomainError maps a domain error to an HTTP error and writes it
 // as JSON. This is the standard way to handle domain errors in bridge handlers.
+//
+// When the mapped status is 5xx, the original (pre-mapping) error is offered
+// to the response writer via the optional errorRecorder interface so the
+// request logger can include it on the request log line. The write itself
+// stays unchanged — clients still receive the generic "internal error" body.
 //
 //	if err != nil {
 //	    web.RespondJSONDomainError(w, err)
 //	    return
 //	}
 func RespondJSONDomainError(w http.ResponseWriter, err error) {
-	RespondJSONError(w, ErrFromDomain(err))
+	mapped := ErrFromDomain(err)
+	if mapped.Status >= http.StatusInternalServerError {
+		if rec, ok := w.(errorRecorder); ok {
+			rec.RecordError(err)
+		}
+	}
+	RespondJSONError(w, mapped)
 }
 
 // RespondText writes a plain text response.

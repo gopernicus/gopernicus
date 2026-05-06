@@ -57,3 +57,36 @@ func (a *Authenticator) AuthenticateAPIKey(ctx context.Context, key string) (str
 	})
 	return apiKey.ServiceAccountID, nil
 }
+
+// ResolveAPIKeyPrincipal returns the effective principal for an API key's
+// service account. For normal service accounts, returns the service account
+// as the principal. For personal service accounts (act_as_user=true), returns
+// the owning user as the principal.
+//
+// If [WithServiceAccountPrincipals] is not configured, always returns the
+// service account as the principal (existing behavior).
+//
+// Satisfies the [httpmid.APIKeyPrincipalResolver] interface.
+func (a *Authenticator) ResolveAPIKeyPrincipal(ctx context.Context, serviceAccountID string) (Principal, error) {
+	if a.serviceAccountPrincipals == nil {
+		return Principal{Type: "service_account", ID: serviceAccountID}, nil
+	}
+
+	info, err := a.serviceAccountPrincipals.GetPrincipalInfo(ctx, serviceAccountID)
+	if err != nil {
+		return Principal{}, fmt.Errorf("resolve principal: %w", err)
+	}
+
+	if info.ActAsUser && info.OwnerUserID != "" {
+		return Principal{Type: "user", ID: info.OwnerUserID}, nil
+	}
+
+	return Principal{Type: "service_account", ID: serviceAccountID}, nil
+}
+
+// Principal identifies the effective subject for authentication.
+// Returned by [ResolveAPIKeyPrincipal].
+type Principal struct {
+	Type string // "user" or "service_account"
+	ID   string
+}

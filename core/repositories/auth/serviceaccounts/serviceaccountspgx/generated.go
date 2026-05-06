@@ -114,7 +114,7 @@ WHERE $conditions AND $search`
 }
 
 func (s *Store) Get(ctx context.Context, serviceAccountID string) (serviceaccounts.ServiceAccount, error) {
-	query := `SELECT service_account_id, name, description, creator_principal_id, record_state, created_at, updated_at
+	query := `SELECT service_account_id, name, description, creator_principal_id, record_state, created_at, updated_at, act_as_user, owner_user_id
 FROM public.service_accounts
 WHERE service_account_id = @service_account_id`
 
@@ -174,7 +174,7 @@ func (s *Store) Update(ctx context.Context, serviceAccountID string, input servi
 
 	buf.WriteString(strings.Join(setClauses, ", "))
 	buf.WriteString(" WHERE service_account_id = @service_account_id")
-	buf.WriteString(" RETURNING service_account_id, name, description, creator_principal_id, record_state, created_at, updated_at")
+	buf.WriteString(" RETURNING service_account_id, name, description, creator_principal_id, record_state, created_at, updated_at, act_as_user, owner_user_id")
 
 	rows, err := s.db.Query(ctx, buf.String(), args)
 	if err != nil {
@@ -187,6 +187,32 @@ func (s *Store) Update(ctx context.Context, serviceAccountID string, input servi
 			return serviceaccounts.ServiceAccount{}, serviceaccounts.ErrServiceAccountNotFound
 		}
 		return serviceaccounts.ServiceAccount{}, s.mapError(err)
+	}
+
+	return record, nil
+}
+
+func (s *Store) GetPrincipalInfo(ctx context.Context, serviceAccountID string) (serviceaccounts.GetPrincipalInfoResult, error) {
+	query := `SELECT act_as_user, owner_user_id
+FROM public.service_accounts
+WHERE service_account_id = @service_account_id`
+
+	args := pgx.NamedArgs{
+		"service_account_id": serviceAccountID,
+	}
+
+	rows, err := s.db.Query(ctx, query, args)
+	if err != nil {
+		return serviceaccounts.GetPrincipalInfoResult{}, pgxdb.HandlePgError(err)
+	}
+	defer rows.Close()
+
+	record, err := pgx.CollectOneRow(rows, pgx.RowToStructByName[serviceaccounts.GetPrincipalInfoResult])
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return serviceaccounts.GetPrincipalInfoResult{}, serviceaccounts.ErrServiceAccountNotFound
+		}
+		return serviceaccounts.GetPrincipalInfoResult{}, pgxdb.HandlePgError(err)
 	}
 
 	return record, nil
@@ -339,6 +365,14 @@ func generatedApplyListConditionsFilter(filter serviceaccounts.FilterList, data 
 	if filter.UpdatedAtBefore != nil {
 		conditions = append(conditions, "updated_at <= @filter_updated_at_before")
 		data["filter_updated_at_before"] = *filter.UpdatedAtBefore
+	}
+	if filter.ActAsUser != nil {
+		conditions = append(conditions, "act_as_user = @filter_act_as_user")
+		data["filter_act_as_user"] = *filter.ActAsUser
+	}
+	if filter.OwnerUserID != nil {
+		conditions = append(conditions, "owner_user_id = @filter_owner_user_id")
+		data["filter_owner_user_id"] = *filter.OwnerUserID
 	}
 
 	// Prefilter authorization: restrict to authorized IDs.

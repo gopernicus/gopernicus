@@ -1,4 +1,4 @@
--- Schema: gopernicus_db.public  reflected at: 2026-04-24 14:18:06
+-- Schema: gopernicus_db.public  reflected at: 2026-04-30 14:14:06
 
 CREATE TABLE public.api_keys (
     api_key_id varchar NOT NULL,
@@ -209,10 +209,14 @@ CREATE TABLE public.service_accounts (
     record_state varchar(50) NOT NULL DEFAULT active,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
+    act_as_user bool NOT NULL DEFAULT false,
+    owner_user_id varchar,
     PRIMARY KEY (service_account_id),
+    CONSTRAINT service_accounts_act_as_user_check CHECK (((act_as_user = false) OR ((act_as_user = true) AND (owner_user_id IS NOT NULL)))),
     CONSTRAINT service_accounts_record_state_check CHECK (((record_state)::text = ANY ((ARRAY['active'::character varying, 'archived'::character varying, 'deleted'::character varying])::text[])))
 );
 ALTER TABLE public.service_accounts ADD CONSTRAINT service_accounts_creator_principal_id_fkey FOREIGN KEY (creator_principal_id) REFERENCES public.principals(principal_id);
+ALTER TABLE public.service_accounts ADD CONSTRAINT service_accounts_owner_user_id_fkey FOREIGN KEY (owner_user_id) REFERENCES public.users(user_id);
 ALTER TABLE public.service_accounts ADD CONSTRAINT service_accounts_service_account_id_fkey FOREIGN KEY (service_account_id) REFERENCES public.principals(principal_id) ON DELETE CASCADE;
 CREATE INDEX idx_service_accounts_creator ON public.service_accounts USING btree (creator_principal_id);
 CREATE INDEX idx_service_accounts_record_state ON public.service_accounts USING btree (record_state, created_at DESC);

@@ -16,6 +16,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/gopernicus/gopernicus/bridge/transit/allowlist"
@@ -23,7 +25,14 @@ import (
 	"github.com/gopernicus/gopernicus/infrastructure/ratelimiter"
 )
 
-const cookiePath = "/"
+const (
+	cookiePath = "/"
+
+	// defaultResetPath is appended to the first allowed frontend when the
+	// caller does not supply a valid reset_url. Frontends conventionally
+	// mount the password-reset page at this path.
+	defaultResetPath = "/reset-password"
+)
 
 // Config holds bridge configuration from environment variables.
 type Config struct {
@@ -124,6 +133,38 @@ func New(log *slog.Logger, cfg Config, authenticator *authentication.Authenticat
 	}
 
 	return b
+}
+
+// resolveResetURL chooses the password-reset frontend URL.
+//
+// When an allow-list is configured, a client-supplied URL is honored only if
+// its origin is on the list; otherwise the first allowed frontend is used
+// with [defaultResetPath] appended. In legacy mode (no allow-list) the
+// client value is returned unchanged — empty included — preserving the
+// pre-allowlist behavior where the email may fall back to a raw token.
+func (b *Bridge) resolveResetURL(provided string) string {
+	if provided != "" && b.originMatcher.Matches(provided) {
+		return provided
+	}
+	if base := b.originMatcher.Default(); base != "" {
+		return stripDefaultPort(strings.TrimRight(base, "/")) + defaultResetPath
+	}
+	return provided
+}
+
+// stripDefaultPort removes :443 from https and :80 from http origins so the
+// rendered URL is clean for users (the allowlist canonicalizes ports for
+// matching, but emails should show the host without the implied port).
+func stripDefaultPort(origin string) string {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return origin
+	}
+	port := u.Port()
+	if (u.Scheme == "https" && port == "443") || (u.Scheme == "http" && port == "80") {
+		u.Host = u.Hostname()
+	}
+	return u.String()
 }
 
 // resolveOrigin returns appOrigin if non-empty, otherwise falls back to first allowed frontend.
