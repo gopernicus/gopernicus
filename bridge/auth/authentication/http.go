@@ -223,17 +223,14 @@ func (b *Bridge) httpInitiatePasswordReset(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Validate reset_url against the origin allow-list.
+	// Resolve the reset URL. A client-supplied URL is honored when it matches
+	// the allow-list; otherwise (empty or off-list) we fall back to the first
+	// allowed frontend with the default reset path appended, so the email
+	// always carries a link rather than a raw token. In legacy mode (no
+	// allow-list) the client value is passed through unchanged.
 	var resetOpts []authentication.PasswordResetOption
-	if req.ResetURL != "" {
-		if !b.originMatcher.Empty() && !b.originMatcher.Matches(req.ResetURL) {
-			web.RespondJSONError(w, web.ErrValidation(errInvalidResetURLOrigin))
-			return
-		}
-		resetOpts = append(resetOpts, authentication.WithResetURL(req.ResetURL))
-	} else if !b.originMatcher.Empty() {
-		web.RespondJSONError(w, web.ErrValidation(errResetURLRequired))
-		return
+	if resetURL := b.resolveResetURL(req.ResetURL); resetURL != "" {
+		resetOpts = append(resetOpts, authentication.WithResetURL(resetURL))
 	}
 
 	// InitiatePasswordReset returns the token for the caller to deliver.

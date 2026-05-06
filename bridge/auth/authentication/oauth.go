@@ -62,10 +62,14 @@ func (b *Bridge) httpOAuthInitiate(w http.ResponseWriter, r *http.Request) {
 // httpOAuthStart handles GET /auth/oauth/start/{provider}.
 // Initiates OAuth flow and redirects user's browser to OAuth provider.
 // This is the web equivalent of httpOAuthInitiate — no JS required.
+//
+// All errors redirect to a known-safe frontend with an error code in the
+// query string rather than returning JSON, since this is a GET endpoint the
+// browser navigates to directly and a JSON 400 would render as raw text.
 func (b *Bridge) httpOAuthStart(w http.ResponseWriter, r *http.Request) {
 	provider := r.PathValue("provider")
 	if provider == "" {
-		web.RespondJSONError(w, web.ErrBadRequest("provider is required"))
+		b.redirectOAuthError(w, r, "invalid_provider")
 		return
 	}
 
@@ -73,11 +77,11 @@ func (b *Bridge) httpOAuthStart(w http.ResponseWriter, r *http.Request) {
 	appOrigin := r.URL.Query().Get("app_origin")
 	if appOrigin != "" {
 		if !b.originMatcher.Empty() && !b.originMatcher.Matches(appOrigin) {
-			web.RespondJSONError(w, web.ErrValidation(errInvalidAppOrigin))
+			b.redirectOAuthError(w, r, "invalid_app_origin")
 			return
 		}
 	} else if !b.originMatcher.Empty() {
-		web.RespondJSONError(w, web.ErrValidation(errAppOriginRequired))
+		b.redirectOAuthError(w, r, "app_origin_required")
 		return
 	}
 
@@ -87,8 +91,10 @@ func (b *Bridge) httpOAuthStart(w http.ResponseWriter, r *http.Request) {
 	// Web flow — no mobile redirect URI, no flow secret.
 	result, err := b.authenticator.InitiateOAuthFlow(r.Context(), provider, callbackURI, "", appOrigin)
 	if err != nil {
-		b.log.ErrorContext(r.Context(), "initiate OAuth flow failed", "error", err)
-		web.RespondJSONError(w, httpErrFor(err))
+		if b.log != nil {
+			b.log.ErrorContext(r.Context(), "initiate OAuth flow failed", "error", err, "provider", provider)
+		}
+		b.redirectOAuthError(w, r, "oauth_initiate_failed")
 		return
 	}
 
@@ -98,13 +104,16 @@ func (b *Bridge) httpOAuthStart(w http.ResponseWriter, r *http.Request) {
 // httpOAuthCallback handles GET /auth/oauth/callback/{provider}.
 // Processes OAuth callback, sets session cookies, and redirects to frontend.
 // This is the web callback — Google/GitHub redirects the browser here.
+//
+// All errors redirect to a known-safe frontend with an error code rather than
+// returning JSON, since this is a GET endpoint the browser navigates to directly.
 func (b *Bridge) httpOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	provider := r.PathValue("provider")
 	code := r.URL.Query().Get("code")
 	state := r.URL.Query().Get("state")
 
 	if code == "" || state == "" {
-		web.RespondJSONError(w, web.ErrBadRequest("code and state are required"))
+		b.redirectOAuthError(w, r, "oauth_callback_invalid")
 		return
 	}
 
@@ -279,10 +288,13 @@ func (b *Bridge) httpOAuthLink(w http.ResponseWriter, r *http.Request) {
 
 // httpOAuthLinkStart handles GET /auth/oauth/link/start/{provider} (protected).
 // Initiates OAuth account linking flow for authenticated users via browser redirect.
+//
+// All errors redirect to a known-safe frontend with an error code rather than
+// returning JSON, since this is a GET endpoint the browser navigates to directly.
 func (b *Bridge) httpOAuthLinkStart(w http.ResponseWriter, r *http.Request) {
 	provider := r.PathValue("provider")
 	if provider == "" {
-		web.RespondJSONError(w, web.ErrBadRequest("provider is required"))
+		b.redirectOAuthError(w, r, "invalid_provider")
 		return
 	}
 
@@ -290,11 +302,11 @@ func (b *Bridge) httpOAuthLinkStart(w http.ResponseWriter, r *http.Request) {
 	appOrigin := r.URL.Query().Get("app_origin")
 	if appOrigin != "" {
 		if !b.originMatcher.Empty() && !b.originMatcher.Matches(appOrigin) {
-			web.RespondJSONError(w, web.ErrValidation(errInvalidAppOrigin))
+			b.redirectOAuthError(w, r, "invalid_app_origin")
 			return
 		}
 	} else if !b.originMatcher.Empty() {
-		web.RespondJSONError(w, web.ErrValidation(errAppOriginRequired))
+		b.redirectOAuthError(w, r, "app_origin_required")
 		return
 	}
 
@@ -302,8 +314,10 @@ func (b *Bridge) httpOAuthLinkStart(w http.ResponseWriter, r *http.Request) {
 
 	result, err := b.authenticator.InitiateOAuthFlow(r.Context(), provider, callbackURI, "", appOrigin)
 	if err != nil {
-		b.log.ErrorContext(r.Context(), "link OAuth initiation failed", "error", err)
-		web.RespondJSONError(w, httpErrFor(err))
+		if b.log != nil {
+			b.log.ErrorContext(r.Context(), "link OAuth initiation failed", "error", err, "provider", provider)
+		}
+		b.redirectOAuthError(w, r, "oauth_initiate_failed")
 		return
 	}
 
@@ -399,5 +413,28 @@ func (b *Bridge) httpOAuthGetLinked(w http.ResponseWriter, r *http.Request) {
 	}
 
 	web.RespondJSONOK(w, resp)
+}
+
+// redirectOAuthError sends the browser back to a known-safe frontend with an
+// error code in the query string. Used by GET-flavored OAuth handlers
+// (httpOAuthStart, httpOAuthLinkStart) where the user is mid-redirect and
+// can't render a JSON response.
+//
+// Always uses the first allowed frontend as the destination — the user-supplied
+// app_origin is untrusted at this point (that's the reason we're rejecting it).
+// Mirrors the fallback pattern used by httpOAuthCallback's error paths.
+//
+// If no allowed frontends are configured (legacy mode), the redirect uses a
+// relative path; whatever Origin the request came from will resolve it.
+func (b *Bridge) redirectOAuthError(w http.ResponseWriter, r *http.Request, errCode string) {
+	origin := b.resolveOrigin("")
+	redirectURL := origin + "/login?error=" + errCode
+	if b.log != nil {
+		b.log.WarnContext(r.Context(), "OAuth start error - redirecting",
+			"error_code", errCode,
+			"redirect_url", redirectURL,
+		)
+	}
+	web.RespondRedirect(w, r, redirectURL, http.StatusTemporaryRedirect)
 }
 

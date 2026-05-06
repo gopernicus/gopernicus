@@ -36,6 +36,8 @@ const (
 	OrderByRecordState        = "record_state"
 	OrderByCreatedAt          = "created_at"
 	OrderByUpdatedAt          = "updated_at"
+	OrderByActAsUser          = "act_as_user"
+	OrderByOwnerUserID        = "owner_user_id"
 )
 
 // OrderByFields maps user-facing field names to OrderField definitions.
@@ -47,6 +49,8 @@ var OrderByFields = map[string]fop.OrderField{
 	OrderByRecordState:        {Column: "record_state", CastLower: true},
 	OrderByCreatedAt:          {Column: "created_at"},
 	OrderByUpdatedAt:          {Column: "updated_at"},
+	OrderByActAsUser:          {Column: "act_as_user"},
+	OrderByOwnerUserID:        {Column: "owner_user_id", CastLower: true},
 }
 
 // =============================================================================
@@ -68,6 +72,8 @@ type ServiceAccount struct {
 	RecordState        string    `json:"record_state" db:"record_state"`
 	CreatedAt          time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt          time.Time `json:"updated_at" db:"updated_at"`
+	ActAsUser          bool      `json:"act_as_user" db:"act_as_user"`
+	OwnerUserID        *string   `json:"owner_user_id" db:"owner_user_id"`
 }
 
 // =============================================================================
@@ -99,6 +105,8 @@ type FilterList struct {
 	UpdatedAt          *time.Time `json:"updated_at,omitempty"`
 	UpdatedAtAfter     *time.Time `json:"updated_at_after,omitempty"`
 	UpdatedAtBefore    *time.Time `json:"updated_at_before,omitempty"`
+	ActAsUser          *bool      `json:"act_as_user,omitempty"`
+	OwnerUserID        *string    `json:"owner_user_id,omitempty"`
 	SearchTerm         *string    `json:"search_term,omitempty"`
 
 	// AuthorizedIDs restricts results to the given primary key values.
@@ -110,6 +118,12 @@ type FilterList struct {
 // =============================================================================
 // Custom result structs
 // =============================================================================
+
+// GetPrincipalInfoResult is the result type for GetPrincipalInfo.
+type GetPrincipalInfoResult struct {
+	ActAsUser   bool   `json:"act_as_user" db:"act_as_user"`
+	OwnerUserID string `json:"owner_user_id" db:"owner_user_id"`
+}
 
 // =============================================================================
 // Event structs
@@ -140,6 +154,10 @@ func GetServiceAccountOrderValue(record ServiceAccount, field string) any {
 		return record.CreatedAt
 	case "updated_at":
 		return record.UpdatedAt
+	case "act_as_user":
+		return record.ActAsUser
+	case "owner_user_id":
+		return record.OwnerUserID
 	default:
 		return record.ServiceAccountID
 	}
@@ -217,6 +235,15 @@ func (r *Repository) Update(ctx context.Context, serviceAccountID string, input 
 	result, err := r.store.Update(ctx, serviceAccountID, input)
 	if err != nil {
 		return ServiceAccount{}, fmt.Errorf("update: %w", err)
+	}
+	return result, nil
+}
+
+// GetPrincipalInfo delegates to the store.
+func (r *Repository) GetPrincipalInfo(ctx context.Context, serviceAccountID string) (GetPrincipalInfoResult, error) {
+	result, err := r.store.GetPrincipalInfo(ctx, serviceAccountID)
+	if err != nil {
+		return GetPrincipalInfoResult{}, fmt.Errorf("get principal info: %w", err)
 	}
 	return result, nil
 }

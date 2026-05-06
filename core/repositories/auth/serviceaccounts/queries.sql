@@ -22,11 +22,18 @@ WHERE service_account_id = @service_account_id
 -- See serviceaccountspgx/store.go.
 
 -- @func: Update
--- @fields: *,-service_account_id,-record_state,-created_at
+-- @fields: *,-service_account_id,-record_state,-created_at,-act_as_user,-owner_user_id
 UPDATE service_accounts
 SET $fields
 WHERE service_account_id = @service_account_id
 RETURNING *;
+
+-- @func: GetPrincipalInfo
+-- @returns: act_as_user, owner_user_id
+SELECT act_as_user, owner_user_id
+FROM service_accounts
+WHERE service_account_id = @service_account_id
+;
 
 -- @func: SoftDelete
 UPDATE service_accounts

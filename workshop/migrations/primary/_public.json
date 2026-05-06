@@ -3,7 +3,7 @@
   "source": "postgres",
   "database": "gopernicus_db",
   "schema_name": "public",
-  "reflected_at": "2026-04-24T14:18:06.302015-07:00",
+  "reflected_at": "2026-04-30T14:14:06.378425-07:00",
   "tables": {
     "api_keys": {
       "table_name": "api_keys",
@@ -2050,6 +2050,28 @@
           "default_value": "now()",
           "has_default": true,
           "validation_tags": "required"
+        },
+        {
+          "name": "act_as_user",
+          "db_type": "bool",
+          "go_type": "bool",
+          "go_import": "",
+          "is_nullable": false,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "default_value": "false",
+          "has_default": true,
+          "validation_tags": "required"
+        },
+        {
+          "name": "owner_user_id",
+          "db_type": "varchar",
+          "go_type": "*string",
+          "go_import": "",
+          "is_nullable": true,
+          "is_primary_key": false,
+          "is_foreign_key": true,
+          "has_default": false
         }
       ],
       "foreign_keys": [
@@ -2067,6 +2089,21 @@
           "on_update": "NO_ACTION",
           "column_name": "creator_principal_id",
           "ref_column": "principal_id"
+        },
+        {
+          "constraint_name": "service_accounts_owner_user_id_fkey",
+          "columns": [
+            "owner_user_id"
+          ],
+          "ref_table": "users",
+          "ref_schema": "public",
+          "ref_columns": [
+            "user_id"
+          ],
+          "on_delete": "NO_ACTION",
+          "on_update": "NO_ACTION",
+          "column_name": "owner_user_id",
+          "ref_column": "user_id"
         },
         {
           "constraint_name": "service_accounts_service_account_id_fkey",
@@ -2106,6 +2143,15 @@
         }
       ],
       "constraints": [
+        {
+          "name": "service_accounts_act_as_user_check",
+          "type": "CHECK",
+          "definition": "CHECK (((act_as_user = false) OR ((act_as_user = true) AND (owner_user_id IS NOT NULL))))",
+          "columns": [
+            "act_as_user",
+            "owner_user_id"
+          ]
+        },
         {
           "name": "service_accounts_record_state_check",
           "type": "CHECK",

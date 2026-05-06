@@ -15,12 +15,14 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/validation"
 	"github.com/gopernicus/gopernicus/sdk/web"
 	"net/http"
+	"strconv"
 	"time"
 )
 
 // Ensure imports are used.
 
 var _ = fmt.Sprintf
+var _ = strconv.Atoi
 
 var _ = time.Time{}
 
@@ -246,6 +248,8 @@ type QueryParamsList struct {
 	RecordState        string
 	CreatedAt          string
 	UpdatedAt          string
+	ActAsUser          string
+	OwnerUserID        string
 }
 
 func parseQueryParamsList(r *http.Request) QueryParamsList {
@@ -262,6 +266,8 @@ func parseQueryParamsList(r *http.Request) QueryParamsList {
 		RecordState:        q.Get("record_state"),
 		CreatedAt:          q.Get("created_at"),
 		UpdatedAt:          q.Get("updated_at"),
+		ActAsUser:          q.Get("act_as_user"),
+		OwnerUserID:        q.Get("owner_user_id"),
 	}
 }
 
@@ -300,6 +306,9 @@ func parseFilterList(qp QueryParamsList) (serviceaccounts.FilterList, error) {
 			return filter, fmt.Errorf("invalid updated_at: %w", err)
 		}
 		filter.UpdatedAt = &v
+	}
+	if qp.OwnerUserID != "" {
+		filter.OwnerUserID = &qp.OwnerUserID
 	}
 	return filter, nil
 }

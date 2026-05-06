@@ -140,6 +140,10 @@ type Authenticator struct {
 	// Optional: API keys (set via WithAPIKeys).
 	apiKeys APIKeyRepository
 
+	// Optional: service account principal resolution (set via WithServiceAccountPrincipals).
+	// When configured, enables personal API keys that act as their owning user.
+	serviceAccountPrincipals ServiceAccountPrincipalRepository
+
 	// Optional: security event logging (set via WithSecurityEvents).
 	securityEvents SecurityEventRepository
 
@@ -254,6 +258,13 @@ func WithAllowedRedirectURIs(uris ...string) Option {
 // auth flows — errors are logged as warnings.
 func WithSecurityEvents(repo SecurityEventRepository) Option {
 	return func(a *Authenticator) { a.securityEvents = repo }
+}
+
+// WithServiceAccountPrincipals enables personal API key support. When
+// configured, [Authenticator.ResolveAPIKeyPrincipal] can resolve service
+// accounts configured with act_as_user=true to their owning user principal.
+func WithServiceAccountPrincipals(repo ServiceAccountPrincipalRepository) Option {
+	return func(a *Authenticator) { a.serviceAccountPrincipals = repo }
 }
 
 // WithAfterUserCreationHooks registers hooks to run after a user is created

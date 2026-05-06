@@ -42,35 +42,6 @@ CREATE TABLE public.principals (
     CONSTRAINT principals_type_check CHECK (principal_type IN ('user', 'service_account'))
 );
 
--- ============================================================================
--- SERVICE ACCOUNTS (non-human principals)
--- ============================================================================
--- Service accounts are "robot users" - they can own API keys and create resources.
--- Like users, they're registered in principals for FK integrity.
--- Unlike users, they don't have email/password - they authenticate via API keys.
-
--- Service accounts: self-access handled by authorizer's checkSelf for read/update/delete
--- Platform admin can manage all service accounts
--- Secure by default: authorization middleware generated, checkSelf handles self-access
-CREATE TABLE public.service_accounts (
-    service_account_id VARCHAR PRIMARY KEY REFERENCES principals(principal_id) ON DELETE CASCADE,
-
-    -- Service account info
-    name VARCHAR(255) NOT NULL,             -- Human-readable: "CI/CD Pipeline"
-    description TEXT,
-
-    -- Status and timestamps
-    creator_principal_id VARCHAR NOT NULL REFERENCES principals(principal_id),
-    record_state VARCHAR(50) NOT NULL DEFAULT 'active',
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-
-    CONSTRAINT service_accounts_record_state_check CHECK (record_state IN ('active', 'archived', 'deleted'))
-);
-
-CREATE INDEX idx_service_accounts_creator ON service_accounts(creator_principal_id);
-CREATE INDEX idx_service_accounts_record_state ON service_accounts(record_state, created_at DESC);
-
 
 -- ============================================================================
 -- USERS TABLE (human principals - OAuth ready)
@@ -100,6 +71,46 @@ CREATE TABLE public.users (
 
 CREATE INDEX idx_users_email ON users(email);
 CREATE INDEX idx_users_record_state ON users(record_state, created_at DESC);
+
+
+-- ============================================================================
+-- SERVICE ACCOUNTS (non-human principals)
+-- ============================================================================
+-- Service accounts are "robot users" - they can own API keys and create resources.
+-- Like users, they're registered in principals for FK integrity.
+-- Unlike users, they don't have email/password - they authenticate via API keys.
+
+-- Service accounts: self-access handled by authorizer's checkSelf for read/update/delete
+-- Platform admin can manage all service accounts
+-- Secure by default: authorization middleware generated, checkSelf handles self-access
+CREATE TABLE public.service_accounts (
+    service_account_id VARCHAR PRIMARY KEY REFERENCES principals(principal_id) ON DELETE CASCADE,
+
+    -- Service account info
+    name VARCHAR(255) NOT NULL,             -- Human-readable: "CI/CD Pipeline"
+    description TEXT,
+
+    -- Status and timestamps
+    creator_principal_id VARCHAR NOT NULL REFERENCES principals(principal_id),
+    record_state VARCHAR(50) NOT NULL DEFAULT 'active',
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+
+    -- Personal API key support: when true, API keys on this service account
+    -- authenticate as the owning user instead of the service account.
+    act_as_user BOOLEAN NOT NULL DEFAULT FALSE,
+    owner_user_id VARCHAR REFERENCES users(user_id),
+
+    CONSTRAINT service_accounts_record_state_check CHECK (record_state IN ('active', 'archived', 'deleted')),
+    CONSTRAINT service_accounts_act_as_user_check CHECK (
+        (act_as_user = FALSE) OR (act_as_user = TRUE AND owner_user_id IS NOT NULL)
+    )
+);
+
+CREATE INDEX idx_service_accounts_creator ON service_accounts(creator_principal_id);
+CREATE INDEX idx_service_accounts_record_state ON service_accounts(record_state, created_at DESC);
+
+
 
 -- ============================================================================
 -- API KEYS (credentials for service accounts)

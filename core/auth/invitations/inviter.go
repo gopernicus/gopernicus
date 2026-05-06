@@ -11,6 +11,7 @@ package invitations
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	invitationsrepo "github.com/gopernicus/gopernicus/core/repositories/rebac/invitations"
 	"github.com/gopernicus/gopernicus/infrastructure/cryptids"
 	"github.com/gopernicus/gopernicus/infrastructure/events"
+	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/fop"
 )
 
@@ -230,6 +232,9 @@ func (c *Inviter) createPendingInvitation(ctx context.Context, input CreateInput
 
 	inv, err := c.invitations.Create(ctx, createInput)
 	if err != nil {
+		if errors.Is(err, errs.ErrAlreadyExists) {
+			return CreateResult{}, ErrPendingInvitationExists
+		}
 		return CreateResult{}, fmt.Errorf("create invitation: %w", err)
 	}
 
