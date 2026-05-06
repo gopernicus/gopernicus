@@ -349,6 +349,24 @@ Events can implement `EventEncoder` for custom serialization (protobuf, msgpack,
 data, err := events.EncodeEvent(event)
 ```
 
+## WakeChannel
+
+`WakeChannel` bridges a bus topic to a worker pool's wake channel. Every time an event matching the topic is emitted, the returned channel receives a value — suitable for feeding to `workers.WithWakeChannel`.
+
+```go
+wake, sub, err := events.WakeChannel(bus, "job.enqueued")
+if err != nil {
+    return err
+}
+defer sub.Unsubscribe()
+
+pool := workers.NewPool(work, opts,
+    workers.WithWakeChannel(wake),
+)
+```
+
+Sends are coalesced (bursts collapse into one signal) and never block the bus. Lost wakes are tolerated — the pool's polling backstop catches up. See [SDK / Workers](/docs/gopernicus/sdk/workers#reducing-pickup-latency-with-wake-hints) for the full pattern.
+
 ## See also
 
 - [SDK / Async](/docs/gopernicus/sdk/async) — simpler fire-and-forget without pub/sub

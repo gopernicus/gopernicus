@@ -28,6 +28,7 @@ type poolConfig struct {
 	idleInterval time.Duration
 	middlewares  []Middleware
 	logger       *slog.Logger
+	wake         <-chan struct{}
 }
 
 // WithName sets the worker pool name.
@@ -60,6 +61,29 @@ func WithLogger(logger *slog.Logger) PoolOption {
 	return func(c *poolConfig) { c.logger = logger }
 }
 
+// WithWakeChannel registers a signal channel that the pool selects on
+// alongside its interval timer. When a value is received, the next work
+// iteration runs immediately.
+//
+// The channel is a non-durable hint: the pool drains receives opportunistically
+// and never blocks the sender. Callers should use a buffered channel (cap 1)
+// with non-blocking sends:
+//
+//	wake := make(chan struct{}, 1)
+//	select { case wake <- struct{}{}: default: }
+//
+// Lost wake signals are tolerated — the polling backstop catches the work
+// on its next idle/active tick. If wake is nil, the pool behaves exactly
+// as if no option were passed.
+//
+// Do not close the wake channel — receiving on a closed channel returns
+// immediately and would spin work iterations until ctx cancel. The intended
+// lifecycle is: pool runs until ctx cancels; emitters tear themselves down
+// without closing wake.
+func WithWakeChannel(wake <-chan struct{}) PoolOption {
+	return func(c *poolConfig) { c.wake = wake }
+}
+
 // WorkerPool manages N worker goroutines that call a WorkFunc in a polling loop.
 // The pool handles adaptive polling, panic recovery, and graceful shutdown.
 // It knows nothing about jobs or tasks — that's the Runner's concern.
@@ -70,6 +94,7 @@ type WorkerPool struct {
 	pollInterval time.Duration
 	idleInterval time.Duration
 	log          *slog.Logger
+	wake         <-chan struct{}
 
 	workFunc    WorkFunc // Final middleware-wrapped work function
 	middlewares []Middleware
@@ -118,6 +143,7 @@ func NewPool(workFunc WorkFunc, cfg Options, opts ...PoolOption) *WorkerPool {
 		pollInterval: c.pollInterval,
 		idleInterval: c.idleInterval,
 		log:          c.logger,
+		wake:         c.wake,
 		middlewares:  c.middlewares,
 		errors:       make(chan error, c.workerCount),
 	}
@@ -227,61 +253,62 @@ func (wp *WorkerPool) worker(workerID string) {
 		select {
 		case <-wp.ctx.Done():
 			return
-
 		case <-ticker.C:
-			ctx := WithWorkerID(wp.ctx, workerID)
-			err := wp.workWithPanicRecovery(ctx)
+		case <-wp.wake:
+		}
 
-			wp.stats.iterations.Add(1)
-			if err != nil && !errors.Is(err, ErrNoWork) {
-				wp.stats.errors.Add(1)
+		ctx := WithWorkerID(wp.ctx, workerID)
+		err := wp.workWithPanicRecovery(ctx)
+
+		wp.stats.iterations.Add(1)
+		if err != nil && !errors.Is(err, ErrNoWork) {
+			wp.stats.errors.Add(1)
+		}
+
+		var newInterval time.Duration
+
+		if err != nil {
+			if errors.Is(err, ErrWorkerShutdown) {
+				wp.log.InfoContext(ctx, "worker shutting down as requested",
+					"worker_id", workerID)
+				return
 			}
 
-			var newInterval time.Duration
-
-			if err != nil {
-				if errors.Is(err, ErrWorkerShutdown) {
-					wp.log.InfoContext(ctx, "worker shutting down as requested",
+			if errors.Is(err, ErrPoolShutdown) {
+				wp.log.ErrorContext(ctx, "worker requesting pool shutdown",
+					"worker_id", workerID,
+					"error", err)
+				select {
+				case wp.errors <- fmt.Errorf("worker %s: %w", workerID, err):
+				default:
+					wp.log.ErrorContext(ctx, "error channel full",
 						"worker_id", workerID)
-					return
 				}
+				return
+			}
 
-				if errors.Is(err, ErrPoolShutdown) {
-					wp.log.ErrorContext(ctx, "worker requesting pool shutdown",
+			if errors.Is(err, ErrNoWork) {
+				newInterval = wp.idleInterval
+				if currentInterval != wp.idleInterval {
+					wp.log.InfoContext(ctx, "no work available, switching to idle",
 						"worker_id", workerID,
-						"error", err)
-					select {
-					case wp.errors <- fmt.Errorf("worker %s: %w", workerID, err):
-					default:
-						wp.log.ErrorContext(ctx, "error channel full",
-							"worker_id", workerID)
-					}
-					return
-				}
-
-				if errors.Is(err, ErrNoWork) {
-					newInterval = wp.idleInterval
-					if currentInterval != wp.idleInterval {
-						wp.log.InfoContext(ctx, "no work available, switching to idle",
-							"worker_id", workerID,
-							"idle_interval", wp.idleInterval)
-					}
-				} else {
-					newInterval = wp.pollInterval
+						"idle_interval", wp.idleInterval)
 				}
 			} else {
 				newInterval = wp.pollInterval
-				if currentInterval != wp.pollInterval {
-					wp.log.InfoContext(ctx, "work completed, switching to active",
-						"worker_id", workerID,
-						"poll_interval", wp.pollInterval)
-				}
 			}
+		} else {
+			newInterval = wp.pollInterval
+			if currentInterval != wp.pollInterval {
+				wp.log.InfoContext(ctx, "work completed, switching to active",
+					"worker_id", workerID,
+					"poll_interval", wp.pollInterval)
+			}
+		}
 
-			if newInterval != currentInterval {
-				currentInterval = newInterval
-				ticker.Reset(newInterval)
-			}
+		if newInterval != currentInterval {
+			currentInterval = newInterval
+			ticker.Reset(newInterval)
 		}
 	}
 }

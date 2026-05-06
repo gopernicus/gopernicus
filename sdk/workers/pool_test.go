@@ -404,3 +404,226 @@ func TestPool_Stats(t *testing.T) {
 		t.Errorf("expected 0 active workers after stop, got %d", stats.ActiveWorkers)
 	}
 }
+
+// --- Wake channel tests ---
+
+func TestPool_WakeChannel_TriggersImmediateWork(t *testing.T) {
+	var workFired atomic.Bool
+	workStarted := make(chan struct{})
+
+	work := func(ctx context.Context) error {
+		if !workFired.Load() {
+			workFired.Store(true)
+			close(workStarted)
+		}
+		return ErrNoWork
+	}
+
+	wake := make(chan struct{}, 1)
+
+	opts := Options{
+		Name:         "test",
+		WorkerCount:  1,
+		PollInterval: 5 * time.Second,
+		IdleInterval: 10 * time.Second,
+	}
+	pool := NewPool(work, opts, WithLogger(silentLogger()), WithWakeChannel(wake))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go func() {
+		pool.Start(ctx)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	workFired.Store(false)
+
+	wake <- struct{}{}
+
+	select {
+	case <-workStarted:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("wake did not trigger immediate work within 100ms")
+	}
+
+	pool.Stop()
+}
+
+func TestPool_WakeChannel_NilIsSafe(t *testing.T) {
+	var calls atomic.Int64
+
+	work := func(ctx context.Context) error {
+		calls.Add(1)
+		return ErrNoWork
+	}
+
+	pool := NewPool(work, defaultPoolOpts(), WithLogger(silentLogger()), WithWakeChannel(nil))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		pool.Start(ctx)
+		close(done)
+	}()
+
+	<-done
+
+	if calls.Load() == 0 {
+		t.Error("expected pool to run normally with nil wake channel")
+	}
+}
+
+func TestPool_WakeChannel_CtxDoneTakesPrecedence(t *testing.T) {
+	work := func(ctx context.Context) error {
+		return ErrNoWork
+	}
+
+	wake := make(chan struct{}, 1)
+	pool := NewPool(work, defaultPoolOpts(), WithLogger(silentLogger()), WithWakeChannel(wake))
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		pool.Start(ctx)
+		close(done)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	wake <- struct{}{}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("pool did not exit after ctx cancel despite wake signal")
+	}
+}
+
+func TestPool_WakeChannel_CoalescedSendsAreSafe(t *testing.T) {
+	var iterations atomic.Int64
+
+	work := func(ctx context.Context) error {
+		iterations.Add(1)
+		return ErrNoWork
+	}
+
+	wake := make(chan struct{}, 1)
+	pool := NewPool(work, defaultPoolOpts(), WithLogger(silentLogger()), WithWakeChannel(wake))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go func() {
+		pool.Start(ctx)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	for i := 0; i < 100; i++ {
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	pool.Stop()
+
+	if iterations.Load() == 0 {
+		t.Error("expected at least one wake-driven iteration")
+	}
+}
+
+func TestPool_WakeChannel_OneWakePerSignalAcrossWorkers(t *testing.T) {
+	var iterations atomic.Int64
+	started := make(chan struct{})
+	var startedOnce sync.Once
+
+	work := func(ctx context.Context) error {
+		startedOnce.Do(func() { close(started) })
+		iterations.Add(1)
+		time.Sleep(50 * time.Millisecond)
+		return ErrNoWork
+	}
+
+	wake := make(chan struct{}, 1)
+
+	opts := Options{
+		Name:         "test",
+		WorkerCount:  3,
+		PollInterval: 5 * time.Second,
+		IdleInterval: 10 * time.Second,
+	}
+	pool := NewPool(work, opts, WithLogger(silentLogger()), WithWakeChannel(wake))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go func() {
+		pool.Start(ctx)
+	}()
+
+	<-started
+	time.Sleep(100 * time.Millisecond)
+
+	before := iterations.Load()
+	wake <- struct{}{}
+	time.Sleep(100 * time.Millisecond)
+	after := iterations.Load()
+
+	pool.Stop()
+
+	wakeTriggered := after - before
+	if wakeTriggered > 1 {
+		t.Errorf("expected at most 1 wake-triggered iteration, got %d", wakeTriggered)
+	}
+}
+
+func TestPool_WakeChannel_WakeWhileIdle_DropsToActive(t *testing.T) {
+	var noWorkCount atomic.Int64
+	var workCount atomic.Int64
+	returnWork := atomic.Bool{}
+
+	work := func(ctx context.Context) error {
+		if returnWork.Load() {
+			workCount.Add(1)
+			return nil
+		}
+		noWorkCount.Add(1)
+		return ErrNoWork
+	}
+
+	wake := make(chan struct{}, 1)
+
+	opts := Options{
+		Name:         "test",
+		WorkerCount:  1,
+		PollInterval: 20 * time.Millisecond,
+		IdleInterval: 5 * time.Second,
+	}
+	pool := NewPool(work, opts, WithLogger(silentLogger()), WithWakeChannel(wake))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go func() {
+		pool.Start(ctx)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	returnWork.Store(true)
+	wake <- struct{}{}
+
+	time.Sleep(100 * time.Millisecond)
+
+	if workCount.Load() < 2 {
+		t.Errorf("expected multiple work iterations after wake (active polling), got %d", workCount.Load())
+	}
+
+	pool.Stop()
+}
