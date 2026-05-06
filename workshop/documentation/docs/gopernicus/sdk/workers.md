@@ -82,6 +82,49 @@ Workers start at 1ms, then switch behavior based on the work result:
 | `ErrWorkerShutdown` | worker exits |
 | `ErrPoolShutdown` | all workers exit |
 
+### Reducing pickup latency with wake hints
+
+Adaptive polling works well for batch work, but user-triggered jobs (e.g. a Slack bot pulling files into Drive) suffer up to one full `idleInterval` of latency when the pool is idle.
+
+`WithWakeChannel` lets callers push a hint that work just landed. The pool selects on the wake channel alongside its interval timer — a signal triggers an immediate work iteration without giving up the polling backstop that handles retries and crash recovery.
+
+```go
+// Create a wake channel (buffered, cap 1).
+wake := make(chan struct{}, 1)
+
+pool := workers.NewPool(runner.WorkFunc(), opts,
+    workers.WithIdleInterval(5*time.Minute),  // long backstop
+    workers.WithWakeChannel(wake),
+)
+
+// After enqueuing work, send a non-blocking wake signal.
+select {
+case wake <- struct{}{}:
+default: // channel full — pool will pick it up
+}
+```
+
+The wake is a hint, not a contract. Sends are coalesced (bursts collapse into one wake) and never block. If the signal is lost, polling catches up on the next tick.
+
+For event-driven wake signals, use `events.WakeChannel` to bridge a bus topic to the pool:
+
+```go
+import "github.com/gopernicus/gopernicus/infrastructure/events"
+
+wake, sub, err := events.WakeChannel(bus, "drivebot.upload.requested")
+if err != nil {
+    return fmt.Errorf("wake subscribe: %w", err)
+}
+defer sub.Unsubscribe()
+
+pool := workers.NewPool(runner.WorkFunc(), opts,
+    workers.WithIdleInterval(5*time.Minute),
+    workers.WithWakeChannel(wake),
+)
+```
+
+Now every `drivebot.upload.requested` event wakes the pool immediately.
+
 ---
 
 ## Sentinels
