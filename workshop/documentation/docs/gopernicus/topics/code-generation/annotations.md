@@ -27,6 +27,8 @@ LIMIT $limit
 
 ## File-level annotations
 
+File-level annotations appear at the top of `queries.sql`, before the first `@func` block. They configure generation for the whole entity.
+
 ### `@database`
 
 Specifies which database connection pool to use for all queries in the file.
@@ -35,7 +37,26 @@ Specifies which database connection pool to use for all queries in the file.
 -- @database: analytics
 ```
 
-Must match a database name in `gopernicus.yml`. Defaults to `"primary"` if omitted. Must appear before the first `@func`.
+Must match a database name in `gopernicus.yml`. Defaults to `"primary"` if omitted.
+
+### `@skip-integration-test`
+
+Suppresses generation of the `*pgx/generated_test.go` smoke test file for the entity. A previously generated file is removed on the next `gopernicus generate` run.
+
+```sql
+-- @database: primary
+-- @skip-integration-test
+-- Nodes carries cross-column invariants the generic fixture cannot
+-- satisfy (kind='entity' requires exactly one of three nullable FKs);
+-- coverage lives in core/cases/nodecreate.
+```
+
+Use this when an entity has invariants the generic fixture default can't satisfy — typically:
+
+- **Mutually exclusive nullable FK groups.** CHECK constraints of the form `(col_a IS NOT NULL)::int + (col_b IS NOT NULL)::int = 1`. The fixture fills both columns, so any value chosen violates one branch of the CHECK.
+- **Domain-specific value invariants** that aren't expressible as a simple `IN (...)` CHECK and require the case layer to enforce.
+
+Hand-write integration tests in `*pgx/store_test.go` (which is bootstrap, not regenerated) using the `setupTestStore()` helper. The opt-out applies only to the store-level smoke test — bridge, repository, and case generation continue normally.
 
 ---
 

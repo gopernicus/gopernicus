@@ -78,8 +78,8 @@ triggers generation in the repository, store, bridge, and test layers.
 
 | File | Created | Overwritten | Description |
 |---|---|---|---|
-| `generated_test.go` | Always | Yes | Auto-generated test cases for all store methods. |
-| `store_test.go` | Once | No | Test setup, fixtures, and custom test stubs. |
+| `generated_test.go` | Always (unless opted out) | Yes | Auto-generated `Create` / `Get` / `List` / `Delete` / `SoftDelete` smoke tests. Suppressed by `-- @skip-integration-test` at the top of `queries.sql`; a previously generated file is removed on opt-in. |
+| `store_test.go` | Once | No | `setupTestStore` helper plus `migrateTestDB` and `testPGXOptions` hooks for the test container. |
 
 **Cache** (`core/repositories/<domain>/<entity>/`) -- only when `@cache` annotations are present:
 
@@ -125,7 +125,7 @@ triggers generation in the repository, store, bridge, and test layers.
 
 | File | Created | Overwritten | Description |
 |---|---|---|---|
-| `generated.go` | Always | Yes | Factory functions for creating test entities with resolved FK relationships. |
+| `generated.go` | Always | Yes | Factory functions for creating test entities with resolved FK relationships. **Cumulative across all domains** — `gopernicus generate <one-domain>` rewrites the file with every entity's fixtures, not just the targeted domain's, so cross-domain FK chains continue to resolve. |
 | `fixtures.go` | Once | No | Custom fixture helpers and overrides. |
 
 **E2E Tests** (`workshop/testing/e2e/`) -- for entities with HTTP routes:
