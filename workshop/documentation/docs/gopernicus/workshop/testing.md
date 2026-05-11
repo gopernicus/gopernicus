@@ -192,7 +192,7 @@ Fixtures bypass the repository layer entirely (direct SQL INSERT + SELECT) for t
 
 ### Integration tests (`*pgx/generated_test.go`)
 
-Each store package gets tests for `Get`, `List`, `Delete`, and `SoftDelete` (when `record_state` exists). These run against a real PostgreSQL container:
+Each store package gets tests for `Create`, `Get`, `List`, `Delete`, and `SoftDelete` (when `record_state` exists). These run against a real PostgreSQL container:
 
 ```go
 //go:build integration
@@ -201,14 +201,72 @@ func TestGeneratedUserStore_Get(t *testing.T) {
     ctx, db, store := setupTestStore(t)
     pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-    created := fixtures.CreateTestUser(t, ctx, db)
+    created := fixtures.CreateTestUserWithDefaults(t, ctx, db)
     result, err := store.Get(ctx, created.UserID)
     require.NoError(t, err)
     assert.Equal(t, created.UserID, result.UserID)
 }
 ```
 
-The `setupTestStore` helper and `migrateTestDB` function are defined in a bootstrap file (`store_test.go`) that the generator creates once.
+The generated tests call `WithDefaults`, which auto-creates every transitive FK ancestor needed for the insert. The fixtures package is cumulative across all domains, so `gopernicus generate <one-domain>` does not wipe other domains' helpers.
+
+When a query declares scope parameters in its SQL (`@parent_world_id`, `@parent_service_account_id`, etc.), the generator threads those into the test call. So a `Get` that compiles to `Store.Get(ctx, id, parentWorldID)` is exercised as `store.Get(ctx, created.UserID, *created.ParentWorldID)` — reading the scope value off the fixture struct.
+
+The `setupTestStore` helper, `migrateTestDB` function, and `testPGXOptions` variable are defined in a bootstrap file (`store_test.go`) that the generator creates once.
+
+#### Bootstrap (`*pgx/store_test.go`)
+
+Two hooks live in the bootstrap, both of which `setupTestStore` consumes:
+
+```go
+//go:build integration
+
+package userspgx
+
+import (
+    "context"
+
+    "github.com/gopernicus/gopernicus/infrastructure/database/postgres/pgxdb"
+    "github.com/gopernicus/gopernicus/workshop/testing/testpgx"
+
+    "your-module/workshop/testing/migrationsfx"
+)
+
+// migrateTestDB applies project migrations to the freshly-spawned container.
+func migrateTestDB(ctx context.Context, pool *pgxdb.Pool) error {
+    return pgxdb.RunMigrations(ctx, pool, migrationsfx.Primary(), "migrations")
+}
+
+// testPGXOptions is appended to the testpgx.SetupTestPGX option list.
+// Use it when the default postgres:17-alpine image is missing extensions
+// your migrations need.
+var testPGXOptions = []testpgx.Option{
+    testpgx.WithPostgresVersion("pgvector/pgvector:pg17"),
+    testpgx.WithExtensions("vector", "pg_trgm"),
+}
+```
+
+`setupTestStore` does the equivalent of:
+
+```go
+opts := append([]testpgx.Option{testpgx.WithMigrations(migrateTestDB)}, testPGXOptions...)
+db := testpgx.SetupTestPGX(t, ctx, opts...)
+```
+
+so anything you add to `testPGXOptions` flows through every generated integration test in that package without editing the generated file.
+
+#### Opting out
+
+Some entities have cross-column invariants the generic fixture cannot satisfy — typically CHECK constraints that pin a mutually exclusive group of nullable FKs (e.g. a `nodes` table where `kind='entity'` requires exactly one of three tier columns). Add `-- @skip-integration-test` at the top of `queries.sql` to suppress the generated test file; any prior copy is removed on the next regeneration. Hand-write smoke tests in `store_test.go` (the bootstrap) using `setupTestStore()` directly.
+
+#### Fixture defaults the generator already knows about
+
+The fixture generator reads the reflected schema to pick sensible defaults so generated inserts pass NOT NULL and CHECK constraints out of the box:
+
+- **CHECK constraints** with an `IN (…)` or `col = 'value'` shape: the first allowed string is used. So `principal_type` defaults to `"user"` when the constraint is `principal_type IN ('user', 'service_account')`.
+- **`varchar(N)` columns** with small `N`: the default is `testUniqueID[:N]` so it fits without overflow.
+- **`json` / `jsonb` columns** (Go type `json.RawMessage`): defaults to `json.RawMessage("{}")` because Postgres rejects empty bytes as invalid JSON.
+- **Principal inheritance** (when an entity's PK is a FK to `principals`): the `principal_type` is set to the singular form of the table name (e.g. `service_accounts` → `service_account`) to match the canonical CHECK on the `principals` table.
 
 ### E2E tests (`e2e/*_generated_test.go`)
 
