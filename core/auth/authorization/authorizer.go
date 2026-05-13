@@ -387,6 +387,15 @@ func (a *Authorizer) CreateRelationships(ctx context.Context, relationships []Cr
 	return a.store.CreateRelationships(ctx, relationships)
 }
 
+// CheckRelationExists reports whether a single direct relationship tuple is
+// present in the store. Unlike Check, this is a raw existence probe: it does
+// not consult the schema, traverse through-relations, or honor platform-admin
+// or self-access bypasses. Use it for dedup before CreateRelationships, not
+// for permission decisions — those should go through Check.
+func (a *Authorizer) CheckRelationExists(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) (bool, error) {
+	return a.store.CheckRelationExists(ctx, resourceType, resourceID, relation, subjectType, subjectID)
+}
+
 // DeleteResourceRelationships removes all relationships for a resource.
 func (a *Authorizer) DeleteResourceRelationships(ctx context.Context, resourceType, resourceID string) error {
 	return a.store.DeleteResourceRelationships(ctx, resourceType, resourceID)
