@@ -19,6 +19,10 @@ type item struct{ id string }
 
 func getID(i item) string { return i.id }
 
+// encCursor is the cursor encoder used in tests; it produces "enc_<id>" so
+// re-anchored cursors are distinguishable from store-provided ones.
+func encCursor(i item) (string, error) { return "enc_" + i.id, nil }
+
 func items(ids ...string) []item {
 	out := make([]item, len(ids))
 	for i, id := range ids {
@@ -97,7 +101,7 @@ func TestPostfilterLoop(t *testing.T) {
 
 		// Expectations
 		wantIDs        []string
-		wantNextCursor string // from the last pagination returned
+		wantNextCursor string // "enc_<last returned id>" when a further authorized record exists, else ""
 		wantListCalls  int
 		wantErr        bool
 	}{
@@ -117,8 +121,9 @@ func TestPostfilterLoop(t *testing.T) {
 			allowedIDs: map[string]bool{"1": true, "2": true, "3": true, "4": true, "5": true, "6": true},
 			limit:      3,
 			// overfetch = 6, batch has 6 all authorized — accumulates 3 then breaks
+			// mid-batch, so the cursor is re-anchored at the last returned record.
 			wantIDs:        []string{"1", "2", "3"},
-			wantNextCursor: "c1",
+			wantNextCursor: "enc_3",
 			wantListCalls:  1,
 		},
 		{
@@ -166,9 +171,11 @@ func TestPostfilterLoop(t *testing.T) {
 				"1": true, "3": true, "5": true, // page 1: 3 authorized
 				"11": true, "13": true, "15": true, "17": true, // page 2: 4 authorized (only 2 needed)
 			},
-			limit:          5,
+			limit: 5,
+			// limit reached at "13" with rows 14-20 unconsumed — cursor re-anchored
+			// there so "15" and "17" surface on the next page instead of being skipped.
 			wantIDs:        []string{"1", "3", "5", "11", "13"},
-			wantNextCursor: "c2",
+			wantNextCursor: "enc_13",
 			wantListCalls:  2,
 		},
 		{
@@ -178,9 +185,9 @@ func TestPostfilterLoop(t *testing.T) {
 			},
 			allowedIDs: map[string]bool{"1": true, "2": true, "3": true, "4": true, "5": true, "6": true},
 			limit:      3,
-			// stops at limit mid-batch, no second page needed
+			// stops at limit mid-batch, no second page needed; cursor re-anchored
 			wantIDs:        []string{"1", "2", "3"},
-			wantNextCursor: "c1",
+			wantNextCursor: "enc_3",
 			wantListCalls:  1,
 		},
 		{
@@ -199,7 +206,9 @@ func TestPostfilterLoop(t *testing.T) {
 				{batch: items("1", "2", "3", "4", "5", "6"), nextCursor: "c1"},
 				{batch: items("7", "8", "9", "10", "11", "12"), nextCursor: ""},
 			},
-			// page 1: only 2 authorized; page 2: 1 authorized → total 3 = limit
+			// page 1: only 2 authorized; page 2: 1 authorized → total 3 = limit.
+			// No limit+1th authorized record exists and the source is exhausted,
+			// so no next cursor — a cursor must never lead to an empty page.
 			allowedIDs: map[string]bool{
 				"2": true, "5": true,
 				"9": true,
@@ -229,8 +238,8 @@ func TestPostfilterLoop(t *testing.T) {
 			isPlatformAdmin: true,
 			limit:           3,
 			wantIDs:         []string{"1", "2", "3"},
-			// pagination from the (only) list call is returned, even though we stopped at limit
-			wantNextCursor: "c1",
+			// stopped at limit mid-batch — cursor re-anchored at the last returned record
+			wantNextCursor: "enc_3",
 			wantListCalls:  1,
 		},
 		{
@@ -271,20 +280,35 @@ func TestPostfilterLoop(t *testing.T) {
 				"2": true, "4": true,          // 2 from page 1
 				"12": true, "14": true, "16": true, // 3 from page 2
 			},
-			limit:          5,
+			limit: 5,
+			// exactly limit authorized and the source is exhausted — no next cursor
 			wantIDs:        []string{"2", "4", "12", "14", "16"},
 			wantNextCursor: "",
 			wantListCalls:  2,
 		},
 		{
-			name: "returns_last_pagination_even_when_stopped_at_limit",
+			name: "reencodes_cursor_when_stopped_at_limit_mid_batch",
 			pages: []listPage{
 				{batch: items("1", "2", "3", "4", "5", "6"), nextCursor: "cursor_from_store"},
 			},
 			allowedIDs: map[string]bool{"1": true, "2": true, "3": true, "4": true, "5": true, "6": true},
 			limit:      3,
-			// stops at limit — but pagination from the store call is still returned
-			wantNextCursor: "cursor_from_store",
+			// stops at limit mid-batch — the store cursor (after "6") would skip
+			// "4" and "5", so the cursor is re-encoded from "3" instead
+			wantNextCursor: "enc_3",
+			wantIDs:        []string{"1", "2", "3"},
+			wantListCalls:  1,
+		},
+		{
+			name: "exhausted_source_ignores_store_cursor",
+			pages: []listPage{
+				{batch: items("1", "2", "3"), nextCursor: "cursor_from_store"},
+			},
+			allowedIDs: map[string]bool{"1": true, "2": true, "3": true},
+			limit:      3,
+			// batch is short of the overfetch → source exhausted; no limit+1th
+			// record exists, so the store's cursor is not propagated
+			wantNextCursor: "",
 			wantIDs:        []string{"1", "2", "3"},
 			wantListCalls:  1,
 		},
@@ -329,12 +353,14 @@ func TestPostfilterLoop(t *testing.T) {
 			},
 			allowedIDs: map[string]bool{
 				"b": true,  // page 1: 1 authorized
-				"g": true,  // page 2: 1 authorized (total: 2 = limit — stops)
+				"g": true,  // page 2: 1 authorized (= limit, but a limit+1th must be proven)
 			},
-			limit:          2,
+			limit: 2,
+			// reaching the limit exactly forces one more fetch to learn whether a
+			// next page exists; page 3 has no authorized rows → no next cursor
 			wantIDs:        []string{"b", "g"},
-			wantNextCursor: "c2",
-			wantListCalls:  2,
+			wantNextCursor: "",
+			wantListCalls:  3,
 		},
 		{
 			name: "large_batch_one_authorized",
@@ -372,6 +398,7 @@ func TestPostfilterLoop(t *testing.T) {
 				"read",
 				"item",
 				getID,
+				encCursor,
 				listFn,
 				fop.PageStringCursor{Limit: tc.limit, Cursor: tc.startCursor},
 			)
@@ -439,6 +466,7 @@ func TestPostfilterLoop_CursorThreading(t *testing.T) {
 		authorization.Subject{Type: "user", ID: "u1"},
 		"read", "item",
 		getID,
+		encCursor,
 		makeList(pages, &listCalls),
 		fop.PageStringCursor{Limit: 3, Cursor: "initial_cursor"},
 	)
@@ -486,6 +514,7 @@ func TestPostfilterLoop_OverfetchSize(t *testing.T) {
 		authorization.Subject{Type: "user", ID: "u1"},
 		"read", "item",
 		getID,
+		encCursor,
 		makeList(pages, &listCalls),
 		fop.PageStringCursor{Limit: 7},
 	)
@@ -512,6 +541,7 @@ func TestPostfilterLoop_ZeroLimitOverfetch(t *testing.T) {
 		authorization.Subject{Type: "user", ID: "u1"},
 		"read", "item",
 		getID,
+		encCursor,
 		makeList(pages, &listCalls),
 		fop.PageStringCursor{Limit: 0},
 	)
@@ -552,12 +582,46 @@ func TestPostfilterLoop_NoAuthCallOnEmptyBatch(t *testing.T) {
 		authorization.Subject{Type: "user", ID: "u1"},
 		"read", "item",
 		getID,
+		encCursor,
 		makeList(pages, nil),
 		fop.PageStringCursor{Limit: 5},
 	)
 
 	if authCallCount != 0 {
 		t.Errorf("expected 0 auth checks on empty batch, got %d", authCallCount)
+	}
+}
+
+// TestPostfilterLoop_PaginationShape verifies that the returned Pagination
+// reflects what was returned to the caller: Limit is the requested limit (not
+// the overfetch size) and PageTotal counts the returned records.
+func TestPostfilterLoop_PaginationShape(t *testing.T) {
+	pages := []listPage{
+		{batch: items("1", "2", "3", "4", "5", "6"), nextCursor: "c1"},
+	}
+	authorizer := makeAuthorizer(map[string]bool{"2": true, "4": true}, false, nil)
+
+	got, pagination, err := bridfop.PostfilterLoop(
+		context.Background(),
+		authorizer,
+		authorization.Subject{Type: "user", ID: "u1"},
+		"read", "item",
+		getID,
+		encCursor,
+		makeList(pages, nil),
+		fop.PageStringCursor{Limit: 3},
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d records, want 2", len(got))
+	}
+	if pagination.Limit != 3 {
+		t.Errorf("Limit = %d, want 3 (requested limit, not overfetch)", pagination.Limit)
+	}
+	if pagination.PageTotal != 2 {
+		t.Errorf("PageTotal = %d, want 2 (records returned to caller)", pagination.PageTotal)
 	}
 }
 
