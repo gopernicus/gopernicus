@@ -69,6 +69,15 @@ func NewStore[T any, F any, C any, U any](q Querier, d Dialect, spec Spec[T, F, 
 	return s, nil
 }
 
+// WithQuerier returns a shallow copy of the store bound to a different
+// execution surface — typically a transaction — so hand-written
+// transactional methods can reuse the spec'd verbs inside the tx.
+func (s *Store[T, F, C, U]) WithQuerier(q Querier) *Store[T, F, C, U] {
+	copied := *s
+	copied.q = q
+	return &copied
+}
+
 // Querier exposes the execution surface for hand-written methods.
 func (s *Store[T, F, C, U]) Querier() Querier { return s.q }
 
@@ -193,6 +202,16 @@ func (s *Store[T, F, C, U]) Create(ctx context.Context, input C) (T, error) {
 	sets := s.spec.Creates(input)
 	if len(sets) == 0 {
 		return zero, fmt.Errorf("crud: %s: create resolved to no columns", s.spec.Table)
+	}
+
+	provided := make(map[string]bool, len(sets))
+	for _, set := range sets {
+		provided[set.Col] = true
+	}
+	for _, col := range s.spec.AutoNowCreate {
+		if !provided[col] {
+			sets = append(sets, Set{Col: col, Val: s.spec.now()})
+		}
 	}
 
 	args := NewArgs(s.d)

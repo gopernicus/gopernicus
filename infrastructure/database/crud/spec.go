@@ -105,6 +105,11 @@ type Spec[T any, F any, C any, U any] struct {
 	// update struct did not provide them (e.g. updated_at).
 	AutoNow []string
 
+	// AutoNowCreate columns are set to the current UTC time on Create when
+	// Creates did not provide them (e.g. created_at, updated_at — input
+	// structs typically don't carry audit timestamps).
+	AutoNowCreate []string
+
 	// RecordState enables SoftDelete/Archive/Restore (a record_state
 	// column); empty disables them.
 	RecordStateCol string
