@@ -19,6 +19,11 @@ var (
 	ErrNotFound         = sql.ErrNoRows
 	ErrDuplicateEntry   = errors.New("duplicate entry")
 	ErrConstraintFailed = errors.New("constraint failed")
+
+	// ErrForeignKeyViolation distinguishes FK failures from other constraint
+	// failures (Postgres parity). It wraps ErrConstraintFailed so existing
+	// errors.Is(err, ErrConstraintFailed) checks keep matching.
+	ErrForeignKeyViolation = fmt.Errorf("foreign key: %w", ErrConstraintFailed)
 )
 
 // DB wraps the SQLite database connection with optional tracing.
@@ -346,7 +351,7 @@ func handleSQLiteError(err error) error {
 		return ErrDuplicateEntry
 	}
 	if strings.Contains(errMsg, "FOREIGN KEY constraint failed") {
-		return ErrConstraintFailed
+		return ErrForeignKeyViolation
 	}
 	if strings.Contains(errMsg, "CHECK constraint failed") {
 		return ErrConstraintFailed

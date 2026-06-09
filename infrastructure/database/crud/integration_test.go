@@ -11,6 +11,7 @@ import (
 	"github.com/gopernicus/gopernicus/infrastructure/database/crud"
 	"github.com/gopernicus/gopernicus/infrastructure/database/crud/pgxq"
 	"github.com/gopernicus/gopernicus/infrastructure/database/postgres/pgxdb"
+	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/fop"
 	"github.com/gopernicus/gopernicus/workshop/testing/testpgx"
 )
@@ -104,11 +105,13 @@ func thingSpec(clock func() time.Time) crud.Spec[thing, thingFilter, createThing
 		AutoNow:      []string{"updated_at"},
 		OrderFields:  map[string]crud.OrderField{"created_at": {Col: "created_at"}, "name": {Col: "name", CastLower: true}},
 		DefaultOrder: "created_at",
+		// Identical MapError shape as the SQLite tests — the errs taxonomy is
+		// the dialect-neutral contract, so generated specs need one mapping.
 		MapError: func(err error) error {
 			switch {
 			case errors.Is(err, crud.ErrNotFound):
 				return errThingNotFound
-			case errors.Is(err, pgxdb.ErrDBDuplicatedEntry):
+			case errors.Is(err, errs.ErrAlreadyExists):
 				return errNameTaken
 			default:
 				return err

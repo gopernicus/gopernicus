@@ -5,9 +5,12 @@ package sqliteq
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 
 	"github.com/gopernicus/gopernicus/infrastructure/database/crud"
 	"github.com/gopernicus/gopernicus/infrastructure/database/sqlite/moderncdb"
+	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // Conn is the execution surface this adapter needs — satisfied by both
@@ -40,7 +43,7 @@ func New(db Conn) Querier {
 func (q Querier) Query(ctx context.Context, query string, args ...any) (crud.Rows, error) {
 	rows, err := q.db.Query(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return nil, mapError(err)
 	}
 	return rows, nil
 }
@@ -48,11 +51,31 @@ func (q Querier) Query(ctx context.Context, query string, args ...any) (crud.Row
 func (q Querier) Exec(ctx context.Context, query string, args ...any) (int64, error) {
 	result, err := q.db.Exec(ctx, query, args...)
 	if err != nil {
-		return 0, err
+		return 0, mapError(err)
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
 		return 0, err
 	}
 	return affected, nil
+}
+
+// mapError translates moderncdb sentinels into the sdk/errs taxonomy — the
+// dialect-neutral contract spec MapError funcs are written against. The
+// original error stays in the wrap chain. FK is checked before the generic
+// constraint sentinel it wraps.
+func mapError(err error) error {
+	if err == nil {
+		return nil
+	}
+	switch {
+	case errors.Is(err, moderncdb.ErrDuplicateEntry):
+		return fmt.Errorf("%w: %w", errs.ErrAlreadyExists, err)
+	case errors.Is(err, moderncdb.ErrForeignKeyViolation):
+		return fmt.Errorf("%w: %w", errs.ErrInvalidReference, err)
+	case errors.Is(err, moderncdb.ErrConstraintFailed):
+		return fmt.Errorf("%w: %w", errs.ErrInvalidInput, err)
+	default:
+		return err
+	}
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/gopernicus/gopernicus/infrastructure/database/crud"
 	"github.com/gopernicus/gopernicus/infrastructure/database/crud/sqliteq"
 	"github.com/gopernicus/gopernicus/infrastructure/database/sqlite/moderncdb"
+	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/fop"
 )
 
@@ -113,7 +114,7 @@ func userSpec(clock func() time.Time) crud.Spec[user, userFilter, createUser, up
 			switch {
 			case errors.Is(err, crud.ErrNotFound):
 				return errUserNotFound
-			case errors.Is(err, moderncdb.ErrDuplicateEntry):
+			case errors.Is(err, errs.ErrAlreadyExists):
 				return errEmailTaken
 			default:
 				return err
