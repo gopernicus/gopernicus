@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -25,6 +26,7 @@ type CacheStore struct {
 	cache     *cache.Cache
 	ttl       time.Duration
 	keyPrefix string
+	log       *slog.Logger
 }
 
 // CacheOption configures a CacheStore.
@@ -40,6 +42,11 @@ func WithCacheKeyPrefix(prefix string) CacheOption {
 	return func(s *CacheStore) { s.keyPrefix = prefix }
 }
 
+// WithCacheLogger sets a structured logger. If not provided, slog.Default() is used.
+func WithCacheLogger(log *slog.Logger) CacheOption {
+	return func(s *CacheStore) { s.log = log }
+}
+
 // NewCacheStore creates a new caching authorization store.
 // If c is nil, all operations pass through to the inner store (no caching).
 func NewCacheStore(inner Storer, c *cache.Cache, opts ...CacheOption) *CacheStore {
@@ -48,11 +55,30 @@ func NewCacheStore(inner Storer, c *cache.Cache, opts ...CacheOption) *CacheStor
 		cache:     c,
 		ttl:       defaultCacheTTL,
 		keyPrefix: defaultCacheKeyPrefix,
+		log:       slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
 	return s
+}
+
+// setCached populates a cache entry. A failure only costs a future cache
+// miss, so it is logged at debug level.
+func (s *CacheStore) setCached(ctx context.Context, key string, value any) {
+	if err := cache.SetJSON(s.cache, ctx, key, value, s.ttl); err != nil {
+		s.log.DebugContext(ctx, "authorization cache set failed", "key", key, "error", err)
+	}
+}
+
+// deletePattern invalidates cache entries. A failure can leave a stale —
+// possibly granted — permission cached until the TTL expires, so it is
+// logged at error level for observability.
+func (s *CacheStore) deletePattern(ctx context.Context, pattern string) {
+	if err := s.cache.DeletePattern(ctx, pattern); err != nil {
+		s.log.ErrorContext(ctx, "authorization cache invalidation failed; stale permissions may persist until TTL expiry",
+			"pattern", pattern, "ttl", s.ttl, "error", err)
+	}
 }
 
 // =============================================================================
@@ -71,7 +97,7 @@ func (s *CacheStore) CheckRelationWithGroupExpansion(ctx context.Context, resour
 		return false, err
 	}
 
-	_ = cache.SetJSON(s.cache, ctx, key, result, s.ttl)
+	s.setCached(ctx, key, result)
 	return result, nil
 }
 
@@ -87,7 +113,7 @@ func (s *CacheStore) CheckRelationExists(ctx context.Context, resourceType, reso
 		return false, err
 	}
 
-	_ = cache.SetJSON(s.cache, ctx, key, result, s.ttl)
+	s.setCached(ctx, key, result)
 	return result, nil
 }
 
@@ -120,7 +146,7 @@ func (s *CacheStore) CheckBatchDirect(ctx context.Context, resourceType string, 
 		allowed := dbResults[id]
 		result[id] = allowed
 		key := s.checkKey(resourceType, id, relation, subjectType, subjectID)
-		_ = cache.SetJSON(s.cache, ctx, key, allowed, s.ttl)
+		s.setCached(ctx, key, allowed)
 	}
 
 	return result, nil
@@ -138,7 +164,7 @@ func (s *CacheStore) GetRelationTargets(ctx context.Context, resourceType, resou
 		return nil, err
 	}
 
-	_ = cache.SetJSON(s.cache, ctx, key, result, s.ttl)
+	s.setCached(ctx, key, result)
 	return result, nil
 }
 
@@ -158,7 +184,7 @@ func (s *CacheStore) LookupResourceIDs(ctx context.Context, resourceType string,
 		return nil, err
 	}
 
-	_ = cache.SetJSON(s.cache, ctx, key, result, s.ttl)
+	s.setCached(ctx, key, result)
 	return result, nil
 }
 
@@ -174,7 +200,7 @@ func (s *CacheStore) LookupResourceIDsByRelationTarget(ctx context.Context, reso
 		return nil, err
 	}
 
-	_ = cache.SetJSON(s.cache, ctx, key, result, s.ttl)
+	s.setCached(ctx, key, result)
 	return result, nil
 }
 
@@ -190,7 +216,7 @@ func (s *CacheStore) LookupDescendantResourceIDs(ctx context.Context, resourceTy
 		return nil, err
 	}
 
-	_ = cache.SetJSON(s.cache, ctx, key, result, s.ttl)
+	s.setCached(ctx, key, result)
 	return result, nil
 }
 
@@ -211,13 +237,13 @@ func (s *CacheStore) DeleteResourceRelationships(ctx context.Context, resourceTy
 		return err
 	}
 	// Invalidate all checks/exists/targets for this resource.
-	_ = s.cache.DeletePattern(ctx, s.keyPrefix+":*:"+resourceType+":"+resourceID+":*")
+	s.deletePattern(ctx, s.keyPrefix+":*:"+resourceType+":"+resourceID+":*")
 	// Per-user: we don't know which users are affected, so clear ALL per-user
 	// lookup caches for this resource type.
-	_ = s.cache.DeletePattern(ctx, fmt.Sprintf("%s:lookup:ids:%s:*", s.keyPrefix, resourceType))
+	s.deletePattern(ctx, fmt.Sprintf("%s:lookup:ids:%s:*", s.keyPrefix, resourceType))
 	// Structural: clear target + descendant caches for this resource type.
-	_ = s.cache.DeletePattern(ctx, fmt.Sprintf("%s:lookup:target:%s:*", s.keyPrefix, resourceType))
-	_ = s.cache.DeletePattern(ctx, fmt.Sprintf("%s:lookup:descendants:%s:*", s.keyPrefix, resourceType))
+	s.deletePattern(ctx, fmt.Sprintf("%s:lookup:target:%s:*", s.keyPrefix, resourceType))
+	s.deletePattern(ctx, fmt.Sprintf("%s:lookup:descendants:%s:*", s.keyPrefix, resourceType))
 	return nil
 }
 
@@ -290,9 +316,9 @@ func (s *CacheStore) invalidateForRelationships(ctx context.Context, relationshi
 
 func (s *CacheStore) invalidateForTuple(ctx context.Context, resourceType, resourceID, subjectType, subjectID string) {
 	// Invalidate all checks/exists/targets for this resource.
-	_ = s.cache.DeletePattern(ctx, fmt.Sprintf("%s:*:%s:%s:*", s.keyPrefix, resourceType, resourceID))
+	s.deletePattern(ctx, fmt.Sprintf("%s:*:%s:%s:*", s.keyPrefix, resourceType, resourceID))
 	// Invalidate all checks/exists involving this subject.
-	_ = s.cache.DeletePattern(ctx, fmt.Sprintf("%s:*:*:*:*:%s:%s", s.keyPrefix, subjectType, subjectID))
+	s.deletePattern(ctx, fmt.Sprintf("%s:*:*:*:*:%s:%s", s.keyPrefix, subjectType, subjectID))
 	// Invalidate lookup caches using two-axis targeted invalidation.
 	s.invalidateLookupCaches(ctx, resourceType, subjectType, subjectID)
 }
@@ -308,8 +334,8 @@ func (s *CacheStore) invalidateForTuple(ctx context.Context, resourceType, resou
 // type. If the graph shape changed for spaces, structural space caches are stale.
 func (s *CacheStore) invalidateLookupCaches(ctx context.Context, resourceType, subjectType, subjectID string) {
 	// Per-user: clear all of this subject's cached LookupResourceIDs results.
-	_ = s.cache.DeletePattern(ctx, fmt.Sprintf("%s:lookup:ids:*:*:%s:%s", s.keyPrefix, subjectType, subjectID))
+	s.deletePattern(ctx, fmt.Sprintf("%s:lookup:ids:*:*:%s:%s", s.keyPrefix, subjectType, subjectID))
 	// Structural: clear target + descendant caches for the written resource type.
-	_ = s.cache.DeletePattern(ctx, fmt.Sprintf("%s:lookup:target:%s:*", s.keyPrefix, resourceType))
-	_ = s.cache.DeletePattern(ctx, fmt.Sprintf("%s:lookup:descendants:%s:*", s.keyPrefix, resourceType))
+	s.deletePattern(ctx, fmt.Sprintf("%s:lookup:target:%s:*", s.keyPrefix, resourceType))
+	s.deletePattern(ctx, fmt.Sprintf("%s:lookup:descendants:%s:*", s.keyPrefix, resourceType))
 }
