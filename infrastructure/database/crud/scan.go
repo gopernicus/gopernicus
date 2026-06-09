@@ -89,6 +89,19 @@ func scanRows[T any](rows Rows, d Dialect) ([]T, error) {
 	return out, nil
 }
 
+// ScanRows collects a result set into T values by column name — exported
+// for hand-written store methods (escape-hatch rung three) so custom SQL
+// shares the store's scanning, time decoding, and drift detection.
+func ScanRows[T any](rows Rows, d Dialect) ([]T, error) {
+	return scanRows[T](rows, d)
+}
+
+// ScanOne returns the single row of a result set, or ErrNotFound — the
+// hand-written-method counterpart of ScanRows.
+func ScanOne[T any](rows Rows, d Dialect) (T, error) {
+	return scanOne[T](rows, d)
+}
+
 // scanOne returns the single row of a result set, or ErrNotFound.
 func scanOne[T any](rows Rows, d Dialect) (T, error) {
 	var zero T

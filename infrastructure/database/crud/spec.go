@@ -93,6 +93,11 @@ type Spec[T any, F any, C any, U any] struct {
 
 	// Creates / Updates map input structs to column assignments. Updates
 	// returning zero sets yields ErrNoFieldsToUpdate.
+	//
+	// ID convention: Creates supplies the primary key explicitly — ID
+	// generation is a domain concern and stays in the Repository layer
+	// (cryptids ID generators), not the store. The store never invents
+	// values the caller didn't declare.
 	Creates func(C) []Set
 	Updates func(U) []Set
 

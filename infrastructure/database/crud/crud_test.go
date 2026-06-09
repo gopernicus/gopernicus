@@ -354,6 +354,46 @@ func TestSQLiteCursorPagination(t *testing.T) {
 	}
 }
 
+// userStore demonstrates escape-hatch rung three: embed the generic store
+// and hand-write methods the spec vocabulary cannot express, sharing the
+// store's querier, dialect, and scanner.
+type userStore struct {
+	*crud.Store[user, userFilter, createUser, updateUser]
+}
+
+func (s *userStore) GetByEmail(ctx context.Context, email string) (user, error) {
+	args := crud.NewArgs(s.Dialect())
+	rows, err := s.Querier().Query(ctx,
+		`SELECT user_id, email, display_name, last_login_at, record_state, created_at, updated_at
+		 FROM users WHERE email = `+args.Add(email), args.Values()...)
+	if err != nil {
+		return user{}, err
+	}
+	return crud.ScanOne[user](rows, s.Dialect())
+}
+
+func TestSQLiteHandWrittenMethodEscapeHatch(t *testing.T) {
+	ctx := context.Background()
+	base := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
+	store := &userStore{Store: newSQLiteStore(t, time.Now)}
+	seeded := seedUsers(t, store.Store, base, 2)
+
+	got, err := store.GetByEmail(ctx, seeded[1].Email)
+	if err != nil {
+		t.Fatalf("get by email: %v", err)
+	}
+	if got.UserID != seeded[1].UserID {
+		t.Errorf("GetByEmail = %+v, want %s", got, seeded[1].UserID)
+	}
+	if _, err := store.GetByEmail(ctx, "nobody@example.com"); !errors.Is(err, crud.ErrNotFound) {
+		t.Errorf("missing email err = %v, want ErrNotFound", err)
+	}
+	// Generic methods remain available on the embedding store.
+	if _, err := store.Get(ctx, seeded[0].UserID); err != nil {
+		t.Errorf("embedded Get: %v", err)
+	}
+}
+
 func TestSQLiteRejectsTSVectorAtConstruction(t *testing.T) {
 	db, err := moderncdb.NewInMemory()
 	if err != nil {
