@@ -57,6 +57,39 @@ This page is a work in progress. Items are unordered and unprioritized.
 
 - Move `core/testing/` (fixtures, setup helpers) into `workshop/testing/` — test infrastructure is a development concern, not part of the deployed binary, and belongs alongside migrations and dev tooling
 
+## Packaging & Module Boundaries
+
+:::note
+This is a **consideration**, not a committed direction. It captures a question worth revisiting, along with the reasoning so far — not a decision to act on.
+:::
+
+**The question:** Gopernicus is currently a single Go module. Its `go.mod` requires every adapter's dependencies at once — AWS SDK, GCS, pgx, go-redis, SendGrid, OIDC, OTel, sqlite, testcontainers. A project that only needs sqlite still inherits the full module graph. Should heavy/optional adapters become their own modules?
+
+**What's already true (so the cost isn't what it first looks like):**
+
+- Go does package-level dead-code elimination. An app that never imports `infrastructure/cache/rediscache` does **not** compile the redis client into its binary. Binaries are already lean regardless of module layout.
+- The real cost of one module is dependency-*graph* hygiene, not binary size: a consumer's `go.sum` inherits every adapter's deps, `go mod download` pulls all of them, and SCA tooling (`govulncheck`, dependency review) flags CVEs in adapters the app never calls.
+- The port-in-parent / adapter-in-child layout already keeps `core` depending only on interface packages (`infrastructure/cache`), never concrete adapters. The architecture is clean; this is purely a *packaging* question.
+
+**Three separable axes (easy to conflate):**
+
+1. Should Gopernicus exist as a framework? — Yes. The value is the coherent wiring (`gopernicus.yml`, the CLI, bridge codegen, a consistent port shape), not any individual adapter. Atomizing into independent libraries would lose exactly that cohesion.
+2. One repo or many? — One repo fits a framework + CLI that version together.
+3. One `go.mod` or many? — The actual open question.
+
+**Inspiration / prior art** for a small core plus many optional dependency-heavy adapters: `aws-sdk-go-v2` (per-service modules in one repo, done specifically so consumers don't pull all of AWS), `gorm` (core + per-driver modules like `gorm.io/driver/postgres`), and `testcontainers-go` (per-module modules — which Gopernicus already consumes that way). The common shape there is **monorepo, multi-module**, with the core module staying dependency-light and heavy adapters opted into explicitly.
+
+**A possible staging, heaviest/most-optional first (if/when this is pursued):**
+
+- Cloud storage (`storage/s3`, `storage/gcs`) — largest dependency trees, clearest win
+- Email (`communications/emailer` / SendGrid)
+- The redis trio together (`cache/rediscache`, `events/goredisbus`, `ratelimiter/goredislimiter`)
+- Postgres (`database/postgres` / pgx) — heavy but very commonly used, so lower urgency to extract
+- OAuth providers, OTLP tracing
+- Core stays in the root module: `sdk`, `core`, `bridge`, all port interfaces, and the pure-Go / stdlib adapters (memory, noop, sqlite, disk)
+
+**Trade-off to weigh before acting:** multi-module monorepos carry real ergonomic friction — per-module release tags (`infrastructure/database/postgres/v1.2.0`), careful ordering for cross-module changes, and reliance on `go.work` for local dev. For a pre-1.0, small-team project this overhead may outweigh the `go.sum`-noise benefit. Reasonable triggers to revisit: publishing for external consumers, dependency-scanning noise from unused adapters, or consumers reporting `go get` weight. If pursued, the cloud-storage seam is the natural first experiment to feel out the tagging/`go.work` ergonomics.
+
 ## Migrations
 
 - Additional SQL dialect support beyond PostgreSQL
