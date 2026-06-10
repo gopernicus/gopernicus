@@ -117,11 +117,14 @@ func (b *Bridge) httpRegister(w http.ResponseWriter, r *http.Request) {
 
 	_, err = b.authenticator.Register(r.Context(), req.Email, req.Password, req.DisplayName)
 	if err != nil {
-		// Register returns nil for duplicate emails (anti-enumeration),
-		// so any non-nil error is a genuine infrastructure failure.
-		b.log.ErrorContext(r.Context(), "registration failed", "error", err)
-		web.RespondJSONError(w, web.ErrInternal("registration failed"))
-		return
+		if !errs.IsExpected(err) {
+			// Unexpected errors (DB down, etc.) are genuine failures — return 500.
+			b.log.ErrorContext(r.Context(), "registration failed", "error", err)
+			web.RespondJSONError(w, web.ErrInternal("registration failed"))
+			return
+		}
+		// Expected domain errors are swallowed to prevent account enumeration —
+		// the response below is identical whether or not an account was created.
 	}
 
 	web.RespondJSON(w, http.StatusOK, SuccessResponse{
