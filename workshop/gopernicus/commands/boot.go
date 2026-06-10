@@ -109,6 +109,13 @@ func runBootRepos(_ context.Context, args []string) error {
 					fmt.Printf("  skip %s/%s (already exists)\n", domain, tableName)
 					continue
 				}
+				// Skip feature entities whose spec ships with the framework —
+				// scaffolding a generic CRUD spec here would shadow it. Create
+				// queries.sql by hand to eject the shipped spec.
+				if _, ok := generators.ShippedSpec(domain, generators.ToPackageName(tableName)); ok {
+					fmt.Printf("  skip %s/%s (spec-shipped with the framework)\n", domain, tableName)
+					continue
+				}
 
 				// Find the table in the reflected schema.
 				table, _, err := scaffold.FindTableInSchemas(root, db, schemaNames, tableName)

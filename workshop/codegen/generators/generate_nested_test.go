@@ -8,6 +8,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/workshop/codegen/manifest"
 	"github.com/gopernicus/gopernicus/workshop/codegen/schema"
+	"github.com/gopernicus/gopernicus/workshop/testing/testenv"
 )
 
 // nestedOutboxQueries is a minimal event_outbox repository for nested-shape
@@ -237,7 +238,8 @@ func TestRunNested_SingleDatabaseKeepsClassicOutput(t *testing.T) {
 }
 
 // TestRunNested_MissingQueriesFile verifies the clear error when the manifest
-// declares an entity that was never scaffolded.
+// declares an entity that was never scaffolded and has no framework-shipped
+// spec to fall back to.
 func TestRunNested_MissingQueriesFile(t *testing.T) {
 	root := t.TempDir()
 
@@ -246,7 +248,7 @@ func TestRunNested_MissingQueriesFile(t *testing.T) {
 			"primary": {
 				Driver:    manifest.DriverPostgres,
 				URLEnvVar: "APP_DB_URL",
-				Domains:   map[string][]string{"events": {"event_outbox"}},
+				Domains:   map[string][]string{"shop": {"widgets"}},
 			},
 		},
 	}
@@ -257,9 +259,63 @@ func TestRunNested_MissingQueriesFile(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected missing queries.sql error, got nil")
 	}
-	if !strings.Contains(err.Error(), "gopernicus new repo events/event_outbox") {
-		t.Errorf("error %q must suggest 'gopernicus new repo events/event_outbox'", err)
+	if !strings.Contains(err.Error(), "gopernicus new repo shop/widgets") {
+		t.Errorf("error %q must suggest 'gopernicus new repo shop/widgets'", err)
 	}
+}
+
+// TestRunNested_ShippedSpecFallback verifies a feature entity with no
+// project-local queries.sql generates from the framework-shipped spec, and
+// that a project-local file (the ejection escape hatch) wins over it.
+func TestRunNested_ShippedSpecFallback(t *testing.T) {
+	fwRoot, err := testenv.ProjectRoot()
+	if err != nil {
+		t.Fatalf("resolving framework root: %v", err)
+	}
+	realSchema, err := schema.LoadJSON(filepath.Join(fwRoot, "workshop", "migrations", "primary", "_public.json"))
+	if err != nil {
+		t.Fatalf("loading framework reflected schema: %v", err)
+	}
+
+	m := &manifest.Manifest{
+		Databases: map[string]*manifest.DatabaseConfig{
+			"primary": {
+				Driver:    manifest.DriverPostgres,
+				URLEnvVar: "APP_DB_URL",
+				Domains:   map[string][]string{"events": {"event_outbox"}},
+			},
+		},
+	}
+	schemas := map[string]*schema.ReflectedSchema{"primary:public": realSchema}
+
+	t.Run("falls back to the shipped spec", func(t *testing.T) {
+		root := t.TempDir()
+		repoDir := filepath.Join(root, "core", "repositories", "events", "eventoutbox")
+
+		cfg := Config{ProjectRoot: root, Manifest: m}
+		if err := runNested(cfg, schemas, "github.com/example/app", Options{}); err != nil {
+			t.Fatalf("runNested: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(repoDir, "generated.go")); err != nil {
+			t.Errorf("expected generated.go from the shipped spec: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(repoDir, "queries.sql")); !os.IsNotExist(err) {
+			t.Error("fallback must not write a project-local queries.sql")
+		}
+	})
+
+	t.Run("project-local queries.sql wins (ejection)", func(t *testing.T) {
+		root, repoDir := writeNestedProject(t) // writes the minimal Get/Delete spec
+		cfg := Config{ProjectRoot: root, Manifest: m}
+		if err := runNested(cfg, schemas, "github.com/example/app", Options{}); err != nil {
+			t.Fatalf("runNested: %v", err)
+		}
+		generated := mustReadFile(t, filepath.Join(repoDir, "generated.go"))
+		if strings.Contains(generated, "func ") && strings.Contains(generated, "List") &&
+			strings.Contains(generated, "FilterList") {
+			t.Error("ejected entity generated from the shipped spec, not the project-local queries.sql")
+		}
+	})
 }
 
 // TestRunNested_UnknownDomainFilter verifies the domain filter is validated

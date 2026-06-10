@@ -83,12 +83,16 @@ func ResolveDirVersion(version string) (string, error) {
 // RepoFiles returns all bootstrap files for a known framework table as a map
 // of relative path → content. Paths are relative to the entity directory:
 //
-//	"queries.sql"
 //	"repository.go"
 //	"cache.go"
 //	"{entity}pgx/store.go"
 //	"bridge/bridge.yml"
 //	"bridge/bridge.go"
+//
+// queries.sql is NOT returned: feature entity specs are spec-shipped —
+// version-locked with the framework and parsed by the generator directly
+// (see generators.ShippedSpec). Creating a project-local queries.sql ejects
+// the shipped spec.
 //
 // Returns an empty map when the entity directory does not exist.
 func RepoFiles(sourceDir, domain, tableName string) map[string][]byte {
@@ -109,16 +113,18 @@ func RepoFiles(sourceDir, domain, tableName string) map[string][]byte {
 
 // walkCollect walks dir and adds all files to result with keys prefixed by prefix.
 // Generated files (generated_*.go) are excluded since those are produced by
-// `gopernicus generate` and should not be scaffolded.
+// `gopernicus generate`, and queries.sql is excluded since feature specs are
+// spec-shipped with the framework rather than copied into projects.
 func walkCollect(dir, prefix string, result map[string][]byte) {
 	filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
 
-		// Skip generated files — they'll be recreated by `gopernicus generate`.
+		// Skip generated files — they'll be recreated by `gopernicus generate` —
+		// and the spec-shipped queries.sql.
 		name := d.Name()
-		if strings.HasPrefix(name, "generated_") || strings.HasSuffix(name, "_test.go") {
+		if strings.HasPrefix(name, "generated_") || strings.HasSuffix(name, "_test.go") || name == "queries.sql" {
 			return nil
 		}
 

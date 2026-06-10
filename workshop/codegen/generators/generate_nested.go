@@ -152,6 +152,9 @@ func runNested(cfg Config, schemas map[string]*schema.ReflectedSchema, modulePat
 
 		fmt.Printf("\n  %s (table: %s, databases: %s)\n",
 			b.PkgName, resolved.TableName, strings.Join(b.DBs, ", "))
+		if opts.Verbose && !fileExists(filepath.Join(repoDir, "queries.sql")) {
+			fmt.Printf("    using framework-shipped spec (create queries.sql to eject)\n")
+		}
 
 		multiHomed := len(b.DBs) > 1
 
@@ -329,10 +332,12 @@ func hostedStoreModes(dbs []string, dbModes map[string]manifest.StoreMode) []man
 	return modes
 }
 
-// resolveNestedBinding parses and resolves a binding's queries.sql against
-// its canonical database's schema snapshot. When report is true, a missing
-// queries.sql is a hard error (the manifest explicitly declares the entity)
-// and skip notes are printed; when false, problems return (nil, nil) or the
+// resolveNestedBinding parses and resolves a binding's spec against its
+// canonical database's schema snapshot. A project-local queries.sql always
+// wins; when absent, a framework-shipped feature spec (ShippedSpec) is parsed
+// instead. When report is true, a missing spec (no file and no shipped spec)
+// is a hard error (the manifest explicitly declares the entity) and skip
+// notes are printed; when false, problems return (nil, nil) or the
 // parse/resolve error silently (used for out-of-scope fixture collection).
 func resolveNestedBinding(
 	b *entityBinding,
@@ -341,20 +346,33 @@ func resolveNestedBinding(
 	report bool,
 ) (*ResolvedFile, error) {
 	qfPath := filepath.Join(repoDir, "queries.sql")
-	if !fileExists(qfPath) {
-		if !report {
-			return nil, nil
-		}
-		return nil, fmt.Errorf(
-			"%s/%s is declared under database %q in gopernicus.yml but %s does not exist\n\n"+
-				"Run 'gopernicus new repo %s/%s' to scaffold it.",
-			b.Domain, b.PkgName, b.DBs[0], qfPath, b.Domain, b.Table,
-		)
-	}
 
-	qf, err := Parse(qfPath)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", qfPath, err)
+	var qf *File
+	var err error
+	switch {
+	case fileExists(qfPath):
+		// Project-local spec — the escape hatch wins over any shipped spec.
+		qf, err = Parse(qfPath)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", qfPath, err)
+		}
+	default:
+		shipped, ok := ShippedSpec(b.Domain, b.PkgName)
+		if !ok {
+			if !report {
+				return nil, nil
+			}
+			return nil, fmt.Errorf(
+				"%s/%s is declared under database %q in gopernicus.yml but %s does not exist\n\n"+
+					"Run 'gopernicus new repo %s/%s' to scaffold it.",
+				b.Domain, b.PkgName, b.DBs[0], qfPath, b.Domain, b.Table,
+			)
+		}
+		// Framework-shipped feature spec, version-locked with the framework.
+		qf, err = ParseString(shipped)
+		if err != nil {
+			return nil, fmt.Errorf("shipped spec %s/%s: %w (gopernicus bug — please report)", b.Domain, b.PkgName, err)
+		}
 	}
 
 	canonical := b.DBs[0]
