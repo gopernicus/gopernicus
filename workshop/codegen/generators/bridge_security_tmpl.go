@@ -38,10 +38,7 @@ package {{.BridgePackage}}
 
 import (
 	"context"
-	"net/http/httptest"
 	"os"
-	"path/filepath"
-	"runtime"
 	"testing"
 {{- if .SpecMode}}
 
@@ -51,21 +48,21 @@ import (
 	"{{.RepoImport}}"
 	"{{.StoreImport}}"
 
-	"github.com/gopernicus/gopernicus/infrastructure/ratelimiter"
-	"github.com/gopernicus/gopernicus/infrastructure/ratelimiter/memorylimiter"
 {{- if .SpecMode}}
 	"github.com/gopernicus/gopernicus/infrastructure/database/sqlite/moderncdb"
 {{- else}}
 	"github.com/gopernicus/gopernicus/infrastructure/database/postgres/pgxdb"
 {{- end}}
 	"github.com/gopernicus/gopernicus/sdk/logger"
-	"github.com/gopernicus/gopernicus/sdk/web"
 	"github.com/gopernicus/gopernicus/workshop/testing/testauth"
+	"github.com/gopernicus/gopernicus/workshop/testing/testenv"
 	"github.com/gopernicus/gopernicus/workshop/testing/testhttp"
+{{- if not .SpecMode}}
+	"github.com/gopernicus/gopernicus/workshop/testing/testpgx"
+{{- end}}
+	"github.com/gopernicus/gopernicus/workshop/testing/testserver"
 {{- if .SpecMode}}
 	"github.com/gopernicus/gopernicus/workshop/testing/testsqlite"
-{{- else}}
-	"github.com/gopernicus/gopernicus/workshop/testing/testpgx"
 {{- end}}
 )
 
@@ -91,45 +88,31 @@ func setupSecurityServer(t *testing.T) *testhttp.Client {
 {{- end}}
 	repo := {{.RepoPkg}}.NewRepository({{.RepoPkg}}.NewCacheStore(store, nil))
 
-	limiter := ratelimiter.New(memorylimiter.New(), ratelimiter.NewDefaultResolver())
 	authenticator, _ := testauth.Authenticator("securitytest")
 	authorizer := testauth.Authorizer()
+	bridge := NewBridge(logger.NewNoop(), repo, testserver.NewRateLimiter(), authenticator, authorizer)
 
-	bridge := NewBridge(logger.NewNoop(), repo, limiter, authenticator, authorizer)
-
-	handler := web.NewWebHandler()
-	bridge.AddHttpRoutes(handler.Group(""))
-
-	srv := httptest.NewServer(handler)
-	t.Cleanup(srv.Close)
-
-	return testhttp.New(srv.URL)
+	return testserver.ServeBridge(t, bridge)
 }
 
 // migrateSecurityDB applies this project's migrations to the test database.
+// testenv.ProjectRoot resolves the module root, so the migrations path works
+// at any test working directory.
 {{- if .SpecMode}}
 func migrateSecurityDB(ctx context.Context, db *moderncdb.DB) error {
-	return moderncdb.RunMigrations(ctx, db, os.DirFS(securityProjectRoot()), "{{.MigrationsDir}}")
+	root, err := testenv.ProjectRoot()
+	if err != nil {
+		return err
+	}
+	return moderncdb.RunMigrations(ctx, db, os.DirFS(root), "{{.MigrationsDir}}")
 }
 {{- else}}
 func migrateSecurityDB(ctx context.Context, pool *pgxdb.Pool) error {
-	return pgxdb.RunMigrations(ctx, pool, os.DirFS(securityProjectRoot()), "{{.MigrationsDir}}")
+	root, err := testenv.ProjectRoot()
+	if err != nil {
+		return err
+	}
+	return pgxdb.RunMigrations(ctx, pool, os.DirFS(root), "{{.MigrationsDir}}")
 }
 {{- end}}
-
-// securityProjectRoot walks up to the directory containing go.mod.
-func securityProjectRoot() string {
-	_, file, _, _ := runtime.Caller(0)
-	dir := filepath.Dir(file)
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "."
-		}
-		dir = parent
-	}
-}
 `

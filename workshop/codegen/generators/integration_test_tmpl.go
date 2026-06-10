@@ -252,39 +252,32 @@ package {{.StorePkg}}
 import (
 	"context"
 	"os"
-	"path/filepath"
-	"runtime"
 
 {{if .SpecMode}}	"github.com/gopernicus/gopernicus/infrastructure/database/sqlite/moderncdb"
+	"github.com/gopernicus/gopernicus/workshop/testing/testenv"
 {{else}}	"github.com/gopernicus/gopernicus/infrastructure/database/postgres/pgxdb"
+	"github.com/gopernicus/gopernicus/workshop/testing/testenv"
 	"github.com/gopernicus/gopernicus/workshop/testing/testpgx"
 {{end}})
 
 // migrateTestDB applies this project's migrations to the test database, so
 // tests run against the same schema as 'gopernicus db migrate'. Replace it
-// if this store's tests need a different schema setup.
+// if this store's tests need a different schema setup. testenv.ProjectRoot
+// resolves the module root, so the migrations path works at any test working
+// directory.
 {{if .SpecMode}}func migrateTestDB(ctx context.Context, db *moderncdb.DB) error {
-	return moderncdb.RunMigrations(ctx, db, os.DirFS(projectRoot()), "{{.MigrationsDir}}")
-{{else}}func migrateTestDB(ctx context.Context, pool *pgxdb.Pool) error {
-	return pgxdb.RunMigrations(ctx, pool, os.DirFS(projectRoot()), "{{.MigrationsDir}}")
-{{end}}}
-
-// projectRoot walks up from this source file to the directory containing
-// go.mod, so the migrations path resolves at any test working directory.
-func projectRoot() string {
-	_, file, _, _ := runtime.Caller(0)
-	dir := filepath.Dir(file)
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "."
-		}
-		dir = parent
+	root, err := testenv.ProjectRoot()
+	if err != nil {
+		return err
 	}
-}
+	return moderncdb.RunMigrations(ctx, db, os.DirFS(root), "{{.MigrationsDir}}")
+{{else}}func migrateTestDB(ctx context.Context, pool *pgxdb.Pool) error {
+	root, err := testenv.ProjectRoot()
+	if err != nil {
+		return err
+	}
+	return pgxdb.RunMigrations(ctx, pool, os.DirFS(root), "{{.MigrationsDir}}")
+{{end}}}
 {{if not .SpecMode}}
 // testPGXOptions provides extra options to testpgx.SetupTestPGX in the
 // generated setupTestStore helper. Use it to pick a Postgres image with
