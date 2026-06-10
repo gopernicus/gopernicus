@@ -25,6 +25,7 @@ func (b *Bridge) AddHttpRoutes(group *web.RouteGroup) {
 	)
 	group.GET("/{resource_type}/{resource_id}",
 		b.httpListByResource,
+		httpmid.MaxBodySize(httpmid.DefaultBodySize),
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
 	)
@@ -45,18 +46,22 @@ func (b *Bridge) AddHttpRoutes(group *web.RouteGroup) {
 
 	// Self-service — authenticated user lists their own invitations.
 	group.GET("/mine", b.httpListMine,
+		httpmid.MaxBodySize(httpmid.DefaultBodySize),
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors, httpmid.WithUserSession()),
 		httpmid.RateLimit(b.rateLimiter, b.log),
 	)
 
 	// Accept — authenticated with full user context (need email for verification).
 	group.POST("/accept", b.httpAccept,
+		httpmid.MaxBodySize(httpmid.DefaultBodySize),
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors, httpmid.WithUserSession()),
 		httpmid.RateLimit(b.rateLimiter, b.log))
 
-	// Decline — public, email-verified in handler.
+	// Decline — public (email-verified in handler), so rate limiting is the
+	// only brake on invitation_id×identifier brute force.
 	group.POST("/{invitation_id}/decline", b.httpDecline,
 		httpmid.MaxBodySize(httpmid.DefaultBodySize),
+		httpmid.RateLimit(b.rateLimiter, b.log),
 	)
 }
 
