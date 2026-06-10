@@ -203,6 +203,14 @@ func TestGenerated{{.EntityName}}Store_CreateInvalidReference(t *testing.T) {
 {{- if .PKReplacementExpr}}
 	input.{{.PKGoName}} = {{.PKReplacementExpr}}
 {{- end}}
+{{- range .FKUniqueAssigns}}
+{{- if .IsPointer}}
+	uniq{{.GoName}} := {{.Expr}}
+	input.{{.GoName}} = &uniq{{.GoName}}
+{{- else}}
+	input.{{.GoName}} = {{.Expr}}
+{{- end}}
+{{- end}}
 	bogusFK := {{.FKViolationExpr}}
 	input.{{.FKViolationGoName}} = {{if .FKViolationIsPointer}}&bogusFK{{else}}bogusFK{{end}}
 	_, err := store.Create(ctx, input)
@@ -216,7 +224,7 @@ func TestGenerated{{.EntityName}}Store_Update(t *testing.T) {
 {{end}}
 	created := fixtures.CreateTest{{.EntityName}}WithDefaults(t, ctx, db)
 
-	newValue := "updated-value"
+	newValue := {{.UpdateValueExpr}}
 	result, err := store.Update(ctx, created.{{.PKGoName}}{{range .GetExtraCallArgs}}, {{.}}{{end}}, {{.RepoPkg}}.Update{{.EntityName}}{
 		{{.UpdateFieldGoName}}: &newValue,
 	})

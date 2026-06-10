@@ -31,6 +31,10 @@ func LoadJSON(path string) (*ReflectedSchema, error) {
 	if err := json.Unmarshal(data, &s); err != nil {
 		return nil, err
 	}
+	// Fold CHECK ... IN constraints into column enum metadata so generators
+	// treat constraint-pinned columns like native enums. Load-time only —
+	// the persisted JSON artifact is never rewritten.
+	EnrichCheckConstraintEnums(&s)
 	return &s, nil
 }
 

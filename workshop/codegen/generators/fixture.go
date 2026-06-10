@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"text/template"
@@ -188,29 +187,12 @@ func BuildFixtureEntity(resolved *ResolvedFile, modulePath string) FixtureEntity
 		}
 	}
 
-	// Honor CHECK constraints with enum-style allowed-value lists
-	// (e.g. CHECK (principal_type IN ('user', 'service_account'))).
+	// Enum-constrained columns — native pg enum types and CHECK ... IN
+	// constraints alike (schema.EnrichCheckConstraintEnums folds the latter
+	// into IsEnum/EnumValues at load time) — must carry an allowed value.
 	// Without this, the generic test-default `"test_<col>"` violates the
-	// constraint at INSERT time. The first allowed value wins.
-	if resolved.Table != nil {
-		allowed := allowedValuesFromCheckConstraints(resolved.Table.Constraints)
-		if len(allowed) > 0 {
-			for i, f := range entity.InsertFields {
-				if vals, ok := allowed[f.DBName]; ok && len(vals) > 0 {
-					// Only override non-FK string fields. FK columns get a
-					// fixture-provided variable name and shouldn't be coerced
-					// to a literal.
-					if !f.IsForeignKey {
-						entity.InsertFields[i].TestDefault = fmt.Sprintf("%q", vals[0])
-					}
-				}
-			}
-		}
-	}
-
-	// Native enum types (pg CREATE TYPE ... AS ENUM) carry their labels on
-	// the reflected column rather than a CHECK constraint — same coercion,
-	// first label wins.
+	// constraint at INSERT time. The first allowed value wins. FK columns
+	// get a fixture-provided variable name and aren't coerced to a literal.
 	for i, f := range entity.InsertFields {
 		if f.IsForeignKey {
 			continue
@@ -229,60 +211,6 @@ func BuildFixtureEntity(resolved *ResolvedFile, modulePath string) FixtureEntity
 	}
 
 	return entity
-}
-
-// checkArrayValueRe pulls single-quoted string literals out of an `ARRAY[...]`
-// inside a CHECK constraint's definition string. Postgres canonicalizes
-// `col IN ('a', 'b')` to `(col)::text = ANY ((ARRAY['a'::varchar, 'b'::varchar])::text[])`
-// so we cannot rely on the source `IN (...)` syntax surviving reflection.
-var checkArrayValueRe = regexp.MustCompile(`'([^']*)'`)
-
-// allowedValuesFromCheckConstraints returns a column → []value map for any
-// single-column CHECK constraint that pins the column to a finite set of
-// string literals. Two canonical shapes are recognized:
-//
-//   - `col IN ('a', 'b')` → `(col)::text = ANY ((ARRAY['a'::varchar, 'b'::varchar])::text[])`
-//   - `col = 'v'`         → `(col)::text = 'v'::text`
-//
-// Range, regexp, and multi-column checks pass through unmodified — callers
-// should treat them as "no override needed."
-func allowedValuesFromCheckConstraints(constraints []schema.ConstraintInfo) map[string][]string {
-	out := make(map[string][]string)
-	for _, c := range constraints {
-		if !strings.EqualFold(c.Type, "CHECK") {
-			continue
-		}
-		if len(c.Columns) != 1 {
-			continue
-		}
-		def := c.Definition
-
-		// Shape 1: ARRAY[...] (IN-list form).
-		if start := strings.Index(def, "ARRAY["); start >= 0 {
-			if end := strings.Index(def[start:], "]"); end > 0 {
-				segment := def[start : start+end+1]
-				matches := checkArrayValueRe.FindAllStringSubmatch(segment, -1)
-				if len(matches) > 0 {
-					vals := make([]string, 0, len(matches))
-					for _, m := range matches {
-						vals = append(vals, m[1])
-					}
-					out[c.Columns[0]] = vals
-					continue
-				}
-			}
-		}
-
-		// Shape 2: single-value equality. Recognized only when the
-		// constraint contains exactly one quoted literal — otherwise
-		// we can't tell apart `col = 'v'` from cases where multiple
-		// literals appear as type tags or unrelated subexpressions.
-		matches := checkArrayValueRe.FindAllStringSubmatch(def, -1)
-		if len(matches) == 1 {
-			out[c.Columns[0]] = []string{matches[0][1]}
-		}
-	}
-	return out
 }
 
 // buildParentFixtures extracts FK dependencies from a table.

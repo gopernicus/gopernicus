@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"text/template"
+
+	"github.com/gopernicus/gopernicus/workshop/codegen/schema"
 )
 
 // ─── integration test template data types ───────────────────────────────────
@@ -92,13 +94,25 @@ type IntegrationTestData struct {
 	// PKReplacementExpr, when non-empty, replaces the copied PK so the dup
 	// constraint doesn't mask the FK violation.
 	PKReplacementExpr string
+	// FKUniqueAssigns replace copied values on columns that participate in
+	// non-PK UNIQUE constraints/indexes, so the bogus-FK probe can only fail
+	// on the FK constraint. Without this, Postgres surfaces the unique
+	// violation first and the probe maps to ErrAlreadyExists instead of
+	// ErrInvalidReference (e.g. verification_tokens.token_hash, tenants.slug).
+	FKUniqueAssigns []FKUniqueAssign
 
 	// Update-mutation test (update_returning only — plain updates return no
-	// entity). The chosen field is a non-enum string without a tight
-	// MaxLength; entity-side pointer-ness drives the assertion.
+	// entity). Preferred pick: a free-form (non-enum) string without a tight
+	// MaxLength, mutated to "updated-value". Fallback pick: an enum string —
+	// native pg enum or CHECK ... IN constrained (folded into IsEnum at
+	// schema load) — mutated to the first allowed value that differs from
+	// the fixture row's (fixtures seed EnumValues[0]). Entity-side
+	// pointer-ness drives the assertion. UpdateValueExpr is the quoted Go
+	// literal assigned to newValue.
 	HasUpdateMutation        bool
 	UpdateFieldGoName        string
 	UpdateFieldEntityPointer bool
+	UpdateValueExpr          string
 
 	// Domain info
 	DomainName string
@@ -115,6 +129,14 @@ type IntegrationTestData struct {
 	GetExtraCallArgs        []string
 	SoftDeleteExtraCallArgs []string
 	HardDeleteExtraCallArgs []string
+}
+
+// FKUniqueAssign is one fresh-value assignment in the bogus-FK probe input,
+// deconflicting a unique column copied from the fixture row.
+type FKUniqueAssign struct {
+	GoName    string // create-field GoName
+	Expr      string // string literal distinct from any fixture-generated value
+	IsPointer bool   // create-field is a pointer — take the address
 }
 
 // BuildIntegrationTestData creates test data from a resolved file. dbName is
@@ -264,6 +286,7 @@ func buildEnrichmentData(data *IntegrationTestData, resolved *ResolvedFile, meth
 	}
 
 	pkInCreate := false
+	fkViolationCol := ""
 	for _, f := range createFields {
 		data.CreateAssigns = append(data.CreateAssigns, f.GoName)
 		if !f.IsTime {
@@ -278,6 +301,7 @@ func buildEnrichmentData(data *IntegrationTestData, resolved *ResolvedFile, meth
 			data.FKViolationGoName = f.GoName
 			data.FKViolationIsPointer = strings.HasPrefix(f.GoType, "*")
 			data.FKViolationExpr = `"nonexistent-fk-id"`
+			fkViolationCol = f.DBName
 			if strings.EqualFold(fkColumnDBType(resolved, f.DBName), "uuid") {
 				data.FKViolationExpr = `"ffffffff-ffff-4fff-8fff-ffffffffffff"`
 			}
@@ -296,7 +320,15 @@ func buildEnrichmentData(data *IntegrationTestData, resolved *ResolvedFile, meth
 		}
 	}
 
+	// The FK test must not collide on any other UNIQUE constraint either —
+	// the database raises the unique violation before the FK check, mapping
+	// to ErrAlreadyExists and masking ErrInvalidReference.
+	if data.HasFKViolationTest {
+		buildFKUniqueAssigns(data, resolved, createFields, fkViolationCol)
+	}
+
 	if hasUpdateReturning {
+		// Preferred: a free-form string column takes any invented value.
 		for _, f := range updateFields {
 			tight := f.MaxLength > 0 && f.MaxLength < len("updated-value")
 			if strings.TrimPrefix(f.GoType, "*") == "string" && !f.IsEnum && !tight &&
@@ -304,13 +336,158 @@ func buildEnrichmentData(data *IntegrationTestData, resolved *ResolvedFile, meth
 				data.HasUpdateMutation = true
 				data.UpdateFieldGoName = f.GoName
 				data.UpdateFieldEntityPointer = entityFieldIsPointer(resolved, f.DBName)
+				data.UpdateValueExpr = `"updated-value"`
 				break
+			}
+		}
+		// Fallback: an enum-constrained string column (native enum or
+		// CHECK ... IN) still proves the update path — but only a value
+		// from its allowed set survives the constraint. Deterministic pick:
+		// the second allowed value when one exists (fixtures seed the
+		// first), otherwise the only allowed value.
+		if !data.HasUpdateMutation {
+			for _, f := range updateFields {
+				if strings.TrimPrefix(f.GoType, "*") == "string" && f.IsEnum &&
+					len(f.EnumValues) > 0 &&
+					f.DBName != resolved.PKColumn && !f.IsForeignKey {
+					data.HasUpdateMutation = true
+					data.UpdateFieldGoName = f.GoName
+					data.UpdateFieldEntityPointer = entityFieldIsPointer(resolved, f.DBName)
+					data.UpdateValueExpr = fmt.Sprintf("%q", enumUpdateValue(f.EnumValues))
+					break
+				}
 			}
 		}
 	}
 
 	data.NeedsRepoImport = data.HasList || data.HasDuplicateTest ||
 		data.HasFKViolationTest || data.HasUpdateMutation
+}
+
+// buildFKUniqueAssigns deconflicts the bogus-FK probe input from the fixture
+// row it copies. For every unique column group on the table (UNIQUE
+// constraints, unique indexes, and single is_unique columns) the probe must
+// differ on at least one column, otherwise the unique violation fires before
+// the FK check. Groups containing the PK (replaced/generated) or the bogus-FK
+// column are already distinct. For the rest, the first eligible copied column
+// — a non-FK, non-enum string create field — gets a fresh literal value. If a
+// colliding group has copied columns but none eligible, the probe cannot
+// reliably observe the FK violation, so the test is dropped for that entity.
+func buildFKUniqueAssigns(data *IntegrationTestData, resolved *ResolvedFile, createFields []FieldInfo, fkViolationCol string) {
+	if resolved.Table == nil {
+		return
+	}
+
+	fieldByCol := make(map[string]FieldInfo, len(createFields))
+	for _, f := range createFields {
+		fieldByCol[f.DBName] = f
+	}
+
+	assigned := make(map[string]bool)
+	for _, group := range uniqueColumnGroups(resolved.Table) {
+		distinct := false
+		copied := false
+		var picked *FieldInfo
+		for _, col := range group {
+			if col == resolved.PKColumn || col == fkViolationCol || assigned[col] {
+				// The probe already differs from the fixture row here: the PK
+				// is replaced (or store/db-generated), the FK carries the
+				// bogus value, or an earlier group freshened this column.
+				distinct = true
+				break
+			}
+			f, ok := fieldByCol[col]
+			if !ok {
+				// Not copied from the fixture (store/db-supplied) — cannot
+				// deconflict here, but also not a guaranteed collision.
+				continue
+			}
+			copied = true
+			if picked == nil && !f.IsForeignKey && !f.IsEnum &&
+				strings.TrimPrefix(f.GoType, "*") == "string" {
+				ff := f
+				picked = &ff
+			}
+		}
+		if distinct || !copied {
+			continue
+		}
+		if picked == nil {
+			// Copied unique group with no freshenable column — the probe
+			// would map to ErrAlreadyExists, not ErrInvalidReference.
+			data.HasFKViolationTest = false
+			data.FKViolationGoName = ""
+			data.FKViolationExpr = ""
+			data.FKViolationIsPointer = false
+			data.PKReplacementExpr = ""
+			data.FKUniqueAssigns = nil
+			return
+		}
+		assigned[picked.DBName] = true
+		data.FKUniqueAssigns = append(data.FKUniqueAssigns, FKUniqueAssign{
+			GoName:    picked.GoName,
+			Expr:      fkProbeUniqueValueExpr(*picked),
+			IsPointer: strings.HasPrefix(picked.GoType, "*"),
+		})
+	}
+}
+
+// uniqueColumnGroups collects every unique column group on a table: UNIQUE
+// constraints, unique indexes, and single columns flagged is_unique —
+// deduplicated, PK constraint excluded (callers handle the PK separately).
+func uniqueColumnGroups(table *schema.TableInfo) [][]string {
+	seen := make(map[string]bool)
+	var groups [][]string
+	add := func(cols []string) {
+		if len(cols) == 0 {
+			return
+		}
+		key := strings.Join(cols, "\x00")
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		groups = append(groups, cols)
+	}
+
+	for _, c := range table.Constraints {
+		if strings.EqualFold(c.Type, "UNIQUE") {
+			add(c.Columns)
+		}
+	}
+	for _, idx := range table.Indexes {
+		if idx.Unique {
+			add(idx.Columns)
+		}
+	}
+	for _, col := range table.Columns {
+		if col.IsUnique && !col.IsPrimaryKey {
+			add([]string{col.Name})
+		}
+	}
+	return groups
+}
+
+// enumUpdateValue picks the post-update value for an enum-constrained
+// column: the second allowed value when one exists — fixtures seed the
+// first, so the mutation is observable — otherwise the only allowed value.
+func enumUpdateValue(values []string) string {
+	if len(values) > 1 {
+		return values[1]
+	}
+	return values[0]
+}
+
+// fkProbeUniqueValueExpr returns a quoted literal for a freshened unique
+// column. The "fk-probe-" prefix cannot collide with fixture values (random
+// cryptids or "test_"-prefixed); varchar(N) caps are honored the same way
+// the fixture generator honors them.
+func fkProbeUniqueValueExpr(f FieldInfo) string {
+	v := "fk-probe-" + strings.ToLower(f.DBName)
+	if f.MaxLength > 0 && len(v) > f.MaxLength {
+		v = v[:f.MaxLength]
+	}
+	return fmt.Sprintf("%q", v)
 }
 
 // fkColumnDBType returns the db type of a column by name.
