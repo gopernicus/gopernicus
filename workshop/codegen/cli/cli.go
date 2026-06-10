@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"runtime/debug"
+	"sort"
 	"strings"
 )
 
@@ -108,13 +109,17 @@ Usage:
 
 Commands:
 `)
+	sorted := make([]*Command, len(commands))
+	copy(sorted, commands)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+
 	maxLen := 0
-	for _, c := range commands {
+	for _, c := range sorted {
 		if len(c.Name) > maxLen {
 			maxLen = len(c.Name)
 		}
 	}
-	for _, c := range commands {
+	for _, c := range sorted {
 		padding := strings.Repeat(" ", maxLen-len(c.Name))
 		fmt.Printf("  %s%s   %s\n", c.Name, padding, c.Short)
 	}
