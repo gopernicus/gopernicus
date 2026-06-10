@@ -2,8 +2,8 @@ package authentication
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
+	"net/url"
 
 	"github.com/gopernicus/gopernicus/bridge/transit/httpmid"
 	"github.com/gopernicus/gopernicus/core/auth/authentication"
@@ -176,7 +176,11 @@ func (b *Bridge) httpOAuthMobileRedirect(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	redirectURL := fmt.Sprintf("%s?code=%s&state=%s", mobileURI, code, state)
+	// code and state are provider-controlled input — encode, never interpolate.
+	params := url.Values{}
+	params.Set("code", code)
+	params.Set("state", state)
+	redirectURL := mobileURI + "?" + params.Encode()
 
 	b.log.InfoContext(r.Context(), "mobile OAuth redirect",
 		"redirect_url", mobileURI,
