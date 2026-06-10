@@ -11,38 +11,10 @@ import (
 
 // VerifyEmail marks a user's email as verified after validating a 6-digit code.
 func (a *Authenticator) VerifyEmail(ctx context.Context, email, code string) error {
-	// Look up the stored code.
-	stored, err := a.repositories.codes.Get(ctx, email, PurposeEmailVerify)
-	if err != nil {
-		if errors.Is(err, errs.ErrNotFound) {
-			return ErrCodeInvalid
-		}
-		return fmt.Errorf("auth verify email: lookup code: %w", err)
-	}
-
-	if time.Now().UTC().After(stored.ExpiresAt) {
-		_ = a.repositories.codes.Delete(ctx, email, PurposeEmailVerify)
-		return ErrCodeExpired
-	}
-
-	// Compare hash (constant-time to prevent timing side-channels).
-	codeHash, err := hashToken(code)
-	if err != nil {
-		return ErrCodeInvalid
-	}
-	if !hashEquals(codeHash, stored.CodeHash) {
-		// Increment attempt counter; delete code if max attempts exceeded.
-		if a.config.MaxVerificationAttempts > 0 {
-			count, err := a.repositories.codes.IncrementAttempts(ctx, email, PurposeEmailVerify)
-			if err != nil {
-				a.log.WarnContext(ctx, "failed to increment verification attempts", "error", err)
-			} else if count >= a.config.MaxVerificationAttempts {
-				_ = a.repositories.codes.Delete(ctx, email, PurposeEmailVerify)
-				a.log.WarnContext(ctx, "verification code locked out", "attempts", count)
-				return ErrTooManyAttempts
-			}
-		}
-		return ErrCodeInvalid
+	// Validate and consume the code — one-shot: lookup, expiry, constant-time
+	// compare, and attempt lockout live in ConsumeVerificationCode.
+	if _, err := a.ConsumeVerificationCode(ctx, email, code, PurposeEmailVerify); err != nil {
+		return err
 	}
 
 	// Look up user to get ID.
@@ -63,9 +35,6 @@ func (a *Authenticator) VerifyEmail(ctx context.Context, email, code string) err
 			a.log.WarnContext(ctx, "failed to set password verified", "user_id", user.UserID, "error", err)
 		}
 	}
-
-	// Clean up the code.
-	_ = a.repositories.codes.Delete(ctx, email, PurposeEmailVerify)
 
 	a.log.InfoContext(ctx, "email verified", "user_id", user.UserID)
 	a.logSecurityEvent(ctx, user.UserID, SecEventEmailVerified, SecStatusSuccess, map[string]any{
