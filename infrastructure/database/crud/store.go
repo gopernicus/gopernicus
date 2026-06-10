@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/fop"
 )
 
@@ -130,7 +131,9 @@ func (s *Store[T, F, C, U]) List(ctx context.Context, filter F, orderBy fop.Orde
 	if page.Cursor != "" {
 		cursor, err := fop.DecodeCursor(page.Cursor, of.Col)
 		if err != nil {
-			return nil, fmt.Errorf("cursor: %w", err)
+			// A malformed cursor is client input, not an internal fault —
+			// surface it as invalid input so the bridge answers 400, not 500.
+			return nil, fmt.Errorf("cursor: %w: %w", errs.ErrInvalidInput, err)
 		}
 		if cursor != nil {
 			quotedOrder, err := s.d.QuoteIdent(of.Col)

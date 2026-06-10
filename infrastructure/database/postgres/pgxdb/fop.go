@@ -6,6 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/fop"
 )
 
@@ -35,7 +36,9 @@ func ApplyCursorPaginationFromToken(
 
 	cursor, err := fop.DecodeCursor(config.Cursor, config.OrderField)
 	if err != nil {
-		return fmt.Errorf("decode cursor: %w", err)
+		// A malformed cursor is client input, not an internal fault —
+		// surface it as invalid input so the bridge answers 400, not 500.
+		return fmt.Errorf("decode cursor: %w: %w", errs.ErrInvalidInput, err)
 	}
 
 	// Stale cursor (order field changed) — treat as first page.
