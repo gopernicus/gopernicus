@@ -349,6 +349,10 @@ import (
 {{- if .HasAuthorization}}
 	"github.com/gopernicus/gopernicus/core/auth/authorization"
 {{- end}}
+{{- if and .HasAuthentication .HasAuthorization}}
+	invitationsbridge "github.com/gopernicus/gopernicus/bridge/auth/invitations"
+	"github.com/gopernicus/gopernicus/core/auth/invitations"
+{{- end}}
 	"github.com/gopernicus/gopernicus/infrastructure/cache"
 	"github.com/gopernicus/gopernicus/infrastructure/communications/emailer"
 {{- if .HasAuthentication}}
@@ -390,6 +394,9 @@ import (
 {{- end}}
 {{- if .HasAuthorization}}
 	authorizationsatisfiers "{{.ModulePath}}/core/auth/authorization/satisfiers"
+{{- end}}
+{{- if and .HasAuthentication .HasAuthorization}}
+	invitationsatisfiers "{{.ModulePath}}/core/auth/invitations/satisfiers"
 {{- end}}
 {{- end}}
 )
@@ -549,6 +556,21 @@ func New(ctx context.Context, log *slog.Logger, cfg Config, infra Infrastructure
 	)
 	log.InfoContext(ctx, "init", "service", "authentication")
 {{- end}}
+{{- if and .HasAuthentication .HasAuthorization}}
+
+	// =========================================================================
+	// Invitations
+	// =========================================================================
+
+	// The invitations engine rides with authorization: invitations grant
+	// relationships on resources, and acceptance requires an authenticated user.
+	inviter := invitations.NewInviter(
+		invitationsatisfiers.NewInvitationSatisfier(rebacRepos.Invitation),
+		authorizer,
+		bus,
+	)
+	log.InfoContext(ctx, "init", "service", "invitations")
+{{- end}}
 
 	// =========================================================================
 	// Web Handler
@@ -586,6 +608,11 @@ func New(ctx context.Context, log *slog.Logger, cfg Config, infra Infrastructure
 
 	rebacBridges := rebacreposbridge.NewBridges(log, rebacRepos, rateLimiter{{- if .HasAuthentication}}, authenticator, authorizer{{- end}})
 	rebacBridges.AddHttpRoutes(api)
+{{- end}}
+{{- if and .HasAuthentication .HasAuthorization}}
+
+	invitationsBridge := invitationsbridge.New(log, inviter, authorizer, authenticator, rateLimiter)
+	invitationsBridge.AddHttpRoutes(api.Group("/invitations"))
 {{- end}}
 {{- if .HasTenancy}}
 

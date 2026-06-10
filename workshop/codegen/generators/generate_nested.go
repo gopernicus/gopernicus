@@ -281,6 +281,12 @@ func runNested(cfg Config, schemas map[string]*schema.ReflectedSchema, modulePat
 		return err
 	}
 
+	// Feature satisfiers — project-side adapters between the generated
+	// repositories and the framework's feature engines.
+	if err := emitSatisfiers(cfg, modulePath, opts); err != nil {
+		return err
+	}
+
 	// Test fixtures are a single cross-domain package: when a domain filter is
 	// active, resolve the out-of-scope bindings too so the fixtures file isn't
 	// overwritten with only the filtered domain's entities.
