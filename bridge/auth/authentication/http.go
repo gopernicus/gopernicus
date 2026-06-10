@@ -24,6 +24,13 @@ func (b *Bridge) AddHttpRoutes(group *web.RouteGroup, authMid web.Middleware) {
 		return httpmid.RateLimit(b.rateLimiter, b.log, httpmid.WithKeyPrefix(prefix), httpmid.WithLimit(limit))
 	}
 
+	// Bound every auth request body. Credential/code payloads are tiny, so 64KB
+	// is generous; without this the unauthenticated /login, /register and
+	// /refresh routes io.ReadAll an unbounded body (memory-exhaustion DoS).
+	// Applied group-wide so new auth routes inherit it; harmless on the GET
+	// (body-less) OAuth routes.
+	group = group.Group("", httpmid.MaxBodySize(httpmid.SmallBodySize))
+
 	// Public routes — rate limited (falls back to IP for unauthenticated callers).
 	group.POST("/login", b.httpLogin, rl("auth:login", ratelimiter.PerMinute(120)))
 	group.POST("/register", b.httpRegister, rl("auth:register", ratelimiter.PerMinute(60)))
