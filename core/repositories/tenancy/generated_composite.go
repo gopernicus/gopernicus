@@ -11,7 +11,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/infrastructure/cache"
 	"github.com/gopernicus/gopernicus/infrastructure/database/postgres/pgxdb"
-	"github.com/gopernicus/gopernicus/infrastructure/events"
+	gopevents "github.com/gopernicus/gopernicus/infrastructure/events"
 )
 
 // Repositories contains all repositories for the tenancy domain.
@@ -22,7 +22,7 @@ type Repositories struct {
 // NewRepositories creates all repositories for the tenancy domain.
 // db accepts *pgxdb.Pool for normal operations or a pgx.Tx for transactional workflows.
 // If c is nil, cache is a passthrough (no caching, falls through to database).
-func NewRepositories(log *slog.Logger, db pgxdb.Querier, c *cache.Cache, bus events.Bus) *Repositories {
+func NewRepositories(log *slog.Logger, db pgxdb.Querier, c *cache.Cache, bus gopevents.Bus) *Repositories {
 	return &Repositories{
 		Tenant: tenants.NewRepository(
 			tenants.NewCacheStore(tenantspgx.NewStore(log, db), c),

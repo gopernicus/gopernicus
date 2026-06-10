@@ -451,7 +451,6 @@ type CreateInvitationRequest struct {
 	InvitationStatus  string     `json:"invitation_status,omitempty"`
 	ExpiresAt         time.Time  `json:"expires_at,omitempty"`
 	AcceptedAt        *time.Time `json:"accepted_at,omitempty"`
-	RecordState       string     `json:"record_state,omitempty"`
 	RedirectURL       *string    `json:"redirect_url,omitempty"`
 }
 
@@ -474,7 +473,6 @@ func (r *CreateInvitationRequest) Validate() error {
 	errs.AddErr("token_hash", validation.Required("token_hash", r.TokenHash))
 	errs.AddErr("token_hash", validation.MaxLength("token_hash", r.TokenHash, 255))
 	errs.AddErr("invitation_status", validation.MaxLength("invitation_status", r.InvitationStatus, 50))
-	errs.AddErr("record_state", validation.MaxLength("record_state", r.RecordState, 50))
 	errs.AddErr("redirect_url", validation.URLPtr("redirect_url", r.RedirectURL))
 	return errs.Err()
 }
@@ -495,7 +493,6 @@ func (r CreateInvitationRequest) ToRepo() (invitations.CreateInvitation, error) 
 		InvitationStatus:  r.InvitationStatus,
 		ExpiresAt:         r.ExpiresAt,
 		AcceptedAt:        r.AcceptedAt,
-		RecordState:       r.RecordState,
 		RedirectURL:       r.RedirectURL,
 	}, nil
 }

@@ -181,7 +181,8 @@ func (s *Store) Create(ctx context.Context, input apikeys.CreateAPIKey) (apikeys
 func (s *Store) Update(ctx context.Context, apiKeyID string, parentServiceAccountID string, input apikeys.UpdateAPIKey) (apikeys.APIKey, error) {
 	buf := bytes.NewBufferString("UPDATE public.api_keys SET ")
 	args := pgx.NamedArgs{
-		"api_key_id": apiKeyID,
+		"api_key_id":                apiKeyID,
+		"parent_service_account_id": parentServiceAccountID,
 	}
 	var setClauses []string
 	if input.Name != nil {
@@ -232,7 +233,7 @@ func (s *Store) Update(ctx context.Context, apiKeyID string, parentServiceAccoun
 	}
 
 	buf.WriteString(strings.Join(setClauses, ", "))
-	buf.WriteString(" WHERE api_key_id = @api_key_id")
+	buf.WriteString(" WHERE api_key_id = @api_key_id AND parent_service_account_id = @parent_service_account_id")
 	buf.WriteString(" RETURNING api_key_id, parent_service_account_id, name, key_prefix, key_hash, expires_at, last_used_at, last_used_ip, rate_limit_per_minute, record_state, revoked_at, created_at, updated_at")
 
 	rows, err := s.db.Query(ctx, buf.String(), args)

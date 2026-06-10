@@ -186,6 +186,7 @@ func (s *Store) Update(ctx context.Context, oauthAccountID string, parentUserID 
 	buf := bytes.NewBufferString("UPDATE public.oauth_accounts SET ")
 	args := pgx.NamedArgs{
 		"oauth_account_id": oauthAccountID,
+		"parent_user_id":   parentUserID,
 	}
 	var setClauses []string
 	if input.Provider != nil {
@@ -256,7 +257,7 @@ func (s *Store) Update(ctx context.Context, oauthAccountID string, parentUserID 
 	}
 
 	buf.WriteString(strings.Join(setClauses, ", "))
-	buf.WriteString(" WHERE oauth_account_id = @oauth_account_id")
+	buf.WriteString(" WHERE oauth_account_id = @oauth_account_id AND parent_user_id = @parent_user_id")
 	buf.WriteString(" RETURNING oauth_account_id, parent_user_id, provider, provider_user_id, provider_email, provider_email_verified, account_verified, access_token, refresh_token, token_expires_at, token_type, scope, id_token, profile_data, linked_at, created_at, updated_at")
 
 	rows, err := s.db.Query(ctx, buf.String(), args)

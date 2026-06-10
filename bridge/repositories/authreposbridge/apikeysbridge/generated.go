@@ -487,7 +487,6 @@ type CreateAPIKeyRequest struct {
 	LastUsedAt         *time.Time `json:"last_used_at,omitempty"`
 	LastUsedIp         *string    `json:"last_used_ip,omitempty"`
 	RateLimitPerMinute *int       `json:"rate_limit_per_minute,omitempty"`
-	RecordState        string     `json:"record_state,omitempty"`
 	RevokedAt          *time.Time `json:"revoked_at,omitempty"`
 }
 
@@ -502,7 +501,6 @@ func (r *CreateAPIKeyRequest) Validate() error {
 	errs.AddErr("key_hash", validation.Required("key_hash", r.KeyHash))
 	errs.AddErr("key_hash", validation.MaxLength("key_hash", r.KeyHash, 255))
 	errs.AddErr("last_used_ip", validation.MaxLengthPtr("last_used_ip", r.LastUsedIp, 45))
-	errs.AddErr("record_state", validation.MaxLength("record_state", r.RecordState, 50))
 	return errs.Err()
 }
 
@@ -517,7 +515,6 @@ func (r CreateAPIKeyRequest) ToRepo() (apikeys.CreateAPIKey, error) {
 		LastUsedAt:         r.LastUsedAt,
 		LastUsedIp:         r.LastUsedIp,
 		RateLimitPerMinute: r.RateLimitPerMinute,
-		RecordState:        r.RecordState,
 		RevokedAt:          r.RevokedAt,
 	}, nil
 }

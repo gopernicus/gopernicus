@@ -28,7 +28,10 @@ var (
 )
 
 // setupTestStore creates a test database and store for integration tests.
-// migrateTestDB must be defined in store_test.go (bootstrap file).
+// migrateTestDB and testPGXOptions are defined in store_test.go (bootstrap
+// file). testPGXOptions lets the consumer customize the Postgres image,
+// enable extensions, etc. — needed when a project depends on extensions
+// like pgvector that the default image doesn't include.
 func setupTestStore(t *testing.T) (context.Context, *testpgx.TestPGX, *Store) {
 	t.Helper()
 
@@ -37,7 +40,8 @@ func setupTestStore(t *testing.T) (context.Context, *testpgx.TestPGX, *Store) {
 	}
 
 	ctx := context.Background()
-	db := testpgx.SetupTestPGX(t, ctx, testpgx.WithMigrations(migrateTestDB))
+	opts := append([]testpgx.Option{testpgx.WithMigrations(migrateTestDB)}, testPGXOptions...)
+	db := testpgx.SetupTestPGX(t, ctx, opts...)
 	store := NewStore(logger.NewNoop(), db.Pool)
 	return ctx, db, store
 }
@@ -47,11 +51,26 @@ func TestGeneratedOauthAccountStore_Create(t *testing.T) {
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
 	created := fixtures.CreateTestOauthAccountWithDefaults(t, ctx, db)
+	_ = created
 
-	// Verify the record was created and can be retrieved.
-	result, err := store.Get(ctx, created.OauthAccountID)
+	// Verify the record was created and can be retrieved, every create
+	// field intact (time fields excluded — encoding differs per dialect).
+	result, err := store.Get(ctx, created.OauthAccountID, created.ParentUserID)
 	require.NoError(t, err)
 	assert.Equal(t, created.OauthAccountID, result.OauthAccountID)
+	assert.Equal(t, created.OauthAccountID, result.OauthAccountID)
+	assert.Equal(t, created.ParentUserID, result.ParentUserID)
+	assert.Equal(t, created.Provider, result.Provider)
+	assert.Equal(t, created.ProviderUserID, result.ProviderUserID)
+	assert.Equal(t, created.ProviderEmail, result.ProviderEmail)
+	assert.Equal(t, created.ProviderEmailVerified, result.ProviderEmailVerified)
+	assert.Equal(t, created.AccountVerified, result.AccountVerified)
+	assert.Equal(t, created.AccessToken, result.AccessToken)
+	assert.Equal(t, created.RefreshToken, result.RefreshToken)
+	assert.Equal(t, created.TokenType, result.TokenType)
+	assert.Equal(t, created.Scope, result.Scope)
+	assert.Equal(t, created.IDToken, result.IDToken)
+	assert.Equal(t, created.ProfileData, result.ProfileData)
 }
 
 func TestGeneratedOauthAccountStore_Get(t *testing.T) {
@@ -59,15 +78,16 @@ func TestGeneratedOauthAccountStore_Get(t *testing.T) {
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
 	created := fixtures.CreateTestOauthAccountWithDefaults(t, ctx, db)
+	_ = created
 
 	t.Run("found", func(t *testing.T) {
-		result, err := store.Get(ctx, created.OauthAccountID)
+		result, err := store.Get(ctx, created.OauthAccountID, created.ParentUserID)
 		require.NoError(t, err)
 		assert.Equal(t, created.OauthAccountID, result.OauthAccountID)
 	})
 
 	t.Run("not found", func(t *testing.T) {
-		_, err := store.Get(ctx, "nonexistent-id")
+		_, err := store.Get(ctx, "nonexistent-id", created.ParentUserID)
 		require.Error(t, err)
 	})
 }
@@ -76,25 +96,28 @@ func TestGeneratedOauthAccountStore_List(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	// Create multiple records.
+	// Each fixture creates its own FK scope. When List filters by scope,
+	// only the matching row is visible; assertions below reflect that.
 	const numRecords = 3
-	for i := 0; i < numRecords; i++ {
+	created := fixtures.CreateTestOauthAccountWithDefaults(t, ctx, db)
+	for i := 1; i < numRecords; i++ {
 		fixtures.CreateTestOauthAccountWithDefaults(t, ctx, db)
 	}
+	_ = created
 
-	t.Run("returns all records", func(t *testing.T) {
+	t.Run("returns records", func(t *testing.T) {
 		filter := oauthaccounts.FilterList{}
 		orderBy := fop.NewOrder(oauthaccounts.DefaultOrderBy, oauthaccounts.DefaultOrderDirection)
-		results, err := store.List(ctx, filter, orderBy, fop.PageStringCursor{}, false)
+		results, err := store.List(ctx, filter, created.ParentUserID, orderBy, fop.PageStringCursor{}, false)
 		require.NoError(t, err)
-		assert.GreaterOrEqual(t, len(results), numRecords)
+		assert.GreaterOrEqual(t, len(results), 1)
 	})
 
 	t.Run("respects limit", func(t *testing.T) {
 		filter := oauthaccounts.FilterList{}
 		orderBy := fop.NewOrder(oauthaccounts.DefaultOrderBy, oauthaccounts.DefaultOrderDirection)
 		page := fop.PageStringCursor{Limit: 2}
-		results, err := store.List(ctx, filter, orderBy, page, false)
+		results, err := store.List(ctx, filter, created.ParentUserID, orderBy, page, false)
 		require.NoError(t, err)
 		assert.LessOrEqual(t, len(results), 2)
 	})
@@ -102,7 +125,7 @@ func TestGeneratedOauthAccountStore_List(t *testing.T) {
 	t.Run("no duplicates", func(t *testing.T) {
 		filter := oauthaccounts.FilterList{}
 		orderBy := fop.NewOrder(oauthaccounts.DefaultOrderBy, oauthaccounts.DefaultOrderDirection)
-		results, err := store.List(ctx, filter, orderBy, fop.PageStringCursor{}, false)
+		results, err := store.List(ctx, filter, created.ParentUserID, orderBy, fop.PageStringCursor{}, false)
 		require.NoError(t, err)
 
 		seen := make(map[string]bool)
@@ -118,11 +141,87 @@ func TestGeneratedOauthAccountStore_Delete(t *testing.T) {
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
 	created := fixtures.CreateTestOauthAccountWithDefaults(t, ctx, db)
+	_ = created
 
-	err := store.Delete(ctx, created.OauthAccountID)
+	err := store.Delete(ctx, created.OauthAccountID, created.ParentUserID)
 	require.NoError(t, err)
 
 	// Verify record is gone.
-	_, err = store.Get(ctx, created.OauthAccountID)
+	_, err = store.Get(ctx, created.OauthAccountID, created.ParentUserID)
 	require.Error(t, err)
+}
+
+func TestGeneratedOauthAccountStore_CreateDuplicate(t *testing.T) {
+	ctx, db, store := setupTestStore(t)
+	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
+
+	created := fixtures.CreateTestOauthAccountWithDefaults(t, ctx, db)
+
+	// Re-creating with the same primary key must map to ErrAlreadyExists.
+	input := oauthaccounts.CreateOauthAccount{
+		OauthAccountID:        created.OauthAccountID,
+		ParentUserID:          created.ParentUserID,
+		Provider:              created.Provider,
+		ProviderUserID:        created.ProviderUserID,
+		ProviderEmail:         created.ProviderEmail,
+		ProviderEmailVerified: created.ProviderEmailVerified,
+		AccountVerified:       created.AccountVerified,
+		AccessToken:           created.AccessToken,
+		RefreshToken:          created.RefreshToken,
+		TokenExpiresAt:        created.TokenExpiresAt,
+		TokenType:             created.TokenType,
+		Scope:                 created.Scope,
+		IDToken:               created.IDToken,
+		ProfileData:           created.ProfileData,
+		LinkedAt:              created.LinkedAt,
+	}
+	_, err := store.Create(ctx, input)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, oauthaccounts.ErrOauthAccountAlreadyExists)
+}
+
+func TestGeneratedOauthAccountStore_CreateInvalidReference(t *testing.T) {
+	ctx, db, store := setupTestStore(t)
+	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
+
+	created := fixtures.CreateTestOauthAccountWithDefaults(t, ctx, db)
+
+	// A create referencing a missing parent must map to ErrInvalidReference.
+	input := oauthaccounts.CreateOauthAccount{
+		OauthAccountID:        created.OauthAccountID,
+		ParentUserID:          created.ParentUserID,
+		Provider:              created.Provider,
+		ProviderUserID:        created.ProviderUserID,
+		ProviderEmail:         created.ProviderEmail,
+		ProviderEmailVerified: created.ProviderEmailVerified,
+		AccountVerified:       created.AccountVerified,
+		AccessToken:           created.AccessToken,
+		RefreshToken:          created.RefreshToken,
+		TokenExpiresAt:        created.TokenExpiresAt,
+		TokenType:             created.TokenType,
+		Scope:                 created.Scope,
+		IDToken:               created.IDToken,
+		ProfileData:           created.ProfileData,
+		LinkedAt:              created.LinkedAt,
+	}
+	input.OauthAccountID = "fk-violation-test-id"
+	bogusFK := "nonexistent-fk-id"
+	input.ParentUserID = bogusFK
+	_, err := store.Create(ctx, input)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, oauthaccounts.ErrOauthAccountInvalidReference)
+}
+
+func TestGeneratedOauthAccountStore_Update(t *testing.T) {
+	ctx, db, store := setupTestStore(t)
+	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
+
+	created := fixtures.CreateTestOauthAccountWithDefaults(t, ctx, db)
+
+	newValue := "updated-value"
+	result, err := store.Update(ctx, created.OauthAccountID, created.ParentUserID, oauthaccounts.UpdateOauthAccount{
+		Provider: &newValue,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, newValue, result.Provider)
 }

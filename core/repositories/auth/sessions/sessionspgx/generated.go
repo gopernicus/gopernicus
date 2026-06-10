@@ -181,7 +181,8 @@ func (s *Store) Create(ctx context.Context, input sessions.CreateSession) (sessi
 func (s *Store) Update(ctx context.Context, sessionID string, parentUserID string, input sessions.UpdateSession) (sessions.Session, error) {
 	buf := bytes.NewBufferString("UPDATE public.sessions SET ")
 	args := pgx.NamedArgs{
-		"session_id": sessionID,
+		"session_id":     sessionID,
+		"parent_user_id": parentUserID,
 	}
 	var setClauses []string
 	if input.SessionTokenHash != nil {
@@ -236,7 +237,7 @@ func (s *Store) Update(ctx context.Context, sessionID string, parentUserID strin
 	}
 
 	buf.WriteString(strings.Join(setClauses, ", "))
-	buf.WriteString(" WHERE session_id = @session_id")
+	buf.WriteString(" WHERE session_id = @session_id AND parent_user_id = @parent_user_id")
 	buf.WriteString(" RETURNING session_id, parent_user_id, session_token_hash, refresh_token_hash, rotation_count, last_rotation_at, previous_refresh_token_hash, expires_at, last_used_at, user_agent, ip_address, created_at, updated_at")
 
 	rows, err := s.db.Query(ctx, buf.String(), args)

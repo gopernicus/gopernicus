@@ -327,10 +327,9 @@ func parseOrderBy(order string) (fop.Order, error) {
 
 // UpdateServiceAccountRequest is the HTTP request for updating a serviceAccount.
 type UpdateServiceAccountRequest struct {
-	Name               *string    `json:"name,omitempty"`
-	Description        *string    `json:"description,omitempty"`
-	CreatorPrincipalID *string    `json:"creator_principal_id,omitempty"`
-	UpdatedAt          *time.Time `json:"updated_at,omitempty"`
+	Name        *string    `json:"name,omitempty"`
+	Description *string    `json:"description,omitempty"`
+	UpdatedAt   *time.Time `json:"updated_at,omitempty"`
 }
 
 // Validate checks all field constraints. Called automatically by web.DecodeJSON.
@@ -344,10 +343,9 @@ func (r *UpdateServiceAccountRequest) Validate() error {
 // ToRepo converts the validated request to a repository input.
 func (r UpdateServiceAccountRequest) ToRepo() (serviceaccounts.UpdateServiceAccount, error) {
 	return serviceaccounts.UpdateServiceAccount{
-		Name:               r.Name,
-		Description:        r.Description,
-		CreatorPrincipalID: r.CreatorPrincipalID,
-		UpdatedAt:          r.UpdatedAt,
+		Name:        r.Name,
+		Description: r.Description,
+		UpdatedAt:   r.UpdatedAt,
 	}, nil
 }
 

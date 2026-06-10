@@ -28,7 +28,10 @@ var (
 )
 
 // setupTestStore creates a test database and store for integration tests.
-// migrateTestDB must be defined in store_test.go (bootstrap file).
+// migrateTestDB and testPGXOptions are defined in store_test.go (bootstrap
+// file). testPGXOptions lets the consumer customize the Postgres image,
+// enable extensions, etc. — needed when a project depends on extensions
+// like pgvector that the default image doesn't include.
 func setupTestStore(t *testing.T) (context.Context, *testpgx.TestPGX, *Store) {
 	t.Helper()
 
@@ -37,7 +40,8 @@ func setupTestStore(t *testing.T) (context.Context, *testpgx.TestPGX, *Store) {
 	}
 
 	ctx := context.Background()
-	db := testpgx.SetupTestPGX(t, ctx, testpgx.WithMigrations(migrateTestDB))
+	opts := append([]testpgx.Option{testpgx.WithMigrations(migrateTestDB)}, testPGXOptions...)
+	db := testpgx.SetupTestPGX(t, ctx, opts...)
 	store := NewStore(logger.NewNoop(), db.Pool)
 	return ctx, db, store
 }
@@ -47,11 +51,26 @@ func TestGeneratedInvitationStore_Create(t *testing.T) {
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
 	created := fixtures.CreateTestInvitationWithDefaults(t, ctx, db)
+	_ = created
 
-	// Verify the record was created and can be retrieved.
+	// Verify the record was created and can be retrieved, every create
+	// field intact (time fields excluded — encoding differs per dialect).
 	result, err := store.Get(ctx, created.InvitationID)
 	require.NoError(t, err)
 	assert.Equal(t, created.InvitationID, result.InvitationID)
+	assert.Equal(t, created.InvitationID, result.InvitationID)
+	assert.Equal(t, created.ResourceType, result.ResourceType)
+	assert.Equal(t, created.ResourceID, result.ResourceID)
+	assert.Equal(t, created.Relation, result.Relation)
+	assert.Equal(t, created.Identifier, result.Identifier)
+	assert.Equal(t, created.IdentifierType, result.IdentifierType)
+	assert.Equal(t, created.ResolvedSubjectID, result.ResolvedSubjectID)
+	assert.Equal(t, created.InvitedBy, result.InvitedBy)
+	assert.Equal(t, created.TokenHash, result.TokenHash)
+	assert.Equal(t, created.AutoAccept, result.AutoAccept)
+	assert.Equal(t, created.InvitationStatus, result.InvitationStatus)
+	assert.Equal(t, created.RecordState, result.RecordState)
+	assert.Equal(t, created.RedirectURL, result.RedirectURL)
 }
 
 func TestGeneratedInvitationStore_Get(t *testing.T) {
@@ -59,6 +78,7 @@ func TestGeneratedInvitationStore_Get(t *testing.T) {
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
 	created := fixtures.CreateTestInvitationWithDefaults(t, ctx, db)
+	_ = created
 
 	t.Run("found", func(t *testing.T) {
 		result, err := store.Get(ctx, created.InvitationID)
@@ -76,18 +96,21 @@ func TestGeneratedInvitationStore_List(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	// Create multiple records.
+	// Each fixture creates its own FK scope. When List filters by scope,
+	// only the matching row is visible; assertions below reflect that.
 	const numRecords = 3
-	for i := 0; i < numRecords; i++ {
+	created := fixtures.CreateTestInvitationWithDefaults(t, ctx, db)
+	for i := 1; i < numRecords; i++ {
 		fixtures.CreateTestInvitationWithDefaults(t, ctx, db)
 	}
+	_ = created
 
-	t.Run("returns all records", func(t *testing.T) {
+	t.Run("returns records", func(t *testing.T) {
 		filter := invitations.FilterList{}
 		orderBy := fop.NewOrder(invitations.DefaultOrderBy, invitations.DefaultOrderDirection)
 		results, err := store.List(ctx, filter, orderBy, fop.PageStringCursor{}, false)
 		require.NoError(t, err)
-		assert.GreaterOrEqual(t, len(results), numRecords)
+		assert.GreaterOrEqual(t, len(results), 1)
 	})
 
 	t.Run("respects limit", func(t *testing.T) {
@@ -118,6 +141,7 @@ func TestGeneratedInvitationStore_Delete(t *testing.T) {
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
 	created := fixtures.CreateTestInvitationWithDefaults(t, ctx, db)
+	_ = created
 
 	err := store.Delete(ctx, created.InvitationID)
 	require.NoError(t, err)
@@ -132,6 +156,7 @@ func TestGeneratedInvitationStore_SoftDelete(t *testing.T) {
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
 	created := fixtures.CreateTestInvitationWithDefaults(t, ctx, db)
+	_ = created
 
 	err := store.SoftDelete(ctx, created.InvitationID)
 	require.NoError(t, err)
@@ -140,4 +165,47 @@ func TestGeneratedInvitationStore_SoftDelete(t *testing.T) {
 	result, err := store.Get(ctx, created.InvitationID)
 	require.NoError(t, err)
 	assert.Equal(t, "deleted", result.RecordState)
+}
+
+func TestGeneratedInvitationStore_CreateDuplicate(t *testing.T) {
+	ctx, db, store := setupTestStore(t)
+	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
+
+	created := fixtures.CreateTestInvitationWithDefaults(t, ctx, db)
+
+	// Re-creating with the same primary key must map to ErrAlreadyExists.
+	input := invitations.CreateInvitation{
+		InvitationID:      created.InvitationID,
+		ResourceType:      created.ResourceType,
+		ResourceID:        created.ResourceID,
+		Relation:          created.Relation,
+		Identifier:        created.Identifier,
+		IdentifierType:    created.IdentifierType,
+		ResolvedSubjectID: created.ResolvedSubjectID,
+		InvitedBy:         created.InvitedBy,
+		TokenHash:         created.TokenHash,
+		AutoAccept:        created.AutoAccept,
+		InvitationStatus:  created.InvitationStatus,
+		ExpiresAt:         created.ExpiresAt,
+		AcceptedAt:        created.AcceptedAt,
+		RecordState:       created.RecordState,
+		RedirectURL:       created.RedirectURL,
+	}
+	_, err := store.Create(ctx, input)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, invitations.ErrInvitationAlreadyExists)
+}
+
+func TestGeneratedInvitationStore_Update(t *testing.T) {
+	ctx, db, store := setupTestStore(t)
+	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
+
+	created := fixtures.CreateTestInvitationWithDefaults(t, ctx, db)
+
+	newValue := "updated-value"
+	result, err := store.Update(ctx, created.InvitationID, invitations.UpdateInvitation{
+		ResourceType: &newValue,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, newValue, result.ResourceType)
 }
