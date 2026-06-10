@@ -11,9 +11,6 @@ import (
 
 func TestSecuritySecurityEventAuthenticationRequired(t *testing.T) {
 	client := setupSecurityServer(t)
-	if client == nil {
-		t.Skip("setupSecurityServer not wired — see security_test.go to enable enforcement probes")
-	}
 
 	t.Run("List rejects anonymous", func(t *testing.T) {
 		client.Get(t, "/security-events").RequireStatus(t, 401)
