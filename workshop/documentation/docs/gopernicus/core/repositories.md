@@ -217,11 +217,9 @@ var (
 
 ## queries.sql
 
-The generation source. Annotations in SQL comments drive what gets generated. The `@database` annotation is declared once at the top; `@func` annotations mark the start of each query:
+The generation source. Annotations in SQL comments drive what gets generated; `@func` annotations mark the start of each query. (The database an entity binds to comes from `databases.<name>.domains` in `gopernicus.yml`, not from the file.)
 
 ```sql
--- @database: primary
-
 -- @func: List
 -- @filter:conditions *
 -- @search: ilike(email, display_name)

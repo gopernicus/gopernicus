@@ -1,5 +1,3 @@
--- @database: primary
-
 -- @func: List
 -- @filter:conditions *
 -- @search: ilike(name, description)

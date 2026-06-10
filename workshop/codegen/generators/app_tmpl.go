@@ -968,8 +968,8 @@ test-integration: ## Run integration tests (requires running DB)
 	go test -tags=integration ./...
 
 .PHONY: test-e2e
-test-e2e: ## Run end-to-end tests (requires running server)
-	go test -tags=e2e ./workshop/testing/e2e/...
+test-e2e: ## Run end-to-end tests
+	go test -tags=e2e ./...
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 

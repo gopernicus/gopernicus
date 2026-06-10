@@ -1,5 +1,3 @@
--- @database: primary
-
 -- @func: List
 -- @filter:conditions *
 -- @search: ilike(user_agent, ip_address)

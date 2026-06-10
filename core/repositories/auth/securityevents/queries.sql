@@ -1,5 +1,3 @@
--- @database: primary
-
 -- @func: List
 -- @filter:conditions *
 -- @search: ilike(event_type, event_status, ip_address, user_agent)

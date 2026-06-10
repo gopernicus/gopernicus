@@ -1,5 +1,3 @@
--- @database: primary
-
 -- @func: List
 -- @filter:conditions *
 -- @search: ilike(resource_type, resource_id, relation, identifier, identifier_type, resolved_subject_id, invited_by, invitation_status)
