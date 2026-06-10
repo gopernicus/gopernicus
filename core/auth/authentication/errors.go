@@ -28,6 +28,11 @@ var (
 	// Verification errors.
 	ErrCodeExpired          = fmt.Errorf("auth code: %w", errs.ErrExpired)
 	ErrCodeInvalid          = fmt.Errorf("auth code: %w", errs.ErrUnauthorized)
+
+	// ErrWeakPassword indicates a password failed the NIST policy checks
+	// (ValidatePassword) — enforced in the core mutators so non-HTTP
+	// callers cannot set out-of-policy passwords.
+	ErrWeakPassword = fmt.Errorf("auth password policy: %w", errs.ErrInvalidInput)
 	ErrTooManyAttempts      = fmt.Errorf("auth: %w", errs.ErrForbidden)
 	ErrEmailAlreadyVerified = fmt.Errorf("auth: %w", errs.ErrConflict)
 
