@@ -24,7 +24,6 @@ var authSchemaRegistry = map[manifest.Feature]AuthSchemaGeneratorFunc{
 type AuthSchemaTemplateData struct {
 	DomainPkg          string             // domain package name, e.g. "auth", "rebac"
 	ModulePath         string             // Go module path
-	FrameworkPath      string             // gopernicus framework module path (for core/auth imports)
 	AuthSchemaEntities []AuthSchemaEntity // entities with auth config (nil = generates return nil)
 }
 
@@ -38,7 +37,6 @@ func GenerateAuthSchema(domainDir, domainPkg, modulePath string, resolvedFiles [
 	data := AuthSchemaTemplateData{
 		DomainPkg:          domainPkg,
 		ModulePath:         modulePath,
-		FrameworkPath:      gopernicusFrameworkPath,
 		AuthSchemaEntities: entities,
 	}
 

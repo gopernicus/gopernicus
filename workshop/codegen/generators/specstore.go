@@ -76,7 +76,6 @@ type SpecSkippedFunc struct {
 
 // SpecStoreData holds everything needed to render the specstore templates.
 type SpecStoreData struct {
-	FrameworkPath string
 	PackageName   string
 	RepoPkg       string
 	RepoImport    string
@@ -247,7 +246,6 @@ func BuildSpecStoreData(resolved *ResolvedFile, modulePath string) (SpecStoreDat
 	repoImport += repoPkg
 
 	data := SpecStoreData{
-		FrameworkPath: gopernicusFrameworkPath,
 		PackageName:   StorePackage(resolved.TableName, specStorePackageSuffix),
 		RepoPkg:       repoPkg,
 		RepoImport:    repoImport,

@@ -19,7 +19,6 @@ type BridgeCompositeTemplateData struct {
 	CompositePkg  string                  // composite package name, e.g. "authreposbridge"
 	DomainName    string                  // domain name, e.g. "auth"
 	ModulePath    string                  // Go module path (for local imports only)
-	FrameworkPath string                  // gopernicus framework module path (for sdk, auth, infra imports)
 	Entities      []BridgeCompositeEntity // sorted by FieldName
 	AuthEnabled   bool                    // true if authentication is enabled
 }

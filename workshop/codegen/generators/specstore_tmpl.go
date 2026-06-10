@@ -18,8 +18,8 @@ import (
 
 	"{{.RepoImport}}"
 
-	"{{.FrameworkPath}}/infrastructure/database/crud"
-	"{{.FrameworkPath}}/sdk/errs"
+	"github.com/gopernicus/gopernicus/infrastructure/database/crud"
+	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // TxRunner executes fn inside a transaction, providing a tx-scoped querier.

@@ -16,11 +16,11 @@ import (
 	"{{.}}"
 {{- end}}
 
-	"{{.FrameworkPath}}/infrastructure/cryptids"
-{{if .SpecMode}}	"{{.FrameworkPath}}/infrastructure/database/crud"
-	"{{.FrameworkPath}}/workshop/testing/testsqlite"
-{{else}}	"{{.FrameworkPath}}/workshop/testing/testpgx"
-{{end}}	"{{.FrameworkPath}}/sdk/conversion"
+	"github.com/gopernicus/gopernicus/infrastructure/cryptids"
+{{if .SpecMode}}	"github.com/gopernicus/gopernicus/infrastructure/database/crud"
+	"github.com/gopernicus/gopernicus/workshop/testing/testsqlite"
+{{else}}	"github.com/gopernicus/gopernicus/workshop/testing/testpgx"
+{{end}}	"github.com/gopernicus/gopernicus/sdk/conversion"
 	"github.com/stretchr/testify/require"
 )
 

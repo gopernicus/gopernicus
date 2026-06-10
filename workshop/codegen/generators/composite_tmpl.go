@@ -12,9 +12,9 @@ import (
 	"{{$.ModulePath}}/{{$.DomainPath}}/{{.RepoPkg}}/{{.StorePkg}}"
 {{- end}}
 
-	"{{.FrameworkPath}}/infrastructure/cache"
-	"{{.FrameworkPath}}/infrastructure/database/postgres/pgxdb"
-	gopevents "{{.FrameworkPath}}/infrastructure/events"
+	"github.com/gopernicus/gopernicus/infrastructure/cache"
+	"github.com/gopernicus/gopernicus/infrastructure/database/postgres/pgxdb"
+	gopevents "github.com/gopernicus/gopernicus/infrastructure/events"
 )
 {{if not .OmitTypes}}
 // Repositories contains all repositories for the {{.DomainPkg}} domain.
@@ -65,9 +65,9 @@ import (
 	"{{$.ModulePath}}/{{$.DomainPath}}/{{.RepoPkg}}/{{.StorePkg}}"
 {{- end}}
 
-	"{{.FrameworkPath}}/infrastructure/cache"
-	"{{.FrameworkPath}}/infrastructure/database/crud"
-	gopevents "{{.FrameworkPath}}/infrastructure/events"
+	"github.com/gopernicus/gopernicus/infrastructure/cache"
+	"github.com/gopernicus/gopernicus/infrastructure/database/crud"
+	gopevents "github.com/gopernicus/gopernicus/infrastructure/events"
 )
 {{if not .OmitTypes}}
 // TxRunner executes fn inside a transaction, providing a tx-scoped querier.
@@ -131,7 +131,7 @@ import (
 	"{{$.ModulePath}}/{{$.DomainPath}}/{{.RepoPkg}}"
 {{- end}}
 {{- if .NeedsTxRunner}}
-	"{{.FrameworkPath}}/infrastructure/database/crud"
+	"github.com/gopernicus/gopernicus/infrastructure/database/crud"
 {{- end}}
 )
 

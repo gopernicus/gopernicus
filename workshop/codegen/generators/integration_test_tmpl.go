@@ -23,11 +23,11 @@ import (
 {{end}}
 	fixtures "{{.FixtureImport}}"
 
-{{if .SpecMode}}	"{{.FrameworkPath}}/workshop/testing/testsqlite"
-{{else}}	"{{.FrameworkPath}}/workshop/testing/pgxfixtures"
-	"{{.FrameworkPath}}/workshop/testing/testpgx"
-{{end}}{{if .HasList}}	"{{.FrameworkPath}}/sdk/fop"
-{{end}}{{if .SpecMode}}){{else}}	"{{.FrameworkPath}}/sdk/logger"
+{{if .SpecMode}}	"github.com/gopernicus/gopernicus/workshop/testing/testsqlite"
+{{else}}	"github.com/gopernicus/gopernicus/workshop/testing/pgxfixtures"
+	"github.com/gopernicus/gopernicus/workshop/testing/testpgx"
+{{end}}{{if .HasList}}	"github.com/gopernicus/gopernicus/sdk/fop"
+{{end}}{{if .SpecMode}}){{else}}	"github.com/gopernicus/gopernicus/sdk/logger"
 ){{end}}
 
 // Ensure imports are used.
@@ -255,9 +255,9 @@ import (
 	"path/filepath"
 	"runtime"
 
-{{if .SpecMode}}	"{{.FrameworkPath}}/infrastructure/database/sqlite/moderncdb"
-{{else}}	"{{.FrameworkPath}}/infrastructure/database/postgres/pgxdb"
-	"{{.FrameworkPath}}/workshop/testing/testpgx"
+{{if .SpecMode}}	"github.com/gopernicus/gopernicus/infrastructure/database/sqlite/moderncdb"
+{{else}}	"github.com/gopernicus/gopernicus/infrastructure/database/postgres/pgxdb"
+	"github.com/gopernicus/gopernicus/workshop/testing/testpgx"
 {{end}})
 
 // migrateTestDB applies this project's migrations to the test database, so

@@ -17,9 +17,9 @@ import (
 	"{{.}}"
 {{- end}}
 
-	"{{.FrameworkPath}}/sdk/errs"
-	"{{.FrameworkPath}}/sdk/fop"
-	"{{.FrameworkPath}}/infrastructure/events"
+	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk/fop"
+	"github.com/gopernicus/gopernicus/infrastructure/events"
 )
 
 // =============================================================================
@@ -442,9 +442,9 @@ package {{.PackageName}}
 import (
 	"context"
 
-	"{{.FrameworkPath}}/infrastructure/cryptids"
-	"{{.FrameworkPath}}/infrastructure/events"
-	"{{.FrameworkPath}}/sdk/fop"
+	"github.com/gopernicus/gopernicus/infrastructure/cryptids"
+	"github.com/gopernicus/gopernicus/infrastructure/events"
+	"github.com/gopernicus/gopernicus/sdk/fop"
 )
 
 // =============================================================================
@@ -514,7 +514,7 @@ const repoFopTemplate = `// This file is created once by gopernicus and will NOT
 
 package {{.PackageName}}
 
-import "{{.FrameworkPath}}/sdk/fop"
+import "github.com/gopernicus/gopernicus/sdk/fop"
 {{if .HasList}}
 // DefaultOrderBy is the default sort field for list operations.
 const DefaultOrderBy = {{.DefaultOrderConst}}

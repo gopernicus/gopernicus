@@ -14,7 +14,7 @@ import (
 	"time"
 {{- end}}
 
-	"{{.FrameworkPath}}/infrastructure/cache"
+	"github.com/gopernicus/gopernicus/infrastructure/cache"
 )
 
 // =============================================================================

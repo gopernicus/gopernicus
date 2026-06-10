@@ -16,7 +16,6 @@ import (
 type BridgeE2EData struct {
 	BridgePackage string
 	EntityName    string
-	FrameworkPath string
 
 	// SpecMode selects the test stack: spec → testsqlite + sqlitefixtures +
 	// NewStore(q,d,inTx); pgx → testpgx + fixtures + NewStore(log, pool).
@@ -156,7 +155,6 @@ func buildBridgeE2EData(data BridgeTemplateData, resolved *ResolvedFile, moduleP
 	e2e := BridgeE2EData{
 		BridgePackage: data.BridgePackage,
 		EntityName:    data.EntityName,
-		FrameworkPath: gopernicusFrameworkPath,
 		SpecMode:      specMode,
 		RepoPkg:       wiring.RepoPkg,
 		RepoImport:    wiring.RepoImport,

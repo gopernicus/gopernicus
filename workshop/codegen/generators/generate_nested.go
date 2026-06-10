@@ -263,7 +263,6 @@ func runNested(cfg Config, schemas map[string]*schema.ReflectedSchema, modulePat
 				Data: CompositeTemplateData{
 					DomainPkg:     domain,
 					ModulePath:    modulePath,
-					FrameworkPath: gopernicusFrameworkPath,
 					DomainPath:    "core/repositories/" + domain,
 					Entities:      dbDomainEntities[dbDomainKey{DB: db, Domain: domain}],
 					HasAuth:       hasAuthProvider,

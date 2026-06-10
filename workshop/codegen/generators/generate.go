@@ -133,7 +133,6 @@ func emitBridgeComposites(
 			CompositePkg:  BridgeCompositePackage(domain),
 			DomainName:    domain,
 			ModulePath:    modulePath,
-			FrameworkPath: gopernicusFrameworkPath,
 			Entities:      bridgeEntities,
 			AuthEnabled:   authEnabled,
 		}
@@ -160,7 +159,6 @@ func emitFixtures(pgxEntities, specEntities []FixtureEntity, projectRoot, module
 		fixtureDir := filepath.Join(projectRoot, "workshop", "testing", "fixtures")
 		data := FixtureTemplateData{
 			ModulePath:    modulePath,
-			FrameworkPath: gopernicusFrameworkPath,
 			Entities:      pgxEntities,
 		}
 		fmt.Printf("\n  fixtures/ (test fixtures)\n")
@@ -172,7 +170,6 @@ func emitFixtures(pgxEntities, specEntities []FixtureEntity, projectRoot, module
 		fixtureDir := filepath.Join(projectRoot, "workshop", "testing", "sqlitefixtures")
 		data := FixtureTemplateData{
 			ModulePath:    modulePath,
-			FrameworkPath: gopernicusFrameworkPath,
 			Entities:      specEntities,
 		}
 		fmt.Printf("\n  sqlitefixtures/ (spec test fixtures)\n")

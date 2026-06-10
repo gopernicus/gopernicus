@@ -32,7 +32,6 @@ type WriteMethod struct {
 
 // CacheTemplateData holds all data needed to render cache templates.
 type CacheTemplateData struct {
-	FrameworkPath  string // gopernicus framework module path (for infra cache import)
 	PackageName    string
 	EntityName     string
 	KeyPrefix      string // cache key prefix, e.g. "auth:users"
@@ -93,7 +92,6 @@ func GenerateCache(resolved *ResolvedFile, repoDir string, multiHomed bool, opts
 
 func buildCacheData(resolved *ResolvedFile) (CacheTemplateData, error) {
 	data := CacheTemplateData{
-		FrameworkPath: gopernicusFrameworkPath,
 		PackageName:   RepoPackage(resolved.TableName),
 		EntityName:    resolved.EntityName,
 		KeyPrefix:     resolved.DomainName + ":" + resolved.TableName,

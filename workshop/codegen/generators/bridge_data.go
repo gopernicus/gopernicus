@@ -5,17 +5,12 @@ package generators
 // path regardless of the project module path.
 const FrameworkModulePath = "github.com/gopernicus/gopernicus"
 
-// gopernicusFrameworkPath aliases FrameworkModulePath for the generators'
-// internal call sites.
-const gopernicusFrameworkPath = FrameworkModulePath
-
 // BridgeTemplateData holds all data needed for bridge template rendering.
 type BridgeTemplateData struct {
 	// Package info
 	BridgePackage string // e.g. "tenantsrepobridge"
 	RepoPackage   string // e.g. "tenantsrepo"
 	ModulePath    string // project module path from go.mod (for local imports only)
-	FrameworkPath string // gopernicus framework module path (for sdk, bridge, auth, infra imports)
 	Module        string // domain name, e.g. "auth"
 
 	// Entity naming

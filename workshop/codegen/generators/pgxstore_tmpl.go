@@ -22,12 +22,12 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"{{.FrameworkPath}}/infrastructure/database/postgres/pgxdb"
+	"github.com/gopernicus/gopernicus/infrastructure/database/postgres/pgxdb"
 {{- if .HasOutbox}}
-	"{{.FrameworkPath}}/infrastructure/events"
+	"github.com/gopernicus/gopernicus/infrastructure/events"
 {{- end}}
 {{- if .HasList}}
-	"{{.FrameworkPath}}/sdk/fop"
+	"github.com/gopernicus/gopernicus/sdk/fop"
 {{- end}}
 
 	"{{.RepoImport}}"

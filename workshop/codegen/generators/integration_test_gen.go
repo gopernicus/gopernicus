@@ -39,7 +39,6 @@ type IntegrationTestMethod struct {
 // IntegrationTestData holds all data for rendering a store integration test.
 type IntegrationTestData struct {
 	// FrameworkPath is the gopernicus framework module path (for sdk, testing imports).
-	FrameworkPath string
 
 	// SpecMode selects the test harness: spec → testsqlite + sqlitefixtures +
 	// NewStore(q, d, inTx); pgx → testpgx + fixtures + NewStore(log, pool).
@@ -124,7 +123,6 @@ type IntegrationTestData struct {
 func BuildIntegrationTestData(resolved *ResolvedFile, modulePath, dbName string) (IntegrationTestData, error) {
 	wiring := buildStackWiring(resolved, modulePath, dbName, false)
 	data := IntegrationTestData{
-		FrameworkPath: gopernicusFrameworkPath,
 		StorePkg:      wiring.StorePkg,
 		RepoPkg:       wiring.RepoPkg,
 		EntityName:    resolved.EntityName,

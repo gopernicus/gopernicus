@@ -13,12 +13,12 @@ import (
 {{- end}}
 {{- if .AuthEnabled}}
 
-	"{{.FrameworkPath}}/core/auth/authentication"
-	"{{.FrameworkPath}}/core/auth/authorization"
+	"github.com/gopernicus/gopernicus/core/auth/authentication"
+	"github.com/gopernicus/gopernicus/core/auth/authorization"
 {{- end}}
 	"{{.ModulePath}}/core/repositories/{{.DomainName}}"
-	"{{.FrameworkPath}}/infrastructure/ratelimiter"
-	"{{.FrameworkPath}}/sdk/web"
+	"github.com/gopernicus/gopernicus/infrastructure/ratelimiter"
+	"github.com/gopernicus/gopernicus/sdk/web"
 )
 
 // Bridges contains all bridges for the {{.DomainName}} domain.

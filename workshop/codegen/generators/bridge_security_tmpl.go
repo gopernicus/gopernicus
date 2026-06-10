@@ -51,21 +51,21 @@ import (
 	"{{.RepoImport}}"
 	"{{.StoreImport}}"
 
-	"{{.FrameworkPath}}/infrastructure/ratelimiter"
-	"{{.FrameworkPath}}/infrastructure/ratelimiter/memorylimiter"
+	"github.com/gopernicus/gopernicus/infrastructure/ratelimiter"
+	"github.com/gopernicus/gopernicus/infrastructure/ratelimiter/memorylimiter"
 {{- if .SpecMode}}
-	"{{.FrameworkPath}}/infrastructure/database/sqlite/moderncdb"
+	"github.com/gopernicus/gopernicus/infrastructure/database/sqlite/moderncdb"
 {{- else}}
-	"{{.FrameworkPath}}/infrastructure/database/postgres/pgxdb"
+	"github.com/gopernicus/gopernicus/infrastructure/database/postgres/pgxdb"
 {{- end}}
-	"{{.FrameworkPath}}/sdk/logger"
-	"{{.FrameworkPath}}/sdk/web"
-	"{{.FrameworkPath}}/workshop/testing/testauth"
-	"{{.FrameworkPath}}/workshop/testing/testhttp"
+	"github.com/gopernicus/gopernicus/sdk/logger"
+	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/workshop/testing/testauth"
+	"github.com/gopernicus/gopernicus/workshop/testing/testhttp"
 {{- if .SpecMode}}
-	"{{.FrameworkPath}}/workshop/testing/testsqlite"
+	"github.com/gopernicus/gopernicus/workshop/testing/testsqlite"
 {{- else}}
-	"{{.FrameworkPath}}/workshop/testing/testpgx"
+	"github.com/gopernicus/gopernicus/workshop/testing/testpgx"
 {{- end}}
 )
 

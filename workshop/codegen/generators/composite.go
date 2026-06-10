@@ -28,7 +28,6 @@ type CompositeEntity struct {
 type CompositeTemplateData struct {
 	DomainPkg     string            // domain package name, e.g. "auth", "rebac"
 	ModulePath    string            // Go module path (for local imports only)
-	FrameworkPath string            // gopernicus framework module path (for auth, infra imports)
 	DomainPath    string            // import path segment, e.g. "core/repositories/auth"
 	Entities      []CompositeEntity // sorted by FieldName
 	HasAuth       bool              // true if domain has authorization schema (@auth.relation/@auth.permission annotations)
@@ -52,7 +51,6 @@ type DBComposite struct {
 type compositeSharedTypesData struct {
 	DomainPkg     string
 	ModulePath    string
-	FrameworkPath string
 	DomainPath    string
 	DBList        string            // hosting databases for doc comments, e.g. "primary, otherdb"
 	Entities      []CompositeEntity // union across hosting databases, sorted by FieldName
@@ -166,7 +164,6 @@ func buildSharedTypesData(composites []DBComposite) compositeSharedTypesData {
 	shared := compositeSharedTypesData{
 		DomainPkg:     first.DomainPkg,
 		ModulePath:    first.ModulePath,
-		FrameworkPath: first.FrameworkPath,
 		DomainPath:    first.DomainPath,
 	}
 

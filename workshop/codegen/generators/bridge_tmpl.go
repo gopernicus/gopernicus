@@ -33,22 +33,22 @@ import (
 {{- end}}
 
 {{- if .NeedsBridgeFOPImport}}
-	fopb "{{.FrameworkPath}}/bridge/transit/fop"
+	fopb "github.com/gopernicus/gopernicus/bridge/transit/fop"
 {{- end}}
 {{- if .Routes}}
-	"{{.FrameworkPath}}/bridge/transit/httpmid"
+	"github.com/gopernicus/gopernicus/bridge/transit/httpmid"
 {{- end}}
 {{- if .NeedsAuthorizationImport}}
-	"{{.FrameworkPath}}/core/auth/authorization"
+	"github.com/gopernicus/gopernicus/core/auth/authorization"
 {{- end}}
 {{- if .Routes}}
-	"{{.FrameworkPath}}/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk/errs"
 {{- end}}
-	"{{.FrameworkPath}}/sdk/fop"
+	"github.com/gopernicus/gopernicus/sdk/fop"
 {{- if .NeedsValidationImport}}
-	"{{.FrameworkPath}}/sdk/validation"
+	"github.com/gopernicus/gopernicus/sdk/validation"
 {{- end}}
-	"{{.FrameworkPath}}/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/web"
 	"{{.ModulePath}}/core/repositories/{{if .Module}}{{.Module}}/{{end}}{{.RepoPackage}}"
 )
 
@@ -657,7 +657,7 @@ const bridgeRoutesTemplate = `// Package {{.BridgePackage}} provides HTTP routes
 
 package {{.BridgePackage}}
 
-import "{{.FrameworkPath}}/sdk/web"
+import "github.com/gopernicus/gopernicus/sdk/web"
 
 // AddHttpRoutes registers all HTTP routes for {{.EntityName}} operations.
 // Generated routes are registered by addGeneratedRoutes (in generated.go).
@@ -689,12 +689,12 @@ package {{.BridgePackage}}
 import (
 	"log/slog"
 
-	"{{.FrameworkPath}}/bridge/transit/httpmid"
+	"github.com/gopernicus/gopernicus/bridge/transit/httpmid"
 {{- if .AuthEnabled}}
-	"{{.FrameworkPath}}/core/auth/authentication"
-	"{{.FrameworkPath}}/core/auth/authorization"
+	"github.com/gopernicus/gopernicus/core/auth/authentication"
+	"github.com/gopernicus/gopernicus/core/auth/authorization"
 {{- end}}
-	"{{.FrameworkPath}}/infrastructure/ratelimiter"
+	"github.com/gopernicus/gopernicus/infrastructure/ratelimiter"
 	"{{.ModulePath}}/core/repositories/{{if .Module}}{{.Module}}/{{end}}{{.RepoPackage}}"
 )
 

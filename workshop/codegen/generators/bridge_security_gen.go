@@ -20,7 +20,6 @@ type SecurityRoute struct {
 type BridgeSecurityData struct {
 	BridgePackage string
 	EntityName    string
-	FrameworkPath string
 	Routes        []SecurityRoute
 
 	// Stack wiring for the setupSecurityServer bootstrap: store/repo
@@ -72,7 +71,6 @@ func buildBridgeSecurityData(data BridgeTemplateData, resolved *ResolvedFile, mo
 	sec := BridgeSecurityData{
 		BridgePackage: data.BridgePackage,
 		EntityName:    data.EntityName,
-		FrameworkPath: gopernicusFrameworkPath,
 		SpecMode:      specMode,
 		RepoPkg:       wiring.RepoPkg,
 		RepoImport:    wiring.RepoImport,

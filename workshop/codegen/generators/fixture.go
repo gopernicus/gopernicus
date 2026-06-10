@@ -92,7 +92,6 @@ type FixtureField struct {
 // FixtureTemplateData holds all data for rendering the fixtures file.
 type FixtureTemplateData struct {
 	ModulePath    string
-	FrameworkPath string // gopernicus framework module path (for sdk, infra imports)
 	SpecMode      bool   // sqlite/spec fixtures (testsqlite, ? placeholders) vs pgx
 	Entities      []FixtureEntity
 	Imports       []string // deduplicated extra imports

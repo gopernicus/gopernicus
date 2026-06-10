@@ -123,7 +123,6 @@ type StoreMethod struct {
 
 // StoreTemplateData holds all data needed to render pgxstore templates.
 type StoreTemplateData struct {
-	FrameworkPath   string // gopernicus framework module path (for sdk, infra imports)
 	PackageName     string
 	RepoPkg         string
 	RepoImport      string
@@ -282,7 +281,6 @@ func buildStoreData(resolved *ResolvedFile, domainName, modulePath string) (Stor
 	}
 
 	return StoreTemplateData{
-		FrameworkPath:   gopernicusFrameworkPath,
 		PackageName:     StorePackage(resolved.TableName, "pgx"),
 		RepoPkg:         repoPkg,
 		RepoImport:      repoImport,

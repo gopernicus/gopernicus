@@ -11,7 +11,6 @@ func specCompositeData() CompositeTemplateData {
 	return CompositeTemplateData{
 		DomainPkg:     "auth",
 		ModulePath:    "github.com/example/app",
-		FrameworkPath: gopernicusFrameworkPath,
 		DomainPath:    "core/repositories/auth",
 		Entities: []CompositeEntity{
 			{FieldName: "Credential", RepoPkg: "credentials", StorePkg: "credentialsstore", EntityName: "Credential"},
@@ -174,7 +173,6 @@ func singleEventOutboxData(storePkg string, specMode bool) CompositeTemplateData
 	return CompositeTemplateData{
 		DomainPkg:     "events",
 		ModulePath:    "github.com/example/app",
-		FrameworkPath: gopernicusFrameworkPath,
 		DomainPath:    "core/repositories/events",
 		Entities: []CompositeEntity{
 			{FieldName: "EventOutbox", RepoPkg: "eventoutbox", StorePkg: storePkg, EntityName: "EventOutbox"},
