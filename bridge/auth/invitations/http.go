@@ -6,7 +6,6 @@ import (
 
 	"github.com/gopernicus/gopernicus/bridge/transit/httpmid"
 	invitationscore "github.com/gopernicus/gopernicus/core/auth/invitations"
-	invitationsrepo "github.com/gopernicus/gopernicus/core/repositories/rebac/invitations"
 	"github.com/gopernicus/gopernicus/sdk/fop"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
@@ -116,7 +115,7 @@ func (b *Bridge) httpListByResource(w http.ResponseWriter, r *http.Request) {
 	page, err := fop.ParsePageStringCursor(
 		r.URL.Query().Get("limit"),
 		r.URL.Query().Get("cursor"),
-		invitationsrepo.MaxLimitListByResource,
+		invitationscore.MaxLimitListByResource,
 	)
 	if err != nil {
 		web.RespondJSONError(w, web.ErrBadRequest("invalid pagination: "+err.Error()))
@@ -124,15 +123,15 @@ func (b *Bridge) httpListByResource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	orderBy, err := fop.ParseOrder(
-		invitationsrepo.OrderByFields,
+		invitationscore.OrderByFields,
 		r.URL.Query().Get("order"),
-		fop.NewOrder(invitationsrepo.OrderByCreatedAt, fop.DESC),
+		fop.NewOrder(invitationscore.OrderByCreatedAt, fop.DESC),
 	)
 	if err != nil {
 		web.RespondJSONError(w, web.ErrBadRequest("invalid order: "+err.Error()))
 		return
 	}
-	filter := invitationsrepo.FilterListByResource{}
+	filter := invitationscore.FilterListByResource{}
 	if v := r.URL.Query().Get("status"); v != "" {
 		filter.InvitationStatus = &v
 	}
@@ -212,7 +211,7 @@ func (b *Bridge) httpListMine(w http.ResponseWriter, r *http.Request) {
 	page, err := fop.ParsePageStringCursor(
 		r.URL.Query().Get("limit"),
 		r.URL.Query().Get("cursor"),
-		invitationsrepo.MaxLimitListBySubject,
+		invitationscore.MaxLimitListBySubject,
 	)
 	if err != nil {
 		web.RespondJSONError(w, web.ErrBadRequest("invalid pagination: "+err.Error()))
@@ -220,16 +219,16 @@ func (b *Bridge) httpListMine(w http.ResponseWriter, r *http.Request) {
 	}
 
 	orderBy, err := fop.ParseOrder(
-		invitationsrepo.OrderByFields,
+		invitationscore.OrderByFields,
 		r.URL.Query().Get("order"),
-		fop.NewOrder(invitationsrepo.OrderByCreatedAt, fop.DESC),
+		fop.NewOrder(invitationscore.OrderByCreatedAt, fop.DESC),
 	)
 	if err != nil {
 		web.RespondJSONError(w, web.ErrBadRequest("invalid order: "+err.Error()))
 		return
 	}
 
-	filter := invitationsrepo.FilterListBySubject{}
+	filter := invitationscore.FilterListBySubject{}
 	if v := r.URL.Query().Get("status"); v != "" {
 		filter.InvitationStatus = &v
 	}
@@ -332,7 +331,7 @@ func (b *Bridge) httpDecline(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 
-func toInvitationResponse(inv invitationsrepo.Invitation) *InvitationResponse {
+func toInvitationResponse(inv invitationscore.Invitation) *InvitationResponse {
 	return &InvitationResponse{
 		InvitationID:   inv.InvitationID,
 		ResourceType:   inv.ResourceType,
@@ -348,7 +347,7 @@ func toInvitationResponse(inv invitationsrepo.Invitation) *InvitationResponse {
 	}
 }
 
-func toInvitationResponses(invs []invitationsrepo.Invitation) []InvitationResponse {
+func toInvitationResponses(invs []invitationscore.Invitation) []InvitationResponse {
 	out := make([]InvitationResponse, len(invs))
 	for i, inv := range invs {
 		out[i] = *toInvitationResponse(inv)

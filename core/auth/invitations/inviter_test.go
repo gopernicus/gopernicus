@@ -3,70 +3,73 @@ package invitations
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/gopernicus/gopernicus/core/auth/authorization"
-	invitationsrepo "github.com/gopernicus/gopernicus/core/repositories/rebac/invitations"
 	"github.com/gopernicus/gopernicus/infrastructure/events"
 	"github.com/gopernicus/gopernicus/sdk/fop"
 )
 
 // =============================================================================
-// Mock invitations store
+// Fake invitation repository (implements InvitationRepository)
 // =============================================================================
 
-type mockInvitationStore struct {
-	invitations map[string]invitationsrepo.Invitation // by ID
-	byToken     map[string]invitationsrepo.Invitation // by token_hash
+type fakeInvitationRepo struct {
+	invitations map[string]Invitation // by ID
+	byToken     map[string]Invitation // by token_hash
 	createErr   error
 	updateErr   error
 	deleteErr   error
 
-	createdInputs []invitationsrepo.CreateInvitation
+	createdInputs []CreateInvitation
 	updatedInputs []struct {
 		ID    string
-		Input invitationsrepo.UpdateInvitation
+		Input UpdateInvitation
 	}
 	deletedIDs []string
 }
 
-func newMockInvitationStore() *mockInvitationStore {
-	return &mockInvitationStore{
-		invitations: make(map[string]invitationsrepo.Invitation),
-		byToken:     make(map[string]invitationsrepo.Invitation),
+func newFakeInvitationRepo() *fakeInvitationRepo {
+	return &fakeInvitationRepo{
+		invitations: make(map[string]Invitation),
+		byToken:     make(map[string]Invitation),
 	}
 }
 
-func (m *mockInvitationStore) addInvitation(inv invitationsrepo.Invitation) {
+func (m *fakeInvitationRepo) addInvitation(inv Invitation) {
 	m.invitations[inv.InvitationID] = inv
 	if inv.TokenHash != "" {
 		m.byToken[inv.TokenHash] = inv
 	}
 }
 
-func (m *mockInvitationStore) Get(_ context.Context, id string) (invitationsrepo.Invitation, error) {
+func (m *fakeInvitationRepo) Get(_ context.Context, id string) (Invitation, error) {
 	inv, ok := m.invitations[id]
 	if !ok {
-		return invitationsrepo.Invitation{}, invitationsrepo.ErrInvitationNotFound
+		return Invitation{}, ErrInvitationNotFound
 	}
 	return inv, nil
 }
 
-func (m *mockInvitationStore) GetByToken(_ context.Context, tokenHash string, _ time.Time) (invitationsrepo.Invitation, error) {
+func (m *fakeInvitationRepo) GetByToken(_ context.Context, tokenHash string, _ time.Time) (Invitation, error) {
 	inv, ok := m.byToken[tokenHash]
 	if !ok {
-		return invitationsrepo.Invitation{}, invitationsrepo.ErrInvitationNotFound
+		return Invitation{}, ErrInvitationNotFound
 	}
 	return inv, nil
 }
 
-func (m *mockInvitationStore) Create(_ context.Context, input invitationsrepo.CreateInvitation) (invitationsrepo.Invitation, error) {
+func (m *fakeInvitationRepo) Create(_ context.Context, input CreateInvitation) (Invitation, error) {
 	if m.createErr != nil {
-		return invitationsrepo.Invitation{}, m.createErr
+		return Invitation{}, m.createErr
 	}
 	m.createdInputs = append(m.createdInputs, input)
-	inv := invitationsrepo.Invitation{
+	if input.InvitationID == "" {
+		input.InvitationID = fmt.Sprintf("inv-%d", len(m.invitations)+1)
+	}
+	inv := Invitation{
 		InvitationID:      input.InvitationID,
 		ResourceType:      input.ResourceType,
 		ResourceID:        input.ResourceID,
@@ -88,17 +91,17 @@ func (m *mockInvitationStore) Create(_ context.Context, input invitationsrepo.Cr
 	return inv, nil
 }
 
-func (m *mockInvitationStore) Update(_ context.Context, id string, input invitationsrepo.UpdateInvitation) (invitationsrepo.Invitation, error) {
+func (m *fakeInvitationRepo) Update(_ context.Context, id string, input UpdateInvitation) (Invitation, error) {
 	if m.updateErr != nil {
-		return invitationsrepo.Invitation{}, m.updateErr
+		return Invitation{}, m.updateErr
 	}
 	inv, ok := m.invitations[id]
 	if !ok {
-		return invitationsrepo.Invitation{}, invitationsrepo.ErrInvitationNotFound
+		return Invitation{}, ErrInvitationNotFound
 	}
 	m.updatedInputs = append(m.updatedInputs, struct {
 		ID    string
-		Input invitationsrepo.UpdateInvitation
+		Input UpdateInvitation
 	}{id, input})
 
 	if input.InvitationStatus != nil {
@@ -122,24 +125,24 @@ func (m *mockInvitationStore) Update(_ context.Context, id string, input invitat
 	return inv, nil
 }
 
-func (m *mockInvitationStore) Delete(_ context.Context, id string) error {
+func (m *fakeInvitationRepo) Delete(_ context.Context, id string) error {
 	if m.deleteErr != nil {
 		return m.deleteErr
 	}
 	if _, ok := m.invitations[id]; !ok {
-		return invitationsrepo.ErrInvitationNotFound
+		return ErrInvitationNotFound
 	}
 	m.deletedIDs = append(m.deletedIDs, id)
 	delete(m.invitations, id)
 	return nil
 }
 
-func (m *mockInvitationStore) ListByResource(_ context.Context, _ invitationsrepo.FilterListByResource, _, _ string, _ fop.Order, _ fop.PageStringCursor, _ bool) ([]invitationsrepo.Invitation, error) {
-	return nil, nil
+func (m *fakeInvitationRepo) ListByResource(_ context.Context, _ FilterListByResource, _, _ string, _ fop.Order, _ fop.PageStringCursor) ([]Invitation, fop.Pagination, error) {
+	return nil, fop.Pagination{}, nil
 }
 
-func (m *mockInvitationStore) ListByIdentifier(_ context.Context, filter invitationsrepo.FilterListByIdentifier, identifier string, _ string, _ time.Time, _ fop.Order, _ fop.PageStringCursor, _ bool) ([]invitationsrepo.Invitation, error) {
-	var results []invitationsrepo.Invitation
+func (m *fakeInvitationRepo) ListByIdentifier(_ context.Context, filter FilterListByIdentifier, identifier string, _ string, _ time.Time, _ fop.Order, _ fop.PageStringCursor) ([]Invitation, fop.Pagination, error) {
+	var results []Invitation
 	for _, inv := range m.invitations {
 		if inv.Identifier != identifier {
 			continue
@@ -155,11 +158,11 @@ func (m *mockInvitationStore) ListByIdentifier(_ context.Context, filter invitat
 		}
 		results = append(results, inv)
 	}
-	return results, nil
+	return results, fop.Pagination{}, nil
 }
 
-func (m *mockInvitationStore) ListBySubject(_ context.Context, filter invitationsrepo.FilterListBySubject, subjectID string, _ fop.Order, _ fop.PageStringCursor, _ bool) ([]invitationsrepo.Invitation, error) {
-	var results []invitationsrepo.Invitation
+func (m *fakeInvitationRepo) ListBySubject(_ context.Context, filter FilterListBySubject, subjectID string, _ fop.Order, _ fop.PageStringCursor) ([]Invitation, fop.Pagination, error) {
+	var results []Invitation
 	for _, inv := range m.invitations {
 		if inv.ResolvedSubjectID == nil || *inv.ResolvedSubjectID != subjectID {
 			continue
@@ -175,16 +178,8 @@ func (m *mockInvitationStore) ListBySubject(_ context.Context, filter invitation
 		}
 		results = append(results, inv)
 	}
-	return results, nil
+	return results, fop.Pagination{}, nil
 }
-
-func (m *mockInvitationStore) List(_ context.Context, _ invitationsrepo.FilterList, _ fop.Order, _ fop.PageStringCursor, _ bool) ([]invitationsrepo.Invitation, error) {
-	return nil, nil
-}
-
-func (m *mockInvitationStore) SoftDelete(_ context.Context, _ string) error { return nil }
-func (m *mockInvitationStore) Archive(_ context.Context, _ string) error    { return nil }
-func (m *mockInvitationStore) Restore(_ context.Context, _ string) error    { return nil }
 
 // =============================================================================
 // Mock authorization store
@@ -303,22 +298,21 @@ func testSchema() authorization.Schema {
 }
 
 type testHarness struct {
-	store   *mockInvitationStore
+	store   *fakeInvitationRepo
 	authz   *mockAuthzStore
 	bus     *mockBus
 	useCase *Inviter
 }
 
 func newTestHarness(opts ...Option) *testHarness {
-	store := newMockInvitationStore()
+	store := newFakeInvitationRepo()
 	authzStore := &mockAuthzStore{}
 	bus := &mockBus{}
 
-	repo := invitationsrepo.NewRepository(store)
 	authorizer := authorization.NewAuthorizer(authzStore, testSchema(), authorization.Config{MaxTraversalDepth: 10})
 
 	allOpts := append([]Option{}, opts...)
-	c := NewInviter(repo, authorizer, bus, allOpts...)
+	c := NewInviter(store, authorizer, bus, allOpts...)
 
 	return &testHarness{
 		store:   store,
@@ -328,8 +322,8 @@ func newTestHarness(opts ...Option) *testHarness {
 	}
 }
 
-func pendingInvitation(id, resourceType, resourceID, relation, email, tokenHash string, autoAccept bool) invitationsrepo.Invitation {
-	return invitationsrepo.Invitation{
+func pendingInvitation(id, resourceType, resourceID, relation, email, tokenHash string, autoAccept bool) Invitation {
+	return Invitation{
 		InvitationID:     id,
 		ResourceType:     resourceType,
 		ResourceID:       resourceID,
