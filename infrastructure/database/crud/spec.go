@@ -54,6 +54,13 @@ type Set struct {
 	Val any
 }
 
+// KeyVal is one key predicate (column = value) for operations addressed by
+// primary key. Composite keys pass one KeyVal per key column.
+type KeyVal struct {
+	Col string
+	Val any
+}
+
 // SearchSpec declares search intent; the dialect owns rendering.
 type SearchSpec struct {
 	Strategy SearchStrategy

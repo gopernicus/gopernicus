@@ -243,9 +243,18 @@ func (s *Store[T, F, C, U]) Create(ctx context.Context, input C) (T, error) {
 // Update applies the non-nil fields of the update struct plus AutoNow
 // columns, returning the stored row.
 func (s *Store[T, F, C, U]) Update(ctx context.Context, id string, input U) (T, error) {
+	return s.UpdateBy(ctx, []KeyVal{{Col: s.spec.PK, Val: id}}, input)
+}
+
+// UpdateBy is Update keyed by an explicit predicate list — composite primary
+// keys pass one KeyVal per key column. Predicates join with AND.
+func (s *Store[T, F, C, U]) UpdateBy(ctx context.Context, keys []KeyVal, input U) (T, error) {
 	var zero T
 	if s.spec.Updates == nil {
 		return zero, fmt.Errorf("crud: %s: no Updates mapping declared", s.spec.Table)
+	}
+	if len(keys) == 0 {
+		return zero, fmt.Errorf("crud: %s: UpdateBy requires at least one key", s.spec.Table)
 	}
 
 	sets := s.spec.Updates(input)
@@ -273,8 +282,17 @@ func (s *Store[T, F, C, U]) Update(ctx context.Context, id string, input U) (T, 
 		clauses[i] = col + " = " + args.Add(timeAware(s.d, set.Val))
 	}
 
+	wheres := make([]string, len(keys))
+	for i, key := range keys {
+		col, err := s.d.QuoteIdent(key.Col)
+		if err != nil {
+			return zero, fmt.Errorf("update: %w", err)
+		}
+		wheres[i] = col + " = " + args.Add(key.Val)
+	}
+
 	query := "UPDATE " + s.quotedTable + " SET " + strings.Join(clauses, ", ") +
-		" WHERE " + s.quotedPK + " = " + args.Add(id) + " RETURNING " + s.selectList()
+		" WHERE " + strings.Join(wheres, " AND ") + " RETURNING " + s.selectList()
 
 	rows, err := s.q.Query(ctx, query, args.Values()...)
 	if err != nil {
