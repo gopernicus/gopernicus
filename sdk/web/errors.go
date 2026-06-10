@@ -99,6 +99,13 @@ func (fe FieldErrors) Error() string {
 //	    return
 //	}
 func ErrValidation(err error) *Error {
+	// A body that overran MaxBodySize fails the decode read with
+	// *http.MaxBytesError — surface the documented 413 rather than a generic
+	// 400, so the body-limit middleware's contract actually holds.
+	var mbe *http.MaxBytesError
+	if errors.As(err, &mbe) {
+		return ErrPayloadTooLarge("request body exceeds the maximum allowed size")
+	}
 	var fe FieldErrors
 	if errors.As(err, &fe) {
 		return &Error{
@@ -114,6 +121,11 @@ func ErrValidation(err error) *Error {
 // ErrBadRequest returns a 400 error.
 func ErrBadRequest(msg string) *Error {
 	return &Error{Status: http.StatusBadRequest, Message: msg, Code: "bad_request"}
+}
+
+// ErrPayloadTooLarge returns a 413 error.
+func ErrPayloadTooLarge(msg string) *Error {
+	return &Error{Status: http.StatusRequestEntityTooLarge, Message: msg, Code: "payload_too_large"}
 }
 
 // ErrUnauthorized returns a 401 error.
