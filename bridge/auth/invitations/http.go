@@ -3,10 +3,8 @@ package invitations
 import (
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/gopernicus/gopernicus/bridge/transit/httpmid"
-	"github.com/gopernicus/gopernicus/core/auth/authorization"
 	invitationscore "github.com/gopernicus/gopernicus/core/auth/invitations"
 	invitationsrepo "github.com/gopernicus/gopernicus/core/repositories/rebac/invitations"
 	"github.com/gopernicus/gopernicus/sdk/fop"
@@ -15,19 +13,20 @@ import (
 
 // AddHttpRoutes registers invitation endpoints on the given route group.
 func (b *Bridge) AddHttpRoutes(group *web.RouteGroup) {
-	// Create + list — authorized against the target resource in-handler
-	// because resource_type is dynamic (tenant, project, etc.).
+	// Create + list — authorized against the target resource via
+	// AuthorizeDynamicParam: resource_type is dynamic (tenant, project, etc.).
 	group.POST("/{resource_type}/{resource_id}", b.httpCreate,
 		httpmid.MaxBodySize(httpmid.DefaultBodySize),
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		// AUTHORZATION HANDLED In httpCreate func
+		httpmid.AuthorizeDynamicParam(b.authorizer, b.log, b.jsonErrors, "manage", "resource_type", "resource_id"),
 	)
 	group.GET("/{resource_type}/{resource_id}",
 		b.httpListByResource,
 		httpmid.MaxBodySize(httpmid.DefaultBodySize),
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
+		httpmid.AuthorizeDynamicParam(b.authorizer, b.log, b.jsonErrors, "manage", "resource_type", "resource_id"),
 	)
 
 	group.POST("/{invitation_id}/cancel", b.httpCancel,
@@ -73,10 +72,6 @@ func (b *Bridge) httpCreate(w http.ResponseWriter, r *http.Request) {
 	resourceType := web.Param(r, "resource_type")
 	resourceID := web.Param(r, "resource_id")
 
-	if !b.authorizeResource(w, r, resourceType, resourceID, "manage") {
-		return
-	}
-
 	req, err := web.DecodeJSON[CreateInvitationRequest](r)
 	if err != nil {
 		web.RespondJSONError(w, web.ErrValidation(err))
@@ -117,10 +112,6 @@ func (b *Bridge) httpCreate(w http.ResponseWriter, r *http.Request) {
 func (b *Bridge) httpListByResource(w http.ResponseWriter, r *http.Request) {
 	resourceType := web.Param(r, "resource_type")
 	resourceID := web.Param(r, "resource_id")
-
-	if !b.authorizeResource(w, r, resourceType, resourceID, "manage") {
-		return
-	}
 
 	page, err := fop.ParsePageStringCursor(
 		r.URL.Query().Get("limit"),
@@ -340,45 +331,6 @@ func (b *Bridge) httpDecline(w http.ResponseWriter, r *http.Request) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-// authorizeResource checks if the authenticated subject has the given permission
-// on a dynamic resource type/ID. Used for create/list where the resource type
-// comes from the URL and isn't known at middleware construction time.
-func (b *Bridge) authorizeResource(w http.ResponseWriter, r *http.Request, resourceType, resourceID, permission string) bool {
-	subject := httpmid.GetSubject(r.Context())
-	subjectType, subjectID, ok := strings.Cut(subject, ":")
-	if !ok || subjectID == "" {
-		b.jsonErrors.RenderError(w, r, httpmid.ErrKindUnauthenticated)
-		return false
-	}
-
-	result, err := b.authorizer.Check(r.Context(), authorization.CheckRequest{
-		Subject:    authorization.Subject{Type: subjectType, ID: subjectID},
-		Permission: permission,
-		Resource:   authorization.Resource{Type: resourceType, ID: resourceID},
-	})
-	if err != nil {
-		b.log.ErrorContext(r.Context(), "authorize: check failed",
-			"error", err,
-			"subject", subject,
-			"permission", permission,
-			"resource", resourceType+":"+resourceID,
-		)
-		b.jsonErrors.RenderError(w, r, httpmid.ErrKindInternal)
-		return false
-	}
-
-	if !result.Allowed {
-		b.log.WarnContext(r.Context(), "authorize: denied",
-			"subject", subject,
-			"permission", permission,
-			"resource", resourceType+":"+resourceID,
-		)
-		b.jsonErrors.RenderError(w, r, httpmid.ErrKindForbidden)
-		return false
-	}
-
-	return true
-}
 
 func toInvitationResponse(inv invitationsrepo.Invitation) *InvitationResponse {
 	return &InvitationResponse{
