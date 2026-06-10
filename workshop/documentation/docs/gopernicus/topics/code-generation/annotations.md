@@ -8,8 +8,6 @@ title: Annotations
 Annotations are comments in `queries.sql` that tell the generator what to produce. Each `@func` starts a new query block; all other annotations modify that block's behavior.
 
 ```sql
--- @database: primary
-
 -- @func: ListUsers
 -- @filter:conditions *,-record_state
 -- @search: ilike(email, display_name)
@@ -29,22 +27,11 @@ LIMIT $limit
 
 File-level annotations appear at the top of `queries.sql`, before the first `@func` block. They configure generation for the whole entity.
 
-### `@database`
-
-Specifies which database connection pool to use for all queries in the file.
-
-```sql
--- @database: analytics
-```
-
-Must match a database name in `gopernicus.yml`. Defaults to `"primary"` if omitted.
-
 ### `@skip-integration-test`
 
 Suppresses generation of the `*pgx/generated_test.go` smoke test file for the entity. A previously generated file is removed on the next `gopernicus generate` run.
 
 ```sql
--- @database: primary
 -- @skip-integration-test
 -- Nodes carries cross-column invariants the generic fixture cannot
 -- satisfy (kind='entity' requires exactly one of three nullable FKs);

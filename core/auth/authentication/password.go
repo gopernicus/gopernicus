@@ -14,6 +14,10 @@ import (
 // If revokeOtherSessions is true, all sessions except the given session are
 // revoked, forcing re-authentication on other devices.
 func (a *Authenticator) ChangePassword(ctx context.Context, userID, sessionID, currentPassword, newPassword string, revokeOtherSessions bool) error {
+	if err := ValidatePassword(newPassword); err != nil {
+		return fmt.Errorf("%w: %w", ErrWeakPassword, err)
+	}
+
 	// Verify the current password.
 	pw, err := a.repositories.passwords.GetByUserID(ctx, userID)
 	if err != nil {
@@ -135,6 +139,10 @@ func (a *Authenticator) InitiatePasswordReset(ctx context.Context, email string,
 //
 // All sessions for the user are revoked, forcing re-authentication.
 func (a *Authenticator) ResetPassword(ctx context.Context, token, newPassword string) error {
+	if err := ValidatePassword(newPassword); err != nil {
+		return fmt.Errorf("%w: %w", ErrWeakPassword, err)
+	}
+
 	tokenHash, err := hashToken(token)
 	if err != nil {
 		return ErrCodeInvalid

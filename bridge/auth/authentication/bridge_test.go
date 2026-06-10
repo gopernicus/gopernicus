@@ -5,8 +5,48 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gopernicus/gopernicus/bridge/transit/allowlist"
 	coreauth "github.com/gopernicus/gopernicus/core/auth/authentication"
 )
+
+// TestResolveOrigin_RejectsUnlistedAppOrigin pins the AS5 fix: a client-supplied
+// origin (carried in OAuth state) is honored only when allow-listed, so a
+// post-OAuth callback can't be turned into an open redirect that leaks the
+// session cookies just set.
+func TestResolveOrigin_RejectsUnlistedAppOrigin(t *testing.T) {
+	m, err := allowlist.New([]string{"https://app.example.com"})
+	if err != nil {
+		t.Fatalf("allowlist.New: %v", err)
+	}
+	b := &Bridge{originMatcher: m}
+	fallback := m.Origins()[0] // canonicalized allowed frontend
+
+	// An allow-listed origin is honored (Matches handles canonicalization).
+	if got := b.resolveOrigin("https://app.example.com"); !m.Matches(got) {
+		t.Errorf("allow-listed origin = %q, want an allow-listed result", got)
+	}
+	// The critical assertion: an attacker origin is NEVER returned.
+	if got := b.resolveOrigin("https://evil.com"); got == "https://evil.com" || got != fallback {
+		t.Errorf("unlisted (attacker) origin = %q, want fallback %q (never the attacker origin)", got, fallback)
+	}
+	if got := b.resolveOrigin(""); got != fallback {
+		t.Errorf("empty origin = %q, want fallback %q", got, fallback)
+	}
+}
+
+// TestResolveOrigin_LegacyModePreservesBehavior: with no allow-list configured,
+// the client origin passes through unchanged (legacy mode; startup warns).
+func TestResolveOrigin_LegacyModePreservesBehavior(t *testing.T) {
+	m, err := allowlist.New(nil)
+	if err != nil {
+		t.Fatalf("allowlist.New(nil): %v", err)
+	}
+	b := &Bridge{originMatcher: m}
+
+	if got := b.resolveOrigin("https://anything.example.com"); got != "https://anything.example.com" {
+		t.Errorf("legacy mode = %q, want passthrough", got)
+	}
+}
 
 func TestBuildAllowedRedirectURIs(t *testing.T) {
 	tests := []struct {

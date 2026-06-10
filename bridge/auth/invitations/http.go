@@ -3,30 +3,29 @@ package invitations
 import (
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/gopernicus/gopernicus/bridge/transit/httpmid"
-	"github.com/gopernicus/gopernicus/core/auth/authorization"
 	invitationscore "github.com/gopernicus/gopernicus/core/auth/invitations"
-	invitationsrepo "github.com/gopernicus/gopernicus/core/repositories/rebac/invitations"
 	"github.com/gopernicus/gopernicus/sdk/fop"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
 
 // AddHttpRoutes registers invitation endpoints on the given route group.
 func (b *Bridge) AddHttpRoutes(group *web.RouteGroup) {
-	// Create + list — authorized against the target resource in-handler
-	// because resource_type is dynamic (tenant, project, etc.).
+	// Create + list — authorized against the target resource via
+	// AuthorizeDynamicParam: resource_type is dynamic (tenant, project, etc.).
 	group.POST("/{resource_type}/{resource_id}", b.httpCreate,
 		httpmid.MaxBodySize(httpmid.DefaultBodySize),
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		// AUTHORZATION HANDLED In httpCreate func
+		httpmid.AuthorizeDynamicParam(b.authorizer, b.log, b.jsonErrors, "manage", "resource_type", "resource_id"),
 	)
 	group.GET("/{resource_type}/{resource_id}",
 		b.httpListByResource,
+		httpmid.MaxBodySize(httpmid.DefaultBodySize),
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
+		httpmid.AuthorizeDynamicParam(b.authorizer, b.log, b.jsonErrors, "manage", "resource_type", "resource_id"),
 	)
 
 	group.POST("/{invitation_id}/cancel", b.httpCancel,
@@ -45,18 +44,22 @@ func (b *Bridge) AddHttpRoutes(group *web.RouteGroup) {
 
 	// Self-service — authenticated user lists their own invitations.
 	group.GET("/mine", b.httpListMine,
+		httpmid.MaxBodySize(httpmid.DefaultBodySize),
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors, httpmid.WithUserSession()),
 		httpmid.RateLimit(b.rateLimiter, b.log),
 	)
 
 	// Accept — authenticated with full user context (need email for verification).
 	group.POST("/accept", b.httpAccept,
+		httpmid.MaxBodySize(httpmid.DefaultBodySize),
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors, httpmid.WithUserSession()),
 		httpmid.RateLimit(b.rateLimiter, b.log))
 
-	// Decline — public, email-verified in handler.
+	// Decline — public (email-verified in handler), so rate limiting is the
+	// only brake on invitation_id×identifier brute force.
 	group.POST("/{invitation_id}/decline", b.httpDecline,
 		httpmid.MaxBodySize(httpmid.DefaultBodySize),
+		httpmid.RateLimit(b.rateLimiter, b.log),
 	)
 }
 
@@ -67,10 +70,6 @@ func (b *Bridge) AddHttpRoutes(group *web.RouteGroup) {
 func (b *Bridge) httpCreate(w http.ResponseWriter, r *http.Request) {
 	resourceType := web.Param(r, "resource_type")
 	resourceID := web.Param(r, "resource_id")
-
-	if !b.authorizeResource(w, r, resourceType, resourceID, "manage") {
-		return
-	}
 
 	req, err := web.DecodeJSON[CreateInvitationRequest](r)
 	if err != nil {
@@ -113,14 +112,10 @@ func (b *Bridge) httpListByResource(w http.ResponseWriter, r *http.Request) {
 	resourceType := web.Param(r, "resource_type")
 	resourceID := web.Param(r, "resource_id")
 
-	if !b.authorizeResource(w, r, resourceType, resourceID, "manage") {
-		return
-	}
-
 	page, err := fop.ParsePageStringCursor(
 		r.URL.Query().Get("limit"),
 		r.URL.Query().Get("cursor"),
-		invitationsrepo.MaxLimitListByResource,
+		invitationscore.MaxLimitListByResource,
 	)
 	if err != nil {
 		web.RespondJSONError(w, web.ErrBadRequest("invalid pagination: "+err.Error()))
@@ -128,15 +123,15 @@ func (b *Bridge) httpListByResource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	orderBy, err := fop.ParseOrder(
-		invitationsrepo.OrderByFields,
+		invitationscore.OrderByFields,
 		r.URL.Query().Get("order"),
-		fop.NewOrder(invitationsrepo.OrderByCreatedAt, fop.DESC),
+		fop.NewOrder(invitationscore.OrderByCreatedAt, fop.DESC),
 	)
 	if err != nil {
 		web.RespondJSONError(w, web.ErrBadRequest("invalid order: "+err.Error()))
 		return
 	}
-	filter := invitationsrepo.FilterListByResource{}
+	filter := invitationscore.FilterListByResource{}
 	if v := r.URL.Query().Get("status"); v != "" {
 		filter.InvitationStatus = &v
 	}
@@ -216,7 +211,7 @@ func (b *Bridge) httpListMine(w http.ResponseWriter, r *http.Request) {
 	page, err := fop.ParsePageStringCursor(
 		r.URL.Query().Get("limit"),
 		r.URL.Query().Get("cursor"),
-		invitationsrepo.MaxLimitListBySubject,
+		invitationscore.MaxLimitListBySubject,
 	)
 	if err != nil {
 		web.RespondJSONError(w, web.ErrBadRequest("invalid pagination: "+err.Error()))
@@ -224,16 +219,16 @@ func (b *Bridge) httpListMine(w http.ResponseWriter, r *http.Request) {
 	}
 
 	orderBy, err := fop.ParseOrder(
-		invitationsrepo.OrderByFields,
+		invitationscore.OrderByFields,
 		r.URL.Query().Get("order"),
-		fop.NewOrder(invitationsrepo.OrderByCreatedAt, fop.DESC),
+		fop.NewOrder(invitationscore.OrderByCreatedAt, fop.DESC),
 	)
 	if err != nil {
 		web.RespondJSONError(w, web.ErrBadRequest("invalid order: "+err.Error()))
 		return
 	}
 
-	filter := invitationsrepo.FilterListBySubject{}
+	filter := invitationscore.FilterListBySubject{}
 	if v := r.URL.Query().Get("status"); v != "" {
 		filter.InvitationStatus = &v
 	}
@@ -335,47 +330,8 @@ func (b *Bridge) httpDecline(w http.ResponseWriter, r *http.Request) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-// authorizeResource checks if the authenticated subject has the given permission
-// on a dynamic resource type/ID. Used for create/list where the resource type
-// comes from the URL and isn't known at middleware construction time.
-func (b *Bridge) authorizeResource(w http.ResponseWriter, r *http.Request, resourceType, resourceID, permission string) bool {
-	subject := httpmid.GetSubject(r.Context())
-	subjectType, subjectID, ok := strings.Cut(subject, ":")
-	if !ok || subjectID == "" {
-		b.jsonErrors.RenderError(w, r, httpmid.ErrKindUnauthenticated)
-		return false
-	}
 
-	result, err := b.authorizer.Check(r.Context(), authorization.CheckRequest{
-		Subject:    authorization.Subject{Type: subjectType, ID: subjectID},
-		Permission: permission,
-		Resource:   authorization.Resource{Type: resourceType, ID: resourceID},
-	})
-	if err != nil {
-		b.log.ErrorContext(r.Context(), "authorize: check failed",
-			"error", err,
-			"subject", subject,
-			"permission", permission,
-			"resource", resourceType+":"+resourceID,
-		)
-		b.jsonErrors.RenderError(w, r, httpmid.ErrKindInternal)
-		return false
-	}
-
-	if !result.Allowed {
-		b.log.WarnContext(r.Context(), "authorize: denied",
-			"subject", subject,
-			"permission", permission,
-			"resource", resourceType+":"+resourceID,
-		)
-		b.jsonErrors.RenderError(w, r, httpmid.ErrKindForbidden)
-		return false
-	}
-
-	return true
-}
-
-func toInvitationResponse(inv invitationsrepo.Invitation) *InvitationResponse {
+func toInvitationResponse(inv invitationscore.Invitation) *InvitationResponse {
 	return &InvitationResponse{
 		InvitationID:   inv.InvitationID,
 		ResourceType:   inv.ResourceType,
@@ -391,7 +347,7 @@ func toInvitationResponse(inv invitationsrepo.Invitation) *InvitationResponse {
 	}
 }
 
-func toInvitationResponses(invs []invitationsrepo.Invitation) []InvitationResponse {
+func toInvitationResponses(invs []invitationscore.Invitation) []InvitationResponse {
 	out := make([]InvitationResponse, len(invs))
 	for i, inv := range invs {
 		out[i] = *toInvitationResponse(inv)

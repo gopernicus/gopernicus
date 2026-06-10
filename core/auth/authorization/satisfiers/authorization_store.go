@@ -30,11 +30,29 @@ type relationshipRepo interface {
 // AuthorizationStoreSatisfier satisfies authorization.Storer using the generated
 // rebac_relationships repository.
 type AuthorizationStoreSatisfier struct {
-	repo relationshipRepo
+	repo       relationshipRepo
+	generateID func() (string, error)
 }
 
-func NewAuthorizationStoreSatisfier(repo relationshipRepo) *AuthorizationStoreSatisfier {
-	return &AuthorizationStoreSatisfier{repo: repo}
+// Option configures an AuthorizationStoreSatisfier.
+type Option func(*AuthorizationStoreSatisfier)
+
+// WithGenerateID overrides the default relationship ID generator
+// (cryptids.GenerateID) — inject a deterministic generator in tests or an
+// alternative scheme without touching the adapter.
+func WithGenerateID(fn func() (string, error)) Option {
+	return func(s *AuthorizationStoreSatisfier) { s.generateID = fn }
+}
+
+func NewAuthorizationStoreSatisfier(repo relationshipRepo, opts ...Option) *AuthorizationStoreSatisfier {
+	s := &AuthorizationStoreSatisfier{
+		repo:       repo,
+		generateID: cryptids.GenerateID,
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 var _ authorization.Storer = (*AuthorizationStoreSatisfier)(nil)
@@ -83,7 +101,7 @@ func (s *AuthorizationStoreSatisfier) CreateRelationships(ctx context.Context, r
 
 	inputs := make([]rebacrelationships.CreateRebacRelationship, len(relationships))
 	for i, r := range relationships {
-		id, err := cryptids.GenerateID()
+		id, err := s.generateID()
 		if err != nil {
 			return fmt.Errorf("generate relationship id: %w", err)
 		}

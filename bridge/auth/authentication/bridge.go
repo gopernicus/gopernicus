@@ -167,12 +167,20 @@ func stripDefaultPort(origin string) string {
 	return u.String()
 }
 
-// resolveOrigin returns appOrigin if non-empty, otherwise falls back to first allowed frontend.
+// resolveOrigin chooses the post-OAuth redirect origin. A client-supplied
+// origin (carried in OAuth state from /oauth/initiate) is honored only when it
+// is on the allow-list; an unlisted origin falls back to a known frontend.
+// Without this check an attacker who seeded AppOrigin at /oauth/initiate could
+// turn the authenticated callback into an open redirect that leaks the session
+// cookies just set (oauth.go setSessionCookies → resolveOrigin → 307). This
+// mirrors resolveResetURL's discipline. In legacy mode (no allow-list
+// configured — the startup warning covers it) the client origin is returned
+// unchanged, preserving pre-allowlist behavior.
 func (b *Bridge) resolveOrigin(appOrigin string) string {
-	if appOrigin != "" {
+	if appOrigin != "" && (b.originMatcher.Empty() || b.originMatcher.Matches(appOrigin)) {
 		return appOrigin
 	}
-	// Fallback to first allowed frontend for error redirects.
+	// Unlisted/empty origin: fall back to a known-safe allowed frontend.
 	origins := b.originMatcher.Origins()
 	if len(origins) > 0 {
 		return origins[0]

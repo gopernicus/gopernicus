@@ -24,6 +24,13 @@ func (b *Bridge) AddHttpRoutes(group *web.RouteGroup, authMid web.Middleware) {
 		return httpmid.RateLimit(b.rateLimiter, b.log, httpmid.WithKeyPrefix(prefix), httpmid.WithLimit(limit))
 	}
 
+	// Bound every auth request body. Credential/code payloads are tiny, so 64KB
+	// is generous; without this the unauthenticated /login, /register and
+	// /refresh routes io.ReadAll an unbounded body (memory-exhaustion DoS).
+	// Applied group-wide so new auth routes inherit it; harmless on the GET
+	// (body-less) OAuth routes.
+	group = group.Group("", httpmid.MaxBodySize(httpmid.SmallBodySize))
+
 	// Public routes — rate limited (falls back to IP for unauthenticated callers).
 	group.POST("/login", b.httpLogin, rl("auth:login", ratelimiter.PerMinute(120)))
 	group.POST("/register", b.httpRegister, rl("auth:register", ratelimiter.PerMinute(60)))
@@ -110,11 +117,14 @@ func (b *Bridge) httpRegister(w http.ResponseWriter, r *http.Request) {
 
 	_, err = b.authenticator.Register(r.Context(), req.Email, req.Password, req.DisplayName)
 	if err != nil {
-		// Register returns nil for duplicate emails (anti-enumeration),
-		// so any non-nil error is a genuine infrastructure failure.
-		b.log.ErrorContext(r.Context(), "registration failed", "error", err)
-		web.RespondJSONError(w, web.ErrInternal("registration failed"))
-		return
+		if !errs.IsExpected(err) {
+			// Unexpected errors (DB down, etc.) are genuine failures — return 500.
+			b.log.ErrorContext(r.Context(), "registration failed", "error", err)
+			web.RespondJSONError(w, web.ErrInternal("registration failed"))
+			return
+		}
+		// Expected domain errors are swallowed to prevent account enumeration —
+		// the response below is identical whether or not an account was created.
 	}
 
 	web.RespondJSON(w, http.StatusOK, SuccessResponse{

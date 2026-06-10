@@ -217,11 +217,11 @@ var (
 
 ## queries.sql
 
-The generation source. Annotations in SQL comments drive what gets generated. The `@database` annotation is declared once at the top; `@func` annotations mark the start of each query:
+The generation source. Annotations in SQL comments drive what gets generated; `@func` annotations mark the start of each query. (The database an entity binds to comes from `databases.<name>.domains` in `gopernicus.yml`, not from the file.)
+
+Feature entities (the auth, rebac, tenancy, events, and jobs repositories) have no project-local `queries.sql` — their specs ship with the framework, version-locked with it; creating `core/repositories/<domain>/<entity>/queries.sql` ejects the shipped spec and your file wins.
 
 ```sql
--- @database: primary
-
 -- @func: List
 -- @filter:conditions *
 -- @search: ilike(email, display_name)

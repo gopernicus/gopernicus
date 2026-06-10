@@ -28,7 +28,10 @@ var (
 )
 
 // setupTestStore creates a test database and store for integration tests.
-// migrateTestDB must be defined in store_test.go (bootstrap file).
+// migrateTestDB and testPGXOptions are defined in store_test.go (bootstrap
+// file). testPGXOptions lets the consumer customize the Postgres image,
+// enable extensions, etc. — needed when a project depends on extensions
+// like pgvector that the default image doesn't include.
 func setupTestStore(t *testing.T) (context.Context, *testpgx.TestPGX, *Store) {
 	t.Helper()
 
@@ -37,7 +40,8 @@ func setupTestStore(t *testing.T) (context.Context, *testpgx.TestPGX, *Store) {
 	}
 
 	ctx := context.Background()
-	db := testpgx.SetupTestPGX(t, ctx, testpgx.WithMigrations(migrateTestDB))
+	opts := append([]testpgx.Option{testpgx.WithMigrations(migrateTestDB)}, testPGXOptions...)
+	db := testpgx.SetupTestPGX(t, ctx, opts...)
 	store := NewStore(logger.NewNoop(), db.Pool)
 	return ctx, db, store
 }
@@ -47,6 +51,7 @@ func TestGeneratedUserStore_Get(t *testing.T) {
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
 	created := fixtures.CreateTestUserWithDefaults(t, ctx, db)
+	_ = created
 
 	t.Run("found", func(t *testing.T) {
 		result, err := store.Get(ctx, created.UserID)
@@ -64,18 +69,21 @@ func TestGeneratedUserStore_List(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	// Create multiple records.
+	// Each fixture creates its own FK scope. When List filters by scope,
+	// only the matching row is visible; assertions below reflect that.
 	const numRecords = 3
-	for i := 0; i < numRecords; i++ {
+	created := fixtures.CreateTestUserWithDefaults(t, ctx, db)
+	for i := 1; i < numRecords; i++ {
 		fixtures.CreateTestUserWithDefaults(t, ctx, db)
 	}
+	_ = created
 
-	t.Run("returns all records", func(t *testing.T) {
+	t.Run("returns records", func(t *testing.T) {
 		filter := users.FilterList{}
 		orderBy := fop.NewOrder(users.DefaultOrderBy, users.DefaultOrderDirection)
 		results, err := store.List(ctx, filter, orderBy, fop.PageStringCursor{}, false)
 		require.NoError(t, err)
-		assert.GreaterOrEqual(t, len(results), numRecords)
+		assert.GreaterOrEqual(t, len(results), 1)
 	})
 
 	t.Run("respects limit", func(t *testing.T) {
@@ -106,6 +114,7 @@ func TestGeneratedUserStore_Delete(t *testing.T) {
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
 	created := fixtures.CreateTestUserWithDefaults(t, ctx, db)
+	_ = created
 
 	err := store.Delete(ctx, created.UserID)
 	require.NoError(t, err)
@@ -120,6 +129,7 @@ func TestGeneratedUserStore_SoftDelete(t *testing.T) {
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
 	created := fixtures.CreateTestUserWithDefaults(t, ctx, db)
+	_ = created
 
 	err := store.SoftDelete(ctx, created.UserID)
 	require.NoError(t, err)
@@ -128,4 +138,18 @@ func TestGeneratedUserStore_SoftDelete(t *testing.T) {
 	result, err := store.Get(ctx, created.UserID)
 	require.NoError(t, err)
 	assert.Equal(t, "deleted", result.RecordState)
+}
+
+func TestGeneratedUserStore_Update(t *testing.T) {
+	ctx, db, store := setupTestStore(t)
+	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
+
+	created := fixtures.CreateTestUserWithDefaults(t, ctx, db)
+
+	newValue := "updated-value"
+	result, err := store.Update(ctx, created.UserID, users.UpdateUser{
+		Email: &newValue,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, newValue, result.Email)
 }

@@ -150,3 +150,31 @@ func BenchmarkGenerateID(b *testing.B) {
 		_, _ = GenerateID()
 	}
 }
+
+func TestGenerateUUID(t *testing.T) {
+	seen := make(map[string]bool)
+	for i := 0; i < 100; i++ {
+		id, err := GenerateUUID()
+		if err != nil {
+			t.Fatalf("GenerateUUID: %v", err)
+		}
+		if len(id) != 36 {
+			t.Fatalf("GenerateUUID length = %d, want 36 (%q)", len(id), id)
+		}
+		if id[8] != '-' || id[13] != '-' || id[18] != '-' || id[23] != '-' {
+			t.Fatalf("GenerateUUID %q missing canonical dashes", id)
+		}
+		if id[14] != '4' {
+			t.Fatalf("GenerateUUID %q version nibble = %c, want 4", id, id[14])
+		}
+		switch id[19] {
+		case '8', '9', 'a', 'b':
+		default:
+			t.Fatalf("GenerateUUID %q variant nibble = %c, want 8/9/a/b", id, id[19])
+		}
+		if seen[id] {
+			t.Fatalf("GenerateUUID produced duplicate %q", id)
+		}
+		seen[id] = true
+	}
+}

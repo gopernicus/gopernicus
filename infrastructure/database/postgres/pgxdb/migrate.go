@@ -3,7 +3,6 @@ package pgxdb
 import (
 	"context"
 	"crypto/sha256"
-	"embed"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -14,12 +13,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// RunMigrations runs all pending SQL migrations from the given embedded filesystem.
+// RunMigrations runs all pending SQL migrations from the given filesystem
+// (an embed.FS, os.DirFS, or any fs.FS). Files prefixed with "_" are skipped —
+// they are reflect artifacts (_public.sql), not migrations.
 // Migrations are applied in alphabetical order (use numeric prefixes: 001_xxx.sql, 002_xxx.sql).
 // Already-applied migrations are tracked in a schema_migrations table.
 // This is a forward-only system — no rollbacks. Checksums prevent accidental modification
 // of previously applied migrations.
-func RunMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsFS embed.FS, migrationsDir string) error {
+func RunMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsFS fs.FS, migrationsDir string) error {
 	if err := StatusCheck(ctx, pool); err != nil {
 		return fmt.Errorf("status check database: %w", err)
 	}
@@ -60,15 +61,16 @@ func createMigrationsTable(ctx context.Context, pool *pgxpool.Pool) error {
 	return err
 }
 
-func getMigrationFiles(migrationsFS embed.FS, migrationsDir string) ([]string, error) {
+func getMigrationFiles(migrationsFS fs.FS, migrationsDir string) ([]string, error) {
 	var files []string
 
 	err := fs.WalkDir(migrationsFS, migrationsDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if !d.IsDir() && strings.HasSuffix(path, ".sql") {
-			files = append(files, filepath.Base(path))
+		name := filepath.Base(path)
+		if !d.IsDir() && strings.HasSuffix(name, ".sql") && !strings.HasPrefix(name, "_") {
+			files = append(files, name)
 		}
 		return nil
 	})
@@ -81,7 +83,7 @@ func getMigrationFiles(migrationsFS embed.FS, migrationsDir string) ([]string, e
 	return files, nil
 }
 
-func applyMigration(ctx context.Context, pool *pgxpool.Pool, migrationsFS embed.FS, filePath string) error {
+func applyMigration(ctx context.Context, pool *pgxpool.Pool, migrationsFS fs.FS, filePath string) error {
 	version := filepath.Base(filePath)
 
 	content, err := fs.ReadFile(migrationsFS, filePath)

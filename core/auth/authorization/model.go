@@ -37,9 +37,9 @@ import (
 // Core Check Types
 // =============================================================================
 
-// Subject represents who is requesting access (user, apikey, service).
+// Subject represents who is requesting access.
 type Subject struct {
-	Type     string // "user", "apikey", "service"
+	Type     string // "user" or "service_account" (the runtime principal types)
 	ID       string
 	Relation string // optional, for "group#member" style
 }
@@ -151,7 +151,7 @@ type RelationDef struct {
 
 // SubjectTypeRef references a subject type, optionally with a relation.
 type SubjectTypeRef struct {
-	Type     string // "user", "group", "apikey", "application", "service"
+	Type     string // "user", "service_account", or a schema type like "group"
 	Relation string // optional: "member" for group#member
 }
 

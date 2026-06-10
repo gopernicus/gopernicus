@@ -207,41 +207,19 @@ func (a *Authenticator) VerifyOAuthLink(ctx context.Context, email, code string)
 		return nil, err
 	}
 
-	// Look up pending link.
-	stored, err := a.repositories.codes.Get(ctx, email, PurposePendingLink)
+	// Validate and consume the pending-link code — one-shot: lookup, expiry,
+	// constant-time compare, and attempt lockout live in
+	// ConsumeVerificationCode. Consuming before the downstream link steps is
+	// the documented safer default: a wrong-context failure burns the code
+	// and the user requests a new one.
+	data, err := a.ConsumeVerificationCode(ctx, email, code, PurposePendingLink)
 	if err != nil {
-		if errors.Is(err, errs.ErrNotFound) {
-			return nil, ErrCodeInvalid
-		}
-		return nil, fmt.Errorf("auth oauth verify: lookup code: %w", err)
-	}
-
-	if time.Now().UTC().After(stored.ExpiresAt) {
-		_ = a.repositories.codes.Delete(ctx, email, PurposePendingLink)
-		return nil, ErrCodeExpired
-	}
-
-	codeHash, err := hashToken(code)
-	if err != nil {
-		return nil, ErrCodeInvalid
-	}
-	if !hashEquals(codeHash, stored.CodeHash) {
-		if a.config.MaxVerificationAttempts > 0 {
-			count, err := a.repositories.codes.IncrementAttempts(ctx, email, PurposePendingLink)
-			if err != nil {
-				a.log.WarnContext(ctx, "failed to increment verification attempts", "error", err)
-			} else if count >= a.config.MaxVerificationAttempts {
-				_ = a.repositories.codes.Delete(ctx, email, PurposePendingLink)
-				a.log.WarnContext(ctx, "OAuth link verification code locked out", "attempts", count)
-				return nil, ErrTooManyAttempts
-			}
-		}
-		return nil, ErrCodeInvalid
+		return nil, err
 	}
 
 	// Parse pending link data.
 	var pending PendingOAuthLink
-	if err := json.Unmarshal(stored.Data, &pending); err != nil {
+	if err := json.Unmarshal(data, &pending); err != nil {
 		return nil, fmt.Errorf("auth oauth verify: parse pending link: %w", err)
 	}
 
@@ -282,7 +260,6 @@ func (a *Authenticator) VerifyOAuthLink(ctx context.Context, email, code string)
 	}
 
 	// Clean up.
-	_ = a.repositories.codes.Delete(ctx, email, PurposePendingLink)
 
 	// Mark email as verified (user proved ownership via code).
 	if err := a.repositories.users.SetEmailVerified(ctx, userID); err != nil {

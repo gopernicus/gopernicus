@@ -176,6 +176,44 @@ func AuthorizeParam(
 		func(r *http.Request) string { return r.PathValue(paramName) })
 }
 
+// AuthorizeDynamicParam authorizes against a resource whose TYPE and ID both
+// come from URL path parameters — for routes like
+// /{resource_type}/{resource_id} where the type isn't known at middleware
+// construction time. Must be used AFTER [Authenticate] middleware.
+//
+//	mux.Handle("POST /{resource_type}/{resource_id}", AuthorizeDynamicParam(
+//	    authorizer, log, jsonErrs, "manage", "resource_type", "resource_id")(handler))
+func AuthorizeDynamicParam(
+	authorizer PermissionChecker,
+	log *slog.Logger,
+	errors ErrorRenderer,
+	permission, typeParam, idParam string,
+) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := r.Context()
+			resourceType := r.PathValue(typeParam)
+			resourceID := r.PathValue(idParam)
+
+			if resourceType == "" {
+				log.ErrorContext(ctx, "authorize: empty resource type", "param", typeParam)
+				errors.RenderError(w, r, ErrKindBadRequest)
+				return
+			}
+
+			result, denial := checkAccess(ctx, authorizer, resourceType, permission, resourceID)
+			if denial != nil {
+				logAccessDenial(log, ctx, denial, permission, resourceType, resourceID)
+				errors.RenderError(w, r, denial.errorKind())
+				return
+			}
+
+			r = handleAccessAllowed(r, result, resourceType, resourceID)
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // AuthorizeType checks permission on a resource TYPE rather than a specific
 // instance. Uses "*" as the resource ID. Useful for list/create operations.
 //

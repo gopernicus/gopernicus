@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/core/auth/authorization"
-	invitationsrepo "github.com/gopernicus/gopernicus/core/repositories/rebac/invitations"
 	"github.com/gopernicus/gopernicus/infrastructure/cryptids"
 	"github.com/gopernicus/gopernicus/infrastructure/events"
 	"github.com/gopernicus/gopernicus/sdk/errs"
@@ -63,7 +62,7 @@ type MemberCheck func(ctx context.Context, resourceType, resourceID, subjectType
 
 // Inviter provides invitation business logic.
 type Inviter struct {
-	invitations *invitationsrepo.Repository
+	invitations InvitationRepository
 	authorizer  *authorization.Authorizer
 	hasher      *cryptids.SHA256Hasher
 	bus         events.Bus
@@ -87,7 +86,7 @@ func WithMemberCheck(fn MemberCheck) Option {
 
 // NewInviter creates a new invitation Inviter.
 func NewInviter(
-	invitationRepo *invitationsrepo.Repository,
+	invitationRepo InvitationRepository,
 	authorizer *authorization.Authorizer,
 	bus events.Bus,
 	opts ...Option,
@@ -126,7 +125,7 @@ type CreateResult struct {
 	DirectlyAdded bool
 
 	// Invitation is set when a pending invitation was created (DirectlyAdded == false).
-	Invitation *invitationsrepo.Invitation
+	Invitation *Invitation
 }
 
 // Create creates an invitation to a resource.
@@ -210,7 +209,7 @@ func (c *Inviter) createPendingInvitation(ctx context.Context, input CreateInput
 
 	expiresAt := time.Now().UTC().Add(time.Duration(InvitationExpiryDays) * 24 * time.Hour)
 
-	createInput := invitationsrepo.CreateInvitation{
+	createInput := CreateInvitation{
 		ResourceType:     input.ResourceType,
 		ResourceID:       input.ResourceID,
 		Relation:         input.Relation,
@@ -325,7 +324,7 @@ func (c *Inviter) Accept(ctx context.Context, input AcceptInput) (AcceptResult, 
 	// Check expiry.
 	if time.Now().UTC().After(inv.ExpiresAt) {
 		expired := StatusExpired
-		c.invitations.Update(ctx, inv.InvitationID, invitationsrepo.UpdateInvitation{
+		c.invitations.Update(ctx, inv.InvitationID, UpdateInvitation{
 			InvitationStatus: &expired,
 		})
 		return AcceptResult{}, ErrInvitationExpired
@@ -350,7 +349,7 @@ func (c *Inviter) Accept(ctx context.Context, input AcceptInput) (AcceptResult, 
 	// Update invitation status.
 	now := time.Now().UTC()
 	accepted := StatusAccepted
-	if _, err := c.invitations.Update(ctx, inv.InvitationID, invitationsrepo.UpdateInvitation{
+	if _, err := c.invitations.Update(ctx, inv.InvitationID, UpdateInvitation{
 		InvitationStatus:  &accepted,
 		AcceptedAt:        &now,
 		ResolvedSubjectID: &input.SubjectID,
@@ -429,7 +428,7 @@ func (c *Inviter) Cancel(ctx context.Context, invitationID string) error {
 
 // Resend regenerates the token and resets the expiry on an existing invitation.
 // The same invitation record is updated in-place — no new ID is created.
-func (c *Inviter) Resend(ctx context.Context, invitationID string) (*invitationsrepo.Invitation, error) {
+func (c *Inviter) Resend(ctx context.Context, invitationID string) (*Invitation, error) {
 	inv, err := c.invitations.Get(ctx, invitationID)
 	if err != nil {
 		return nil, ErrInvitationNotFound
@@ -454,7 +453,7 @@ func (c *Inviter) Resend(ctx context.Context, invitationID string) (*invitations
 	expiresAt := time.Now().UTC().Add(time.Duration(InvitationExpiryDays) * 24 * time.Hour)
 	pending := StatusPending
 
-	updated, err := c.invitations.Update(ctx, invitationID, invitationsrepo.UpdateInvitation{
+	updated, err := c.invitations.Update(ctx, invitationID, UpdateInvitation{
 		TokenHash:        &tokenHash,
 		InvitationStatus: &pending,
 		ExpiresAt:        &expiresAt,
@@ -494,10 +493,10 @@ func (c *Inviter) Resend(ctx context.Context, invitationID string) (*invitations
 func (c *Inviter) ListByResource(
 	ctx context.Context,
 	resourceType, resourceID string,
-	filter invitationsrepo.FilterListByResource,
+	filter FilterListByResource,
 	orderBy fop.Order,
 	page fop.PageStringCursor,
-) ([]invitationsrepo.Invitation, fop.Pagination, error) {
+) ([]Invitation, fop.Pagination, error) {
 	return c.invitations.ListByResource(ctx, filter, resourceType, resourceID, orderBy, page)
 }
 
@@ -505,10 +504,10 @@ func (c *Inviter) ListByResource(
 func (c *Inviter) ListBySubject(
 	ctx context.Context,
 	resolvedSubjectID string,
-	filter invitationsrepo.FilterListBySubject,
+	filter FilterListBySubject,
 	orderBy fop.Order,
 	page fop.PageStringCursor,
-) ([]invitationsrepo.Invitation, fop.Pagination, error) {
+) ([]Invitation, fop.Pagination, error) {
 	return c.invitations.ListBySubject(ctx, filter, resolvedSubjectID, orderBy, page)
 }
 
@@ -516,10 +515,10 @@ func (c *Inviter) ListBySubject(
 func (c *Inviter) ListByIdentifier(
 	ctx context.Context,
 	identifier, identifierType string,
-	filter invitationsrepo.FilterListByIdentifier,
+	filter FilterListByIdentifier,
 	orderBy fop.Order,
 	page fop.PageStringCursor,
-) ([]invitationsrepo.Invitation, fop.Pagination, error) {
+) ([]Invitation, fop.Pagination, error) {
 	return c.invitations.ListByIdentifier(ctx, filter, identifier, identifierType, time.Now().UTC(), orderBy, page)
 }
 
@@ -534,7 +533,7 @@ func (c *Inviter) ListByIdentifier(
 func (c *Inviter) ResolveOnRegistration(ctx context.Context, identifier, identifierType, subjectType, subjectID string) (int, error) {
 	pending := StatusPending
 	autoAccept := true
-	filter := invitationsrepo.FilterListByIdentifier{
+	filter := FilterListByIdentifier{
 		InvitationStatus: &pending,
 		AutoAccept:       &autoAccept,
 	}
@@ -565,7 +564,7 @@ func (c *Inviter) ResolveOnRegistration(ctx context.Context, identifier, identif
 		// Mark as accepted.
 		now := time.Now().UTC()
 		accepted := StatusAccepted
-		c.invitations.Update(ctx, inv.InvitationID, invitationsrepo.UpdateInvitation{
+		c.invitations.Update(ctx, inv.InvitationID, UpdateInvitation{
 			InvitationStatus:  &accepted,
 			AcceptedAt:        &now,
 			ResolvedSubjectID: &subjectID,

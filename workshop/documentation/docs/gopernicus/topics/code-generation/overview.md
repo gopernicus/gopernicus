@@ -22,6 +22,8 @@ The generator consumes four things:
 
 `queries.sql` defines what queries exist and how they behave. `bridge.yml` defines how those queries are exposed over HTTP. The reflected schema provides column types, constraints, and relationships. The manifest tells the generator which databases, domains, and features are in play.
 
+Feature entities (auth, rebac, tenancy, events, jobs) are the exception: their `queries.sql` specs ship with the framework instead of living in the project — the generator falls back to the shipped spec when no project-local file exists, and creating one ejects the shipped spec for that entity.
+
 ## Running the generator
 
 ```bash

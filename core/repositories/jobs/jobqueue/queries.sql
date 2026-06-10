@@ -1,5 +1,3 @@
--- @database: primary
-
 -- @func: List
 -- @filter:conditions *
 -- @search: ilike(event_type, correlation_id, tenant_id, aggregate_type, aggregate_id, status, worker_name, failure_reason)

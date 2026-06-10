@@ -28,6 +28,8 @@ Never edit generated files directly. Instead:
 - HTTP layer: modify bridge.yml, then run gopernicus generate
 - Both: see workshop/documentation/gopernicus/ for full annotation and config reference
 
+Feature entities (auth, rebac, tenancy, events, jobs) have no project-local queries.sql — their specs ship with the framework; create core/repositories/<domain>/<entity>/queries.sql to eject the shipped spec for that entity (your file wins).
+
 Bootstrap files (repository.go, bridge.go, routes.go, http.go, store.go) are created once and never overwritten. Add custom methods above the // gopernicus:start marker in Storer interfaces.
 
 ## Conventions

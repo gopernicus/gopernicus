@@ -413,7 +413,6 @@ type CreateTenantRequest struct {
 	Slug               string  `json:"slug,omitempty"`
 	Description        *string `json:"description,omitempty"`
 	CreatorPrincipalID string  `json:"creator_principal_id,omitempty"`
-	RecordState        string  `json:"record_state,omitempty"`
 }
 
 // Validate checks all field constraints. Called automatically by web.DecodeJSON.
@@ -425,7 +424,6 @@ func (r *CreateTenantRequest) Validate() error {
 	errs.AddErr("slug", validation.Required("slug", r.Slug))
 	errs.AddErr("slug", validation.Slug("slug", r.Slug))
 	errs.AddErr("slug", validation.MaxLength("slug", r.Slug, 255))
-	errs.AddErr("record_state", validation.MaxLength("record_state", r.RecordState, 50))
 	return errs.Err()
 }
 
@@ -437,17 +435,15 @@ func (r CreateTenantRequest) ToRepo() (tenants.CreateTenant, error) {
 		Slug:               r.Slug,
 		Description:        r.Description,
 		CreatorPrincipalID: r.CreatorPrincipalID,
-		RecordState:        r.RecordState,
 	}, nil
 }
 
 // UpdateTenantRequest is the HTTP request for updating a tenant.
 type UpdateTenantRequest struct {
-	Name               *string    `json:"name,omitempty"`
-	Slug               *string    `json:"slug,omitempty"`
-	Description        *string    `json:"description,omitempty"`
-	CreatorPrincipalID *string    `json:"creator_principal_id,omitempty"`
-	UpdatedAt          *time.Time `json:"updated_at,omitempty"`
+	Name        *string    `json:"name,omitempty"`
+	Slug        *string    `json:"slug,omitempty"`
+	Description *string    `json:"description,omitempty"`
+	UpdatedAt   *time.Time `json:"updated_at,omitempty"`
 }
 
 // Validate checks all field constraints. Called automatically by web.DecodeJSON.
@@ -463,11 +459,10 @@ func (r *UpdateTenantRequest) Validate() error {
 // ToRepo converts the validated request to a repository input.
 func (r UpdateTenantRequest) ToRepo() (tenants.UpdateTenant, error) {
 	return tenants.UpdateTenant{
-		Name:               r.Name,
-		Slug:               r.Slug,
-		Description:        r.Description,
-		CreatorPrincipalID: r.CreatorPrincipalID,
-		UpdatedAt:          r.UpdatedAt,
+		Name:        r.Name,
+		Slug:        r.Slug,
+		Description: r.Description,
+		UpdatedAt:   r.UpdatedAt,
 	}, nil
 }
 

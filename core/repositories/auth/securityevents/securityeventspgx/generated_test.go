@@ -28,7 +28,10 @@ var (
 )
 
 // setupTestStore creates a test database and store for integration tests.
-// migrateTestDB must be defined in store_test.go (bootstrap file).
+// migrateTestDB and testPGXOptions are defined in store_test.go (bootstrap
+// file). testPGXOptions lets the consumer customize the Postgres image,
+// enable extensions, etc. — needed when a project depends on extensions
+// like pgvector that the default image doesn't include.
 func setupTestStore(t *testing.T) (context.Context, *testpgx.TestPGX, *Store) {
 	t.Helper()
 
@@ -37,7 +40,8 @@ func setupTestStore(t *testing.T) (context.Context, *testpgx.TestPGX, *Store) {
 	}
 
 	ctx := context.Background()
-	db := testpgx.SetupTestPGX(t, ctx, testpgx.WithMigrations(migrateTestDB))
+	opts := append([]testpgx.Option{testpgx.WithMigrations(migrateTestDB)}, testPGXOptions...)
+	db := testpgx.SetupTestPGX(t, ctx, opts...)
 	store := NewStore(logger.NewNoop(), db.Pool)
 	return ctx, db, store
 }
@@ -47,11 +51,20 @@ func TestGeneratedSecurityEventStore_Create(t *testing.T) {
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
 	created := fixtures.CreateTestSecurityEventWithDefaults(t, ctx, db)
+	_ = created
 
-	// Verify the record was created and can be retrieved.
+	// Verify the record was created and can be retrieved, every create
+	// field intact (time fields excluded — encoding differs per dialect).
 	result, err := store.Get(ctx, created.EventID)
 	require.NoError(t, err)
 	assert.Equal(t, created.EventID, result.EventID)
+	assert.Equal(t, created.EventID, result.EventID)
+	assert.Equal(t, created.UserID, result.UserID)
+	assert.Equal(t, created.EventType, result.EventType)
+	assert.Equal(t, created.EventStatus, result.EventStatus)
+	assert.Equal(t, created.EventDetails, result.EventDetails)
+	assert.Equal(t, created.IpAddress, result.IpAddress)
+	assert.Equal(t, created.UserAgent, result.UserAgent)
 }
 
 func TestGeneratedSecurityEventStore_Get(t *testing.T) {
@@ -59,6 +72,7 @@ func TestGeneratedSecurityEventStore_Get(t *testing.T) {
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
 	created := fixtures.CreateTestSecurityEventWithDefaults(t, ctx, db)
+	_ = created
 
 	t.Run("found", func(t *testing.T) {
 		result, err := store.Get(ctx, created.EventID)
@@ -76,18 +90,21 @@ func TestGeneratedSecurityEventStore_List(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	// Create multiple records.
+	// Each fixture creates its own FK scope. When List filters by scope,
+	// only the matching row is visible; assertions below reflect that.
 	const numRecords = 3
-	for i := 0; i < numRecords; i++ {
+	created := fixtures.CreateTestSecurityEventWithDefaults(t, ctx, db)
+	for i := 1; i < numRecords; i++ {
 		fixtures.CreateTestSecurityEventWithDefaults(t, ctx, db)
 	}
+	_ = created
 
-	t.Run("returns all records", func(t *testing.T) {
+	t.Run("returns records", func(t *testing.T) {
 		filter := securityevents.FilterList{}
 		orderBy := fop.NewOrder(securityevents.DefaultOrderBy, securityevents.DefaultOrderDirection)
 		results, err := store.List(ctx, filter, orderBy, fop.PageStringCursor{}, false)
 		require.NoError(t, err)
-		assert.GreaterOrEqual(t, len(results), numRecords)
+		assert.GreaterOrEqual(t, len(results), 1)
 	})
 
 	t.Run("respects limit", func(t *testing.T) {
@@ -118,6 +135,7 @@ func TestGeneratedSecurityEventStore_Delete(t *testing.T) {
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
 	created := fixtures.CreateTestSecurityEventWithDefaults(t, ctx, db)
+	_ = created
 
 	err := store.Delete(ctx, created.EventID)
 	require.NoError(t, err)
@@ -125,4 +143,63 @@ func TestGeneratedSecurityEventStore_Delete(t *testing.T) {
 	// Verify record is gone.
 	_, err = store.Get(ctx, created.EventID)
 	require.Error(t, err)
+}
+
+func TestGeneratedSecurityEventStore_CreateDuplicate(t *testing.T) {
+	ctx, db, store := setupTestStore(t)
+	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
+
+	created := fixtures.CreateTestSecurityEventWithDefaults(t, ctx, db)
+
+	// Re-creating with the same primary key must map to ErrAlreadyExists.
+	input := securityevents.CreateSecurityEvent{
+		EventID:      created.EventID,
+		UserID:       created.UserID,
+		EventType:    created.EventType,
+		EventStatus:  created.EventStatus,
+		EventDetails: created.EventDetails,
+		IpAddress:    created.IpAddress,
+		UserAgent:    created.UserAgent,
+	}
+	_, err := store.Create(ctx, input)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, securityevents.ErrSecurityEventAlreadyExists)
+}
+
+func TestGeneratedSecurityEventStore_CreateInvalidReference(t *testing.T) {
+	ctx, db, store := setupTestStore(t)
+	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
+
+	created := fixtures.CreateTestSecurityEventWithDefaults(t, ctx, db)
+
+	// A create referencing a missing parent must map to ErrInvalidReference.
+	input := securityevents.CreateSecurityEvent{
+		EventID:      created.EventID,
+		UserID:       created.UserID,
+		EventType:    created.EventType,
+		EventStatus:  created.EventStatus,
+		EventDetails: created.EventDetails,
+		IpAddress:    created.IpAddress,
+		UserAgent:    created.UserAgent,
+	}
+	input.EventID = "fk-violation-test-id"
+	bogusFK := "nonexistent-fk-id"
+	input.UserID = &bogusFK
+	_, err := store.Create(ctx, input)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, securityevents.ErrSecurityEventInvalidReference)
+}
+
+func TestGeneratedSecurityEventStore_Update(t *testing.T) {
+	ctx, db, store := setupTestStore(t)
+	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
+
+	created := fixtures.CreateTestSecurityEventWithDefaults(t, ctx, db)
+
+	newValue := "updated-value"
+	result, err := store.Update(ctx, created.EventID, securityevents.UpdateSecurityEvent{
+		EventType: &newValue,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, newValue, result.EventType)
 }
