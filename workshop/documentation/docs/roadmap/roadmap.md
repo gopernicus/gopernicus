@@ -103,3 +103,13 @@ This is a **consideration**, not a committed direction. It captures a question w
   
   Both items share the same `bridge/auth/authentication/*_test.go` bootstrap, so do them in one pass.
 - **Promote `penetration_test.go` harness to a shared `testing.go` helper** — the mocks and `testHarness` in `core/auth/authentication/penetration_test.go` are useful well beyond the penetration tests (they're already used by `sensitive_test.go`). Extracting them into a non-build-tagged helper would let other test files in the package use them without sharing the `penetration` build tag. This becomes more valuable once the bridge tests above exist, since the bridge tests will want to drive a real `Authenticator` and the cleanest way to construct one for tests is the existing harness.
+
+## Enum filter values 500 on Postgres (robustness)
+
+Filtering a List by an enum column with an out-of-domain value (e.g. a
+client sends `?status=bogus`) returns 500 on the pgx path — Postgres rejects
+the invalid enum cast before the comparison runs. On sqlite the column is
+TEXT so it matches nothing. Desired: a clean 400 or empty result on both
+drivers. The store knows the enum labels, so it could validate filter values
+and short-circuit. Surfaced by the generated P2 SQL-injection probes, which
+now skip enum filter params (type-constrained, not an injection surface).
