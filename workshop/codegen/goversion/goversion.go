@@ -1,6 +1,5 @@
 // Package goversion centralizes Go version requirements for gopernicus.
-// To bump the minimum version: update MinGoVersion, run go mod edit -go=X.Y
-// in both gopernicus/ and gopernicus-cli/, and update go.work.
+// To bump the minimum version: update MinGoVersion and run go mod edit -go=X.Y.
 package goversion
 
 import (

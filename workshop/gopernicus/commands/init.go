@@ -11,17 +11,15 @@ import (
 func init() {
 	cli.RegisterCommand(&cli.Command{
 		Name:  "init",
-		Short: "Bootstrap a new gopernicus project (flags only)",
+		Short: "Bootstrap a new gopernicus project",
 		Long: `Bootstrap a new gopernicus project in a new directory.
 
 Scaffolds a project directory with go.mod, gopernicus.yml, and a minimal
-directory layout ready for 'gopernicus generate'. This in-framework tool is
-flags-only: every choice is a flag, and omitted flags use the defaults (all
-features, default infrastructure). For the interactive picker experience,
-use the gopernicus CLI: go run github.com/gopernicus/gopernicus-cli@latest init
+directory layout ready for 'gopernicus generate'. Every choice is a flag;
+omitted flags use the defaults (all features, default infrastructure).
 
-Bootstrap a project with no second install:
-  go run github.com/gopernicus/gopernicus/workshop/gopernicus@latest init myapp --no-interactive
+Bootstrap a project with no install:
+  go run github.com/gopernicus/gopernicus/workshop/gopernicus@latest init myapp
 
 Examples:
   gopernicus init myapp
@@ -40,10 +38,9 @@ func runInit(_ context.Context, args []string) error {
 		return err
 	}
 
-	// This tool has no TUI: init is always non-interactive here. When the
-	// user didn't ask for that explicitly, point at the CLI's picker flow.
+	// init is flag-driven; omitted flags mean defaults.
 	if !opts.NoInteractive {
-		fmt.Println("note: using defaults — the interactive picker lives in the gopernicus CLI (go run github.com/gopernicus/gopernicus-cli@latest init)")
+		fmt.Println("note: using defaults — pass --features/--module to customize")
 		opts.NoInteractive = true
 	}
 

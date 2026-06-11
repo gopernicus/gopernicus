@@ -23,3 +23,6 @@ secrets.txt
 *.env
 .env
 .env.docker
+
+# Claude Code workspace (plans, harness, memos) — local only for now
+.claude/
