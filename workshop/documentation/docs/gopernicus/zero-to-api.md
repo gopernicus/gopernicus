@@ -11,22 +11,21 @@ your own names throughout.
 
 ## Prerequisites
 
-- Go 1.23+ installed
+- Go 1.24+ installed (the generator runs via the go.mod `tool` directive)
 - Docker (for PostgreSQL and Redis)
-- The gopernicus CLI:
-  ```bash
-  go install github.com/gopernicus/gopernicus-cli@latest
-  ```
 
 ## 1. Create the Project
 
+Nothing to install — bootstrap straight from the module proxy:
+
 ```bash
-gopernicus init myapp
+go run github.com/gopernicus/gopernicus/workshop/gopernicus@latest init myapp
 cd myapp
 ```
 
-The interactive wizard walks you through feature selection. For this guide,
-accept the defaults (all features enabled).
+Omitted flags use the defaults (all features enabled), which is what this
+guide assumes. After init, every command runs through the project-pinned
+tool: `go tool gopernicus <command>`.
 
 After init completes you have a full project structure: `app/server/`, `core/`,
 `bridge/`, `workshop/`, a `Makefile`, `.env`, and `gopernicus.yml`.

@@ -59,27 +59,22 @@ Generated files are never edited directly. Instead, Gopernicus generates [bootst
 
 ## Installation
 
-```bash
-go install github.com/gopernicus/gopernicus-cli@latest
-```
-
-`go install` places the binary in your `$GOBIN` directory (defaults to `$HOME/go/bin`). Make sure it's on your PATH:
+There is nothing to install. Bootstrap a project straight from the module proxy:
 
 ```bash
-# Linux / macOS — add to your ~/.bashrc, ~/.zshrc, or equivalent
-export PATH="$HOME/go/bin:$PATH"
-```
-
-```powershell
-# Windows (PowerShell) — add to your profile or set via System > Environment Variables
-$env:Path = "$env:USERPROFILE\go\bin;$env:Path"
-```
-
-Initialize a new project:
-
-```bash
-gopernicus init myapp
+go run github.com/gopernicus/gopernicus/workshop/gopernicus@latest init myapp
 cd myapp
 ```
+
+Inside the project, every command runs through the version-pinned tool:
+
+```bash
+go tool gopernicus generate
+go tool gopernicus db migrate
+```
+
+The project's `go.mod` carries a `tool` directive pinning the generator to the
+same framework version the project links, so generated code and runtime can
+never drift.
 
 See [CLI: init](../cli/init.md) for all initialization options (authentication, authorization, tenancy, events).
