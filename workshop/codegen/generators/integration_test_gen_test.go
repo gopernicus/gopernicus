@@ -472,14 +472,13 @@ func TestDeleteRendersWithoutGetVerification(t *testing.T) {
 	}
 }
 
-// An entity with no surviving probes must not emit generated_test.go at all
-// (its fixed imports would be unused), and a stale copy must be removed.
-func TestEmptyGeneratedTestFileSkippedAndStaleRemoved(t *testing.T) {
+// An entity with no surviving probes emits a setup-only generated_test.go:
+// the setupTestStore helper survives for hand-written tests in store_test.go,
+// while test-only imports (fixtures, assert, pgxfixtures) are omitted so the
+// file compiles. Covers both @skip-integration-test (probes suppressed) and
+// entities where no standard probe is usable from the generic fixtures.
+func TestNoProbesEmitsSetupOnlyTestFile(t *testing.T) {
 	dir := t.TempDir()
-	stale := filepath.Join(dir, "generated_test.go")
-	if err := os.WriteFile(stale, []byte("package thingspgx\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
 
 	data := IntegrationTestData{
 		StorePkg:      "thingspgx",
@@ -495,10 +494,48 @@ func TestEmptyGeneratedTestFileSkippedAndStaleRemoved(t *testing.T) {
 	if err := GenerateIntegrationTest(data, dir, Options{}); err != nil {
 		t.Fatalf("GenerateIntegrationTest: %v", err)
 	}
-	if _, err := os.Stat(stale); !os.IsNotExist(err) {
-		t.Error("stale generated_test.go must be removed")
+
+	out, err := os.ReadFile(filepath.Join(dir, "generated_test.go"))
+	if err != nil {
+		t.Fatalf("setup-only generated_test.go must be emitted: %v", err)
+	}
+	content := string(out)
+	if !strings.Contains(content, "func setupTestStore(") {
+		t.Error("setup-only file must keep the setupTestStore helper")
+	}
+	if strings.Contains(content, "func TestGenerated") {
+		t.Error("setup-only file must not contain test functions")
+	}
+	for _, banned := range []string{"fixtures ", "stretchr/testify", "pgxfixtures"} {
+		if strings.Contains(content, banned) {
+			t.Errorf("setup-only file must not import %q (unused → compile error)", banned)
+		}
 	}
 	if _, err := os.Stat(filepath.Join(dir, "store_test.go")); err != nil {
 		t.Error("store_test.go bootstrap must still be created")
+	}
+}
+
+// SuppressTests (the @skip-integration-test path) downgrades a fully-probed
+// entity to the same setup-only emission.
+func TestSuppressTestsForcesSetupOnly(t *testing.T) {
+	data, err := BuildIntegrationTestData(spacesResolved(), "example.com/app", "primary")
+	if err != nil {
+		t.Fatalf("BuildIntegrationTestData: %v", err)
+	}
+	if !data.HasAnyTest() {
+		t.Fatal("expected probes before suppression")
+	}
+	data.SuppressTests()
+	if data.HasAnyTest() {
+		t.Error("SuppressTests must clear every probe flag")
+	}
+
+	out, err := renderIntegrationTestTemplate(integrationTestGeneratedTemplate, data)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if strings.Contains(string(out), "func TestGenerated") {
+		t.Error("suppressed entity must render setup-only")
 	}
 }

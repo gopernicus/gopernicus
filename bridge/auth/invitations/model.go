@@ -17,6 +17,7 @@ type CreateInvitationRequest struct {
 	Identifier     string `json:"identifier"`      // identifier value (email, phone, etc.)
 	IdentifierType string `json:"identifier_type"` // "email" (default), "phone", etc.
 	AutoAccept     bool   `json:"auto_accept"`     // true = direct add (known) or auto-accept on verification (unknown)
+	RedirectURL    string `json:"redirect_url"`    // frontend URL for the accept flow; validated against the allowed-frontends origin list
 }
 
 func (r *CreateInvitationRequest) Validate() error {

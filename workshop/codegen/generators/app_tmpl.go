@@ -1415,6 +1415,134 @@ Didn't initiate this? You can safely ignore this email — no changes will be ma
 {{end}}
 `
 
+// invitationInviteHTMLRaw is written to templates/invitations/invite.html.
+// Rendered by the invitations bridge subscriber on invitation.sent
+// (non-auto-accept): a "please accept" email with a token link.
+const invitationInviteHTMLRaw = `{{define "invitations:invite"}}
+<h2 style="margin: 0 0 16px 0; color: #1f2937; font-size: 22px;">You've been invited</h2>
+<p style="color: #374151;">
+  {{if .InviterName}}<strong>{{.InviterName}}</strong>{{else}}Someone{{end}} invited you to join
+  {{if .ResourceName}}<strong>{{.ResourceName}}</strong>{{else}}a {{.ResourceType}}{{end}}
+  as a <strong>{{.Relation}}</strong>.
+</p>
+
+<div style="text-align: center; margin: 32px 0;">
+  <a href="{{.AcceptLink}}"
+     style="display: inline-block; background-color: #1f2937; color: #ffffff; padding: 12px 28px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 15px;">
+    Accept invitation
+  </a>
+</div>
+
+<p style="margin: 24px 0 6px 0; font-size: 13px; color: #6b7280;">Or copy this link into your browser:</p>
+<p style="margin: 0 0 20px 0; font-size: 13px; word-break: break-all;">
+  <a href="{{.AcceptLink}}" style="color: #374151; text-decoration: underline;">{{.AcceptLink}}</a>
+</p>
+
+<p style="font-size: 14px; color: #6b7280;">This invitation expires in {{.ExpiresIn}}.</p>
+
+<p style="margin-top: 24px; padding-top: 24px; border-top: 1px solid #e5e7eb; font-size: 12px; color: #9ca3af;">
+  If you weren't expecting this invitation, you can safely ignore this email.
+</p>
+{{end}}
+`
+
+// invitationInviteTXTRaw is written to templates/invitations/invite.txt.
+const invitationInviteTXTRaw = `{{define "invitations:invite.text"}}
+You've been invited to {{.Brand.Name}}
+
+{{if .InviterName}}{{.InviterName}}{{else}}Someone{{end}} has invited you to join {{if .ResourceName}}{{.ResourceName}}{{else}}a {{.ResourceType}}{{end}} as a {{.Relation}}.
+
+Accept the invitation by opening this link:
+
+{{.AcceptLink}}
+
+This invitation expires in {{.ExpiresIn}}.
+
+If you weren't expecting this invitation, you can safely ignore this email.
+{{end}}
+`
+
+// invitationSharedHTMLRaw is written to templates/invitations/shared.html.
+// Rendered on invitation.sent for auto-accept invitations: a "shared with
+// you" email linking straight to the resource.
+const invitationSharedHTMLRaw = `{{define "invitations:shared"}}
+<h2 style="margin: 0 0 16px 0; color: #1f2937; font-size: 22px;">
+  {{if .InviterName}}{{.InviterName}}{{else}}Someone{{end}} shared
+  {{if .ResourceName}}{{.ResourceName}}{{else}}a {{.ResourceType}}{{end}} with you
+</h2>
+<p style="color: #374151;">You now have <strong>{{.Relation}}</strong> access. No action needed — just open it.</p>
+
+<div style="text-align: center; margin: 32px 0;">
+  <a href="{{.OpenLink}}"
+     style="display: inline-block; background-color: #1f2937; color: #ffffff; padding: 12px 28px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 15px;">
+    Open {{if .ResourceName}}{{.ResourceName}}{{else}}it{{end}}
+  </a>
+</div>
+
+<p style="font-size: 14px; color: #6b7280;">
+  If you don't have an account yet, you'll be prompted to create one first — your access is waiting.
+</p>
+
+<p style="margin-top: 24px; padding-top: 24px; border-top: 1px solid #e5e7eb; font-size: 12px; color: #9ca3af;">
+  If this looks wrong, contact the person who shared with you or your admin.
+</p>
+{{end}}
+`
+
+// invitationSharedTXTRaw is written to templates/invitations/shared.txt.
+const invitationSharedTXTRaw = `{{define "invitations:shared.text"}}
+{{if .InviterName}}{{.InviterName}}{{else}}Someone{{end}} shared {{if .ResourceName}}{{.ResourceName}}{{else}}a {{.ResourceType}}{{end}} with you on {{.Brand.Name}}
+
+You now have {{.Relation}} access. No action needed — just open it:
+
+{{.OpenLink}}
+
+If you don't have an account yet, you'll be prompted to create one first — your access is waiting.
+
+If this looks wrong, contact the person who shared with you or your admin.
+{{end}}
+`
+
+// invitationMemberAddedHTMLRaw is written to templates/invitations/member_added.html.
+// Rendered on member.added: an existing user was added directly to a resource.
+const invitationMemberAddedHTMLRaw = `{{define "invitations:member_added"}}
+<h2 style="margin: 0 0 16px 0; color: #1f2937; font-size: 22px;">You've been added</h2>
+{{if .DisplayName}}<p style="color: #374151;">Hi {{.DisplayName}},</p>{{end}}
+<p style="color: #374151;">
+  {{if .InviterName}}<strong>{{.InviterName}}</strong>{{else}}Someone{{end}} added you to
+  {{if .ResourceName}}<strong>{{.ResourceName}}</strong>{{else}}a {{.ResourceType}}{{end}}
+  as a <strong>{{.Relation}}</strong>. No action needed — access is live now.
+</p>
+
+<div style="text-align: center; margin: 32px 0;">
+  <a href="{{.OpenLink}}"
+     style="display: inline-block; background-color: #1f2937; color: #ffffff; padding: 12px 28px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 15px;">
+    Open {{if .ResourceName}}{{.ResourceName}}{{else}}it{{end}}
+  </a>
+</div>
+
+<p style="margin-top: 24px; padding-top: 24px; border-top: 1px solid #e5e7eb; font-size: 12px; color: #9ca3af;">
+  If this looks wrong, contact the person who added you or your admin.
+</p>
+{{end}}
+`
+
+// invitationMemberAddedTXTRaw is written to templates/invitations/member_added.txt.
+const invitationMemberAddedTXTRaw = `{{define "invitations:member_added.text"}}
+You've been added to {{.Brand.Name}}
+{{if .DisplayName}}
+Hi {{.DisplayName}},
+{{end}}
+{{if .InviterName}}{{.InviterName}}{{else}}Someone{{end}} added you to {{if .ResourceName}}{{.ResourceName}}{{else}}a {{.ResourceType}}{{end}} as a {{.Relation}}. No action needed — access is live now.
+
+Open it here:
+
+{{.OpenLink}}
+
+If this looks wrong, contact the person who added you or your admin.
+{{end}}
+`
+
 // airTomlRaw is the default air.toml configuration for hot-reload during development.
 const airTomlRaw = `root = "."
 tmp_dir = "tmp"

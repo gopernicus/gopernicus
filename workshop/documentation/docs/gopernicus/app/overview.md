@@ -25,13 +25,20 @@ app/
         │   ├── transactional.html # Branded HTML email layout
         │   └── transactional.txt  # Plaintext email layout
         └── templates/
-            └── authentication/    # App-level overrides for auth emails
-                ├── verification.html
-                ├── verification.txt
-                ├── password_reset.html
-                ├── password_reset.txt
-                ├── oauth_link_verification.html
-                └── oauth_link_verification.txt
+            ├── authentication/    # App-level overrides for auth emails
+            │   ├── verification.html
+            │   ├── verification.txt
+            │   ├── password_reset.html
+            │   ├── password_reset.txt
+            │   ├── oauth_link_verification.html
+            │   └── oauth_link_verification.txt
+            └── invitations/       # Invitation emails (authorization feature)
+                ├── invite.html
+                ├── invite.txt
+                ├── shared.html
+                ├── shared.txt
+                ├── member_added.html
+                └── member_added.txt
 ```
 
 All files are scaffolded once and fully customizable.
@@ -182,8 +189,10 @@ Event subscribers are registered in `server.New()` after the event bus and domai
 authSubs := authbridge.NewSubscribers(mailer, log, frontendURL)
 authSubs.Register(bus)
 
-// Invitation auto-resolve subscriber
-invitationSubs := invbridge.NewSubscribers(inviter, authRepos.Users, log)
+// Invitation auto-resolve subscriber. The user lookup rides the generated
+// authentication users satisfier; add invbridge.WithEmailer(mailer) to also
+// deliver invitation emails.
+invitationSubs := invbridge.NewSubscribers(inviter, satisfiers.NewUserSatisfier(authRepos.Users), log)
 invitationSubs.Register(bus)
 ```
 
