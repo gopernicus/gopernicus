@@ -2,7 +2,7 @@
 SHELL_PATH := /bin/ash
 SHELL := $(if $(wildcard $(SHELL_PATH)),/bin/ash,/bin/bash)
 
-GOLANG := golang:1.25
+GOLANG := golang:1.26
 
 NAMESPACE := gopernicus
 IMAGE_NAME := localhost/gopernicus
