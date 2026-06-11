@@ -3,6 +3,7 @@ package generators
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"text/template"
@@ -119,9 +120,9 @@ type IntegrationTestData struct {
 
 	// *ExtraCallArgs are Go expressions to pass for queries whose SQL declares
 	// scope parameters beyond the PK / filter (e.g. @parent_world_id on a
-	// Get / List / SoftDelete / Delete). Each expression reads from the first
-	// created fixture's struct, dereferencing nullable columns. Examples:
-	// []string{"*created.ParentWorldID"}.
+	// Get / List / SoftDelete / Delete / Update). Each expression reads from
+	// the first created fixture's struct, dereferencing nullable columns.
+	// Examples: []string{"*created.ParentWorldID"}.
 	//
 	// Held per-method because the same entity may have different scope shapes
 	// across its standard verbs (though in practice they usually match).
@@ -129,6 +130,15 @@ type IntegrationTestData struct {
 	GetExtraCallArgs        []string
 	SoftDeleteExtraCallArgs []string
 	HardDeleteExtraCallArgs []string
+	UpdateExtraCallArgs     []string
+}
+
+// HasAnyTest reports whether the generated test file would contain at least
+// one test function. When false the file must not be emitted at all — its
+// fixed imports (fixtures, require) would be unused and break the build.
+func (d IntegrationTestData) HasAnyTest() bool {
+	return d.HasGet || d.HasList || d.HasHardDelete || d.HasSoftDelete ||
+		d.HasDuplicateTest || d.HasFKViolationTest || d.HasUpdateMutation
 }
 
 // FKUniqueAssign is one fresh-value assignment in the bogus-FK probe input,
@@ -172,12 +182,19 @@ func BuildIntegrationTestData(resolved *ResolvedFile, modulePath, dbName string)
 
 		switch m.Category {
 		case "scan_one", "scan_one_custom":
-			data.HasGet = true
 			if pk := FindPKParam(m.PKParams, resolved.PKColumn); pk != "" {
 				tm.PKParam = pk
 			}
+			// Only the method literally named "Get" drives the standard
+			// Get-roundtrip tests — GetByFoo variants have different
+			// signatures and the emitted store.Get(...) calls would not
+			// compile. Scope args the fixture seeds as NULL make the
+			// probe unusable too (nil deref / can never match the row).
 			if m.Name == "Get" {
-				data.GetExtraCallArgs = buildScopeCallArgs(rq, resolved.PKColumn, resolved)
+				if args, ok := buildScopeCallArgs(rq, resolved.PKColumn, resolved); ok {
+					data.HasGet = true
+					data.GetExtraCallArgs = args
+				}
 			}
 
 		case "create":
@@ -188,9 +205,11 @@ func BuildIntegrationTestData(resolved *ResolvedFile, modulePath, dbName string)
 			// Only generate the standard List test for the method named "List"
 			// (not "ListByFoo" variants which have different filter types).
 			if m.Name == "List" {
-				data.HasList = true
-				tm.HasList = true
-				data.ListExtraCallArgs = buildScopeCallArgs(rq, "", resolved)
+				if args, ok := buildScopeCallArgs(rq, "", resolved); ok {
+					data.HasList = true
+					tm.HasList = true
+					data.ListExtraCallArgs = args
+				}
 			}
 
 		case "update":
@@ -221,17 +240,21 @@ func BuildIntegrationTestData(resolved *ResolvedFile, modulePath, dbName string)
 			// auxiliary delete-by-X variants have different signatures and
 			// would clobber the scope-arg list if we let them in.
 			if rq.Type == QueryDelete && m.Name == "Delete" {
-				data.HasHardDelete = true
-				tm.IsDelete = true
-				data.HardDeleteExtraCallArgs = buildScopeCallArgs(rq, resolved.PKColumn, resolved)
+				if args, ok := buildScopeCallArgs(rq, resolved.PKColumn, resolved); ok {
+					data.HasHardDelete = true
+					tm.IsDelete = true
+					data.HardDeleteExtraCallArgs = args
+				}
 			} else if rq.Type != QueryDelete {
 				nameLower := strings.ToLower(m.Name)
 				switch {
 				case nameLower == "softdelete":
-					data.HasSoftDelete = true
-					tm.IsSoftState = true
-					tm.NewState = "deleted"
-					data.SoftDeleteExtraCallArgs = buildScopeCallArgs(rq, resolved.PKColumn, resolved)
+					if args, ok := buildScopeCallArgs(rq, resolved.PKColumn, resolved); ok {
+						data.HasSoftDelete = true
+						tm.IsSoftState = true
+						tm.NewState = "deleted"
+						data.SoftDeleteExtraCallArgs = args
+					}
 				case nameLower == "archive":
 					tm.IsSoftState = true
 					tm.NewState = "archived"
@@ -277,7 +300,16 @@ func buildEnrichmentData(data *IntegrationTestData, resolved *ResolvedFile, meth
 			}
 		case "update_returning":
 			if m.Name == "Update" {
+				// The standard Update test passes the update query's own
+				// scope args (they may differ from Get's, and Get may not
+				// exist). Args reading nil-seeded columns are unusable —
+				// the test is dropped for this entity.
+				args, ok := buildScopeCallArgs(rq, resolved.PKColumn, resolved)
+				if !ok {
+					continue
+				}
 				hasUpdateReturning = true
+				data.UpdateExtraCallArgs = args
 				if len(updateFields) == 0 {
 					updateFields = rq.SetFields
 				}
@@ -545,6 +577,20 @@ func generateIntegrationTestWith(data IntegrationTestData, storeDir string, opts
 			continue
 		}
 
+		// No standard probe survived (no single-PK Get/List/Delete/Update
+		// usable from the fixture row) — an empty test file would not even
+		// compile (unused imports), so skip it and clear any stale copy.
+		// store_test.go still bootstraps for hand-written tests.
+		if !f.bootstrap && !data.HasAnyTest() {
+			fmt.Printf("      skip %s (%s: no standard store probes; add tests in store_test.go)\n", f.name, data.StorePkg)
+			if fileExists(path) && !opts.DryRun {
+				if err := os.Remove(path); err != nil {
+					return fmt.Errorf("remove stale %s: %w", f.name, err)
+				}
+			}
+			continue
+		}
+
 		out, err := renderIntegrationTestTemplate(f.tmpl, data)
 		if err != nil {
 			return fmt.Errorf("render %s for %s: %w", f.name, data.StorePkg, err)
@@ -561,17 +607,24 @@ func generateIntegrationTestWith(data IntegrationTestData, storeDir string, opts
 // buildScopeCallArgs returns Go expressions that read a query's scope
 // parameters (e.g. @parent_world_id) off the first created fixture's struct.
 // Used by the generated standard smoke tests (Get / List / SoftDelete /
-// HardDelete) to match the generated Store method's positional signature.
+// HardDelete / Update) to match the generated Store method's positional
+// signature.
 //
 // Pass excludePKColumn to skip the PK param (Get / SoftDelete / Delete
 // already pass the PK as their first arg). Pass "" for List, which has no
 // PK in its params at all.
 //
-// Returns nil when the query has no extra params beyond the (optional) PK.
-func buildScopeCallArgs(rq ResolvedQuery, excludePKColumn string, resolved *ResolvedFile) []string {
+// Returns (nil, true) when the query has no extra params beyond the
+// (optional) PK. Returns ok=false when a scope param reads a column the
+// fixtures seed as NULL (a nullable self-referential FK): dereferencing the
+// nil pointer would panic, and even a zero-value substitute could never
+// match the fixture row (`col = NULL` is never true) — the caller must
+// suppress the test that needs these args.
+func buildScopeCallArgs(rq ResolvedQuery, excludePKColumn string, resolved *ResolvedFile) ([]string, bool) {
 	if len(rq.Params) == 0 {
-		return nil
+		return nil, true
 	}
+	nilSeeded := fixtureNilSeededCols(resolved)
 	colByName := make(map[string]int, len(resolved.AllColumns))
 	for i, col := range resolved.AllColumns {
 		colByName[col.Name] = i
@@ -580,6 +633,9 @@ func buildScopeCallArgs(rq ResolvedQuery, excludePKColumn string, resolved *Reso
 	for _, p := range rq.Params {
 		if p == excludePKColumn {
 			continue
+		}
+		if nilSeeded[p] {
+			return nil, false
 		}
 		idx, ok := colByName[p]
 		if !ok {
@@ -601,7 +657,38 @@ func buildScopeCallArgs(rq ResolvedQuery, excludePKColumn string, resolved *Reso
 		out = append(out, expr)
 	}
 	if len(out) == 0 {
-		return nil
+		return nil, true
+	}
+	return out, true
+}
+
+// fixtureNilSeededCols returns the columns the generated fixtures seed as
+// NULL: nullable self-referential FK columns, left nil so root rows are
+// creatable (mirrors BuildFixtureEntity's selfRefNullableCols handling).
+func fixtureNilSeededCols(resolved *ResolvedFile) map[string]bool {
+	out := make(map[string]bool)
+	if resolved.Table == nil {
+		return out
+	}
+	nullable := make(map[string]bool, len(resolved.AllColumns))
+	for _, col := range resolved.AllColumns {
+		if col.IsNullable {
+			nullable[col.Name] = true
+		}
+	}
+	for _, fk := range resolved.Table.ForeignKeys {
+		if fk.RefTable != resolved.TableName {
+			continue
+		}
+		cols := fk.Columns
+		if len(cols) == 0 && fk.ColumnName != "" {
+			cols = []string{fk.ColumnName}
+		}
+		for _, c := range cols {
+			if nullable[c] {
+				out[c] = true
+			}
+		}
 	}
 	return out
 }

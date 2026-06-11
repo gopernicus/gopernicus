@@ -196,6 +196,7 @@ func TestGeneratedTenantStore_CreateInvalidReference(t *testing.T) {
 		RecordState:        created.RecordState,
 	}
 	input.TenantID = "fk-violation-test-id"
+	input.Slug = "fk-probe-slug"
 	bogusFK := "nonexistent-fk-id"
 	input.CreatorPrincipalID = bogusFK
 	_, err := store.Create(ctx, input)

@@ -28,7 +28,10 @@ var (
 )
 
 // setupTestStore creates a test database and store for integration tests.
-// migrateTestDB must be defined in store_test.go (bootstrap file).
+// migrateTestDB and testPGXOptions are defined in store_test.go (bootstrap
+// file). testPGXOptions lets the consumer customize the Postgres image,
+// enable extensions, etc. — needed when a project depends on extensions
+// like pgvector that the default image doesn't include.
 func setupTestStore(t *testing.T) (context.Context, *testpgx.TestPGX, *Store) {
 	t.Helper()
 
@@ -37,7 +40,8 @@ func setupTestStore(t *testing.T) (context.Context, *testpgx.TestPGX, *Store) {
 	}
 
 	ctx := context.Background()
-	db := testpgx.SetupTestPGX(t, ctx, testpgx.WithMigrations(migrateTestDB))
+	opts := append([]testpgx.Option{testpgx.WithMigrations(migrateTestDB)}, testPGXOptions...)
+	db := testpgx.SetupTestPGX(t, ctx, opts...)
 	store := NewStore(logger.NewNoop(), db.Pool)
 	return ctx, db, store
 }
@@ -47,11 +51,26 @@ func TestGeneratedJobQueueStore_Create(t *testing.T) {
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
 	created := fixtures.CreateTestJobQueueWithDefaults(t, ctx, db)
+	_ = created
 
-	// Verify the record was created and can be retrieved.
+	// Verify the record was created and can be retrieved, every create
+	// field intact (time fields excluded — encoding differs per dialect).
 	result, err := store.Get(ctx, created.JobID)
 	require.NoError(t, err)
 	assert.Equal(t, created.JobID, result.JobID)
+	assert.Equal(t, created.JobID, result.JobID)
+	assert.Equal(t, created.EventType, result.EventType)
+	assert.Equal(t, created.CorrelationID, result.CorrelationID)
+	assert.Equal(t, created.TenantID, result.TenantID)
+	assert.Equal(t, created.AggregateType, result.AggregateType)
+	assert.Equal(t, created.AggregateID, result.AggregateID)
+	assert.Equal(t, created.Payload, result.Payload)
+	assert.Equal(t, created.Status, result.Status)
+	assert.Equal(t, created.Priority, result.Priority)
+	assert.Equal(t, created.RetryCount, result.RetryCount)
+	assert.Equal(t, created.MaxRetries, result.MaxRetries)
+	assert.Equal(t, created.WorkerName, result.WorkerName)
+	assert.Equal(t, created.FailureReason, result.FailureReason)
 }
 
 func TestGeneratedJobQueueStore_Get(t *testing.T) {
@@ -59,6 +78,7 @@ func TestGeneratedJobQueueStore_Get(t *testing.T) {
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
 	created := fixtures.CreateTestJobQueueWithDefaults(t, ctx, db)
+	_ = created
 
 	t.Run("found", func(t *testing.T) {
 		result, err := store.Get(ctx, created.JobID)
@@ -76,18 +96,21 @@ func TestGeneratedJobQueueStore_List(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
-	// Create multiple records.
+	// Each fixture creates its own FK scope. When List filters by scope,
+	// only the matching row is visible; assertions below reflect that.
 	const numRecords = 3
-	for i := 0; i < numRecords; i++ {
+	created := fixtures.CreateTestJobQueueWithDefaults(t, ctx, db)
+	for i := 1; i < numRecords; i++ {
 		fixtures.CreateTestJobQueueWithDefaults(t, ctx, db)
 	}
+	_ = created
 
-	t.Run("returns all records", func(t *testing.T) {
+	t.Run("returns records", func(t *testing.T) {
 		filter := jobqueue.FilterList{}
 		orderBy := fop.NewOrder(jobqueue.DefaultOrderBy, jobqueue.DefaultOrderDirection)
 		results, err := store.List(ctx, filter, orderBy, fop.PageStringCursor{}, false)
 		require.NoError(t, err)
-		assert.GreaterOrEqual(t, len(results), numRecords)
+		assert.GreaterOrEqual(t, len(results), 1)
 	})
 
 	t.Run("respects limit", func(t *testing.T) {
@@ -118,6 +141,7 @@ func TestGeneratedJobQueueStore_Delete(t *testing.T) {
 	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
 
 	created := fixtures.CreateTestJobQueueWithDefaults(t, ctx, db)
+	_ = created
 
 	err := store.Delete(ctx, created.JobID)
 	require.NoError(t, err)
@@ -125,4 +149,49 @@ func TestGeneratedJobQueueStore_Delete(t *testing.T) {
 	// Verify record is gone.
 	_, err = store.Get(ctx, created.JobID)
 	require.Error(t, err)
+}
+
+func TestGeneratedJobQueueStore_CreateDuplicate(t *testing.T) {
+	ctx, db, store := setupTestStore(t)
+	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
+
+	created := fixtures.CreateTestJobQueueWithDefaults(t, ctx, db)
+
+	// Re-creating with the same primary key must map to ErrAlreadyExists.
+	input := jobqueue.CreateJobQueue{
+		JobID:         created.JobID,
+		EventType:     created.EventType,
+		CorrelationID: created.CorrelationID,
+		TenantID:      created.TenantID,
+		AggregateType: created.AggregateType,
+		AggregateID:   created.AggregateID,
+		Payload:       created.Payload,
+		OccurredAt:    created.OccurredAt,
+		Status:        created.Status,
+		Priority:      created.Priority,
+		RetryCount:    created.RetryCount,
+		MaxRetries:    created.MaxRetries,
+		WorkerName:    created.WorkerName,
+		FailureReason: created.FailureReason,
+		ScheduledFor:  created.ScheduledFor,
+		StagedAt:      created.StagedAt,
+		CompletedAt:   created.CompletedAt,
+	}
+	_, err := store.Create(ctx, input)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, jobqueue.ErrJobQueueAlreadyExists)
+}
+
+func TestGeneratedJobQueueStore_Update(t *testing.T) {
+	ctx, db, store := setupTestStore(t)
+	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
+
+	created := fixtures.CreateTestJobQueueWithDefaults(t, ctx, db)
+
+	newValue := "updated-value"
+	result, err := store.Update(ctx, created.JobID, jobqueue.UpdateJobQueue{
+		EventType: &newValue,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, newValue, result.EventType)
 }

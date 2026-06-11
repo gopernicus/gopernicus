@@ -46,6 +46,31 @@ and Redis if selected during init).
 | `make dev-reset` | Nuclear reset — stops containers, wipes all volumes (deletes database data), and restarts fresh. |
 | `make dev-psql` | Open an interactive `psql` shell connected to the dev database. |
 
+## Gopernicus
+
+Thin wrappers over the pinned framework tool (`go tool gopernicus`), exposed as
+the `GOPERNICUS` variable. Because the tool is pinned via the `tool` directive
+in `go.mod`, these targets always run the generator that matches the framework
+version the project links.
+
+| Target | Description |
+|---|---|
+| `make generate` | Regenerate all domains, then `go build ./...` so codegen breakage surfaces immediately. |
+| `make doctor` | Check project health and configuration. |
+| `make db-migrate` | Apply pending migrations. |
+| `make db-status` | Show migration status. |
+| `make db-reflect` | Reflect the database schema into the migrations directory. |
+| `make db-reset` | Wipe dev database volumes, restart (waiting for health checks), and re-apply migrations. |
+
+Parameterized commands are deliberately not wrapped — make is clumsy with
+arguments, so run them directly:
+
+```bash
+go tool gopernicus db create <name>           # create a migration
+go tool gopernicus new repo <domain/entity>   # scaffold an entity
+go tool gopernicus new case <name>            # scaffold a use case
+```
+
 ## Tests
 
 | Target | Description |
@@ -58,7 +83,7 @@ and Redis if selected during init).
 
 ```bash
 make dev-up                # start postgres + redis
-gopernicus db migrate      # apply migrations
+make db-migrate            # apply migrations
 make test-integration      # run integration tests
 
 # For E2E tests:
@@ -74,6 +99,7 @@ The Makefile defines these variables at the top, all overridable:
 |---|---|---|
 | `BINARY` | `<project-name>` | Output binary name and Docker container name. |
 | `COMPOSE` | `docker compose -f workshop/dev/docker-compose.yml` | Compose command for dev infrastructure. |
+| `GOPERNICUS` | `go tool gopernicus` | The pinned framework tool. |
 | `VERSION` | `git describe --tags` or `dev` | Version string for Docker image tags and build metadata. |
 | `IMAGE` | `<project-name>` | Docker image name. |
 | `IMAGE_TAG` | `<image>:<version>` | Full Docker image tag. |
@@ -84,9 +110,7 @@ The Makefile is a bootstrap file — it's created once by `gopernicus init` and
 never overwritten. Add your own targets freely. Common additions:
 
 - `make lint` — run `golangci-lint`
-- `make migrate` — shorthand for `gopernicus db migrate && gopernicus db reflect`
 - `make seed` — populate development data
-- `make gen` — shorthand for `gopernicus generate`
 
 ## Related
 

@@ -162,7 +162,7 @@ func TestGeneratedPrincipalStore_Update(t *testing.T) {
 
 	created := fixtures.CreateTestPrincipalWithDefaults(t, ctx, db)
 
-	newValue := "updated-value"
+	newValue := "service_account"
 	result, err := store.Update(ctx, created.PrincipalID, principals.UpdatePrincipal{
 		PrincipalType: &newValue,
 	})

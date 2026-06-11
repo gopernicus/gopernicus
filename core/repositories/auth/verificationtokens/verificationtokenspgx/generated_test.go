@@ -179,6 +179,7 @@ func TestGeneratedVerificationTokenStore_CreateInvalidReference(t *testing.T) {
 		ExpiresAt:  created.ExpiresAt,
 	}
 	input.TokenID = "fk-violation-test-id"
+	input.TokenHash = "fk-probe-token_hash"
 	bogusFK := "nonexistent-fk-id"
 	input.UserID = &bogusFK
 	_, err := store.Create(ctx, input)

@@ -61,7 +61,7 @@ var OrderByFields = map[string]fop.OrderField{
 	OrderByAggregateID:   {Column: "aggregate_id", CastLower: true},
 	OrderByPayload:       {Column: "payload"},
 	OrderByOccurredAt:    {Column: "occurred_at"},
-	OrderByStatus:        {Column: "status", CastLower: true},
+	OrderByStatus:        {Column: "status"},
 	OrderByPriority:      {Column: "priority"},
 	OrderByRetryCount:    {Column: "retry_count"},
 	OrderByMaxRetries:    {Column: "max_retries"},
@@ -270,8 +270,12 @@ func (r *Repository) List(ctx context.Context, filter FilterList, orderBy fop.Or
 		orderBy = fop.NewOrder(DefaultOrderBy, DefaultOrderDirection)
 	}
 	orderField := orderBy.Field
+	encodeCursor := func(record JobQueue) (string, error) {
+		return EncodeJobQueueCursor(record, orderField)
+	}
 
-	// Over-fetch by one to detect next page.
+	// Over-fetch by one to detect next page; fop.TrimPage trims back to the
+	// requested limit and encodes NextCursor from the last returned record.
 	listPage := fop.PageStringCursor{
 		Limit:  page.Limit + 1,
 		Cursor: page.Cursor,
@@ -282,35 +286,17 @@ func (r *Repository) List(ctx context.Context, filter FilterList, orderBy fop.Or
 		return nil, fop.Pagination{}, fmt.Errorf("query: %w", err)
 	}
 
-	returnableRecords := records
-	nextCursor := ""
-
-	if len(records) > page.Limit {
-		returnableRecords = records[:page.Limit]
-		lastRecord := returnableRecords[len(returnableRecords)-1]
-		nextCursor, err = EncodeJobQueueCursor(lastRecord, orderField)
-		if err != nil {
-			return nil, fop.Pagination{}, fmt.Errorf("encode next cursor: %w", err)
-		}
-	}
-
-	pagination := fop.Pagination{
-		Limit:      page.Limit,
-		NextCursor: nextCursor,
-		PageTotal:  len(returnableRecords),
+	returnableRecords, pagination, err := fop.TrimPage(records, page.Limit, encodeCursor)
+	if err != nil {
+		return nil, fop.Pagination{}, err
 	}
 
 	// Check for previous page when a cursor was provided.
 	if page.Cursor != "" {
 		prevRecords, err := r.store.List(ctx, filter, orderBy, page, true)
-		if err == nil && len(prevRecords) > 0 {
-			pagination.HasPrev = true
-			if len(prevRecords) == page.Limit {
-				firstRecord := prevRecords[0]
-				pagination.PreviousCursor, err = EncodeJobQueueCursor(firstRecord, orderField)
-				if err != nil {
-					return nil, fop.Pagination{}, fmt.Errorf("encode prev cursor: %w", err)
-				}
+		if err == nil {
+			if err := fop.MarkPrevPage(&pagination, prevRecords, page.Limit, encodeCursor); err != nil {
+				return nil, fop.Pagination{}, err
 			}
 		}
 	}

@@ -325,6 +325,32 @@ func (r *Repository) Delete(ctx context.Context, oauthAccountID string, parentUs
 	return nil
 }
 
+// GetByProvider delegates to the store.
+func (r *Repository) GetByProvider(ctx context.Context, provider string, providerUserID string) (OauthAccount, error) {
+	result, err := r.store.GetByProvider(ctx, provider, providerUserID)
+	if err != nil {
+		return OauthAccount{}, fmt.Errorf("get by provider: %w", err)
+	}
+	return result, nil
+}
+
+// ListByUser delegates to the store.
+func (r *Repository) ListByUser(ctx context.Context, parentUserID string, limit int) ([]OauthAccount, error) {
+	results, err := r.store.ListByUser(ctx, parentUserID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list by user: %w", err)
+	}
+	return results, nil
+}
+
+// DeleteByUserAndProvider delegates to the store.
+func (r *Repository) DeleteByUserAndProvider(ctx context.Context, parentUserID string, provider string) error {
+	if err := r.store.DeleteByUserAndProvider(ctx, parentUserID, provider); err != nil {
+		return fmt.Errorf("delete by user and provider: %w", err)
+	}
+	return nil
+}
+
 // Ensure imports are used.
 var _ = time.Time{}
 var _ = fop.Order{}

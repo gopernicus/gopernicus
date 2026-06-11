@@ -55,7 +55,7 @@ var OrderByFields = map[string]fop.OrderField{
 	OrderByLastUsedAt:             {Column: "last_used_at"},
 	OrderByLastUsedIp:             {Column: "last_used_ip", CastLower: true},
 	OrderByRateLimitPerMinute:     {Column: "rate_limit_per_minute"},
-	OrderByRecordState:            {Column: "record_state", CastLower: true},
+	OrderByRecordState:            {Column: "record_state"},
 	OrderByRevokedAt:              {Column: "revoked_at"},
 	OrderByCreatedAt:              {Column: "created_at"},
 	OrderByUpdatedAt:              {Column: "updated_at"},

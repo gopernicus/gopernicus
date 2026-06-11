@@ -46,7 +46,7 @@ var OrderByFields = map[string]fop.OrderField{
 	OrderBySlug:               {Column: "slug", CastLower: true},
 	OrderByDescription:        {Column: "description", CastLower: true},
 	OrderByCreatorPrincipalID: {Column: "creator_principal_id", CastLower: true},
-	OrderByRecordState:        {Column: "record_state", CastLower: true},
+	OrderByRecordState:        {Column: "record_state"},
 	OrderByCreatedAt:          {Column: "created_at"},
 	OrderByUpdatedAt:          {Column: "updated_at"},
 }

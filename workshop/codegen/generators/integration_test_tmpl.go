@@ -59,7 +59,7 @@ func setupTestStore(t *testing.T) (context.Context, *testpgx.TestPGX, *Store) {
 	store := NewStore(logger.NewNoop(), db.Pool)
 {{end}}	return ctx, db, store
 }
-{{if .HasCreate}}
+{{if and .HasCreate .HasGet}}
 func TestGenerated{{.EntityName}}Store_Create(t *testing.T) {
 	ctx, db, store := setupTestStore(t)
 {{if not .SpecMode}}	pgxfixtures.TruncatePublicSchema(t, ctx, db.Pool)
@@ -149,10 +149,12 @@ func TestGenerated{{.EntityName}}Store_Delete(t *testing.T) {
 
 	err := store.Delete(ctx, created.{{.PKGoName}}{{range .HardDeleteExtraCallArgs}}, {{.}}{{end}})
 	require.NoError(t, err)
+{{- if .HasGet}}
 
 	// Verify record is gone.
 	_, err = store.Get(ctx, created.{{.PKGoName}}{{range .GetExtraCallArgs}}, {{.}}{{end}})
 	require.Error(t, err)
+{{- end}}
 }
 {{end}}{{if .HasSoftDelete}}
 func TestGenerated{{.EntityName}}Store_SoftDelete(t *testing.T) {
@@ -164,11 +166,13 @@ func TestGenerated{{.EntityName}}Store_SoftDelete(t *testing.T) {
 
 	err := store.SoftDelete(ctx, created.{{.PKGoName}}{{range .SoftDeleteExtraCallArgs}}, {{.}}{{end}})
 	require.NoError(t, err)
+{{- if .HasGet}}
 
 	// Verify record state changed.
 	result, err := store.Get(ctx, created.{{.PKGoName}}{{range .GetExtraCallArgs}}, {{.}}{{end}})
 	require.NoError(t, err)
 	assert.Equal(t, "deleted", result.RecordState)
+{{- end}}
 }
 {{end}}{{if .HasDuplicateTest}}
 func TestGenerated{{.EntityName}}Store_CreateDuplicate(t *testing.T) {
@@ -225,7 +229,7 @@ func TestGenerated{{.EntityName}}Store_Update(t *testing.T) {
 	created := fixtures.CreateTest{{.EntityName}}WithDefaults(t, ctx, db)
 
 	newValue := {{.UpdateValueExpr}}
-	result, err := store.Update(ctx, created.{{.PKGoName}}{{range .GetExtraCallArgs}}, {{.}}{{end}}, {{.RepoPkg}}.Update{{.EntityName}}{
+	result, err := store.Update(ctx, created.{{.PKGoName}}{{range .UpdateExtraCallArgs}}, {{.}}{{end}}, {{.RepoPkg}}.Update{{.EntityName}}{
 		{{.UpdateFieldGoName}}: &newValue,
 	})
 	require.NoError(t, err)

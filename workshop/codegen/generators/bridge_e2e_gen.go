@@ -83,12 +83,14 @@ type BridgeE2EData struct {
 // spec-mode database. Entities whose create model requires foreign keys are
 // skipped for now — their POST bodies need seeded parents. Routes with
 // params other than the PK are likewise skipped (scope params need fixture
-// context the plain HTTP round-trip doesn't have).
+// context the plain HTTP round-trip doesn't have). Every skip prints its
+// reason — a silently absent e2e suite reads as a generation failure.
 func GenerateBridgeE2E(data BridgeTemplateData, resolved *ResolvedFile, bridgeDir, modulePath, hostDB string, specMode bool, opts Options) error {
 	path := filepath.Join(bridgeDir, "generated_e2e_test.go")
 
-	e2e, ok := buildBridgeE2EData(data, resolved, modulePath, hostDB, specMode)
-	if !ok {
+	e2e, skipReason := buildBridgeE2EData(data, resolved, modulePath, hostDB, specMode)
+	if skipReason != "" {
+		fmt.Printf("      skip generated_e2e_test.go (%s: %s)\n", data.BridgePackage, skipReason)
 		if fileExists(path) && !opts.DryRun {
 			if err := os.Remove(path); err != nil {
 				return fmt.Errorf("remove stale generated_e2e_test.go: %w", err)
@@ -132,17 +134,19 @@ type FKSeed struct {
 	ParentPKExpr string // expr off the seeded parent, e.g. "parent0.ID"
 }
 
-func buildBridgeE2EData(data BridgeTemplateData, resolved *ResolvedFile, modulePath, hostDB string, specMode bool) (BridgeE2EData, bool) {
+// buildBridgeE2EData assembles the template data for one bridged entity.
+// A non-empty skipReason means no e2e suite can be generated and says why.
+func buildBridgeE2EData(data BridgeTemplateData, resolved *ResolvedFile, modulePath, hostDB string, specMode bool) (BridgeE2EData, string) {
 	if len(data.CreateQueries) == 0 {
-		return BridgeE2EData{}, false
+		return BridgeE2EData{}, "no create query — nothing to round-trip"
 	}
 
 	// Required FK create fields are populated from seeded parents. Each FK
 	// column must map to a field in the create request (one that wasn't
 	// stripped as a URL path param) and a parent table we can seed.
-	seeds, ok := buildFKSeeds(data, resolved)
-	if !ok {
-		return BridgeE2EData{}, false
+	seeds, seedSkip := buildFKSeeds(data, resolved)
+	if seedSkip != "" {
+		return BridgeE2EData{}, seedSkip
 	}
 
 	// Store package + fixtures differ by mode; the test bodies do not.
@@ -207,7 +211,7 @@ func buildBridgeE2EData(data BridgeTemplateData, resolved *ResolvedFile, moduleP
 	for _, r := range data.Routes {
 		for _, m := range r.MiddlewareChain {
 			if m.Authenticate != "" || m.Authorize != nil {
-				return BridgeE2EData{}, false
+				return BridgeE2EData{}, fmt.Sprintf("route %s %s requires auth — e2e probes drive routes anonymously", r.Method, r.Path)
 			}
 		}
 	}
@@ -263,20 +267,20 @@ func buildBridgeE2EData(data BridgeTemplateData, resolved *ResolvedFile, moduleP
 
 	// Without a paramless POST there is nothing to round-trip.
 	if e2e.CreatePath == "" {
-		return BridgeE2EData{}, false
+		return BridgeE2EData{}, "no paramless POST create route — nothing to round-trip"
 	}
-	return e2e, true
+	return e2e, ""
 }
 
 // buildFKSeeds maps each required (NOT NULL) foreign-key create field to a
-// parent fixture and the create-request field it fills. Returns ok=false when
-// an FK can't be seeded from the request body (e.g. it was stripped as a URL
-// path param, or its create field isn't in the request), so the caller falls
-// back to skipping e2e for that entity. Self-referential FKs are nullable by
-// design and need no seed.
-func buildFKSeeds(data BridgeTemplateData, resolved *ResolvedFile) ([]FKSeed, bool) {
+// parent fixture and the create-request field it fills. A non-empty
+// skipReason means an FK can't be seeded from the request body (e.g. it was
+// stripped as a URL path param, or its create field isn't in the request),
+// so the caller falls back to skipping e2e for that entity. Self-referential
+// FKs are nullable by design and need no seed.
+func buildFKSeeds(data BridgeTemplateData, resolved *ResolvedFile) ([]FKSeed, string) {
 	if resolved.Table == nil {
-		return nil, true
+		return nil, ""
 	}
 
 	// Request fields present in the (path-param-stripped) create model.
@@ -299,18 +303,18 @@ func buildFKSeeds(data BridgeTemplateData, resolved *ResolvedFile) ([]FKSeed, bo
 	idx := 0
 	for _, fk := range resolved.Table.ForeignKeys {
 		if len(fk.Columns) != 1 || len(fk.RefColumns) != 1 {
-			return nil, false // composite FK — not seedable by this simple path
+			return nil, fmt.Sprintf("composite FK %v — parent seeding not supported", fk.Columns)
 		}
 		col := fk.Columns[0]
 		if !required[col] {
 			continue // nullable FK — the insert succeeds without it
 		}
 		if fk.RefTable == resolved.TableName {
-			return nil, false // self-ref required FK can't be satisfied
+			return nil, fmt.Sprintf("required self-referential FK %s can't be seeded", col)
 		}
 		goName, ok := requestFields[col]
 		if !ok {
-			return nil, false // FK not settable from the request body
+			return nil, fmt.Sprintf("required FK %s is not settable from the create request body", col)
 		}
 		seeds = append(seeds, FKSeed{
 			RequestField: goName,
@@ -319,7 +323,7 @@ func buildFKSeeds(data BridgeTemplateData, resolved *ResolvedFile) ([]FKSeed, bo
 		})
 		idx++
 	}
-	return seeds, true
+	return seeds, ""
 }
 
 // pkOnlyPathExpr converts a route path whose only parameter is the PK into a
