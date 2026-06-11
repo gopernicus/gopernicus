@@ -19,6 +19,12 @@ type File struct {
 	// (databases.<name>.domains) is the binding source.
 	FileAnnotations map[string]string
 
+	// FixtureDefaults holds raw `@fixture-default: <column> <value>` entries
+	// in file order. Repeatable — accumulated separately because
+	// FileAnnotations overwrites duplicate keys. Validated against the
+	// schema in Resolve.
+	FixtureDefaults []string
+
 	Queries []QueryBlock
 }
 
@@ -137,6 +143,13 @@ type ResolvedFile struct {
 	// nullable FK groups) that the generic fixture cannot satisfy —
 	// hand-write the desired tests in store_test.go instead.
 	SkipIntegrationTest bool
+
+	// FixtureDefaults maps column name → raw author-supplied value from
+	// file-level `-- @fixture-default: <column> <value>` annotations.
+	// Validated in Resolve (column exists, not PK/FK/time, value parses for
+	// the column's type); applied as the final TestDefault override in
+	// BuildFixtureEntity.
+	FixtureDefaults map[string]string
 
 	Queries []ResolvedQuery
 }

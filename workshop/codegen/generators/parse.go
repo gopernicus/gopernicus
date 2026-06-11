@@ -37,6 +37,8 @@ func ParseString(input string) (*File, error) {
 			if v, ok := annotations[lastAnnotationKey]; ok {
 				annotations[lastAnnotationKey] = v + " " + continuation
 			}
+		} else if !inQuery && lastAnnotationKey == "fixture-default" && len(f.FixtureDefaults) > 0 {
+			f.FixtureDefaults[len(f.FixtureDefaults)-1] += " " + continuation
 		} else if !inQuery && f.FileAnnotations != nil {
 			if v, ok := f.FileAnnotations[lastAnnotationKey]; ok {
 				f.FileAnnotations[lastAnnotationKey] = v + " " + continuation
@@ -172,6 +174,19 @@ func ParseString(input string) (*File, error) {
 				}
 
 				if !inQuery {
+					// @fixture-default is repeatable (one column per line) —
+					// accumulate instead of letting the map overwrite. The
+					// named form `@fixture-default:col value` normalizes to
+					// the standard "col value" entry.
+					if key == "fixture-default" {
+						lastAnnotationKey = key
+						entry := val
+						if name != "" {
+							entry = strings.TrimSpace(name + " " + val)
+						}
+						f.FixtureDefaults = append(f.FixtureDefaults, entry)
+						continue
+					}
 					if f.FileAnnotations == nil {
 						f.FileAnnotations = make(map[string]string)
 					}

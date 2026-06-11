@@ -283,6 +283,55 @@ SELECT count(*) FROM events WHERE tenant_id = @tenant_id;
 	}
 }
 
+func TestParseString_FixtureDefaults(t *testing.T) {
+	input := `-- @fixture-default: payload {"backend":"db","ciphertext":"dGVzdA=="}
+-- @fixture-default: kind entity
+-- @fixture-default:named_form value with spaces
+
+-- @func: Get
+SELECT * FROM tenant_secrets WHERE secret_id = @secret_id;
+`
+	f, err := ParseString(input)
+	if err != nil {
+		t.Fatalf("ParseString: %v", err)
+	}
+	want := []string{
+		`payload {"backend":"db","ciphertext":"dGVzdA=="}`,
+		"kind entity",
+		"named_form value with spaces",
+	}
+	if len(f.FixtureDefaults) != len(want) {
+		t.Fatalf("FixtureDefaults = %v, want %d entries", f.FixtureDefaults, len(want))
+	}
+	for i, w := range want {
+		if f.FixtureDefaults[i] != w {
+			t.Errorf("FixtureDefaults[%d] = %q, want %q", i, f.FixtureDefaults[i], w)
+		}
+	}
+	if _, ok := f.FileAnnotations["fixture-default"]; ok {
+		t.Error("fixture-default must not land in FileAnnotations")
+	}
+}
+
+func TestParseString_FixtureDefaultContinuation(t *testing.T) {
+	input := `-- @fixture-default: kind entity
+-- | extended
+
+-- @func: Get
+SELECT * FROM tenant_secrets WHERE secret_id = @secret_id;
+`
+	f, err := ParseString(input)
+	if err != nil {
+		t.Fatalf("ParseString: %v", err)
+	}
+	if len(f.FixtureDefaults) != 1 {
+		t.Fatalf("FixtureDefaults = %v, want 1 entry", f.FixtureDefaults)
+	}
+	if !strings.HasPrefix(f.FixtureDefaults[0], "kind entity ") {
+		t.Errorf("continuation must append to the last fixture-default, got %q", f.FixtureDefaults[0])
+	}
+}
+
 func TestParseString_SQLOutsideBlock(t *testing.T) {
 	input := `SELECT * FROM users;`
 	_, err := ParseString(input)
