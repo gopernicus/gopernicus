@@ -45,6 +45,31 @@ Use this when an entity has invariants the generic fixture default can't satisfy
 
 Hand-write integration tests in `*pgx/store_test.go` (which is bootstrap, not regenerated) using the `setupTestStore()` helper. The opt-out applies only to the store-level smoke test — bridge, repository, and case generation continue normally.
 
+Before reaching for the opt-out, check whether `@fixture-default` (below) solves it: if the constraint can be satisfied by pinning one or two column values, the override keeps the entity inside the generated path.
+
+### `@fixture-default`
+
+Overrides the generated test fixture's value for one column. Repeatable — one column per line. The answer to arbitrary CHECK constraints the generic fixture can't satisfy (cross-column predicates, JSON shape requirements): supply a value that does, and the generated smoke tests keep running.
+
+```sql
+-- @fixture-default: payload {"backend":"db","ciphertext":"dGVzdA=="}
+-- @fixture-default: kind entity
+```
+
+Grammar: `@fixture-default: <column> <value>` — everything after the first space is the value.
+
+| Column type | Value handling |
+|-------------|----------------|
+| string | Used as the literal; the generator quotes it |
+| json / jsonb | Validated as JSON at generation time, emitted as `json.RawMessage` |
+| bool | Must be `true` or `false`, emitted verbatim |
+| int / float | Type-checked, emitted verbatim |
+| nullable (pointer) | Value wrapped in `conversion.Ptr(...)` |
+
+An unknown column, an unparseable value, or an attempt to override a primary key, foreign key, or time column is a hard generation error naming the file — fail loud, never a silently wrong fixture. FK values always come from parent fixture wiring; PKs are generated uniquely per test row.
+
+General CHECK-constraint evaluation is explicitly not the goal — author-supplied values are. If no fixed per-column value can satisfy the invariant (e.g. mutually exclusive nullable FK groups), fall back to `@skip-integration-test`.
+
 ---
 
 ## Query-level annotations

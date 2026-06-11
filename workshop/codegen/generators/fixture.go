@@ -211,12 +211,44 @@ func BuildFixtureEntity(resolved *ResolvedFile, modulePath string) FixtureEntity
 		}
 	}
 
+	// @fixture-default overrides are the final pass — they win over the
+	// generic, enum, and length-capped defaults. PK and FK columns are
+	// rejected at resolve time, so param wiring above is never clobbered.
+	for i, f := range entity.InsertFields {
+		if raw, ok := resolved.FixtureDefaults[f.DBName]; ok {
+			entity.InsertFields[i].TestDefault = fixtureDefaultExpr(f, raw)
+		}
+	}
+
 	// Build AllColumns for SELECT back.
 	for _, col := range resolved.AllColumns {
 		entity.AllColumns = append(entity.AllColumns, columnToFixture(col))
 	}
 
 	return entity
+}
+
+// fixtureDefaultExpr renders an author-supplied @fixture-default value as a
+// Go expression for the column's type. Values were validated in Resolve;
+// only representation decisions live here.
+func fixtureDefaultExpr(f FixtureField, raw string) string {
+	inner := strings.TrimPrefix(f.GoType, "*")
+
+	var expr string
+	switch inner {
+	case "string":
+		expr = fmt.Sprintf("%q", raw)
+	case "json.RawMessage":
+		expr = fmt.Sprintf("json.RawMessage(`%s`)", raw)
+	default:
+		// bool/int/float literals emit verbatim (sanity-checked in Resolve).
+		expr = raw
+	}
+
+	if strings.HasPrefix(f.GoType, "*") {
+		return fmt.Sprintf("conversion.Ptr(%s)", expr)
+	}
+	return expr
 }
 
 // buildParentFixtures extracts FK dependencies from a table.

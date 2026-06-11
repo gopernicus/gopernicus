@@ -1,6 +1,7 @@
 package generators
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"sort"
@@ -63,6 +64,13 @@ func Resolve(qf *File, s *schema.ReflectedSchema, domainName string) (*ResolvedF
 
 	_, skipIntegrationTest := qf.FileAnnotations["skip-integration-test"]
 
+	colMap := buildColumnMap(table)
+
+	fixtureDefaults, err := resolveFixtureDefaults(qf.FixtureDefaults, table, colMap)
+	if err != nil {
+		return nil, fmt.Errorf("@fixture-default: %w", err)
+	}
+
 	rf := &ResolvedFile{
 		Table:               table,
 		SchemaName:          s.SchemaName,
@@ -78,9 +86,8 @@ func Resolve(qf *File, s *schema.ReflectedSchema, domainName string) (*ResolvedF
 		PKGoName:            pkGoName,
 		PKGoType:            pkGoType,
 		SkipIntegrationTest: skipIntegrationTest,
+		FixtureDefaults:     fixtureDefaults,
 	}
-
-	colMap := buildColumnMap(table)
 
 	// Build a cross-table column lookup for resolving JOIN/CTE columns.
 	allColMap := buildAllColumnMap(s.Tables)
@@ -363,6 +370,74 @@ func resolveASTColumn(col ASTColumn, aliasMap map[string]string, cteTypeMap map[
 		DBName: col.Name,
 		IsTime: goType == "*time.Time" || goType == "time.Time",
 	}
+}
+
+// resolveFixtureDefaults validates raw `@fixture-default: <column> <value>`
+// entries against the table schema and returns a column → raw value map.
+// General CHECK-constraint evaluation is explicitly not the goal —
+// author-supplied values are. Anything unresolvable is a hard generation
+// error naming the offending entry: a silently wrong fixture would defeat
+// the point of the annotation.
+func resolveFixtureDefaults(entries []string, table *schema.TableInfo, colMap map[string]schema.ColumnInfo) (map[string]string, error) {
+	if len(entries) == 0 {
+		return nil, nil
+	}
+
+	defaults := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		column, value, found := strings.Cut(strings.TrimSpace(entry), " ")
+		if !found || strings.TrimSpace(value) == "" {
+			return nil, fmt.Errorf("entry %q: want `<column> <value>`", entry)
+		}
+		value = strings.TrimSpace(value)
+
+		col, ok := colMap[column]
+		if !ok {
+			return nil, fmt.Errorf("column %q not found in table %q", column, table.TableName)
+		}
+		if _, dup := defaults[column]; dup {
+			return nil, fmt.Errorf("column %q declared more than once", column)
+		}
+		if col.IsPrimaryKey {
+			return nil, fmt.Errorf("column %q is the primary key — fixtures generate unique PKs themselves", column)
+		}
+		if col.IsForeignKey {
+			return nil, fmt.Errorf("column %q is a foreign key — FK values come from parent fixture wiring", column)
+		}
+
+		goType := strings.TrimPrefix(col.GoType, "*")
+		switch goType {
+		case "string":
+			// Any value works — the generator emits it as a quoted literal.
+		case "json.RawMessage":
+			if !json.Valid([]byte(value)) {
+				return nil, fmt.Errorf("column %q: value is not valid JSON: %s", column, value)
+			}
+			if strings.Contains(value, "`") {
+				return nil, fmt.Errorf("column %q: JSON value must not contain backticks (emitted as a raw string literal)", column)
+			}
+		case "bool":
+			if value != "true" && value != "false" {
+				return nil, fmt.Errorf("column %q: bool value must be `true` or `false`, got %q", column, value)
+			}
+		case "int", "int32", "int64":
+			if _, err := strconv.ParseInt(value, 10, 64); err != nil {
+				return nil, fmt.Errorf("column %q: invalid integer value %q", column, value)
+			}
+		case "float64":
+			if _, err := strconv.ParseFloat(value, 64); err != nil {
+				return nil, fmt.Errorf("column %q: invalid float value %q", column, value)
+			}
+		case "time.Time":
+			return nil, fmt.Errorf("column %q: time columns cannot be overridden", column)
+		default:
+			return nil, fmt.Errorf("column %q: unsupported column type %s", column, col.GoType)
+		}
+
+		defaults[column] = value
+	}
+
+	return defaults, nil
 }
 
 // resolveSearchSpec parses "@search: ilike(field1, field2)" and returns FieldInfo entries.

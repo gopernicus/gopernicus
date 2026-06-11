@@ -92,6 +92,102 @@ func TestPrincipalInheritanceFixtureUsesCheckValidType(t *testing.T) {
 	}
 }
 
+// fixtureDefaultsResolved builds a tenant_secrets-shaped entity carrying
+// resolved @fixture-default overrides for string, json, bool, and nullable
+// pointer columns.
+func fixtureDefaultsResolved() *ResolvedFile {
+	return &ResolvedFile{
+		Table:       &schema.TableInfo{TableName: "tenant_secrets"},
+		EntityName:  "TenantSecret",
+		EntityLower: "tenantsecret",
+		TableName:   "tenant_secrets",
+		PackageName: "tenantsecrets",
+		DomainName:  "tenancy",
+		PKColumn:    "secret_id",
+		PKGoName:    "SecretID",
+		PKGoType:    "string",
+		AllColumns: []schema.ColumnInfo{
+			{Name: "secret_id", DBType: "text", GoType: "string", IsPrimaryKey: true},
+			{Name: "payload", DBType: "jsonb", GoType: "json.RawMessage", GoImport: "encoding/json"},
+			{Name: "kind", DBType: "text", GoType: "string"},
+			{Name: "note", DBType: "text", GoType: "*string", IsNullable: true},
+			{Name: "enabled", DBType: "boolean", GoType: "bool"},
+		},
+		FixtureDefaults: map[string]string{
+			"payload": `{"backend":"db","ciphertext":"dGVzdA=="}`,
+			"kind":    "entity",
+			"note":    "pinned",
+			"enabled": "true",
+		},
+	}
+}
+
+// @fixture-default overrides must win over the generic test defaults, with
+// type-appropriate rendering: quoted strings, raw-string json.RawMessage,
+// verbatim bools, and conversion.Ptr wrapping for nullable pointer columns.
+func TestFixtureDefaultOverridesEmitted(t *testing.T) {
+	dir := t.TempDir()
+	data := FixtureTemplateData{
+		ModulePath: "example.com/app",
+		Entities:   []FixtureEntity{BuildFixtureEntity(fixtureDefaultsResolved(), "example.com/app")},
+	}
+	if err := GenerateFixtures(data, dir, Options{}); err != nil {
+		t.Fatalf("GenerateFixtures: %v", err)
+	}
+
+	out, err := os.ReadFile(filepath.Join(dir, "generated.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(out)
+
+	for _, want := range []string{
+		"json.RawMessage(`{\"backend\":\"db\",\"ciphertext\":\"dGVzdA==\"}`)",
+		`"entity"`,
+		`conversion.Ptr("pinned")`,
+		"true",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("generated fixture missing override %s", want)
+		}
+	}
+	if strings.Contains(content, `"test_kind`) {
+		t.Error("generic default must not survive a @fixture-default override")
+	}
+	if strings.Contains(content, `json.RawMessage("{}")`) {
+		t.Error("generic JSON default must not survive a @fixture-default override")
+	}
+}
+
+// Spec-mode fixtures share BuildFixtureEntity, so overrides must carry
+// through GenerateSpecFixtures unchanged.
+func TestFixtureDefaultOverridesEmittedSpecMode(t *testing.T) {
+	dir := t.TempDir()
+	data := FixtureTemplateData{
+		ModulePath: "example.com/app",
+		Entities:   []FixtureEntity{BuildFixtureEntity(fixtureDefaultsResolved(), "example.com/app")},
+	}
+	if err := GenerateSpecFixtures(data, dir, Options{}); err != nil {
+		t.Fatalf("GenerateSpecFixtures: %v", err)
+	}
+
+	out, err := os.ReadFile(filepath.Join(dir, "generated.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(out)
+
+	for _, want := range []string{
+		"json.RawMessage(`{\"backend\":\"db\",\"ciphertext\":\"dGVzdA==\"}`)",
+		`"entity"`,
+		`conversion.Ptr("pinned")`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("spec-mode fixture missing override %s", want)
+		}
+	}
+}
+
 // Without a principals entity in the batch, the fallback is "user" — the
 // first value the framework-shipped principals_type_check allows.
 func TestPrincipalInheritanceFixtureFallsBackToUser(t *testing.T) {
