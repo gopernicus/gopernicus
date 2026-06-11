@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Unit tests
+        run: go test ./... -count=1
+
+  tagged-compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Vet (integration)
+        run: go vet -tags=integration ./...
+
+      - name: Vet (e2e)
+        run: go vet -tags=e2e ./...
+
+      - name: Vet (penetration)
+        run: go vet -tags=penetration ./...
+
+  clean-regenerate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Regenerate
+        run: go run ./workshop/gopernicus generate
+
+      - name: Verify no drift
+        run: |
+          git add -A
+          if ! git diff --cached --exit-code; then
+            echo "::error::Generated files are stale or generation is nondeterministic — run 'gopernicus generate' and commit the result."
+            exit 1
+          fi
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Integration tests
+        run: go test -tags=integration -timeout 10m ./...
