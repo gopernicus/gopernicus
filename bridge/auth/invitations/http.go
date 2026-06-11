@@ -77,6 +77,11 @@ func (b *Bridge) httpCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := b.validateRedirectURL(req.RedirectURL); err != nil {
+		web.RespondJSONError(w, err)
+		return
+	}
+
 	userID := httpmid.GetSubjectID(r.Context())
 
 	result, err := b.invitations.Create(r.Context(), invitationscore.CreateInput{
@@ -87,6 +92,7 @@ func (b *Bridge) httpCreate(w http.ResponseWriter, r *http.Request) {
 		IdentifierType: req.IdentifierType,
 		InvitedBy:      userID,
 		AutoAccept:     req.AutoAccept,
+		RedirectURL:    req.RedirectURL,
 	})
 	if err != nil {
 		switch {
@@ -353,4 +359,21 @@ func toInvitationResponses(invs []invitationscore.Invitation) []InvitationRespon
 		out[i] = *toInvitationResponse(inv)
 	}
 	return out
+}
+
+// validateRedirectURL enforces the allowed-frontends policy on a create
+// request's redirect_url. Strict mode (matcher configured via
+// WithAllowedFrontends) requires an allow-listed origin; legacy mode
+// (no allow-list) accepts whatever the client sends, including empty.
+func (b *Bridge) validateRedirectURL(raw string) *web.Error {
+	if b.originMatcher.Empty() {
+		return nil
+	}
+	if raw == "" {
+		return web.ErrBadRequest("redirect_url is required")
+	}
+	if !b.originMatcher.Matches(raw) {
+		return web.ErrBadRequest("redirect_url origin not in allowed list")
+	}
+	return nil
 }

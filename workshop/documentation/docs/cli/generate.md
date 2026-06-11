@@ -78,7 +78,7 @@ triggers generation in the repository, store, bridge, and test layers.
 
 | File | Created | Overwritten | Description |
 |---|---|---|---|
-| `generated_test.go` | Always (unless opted out) | Yes | Auto-generated `Create` / `Get` / `List` / `Delete` / `SoftDelete` smoke tests. Suppressed by `-- @skip-integration-test` at the top of `queries.sql`; a previously generated file is removed on opt-in. |
+| `generated_test.go` | Always | Yes | Auto-generated `Create` / `Get` / `List` / `Delete` / `SoftDelete` smoke tests. `-- @skip-integration-test` at the top of `queries.sql` suppresses the probes — the file is regenerated setup-only (just the `setupTestStore` helper). |
 | `store_test.go` | Once | No | `setupTestStore` helper plus `migrateTestDB` and `testPGXOptions` hooks for the test container. |
 
 **Cache** (`core/repositories/<domain>/<entity>/`) -- only when `@cache` annotations are present:

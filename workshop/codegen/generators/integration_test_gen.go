@@ -3,7 +3,6 @@ package generators
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"text/template"
@@ -133,12 +132,29 @@ type IntegrationTestData struct {
 	UpdateExtraCallArgs     []string
 }
 
-// HasAnyTest reports whether the generated test file would contain at least
-// one test function. When false the file must not be emitted at all — its
-// fixed imports (fixtures, require) would be unused and break the build.
+// HasAnyTest reports whether the generated test file contains at least one
+// test function. When false the file renders setup-only — just the
+// setupTestStore helper, with the test-only imports (fixtures, assert,
+// pgxfixtures) omitted so it still compiles.
 func (d IntegrationTestData) HasAnyTest() bool {
 	return d.HasGet || d.HasList || d.HasHardDelete || d.HasSoftDelete ||
 		d.HasDuplicateTest || d.HasFKViolationTest || d.HasUpdateMutation
+}
+
+// SuppressTests clears every probe flag so the generated file renders
+// setup-only. Used for entities annotated `-- @skip-integration-test`: the
+// generic probes are unwanted, but hand-written tests in store_test.go still
+// need the setupTestStore helper.
+func (d *IntegrationTestData) SuppressTests() {
+	d.HasCreate = false
+	d.HasGet = false
+	d.HasList = false
+	d.HasSoftDelete = false
+	d.HasHardDelete = false
+	d.HasDuplicateTest = false
+	d.HasFKViolationTest = false
+	d.HasUpdateMutation = false
+	d.NeedsRepoImport = false
 }
 
 // FKUniqueAssign is one fresh-value assignment in the bogus-FK probe input,
@@ -577,18 +593,12 @@ func generateIntegrationTestWith(data IntegrationTestData, storeDir string, opts
 			continue
 		}
 
-		// No standard probe survived (no single-PK Get/List/Delete/Update
-		// usable from the fixture row) — an empty test file would not even
-		// compile (unused imports), so skip it and clear any stale copy.
-		// store_test.go still bootstraps for hand-written tests.
+		// No standard probe survived (skipped via @skip-integration-test,
+		// or no single-PK Get/List/Delete/Update is usable from the fixture
+		// row) — the file still renders, setup-only, so hand-written tests
+		// in store_test.go keep the setupTestStore helper.
 		if !f.bootstrap && !data.HasAnyTest() {
-			fmt.Printf("      skip %s (%s: no standard store probes; add tests in store_test.go)\n", f.name, data.StorePkg)
-			if fileExists(path) && !opts.DryRun {
-				if err := os.Remove(path); err != nil {
-					return fmt.Errorf("remove stale %s: %w", f.name, err)
-				}
-			}
-			continue
+			fmt.Printf("      note %s (%s: no standard store probes — setup-only; add tests in store_test.go)\n", f.name, data.StorePkg)
 		}
 
 		out, err := renderIntegrationTestTemplate(f.tmpl, data)

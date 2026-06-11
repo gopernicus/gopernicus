@@ -29,7 +29,7 @@ File-level annotations appear at the top of `queries.sql`, before the first `@fu
 
 ### `@skip-integration-test`
 
-Suppresses generation of the `*pgx/generated_test.go` smoke test file for the entity. A previously generated file is removed on the next `gopernicus generate` run.
+Suppresses the generated smoke tests for the entity. The next `gopernicus generate` run regenerates `*pgx/generated_test.go` setup-only: no test functions, but the `setupTestStore` helper stays available for hand-written tests in `store_test.go` (don't keep a private copy of it there — it would collide).
 
 ```sql
 -- @skip-integration-test

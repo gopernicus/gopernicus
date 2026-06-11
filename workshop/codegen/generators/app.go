@@ -109,6 +109,37 @@ func GenerateAppScaffold(root string, data AppScaffoldData) error {
 			}{"app/server/emails/templates/authentication/oauth_link_verification.txt", authOAuthLinkTXTRaw},
 		)
 	}
+	// Invitations ship with the authorization (rebac) feature; their emails
+	// are rendered by the framework invitations bridge subscriber when an
+	// emailer is wired (invitations.WithEmailer).
+	if data.HasAuthorization {
+		rawFiles = append(rawFiles,
+			struct {
+				relPath string
+				content string
+			}{"app/server/emails/templates/invitations/invite.html", invitationInviteHTMLRaw},
+			struct {
+				relPath string
+				content string
+			}{"app/server/emails/templates/invitations/invite.txt", invitationInviteTXTRaw},
+			struct {
+				relPath string
+				content string
+			}{"app/server/emails/templates/invitations/shared.html", invitationSharedHTMLRaw},
+			struct {
+				relPath string
+				content string
+			}{"app/server/emails/templates/invitations/shared.txt", invitationSharedTXTRaw},
+			struct {
+				relPath string
+				content string
+			}{"app/server/emails/templates/invitations/member_added.html", invitationMemberAddedHTMLRaw},
+			struct {
+				relPath string
+				content string
+			}{"app/server/emails/templates/invitations/member_added.txt", invitationMemberAddedTXTRaw},
+		)
+	}
 
 	for _, f := range templatedFiles {
 		target := filepath.Join(root, f.relPath)

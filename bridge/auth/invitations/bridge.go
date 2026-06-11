@@ -11,6 +11,7 @@ package invitations
 import (
 	"log/slog"
 
+	"github.com/gopernicus/gopernicus/bridge/transit/allowlist"
 	"github.com/gopernicus/gopernicus/bridge/transit/httpmid"
 	"github.com/gopernicus/gopernicus/core/auth/authentication"
 	"github.com/gopernicus/gopernicus/core/auth/authorization"
@@ -25,6 +26,7 @@ type Bridge struct {
 	authorizer    *authorization.Authorizer
 	authenticator *authentication.Authenticator
 	rateLimiter   *ratelimiter.RateLimiter
+	originMatcher *allowlist.Matcher
 	jsonErrors    httpmid.ErrorRenderer
 	htmlErrors    httpmid.ErrorRenderer
 }
@@ -45,6 +47,21 @@ func WithHTMLErrorRenderer(r httpmid.ErrorRenderer) BridgeOption {
 	return func(b *Bridge) { b.htmlErrors = r }
 }
 
+// WithAllowedFrontends sets the origin allow-list used to validate
+// redirect_url on invitation create — use the same list the authentication
+// bridge gets. When configured, create requests MUST carry an allow-listed
+// redirect_url; when not set, redirect_url passes through unvalidated
+// (legacy mode). Panics on invalid origins, like the authentication bridge.
+func WithAllowedFrontends(origins []string) BridgeOption {
+	return func(b *Bridge) {
+		m, err := allowlist.New(origins)
+		if err != nil {
+			panic("invitations bridge: invalid allowed frontends: " + err.Error())
+		}
+		b.originMatcher = m
+	}
+}
+
 // New creates a new invitations bridge.
 func New(
 	log *slog.Logger,
@@ -54,12 +71,17 @@ func New(
 	rateLimiter *ratelimiter.RateLimiter,
 	opts ...BridgeOption,
 ) *Bridge {
+	// Default: empty matcher — redirect_url passes through unvalidated
+	// until WithAllowedFrontends configures the allow-list.
+	defaultMatcher, _ := allowlist.New(nil)
+
 	b := &Bridge{
 		log:           log,
 		invitations:   invitations,
 		authorizer:    authorizer,
 		authenticator: authenticator,
 		rateLimiter:   rateLimiter,
+		originMatcher: defaultMatcher,
 	}
 	for _, opt := range opts {
 		opt(b)

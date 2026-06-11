@@ -191,22 +191,15 @@ func generatePgxStoreAndTests(resolved *ResolvedFile, domainName, modulePath, pr
 	}
 
 	storeDir := StoreDir(domainName, resolved.TableName, "pgx", projectRoot)
-	if resolved.SkipIntegrationTest {
-		stalePath := filepath.Join(storeDir, "generated_test.go")
-		if fileExists(stalePath) && !opts.DryRun {
-			if err := os.Remove(stalePath); err != nil {
-				return fmt.Errorf("remove stale generated_test.go: %w", err)
-			}
-			if opts.Verbose {
-				fmt.Printf("      removed %s (skip-integration-test)\n", stalePath)
-			}
-		}
-		return nil
-	}
-
 	testData, err := BuildIntegrationTestData(resolved, modulePath, dbName)
 	if err != nil {
 		return fmt.Errorf("integration test data: %w", err)
+	}
+	// @skip-integration-test suppresses the generic probes but still emits a
+	// setup-only generated_test.go so hand-written tests in store_test.go
+	// keep the setupTestStore helper.
+	if resolved.SkipIntegrationTest {
+		testData.SuppressTests()
 	}
 	if err := GenerateIntegrationTest(testData, storeDir, opts); err != nil {
 		return fmt.Errorf("integration tests: %w", err)
@@ -219,22 +212,14 @@ func generatePgxStoreAndTests(resolved *ResolvedFile, domainName, modulePath, pr
 // same way the pgx path does.
 func generateSpecStoreTests(resolved *ResolvedFile, domainName, modulePath, projectRoot, dbName string, opts Options) error {
 	storeDir := StoreDir(domainName, resolved.TableName, specStorePackageSuffix, projectRoot)
-	if resolved.SkipIntegrationTest {
-		stalePath := filepath.Join(storeDir, "generated_test.go")
-		if fileExists(stalePath) && !opts.DryRun {
-			if err := os.Remove(stalePath); err != nil {
-				return fmt.Errorf("remove stale generated_test.go: %w", err)
-			}
-			if opts.Verbose {
-				fmt.Printf("      removed %s (skip-integration-test)\n", stalePath)
-			}
-		}
-		return nil
-	}
-
 	testData, err := BuildIntegrationTestData(resolved, modulePath, dbName)
 	if err != nil {
 		return fmt.Errorf("spec integration test data: %w", err)
+	}
+	// @skip-integration-test suppresses the generic probes but still emits a
+	// setup-only generated_test.go (see generatePgxStoreAndTests).
+	if resolved.SkipIntegrationTest {
+		testData.SuppressTests()
 	}
 	testData.StorePkg = StorePackage(resolved.TableName, specStorePackageSuffix)
 	testData.FixtureImport = modulePath + "/workshop/testing/sqlitefixtures"

@@ -257,7 +257,13 @@ so anything you add to `testPGXOptions` flows through every generated integratio
 
 #### Opting out
 
-Some entities have cross-column invariants the generic fixture cannot satisfy — typically CHECK constraints that pin a mutually exclusive group of nullable FKs (e.g. a `nodes` table where `kind='entity'` requires exactly one of three tier columns). Add `-- @skip-integration-test` at the top of `queries.sql` to suppress the generated test file; any prior copy is removed on the next regeneration. Hand-write smoke tests in `store_test.go` (the bootstrap) using `setupTestStore()` directly.
+Some entities have cross-column invariants the generic fixture cannot satisfy — typically CHECK constraints that pin a mutually exclusive group of nullable FKs (e.g. a `nodes` table where `kind='entity'` requires exactly one of three tier columns). Add `-- @skip-integration-test` at the top of `queries.sql` to suppress the generated probes. The next regeneration replaces `generated_test.go` with a **setup-only** version: no test functions, but the `setupTestStore()` helper stays available. Hand-write smoke tests in `store_test.go` (the bootstrap) using it directly.
+
+The same setup-only emission applies automatically to entities where no standard probe is usable from the generic fixtures (no single-PK `Get`, or scope params reading columns the fixtures seed as NULL) — the generation output notes each one.
+
+:::caution Upgrading
+Before v0.3.2, skipping removed `generated_test.go` entirely, so projects often copied `setupTestStore` into `store_test.go`. The setup-only file re-introduces the generated helper — delete your copy or the package fails to compile with a duplicate `setupTestStore`.
+:::
 
 #### Fixture defaults the generator already knows about
 
