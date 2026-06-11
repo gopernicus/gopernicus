@@ -17,6 +17,7 @@ import (
 	"github.com/gopernicus/gopernicus/core/repositories/auth/verificationcodes"
 	"github.com/gopernicus/gopernicus/core/repositories/auth/verificationtokens"
 	"github.com/gopernicus/gopernicus/core/repositories/events/eventoutbox"
+	"github.com/gopernicus/gopernicus/core/repositories/jobs/jobqueue"
 	"github.com/gopernicus/gopernicus/core/repositories/rebac/groups"
 	"github.com/gopernicus/gopernicus/core/repositories/rebac/invitations"
 	"github.com/gopernicus/gopernicus/core/repositories/rebac/rebacrelationshipmetadata"
@@ -184,7 +185,7 @@ func CreateTestServiceAccount(t *testing.T, ctx context.Context, db *testpgx.Tes
 		INSERT INTO principals (principal_id, principal_type, created_at)
 		VALUES ($1, $2, NOW())
 		ON CONFLICT (principal_id) DO NOTHING
-	`, serviceAccountID, "service_account")
+	`, serviceAccountID, "user")
 	require.NoError(t, err, "failed to insert principal for ServiceAccount")
 
 	// Insert directly via SQL (bypassing repository for test isolation).
@@ -512,6 +513,89 @@ func CreateTestInvitationWithDefaults(t *testing.T, ctx context.Context, db *tes
 	t.Helper()
 
 	return CreateTestInvitation(t, ctx, db)
+}
+
+// =============================================================================
+// JobQueue
+// =============================================================================
+
+// CreateTestJobQueue creates a test JobQueue with valid test data via direct SQL INSERT.
+// Bypasses the repository layer for test isolation.
+func CreateTestJobQueue(t *testing.T, ctx context.Context, db *testpgx.TestPGX) jobqueue.JobQueue {
+	t.Helper()
+	require.NotNil(t, db)
+
+	// Generate unique ID for unique field values.
+	testUniqueID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+	_ = testUniqueID
+
+	jobID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+
+	// Insert directly via SQL (bypassing repository for test isolation).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO job_queue (job_id, event_type, correlation_id, tenant_id, aggregate_type, aggregate_id, payload, occurred_at, status, priority, retry_count, max_retries, worker_name, failure_reason, scheduled_for, staged_at, completed_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+	`,
+		jobID,
+		"test_event_type",
+		"test_correlation_id_"+testUniqueID[:8],
+		conversion.Ptr("test_tenant_id"),
+		conversion.Ptr("test_aggregate_type"),
+		conversion.Ptr("test_aggregate_id"),
+		json.RawMessage("{}"),
+		time.Now().UTC(),
+		"PENDING",
+		0,
+		0,
+		0,
+		conversion.Ptr("test_worker_name"),
+		conversion.Ptr("test_failure_reason"),
+		time.Now().UTC(),
+		conversion.Ptr(time.Now().UTC()),
+		conversion.Ptr(time.Now().UTC()),
+	)
+	require.NoError(t, err, "failed to insert JobQueue")
+
+	// Retrieve the created record.
+	var entity jobqueue.JobQueue
+	err = db.Pool.QueryRow(ctx, `
+		SELECT job_id, event_type, correlation_id, tenant_id, aggregate_type, aggregate_id, payload, occurred_at, status, priority, retry_count, max_retries, worker_name, failure_reason, scheduled_for, created_at, updated_at, staged_at, completed_at
+		FROM job_queue
+		WHERE job_id = $1
+	`, jobID).Scan(
+		&entity.JobID,
+		&entity.EventType,
+		&entity.CorrelationID,
+		&entity.TenantID,
+		&entity.AggregateType,
+		&entity.AggregateID,
+		&entity.Payload,
+		&entity.OccurredAt,
+		&entity.Status,
+		&entity.Priority,
+		&entity.RetryCount,
+		&entity.MaxRetries,
+		&entity.WorkerName,
+		&entity.FailureReason,
+		&entity.ScheduledFor,
+		&entity.CreatedAt,
+		&entity.UpdatedAt,
+		&entity.StagedAt,
+		&entity.CompletedAt,
+	)
+	require.NoError(t, err, "failed to retrieve created JobQueue")
+
+	return entity
+}
+
+// CreateTestJobQueueWithDefaults creates a test JobQueue with auto-created FK dependencies.
+// FK dependencies whose parent table is outside this generation batch are required as parameters.
+func CreateTestJobQueueWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) jobqueue.JobQueue {
+	t.Helper()
+
+	return CreateTestJobQueue(t, ctx, db)
 }
 
 // =============================================================================

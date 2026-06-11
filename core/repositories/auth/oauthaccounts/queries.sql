@@ -35,3 +35,28 @@ DELETE FROM oauth_accounts
 WHERE oauth_account_id = @oauth_account_id AND parent_user_id = @parent_user_id
 ;
 
+-- GetByProvider, ListByUser, and DeleteByUserAndProvider back the emitted
+-- authentication satisfier (satisfiers/oauth_accounts.go) — its repo
+-- interface requires all three.
+
+-- @func: GetByProvider
+SELECT *
+FROM oauth_accounts
+WHERE provider = @provider AND provider_user_id = @provider_user_id
+;
+
+-- @func: ListByUser
+-- @scan: many
+-- @type:limit int
+SELECT *
+FROM oauth_accounts
+WHERE parent_user_id = @parent_user_id
+ORDER BY linked_at DESC
+LIMIT @limit
+;
+
+-- @func: DeleteByUserAndProvider
+DELETE FROM oauth_accounts
+WHERE parent_user_id = @parent_user_id AND provider = @provider
+;
+

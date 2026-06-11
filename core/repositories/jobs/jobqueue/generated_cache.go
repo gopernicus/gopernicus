@@ -4,11 +4,6 @@
 package jobqueue
 
 import (
-	"context"
-	"encoding/json"
-	"fmt"
-	"time"
-
 	"github.com/gopernicus/gopernicus/infrastructure/cache"
 )
 
@@ -48,10 +43,3 @@ func NewCacheStore(store Storer, c *cache.Cache) *CacheStore {
 		config: DefaultCacheConfig(),
 	}
 }
-
-// Ensure imports are used.
-var _ = time.Second
-var _ = json.Marshal
-var _ = fmt.Sprintf
-var _ = cache.GetJSON[int]
-var _ context.Context

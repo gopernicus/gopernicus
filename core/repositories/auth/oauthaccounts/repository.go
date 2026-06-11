@@ -28,6 +28,9 @@ type Storer interface {
 	Create(ctx context.Context, input CreateOauthAccount) (OauthAccount, error)
 	Update(ctx context.Context, oauthAccountID string, parentUserID string, input UpdateOauthAccount) (OauthAccount, error)
 	Delete(ctx context.Context, oauthAccountID string, parentUserID string) error
+	GetByProvider(ctx context.Context, provider string, providerUserID string) (OauthAccount, error)
+	ListByUser(ctx context.Context, parentUserID string, limit int) ([]OauthAccount, error)
+	DeleteByUserAndProvider(ctx context.Context, parentUserID string, provider string) error
 	// gopernicus:end
 }
 

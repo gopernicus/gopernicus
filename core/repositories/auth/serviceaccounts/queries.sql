@@ -28,7 +28,10 @@ RETURNING *;
 
 -- @func: GetPrincipalInfo
 -- @returns: act_as_user, owner_user_id
-SELECT act_as_user, owner_user_id
+-- owner_user_id is nullable but the result struct (and the authentication
+-- engine's ServiceAccountPrincipal) carry a plain string where "" means no
+-- owner — COALESCE keeps the NULL row scannable.
+SELECT act_as_user, COALESCE(owner_user_id, '') AS owner_user_id
 FROM service_accounts
 WHERE service_account_id = @service_account_id
 ;

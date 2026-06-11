@@ -69,6 +69,12 @@ type FixtureEntity struct {
 
 	// HasPrincipalInheritance is true if PK is a FK to the principals table.
 	HasPrincipalInheritance bool
+
+	// PrincipalTypeValue is the quoted Go literal inserted as principal_type
+	// for principal-inheritance entities. Resolved in generateFixturesWith
+	// from the batch's principals entity, whose enum default already honors
+	// the reflected principals_type_check CHECK constraint.
+	PrincipalTypeValue string
 }
 
 // FixtureField describes a single column for fixture generation.
@@ -371,6 +377,32 @@ func computeTransitiveExternalParams(entities []FixtureEntity) {
 	}
 }
 
+// applyPrincipalTypeValues resolves PrincipalTypeValue for every
+// principal-inheritance entity: the principals entity's own principal_type
+// insert default when principals is in the batch (a quoted literal — the
+// CHECK ... IN constraint folds into EnumValues at schema load, so the
+// default is always an allowed value), otherwise "user", the first value the
+// framework-shipped principals_type_check allows.
+func applyPrincipalTypeValues(entities []FixtureEntity) {
+	value := `"user"`
+	for _, e := range entities {
+		if e.TableName != "principals" {
+			continue
+		}
+		for _, f := range e.InsertFields {
+			if f.DBName == "principal_type" && strings.HasPrefix(f.TestDefault, `"`) {
+				value = f.TestDefault
+			}
+		}
+		break
+	}
+	for i := range entities {
+		if entities[i].HasPrincipalInheritance {
+			entities[i].PrincipalTypeValue = value
+		}
+	}
+}
+
 // ─── generation ─────────────────────────────────────────────────────────────
 
 // GenerateFixtures produces the test fixtures file for all entities in a domain.
@@ -432,6 +464,11 @@ func generateFixturesWith(data FixtureTemplateData, fixtureDir string, opts Opti
 
 	// Compute transitive external params bottom-up (topo order: parents first).
 	computeTransitiveExternalParams(data.Entities)
+
+	// Principal-inheritance inserts must use a CHECK-valid principal_type —
+	// the child entity's own name (e.g. "favorite") violates the principals
+	// table's type CHECK constraint.
+	applyPrincipalTypeValues(data.Entities)
 
 	// Collect unique imports.
 	data.Imports = collectFixtureImports(data.Entities)

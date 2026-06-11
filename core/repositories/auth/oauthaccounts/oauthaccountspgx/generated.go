@@ -296,6 +296,74 @@ WHERE oauth_account_id = @oauth_account_id AND parent_user_id = @parent_user_id`
 	return nil
 }
 
+func (s *Store) GetByProvider(ctx context.Context, provider string, providerUserID string) (oauthaccounts.OauthAccount, error) {
+	query := `SELECT oauth_account_id, parent_user_id, provider, provider_user_id, provider_email, provider_email_verified, account_verified, access_token, refresh_token, token_expires_at, token_type, scope, id_token, profile_data, linked_at, created_at, updated_at
+FROM public.oauth_accounts
+WHERE provider = @provider AND provider_user_id = @provider_user_id`
+
+	args := pgx.NamedArgs{
+		"provider":         provider,
+		"provider_user_id": providerUserID,
+	}
+
+	rows, err := s.db.Query(ctx, query, args)
+	if err != nil {
+		return oauthaccounts.OauthAccount{}, pgxdb.HandlePgError(err)
+	}
+	defer rows.Close()
+
+	record, err := pgx.CollectOneRow(rows, pgx.RowToStructByName[oauthaccounts.OauthAccount])
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return oauthaccounts.OauthAccount{}, oauthaccounts.ErrOauthAccountNotFound
+		}
+		return oauthaccounts.OauthAccount{}, pgxdb.HandlePgError(err)
+	}
+
+	return record, nil
+}
+
+func (s *Store) ListByUser(ctx context.Context, parentUserID string, limit int) ([]oauthaccounts.OauthAccount, error) {
+	query := `SELECT oauth_account_id, parent_user_id, provider, provider_user_id, provider_email, provider_email_verified, account_verified, access_token, refresh_token, token_expires_at, token_type, scope, id_token, profile_data, linked_at, created_at, updated_at
+FROM public.oauth_accounts
+WHERE parent_user_id = @parent_user_id
+ORDER BY linked_at DESC
+LIMIT @limit`
+
+	args := pgx.NamedArgs{
+		"parent_user_id": parentUserID,
+		"limit":          limit,
+	}
+
+	rows, err := s.db.Query(ctx, query, args)
+	if err != nil {
+		return nil, pgxdb.HandlePgError(err)
+	}
+	defer rows.Close()
+
+	return pgx.CollectRows(rows, pgx.RowToStructByName[oauthaccounts.OauthAccount])
+}
+
+func (s *Store) DeleteByUserAndProvider(ctx context.Context, parentUserID string, provider string) error {
+	args := pgx.NamedArgs{
+		"parent_user_id": parentUserID,
+		"provider":       provider,
+	}
+
+	query := `DELETE FROM public.oauth_accounts
+WHERE parent_user_id = @parent_user_id AND provider = @provider`
+	result, err := s.db.Exec(ctx, query, args)
+	if err != nil {
+		return pgxdb.HandlePgError(err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return oauthaccounts.ErrOauthAccountNotFound
+	}
+
+	return nil
+}
+
 // ─── filter placeholder substitution ─────────────────────────────────────────
 
 func replaceFilterPlaceholder(sql, placeholder, fragment string) string {

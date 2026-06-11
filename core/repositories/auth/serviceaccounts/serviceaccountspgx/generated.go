@@ -193,7 +193,7 @@ func (s *Store) Update(ctx context.Context, serviceAccountID string, input servi
 }
 
 func (s *Store) GetPrincipalInfo(ctx context.Context, serviceAccountID string) (serviceaccounts.GetPrincipalInfoResult, error) {
-	query := `SELECT act_as_user, owner_user_id
+	query := `SELECT act_as_user, COALESCE(owner_user_id, '') AS owner_user_id
 FROM public.service_accounts
 WHERE service_account_id = @service_account_id`
 

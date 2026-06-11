@@ -185,6 +185,7 @@ func TestGeneratedVerificationCodeStore_CreateInvalidReference(t *testing.T) {
 		ExpiresAt:    created.ExpiresAt,
 	}
 	input.CodeID = "fk-violation-test-id"
+	input.Identifier = "fk-probe-identifier"
 	bogusFK := "nonexistent-fk-id"
 	input.UserID = &bogusFK
 	_, err := store.Create(ctx, input)

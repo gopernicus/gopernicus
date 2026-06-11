@@ -28,3 +28,4 @@ databases:
       rebac: [rebac_relationships, rebac_relationship_metadata, groups,invitations,]
       tenancy: [tenants]
       events: [event_outbox]
+      jobs: [job_queue]

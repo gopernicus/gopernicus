@@ -20,10 +20,10 @@ func validCreateInvitationRequest() CreateInvitationRequest {
 		ResourceID:       "ok",
 		Relation:         "ok",
 		Identifier:       "ok",
-		IdentifierType:   "ok",
+		IdentifierType:   "email",
 		InvitedBy:        "ok",
 		TokenHash:        "ok",
-		InvitationStatus: "ok",
+		InvitationStatus: "pending",
 	}
 }
 
@@ -90,6 +90,13 @@ func TestCreateInvitationRequestValidate(t *testing.T) {
 			t.Fatal("want validation error, got nil")
 		}
 	})
+	t.Run("identifier_type rejects value outside enum", func(t *testing.T) {
+		r := validCreateInvitationRequest()
+		r.IdentifierType = "zzz-not-an-allowed-value"
+		if err := r.Validate(); err == nil {
+			t.Fatal("want validation error, got nil")
+		}
+	})
 	t.Run("identifier_type rejects value over max length", func(t *testing.T) {
 		r := validCreateInvitationRequest()
 		r.IdentifierType = strings.Repeat("a", 51)
@@ -128,6 +135,13 @@ func TestCreateInvitationRequestValidate(t *testing.T) {
 	t.Run("token_hash rejects value over max length", func(t *testing.T) {
 		r := validCreateInvitationRequest()
 		r.TokenHash = strings.Repeat("a", 256)
+		if err := r.Validate(); err == nil {
+			t.Fatal("want validation error, got nil")
+		}
+	})
+	t.Run("invitation_status rejects value outside enum", func(t *testing.T) {
+		r := validCreateInvitationRequest()
+		r.InvitationStatus = "zzz-not-an-allowed-value"
 		if err := r.Validate(); err == nil {
 			t.Fatal("want validation error, got nil")
 		}
@@ -183,6 +197,13 @@ func TestUpdateInvitationRequestValidate(t *testing.T) {
 			t.Fatal("want validation error, got nil")
 		}
 	})
+	t.Run("update identifier_type rejects value outside enum", func(t *testing.T) {
+		r := UpdateInvitationRequest{}
+		r.IdentifierType = testPtr("zzz-not-an-allowed-value")
+		if err := r.Validate(); err == nil {
+			t.Fatal("want validation error, got nil")
+		}
+	})
 	t.Run("update identifier_type rejects value over max length", func(t *testing.T) {
 		r := UpdateInvitationRequest{}
 		r.IdentifierType = testPtr(strings.Repeat("a", 51))
@@ -207,6 +228,13 @@ func TestUpdateInvitationRequestValidate(t *testing.T) {
 	t.Run("update token_hash rejects value over max length", func(t *testing.T) {
 		r := UpdateInvitationRequest{}
 		r.TokenHash = testPtr(strings.Repeat("a", 256))
+		if err := r.Validate(); err == nil {
+			t.Fatal("want validation error, got nil")
+		}
+	})
+	t.Run("update invitation_status rejects value outside enum", func(t *testing.T) {
+		r := UpdateInvitationRequest{}
+		r.InvitationStatus = testPtr("zzz-not-an-allowed-value")
 		if err := r.Validate(); err == nil {
 			t.Fatal("want validation error, got nil")
 		}

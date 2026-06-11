@@ -46,7 +46,7 @@ var OrderByFields = map[string]fop.OrderField{
 	OrderByDisplayName:   {Column: "display_name", CastLower: true},
 	OrderByEmailVerified: {Column: "email_verified"},
 	OrderByLastLoginAt:   {Column: "last_login_at"},
-	OrderByRecordState:   {Column: "record_state", CastLower: true},
+	OrderByRecordState:   {Column: "record_state"},
 	OrderByCreatedAt:     {Column: "created_at"},
 	OrderByUpdatedAt:     {Column: "updated_at"},
 }

@@ -867,11 +867,12 @@ services:
 `
 
 // makefileTemplate produces a Makefile with standard development targets.
-const makefileTemplate = `BINARY    := {{.ProjectName}}
-COMPOSE   := docker compose -f workshop/dev/docker-compose.yml
-VERSION   ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-IMAGE     := {{.ProjectName}}
-IMAGE_TAG := $(IMAGE):$(VERSION)
+const makefileTemplate = `BINARY     := {{.ProjectName}}
+COMPOSE    := docker compose -f workshop/dev/docker-compose.yml
+GOPERNICUS := go tool gopernicus
+VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+IMAGE      := {{.ProjectName}}
+IMAGE_TAG  := $(IMAGE):$(VERSION)
 
 # ── Application ──────────────────────────────────────────────────────────────
 
@@ -957,6 +958,38 @@ dev-reset: ## Nuclear reset: stop, wipe volumes, restart
 dev-psql: ## Open a psql shell in the dev database
 	$(COMPOSE) exec postgres psql -U postgres -d {{.ProjectName}}
 
+# ── Gopernicus ────────────────────────────────────────────────────────────────
+# Thin wrappers over the pinned framework tool ($(GOPERNICUS)). Parameterized
+# commands (db create <name>, new repo <domain/entity>, new case <name>) are
+# better run directly — see 'make help'.
+
+.PHONY: generate
+generate: ## Regenerate all domains, then build to catch breakage
+	$(GOPERNICUS) generate
+	go build ./...
+
+.PHONY: doctor
+doctor: ## Check project health and configuration
+	$(GOPERNICUS) doctor
+
+.PHONY: db-migrate
+db-migrate: ## Apply pending migrations
+	$(GOPERNICUS) db migrate
+
+.PHONY: db-status
+db-status: ## Show migration status
+	$(GOPERNICUS) db status
+
+.PHONY: db-reflect
+db-reflect: ## Reflect database schema into the migrations directory
+	$(GOPERNICUS) db reflect
+
+.PHONY: db-reset
+db-reset: ## Wipe dev database volumes, restart, and re-apply migrations
+	$(COMPOSE) down -v
+	$(COMPOSE) up -d --wait
+	$(GOPERNICUS) db migrate
+
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 .PHONY: test
@@ -975,7 +1008,12 @@ test-e2e: ## Run end-to-end tests
 
 .PHONY: help
 help: ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}'
+	@echo ""
+	@echo "  Parameterized gopernicus commands (run directly):"
+	@echo "    $(GOPERNICUS) db create <name>            create a migration"
+	@echo "    $(GOPERNICUS) new repo <domain/entity>    scaffold an entity"
+	@echo "    $(GOPERNICUS) new case <name>             scaffold a use case"
 
 .DEFAULT_GOAL := help
 `

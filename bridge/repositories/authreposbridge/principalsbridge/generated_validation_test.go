@@ -16,7 +16,7 @@ func testPtr[T any](v T) *T { return &v }
 
 func validCreatePrincipalRequest() CreatePrincipalRequest {
 	return CreatePrincipalRequest{
-		PrincipalType: "ok",
+		PrincipalType: "user",
 	}
 }
 
@@ -30,6 +30,13 @@ func TestCreatePrincipalRequestValidate(t *testing.T) {
 	t.Run("missing required principal_type", func(t *testing.T) {
 		r := validCreatePrincipalRequest()
 		r.PrincipalType = ""
+		if err := r.Validate(); err == nil {
+			t.Fatal("want validation error, got nil")
+		}
+	})
+	t.Run("principal_type rejects value outside enum", func(t *testing.T) {
+		r := validCreatePrincipalRequest()
+		r.PrincipalType = "zzz-not-an-allowed-value"
 		if err := r.Validate(); err == nil {
 			t.Fatal("want validation error, got nil")
 		}
@@ -48,6 +55,13 @@ func TestUpdatePrincipalRequestValidate(t *testing.T) {
 		r := UpdatePrincipalRequest{}
 		if err := r.Validate(); err != nil {
 			t.Fatalf("empty update: unexpected error: %v", err)
+		}
+	})
+	t.Run("update principal_type rejects value outside enum", func(t *testing.T) {
+		r := UpdatePrincipalRequest{}
+		r.PrincipalType = testPtr("zzz-not-an-allowed-value")
+		if err := r.Validate(); err == nil {
+			t.Fatal("want validation error, got nil")
 		}
 	})
 	t.Run("update principal_type rejects value over max length", func(t *testing.T) {

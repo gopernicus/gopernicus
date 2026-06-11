@@ -208,6 +208,7 @@ func TestGeneratedAPIKeyStore_CreateInvalidReference(t *testing.T) {
 		RevokedAt:              created.RevokedAt,
 	}
 	input.APIKeyID = "fk-violation-test-id"
+	input.KeyPrefix = "fk-probe-key"
 	bogusFK := "nonexistent-fk-id"
 	input.ParentServiceAccountID = bogusFK
 	_, err := store.Create(ctx, input)

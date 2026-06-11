@@ -1,6 +1,8 @@
 package generators
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -299,5 +301,204 @@ func TestFKViolationProbeDroppedWhenUndeconflictable(t *testing.T) {
 	}
 	if len(data.FKUniqueAssigns) != 0 {
 		t.Errorf("expected no unique assigns, got %v", data.FKUniqueAssigns)
+	}
+}
+
+// ─── standard-probe gating ───────────────────────────────────────────────────
+
+// spacesResolved builds a spaces-shaped entity: a nullable self-referential
+// FK (parent_space_id — fixtures seed it NULL) rides in the scope params of
+// Get / Update / SoftDelete / Delete, while List is scoped by tenant_id only.
+func spacesResolved() *ResolvedFile {
+	return &ResolvedFile{
+		Table: &schema.TableInfo{
+			TableName: "spaces",
+			ForeignKeys: []schema.ForeignKeyInfo{
+				{Columns: []string{"tenant_id"}, RefTable: "tenants", RefColumns: []string{"tenant_id"}, ColumnName: "tenant_id"},
+				{Columns: []string{"parent_space_id"}, RefTable: "spaces", RefColumns: []string{"space_id"}, ColumnName: "parent_space_id"},
+			},
+		},
+		EntityName:  "Space",
+		EntityLower: "space",
+		EntityPlural: "Spaces",
+		TableName:   "spaces",
+		PackageName: "spaces",
+		DomainName:  "tenancy",
+		PKColumn:    "space_id",
+		PKGoName:    "SpaceID",
+		PKGoType:    "string",
+		AllColumns: []schema.ColumnInfo{
+			{Name: "space_id", DBType: "varchar", GoType: "string", IsPrimaryKey: true},
+			{Name: "tenant_id", DBType: "varchar", GoType: "string", IsForeignKey: true},
+			{Name: "parent_space_id", DBType: "varchar", GoType: "*string", IsForeignKey: true, IsNullable: true},
+			{Name: "name", DBType: "varchar(255)", GoType: "string"},
+		},
+		Queries: []ResolvedQuery{
+			{QueryBlock: QueryBlock{ReturnsRows: true, Params: []string{"space_id", "tenant_id", "parent_space_id"}},
+				FuncName: "Get"},
+			{QueryBlock: QueryBlock{HasFilters: true, HasOrder: true, HasLimit: true, Params: []string{"tenant_id"}},
+				FuncName: "List"},
+			{QueryBlock: QueryBlock{Type: QueryUpdate, HasFields: true, ReturnsRows: true,
+				Params: []string{"space_id", "tenant_id", "parent_space_id"}},
+				FuncName:  "Update",
+				SetFields: []FieldInfo{{GoName: "Name", GoType: "string", DBName: "name", MaxLength: 255}}},
+			{QueryBlock: QueryBlock{Type: QueryUpdate, Params: []string{"space_id", "tenant_id", "parent_space_id"}},
+				FuncName: "SoftDelete"},
+			{QueryBlock: QueryBlock{Type: QueryDelete, Params: []string{"space_id", "tenant_id", "parent_space_id"}},
+				FuncName: "Delete"},
+		},
+	}
+}
+
+// A scope param reading a nullable self-referential FK (seeded NULL by the
+// fixtures) makes a probe unusable: dereferencing the nil pointer panics,
+// and `col = NULL` can never match the fixture row. Every probe carrying
+// that param must be suppressed; List (scoped by tenant only) survives.
+func TestNilSeededScopeArgSuppressesProbes(t *testing.T) {
+	data, err := BuildIntegrationTestData(spacesResolved(), "example.com/app", "primary")
+	if err != nil {
+		t.Fatalf("BuildIntegrationTestData: %v", err)
+	}
+
+	if data.HasGet {
+		t.Error("Get probe must be suppressed (nil-seeded parent_space_id arg)")
+	}
+	if data.HasSoftDelete {
+		t.Error("SoftDelete probe must be suppressed")
+	}
+	if data.HasHardDelete {
+		t.Error("Delete probe must be suppressed")
+	}
+	if data.HasUpdateMutation {
+		t.Error("Update mutation must be suppressed")
+	}
+	if !data.HasList {
+		t.Fatal("List probe must survive (no nil-seeded scope args)")
+	}
+	if len(data.ListExtraCallArgs) != 1 || data.ListExtraCallArgs[0] != "created.TenantID" {
+		t.Errorf("unexpected List scope args: %v", data.ListExtraCallArgs)
+	}
+	if !data.HasAnyTest() {
+		t.Error("List probe should keep the test file alive")
+	}
+}
+
+// Only the method literally named "Get" drives the Get-roundtrip tests —
+// a GetByFoo-only entity must not emit store.Get(...) calls, and with no
+// other probes the whole test file is skipped (it would not compile).
+func TestScanOneVariantDoesNotEmitGetProbe(t *testing.T) {
+	resolved := &ResolvedFile{
+		Table:       &schema.TableInfo{TableName: "dashboard_basic_auth_credentials"},
+		EntityName:  "DashboardBasicAuthCredential",
+		EntityLower: "dashboardbasicauthcredential",
+		EntityPlural: "DashboardBasicAuthCredentials",
+		TableName:   "dashboard_basic_auth_credentials",
+		PackageName: "dashboardbasicauthcredentials",
+		DomainName:  "dashboards",
+		PKColumn:    "credential_id",
+		PKGoName:    "CredentialID",
+		PKGoType:    "string",
+		AllColumns: []schema.ColumnInfo{
+			{Name: "credential_id", DBType: "varchar", GoType: "string", IsPrimaryKey: true},
+			{Name: "dashboard_id", DBType: "varchar", GoType: "string", IsForeignKey: true},
+		},
+		Queries: []ResolvedQuery{
+			{QueryBlock: QueryBlock{ReturnsRows: true, Params: []string{"dashboard_id"}},
+				FuncName: "GetByDashboardID"},
+		},
+	}
+
+	data, err := BuildIntegrationTestData(resolved, "example.com/app", "primary")
+	if err != nil {
+		t.Fatalf("BuildIntegrationTestData: %v", err)
+	}
+	if data.HasGet {
+		t.Error("GetByDashboardID must not drive the standard Get probe")
+	}
+	if data.HasAnyTest() {
+		t.Error("no probes expected — the test file must be skipped entirely")
+	}
+}
+
+// Nullable scope columns that fixtures seed non-NULL (anything but a
+// self-referential FK) still dereference the fixture row's pointer field.
+func TestScopeArgsDerefNonSelfRefNullablePointers(t *testing.T) {
+	resolved := spacesResolved()
+	// Re-point the parent FK at another table: now seeded by the fixture.
+	resolved.Table.ForeignKeys[1].RefTable = "orgs"
+
+	data, err := BuildIntegrationTestData(resolved, "example.com/app", "primary")
+	if err != nil {
+		t.Fatalf("BuildIntegrationTestData: %v", err)
+	}
+	if !data.HasGet {
+		t.Fatal("Get probe expected (no nil-seeded args)")
+	}
+	want := []string{"created.TenantID", "*created.ParentSpaceID"}
+	if len(data.GetExtraCallArgs) != len(want) {
+		t.Fatalf("unexpected Get scope args: %v", data.GetExtraCallArgs)
+	}
+	for i, w := range want {
+		if data.GetExtraCallArgs[i] != w {
+			t.Errorf("arg %d: got %q want %q", i, data.GetExtraCallArgs[i], w)
+		}
+	}
+}
+
+// Without a standard Get, Delete still smoke-tests but must not render the
+// Get-based verification (store.Get does not exist on such stores).
+func TestDeleteRendersWithoutGetVerification(t *testing.T) {
+	data := IntegrationTestData{
+		StorePkg:      "thingspgx",
+		RepoPkg:       "things",
+		EntityName:    "Thing",
+		EntityLower:   "thing",
+		RepoImport:    "example.com/app/core/repositories/stuff/things",
+		FixtureImport: "example.com/app/workshop/testing/fixtures",
+		PKGoName:      "ThingID",
+		PKGoType:      "string",
+		HasHardDelete: true,
+	}
+	out, err := renderIntegrationTestTemplate(integrationTestGeneratedTemplate, data)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	content := string(out)
+	if !strings.Contains(content, "TestGeneratedThingStore_Delete") {
+		t.Error("expected Delete test")
+	}
+	if strings.Contains(content, "store.Get(") {
+		t.Error("store.Get must not be referenced without a standard Get")
+	}
+}
+
+// An entity with no surviving probes must not emit generated_test.go at all
+// (its fixed imports would be unused), and a stale copy must be removed.
+func TestEmptyGeneratedTestFileSkippedAndStaleRemoved(t *testing.T) {
+	dir := t.TempDir()
+	stale := filepath.Join(dir, "generated_test.go")
+	if err := os.WriteFile(stale, []byte("package thingspgx\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	data := IntegrationTestData{
+		StorePkg:      "thingspgx",
+		RepoPkg:       "things",
+		EntityName:    "Thing",
+		EntityLower:   "thing",
+		RepoImport:    "example.com/app/core/repositories/stuff/things",
+		FixtureImport: "example.com/app/workshop/testing/fixtures",
+		PKGoName:      "ThingID",
+		PKGoType:      "string",
+		MigrationsDir: "workshop/migrations/primary",
+	}
+	if err := GenerateIntegrationTest(data, dir, Options{}); err != nil {
+		t.Fatalf("GenerateIntegrationTest: %v", err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Error("stale generated_test.go must be removed")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "store_test.go")); err != nil {
+		t.Error("store_test.go bootstrap must still be created")
 	}
 }

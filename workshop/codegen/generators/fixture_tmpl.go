@@ -58,7 +58,7 @@ func CreateTest{{$e.EntityName}}(t *testing.T, ctx context.Context, db *{{if $.S
 		INSERT INTO principals (principal_id, principal_type, created_at)
 		VALUES {{if $.SpecMode}}(?, ?, datetime('now')){{else}}($1, $2, NOW()){{end}}
 		ON CONFLICT (principal_id) DO NOTHING
-	` + "`" + `, {{camel $e.PKColumn}}, "{{singularize $e.TableName}}")
+	` + "`" + `, {{camel $e.PKColumn}}, {{$e.PrincipalTypeValue}})
 	require.NoError(t, err, "failed to insert principal for {{$e.EntityName}}")
 {{end}}
 	// Insert directly via SQL (bypassing repository for test isolation).

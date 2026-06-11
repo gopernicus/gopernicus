@@ -308,6 +308,7 @@ func (r *CreatePrincipalRequest) Validate() error {
 
 	errs.AddErr("principal_type", validation.Required("principal_type", r.PrincipalType))
 	errs.AddErr("principal_type", validation.MaxLength("principal_type", r.PrincipalType, 64))
+	errs.AddErr("principal_type", validation.OneOf("principal_type", r.PrincipalType, "user", "service_account"))
 	return errs.Err()
 }
 
@@ -329,6 +330,7 @@ func (r *UpdatePrincipalRequest) Validate() error {
 	var errs web.FieldErrors
 
 	errs.AddErr("principal_type", validation.MaxLengthPtr("principal_type", r.PrincipalType, 64))
+	errs.AddErr("principal_type", validation.OneOfPtr("principal_type", r.PrincipalType, "user", "service_account"))
 	return errs.Err()
 }
 

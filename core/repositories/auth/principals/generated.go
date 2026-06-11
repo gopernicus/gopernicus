@@ -37,7 +37,7 @@ const (
 // OrderByFields maps user-facing field names to OrderField definitions.
 var OrderByFields = map[string]fop.OrderField{
 	OrderByPK:            {Column: "principal_id"},
-	OrderByPrincipalType: {Column: "principal_type", CastLower: true},
+	OrderByPrincipalType: {Column: "principal_type"},
 	OrderByCreatedAt:     {Column: "created_at"},
 }
 

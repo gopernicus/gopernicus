@@ -205,6 +205,7 @@ func TestGeneratedOauthAccountStore_CreateInvalidReference(t *testing.T) {
 		LinkedAt:              created.LinkedAt,
 	}
 	input.OauthAccountID = "fk-violation-test-id"
+	input.Provider = "fk-probe-provider"
 	bogusFK := "nonexistent-fk-id"
 	input.ParentUserID = bogusFK
 	_, err := store.Create(ctx, input)

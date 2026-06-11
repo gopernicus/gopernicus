@@ -102,6 +102,31 @@ DELETE FROM oauth_accounts
 WHERE oauth_account_id = @oauth_account_id AND parent_user_id = @parent_user_id
 ;
 
+-- GetByProvider, ListByUser, and DeleteByUserAndProvider back the emitted
+-- authentication satisfier (satisfiers/oauth_accounts.go) — its repo
+-- interface requires all three.
+
+-- @func: GetByProvider
+SELECT *
+FROM oauth_accounts
+WHERE provider = @provider AND provider_user_id = @provider_user_id
+;
+
+-- @func: ListByUser
+-- @scan: many
+-- @type:limit int
+SELECT *
+FROM oauth_accounts
+WHERE parent_user_id = @parent_user_id
+ORDER BY linked_at DESC
+LIMIT @limit
+;
+
+-- @func: DeleteByUserAndProvider
+DELETE FROM oauth_accounts
+WHERE parent_user_id = @parent_user_id AND provider = @provider
+;
+
 `,
 	"auth/principals": `-- @func: List
 -- @filter:conditions *
@@ -209,7 +234,10 @@ RETURNING *;
 
 -- @func: GetPrincipalInfo
 -- @returns: act_as_user, owner_user_id
-SELECT act_as_user, owner_user_id
+-- owner_user_id is nullable but the result struct (and the authentication
+-- engine's ServiceAccountPrincipal) carry a plain string where "" means no
+-- owner — COALESCE keeps the NULL row scannable.
+SELECT act_as_user, COALESCE(owner_user_id, '') AS owner_user_id
 FROM service_accounts
 WHERE service_account_id = @service_account_id
 ;
