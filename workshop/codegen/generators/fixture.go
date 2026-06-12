@@ -232,6 +232,12 @@ func BuildFixtureEntity(resolved *ResolvedFile, modulePath string) FixtureEntity
 // Go expression for the column's type. Values were validated in Resolve;
 // only representation decisions live here.
 func fixtureDefaultExpr(f FixtureField, raw string) string {
+	// `null` pins a nullable column to SQL NULL (nil binds NULL for both
+	// pointer and slice-backed types). Resolve rejects it on NOT NULL columns.
+	if raw == "null" {
+		return "nil"
+	}
+
 	inner := strings.TrimPrefix(f.GoType, "*")
 
 	var expr string

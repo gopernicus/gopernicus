@@ -260,14 +260,14 @@ so anything you add to `testPGXOptions` flows through every generated integratio
 The escape-hatch ladder, in order:
 
 1. **Do nothing** — the generator's built-in defaults (below) satisfy NOT NULL, simple `IN (…)` CHECKs, and length caps on their own.
-2. **`@fixture-default`** — when a constraint needs a specific value the generator can't infer (an arbitrary CHECK predicate, a JSON shape requirement), pin that column's fixture value and keep the generated probes running:
+2. **`@fixture-default`** — when a constraint needs a specific value the generator can't infer (an arbitrary CHECK predicate, a JSON shape requirement, an `IS NULL` branch), pin that column's fixture value and keep the generated probes running:
 
    ```sql
-   -- @fixture-default: payload {"backend":"db","ciphertext":"dGVzdA=="}
-   -- @fixture-default: kind entity
+   -- @fixture-default: external_ref null
+   -- @fixture-default: settings {"theme":"dark"}
    ```
 
-   One column per line; see the [annotations reference](../topics/code-generation/annotations.md#fixture-default) for the grammar and per-type value handling.
+   One column per line; `null` pins a nullable column to SQL NULL. See the [annotations reference](../topics/code-generation/annotations.md#fixture-default) for the grammar and per-type value handling.
 3. **`@skip-integration-test`** — last resort, when no fixed per-column value can satisfy the invariant.
 
 Some entities have cross-column invariants no fixed fixture value can satisfy — typically CHECK constraints that pin a mutually exclusive group of nullable FKs (e.g. a `nodes` table where `kind='entity'` requires exactly one of three tier columns). Add `-- @skip-integration-test` at the top of `queries.sql` to suppress the generated probes. The next regeneration replaces `generated_test.go` with a **setup-only** version: no test functions, but the `setupTestStore()` helper stays available. Hand-write smoke tests in `store_test.go` (the bootstrap) using it directly.
