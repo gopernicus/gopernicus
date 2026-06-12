@@ -15,6 +15,7 @@ re-running never overwrites.
 |---|---|
 | `do-app` | DigitalOcean App Platform: tag-triggered GitHub workflow — ghcr image build, migrations as a release step, app refresh — plus a reference app spec |
 | `cloud-run` | Google Cloud Run: make targets (`cloud-bootstrap`, `cloud-build`, `cloud-migrate`, `cloud-deploy`, `cloud-ship`) included from the root Makefile |
+| `compose-prod` | Single host ("the $10 VPS"): compose stack (app + postgres + redis + caddy with automatic TLS), `deploy.sh` (build → migrate → roll → readiness wait), systemd unit, pg backup script + cron |
 
 Each target's README is the runbook: one-time setup, deploy procedure,
 rollback notes.

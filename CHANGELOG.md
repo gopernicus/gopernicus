@@ -20,8 +20,13 @@ Releases are tag-only: `git tag -a vX.Y.Z && git push origin vX.Y.Z`.
   reference app spec) and `cloud-run` (Google Cloud Run — make targets
   generalizing bluemark-redirector's flow: `cloud-bootstrap`/`cloud-build`/
   `cloud-migrate`/`cloud-deploy`/`cloud-ship`/`cloud-url`/`cloud-logs`,
-  included from the root Makefile). Everything emitted is created-once
-  with a drift marker; profiles never modify existing files.
+  included from the root Makefile) and `compose-prod` (single host, "the
+  $10 VPS" — compose stack with app + postgres + redis + caddy automatic
+  TLS, `deploy.sh` build→migrate→roll→readiness-wait, systemd unit, pg
+  backup script with rotation; migrations run in a one-off golang
+  container so the host needs no Go toolchain). Everything emitted is
+  created-once with a drift marker; profiles never modify existing
+  files.
 - **Probe contract**: scaffolded servers expose `/readyz` (readiness —
   pings the database, 503 on outage) alongside `/healthz` (liveness —
   dependency-free, now reports the running `build` ref). Load balancers

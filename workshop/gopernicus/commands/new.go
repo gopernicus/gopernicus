@@ -69,6 +69,9 @@ Targets:
              app spec
   cloud-run  Google Cloud Run — make targets (include from the root
              Makefile): bootstrap, build, migrate, deploy, url, logs
+  compose-prod
+             Single host — compose stack (app+postgres+redis+caddy TLS),
+             deploy.sh, systemd unit, pg backup cron
 
 Files land in workshop/deploy/<target>/ (workflows in .github/workflows/).
 Everything is created-once with a drift marker — you own the files after
@@ -77,7 +80,8 @@ a sibling directory.
 
 Examples:
   gopernicus new deploy do-app
-  gopernicus new deploy cloud-run`,
+  gopernicus new deploy cloud-run
+  gopernicus new deploy compose-prod`,
 			Usage: "gopernicus new deploy <target>",
 			Run:   runNewDeploy,
 		},

@@ -10,7 +10,7 @@ import (
 
 // DeployTargets lists the deploy profiles `gopernicus new deploy` can emit,
 // in recommendation order.
-var DeployTargets = []string{"do-app", "cloud-run"}
+var DeployTargets = []string{"do-app", "cloud-run", "compose-prod"}
 
 // deployProfiles maps each target to the files it emits. Workflow files
 // must live under .github/workflows/ to fire; everything else lives under
@@ -26,15 +26,24 @@ var deployProfiles = map[string][]deployFile{
 		{relPath: "workshop/deploy/cloud-run/makefile.cloud-run", kind: "deploy/cloud-run/makefile.cloud-run", altDelims: true},
 		{relPath: "workshop/deploy/cloud-run/README.md", kind: "deploy/cloud-run/README.md"},
 	},
+	"compose-prod": {
+		{relPath: "workshop/deploy/compose-prod/compose.prod.yml", kind: "deploy/compose-prod/compose.prod.yml"},
+		{relPath: "workshop/deploy/compose-prod/caddy/Caddyfile", kind: "deploy/compose-prod/Caddyfile"},
+		{relPath: "workshop/deploy/compose-prod/deploy.sh", kind: "deploy/compose-prod/deploy.sh", executable: true},
+		{relPath: "workshop/deploy/compose-prod/backup.sh", kind: "deploy/compose-prod/backup.sh", executable: true},
+		{relPath: "workshop/deploy/compose-prod/systemd/%s-compose.service", kind: "deploy/compose-prod/systemd.service"},
+		{relPath: "workshop/deploy/compose-prod/README.md", kind: "deploy/compose-prod/README.md"},
+	},
 }
 
 // deployFile is one emitted profile file. relPath may carry one %s, filled
 // with the project name. altDelims selects [[ ]] template delimiters for
 // payloads whose syntax collides with {{ }} (GitHub Actions, make).
 type deployFile struct {
-	relPath   string
-	kind      string
-	altDelims bool
+	relPath    string
+	kind       string
+	altDelims  bool
+	executable bool
 }
 
 // DeployData is the template data for deploy profile files.
@@ -82,7 +91,11 @@ func GenerateDeployProfile(root, target string, data DeployData) error {
 			return fmt.Errorf("creating directory for %s: %w", rel, err)
 		}
 		out := prependBootstrapMarkerStyled(f.kind, rel, buf.Bytes())
-		if err := os.WriteFile(dst, out, 0o644); err != nil {
+		mode := os.FileMode(0o644)
+		if f.executable {
+			mode = 0o755
+		}
+		if err := os.WriteFile(dst, out, mode); err != nil {
 			return fmt.Errorf("writing %s: %w", rel, err)
 		}
 		fmt.Printf("  ✓ %s\n", rel)
