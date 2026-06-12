@@ -8,7 +8,7 @@ assume is documented in
 
 Releases are tag-only: `git tag -a vX.Y.Z && git push origin vX.Y.Z`.
 
-## Unreleased
+## v0.4.1 — 2026-06-12
 
 ### Fixed
 - **Authorization resource-type derivation (production behavior change).**
