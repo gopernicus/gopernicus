@@ -367,7 +367,20 @@ func Load(root string) (*Manifest, error) {
 	if err := yaml.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", Filename, err)
 	}
+	if err := m.validate(); err != nil {
+		return nil, fmt.Errorf("%s: %w", Filename, err)
+	}
 	return &m, nil
+}
+
+// validate rejects manifest combinations the generated output cannot
+// support, with guidance — better one clear error here than an opaque
+// compile failure far from its cause.
+func (m *Manifest) validate() error {
+	if m.Features.AuthenticationEnabled() && !m.Features.AuthorizationEnabled() {
+		return fmt.Errorf("features: authentication requires authorization — generated bridges wire both engines (authorizer parameters, relationship cleanup, auth schemas); add an authorization provider under features")
+	}
+	return nil
 }
 
 // Save writes the manifest to gopernicus.yml in the given project root.
