@@ -8,7 +8,7 @@ assume is documented in
 
 Releases are tag-only: `git tag -a vX.Y.Z && git push origin vX.Y.Z`.
 
-## Unreleased
+## v0.5.0 — 2026-06-12
 
 ### Added
 - **Generated TypeScript client** (v0.5 item 1): `gopernicus generate`
