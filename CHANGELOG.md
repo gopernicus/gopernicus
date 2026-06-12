@@ -8,6 +8,25 @@ assume is documented in
 
 Releases are tag-only: `git tag -a vX.Y.Z && git push origin vX.Y.Z`.
 
+## Unreleased
+
+### Fixed
+- **SSE streams died under production middleware and server timeouts** —
+  two bugs found by the live segovia demo, invisible to httptest:
+  (1) the request logger's `statusWriter` hid `http.Flusher`, so any
+  wrapped SSE handler 500'd "streaming not supported" — it now
+  implements `Unwrap` and SSE flushes via `http.ResponseController`;
+  (2) the server's `WriteTimeout` arms at request start, killing every
+  stream at its first post-deadline frame (segovia: exactly 25.001s, the
+  first heartbeat) — `SSEStream` now extends the write deadline per
+  frame (4× heartbeat; 2m without one). `StreamWriter` gets the same
+  treatment. Regression tests pin heartbeat delivery and SSE through a
+  logger-wrapped chain.
+
+### Consumer actions
+- [ ] Repin + redeploy if you mounted ssebridge on v0.5.0 — streams
+      longer than your server WriteTimeout require this fix.
+
 ## v0.5.0 — 2026-06-12
 
 ### Added

@@ -47,6 +47,7 @@ func (rc *ResponseCapture) Unwrap() http.ResponseWriter {
 	return rc.ResponseWriter
 }
 
+
 // Flush implements http.Flusher if the underlying writer supports it.
 func (rc *ResponseCapture) Flush() {
 	if f, ok := rc.ResponseWriter.(http.Flusher); ok {
