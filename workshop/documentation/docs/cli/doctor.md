@@ -8,22 +8,52 @@ Check project health and configuration.
 verify that it is correctly configured for gopernicus. It is a quick way to
 identify missing files, version mismatches, or dependency problems.
 
-The command exits cleanly even when checks fail -- it prints results and
-suggestions rather than returning errors.
+The command exits non-zero when any check fails (warnings don't fail), so it
+is safe to gate scripts on it.
 
 ## Usage
 
 ```
-gopernicus doctor
+gopernicus doctor [--json]
 ```
 
-No flags or arguments. Run it from anywhere inside a gopernicus project
-directory (or a subdirectory). The command walks up the directory tree to find
-the project root by locating `go.mod`.
+Run it from anywhere inside a gopernicus project directory (or a
+subdirectory). The command walks up the directory tree to find the project
+root by locating `go.mod`.
+
+### `--json`
+
+Emits the run as machine-readable JSON on stdout instead of the human
+report. Field names are a stable contract for agents and scripts:
+
+```json
+{
+  "root": "/home/user/code/myapp",
+  "framework": "v0.4.0",
+  "ok": false,
+  "checks": [
+    {"name": "go.mod", "passed": true},
+    {"name": "sql: Pred.Raw usage", "passed": true, "warn": true, "detail": "store.go:12 raw predicate"},
+    {"name": "gopernicus framework", "passed": false, "detail": "not found in go.mod"}
+  ]
+}
+```
+
+- `ok` is false when any check is a hard failure; warnings (`"warn": true`)
+  never fail the run.
+- `framework` is the project's pinned framework version from go.mod; omitted
+  when no version-shaped pin is found.
+- `detail` and `warn` are omitted when empty/false.
+- Exit code matches the human mode (non-zero on failure), and error text
+  goes to stderr — stdout is always exactly one JSON object:
+
+```bash
+go tool gopernicus doctor --json | jq -e '.ok'
+```
 
 ## Checks Performed
 
-Doctor runs five checks in order:
+Doctor runs these checks in order:
 
 ### 1. go.mod
 
@@ -70,6 +100,23 @@ Scans `go.mod` for a `require` or `replace` line referencing
   dependencies.
 - **Fail**: "not found in go.mod" -- run
   `go get github.com/gopernicus/gopernicus@latest` to add it.
+
+### 6. SQL guards
+
+Scans store packages for SQL-injection hazards via the standing guard.
+
+- **Pass**: "sql: parameterized queries" -- no unsanctioned dynamic
+  concatenation into SQL.
+- **Fail**: names the first offending position (e.g. a `fmt.Sprintf` built
+  into a query) -- use placeholders (`args.Add`) or `QuoteIdent`.
+- **Warning**: "sql: Pred.Raw usage" -- `Pred.Raw` is a legitimate escape
+  hatch that deserves review on every run; it never fails the run.
+
+### 7. Bridge body limits
+
+Walks `bridge.yml` files and warns when a write route (Create/Update) has no
+`max_body_size` middleware -- unbounded request bodies are a
+resource-exhaustion vector. A warning, not a failure.
 
 ## Output Format
 

@@ -3,11 +3,14 @@ package commands
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
-	"github.com/gopernicus/gopernicus/workshop/codegen/cli"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+
+	"github.com/gopernicus/gopernicus/workshop/codegen/cli"
 
 	"github.com/gopernicus/gopernicus/workshop/codegen/generators"
 	"github.com/gopernicus/gopernicus/workshop/codegen/goversion"
@@ -28,7 +31,7 @@ Verifies:
   - gopernicus.yml manifest exists and is valid
   - Workshop directory exists
   - Gopernicus framework is in go.mod dependencies`,
-		Usage: "gopernicus doctor",
+		Usage: "gopernicus doctor [--json]",
 		Run:   runDoctor,
 	})
 }
@@ -40,47 +43,121 @@ type check struct {
 	warn   bool // warning, not failure
 }
 
-func runDoctor(_ context.Context, _ []string) error {
+// doctorResult is the machine-readable shape of a doctor run. Field names
+// are a stable contract — agents and scripts parse this output.
+type doctorResult struct {
+	Root      string        `json:"root"`
+	Framework string        `json:"framework,omitempty"`
+	OK        bool          `json:"ok"`
+	Checks    []doctorCheck `json:"checks"`
+}
+
+type doctorCheck struct {
+	Name   string `json:"name"`
+	Passed bool   `json:"passed"`
+	Warn   bool   `json:"warn,omitempty"`
+	Detail string `json:"detail,omitempty"`
+}
+
+func runDoctor(_ context.Context, args []string) error {
+	asJSON := hasFlag(args, "--json")
+
 	root, err := project.FindRoot()
 	if err != nil {
-		fmt.Println("✗ project root — no go.mod found in current or parent directories")
+		rootCheck := check{name: "project root", passed: false, detail: "no go.mod found in current or parent directories"}
+		if asJSON {
+			printDoctorJSON(buildDoctorResult("", "", []check{rootCheck}))
+		} else {
+			fmt.Println("✗ project root — no go.mod found in current or parent directories")
+		}
 		return fmt.Errorf("doctor found problems")
 	}
-	fmt.Printf("  project root: %s\n\n", root)
 
+	frameworkCheck, frameworkVersion := checkFrameworkDep(root)
 	checks := []check{
 		checkGoMod(root),
 		checkGoVersion(root),
 		checkManifest(root),
 		checkWorkshopDir(root),
-		checkFrameworkDep(root),
+		frameworkCheck,
 	}
 	checks = append(checks, checkSQLGuards(root)...)
 	checks = append(checks, checkBodyLimits(root))
 
-	allPassed := true
+	result := buildDoctorResult(root, frameworkVersion, checks)
+
+	if asJSON {
+		printDoctorJSON(result)
+	} else {
+		printDoctorHuman(result)
+	}
+
+	if !result.OK {
+		return fmt.Errorf("doctor found problems")
+	}
+	return nil
+}
+
+// buildDoctorResult folds raw checks into the stable result shape. A run is
+// OK when no check is a hard failure (warnings don't fail).
+func buildDoctorResult(root, frameworkVersion string, checks []check) doctorResult {
+	result := doctorResult{
+		Root:      root,
+		Framework: frameworkVersion,
+		OK:        true,
+		Checks:    make([]doctorCheck, 0, len(checks)),
+	}
 	for _, c := range checks {
-		symbol := "✓"
 		if !c.passed && !c.warn {
+			result.OK = false
+		}
+		result.Checks = append(result.Checks, doctorCheck{
+			Name:   c.name,
+			Passed: c.passed,
+			Warn:   c.warn,
+			Detail: c.detail,
+		})
+	}
+	return result
+}
+
+func printDoctorHuman(result doctorResult) {
+	fmt.Printf("  project root: %s\n\n", result.Root)
+
+	for _, c := range result.Checks {
+		symbol := "✓"
+		if !c.Passed && !c.Warn {
 			symbol = "✗"
-			allPassed = false
-		} else if c.warn {
+		} else if c.Warn {
 			symbol = "!"
 		}
-		line := fmt.Sprintf("%s %s", symbol, c.name)
-		if c.detail != "" {
-			line += fmt.Sprintf(" — %s", c.detail)
+		line := fmt.Sprintf("%s %s", symbol, c.Name)
+		if c.Detail != "" {
+			line += fmt.Sprintf(" — %s", c.Detail)
 		}
 		fmt.Println(line)
 	}
 
 	fmt.Println()
-	if !allPassed {
+	if !result.OK {
 		fmt.Println("Some checks failed. Run 'gopernicus init' to set up a project.")
-		return fmt.Errorf("doctor found problems")
+		return
 	}
 	fmt.Println("All checks passed.")
-	return nil
+}
+
+func printDoctorJSON(result doctorResult) {
+	out, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		fmt.Printf(`{"root":%q,"ok":false,"checks":[{"name":"json encoding","passed":false,"detail":%q}]}`+"\n", result.Root, err.Error())
+		return
+	}
+	fmt.Println(string(out))
+}
+
+// hasFlag reports whether a bare boolean flag is present in args.
+func hasFlag(args []string, flag string) bool {
+	return slices.Contains(args, flag)
 }
 
 func checkGoMod(root string) check {
@@ -209,10 +286,13 @@ func checkBodyLimits(root string) check {
 	return check{name: "bridge: write routes bound body size", passed: true, warn: true, detail: detail}
 }
 
-func checkFrameworkDep(root string) check {
+// checkFrameworkDep verifies the framework pin in go.mod and also returns
+// the pinned version string ("" when absent) for the doctor result's
+// top-level framework field.
+func checkFrameworkDep(root string) (check, string) {
 	f, err := os.Open(filepath.Join(root, "go.mod"))
 	if err != nil {
-		return check{name: "gopernicus dependency", passed: false, detail: "could not read go.mod"}
+		return check{name: "gopernicus dependency", passed: false, detail: "could not read go.mod"}, ""
 	}
 	defer f.Close()
 
@@ -220,17 +300,25 @@ func checkFrameworkDep(root string) check {
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if strings.Contains(line, generators.FrameworkModulePath) {
-			// Extract version from the require line.
+			// Extract version from the require line. In the framework repo
+			// itself the match is the module declaration, so the trailing
+			// token is the module path — only report version-shaped tokens
+			// in the result's framework field.
 			parts := strings.Fields(line)
 			if len(parts) >= 2 {
-				return check{name: fmt.Sprintf("gopernicus framework (%s)", parts[len(parts)-1]), passed: true}
+				token := parts[len(parts)-1]
+				version := ""
+				if strings.HasPrefix(token, "v") {
+					version = token
+				}
+				return check{name: fmt.Sprintf("gopernicus framework (%s)", token), passed: true}, version
 			}
-			return check{name: "gopernicus framework", passed: true}
+			return check{name: "gopernicus framework", passed: true}, ""
 		}
 	}
 	return check{
 		name:   "gopernicus framework",
 		passed: false,
 		detail: "not found in go.mod — run 'go get " + generators.FrameworkModulePath + "@latest'",
-	}
+	}, ""
 }
