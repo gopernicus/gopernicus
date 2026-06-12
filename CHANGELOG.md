@@ -8,7 +8,7 @@ assume is documented in
 
 Releases are tag-only: `git tag -a vX.Y.Z && git push origin vX.Y.Z`.
 
-## Unreleased
+## v0.5.1 — 2026-06-12
 
 ### Fixed
 - **SSE streams died under production middleware and server timeouts** —
