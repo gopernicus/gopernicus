@@ -220,6 +220,7 @@ func scaffoldProject(opts Options) (string, error) {
 				HasAuthorization:  opts.Features.Authorization,
 				HasTenancy:        opts.Features.Tenancy,
 				HasOutbox:         opts.Features.EventOutbox,
+				HasJobQueue:       opts.Features.JobQueue,
 				HasRedis:          opts.Infra.HasRedis,
 				HasRedisStreams:   opts.Infra.HasRedisStreams,
 				HasStorageDisk:    opts.Infra.HasStorageDisk,
@@ -327,6 +328,7 @@ func applyFeatureSelection(m *manifest.Manifest, features FeatureSelection) {
 	if features.JobQueue {
 		db.Domains["jobs"] = []string{
 			"job_queue",
+			"job_schedules",
 		}
 	}
 }

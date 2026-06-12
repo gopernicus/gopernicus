@@ -29,6 +29,11 @@ type AppScaffoldData struct {
 	// adapter and bootstraps a WorkerPool for event processing.
 	HasOutbox bool
 
+	// HasJobQueue enables jobs wiring in server.go: the jobs domain
+	// repositories, the queue worker pool (event_type dispatch), and the
+	// recurring-jobs scheduler pool.
+	HasJobQueue bool
+
 	// Infrastructure flags — determine which adapter imports and config helpers
 	// are generated. These reflect the user's TUI selections at init time and
 	// control which Go packages appear in go.mod (once adapters are split out).

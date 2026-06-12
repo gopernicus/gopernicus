@@ -13,6 +13,7 @@ import (
 	"github.com/gopernicus/gopernicus/infrastructure/cryptids"
 	"github.com/gopernicus/gopernicus/infrastructure/events"
 	"github.com/gopernicus/gopernicus/sdk/fop"
+	"github.com/gopernicus/gopernicus/sdk/workers"
 )
 
 // =============================================================================
@@ -81,3 +82,24 @@ func NewRepository(store Storer, opts ...Option) *Repository {
 // Ensure imports are used.
 var _ context.Context
 var _ fop.Order
+
+// ─── worker-pool ergonomics (hand-written) ───────────────────────────────────
+
+// compile-time check: Repository satisfies workers.JobStore, so it plugs
+// straight into workers.NewRunner.
+var _ workers.JobStore[JobQueue] = (*Repository)(nil)
+
+// Checkout exposes the store's atomic claim to the worker runner.
+func (r *Repository) Checkout(ctx context.Context, workerID string, now time.Time) (JobQueue, error) {
+	return r.store.Checkout(ctx, workerID, now)
+}
+
+// Complete exposes the store's completion update to the worker runner.
+func (r *Repository) Complete(ctx context.Context, jobID string, now time.Time) error {
+	return r.store.Complete(ctx, jobID, now)
+}
+
+// Fail exposes the store's failure/retry update to the worker runner.
+func (r *Repository) Fail(ctx context.Context, jobID string, now time.Time, reason string, maxAttempts int) error {
+	return r.store.Fail(ctx, jobID, now, reason, maxAttempts)
+}

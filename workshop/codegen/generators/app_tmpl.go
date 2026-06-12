@@ -353,6 +353,9 @@ import (
 	invitationsbridge "github.com/gopernicus/gopernicus/bridge/auth/invitations"
 	"github.com/gopernicus/gopernicus/core/auth/invitations"
 {{- end}}
+{{- if .HasJobQueue}}
+	"github.com/gopernicus/gopernicus/core/jobs/scheduler"
+{{- end}}
 	"github.com/gopernicus/gopernicus/infrastructure/cache"
 	"github.com/gopernicus/gopernicus/infrastructure/communications/emailer"
 {{- if .HasAuthentication}}
@@ -369,6 +372,12 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/async"
 	"github.com/gopernicus/gopernicus/sdk/environment"
 	"github.com/gopernicus/gopernicus/sdk/web"
+{{- if .HasJobQueue}}
+	"github.com/gopernicus/gopernicus/sdk/workers"
+
+	"{{.ModulePath}}/core/repositories/jobs"
+	"{{.ModulePath}}/core/repositories/jobs/jobqueue"
+{{- end}}
 {{- if or .HasAuthentication .HasAuthorization}}
 
 {{- if .HasAuthentication}}
@@ -414,6 +423,15 @@ type Server struct {
 	Storage    *storage.FileStorer
 {{- end}}
 	Emailer    *emailer.Emailer
+{{- if .HasJobQueue}}
+
+	// Jobs: the queue worker pool processes job_queue rows; the scheduler
+	// pool fires recurring job_schedules into the queue. Both start with
+	// the server and drain on shutdown.
+	JobsRepos     *jobs.Repositories
+	JobPool       *workers.WorkerPool
+	SchedulerPool *workers.WorkerPool
+{{- end}}
 }
 
 // Config holds application metadata.
@@ -482,7 +500,12 @@ func New(ctx context.Context, log *slog.Logger, cfg Config, infra Infrastructure
 	tenancyRepos := tenancy.NewRepositories(log, infra.Pool, cacher, bus)
 	log.InfoContext(ctx, "init", "service", "tenancy_repos")
 {{- end}}
-{{- if not (or .HasAuthentication .HasAuthorization .HasTenancy)}}
+{{- if .HasJobQueue}}
+
+	jobsRepos := jobs.NewRepositories(log, infra.Pool, cacher, bus)
+	log.InfoContext(ctx, "init", "service", "jobs_repos")
+{{- end}}
+{{- if not (or .HasAuthentication .HasAuthorization .HasTenancy .HasJobQueue)}}
 
 	// TODO: Wire your domain repositories here.
 	// Example:
@@ -570,6 +593,55 @@ func New(ctx context.Context, log *slog.Logger, cfg Config, infra Infrastructure
 		bus,
 	)
 	log.InfoContext(ctx, "init", "service", "invitations")
+{{- end}}
+{{- if .HasJobQueue}}
+
+	// =========================================================================
+	// Jobs (queue worker pool + scheduler)
+	// =========================================================================
+
+	// Declare recurring jobs here — EnsureSchedule is idempotent at boot;
+	// operators can still flip enabled/cron_expr at runtime through the
+	// repository. Fired jobs land in job_queue and dispatch by event_type
+	// below.
+	// Example:
+	//   if err := jobsRepos.JobSchedule.EnsureSchedule(ctx, "nightly-digest", "0 9 * * *", "digest.send", nil); err != nil {
+	//       return nil, fmt.Errorf("ensuring schedules: %w", err)
+	//   }
+
+	// jobHandlers dispatches queued jobs by event_type. Register a handler
+	// for every event type your schedules and producers enqueue.
+	jobHandlers := map[string]func(context.Context, jobqueue.JobQueue) error{
+		// "digest.send": func(ctx context.Context, job jobqueue.JobQueue) error { ... },
+	}
+
+	jobRunner := workers.NewRunner(jobsRepos.JobQueue, func(ctx context.Context, job jobqueue.JobQueue) (jobqueue.JobQueue, error) {
+		handle, ok := jobHandlers[job.EventType]
+		if !ok {
+			return job, fmt.Errorf("no job handler registered for event type %q", job.EventType)
+		}
+		return job, handle(ctx, job)
+	}, log)
+
+	var jobPoolCfg workers.Options
+	if err := environment.ParseEnvTags(cfg.AppName+"_JOBS", &jobPoolCfg); err != nil {
+		return nil, fmt.Errorf("parsing job pool config: %w", err)
+	}
+	jobPool := workers.NewPool(jobRunner.WorkFunc(), jobPoolCfg, workers.WithLogger(log))
+
+	// One scheduler worker per instance is enough — the claim path's
+	// compare-and-set makes any number of instances safe without leader
+	// election, so more workers here only add poll traffic.
+	schedulerEngine := scheduler.New(jobsRepos.JobSchedule, jobsRepos.EnqueueScheduled, log)
+	var schedulerPoolCfg workers.Options
+	if err := environment.ParseEnvTags(cfg.AppName+"_SCHEDULER", &schedulerPoolCfg); err != nil {
+		return nil, fmt.Errorf("parsing scheduler pool config: %w", err)
+	}
+	schedulerPool := workers.NewPool(schedulerEngine.WorkFunc(), schedulerPoolCfg,
+		workers.WithWorkerCount(1),
+		workers.WithLogger(log),
+	)
+	log.InfoContext(ctx, "init", "service", "jobs")
 {{- end}}
 
 	// =========================================================================
@@ -684,11 +756,21 @@ func New(ctx context.Context, log *slog.Logger, cfg Config, infra Infrastructure
 		Storage:    infra.Storage,
 {{- end}}
 		Emailer:    infra.Emailer,
+{{- if .HasJobQueue}}
+		JobsRepos:     jobsRepos,
+		JobPool:       jobPool,
+		SchedulerPool: schedulerPool,
+{{- end}}
 	}, nil
 }
 
 // Start begins listening for HTTP requests. This is a blocking call.
 func (s *Server) Start(ctx context.Context) error {
+{{- if .HasJobQueue}}
+	go s.JobPool.Start(ctx)
+	go s.SchedulerPool.Start(ctx)
+	s.Log.InfoContext(ctx, "startup", "status", "job + scheduler pools started")
+{{- end}}
 	s.Log.InfoContext(ctx, "startup", "status", "api router started", "host", s.HTTPServer.Config.Address())
 	return s.HTTPServer.ListenAndServe()
 }
@@ -701,6 +783,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if err := s.HTTPServer.Shutdown(ctx); err != nil {
 		return fmt.Errorf("http server shutdown: %w", err)
 	}
+{{- if .HasJobQueue}}
+
+	// Stop the worker pools — in-flight jobs finish, no new claims.
+	s.SchedulerPool.Stop()
+	s.JobPool.Stop()
+{{- end}}
 
 	// 2. Drain the async pool now that no new tasks can be submitted.
 	if err := s.AsyncPool.Close(ctx); err != nil {
@@ -789,6 +877,18 @@ AUTH_CALLBACK_BASE_URL=
 {{.AppNameUpper}}_S3_SECRET_ACCESS_KEY=
 {{.AppNameUpper}}_S3_ENDPOINT=
 {{end}}{{- end}}
+
+{{- if .HasJobQueue}}
+
+# ── Jobs ──────────────────────────────────────────────────────────────────────
+# Queue worker pool (processes job_queue rows by event_type).
+{{.AppNameUpper}}_JOBS_WORKER_COUNT=5
+{{.AppNameUpper}}_JOBS_WORKER_POLL_INTERVAL=5s
+{{.AppNameUpper}}_JOBS_WORKER_IDLE_INTERVAL=30s
+# Scheduler pool (fires recurring job_schedules into the queue).
+{{.AppNameUpper}}_SCHEDULER_WORKER_POLL_INTERVAL=15s
+{{.AppNameUpper}}_SCHEDULER_WORKER_IDLE_INTERVAL=60s
+{{- end}}
 
 # ── Email ─────────────────────────────────────────────────────────────────────
 # Values: {{if .HasSendGrid}}sendgrid (default), {{end}}stdout (logs emails, never delivers)

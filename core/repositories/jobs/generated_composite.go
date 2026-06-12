@@ -8,6 +8,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/core/repositories/jobs/jobqueue"
 	"github.com/gopernicus/gopernicus/core/repositories/jobs/jobqueue/jobqueuepgx"
+	"github.com/gopernicus/gopernicus/core/repositories/jobs/jobschedules"
+	"github.com/gopernicus/gopernicus/core/repositories/jobs/jobschedules/jobschedulespgx"
 
 	"github.com/gopernicus/gopernicus/infrastructure/cache"
 	"github.com/gopernicus/gopernicus/infrastructure/database/postgres/pgxdb"
@@ -16,7 +18,8 @@ import (
 
 // Repositories contains all repositories for the jobs domain.
 type Repositories struct {
-	JobQueue *jobqueue.Repository
+	JobQueue    *jobqueue.Repository
+	JobSchedule *jobschedules.Repository
 }
 
 // NewRepositories creates all repositories for the jobs domain.
@@ -27,6 +30,10 @@ func NewRepositories(log *slog.Logger, db pgxdb.Querier, c *cache.Cache, bus gop
 		JobQueue: jobqueue.NewRepository(
 			jobqueue.NewCacheStore(jobqueuepgx.NewStore(log, db), c),
 			jobqueue.WithEventBus(bus),
+		),
+		JobSchedule: jobschedules.NewRepository(
+			jobschedules.NewCacheStore(jobschedulespgx.NewStore(log, db), c),
+			jobschedules.WithEventBus(bus),
 		),
 	}
 }
