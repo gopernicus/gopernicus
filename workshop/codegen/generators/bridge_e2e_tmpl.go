@@ -14,11 +14,14 @@ package {{.BridgePackage}}
 
 import (
 	"context"
-{{- if or .HasRecordState .CreateMaxBodySize}}
+{{- if or .HasRecordState .CreateMaxBodySize (and .HasList .UniqueRequestFields)}}
 	"encoding/json"
 {{- end}}
 {{- if .HasList}}
 	"net/url"
+{{- end}}
+{{- if and .HasList .UniqueRequestFields}}
+	"strconv"
 {{- end}}
 {{- if .CreateMaxBodySize}}
 	"strings"
@@ -38,6 +41,9 @@ import (
 	"{{.ModulePath}}/core/repositories/auth/users/userspgx"
 
 	"github.com/gopernicus/gopernicus/core/auth/authentication"
+{{- end}}
+{{- if .HasAuthorize}}
+	"github.com/gopernicus/gopernicus/core/auth/authorization"
 {{- end}}
 
 	"github.com/gopernicus/gopernicus/sdk/logger"
@@ -62,6 +68,45 @@ var _ = assert.Equal
 
 // e2eDB is the test database handle the stack boots against.
 type e2eDB = {{if .SpecMode}}*testsqlite.TestSQLite{{else}}*testpgx.TestPGX{{end}}
+{{- if .HasAuthorize}}{{with .AuthSchemaEntity}}
+
+// e2eAuthSchema is the entity's resource schema, rendered locally — the
+// domain composite package exports AuthSchema() but importing it here is an
+// import cycle (the composite imports this bridge package). The bridge's
+// own @auth.create relationship writes at POST time grant the suite's
+// subject the relations these permissions check.
+func e2eAuthSchema() []authorization.ResourceSchema {
+	return []authorization.ResourceSchema{
+		{
+			Name: "{{.ResourceType}}",
+			Def: authorization.ResourceTypeDef{
+				Relations: map[string]authorization.RelationDef{
+{{- range .Relations}}
+					"{{.Name}}": {AllowedSubjects: []authorization.SubjectTypeRef{
+{{- range .AllowedSubjects}}
+						{Type: "{{.Type}}"{{if .Relation}}, Relation: "{{.Relation}}"{{end}}},
+{{- end}}
+					}},
+{{- end}}
+				},
+				Permissions: map[string]authorization.PermissionRule{
+{{- range .Permissions}}
+					"{{.Name}}": authorization.AnyOf(
+{{- range .Checks}}
+{{- if .IsDirect}}
+						authorization.Direct("{{.Relation}}"),
+{{- else}}
+						authorization.Through("{{.Relation}}", "{{.Permission}}"),
+{{- end}}
+{{- end}}
+					),
+{{- end}}
+				},
+			},
+		},
+	}
+}
+{{- end}}{{- end}}
 
 // setupE2EServer boots the full HTTP stack for {{.EntityName}} against a fresh
 // database: store → repository → bridge, served via testserver.ServeBridge.
@@ -102,7 +147,12 @@ func setupE2EServer(t *testing.T) (*testhttp.Client, e2eDB) {
 {{- else}}
 	authenticator, _ := testauth.Authenticator("e2etest")
 {{- end}}
+{{- if .HasAuthorize}}
+	authorizer, _ := testauth.AuthorizerWithStore(authorization.NewSchema(e2eAuthSchema()))
+	bridge := NewBridge(logger.NewNoop(), repo, testserver.NewRateLimiter(), authenticator, authorizer)
+{{- else}}
 	bridge := NewBridge(logger.NewNoop(), repo, testserver.NewRateLimiter(), authenticator, testauth.Authorizer())
+{{- end}}
 {{- else}}
 	bridge := NewBridge(logger.NewNoop(), repo, testserver.NewRateLimiter())
 {{- end}}
@@ -177,7 +227,7 @@ func TestE2E{{.EntityName}}CreateAndGet(t *testing.T) {
 
 	t.Run("not found", func(t *testing.T) {
 		id := "{{.NotFoundID}}"
-		client.Get(t, {{.GetPathExpr}}).RequireStatus(t, 404)
+		client.Get(t, {{.GetPathExpr}}).RequireStatus(t, {{.NotFoundStatus}})
 	})
 {{- end}}
 }
@@ -195,7 +245,21 @@ func TestE2E{{.EntityName}}PaginationAdvance(t *testing.T) {
 	// Three rows, then walk two pages of two — keyset pagination must not
 	// repeat a row across the page boundary (page1 ∩ page2 = ∅).
 	for i := 0; i < 3; i++ {
+{{- if .UniqueRequestFields}}
+		// UNIQUE-columned fields must vary per row or the insert 409s.
+		raw, err := json.Marshal(seededCreate{{.EntityName}}Request(t, db))
+		require.NoError(t, err)
+		var body map[string]any
+		require.NoError(t, json.Unmarshal(raw, &body))
+{{- range .UniqueRequestFields}}
+		if s, ok := body["{{.}}"].(string); ok {
+			body["{{.}}"] = s + "-" + strconv.Itoa(i)
+		}
+{{- end}}
+		client.Post(t, "{{.CreatePath}}", body).RequireStatus(t, 201)
+{{- else}}
 		client.Post(t, "{{.CreatePath}}", seededCreate{{.EntityName}}Request(t, db)).RequireStatus(t, 201)
+{{- end}}
 	}
 
 	page1 := client.Get(t, "{{.ListPath}}?limit=2")
@@ -240,7 +304,7 @@ func TestE2E{{.EntityName}}Delete(t *testing.T) {
 
 	client.Delete(t, {{.DeletePathExpr}}).RequireStatus(t, 204)
 {{- if .HasGet}}
-	client.Get(t, {{.GetPathExpr}}).RequireStatus(t, 404)
+	client.Get(t, {{.GetPathExpr}}).RequireStatus(t, {{.NotFoundStatus}})
 {{- end}}
 }
 {{end}}{{if .HasList}}

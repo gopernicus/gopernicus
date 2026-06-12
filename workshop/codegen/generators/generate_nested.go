@@ -167,6 +167,11 @@ func runNested(cfg Config, schemas map[string]*schema.ReflectedSchema, modulePat
 		} else if generated && opts.Verbose {
 			fmt.Printf("    generated cache layer\n")
 		}
+		// The bridge.yml auth schema must be on the resolved file BEFORE
+		// bridge generation — the e2e generator's authorize-satisfiability
+		// analysis reads AuthRelations/AuthPermissions.
+		injectBridgeAuthSchema(resolved, cfg.ProjectRoot)
+
 		// e2e boots against the canonical hosting database (DBs[0]) in its
 		// store mode.
 		hostDB := ""
@@ -235,8 +240,8 @@ func runNested(cfg Config, schemas map[string]*schema.ReflectedSchema, modulePat
 			}
 		}
 
-		// Auth schema, bridge composite, and fixture tracking (as in the legacy path).
-		injectBridgeAuthSchema(resolved, cfg.ProjectRoot)
+		// Auth schema (injected above), bridge composite, and fixture
+		// tracking (as in the legacy path).
 		domainResolvedFiles[b.Domain] = append(domainResolvedFiles[b.Domain], resolved)
 		if fileExists(bridgeYMLPath(b.Domain, resolved.TableName, cfg.ProjectRoot)) {
 			domainBridgeEntities[b.Domain] = append(domainBridgeEntities[b.Domain], BuildBridgeCompositeEntity(resolved))
@@ -264,12 +269,12 @@ func runNested(cfg Config, schemas map[string]*schema.ReflectedSchema, modulePat
 			composites = append(composites, DBComposite{
 				DBName: db,
 				Data: CompositeTemplateData{
-					DomainPkg:     domain,
-					ModulePath:    modulePath,
-					DomainPath:    "core/repositories/" + domain,
-					Entities:      dbDomainEntities[dbDomainKey{DB: db, Domain: domain}],
-					HasAuth:       hasAuthProvider,
-					SpecMode:      dbModes[db] == manifest.StoreModeSpec,
+					DomainPkg:  domain,
+					ModulePath: modulePath,
+					DomainPath: "core/repositories/" + domain,
+					Entities:   dbDomainEntities[dbDomainKey{DB: db, Domain: domain}],
+					HasAuth:    hasAuthProvider,
+					SpecMode:   dbModes[db] == manifest.StoreModeSpec,
 				},
 			})
 		}
