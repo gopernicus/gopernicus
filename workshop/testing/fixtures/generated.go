@@ -43,8 +43,11 @@ var (
 // =============================================================================
 
 // CreateTestPrincipal creates a test Principal with valid test data via direct SQL INSERT.
-// Bypasses the repository layer for test isolation.
-func CreateTestPrincipal(t *testing.T, ctx context.Context, db *testpgx.TestPGX) principals.Principal {
+// Bypasses the repository layer for test isolation. Optional overrides
+// replace the generated default for the named insert columns — e.g.
+// seeding a credential row whose hash must match a real token. Overriding
+// the primary key or an unknown column fails the test.
+func CreateTestPrincipal(t *testing.T, ctx context.Context, db *testpgx.TestPGX, overrides ...map[string]any) principals.Principal {
 	t.Helper()
 	require.NotNil(t, db)
 
@@ -56,14 +59,28 @@ func CreateTestPrincipal(t *testing.T, ctx context.Context, db *testpgx.TestPGX)
 	principalID, err := cryptids.GenerateID()
 	require.NoError(t, err)
 
+	args := []any{
+		principalID,
+		"user",
+	}
+	for _, ov := range overrides {
+		for col, val := range ov {
+			switch col {
+			case "principal_id":
+				t.Fatalf("CreateTestPrincipal: the primary key %q cannot be overridden — it drives the fixture's read-back", col)
+			case "principal_type":
+				args[1] = val
+			default:
+				t.Fatalf("CreateTestPrincipal: unknown override column %q (insert columns: principal_id, principal_type)", col)
+			}
+		}
+	}
+
 	// Insert directly via SQL (bypassing repository for test isolation).
 	_, err = db.Pool.Exec(ctx, `
 		INSERT INTO principals (principal_id, principal_type)
 		VALUES ($1, $2)
-	`,
-		principalID,
-		"user",
-	)
+	`, args...)
 	require.NoError(t, err, "failed to insert Principal")
 
 	// Retrieve the created record.
@@ -84,10 +101,11 @@ func CreateTestPrincipal(t *testing.T, ctx context.Context, db *testpgx.TestPGX)
 
 // CreateTestPrincipalWithDefaults creates a test Principal with auto-created FK dependencies.
 // FK dependencies whose parent table is outside this generation batch are required as parameters.
-func CreateTestPrincipalWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) principals.Principal {
+// Optional overrides apply to the Principal row itself, not its parents.
+func CreateTestPrincipalWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX, overrides ...map[string]any) principals.Principal {
 	t.Helper()
 
-	return CreateTestPrincipal(t, ctx, db)
+	return CreateTestPrincipal(t, ctx, db, overrides...)
 }
 
 // =============================================================================
@@ -95,8 +113,11 @@ func CreateTestPrincipalWithDefaults(t *testing.T, ctx context.Context, db *test
 // =============================================================================
 
 // CreateTestUser creates a test User with valid test data via direct SQL INSERT.
-// Bypasses the repository layer for test isolation.
-func CreateTestUser(t *testing.T, ctx context.Context, db *testpgx.TestPGX) users.User {
+// Bypasses the repository layer for test isolation. Optional overrides
+// replace the generated default for the named insert columns — e.g.
+// seeding a credential row whose hash must match a real token. Overriding
+// the primary key or an unknown column fails the test.
+func CreateTestUser(t *testing.T, ctx context.Context, db *testpgx.TestPGX, overrides ...map[string]any) users.User {
 	t.Helper()
 	require.NotNil(t, db)
 
@@ -116,18 +137,40 @@ func CreateTestUser(t *testing.T, ctx context.Context, db *testpgx.TestPGX) user
 	`, userID, "user")
 	require.NoError(t, err, "failed to insert principal for User")
 
-	// Insert directly via SQL (bypassing repository for test isolation).
-	_, err = db.Pool.Exec(ctx, `
-		INSERT INTO users (user_id, email, display_name, email_verified, last_login_at, record_state)
-		VALUES ($1, $2, $3, $4, $5, $6)
-	`,
+	args := []any{
 		userID,
-		"test_"+testUniqueID[:8]+"@example.com",
+		"test_" + testUniqueID[:8] + "@example.com",
 		conversion.Ptr("test_display_name"),
 		false,
 		conversion.Ptr(time.Now().UTC()),
 		"active",
-	)
+	}
+	for _, ov := range overrides {
+		for col, val := range ov {
+			switch col {
+			case "user_id":
+				t.Fatalf("CreateTestUser: the primary key %q cannot be overridden — it drives the fixture's read-back", col)
+			case "email":
+				args[1] = val
+			case "display_name":
+				args[2] = val
+			case "email_verified":
+				args[3] = val
+			case "last_login_at":
+				args[4] = val
+			case "record_state":
+				args[5] = val
+			default:
+				t.Fatalf("CreateTestUser: unknown override column %q (insert columns: user_id, email, display_name, email_verified, last_login_at, record_state)", col)
+			}
+		}
+	}
+
+	// Insert directly via SQL (bypassing repository for test isolation).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO users (user_id, email, display_name, email_verified, last_login_at, record_state)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, args...)
 	require.NoError(t, err, "failed to insert User")
 
 	// Retrieve the created record.
@@ -153,10 +196,11 @@ func CreateTestUser(t *testing.T, ctx context.Context, db *testpgx.TestPGX) user
 
 // CreateTestUserWithDefaults creates a test User with auto-created FK dependencies.
 // FK dependencies whose parent table is outside this generation batch are required as parameters.
-func CreateTestUserWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) users.User {
+// Optional overrides apply to the User row itself, not its parents.
+func CreateTestUserWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX, overrides ...map[string]any) users.User {
 	t.Helper()
 
-	return CreateTestUser(t, ctx, db)
+	return CreateTestUser(t, ctx, db, overrides...)
 }
 
 // =============================================================================
@@ -164,8 +208,11 @@ func CreateTestUserWithDefaults(t *testing.T, ctx context.Context, db *testpgx.T
 // =============================================================================
 
 // CreateTestServiceAccount creates a test ServiceAccount with valid test data via direct SQL INSERT.
-// Bypasses the repository layer for test isolation.
-func CreateTestServiceAccount(t *testing.T, ctx context.Context, db *testpgx.TestPGX, creatorPrincipalID string, ownerUserID string) serviceaccounts.ServiceAccount {
+// Bypasses the repository layer for test isolation. Optional overrides
+// replace the generated default for the named insert columns — e.g.
+// seeding a credential row whose hash must match a real token. Overriding
+// the primary key or an unknown column fails the test.
+func CreateTestServiceAccount(t *testing.T, ctx context.Context, db *testpgx.TestPGX, creatorPrincipalID string, ownerUserID string, overrides ...map[string]any) serviceaccounts.ServiceAccount {
 	t.Helper()
 	require.NotNil(t, db)
 
@@ -188,19 +235,43 @@ func CreateTestServiceAccount(t *testing.T, ctx context.Context, db *testpgx.Tes
 	`, serviceAccountID, "user")
 	require.NoError(t, err, "failed to insert principal for ServiceAccount")
 
-	// Insert directly via SQL (bypassing repository for test isolation).
-	_, err = db.Pool.Exec(ctx, `
-		INSERT INTO service_accounts (service_account_id, name, description, creator_principal_id, record_state, act_as_user, owner_user_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`,
+	args := []any{
 		serviceAccountID,
-		"test_name_"+testUniqueID[:8],
+		"test_name_" + testUniqueID[:8],
 		conversion.Ptr("test_description"),
 		creatorPrincipalID,
 		"active",
 		false,
 		ownerUserID,
-	)
+	}
+	for _, ov := range overrides {
+		for col, val := range ov {
+			switch col {
+			case "service_account_id":
+				t.Fatalf("CreateTestServiceAccount: the primary key %q cannot be overridden — it drives the fixture's read-back", col)
+			case "name":
+				args[1] = val
+			case "description":
+				args[2] = val
+			case "creator_principal_id":
+				args[3] = val
+			case "record_state":
+				args[4] = val
+			case "act_as_user":
+				args[5] = val
+			case "owner_user_id":
+				args[6] = val
+			default:
+				t.Fatalf("CreateTestServiceAccount: unknown override column %q (insert columns: service_account_id, name, description, creator_principal_id, record_state, act_as_user, owner_user_id)", col)
+			}
+		}
+	}
+
+	// Insert directly via SQL (bypassing repository for test isolation).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO service_accounts (service_account_id, name, description, creator_principal_id, record_state, act_as_user, owner_user_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, args...)
 	require.NoError(t, err, "failed to insert ServiceAccount")
 
 	// Retrieve the created record.
@@ -227,7 +298,8 @@ func CreateTestServiceAccount(t *testing.T, ctx context.Context, db *testpgx.Tes
 
 // CreateTestServiceAccountWithDefaults creates a test ServiceAccount with auto-created FK dependencies.
 // FK dependencies whose parent table is outside this generation batch are required as parameters.
-func CreateTestServiceAccountWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) serviceaccounts.ServiceAccount {
+// Optional overrides apply to the ServiceAccount row itself, not its parents.
+func CreateTestServiceAccountWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX, overrides ...map[string]any) serviceaccounts.ServiceAccount {
 	t.Helper()
 
 	creatorPrincipalIDParent := CreateTestPrincipalWithDefaults(t, ctx, db)
@@ -236,7 +308,7 @@ func CreateTestServiceAccountWithDefaults(t *testing.T, ctx context.Context, db 
 	ownerUserIDParent := CreateTestUserWithDefaults(t, ctx, db)
 	ownerUserID := ownerUserIDParent.UserID
 
-	return CreateTestServiceAccount(t, ctx, db, creatorPrincipalID, ownerUserID)
+	return CreateTestServiceAccount(t, ctx, db, creatorPrincipalID, ownerUserID, overrides...)
 }
 
 // =============================================================================
@@ -244,8 +316,11 @@ func CreateTestServiceAccountWithDefaults(t *testing.T, ctx context.Context, db 
 // =============================================================================
 
 // CreateTestAPIKey creates a test APIKey with valid test data via direct SQL INSERT.
-// Bypasses the repository layer for test isolation.
-func CreateTestAPIKey(t *testing.T, ctx context.Context, db *testpgx.TestPGX, parentServiceAccountID string) apikeys.APIKey {
+// Bypasses the repository layer for test isolation. Optional overrides
+// replace the generated default for the named insert columns — e.g.
+// seeding a credential row whose hash must match a real token. Overriding
+// the primary key or an unknown column fails the test.
+func CreateTestAPIKey(t *testing.T, ctx context.Context, db *testpgx.TestPGX, parentServiceAccountID string, overrides ...map[string]any) apikeys.APIKey {
 	t.Helper()
 	require.NotNil(t, db)
 
@@ -259,23 +334,55 @@ func CreateTestAPIKey(t *testing.T, ctx context.Context, db *testpgx.TestPGX, pa
 	apiKeyID, err := cryptids.GenerateID()
 	require.NoError(t, err)
 
-	// Insert directly via SQL (bypassing repository for test isolation).
-	_, err = db.Pool.Exec(ctx, `
-		INSERT INTO api_keys (api_key_id, parent_service_account_id, name, key_prefix, key_hash, expires_at, last_used_at, last_used_ip, rate_limit_per_minute, record_state, revoked_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-	`,
+	args := []any{
 		apiKeyID,
 		parentServiceAccountID,
-		"test_name_"+testUniqueID[:8],
+		"test_name_" + testUniqueID[:8],
 		testUniqueID[:12],
-		"test_key_hash_"+testUniqueID[:8],
-		conversion.Ptr(time.Now().UTC()),
+		"test_key_hash_" + testUniqueID[:8],
+		conversion.Ptr(time.Now().UTC().Add(24 * time.Hour)),
 		conversion.Ptr(time.Now().UTC()),
 		conversion.Ptr("test_last_used_ip"),
 		conversion.Ptr(0),
 		"active",
-		conversion.Ptr(time.Now().UTC()),
-	)
+		nil,
+	}
+	for _, ov := range overrides {
+		for col, val := range ov {
+			switch col {
+			case "api_key_id":
+				t.Fatalf("CreateTestAPIKey: the primary key %q cannot be overridden — it drives the fixture's read-back", col)
+			case "parent_service_account_id":
+				args[1] = val
+			case "name":
+				args[2] = val
+			case "key_prefix":
+				args[3] = val
+			case "key_hash":
+				args[4] = val
+			case "expires_at":
+				args[5] = val
+			case "last_used_at":
+				args[6] = val
+			case "last_used_ip":
+				args[7] = val
+			case "rate_limit_per_minute":
+				args[8] = val
+			case "record_state":
+				args[9] = val
+			case "revoked_at":
+				args[10] = val
+			default:
+				t.Fatalf("CreateTestAPIKey: unknown override column %q (insert columns: api_key_id, parent_service_account_id, name, key_prefix, key_hash, expires_at, last_used_at, last_used_ip, rate_limit_per_minute, record_state, revoked_at)", col)
+			}
+		}
+	}
+
+	// Insert directly via SQL (bypassing repository for test isolation).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO api_keys (api_key_id, parent_service_account_id, name, key_prefix, key_hash, expires_at, last_used_at, last_used_ip, rate_limit_per_minute, record_state, revoked_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+	`, args...)
 	require.NoError(t, err, "failed to insert APIKey")
 
 	// Retrieve the created record.
@@ -306,13 +413,14 @@ func CreateTestAPIKey(t *testing.T, ctx context.Context, db *testpgx.TestPGX, pa
 
 // CreateTestAPIKeyWithDefaults creates a test APIKey with auto-created FK dependencies.
 // FK dependencies whose parent table is outside this generation batch are required as parameters.
-func CreateTestAPIKeyWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) apikeys.APIKey {
+// Optional overrides apply to the APIKey row itself, not its parents.
+func CreateTestAPIKeyWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX, overrides ...map[string]any) apikeys.APIKey {
 	t.Helper()
 
 	parentServiceAccountIDParent := CreateTestServiceAccountWithDefaults(t, ctx, db)
 	parentServiceAccountID := parentServiceAccountIDParent.ServiceAccountID
 
-	return CreateTestAPIKey(t, ctx, db, parentServiceAccountID)
+	return CreateTestAPIKey(t, ctx, db, parentServiceAccountID, overrides...)
 }
 
 // =============================================================================
@@ -320,8 +428,11 @@ func CreateTestAPIKeyWithDefaults(t *testing.T, ctx context.Context, db *testpgx
 // =============================================================================
 
 // CreateTestEventOutbox creates a test EventOutbox with valid test data via direct SQL INSERT.
-// Bypasses the repository layer for test isolation.
-func CreateTestEventOutbox(t *testing.T, ctx context.Context, db *testpgx.TestPGX) eventoutbox.EventOutbox {
+// Bypasses the repository layer for test isolation. Optional overrides
+// replace the generated default for the named insert columns — e.g.
+// seeding a credential row whose hash must match a real token. Overriding
+// the primary key or an unknown column fails the test.
+func CreateTestEventOutbox(t *testing.T, ctx context.Context, db *testpgx.TestPGX, overrides ...map[string]any) eventoutbox.EventOutbox {
 	t.Helper()
 	require.NotNil(t, db)
 
@@ -333,15 +444,31 @@ func CreateTestEventOutbox(t *testing.T, ctx context.Context, db *testpgx.TestPG
 	eventID, err := cryptids.GenerateID()
 	require.NoError(t, err)
 
+	args := []any{
+		eventID,
+		"test_event_type",
+		json.RawMessage("{}"),
+	}
+	for _, ov := range overrides {
+		for col, val := range ov {
+			switch col {
+			case "event_id":
+				t.Fatalf("CreateTestEventOutbox: the primary key %q cannot be overridden — it drives the fixture's read-back", col)
+			case "event_type":
+				args[1] = val
+			case "payload":
+				args[2] = val
+			default:
+				t.Fatalf("CreateTestEventOutbox: unknown override column %q (insert columns: event_id, event_type, payload)", col)
+			}
+		}
+	}
+
 	// Insert directly via SQL (bypassing repository for test isolation).
 	_, err = db.Pool.Exec(ctx, `
 		INSERT INTO event_outbox (event_id, event_type, payload)
 		VALUES ($1, $2, $3)
-	`,
-		eventID,
-		"test_event_type",
-		json.RawMessage("{}"),
-	)
+	`, args...)
 	require.NoError(t, err, "failed to insert EventOutbox")
 
 	// Retrieve the created record.
@@ -364,10 +491,11 @@ func CreateTestEventOutbox(t *testing.T, ctx context.Context, db *testpgx.TestPG
 
 // CreateTestEventOutboxWithDefaults creates a test EventOutbox with auto-created FK dependencies.
 // FK dependencies whose parent table is outside this generation batch are required as parameters.
-func CreateTestEventOutboxWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) eventoutbox.EventOutbox {
+// Optional overrides apply to the EventOutbox row itself, not its parents.
+func CreateTestEventOutboxWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX, overrides ...map[string]any) eventoutbox.EventOutbox {
 	t.Helper()
 
-	return CreateTestEventOutbox(t, ctx, db)
+	return CreateTestEventOutbox(t, ctx, db, overrides...)
 }
 
 // =============================================================================
@@ -375,8 +503,11 @@ func CreateTestEventOutboxWithDefaults(t *testing.T, ctx context.Context, db *te
 // =============================================================================
 
 // CreateTestGroup creates a test Group with valid test data via direct SQL INSERT.
-// Bypasses the repository layer for test isolation.
-func CreateTestGroup(t *testing.T, ctx context.Context, db *testpgx.TestPGX, creatorPrincipalID string) groups.Group {
+// Bypasses the repository layer for test isolation. Optional overrides
+// replace the generated default for the named insert columns — e.g.
+// seeding a credential row whose hash must match a real token. Overriding
+// the primary key or an unknown column fails the test.
+func CreateTestGroup(t *testing.T, ctx context.Context, db *testpgx.TestPGX, creatorPrincipalID string, overrides ...map[string]any) groups.Group {
 	t.Helper()
 	require.NotNil(t, db)
 
@@ -390,18 +521,40 @@ func CreateTestGroup(t *testing.T, ctx context.Context, db *testpgx.TestPGX, cre
 	groupID, err := cryptids.GenerateID()
 	require.NoError(t, err)
 
+	args := []any{
+		groupID,
+		"test_name_" + testUniqueID[:8],
+		"test_slug_" + testUniqueID[:8],
+		conversion.Ptr("test_description"),
+		creatorPrincipalID,
+		"active",
+	}
+	for _, ov := range overrides {
+		for col, val := range ov {
+			switch col {
+			case "group_id":
+				t.Fatalf("CreateTestGroup: the primary key %q cannot be overridden — it drives the fixture's read-back", col)
+			case "name":
+				args[1] = val
+			case "slug":
+				args[2] = val
+			case "description":
+				args[3] = val
+			case "creator_principal_id":
+				args[4] = val
+			case "record_state":
+				args[5] = val
+			default:
+				t.Fatalf("CreateTestGroup: unknown override column %q (insert columns: group_id, name, slug, description, creator_principal_id, record_state)", col)
+			}
+		}
+	}
+
 	// Insert directly via SQL (bypassing repository for test isolation).
 	_, err = db.Pool.Exec(ctx, `
 		INSERT INTO groups (group_id, name, slug, description, creator_principal_id, record_state)
 		VALUES ($1, $2, $3, $4, $5, $6)
-	`,
-		groupID,
-		"test_name_"+testUniqueID[:8],
-		"test_slug_"+testUniqueID[:8],
-		conversion.Ptr("test_description"),
-		creatorPrincipalID,
-		"active",
-	)
+	`, args...)
 	require.NoError(t, err, "failed to insert Group")
 
 	// Retrieve the created record.
@@ -427,13 +580,14 @@ func CreateTestGroup(t *testing.T, ctx context.Context, db *testpgx.TestPGX, cre
 
 // CreateTestGroupWithDefaults creates a test Group with auto-created FK dependencies.
 // FK dependencies whose parent table is outside this generation batch are required as parameters.
-func CreateTestGroupWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) groups.Group {
+// Optional overrides apply to the Group row itself, not its parents.
+func CreateTestGroupWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX, overrides ...map[string]any) groups.Group {
 	t.Helper()
 
 	creatorPrincipalIDParent := CreateTestPrincipalWithDefaults(t, ctx, db)
 	creatorPrincipalID := creatorPrincipalIDParent.PrincipalID
 
-	return CreateTestGroup(t, ctx, db, creatorPrincipalID)
+	return CreateTestGroup(t, ctx, db, creatorPrincipalID, overrides...)
 }
 
 // =============================================================================
@@ -441,8 +595,11 @@ func CreateTestGroupWithDefaults(t *testing.T, ctx context.Context, db *testpgx.
 // =============================================================================
 
 // CreateTestInvitation creates a test Invitation with valid test data via direct SQL INSERT.
-// Bypasses the repository layer for test isolation.
-func CreateTestInvitation(t *testing.T, ctx context.Context, db *testpgx.TestPGX) invitations.Invitation {
+// Bypasses the repository layer for test isolation. Optional overrides
+// replace the generated default for the named insert columns — e.g.
+// seeding a credential row whose hash must match a real token. Overriding
+// the primary key or an unknown column fails the test.
+func CreateTestInvitation(t *testing.T, ctx context.Context, db *testpgx.TestPGX, overrides ...map[string]any) invitations.Invitation {
 	t.Helper()
 	require.NotNil(t, db)
 
@@ -454,27 +611,67 @@ func CreateTestInvitation(t *testing.T, ctx context.Context, db *testpgx.TestPGX
 	invitationID, err := cryptids.GenerateID()
 	require.NoError(t, err)
 
+	args := []any{
+		invitationID,
+		"test_resource_type",
+		"test_resource_id_" + testUniqueID[:8],
+		"test_relation_" + testUniqueID[:8],
+		"test_identifier_" + testUniqueID[:8],
+		"email",
+		conversion.Ptr("test_resolved_subject_id"),
+		"test_invited_by_" + testUniqueID[:8],
+		"test_token_hash_" + testUniqueID[:8],
+		false,
+		"pending",
+		time.Now().UTC().Add(24 * time.Hour),
+		conversion.Ptr(time.Now().UTC()),
+		"active",
+		conversion.Ptr("test_redirect_url"),
+	}
+	for _, ov := range overrides {
+		for col, val := range ov {
+			switch col {
+			case "invitation_id":
+				t.Fatalf("CreateTestInvitation: the primary key %q cannot be overridden — it drives the fixture's read-back", col)
+			case "resource_type":
+				args[1] = val
+			case "resource_id":
+				args[2] = val
+			case "relation":
+				args[3] = val
+			case "identifier":
+				args[4] = val
+			case "identifier_type":
+				args[5] = val
+			case "resolved_subject_id":
+				args[6] = val
+			case "invited_by":
+				args[7] = val
+			case "token_hash":
+				args[8] = val
+			case "auto_accept":
+				args[9] = val
+			case "invitation_status":
+				args[10] = val
+			case "expires_at":
+				args[11] = val
+			case "accepted_at":
+				args[12] = val
+			case "record_state":
+				args[13] = val
+			case "redirect_url":
+				args[14] = val
+			default:
+				t.Fatalf("CreateTestInvitation: unknown override column %q (insert columns: invitation_id, resource_type, resource_id, relation, identifier, identifier_type, resolved_subject_id, invited_by, token_hash, auto_accept, invitation_status, expires_at, accepted_at, record_state, redirect_url)", col)
+			}
+		}
+	}
+
 	// Insert directly via SQL (bypassing repository for test isolation).
 	_, err = db.Pool.Exec(ctx, `
 		INSERT INTO invitations (invitation_id, resource_type, resource_id, relation, identifier, identifier_type, resolved_subject_id, invited_by, token_hash, auto_accept, invitation_status, expires_at, accepted_at, record_state, redirect_url)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-	`,
-		invitationID,
-		"test_resource_type",
-		"test_resource_id_"+testUniqueID[:8],
-		"test_relation_"+testUniqueID[:8],
-		"test_identifier_"+testUniqueID[:8],
-		"email",
-		conversion.Ptr("test_resolved_subject_id"),
-		"test_invited_by_"+testUniqueID[:8],
-		"test_token_hash_"+testUniqueID[:8],
-		false,
-		"pending",
-		time.Now().UTC(),
-		conversion.Ptr(time.Now().UTC()),
-		"active",
-		conversion.Ptr("test_redirect_url"),
-	)
+	`, args...)
 	require.NoError(t, err, "failed to insert Invitation")
 
 	// Retrieve the created record.
@@ -509,10 +706,11 @@ func CreateTestInvitation(t *testing.T, ctx context.Context, db *testpgx.TestPGX
 
 // CreateTestInvitationWithDefaults creates a test Invitation with auto-created FK dependencies.
 // FK dependencies whose parent table is outside this generation batch are required as parameters.
-func CreateTestInvitationWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) invitations.Invitation {
+// Optional overrides apply to the Invitation row itself, not its parents.
+func CreateTestInvitationWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX, overrides ...map[string]any) invitations.Invitation {
 	t.Helper()
 
-	return CreateTestInvitation(t, ctx, db)
+	return CreateTestInvitation(t, ctx, db, overrides...)
 }
 
 // =============================================================================
@@ -520,8 +718,11 @@ func CreateTestInvitationWithDefaults(t *testing.T, ctx context.Context, db *tes
 // =============================================================================
 
 // CreateTestJobQueue creates a test JobQueue with valid test data via direct SQL INSERT.
-// Bypasses the repository layer for test isolation.
-func CreateTestJobQueue(t *testing.T, ctx context.Context, db *testpgx.TestPGX) jobqueue.JobQueue {
+// Bypasses the repository layer for test isolation. Optional overrides
+// replace the generated default for the named insert columns — e.g.
+// seeding a credential row whose hash must match a real token. Overriding
+// the primary key or an unknown column fails the test.
+func CreateTestJobQueue(t *testing.T, ctx context.Context, db *testpgx.TestPGX, overrides ...map[string]any) jobqueue.JobQueue {
 	t.Helper()
 	require.NotNil(t, db)
 
@@ -533,14 +734,10 @@ func CreateTestJobQueue(t *testing.T, ctx context.Context, db *testpgx.TestPGX) 
 	jobID, err := cryptids.GenerateID()
 	require.NoError(t, err)
 
-	// Insert directly via SQL (bypassing repository for test isolation).
-	_, err = db.Pool.Exec(ctx, `
-		INSERT INTO job_queue (job_id, event_type, correlation_id, tenant_id, aggregate_type, aggregate_id, payload, occurred_at, status, priority, retry_count, max_retries, worker_name, failure_reason, scheduled_for, staged_at, completed_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-	`,
+	args := []any{
 		jobID,
 		"test_event_type",
-		"test_correlation_id_"+testUniqueID[:8],
+		"test_correlation_id_" + testUniqueID[:8],
 		conversion.Ptr("test_tenant_id"),
 		conversion.Ptr("test_aggregate_type"),
 		conversion.Ptr("test_aggregate_id"),
@@ -555,7 +752,55 @@ func CreateTestJobQueue(t *testing.T, ctx context.Context, db *testpgx.TestPGX) 
 		time.Now().UTC(),
 		conversion.Ptr(time.Now().UTC()),
 		conversion.Ptr(time.Now().UTC()),
-	)
+	}
+	for _, ov := range overrides {
+		for col, val := range ov {
+			switch col {
+			case "job_id":
+				t.Fatalf("CreateTestJobQueue: the primary key %q cannot be overridden — it drives the fixture's read-back", col)
+			case "event_type":
+				args[1] = val
+			case "correlation_id":
+				args[2] = val
+			case "tenant_id":
+				args[3] = val
+			case "aggregate_type":
+				args[4] = val
+			case "aggregate_id":
+				args[5] = val
+			case "payload":
+				args[6] = val
+			case "occurred_at":
+				args[7] = val
+			case "status":
+				args[8] = val
+			case "priority":
+				args[9] = val
+			case "retry_count":
+				args[10] = val
+			case "max_retries":
+				args[11] = val
+			case "worker_name":
+				args[12] = val
+			case "failure_reason":
+				args[13] = val
+			case "scheduled_for":
+				args[14] = val
+			case "staged_at":
+				args[15] = val
+			case "completed_at":
+				args[16] = val
+			default:
+				t.Fatalf("CreateTestJobQueue: unknown override column %q (insert columns: job_id, event_type, correlation_id, tenant_id, aggregate_type, aggregate_id, payload, occurred_at, status, priority, retry_count, max_retries, worker_name, failure_reason, scheduled_for, staged_at, completed_at)", col)
+			}
+		}
+	}
+
+	// Insert directly via SQL (bypassing repository for test isolation).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO job_queue (job_id, event_type, correlation_id, tenant_id, aggregate_type, aggregate_id, payload, occurred_at, status, priority, retry_count, max_retries, worker_name, failure_reason, scheduled_for, staged_at, completed_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+	`, args...)
 	require.NoError(t, err, "failed to insert JobQueue")
 
 	// Retrieve the created record.
@@ -592,10 +837,11 @@ func CreateTestJobQueue(t *testing.T, ctx context.Context, db *testpgx.TestPGX) 
 
 // CreateTestJobQueueWithDefaults creates a test JobQueue with auto-created FK dependencies.
 // FK dependencies whose parent table is outside this generation batch are required as parameters.
-func CreateTestJobQueueWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) jobqueue.JobQueue {
+// Optional overrides apply to the JobQueue row itself, not its parents.
+func CreateTestJobQueueWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX, overrides ...map[string]any) jobqueue.JobQueue {
 	t.Helper()
 
-	return CreateTestJobQueue(t, ctx, db)
+	return CreateTestJobQueue(t, ctx, db, overrides...)
 }
 
 // =============================================================================
@@ -603,8 +849,11 @@ func CreateTestJobQueueWithDefaults(t *testing.T, ctx context.Context, db *testp
 // =============================================================================
 
 // CreateTestOauthAccount creates a test OauthAccount with valid test data via direct SQL INSERT.
-// Bypasses the repository layer for test isolation.
-func CreateTestOauthAccount(t *testing.T, ctx context.Context, db *testpgx.TestPGX, parentUserID string) oauthaccounts.OauthAccount {
+// Bypasses the repository layer for test isolation. Optional overrides
+// replace the generated default for the named insert columns — e.g.
+// seeding a credential row whose hash must match a real token. Overriding
+// the primary key or an unknown column fails the test.
+func CreateTestOauthAccount(t *testing.T, ctx context.Context, db *testpgx.TestPGX, parentUserID string, overrides ...map[string]any) oauthaccounts.OauthAccount {
 	t.Helper()
 	require.NotNil(t, db)
 
@@ -618,27 +867,67 @@ func CreateTestOauthAccount(t *testing.T, ctx context.Context, db *testpgx.TestP
 	oauthAccountID, err := cryptids.GenerateID()
 	require.NoError(t, err)
 
-	// Insert directly via SQL (bypassing repository for test isolation).
-	_, err = db.Pool.Exec(ctx, `
-		INSERT INTO oauth_accounts (oauth_account_id, parent_user_id, provider, provider_user_id, provider_email, provider_email_verified, account_verified, access_token, refresh_token, token_expires_at, token_type, scope, id_token, profile_data, linked_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-	`,
+	args := []any{
 		oauthAccountID,
 		parentUserID,
-		"test_provider_"+testUniqueID[:8],
-		"test_provider_user_id_"+testUniqueID[:8],
+		"test_provider_" + testUniqueID[:8],
+		"test_provider_user_id_" + testUniqueID[:8],
 		conversion.Ptr("test_provider_email"),
 		conversion.Ptr(false),
 		false,
 		conversion.Ptr("test_access_token"),
 		conversion.Ptr("test_refresh_token"),
-		conversion.Ptr(time.Now().UTC()),
+		conversion.Ptr(time.Now().UTC().Add(24 * time.Hour)),
 		conversion.Ptr("test_token_type"),
 		conversion.Ptr("test_scope"),
 		conversion.Ptr("test_id_token"),
 		conversion.Ptr(json.RawMessage("{}")),
 		time.Now().UTC(),
-	)
+	}
+	for _, ov := range overrides {
+		for col, val := range ov {
+			switch col {
+			case "oauth_account_id":
+				t.Fatalf("CreateTestOauthAccount: the primary key %q cannot be overridden — it drives the fixture's read-back", col)
+			case "parent_user_id":
+				args[1] = val
+			case "provider":
+				args[2] = val
+			case "provider_user_id":
+				args[3] = val
+			case "provider_email":
+				args[4] = val
+			case "provider_email_verified":
+				args[5] = val
+			case "account_verified":
+				args[6] = val
+			case "access_token":
+				args[7] = val
+			case "refresh_token":
+				args[8] = val
+			case "token_expires_at":
+				args[9] = val
+			case "token_type":
+				args[10] = val
+			case "scope":
+				args[11] = val
+			case "id_token":
+				args[12] = val
+			case "profile_data":
+				args[13] = val
+			case "linked_at":
+				args[14] = val
+			default:
+				t.Fatalf("CreateTestOauthAccount: unknown override column %q (insert columns: oauth_account_id, parent_user_id, provider, provider_user_id, provider_email, provider_email_verified, account_verified, access_token, refresh_token, token_expires_at, token_type, scope, id_token, profile_data, linked_at)", col)
+			}
+		}
+	}
+
+	// Insert directly via SQL (bypassing repository for test isolation).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO oauth_accounts (oauth_account_id, parent_user_id, provider, provider_user_id, provider_email, provider_email_verified, account_verified, access_token, refresh_token, token_expires_at, token_type, scope, id_token, profile_data, linked_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+	`, args...)
 	require.NoError(t, err, "failed to insert OauthAccount")
 
 	// Retrieve the created record.
@@ -673,13 +962,14 @@ func CreateTestOauthAccount(t *testing.T, ctx context.Context, db *testpgx.TestP
 
 // CreateTestOauthAccountWithDefaults creates a test OauthAccount with auto-created FK dependencies.
 // FK dependencies whose parent table is outside this generation batch are required as parameters.
-func CreateTestOauthAccountWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) oauthaccounts.OauthAccount {
+// Optional overrides apply to the OauthAccount row itself, not its parents.
+func CreateTestOauthAccountWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX, overrides ...map[string]any) oauthaccounts.OauthAccount {
 	t.Helper()
 
 	parentUserIDParent := CreateTestUserWithDefaults(t, ctx, db)
 	parentUserID := parentUserIDParent.UserID
 
-	return CreateTestOauthAccount(t, ctx, db, parentUserID)
+	return CreateTestOauthAccount(t, ctx, db, parentUserID, overrides...)
 }
 
 // =============================================================================
@@ -687,8 +977,11 @@ func CreateTestOauthAccountWithDefaults(t *testing.T, ctx context.Context, db *t
 // =============================================================================
 
 // CreateTestRebacRelationship creates a test RebacRelationship with valid test data via direct SQL INSERT.
-// Bypasses the repository layer for test isolation.
-func CreateTestRebacRelationship(t *testing.T, ctx context.Context, db *testpgx.TestPGX) rebacrelationships.RebacRelationship {
+// Bypasses the repository layer for test isolation. Optional overrides
+// replace the generated default for the named insert columns — e.g.
+// seeding a credential row whose hash must match a real token. Overriding
+// the primary key or an unknown column fails the test.
+func CreateTestRebacRelationship(t *testing.T, ctx context.Context, db *testpgx.TestPGX, overrides ...map[string]any) rebacrelationships.RebacRelationship {
 	t.Helper()
 	require.NotNil(t, db)
 
@@ -700,19 +993,43 @@ func CreateTestRebacRelationship(t *testing.T, ctx context.Context, db *testpgx.
 	relationshipID, err := cryptids.GenerateID()
 	require.NoError(t, err)
 
+	args := []any{
+		relationshipID,
+		"test_resource_type",
+		"test_resource_id_" + testUniqueID[:8],
+		"test_relation_" + testUniqueID[:8],
+		"test_subject_type",
+		"test_subject_id_" + testUniqueID[:8],
+		conversion.Ptr("test_subject_relation"),
+	}
+	for _, ov := range overrides {
+		for col, val := range ov {
+			switch col {
+			case "relationship_id":
+				t.Fatalf("CreateTestRebacRelationship: the primary key %q cannot be overridden — it drives the fixture's read-back", col)
+			case "resource_type":
+				args[1] = val
+			case "resource_id":
+				args[2] = val
+			case "relation":
+				args[3] = val
+			case "subject_type":
+				args[4] = val
+			case "subject_id":
+				args[5] = val
+			case "subject_relation":
+				args[6] = val
+			default:
+				t.Fatalf("CreateTestRebacRelationship: unknown override column %q (insert columns: relationship_id, resource_type, resource_id, relation, subject_type, subject_id, subject_relation)", col)
+			}
+		}
+	}
+
 	// Insert directly via SQL (bypassing repository for test isolation).
 	_, err = db.Pool.Exec(ctx, `
 		INSERT INTO rebac_relationships (relationship_id, resource_type, resource_id, relation, subject_type, subject_id, subject_relation)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`,
-		relationshipID,
-		"test_resource_type",
-		"test_resource_id_"+testUniqueID[:8],
-		"test_relation_"+testUniqueID[:8],
-		"test_subject_type",
-		"test_subject_id_"+testUniqueID[:8],
-		conversion.Ptr("test_subject_relation"),
-	)
+	`, args...)
 	require.NoError(t, err, "failed to insert RebacRelationship")
 
 	// Retrieve the created record.
@@ -738,10 +1055,11 @@ func CreateTestRebacRelationship(t *testing.T, ctx context.Context, db *testpgx.
 
 // CreateTestRebacRelationshipWithDefaults creates a test RebacRelationship with auto-created FK dependencies.
 // FK dependencies whose parent table is outside this generation batch are required as parameters.
-func CreateTestRebacRelationshipWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) rebacrelationships.RebacRelationship {
+// Optional overrides apply to the RebacRelationship row itself, not its parents.
+func CreateTestRebacRelationshipWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX, overrides ...map[string]any) rebacrelationships.RebacRelationship {
 	t.Helper()
 
-	return CreateTestRebacRelationship(t, ctx, db)
+	return CreateTestRebacRelationship(t, ctx, db, overrides...)
 }
 
 // =============================================================================
@@ -749,8 +1067,11 @@ func CreateTestRebacRelationshipWithDefaults(t *testing.T, ctx context.Context, 
 // =============================================================================
 
 // CreateTestRebacRelationshipMetadata creates a test RebacRelationshipMetadata with valid test data via direct SQL INSERT.
-// Bypasses the repository layer for test isolation.
-func CreateTestRebacRelationshipMetadata(t *testing.T, ctx context.Context, db *testpgx.TestPGX, relationshipID string) rebacrelationshipmetadata.RebacRelationshipMetadata {
+// Bypasses the repository layer for test isolation. Optional overrides
+// replace the generated default for the named insert columns — e.g.
+// seeding a credential row whose hash must match a real token. Overriding
+// the primary key or an unknown column fails the test.
+func CreateTestRebacRelationshipMetadata(t *testing.T, ctx context.Context, db *testpgx.TestPGX, relationshipID string, overrides ...map[string]any) rebacrelationshipmetadata.RebacRelationshipMetadata {
 	t.Helper()
 	require.NotNil(t, db)
 
@@ -761,14 +1082,28 @@ func CreateTestRebacRelationshipMetadata(t *testing.T, ctx context.Context, db *
 	require.NoError(t, err)
 	_ = testUniqueID
 
+	args := []any{
+		relationshipID,
+		json.RawMessage("{}"),
+	}
+	for _, ov := range overrides {
+		for col, val := range ov {
+			switch col {
+			case "relationship_id":
+				t.Fatalf("CreateTestRebacRelationshipMetadata: the primary key %q cannot be overridden — it drives the fixture's read-back", col)
+			case "metadata":
+				args[1] = val
+			default:
+				t.Fatalf("CreateTestRebacRelationshipMetadata: unknown override column %q (insert columns: relationship_id, metadata)", col)
+			}
+		}
+	}
+
 	// Insert directly via SQL (bypassing repository for test isolation).
 	_, err = db.Pool.Exec(ctx, `
 		INSERT INTO rebac_relationship_metadata (relationship_id, metadata)
 		VALUES ($1, $2)
-	`,
-		relationshipID,
-		json.RawMessage("{}"),
-	)
+	`, args...)
 	require.NoError(t, err, "failed to insert RebacRelationshipMetadata")
 
 	// Retrieve the created record.
@@ -790,13 +1125,14 @@ func CreateTestRebacRelationshipMetadata(t *testing.T, ctx context.Context, db *
 
 // CreateTestRebacRelationshipMetadataWithDefaults creates a test RebacRelationshipMetadata with auto-created FK dependencies.
 // FK dependencies whose parent table is outside this generation batch are required as parameters.
-func CreateTestRebacRelationshipMetadataWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) rebacrelationshipmetadata.RebacRelationshipMetadata {
+// Optional overrides apply to the RebacRelationshipMetadata row itself, not its parents.
+func CreateTestRebacRelationshipMetadataWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX, overrides ...map[string]any) rebacrelationshipmetadata.RebacRelationshipMetadata {
 	t.Helper()
 
 	relationshipIDParent := CreateTestRebacRelationshipWithDefaults(t, ctx, db)
 	relationshipID := relationshipIDParent.RelationshipID
 
-	return CreateTestRebacRelationshipMetadata(t, ctx, db, relationshipID)
+	return CreateTestRebacRelationshipMetadata(t, ctx, db, relationshipID, overrides...)
 }
 
 // =============================================================================
@@ -804,8 +1140,11 @@ func CreateTestRebacRelationshipMetadataWithDefaults(t *testing.T, ctx context.C
 // =============================================================================
 
 // CreateTestSecurityEvent creates a test SecurityEvent with valid test data via direct SQL INSERT.
-// Bypasses the repository layer for test isolation.
-func CreateTestSecurityEvent(t *testing.T, ctx context.Context, db *testpgx.TestPGX, userID string) securityevents.SecurityEvent {
+// Bypasses the repository layer for test isolation. Optional overrides
+// replace the generated default for the named insert columns — e.g.
+// seeding a credential row whose hash must match a real token. Overriding
+// the primary key or an unknown column fails the test.
+func CreateTestSecurityEvent(t *testing.T, ctx context.Context, db *testpgx.TestPGX, userID string, overrides ...map[string]any) securityevents.SecurityEvent {
 	t.Helper()
 	require.NotNil(t, db)
 
@@ -819,11 +1158,7 @@ func CreateTestSecurityEvent(t *testing.T, ctx context.Context, db *testpgx.Test
 	eventID, err := cryptids.GenerateID()
 	require.NoError(t, err)
 
-	// Insert directly via SQL (bypassing repository for test isolation).
-	_, err = db.Pool.Exec(ctx, `
-		INSERT INTO security_events (event_id, user_id, event_type, event_status, event_details, ip_address, user_agent)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`,
+	args := []any{
 		eventID,
 		userID,
 		"test_event_type",
@@ -831,7 +1166,35 @@ func CreateTestSecurityEvent(t *testing.T, ctx context.Context, db *testpgx.Test
 		conversion.Ptr(json.RawMessage("{}")),
 		conversion.Ptr("test_ip_address"),
 		conversion.Ptr("test_user_agent"),
-	)
+	}
+	for _, ov := range overrides {
+		for col, val := range ov {
+			switch col {
+			case "event_id":
+				t.Fatalf("CreateTestSecurityEvent: the primary key %q cannot be overridden — it drives the fixture's read-back", col)
+			case "user_id":
+				args[1] = val
+			case "event_type":
+				args[2] = val
+			case "event_status":
+				args[3] = val
+			case "event_details":
+				args[4] = val
+			case "ip_address":
+				args[5] = val
+			case "user_agent":
+				args[6] = val
+			default:
+				t.Fatalf("CreateTestSecurityEvent: unknown override column %q (insert columns: event_id, user_id, event_type, event_status, event_details, ip_address, user_agent)", col)
+			}
+		}
+	}
+
+	// Insert directly via SQL (bypassing repository for test isolation).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO security_events (event_id, user_id, event_type, event_status, event_details, ip_address, user_agent)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, args...)
 	require.NoError(t, err, "failed to insert SecurityEvent")
 
 	// Retrieve the created record.
@@ -857,13 +1220,14 @@ func CreateTestSecurityEvent(t *testing.T, ctx context.Context, db *testpgx.Test
 
 // CreateTestSecurityEventWithDefaults creates a test SecurityEvent with auto-created FK dependencies.
 // FK dependencies whose parent table is outside this generation batch are required as parameters.
-func CreateTestSecurityEventWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) securityevents.SecurityEvent {
+// Optional overrides apply to the SecurityEvent row itself, not its parents.
+func CreateTestSecurityEventWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX, overrides ...map[string]any) securityevents.SecurityEvent {
 	t.Helper()
 
 	userIDParent := CreateTestUserWithDefaults(t, ctx, db)
 	userID := userIDParent.UserID
 
-	return CreateTestSecurityEvent(t, ctx, db, userID)
+	return CreateTestSecurityEvent(t, ctx, db, userID, overrides...)
 }
 
 // =============================================================================
@@ -871,8 +1235,11 @@ func CreateTestSecurityEventWithDefaults(t *testing.T, ctx context.Context, db *
 // =============================================================================
 
 // CreateTestSession creates a test Session with valid test data via direct SQL INSERT.
-// Bypasses the repository layer for test isolation.
-func CreateTestSession(t *testing.T, ctx context.Context, db *testpgx.TestPGX, parentUserID string) sessions.Session {
+// Bypasses the repository layer for test isolation. Optional overrides
+// replace the generated default for the named insert columns — e.g.
+// seeding a credential row whose hash must match a real token. Overriding
+// the primary key or an unknown column fails the test.
+func CreateTestSession(t *testing.T, ctx context.Context, db *testpgx.TestPGX, parentUserID string, overrides ...map[string]any) sessions.Session {
 	t.Helper()
 	require.NotNil(t, db)
 
@@ -886,23 +1253,55 @@ func CreateTestSession(t *testing.T, ctx context.Context, db *testpgx.TestPGX, p
 	sessionID, err := cryptids.GenerateID()
 	require.NoError(t, err)
 
-	// Insert directly via SQL (bypassing repository for test isolation).
-	_, err = db.Pool.Exec(ctx, `
-		INSERT INTO sessions (session_id, parent_user_id, session_token_hash, refresh_token_hash, rotation_count, last_rotation_at, previous_refresh_token_hash, expires_at, last_used_at, user_agent, ip_address)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-	`,
+	args := []any{
 		sessionID,
 		parentUserID,
-		"test_session_token_hash_"+testUniqueID[:8],
+		"test_session_token_hash_" + testUniqueID[:8],
 		conversion.Ptr("test_refresh_token_hash"),
 		conversion.Ptr(0),
 		conversion.Ptr(time.Now().UTC()),
 		conversion.Ptr("test_previous_refresh_token_hash"),
-		time.Now().UTC(),
+		time.Now().UTC().Add(24 * time.Hour),
 		time.Now().UTC(),
 		conversion.Ptr("test_user_agent"),
 		conversion.Ptr("test_ip_address"),
-	)
+	}
+	for _, ov := range overrides {
+		for col, val := range ov {
+			switch col {
+			case "session_id":
+				t.Fatalf("CreateTestSession: the primary key %q cannot be overridden — it drives the fixture's read-back", col)
+			case "parent_user_id":
+				args[1] = val
+			case "session_token_hash":
+				args[2] = val
+			case "refresh_token_hash":
+				args[3] = val
+			case "rotation_count":
+				args[4] = val
+			case "last_rotation_at":
+				args[5] = val
+			case "previous_refresh_token_hash":
+				args[6] = val
+			case "expires_at":
+				args[7] = val
+			case "last_used_at":
+				args[8] = val
+			case "user_agent":
+				args[9] = val
+			case "ip_address":
+				args[10] = val
+			default:
+				t.Fatalf("CreateTestSession: unknown override column %q (insert columns: session_id, parent_user_id, session_token_hash, refresh_token_hash, rotation_count, last_rotation_at, previous_refresh_token_hash, expires_at, last_used_at, user_agent, ip_address)", col)
+			}
+		}
+	}
+
+	// Insert directly via SQL (bypassing repository for test isolation).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO sessions (session_id, parent_user_id, session_token_hash, refresh_token_hash, rotation_count, last_rotation_at, previous_refresh_token_hash, expires_at, last_used_at, user_agent, ip_address)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+	`, args...)
 	require.NoError(t, err, "failed to insert Session")
 
 	// Retrieve the created record.
@@ -933,13 +1332,14 @@ func CreateTestSession(t *testing.T, ctx context.Context, db *testpgx.TestPGX, p
 
 // CreateTestSessionWithDefaults creates a test Session with auto-created FK dependencies.
 // FK dependencies whose parent table is outside this generation batch are required as parameters.
-func CreateTestSessionWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) sessions.Session {
+// Optional overrides apply to the Session row itself, not its parents.
+func CreateTestSessionWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX, overrides ...map[string]any) sessions.Session {
 	t.Helper()
 
 	parentUserIDParent := CreateTestUserWithDefaults(t, ctx, db)
 	parentUserID := parentUserIDParent.UserID
 
-	return CreateTestSession(t, ctx, db, parentUserID)
+	return CreateTestSession(t, ctx, db, parentUserID, overrides...)
 }
 
 // =============================================================================
@@ -947,8 +1347,11 @@ func CreateTestSessionWithDefaults(t *testing.T, ctx context.Context, db *testpg
 // =============================================================================
 
 // CreateTestTenant creates a test Tenant with valid test data via direct SQL INSERT.
-// Bypasses the repository layer for test isolation.
-func CreateTestTenant(t *testing.T, ctx context.Context, db *testpgx.TestPGX, creatorPrincipalID string) tenants.Tenant {
+// Bypasses the repository layer for test isolation. Optional overrides
+// replace the generated default for the named insert columns — e.g.
+// seeding a credential row whose hash must match a real token. Overriding
+// the primary key or an unknown column fails the test.
+func CreateTestTenant(t *testing.T, ctx context.Context, db *testpgx.TestPGX, creatorPrincipalID string, overrides ...map[string]any) tenants.Tenant {
 	t.Helper()
 	require.NotNil(t, db)
 
@@ -962,18 +1365,40 @@ func CreateTestTenant(t *testing.T, ctx context.Context, db *testpgx.TestPGX, cr
 	tenantID, err := cryptids.GenerateID()
 	require.NoError(t, err)
 
+	args := []any{
+		tenantID,
+		"test_name_" + testUniqueID[:8],
+		"test_slug_" + testUniqueID[:8],
+		conversion.Ptr("test_description"),
+		creatorPrincipalID,
+		"active",
+	}
+	for _, ov := range overrides {
+		for col, val := range ov {
+			switch col {
+			case "tenant_id":
+				t.Fatalf("CreateTestTenant: the primary key %q cannot be overridden — it drives the fixture's read-back", col)
+			case "name":
+				args[1] = val
+			case "slug":
+				args[2] = val
+			case "description":
+				args[3] = val
+			case "creator_principal_id":
+				args[4] = val
+			case "record_state":
+				args[5] = val
+			default:
+				t.Fatalf("CreateTestTenant: unknown override column %q (insert columns: tenant_id, name, slug, description, creator_principal_id, record_state)", col)
+			}
+		}
+	}
+
 	// Insert directly via SQL (bypassing repository for test isolation).
 	_, err = db.Pool.Exec(ctx, `
 		INSERT INTO tenants (tenant_id, name, slug, description, creator_principal_id, record_state)
 		VALUES ($1, $2, $3, $4, $5, $6)
-	`,
-		tenantID,
-		"test_name_"+testUniqueID[:8],
-		"test_slug_"+testUniqueID[:8],
-		conversion.Ptr("test_description"),
-		creatorPrincipalID,
-		"active",
-	)
+	`, args...)
 	require.NoError(t, err, "failed to insert Tenant")
 
 	// Retrieve the created record.
@@ -999,13 +1424,14 @@ func CreateTestTenant(t *testing.T, ctx context.Context, db *testpgx.TestPGX, cr
 
 // CreateTestTenantWithDefaults creates a test Tenant with auto-created FK dependencies.
 // FK dependencies whose parent table is outside this generation batch are required as parameters.
-func CreateTestTenantWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) tenants.Tenant {
+// Optional overrides apply to the Tenant row itself, not its parents.
+func CreateTestTenantWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX, overrides ...map[string]any) tenants.Tenant {
 	t.Helper()
 
 	creatorPrincipalIDParent := CreateTestPrincipalWithDefaults(t, ctx, db)
 	creatorPrincipalID := creatorPrincipalIDParent.PrincipalID
 
-	return CreateTestTenant(t, ctx, db, creatorPrincipalID)
+	return CreateTestTenant(t, ctx, db, creatorPrincipalID, overrides...)
 }
 
 // =============================================================================
@@ -1013,8 +1439,11 @@ func CreateTestTenantWithDefaults(t *testing.T, ctx context.Context, db *testpgx
 // =============================================================================
 
 // CreateTestUserPassword creates a test UserPassword with valid test data via direct SQL INSERT.
-// Bypasses the repository layer for test isolation.
-func CreateTestUserPassword(t *testing.T, ctx context.Context, db *testpgx.TestPGX, userID string) userpasswords.UserPassword {
+// Bypasses the repository layer for test isolation. Optional overrides
+// replace the generated default for the named insert columns — e.g.
+// seeding a credential row whose hash must match a real token. Overriding
+// the primary key or an unknown column fails the test.
+func CreateTestUserPassword(t *testing.T, ctx context.Context, db *testpgx.TestPGX, userID string, overrides ...map[string]any) userpasswords.UserPassword {
 	t.Helper()
 	require.NotNil(t, db)
 
@@ -1025,16 +1454,34 @@ func CreateTestUserPassword(t *testing.T, ctx context.Context, db *testpgx.TestP
 	require.NoError(t, err)
 	_ = testUniqueID
 
+	args := []any{
+		userID,
+		"test_password_hash_" + testUniqueID[:8],
+		time.Now().UTC(),
+		false,
+	}
+	for _, ov := range overrides {
+		for col, val := range ov {
+			switch col {
+			case "user_id":
+				t.Fatalf("CreateTestUserPassword: the primary key %q cannot be overridden — it drives the fixture's read-back", col)
+			case "password_hash":
+				args[1] = val
+			case "password_changed_at":
+				args[2] = val
+			case "password_verified":
+				args[3] = val
+			default:
+				t.Fatalf("CreateTestUserPassword: unknown override column %q (insert columns: user_id, password_hash, password_changed_at, password_verified)", col)
+			}
+		}
+	}
+
 	// Insert directly via SQL (bypassing repository for test isolation).
 	_, err = db.Pool.Exec(ctx, `
 		INSERT INTO user_passwords (user_id, password_hash, password_changed_at, password_verified)
 		VALUES ($1, $2, $3, $4)
-	`,
-		userID,
-		"test_password_hash_"+testUniqueID[:8],
-		time.Now().UTC(),
-		false,
-	)
+	`, args...)
 	require.NoError(t, err, "failed to insert UserPassword")
 
 	// Retrieve the created record.
@@ -1058,13 +1505,14 @@ func CreateTestUserPassword(t *testing.T, ctx context.Context, db *testpgx.TestP
 
 // CreateTestUserPasswordWithDefaults creates a test UserPassword with auto-created FK dependencies.
 // FK dependencies whose parent table is outside this generation batch are required as parameters.
-func CreateTestUserPasswordWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) userpasswords.UserPassword {
+// Optional overrides apply to the UserPassword row itself, not its parents.
+func CreateTestUserPasswordWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX, overrides ...map[string]any) userpasswords.UserPassword {
 	t.Helper()
 
 	userIDParent := CreateTestUserWithDefaults(t, ctx, db)
 	userID := userIDParent.UserID
 
-	return CreateTestUserPassword(t, ctx, db, userID)
+	return CreateTestUserPassword(t, ctx, db, userID, overrides...)
 }
 
 // =============================================================================
@@ -1072,8 +1520,11 @@ func CreateTestUserPasswordWithDefaults(t *testing.T, ctx context.Context, db *t
 // =============================================================================
 
 // CreateTestVerificationCode creates a test VerificationCode with valid test data via direct SQL INSERT.
-// Bypasses the repository layer for test isolation.
-func CreateTestVerificationCode(t *testing.T, ctx context.Context, db *testpgx.TestPGX, userID string) verificationcodes.VerificationCode {
+// Bypasses the repository layer for test isolation. Optional overrides
+// replace the generated default for the named insert columns — e.g.
+// seeding a credential row whose hash must match a real token. Overriding
+// the primary key or an unknown column fails the test.
+func CreateTestVerificationCode(t *testing.T, ctx context.Context, db *testpgx.TestPGX, userID string, overrides ...map[string]any) verificationcodes.VerificationCode {
 	t.Helper()
 	require.NotNil(t, db)
 
@@ -1087,20 +1538,46 @@ func CreateTestVerificationCode(t *testing.T, ctx context.Context, db *testpgx.T
 	codeID, err := cryptids.GenerateID()
 	require.NoError(t, err)
 
+	args := []any{
+		codeID,
+		"test_identifier_" + testUniqueID[:8],
+		"test_code_hash_" + testUniqueID[:8],
+		"test_purpose_" + testUniqueID[:8],
+		userID,
+		conversion.Ptr(json.RawMessage("{}")),
+		0,
+		time.Now().UTC().Add(24 * time.Hour),
+	}
+	for _, ov := range overrides {
+		for col, val := range ov {
+			switch col {
+			case "code_id":
+				t.Fatalf("CreateTestVerificationCode: the primary key %q cannot be overridden — it drives the fixture's read-back", col)
+			case "identifier":
+				args[1] = val
+			case "code_hash":
+				args[2] = val
+			case "purpose":
+				args[3] = val
+			case "user_id":
+				args[4] = val
+			case "data":
+				args[5] = val
+			case "attempt_count":
+				args[6] = val
+			case "expires_at":
+				args[7] = val
+			default:
+				t.Fatalf("CreateTestVerificationCode: unknown override column %q (insert columns: code_id, identifier, code_hash, purpose, user_id, data, attempt_count, expires_at)", col)
+			}
+		}
+	}
+
 	// Insert directly via SQL (bypassing repository for test isolation).
 	_, err = db.Pool.Exec(ctx, `
 		INSERT INTO verification_codes (code_id, identifier, code_hash, purpose, user_id, data, attempt_count, expires_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`,
-		codeID,
-		"test_identifier_"+testUniqueID[:8],
-		"test_code_hash_"+testUniqueID[:8],
-		"test_purpose_"+testUniqueID[:8],
-		userID,
-		conversion.Ptr(json.RawMessage("{}")),
-		0,
-		time.Now().UTC(),
-	)
+	`, args...)
 	require.NoError(t, err, "failed to insert VerificationCode")
 
 	// Retrieve the created record.
@@ -1127,13 +1604,14 @@ func CreateTestVerificationCode(t *testing.T, ctx context.Context, db *testpgx.T
 
 // CreateTestVerificationCodeWithDefaults creates a test VerificationCode with auto-created FK dependencies.
 // FK dependencies whose parent table is outside this generation batch are required as parameters.
-func CreateTestVerificationCodeWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) verificationcodes.VerificationCode {
+// Optional overrides apply to the VerificationCode row itself, not its parents.
+func CreateTestVerificationCodeWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX, overrides ...map[string]any) verificationcodes.VerificationCode {
 	t.Helper()
 
 	userIDParent := CreateTestUserWithDefaults(t, ctx, db)
 	userID := userIDParent.UserID
 
-	return CreateTestVerificationCode(t, ctx, db, userID)
+	return CreateTestVerificationCode(t, ctx, db, userID, overrides...)
 }
 
 // =============================================================================
@@ -1141,8 +1619,11 @@ func CreateTestVerificationCodeWithDefaults(t *testing.T, ctx context.Context, d
 // =============================================================================
 
 // CreateTestVerificationToken creates a test VerificationToken with valid test data via direct SQL INSERT.
-// Bypasses the repository layer for test isolation.
-func CreateTestVerificationToken(t *testing.T, ctx context.Context, db *testpgx.TestPGX, userID string) verificationtokens.VerificationToken {
+// Bypasses the repository layer for test isolation. Optional overrides
+// replace the generated default for the named insert columns — e.g.
+// seeding a credential row whose hash must match a real token. Overriding
+// the primary key or an unknown column fails the test.
+func CreateTestVerificationToken(t *testing.T, ctx context.Context, db *testpgx.TestPGX, userID string, overrides ...map[string]any) verificationtokens.VerificationToken {
 	t.Helper()
 	require.NotNil(t, db)
 
@@ -1156,18 +1637,40 @@ func CreateTestVerificationToken(t *testing.T, ctx context.Context, db *testpgx.
 	tokenID, err := cryptids.GenerateID()
 	require.NoError(t, err)
 
+	args := []any{
+		tokenID,
+		"test_token_hash_" + testUniqueID[:8],
+		"test_purpose_" + testUniqueID[:8],
+		"test_identifier_" + testUniqueID[:8],
+		userID,
+		time.Now().UTC().Add(24 * time.Hour),
+	}
+	for _, ov := range overrides {
+		for col, val := range ov {
+			switch col {
+			case "token_id":
+				t.Fatalf("CreateTestVerificationToken: the primary key %q cannot be overridden — it drives the fixture's read-back", col)
+			case "token_hash":
+				args[1] = val
+			case "purpose":
+				args[2] = val
+			case "identifier":
+				args[3] = val
+			case "user_id":
+				args[4] = val
+			case "expires_at":
+				args[5] = val
+			default:
+				t.Fatalf("CreateTestVerificationToken: unknown override column %q (insert columns: token_id, token_hash, purpose, identifier, user_id, expires_at)", col)
+			}
+		}
+	}
+
 	// Insert directly via SQL (bypassing repository for test isolation).
 	_, err = db.Pool.Exec(ctx, `
 		INSERT INTO verification_tokens (token_id, token_hash, purpose, identifier, user_id, expires_at)
 		VALUES ($1, $2, $3, $4, $5, $6)
-	`,
-		tokenID,
-		"test_token_hash_"+testUniqueID[:8],
-		"test_purpose_"+testUniqueID[:8],
-		"test_identifier_"+testUniqueID[:8],
-		userID,
-		time.Now().UTC(),
-	)
+	`, args...)
 	require.NoError(t, err, "failed to insert VerificationToken")
 
 	// Retrieve the created record.
@@ -1192,11 +1695,12 @@ func CreateTestVerificationToken(t *testing.T, ctx context.Context, db *testpgx.
 
 // CreateTestVerificationTokenWithDefaults creates a test VerificationToken with auto-created FK dependencies.
 // FK dependencies whose parent table is outside this generation batch are required as parameters.
-func CreateTestVerificationTokenWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX) verificationtokens.VerificationToken {
+// Optional overrides apply to the VerificationToken row itself, not its parents.
+func CreateTestVerificationTokenWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX, overrides ...map[string]any) verificationtokens.VerificationToken {
 	t.Helper()
 
 	userIDParent := CreateTestUserWithDefaults(t, ctx, db)
 	userID := userIDParent.UserID
 
-	return CreateTestVerificationToken(t, ctx, db, userID)
+	return CreateTestVerificationToken(t, ctx, db, userID, overrides...)
 }

@@ -20,6 +20,15 @@ func generateToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
+// HashToken returns the canonical hash the engine applies to bearer
+// credentials (session tokens, API keys) before storage and lookup.
+// Exported so test harnesses can seed credential rows the engine will
+// actually match — a private re-implementation in tests would drift
+// silently if the algorithm ever changed.
+func HashToken(token string) (string, error) {
+	return hashToken(token)
+}
+
 // hashToken returns the SHA256 hash of a token as a hex string.
 // Returns an error for empty input to prevent accidental hash-of-nothing comparisons.
 func hashToken(token string) (string, error) {

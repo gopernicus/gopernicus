@@ -460,7 +460,10 @@ func GenerateSpecFixtures(data FixtureTemplateData, fixtureDir string, opts Opti
 // specEncodeTimeDefaults rewrites time-typed insert defaults to go through
 // the dialect's TimeArg encoding. Binding a raw time.Time stores Go's
 // String() rendering in TEXT columns, which crud's scanner rejects; the
-// stores themselves encode via timeAware, fixtures must match. InsertFields
+// stores themselves encode via timeAware, fixtures must match. The original
+// time expression is preserved inside the TimeArg wrap (a future-expiry
+// default must stay in the future), with any conversion.Ptr unwrapped —
+// TimeArg takes a value and INSERT args are []any either way. InsertFields
 // is deep-copied first — multi-homed entities share backing arrays with the
 // pgx fixture list.
 func specEncodeTimeDefaults(entities []FixtureEntity) {
@@ -469,7 +472,11 @@ func specEncodeTimeDefaults(entities []FixtureEntity) {
 		copy(fields, entities[i].InsertFields)
 		for j, f := range fields {
 			if strings.Contains(f.TestDefault, "time.Now()") {
-				fields[j].TestDefault = "db.Dialect().TimeArg(time.Now().UTC())"
+				inner := f.TestDefault
+				if unwrapped, ok := strings.CutPrefix(inner, "conversion.Ptr("); ok {
+					inner = strings.TrimSuffix(unwrapped, ")")
+				}
+				fields[j].TestDefault = "db.Dialect().TimeArg(" + inner + ")"
 			}
 		}
 		entities[i].InsertFields = fields
@@ -689,12 +696,28 @@ func columnToFixture(col schema.ColumnInfo) FixtureField {
 	return ff
 }
 
+// tombstoneTimeColumns are nullable time columns whose non-NULL value marks
+// the row as dead (revoked, deleted, …). The generic fixture used to fill
+// them like any nullable column, producing rows tombstoned at birth —
+// credentials that can never authenticate, records that read as deleted.
+// Fixtures represent live rows; tombstones default to NULL.
+var tombstoneTimeColumns = map[string]bool{
+	"revoked_at":  true,
+	"deleted_at":  true,
+	"archived_at": true,
+	"disabled_at": true,
+	"removed_at":  true,
+}
+
 func testDefaultForField(f FixtureField) string {
 	dbName := strings.ToLower(f.DBName)
 
 	// Handle nullable pointer types.
 	if f.IsNullable && strings.HasPrefix(f.GoType, "*") {
 		innerType := f.GoType[1:]
+		if innerType == "time.Time" && tombstoneTimeColumns[dbName] {
+			return "nil"
+		}
 		switch innerType {
 		case "string":
 			return fmt.Sprintf(`conversion.Ptr("test_%s")`, dbName)
@@ -705,6 +728,11 @@ func testDefaultForField(f FixtureField) string {
 		case "float64":
 			return "conversion.Ptr(0.0)"
 		case "time.Time":
+			// Expiry columns must be in the future — a fixture row expired
+			// at birth can never authenticate or validate.
+			if strings.HasSuffix(dbName, "expires_at") {
+				return "conversion.Ptr(time.Now().UTC().Add(24 * time.Hour))"
+			}
 			return "conversion.Ptr(time.Now().UTC())"
 		case "json.RawMessage":
 			// Postgres rejects empty bytes as invalid JSON; emit `{}` so the
@@ -755,6 +783,9 @@ func testDefaultForField(f FixtureField) string {
 	case "float64":
 		return "0.0"
 	case "time.Time":
+		if strings.HasSuffix(dbName, "expires_at") {
+			return "time.Now().UTC().Add(24 * time.Hour)"
+		}
 		return "time.Now().UTC()"
 	case "[]byte":
 		return `[]byte("test")`
