@@ -242,6 +242,97 @@ func TestFixtureDefaultOverridesEmittedSpecMode(t *testing.T) {
 	}
 }
 
+// credentialResolved builds a sessions-shaped entity: hash + expiry +
+// tombstone columns, the shape the authenticated e2e stack seeds.
+func credentialResolved() *ResolvedFile {
+	return &ResolvedFile{
+		Table:       &schema.TableInfo{TableName: "sessions"},
+		EntityName:  "Session",
+		EntityLower: "session",
+		TableName:   "sessions",
+		PackageName: "sessions",
+		DomainName:  "auth",
+		PKColumn:    "session_id",
+		PKGoName:    "SessionID",
+		PKGoType:    "string",
+		AllColumns: []schema.ColumnInfo{
+			{Name: "session_id", DBType: "text", GoType: "string", IsPrimaryKey: true},
+			{Name: "session_token_hash", DBType: "text", GoType: "string"},
+			{Name: "expires_at", DBType: "timestamptz", GoType: "time.Time", GoImport: "time"},
+			{Name: "revoked_at", DBType: "timestamptz", GoType: "*time.Time", GoImport: "time", IsNullable: true},
+		},
+	}
+}
+
+// Fixture rows must be live at birth: expiry columns default to the future
+// and tombstone columns (revoked_at and friends) default to NULL — the old
+// defaults produced credentials expired and revoked at creation.
+func TestFixtureLiveCredentialDefaults(t *testing.T) {
+	entity := BuildFixtureEntity(credentialResolved(), "example.com/app")
+
+	defaults := map[string]string{}
+	for _, f := range entity.InsertFields {
+		defaults[f.DBName] = f.TestDefault
+	}
+	if got := defaults["expires_at"]; !strings.Contains(got, "Add(24 * time.Hour)") {
+		t.Errorf("expires_at default = %q, want future time", got)
+	}
+	if got := defaults["revoked_at"]; got != "nil" {
+		t.Errorf("revoked_at default = %q, want nil (tombstones stay NULL)", got)
+	}
+}
+
+// Spec-mode TimeArg encoding must preserve the time expression — wholesale
+// replacement used to silently turn a future expiry back into now().
+func TestSpecEncodeTimeDefaultsPreservesExpression(t *testing.T) {
+	entities := []FixtureEntity{BuildFixtureEntity(credentialResolved(), "example.com/app")}
+	specEncodeTimeDefaults(entities)
+
+	for _, f := range entities[0].InsertFields {
+		if f.DBName == "expires_at" {
+			want := "db.Dialect().TimeArg(time.Now().UTC().Add(24 * time.Hour))"
+			if f.TestDefault != want {
+				t.Errorf("spec expires_at = %q, want %q", f.TestDefault, want)
+			}
+		}
+		if f.DBName == "revoked_at" && f.TestDefault != "nil" {
+			t.Errorf("spec revoked_at = %q, want nil untouched", f.TestDefault)
+		}
+	}
+}
+
+// The generated fixture accepts per-call column overrides (variadic, so
+// existing call sites compile unchanged): override cases for every insert
+// column, a fail-loud unknown-column default, and a PK guard.
+func TestFixtureOverridesEmitted(t *testing.T) {
+	dir := t.TempDir()
+	data := FixtureTemplateData{
+		ModulePath: "example.com/app",
+		Entities:   []FixtureEntity{BuildFixtureEntity(credentialResolved(), "example.com/app")},
+	}
+	if err := GenerateFixtures(data, dir, Options{}); err != nil {
+		t.Fatalf("GenerateFixtures: %v", err)
+	}
+
+	out, err := os.ReadFile(filepath.Join(dir, "generated.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(out)
+
+	for _, want := range []string{
+		"overrides ...map[string]any",
+		`case "session_token_hash":`,
+		"unknown override column",
+		`the primary key %q cannot be overridden`,
+		"CreateTestSession(t, ctx, db, overrides...)",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("generated fixture missing %q", want)
+		}
+	}
+}
+
 // Without a principals entity in the batch, the fallback is "user" — the
 // first value the framework-shipped principals_type_check allows.
 func TestPrincipalInheritanceFixtureFallsBackToUser(t *testing.T) {

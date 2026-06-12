@@ -20,12 +20,31 @@ Releases are tag-only: `git tag -a vX.Y.Z && git push origin vX.Y.Z`.
   when a file's template has since changed. The hash covers the template,
   never the file — your edits to bootstraps don't count as drift.
 
+- Authenticated e2e groundwork (phase A): generated fixtures accept
+  per-call column overrides (`CreateTestX(t, ctx, db, …,
+  map[string]any{"col": v})` — variadic, existing call sites compile
+  unchanged; unknown columns and the PK fail loud);
+  `authentication.HashToken` is exported so harnesses seed credential
+  rows the engine will match; `testauth.AuthenticatorWithRepositories`
+  wires the real database-backed authentication modes.
+
+### Fixed
+- Generated fixture defaults now produce live rows: `*expires_at` columns
+  default 24h in the future (was `now()` — expired at birth) and
+  tombstone columns (`revoked_at`, `deleted_at`, `archived_at`,
+  `disabled_at`, `removed_at`) default NULL (was a non-NULL timestamp —
+  revoked at birth). Spec-mode TimeArg encoding preserves the time
+  expression instead of replacing it wholesale.
+
 ### Consumer actions
 - [ ] None required. Scripts may now gate on
       `go tool gopernicus doctor --json | jq -e '.ok'`.
 - [ ] Existing bootstrap files have no markers and are reported as a
       pre-marker count, not warnings; they start tracking when refreshed
       or newly created.
+- [ ] Regenerate. If any hand-written test relied on fixture rows being
+      expired/revoked at creation, it now needs an explicit override
+      (e.g. `map[string]any{"expires_at": time.Now()}`).
 
 ## v0.3.5 — 2026-06-11
 

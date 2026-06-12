@@ -37,8 +37,11 @@ var (
 // =============================================================================
 
 // CreateTest{{$e.EntityName}} creates a test {{$e.EntityName}} with valid test data via direct SQL INSERT.
-// Bypasses the repository layer for test isolation.
-func CreateTest{{$e.EntityName}}(t *testing.T, ctx context.Context, db *{{if $.SpecMode}}testsqlite.TestSQLite{{else}}testpgx.TestPGX{{end}}{{range nonSelfRefParents $e.ParentFixtures}}, {{.VarName}} string{{end}}) {{$e.RepoPkg}}.{{$e.EntityName}} {
+// Bypasses the repository layer for test isolation. Optional overrides
+// replace the generated default for the named insert columns — e.g.
+// seeding a credential row whose hash must match a real token. Overriding
+// the primary key or an unknown column fails the test.
+func CreateTest{{$e.EntityName}}(t *testing.T, ctx context.Context, db *{{if $.SpecMode}}testsqlite.TestSQLite{{else}}testpgx.TestPGX{{end}}{{range nonSelfRefParents $e.ParentFixtures}}, {{.VarName}} string{{end}}, overrides ...map[string]any) {{$e.RepoPkg}}.{{$e.EntityName}} {
 	t.Helper()
 	require.NotNil(t, db)
 {{range nonSelfRefParents $e.ParentFixtures}}
@@ -61,15 +64,34 @@ func CreateTest{{$e.EntityName}}(t *testing.T, ctx context.Context, db *{{if $.S
 	` + "`" + `, {{camel $e.PKColumn}}, {{$e.PrincipalTypeValue}})
 	require.NoError(t, err, "failed to insert principal for {{$e.EntityName}}")
 {{end}}
+	args := []any{
+		{{- range $e.InsertFields}}
+		{{.TestDefault}},
+		{{- end}}
+	}
+	for _, ov := range overrides {
+		for col, val := range ov {
+			switch col {
+			{{- range $i, $f := $e.InsertFields}}
+			{{- if eq $f.DBName $e.PKColumn}}
+			case "{{$f.DBName}}":
+				t.Fatalf("CreateTest{{$e.EntityName}}: the primary key %q cannot be overridden — it drives the fixture's read-back", col)
+			{{- else}}
+			case "{{$f.DBName}}":
+				args[{{$i}}] = val
+			{{- end}}
+			{{- end}}
+			default:
+				t.Fatalf("CreateTest{{$e.EntityName}}: unknown override column %q (insert columns: {{insertCols $e.InsertFields}})", col)
+			}
+		}
+	}
+
 	// Insert directly via SQL (bypassing repository for test isolation).
 	_, err = db.{{if $.SpecMode}}DB{{else}}Pool{{end}}.Exec(ctx, ` + "`" + `
 		INSERT INTO {{$e.TableName}} ({{insertCols $e.InsertFields}})
 		VALUES ({{if $.SpecMode}}{{questionArgs (len $e.InsertFields)}}{{else}}{{positionalArgs (len $e.InsertFields)}}{{end}})
-	` + "`" + `,
-		{{- range $e.InsertFields}}
-		{{.TestDefault}},
-		{{- end}}
-	)
+	` + "`" + `, args...)
 	require.NoError(t, err, "failed to insert {{$e.EntityName}}")
 
 {{if $.SpecMode}}	// Retrieve the created record through the dialect-aware scanner —
@@ -100,13 +122,14 @@ func CreateTest{{$e.EntityName}}(t *testing.T, ctx context.Context, db *{{if $.S
 
 // CreateTest{{$e.EntityName}}WithDefaults creates a test {{$e.EntityName}} with auto-created FK dependencies.
 // FK dependencies whose parent table is outside this generation batch are required as parameters.
-func CreateTest{{$e.EntityName}}WithDefaults(t *testing.T, ctx context.Context, db *{{if $.SpecMode}}testsqlite.TestSQLite{{else}}testpgx.TestPGX{{end}}{{range $e.AllExternalParams}}, {{.VarName}} string{{end}}) {{$e.RepoPkg}}.{{$e.EntityName}} {
+// Optional overrides apply to the {{$e.EntityName}} row itself, not its parents.
+func CreateTest{{$e.EntityName}}WithDefaults(t *testing.T, ctx context.Context, db *{{if $.SpecMode}}testsqlite.TestSQLite{{else}}testpgx.TestPGX{{end}}{{range $e.AllExternalParams}}, {{.VarName}} string{{end}}, overrides ...map[string]any) {{$e.RepoPkg}}.{{$e.EntityName}} {
 	t.Helper()
 {{range inBatchParents $e.ParentFixtures}}
 	{{.VarName}}Parent := CreateTest{{.EntityName}}WithDefaults(t, ctx, db{{range .ForwardParams}}, {{.VarName}}{{end}})
 	{{.VarName}} := {{.VarName}}Parent.{{.PKGoName}}
 {{end}}
-	return CreateTest{{$e.EntityName}}(t, ctx, db{{range nonSelfRefParents $e.ParentFixtures}}, {{.VarName}}{{end}})
+	return CreateTest{{$e.EntityName}}(t, ctx, db{{range nonSelfRefParents $e.ParentFixtures}}, {{.VarName}}{{end}}, overrides...)
 }
 {{end}}`
 

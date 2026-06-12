@@ -35,6 +35,28 @@ func Authenticator(name string) (*authentication.Authenticator, *golangjwt.Signe
 	return auth, signer
 }
 
+// AuthenticatorWithRepositories returns an authenticator over real
+// repositories, for harnesses that exercise the database-backed
+// authentication modes — user sessions and API keys — where a seeded
+// credential row must be looked up for real. Pair with the generated
+// fixtures' column overrides and authentication.HashToken to seed rows
+// the engine will match:
+//
+//	token := testauth.MintAccessToken(signer, user.UserID)
+//	hash, _ := authentication.HashToken(token)
+//	fixtures.CreateTestSession(t, ctx, db, user.UserID,
+//		map[string]any{"session_token_hash": hash})
+func AuthenticatorWithRepositories(name string, repos authentication.Repositories) (*authentication.Authenticator, *golangjwt.Signer) {
+	signer, err := golangjwt.NewSigner(testSecret)
+	if err != nil {
+		panic("testauth: build signer: " + err.Error())
+	}
+	auth := authentication.NewAuthenticator(name, repos, nil, signer, nil, authentication.Config{
+		AccessTokenExpiry: time.Hour,
+	})
+	return auth, signer
+}
+
 // MintAccessToken signs a valid access token carrying the given user id —
 // the claim AuthenticateJWT reads. Use distinct ids to act as different
 // principals in isolation tests.
