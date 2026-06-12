@@ -10,6 +10,15 @@ Releases are tag-only: `git tag -a vX.Y.Z && git push origin vX.Y.Z`.
 
 ## Unreleased
 
+### Added
+- Parity audit (v0.5 item 3): every engine port ↔ satisfier pair verified
+  — all 11 ports have satisfiers with compile-time assertions, and all
+  mappings populate their engine structs completely. A new
+  AST-based guard (TestSatisfierMappingsPopulateEngineStructs) pins it:
+  when an engine struct gains a field, every satisfier mapping must
+  populate it or explicitly ignore it with a reason — the invitations
+  RedirectURL half-shipped-feature class can no longer recur silently.
+
 ### Fixed
 - `init --features=authentication` (without authorization) scaffolded a
   non-compiling project — generated bridges wire both engines
