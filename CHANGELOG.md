@@ -8,6 +8,37 @@ assume is documented in
 
 Releases are tag-only: `git tag -a vX.Y.Z && git push origin vX.Y.Z`.
 
+## Unreleased
+
+### Added
+- **Generated TypeScript client** (v0.5 item 1): `gopernicus generate`
+  emits `workshop/clients/typescript/` when gopernicus.yml carries a
+  `clients: { typescript: {} }` section (absent → nothing changes).
+  Fetch-based and dependency-free: per-bridge namespaces
+  (`client.tenants.list(...)`), entity/request interfaces generated
+  losslessly from bridge data (enum literal unions, `| null`
+  nullability, optional markers from required-ness), typed error
+  throwing (`ApiError` with the closed error-code union), cursor
+  pagination options plus a `paginate` async iterator, bearer-token
+  auth. `client.ts` is the created-once customization seam
+  (marker-tracked); `tsconfig.json` ships for standalone typechecks.
+  Hand-written routes are not modeled — extend the bootstrap class.
+- CI gains a `tsclient-typecheck` job: strict `tsc --noEmit` over the
+  framework's own generated client.
+
+### Fixed
+- Shipped rebac spec: `DeleteAllForResource` and
+  `DeleteByResourceAndSubject` are bulk deletes — zero matching rows is
+  success (`@check_rows: false`). Previously, hard-deleting any entity
+  with no relationships 500'd ("delete auth relationships … not found")
+  whenever auth was enabled. Found by the TS client acceptance run
+  against a live stack; the in-memory test store never errored.
+
+### Consumer actions
+- [ ] Opt in by adding `clients:\n    typescript: {}` to gopernicus.yml
+      and regenerating; point your frontend at
+      `workshop/clients/typescript` (compile it in your own build).
+
 ## v0.4.1 — 2026-06-12
 
 ### Fixed

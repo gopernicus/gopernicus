@@ -928,7 +928,10 @@ LIMIT $limit
 ;
 
 -- @func: DeleteAllForResource
--- Hard-deletes all relationships for a resource (called on resource deletion).
+-- Hard-deletes all relationships for a resource (called on resource
+-- deletion). Zero matches is success — an entity with no relationships
+-- must still hard-delete cleanly.
+-- @check_rows: false
 DELETE FROM rebac_relationships
 WHERE resource_type = @resource_type
   AND resource_id = @resource_id
@@ -946,6 +949,8 @@ WHERE resource_type = @resource_type
 
 -- @func: DeleteByResourceAndSubject
 -- Removes all relations a subject holds on a specific resource (e.g., unassign all roles from a user on a resource).
+-- Zero matches is success: bulk removal is idempotent.
+-- @check_rows: false
 DELETE FROM rebac_relationships
 WHERE resource_type = @resource_type
   AND resource_id = @resource_id

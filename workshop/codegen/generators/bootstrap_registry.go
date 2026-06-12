@@ -36,6 +36,7 @@ var bootstrapTemplates = map[string]string{
 	"integrationtest/store_test.go":    integrationTestBootstrapTemplate,
 	"bridge-e2e/e2e_test.go":           bridgeE2EBootstrapTemplate,
 	"bridge-security/security_test.go": bridgeSecurityBootstrapTemplate,
+	"tsclient/client.ts":               tsClientBootstrapTemplate,
 }
 
 // BootstrapTemplateHash returns the content hash of the registered template
