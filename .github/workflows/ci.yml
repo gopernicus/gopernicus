@@ -91,4 +91,4 @@ jobs:
           node-version: 22
 
       - name: Typecheck generated TypeScript client
-        run: npx -y typescript@5.6.3 tsc --noEmit -p workshop/clients/typescript
+        run: npm exec -y --package=typescript@5.6.3 -- tsc --noEmit -p workshop/clients/typescript
