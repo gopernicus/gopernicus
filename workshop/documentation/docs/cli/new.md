@@ -1,14 +1,15 @@
 # gopernicus new
 
-Scaffold new repositories, use cases, and infrastructure adapters from templates or reflected database schemas.
+Scaffold new repositories, use cases, infrastructure adapters, and deploy profiles from templates or reflected database schemas.
 
 ## Overview
 
-`gopernicus new` has three subcommands:
+`gopernicus new` has four subcommands:
 
 - `gopernicus new repo` -- scaffold a repository from reflected schema.
 - `gopernicus new case` -- scaffold a use case with core logic and HTTP bridge.
 - `gopernicus new adapter` -- scaffold a custom infrastructure adapter implementing a framework interface.
+- `gopernicus new deploy` -- emit a deploy profile (runbook + pipeline files) for a hosting target.
 
 ---
 
@@ -275,3 +276,30 @@ go test ./infrastructure/cache/redis/...
 - [boot](boot.md) -- batch-scaffold all repos for a domain
 - [db](db.md) -- reflect schema before scaffolding repos
 - [init](init.md) -- initial project setup
+
+---
+
+## gopernicus new deploy
+
+Emit a deploy profile for one hosting target: a runbook plus the pipeline
+files that ship the app there.
+
+```bash
+gopernicus new deploy do-app      # DigitalOcean App Platform
+gopernicus new deploy cloud-run   # Google Cloud Run
+```
+
+| Target | Style | Files |
+|---|---|---|
+| `do-app` | CI-driven | `.github/workflows/deploy-<app>-do.yml` (tag-triggered: ghcr build → migrate as release step → DO app refresh), `workshop/deploy/do-app/app-spec.yaml`, README runbook |
+| `cloud-run` | make-driven | `workshop/deploy/cloud-run/makefile.cloud-run` (`cloud-bootstrap` / `cloud-build` / `cloud-migrate` / `cloud-deploy` / `cloud-ship` / `cloud-url` / `cloud-logs`; include it from the root Makefile), README runbook |
+
+Everything emitted is a **created-once bootstrap with a drift marker** —
+you own the files after emission; re-running skips existing files.
+Profiles never modify existing files: they reference the dockerfile init
+emitted (`workshop/docker/dockerfile.<app>`) and document any required
+tweaks in their README. Emitting a second target adds a sibling directory
+under `workshop/deploy/`.
+
+See the [deployment topic](../gopernicus/topics/deployment.md) for the
+probe contract and the production migration policy the profiles embody.

@@ -312,23 +312,34 @@ func checkBootstrapDrift(root string) check {
 			}
 			return nil
 		}
-		if !basenames[d.Name()] || !strings.HasSuffix(d.Name(), ".go") {
-			return nil
-		}
 		rel, _ := filepath.Rel(root, path)
-		if !strings.HasPrefix(rel, "core"+string(filepath.Separator)) &&
-			!strings.HasPrefix(rel, "bridge"+string(filepath.Separator)) &&
-			!strings.HasPrefix(rel, filepath.Join("workshop", "testing")+string(filepath.Separator)) {
-			return nil
+
+		// Deploy profile files (workshop/deploy/, .github/workflows/) are
+		// non-Go bootstraps with app-specific names — any file there that
+		// carries a marker is tracked; unmarked files are the user's own.
+		deployFile := strings.HasPrefix(rel, filepath.Join("workshop", "deploy")+string(filepath.Separator)) ||
+			strings.HasPrefix(rel, filepath.Join(".github", "workflows")+string(filepath.Separator))
+
+		if !deployFile {
+			if !basenames[d.Name()] || !strings.HasSuffix(d.Name(), ".go") {
+				return nil
+			}
+			if !strings.HasPrefix(rel, "core"+string(filepath.Separator)) &&
+				!strings.HasPrefix(rel, "bridge"+string(filepath.Separator)) &&
+				!strings.HasPrefix(rel, filepath.Join("workshop", "testing")+string(filepath.Separator)) {
+				return nil
+			}
 		}
 
-		firstLine, rerr := readFirstLine(path)
+		firstLine, rerr := readMarkerLine(path)
 		if rerr != nil {
 			return nil
 		}
 		kind, hash, ok := generators.ParseBootstrapMarker(firstLine)
 		if !ok {
-			unmarked++
+			if !deployFile {
+				unmarked++
+			}
 			return nil
 		}
 		current, known := generators.BootstrapTemplateHash(kind)
@@ -365,8 +376,10 @@ func checkBootstrapDrift(root string) check {
 	return check{name: name, passed: true, detail: detail}
 }
 
-// readFirstLine returns the first line of a file without reading the rest.
-func readFirstLine(path string) (string, error) {
+// readMarkerLine returns the line a bootstrap marker would occupy: the
+// first line, or the second when the file opens with a shebang (shell
+// bootstraps keep `#!` on line 1).
+func readMarkerLine(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
@@ -374,7 +387,11 @@ func readFirstLine(path string) (string, error) {
 	defer f.Close()
 	scanner := bufio.NewScanner(f)
 	if scanner.Scan() {
-		return scanner.Text(), nil
+		line := scanner.Text()
+		if strings.HasPrefix(line, "#!") && scanner.Scan() {
+			return scanner.Text(), nil
+		}
+		return line, nil
 	}
 	return "", scanner.Err()
 }

@@ -8,6 +8,40 @@ assume is documented in
 
 Releases are tag-only: `git tag -a vX.Y.Z && git push origin vX.Y.Z`.
 
+## Unreleased
+
+### Added
+- **Deploy profiles**: `gopernicus new deploy <target>` emits a runbook +
+  pipeline files under `workshop/deploy/<target>/` (workflows under
+  `.github/workflows/`). Targets: `do-app` (DigitalOcean App Platform —
+  tag-triggered workflow generalizing segovia's production pipeline:
+  tag-on-main guard, ghcr build with BUILD_REF/BUILD_DATE, migrations as
+  a release step via the pinned tool, `app_action` refresh — plus a
+  reference app spec) and `cloud-run` (Google Cloud Run — make targets
+  generalizing bluemark-redirector's flow: `cloud-bootstrap`/`cloud-build`/
+  `cloud-migrate`/`cloud-deploy`/`cloud-ship`/`cloud-url`/`cloud-logs`,
+  included from the root Makefile). Everything emitted is created-once
+  with a drift marker; profiles never modify existing files.
+- **Probe contract**: scaffolded servers expose `/readyz` (readiness —
+  pings the database, 503 on outage) alongside `/healthz` (liveness —
+  dependency-free, now reports the running `build` ref). Load balancers
+  route on readyz; restart checks stay on healthz.
+- Drift markers extended to non-Go files: `#` style for
+  yaml/makefile/shell (shebang-aware), `<!-- -->` for markdown; doctor
+  tracks markers under `workshop/deploy/` and `.github/workflows/`.
+- Docs: new `topics/deployment.md` (targets, probe contract, version
+  stamping, migrate-as-release-step policy); `cli/new.md` covers
+  `new deploy`.
+
+### Consumer actions
+- Optional — existing projects' bootstrap files are never overwritten:
+  - Run `go tool gopernicus new deploy do-app` and/or `cloud-run` to
+    emit pipelines for an existing app.
+  - To adopt the probe contract, copy the `/healthz` + `/readyz` block
+    from a fresh scaffold's `app/server/config/server.go` (segovia and
+    other pre-existing apps keep working without it; deploy runbooks
+    assume the endpoints exist).
+
 ## v0.5.3 — 2026-06-12
 
 ### Added
