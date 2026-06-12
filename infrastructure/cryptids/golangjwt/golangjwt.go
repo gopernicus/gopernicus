@@ -81,12 +81,16 @@ func (s *Signer) Verify(tokenString string) (map[string]any, error) {
 		return nil, fmt.Errorf("golangjwt: token cannot be empty")
 	}
 
+	// WithStrictDecoding rejects non-canonical base64url segments. The
+	// lenient default ignores a final character's unused padding bits, so
+	// textually distinct tokens (e.g. signature ending 'U' vs 'X') decode
+	// to the same MAC and all verify — token malleability.
 	token, err := gojwt.Parse(tokenString, func(token *gojwt.Token) (any, error) {
 		if _, ok := token.Method.(*gojwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 		return s.secret, nil
-	})
+	}, gojwt.WithStrictDecoding())
 	if err != nil {
 		return nil, fmt.Errorf("golangjwt: %w", err)
 	}
