@@ -21,6 +21,7 @@ func fixtureDefaultsSchema() *schema.ReflectedSchema {
 		{Name: "version", DBType: "integer", GoType: "int"},
 		{Name: "weight", DBType: "double precision", GoType: "float64"},
 		{Name: "rotated_at", DBType: "timestamptz", GoType: "time.Time", GoImport: "time"},
+		{Name: "expires_at", DBType: "timestamptz", GoType: "*time.Time", GoImport: "time", IsNullable: true},
 	}
 	return &schema.ReflectedSchema{
 		SchemaName: "public",
@@ -109,6 +110,31 @@ func TestResolveFixtureDefaults_Errors(t *testing.T) {
 				t.Errorf("error %q does not mention %q", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+// The bare token `null` pins nullable columns of any type — including time —
+// to SQL NULL; NOT NULL columns reject it. This is the answer to CHECK
+// constraints with an IS NULL branch (tenant_secrets_payload_check requires
+// external_ref IS NULL when backend='db').
+func TestResolveFixtureDefaults_Null(t *testing.T) {
+	resolved, err := resolveWithFixtureDefaults(t, "note null", "expires_at null")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	for _, col := range []string{"note", "expires_at"} {
+		if resolved.FixtureDefaults[col] != "null" {
+			t.Errorf("FixtureDefaults[%s] = %q, want %q", col, resolved.FixtureDefaults[col], "null")
+		}
+	}
+
+	for _, entry := range []string{"kind null", "rotated_at null", "payload null"} {
+		_, err := resolveWithFixtureDefaults(t, entry)
+		if err == nil {
+			t.Errorf("expected NOT NULL rejection for %q", entry)
+		} else if !strings.Contains(err.Error(), "NOT NULL") {
+			t.Errorf("error %q for %q does not mention NOT NULL", err, entry)
+		}
 	}
 }
 

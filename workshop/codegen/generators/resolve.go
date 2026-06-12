@@ -405,6 +405,19 @@ func resolveFixtureDefaults(entries []string, table *schema.TableInfo, colMap ma
 			return nil, fmt.Errorf("column %q is a foreign key — FK values come from parent fixture wiring", column)
 		}
 
+		// The bare token `null` pins a nullable column to SQL NULL — the
+		// answer to CHECK constraints requiring a column's absence (e.g.
+		// tenant_secrets_payload_check's `external_ref IS NULL` branch).
+		// Checked before the type switch so nullable columns of any type,
+		// including time, can be nulled.
+		if value == "null" {
+			if !col.IsNullable {
+				return nil, fmt.Errorf("column %q is NOT NULL — `null` overrides need a nullable column", column)
+			}
+			defaults[column] = value
+			continue
+		}
+
 		goType := strings.TrimPrefix(col.GoType, "*")
 		switch goType {
 		case "string":

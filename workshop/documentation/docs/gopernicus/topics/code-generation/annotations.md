@@ -52,7 +52,8 @@ Before reaching for the opt-out, check whether `@fixture-default` (below) solves
 Overrides the generated test fixture's value for one column. Repeatable — one column per line. The answer to arbitrary CHECK constraints the generic fixture can't satisfy (cross-column predicates, JSON shape requirements): supply a value that does, and the generated smoke tests keep running.
 
 ```sql
--- @fixture-default: payload {"backend":"db","ciphertext":"dGVzdA=="}
+-- @fixture-default: external_ref null
+-- @fixture-default: settings {"theme":"dark"}
 -- @fixture-default: kind entity
 ```
 
@@ -65,8 +66,11 @@ Grammar: `@fixture-default: <column> <value>` — everything after the first spa
 | bool | Must be `true` or `false`, emitted verbatim |
 | int / float | Type-checked, emitted verbatim |
 | nullable (pointer) | Value wrapped in `conversion.Ptr(...)` |
+| any nullable column | The bare token `null` pins the column to SQL NULL |
 
-An unknown column, an unparseable value, or an attempt to override a primary key, foreign key, or time column is a hard generation error naming the file — fail loud, never a silently wrong fixture. FK values always come from parent fixture wiring; PKs are generated uniquely per test row.
+`null` is the answer to CHECK constraints with an `IS NULL` branch — e.g. a `backend = 'db' AND ciphertext IS NOT NULL AND external_ref IS NULL` predicate fails against the generic fixture precisely because it fills every nullable column; `@fixture-default: external_ref null` satisfies it. (A nullable string column can't carry the literal value `"null"` as a result — an acceptable trade.)
+
+An unknown column, an unparseable value, or an attempt to override a primary key, foreign key, or (non-`null`) time column is a hard generation error naming the file — fail loud, never a silently wrong fixture. FK values always come from parent fixture wiring; PKs are generated uniquely per test row.
 
 General CHECK-constraint evaluation is explicitly not the goal — author-supplied values are. If no fixed per-column value can satisfy the invariant (e.g. mutually exclusive nullable FK groups), fall back to `@skip-integration-test`.
 

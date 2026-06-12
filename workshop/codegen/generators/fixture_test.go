@@ -159,6 +159,60 @@ func TestFixtureDefaultOverridesEmitted(t *testing.T) {
 	}
 }
 
+// A `null` override emits nil — the tenant_secrets_payload_check shape:
+// the generic fixture fills nullable external_ref with a Ptr value,
+// violating the CHECK's `external_ref IS NULL` branch.
+func TestFixtureDefaultNullEmitsNil(t *testing.T) {
+	resolved := &ResolvedFile{
+		Table:       &schema.TableInfo{TableName: "tenant_secrets"},
+		EntityName:  "TenantSecret",
+		EntityLower: "tenantsecret",
+		TableName:   "tenant_secrets",
+		PackageName: "tenantsecrets",
+		DomainName:  "tenancy",
+		PKColumn:    "secret_key",
+		PKGoName:    "SecretKey",
+		PKGoType:    "string",
+		AllColumns: []schema.ColumnInfo{
+			{Name: "secret_key", DBType: "varchar", GoType: "string", IsPrimaryKey: true},
+			{Name: "backend", DBType: "varchar", GoType: "string", IsEnum: true,
+				EnumValues: []string{"db", "gcp_kms", "gcp_secret_manager"}},
+			{Name: "ciphertext", DBType: "text", GoType: "*string", IsNullable: true},
+			{Name: "external_ref", DBType: "varchar", GoType: "*string", IsNullable: true},
+		},
+		FixtureDefaults: map[string]string{"external_ref": "null"},
+	}
+
+	dir := t.TempDir()
+	data := FixtureTemplateData{
+		ModulePath: "example.com/app",
+		Entities:   []FixtureEntity{BuildFixtureEntity(resolved, "example.com/app")},
+	}
+	if err := GenerateFixtures(data, dir, Options{}); err != nil {
+		t.Fatalf("GenerateFixtures: %v", err)
+	}
+
+	out, err := os.ReadFile(filepath.Join(dir, "generated.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(out)
+
+	if strings.Contains(content, `conversion.Ptr("test_external_ref`) {
+		t.Error("generic Ptr default must not survive a null override")
+	}
+	if !strings.Contains(content, `"db"`) {
+		t.Error("backend should keep its enum default")
+	}
+	if !strings.Contains(content, `conversion.Ptr("test_ciphertext`) {
+		t.Error("ciphertext should keep its generic nullable default")
+	}
+	// The insert args line carries the nil: ..., ciphertextPtr, nil)
+	if !strings.Contains(content, "nil)") && !strings.Contains(content, "nil,") {
+		t.Error("expected nil in the insert args for external_ref")
+	}
+}
+
 // Spec-mode fixtures share BuildFixtureEntity, so overrides must carry
 // through GenerateSpecFixtures unchanged.
 func TestFixtureDefaultOverridesEmittedSpecMode(t *testing.T) {
