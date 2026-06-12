@@ -139,6 +139,30 @@ func TestVerify(t *testing.T) {
 			t.Fatal("expected error for tampered token")
 		}
 	})
+
+	// A 43-char base64url HS256 signature's final character carries only 4
+	// significant bits; a lenient decoder ignores its low 2 padding bits, so
+	// setting one yields a textually distinct token with the same MAC. This
+	// made the tampered-token test flaky (whenever the signature ended 'U',
+	// the 'X' replacement still verified) and is token malleability —
+	// WithStrictDecoding must reject the non-canonical encoding.
+	t.Run("padding-bit malleability rejected", func(t *testing.T) {
+		const b64url = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+		token, _ := s.Sign(map[string]any{}, time.Now().Add(time.Hour))
+		idx := strings.IndexByte(b64url, token[len(token)-1])
+		if idx < 0 {
+			t.Fatalf("last token char %q not in base64url alphabet", token[len(token)-1])
+		}
+		// Canonical encodings end with zero padding bits, so idx|1 always
+		// differs from idx and changes only padding bits.
+		mutated := token[:len(token)-1] + string(b64url[idx|1])
+		if mutated == token {
+			t.Fatal("mutation produced an identical token — encoder emitted non-canonical padding bits")
+		}
+		if _, err := s.Verify(mutated); err == nil {
+			t.Fatal("expected error for non-canonical signature encoding (padding-bit malleability)")
+		}
+	})
 }
 
 func BenchmarkSign(b *testing.B) {
