@@ -36,6 +36,7 @@ func copyFeatureAssets(target, modulePath, projectName, fwVersion string, featur
 		{"tenancy", "0003_tenants.sql"},
 		{"event-outbox", "0004_event_outbox.sql"},
 		{"job-queue", "0005_job_queue.sql"},
+		{"job-queue", "0006_job_schedules.sql"},
 	}
 
 	for _, mig := range migrations {

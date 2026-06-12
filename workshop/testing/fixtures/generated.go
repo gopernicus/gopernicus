@@ -18,6 +18,7 @@ import (
 	"github.com/gopernicus/gopernicus/core/repositories/auth/verificationtokens"
 	"github.com/gopernicus/gopernicus/core/repositories/events/eventoutbox"
 	"github.com/gopernicus/gopernicus/core/repositories/jobs/jobqueue"
+	"github.com/gopernicus/gopernicus/core/repositories/jobs/jobschedules"
 	"github.com/gopernicus/gopernicus/core/repositories/rebac/groups"
 	"github.com/gopernicus/gopernicus/core/repositories/rebac/invitations"
 	"github.com/gopernicus/gopernicus/core/repositories/rebac/rebacrelationshipmetadata"
@@ -842,6 +843,105 @@ func CreateTestJobQueueWithDefaults(t *testing.T, ctx context.Context, db *testp
 	t.Helper()
 
 	return CreateTestJobQueue(t, ctx, db, overrides...)
+}
+
+// =============================================================================
+// JobSchedule
+// =============================================================================
+
+// CreateTestJobSchedule creates a test JobSchedule with valid test data via direct SQL INSERT.
+// Bypasses the repository layer for test isolation. Optional overrides
+// replace the generated default for the named insert columns — e.g.
+// seeding a credential row whose hash must match a real token. Overriding
+// the primary key or an unknown column fails the test.
+func CreateTestJobSchedule(t *testing.T, ctx context.Context, db *testpgx.TestPGX, overrides ...map[string]any) jobschedules.JobSchedule {
+	t.Helper()
+	require.NotNil(t, db)
+
+	// Generate unique ID for unique field values.
+	testUniqueID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+	_ = testUniqueID
+
+	scheduleID, err := cryptids.GenerateID()
+	require.NoError(t, err)
+
+	args := []any{
+		scheduleID,
+		"test_name_" + testUniqueID[:8],
+		"test_event_type",
+		"test_cron_expr_" + testUniqueID[:8],
+		json.RawMessage("{}"),
+		false,
+		time.Now().UTC(),
+		conversion.Ptr(time.Now().UTC()),
+		conversion.Ptr("test_last_job_id"),
+	}
+	for _, ov := range overrides {
+		for col, val := range ov {
+			switch col {
+			case "schedule_id":
+				t.Fatalf("CreateTestJobSchedule: the primary key %q cannot be overridden — it drives the fixture's read-back", col)
+			case "name":
+				args[1] = val
+			case "event_type":
+				args[2] = val
+			case "cron_expr":
+				args[3] = val
+			case "payload":
+				args[4] = val
+			case "enabled":
+				args[5] = val
+			case "next_run_at":
+				args[6] = val
+			case "last_run_at":
+				args[7] = val
+			case "last_job_id":
+				args[8] = val
+			default:
+				t.Fatalf("CreateTestJobSchedule: unknown override column %q (insert columns: schedule_id, name, event_type, cron_expr, payload, enabled, next_run_at, last_run_at, last_job_id)", col)
+			}
+		}
+	}
+
+	// Insert directly via SQL (bypassing repository for test isolation).
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO job_schedules (schedule_id, name, event_type, cron_expr, payload, enabled, next_run_at, last_run_at, last_job_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`, args...)
+	require.NoError(t, err, "failed to insert JobSchedule")
+
+	// Retrieve the created record.
+	var entity jobschedules.JobSchedule
+	err = db.Pool.QueryRow(ctx, `
+		SELECT schedule_id, name, event_type, cron_expr, payload, enabled, next_run_at, last_run_at, last_job_id, created_at, updated_at
+		FROM job_schedules
+		WHERE schedule_id = $1
+	`, scheduleID).Scan(
+		&entity.ScheduleID,
+		&entity.Name,
+		&entity.EventType,
+		&entity.CronExpr,
+		&entity.Payload,
+		&entity.Enabled,
+		&entity.NextRunAt,
+		&entity.LastRunAt,
+		&entity.LastJobID,
+		&entity.CreatedAt,
+		&entity.UpdatedAt,
+	)
+	require.NoError(t, err, "failed to retrieve created JobSchedule")
+
+	return entity
+}
+
+// CreateTestJobScheduleWithDefaults creates a test JobSchedule with auto-created FK dependencies.
+// FK dependencies whose parent table is outside this generation batch are required as parameters.
+// Optional overrides apply to the JobSchedule row itself, not its parents.
+func CreateTestJobScheduleWithDefaults(t *testing.T, ctx context.Context, db *testpgx.TestPGX, overrides ...map[string]any) jobschedules.JobSchedule {
+	t.Helper()
+
+	return CreateTestJobSchedule(t, ctx, db, overrides...)
 }
 
 // =============================================================================

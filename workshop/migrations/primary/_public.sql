@@ -1,4 +1,4 @@
--- Schema: gopernicus_db.public  reflected at: 2026-04-30 14:14:06
+-- Schema: gopref.public  reflected at: 2026-06-12 13:17:55
 
 CREATE TABLE public.api_keys (
     api_key_id varchar NOT NULL,
@@ -110,6 +110,24 @@ CREATE TABLE public.job_queue (
 CREATE INDEX idx_job_queue_correlation ON public.job_queue USING btree (correlation_id);
 CREATE INDEX idx_job_queue_pending ON public.job_queue USING btree (scheduled_for, priority DESC, created_at) WHERE (status = 'PENDING'::text);
 CREATE INDEX idx_job_queue_type ON public.job_queue USING btree (event_type, status);
+
+CREATE TABLE public.job_schedules (
+    schedule_id text NOT NULL,
+    name varchar(255) NOT NULL,
+    event_type varchar(255) NOT NULL,
+    cron_expr varchar(255) NOT NULL,
+    payload jsonb NOT NULL DEFAULT {},
+    enabled bool NOT NULL DEFAULT true,
+    next_run_at timestamptz NOT NULL,
+    last_run_at timestamptz,
+    last_job_id text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (schedule_id),
+    CONSTRAINT job_schedules_name_unique UNIQUE (name)
+);
+CREATE INDEX idx_job_schedules_due ON public.job_schedules USING btree (next_run_at) WHERE (enabled = true);
+CREATE UNIQUE INDEX job_schedules_name_unique ON public.job_schedules USING btree (name);
 
 CREATE TABLE public.oauth_accounts (
     oauth_account_id varchar NOT NULL,

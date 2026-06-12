@@ -8,6 +8,44 @@ assume is documented in
 
 Releases are tag-only: `git tag -a vX.Y.Z && git push origin vX.Y.Z`.
 
+## Unreleased
+
+### Added
+- **Recurring jobs (scheduler)**: new `job_schedules` feature entity
+  (rides with the `job-queue` feature — no new flag) + the
+  `core/jobs/scheduler` engine. Cron-defined schedules fire idempotent
+  jobs into `job_queue`; N instances are safe with no leader election
+  (compare-and-set claim on `next_run_at`, deterministic
+  `sched_<id>_<slot>` job ids, DB-clock due-ness). Missed slots fire
+  once (next run computed from now). `EnsureSchedule` upserts by name —
+  idempotent at boot, race-safe across instances. Cron parsing via
+  `robfig/cron/v3` (parser only): standard 5-field + `@hourly`
+  descriptors, UTC.
+- Scaffolded `server.go` now wires the **job worker pool**
+  (`event_type` → handler dispatch via `workers.Runner`) and the
+  **scheduler pool** — both previously missing from the app template.
+  Pools start with the server and drain on shutdown; config under
+  `<APP>_JOBS_*` / `<APP>_SCHEDULER_*` env prefixes.
+- `jobqueue.Repository` now satisfies `workers.JobStore` and
+  `jobschedules.Repository` the scheduler's claim port directly
+  (hand-written passthroughs in the copied bootstrap files), so
+  composition roots wire pools without touching pgx stores.
+- Docs: new topic page `topics/jobs.md` (queue + recurring jobs,
+  delivery semantics, configuration).
+
+### Consumer actions
+- Repin: `go get github.com/gopernicus/gopernicus@v0.5.3 && go mod tidy`
+  (+ `go mod vendor` where vendoring), then `go tool gopernicus generate`.
+- Add `job_schedules` to the `jobs` domain in `gopernicus.yml`
+  (`jobs: [job_queue, job_schedules]`) and copy the
+  `0006_job_schedules.sql` migration from the framework into
+  `workshop/migrations/primary/`, then `go tool gopernicus db migrate`.
+- Existing projects' bootstrap files are never overwritten: to adopt the
+  scheduler, copy the new hand-written pieces from a fresh scaffold (or
+  the framework tree): `core/repositories/jobs/scheduler.go`,
+  `jobschedules/schedule.go`, the `jobschedules`/`jobqueue` repository
+  passthroughs, and the `server.go` jobs wiring block.
+
 ## v0.5.2 — 2026-06-12
 
 ### Added

@@ -1,9 +1,9 @@
 {
   "version": "1.0",
   "source": "postgres",
-  "database": "gopernicus_db",
+  "database": "gopref",
   "schema_name": "public",
-  "reflected_at": "2026-04-30T14:14:06.378425-07:00",
+  "reflected_at": "2026-06-12T13:17:55.554247-07:00",
   "tables": {
     "api_keys": {
       "table_name": "api_keys",
@@ -1097,6 +1097,180 @@
           "definition": "CHECK ((status = ANY (ARRAY['PENDING'::text, 'STAGED'::text, 'COMPLETED'::text, 'FAILED'::text, 'DEAD_LETTER'::text])))",
           "columns": [
             "status"
+          ]
+        }
+      ]
+    },
+    "job_schedules": {
+      "table_name": "job_schedules",
+      "schema": "public",
+      "primary_key": {
+        "column": "schedule_id",
+        "columns": [
+          "schedule_id"
+        ],
+        "db_type": "text",
+        "go_type": "string",
+        "has_default": false
+      },
+      "columns": [
+        {
+          "name": "schedule_id",
+          "db_type": "text",
+          "go_type": "string",
+          "go_import": "",
+          "is_nullable": false,
+          "is_primary_key": true,
+          "is_foreign_key": false,
+          "has_default": false,
+          "validation_tags": "required"
+        },
+        {
+          "name": "name",
+          "db_type": "varchar(255)",
+          "go_type": "string",
+          "go_import": "",
+          "is_nullable": false,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "is_unique": true,
+          "has_default": false,
+          "max_length": 255,
+          "validation_tags": "required,max=255"
+        },
+        {
+          "name": "event_type",
+          "db_type": "varchar(255)",
+          "go_type": "string",
+          "go_import": "",
+          "is_nullable": false,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "has_default": false,
+          "max_length": 255,
+          "validation_tags": "required,max=255"
+        },
+        {
+          "name": "cron_expr",
+          "db_type": "varchar(255)",
+          "go_type": "string",
+          "go_import": "",
+          "is_nullable": false,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "has_default": false,
+          "max_length": 255,
+          "validation_tags": "required,max=255"
+        },
+        {
+          "name": "payload",
+          "db_type": "jsonb",
+          "go_type": "json.RawMessage",
+          "go_import": "encoding/json",
+          "is_nullable": false,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "default_value": "{}",
+          "has_default": true,
+          "validation_tags": "required"
+        },
+        {
+          "name": "enabled",
+          "db_type": "bool",
+          "go_type": "bool",
+          "go_import": "",
+          "is_nullable": false,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "default_value": "true",
+          "has_default": true,
+          "validation_tags": "required"
+        },
+        {
+          "name": "next_run_at",
+          "db_type": "timestamptz",
+          "go_type": "time.Time",
+          "go_import": "time",
+          "is_nullable": false,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "has_default": false,
+          "validation_tags": "required"
+        },
+        {
+          "name": "last_run_at",
+          "db_type": "timestamptz",
+          "go_type": "*time.Time",
+          "go_import": "time",
+          "is_nullable": true,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "has_default": false
+        },
+        {
+          "name": "last_job_id",
+          "db_type": "text",
+          "go_type": "*string",
+          "go_import": "",
+          "is_nullable": true,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "has_default": false
+        },
+        {
+          "name": "created_at",
+          "db_type": "timestamptz",
+          "go_type": "time.Time",
+          "go_import": "time",
+          "is_nullable": false,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "default_value": "now()",
+          "has_default": true,
+          "validation_tags": "required"
+        },
+        {
+          "name": "updated_at",
+          "db_type": "timestamptz",
+          "go_type": "time.Time",
+          "go_import": "time",
+          "is_nullable": false,
+          "is_primary_key": false,
+          "is_foreign_key": false,
+          "default_value": "now()",
+          "has_default": true,
+          "validation_tags": "required"
+        }
+      ],
+      "foreign_keys": null,
+      "indexes": [
+        {
+          "name": "idx_job_schedules_due",
+          "columns": [
+            "next_run_at"
+          ],
+          "unique": false,
+          "method": "btree",
+          "predicate": "(enabled = true)",
+          "definition": "CREATE INDEX idx_job_schedules_due ON public.job_schedules USING btree (next_run_at) WHERE (enabled = true)"
+        },
+        {
+          "name": "job_schedules_name_unique",
+          "columns": [
+            "name"
+          ],
+          "unique": true,
+          "method": "btree",
+          "definition": "CREATE UNIQUE INDEX job_schedules_name_unique ON public.job_schedules USING btree (name)"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "job_schedules_name_unique",
+          "type": "UNIQUE",
+          "definition": "UNIQUE (name)",
+          "columns": [
+            "name"
           ]
         }
       ]
