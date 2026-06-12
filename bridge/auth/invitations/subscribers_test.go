@@ -13,12 +13,12 @@ func TestIsSafeRelativePath(t *testing.T) {
 	}{
 		{"/d/d_campaign_01", true},
 		{"/", true},
-		{"", false},                       // empty falls back to origin root
-		{"dashboard", false},              // no leading slash
-		{"//evil.example", false},       // scheme-relative URL
+		{"", false},                      // empty falls back to origin root
+		{"dashboard", false},             // no leading slash
+		{"//evil.example", false},        // scheme-relative URL
 		{"/path?next=https://ok", false}, // conservative: any embedded "://" is rejected
-		{"https://evil.example", false}, // absolute URL
-		{"/redirect/https://x", false},    // embedded scheme separator
+		{"https://evil.example", false},  // absolute URL
+		{"/redirect/https://x", false},   // embedded scheme separator
 	}
 	for _, c := range cases {
 		if got := isSafeRelativePath(c.path); got != c.want {

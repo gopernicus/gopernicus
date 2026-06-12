@@ -24,9 +24,9 @@ import (
 // ---------------------------------------------------------------------------
 
 type mockUserRepo struct {
-	mu    sync.Mutex
-	users map[string]User       // by ID
-	byEmail map[string]User     // by email
+	mu      sync.Mutex
+	users   map[string]User // by ID
+	byEmail map[string]User // by email
 }
 
 func newMockUserRepo() *mockUserRepo {
@@ -458,14 +458,14 @@ func (b *mockEventBus) Close(_ context.Context) error { return nil }
 // ---------------------------------------------------------------------------
 
 type testHarness struct {
-	auth       *Authenticator
-	users      *mockUserRepo
-	passwords  *mockPasswordRepo
-	sessions   *mockSessionRepo
-	codes      *mockVerificationCodeRepo
-	tokens     *mockVerificationTokenRepo
-	secEvents  *mockSecurityEventRepo
-	bus        *mockEventBus
+	auth      *Authenticator
+	users     *mockUserRepo
+	passwords *mockPasswordRepo
+	sessions  *mockSessionRepo
+	codes     *mockVerificationCodeRepo
+	tokens    *mockVerificationTokenRepo
+	secEvents *mockSecurityEventRepo
+	bus       *mockEventBus
 }
 
 func newTestHarness() *testHarness {

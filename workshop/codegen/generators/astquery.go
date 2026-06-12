@@ -259,10 +259,10 @@ func classifyColumnRef(cr *pgq.ColumnRef, alias string) ASTColumn {
 	}
 
 	return ASTColumn{
-		Name:        name,
-		SourceTable: tableAlias,
-		SourceCol:   colName,
-		NodeType:    "column",
+		Name:         name,
+		SourceTable:  tableAlias,
+		SourceCol:    colName,
+		NodeType:     "column",
 		InferredType: "", // needs schema lookup
 	}
 }

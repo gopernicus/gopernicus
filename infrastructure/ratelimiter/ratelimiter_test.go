@@ -48,7 +48,6 @@ func TestAllow_UsesResolver(t *testing.T) {
 	}
 	resolver := ratelimiter.NewDefaultResolver()
 
-
 	limiter := ratelimiter.New(store, resolver)
 
 	result, err := limiter.Allow(context.Background(), "user:123", ratelimiter.ResolveRequest{

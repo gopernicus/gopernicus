@@ -7,15 +7,15 @@ import (
 
 // AuthSchemaEntity represents a single resource type in the authorization schema.
 type AuthSchemaEntity struct {
-	ResourceType string                  // singular lowercase resource name, e.g. "user"
-	Relations    []AuthSchemaRelation    // sorted by name
-	Permissions  []AuthSchemaPermission  // sorted by name
+	ResourceType string                 // singular lowercase resource name, e.g. "user"
+	Relations    []AuthSchemaRelation   // sorted by name
+	Permissions  []AuthSchemaPermission // sorted by name
 }
 
 // AuthSchemaRelation defines what subjects can hold a relation.
 type AuthSchemaRelation struct {
-	Name            string                  // e.g. "owner", "member"
-	AllowedSubjects []AuthSchemaSubjectRef  // who can hold this relation
+	Name            string                 // e.g. "owner", "member"
+	AllowedSubjects []AuthSchemaSubjectRef // who can hold this relation
 }
 
 // AuthSchemaSubjectRef references a subject type, optionally with a relation.
@@ -26,8 +26,8 @@ type AuthSchemaSubjectRef struct {
 
 // AuthSchemaPermission defines how a permission is computed.
 type AuthSchemaPermission struct {
-	Name   string                 // e.g. "read", "create"
-	Checks []AuthSchemaPermCheck  // OR'd checks
+	Name   string                // e.g. "read", "create"
+	Checks []AuthSchemaPermCheck // OR'd checks
 }
 
 // AuthSchemaPermCheck is a single check in a permission rule.

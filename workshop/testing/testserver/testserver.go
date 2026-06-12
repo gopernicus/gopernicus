@@ -15,9 +15,9 @@ import (
 	"testing"
 
 	"github.com/gopernicus/gopernicus/infrastructure/database/postgres/pgxdb"
+	"github.com/gopernicus/gopernicus/sdk/logger"
 	"github.com/gopernicus/gopernicus/workshop/testing/testpgx"
 	"github.com/gopernicus/gopernicus/workshop/testing/testredis"
-	"github.com/gopernicus/gopernicus/sdk/logger"
 	"github.com/stretchr/testify/require"
 )
 

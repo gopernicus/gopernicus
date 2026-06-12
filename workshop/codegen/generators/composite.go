@@ -26,12 +26,12 @@ type CompositeEntity struct {
 
 // CompositeTemplateData holds all data needed to render domain composite templates.
 type CompositeTemplateData struct {
-	DomainPkg     string            // domain package name, e.g. "auth", "rebac"
-	ModulePath    string            // Go module path (for local imports only)
-	DomainPath    string            // import path segment, e.g. "core/repositories/auth"
-	Entities      []CompositeEntity // sorted by FieldName
-	HasAuth       bool              // true if domain has authorization schema (@auth.relation/@auth.permission annotations)
-	SpecMode      bool              // true when the hosting database uses the spec store mode
+	DomainPkg  string            // domain package name, e.g. "auth", "rebac"
+	ModulePath string            // Go module path (for local imports only)
+	DomainPath string            // import path segment, e.g. "core/repositories/auth"
+	Entities   []CompositeEntity // sorted by FieldName
+	HasAuth    bool              // true if domain has authorization schema (@auth.relation/@auth.permission annotations)
+	SpecMode   bool              // true when the hosting database uses the spec store mode
 
 	// Multi-database rendering controls, set by GenerateDomainComposites for
 	// per-database constructor files. Zero values render the classic
@@ -162,9 +162,9 @@ func GenerateDomainComposites(domainDir string, composites []DBComposite, opts O
 func buildSharedTypesData(composites []DBComposite) compositeSharedTypesData {
 	first := composites[0].Data
 	shared := compositeSharedTypesData{
-		DomainPkg:     first.DomainPkg,
-		ModulePath:    first.ModulePath,
-		DomainPath:    first.DomainPath,
+		DomainPkg:  first.DomainPkg,
+		ModulePath: first.ModulePath,
+		DomainPath: first.DomainPath,
 	}
 
 	dbNames := make([]string, 0, len(composites))

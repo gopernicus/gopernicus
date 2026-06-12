@@ -72,15 +72,15 @@ import (
 //	var cfg authentication.Config
 //	environment.ParseEnvTags("APP", &cfg) // reads APP_ACCESS_TOKEN_EXPIRY, etc.
 type Config struct {
-	AccessTokenExpiry      time.Duration `env:"ACCESS_TOKEN_EXPIRY" default:"30m"`
-	RefreshTokenExpiry     time.Duration `env:"REFRESH_TOKEN_EXPIRY" default:"720h"` // 30 days
-	VerificationCodeExpiry time.Duration `env:"VERIFICATION_CODE_EXPIRY" default:"15m"`
-	PasswordResetExpiry    time.Duration `env:"PASSWORD_RESET_EXPIRY" default:"1h"`
-	OAuthStateExpiry       time.Duration `env:"OAUTH_STATE_EXPIRY" default:"10m"`
-	MaxVerificationAttempts int          `env:"MAX_VERIFICATION_ATTEMPTS" default:"5"`
+	AccessTokenExpiry       time.Duration `env:"ACCESS_TOKEN_EXPIRY" default:"30m"`
+	RefreshTokenExpiry      time.Duration `env:"REFRESH_TOKEN_EXPIRY" default:"720h"` // 30 days
+	VerificationCodeExpiry  time.Duration `env:"VERIFICATION_CODE_EXPIRY" default:"15m"`
+	PasswordResetExpiry     time.Duration `env:"PASSWORD_RESET_EXPIRY" default:"1h"`
+	OAuthStateExpiry        time.Duration `env:"OAUTH_STATE_EXPIRY" default:"10m"`
+	MaxVerificationAttempts int           `env:"MAX_VERIFICATION_ATTEMPTS" default:"5"`
 
 	// JWTIssuer sets the "iss" claim in access tokens. Optional.
-	JWTIssuer   string `env:"JWT_ISSUER"`
+	JWTIssuer string `env:"JWT_ISSUER"`
 	// JWTAudience sets the "aud" claim in access tokens. Optional.
 	JWTAudience string `env:"JWT_AUDIENCE"`
 }

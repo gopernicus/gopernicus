@@ -98,9 +98,9 @@ func TestPostgresRenderList(t *testing.T) {
 
 	for _, want := range []string{
 		`"name" = $1`,
-		`"tags" = ANY($2)`,            // array membership via single array arg (jsonb/array columns ride the same path)
+		`"tags" = ANY($2)`, // array membership via single array arg (jsonb/array columns ride the same path)
 		`"created_at" > $3`,
-		`"id" = ANY($4)`,              // prefilter authorization
+		`"id" = ANY($4)`, // prefilter authorization
 		`"search_vector" @@ websearch_to_tsquery($5::regconfig, $6)`,
 		`ORDER BY "created_at" DESC, "id" DESC`,
 		`LIMIT $7`,
@@ -201,9 +201,9 @@ func TestSQLiteRenderDelta(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		`"tags" IN (?, ?)`,   // expanded placeholders, not array binding
-		`0=1`,                // empty authorized set: constant false, never IN ()
-		`"name" LIKE ?`,      // LIKE, not ILIKE
+		`"tags" IN (?, ?)`, // expanded placeholders, not array binding
+		`0=1`,              // empty authorized set: constant false, never IN ()
+		`"name" LIKE ?`,    // LIKE, not ILIKE
 	} {
 		if !strings.Contains(q.query, want) {
 			t.Errorf("rendered SQL missing %q:\n%s", want, q.query)

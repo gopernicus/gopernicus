@@ -16,11 +16,11 @@ type BridgeCompositeEntity struct {
 
 // BridgeCompositeTemplateData holds all data needed to render bridge composite templates.
 type BridgeCompositeTemplateData struct {
-	CompositePkg  string                  // composite package name, e.g. "authreposbridge"
-	DomainName    string                  // domain name, e.g. "auth"
-	ModulePath    string                  // Go module path (for local imports only)
-	Entities      []BridgeCompositeEntity // sorted by FieldName
-	AuthEnabled   bool                    // true if authentication is enabled
+	CompositePkg string                  // composite package name, e.g. "authreposbridge"
+	DomainName   string                  // domain name, e.g. "auth"
+	ModulePath   string                  // Go module path (for local imports only)
+	Entities     []BridgeCompositeEntity // sorted by FieldName
+	AuthEnabled  bool                    // true if authentication is enabled
 }
 
 // GenerateBridgeComposite produces domain-level bridge composite wiring files.

@@ -507,4 +507,3 @@ func assertParams(t *testing.T, q QueryBlock, expected ...string) {
 		}
 	}
 }
-

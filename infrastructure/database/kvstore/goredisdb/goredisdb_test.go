@@ -37,7 +37,7 @@ func TestIsCacheReadOp(t *testing.T) {
 
 		// Edge cases
 		{"", false},
-		{"get", false},  // Case sensitive - operation should be uppercase
+		{"get", false}, // Case sensitive - operation should be uppercase
 		{"Get", false},
 		{"PING", false},
 	}

@@ -66,8 +66,8 @@ type Runner[T Job] struct {
 // a non-generic config struct and add hooks via methods on Runner.
 type runnerConfig struct {
 	maxAttempts int
-	clock      func() time.Time
-	tracer     Tracer
+	clock       func() time.Time
+	tracer      Tracer
 }
 
 // RunnerOption configures a Runner.
@@ -100,7 +100,7 @@ func NewRunner[T Job](
 ) *Runner[T] {
 	cfg := &runnerConfig{
 		maxAttempts: 3,
-		clock:      func() time.Time { return time.Now().UTC() },
+		clock:       func() time.Time { return time.Now().UTC() },
 	}
 	for _, opt := range opts {
 		opt(cfg)
@@ -113,7 +113,7 @@ func NewRunner[T Job](
 	return &Runner[T]{
 		store:       store,
 		processFunc: processFunc,
-		maxAttempts:  cfg.maxAttempts,
+		maxAttempts: cfg.maxAttempts,
 		clock:       cfg.clock,
 		log:         log,
 		tracer:      cfg.tracer,

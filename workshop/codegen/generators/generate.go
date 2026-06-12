@@ -130,11 +130,11 @@ func emitBridgeComposites(
 	for domain, bridgeEntities := range domainBridgeEntities {
 		compositeDir := BridgeCompositeDir(domain, cfg.ProjectRoot)
 		data := BridgeCompositeTemplateData{
-			CompositePkg:  BridgeCompositePackage(domain),
-			DomainName:    domain,
-			ModulePath:    modulePath,
-			Entities:      bridgeEntities,
-			AuthEnabled:   authEnabled,
+			CompositePkg: BridgeCompositePackage(domain),
+			DomainName:   domain,
+			ModulePath:   modulePath,
+			Entities:     bridgeEntities,
+			AuthEnabled:  authEnabled,
 		}
 		fmt.Printf("\n  %s/ (bridge composite)\n", BridgeCompositePackage(domain))
 		if err := GenerateBridgeComposite(data, compositeDir, opts); err != nil {
@@ -158,8 +158,8 @@ func emitFixtures(pgxEntities, specEntities []FixtureEntity, projectRoot, module
 	if len(pgxEntities) > 0 {
 		fixtureDir := filepath.Join(projectRoot, "workshop", "testing", "fixtures")
 		data := FixtureTemplateData{
-			ModulePath:    modulePath,
-			Entities:      pgxEntities,
+			ModulePath: modulePath,
+			Entities:   pgxEntities,
 		}
 		fmt.Printf("\n  fixtures/ (test fixtures)\n")
 		if err := GenerateFixtures(data, fixtureDir, opts); err != nil {
@@ -169,8 +169,8 @@ func emitFixtures(pgxEntities, specEntities []FixtureEntity, projectRoot, module
 	if len(specEntities) > 0 {
 		fixtureDir := filepath.Join(projectRoot, "workshop", "testing", "sqlitefixtures")
 		data := FixtureTemplateData{
-			ModulePath:    modulePath,
-			Entities:      specEntities,
+			ModulePath: modulePath,
+			Entities:   specEntities,
 		}
 		fmt.Printf("\n  sqlitefixtures/ (spec test fixtures)\n")
 		if err := GenerateSpecFixtures(data, fixtureDir, opts); err != nil {

@@ -3,8 +3,8 @@ package golangjwt_test
 import (
 	"testing"
 
-	"github.com/gopernicus/gopernicus/infrastructure/cryptids/golangjwt"
 	"github.com/gopernicus/gopernicus/infrastructure/cryptids/cryptidstest"
+	"github.com/gopernicus/gopernicus/infrastructure/cryptids/golangjwt"
 )
 
 func TestSignerCompliance(t *testing.T) {

@@ -6,8 +6,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/infrastructure/ratelimiter"
 	"github.com/gopernicus/gopernicus/infrastructure/ratelimiter/memorylimiter"
-	"github.com/gopernicus/gopernicus/workshop/testing/testhttp"
 	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/workshop/testing/testhttp"
 )
 
 // RouteMounter mounts HTTP routes onto a route group. Generated bridges and

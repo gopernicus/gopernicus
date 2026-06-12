@@ -7,9 +7,9 @@ import "time"
 // ReflectedSchema is the root of workshop/public.json.
 type ReflectedSchema struct {
 	Version     string                   `json:"version"`
-	Source      string                   `json:"source"`       // e.g. "postgres"
-	Database    string                   `json:"database"`     // database name
-	SchemaName  string                   `json:"schema_name"`  // e.g. "public"
+	Source      string                   `json:"source"`      // e.g. "postgres"
+	Database    string                   `json:"database"`    // database name
+	SchemaName  string                   `json:"schema_name"` // e.g. "public"
 	ReflectedAt time.Time                `json:"reflected_at"`
 	Tables      map[string]*TableInfo    `json:"tables"`
 	EnumTypes   map[string]*EnumTypeInfo `json:"enum_types,omitempty"`
@@ -37,9 +37,9 @@ type TableInfo struct {
 // ColumnInfo represents a single column's metadata.
 type ColumnInfo struct {
 	Name           string `json:"name"`
-	DBType         string `json:"db_type"`           // e.g. "uuid", "varchar(255)"
-	GoType         string `json:"go_type"`           // e.g. "string", "*time.Time"
-	GoImport       string `json:"go_import"`         // import path if needed, e.g. "time"
+	DBType         string `json:"db_type"`   // e.g. "uuid", "varchar(255)"
+	GoType         string `json:"go_type"`   // e.g. "string", "*time.Time"
+	GoImport       string `json:"go_import"` // import path if needed, e.g. "time"
 	IsNullable     bool   `json:"is_nullable"`
 	IsPrimaryKey   bool   `json:"is_primary_key"`
 	IsForeignKey   bool   `json:"is_foreign_key"`
@@ -64,8 +64,8 @@ type ColumnInfo struct {
 
 // PrimaryKeyInfo represents primary key metadata.
 type PrimaryKeyInfo struct {
-	Column      string   `json:"column"`                  // first column (backwards compat)
-	Columns     []string `json:"columns,omitempty"`       // all columns (composite PKs)
+	Column      string   `json:"column"`            // first column (backwards compat)
+	Columns     []string `json:"columns,omitempty"` // all columns (composite PKs)
 	DBType      string   `json:"db_type"`
 	GoType      string   `json:"go_type"`
 	HasDefault  bool     `json:"has_default"`
@@ -93,14 +93,14 @@ type IndexInfo struct {
 	Columns    []string `json:"columns"`
 	Unique     bool     `json:"unique"`
 	Method     string   `json:"method"`               // btree, hash, gin, gist, etc.
-	Predicate  string   `json:"predicate,omitempty"`   // WHERE clause for partial indexes
-	Definition string   `json:"definition,omitempty"`  // full CREATE INDEX statement (for expression indexes)
+	Predicate  string   `json:"predicate,omitempty"`  // WHERE clause for partial indexes
+	Definition string   `json:"definition,omitempty"` // full CREATE INDEX statement (for expression indexes)
 }
 
 // ConstraintInfo represents a table constraint (CHECK, UNIQUE, EXCLUDE).
 type ConstraintInfo struct {
 	Name       string   `json:"name"`
-	Type       string   `json:"type"`            // CHECK, UNIQUE, EXCLUDE
-	Definition string   `json:"definition"`      // the constraint expression
+	Type       string   `json:"type"`       // CHECK, UNIQUE, EXCLUDE
+	Definition string   `json:"definition"` // the constraint expression
 	Columns    []string `json:"columns,omitempty"`
 }

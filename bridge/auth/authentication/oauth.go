@@ -441,4 +441,3 @@ func (b *Bridge) redirectOAuthError(w http.ResponseWriter, r *http.Request, errC
 	}
 	web.RespondRedirect(w, r, redirectURL, http.StatusTemporaryRedirect)
 }
-

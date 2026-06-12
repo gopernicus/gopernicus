@@ -47,9 +47,9 @@ func helperFunc() {}
 		{"Repository", "Create", true},
 		{"Repository", "Get", true},
 		{"Repository", "ValueReceiverMethod", true},
-		{"Repository", "List", false},          // doesn't exist
-		{"Repository", "helperFunc", false},     // not a method
-		{"OtherType", "Create", false},          // wrong receiver type
+		{"Repository", "List", false},       // doesn't exist
+		{"Repository", "helperFunc", false}, // not a method
+		{"OtherType", "Create", false},      // wrong receiver type
 	}
 
 	for _, tt := range tests {

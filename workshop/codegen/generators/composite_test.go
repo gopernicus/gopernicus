@@ -9,9 +9,9 @@ import (
 
 func specCompositeData() CompositeTemplateData {
 	return CompositeTemplateData{
-		DomainPkg:     "auth",
-		ModulePath:    "github.com/example/app",
-		DomainPath:    "core/repositories/auth",
+		DomainPkg:  "auth",
+		ModulePath: "github.com/example/app",
+		DomainPath: "core/repositories/auth",
 		Entities: []CompositeEntity{
 			{FieldName: "Credential", RepoPkg: "credentials", StorePkg: "credentialsstore", EntityName: "Credential"},
 			{FieldName: "User", RepoPkg: "users", StorePkg: "usersstore", EntityName: "User"},
@@ -171,9 +171,9 @@ func NewRepositories(log *slog.Logger, q crud.Querier, d crud.Dialect, inTx TxRu
 
 func singleEventOutboxData(storePkg string, specMode bool) CompositeTemplateData {
 	return CompositeTemplateData{
-		DomainPkg:     "events",
-		ModulePath:    "github.com/example/app",
-		DomainPath:    "core/repositories/events",
+		DomainPkg:  "events",
+		ModulePath: "github.com/example/app",
+		DomainPath: "core/repositories/events",
 		Entities: []CompositeEntity{
 			{FieldName: "EventOutbox", RepoPkg: "eventoutbox", StorePkg: storePkg, EntityName: "EventOutbox"},
 		},

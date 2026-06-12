@@ -33,7 +33,7 @@ type AppScaffoldData struct {
 	// are generated. These reflect the user's TUI selections at init time and
 	// control which Go packages appear in go.mod (once adapters are split out).
 	HasRedis        bool // Redis client wired; enables redis cache backend option
-	HasRedisStreams  bool // Redis Streams event bus backend (implies HasRedis)
+	HasRedisStreams bool // Redis Streams event bus backend (implies HasRedis)
 	HasStorageDisk  bool // Local disk storage adapter
 	HasStorageGCS   bool // Google Cloud Storage adapter
 	HasStorageS3    bool // AWS S3 / compatible object storage adapter
