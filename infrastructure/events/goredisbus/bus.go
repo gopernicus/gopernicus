@@ -63,6 +63,13 @@ type Bus struct {
 	started bool
 	stopCh  chan struct{}
 	wg      sync.WaitGroup
+
+	// Broadcast (pub/sub) support — see broadcast.go.
+	broadcastMu      sync.RWMutex
+	broadcastSubs    map[uint64]*broadcastSub
+	nextBroadcastID  uint64
+	broadcastStarted bool
+	broadcastPubsub  *redis.PubSub
 }
 
 type handlerEntry struct {
@@ -113,6 +120,8 @@ func (b *Bus) Emit(ctx context.Context, event events.Event, opts ...events.EmitO
 	if err != nil {
 		return fmt.Errorf("encoding event: %w", err)
 	}
+
+	b.publishBroadcast(ctx, event, data)
 
 	stream := b.cfg.StreamPrefix + event.Type()
 	values := map[string]interface{}{
@@ -324,9 +333,9 @@ func (b *Bus) parseMessage(values map[string]interface{}) (events.Event, error) 
 	occurredAt, _ := time.Parse(time.RFC3339Nano, occurredAtStr)
 
 	return &streamEvent{
-		base:    events.NewBaseEventWithCorrelation(eventType, correlationID),
+		base:     events.NewBaseEventWithCorrelation(eventType, correlationID),
 		occurred: occurredAt,
-		payload: []byte(payload),
+		payload:  []byte(payload),
 	}, nil
 }
 

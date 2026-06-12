@@ -53,6 +53,16 @@ export interface RecordResponse<T> {
   permissions?: string[];
 }
 
+/** The default SSE projection streamed by the ssebridge (metadata only —
+ * clients re-fetch state through the API on receipt). */
+export interface EventProjection {
+  type: string;
+  occurred_at: string;
+  tenant_id?: string;
+  aggregate_type?: string;
+  aggregate_id?: string;
+}
+
 /** Cursor pagination options accepted by every list method. */
 export interface PageOptions {
   limit?: number;

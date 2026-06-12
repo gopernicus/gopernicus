@@ -184,6 +184,56 @@ type Bus interface {
 	Close(ctx context.Context) error
 }
 
+// Broadcaster is an optional Bus capability: SubscribeBroadcast delivers
+// every matching event to this handler on EVERY process — fan-out
+// semantics, no durability, no replay. For ephemeral consumers only (SSE
+// streams, metrics): lost messages are acceptable because clients
+// reconnect and re-fetch state. Contrast Subscribe on distributed buses,
+// whose consumer-group semantics deliver each event to ONE process.
+type Broadcaster interface {
+	SubscribeBroadcast(topic string, handler Handler) (Subscription, error)
+}
+
+// RemoteEvent is an event reconstructed from a transport envelope on
+// another process — the broadcast path can't recover the original typed
+// struct, so it carries the envelope fields plus the encoded payload and
+// the metadata extracted from it.
+type RemoteEvent struct {
+	EventType   string
+	Occurred    time.Time
+	Correlation string
+	Payload     []byte // the original EncodeEvent bytes
+
+	Tenant  *string
+	AggType *string
+	AggID   *string
+}
+
+func (e RemoteEvent) Type() string           { return e.EventType }
+func (e RemoteEvent) OccurredAt() time.Time  { return e.Occurred }
+func (e RemoteEvent) CorrelationID() string  { return e.Correlation }
+func (e RemoteEvent) TenantID() *string      { return e.Tenant }
+func (e RemoteEvent) AggregateType() *string { return e.AggType }
+func (e RemoteEvent) AggregateID() *string   { return e.AggID }
+
+// EncodeEvent returns the original payload bytes unchanged.
+func (e RemoteEvent) EncodeEvent() ([]byte, error) { return e.Payload, nil }
+
+// DecodeRemoteMetadata best-effort extracts tenant/aggregate metadata from
+// an encoded event payload (BaseEvent's json tags: tenant_id,
+// aggregate_type, aggregate_id). Absent or unparseable fields stay nil.
+func DecodeRemoteMetadata(payload []byte) (tenant, aggType, aggID *string) {
+	var probe struct {
+		Tenant  *string `json:"tenant_id"`
+		AggType *string `json:"aggregate_type"`
+		AggID   *string `json:"aggregate_id"`
+	}
+	if err := json.Unmarshal(payload, &probe); err != nil {
+		return nil, nil, nil
+	}
+	return probe.Tenant, probe.AggType, probe.AggID
+}
+
 // Subscription represents an active subscription that can be cancelled.
 type Subscription interface {
 	// Unsubscribe removes this subscription from the bus.

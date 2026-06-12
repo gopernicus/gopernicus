@@ -34,6 +34,20 @@ Releases are tag-only: `git tag -a vX.Y.Z && git push origin vX.Y.Z`.
   whenever auth was enabled. Found by the TS client acceptance run
   against a live stack; the in-memory test store never errored.
 
+- **SSE realtime bridge** (v0.5 item 2): `bridge/events/ssebridge`
+  streams domain events to browsers — `NewHub(bus, log)` +
+  `New(log, hub, authenticator, authorizer, rateLimiter)` mounted at
+  `api.Group("/events")`. Tenant stream (subject-scoped) and
+  resource stream (connect-time `authorize read`), `?types=` filters,
+  heartbeats, per-subject connection caps, slow-client drop policy.
+  Events are projected to metadata only by default (never payloads);
+  `WithPayloadProjector` opts in per deployment. The event bus gains an
+  optional `Broadcaster` capability: redis pub/sub fan-out alongside the
+  durable streams (every instance sees every event — required for SSE
+  across processes; memory bus already fans out). The TS client gains
+  `client.events.subscribe(path)` — a typed fetch-streaming SSE reader.
+  sdk SSEStream gains `WithHeartbeat`.
+
 ### Consumer actions
 - [ ] Opt in by adding `clients:\n    typescript: {}` to gopernicus.yml
       and regenerating; point your frontend at
