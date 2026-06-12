@@ -212,10 +212,9 @@ func (p *Pool) GoContext(ctx context.Context, fn func()) bool {
 
 func (p *Pool) execute(fn func()) {
 	defer func() {
-		<-p.semaphore
-		atomic.AddInt64(&p.active, -1)
-		p.wg.Done()
-
+		// Panic accounting must complete before wg.Done() — otherwise
+		// Wait() can return while the panic counter is still unwritten
+		// and a Wait()-then-Stats() caller reads a torn count.
 		if r := recover(); r != nil {
 			atomic.AddInt64(&p.panics, 1)
 			p.log.Error("async pool: panic recovered",
@@ -223,6 +222,10 @@ func (p *Pool) execute(fn func()) {
 				"stack", string(debug.Stack()),
 			)
 		}
+
+		<-p.semaphore
+		atomic.AddInt64(&p.active, -1)
+		p.wg.Done()
 	}()
 
 	fn()
