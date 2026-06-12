@@ -76,10 +76,10 @@ type SpecSkippedFunc struct {
 
 // SpecStoreData holds everything needed to render the specstore templates.
 type SpecStoreData struct {
-	PackageName   string
-	RepoPkg       string
-	RepoImport    string
-	EntityName    string
+	PackageName string
+	RepoPkg     string
+	RepoImport  string
+	EntityName  string
 
 	Table         string
 	PK            string
@@ -169,6 +169,10 @@ func GenerateSpecStore(resolved *ResolvedFile, repoDir, modulePath string, opts 
 			return fmt.Errorf("render %s for %s: %w", f.name, resolved.TableName, err)
 		}
 
+		if f.bootstrap {
+			out = prependBootstrapMarker("specstore/"+f.name, out)
+		}
+
 		if err := renderGoFile(f.name, out, path, opts); err != nil {
 			return err
 		}
@@ -246,12 +250,12 @@ func BuildSpecStoreData(resolved *ResolvedFile, modulePath string) (SpecStoreDat
 	repoImport += repoPkg
 
 	data := SpecStoreData{
-		PackageName:   StorePackage(resolved.TableName, specStorePackageSuffix),
-		RepoPkg:       repoPkg,
-		RepoImport:    repoImport,
-		EntityName:    resolved.EntityName,
-		Table:         resolved.TableName, // no schema prefix — dialect-neutral
-		PK:            resolved.PKColumn,
+		PackageName: StorePackage(resolved.TableName, specStorePackageSuffix),
+		RepoPkg:     repoPkg,
+		RepoImport:  repoImport,
+		EntityName:  resolved.EntityName,
+		Table:       resolved.TableName, // no schema prefix — dialect-neutral
+		PK:          resolved.PKColumn,
 	}
 
 	hasRecordState := false

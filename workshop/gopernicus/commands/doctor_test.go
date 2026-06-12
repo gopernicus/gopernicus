@@ -2,7 +2,12 @@ package commands
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/gopernicus/gopernicus/workshop/codegen/generators"
 )
 
 // The JSON field names are a stable contract — agents and scripts parse
@@ -78,6 +83,86 @@ func TestDoctorResultJSONShape(t *testing.T) {
 	if _, present := first["warn"]; present {
 		t.Error("warn=false must be omitted")
 	}
+}
+
+func writeBootstrapFixture(t *testing.T, root, rel, firstLine string) {
+	t.Helper()
+	path := filepath.Join(root, rel)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	content := firstLine + "\npackage x\n"
+	if firstLine == "" {
+		content = "package x\n"
+	}
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCheckBootstrapDrift(t *testing.T) {
+	currentHash, ok := generators.BootstrapTemplateHash("repository/repository.go")
+	if !ok {
+		t.Fatal("repository/repository.go not in registry")
+	}
+	marker := func(kind, hash string) string {
+		return "// gopernicus:bootstrap kind=" + kind + " template=" + hash
+	}
+
+	t.Run("current marker passes", func(t *testing.T) {
+		root := t.TempDir()
+		writeBootstrapFixture(t, root, "core/repositories/d/e/repository.go", marker("repository/repository.go", currentHash))
+		c := checkBootstrapDrift(root)
+		if !c.passed || c.warn {
+			t.Errorf("check = %+v, want pass without warn", c)
+		}
+		if !strings.Contains(c.detail, "1 tracked") {
+			t.Errorf("detail = %q", c.detail)
+		}
+	})
+
+	t.Run("stale marker warns", func(t *testing.T) {
+		root := t.TempDir()
+		writeBootstrapFixture(t, root, "core/repositories/d/e/repository.go", marker("repository/repository.go", "000000000000"))
+		c := checkBootstrapDrift(root)
+		if !c.passed || !c.warn {
+			t.Errorf("check = %+v, want pass with warn", c)
+		}
+		if !strings.Contains(c.detail, "repository.go") || !strings.Contains(c.detail, "older template") {
+			t.Errorf("detail = %q", c.detail)
+		}
+	})
+
+	t.Run("unknown kind warns as drift", func(t *testing.T) {
+		root := t.TempDir()
+		writeBootstrapFixture(t, root, "bridge/repositories/foo/bridge.go", marker("retired/bridge.go", "abcabcabcabc"))
+		c := checkBootstrapDrift(root)
+		if !c.warn || !strings.Contains(c.detail, "unknown kind") {
+			t.Errorf("check = %+v, want unknown-kind drift warn", c)
+		}
+	})
+
+	t.Run("pre-marker files counted not warned", func(t *testing.T) {
+		root := t.TempDir()
+		writeBootstrapFixture(t, root, "core/repositories/d/e/repository.go", "")
+		writeBootstrapFixture(t, root, "bridge/repositories/foo/bridge.go", "// plain comment")
+		c := checkBootstrapDrift(root)
+		if !c.passed || c.warn {
+			t.Errorf("check = %+v, want plain pass", c)
+		}
+		if !strings.Contains(c.detail, "2 pre-marker") {
+			t.Errorf("detail = %q", c.detail)
+		}
+	})
+
+	t.Run("files outside generated trees ignored", func(t *testing.T) {
+		root := t.TempDir()
+		writeBootstrapFixture(t, root, "app/server/store.go", marker("pgxstore/store.go", "000000000000"))
+		c := checkBootstrapDrift(root)
+		if c.warn || c.detail != "" {
+			t.Errorf("check = %+v, want empty pass", c)
+		}
+	})
 }
 
 func TestHasFlag(t *testing.T) {

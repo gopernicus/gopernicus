@@ -125,12 +125,12 @@ type RepoTemplateData struct {
 	Filters []FilterInfo
 	Methods []MethodSig
 
-	HasCreate        bool
-	HasUpdate        bool
-	HasFilter        bool
-	HasList          bool
-	HasSoftDelete    bool
-	HasPKInCreate    bool
+	HasCreate     bool
+	HasUpdate     bool
+	HasFilter     bool
+	HasList       bool
+	HasSoftDelete bool
+	HasPKInCreate bool
 	// HasRecordStateInCreate gates the create-time record_state default:
 	// only valid when record_state is among the create @fields — otherwise
 	// the column's SQL default applies and the Create model has no field.
@@ -147,7 +147,6 @@ type RepoTemplateData struct {
 	// has defined their own in repository.go.
 	SkipStorer bool
 }
-
 
 // GenerateRepository produces flat repository layer files (standard).
 // Types use final names, Repository struct + methods are in generated.go,
@@ -182,6 +181,10 @@ func GenerateRepository(resolved *ResolvedFile, repoDir string, opts Options) er
 		out, err := renderRepoTemplate(f.tmpl, data)
 		if err != nil {
 			return fmt.Errorf("render %s for %s: %w", f.name, resolved.TableName, err)
+		}
+
+		if f.bootstrap {
+			out = prependBootstrapMarker("repository/"+f.name, out)
 		}
 
 		if err := renderGoFile(f.name, out, path, opts); err != nil {
@@ -442,35 +445,35 @@ func buildRepoTemplateData(resolved *ResolvedFile) (RepoTemplateData, error) {
 	}
 
 	return RepoTemplateData{
-		PackageName:       resolved.PackageName,
-		EntityName:        resolved.EntityName,
-		EntityNameLower:   resolved.EntityLower,
-		EntityNameSpaced:  ToSpaced(strings.ToLower(resolved.EntityName)),
-		EntityNamePlural:  resolved.EntityPlural,
-		CreateName:        "Create" + resolved.EntityName,
-		UpdateName:        "Update" + resolved.EntityName,
-		PKColumn:          resolved.PKColumn,
-		PKGoName:          resolved.PKGoName,
-		PKGoType:          resolved.PKGoType,
-		DefaultOrderConst: defaultOrderConst,
-		EntityFields:      entityFields,
-		CreateFields:      createFields,
-		UpdateFields:      updateFields,
-		OrderByFields:     orderByFields,
-		CursorFields:      cursorFields,
-		ExtraImports:      extraImports,
-		Filters:           filters,
-		Methods:           methods,
-		HasCreate:         hasCreate,
-		HasUpdate:         hasUpdate,
-		HasFilter:         hasFilter,
-		HasList:           hasList,
+		PackageName:            resolved.PackageName,
+		EntityName:             resolved.EntityName,
+		EntityNameLower:        resolved.EntityLower,
+		EntityNameSpaced:       ToSpaced(strings.ToLower(resolved.EntityName)),
+		EntityNamePlural:       resolved.EntityPlural,
+		CreateName:             "Create" + resolved.EntityName,
+		UpdateName:             "Update" + resolved.EntityName,
+		PKColumn:               resolved.PKColumn,
+		PKGoName:               resolved.PKGoName,
+		PKGoType:               resolved.PKGoType,
+		DefaultOrderConst:      defaultOrderConst,
+		EntityFields:           entityFields,
+		CreateFields:           createFields,
+		UpdateFields:           updateFields,
+		OrderByFields:          orderByFields,
+		CursorFields:           cursorFields,
+		ExtraImports:           extraImports,
+		Filters:                filters,
+		Methods:                methods,
+		HasCreate:              hasCreate,
+		HasUpdate:              hasUpdate,
+		HasFilter:              hasFilter,
+		HasList:                hasList,
 		HasSoftDelete:          hasSoftDelete,
 		HasPKInCreate:          hasPKInCreate,
 		HasRecordStateInCreate: hasRecordStateInCreate,
 		PKIsUUID:               pkIsUUID(resolved),
-		DefaultDirection:  defaultDirection,
-		Events:            events,
+		DefaultDirection:       defaultDirection,
+		Events:                 events,
 	}, nil
 }
 

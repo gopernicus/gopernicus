@@ -65,6 +65,10 @@ func GenerateAuthSchema(domainDir, domainPkg, modulePath string, resolvedFiles [
 			return fmt.Errorf("render %s for %s: %w", f.name, domainPkg, err)
 		}
 
+		if f.bootstrap {
+			out = prependBootstrapMarker("authschema/"+f.name, out)
+		}
+
 		if err := renderGoFile(f.name, out, path, opts); err != nil {
 			return err
 		}

@@ -30,8 +30,8 @@ type IntegrationTestMethod struct {
 	HasUpdate bool
 
 	// For exec (soft delete, archive, restore, hard delete)
-	IsDelete    bool // hard delete
-	IsSoftState bool // soft delete / archive / restore
+	IsDelete    bool   // hard delete
+	IsSoftState bool   // soft delete / archive / restore
 	NewState    string // e.g. "deleted", "archived", "active"
 
 	// For update_returning
@@ -47,9 +47,9 @@ type IntegrationTestData struct {
 	SpecMode bool
 
 	// Package info
-	StorePkg   string // e.g. "userspgx"
-	RepoPkg    string // e.g. "users"
-	EntityName string // e.g. "User"
+	StorePkg    string // e.g. "userspgx"
+	RepoPkg     string // e.g. "users"
+	EntityName  string // e.g. "User"
 	EntityLower string // e.g. "user"
 
 	// Import paths
@@ -604,6 +604,10 @@ func generateIntegrationTestWith(data IntegrationTestData, storeDir string, opts
 		out, err := renderIntegrationTestTemplate(f.tmpl, data)
 		if err != nil {
 			return fmt.Errorf("render %s for %s: %w", f.name, data.StorePkg, err)
+		}
+
+		if f.bootstrap {
+			out = prependBootstrapMarker("integrationtest/"+f.name, out)
 		}
 
 		if err := renderGoFile(f.name, out, path, opts); err != nil {

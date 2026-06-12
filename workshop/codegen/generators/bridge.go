@@ -96,6 +96,10 @@ func GenerateBridge(resolved *ResolvedFile, domainName, modulePath, projectRoot 
 			return false, fmt.Errorf("render %s for %s: %w", f.name, resolved.TableName, err)
 		}
 
+		if f.bootstrap {
+			out = prependBootstrapMarker("bridge/"+f.name, out)
+		}
+
 		if err := renderGoFile(f.name, out, path, opts); err != nil {
 			return false, err
 		}

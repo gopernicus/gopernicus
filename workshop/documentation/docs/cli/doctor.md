@@ -118,6 +118,27 @@ Walks `bridge.yml` files and warns when a write route (Create/Update) has no
 `max_body_size` middleware -- unbounded request bodies are a
 resource-exhaustion vector. A warning, not a failure.
 
+### 8. Bootstrap template drift
+
+Bootstrap files created at v0.4+ carry a first-line marker recording which
+framework template created them:
+
+```go
+// gopernicus:bootstrap kind=repository/fop.go template=f199aa94a337
+```
+
+Doctor compares each marker's hash against the current framework's template
+for that kind. The hash covers the *template*, not the file -- your edits to
+bootstrap files never count as drift.
+
+- **Pass**: all marked bootstraps match the current templates. The detail
+  reports how many files are tracked, and how many pre-v0.4 bootstraps have
+  no marker yet (they start tracking when refreshed or newly created).
+- **Warning**: a file was created from an older template that has since
+  changed -- review the release notes or refresh the file (see the
+  [upgrading guide](../guides/upgrading.md)). Never a failure: bootstraps
+  are user-owned and refreshing is a deliberate act.
+
 ## Output Format
 
 Each check is displayed with a symbol prefix:

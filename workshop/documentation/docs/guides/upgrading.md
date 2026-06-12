@@ -83,7 +83,13 @@ endpoint. Green tests alone are not a release gate.
 
 Bootstrap files are created once and never overwritten, so a project
 carries them at the template vintage of whatever version first generated
-them. When a release improves a bootstrap template:
+them. Files created at v0.4+ carry a first-line marker
+(`// gopernicus:bootstrap kind=... template=<hash>`) that
+`gopernicus doctor` compares against the current framework's templates —
+after every upgrade, doctor's `bootstrap: template drift` check tells you
+which files were created from templates that have since changed.
+
+When a release improves a bootstrap template:
 
 - `go tool gopernicus generate --force-bootstrap` overwrites **all**
   bootstrap files. Never run this blindly on a project with customized

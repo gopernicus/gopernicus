@@ -82,6 +82,10 @@ func GenerateCache(resolved *ResolvedFile, repoDir string, multiHomed bool, opts
 			return false, fmt.Errorf("render %s for %s: %w", f.name, resolved.TableName, err)
 		}
 
+		if f.bootstrap {
+			out = prependBootstrapMarker("cache/"+f.name, out)
+		}
+
 		if err := renderGoFile(f.name, out, path, opts); err != nil {
 			return false, err
 		}
@@ -92,9 +96,9 @@ func GenerateCache(resolved *ResolvedFile, repoDir string, multiHomed bool, opts
 
 func buildCacheData(resolved *ResolvedFile) (CacheTemplateData, error) {
 	data := CacheTemplateData{
-		PackageName:   RepoPackage(resolved.TableName),
-		EntityName:    resolved.EntityName,
-		KeyPrefix:     resolved.DomainName + ":" + resolved.TableName,
+		PackageName: RepoPackage(resolved.TableName),
+		EntityName:  resolved.EntityName,
+		KeyPrefix:   resolved.DomainName + ":" + resolved.TableName,
 	}
 
 	// Build method signatures from resolved queries (reuse the repo method builder logic).

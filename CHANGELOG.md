@@ -14,10 +14,18 @@ Releases are tag-only: `git tag -a vX.Y.Z && git push origin vX.Y.Z`.
 - `gopernicus doctor --json` — machine-readable health output with a stable
   field contract (`root`, `framework`, `ok`, `checks[]`). Exit codes and the
   human report are unchanged. (#30)
+- Bootstrap drift detection: newly created bootstrap files carry a
+  first-line marker (`// gopernicus:bootstrap kind=... template=<hash>`)
+  recording the creating template's content hash; a new doctor check warns
+  when a file's template has since changed. The hash covers the template,
+  never the file — your edits to bootstraps don't count as drift.
 
 ### Consumer actions
 - [ ] None required. Scripts may now gate on
       `go tool gopernicus doctor --json | jq -e '.ok'`.
+- [ ] Existing bootstrap files have no markers and are reported as a
+      pre-marker count, not warnings; they start tracking when refreshed
+      or newly created.
 
 ## v0.3.5 — 2026-06-11
 

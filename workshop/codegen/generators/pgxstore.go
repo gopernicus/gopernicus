@@ -50,9 +50,9 @@ func (f SearchFieldInfo) SQLName() string {
 
 // StoreFilter holds data for one named filter in a list method.
 type StoreFilter struct {
-	PlaceholderName string // "conditions"
-	GenFuncName     string // "generatedApplyListUsersConditionsFilter"
-	FilterTypeName  string // "FilterListUsers" (copied from parent for template access)
+	PlaceholderName    string           // "conditions"
+	GenFuncName        string           // "generatedApplyListUsersConditionsFilter"
+	FilterTypeName     string           // "FilterListUsers" (copied from parent for template access)
 	Fields             []StoreFieldInfo // resolved fields for this filter
 	HasRecordState     bool             // this filter includes record_state
 	RecordStateSQLName string           // qualified name for record_state in SQL (e.g. "u.record_state")
@@ -85,10 +85,10 @@ type StoreMethod struct {
 	HasAppUpdatedAt bool // entity has updated_at but it's excluded from @fields
 
 	// For update / update_returning.
-	UpdateFields        []StoreFieldInfo
+	UpdateFields []StoreFieldInfo
 	// WhereParams are the update's WHERE predicates, one per SQL @param —
 	// composite keys carry more than one (joined with AND).
-	WhereParams []StoreWhereParam
+	WhereParams         []StoreWhereParam
 	HasUpdatedAt        bool
 	UpdateReturningCols string
 
@@ -104,11 +104,11 @@ type StoreMethod struct {
 
 	// For list — named filters with placeholder substitution.
 	FilterTypeName      string
-	Filters             []StoreFilter    // one per named filter
+	Filters             []StoreFilter // one per named filter
 	SearchFields        []SearchFieldInfo
 	SearchType          string
 	HasSearch           bool
-	GenSearchFunc string // generated: "generatedApplyListUsersSearchFilter"
+	GenSearchFunc       string // generated: "generatedApplyListUsersSearchFilter"
 	RecordStateInFilter bool   // any filter includes record_state
 
 	// List sub-features (for conditional template rendering).
@@ -191,6 +191,10 @@ func GeneratePgxStore(
 			return fmt.Errorf("render %s for %s: %w", f.name, resolved.TableName, err)
 		}
 
+		if f.bootstrap {
+			out = prependBootstrapMarker("pgxstore/"+f.name, out)
+		}
+
 		if err := renderGoFile(f.name, out, path, opts); err != nil {
 			return err
 		}
@@ -216,7 +220,6 @@ func renderStoreTemplate(tmplText string, data StoreTemplateData) ([]byte, error
 	}
 	return buf.Bytes(), nil
 }
-
 
 func buildStoreData(resolved *ResolvedFile, domainName, modulePath string) (StoreTemplateData, error) {
 	repoPkg := RepoPackage(resolved.TableName)
