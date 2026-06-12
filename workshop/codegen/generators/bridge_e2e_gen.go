@@ -65,10 +65,10 @@ type BridgeE2EData struct {
 	// Update-path mass-assignment probe (P5): a PUT setting a legit field
 	// plus a smuggled record_state must leave the stored state untouched.
 	// Requires record_state, an Update route, and a settable update field.
-	HasUpdate         bool
-	UpdatePathExpr    string // Go expr building the PUT path from `id`
-	UpdateLegitJSON   string // a non-server-set update field (json name)
-	UpdateLegitValue  string // a valid value literal for that field
+	HasUpdate        bool
+	UpdatePathExpr   string // Go expr building the PUT path from `id`
+	UpdateLegitJSON  string // a non-server-set update field (json name)
+	UpdateLegitValue string // a valid value literal for that field
 
 	// String filter params (plus "search") get the strict probe: a payload
 	// is a parameterized match value, so a 200 must return zero rows.
@@ -99,14 +99,14 @@ func GenerateBridgeE2E(data BridgeTemplateData, resolved *ResolvedFile, bridgeDi
 		return nil
 	}
 
-	if err := renderE2EFile(path, bridgeE2EGeneratedTemplate, e2e, opts); err != nil {
+	if err := renderE2EFile(path, bridgeE2EGeneratedTemplate, "", e2e, opts); err != nil {
 		return err
 	}
 	fmt.Printf("      write %s\n", path)
 
 	bootstrapPath := filepath.Join(bridgeDir, "e2e_test.go")
 	if !fileExists(bootstrapPath) || opts.ForceBootstrap {
-		if err := renderE2EFile(bootstrapPath, bridgeE2EBootstrapTemplate, e2e, opts); err != nil {
+		if err := renderE2EFile(bootstrapPath, bridgeE2EBootstrapTemplate, "bridge-e2e/e2e_test.go", e2e, opts); err != nil {
 			return err
 		}
 		fmt.Printf("      create %s\n", bootstrapPath)
@@ -114,7 +114,7 @@ func GenerateBridgeE2E(data BridgeTemplateData, resolved *ResolvedFile, bridgeDi
 	return nil
 }
 
-func renderE2EFile(path, tmplText string, e2e BridgeE2EData, opts Options) error {
+func renderE2EFile(path, tmplText, bootstrapKind string, e2e BridgeE2EData, opts Options) error {
 	tmpl, err := template.New("bridge_e2e").Parse(tmplText)
 	if err != nil {
 		return fmt.Errorf("parse e2e template: %w", err)
@@ -123,7 +123,11 @@ func renderE2EFile(path, tmplText string, e2e BridgeE2EData, opts Options) error
 	if err := tmpl.Execute(&buf, e2e); err != nil {
 		return fmt.Errorf("render %s: %w", path, err)
 	}
-	return renderGoFile(path, buf.Bytes(), path, opts)
+	out := buf.Bytes()
+	if bootstrapKind != "" {
+		out = prependBootstrapMarker(bootstrapKind, out)
+	}
+	return renderGoFile(path, out, path, opts)
 }
 
 // FKSeed is one foreign-key create field whose value comes from a parent row
@@ -349,4 +353,3 @@ func pkOnlyPathExpr(path, pkParam string) (string, bool) {
 	}
 	return strings.Join(exprs, " + "), true
 }
-

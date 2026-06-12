@@ -15,14 +15,14 @@ import (
 
 // ParentFixture describes a FK dependency on another entity.
 type ParentFixture struct {
-	VarName                string // camelCase param name, e.g. "serviceAccountID"
-	EntityName             string // PascalCase parent entity, e.g. "ServiceAccount"
-	TableName              string // parent table name, e.g. "service_accounts"
-	FKColumn               string // FK column on this table, e.g. "service_account_id"
-	PKGoName               string // parent's PK Go field, e.g. "ServiceAccountID"
-	IsSelfReference        bool   // FK references same table
-	IsPrincipalInheritance bool   // PK is FK to principals table
-	IsInBatch              bool   // parent table has a fixture in this generation batch
+	VarName                string          // camelCase param name, e.g. "serviceAccountID"
+	EntityName             string          // PascalCase parent entity, e.g. "ServiceAccount"
+	TableName              string          // parent table name, e.g. "service_accounts"
+	FKColumn               string          // FK column on this table, e.g. "service_account_id"
+	PKGoName               string          // parent's PK Go field, e.g. "ServiceAccountID"
+	IsSelfReference        bool            // FK references same table
+	IsPrincipalInheritance bool            // PK is FK to principals table
+	IsInBatch              bool            // parent table has a fixture in this generation batch
 	ForwardParams          []ParentFixture // external params to forward when calling this in-batch parent's WithDefaults
 }
 
@@ -47,11 +47,11 @@ type FixtureEntity struct {
 	RepoPkg     string // e.g. "users"
 	RepoImport  string // full import path
 
-	PKColumn   string // e.g. "user_id"
-	PKGoName   string // e.g. "UserID"
-	PKGoType   string // e.g. "string"
-	PKIsFK     bool   // true if PK is also a FK (use param, don't generate)
-	PKIsUUID   bool   // true when the PK column is a uuid — GenerateID's alphabet is rejected
+	PKColumn string // e.g. "user_id"
+	PKGoName string // e.g. "UserID"
+	PKGoType string // e.g. "string"
+	PKIsFK   bool   // true if PK is also a FK (use param, don't generate)
+	PKIsUUID bool   // true when the PK column is a uuid — GenerateID's alphabet is rejected
 
 	// InsertFields are the columns the fixture INSERT will populate.
 	InsertFields []FixtureField
@@ -96,11 +96,11 @@ type FixtureField struct {
 
 // FixtureTemplateData holds all data for rendering the fixtures file.
 type FixtureTemplateData struct {
-	ModulePath    string
-	SpecMode      bool   // sqlite/spec fixtures (testsqlite, ? placeholders) vs pgx
-	Entities      []FixtureEntity
-	Imports       []string // deduplicated extra imports
-	NeedsTime     bool     // "time" is among Imports — gates the usage guard
+	ModulePath string
+	SpecMode   bool // sqlite/spec fixtures (testsqlite, ? placeholders) vs pgx
+	Entities   []FixtureEntity
+	Imports    []string // deduplicated extra imports
+	NeedsTime  bool     // "time" is among Imports — gates the usage guard
 }
 
 // BuildFixtureEntity creates a FixtureEntity from a ResolvedFile.
@@ -540,6 +540,10 @@ func generateFixturesWith(data FixtureTemplateData, fixtureDir string, opts Opti
 		out, err := renderFixtureTemplate(f.tmpl, data)
 		if err != nil {
 			return fmt.Errorf("render %s: %w", f.name, err)
+		}
+
+		if f.bootstrap {
+			out = prependBootstrapMarker("fixtures/"+f.name, out)
 		}
 
 		if err := renderGoFile(f.name, out, path, opts); err != nil {

@@ -50,14 +50,14 @@ func GenerateBridgeSecurity(data BridgeTemplateData, resolved *ResolvedFile, bri
 		return nil
 	}
 
-	if err := renderSecurityFile(path, bridgeSecurityGeneratedTemplate, sec, opts); err != nil {
+	if err := renderSecurityFile(path, bridgeSecurityGeneratedTemplate, "", sec, opts); err != nil {
 		return err
 	}
 	fmt.Printf("      write %s\n", path)
 
 	bootstrapPath := filepath.Join(bridgeDir, "security_test.go")
 	if !fileExists(bootstrapPath) || opts.ForceBootstrap {
-		if err := renderSecurityFile(bootstrapPath, bridgeSecurityBootstrapTemplate, sec, opts); err != nil {
+		if err := renderSecurityFile(bootstrapPath, bridgeSecurityBootstrapTemplate, "bridge-security/security_test.go", sec, opts); err != nil {
 			return err
 		}
 		fmt.Printf("      create %s\n", bootstrapPath)
@@ -137,7 +137,7 @@ func substituteProbeParams(path string) string {
 	return string(out)
 }
 
-func renderSecurityFile(path, tmplText string, sec BridgeSecurityData, opts Options) error {
+func renderSecurityFile(path, tmplText, bootstrapKind string, sec BridgeSecurityData, opts Options) error {
 	tmpl, err := template.New("bridge_security").Parse(tmplText)
 	if err != nil {
 		return fmt.Errorf("parse security template: %w", err)
@@ -146,5 +146,9 @@ func renderSecurityFile(path, tmplText string, sec BridgeSecurityData, opts Opti
 	if err := tmpl.Execute(&buf, sec); err != nil {
 		return fmt.Errorf("render %s: %w", path, err)
 	}
-	return renderGoFile(path, buf.Bytes(), path, opts)
+	out := buf.Bytes()
+	if bootstrapKind != "" {
+		out = prependBootstrapMarker(bootstrapKind, out)
+	}
+	return renderGoFile(path, out, path, opts)
 }

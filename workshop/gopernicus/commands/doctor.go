@@ -83,6 +83,7 @@ func runDoctor(_ context.Context, args []string) error {
 	}
 	checks = append(checks, checkSQLGuards(root)...)
 	checks = append(checks, checkBodyLimits(root))
+	checks = append(checks, checkBootstrapDrift(root))
 
 	result := buildDoctorResult(root, frameworkVersion, checks)
 
@@ -284,6 +285,98 @@ func checkBodyLimits(root string) check {
 		detail = fmt.Sprintf("%s (+%d more)", detail, len(unbounded)-1)
 	}
 	return check{name: "bridge: write routes bound body size", passed: true, warn: true, detail: detail}
+}
+
+// checkBootstrapDrift compares each bootstrap file's creation marker
+// (`// gopernicus:bootstrap kind=... template=<hash>`) against the current
+// framework's template hash for that kind. A mismatch means the file was
+// created from an older template — a warning, never a failure: bootstraps
+// are user-owned and refresh is a deliberate act. Conventionally-named
+// bootstrap files without a marker (created before v0.4) are counted in
+// the detail so the one-time refresh path is visible.
+func checkBootstrapDrift(root string) check {
+	const name = "bootstrap: template drift"
+
+	basenames := generators.BootstrapBasenames()
+	var drifted []string
+	tracked, unmarked := 0, 0
+
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "vendor", "node_modules":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !basenames[d.Name()] || !strings.HasSuffix(d.Name(), ".go") {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, path)
+		if !strings.HasPrefix(rel, "core"+string(filepath.Separator)) &&
+			!strings.HasPrefix(rel, "bridge"+string(filepath.Separator)) &&
+			!strings.HasPrefix(rel, filepath.Join("workshop", "testing")+string(filepath.Separator)) {
+			return nil
+		}
+
+		firstLine, rerr := readFirstLine(path)
+		if rerr != nil {
+			return nil
+		}
+		kind, hash, ok := generators.ParseBootstrapMarker(firstLine)
+		if !ok {
+			unmarked++
+			return nil
+		}
+		current, known := generators.BootstrapTemplateHash(kind)
+		if !known {
+			// Marker from a different framework vintage whose kind no
+			// longer exists — surface it as drift, the honest reading.
+			drifted = append(drifted, rel+" (unknown kind "+kind+")")
+			return nil
+		}
+		tracked++
+		if hash != current {
+			drifted = append(drifted, rel)
+		}
+		return nil
+	})
+
+	if len(drifted) > 0 {
+		detail := drifted[0] + " created from an older template — review or refresh (see the upgrading guide)"
+		if len(drifted) > 1 {
+			detail = fmt.Sprintf("%s (+%d more)", detail, len(drifted)-1)
+		}
+		return check{name: name, passed: true, warn: true, detail: detail}
+	}
+
+	detail := ""
+	switch {
+	case tracked > 0 && unmarked > 0:
+		detail = fmt.Sprintf("%d tracked; %d pre-marker bootstrap files (created before v0.4)", tracked, unmarked)
+	case tracked > 0:
+		detail = fmt.Sprintf("%d tracked", tracked)
+	case unmarked > 0:
+		detail = fmt.Sprintf("%d pre-marker bootstrap files (created before v0.4 — refresh to start tracking)", unmarked)
+	}
+	return check{name: name, passed: true, detail: detail}
+}
+
+// readFirstLine returns the first line of a file without reading the rest.
+func readFirstLine(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	if scanner.Scan() {
+		return scanner.Text(), nil
+	}
+	return "", scanner.Err()
 }
 
 // checkFrameworkDep verifies the framework pin in go.mod and also returns
