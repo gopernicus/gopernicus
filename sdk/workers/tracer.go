@@ -39,5 +39,5 @@ func StringAttribute(key, value string) Attribute {
 type noopSpanFinisher struct{}
 
 func (noopSpanFinisher) SetAttributes(...Attribute) {}
-func (noopSpanFinisher) RecordError(error)           {}
-func (noopSpanFinisher) Finish()                     {}
+func (noopSpanFinisher) RecordError(error)          {}
+func (noopSpanFinisher) Finish()                    {}

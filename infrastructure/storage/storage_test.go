@@ -11,15 +11,15 @@ import (
 
 // mockClient is a test implementation of the Client interface.
 type mockClient struct {
-	uploadFunc        func(ctx context.Context, path string, reader io.Reader) error
-	downloadFunc      func(ctx context.Context, path string) (io.ReadCloser, error)
-	deleteFunc        func(ctx context.Context, path string) error
-	existsFunc        func(ctx context.Context, path string) (bool, error)
-	listFunc          func(ctx context.Context, prefix string) ([]string, error)
-	downloadRangeFunc func(ctx context.Context, path string, offset, length int64) (io.ReadCloser, error)
-	getObjectSizeFunc            func(ctx context.Context, path string) (int64, error)
-	initiateResumableUploadFunc  func(ctx context.Context, path, contentType string) (string, error)
-	signedURLFunc                func(ctx context.Context, path string, expiry time.Duration) (string, error)
+	uploadFunc                  func(ctx context.Context, path string, reader io.Reader) error
+	downloadFunc                func(ctx context.Context, path string) (io.ReadCloser, error)
+	deleteFunc                  func(ctx context.Context, path string) error
+	existsFunc                  func(ctx context.Context, path string) (bool, error)
+	listFunc                    func(ctx context.Context, prefix string) ([]string, error)
+	downloadRangeFunc           func(ctx context.Context, path string, offset, length int64) (io.ReadCloser, error)
+	getObjectSizeFunc           func(ctx context.Context, path string) (int64, error)
+	initiateResumableUploadFunc func(ctx context.Context, path, contentType string) (string, error)
+	signedURLFunc               func(ctx context.Context, path string, expiry time.Duration) (string, error)
 }
 
 func (m *mockClient) Upload(ctx context.Context, path string, reader io.Reader) error {

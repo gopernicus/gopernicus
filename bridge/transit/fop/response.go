@@ -20,6 +20,6 @@ type RecordResponse[T any] struct {
 // Generated list handlers use this instead of map[string]any so the shape is
 // self-documenting, IDE-friendly, and usable in OpenAPI spec generation.
 type PageResponse[T any] struct {
-	Data       []T                 `json:"data"`
-	Pagination sdkfop.Pagination   `json:"pagination"`
+	Data       []T               `json:"data"`
+	Pagination sdkfop.Pagination `json:"pagination"`
 }

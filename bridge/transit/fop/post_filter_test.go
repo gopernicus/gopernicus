@@ -132,9 +132,9 @@ func TestPostfilterLoop(t *testing.T) {
 				// 5 items < overfetch(20) — source exhausted
 				{batch: items("1", "2", "3", "4", "5"), nextCursor: ""},
 			},
-			allowedIDs: map[string]bool{"1": true, "2": true, "3": true, "4": true, "5": true},
-			limit:      10,
-			wantIDs:    []string{"1", "2", "3", "4", "5"},
+			allowedIDs:    map[string]bool{"1": true, "2": true, "3": true, "4": true, "5": true},
+			limit:         10,
+			wantIDs:       []string{"1", "2", "3", "4", "5"},
 			wantListCalls: 1,
 		},
 		{
@@ -264,10 +264,10 @@ func TestPostfilterLoop(t *testing.T) {
 			pages: []listPage{
 				{batch: items("1", "2", "3"), nextCursor: ""},
 			},
-			allowedIDs:  map[string]bool{"1": true, "2": true, "3": true},
-			limit:       5,
-			startCursor: "resume_from_here",
-			wantIDs:     []string{"1", "2", "3"},
+			allowedIDs:    map[string]bool{"1": true, "2": true, "3": true},
+			limit:         5,
+			startCursor:   "resume_from_here",
+			wantIDs:       []string{"1", "2", "3"},
 			wantListCalls: 1,
 		},
 		{
@@ -277,7 +277,7 @@ func TestPostfilterLoop(t *testing.T) {
 				{batch: items("11", "12", "13", "14", "15", "16", "17", "18", "19", "20"), nextCursor: ""},
 			},
 			allowedIDs: map[string]bool{
-				"2": true, "4": true,          // 2 from page 1
+				"2": true, "4": true, // 2 from page 1
 				"12": true, "14": true, "16": true, // 3 from page 2
 			},
 			limit: 5,
@@ -352,8 +352,8 @@ func TestPostfilterLoop(t *testing.T) {
 				{batch: items("i", "j", "k", "l"), nextCursor: ""},
 			},
 			allowedIDs: map[string]bool{
-				"b": true,  // page 1: 1 authorized
-				"g": true,  // page 2: 1 authorized (= limit, but a limit+1th must be proven)
+				"b": true, // page 1: 1 authorized
+				"g": true, // page 2: 1 authorized (= limit, but a limit+1th must be proven)
 			},
 			limit: 2,
 			// reaching the limit exactly forces one more fetch to learn whether a
@@ -683,7 +683,9 @@ func (m *mockStorer) CreateRelationships(_ context.Context, _ []authorization.Cr
 }
 func (m *mockStorer) DeleteResourceRelationships(_ context.Context, _, _ string) error { return nil }
 func (m *mockStorer) DeleteRelationship(_ context.Context, _, _, _, _, _ string) error { return nil }
-func (m *mockStorer) DeleteByResourceAndSubject(_ context.Context, _, _, _, _ string) error       { return nil }
+func (m *mockStorer) DeleteByResourceAndSubject(_ context.Context, _, _, _, _ string) error {
+	return nil
+}
 func (m *mockStorer) CountByResourceAndRelation(_ context.Context, _, _, _ string) (int, error) {
 	return 0, nil
 }

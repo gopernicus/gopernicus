@@ -75,12 +75,12 @@ func NewGoogleProvider(ctx context.Context, clientID, clientSecret string, scope
 }
 
 func (p *GoogleProvider) Name() string                 { return "google" }
-func (p *GoogleProvider) SupportsOIDC() bool            { return true }
-func (p *GoogleProvider) TrustEmailVerification() bool  { return true }
+func (p *GoogleProvider) SupportsOIDC() bool           { return true }
+func (p *GoogleProvider) TrustEmailVerification() bool { return true }
 
 func (p *GoogleProvider) GetAuthorizationURL(state, codeVerifier, nonce, redirectURI string) string {
 	params := url.Values{
-		"client_id":              {p.config.ClientID},
+		"client_id":             {p.config.ClientID},
 		"redirect_uri":          {redirectURI},
 		"response_type":         {"code"},
 		"scope":                 {strings.Join(p.config.Scopes, " ")},

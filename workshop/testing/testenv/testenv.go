@@ -13,9 +13,9 @@ import (
 	"github.com/gopernicus/gopernicus/infrastructure/database/postgres/pgxdb"
 	"github.com/gopernicus/gopernicus/infrastructure/events"
 	"github.com/gopernicus/gopernicus/infrastructure/events/memorybus"
+	"github.com/gopernicus/gopernicus/sdk/logger"
 	"github.com/gopernicus/gopernicus/workshop/testing/testpgx"
 	"github.com/gopernicus/gopernicus/workshop/testing/testredis"
-	"github.com/gopernicus/gopernicus/sdk/logger"
 )
 
 // TestEnv holds a fully wired test environment for integration tests.

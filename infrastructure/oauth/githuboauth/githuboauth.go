@@ -52,12 +52,12 @@ func NewGitHubProvider(clientID, clientSecret string, scopes []string, client *h
 }
 
 func (p *GitHubProvider) Name() string                 { return "github" }
-func (p *GitHubProvider) SupportsOIDC() bool            { return false }
-func (p *GitHubProvider) TrustEmailVerification() bool  { return false }
+func (p *GitHubProvider) SupportsOIDC() bool           { return false }
+func (p *GitHubProvider) TrustEmailVerification() bool { return false }
 
 func (p *GitHubProvider) GetAuthorizationURL(state, codeVerifier, _, redirectURI string) string {
 	params := url.Values{
-		"client_id":              {p.config.ClientID},
+		"client_id":             {p.config.ClientID},
 		"redirect_uri":          {redirectURI},
 		"scope":                 {strings.Join(p.config.Scopes, " ")},
 		"state":                 {state},

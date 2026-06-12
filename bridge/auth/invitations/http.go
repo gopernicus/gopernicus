@@ -336,7 +336,6 @@ func (b *Bridge) httpDecline(w http.ResponseWriter, r *http.Request) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-
 func toInvitationResponse(inv invitationscore.Invitation) *InvitationResponse {
 	return &InvitationResponse{
 		InvitationID:   inv.InvitationID,

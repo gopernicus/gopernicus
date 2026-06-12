@@ -8,14 +8,14 @@ import (
 
 var (
 	// Credential errors.
-	ErrInvalidCredentials    = fmt.Errorf("auth: %w", errs.ErrUnauthorized)
-	ErrEmailNotVerified      = fmt.Errorf("auth email not verified: %w", errs.ErrForbidden)
-	ErrPasswordNotVerified   = fmt.Errorf("auth password not verified: %w", errs.ErrForbidden)
-	ErrPasswordNotSet        = fmt.Errorf("auth password not set: %w", errs.ErrNotFound)
+	ErrInvalidCredentials     = fmt.Errorf("auth: %w", errs.ErrUnauthorized)
+	ErrEmailNotVerified       = fmt.Errorf("auth email not verified: %w", errs.ErrForbidden)
+	ErrPasswordNotVerified    = fmt.Errorf("auth password not verified: %w", errs.ErrForbidden)
+	ErrPasswordNotSet         = fmt.Errorf("auth password not set: %w", errs.ErrNotFound)
 	ErrOAuthAccountUnverified = fmt.Errorf("auth oauth account not verified: %w", errs.ErrForbidden)
-	ErrEmailAlreadyExists    = fmt.Errorf("auth: %w", errs.ErrAlreadyExists)
-	ErrUserInactive          = fmt.Errorf("auth user inactive: %w", errs.ErrForbidden)
-	ErrCouldNotRegister      = fmt.Errorf("auth user register: %w", errs.ErrConflict)
+	ErrEmailAlreadyExists     = fmt.Errorf("auth: %w", errs.ErrAlreadyExists)
+	ErrUserInactive           = fmt.Errorf("auth user inactive: %w", errs.ErrForbidden)
+	ErrCouldNotRegister       = fmt.Errorf("auth user register: %w", errs.ErrConflict)
 	// ErrCannotRemoveLastMethod is returned when removing an authentication
 	// method (OAuth account or password) would leave the user with no way to
 	// sign in. Applies to both OAuth unlink and password removal.
@@ -26,13 +26,13 @@ var (
 	ErrTokenReuse      = fmt.Errorf("auth token reuse: %w", errs.ErrUnauthorized)
 
 	// Verification errors.
-	ErrCodeExpired          = fmt.Errorf("auth code: %w", errs.ErrExpired)
-	ErrCodeInvalid          = fmt.Errorf("auth code: %w", errs.ErrUnauthorized)
+	ErrCodeExpired = fmt.Errorf("auth code: %w", errs.ErrExpired)
+	ErrCodeInvalid = fmt.Errorf("auth code: %w", errs.ErrUnauthorized)
 
 	// ErrWeakPassword indicates a password failed the NIST policy checks
 	// (ValidatePassword) — enforced in the core mutators so non-HTTP
 	// callers cannot set out-of-policy passwords.
-	ErrWeakPassword = fmt.Errorf("auth password policy: %w", errs.ErrInvalidInput)
+	ErrWeakPassword         = fmt.Errorf("auth password policy: %w", errs.ErrInvalidInput)
 	ErrTooManyAttempts      = fmt.Errorf("auth: %w", errs.ErrForbidden)
 	ErrEmailAlreadyVerified = fmt.Errorf("auth: %w", errs.ErrConflict)
 

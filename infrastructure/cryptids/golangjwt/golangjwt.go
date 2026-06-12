@@ -21,8 +21,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/gopernicus/gopernicus/infrastructure/cryptids"
 	gojwt "github.com/golang-jwt/jwt/v5"
+	"github.com/gopernicus/gopernicus/infrastructure/cryptids"
 )
 
 var _ cryptids.JWTSigner = (*Signer)(nil)

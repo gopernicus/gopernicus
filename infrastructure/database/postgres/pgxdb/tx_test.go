@@ -19,9 +19,9 @@ type mockTx struct {
 	commitErr  error
 }
 
-func (m *mockTx) Begin(ctx context.Context) (pgx.Tx, error)                          { return m, nil }
-func (m *mockTx) Commit(ctx context.Context) error                                    { m.committed = true; return m.commitErr }
-func (m *mockTx) Rollback(ctx context.Context) error                                  { m.rolledBack = true; return nil }
+func (m *mockTx) Begin(ctx context.Context) (pgx.Tx, error) { return m, nil }
+func (m *mockTx) Commit(ctx context.Context) error          { m.committed = true; return m.commitErr }
+func (m *mockTx) Rollback(ctx context.Context) error        { m.rolledBack = true; return nil }
 func (m *mockTx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	return pgconn.CommandTag{}, nil
 }

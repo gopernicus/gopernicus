@@ -17,9 +17,9 @@ type mockJob struct {
 	retryCount int
 }
 
-func (j mockJob) GetID() string       { return j.id }
-func (j mockJob) GetStatus() string   { return j.status }
-func (j mockJob) GetRetryCount() int  { return j.retryCount }
+func (j mockJob) GetID() string      { return j.id }
+func (j mockJob) GetStatus() string  { return j.status }
+func (j mockJob) GetRetryCount() int { return j.retryCount }
 
 type mockJobStore struct {
 	checkoutFn func(ctx context.Context, workerID string, now time.Time) (mockJob, error)

@@ -37,11 +37,11 @@ const (
 
 // Invitation status values.
 const (
-	StatusPending  = "pending"
-	StatusAccepted = "accepted"
-	StatusDeclined = "declined"
+	StatusPending   = "pending"
+	StatusAccepted  = "accepted"
+	StatusDeclined  = "declined"
 	StatusCancelled = "cancelled"
-	StatusExpired  = "expired"
+	StatusExpired   = "expired"
 )
 
 // =============================================================================

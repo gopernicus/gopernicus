@@ -185,7 +185,6 @@ func TestSend_ClientError(t *testing.T) {
 	}
 }
 
-
 func TestStripHTMLTags(t *testing.T) {
 	tests := []struct {
 		name     string

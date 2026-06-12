@@ -1821,11 +1821,11 @@ func TestLookupDescendantResourceIDs_DataCycle(t *testing.T) {
 // countingStorer wraps mockStorer and counts calls to lookup methods.
 type countingStorer struct {
 	*mockStorer
-	lookupResourceIDsCalls              int
-	lookupResourceIDsByRelationCalls    int
-	lookupDescendantResourceIDsCalls    int
-	createRelationshipsCalls            int
-	deleteRelationshipCalls             int
+	lookupResourceIDsCalls           int
+	lookupResourceIDsByRelationCalls int
+	lookupDescendantResourceIDsCalls int
+	createRelationshipsCalls         int
+	deleteRelationshipCalls          int
 }
 
 func newCountingStorer() *countingStorer {

@@ -39,11 +39,11 @@ EMPTY_VAL=
 	}{
 		{"DB_HOST", "localhost"},
 		{"DB_PORT", "5432"},
-		{"DB_NAME", "my_database"},    // double quotes stripped
-		{"DB_PASS", "s3cret"},         // single quotes stripped
-		{"APP_ENV", "production"},     // export prefix stripped
-		{"CACHE_TTL", "300"},          // inline comment stripped
-		{"EMPTY_VAL", ""},             // empty value preserved
+		{"DB_NAME", "my_database"}, // double quotes stripped
+		{"DB_PASS", "s3cret"},      // single quotes stripped
+		{"APP_ENV", "production"},  // export prefix stripped
+		{"CACHE_TTL", "300"},       // inline comment stripped
+		{"EMPTY_VAL", ""},          // empty value preserved
 	}
 
 	for _, tt := range tests {

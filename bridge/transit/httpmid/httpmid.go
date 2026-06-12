@@ -39,7 +39,7 @@ const (
 type SubjectType int
 
 const (
-	SubjectTypeUser           SubjectType = iota
+	SubjectTypeUser SubjectType = iota
 	SubjectTypeServiceAccount
 )
 

@@ -34,7 +34,6 @@ func (c *Config) Get(key string) string {
 	return os.Getenv(key)
 }
 
-
 // Require returns the value or an error if the variable is unset.
 func (c *Config) Require(key string) (string, error) {
 	v := c.Get(key)

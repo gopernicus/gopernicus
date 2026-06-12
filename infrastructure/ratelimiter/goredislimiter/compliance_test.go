@@ -3,9 +3,9 @@ package goredislimiter_test
 import (
 	"testing"
 
+	"github.com/gopernicus/gopernicus/infrastructure/database/kvstore/goredisdb"
 	"github.com/gopernicus/gopernicus/infrastructure/ratelimiter/goredislimiter"
 	"github.com/gopernicus/gopernicus/infrastructure/ratelimiter/ratelimitertest"
-	"github.com/gopernicus/gopernicus/infrastructure/database/kvstore/goredisdb"
 )
 
 func TestCompliance(t *testing.T) {

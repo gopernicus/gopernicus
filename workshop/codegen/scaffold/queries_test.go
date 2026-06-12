@@ -29,13 +29,13 @@ func TestScaffoldQueries_Users(t *testing.T) {
 	fmt.Println(got)
 
 	checks := map[string]string{
-		"filter":       "@filter:conditions *",
-		"order":        "@order: *",
-		"max":          "@max: 100",
-		"search":       "@search: ilike(",
-		"soft delete":  "record_state = 'deleted'",
-		"SoftDelete":   "-- @func: SoftDelete",
-		"hard delete":  "DELETE FROM users",
+		"filter":        "@filter:conditions *",
+		"order":         "@order: *",
+		"max":           "@max: 100",
+		"search":        "@search: ilike(",
+		"soft delete":   "record_state = 'deleted'",
+		"SoftDelete":    "-- @func: SoftDelete",
+		"hard delete":   "DELETE FROM users",
 		"create fields": "-- @fields: *,-created_at,-updated_at",
 		"update fields": "-- @fields: *,-user_id,-record_state,-created_at",
 	}
@@ -88,8 +88,8 @@ func TestScaffoldQueries_NoSoftDelete(t *testing.T) {
 
 func TestScaffoldQueries_TenantScoped(t *testing.T) {
 	table := &schema.TableInfo{
-		TableName: "projects",
-		Schema:    "public",
+		TableName:  "projects",
+		Schema:     "public",
 		PrimaryKey: &schema.PrimaryKeyInfo{Column: "project_id", DBType: "varchar", GoType: "string"},
 		Columns: []schema.ColumnInfo{
 			{Name: "project_id", DBType: "varchar", GoType: "string", IsPrimaryKey: true},

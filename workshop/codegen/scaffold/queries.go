@@ -13,7 +13,8 @@ import (
 // @authorize, @auth.create). Protocol config lives in bridge.yml.
 //
 // Generated operations (when applicable):
-//   List, Get, Create, Update, SoftDelete, Archive, Restore, Delete
+//
+//	List, Get, Create, Update, SoftDelete, Archive, Restore, Delete
 func Queries(
 	table *schema.TableInfo,
 	tableName, entitySingular string,
