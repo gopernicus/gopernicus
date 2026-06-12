@@ -43,6 +43,27 @@ Releases are tag-only: `git tag -a vX.Y.Z && git push origin vX.Y.Z`.
   authorization tests.
 - `testhttp.Client.Anonymous()` — a credential-less client against the
   same server, for rejection probes alongside an authenticated client.
+- Authorize-gated e2e suites (phase C): routes guarded by `authorize:`
+  now generate when the create route's `auth_create` relations provably
+  grant the suite's subject a direct relation satisfying each checked
+  permission. The stack wires the entity's real schema (rendered locally
+  — importing the domain composite would cycle) over the seedable
+  in-memory store; the bridge's own relationship writes at POST time do
+  the seeding — production semantics. Authorize-checked probes expect
+  403 (not 404) for absent ids: denial renders before lookup.
+  Cross-entity checks (e.g. a `user_id`-param route authorizing against
+  `user`) still skip with the reason.
+
+### Fixed
+- Bridge e2e generation read the bridge.yml auth schema AFTER generating
+  the e2e suite — authorize analysis saw an empty schema for
+  bridge.yml-sourced entities. Injection now runs first.
+- The e2e SQL-injection probe sent `?search=`; the generated bridge
+  reads the search term from `?s=` — the probe silently tested nothing.
+- Multi-POST probes (pagination) now vary create fields backed by UNIQUE
+  columns and unique (incl. composite/partial) indexes — repeated valid
+  inserts 409'd on entities like tenants (slug) and invitations
+  (pending-invite identity).
 
 ### Fixed
 - Generated fixture defaults now produce live rows: `*expires_at` columns

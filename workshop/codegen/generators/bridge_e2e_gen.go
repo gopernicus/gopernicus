@@ -99,6 +99,29 @@ type BridgeE2EData struct {
 	// ModulePath derives the session-mode auth imports (project repos,
 	// satisfiers) in the generated file.
 	ModulePath string
+
+	// HasAuthorize wires a real schema over the seedable in-memory store
+	// (phase C): the bridge's own @auth.create relationship writes at POST
+	// time grant the suite's subject the relations the authorize-gated
+	// routes check — production semantics, no artificial seeding. Only set
+	// when generation-time analysis proves every authorize-gated suite
+	// route's permission is satisfiable by a created-on-POST relation.
+	HasAuthorize bool
+
+	// AuthSchemaEntity renders the entity's resource schema locally in the
+	// generated file — the domain composite package exports AuthSchema()
+	// but importing it from an entity bridge package is an import cycle.
+	AuthSchemaEntity *AuthSchemaEntity
+
+	// NotFoundStatus is what a probe of an absent id receives: 404, or 403
+	// when the Get route is authorize-checked (no relation exists on a
+	// nonexistent resource, and denial renders before lookup).
+	NotFoundStatus int
+
+	// UniqueRequestFields are create-request string fields backed by UNIQUE
+	// columns — probes POSTing the valid request more than once must vary
+	// them or the second insert 409s.
+	UniqueRequestFields []string
 }
 
 // GenerateBridgeE2E emits light e2e tests for a bridged entity hosted by a
@@ -225,31 +248,60 @@ func buildBridgeE2EData(data BridgeTemplateData, resolved *ResolvedFile, moduleP
 			}
 		}
 		if lq.HasSearch {
-			e2e.StringFilterParams = append(e2e.StringFilterParams, "search")
+			// The generated bridge reads the search term from the "s" query
+			// param (parseQueryParams), not "search".
+			e2e.StringFilterParams = append(e2e.StringFilterParams, "s")
 		}
 		break
+	}
+
+	uniqueCols := map[string]bool{}
+	for _, col := range resolved.AllColumns {
+		if col.IsUnique && !col.IsPrimaryKey {
+			uniqueCols[col.Name] = true
+		}
+	}
+	// Composite (and partial) unique indexes aren't single-column IsUnique;
+	// every member column must vary too or repeated valid inserts 409.
+	if resolved.Table != nil {
+		for _, idx := range resolved.Table.Indexes {
+			if !idx.Unique {
+				continue
+			}
+			for _, col := range idx.Columns {
+				if col != resolved.PKColumn {
+					uniqueCols[col] = true
+				}
+			}
+		}
+	}
+	for _, f := range data.CreateQueries[0].Fields {
+		if f.IsString && uniqueCols[f.DBName] {
+			e2e.UniqueRequestFields = append(e2e.UniqueRequestFields, f.DBName)
+		}
 	}
 
 	// Route auth requirements are evaluated per SUITE route below — only
 	// the routes the probes actually exercise decide the credential.
 	type routeAuth struct {
-		mode       string // "" | "user" | "service_account" | "user_session" | "any"
-		authorized bool
-		method     string
-		path       string
+		mode      string // "" | "user" | "service_account" | "user_session" | "any"
+		authorize *AuthorizeSpec
+		method    string
+		path      string
 	}
 	suiteAuth := map[string]routeAuth{}
+	var createRels []BridgeCreateRel
 	recordAuth := func(funcName string, r BridgeRoute) {
-		ra := routeAuth{method: r.Method, path: r.Path}
+		ra := routeAuth{method: r.Method, path: r.Path, authorize: r.Authorize}
 		for _, m := range r.MiddlewareChain {
 			if m.Authenticate != "" {
 				ra.mode = m.Authenticate
 			}
-			if m.Authorize != nil {
-				ra.authorized = true
-			}
 		}
 		suiteAuth[funcName] = ra
+		if funcName == "Create" {
+			createRels = r.CreateRels
+		}
 	}
 
 	pkParam := "{" + resolved.PKColumn + "}"
@@ -293,15 +345,64 @@ func buildBridgeE2EData(data BridgeTemplateData, resolved *ResolvedFile, moduleP
 		}
 	}
 
-	// Pick the suite credential from the exercised routes' auth modes.
-	// A session-backed JWT satisfies user, any, and user_session; a plain
-	// minted JWT satisfies user and any. service_account routes need an
-	// API-key-wired stack (project-specific GetByHash) and authorize-gated
-	// routes need ReBAC seeding — both still skip, each saying why.
+	// Authorize-gated suite routes (phase C): the stack wires the entity's
+	// real schema over a seedable in-memory store, and the bridge's own
+	// @auth.create relationship writes at POST time grant the suite's
+	// subject its relations — production semantics. Generation-time
+	// analysis proves each route's permission is satisfiable by a
+	// created-on-POST direct relation; anything it can't prove skips with
+	// the reason, never emitting a suite that fails at runtime.
+	entityResourceType := Singularize(resolved.TableName)
+	granted := map[string]bool{}
+	for _, rel := range createRels {
+		if rel.SubjectFromContext && rel.ResourceType == entityResourceType {
+			granted[rel.Relation] = true
+		}
+	}
+	permissions := map[string]AuthSchemaPermission{}
+	if len(resolved.AuthRelations) > 0 || len(resolved.AuthPermissions) > 0 {
+		entity := buildAuthSchemaEntityFromResolved(resolved)
+		e2e.AuthSchemaEntity = &entity
+		for _, p := range entity.Permissions {
+			permissions[p.Name] = p
+		}
+	}
+
 	var needSession, needUser, needServiceAccount bool
-	for _, ra := range suiteAuth {
-		if ra.authorized {
-			return BridgeE2EData{}, fmt.Sprintf("route %s %s requires authorization — ReBAC seeding is not yet generated", ra.method, ra.path)
+	for funcName, ra := range suiteAuth {
+		if spec := ra.authorize; spec != nil {
+			routeDesc := fmt.Sprintf("route %s %s", ra.method, ra.path)
+			// Mirror the bridge template's resource-type derivation exactly
+			// (bridge_tmpl check branch): Entity override, else the path
+			// param with "_id" stripped, else the entity singular.
+			resourceType := spec.Entity
+			if resourceType == "" && spec.Param != "" {
+				resourceType = strings.TrimSuffix(spec.Param, "_id")
+			}
+			if resourceType == "" {
+				resourceType = entityResourceType
+			}
+			if resourceType != entityResourceType {
+				return BridgeE2EData{}, fmt.Sprintf("%s authorizes against resource type %q — cross-entity authorization is not yet generated", routeDesc, resourceType)
+			}
+			perm, ok := permissions[spec.Permission]
+			if !ok {
+				return BridgeE2EData{}, fmt.Sprintf("%s checks permission %q which the entity's auth schema does not define", routeDesc, spec.Permission)
+			}
+			satisfiable := false
+			for _, check := range perm.Checks {
+				if check.IsDirect && granted[check.Relation] {
+					satisfiable = true
+					break
+				}
+			}
+			if !satisfiable {
+				return BridgeE2EData{}, fmt.Sprintf("%s needs permission %q but the create route's @auth.create relations don't grant a satisfying direct relation", routeDesc, spec.Permission)
+			}
+			e2e.HasAuthorize = true
+			if funcName == "Get" && spec.Pattern == "check" {
+				e2e.NotFoundStatus = 403
+			}
 		}
 		switch ra.mode {
 		case "user_session":
@@ -311,6 +412,9 @@ func buildBridgeE2EData(data BridgeTemplateData, resolved *ResolvedFile, moduleP
 		case "service_account":
 			needServiceAccount = true
 		}
+	}
+	if e2e.HasAuthorize && !needSession && !needUser {
+		return BridgeE2EData{}, "authorize-gated routes without a user-credential authenticate mode — not yet generated"
 	}
 	switch {
 	case needServiceAccount && (needUser || needSession):
@@ -328,6 +432,14 @@ func buildBridgeE2EData(data BridgeTemplateData, resolved *ResolvedFile, moduleP
 	e2e.ModulePath = modulePath
 	e2e.CreateAuthed = suiteAuth["Create"].mode != ""
 	e2e.GetAuthed = suiteAuth["Get"].mode != ""
+	if e2e.NotFoundStatus == 0 {
+		e2e.NotFoundStatus = 404
+	}
+	if !e2e.HasAuthorize {
+		// The local schema function is only emitted for authorize-wired
+		// stacks; an anonymous or authenticate-only suite doesn't need it.
+		e2e.AuthSchemaEntity = nil
+	}
 
 	// Pick a settable, non-server-set string update field for the update
 	// mass-assignment probe (SEC1 already strips record_state/ownership from

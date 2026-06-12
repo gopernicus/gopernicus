@@ -175,16 +175,48 @@ func TestBridgeE2EAuthModesRender(t *testing.T) {
 	}
 }
 
+// Authorize-wired suites render the local schema function and the seedable
+// authorizer, with denial-aware probe statuses.
+func TestBridgeE2EAuthorizeRender(t *testing.T) {
+	data := fullE2EData(false)
+	data.AuthMode = "jwt"
+	data.BridgeAuthEnabled = true
+	data.CreateAuthed = true
+	data.HasAuthorize = true
+	data.NotFoundStatus = 403
+	data.ModulePath = "github.com/x/app"
+	data.AuthSchemaEntity = &AuthSchemaEntity{
+		ResourceType: "thing",
+		Relations:    []AuthSchemaRelation{{Name: "owner", AllowedSubjects: []AuthSchemaSubjectRef{{Type: "user"}}}},
+		Permissions: []AuthSchemaPermission{
+			{Name: "read", Checks: []AuthSchemaPermCheck{{IsDirect: true, Relation: "owner"}}},
+		},
+	}
+
+	out := renderTemplateString(t, "bridge_e2e", bridgeE2EGeneratedTemplate, data)
+	for _, want := range []string{
+		"func e2eAuthSchema() []authorization.ResourceSchema",
+		`Name: "thing"`,
+		`authorization.Direct("owner")`,
+		"testauth.AuthorizerWithStore(authorization.NewSchema(e2eAuthSchema()))",
+		"RequireStatus(t, 403)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("authorize render missing %q", want)
+		}
+	}
+	if strings.Contains(out, "RequireStatus(t, 404)") {
+		t.Error("authorize-checked Get must not expect 404 for absent ids")
+	}
+}
+
 // Suite-route auth requirements drive credential selection and the
 // remaining skip classes.
 func TestBuildBridgeE2EAuthSelection(t *testing.T) {
-	route := func(funcName, method, path, mode string, authorize bool) BridgeRoute {
-		r := BridgeRoute{FuncName: funcName, Method: method, Path: path}
+	route := func(funcName, method, path, mode string, authorize *AuthorizeSpec) BridgeRoute {
+		r := BridgeRoute{FuncName: funcName, Method: method, Path: path, Authorize: authorize}
 		if mode != "" {
 			r.MiddlewareChain = append(r.MiddlewareChain, MiddlewareEntry{Authenticate: mode})
-		}
-		if authorize {
-			r.MiddlewareChain = append(r.MiddlewareChain, MiddlewareEntry{Authorize: &AuthorizeEntry{}})
 		}
 		return r
 	}
@@ -212,15 +244,15 @@ func TestBuildBridgeE2EAuthSelection(t *testing.T) {
 		wantMode string
 		wantSkip string
 	}{
-		{"anonymous", []BridgeRoute{route("Create", "POST", "/things", "", false)}, "", ""},
-		{"user → jwt", []BridgeRoute{route("Create", "POST", "/things", "user", false)}, "jwt", ""},
-		{"any → jwt", []BridgeRoute{route("Create", "POST", "/things", "any", false)}, "jwt", ""},
-		{"user_session → session", []BridgeRoute{route("Create", "POST", "/things", "user_session", false)}, "session", ""},
-		{"authorize skips", []BridgeRoute{route("Create", "POST", "/things", "user", true)}, "", "requires authorization"},
-		{"service_account skips", []BridgeRoute{route("Create", "POST", "/things", "service_account", false)}, "", "API-key-wired"},
+		{"anonymous", []BridgeRoute{route("Create", "POST", "/things", "", nil)}, "", ""},
+		{"user → jwt", []BridgeRoute{route("Create", "POST", "/things", "user", nil)}, "jwt", ""},
+		{"any → jwt", []BridgeRoute{route("Create", "POST", "/things", "any", nil)}, "jwt", ""},
+		{"user_session → session", []BridgeRoute{route("Create", "POST", "/things", "user_session", nil)}, "session", ""},
+		{"authorize without schema skips", []BridgeRoute{route("Create", "POST", "/things", "user", &AuthorizeSpec{Pattern: "check", Permission: "read", Param: "thing_id"})}, "", "does not define"},
+		{"service_account skips", []BridgeRoute{route("Create", "POST", "/things", "service_account", nil)}, "", "API-key-wired"},
 		{"mixed skips", []BridgeRoute{
-			route("Create", "POST", "/things", "service_account", false),
-			route("Get", "GET", "/things/{id}", "user", false),
+			route("Create", "POST", "/things", "service_account", nil),
+			route("Get", "GET", "/things/{id}", "user", nil),
 		}, "", "mix service_account and user"},
 	}
 	for _, tc := range cases {
@@ -245,10 +277,79 @@ func TestBuildBridgeE2EAuthSelection(t *testing.T) {
 	}
 
 	// session + spec mode skips: the sqlite stack has no auth wiring.
-	_, skip := buildBridgeE2EData(base(route("Create", "POST", "/things", "user_session", false)), resolved, "github.com/x/app", "litedb", true)
+	_, skip := buildBridgeE2EData(base(route("Create", "POST", "/things", "user_session", nil)), resolved, "github.com/x/app", "litedb", true)
 	if !strings.Contains(skip, "spec mode") {
 		t.Errorf("spec-mode session skip = %q", skip)
 	}
+}
+
+// Authorize-gated routes generate when the create route's @auth.create
+// relations provably satisfy each checked permission (phase C); through-only
+// permissions and ungranted relations skip with their reasons.
+func TestBuildBridgeE2EAuthorizeSatisfiability(t *testing.T) {
+	authedResolved := func(rules ...string) *ResolvedFile {
+		return &ResolvedFile{
+			TableName: "things",
+			PKColumn:  "id",
+			AllColumns: []schema.ColumnInfo{
+				{Name: "id", DBType: "text", GoType: "string", IsPrimaryKey: true},
+				{Name: "title", DBType: "text", GoType: "string"},
+			},
+			AuthRelations:   []AuthRelation{{Name: "owner", Subjects: []string{"user"}}},
+			AuthPermissions: []AuthPermission{{Name: "read", Rules: rules}, {Name: "delete", Rules: rules}},
+		}
+	}
+	ownerRel := []BridgeCreateRel{{
+		ResourceType: "thing", ResourceIDExpr: "record.ID",
+		Relation: "owner", SubjectFromContext: true,
+	}}
+	routes := func(rels []BridgeCreateRel) []BridgeRoute {
+		create := BridgeRoute{FuncName: "Create", Method: "POST", Path: "/things",
+			MiddlewareChain: []MiddlewareEntry{{Authenticate: "user"}}, CreateRels: rels}
+		get := BridgeRoute{FuncName: "Get", Method: "GET", Path: "/things/{id}",
+			MiddlewareChain: []MiddlewareEntry{{Authenticate: "user"}},
+			Authorize:       &AuthorizeSpec{Pattern: "check", Permission: "read", Param: "thing_id"}}
+		return []BridgeRoute{create, get}
+	}
+	data := func(rels []BridgeCreateRel) BridgeTemplateData {
+		return BridgeTemplateData{
+			BridgePackage: "thingsbridge",
+			EntityName:    "Thing",
+			AuthEnabled:   true,
+			CreateQueries: []BridgeCreateQuery{{FuncName: "Create", Fields: []BridgeField{{DBName: "title", GoName: "Title", IsString: true}}}},
+			Routes:        routes(rels),
+		}
+	}
+
+	t.Run("satisfiable generates with 403 not-found", func(t *testing.T) {
+		e2e, skip := buildBridgeE2EData(data(ownerRel), authedResolved("owner"), "github.com/x/app", "primary", false)
+		if skip != "" {
+			t.Fatalf("unexpected skip: %s", skip)
+		}
+		if !e2e.HasAuthorize {
+			t.Error("HasAuthorize must be set")
+		}
+		if e2e.AuthSchemaEntity == nil || e2e.AuthSchemaEntity.ResourceType != "thing" {
+			t.Errorf("AuthSchemaEntity = %+v", e2e.AuthSchemaEntity)
+		}
+		if e2e.NotFoundStatus != 403 {
+			t.Errorf("NotFoundStatus = %d, want 403 (authorize-checked Get denies before lookup)", e2e.NotFoundStatus)
+		}
+	})
+
+	t.Run("ungranted relation skips", func(t *testing.T) {
+		_, skip := buildBridgeE2EData(data(nil), authedResolved("owner"), "github.com/x/app", "primary", false)
+		if !strings.Contains(skip, "don't grant a satisfying direct relation") {
+			t.Errorf("skip = %q", skip)
+		}
+	})
+
+	t.Run("through-only permission skips", func(t *testing.T) {
+		_, skip := buildBridgeE2EData(data(ownerRel), authedResolved("tenant->member"), "github.com/x/app", "primary", false)
+		if !strings.Contains(skip, "don't grant a satisfying direct relation") {
+			t.Errorf("skip = %q", skip)
+		}
+	})
 }
 
 // TestBridgeSecurityBootstrapRendersGofmtClean covers the security bootstrap
