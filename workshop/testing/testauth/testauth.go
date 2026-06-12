@@ -68,10 +68,20 @@ func MintAccessToken(signer *golangjwt.Signer, userID string) string {
 	return token
 }
 
-// Authorizer returns an authorizer over an empty schema. Authentication is
-// enforced ahead of authorization, so the security suite's rejection probes
-// never reach the (nil) store; isolation tests that need real authorization
-// supply their own schema/store.
+// Authorizer returns an authorizer over an empty schema and an empty
+// in-memory store. The store is real (never nil): generated handlers call
+// relationship writes outside permission checks — hard-delete cleanup runs
+// DeleteResourceRelationships even when no route authorizes — and a nil
+// store panics the server. Isolation tests that need real authorization
+// supply their own schema/store, or seed this one via AuthorizerWithStore.
 func Authorizer() *authorization.Authorizer {
-	return authorization.NewAuthorizer(nil, authorization.Schema{}, authorization.Config{})
+	return authorization.NewAuthorizer(NewMemoryStore(), authorization.Schema{}, authorization.Config{})
+}
+
+// AuthorizerWithStore returns an authorizer over the given schema backed by
+// a seedable in-memory store — grant a relation with store.Seed(...) before
+// driving an authorize-gated route.
+func AuthorizerWithStore(schema authorization.Schema) (*authorization.Authorizer, *MemoryStore) {
+	store := NewMemoryStore()
+	return authorization.NewAuthorizer(store, schema, authorization.Config{}), store
 }

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"text/template"
+
+	"github.com/gopernicus/gopernicus/workshop/codegen/schema"
 )
 
 // fullE2EData returns BridgeE2EData with every optional probe enabled, so a
@@ -111,6 +113,141 @@ func TestBridgeE2ETemplatesRenderGofmtClean(t *testing.T) {
 				t.Errorf("specMode=%v: e2e bootstrap still inlines the go.mod walk", specMode)
 			}
 		}
+	}
+}
+
+// Authenticated modes (phase B): jwt drives routes with a minted token and
+// no extra wiring; session wires real user/session repos and seeds a session
+// row whose hash matches the minted token. Both render gofmt-clean with the
+// auth-enabled NewBridge signature and the anonymous-401 probe.
+func TestBridgeE2EAuthModesRender(t *testing.T) {
+	jwt := fullE2EData(false)
+	jwt.AuthMode = "jwt"
+	jwt.BridgeAuthEnabled = true
+	jwt.CreateAuthed = true
+	jwt.GetAuthed = true
+	jwt.ModulePath = "github.com/x/app"
+
+	out := renderTemplateString(t, "bridge_e2e", bridgeE2EGeneratedTemplate, jwt)
+	for _, want := range []string{
+		`testauth.Authenticator("e2etest")`,
+		`client.SetBearerToken(testauth.MintAccessToken(signer, "e2e-test-user"))`,
+		"authenticator, testauth.Authorizer())",
+		"TestE2EThingRequiresAuthentication",
+		"client.Anonymous()",
+		"RequireStatus(t, 401)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("jwt mode: missing %q", want)
+		}
+	}
+	if strings.Contains(out, "AuthenticatorWithRepositories") {
+		t.Error("jwt mode must not wire repositories")
+	}
+
+	session := jwt
+	session.AuthMode = "session"
+	out = renderTemplateString(t, "bridge_e2e", bridgeE2EGeneratedTemplate, session)
+	for _, want := range []string{
+		"testauth.AuthenticatorWithRepositories",
+		"satisfiers.NewUserSatisfier",
+		"satisfiers.NewSessionSatisfier",
+		"authentication.HashToken(token)",
+		`"session_token_hash": tokenHash`,
+		"fixtures.CreateTestUserWithDefaults",
+		`"github.com/x/app/core/repositories/auth/sessions/sessionspgx"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("session mode: missing %q", want)
+		}
+	}
+
+	// Auth-enabled bridge with anonymous suite routes still passes the
+	// authenticator/authorizer constructor args, mints nothing.
+	anon := fullE2EData(false)
+	anon.BridgeAuthEnabled = true
+	out = renderTemplateString(t, "bridge_e2e", bridgeE2EGeneratedTemplate, anon)
+	if !strings.Contains(out, "authenticator, _ := testauth.Authenticator") {
+		t.Error("auth-enabled anonymous suite must still construct the authenticator")
+	}
+	if strings.Contains(out, "SetBearerToken") {
+		t.Error("anonymous suite must not set a credential")
+	}
+}
+
+// Suite-route auth requirements drive credential selection and the
+// remaining skip classes.
+func TestBuildBridgeE2EAuthSelection(t *testing.T) {
+	route := func(funcName, method, path, mode string, authorize bool) BridgeRoute {
+		r := BridgeRoute{FuncName: funcName, Method: method, Path: path}
+		if mode != "" {
+			r.MiddlewareChain = append(r.MiddlewareChain, MiddlewareEntry{Authenticate: mode})
+		}
+		if authorize {
+			r.MiddlewareChain = append(r.MiddlewareChain, MiddlewareEntry{Authorize: &AuthorizeEntry{}})
+		}
+		return r
+	}
+	base := func(routes ...BridgeRoute) BridgeTemplateData {
+		return BridgeTemplateData{
+			BridgePackage: "thingsbridge",
+			EntityName:    "Thing",
+			AuthEnabled:   true,
+			CreateQueries: []BridgeCreateQuery{{FuncName: "Create", Fields: []BridgeField{{DBName: "title", GoName: "Title", IsString: true}}}},
+			Routes:        routes,
+		}
+	}
+	resolved := &ResolvedFile{
+		TableName: "things",
+		PKColumn:  "id",
+		AllColumns: []schema.ColumnInfo{
+			{Name: "id", DBType: "text", GoType: "string", IsPrimaryKey: true},
+			{Name: "title", DBType: "text", GoType: "string"},
+		},
+	}
+
+	cases := []struct {
+		name     string
+		routes   []BridgeRoute
+		wantMode string
+		wantSkip string
+	}{
+		{"anonymous", []BridgeRoute{route("Create", "POST", "/things", "", false)}, "", ""},
+		{"user → jwt", []BridgeRoute{route("Create", "POST", "/things", "user", false)}, "jwt", ""},
+		{"any → jwt", []BridgeRoute{route("Create", "POST", "/things", "any", false)}, "jwt", ""},
+		{"user_session → session", []BridgeRoute{route("Create", "POST", "/things", "user_session", false)}, "session", ""},
+		{"authorize skips", []BridgeRoute{route("Create", "POST", "/things", "user", true)}, "", "requires authorization"},
+		{"service_account skips", []BridgeRoute{route("Create", "POST", "/things", "service_account", false)}, "", "API-key-wired"},
+		{"mixed skips", []BridgeRoute{
+			route("Create", "POST", "/things", "service_account", false),
+			route("Get", "GET", "/things/{id}", "user", false),
+		}, "", "mix service_account and user"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e2e, skip := buildBridgeE2EData(base(tc.routes...), resolved, "github.com/x/app", "primary", false)
+			if tc.wantSkip != "" {
+				if !strings.Contains(skip, tc.wantSkip) {
+					t.Fatalf("skip = %q, want containing %q", skip, tc.wantSkip)
+				}
+				return
+			}
+			if skip != "" {
+				t.Fatalf("unexpected skip: %s", skip)
+			}
+			if e2e.AuthMode != tc.wantMode {
+				t.Errorf("AuthMode = %q, want %q", e2e.AuthMode, tc.wantMode)
+			}
+			if !e2e.BridgeAuthEnabled {
+				t.Error("BridgeAuthEnabled must mirror data.AuthEnabled")
+			}
+		})
+	}
+
+	// session + spec mode skips: the sqlite stack has no auth wiring.
+	_, skip := buildBridgeE2EData(base(route("Create", "POST", "/things", "user_session", false)), resolved, "github.com/x/app", "litedb", true)
+	if !strings.Contains(skip, "spec mode") {
+		t.Errorf("spec-mode session skip = %q", skip)
 	}
 }
 

@@ -27,6 +27,22 @@ Releases are tag-only: `git tag -a vX.Y.Z && git push origin vX.Y.Z`.
   `authentication.HashToken` is exported so harnesses seed credential
   rows the engine will match; `testauth.AuthenticatorWithRepositories`
   wires the real database-backed authentication modes.
+- Authenticated e2e suites (phase B): the bridge e2e generator no longer
+  skips authenticated routes. Suites whose routes authenticate as `user`
+  or `any` run with a minted JWT (no DB rows); `user_session` routes get
+  a session row seeded with the real token hash (pgx mode). Authenticated
+  suites also gain an anonymous-401 probe. Still skipped, each with its
+  printed reason: authorize-gated routes (ReBAC seeding is phase C),
+  `service_account` routes, mixed user/service-account suites, and
+  `user_session` on spec-mode databases.
+- `testauth.MemoryStore` — an in-memory `authorization.Storer`;
+  `testauth.Authorizer()` now uses it instead of a nil store (generated
+  hard-delete handlers call `DeleteResourceRelationships` even on
+  bridges with no authorize-gated routes — the nil store panicked the
+  server). `AuthorizerWithStore` returns a seedable pair for
+  authorization tests.
+- `testhttp.Client.Anonymous()` — a credential-less client against the
+  same server, for rejection probes alongside an authenticated client.
 
 ### Fixed
 - Generated fixture defaults now produce live rows: `*expires_at` columns

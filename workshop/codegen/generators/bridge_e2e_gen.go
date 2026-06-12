@@ -77,6 +77,28 @@ type BridgeE2EData struct {
 	// returning unfiltered results (P2).
 	StringFilterParams []string
 	OtherProbeParams   []string
+
+	// AuthMode selects the credential the suite drives routes with:
+	// "" (anonymous), "jwt" (user/any fast path — a minted token, no DB
+	// rows), or "session" (user_session — a session row seeded with a real
+	// token hash; pgx only). service_account and authorize-gated routes
+	// still skip the suite, each with its own printed reason.
+	AuthMode string
+
+	// BridgeAuthEnabled mirrors the bridge's AuthEnabled flag: NewBridge
+	// takes authenticator+authorizer parameters when set, regardless of
+	// which routes authenticate.
+	BridgeAuthEnabled bool
+
+	// CreateAuthed / GetAuthed gate the anonymous-401 probe — when the
+	// suite runs authenticated, one unauthenticated request must still be
+	// rejected, proving enforcement is on in this exact stack.
+	CreateAuthed bool
+	GetAuthed    bool
+
+	// ModulePath derives the session-mode auth imports (project repos,
+	// satisfiers) in the generated file.
+	ModulePath string
 }
 
 // GenerateBridgeE2E emits light e2e tests for a bridged entity hosted by a
@@ -208,16 +230,26 @@ func buildBridgeE2EData(data BridgeTemplateData, resolved *ResolvedFile, moduleP
 		break
 	}
 
-	// The e2e probes drive routes anonymously (POST → 201, GET → 200). If
-	// any route the suite exercises requires authentication or authorization,
-	// those calls would 401/403 instead — skip e2e for the entity until an
-	// authenticated stack exists (see the security suite for auth coverage).
-	for _, r := range data.Routes {
+	// Route auth requirements are evaluated per SUITE route below — only
+	// the routes the probes actually exercise decide the credential.
+	type routeAuth struct {
+		mode       string // "" | "user" | "service_account" | "user_session" | "any"
+		authorized bool
+		method     string
+		path       string
+	}
+	suiteAuth := map[string]routeAuth{}
+	recordAuth := func(funcName string, r BridgeRoute) {
+		ra := routeAuth{method: r.Method, path: r.Path}
 		for _, m := range r.MiddlewareChain {
-			if m.Authenticate != "" || m.Authorize != nil {
-				return BridgeE2EData{}, fmt.Sprintf("route %s %s requires auth — e2e probes drive routes anonymously", r.Method, r.Path)
+			if m.Authenticate != "" {
+				ra.mode = m.Authenticate
+			}
+			if m.Authorize != nil {
+				ra.authorized = true
 			}
 		}
+		suiteAuth[funcName] = ra
 	}
 
 	pkParam := "{" + resolved.PKColumn + "}"
@@ -226,6 +258,7 @@ func buildBridgeE2EData(data BridgeTemplateData, resolved *ResolvedFile, moduleP
 		case "Create":
 			if r.Method == "POST" && !strings.Contains(r.Path, "{") {
 				e2e.CreatePath = r.Path
+				recordAuth("Create", r)
 				for _, m := range r.MiddlewareChain {
 					if m.MaxBodySize > 0 {
 						e2e.CreateMaxBodySize = m.MaxBodySize
@@ -237,24 +270,64 @@ func buildBridgeE2EData(data BridgeTemplateData, resolved *ResolvedFile, moduleP
 			if expr, ok := pkOnlyPathExpr(r.Path, pkParam); ok {
 				e2e.HasGet = true
 				e2e.GetPathExpr = expr
+				recordAuth("Get", r)
 			}
 		case "List":
 			if r.Method == "GET" && !strings.Contains(r.Path, "{") {
 				e2e.HasList = true
 				e2e.ListPath = r.Path
+				recordAuth("List", r)
 			}
 		case "Delete":
 			if expr, ok := pkOnlyPathExpr(r.Path, pkParam); ok {
 				e2e.HasDelete = true
 				e2e.DeletePathExpr = expr
+				recordAuth("Delete", r)
 			}
 		case "Update":
 			if expr, ok := pkOnlyPathExpr(r.Path, pkParam); ok {
 				e2e.HasUpdate = true
 				e2e.UpdatePathExpr = expr
+				recordAuth("Update", r)
 			}
 		}
 	}
+
+	// Pick the suite credential from the exercised routes' auth modes.
+	// A session-backed JWT satisfies user, any, and user_session; a plain
+	// minted JWT satisfies user and any. service_account routes need an
+	// API-key-wired stack (project-specific GetByHash) and authorize-gated
+	// routes need ReBAC seeding — both still skip, each saying why.
+	var needSession, needUser, needServiceAccount bool
+	for _, ra := range suiteAuth {
+		if ra.authorized {
+			return BridgeE2EData{}, fmt.Sprintf("route %s %s requires authorization — ReBAC seeding is not yet generated", ra.method, ra.path)
+		}
+		switch ra.mode {
+		case "user_session":
+			needSession = true
+		case "user", "any":
+			needUser = true
+		case "service_account":
+			needServiceAccount = true
+		}
+	}
+	switch {
+	case needServiceAccount && (needUser || needSession):
+		return BridgeE2EData{}, "routes mix service_account and user credentials — per-route credential switching is not yet generated"
+	case needServiceAccount:
+		return BridgeE2EData{}, "service_account routes need an API-key-wired stack — not yet generated"
+	case needSession && specMode:
+		return BridgeE2EData{}, "user_session routes need the pgx auth stack — not available in spec mode"
+	case needSession:
+		e2e.AuthMode = "session"
+	case needUser:
+		e2e.AuthMode = "jwt"
+	}
+	e2e.BridgeAuthEnabled = data.AuthEnabled
+	e2e.ModulePath = modulePath
+	e2e.CreateAuthed = suiteAuth["Create"].mode != ""
+	e2e.GetAuthed = suiteAuth["Get"].mode != ""
 
 	// Pick a settable, non-server-set string update field for the update
 	// mass-assignment probe (SEC1 already strips record_state/ownership from
