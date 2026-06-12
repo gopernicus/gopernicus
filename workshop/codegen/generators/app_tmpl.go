@@ -340,6 +340,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/gopernicus/gopernicus/bridge/transit/httpmid"
 	"github.com/gopernicus/gopernicus/telemetry"
@@ -665,9 +666,22 @@ func New(ctx context.Context, log *slog.Logger, cfg Config, infra Infrastructure
 	// Routes
 	// =========================================================================
 
-	// Health check
+	// Probe contract: /healthz is LIVENESS — dependency-free, answers as
+	// long as the process serves HTTP, so a database outage never makes
+	// the platform restart healthy processes. /readyz is READINESS —
+	// answers 200 only when downstream dependencies are reachable, so
+	// load balancers route traffic elsewhere during an outage.
 	webHandler.Handle("GET", "/healthz", func(w http.ResponseWriter, r *http.Request) {
-		web.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		web.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok", "build": cfg.Build})
+	})
+	webHandler.Handle("GET", "/readyz", func(w http.ResponseWriter, r *http.Request) {
+		probeCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := infra.Pool.Ping(probeCtx); err != nil {
+			web.RespondJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unready", "reason": "database unreachable"})
+			return
+		}
+		web.RespondJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 	})
 
 	api := webHandler.Group("/api/v1")
