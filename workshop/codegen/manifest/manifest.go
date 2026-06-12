@@ -126,6 +126,32 @@ type Manifest struct {
 	Databases         map[string]*DatabaseConfig `yaml:"databases,omitempty"`
 	Features          *FeaturesConfig            `yaml:"features,omitempty"`
 	Events            *EventsConfig              `yaml:"events,omitempty"`
+	Clients           *ClientsConfig             `yaml:"clients,omitempty"`
+}
+
+// ClientsConfig opts into generated API clients. Absent section → nothing
+// is emitted.
+type ClientsConfig struct {
+	TypeScript *TypeScriptClientConfig `yaml:"typescript,omitempty"`
+}
+
+// TypeScriptClientConfig configures the generated TypeScript client.
+type TypeScriptClientConfig struct {
+	// Output is the emission directory relative to the project root.
+	// Defaults to workshop/clients/typescript.
+	Output string `yaml:"output,omitempty"`
+}
+
+// TypeScriptClientDir returns the configured TS client output directory,
+// or "" when the client is not enabled.
+func (m *Manifest) TypeScriptClientDir() string {
+	if m == nil || m.Clients == nil || m.Clients.TypeScript == nil {
+		return ""
+	}
+	if m.Clients.TypeScript.Output != "" {
+		return m.Clients.TypeScript.Output
+	}
+	return "workshop/clients/typescript"
 }
 
 // EventsConfig configures the event infrastructure for a gopernicus project.

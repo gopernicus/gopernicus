@@ -15,17 +15,19 @@ import (
 // Returns (false, nil) if no bridge.yml exists.
 // hostDB names the database whose store the e2e stack boots against, and
 // hostSpecMode selects spec (testsqlite) vs pgx (testpgx) for that stack.
-func GenerateBridge(resolved *ResolvedFile, domainName, modulePath, projectRoot string, authEnabled bool, hostDB string, hostSpecMode bool, opts Options) (bool, error) {
+// The returned *BridgeTemplateData is non-nil when a bridge was generated —
+// downstream consumers (the TypeScript client emitter) accumulate it.
+func GenerateBridge(resolved *ResolvedFile, domainName, modulePath, projectRoot string, authEnabled bool, hostDB string, hostSpecMode bool, opts Options) (*BridgeTemplateData, error) {
 	bridgeDir := BridgeDir(domainName, resolved.TableName, projectRoot)
 	ymlPath := filepath.Join(bridgeDir, "bridge.yml")
 
 	if !fileExists(ymlPath) {
-		return false, nil
+		return nil, nil
 	}
 
 	yml, err := ParseBridgeYML(ymlPath)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
 	// Fail early with a clear message when a route asks for auth middleware
@@ -37,12 +39,12 @@ func GenerateBridge(resolved *ResolvedFile, domainName, modulePath, projectRoot 
 		for _, route := range yml.Routes {
 			for _, mw := range route.Middleware {
 				if mw.Authenticate != "" {
-					return false, fmt.Errorf(
+					return nil, fmt.Errorf(
 						"bridge.yml %s/%s: route %q uses authenticate: but the project has no authentication feature — add it to features in gopernicus.yml or remove the middleware",
 						domainName, resolved.TableName, route.Func)
 				}
 				if mw.Authorize != nil {
-					return false, fmt.Errorf(
+					return nil, fmt.Errorf(
 						"bridge.yml %s/%s: route %q uses authorize: but the project has no authentication feature — add it to features in gopernicus.yml or remove the middleware",
 						domainName, resolved.TableName, route.Func)
 				}
@@ -58,14 +60,14 @@ func GenerateBridge(resolved *ResolvedFile, domainName, modulePath, projectRoot 
 
 	data, err := buildBridgeData(yml, resolved, domainName, modulePath, authEnabled, bridgeDir)
 	if err != nil {
-		return false, fmt.Errorf("bridge: %w", err)
+		return nil, fmt.Errorf("bridge: %w", err)
 	}
 
 	entitySingular := Singularize(resolved.TableName)
 	data.EntitySingular = entitySingular
 
 	if err := ensureDir(bridgeDir, opts); err != nil {
-		return false, fmt.Errorf("create bridge directory: %w", err)
+		return nil, fmt.Errorf("create bridge directory: %w", err)
 	}
 
 	type genFile struct {
@@ -93,7 +95,7 @@ func GenerateBridge(resolved *ResolvedFile, domainName, modulePath, projectRoot 
 
 		out, err := renderBridgeTemplate(f.tmpl, data)
 		if err != nil {
-			return false, fmt.Errorf("render %s for %s: %w", f.name, resolved.TableName, err)
+			return nil, fmt.Errorf("render %s for %s: %w", f.name, resolved.TableName, err)
 		}
 
 		if f.bootstrap {
@@ -101,7 +103,7 @@ func GenerateBridge(resolved *ResolvedFile, domainName, modulePath, projectRoot 
 		}
 
 		if err := renderGoFile(f.name, out, path, opts); err != nil {
-			return false, err
+			return nil, err
 		}
 
 		verb := "write"
@@ -112,20 +114,20 @@ func GenerateBridge(resolved *ResolvedFile, domainName, modulePath, projectRoot 
 	}
 
 	if err := GenerateBridgeValidationTests(data, bridgeDir, opts); err != nil {
-		return false, fmt.Errorf("bridge validation tests: %w", err)
+		return nil, fmt.Errorf("bridge validation tests: %w", err)
 	}
 
 	if err := GenerateBridgeSecurity(data, resolved, bridgeDir, modulePath, hostDB, hostSpecMode, opts); err != nil {
-		return false, fmt.Errorf("bridge security tests: %w", err)
+		return nil, fmt.Errorf("bridge security tests: %w", err)
 	}
 
 	if hostDB != "" {
 		if err := GenerateBridgeE2E(data, resolved, bridgeDir, modulePath, hostDB, hostSpecMode, opts); err != nil {
-			return false, fmt.Errorf("bridge e2e tests: %w", err)
+			return nil, fmt.Errorf("bridge e2e tests: %w", err)
 		}
 	}
 
-	return true, nil
+	return &data, nil
 }
 
 // buildBridgeData constructs BridgeTemplateData from bridge.yml + resolved queries.

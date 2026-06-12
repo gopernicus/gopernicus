@@ -29,3 +29,5 @@ databases:
       tenancy: [tenants]
       events: [event_outbox]
       jobs: [job_queue]
+clients:
+    typescript: {}

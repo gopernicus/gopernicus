@@ -135,6 +135,7 @@ func runNested(cfg Config, schemas map[string]*schema.ReflectedSchema, modulePat
 	domainBridgeEntities := make(map[string][]BridgeCompositeEntity)
 	domainResolvedFiles := make(map[string][]*ResolvedFile)
 	var pgxFixtureEntities, specFixtureEntities []FixtureEntity
+	var tsEntities []TSClientEntity
 
 	for _, b := range bindings {
 		if cfg.Domain != "" && b.Domain != cfg.Domain {
@@ -180,10 +181,15 @@ func runNested(cfg Config, schemas map[string]*schema.ReflectedSchema, modulePat
 			hostDB = b.DBs[0]
 			hostSpecMode = dbModes[hostDB] == manifest.StoreModeSpec
 		}
-		if generated, err := GenerateBridge(resolved, b.Domain, modulePath, cfg.ProjectRoot, authEnabled, hostDB, hostSpecMode, opts); err != nil {
+		bridgeData, err := GenerateBridge(resolved, b.Domain, modulePath, cfg.ProjectRoot, authEnabled, hostDB, hostSpecMode, opts)
+		if err != nil {
 			return fmt.Errorf("%s/%s: bridge: %w", b.Domain, b.PkgName, err)
-		} else if generated && opts.Verbose {
-			fmt.Printf("    generated bridge layer\n")
+		}
+		if bridgeData != nil {
+			if opts.Verbose {
+				fmt.Printf("    generated bridge layer\n")
+			}
+			tsEntities = append(tsEntities, BuildTSClientEntity(bridgeData, resolved))
 		}
 
 		// Stores — once per (entity × store mode), all from the canonical snapshot.
@@ -318,7 +324,10 @@ func runNested(cfg Config, schemas map[string]*schema.ReflectedSchema, modulePat
 			}
 		}
 	}
-	return emitFixtures(pgxFixtureEntities, specFixtureEntities, cfg.ProjectRoot, modulePath, opts)
+	if err := emitFixtures(pgxFixtureEntities, specFixtureEntities, cfg.ProjectRoot, modulePath, opts); err != nil {
+		return err
+	}
+	return emitTypeScriptClient(cfg, tsEntities, opts)
 }
 
 // hostedStoreModes returns the distinct store modes of the databases hosting

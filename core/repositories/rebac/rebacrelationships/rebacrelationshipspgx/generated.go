@@ -377,13 +377,9 @@ func (s *Store) DeleteAllForResource(ctx context.Context, resourceType string, r
 	query := `DELETE FROM public.rebac_relationships
 WHERE resource_type = @resource_type
 AND resource_id = @resource_id`
-	result, err := s.db.Exec(ctx, query, args)
+	_, err := s.db.Exec(ctx, query, args)
 	if err != nil {
 		return pgxdb.HandlePgError(err)
-	}
-
-	if result.RowsAffected() == 0 {
-		return rebacrelationships.ErrRebacRelationshipNotFound
 	}
 
 	return nil
@@ -429,13 +425,9 @@ WHERE resource_type = @resource_type
 AND resource_id = @resource_id
 AND subject_type = @subject_type
 AND subject_id = @subject_id`
-	result, err := s.db.Exec(ctx, query, args)
+	_, err := s.db.Exec(ctx, query, args)
 	if err != nil {
 		return pgxdb.HandlePgError(err)
-	}
-
-	if result.RowsAffected() == 0 {
-		return rebacrelationships.ErrRebacRelationshipNotFound
 	}
 
 	return nil
