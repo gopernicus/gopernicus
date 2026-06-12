@@ -171,6 +171,7 @@ const sidebars: SidebarsConfig = {
       link: { type: "doc", id: "gopernicus/topics/extending-generated-code" },
       items: [],
     },
+    "gopernicus/topics/realtime",
     "gopernicus/topics/running-from-source",
   ],
 

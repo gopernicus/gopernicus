@@ -10,6 +10,8 @@ import (
 	"github.com/gopernicus/gopernicus/infrastructure/events"
 )
 
+var _ events.Broadcaster = (*Bus)(nil)
+
 // asyncEvent wraps an event for async processing.
 type asyncEvent struct {
 	ctx      context.Context
@@ -35,6 +37,13 @@ func (s *subscription) Unsubscribe() error {
 		s.cancelled = true
 	})
 	return nil
+}
+
+// SubscribeBroadcast implements events.Broadcaster. The in-memory bus
+// already fans every event out to all subscribers, so broadcast is plain
+// Subscribe.
+func (b *Bus) SubscribeBroadcast(topic string, handler events.Handler) (events.Subscription, error) {
+	return b.Subscribe(topic, handler)
 }
 
 // Bus is an in-memory event bus with async worker support.

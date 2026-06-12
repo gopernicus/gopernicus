@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 )
 
 // SSEEvent represents a single Server-Sent Event.
@@ -23,12 +24,26 @@ type SSEEvent struct {
 
 // SSEStream streams Server-Sent Events from a channel.
 type SSEStream struct {
-	events <-chan SSEEvent
+	events    <-chan SSEEvent
+	heartbeat time.Duration // 0 = no heartbeat frames
+}
+
+// SSEOption configures an SSEStream.
+type SSEOption func(*SSEStream)
+
+// WithHeartbeat emits an SSE comment frame (": ping") on the given interval
+// so proxies and clients see a live connection between events. 0 disables.
+func WithHeartbeat(d time.Duration) SSEOption {
+	return func(s *SSEStream) { s.heartbeat = d }
 }
 
 // NewSSEStream creates an SSE stream that reads events from the channel.
-func NewSSEStream(events <-chan SSEEvent) *SSEStream {
-	return &SSEStream{events: events}
+func NewSSEStream(events <-chan SSEEvent, opts ...SSEOption) *SSEStream {
+	s := &SSEStream{events: events}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // ServeHTTP streams events to the client until the channel closes or the
@@ -48,10 +63,23 @@ func (s *SSEStream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
+	var heartbeat <-chan time.Time
+	if s.heartbeat > 0 {
+		ticker := time.NewTicker(s.heartbeat)
+		defer ticker.Stop()
+		heartbeat = ticker.C
+	}
+
 	for {
 		select {
 		case <-r.Context().Done():
 			return
+
+		case <-heartbeat:
+			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
 
 		case event, ok := <-s.events:
 			if !ok {
