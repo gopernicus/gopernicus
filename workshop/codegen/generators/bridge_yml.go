@@ -86,11 +86,15 @@ type UniqueToIDEntry struct {
 
 // AuthorizeEntry configures authorization middleware.
 type AuthorizeEntry struct {
-	Pattern    string `yaml:"pattern,omitempty"`    // "prefilter", "postfilter", or "" (defaults to "check")
+	// ResourceType is resolved at conversion time (authorizeResourceType)
+	// — the type the mounted check middleware runs against.
+	ResourceType string `yaml:"-"`
+
+	Pattern    string `yaml:"pattern,omitempty"` // "prefilter", "postfilter", or "" (defaults to "check")
 	Permission string `yaml:"permission"`
-	Param      string `yaml:"param,omitempty"`      // path param for check
-	Entity     string `yaml:"entity,omitempty"`      // override resource type (default: bridge entity)
-	Subject    string `yaml:"subject,omitempty"`     // explicit subject for prefilter
+	Param      string `yaml:"param,omitempty"`   // path param for check
+	Entity     string `yaml:"entity,omitempty"`  // override resource type (default: bridge entity)
+	Subject    string `yaml:"subject,omitempty"` // explicit subject for prefilter
 }
 
 // UnmarshalYAML handles the polymorphic middleware entry format.
@@ -322,12 +326,14 @@ func BridgeYMLToBridgeRoutes(yml *BridgeYML, resolved *ResolvedFile) ([]BridgeRo
 				if pattern == "" {
 					pattern = "check"
 				}
+				mw.Authorize.ResourceType = authorizeResourceType(mw.Authorize, resolved)
 				br.Authorize = &AuthorizeSpec{
-					Pattern:    pattern,
-					Permission: mw.Authorize.Permission,
-					Param:      mw.Authorize.Param,
-					SubjectRef: mw.Authorize.Subject,
-					Entity:     mw.Authorize.Entity,
+					Pattern:      pattern,
+					Permission:   mw.Authorize.Permission,
+					Param:        mw.Authorize.Param,
+					SubjectRef:   mw.Authorize.Subject,
+					Entity:       mw.Authorize.Entity,
+					ResourceType: authorizeResourceType(mw.Authorize, resolved),
 				}
 			}
 			if mw.Authenticate != "" {
@@ -517,4 +523,60 @@ func splitTypeRef(ref string) (string, string, error) {
 		return "", "", fmt.Errorf("expected type:id format, got %q", ref)
 	}
 	return parts[0], parts[1], nil
+}
+
+// authorizeResourceType resolves the resource type an authorize check runs
+// against. The Entity override wins. A param that is the entity's own
+// non-FK primary key means the check targets THIS entity — naive "_id"
+// stripping derived types no schema defines ({event_id} → "event") and
+// those checks could never pass. A PK that is also a foreign key keeps the
+// stripped form: the param genuinely names the parent (user_passwords'
+// user_id → "user"), which checkSelf and parent relations serve.
+func authorizeResourceType(entry *AuthorizeEntry, resolved *ResolvedFile) string {
+	if entry.Entity != "" {
+		return entry.Entity
+	}
+	entitySingular := Singularize(resolved.TableName)
+	if entry.Param == "" {
+		return entitySingular
+	}
+	if entry.Param == resolved.PKColumn && !resolvedPKIsFK(resolved) {
+		return entitySingular
+	}
+	// A param matching one of the entity's FK columns names the PARENT —
+	// derive the type from the referenced table, not the column name
+	// (relationship_id → rebac_relationships → "rebac_relationship";
+	// naive stripping yields "relationship", which no schema defines).
+	if resolved.Table != nil {
+		for _, fk := range resolved.Table.ForeignKeys {
+			col := fk.ColumnName
+			if len(fk.Columns) > 0 {
+				col = fk.Columns[0]
+			}
+			if col == entry.Param && fk.RefTable != "principals" {
+				return Singularize(fk.RefTable)
+			}
+		}
+	}
+	return strings.TrimSuffix(entry.Param, "_id")
+}
+
+// resolvedPKIsFK reports whether the entity's primary key column is also a
+// foreign key (parent-keyed entities like user_passwords). Principal
+// inheritance (PK → principals) doesn't count: those params still name the
+// entity itself.
+func resolvedPKIsFK(resolved *ResolvedFile) bool {
+	if resolved.Table == nil {
+		return false
+	}
+	for _, fk := range resolved.Table.ForeignKeys {
+		col := fk.ColumnName
+		if len(fk.Columns) > 0 {
+			col = fk.Columns[0]
+		}
+		if col == resolved.PKColumn && fk.RefTable != "principals" {
+			return true
+		}
+	}
+	return false
 }

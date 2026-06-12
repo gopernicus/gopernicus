@@ -217,6 +217,14 @@ type AuthorizeSpec struct {
 	// Permission is the action to check (e.g. "read", "update", "delete").
 	Permission string
 
+	// ResourceType is the resolved resource type the check runs against,
+	// computed at conversion time: the Entity override; else, when the
+	// param is the entity's own non-FK primary key, the entity singular
+	// (an {event_id} param on security_events checks "security_event",
+	// not the schema-less "event"); else the param with "_id" stripped
+	// (parent-gating like user_passwords' PK-is-FK user_id → "user").
+	ResourceType string
+
 	// Param is the path parameter name to authorize against for check patterns.
 	// e.g. "tenant_id" or "question_id". Required for check on nested routes
 	// where the first path param may not be the resource being authorized.

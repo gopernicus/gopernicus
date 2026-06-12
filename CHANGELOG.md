@@ -8,6 +8,37 @@ assume is documented in
 
 Releases are tag-only: `git tag -a vX.Y.Z && git push origin vX.Y.Z`.
 
+## Unreleased
+
+### Fixed
+- **Authorization resource-type derivation (production behavior change).**
+  The generated check middleware derived its resource type by stripping
+  "_id" from the path param, producing types no schema defines for
+  entities whose PK isn't `<entity>_id` (`{event_id}` → "event" instead
+  of "security_event"). Those routes could never authorize for anyone
+  but platform admins. The type is now resolved at generation time:
+  `entity:` override → the entity singular when the param is its own
+  non-FK primary key → the FK's referenced table singular when the param
+  is a foreign key (`relationship_id` → "rebac_relationship") → the
+  stripped param. Affected shipped routes: security_events,
+  verification_codes, verification_tokens, rebac_relationships,
+  rebac_relationship_metadata — they now enforce their declared
+  owner-based ReBAC rules instead of always denying.
+
+### Added
+- Parent-gated e2e suites: entities whose PK is an FK to users (the
+  user_passwords shape) now generate — the suite authenticates AS the
+  parent user so `checkSelf` authorizes read/update/delete exactly as
+  production does for tuple-less accounts. Pagination probes are
+  suppressed (one row per parent by construction); a foreign absent id
+  expects 403 while a deleted own id expects 404.
+
+### Consumer actions
+- [ ] Repin and regenerate. Review the regenerated bridge middleware
+      diff: routes in the affected groups change from always-deny to
+      their schema's owner rules — if any consumer relied on those
+      routes being unreachable, gate them explicitly before deploying.
+
 ## v0.4.0 — 2026-06-12
 
 ### Added

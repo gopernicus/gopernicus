@@ -404,7 +404,7 @@ func (b *Bridge) addGeneratedRoutes(group *web.RouteGroup) {
 	group.GET("/verification-tokens/{token_id}", b.httpGet,
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "token", "read", "token_id"),
+		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "verification_token", "read", "token_id"),
 	)
 
 	group.POST("/verification-tokens", b.httpCreate,
@@ -417,13 +417,13 @@ func (b *Bridge) addGeneratedRoutes(group *web.RouteGroup) {
 		httpmid.MaxBodySize(1048576),
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "token", "update", "token_id"),
+		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "verification_token", "update", "token_id"),
 	)
 
 	group.DELETE("/verification-tokens/{token_id}", b.httpDelete,
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "token", "delete", "token_id"),
+		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "verification_token", "delete", "token_id"),
 	)
 
 }

@@ -417,7 +417,7 @@ func (b *Bridge) addGeneratedRoutes(group *web.RouteGroup) {
 	group.GET("/rebac-relationships/{relationship_id}", b.httpGet,
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "relationship", "read", "relationship_id"),
+		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "rebac_relationship", "read", "relationship_id"),
 	)
 
 	group.POST("/rebac-relationships", b.httpCreate,
@@ -430,13 +430,13 @@ func (b *Bridge) addGeneratedRoutes(group *web.RouteGroup) {
 		httpmid.MaxBodySize(1048576),
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "relationship", "update", "relationship_id"),
+		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "rebac_relationship", "update", "relationship_id"),
 	)
 
 	group.DELETE("/rebac-relationships/{relationship_id}", b.httpDelete,
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "relationship", "delete", "relationship_id"),
+		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "rebac_relationship", "delete", "relationship_id"),
 	)
 
 }

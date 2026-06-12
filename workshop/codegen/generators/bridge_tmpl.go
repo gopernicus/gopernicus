@@ -585,7 +585,7 @@ func (b *Bridge) addGeneratedRoutes(group *web.RouteGroup) {
 {{- end}}
 {{- /* postfilter without Subject: authorization handled in handler via PostfilterLoop */}}
 {{- else}}
-		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "{{if .Authorize.Entity}}{{.Authorize.Entity}}{{else if .Authorize.Param}}{{paramToResource .Authorize.Param}}{{else}}{{$.EntitySingular}}{{end}}", "{{.Authorize.Permission}}", "{{.Authorize.Param}}"),
+		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "{{.Authorize.ResourceType}}", "{{.Authorize.Permission}}", "{{.Authorize.Param}}"),
 {{- end}}
 {{- else if .UniqueToID}}
 		httpmid.UniqueToID(

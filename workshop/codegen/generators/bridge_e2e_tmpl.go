@@ -58,7 +58,7 @@ import (
 {{- if .SpecMode}}
 	"github.com/gopernicus/gopernicus/workshop/testing/testsqlite"
 {{- end}}
-{{- if or .FKSeeds (eq .AuthMode "session")}}
+{{- if or .FKSeeds .ParentGated (eq .AuthMode "session")}}
 	"{{.FixtureImport}}"
 {{- end}}
 )
@@ -112,7 +112,7 @@ func e2eAuthSchema() []authorization.ResourceSchema {
 // database: store → repository → bridge, served via testserver.ServeBridge.
 // It returns the test DB too so FK parents can be seeded into the same store
 // the server reads. migrateE2EDB is defined in e2e_test.go (bootstrap file).
-func setupE2EServer(t *testing.T) (*testhttp.Client, e2eDB) {
+func setupE2EServer(t *testing.T) (*testhttp.Client, e2eDB{{if .ParentGated}}, string{{end}}) {
 	t.Helper()
 
 	if testing.Short() {
@@ -159,10 +159,19 @@ func setupE2EServer(t *testing.T) (*testhttp.Client, e2eDB) {
 
 	client := testserver.ServeBridge(t, bridge)
 {{- if eq .AuthMode "jwt"}}
+{{- if .ParentGated}}
+
+	// Parent-gated authorize checks target the subject's own user record
+	// (checkSelf) — the suite authenticates AS a real fixture user and
+	// binds the create request's parent FK to it.
+	user := {{.FixturePkg}}.CreateTestUserWithDefaults(t, ctx, db)
+	client.SetBearerToken(testauth.MintAccessToken(signer, user.UserID))
+{{- else}}
 
 	// The exercised routes authenticate via the JWT fast path (signature
 	// only) — a minted token needs no database rows.
 	client.SetBearerToken(testauth.MintAccessToken(signer, "e2e-test-user"))
+{{- end}}
 {{- else if eq .AuthMode "session"}}
 
 	// user_session routes recheck the session row: seed a session whose
@@ -176,19 +185,31 @@ func setupE2EServer(t *testing.T) (*testhttp.Client, e2eDB) {
 	})
 	client.SetBearerToken(token)
 {{- end}}
+{{- if .ParentGated}}
+	return client, db, user.UserID
+{{- else}}
 	return client, db
+{{- end}}
 }
 
 // seededCreate{{.EntityName}}Request builds a valid create request, populating
 // foreign-key fields from parent rows seeded into db.
-func seededCreate{{.EntityName}}Request(t *testing.T, db e2eDB) Create{{.EntityName}}Request {
+func seededCreate{{.EntityName}}Request(t *testing.T, db e2eDB{{if .ParentGated}}, subjectID string{{end}}) Create{{.EntityName}}Request {
 	t.Helper()
+{{- if or .FKSeeds .ParentGated}}
 {{- if .FKSeeds}}
 	ctx := context.Background()
+{{- else}}
+	_ = db
+{{- end}}
 	req := validCreate{{.EntityName}}Request()
 {{- range $i, $s := .FKSeeds}}
 	parent{{$i}} := {{$.FixturePkg}}.CreateTest{{$s.ParentEntity}}WithDefaults(t, ctx, db)
 	req.{{$s.RequestField}} = {{$s.ParentPKExpr}}
+{{- end}}
+{{- if .ParentGated}}
+	// The parent FK is the suite's own subject — checkSelf authorizes it.
+	req.{{.SubjectFKField}} = subjectID
 {{- end}}
 	return req
 {{- else}}
@@ -201,21 +222,24 @@ func seededCreate{{.EntityName}}Request(t *testing.T, db e2eDB) Create{{.EntityN
 // The suite runs authenticated — one anonymous request must still be
 // rejected, proving enforcement is live in this exact stack.
 func TestE2E{{.EntityName}}RequiresAuthentication(t *testing.T) {
-	client, db := setupE2EServer(t)
+	client, db{{if $.ParentGated}}, subjectID{{end}} := setupE2EServer(t)
 	anon := client.Anonymous()
 {{- if .CreateAuthed}}
-	anon.Post(t, "{{.CreatePath}}", seededCreate{{.EntityName}}Request(t, db)).RequireStatus(t, 401)
+	anon.Post(t, "{{.CreatePath}}", seededCreate{{.EntityName}}Request(t, db{{if $.ParentGated}}, subjectID{{end}})).RequireStatus(t, 401)
 {{- else}}
 	_ = db
+{{- if $.ParentGated}}
+	_ = subjectID
+{{- end}}
 	id := "{{.NotFoundID}}"
 	anon.Get(t, {{.GetPathExpr}}).RequireStatus(t, 401)
 {{- end}}
 }
 {{end}}
 func TestE2E{{.EntityName}}CreateAndGet(t *testing.T) {
-	client, db := setupE2EServer(t)
+	client, db{{if $.ParentGated}}, subjectID{{end}} := setupE2EServer(t)
 
-	resp := client.Post(t, "{{.CreatePath}}", seededCreate{{.EntityName}}Request(t, db))
+	resp := client.Post(t, "{{.CreatePath}}", seededCreate{{.EntityName}}Request(t, db{{if $.ParentGated}}, subjectID{{end}}))
 	resp.RequireStatus(t, 201)
 	id := resp.String(t, "record.{{.PKJSON}}")
 	require.NotEmpty(t, id)
@@ -233,21 +257,22 @@ func TestE2E{{.EntityName}}CreateAndGet(t *testing.T) {
 }
 {{if .HasList}}
 func TestE2E{{.EntityName}}List(t *testing.T) {
-	client, db := setupE2EServer(t)
+	client, db{{if $.ParentGated}}, subjectID{{end}} := setupE2EServer(t)
 
-	client.Post(t, "{{.CreatePath}}", seededCreate{{.EntityName}}Request(t, db)).RequireStatus(t, 201)
+	client.Post(t, "{{.CreatePath}}", seededCreate{{.EntityName}}Request(t, db{{if $.ParentGated}}, subjectID{{end}})).RequireStatus(t, 201)
 	client.Get(t, "{{.ListPath}}").RequireStatus(t, 200)
 }
 
+{{if not .ParentGated}}
 func TestE2E{{.EntityName}}PaginationAdvance(t *testing.T) {
-	client, db := setupE2EServer(t)
+	client, db{{if $.ParentGated}}, subjectID{{end}} := setupE2EServer(t)
 
 	// Three rows, then walk two pages of two — keyset pagination must not
 	// repeat a row across the page boundary (page1 ∩ page2 = ∅).
 	for i := 0; i < 3; i++ {
 {{- if .UniqueRequestFields}}
 		// UNIQUE-columned fields must vary per row or the insert 409s.
-		raw, err := json.Marshal(seededCreate{{.EntityName}}Request(t, db))
+		raw, err := json.Marshal(seededCreate{{.EntityName}}Request(t, db{{if $.ParentGated}}, subjectID{{end}}))
 		require.NoError(t, err)
 		var body map[string]any
 		require.NoError(t, json.Unmarshal(raw, &body))
@@ -258,7 +283,7 @@ func TestE2E{{.EntityName}}PaginationAdvance(t *testing.T) {
 {{- end}}
 		client.Post(t, "{{.CreatePath}}", body).RequireStatus(t, 201)
 {{- else}}
-		client.Post(t, "{{.CreatePath}}", seededCreate{{.EntityName}}Request(t, db)).RequireStatus(t, 201)
+		client.Post(t, "{{.CreatePath}}", seededCreate{{.EntityName}}Request(t, db{{if $.ParentGated}}, subjectID{{end}})).RequireStatus(t, 201)
 {{- end}}
 	}
 
@@ -293,26 +318,27 @@ func toStr(v any) string {
 	s, _ := v.(string)
 	return s
 }
+{{end}}
 {{end}}{{if .HasDelete}}
 func TestE2E{{.EntityName}}Delete(t *testing.T) {
-	client, db := setupE2EServer(t)
+	client, db{{if $.ParentGated}}, subjectID{{end}} := setupE2EServer(t)
 
-	resp := client.Post(t, "{{.CreatePath}}", seededCreate{{.EntityName}}Request(t, db))
+	resp := client.Post(t, "{{.CreatePath}}", seededCreate{{.EntityName}}Request(t, db{{if $.ParentGated}}, subjectID{{end}}))
 	resp.RequireStatus(t, 201)
 	id := resp.String(t, "record.{{.PKJSON}}")
 	require.NotEmpty(t, id)
 
 	client.Delete(t, {{.DeletePathExpr}}).RequireStatus(t, 204)
 {{- if .HasGet}}
-	client.Get(t, {{.GetPathExpr}}).RequireStatus(t, {{.NotFoundStatus}})
+	client.Get(t, {{.GetPathExpr}}).RequireStatus(t, {{.GoneStatus}})
 {{- end}}
 }
 {{end}}{{if .HasList}}
 func TestE2E{{.EntityName}}SQLInjection(t *testing.T) {
-	client, db := setupE2EServer(t)
+	client, db{{if $.ParentGated}}, subjectID{{end}} := setupE2EServer(t)
 
 	// One known row — an executed OR-1=1 style injection would leak it.
-	client.Post(t, "{{.CreatePath}}", seededCreate{{.EntityName}}Request(t, db)).RequireStatus(t, 201)
+	client.Post(t, "{{.CreatePath}}", seededCreate{{.EntityName}}Request(t, db{{if $.ParentGated}}, subjectID{{end}})).RequireStatus(t, 201)
 
 	payloads := []string{
 		` + "`" + `' OR 1=1 --` + "`" + `,
@@ -352,12 +378,12 @@ func TestE2E{{.EntityName}}SQLInjection(t *testing.T) {
 }
 {{end}}{{if .CreateMaxBodySize}}
 func TestE2E{{.EntityName}}OversizedPayload(t *testing.T) {
-	client, db := setupE2EServer(t)
+	client, db{{if $.ParentGated}}, subjectID{{end}} := setupE2EServer(t)
 
 	// A body past the route's max_body_size ({{.CreateMaxBodySize}} bytes) must
 	// be rejected with 413, not accepted or 500'd. Pad a valid request with a
 	// huge string field the server ignores so only the size trips the limit.
-	raw, err := json.Marshal(seededCreate{{.EntityName}}Request(t, db))
+	raw, err := json.Marshal(seededCreate{{.EntityName}}Request(t, db{{if $.ParentGated}}, subjectID{{end}}))
 	require.NoError(t, err)
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(raw, &body))
@@ -367,12 +393,12 @@ func TestE2E{{.EntityName}}OversizedPayload(t *testing.T) {
 }
 {{end}}{{if .HasRecordState}}
 func TestE2E{{.EntityName}}MassAssignment(t *testing.T) {
-	client, db := setupE2EServer(t)
+	client, db{{if $.ParentGated}}, subjectID{{end}} := setupE2EServer(t)
 
 	// A client smuggling record_state into the create body must not control
 	// the stored state — the field is not part of the request model and the
 	// lifecycle routes own all transitions (SEC1/P5).
-	raw, err := json.Marshal(seededCreate{{.EntityName}}Request(t, db))
+	raw, err := json.Marshal(seededCreate{{.EntityName}}Request(t, db{{if $.ParentGated}}, subjectID{{end}}))
 	require.NoError(t, err)
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(raw, &body))
@@ -384,9 +410,9 @@ func TestE2E{{.EntityName}}MassAssignment(t *testing.T) {
 }
 {{end}}{{if and .UpdateLegitJSON .HasGet}}
 func TestE2E{{.EntityName}}UpdateMassAssignment(t *testing.T) {
-	client, db := setupE2EServer(t)
+	client, db{{if $.ParentGated}}, subjectID{{end}} := setupE2EServer(t)
 
-	resp := client.Post(t, "{{.CreatePath}}", seededCreate{{.EntityName}}Request(t, db))
+	resp := client.Post(t, "{{.CreatePath}}", seededCreate{{.EntityName}}Request(t, db{{if $.ParentGated}}, subjectID{{end}}))
 	resp.RequireStatus(t, 201)
 	id := resp.String(t, "record.{{.PKJSON}}")
 	require.NotEmpty(t, id)
