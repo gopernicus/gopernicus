@@ -8,6 +8,16 @@ assume is documented in
 
 Releases are tag-only: `git tag -a vX.Y.Z && git push origin vX.Y.Z`.
 
+## Unreleased
+
+### Fixed
+- `init --features=authentication` (without authorization) scaffolded a
+  non-compiling project — generated bridges wire both engines
+  (authorizer parameters, relationship cleanup, auth schemas).
+  Authentication now implies authorization at init, and a hand-edited
+  manifest with the broken combination fails at load with guidance.
+- Repo-wide gofmt sweep; CI's build-and-unit job now gates formatting.
+
 ## v0.5.1 — 2026-06-12
 
 ### Fixed

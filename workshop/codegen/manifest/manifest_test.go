@@ -1,6 +1,8 @@
 package manifest
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -188,5 +190,35 @@ func TestNewWithProject_DriverDefault(t *testing.T) {
 	}
 	if mode != StoreModePgx {
 		t.Errorf("scaffolded store mode = %q, want %q", mode, StoreModePgx)
+	}
+}
+
+// An authentication-only manifest is rejected at load with guidance — the
+// generated output wires both engines and cannot compile without
+// authorization.
+func TestLoadRejectsAuthenticationWithoutAuthorization(t *testing.T) {
+	dir := t.TempDir()
+	yml := `version: "1"
+databases:
+    primary:
+        driver: postgres
+        url_env_var: X_DB_DATABASE_URL
+features:
+    authentication: gopernicus
+`
+	if err := os.WriteFile(filepath.Join(dir, Filename), []byte(yml), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(dir)
+	if err == nil || !strings.Contains(err.Error(), "authentication requires authorization") {
+		t.Fatalf("err = %v, want authentication-requires-authorization guidance", err)
+	}
+
+	yml += "    authorization: gopernicus\n"
+	if err := os.WriteFile(filepath.Join(dir, Filename), []byte(yml), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(dir); err != nil {
+		t.Fatalf("both features must load: %v", err)
 	}
 }

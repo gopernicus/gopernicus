@@ -245,6 +245,14 @@ func ParseFeaturesFlag(value string) (FeatureSelection, error) {
 			return features, fmt.Errorf("unknown feature %q (valid: authentication, authorization, tenancy, event-outbox, job-queue, none, all)", name)
 		}
 	}
+	// Authentication implies authorization: generated bridges with auth
+	// enabled wire both engines (authorizer constructor params, delete
+	// cleanup, AuthSchema composites) — an authentication-only scaffold
+	// does not compile. Coupling here keeps init honest instead of
+	// emitting a broken project.
+	if features.Authentication && !features.Authorization {
+		features.Authorization = true
+	}
 	return features, nil
 }
 
