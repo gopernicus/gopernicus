@@ -37,6 +37,16 @@ func WithHeartbeat(d time.Duration) SSEOption {
 	return func(s *SSEStream) { s.heartbeat = d }
 }
 
+// writeWindow is the per-write deadline extension: generous relative to
+// the heartbeat so a healthy stream never trips it, finite so a dead
+// client's connection is reclaimed.
+func (s *SSEStream) writeWindow() time.Duration {
+	if s.heartbeat > 0 {
+		return s.heartbeat * 4
+	}
+	return 2 * time.Minute
+}
+
 // NewSSEStream creates an SSE stream that reads events from the channel.
 func NewSSEStream(events <-chan SSEEvent, opts ...SSEOption) *SSEStream {
 	s := &SSEStream{events: events}
@@ -54,14 +64,26 @@ func (s *SSEStream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
+	// ResponseController reaches Flush through middleware wrappers that
+	// implement Unwrap — a bare type assertion fails under any wrapping
+	// middleware (request loggers etc.).
+	rc := http.NewResponseController(w)
+
+	// Long-lived streams outlive the server's WriteTimeout: the deadline
+	// arms at request start and every write after it fails, killing the
+	// stream at the first post-deadline frame. Extend it per write
+	// instead; falls back silently when the connection doesn't support
+	// deadlines (e.g. some test recorders).
+	extendDeadline := func() {
+		_ = rc.SetWriteDeadline(time.Now().Add(s.writeWindow()))
+	}
+	extendDeadline()
+
+	w.WriteHeader(http.StatusOK)
+	if err := rc.Flush(); err != nil {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
 		return
 	}
-
-	w.WriteHeader(http.StatusOK)
-	flusher.Flush()
 
 	var heartbeat <-chan time.Time
 	if s.heartbeat > 0 {
@@ -76,24 +98,28 @@ func (s *SSEStream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 
 		case <-heartbeat:
+			extendDeadline()
 			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
 				return
 			}
-			flusher.Flush()
+			if err := rc.Flush(); err != nil {
+				return
+			}
 
 		case event, ok := <-s.events:
 			if !ok {
 				return
 			}
 
-			if err := writeSSEEvent(w, flusher, event); err != nil {
+			extendDeadline()
+			if err := writeSSEEvent(w, rc, event); err != nil {
 				return
 			}
 		}
 	}
 }
 
-func writeSSEEvent(w http.ResponseWriter, flusher http.Flusher, event SSEEvent) error {
+func writeSSEEvent(w http.ResponseWriter, rc *http.ResponseController, event SSEEvent) error {
 	if event.Event != "" {
 		if _, err := fmt.Fprintf(w, "event: %s\n", event.Event); err != nil {
 			return err
@@ -130,6 +156,5 @@ func writeSSEEvent(w http.ResponseWriter, flusher http.Flusher, event SSEEvent) 
 		return err
 	}
 
-	flusher.Flush()
-	return nil
+	return rc.Flush()
 }

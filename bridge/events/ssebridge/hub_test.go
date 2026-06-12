@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/bridge/events/ssebridge"
+	"github.com/gopernicus/gopernicus/bridge/transit/httpmid"
 	"github.com/gopernicus/gopernicus/core/auth/authorization"
 	"github.com/gopernicus/gopernicus/infrastructure/events"
 	"github.com/gopernicus/gopernicus/infrastructure/events/memorybus"
@@ -58,6 +59,10 @@ func serve(t *testing.T, hub *ssebridge.Hub) (string, string) {
 
 	bridge := ssebridge.New(quietLog(), hub, authenticator, authorizer, nil)
 	handler := web.NewWebHandler()
+	// Production stacks wrap every request in logging middleware whose
+	// statusWriter must stay flushable (segovia's live demo 500'd with
+	// "streaming not supported" before Unwrap + ResponseController).
+	handler.Use(httpmid.Logger(quietLog()))
 	bridge.AddHttpRoutes(handler.Group("/events"))
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)

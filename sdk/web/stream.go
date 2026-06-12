@@ -25,20 +25,18 @@ import (
 //	})
 type StreamWriter struct {
 	w       http.ResponseWriter
-	flusher http.Flusher
+	rc      *http.ResponseController
 	started bool
 }
 
-// NewStreamWriter creates a StreamWriter. Returns nil if the ResponseWriter
-// does not support flushing (required for streaming).
+// NewStreamWriter creates a StreamWriter. Flushing goes through
+// http.ResponseController, which reaches the real Flusher through
+// middleware wrappers implementing Unwrap; an unflushable writer surfaces
+// as an error on the first Send.
 func NewStreamWriter(w http.ResponseWriter) *StreamWriter {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		return nil
-	}
 	return &StreamWriter{
-		w:       w,
-		flusher: flusher,
+		w:  w,
+		rc: http.NewResponseController(w),
 	}
 }
 
@@ -51,11 +49,13 @@ func (sw *StreamWriter) Send(event SSEEvent) error {
 		sw.w.Header().Set("Connection", "keep-alive")
 		sw.w.Header().Set("X-Accel-Buffering", "no")
 		sw.w.WriteHeader(http.StatusOK)
-		sw.flusher.Flush()
+		if err := sw.rc.Flush(); err != nil {
+			return err
+		}
 		sw.started = true
 	}
 
-	return writeSSEEvent(sw.w, sw.flusher, event)
+	return writeSSEEvent(sw.w, sw.rc, event)
 }
 
 // SendJSON sends an SSE event with JSON-encoded data and an optional event type.
