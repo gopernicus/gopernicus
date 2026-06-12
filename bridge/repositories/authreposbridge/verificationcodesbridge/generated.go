@@ -418,7 +418,7 @@ func (b *Bridge) addGeneratedRoutes(group *web.RouteGroup) {
 	group.GET("/verification-codes/{code_id}", b.httpGet,
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "code", "read", "code_id"),
+		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "verification_code", "read", "code_id"),
 	)
 
 	group.POST("/verification-codes", b.httpCreate,
@@ -431,13 +431,13 @@ func (b *Bridge) addGeneratedRoutes(group *web.RouteGroup) {
 		httpmid.MaxBodySize(1048576),
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "code", "update", "code_id"),
+		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "verification_code", "update", "code_id"),
 	)
 
 	group.DELETE("/verification-codes/{code_id}", b.httpDelete,
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "code", "delete", "code_id"),
+		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "verification_code", "delete", "code_id"),
 	)
 
 }

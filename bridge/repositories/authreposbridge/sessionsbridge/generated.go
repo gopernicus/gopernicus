@@ -510,7 +510,7 @@ func (b *Bridge) addGeneratedRoutes(group *web.RouteGroup) {
 		httpmid.MaxBodySize(1048576),
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "parent_user", "create", "parent_user_id"),
+		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "user", "create", "parent_user_id"),
 	)
 
 	group.PUT("/users/{parent_user_id}/sessions/{session_id}", b.httpUpdate,

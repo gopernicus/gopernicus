@@ -122,6 +122,25 @@ type BridgeE2EData struct {
 	// columns — probes POSTing the valid request more than once must vary
 	// them or the second insert 409s.
 	UniqueRequestFields []string
+
+	// ParentGated marks suites whose authorize checks target the parent
+	// user (the entity's PK is an FK to users — the user_passwords class).
+	// The suite authenticates AS the parent: setup creates one fixture
+	// user, mints the credential with its id, and the create request's
+	// parent FK binds to it, so checkSelf (self read/update/delete)
+	// authorizes exactly as production does for tuple-less accounts.
+	ParentGated bool
+
+	// SubjectFKField is the create-request Go field bound to the subject
+	// user's id when ParentGated.
+	SubjectFKField string
+
+	// GoneStatus is what GET returns after a successful DELETE: 403 for
+	// own-type authorize (the delete cleanup removed the owner tuple, so
+	// denial fires before lookup), 404 for parent-gated checks (checkSelf
+	// still authorizes the subject's own user — the handler 404s) and for
+	// anonymous suites.
+	GoneStatus int
 }
 
 // GenerateBridgeE2E emits light e2e tests for a bridged entity hosted by a
@@ -181,6 +200,7 @@ type FKSeed struct {
 	RequestField string // create-request Go field, e.g. "AccountID"
 	ParentEntity string // parent entity name, e.g. "Account"
 	ParentPKExpr string // expr off the seeded parent, e.g. "parent0.ID"
+	Column       string // FK column name, e.g. "account_id"
 }
 
 // buildBridgeE2EData assembles the template data for one bridged entity.
@@ -370,20 +390,56 @@ func buildBridgeE2EData(data BridgeTemplateData, resolved *ResolvedFile, moduleP
 
 	var needSession, needUser, needServiceAccount bool
 	for funcName, ra := range suiteAuth {
+		switch ra.mode {
+		case "user_session":
+			needSession = true
+		case "user", "any":
+			needUser = true
+		case "service_account":
+			needServiceAccount = true
+		}
 		if spec := ra.authorize; spec != nil {
 			routeDesc := fmt.Sprintf("route %s %s", ra.method, ra.path)
-			// Mirror the bridge template's resource-type derivation exactly
-			// (bridge_tmpl check branch): Entity override, else the path
-			// param with "_id" stripped, else the entity singular.
-			resourceType := spec.Entity
-			if resourceType == "" && spec.Param != "" {
-				resourceType = strings.TrimSuffix(spec.Param, "_id")
-			}
+			// The conversion precomputes the resource type every check runs
+			// against (authorizeResourceType) — no duplicate derivation.
+			resourceType := spec.ResourceType
 			if resourceType == "" {
 				resourceType = entityResourceType
 			}
 			if resourceType != entityResourceType {
-				return BridgeE2EData{}, fmt.Sprintf("%s authorizes against resource type %q — cross-entity authorization is not yet generated", routeDesc, resourceType)
+				// Parent-gating: the param is the entity's own PK, which is
+				// an FK to users, so the check runs against the parent user
+				// — production authorizes via checkSelf (a user's own
+				// read/update/delete on themself, no tuples). The suite can
+				// reproduce that exactly by authenticating AS the parent.
+				if resourceType != "user" {
+					return BridgeE2EData{}, fmt.Sprintf("%s authorizes against resource type %q — only user-parented checks are generated", routeDesc, resourceType)
+				}
+				if spec.Param != resolved.PKColumn {
+					return BridgeE2EData{}, fmt.Sprintf("%s authorizes against the parent user via non-PK param %q — not yet generated", routeDesc, spec.Param)
+				}
+				switch spec.Permission {
+				case "read", "update", "delete":
+					// checkSelf's permission set.
+				default:
+					return BridgeE2EData{}, fmt.Sprintf("%s checks permission %q on the parent user — outside checkSelf, would need seeded user relations", routeDesc, spec.Permission)
+				}
+				var subjectSeed *FKSeed
+				for i := range e2e.FKSeeds {
+					if e2e.FKSeeds[i].Column == spec.Param && e2e.FKSeeds[i].ParentEntity == "User" {
+						subjectSeed = &e2e.FKSeeds[i]
+						break
+					}
+				}
+				if subjectSeed == nil {
+					return BridgeE2EData{}, fmt.Sprintf("%s is user-parented but the create request has no seedable users FK for %q", routeDesc, spec.Param)
+				}
+				e2e.ParentGated = true
+				e2e.SubjectFKField = subjectSeed.RequestField
+				if funcName == "Get" && spec.Pattern == "check" {
+					e2e.NotFoundStatus = 403
+				}
+				continue
 			}
 			perm, ok := permissions[spec.Permission]
 			if !ok {
@@ -404,17 +460,25 @@ func buildBridgeE2EData(data BridgeTemplateData, resolved *ResolvedFile, moduleP
 				e2e.NotFoundStatus = 403
 			}
 		}
-		switch ra.mode {
-		case "user_session":
-			needSession = true
-		case "user", "any":
-			needUser = true
-		case "service_account":
-			needServiceAccount = true
-		}
 	}
-	if e2e.HasAuthorize && !needSession && !needUser {
+	if (e2e.HasAuthorize || e2e.ParentGated) && !needSession && !needUser {
 		return BridgeE2EData{}, "authorize-gated routes without a user-credential authenticate mode — not yet generated"
+	}
+	if e2e.ParentGated {
+		// The subject user IS the parent — drop its FK seed so the create
+		// request binds to the suite subject instead of a fresh fixture row.
+		kept := e2e.FKSeeds[:0]
+		for _, seed := range e2e.FKSeeds {
+			if seed.RequestField != e2e.SubjectFKField {
+				// Re-number parentN expressions for the surviving seeds —
+				// the template declares parent vars by range position.
+				if _, field, ok := strings.Cut(seed.ParentPKExpr, "."); ok {
+					seed.ParentPKExpr = fmt.Sprintf("parent%d.%s", len(kept), field)
+				}
+				kept = append(kept, seed)
+			}
+		}
+		e2e.FKSeeds = kept
 	}
 	switch {
 	case needServiceAccount && (needUser || needSession):
@@ -434,6 +498,12 @@ func buildBridgeE2EData(data BridgeTemplateData, resolved *ResolvedFile, moduleP
 	e2e.GetAuthed = suiteAuth["Get"].mode != ""
 	if e2e.NotFoundStatus == 0 {
 		e2e.NotFoundStatus = 404
+	}
+	e2e.GoneStatus = e2e.NotFoundStatus
+	if e2e.ParentGated {
+		// checkSelf authorizes the subject's own (deleted) parent id, so
+		// the handler's 404 comes through; a foreign absent id still 403s.
+		e2e.GoneStatus = 404
 	}
 	if !e2e.HasAuthorize {
 		// The local schema function is only emitted for authorize-wired
@@ -509,6 +579,7 @@ func buildFKSeeds(data BridgeTemplateData, resolved *ResolvedFile) ([]FKSeed, st
 			RequestField: goName,
 			ParentEntity: ToPascalCase(Singularize(fk.RefTable)),
 			ParentPKExpr: fmt.Sprintf("parent%d.%s", idx, ToPascalCase(fk.RefColumns[0])),
+			Column:       col,
 		})
 		idx++
 	}

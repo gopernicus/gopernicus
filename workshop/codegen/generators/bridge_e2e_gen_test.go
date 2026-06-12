@@ -352,6 +352,114 @@ func TestBuildBridgeE2EAuthorizeSatisfiability(t *testing.T) {
 	})
 }
 
+// authorizeResourceType: Entity override → own non-FK PK → FK ref table →
+// param strip. The own-PK rule is what un-breaks {event_id}-style checks.
+func TestAuthorizeResourceType(t *testing.T) {
+	table := func(pk string, fks ...schema.ForeignKeyInfo) *ResolvedFile {
+		return &ResolvedFile{
+			TableName: "security_events",
+			PKColumn:  pk,
+			Table:     &schema.TableInfo{TableName: "security_events", ForeignKeys: fks},
+		}
+	}
+	cases := []struct {
+		name     string
+		entry    *AuthorizeEntry
+		resolved *ResolvedFile
+		want     string
+	}{
+		{"entity override wins", &AuthorizeEntry{Entity: "custom", Param: "event_id"}, table("event_id"), "custom"},
+		{"own non-FK PK → entity type", &AuthorizeEntry{Param: "event_id"}, table("event_id"), "security_event"},
+		{"no param → entity type", &AuthorizeEntry{}, table("event_id"), "security_event"},
+		{"PK-is-FK → parent ref table", &AuthorizeEntry{Param: "user_id"},
+			&ResolvedFile{TableName: "user_passwords", PKColumn: "user_id",
+				Table: &schema.TableInfo{TableName: "user_passwords", ForeignKeys: []schema.ForeignKeyInfo{{Columns: []string{"user_id"}, RefTable: "users"}}}}, "user"},
+		{"FK ref table beats param strip", &AuthorizeEntry{Param: "relationship_id"},
+			&ResolvedFile{TableName: "rebac_relationship_metadata", PKColumn: "relationship_id",
+				Table: &schema.TableInfo{TableName: "rebac_relationship_metadata", ForeignKeys: []schema.ForeignKeyInfo{{Columns: []string{"relationship_id"}, RefTable: "rebac_relationships"}}}}, "rebac_relationship"},
+		{"scope param strips", &AuthorizeEntry{Param: "tenant_id"}, table("event_id"), "tenant"},
+		{"principal-inheritance PK stays own type", &AuthorizeEntry{Param: "user_id"},
+			&ResolvedFile{TableName: "users", PKColumn: "user_id",
+				Table: &schema.TableInfo{TableName: "users", ForeignKeys: []schema.ForeignKeyInfo{{Columns: []string{"user_id"}, RefTable: "principals"}}}}, "user"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := authorizeResourceType(tc.entry, tc.resolved); got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// Parent-gated suites (PK-is-FK to users, checkSelf permissions) generate
+// with the subject bound to the parent; everything else still skips.
+func TestBuildBridgeE2EParentGated(t *testing.T) {
+	resolved := &ResolvedFile{
+		TableName: "user_passwords",
+		PKColumn:  "user_id",
+		Table: &schema.TableInfo{
+			TableName:   "user_passwords",
+			PrimaryKey:  &schema.PrimaryKeyInfo{Column: "user_id"},
+			ForeignKeys: []schema.ForeignKeyInfo{{Columns: []string{"user_id"}, RefColumns: []string{"user_id"}, RefTable: "users"}},
+		},
+		AllColumns: []schema.ColumnInfo{
+			{Name: "user_id", DBType: "text", GoType: "string", IsPrimaryKey: true, IsForeignKey: true},
+			{Name: "password_hash", DBType: "text", GoType: "string"},
+		},
+		Queries: []ResolvedQuery{{QueryBlock: QueryBlock{Type: QueryInsert}, InsertFields: []FieldInfo{
+			{DBName: "user_id", GoName: "UserID"}, {DBName: "password_hash", GoName: "PasswordHash"},
+		}}},
+	}
+	routes := []BridgeRoute{
+		{FuncName: "Create", Method: "POST", Path: "/user-passwords",
+			MiddlewareChain: []MiddlewareEntry{{Authenticate: "user"}}},
+		{FuncName: "Get", Method: "GET", Path: "/user-passwords/{user_id}",
+			MiddlewareChain: []MiddlewareEntry{{Authenticate: "user"}},
+			Authorize:       &AuthorizeSpec{Pattern: "check", Permission: "read", Param: "user_id", ResourceType: "user"}},
+		{FuncName: "Delete", Method: "DELETE", Path: "/user-passwords/{user_id}",
+			MiddlewareChain: []MiddlewareEntry{{Authenticate: "user"}},
+			Authorize:       &AuthorizeSpec{Pattern: "check", Permission: "delete", Param: "user_id", ResourceType: "user"}},
+	}
+	data := BridgeTemplateData{
+		BridgePackage: "userpasswordsbridge",
+		EntityName:    "UserPassword",
+		AuthEnabled:   true,
+		CreateQueries: []BridgeCreateQuery{{FuncName: "Create", Fields: []BridgeField{
+			{DBName: "user_id", GoName: "UserID", IsString: true},
+			{DBName: "password_hash", GoName: "PasswordHash", IsString: true},
+		}}},
+		Routes: routes,
+	}
+
+	e2e, skip := buildBridgeE2EData(data, resolved, "github.com/x/app", "primary", false)
+	if skip != "" {
+		t.Fatalf("unexpected skip: %s", skip)
+	}
+	if !e2e.ParentGated || e2e.SubjectFKField != "UserID" {
+		t.Errorf("ParentGated=%v SubjectFKField=%q", e2e.ParentGated, e2e.SubjectFKField)
+	}
+	if len(e2e.FKSeeds) != 0 {
+		t.Errorf("subject FK seed must be removed, got %+v", e2e.FKSeeds)
+	}
+	if e2e.NotFoundStatus != 403 || e2e.GoneStatus != 404 {
+		t.Errorf("NotFoundStatus=%d GoneStatus=%d, want 403/404", e2e.NotFoundStatus, e2e.GoneStatus)
+	}
+
+	// A non-checkSelf permission on the parent skips.
+	routes[1].Authorize = &AuthorizeSpec{Pattern: "check", Permission: "manage", Param: "user_id", ResourceType: "user"}
+	_, skip = buildBridgeE2EData(data, resolved, "github.com/x/app", "primary", false)
+	if !strings.Contains(skip, "outside checkSelf") {
+		t.Errorf("manage skip = %q", skip)
+	}
+
+	// A non-user parent type skips.
+	routes[1].Authorize = &AuthorizeSpec{Pattern: "check", Permission: "read", Param: "user_id", ResourceType: "rebac_relationship"}
+	_, skip = buildBridgeE2EData(data, resolved, "github.com/x/app", "primary", false)
+	if !strings.Contains(skip, "only user-parented") {
+		t.Errorf("non-user skip = %q", skip)
+	}
+}
+
 // TestBridgeSecurityBootstrapRendersGofmtClean covers the security bootstrap
 // for both store modes (the generation-level test only exercises pgx).
 func TestBridgeSecurityBootstrapRendersGofmtClean(t *testing.T) {

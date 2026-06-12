@@ -408,7 +408,7 @@ func (b *Bridge) addGeneratedRoutes(group *web.RouteGroup) {
 	group.GET("/security-events/{event_id}", b.httpGet,
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "event", "read", "event_id"),
+		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "security_event", "read", "event_id"),
 	)
 
 	group.POST("/security-events", b.httpCreate,
@@ -421,13 +421,13 @@ func (b *Bridge) addGeneratedRoutes(group *web.RouteGroup) {
 		httpmid.MaxBodySize(1048576),
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "event", "update", "event_id"),
+		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "security_event", "update", "event_id"),
 	)
 
 	group.DELETE("/security-events/{event_id}", b.httpDelete,
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "event", "delete", "event_id"),
+		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "security_event", "delete", "event_id"),
 	)
 
 }

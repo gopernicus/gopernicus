@@ -584,7 +584,7 @@ func (b *Bridge) addGeneratedRoutes(group *web.RouteGroup) {
 		httpmid.MaxBodySize(1048576),
 		httpmid.Authenticate(b.authenticator, b.log, b.jsonErrors),
 		httpmid.RateLimit(b.rateLimiter, b.log),
-		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "parent_service_account", "create", "parent_service_account_id"),
+		httpmid.AuthorizeParam(b.authorizer, b.log, b.jsonErrors, "service_account", "create", "parent_service_account_id"),
 	)
 
 	group.PUT("/service-accounts/{parent_service_account_id}/api-keys/{api_key_id}", b.httpUpdate,
