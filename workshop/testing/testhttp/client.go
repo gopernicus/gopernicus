@@ -36,6 +36,13 @@ func New(baseURL string) *Client {
 	}
 }
 
+// Anonymous returns a fresh client against the same server with no
+// credentials — for probes asserting that unauthenticated requests are
+// rejected while the main client stays authenticated.
+func (c *Client) Anonymous() *Client {
+	return New(c.baseURL)
+}
+
 // SetBearerToken sets the Authorization header for all subsequent requests.
 func (c *Client) SetBearerToken(token string) {
 	c.headers.Set("Authorization", "Bearer "+token)

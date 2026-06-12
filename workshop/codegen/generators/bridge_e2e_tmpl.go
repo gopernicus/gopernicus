@@ -30,8 +30,20 @@ import (
 
 	"{{.RepoImport}}"
 	"{{.StoreImport}}"
+{{- if eq .AuthMode "session"}}
+	"{{.ModulePath}}/core/auth/authentication/satisfiers"
+	"{{.ModulePath}}/core/repositories/auth/sessions"
+	"{{.ModulePath}}/core/repositories/auth/sessions/sessionspgx"
+	"{{.ModulePath}}/core/repositories/auth/users"
+	"{{.ModulePath}}/core/repositories/auth/users/userspgx"
+
+	"github.com/gopernicus/gopernicus/core/auth/authentication"
+{{- end}}
 
 	"github.com/gopernicus/gopernicus/sdk/logger"
+{{- if .BridgeAuthEnabled}}
+	"github.com/gopernicus/gopernicus/workshop/testing/testauth"
+{{- end}}
 	"github.com/gopernicus/gopernicus/workshop/testing/testhttp"
 {{- if not .SpecMode}}
 	"github.com/gopernicus/gopernicus/workshop/testing/testpgx"
@@ -40,7 +52,7 @@ import (
 {{- if .SpecMode}}
 	"github.com/gopernicus/gopernicus/workshop/testing/testsqlite"
 {{- end}}
-{{- if .FKSeeds}}
+{{- if or .FKSeeds (eq .AuthMode "session")}}
 	"{{.FixtureImport}}"
 {{- end}}
 )
@@ -74,9 +86,47 @@ func setupE2EServer(t *testing.T) (*testhttp.Client, e2eDB) {
 	store := {{.StorePkg}}.NewStore(logger.NewNoop(), db.Pool)
 {{- end}}
 	repo := {{.RepoPkg}}.NewRepository({{.RepoPkg}}.NewCacheStore(store, nil))
+{{- if .BridgeAuthEnabled}}
+{{- if eq .AuthMode "session"}}
+	usersRepo := users.NewRepository(users.NewCacheStore(userspgx.NewStore(logger.NewNoop(), db.Pool), nil))
+	sessionsRepo := sessions.NewRepository(sessions.NewCacheStore(sessionspgx.NewStore(logger.NewNoop(), db.Pool), nil))
+	authenticator, signer := testauth.AuthenticatorWithRepositories("e2etest", authentication.NewRepositories(
+		satisfiers.NewUserSatisfier(usersRepo),
+		nil,
+		satisfiers.NewSessionSatisfier(sessionsRepo),
+		nil,
+		nil,
+	))
+{{- else if eq .AuthMode "jwt"}}
+	authenticator, signer := testauth.Authenticator("e2etest")
+{{- else}}
+	authenticator, _ := testauth.Authenticator("e2etest")
+{{- end}}
+	bridge := NewBridge(logger.NewNoop(), repo, testserver.NewRateLimiter(), authenticator, testauth.Authorizer())
+{{- else}}
 	bridge := NewBridge(logger.NewNoop(), repo, testserver.NewRateLimiter())
+{{- end}}
 
-	return testserver.ServeBridge(t, bridge), db
+	client := testserver.ServeBridge(t, bridge)
+{{- if eq .AuthMode "jwt"}}
+
+	// The exercised routes authenticate via the JWT fast path (signature
+	// only) — a minted token needs no database rows.
+	client.SetBearerToken(testauth.MintAccessToken(signer, "e2e-test-user"))
+{{- else if eq .AuthMode "session"}}
+
+	// user_session routes recheck the session row: seed a session whose
+	// stored hash matches the real minted token.
+	user := {{.FixturePkg}}.CreateTestUserWithDefaults(t, ctx, db)
+	token := testauth.MintAccessToken(signer, user.UserID)
+	tokenHash, err := authentication.HashToken(token)
+	require.NoError(t, err)
+	{{.FixturePkg}}.CreateTestSession(t, ctx, db, user.UserID, map[string]any{
+		"session_token_hash": tokenHash,
+	})
+	client.SetBearerToken(token)
+{{- end}}
+	return client, db
 }
 
 // seededCreate{{.EntityName}}Request builds a valid create request, populating
@@ -97,6 +147,21 @@ func seededCreate{{.EntityName}}Request(t *testing.T, db e2eDB) Create{{.EntityN
 {{- end}}
 }
 
+{{if or .CreateAuthed (and .HasGet .GetAuthed)}}
+// The suite runs authenticated — one anonymous request must still be
+// rejected, proving enforcement is live in this exact stack.
+func TestE2E{{.EntityName}}RequiresAuthentication(t *testing.T) {
+	client, db := setupE2EServer(t)
+	anon := client.Anonymous()
+{{- if .CreateAuthed}}
+	anon.Post(t, "{{.CreatePath}}", seededCreate{{.EntityName}}Request(t, db)).RequireStatus(t, 401)
+{{- else}}
+	_ = db
+	id := "{{.NotFoundID}}"
+	anon.Get(t, {{.GetPathExpr}}).RequireStatus(t, 401)
+{{- end}}
+}
+{{end}}
 func TestE2E{{.EntityName}}CreateAndGet(t *testing.T) {
 	client, db := setupE2EServer(t)
 
