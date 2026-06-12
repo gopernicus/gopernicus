@@ -194,6 +194,7 @@ const sidebars: SidebarsConfig = {
         "guides/adding-use-case",
         "guides/adding-auth-to-entity",
         "guides/adding-adapter",
+        "guides/upgrading",
       ],
     },
     "roadmap/roadmap",
