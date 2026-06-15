@@ -285,14 +285,16 @@ Emit a deploy profile for one hosting target: a runbook plus the pipeline
 files that ship the app there.
 
 ```bash
-gopernicus new deploy do-app      # DigitalOcean App Platform
-gopernicus new deploy cloud-run   # Google Cloud Run
+gopernicus new deploy do-app        # DigitalOcean App Platform
+gopernicus new deploy cloud-run     # Google Cloud Run
+gopernicus new deploy compose-prod  # single host: compose + caddy + systemd
 ```
 
 | Target | Style | Files |
 |---|---|---|
 | `do-app` | CI-driven | `.github/workflows/deploy-<app>-do.yml` (tag-triggered: ghcr build → migrate as release step → DO app refresh), `workshop/deploy/do-app/app-spec.yaml`, README runbook |
 | `cloud-run` | make-driven | `workshop/deploy/cloud-run/makefile.cloud-run` (`cloud-bootstrap` / `cloud-build` / `cloud-migrate` / `cloud-deploy` / `cloud-ship` / `cloud-url` / `cloud-logs`; include it from the root Makefile), README runbook |
+| `compose-prod` | host-driven | `workshop/deploy/compose-prod/`: `compose.prod.yml` (app + postgres + redis + caddy TLS), `deploy.sh` (build → migrate → roll → readiness wait), `caddy/Caddyfile`, `systemd/<app>-compose.service`, `backup.sh`, README runbook |
 
 Everything emitted is a **created-once bootstrap with a drift marker** —
 you own the files after emission; re-running skips existing files.

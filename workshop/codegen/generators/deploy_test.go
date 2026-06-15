@@ -141,3 +141,54 @@ func TestStyledMarkers(t *testing.T) {
 		t.Errorf("marker not on line 2 of shell file: %q", lines[1])
 	}
 }
+
+func TestGenerateDeployProfileComposeProd(t *testing.T) {
+	root := t.TempDir()
+	data := DeployData{ProjectName: "myapp", AppNameUpper: "MYAPP"}
+
+	if err := GenerateDeployProfile(root, "compose-prod", data); err != nil {
+		t.Fatal(err)
+	}
+
+	base := filepath.Join(root, "workshop", "deploy", "compose-prod")
+	for _, rel := range []string{
+		"compose.prod.yml", "caddy/Caddyfile", "deploy.sh", "backup.sh",
+		"systemd/myapp-compose.service", "README.md",
+	} {
+		if _, err := os.Stat(filepath.Join(base, rel)); err != nil {
+			t.Errorf("missing %s: %v", rel, err)
+		}
+	}
+
+	// Shell scripts: shebang on line 1, marker on line 2, executable.
+	for _, sh := range []string{"deploy.sh", "backup.sh"} {
+		body, err := os.ReadFile(filepath.Join(base, sh))
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.SplitN(string(body), "\n", 3)
+		if !strings.HasPrefix(lines[0], "#!") {
+			t.Errorf("%s: line 1 = %q, want shebang", sh, lines[0])
+		}
+		if _, _, ok := ParseBootstrapMarker(lines[1]); !ok {
+			t.Errorf("%s: line 2 = %q, want marker", sh, lines[1])
+		}
+		info, _ := os.Stat(filepath.Join(base, sh))
+		if info.Mode()&0o111 == 0 {
+			t.Errorf("%s not executable: %v", sh, info.Mode())
+		}
+	}
+
+	compose, _ := os.ReadFile(filepath.Join(base, "compose.prod.yml"))
+	for _, want := range []string{
+		"dockerfile.myapp",
+		"MYAPP_DB_DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/myapp",
+		"go tool gopernicus db migrate",
+		`profiles: ["deploy"]`,
+		"BUILD_REF: ${BUILD_REF:-dev}",
+	} {
+		if !strings.Contains(string(compose), want) {
+			t.Errorf("compose missing %q", want)
+		}
+	}
+}

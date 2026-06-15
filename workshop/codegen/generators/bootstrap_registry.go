@@ -48,11 +48,17 @@ var bootstrapTemplates = map[string]string{
 
 	// Deploy profiles (gopernicus new deploy <target>) — non-Go files;
 	// markers use the comment style matching each file type.
-	"deploy/do-app/workflow.yml":          deployDoAppWorkflowTemplate,
-	"deploy/do-app/app-spec.yaml":         deployDoAppSpecTemplate,
-	"deploy/do-app/README.md":             deployDoAppReadmeTemplate,
-	"deploy/cloud-run/makefile.cloud-run": deployCloudRunMakefileTemplate,
-	"deploy/cloud-run/README.md":          deployCloudRunReadmeTemplate,
+	"deploy/do-app/workflow.yml":           deployDoAppWorkflowTemplate,
+	"deploy/do-app/app-spec.yaml":          deployDoAppSpecTemplate,
+	"deploy/do-app/README.md":              deployDoAppReadmeTemplate,
+	"deploy/cloud-run/makefile.cloud-run":  deployCloudRunMakefileTemplate,
+	"deploy/cloud-run/README.md":           deployCloudRunReadmeTemplate,
+	"deploy/compose-prod/compose.prod.yml": deployComposeProdComposeTemplate,
+	"deploy/compose-prod/Caddyfile":        deployComposeProdCaddyfileTemplate,
+	"deploy/compose-prod/deploy.sh":        deployComposeProdDeployShTemplate,
+	"deploy/compose-prod/backup.sh":        deployComposeProdBackupShTemplate,
+	"deploy/compose-prod/systemd.service":  deployComposeProdSystemdTemplate,
+	"deploy/compose-prod/README.md":        deployComposeProdReadmeTemplate,
 }
 
 // BootstrapTemplateHash returns the content hash of the registered template
