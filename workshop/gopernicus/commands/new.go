@@ -58,6 +58,29 @@ Examples:
 			Usage: "gopernicus new case <name>",
 			Run:   runNewCase,
 		},
+		{
+			Name:  "deploy",
+			Short: "Emit a deploy profile for a hosting target",
+			Long: `Emit a deploy profile: a runbook plus pipeline files for one target.
+
+Targets:
+  do-app     DigitalOcean App Platform — tag-triggered GitHub workflow
+             (ghcr build, migrate as release step, app refresh) + reference
+             app spec
+  cloud-run  Google Cloud Run — make targets (include from the root
+             Makefile): bootstrap, build, migrate, deploy, url, logs
+
+Files land in workshop/deploy/<target>/ (workflows in .github/workflows/).
+Everything is created-once with a drift marker — you own the files after
+emission; re-running never overwrites them. Emitting a second target adds
+a sibling directory.
+
+Examples:
+  gopernicus new deploy do-app
+  gopernicus new deploy cloud-run`,
+			Usage: "gopernicus new deploy <target>",
+			Run:   runNewDeploy,
+		},
 	}
 	newCmd.Run = runNew
 	cli.RegisterCommand(newCmd)
