@@ -8,7 +8,7 @@ assume is documented in
 
 Releases are tag-only: `git tag -a vX.Y.Z && git push origin vX.Y.Z`.
 
-## v0.5.3 — 2026-06-12
+## v0.5.4 — 2026-06-15
 
 ### Added
 - **Deploy profiles**: `gopernicus new deploy <target>` emits a runbook +
@@ -40,8 +40,8 @@ Releases are tag-only: `git tag -a vX.Y.Z && git push origin vX.Y.Z`.
 
 ### Consumer actions
 - Optional — existing projects' bootstrap files are never overwritten:
-  - Run `go tool gopernicus new deploy do-app` and/or `cloud-run` to
-    emit pipelines for an existing app.
+  - Run `go tool gopernicus new deploy do-app`, `cloud-run`, and/or
+    `compose-prod` to emit pipelines for an existing app.
   - To adopt the probe contract, copy the `/healthz` + `/readyz` block
     from a fresh scaffold's `app/server/config/server.go` (segovia and
     other pre-existing apps keep working without it; deploy runbooks
