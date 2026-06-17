@@ -13,7 +13,7 @@ The Workshop is everything your project needs to run, but nothing that gets depl
 workshop/
 ├── migrations/         # SQL migration files and reflected schema
 ├── dev/                # Local development environment
-├── docker/             # Docker Compose services and related config
+├── docker/             # Dockerfiles for deploying your application
 ├── documentation/      # Your application's documentation
 └── testing/            # Test infrastructure, fixtures, and E2E setup
 ```
@@ -35,5 +35,5 @@ Gopernicus consolidates development concerns into `workshop/` for a few reasons:
 |---|---|
 | [Migrations](./migrations.md) | SQL migration files, schema reflection |
 | [Dev](./dev.md) | Local development environment setup |
-| [Docker](./docker.md) | Docker Compose services (PostgreSQL, Redis, Jaeger) |
+| [Docker](./docker.md) | Dockerfiles for deploying your application |
 | [Documentation](./documentation.md) | Your application's documentation |

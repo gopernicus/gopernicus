@@ -22,7 +22,7 @@ It supports multiple credential types simultaneously:
 
 The bridge layer exposes these as HTTP endpoints with dual-client support — cookies for web, JSON tokens for mobile/API.
 
-**Key design choice:** Authentication emits events (`VerificationCodeRequested`, `PasswordResetRequested`) instead of sending emails directly. The bridge layer subscribes to these events and handles delivery. This keeps the core free of transport concerns.
+**Key design choice:** Authentication emits events (`VerificationCodeRequestedEvent`, `PasswordResetRequestedEvent`) instead of sending emails directly. The bridge layer subscribes to these events and handles delivery. This keeps the core free of transport concerns.
 
 → [Core — Authentication](../core/auth/authentication.md) · [Bridge — Authentication](../bridge/auth/authentication.md)
 
@@ -91,7 +91,7 @@ Invitations are generic over resource type — the same system handles org invit
 
 ## How they wire together
 
-In `app/server.go`, the composition root connects these pieces:
+In `app/server/main.go` (with config in `app/server/config/server.go`), the composition root connects these pieces:
 
 ```
 Authenticator ← repos, hasher, signer, bus, config

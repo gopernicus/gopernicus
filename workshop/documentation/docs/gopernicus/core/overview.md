@@ -20,6 +20,7 @@ core/
 │   │   └── satisfiers/      # Adapters bridging generated repos to authz interfaces
 │   └── invitations/         # Invitation workflow (create, accept, decline)
 ├── cases/                   # Hand-written business logic (user-defined)
+├── jobs/                    # Recurring-job scheduler
 ├── repositories/            # Generated data access
 │   ├── auth/                # Auth domain (users, sessions, apikeys, etc.)
 │   ├── rebac/               # ReBAC domain (groups, invitations, relationships)

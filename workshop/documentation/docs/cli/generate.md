@@ -4,10 +4,12 @@ Run code generators from `queries.sql` files and `bridge.yml` configuration.
 
 ## Overview
 
-`gopernicus generate` scans `core/repositories/` for `queries.sql` files and
-`bridge/repositories/` for `bridge.yml` files, then generates Go code by
-cross-referencing each query with the reflected database schema (produced by
-`gopernicus db reflect`).
+`gopernicus generate` is driven by the `gopernicus.yml` manifest domain mapping
+(`databases.<name>.domains`), iterating database × domain × entity. For each
+declared entity it locates that entity's `queries.sql` (not discovered by
+scanning) and, if present, the entity's `bridge.yml` from its bridge directory,
+then generates Go code by cross-referencing each query with the reflected
+database schema (produced by `gopernicus db reflect`).
 
 The generator produces two categories of files:
 
@@ -29,7 +31,7 @@ gopernicus generate [domain] [--dry-run] [--verbose] [--force-bootstrap]
 
 | Argument | Description |
 |---|---|
-| `[domain]` | Optional. Restrict generation to a single domain (e.g. `auth`). When omitted, all domains under `core/repositories/` are processed. |
+| `[domain]` | Optional. Restrict generation to a single domain (e.g. `auth`). When omitted, all domains declared in the manifest are processed. |
 
 ### Flags
 
@@ -81,7 +83,7 @@ triggers generation in the repository, store, bridge, and test layers.
 | `generated_test.go` | Always | Yes | Auto-generated `Create` / `Get` / `List` / `Delete` / `SoftDelete` smoke tests. `-- @skip-integration-test` at the top of `queries.sql` suppresses the probes — the file is regenerated setup-only (just the `setupTestStore` helper). |
 | `store_test.go` | Once | No | `setupTestStore` helper plus `migrateTestDB` and `testPGXOptions` hooks for the test container. |
 
-**Cache** (`core/repositories/<domain>/<entity>/`) -- only when `@cache` annotations are present:
+**Cache** (`core/repositories/<domain>/<entity>/`) -- always emitted per entity (the wrapper is generated even with no `@cache` annotations so adding caching later is just a regenerate; `@cache` annotations only determine which methods become cache-aware):
 
 | File | Created | Overwritten | Description |
 |---|---|---|---|
@@ -128,13 +130,12 @@ triggers generation in the repository, store, bridge, and test layers.
 | `generated.go` | Always | Yes | Factory functions for creating test entities with resolved FK relationships. **Cumulative across all domains** — `gopernicus generate <one-domain>` rewrites the file with every entity's fixtures, not just the targeted domain's, so cross-domain FK chains continue to resolve. |
 | `fixtures.go` | Once | No | Custom fixture helpers and overrides. |
 
-**E2E Tests** (`workshop/testing/e2e/`) -- for entities with HTTP routes:
+**E2E Tests** (`bridge/repositories/<domain>reposbridge/<entity>bridge/`) -- for entities with HTTP routes:
 
 | File | Created | Overwritten | Description |
 |---|---|---|---|
-| `setup_test.go` | Once | No | E2E test bootstrap (server setup, database connection). One per project. |
-| `<entity>_generated_test.go` | Always | Yes | Auto-generated HTTP roundtrip tests per entity. |
-| `<entity>_test.go` | Once | No | Custom E2E test cases per entity. |
+| `generated_e2e_test.go` | Always | Yes | Auto-generated HTTP roundtrip tests per entity, emitted into the entity's bridge directory. |
+| `e2e_test.go` | Once | No | Custom E2E test cases per entity. |
 
 With `--force-bootstrap`, all "Once / No" files are regenerated from scratch.
 
@@ -200,8 +201,9 @@ vim bridge/repositories/catalogreposbridge/widgetsbridge/bridge.yml
 ## Notes
 
 - The generator requires the project root to contain a `gopernicus.yml`
-  manifest. It uses `project.MustFindRoot()` to locate it by walking up from
-  the current directory.
+  manifest. It uses `project.MustFindRoot()` to locate the project root by
+  walking up from the current directory until it finds a `go.mod` file; the
+  `gopernicus.yml` manifest is then expected at that root.
 - If the reflected schema is missing or stale, generated types may be incorrect.
   Always re-reflect after schema changes.
 - Generated files contain a header comment indicating they are auto-generated.

@@ -41,10 +41,14 @@ workshop/testing/
 ├── fixtures/         # Generated + custom fixture factories
 │   ├── generated.go  # Auto-generated per entity (regenerated)
 │   └── fixtures.go   # Custom helpers (created once, never overwritten)
-└── e2e/              # Generated E2E test files + setup bootstrap
-    ├── setup_test.go           # Bootstrap — implement once (never overwritten)
-    └── *_generated_test.go     # Route tests per entity (regenerated)
+├── testauth/         # Authenticator + signer helpers for E2E auth
+└── testsqlite/       # SQLite test database (spec-mode stores)
 ```
+
+E2E tests are not collected under `workshop/testing/`. The generator emits them per bridged entity, under `bridge/repositories/<domain>reposbridge/<entity>bridge/`:
+
+- `e2e_test.go` — bootstrap, created once (never overwritten), defines `migrateE2EDB`
+- `generated_e2e_test.go` — route tests + the `setupE2EServer` helper, regenerated
 
 ## testenv — composite environment
 
@@ -287,16 +291,15 @@ The fixture generator reads the reflected schema to pick sensible defaults so ge
 - **`json` / `jsonb` columns** (Go type `json.RawMessage`): defaults to `json.RawMessage("{}")` because Postgres rejects empty bytes as invalid JSON.
 - **Principal inheritance** (when an entity's PK is a FK to `principals`): the `principal_type` is set to the singular form of the table name (e.g. `service_accounts` → `service_account`) to match the canonical CHECK on the `principals` table.
 
-### E2E tests (`e2e/*_generated_test.go`)
+### E2E tests (`<entity>bridge/generated_e2e_test.go`)
 
-Each bridged entity gets HTTP-level tests for its CRUD routes:
+Each bridged entity gets HTTP-level tests for its CRUD routes, generated alongside the bridge package under `bridge/repositories/<domain>reposbridge/<entity>bridge/`:
 
 ```go
 //go:build e2e
 
-func TestGeneratedUser_Get(t *testing.T) {
-    ctx, db, ts := setupTestServer(t)
-    client := testhttp.New(ts.URL())
+func TestE2EUserCreateAndGet(t *testing.T) {
+    client, db := setupE2EServer(t)
 
     created := fixtures.CreateTestUserWithDefaults(t, ctx, db)
 
@@ -306,7 +309,7 @@ func TestGeneratedUser_Get(t *testing.T) {
 }
 ```
 
-The `setupTestServer` function is defined in `e2e/setup_test.go` — a bootstrap file you implement once to wire your full application.
+The `setupE2EServer(t) (*testhttp.Client, e2eDB)` helper is generated into `generated_e2e_test.go`. It calls `migrateE2EDB`, defined in the `e2e_test.go` bootstrap file you implement once to apply your project's migrations.
 
 ## Bootstrap vs regenerated files
 
@@ -314,7 +317,7 @@ The `setupTestServer` function is defined in `e2e/setup_test.go` — a bootstrap
 |---|---|---|
 | Fixtures | `fixtures/fixtures.go` | `fixtures/generated.go` |
 | Integration | `*pgx/store_test.go` | `*pgx/generated_test.go` |
-| E2E | `e2e/setup_test.go` | `e2e/*_generated_test.go` |
+| E2E | `<entity>bridge/e2e_test.go` | `<entity>bridge/generated_e2e_test.go` |
 
 Bootstrap files are created by the generator the first time, then never overwritten. Add your custom test helpers and scenario-specific tests in these files.
 

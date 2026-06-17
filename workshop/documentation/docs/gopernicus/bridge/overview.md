@@ -25,8 +25,9 @@ bridge/
 │   │   ├── apikeysbridge/
 │   │   └── ...
 │   ├── rebacreposbridge/    # ReBAC domain
-│   ├── eventsreposbridge/   # Events domain
 │   └── tenancyreposbridge/  # Tenancy domain
+├── events/                  # Events bridge (server-sent events)
+│   └── ssebridge/
 └── transit/                 # Shared HTTP utilities
     ├── httpmid/             # Middleware (auth, rate limiting, logging, etc.)
     └── fop/                 # Response envelopes, post-filter authorization

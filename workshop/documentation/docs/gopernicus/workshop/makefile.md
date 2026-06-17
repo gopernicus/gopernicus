@@ -77,7 +77,7 @@ go tool gopernicus new case <name>            # scaffold a use case
 |---|---|
 | `make test` | Run unit tests (`go test ./...`). |
 | `make test-integration` | Run integration tests with `-tags=integration`. Requires a running database. |
-| `make test-e2e` | Run end-to-end tests with `-tags=e2e` against `workshop/testing/e2e/`. Requires a running server. |
+| `make test-e2e` | Run end-to-end tests with `-tags=e2e` (`go test -tags=e2e ./...`). Requires a running server. |
 
 ### Typical test workflow
 

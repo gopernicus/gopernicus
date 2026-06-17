@@ -49,11 +49,18 @@ gopernicus boot repos [domain] [--db <name>]
 3. For each database, reads the `domains` map. If a domain filter is provided,
    only that domain is processed; otherwise all domains are iterated in
    alphabetical order.
-4. For each table in a domain:
-   - **Skips** if `core/repositories/<domain>/<table>/queries.sql` already exists.
+4. For each table in a domain (the repo directory uses the package-normalized
+   table name -- lowercased with underscores stripped -- so table `api_keys`
+   scaffolds to `core/repositories/<domain>/apikeys/`, not `api_keys`):
+   - **Skips** if `core/repositories/<domain>/<package-normalized-table>/queries.sql`
+     already exists.
+   - **Skips** (with a `spec-shipped with the framework` notice) feature entities
+     whose `queries.sql` spec ships with the framework -- create
+     `core/repositories/<domain>/<package-normalized-table>/queries.sql` by hand to
+     eject the shipped spec.
    - Looks up the table in the reflected schema JSON (`_public.json`).
    - **Skips** with a warning if the table is not found in the reflected schema.
-   - Calls the same `scaffoldRepoForTable` and `scaffoldBridgeYMLForTable`
+   - Calls the same `scaffold.RepoForTable` and `scaffold.BridgeYMLForTable`
      functions used by `gopernicus new repo` to create the repo directory,
      `queries.sql`, and `bridge.yml`.
 5. Prints a summary of how many repos were scaffolded and next steps.
@@ -103,7 +110,7 @@ Running `gopernicus boot repos` scaffolds repos for all three domains.
 ### Error Handling
 
 - If a domain filter is provided but not found in the specified database, the
-  command fails with an error listing the available domains.
+  command fails with an error listing the defined domains.
 - If a table is not found in the reflected schema, that table is skipped with a
   warning (not a fatal error). Run `gopernicus db reflect` to update the schema.
 - If all repos already exist, the command reports "No new repos to scaffold."

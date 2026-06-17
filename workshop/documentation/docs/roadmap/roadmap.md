@@ -53,10 +53,6 @@ This page is a work in progress. Items are unordered and unprioritized.
 
 - Multi-protocol support — bridge packages currently only generate HTTP handlers (`generated.go`). Future protocols (gRPC, GraphQL) would live alongside as `grpc.go`, `graphql.go`, etc., sharing the same `bridge.yml` configuration and core wiring
 
-## Project Structure
-
-- Move `core/testing/` (fixtures, setup helpers) into `workshop/testing/` — test infrastructure is a development concern, not part of the deployed binary, and belongs alongside migrations and dev tooling
-
 ## Packaging & Module Boundaries
 
 :::note
@@ -97,11 +93,8 @@ This is a **consideration**, not a committed direction. It captures a question w
 
 ## Testing
 
-- **Bridge auth handler tests + response shape contracts** *(elevated priority)* — `bridge/auth/authentication/` has no `*_test.go` files. Two related gaps that should be closed together since they share the same harness:
-  1. **Handler behavior tests.** The handlers (verify-email, change-password, remove-password send/verify, unlink-OAuth send/verify, OAuth link/unlink, etc.) all interact with the authenticator and the `httpErrFor` mapper, but there is no end-to-end test that exercises the full HTTP request → handler → core → response cycle. Bootstrapping requires a fake `Bridge` with stub repos + a real authenticator instance + an `httptest.Server`.
-  2. **Response shape contract tests.** Several response types now carry stability contracts in their doc comments (`OAuthAccountResponse`, `LoginResponse`, `MeResponse`, `OAuthCallbackResponse`, `UserResponse`, `SessionResponse`, `TokenResponse`, `SuccessResponse`). The Go type system catches Go-side renames, but it does *not* catch JSON tag changes (e.g. `json:"provider"` → `json:"provider_name"` while leaving the Go field as `Provider`) or accidental array-vs-envelope changes. Each documented contract should be backed by a golden-file marshaling test that fixtures a populated struct and asserts the exact JSON output. Treat the test failure as the breaking-change alarm — frontends bind directly to these shapes.
-  
-  Both items share the same `bridge/auth/authentication/*_test.go` bootstrap, so do them in one pass.
+- **Bridge auth response shape contract tests** *(elevated priority)* — `bridge/auth/authentication/` now has `*_test.go` coverage (`bridge_test.go`, `oauth_test.go`, `validation_test.go`), including handler behavior tests and a golden-file marshaling test for `OAuthAccountResponse`. The remaining gap is extending golden-file contract coverage to the other documented response types:
+  - **Response shape contract tests.** Several response types carry stability contracts in their doc comments (`LoginResponse`, `MeResponse`, `OAuthCallbackResponse`, `UserResponse`, `SessionResponse`, `TokenResponse`, `SuccessResponse`) that do not yet have golden-file tests. The Go type system catches Go-side renames, but it does *not* catch JSON tag changes (e.g. `json:"provider"` → `json:"provider_name"` while leaving the Go field as `Provider`) or accidental array-vs-envelope changes. Each documented contract should be backed by a golden-file marshaling test that fixtures a populated struct and asserts the exact JSON output. Treat the test failure as the breaking-change alarm — frontends bind directly to these shapes.
 - **Promote `penetration_test.go` harness to a shared `testing.go` helper** — the mocks and `testHarness` in `core/auth/authentication/penetration_test.go` are useful well beyond the penetration tests (they're already used by `sensitive_test.go`). Extracting them into a non-build-tagged helper would let other test files in the package use them without sharing the `penetration` build tag. This becomes more valuable once the bridge tests above exist, since the bridge tests will want to drive a real `Authenticator` and the cleanest way to construct one for tests is the existing harness.
 
 ## Enum filter values 500 on Postgres (robustness)

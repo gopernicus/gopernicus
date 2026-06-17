@@ -30,7 +30,7 @@ Example scaffolded output for a `questions` table with `tenant_id`:
 
 ```sql
 -- @func: List
--- @filter:conditions *,-record_state
+-- @filter:conditions *
 SELECT * FROM questions
 WHERE tenant_id = @tenant_id AND $conditions AND $search
 ORDER BY $order LIMIT $limit;
@@ -74,8 +74,10 @@ A column named `record_state` generates `SoftDelete`, `Archive`, and `Restore` q
 
 The scaffolder also:
 
-- Excludes `record_state` from `@filter` specs (using `*,-record_state`)
+- Excludes `record_state` from `@search` specs (it's never a search column)
 - Excludes `record_state` from `@fields` on update
+
+The scaffolded `@filter` spec stays plain `*` — `record_state`'s active-default behavior is applied at generation time (see [`record_state` in filters](#record_state-in-filters)), not via a scaffolded `*,-record_state` filter.
 
 ---
 

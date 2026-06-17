@@ -39,7 +39,7 @@ Open the bridge package's `bridge.yml` file. Add `auth_relations` that describe 
 
 **Tenant-scoped entity** (has a `tenant_id` FK):
 
-When you scaffold with `gopernicus new repo`, the generator detects the `tenant_id` FK and produces these automatically in `bridge.yml`:
+When you scaffold with `gopernicus new repo`, the generator emits a relation for the *nearest parent* (a non-tenant parent FK takes precedence over `tenant_id`) plus `owner`. For a purely tenant-scoped entity, the nearest parent is the tenant relation, so it produces these automatically in `bridge.yml` (the relation name is derived from ancestry detection, not hardcoded):
 
 ```yaml
 auth_relations:
@@ -95,7 +95,7 @@ In `read(owner|manager|tenant->read)`:
 - `manager` -- direct: the caller has the `manager` relation on this resource
 - `tenant->read` -- inherited: the caller has `read` permission on the parent `tenant` resource
 
-The special relation `authenticated` means any authenticated caller (no specific relationship required).
+A bare relation name compiles to `Direct(name)` and only grants access when an explicit relationship tuple for that relation exists; there is no special "any authenticated caller" relation.
 
 ---
 
@@ -114,15 +114,20 @@ routes:
     path: /tenants/{tenant_id}/projects
     middleware:
       - authenticate
-      - authorize: prefilter(tenant:tenant_id, read)
+      - authorize:
+          pattern: prefilter
+          permission: read
+          subject: "tenant:tenant_id"
 ```
 
-The `tenant:tenant_id` syntax tells the prefilter to scope the check to the tenant specified by the `tenant_id` path parameter. For non-tenant-scoped entities, omit the scope:
+The `subject: "tenant:tenant_id"` field tells the prefilter to scope the check to the tenant specified by the `tenant_id` path parameter. For non-tenant-scoped entities, omit the `subject`:
 
 ```yaml
     middleware:
       - authenticate
-      - authorize: prefilter(read)
+      - authorize:
+          pattern: prefilter
+          permission: read
 ```
 
 ### check (for single-resource operations)
@@ -136,7 +141,9 @@ routes:
     path: /tenants/{tenant_id}/projects/{project_id}
     middleware:
       - authenticate
-      - authorize: check(read)
+      - authorize:
+          permission: read
+          param: project_id
 ```
 
 ### postfilter (for queries returning multiple results)
@@ -145,7 +152,9 @@ Postfilter runs the query first, then filters results based on authorization. Us
 
 ```yaml
     middleware:
-      - authorize: postfilter(read)
+      - authorize:
+          pattern: postfilter
+          permission: read
 ```
 
 Prefer `prefilter` over `postfilter` when possible -- it is more efficient because the database only returns authorized rows.
@@ -163,7 +172,9 @@ routes:
     path: /tenants/{tenant_id}/projects
     middleware:
       - authenticate
-      - authorize: check(create)
+      - authorize:
+          permission: create
+          param: tenant_id
     auth_create:
       - project:{project_id}#owner@{=subject}
       - project:{project_id}#tenant@tenant:{tenant_id}
@@ -267,13 +278,13 @@ func TestProjectAuthorization(t *testing.T) {
 |---|---|---|
 | `auth_relations` | `bridge.yml` | Define relations on the resource |
 | `auth_permissions` | `bridge.yml` | Define permissions from relations |
-| `authorize: prefilter(perm)` | Route middleware in `bridge.yml` | Filter list by authorized resources |
-| `authorize: prefilter(scope:param, perm)` | Route middleware in `bridge.yml` | Scoped prefilter (tenant) |
-| `authorize: check(perm)` | Route middleware in `bridge.yml` | Check permission on resource by ID |
-| `authorize: postfilter(perm)` | Route middleware in `bridge.yml` | Filter results after execution |
+| `authorize:` with `pattern: prefilter`, `permission: <perm>` | Route middleware in `bridge.yml` | Filter list by authorized resources |
+| `authorize:` with `pattern: prefilter`, `permission: <perm>`, `subject: "<rel>:<param>"` | Route middleware in `bridge.yml` | Scoped prefilter (tenant) |
+| `authorize:` with `permission: <perm>`, `param: <param>` | Route middleware in `bridge.yml` | Check permission on resource by ID (default pattern) |
+| `authorize:` with `pattern: postfilter`, `permission: <perm>` | Route middleware in `bridge.yml` | Filter results after execution |
 | `auth_create` | Route config in `bridge.yml` | Write relationship tuples on create |
 | `authenticate` | Route middleware in `bridge.yml` | Require authentication |
-| `with_permissions` | Route middleware in `bridge.yml` | Include caller's permissions in response |
+| `with_permissions` | Route field in `bridge.yml` | Include caller's permissions in response |
 
 ---
 

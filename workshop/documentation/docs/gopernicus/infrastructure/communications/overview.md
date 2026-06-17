@@ -17,4 +17,4 @@ The communications layer handles outbound messaging across delivery channels. Ea
 
 Each channel defines its own `Client` interface suited to that medium — email, SMS, and instant messaging have fundamentally different data requirements and there's no meaningful common abstraction between them.
 
-If your domain needs to send an email, it depends on `emailer.Renderer`. If it needs SMS, it will depend on the SMS client interface. Channels are not interchangeable by design.
+If your domain needs to send an email, it depends on the concrete `*emailer.Emailer` and calls its `RenderAndSend` method (the `emailer.Renderer` interface is the contract `Emailer` satisfies, not the injected dependency type today). If it needs SMS, it will depend on the SMS client interface. Channels are not interchangeable by design.

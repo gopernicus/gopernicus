@@ -143,6 +143,13 @@ TWILIO_FROM_PHONE=+15551234567
 
 The project loads `.env` automatically based on the `env_file` field in `gopernicus.yml`.
 
+There are two patterns for populating a Config:
+
+- **`env:"..."` struct tags** decoded automatically from the environment (used by `goredisbus`, `postgres`, `redis`, `cryptids`). The Twilio example above uses this style.
+- **A plain Config struct populated explicitly at the call site** via `env.MustGet()` or `os.Getenv()` during wiring (used by the actual `sendgridemailer`, whose `Config` has no env tags). See Step 5.
+
+Pick one — don't mix struct-tag decoding with manual reads of the same variables.
+
 ---
 
 ## Step 4: Create a Development Stub (recommended)
@@ -274,7 +281,7 @@ infrastructure/
 This follows the established pattern seen in:
 - `cache/` with `memorycache/`, `rediscache/`, `noopcache/`
 - `storage/` with `diskstorage/`, `s3/`, `gcs/`
-- `events/` with `memorybus/`, `goredisbus/`, `outbox/`
+- `events/` with `memorybus/`, `goredisbus/`, `poller/`
 - `emailer/` with `sendgridemailer/`, `stdoutemailer/`
 
 ---

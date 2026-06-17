@@ -16,7 +16,7 @@ The generator consumes four things:
 | Input | Location | Created by |
 |---|---|---|
 | `queries.sql` | `core/repositories/{domain}/{entity}/` | `gopernicus new repo` or by hand |
-| `bridge.yml` | `bridge/repositories/{domain}bridge/{entity}bridge/` | `gopernicus new repo` or by hand |
+| `bridge.yml` | `bridge/repositories/{domain}reposbridge/{entity}bridge/` | `gopernicus new repo` or by hand |
 | Reflected schema | `workshop/migrations/{db}/_public.json` | `gopernicus db reflect` |
 | Project manifest | `gopernicus.yml` | `gopernicus init` |
 
@@ -86,7 +86,7 @@ The generator also produces composites that wire all entities in a domain togeth
 | `core/repositories/{domain}/generated_composite.go` | Core | Aggregates all repos into a `Repositories` struct |
 | `bridge/repositories/{domain}bridge/generated_composite.go` | Bridge | Aggregates all bridges, exposes `AddHttpRoutes` |
 | `workshop/testing/fixtures/generated.go` | Testing | Factory functions for test data |
-| `workshop/testing/e2e/{entity}_generated_test.go` | Testing | HTTP-level CRUD tests |
+| `bridge/repositories/{domain}reposbridge/{entity}bridge/generated_e2e_test.go` | Bridge | HTTP-level CRUD tests (colocated with the bridge entity) |
 
 ## The pipeline
 
