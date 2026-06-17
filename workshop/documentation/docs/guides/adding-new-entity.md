@@ -104,7 +104,7 @@ The CLI looks up `projects` in `_public.json`, detects the `tenant_id` FK to `te
 - `SoftDelete`, `Archive`, `Restore` -- if the table has a `record_state` column
 - `Delete` -- hard delete
 
-The scaffold also generates `bridge.yml` in the bridge package directory with route definitions, ordered middleware arrays (authenticate, authorize, rate_limit), and auth schema (`auth_relations`, `auth_permissions`). Because the table has a `tenant_id` FK to `tenants`, the scaffold automatically:
+The scaffold also generates `bridge.yml` in the bridge package directory with route definitions, ordered middleware arrays (authenticate, rate_limit, authorize -- `rate_limit` comes before `authorize`, and `max_body_size` is prepended on mutations), and auth schema (`auth_relations`, `auth_permissions`). Because the table has a `tenant_id` FK to `tenants`, the scaffold automatically:
 - Nests routes under `/tenants/{tenant_id}/projects` in `bridge.yml`
 - Adds `tenant_id = @tenant_id AND` to WHERE clauses in `queries.sql`
 - Generates `auth_relations` and `auth_permissions` that inherit from the tenant
@@ -146,26 +146,33 @@ middleware, and auth schema:
 
 ```yaml
 routes:
-  list:
-    method: GET
+  - func: List
     path: /tenants/{tenant_id}/projects
     middleware:
-      - authenticate
+      - authenticate: any
       - rate_limit
-      - authorize: prefilter(tenant:tenant_id, read)
-  get:
-    method: GET
+      - authorize:
+          pattern: prefilter
+          permission: read
+          subject: "tenant:tenant_id"
+  - func: Get
     path: /tenants/{tenant_id}/projects/{project_id}
+    with_permissions: true
     middleware:
-      - authenticate
-      - authorize: check(read)
-      - with_permissions
-  create:
+      - authenticate: any
+      - rate_limit
+      - authorize:
+          permission: read
+          param: project_id
+  - func: Create
     method: POST
     path: /tenants/{tenant_id}/projects
     middleware:
-      - authenticate
-      - authorize: check(create)
+      - authenticate: any
+      - rate_limit
+      - authorize:
+          permission: create
+          param: tenant_id
 
 auth_relations:
   - tenant(tenant)
@@ -185,7 +192,7 @@ Common customizations:
 - **Add `unique_to_id`** middleware for slug-based lookups
 - **Add `max_body_size`** middleware for upload routes
 - **Adjust `auth_relations`** and `auth_permissions`
-- **Add `with_permissions`** to routes that should return caller's permissions
+- **Add the route-level key `with_permissions: true`** to routes that should return the caller's permissions (it is a per-route field, not a middleware entry)
 
 ---
 

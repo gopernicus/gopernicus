@@ -186,13 +186,13 @@ Event subscribers are registered in `server.New()` after the event bus and domai
 
 ```go
 // Authentication email subscriber
-authSubs := authbridge.NewSubscribers(mailer, log, frontendURL)
+authSubs := authbridge.NewSubscribers(mailer, log)
 authSubs.Register(bus)
 
 // Invitation auto-resolve subscriber. The user lookup rides the generated
-// authentication users satisfier; add invbridge.WithEmailer(mailer) to also
+// authentication users satisfier; add invitationsbridge.WithEmailer(mailer) to also
 // deliver invitation emails.
-invitationSubs := invbridge.NewSubscribers(inviter, satisfiers.NewUserSatisfier(authRepos.Users), log)
+invitationSubs := invitationsbridge.NewSubscribers(inviter, authenticationsatisfiers.NewUserSatisfier(authRepos.User), log)
 invitationSubs.Register(bus)
 ```
 
@@ -228,6 +228,6 @@ Beyond the Go code, `gopernicus init` also generates:
 |---|---|
 | `.env.example` | Configuration reference with all env vars and defaults |
 | `Makefile` | Development targets: `dev`, `run`, `build`, `test`, `dev-up`, `dev-down`, `dev-psql` |
-| `docker-compose.yml` | Local dev infrastructure (PostgreSQL, Redis if configured) |
-| `Dockerfile` | Multi-stage production build (Go build → Alpine runtime) |
+| `workshop/dev/docker-compose.yml` | Local dev infrastructure (PostgreSQL, Redis if configured) |
+| `workshop/docker/dockerfile.<project-name>` | Multi-stage production build (Go build → Alpine runtime) |
 | `.air.toml` | Hot-reload configuration for development |

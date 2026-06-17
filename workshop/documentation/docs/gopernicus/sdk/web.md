@@ -234,7 +234,7 @@ handler.POST("/generate", func(w http.ResponseWriter, r *http.Request) {
 })
 ```
 
-`AcceptsStream(r)` checks for `text/event-stream` in the `Accept` header. `NewStreamWriter` returns `nil` if the `ResponseWriter` does not support flushing.
+`AcceptsStream(r)` checks for `text/event-stream` in the `Accept` header. `NewStreamWriter` always returns a usable `*StreamWriter`; if the underlying `ResponseWriter` cannot flush, the failure surfaces as an error returned from the first `Send`/`SendJSON`/`SendData` call (not as a `nil` return).
 
 ## Static files
 

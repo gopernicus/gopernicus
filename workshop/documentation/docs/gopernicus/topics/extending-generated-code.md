@@ -176,11 +176,9 @@ The `fop.go` bootstrap file controls default ordering, direction, and page size:
 ```go
 // core/repositories/tenancy/tenants/fop.go
 
-var (
-    DefaultOrderBy  = OrderByCreatedAt
-    DefaultDirection = fop.DESC
-    DefaultLimit     = 25
-)
+const DefaultOrderBy = OrderByCreatedAt
+const DefaultOrderDirection = fop.DESC
+const DefaultLimit = 25
 ```
 
 Change these to match your domain's natural ordering. The generated list handlers use these defaults when the caller doesn't specify.

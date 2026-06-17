@@ -50,8 +50,11 @@ gopernicus new repo <domain/entity> [--db <name>] [--table <name>]
 ### Scaffolded queries.sql
 
 The generated `queries.sql` includes data annotation comments that drive code
-generation. Only data annotations appear here (`@func`, `@filter`, `@search`,
-`@order`, `@max`, `@fields`, `@cache`, `@event`). The scaffolded operations include:
+generation. Only data annotations appear here. The scaffolder emits `@func`,
+`@filter`, `@search`, `@order`, `@max`, `@fields`, and `@returns` (on
+`GetIDBySlug`); other data annotations such as `@cache` and `@event` are
+available to add manually but are not auto-generated. The scaffolded operations
+include:
 
 - **List** -- paginated, filterable, searchable (string columns).
 - **Get** -- by primary key.
@@ -86,11 +89,13 @@ An entity can have both tenant and parent (e.g. takes), just tenant (e.g. questi
 
 The scaffolder finds text/string columns and adds them to a `@search: ilike(...)` annotation on the List query. Columns named with `hash`, `secret`, `token`, `password`, or `key_prefix` are excluded from search.
 
-### UniqueToID Middleware
+### Slug Awareness
 
-If the table has a unique `slug` column, the scaffold generates `unique_to_id`
-middleware in `bridge.yml` for routes that accept the entity ID parameter. This
-enables clients to use either the ID or the slug in URLs.
+If the table has a unique `slug` column, the scaffolder is slug-aware in
+`queries.sql`, emitting `GetBySlug` / `GetIDBySlug` queries. It does **not**
+auto-generate `unique_to_id` middleware. `unique_to_id` is a valid `bridge.yml`
+middleware type you can add by hand if you want clients to use either the ID or
+the slug in URLs.
 
 ### Examples
 

@@ -154,7 +154,7 @@ Use the pattern that matches your situation. Most cases work fine with the gener
 
 Infrastructure packages follow a consistent logging policy based on whether they operate synchronously or asynchronously.
 
-**Asynchronous packages** — those with background goroutines or fire-and-forget paths — require a `*slog.Logger` in their constructor. Errors in async code paths have no caller to return to, so logging is the only way to surface them. This applies to `memorybus`, `goredisbus`, `outbox`, `throttler`, and `tokenbucket`.
+**Asynchronous packages** — those with background goroutines or fire-and-forget paths — require a `*slog.Logger` in their constructor. Errors in async code paths have no caller to return to, so logging is the only way to surface them. This applies to `memorybus.New`, `goredisbus.New`, `throttler.New`, and `throttler.NewTokenBucket`. The `poller` is also asynchronous but takes its logger via the optional `WithLogger` option rather than a required constructor parameter.
 
 **Synchronous packages** offer logging as an opt-in via `WithLogger(*slog.Logger)`. All errors are returned to the caller regardless — logging is purely observational. When a caller passes `WithLogger`, they're saying "log your defaults." When they don't, the package is silent.
 

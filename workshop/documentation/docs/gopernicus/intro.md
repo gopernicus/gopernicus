@@ -77,4 +77,4 @@ The project's `go.mod` carries a `tool` directive pinning the generator to the
 same framework version the project links, so generated code and runtime can
 never drift.
 
-See [CLI: init](../cli/init.md) for all initialization options (authentication, authorization, tenancy, events).
+See [CLI: init](../cli/init.md) for all initialization options via the `--features` flag (authentication, authorization, tenancy, event-outbox, job-queue).

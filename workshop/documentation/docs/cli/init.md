@@ -29,34 +29,23 @@ gopernicus init <project-name> [--module <path>] [--framework-version <version>]
 |---|---|
 | `--module`, `-m` | Go module path (e.g. `github.com/acme/myapp`). Inferred from org/repo shorthand if omitted. When neither shorthand nor flag is provided, defaults to `github.com/your-org/<project-name>`. |
 | `--framework-version` | Pin a specific gopernicus framework version (e.g. `v0.1.0`). When omitted, fetches `@latest`. |
-| `--no-interactive` | Skip interactive prompts. Uses all-features-enabled and default infrastructure when combined with no `--features` flag. |
+| `--no-interactive` | Accepted for compatibility. `init` is always non-interactive; omitted flags fall back to defaults (all features, default infrastructure). |
 | `--features <list>` | Comma-separated feature list. Valid values: `authentication`, `authorization`, `tenancy`, `event-outbox`, `job-queue`, `all`, `none`. Default when omitted in non-interactive mode: `all`. |
 
-## Interactive Prompts
+## Feature & Infrastructure Selection
 
-When run without `--no-interactive` (and stdin is a terminal), init launches a
-multi-step TUI wizard:
+`gopernicus init` is fully flag-driven -- it does **not** launch a TUI wizard.
+Even when `--no-interactive` is omitted, the command runs with defaults (printing
+a note that it is using defaults; pass `--features`/`--module` to customize).
+Omitted flags resolve to:
 
-1. **Project name** -- defaults to the positional argument.
-2. **Go module path** -- defaults to `github.com/<org>/<project>` or `github.com/your-org/<project>`.
-3. **Framework Features** -- multi-select picker, all selected by default:
-   - Authentication (users, sessions, OAuth, API keys)
-   - Authorization (ReBAC relationships, permissions)
-   - Tenancy (multi-tenant isolation, groups)
-4. **Event Infrastructure** -- separate picker screen, both selected by default:
-   - Event Outbox (transactional outbox for atomic event delivery)
-   - Job Queue (durable deferred processing with retry and dead-lettering)
-5. **Infrastructure Adapters** -- four separate picker screens:
-   - Cache Backend (Redis Cache -- selected by default)
-   - Event Bus Backend (Redis Streams -- selected by default)
-   - File Storage (Disk and GCS selected by default, S3 unselected)
-   - Email Delivery (SendGrid -- selected by default)
-6. **AI Companion** -- multi-select picker:
-   - Claude (selected by default) -- generates CLAUDE.md with project conventions and .claude/skills/ with workflow skills for common tasks (generate, new-entity, new-case, migrate)
-
-If `--features` is provided on the CLI alongside interactive mode, the feature
-picker is skipped and the flag value is used. The infrastructure picker always
-runs in interactive mode.
+- **Features** -- all features enabled: `authentication`, `authorization`,
+  `tenancy`, `event-outbox`, `job-queue`. Override with `--features`.
+- **Infrastructure** -- the default adapter set (see
+  [Non-Interactive Infrastructure Defaults](#non-interactive-infrastructure-defaults)
+  below).
+- **AI companion** -- Claude, which generates `CLAUDE.md` with project
+  conventions and `.claude/skills/` with workflow skills for common tasks.
 
 ## What Gets Created
 
@@ -77,17 +66,15 @@ The scaffolding process executes these steps in order:
    - `bridge/transit/`
    - `infrastructure/`
    - `sdk/`
-4. **gopernicus.yml** -- manifest file with feature flags and domain-to-table mappings. Includes `gopernicus_version` if `--framework-version` was provided.
+4. **gopernicus.yml** -- manifest file with feature flags and domain-to-table mappings. Always includes `gopernicus_version`, defaulting to `latest`; when `--framework-version` is provided it is set to that pinned version instead.
 5. **.gitignore** -- standard Go gitignore with env file exclusions.
 6. **App server scaffold** -- `cmd/`, `app/`, and server wiring code generated from templates. Infrastructure adapters are included based on picker selections.
-7. **Feature assets** -- when at least one feature is selected, the CLI copies migrations, core repositories, bridge repositories, and satisfiers from the gopernicus framework source. Source files are resolved from the Go module cache (or from `GOPERNICUS_DEV_SOURCE` in dev mode). Copied Go files have their import paths rewritten from the gopernicus module to your module path for `core/repositories/`, `core/auth/*/satisfiers`, and `bridge/repositories/` imports. Framework SDK and infrastructure imports are left pointing at gopernicus.
-   - SQL migrations (`0001_auth.sql`, `0002_rebac.sql`, `0003_tenants.sql`, `0004_event_outbox.sql`, `0005_job_queue.sql`)
+7. **Feature assets** -- when at least one feature is selected, the CLI copies migrations, core repositories, and bridge repositories from the gopernicus framework source. Source files are resolved from the Go module cache (or from `GOPERNICUS_DEV_SOURCE` in dev mode). Copied Go files have their import paths rewritten from the gopernicus module to your module path for `core/repositories/` and `bridge/repositories/` imports. Framework SDK and infrastructure imports are left pointing at gopernicus.
+   - SQL migrations (`0001_auth.sql`, `0002_rebac.sql`, `0003_tenants.sql`, `0004_event_outbox.sql`, `0005_job_queue.sql`, `0006_job_schedules.sql`)
    - Core repositories (`core/repositories/auth/`, `core/repositories/rebac/`, `core/repositories/tenancy/`, etc.)
    - Bridge repositories (`bridge/repositories/authreposbridge/`, `bridge/repositories/rebacreposbridge/`, `bridge/repositories/tenancyreposbridge/`)
-   - Authentication satisfiers (`core/auth/authentication/satisfiers/`)
-   - Authorization satisfiers (`core/auth/authorization/satisfiers/`)
-   - Authentication bridge (`bridge/auth/authentication/`)
-   - Invitations bridge (`bridge/auth/invitations/`)
+   - Authentication and authorization satisfiers (`core/auth/authentication/satisfiers/`, `core/auth/authorization/satisfiers/`) are **generated** by the post-init `gopernicus generate` step, not copied.
+   - The authentication and invitations bridges (`bridge/auth/authentication/`, `bridge/auth/invitations/`) are **imported** from the framework rather than copied.
 8. **AI companion files** -- when Claude is selected:
    - `CLAUDE.md` -- project instructions with architecture overview, conventions, key paths, and common commands
    - `.claude/skills/new-domain.md` -- interactive workflow: design tables, write migrations, scaffold repos, generate, and wire a new domain
@@ -106,7 +93,7 @@ domain-to-table mappings:
 | `rebac` | groups, invitations, rebac_relationships, rebac_relationship_metadata |
 | `tenancy` | tenants |
 | `events` | event_outbox |
-| `jobs` | job_queue |
+| `jobs` | job_queue, job_schedules |
 
 ### Non-Interactive Infrastructure Defaults
 
@@ -121,11 +108,12 @@ enabled by default (matching the docker-compose development setup):
 | GCS | enabled |
 | S3 | disabled |
 | SendGrid | enabled |
+| Telemetry | enabled |
 
 ## Examples
 
 ```bash
-# Interactive wizard (recommended for first-time setup)
+# Uses defaults for all features and infrastructure (recommended for first-time setup)
 gopernicus init myapp
 
 # Shorthand with org -- infers module path github.com/acme/myapp

@@ -42,7 +42,7 @@ Most code depends on `Renderer`, not `Emailer` directly.
 
 ## Emailer
 
-`Emailer` wraps a `Client` and adds template rendering, a default sender address, and branding. It satisfies both `Renderer` and `notify.Notifier`. Structured logging of send failures is opt-in via `WithLogger`:
+`Emailer` wraps a `Client` and adds template rendering, a default sender address, and branding. It satisfies `Renderer` and also exposes a direct `Send` method. Structured logging of send failures is opt-in via `WithLogger`:
 
 ```go
 e, err := emailer.New(

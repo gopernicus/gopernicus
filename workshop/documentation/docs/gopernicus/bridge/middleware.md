@@ -72,7 +72,7 @@ httpmid.Authorize(authorizer, log, jsonErrs, "post", "read",
 
 ### Relationship Tracking
 
-When the authorization check succeeds, the middleware stores which relation granted access in the context. Handlers can retrieve it via `GetRelationship()` — useful for varying behavior based on role (e.g., owners see more fields than viewers).
+When the authorization check succeeds and the authorizer's result includes a granting relation reason, the middleware stores which relation granted access in the context. Handlers can retrieve it via `GetRelationship()`, which returns `(RelationshipInfo, bool)` — the boolean indicates whether a relation was recorded. This is useful for varying behavior based on role (e.g., owners see more fields than viewers).
 
 ### bridge.yml Syntax
 
@@ -314,7 +314,7 @@ Context helpers read values set by middleware. All getters return zero values wh
 | Function | Set By | Returns |
 |---|---|---|
 | `GetClientIP(ctx)` | `TrustProxies` | Resolved client IP |
-| `GetRelationship(ctx)` | `Authorize` | `RelationshipInfo{Relation, ResourceType, ResourceID}` |
+| `GetRelationship(ctx)` | `Authorize` | `(RelationshipInfo{Relation, ResourceType, ResourceID}, bool)` — `bool` reports whether a relation was set |
 | `GetTenantID(ctx)` | `ExtractTenantID` / `InjectDefaultTenant` | Tenant ID |
 | `MustGetTenantID(ctx)` | `ExtractTenantID` / `InjectDefaultTenant` | Tenant ID or panic |
 

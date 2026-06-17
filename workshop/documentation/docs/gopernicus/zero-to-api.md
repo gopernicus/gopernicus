@@ -54,7 +54,7 @@ to match your `.env` — no manual setup needed.
 gopernicus doctor
 ```
 
-All five checks should pass. If any fail, the output explains how to fix them.
+All checks should pass. If any fail, the output explains how to fix them.
 
 ## 4. Run Initial Migrations
 
@@ -76,17 +76,21 @@ gopernicus db reflect
 This writes `workshop/migrations/primary/_public.json` (consumed by the
 generator) and `_public.sql` (human-readable summary).
 
-## 6. Bootstrap Feature Repositories
+## 6. Bootstrap Project Repositories
 
-The framework features selected during init have their tables mapped in
-`gopernicus.yml`. Scaffold repositories for all of them at once:
+`gopernicus boot repos` scaffolds `queries.sql` and `bridge.yml` files for
+every project-owned table mapped to a domain in `gopernicus.yml`:
 
 ```bash
 gopernicus boot repos
 ```
 
-This creates `queries.sql` and `bridge.yml` files for every framework table
-(auth, rebac, tenancy, etc.).
+Framework feature entities (auth, rebac, tenancy, events, jobs) are spec-shipped
+with the framework and are intentionally skipped — their `queries.sql` ship
+version-locked with the framework, and you only create a local `queries.sql` by
+hand to eject a shipped spec. Right after init the only mapped domains are these
+framework domains, so this step does nothing until you map a project table of
+your own (see step 9).
 
 ## 7. Generate Code
 
@@ -108,12 +112,13 @@ This starts the server with [air](https://github.com/air-verse/air) for hot
 reload. You should see the boot sequence log:
 
 ```
-→ telemetry initialized
-→ database connected
-→ redis connected
-→ event bus started
-→ cache initialized
-→ server listening on 0.0.0.0:3000
+init service=telemetry
+init service=postgres
+init service=redis
+init service=event_bus
+init service=cache
+init service=http_server host=0.0.0.0:3000
+startup status="api router started" host=0.0.0.0:3000
 ```
 
 Verify it's running:
@@ -238,7 +243,7 @@ make dev-up                    # start postgres + redis
 gopernicus doctor              # verify health
 gopernicus db migrate          # apply migrations
 gopernicus db reflect          # snapshot schema
-gopernicus boot repos          # scaffold framework repos
+gopernicus boot repos          # scaffold project repos (framework specs skipped)
 gopernicus generate            # generate Go code
 make dev                       # run server with hot reload
 

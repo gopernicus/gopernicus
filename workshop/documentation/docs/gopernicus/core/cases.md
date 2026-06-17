@@ -34,8 +34,7 @@ core/cases/
 bridge/cases/
 └── checkoutbridge/
     ├── bridge.go       # Bridge struct, constructor
-    ├── routes.go       # AddHttpRoutes
-    ├── http.go         # HTTP handlers
+    ├── http.go         # AddHttpRoutes + HTTP handlers
     └── model.go        # Request/response models
 ```
 

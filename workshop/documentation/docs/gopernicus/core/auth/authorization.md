@@ -160,7 +160,7 @@ result, err := authorizer.Check(ctx, authorization.CheckRequest{
    - **Direct:** queries the store for the relation, with group membership expansion
    - **Through:** traverses the relation to find target resources, then recursively checks the specified permission on each target
 
-The `Reason` field in the result describes which rule granted access (e.g., `"direct:owner"`, `"through:org->direct:admin"`, `"platform:admin"`, `"self:user"`).
+The `Reason` field in the result describes which rule granted access (e.g., `"direct:owner"`, `"through:org->direct:admin"`, `"platform:admin"`, `"self"`).
 
 ### Batch Check
 

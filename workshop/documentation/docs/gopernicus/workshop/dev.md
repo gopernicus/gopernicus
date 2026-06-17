@@ -12,14 +12,14 @@ title: Dev
 Bring up local services:
 
 ```bash
-make dev-up
+make dev-data-up
 # or: docker compose -f workshop/dev/local-data-compose.yml up -d
 ```
 
 Tear them down:
 
 ```bash
-make dev-down
+make dev-data-down
 ```
 
 Data is persisted in `workshop/dev/data/` (gitignored) so volumes survive restarts.

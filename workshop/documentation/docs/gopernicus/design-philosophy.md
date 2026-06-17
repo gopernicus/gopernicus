@@ -82,6 +82,7 @@ The same alphabetical convention applies to the top-level packages inside each l
 core/
 ├── auth/ # Authentication, authorization, invitations (framework-provided)
 ├── cases/ # Hand-written business logic (user-defined)
+├── jobs/ # Background job scheduling (framework-provided)
 └── repositories/ # Data access layer
 
 ```
@@ -105,6 +106,7 @@ Cases don't need to import auth. Authorization checks happen at the bridge layer
 bridge/
 ├── auth/ # Framework-provided HTTP auth handlers
 ├── cases/ # User-defined case HTTP handlers
+├── events/ # Framework-provided event streaming (SSE) handlers
 ├── repositories/ # Generated CRUD HTTP handlers
 └── transit/ # HTTP middleware, authorization-aware pagination, error rendering
 

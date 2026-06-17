@@ -168,19 +168,11 @@ If `callbackBaseURL` is empty, returns nil (no allowlist configured).
 Construction and registration:
 
 ```go
-// Derive fallback URL for email links from first allowed frontend.
-// In strict mode (ALLOWED_FRONTENDS set), reset_url is required in requests
-// and this fallback is not used. Pass empty string if not needed.
-var frontendURL string
-if len(cfg.Auth.AllowedFrontends) > 0 {
-    frontendURL = cfg.Auth.AllowedFrontends[0]
-}
-
-subs := authbridge.NewSubscribers(emailer, log, frontendURL)
+subs := authbridge.NewSubscribers(emailer, log)
 subs.Register(bus)
 ```
 
-Alternatively, if you already have an `OriginMatcher` instance, use `matcher.Default()` which returns the first origin (canonicalized with explicit port).
+Alternatively, if you already have an `allowlist.Matcher` instance (type `*allowlist.Matcher` from `bridge/transit/allowlist`), use `matcher.Default()` which returns the first origin (canonicalized with explicit port).
 
 Email templates are embedded in the package under `templates/` (HTML + plaintext pairs). Register them with the emailer during app wiring:
 
@@ -198,6 +190,5 @@ emailer.WithContentTemplates("authentication", authbridge.AuthTemplates(), email
 | `model.go` | Request/response types for core auth endpoints |
 | `oauth_model.go` | Request/response types for OAuth endpoints |
 | `cookie.go` | Cookie set/clear helpers |
-| `allowlist.go` | `OriginMatcher` for validating client-supplied URLs |
 | `subscribers.go` | Event subscribers for email delivery |
 | `templates/` | Embedded HTML/text email templates |

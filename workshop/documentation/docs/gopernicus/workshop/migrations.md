@@ -11,7 +11,7 @@ Migrations are **forward-only**. There are no down migrations.
 
 ## Databases & `gopernicus.yml`
 
-Gopernicus supports multiple named databases, each defined under the `databases` key in `gopernicus.yml`. The `primary` database is where Gopernicus-managed features (authentication, authorization, tenancy, events) store their data. You can define additional named databases for your own domain needs.
+Gopernicus supports multiple named databases, each defined under the `databases` key in `gopernicus.yml`. The `primary` database is where Gopernicus-managed features (authentication/authorization via `auth` and `rebac`, `tenancy`, `events`, and `jobs`) store their data. You can define additional named databases for your own domain needs.
 
 ```yaml
 databases:
@@ -20,8 +20,10 @@ databases:
     url_env_var: PRIMARY_POSTGRES_URL
     domains:
       auth: [principals, users, sessions, ...]
+      rebac: [rebac_relationships, groups, invitations, ...]
       tenancy: [tenants]
       events: [event_outbox]
+      jobs: [job_queue, job_schedules]
   analytics:
     driver: postgres/pgx
     url_env_var: ANALYTICS_POSTGRES_URL
@@ -38,10 +40,10 @@ When you add a new entity, you need to:
 1. Add the table in a migration file
 2. Declare it under the appropriate domain (or a new one) in `gopernicus.yml`
 
-Without the `gopernicus.yml` entry, the table won't be included in reflection or code generation.
+Without the `gopernicus.yml` entry, the table is still captured in reflection (`_public.json`), but it won't be scaffolded by `boot repos` or included in code generation.
 
 :::note Dialect support
-Gopernicus currently supports PostgreSQL (`postgres/pgx`) only. Support for other SQL dialects and bring-your-own migrator integrations are on the long-term roadmap but not yet planned.
+Gopernicus supports two database drivers: `postgres` (the default; the legacy spelling `postgres/pgx` normalizes to it) and `sqlite`. For `sqlite`, the `url_env_var` holds the database file path rather than a connection URL. Bring-your-own migrator integrations are on the long-term roadmap but not yet planned.
 :::
 
 ## Structure
@@ -80,7 +82,7 @@ gopernicus generate
 
 After reflecting, make sure the new table is declared under a domain in `gopernicus.yml`. Without it, `boot repos` and `gopernicus generate` won't include the table.
 
-`boot repos` creates `core/repositories/<domain>/<table>/queries.sql` for every unmapped table — existing files are never overwritten. Edit `queries.sql` to define operations and `bridge.yml` to configure HTTP routes before running `gopernicus generate`.
+`boot repos` creates `core/repositories/<domain>/<table>/queries.sql` for every domain-mapped table that lacks a repo (tables not mapped to any domain are ignored, framework spec-shipped feature entities are skipped, and existing files are never overwritten). Edit `queries.sql` to define operations and `bridge.yml` to configure HTTP routes before running `gopernicus generate`.
 
 :::tip Full walkthrough
 For a complete end-to-end example see [Adding a New Entity](../../guides/adding-new-entity.md).

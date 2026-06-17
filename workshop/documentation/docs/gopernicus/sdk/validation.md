@@ -38,7 +38,7 @@ errs.Add(validation.Email("email", req.Email))
 
 ## Pointer variants
 
-Every validator has a `Ptr` variant that skips validation when the pointer is nil:
+Most string and numeric scalar validators have a `Ptr` variant that skips validation when the pointer is nil (`Required`, `MinLength`, `MaxLength`, `OneOf`, `Email`, `UUID`, `URL`, `Matches`, `Min`, `Max`, `Positive`, `Slug`). For validators without a `Ptr` variant (e.g. `Range`, the collection validators, `PasswordStrength`), wrap them with `IfSet` for optional pointer fields:
 
 ```go
 errs.Add(validation.EmailPtr("email", req.Email))       // *string, nil passes

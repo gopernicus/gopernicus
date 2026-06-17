@@ -139,7 +139,7 @@ routes:
 
 | Middleware | Syntax | Purpose |
 |---|---|---|
-| `authenticate` | `authenticate: any\|user_only\|service_account_only` | JWT/API key validation |
+| `authenticate` | `authenticate: any\|user\|service_account\|user_session` | JWT/API key validation |
 | `rate_limit` | `rate_limit` | Per-subject rate limiting |
 | `authorize` | `authorize: {permission, param}` | Check permission on specific resource via path param |
 | `authorize` (prefilter) | `authorize: {pattern: prefilter, permission}` | Resolve authorized IDs before querying (for list endpoints) |

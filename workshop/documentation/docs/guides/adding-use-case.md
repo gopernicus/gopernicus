@@ -213,21 +213,23 @@ func (b *Bridge) AddHttpRoutes(group *web.RouteGroup) {
 Implement the handler method on Bridge. It decodes the request, calls the case, and encodes the response:
 
 ```go
-func (b *Bridge) httpArchiveProject(ctx web.Context) error {
-    var req ArchiveProjectRequest
-    if err := ctx.DecodeJSON(&req); err != nil {
-        return err
+func (b *Bridge) httpArchiveProject(w http.ResponseWriter, r *http.Request) {
+    req, err := web.DecodeJSON[ArchiveProjectRequest](r)
+    if err != nil {
+        web.RespondJSONError(w, web.ErrValidation(err))
+        return
     }
 
-    result, err := b.useCase.ArchiveProject(ctx.Request().Context(), projectadmin.ArchiveProjectInput{
+    result, err := b.useCase.ArchiveProject(r.Context(), projectadmin.ArchiveProjectInput{
         ProjectID: req.ProjectID,
         Reason:    req.Reason,
     })
     if err != nil {
-        return err
+        web.RespondJSONDomainError(w, err)
+        return
     }
 
-    return ctx.JSON(http.StatusOK, ArchiveProjectResponse{
+    web.RespondJSON(w, http.StatusOK, ArchiveProjectResponse{
         ProjectID: result.Project.ProjectID,
     })
 }
