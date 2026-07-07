@@ -919,3 +919,133 @@ post-merge; log shows the drift git-diff step, all 26 module blocks, the
 integration-tag vet step, and the four guards; context name `check` recorded for
 task-11. No branch protection applied yet (task-11). This log commit's own run
 is confirmed green on the remote below at push time.
+
+### task-6 — 2026-07-07 (live-legs workflow) — PASS (turso legs pending secrets)
+
+**Scope note:** the `TURSO_*` repo secrets are NOT configured (confirmed
+`gh secret list --repo gopernicus/gopernicus` → empty) and were NOT set this
+leg — jrazmi uploads credentials himself (permission-mode requirement, already
+flagged). With the secrets absent the turso `-tags=integration` legs skip
+loudly, which the plan explicitly accepts mid-milestone. Everything else in
+task-6 executed.
+
+**Env var names verified from source before writing the workflow (not guessed):**
+- pgx store legs (cms/auth/jobs) + pgxdb live test →
+  `POSTGRES_TEST_DSN` (`features/*/stores/pgx/conformance_test.go`,
+  `integrations/datastores/pgxdb/live_test.go`).
+- turso store legs (cms/auth/jobs) →
+  `TURSO_DATABASE_URL` + `TURSO_AUTH_TOKEN`, `//go:build integration`
+  (`features/*/stores/turso/*_integration_test.go`).
+- goredis conformance → `REDIS_TEST_ADDR`
+  (`integrations/kvstores/goredis/conformance_test.go`).
+
+**File added:** `.github/workflows/live-stores.yml` — trigger
+`workflow_dispatch` ONLY (no schedule, RH4); least-privilege
+`permissions: contents: read`; header comment carries the three SRE
+amendments (failure-signal ownership = GitHub workflow-failure email to the
+triggering owner jrazmi; Turso token owner jrazmi / gps-impact playground DB /
+expiry unknown / rotation = update repo secret `TURSO_AUTH_TOKEN` only;
+`TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN` pin exactly the authorized playground
+URL per RH4/RH3 and are PENDING UPLOAD as of 2026-07-07), plus the
+localhost-port DSN-consistency note (jobs run on the runner, not in a
+container) and the explicit-NOT-testcontainers note.
+- **Job A `postgres-turso`:** postgres:17 service (health `pg_isready`, port
+  `5432:5432`) → `POSTGRES_TEST_DSN=postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable`
+  + `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN` from repo secrets (empty ⇒ loud
+  skips) → `make test-stores`.
+- **Job B `redis-pgxdb`:** redis:7 service (health `redis-cli ping`, port
+  `6379:6379`) → `REDIS_TEST_ADDR=localhost:6379` + `go test -race ./...` in
+  `integrations/kvstores/goredis` (goredis is NOT in `STORE_MODULES`/`make
+  test-stores`, so this step exists by necessity); plus a postgres:17 service
+  → `POSTGRES_TEST_DSN` + `go test ./...` in `integrations/datastores/pgxdb`
+  (its `TestLive_OpenAndMigrate`).
+- setup-go posture matches check.yml (`go-version-file: go.work`, `cache:
+  true`, `cache-dependency-path: "**/go.sum"`).
+
+**Git discipline (exact commands):**
+- `git checkout -b ci/live-legs`; `git add .github/workflows/live-stores.yml`;
+  commit `faa19a4` (`Co-Authored-By: Claude Fable 5`); `git push -u origin
+  ci/live-legs`.
+- `gh pr create` → **PR #2** (https://github.com/gopernicus/gopernicus/pull/2).
+- Required `check` gate green on PR #2 (push-event run **28897783548** = pass
+  37s; PR-event run **28897785866** = pass 32s). `live-stores.yml` is
+  `workflow_dispatch`-only so it correctly does NOT appear as a PR check.
+- `gh pr merge 2 --squash --delete-branch` → **merge SHA
+  `2fb6bfa6da5dec7171a32bdb29c7d9951772219e`**, branch `ci/live-legs` deleted.
+
+**Real-interaction core — dispatch + watch to conclusion — PASS.**
+`gh workflow run live-stores.yml --ref main`; watched
+`gh run watch 28897847959` to completion. **Dispatch run ID 28897847959**,
+conclusion **success**; both jobs `success` (`postgres-turso`,
+`redis-pgxdb`). No `FAIL`/`panic` in the log (the one `fail`-substring match
+is the benign redis "Memory overcommit must be enabled" container warning at
+Stop containers, not a test failure).
+
+- **Job A — pgx legs RUNNING against the postgres service (real work):**
+  - `ok  github.com/gopernicus/gopernicus/features/cms/stores/pgx  1.658s`
+  - `ok  github.com/gopernicus/gopernicus/features/auth/stores/pgx  0.625s`
+  - `ok  github.com/gopernicus/gopernicus/features/jobs/stores/pgx  4.603s`
+  (sub-second-to-multi-second runtimes = live conformance suites executed, not
+  skips; step env block shows `POSTGRES_TEST_DSN` set to the localhost:5432
+  service DSN).
+- **Job A — turso legs SKIPPING LOUDLY (expected, no secrets):** step env
+  block shows `TURSO_DATABASE_URL:` and `TURSO_AUTH_TOKEN:` both EMPTY; the
+  three turso packages complete in 0.006s / 0.004s / 0.004s (skip path, no DB
+  work) vs the pgx legs' 0.6–4.6s. `make test-stores` runs the turso legs
+  WITHOUT `-v`, so CI prints only `ok  …/features/{cms,auth,jobs}/stores/turso
+  0.00Xs` — the literal per-test `t.Skip` string is not emitted in the CI
+  output. Captured the EXACT skip lines via a hermetic local `-v` reproduction
+  (both `TURSO_*` unset) — the identical code path the CI turso legs took:
+  - cms: `entries_integration_test.go:44: TURSO_DATABASE_URL/TURSO_AUTH_TOKEN
+    not set — turso conformance NOT verified` → `--- SKIP: TestConformance_Turso`
+  - auth: `conformance_integration_test.go:41: TURSO_DATABASE_URL/TURSO_AUTH_TOKEN
+    not set — turso conformance NOT verified` → `--- SKIP: TestConformance_Turso`
+  - jobs: `conformance_integration_test.go:34 / :45:
+    TURSO_DATABASE_URL/TURSO_AUTH_TOKEN not set — turso conformance NOT
+    verified` → `--- SKIP: TestConformance_Queue` + `--- SKIP:
+    TestConformance_Schedules`
+  (each package's hermetic `TestExportMigrations` still `--- PASS`; the
+  package line is `ok` because a skip is not a failure.)
+- **Job B — goredis `-race` suites RUNNING green against redis:**
+  `ok  github.com/gopernicus/gopernicus/integrations/kvstores/goredis  4.314s`;
+  step env block shows `REDIS_TEST_ADDR: localhost:6379`. The 4.3s runtime
+  (a skip would be sub-10ms) + non-empty `REDIS_TEST_ADDR` (the `requireAddr`
+  helper skips ONLY when empty) prove the six live conformance/broadcast tests
+  (`TestOpenLive`, `TestStatusCheckLive`, `TestConformance_{Bus,Cacher,Limiter}`,
+  `TestBroadcastFansOutAcrossInstances`) ran under `-race`.
+- **Job B — pgxdb live test RUNNING green against postgres:**
+  `ok  github.com/gopernicus/gopernicus/integrations/datastores/pgxdb  0.053s`;
+  step env block shows `POSTGRES_TEST_DSN` set. Non-empty DSN ⇒ no skip; `ok`
+  ⇒ no fatal (the live test `t.Fatalf`s on an unreachable DB rather than
+  skipping) ⇒ `TestLive_OpenAndMigrate` opened, migrated, queried, and
+  re-applied against the postgres:17 service and passed.
+
+**Standing per-leg check — PASS.** Local `make check` green (`all checks
+passed`; drift git-diff branch, all 26 module blocks, integration-tag vet, four
+guards). Boot `examples/minimal` on :8081 (`PORT=8081 go run ./cmd/server`):
+`GET /` → **200**, `GET /products/widget-3000` → **200**; killed by port; port
+8081 free (post-kill curl → `000` connection refused).
+
+**Divergences (none are failures):**
+1. Turso literal skip strings are not in the CI log because `make
+   test-stores` runs the turso legs without `-v` — captured instead via a
+   hermetic local `-v` reproduction of the identical skip code path (empty
+   `TURSO_*`). CI evidence for the skip is the empty-`TURSO_*` env block plus
+   the sub-10ms turso package times against the pgx legs' 0.6–4.6s.
+2. Node 20 deprecation annotation on both jobs (`actions/checkout@v4`,
+   `actions/setup-go@v5` forced onto Node 24) — the same benign warning
+   task-5 logged; NOT touched here (deferred per the standing decision).
+
+**Flagged follow-up (milestone-close gate):** the `TURSO_*` secrets remain
+PENDING jrazmi upload. **One dispatch with the turso legs RUNNING (not
+skipping) is required before milestone close** — the close gate requires
+recorded LIVE turso conformance; a hermetic/skipped green (this run) does NOT
+close it. When jrazmi uploads `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN` (pinned
+to the authorized playground URL per RH3/RH4), re-dispatch `live-stores.yml`
+and record the turso conformance subtest names actually running.
+
+**Result: PASS (turso legs pending secrets).** Workflow added, PR #2 merged
+(`2fb6bfa…`) behind a green required `check`; dispatch run 28897847959 green —
+pgx legs, goredis `-race`, and pgxdb live test all RAN green against their
+services; the three turso legs SKIPPED LOUDLY as expected with no secrets.
+turso-live conformance remains OUTSTANDING pending the secret upload.
