@@ -31,11 +31,15 @@ import (
 
 	internalhttp "github.com/gopernicus/gopernicus/features/auth/internal/inbound/http"
 	"github.com/gopernicus/gopernicus/features/auth/internal/logic/authsvc"
+	"github.com/gopernicus/gopernicus/features/auth/logic/oauthaccount"
+	"github.com/gopernicus/gopernicus/features/auth/logic/oauthstate"
 	"github.com/gopernicus/gopernicus/features/auth/logic/session"
 	"github.com/gopernicus/gopernicus/features/auth/logic/user"
 	"github.com/gopernicus/gopernicus/features/auth/logic/verification"
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/email"
 	"github.com/gopernicus/gopernicus/sdk/feature"
+	"github.com/gopernicus/gopernicus/sdk/oauth"
 	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
 )
 
@@ -48,6 +52,20 @@ var (
 	ErrHasherRequired = errors.New("auth: Config.Hasher is required")
 	ErrMailerRequired = errors.New("auth: Config.Mailer is required")
 )
+
+// ErrOAuthReposRequired is returned by NewService/Register when Config.Providers
+// is non-empty but Repositories.OAuthAccounts or Repositories.OAuthStates is nil.
+// OAuth is deny-by-absence — no providers means no routes and the oauth repos may
+// be nil — but wiring providers without their stores is a loud partial-wiring
+// error (design §3, the Hasher/Mailer precedent), never a silent half-on state.
+var ErrOAuthReposRequired = errors.New("auth: Config.Providers set but Repositories.OAuthAccounts/OAuthStates is nil")
+
+// ErrOAuthLastMethod is returned (as the wrapped cause) by Service.Unlink when the
+// target link is the user's only authentication method and no password is set —
+// unlinking it would lock the account out. It wraps errs.ErrConflict, so the
+// transport maps it to 409. Hosts detect it with errors.Is(err,
+// auth.ErrOAuthLastMethod).
+var ErrOAuthLastMethod = authsvc.ErrLastAuthMethod
 
 // ErrEmailNotVerified is returned (as the wrapped cause) by login when
 // Config.RequireVerifiedEmail is set and the caller's email is unverified. It
@@ -77,6 +95,11 @@ type Repositories struct {
 	Sessions           session.SessionRepository
 	VerificationCodes  verification.CodeRepository
 	VerificationTokens verification.TokenRepository
+	// OAuthAccounts and OAuthStates back the OAuth flow (design §3). They may be
+	// nil when Config.Providers is empty (OAuth off); wiring providers without
+	// them is ErrOAuthReposRequired at construction.
+	OAuthAccounts oauthaccount.OAuthAccountRepository
+	OAuthStates   oauthstate.StateRepository
 }
 
 // CookieConfig is the session-cookie policy. Zero values are safe: an empty Name
@@ -113,6 +136,27 @@ type Config struct {
 	// with a 403 (ErrEmailNotVerified). Default false (design §7.1, AV8):
 	// flipping it on requires a working Mailer so users can verify.
 	RequireVerifiedEmail bool
+
+	// Providers are the wired OAuth/OIDC providers (integrations/oauth/* satisfy
+	// oauth.Provider). Empty/nil → the OAuth subsystem is OFF and its routes are
+	// NOT registered (deny-by-absence); Repositories.OAuthAccounts/OAuthStates
+	// may then be nil. Non-empty → both oauth repositories are required
+	// (ErrOAuthReposRequired).
+	Providers []oauth.Provider
+	// TokenEncrypter encrypts provider access/refresh tokens at rest. Nil →
+	// provider tokens are NOT persisted (login and linking still work; there is
+	// no offline provider-API access) — a safe, documented silent degradation.
+	// Wire cryptids.AESGCM to store them.
+	TokenEncrypter cryptids.Encrypter
+	// OAuthCallbackBase is the absolute origin (e.g. "https://app.example.com")
+	// the provider callback URL is built from. Only meaningful when Providers is
+	// set.
+	OAuthCallbackBase string
+	// RedirectAllowlist is the exact-match allowlist of post-flow redirect
+	// destinations (open-redirect guard). The same-origin default ("/") is always
+	// allowed; any other requested target must appear verbatim here or it falls
+	// back to "/".
+	RedirectAllowlist []string
 }
 
 // Service is the auth feature's identity capability without HTTP routes — the
@@ -132,6 +176,9 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 	}
 	if cfg.Mailer == nil {
 		return nil, ErrMailerRequired
+	}
+	if len(cfg.Providers) > 0 && (repos.OAuthAccounts == nil || repos.OAuthStates == nil) {
+		return nil, ErrOAuthReposRequired
 	}
 	limiter := cfg.RateLimiter
 	if limiter == nil {
@@ -155,6 +202,12 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 			MaxAge: cfg.SessionCookie.MaxAge,
 		},
 		RequireVerifiedEmail: cfg.RequireVerifiedEmail,
+		OAuthAccounts:        repos.OAuthAccounts,
+		OAuthStates:          repos.OAuthStates,
+		Providers:            cfg.Providers,
+		TokenEncrypter:       cfg.TokenEncrypter,
+		OAuthCallbackBase:    cfg.OAuthCallbackBase,
+		RedirectAllowlist:    cfg.RedirectAllowlist,
 	})
 	return &Service{svc: svc}, nil
 }

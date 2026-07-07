@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/gopernicus/gopernicus/features/auth/internal/logic/authsvc"
+	"github.com/gopernicus/gopernicus/features/auth/logic/oauthaccount"
 	"github.com/gopernicus/gopernicus/features/auth/logic/user"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/web"
@@ -36,6 +37,16 @@ type authService interface {
 	ClearSessionCookie(w http.ResponseWriter)
 	SessionCookieName() string
 	RequireUser(next http.Handler) http.Handler
+
+	// OAuth flow (design §3). OAuthEnabled gates whether the OAuth routes are
+	// registered at all (deny-by-absence).
+	OAuthEnabled() bool
+	StartOAuth(ctx context.Context, provider, redirectTo string) (authURL string, err error)
+	StartLink(ctx context.Context, userID, provider, redirectTo string) (authURL string, err error)
+	OAuthCallback(ctx context.Context, provider, code, state string) (authsvc.OAuthResult, error)
+	VerifyLink(ctx context.Context, token string) (authsvc.OAuthResult, error)
+	ListLinked(ctx context.Context, userID string) ([]oauthaccount.OAuthAccount, error)
+	Unlink(ctx context.Context, userID, provider string) error
 }
 
 // handlers holds the auth service the route handlers delegate to.
@@ -104,6 +115,12 @@ func Mount(r feature.RouteRegistrar, svc authService) {
 	r.Handle("POST", "/auth/password/reset", h.resetPassword)
 	r.Handle("POST", "/auth/logout", h.logout, svc.RequireUser)
 	r.Handle("POST", "/auth/password/change", h.changePassword, svc.RequireUser)
+
+	// OAuth routes are registered only when at least one provider is wired
+	// (deny-by-absence, design §3): an unwired host returns 404 for them.
+	if svc.OAuthEnabled() {
+		mountOAuth(r, h, svc.RequireUser)
+	}
 }
 
 func (h *handlers) register(w http.ResponseWriter, r *http.Request) {
