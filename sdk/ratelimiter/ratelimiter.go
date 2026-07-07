@@ -1,5 +1,6 @@
 // Package ratelimiter provides rate limiting for the facilities layer.
-// Limiter implementations are in the memorylimiter/ subpackage.
+// Memory is the in-package default Limiter; Acquire is the blocking helper
+// that waits for quota instead of rejecting.
 package ratelimiter
 
 import (
@@ -12,8 +13,9 @@ import (
 // Limiter port (what backend implementations satisfy)
 // =============================================================================
 
-// Limiter is the rate-limit backend port. Memory, Redis, and SQLite backends
-// satisfy it.
+// Limiter is the rate-limit backend port. Memory satisfies it in-package;
+// goredis.Limiter (integrations/kvstores/goredis) is the Redis-backed
+// implementation.
 type Limiter interface {
 	// Allow checks if a request should be allowed for the given key.
 	// Returns the result with remaining quota and timing information.
@@ -34,9 +36,9 @@ type Limiter interface {
 //
 // Usage:
 //
-//	store := memorylimiter.New()
+//	store := ratelimiter.NewMemory()
 //	resolver := ratelimiter.NewDefaultResolver()
-//	limiter := ratelimiter.New(store, resolver, log)
+//	limiter := ratelimiter.New(store, resolver, ratelimiter.WithLogger(log))
 //
 //	// Use resolver to determine limit
 //	result, err := limiter.Allow(ctx, key, resolveReq)
