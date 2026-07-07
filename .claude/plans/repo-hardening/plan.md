@@ -734,3 +734,11 @@ Options for the YOUR CALL (loop's recommendation: option 1):
    history unless it is fully preserved elsewhere; most destructive.
 4. Choose a different remote name — contradicts ratified RH1 and would
    re-arm phase 4's full rename branch; a scope change, not a default.
+
+**Resolution (2026-07-07, jrazmi):** option 1 taken — jrazmi authorized the
+rename in-session; executed `gh repo rename gopernicus-original --repo
+gopernicus/gopernicus --yes`. Verified: `gopernicus/gopernicus-original`
+now carries the original repo (PUBLIC, main, pushedAt 2026-06-17 intact);
+the bare name currently redirects there (GitHub rename redirect), which
+task-4's `gh repo create gopernicus/gopernicus` severs when it claims the
+name — expected and intended. Task-4 is UNBLOCKED and re-runs verbatim.
