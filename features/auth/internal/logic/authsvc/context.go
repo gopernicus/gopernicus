@@ -10,7 +10,10 @@ import "context"
 // method, never this key (see the auth-feature-design doc, §3).
 type contextKey int
 
-const userIDKey contextKey = iota
+const (
+	userIDKey contextKey = iota
+	principalKey
+)
 
 // withUserID returns a copy of ctx carrying userID.
 func withUserID(ctx context.Context, userID string) context.Context {
@@ -22,4 +25,17 @@ func withUserID(ctx context.Context, userID string) context.Context {
 func userIDFromContext(ctx context.Context) (string, bool) {
 	v, ok := ctx.Value(userIDKey).(string)
 	return v, ok && v != ""
+}
+
+// withPrincipal returns a copy of ctx carrying the effective Principal resolved
+// by RequireServiceAccount / RequirePrincipal.
+func withPrincipal(ctx context.Context, p Principal) context.Context {
+	return context.WithValue(ctx, principalKey, p)
+}
+
+// principalFromContext returns the Principal stashed by withPrincipal, if any. A
+// zero-valued (empty-ID) principal reports (Principal{}, false).
+func principalFromContext(ctx context.Context) (Principal, bool) {
+	p, ok := ctx.Value(principalKey).(Principal)
+	return p, ok && p.ID != ""
 }

@@ -12,10 +12,14 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gopernicus/gopernicus/features/auth/internal/logic/authsvc"
+	"github.com/gopernicus/gopernicus/features/auth/logic/apikey"
 	"github.com/gopernicus/gopernicus/features/auth/logic/oauthaccount"
+	"github.com/gopernicus/gopernicus/features/auth/logic/serviceaccount"
 	"github.com/gopernicus/gopernicus/features/auth/logic/user"
+	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
@@ -47,6 +51,15 @@ type authService interface {
 	VerifyLink(ctx context.Context, token string) (authsvc.OAuthResult, error)
 	ListLinked(ctx context.Context, userID string) ([]oauthaccount.OAuthAccount, error)
 	Unlink(ctx context.Context, userID, provider string) error
+
+	// Machine identity (design §4.1). MachineEnabled gates whether the lifecycle
+	// routes are registered at all (deny-by-absence).
+	MachineEnabled() bool
+	CreateServiceAccount(ctx context.Context, createdBy, name, description string, actAsUser bool, ownerUserID string) (serviceaccount.ServiceAccount, error)
+	ListServiceAccounts(ctx context.Context, req crud.ListRequest) (crud.Page[serviceaccount.ServiceAccount], error)
+	MintAPIKey(ctx context.Context, serviceAccountID, name string, expiresAt time.Time) (apikey.APIKey, string, error)
+	ListAPIKeys(ctx context.Context, serviceAccountID string, req crud.ListRequest) (crud.Page[apikey.APIKey], error)
+	RevokeAPIKey(ctx context.Context, keyID string) error
 }
 
 // handlers holds the auth service the route handlers delegate to.
@@ -120,6 +133,13 @@ func Mount(r feature.RouteRegistrar, svc authService) {
 	// (deny-by-absence, design §3): an unwired host returns 404 for them.
 	if svc.OAuthEnabled() {
 		mountOAuth(r, h, svc.RequireUser)
+	}
+
+	// Machine-identity lifecycle routes are registered only when both machine
+	// repositories are wired (deny-by-absence, design §4.1); an unwired host
+	// returns 404 for them.
+	if svc.MachineEnabled() {
+		mountMachine(r, h, svc.RequireUser)
 	}
 }
 

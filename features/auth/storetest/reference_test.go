@@ -2,17 +2,21 @@ package storetest
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/auth"
+	"github.com/gopernicus/gopernicus/features/auth/logic/apikey"
 	"github.com/gopernicus/gopernicus/features/auth/logic/oauthaccount"
 	"github.com/gopernicus/gopernicus/features/auth/logic/oauthstate"
+	"github.com/gopernicus/gopernicus/features/auth/logic/serviceaccount"
 	"github.com/gopernicus/gopernicus/features/auth/logic/session"
 	"github.com/gopernicus/gopernicus/features/auth/logic/user"
 	"github.com/gopernicus/gopernicus/features/auth/logic/verification"
+	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
@@ -33,24 +37,28 @@ func TestReference(t *testing.T) {
 // proves and the class of drift a naive memory store silently loses. Expiry is
 // checked against time.Now, matching a store that filters on the read clock.
 type reference struct {
-	mu            sync.RWMutex
-	users         map[string]user.User
-	passwords     map[string]string
-	sessions      map[string]session.Session
-	codes         map[string]verification.Code
-	tokens        map[string]verification.Token
-	oauthAccounts []oauthaccount.OAuthAccount // keyed by (Provider, ProviderUserID) invariant
-	oauthStates   map[string]oauthstate.State
+	mu              sync.RWMutex
+	users           map[string]user.User
+	passwords       map[string]string
+	sessions        map[string]session.Session
+	codes           map[string]verification.Code
+	tokens          map[string]verification.Token
+	oauthAccounts   []oauthaccount.OAuthAccount // keyed by (Provider, ProviderUserID) invariant
+	oauthStates     map[string]oauthstate.State
+	serviceAccounts map[string]serviceaccount.ServiceAccount // by ID
+	apiKeys         map[string]apikey.APIKey                 // by ID
 }
 
 func newReference() *reference {
 	return &reference{
-		users:       map[string]user.User{},
-		passwords:   map[string]string{},
-		sessions:    map[string]session.Session{},
-		codes:       map[string]verification.Code{},
-		tokens:      map[string]verification.Token{},
-		oauthStates: map[string]oauthstate.State{},
+		users:           map[string]user.User{},
+		passwords:       map[string]string{},
+		sessions:        map[string]session.Session{},
+		codes:           map[string]verification.Code{},
+		tokens:          map[string]verification.Token{},
+		oauthStates:     map[string]oauthstate.State{},
+		serviceAccounts: map[string]serviceaccount.ServiceAccount{},
+		apiKeys:         map[string]apikey.APIKey{},
 	}
 }
 
@@ -63,6 +71,8 @@ func (r *reference) repositories() auth.Repositories {
 		VerificationTokens: refTokens{r},
 		OAuthAccounts:      refOAuthAccounts{r},
 		OAuthStates:        refOAuthStates{r},
+		ServiceAccounts:    refServiceAccounts{r},
+		APIKeys:            refAPIKeys{r},
 	}
 }
 
@@ -331,4 +341,175 @@ func (r refOAuthStates) Consume(_ context.Context, token string) (oauthstate.Sta
 		return oauthstate.State{}, errs.ErrExpired
 	}
 	return s, nil
+}
+
+// --- serviceaccount.ServiceAccountRepository ---
+
+type refServiceAccounts struct{ *reference }
+
+func (r refServiceAccounts) Create(_ context.Context, sa serviceaccount.ServiceAccount) (serviceaccount.ServiceAccount, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.serviceAccounts[sa.ID]; ok {
+		return serviceaccount.ServiceAccount{}, errs.ErrAlreadyExists
+	}
+	r.serviceAccounts[sa.ID] = sa
+	return sa, nil
+}
+
+func (r refServiceAccounts) Get(_ context.Context, id string) (serviceaccount.ServiceAccount, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	sa, ok := r.serviceAccounts[id]
+	if !ok {
+		return serviceaccount.ServiceAccount{}, errs.ErrNotFound
+	}
+	return sa, nil
+}
+
+// List sorts the full population by (created_at DESC, id DESC) then pages via the
+// keyset cursor — the reference behavior the paginated stores must match.
+func (r refServiceAccounts) List(_ context.Context, req crud.ListRequest) (crud.Page[serviceaccount.ServiceAccount], error) {
+	r.mu.RLock()
+	all := make([]serviceaccount.ServiceAccount, 0, len(r.serviceAccounts))
+	for _, sa := range r.serviceAccounts {
+		all = append(all, sa)
+	}
+	r.mu.RUnlock()
+	return pageDESC(all, req, func(sa serviceaccount.ServiceAccount) (time.Time, string) {
+		return sa.CreatedAt, sa.ID
+	})
+}
+
+func (r refServiceAccounts) Update(_ context.Context, id string, sa serviceaccount.ServiceAccount) (serviceaccount.ServiceAccount, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.serviceAccounts[id]; !ok {
+		return serviceaccount.ServiceAccount{}, errs.ErrNotFound
+	}
+	r.serviceAccounts[id] = sa
+	return sa, nil
+}
+
+func (r refServiceAccounts) Delete(_ context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.serviceAccounts[id]; !ok {
+		return errs.ErrNotFound
+	}
+	delete(r.serviceAccounts, id)
+	return nil
+}
+
+// --- apikey.APIKeyRepository ---
+
+type refAPIKeys struct{ *reference }
+
+func (r refAPIKeys) Create(_ context.Context, k apikey.APIKey) (apikey.APIKey, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, ex := range r.apiKeys {
+		if ex.KeyHash == k.KeyHash {
+			return apikey.APIKey{}, errs.ErrAlreadyExists
+		}
+	}
+	r.apiKeys[k.ID] = k
+	return k, nil
+}
+
+// GetByHash selects by key_hash ALONE and returns the record for ANY present row
+// — revoked and expired included; unknown hash → ErrNotFound (the pinned
+// contract; revocation/expiry are service branches, never store filters).
+func (r refAPIKeys) GetByHash(_ context.Context, keyHash string) (apikey.APIKey, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, k := range r.apiKeys {
+		if k.KeyHash == keyHash {
+			return k, nil
+		}
+	}
+	return apikey.APIKey{}, errs.ErrNotFound
+}
+
+func (r refAPIKeys) ListByServiceAccount(_ context.Context, serviceAccountID string, req crud.ListRequest) (crud.Page[apikey.APIKey], error) {
+	r.mu.RLock()
+	all := make([]apikey.APIKey, 0, len(r.apiKeys))
+	for _, k := range r.apiKeys {
+		if k.ServiceAccountID == serviceAccountID {
+			all = append(all, k)
+		}
+	}
+	r.mu.RUnlock()
+	return pageDESC(all, req, func(k apikey.APIKey) (time.Time, string) {
+		return k.CreatedAt, k.ID
+	})
+}
+
+func (r refAPIKeys) Revoke(_ context.Context, id string, revokedAt time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	k, ok := r.apiKeys[id]
+	if !ok {
+		return errs.ErrNotFound
+	}
+	k.RevokedAt = revokedAt.UTC()
+	r.apiKeys[id] = k
+	return nil
+}
+
+func (r refAPIKeys) TouchLastUsed(_ context.Context, id string, usedAt time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	k, ok := r.apiKeys[id]
+	if !ok {
+		return errs.ErrNotFound
+	}
+	k.LastUsedAt = usedAt.UTC()
+	r.apiKeys[id] = k
+	return nil
+}
+
+// pageDESC sorts records by (created_at DESC, id DESC), applies the keyset
+// cursor, and trims to a page — the reference keyset semantics the SQL stores
+// must reproduce. keyOf returns each record's (created_at, id).
+func pageDESC[T any](all []T, req crud.ListRequest, keyOf func(T) (time.Time, string)) (crud.Page[T], error) {
+	sort.Slice(all, func(i, j int) bool {
+		ti, idi := keyOf(all[i])
+		tj, idj := keyOf(all[j])
+		if !ti.Equal(tj) {
+			return ti.After(tj)
+		}
+		return idi > idj
+	})
+
+	cur, err := crud.DecodeCursor(req.Cursor, "created_at")
+	if err != nil {
+		return crud.Page[T]{}, err
+	}
+
+	windowed := all
+	if cur != nil {
+		curTime, _ := cur.OrderValue.(time.Time)
+		windowed = windowed[:0:0]
+		for _, item := range all {
+			t, itemID := keyOf(item)
+			if afterCursorDESC(t, itemID, curTime, cur.PK) {
+				windowed = append(windowed, item)
+			}
+		}
+	}
+
+	return crud.TrimPage(windowed, req.NormalizedLimit(), func(item T) (string, error) {
+		t, itemID := keyOf(item)
+		return crud.EncodeCursor("created_at", t, itemID)
+	})
+}
+
+// afterCursorDESC reports whether (itemTime, itemID) sorts strictly after
+// (curTime, curID) under created_at DESC, id DESC — the next-page predicate.
+func afterCursorDESC(itemTime time.Time, itemID string, curTime time.Time, curID string) bool {
+	if !itemTime.Equal(curTime) {
+		return itemTime.Before(curTime)
+	}
+	return itemID < curID
 }
