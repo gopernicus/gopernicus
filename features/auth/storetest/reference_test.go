@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/auth"
+	"github.com/gopernicus/gopernicus/features/auth/logic/oauthaccount"
+	"github.com/gopernicus/gopernicus/features/auth/logic/oauthstate"
 	"github.com/gopernicus/gopernicus/features/auth/logic/session"
 	"github.com/gopernicus/gopernicus/features/auth/logic/user"
 	"github.com/gopernicus/gopernicus/features/auth/logic/verification"
@@ -31,21 +33,24 @@ func TestReference(t *testing.T) {
 // proves and the class of drift a naive memory store silently loses. Expiry is
 // checked against time.Now, matching a store that filters on the read clock.
 type reference struct {
-	mu        sync.RWMutex
-	users     map[string]user.User
-	passwords map[string]string
-	sessions  map[string]session.Session
-	codes     map[string]verification.Code
-	tokens    map[string]verification.Token
+	mu            sync.RWMutex
+	users         map[string]user.User
+	passwords     map[string]string
+	sessions      map[string]session.Session
+	codes         map[string]verification.Code
+	tokens        map[string]verification.Token
+	oauthAccounts []oauthaccount.OAuthAccount // keyed by (Provider, ProviderUserID) invariant
+	oauthStates   map[string]oauthstate.State
 }
 
 func newReference() *reference {
 	return &reference{
-		users:     map[string]user.User{},
-		passwords: map[string]string{},
-		sessions:  map[string]session.Session{},
-		codes:     map[string]verification.Code{},
-		tokens:    map[string]verification.Token{},
+		users:       map[string]user.User{},
+		passwords:   map[string]string{},
+		sessions:    map[string]session.Session{},
+		codes:       map[string]verification.Code{},
+		tokens:      map[string]verification.Token{},
+		oauthStates: map[string]oauthstate.State{},
 	}
 }
 
@@ -56,6 +61,8 @@ func (r *reference) repositories() auth.Repositories {
 		Sessions:           refSessions{r},
 		VerificationCodes:  refCodes{r},
 		VerificationTokens: refTokens{r},
+		OAuthAccounts:      refOAuthAccounts{r},
+		OAuthStates:        refOAuthStates{r},
 	}
 }
 
@@ -238,4 +245,90 @@ func (r refTokens) Delete(_ context.Context, token string) error {
 	}
 	delete(r.tokens, token)
 	return nil
+}
+
+// --- oauthaccount.OAuthAccountRepository ---
+
+type refOAuthAccounts struct{ *reference }
+
+func (r refOAuthAccounts) Create(_ context.Context, a oauthaccount.OAuthAccount) (oauthaccount.OAuthAccount, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, ex := range r.oauthAccounts {
+		if ex.Provider == a.Provider && ex.ProviderUserID == a.ProviderUserID {
+			return oauthaccount.OAuthAccount{}, errs.ErrAlreadyExists
+		}
+	}
+	r.oauthAccounts = append(r.oauthAccounts, a)
+	return a, nil
+}
+
+func (r refOAuthAccounts) GetByProvider(_ context.Context, provider, providerUserID string) (oauthaccount.OAuthAccount, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, a := range r.oauthAccounts {
+		if a.Provider == provider && a.ProviderUserID == providerUserID {
+			return a, nil
+		}
+	}
+	return oauthaccount.OAuthAccount{}, errs.ErrNotFound
+}
+
+func (r refOAuthAccounts) ListByUser(_ context.Context, userID string) ([]oauthaccount.OAuthAccount, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := []oauthaccount.OAuthAccount{}
+	for _, a := range r.oauthAccounts {
+		if a.UserID == userID {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
+func (r refOAuthAccounts) Delete(_ context.Context, userID, provider string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	kept := r.oauthAccounts[:0:0]
+	deleted := false
+	for _, a := range r.oauthAccounts {
+		if a.UserID == userID && a.Provider == provider {
+			deleted = true
+			continue
+		}
+		kept = append(kept, a)
+	}
+	if !deleted {
+		return errs.ErrNotFound
+	}
+	r.oauthAccounts = kept
+	return nil
+}
+
+// --- oauthstate.StateRepository ---
+
+type refOAuthStates struct{ *reference }
+
+func (r refOAuthStates) Create(_ context.Context, s oauthstate.State) (oauthstate.State, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.oauthStates[s.Token] = s
+	return s, nil
+}
+
+// Consume is get-and-delete: the row is removed regardless of expiry, so an
+// expired Consume deletes and reports ErrExpired, and any second Consume →
+// ErrNotFound (design §3's pinned contract).
+func (r refOAuthStates) Consume(_ context.Context, token string) (oauthstate.State, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, ok := r.oauthStates[token]
+	if !ok {
+		return oauthstate.State{}, errs.ErrNotFound
+	}
+	delete(r.oauthStates, token)
+	if s.Expired(time.Now()) {
+		return oauthstate.State{}, errs.ErrExpired
+	}
+	return s, nil
 }

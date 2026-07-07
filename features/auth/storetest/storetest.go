@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/auth"
+	"github.com/gopernicus/gopernicus/features/auth/logic/oauthaccount"
+	"github.com/gopernicus/gopernicus/features/auth/logic/oauthstate"
 	"github.com/gopernicus/gopernicus/features/auth/logic/session"
 	"github.com/gopernicus/gopernicus/features/auth/logic/user"
 	"github.com/gopernicus/gopernicus/features/auth/logic/verification"
@@ -68,6 +70,29 @@ func Run(t *testing.T, newRepos func(t *testing.T) auth.Repositories) {
 		t.Run("CreateGetDelete", func(t *testing.T) { testTokensCRUD(t, newRepos(t)) })
 		t.Run("AbsentNotFound", func(t *testing.T) { testTokensAbsent(t, newRepos(t)) })
 		t.Run("ExpiredAtRead", func(t *testing.T) { testTokensExpired(t, newRepos(t)) })
+	})
+
+	// OAuth ports are optional (a host that wires no providers leaves them nil).
+	// When present they are exercised in full; when absent the group skips
+	// LOUDLY — a silent green would claim OAuth conformance nothing verified.
+	t.Run("OAuthAccounts", func(t *testing.T) {
+		if newRepos(t).OAuthAccounts == nil {
+			t.Skip("OAuthAccounts not wired — OAuth account conformance NOT verified for this Repositories")
+		}
+		t.Run("CRUDRoundTrip", func(t *testing.T) { testOAuthAccountsCRUD(t, newRepos(t)) })
+		t.Run("ProviderUniqueness", func(t *testing.T) { testOAuthAccountsUniqueness(t, newRepos(t)) })
+		t.Run("AbsentNotFound", func(t *testing.T) { testOAuthAccountsAbsent(t, newRepos(t)) })
+		t.Run("ListByUser", func(t *testing.T) { testOAuthAccountsListByUser(t, newRepos(t)) })
+		t.Run("DeleteAbsentNotFound", func(t *testing.T) { testOAuthAccountsDeleteAbsent(t, newRepos(t)) })
+	})
+
+	t.Run("OAuthStates", func(t *testing.T) {
+		if newRepos(t).OAuthStates == nil {
+			t.Skip("OAuthStates not wired — OAuth state conformance NOT verified for this Repositories")
+		}
+		t.Run("ConsumeSingleUse", func(t *testing.T) { testOAuthStatesConsume(t, newRepos(t)) })
+		t.Run("ConsumeExpiredDeletes", func(t *testing.T) { testOAuthStatesExpired(t, newRepos(t)) })
+		t.Run("ConsumeUnknown", func(t *testing.T) { testOAuthStatesUnknown(t, newRepos(t)) })
 	})
 }
 
@@ -343,5 +368,174 @@ func testTokensExpired(t *testing.T, repos auth.Repositories) {
 	}
 	if _, err := repo.Get(ctx, tok.Token); !errors.Is(err, errs.ErrExpired) {
 		t.Errorf("Get(expired): err=%v, want ErrExpired", err)
+	}
+}
+
+// --- OAuthAccounts ---
+
+func testOAuthAccountsCRUD(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	repo := repos.OAuthAccounts
+
+	acct, err := oauthaccount.New("user1", "google", "google-123", suiteBase)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	acct.ProviderEmail = "u@example.com"
+	acct.ProviderEmailVerified = true
+	acct.AccessToken = "cipher-abc" // the store persists the opaque (encrypted) value verbatim
+	acct.TokenType = "Bearer"
+
+	created, err := repo.Create(ctx, acct)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if created.UserID != "user1" {
+		t.Errorf("Create UserID = %q, want user1", created.UserID)
+	}
+
+	got, err := repo.GetByProvider(ctx, "google", "google-123")
+	if err != nil {
+		t.Fatalf("GetByProvider: %v", err)
+	}
+	if got.UserID != "user1" || got.ProviderEmail != "u@example.com" || got.AccessToken != "cipher-abc" {
+		t.Errorf("GetByProvider round-trip lost data: %+v", got)
+	}
+
+	if err := repo.Delete(ctx, "user1", "google"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := repo.GetByProvider(ctx, "google", "google-123"); !errors.Is(err, errs.ErrNotFound) {
+		t.Errorf("GetByProvider after Delete: err=%v, want ErrNotFound", err)
+	}
+}
+
+func testOAuthAccountsUniqueness(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	repo := repos.OAuthAccounts
+
+	a, _ := oauthaccount.New("user1", "google", "dup-123", suiteBase)
+	if _, err := repo.Create(ctx, a); err != nil {
+		t.Fatalf("first Create: %v", err)
+	}
+	// The SAME provider identity claimed by a different user → collision.
+	b, _ := oauthaccount.New("user2", "google", "dup-123", suiteBase)
+	if _, err := repo.Create(ctx, b); !errors.Is(err, errs.ErrAlreadyExists) {
+		t.Errorf("Create colliding (provider, provider_user_id): err=%v, want ErrAlreadyExists", err)
+	}
+	// A distinct provider identity is fine.
+	c, _ := oauthaccount.New("user2", "google", "other-456", suiteBase)
+	if _, err := repo.Create(ctx, c); err != nil {
+		t.Errorf("Create distinct identity: err=%v, want nil", err)
+	}
+}
+
+func testOAuthAccountsAbsent(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	if _, err := repos.OAuthAccounts.GetByProvider(ctx, "google", "nope"); !errors.Is(err, errs.ErrNotFound) {
+		t.Errorf("GetByProvider(absent): err=%v, want ErrNotFound", err)
+	}
+}
+
+func testOAuthAccountsListByUser(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	repo := repos.OAuthAccounts
+
+	g1, _ := oauthaccount.New("user1", "google", "g1", suiteBase)
+	gh1, _ := oauthaccount.New("user1", "github", "gh1", suiteBase)
+	g2, _ := oauthaccount.New("user2", "google", "g2", suiteBase)
+	for _, a := range []oauthaccount.OAuthAccount{g1, gh1, g2} {
+		if _, err := repo.Create(ctx, a); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+	}
+
+	list, err := repo.ListByUser(ctx, "user1")
+	if err != nil {
+		t.Fatalf("ListByUser(user1): %v", err)
+	}
+	if len(list) != 2 {
+		t.Errorf("ListByUser(user1) len = %d, want 2", len(list))
+	}
+	providers := map[string]bool{}
+	for _, a := range list {
+		providers[a.Provider] = true
+		if a.UserID != "user1" {
+			t.Errorf("ListByUser(user1) returned a foreign user: %+v", a)
+		}
+	}
+	if !providers["google"] || !providers["github"] {
+		t.Errorf("ListByUser(user1) providers = %v, want google+github", providers)
+	}
+
+	if list, _ := repo.ListByUser(ctx, "user2"); len(list) != 1 {
+		t.Errorf("ListByUser(user2) len = %d, want 1", len(list))
+	}
+	empty, err := repo.ListByUser(ctx, "nobody")
+	if err != nil {
+		t.Errorf("ListByUser(nobody): err=%v, want nil", err)
+	}
+	if len(empty) != 0 {
+		t.Errorf("ListByUser(nobody) len = %d, want 0", len(empty))
+	}
+}
+
+func testOAuthAccountsDeleteAbsent(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	if err := repos.OAuthAccounts.Delete(ctx, "nobody", "google"); !errors.Is(err, errs.ErrNotFound) {
+		t.Errorf("Delete(absent): err=%v, want ErrNotFound", err)
+	}
+}
+
+// --- OAuthStates ---
+
+func testOAuthStatesConsume(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	repo := repos.OAuthStates
+
+	payload := []byte(`{"code_verifier":"v","nonce":"n"}`)
+	st := oauthstate.New("google", oauthstate.PurposeFlow, payload, time.Hour, time.Now())
+	if _, err := repo.Create(ctx, st); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := repo.Consume(ctx, st.Token)
+	if err != nil {
+		t.Fatalf("Consume: %v", err)
+	}
+	if got.Provider != "google" || got.Purpose != oauthstate.PurposeFlow || string(got.Payload) != string(payload) {
+		t.Errorf("Consume round-trip lost data: %+v", got)
+	}
+
+	// Single-use: a second Consume of the same token → ErrNotFound (it is gone).
+	if _, err := repo.Consume(ctx, st.Token); !errors.Is(err, errs.ErrNotFound) {
+		t.Errorf("second Consume: err=%v, want ErrNotFound", err)
+	}
+}
+
+func testOAuthStatesExpired(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	repo := repos.OAuthStates
+
+	// Created one hour ago with a one-minute lifetime → expired now.
+	st := oauthstate.New("google", oauthstate.PurposePendingLink, []byte("payload"), time.Minute, time.Now().Add(-time.Hour))
+	if _, err := repo.Create(ctx, st); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Expired Consume deletes the row AND returns ErrExpired.
+	if _, err := repo.Consume(ctx, st.Token); !errors.Is(err, errs.ErrExpired) {
+		t.Errorf("Consume(expired): err=%v, want ErrExpired", err)
+	}
+	// Row is gone (deleted regardless of expiry): a follow-up Consume → ErrNotFound.
+	if _, err := repo.Consume(ctx, st.Token); !errors.Is(err, errs.ErrNotFound) {
+		t.Errorf("Consume after expired-delete: err=%v, want ErrNotFound", err)
+	}
+}
+
+func testOAuthStatesUnknown(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	if _, err := repos.OAuthStates.Consume(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
+		t.Errorf("Consume(unknown): err=%v, want ErrNotFound", err)
 	}
 }

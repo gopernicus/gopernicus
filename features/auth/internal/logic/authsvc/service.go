@@ -19,12 +19,16 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/gopernicus/gopernicus/features/auth/internal/redirect"
+	"github.com/gopernicus/gopernicus/features/auth/logic/oauthaccount"
+	"github.com/gopernicus/gopernicus/features/auth/logic/oauthstate"
 	"github.com/gopernicus/gopernicus/features/auth/logic/session"
 	"github.com/gopernicus/gopernicus/features/auth/logic/user"
 	"github.com/gopernicus/gopernicus/features/auth/logic/verification"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/email"
 	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk/oauth"
 	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
@@ -91,6 +95,18 @@ type Deps struct {
 	// RequireVerifiedEmail, when true, makes Login refuse an unverified user
 	// with ErrEmailNotVerified (403). Default false (design §7.1, AV8).
 	RequireVerifiedEmail bool
+
+	// OAuth flow collaborators (design §3). Providers empty → the OAuth
+	// subsystem is off and its routes are not registered (deny-by-absence); the
+	// two oauth repositories and TokenEncrypter may then be nil. When Providers
+	// is non-empty the auth package requires both oauth repositories at
+	// construction (auth.ErrOAuthReposRequired).
+	OAuthAccounts     oauthaccount.OAuthAccountRepository
+	OAuthStates       oauthstate.StateRepository
+	Providers         []oauth.Provider
+	TokenEncrypter    cryptids.Encrypter // nil → provider tokens are dropped (not persisted)
+	OAuthCallbackBase string
+	RedirectAllowlist []string
 }
 
 // Service implements the auth use cases over the repository ports.
@@ -111,6 +127,17 @@ type Service struct {
 	// an internal implementation detail, not a host-provided port: the stored
 	// session value is always the SHA-256 hash of the cookie (design §7.3).
 	tokenHasher *cryptids.SHA256Hasher
+
+	// OAuth flow state (design §3). providers is keyed by Provider.Name();
+	// oauthAccounts/oauthStates are the flow's repositories; tokenEncrypter is
+	// nil when provider tokens are dropped; redirects guards post-flow
+	// destinations. All are zero/empty when the subsystem is off.
+	oauthAccounts  oauthaccount.OAuthAccountRepository
+	oauthStates    oauthstate.StateRepository
+	providers      map[string]oauth.Provider
+	tokenEncrypter cryptids.Encrypter
+	callbackBase   string
+	redirects      redirect.Allowlist
 }
 
 // NewService builds a Service from its dependencies, applying cookie name/path
@@ -127,6 +154,10 @@ func NewService(d Deps) *Service {
 	if cookie.Path == "" {
 		cookie.Path = "/"
 	}
+	providers := make(map[string]oauth.Provider, len(d.Providers))
+	for _, p := range d.Providers {
+		providers[p.Name()] = p
+	}
 	return &Service{
 		users:                d.Users,
 		passwords:            d.Passwords,
@@ -141,6 +172,12 @@ func NewService(d Deps) *Service {
 		now:                  clock,
 		requireVerifiedEmail: d.RequireVerifiedEmail,
 		tokenHasher:          cryptids.NewSHA256Hasher(),
+		oauthAccounts:        d.OAuthAccounts,
+		oauthStates:          d.OAuthStates,
+		providers:            providers,
+		tokenEncrypter:       d.TokenEncrypter,
+		callbackBase:         d.OAuthCallbackBase,
+		redirects:            redirect.New(d.RedirectAllowlist),
 	}
 }
 
