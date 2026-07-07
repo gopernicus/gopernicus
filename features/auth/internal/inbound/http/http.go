@@ -14,21 +14,24 @@ import (
 	"strings"
 
 	"github.com/gopernicus/gopernicus/features/auth/internal/logic/authsvc"
-	"github.com/gopernicus/gopernicus/features/auth/logic/session"
 	"github.com/gopernicus/gopernicus/features/auth/logic/user"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
 
 // authService is the narrow surface the handlers consume. *authsvc.Service
-// satisfies it. Accept interfaces, return structs.
+// satisfies it. Login and ChangePassword return the plaintext session cookie
+// token to set (the stored session value is that token's hash — design §7.3).
+// Accept interfaces, return structs.
 type authService interface {
 	Register(ctx context.Context, email, password, displayName string) (user.User, error)
 	Verify(ctx context.Context, code string) error
-	Login(ctx context.Context, email, password, clientIP string) (session.Session, user.User, error)
+	Login(ctx context.Context, email, password, clientIP string) (token string, u user.User, err error)
 	Logout(ctx context.Context, token string) error
+	ChangePassword(ctx context.Context, userID, currentPassword, newPassword string) (token string, err error)
 	ForgotPassword(ctx context.Context, email string) error
 	ResetPassword(ctx context.Context, token, newPassword string) error
+	CurrentUser(ctx context.Context) (userID string, ok bool)
 	SetSessionCookie(w http.ResponseWriter, token string)
 	ClearSessionCookie(w http.ResponseWriter)
 	SessionCookieName() string
@@ -68,6 +71,11 @@ type resetRequest struct {
 	Password string `json:"password"`
 }
 
+type changePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
 type userResponse struct {
 	ID            string `json:"id"`
 	Email         string `json:"email"`
@@ -85,8 +93,8 @@ func newUserResponse(u user.User) userResponse {
 }
 
 // Mount registers the auth feature's routes on the registrar. The route surface
-// is POST /auth/{register,login,verify,password/forgot,password/reset} plus
-// POST /auth/logout, which is gated by RequireUser.
+// is POST /auth/{register,login,verify,password/forgot,password/reset} plus the
+// session-gated POST /auth/logout and POST /auth/password/change.
 func Mount(r feature.RouteRegistrar, svc authService) {
 	h := &handlers{svc: svc}
 	r.Handle("POST", "/auth/register", h.register)
@@ -95,6 +103,7 @@ func Mount(r feature.RouteRegistrar, svc authService) {
 	r.Handle("POST", "/auth/password/forgot", h.forgotPassword)
 	r.Handle("POST", "/auth/password/reset", h.resetPassword)
 	r.Handle("POST", "/auth/logout", h.logout, svc.RequireUser)
+	r.Handle("POST", "/auth/password/change", h.changePassword, svc.RequireUser)
 }
 
 func (h *handlers) register(w http.ResponseWriter, r *http.Request) {
@@ -115,7 +124,7 @@ func (h *handlers) login(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	sess, u, err := h.svc.Login(r.Context(), req.Email, req.Password, clientIP(r))
+	token, u, err := h.svc.Login(r.Context(), req.Email, req.Password, clientIP(r))
 	if err != nil {
 		if errors.Is(err, authsvc.ErrRateLimited) {
 			writeError(w, web.NewError(http.StatusTooManyRequests, "too many login attempts").WithCode("rate_limited"))
@@ -124,7 +133,7 @@ func (h *handlers) login(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	h.svc.SetSessionCookie(w, sess.Token)
+	h.svc.SetSessionCookie(w, token)
 	writeJSON(w, http.StatusOK, newUserResponse(u))
 }
 
@@ -165,6 +174,29 @@ func (h *handlers) resetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reset"})
+}
+
+// changePassword is session-gated (RequireUser has already validated the caller
+// and stashed the user id). It verifies the current password, sets the new one,
+// revokes ALL the user's sessions, and sets a fresh session cookie for the
+// caller (design §7.2). A wrong current password surfaces as 401.
+func (h *handlers) changePassword(w http.ResponseWriter, r *http.Request) {
+	var req changePasswordRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	userID, ok := h.svc.CurrentUser(r.Context())
+	if !ok {
+		writeError(w, web.ErrUnauthorized("authentication required"))
+		return
+	}
+	token, err := h.svc.ChangePassword(r.Context(), userID, req.CurrentPassword, req.NewPassword)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	h.svc.SetSessionCookie(w, token)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "password_changed"})
 }
 
 func (h *handlers) logout(w http.ResponseWriter, r *http.Request) {

@@ -139,6 +139,16 @@ func (s *memSessions) Delete(_ context.Context, token string) error {
 	delete(s.m, token)
 	return nil
 }
+func (s *memSessions) DeleteByUser(_ context.Context, userID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for token, sess := range s.m {
+		if sess.UserID == userID {
+			delete(s.m, token)
+		}
+	}
+	return nil
+}
 
 type memCodes struct {
 	mu sync.Mutex
@@ -369,6 +379,80 @@ func TestLogoutRouteClearsSession(t *testing.T) {
 	again := do(t, h, "POST", "/auth/logout", "", &http.Cookie{Name: c.Name, Value: c.Value})
 	if again.Code != http.StatusUnauthorized {
 		t.Errorf("logout after logout status = %d, want 401", again.Code)
+	}
+}
+
+func TestChangePasswordRouteRequiresSession(t *testing.T) {
+	h := newTestHandler(t, nil)
+	rec := do(t, h, "POST", "/auth/password/change", `{"current_password":"password123","new_password":"newpassword456"}`)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("change without session status = %d, want 401", rec.Code)
+	}
+}
+
+func TestChangePasswordRouteStrictDecode(t *testing.T) {
+	h := newTestHandler(t, nil)
+	do(t, h, "POST", "/auth/register", `{"email":"g@example.com","password":"password123","display_name":"G"}`)
+	login := do(t, h, "POST", "/auth/login", `{"email":"g@example.com","password":"password123"}`)
+	c := sessionCookie(login)
+	if c == nil {
+		t.Fatal("no session cookie from login")
+	}
+	rec := do(t, h, "POST", "/auth/password/change",
+		`{"current_password":"password123","new_password":"newpassword456","extra":1}`,
+		&http.Cookie{Name: c.Name, Value: c.Value})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("unknown-field body status = %d, want 400", rec.Code)
+	}
+}
+
+func TestChangePasswordRouteWrongCurrent(t *testing.T) {
+	h := newTestHandler(t, nil)
+	do(t, h, "POST", "/auth/register", `{"email":"h@example.com","password":"password123","display_name":"H"}`)
+	login := do(t, h, "POST", "/auth/login", `{"email":"h@example.com","password":"password123"}`)
+	c := sessionCookie(login)
+	rec := do(t, h, "POST", "/auth/password/change",
+		`{"current_password":"wrongcurrent","new_password":"newpassword456"}`,
+		&http.Cookie{Name: c.Name, Value: c.Value})
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("wrong-current status = %d, want 401", rec.Code)
+	}
+}
+
+func TestChangePasswordRouteHappyPath(t *testing.T) {
+	h := newTestHandler(t, nil)
+	do(t, h, "POST", "/auth/register", `{"email":"i@example.com","password":"password123","display_name":"I"}`)
+	login := do(t, h, "POST", "/auth/login", `{"email":"i@example.com","password":"password123"}`)
+	old := sessionCookie(login)
+	if old == nil {
+		t.Fatal("no session cookie from login")
+	}
+
+	rec := do(t, h, "POST", "/auth/password/change",
+		`{"current_password":"password123","new_password":"newpassword456"}`,
+		&http.Cookie{Name: old.Name, Value: old.Value})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("change status = %d, want 200; body=%s", rec.Code, rec.Body)
+	}
+	fresh := sessionCookie(rec)
+	if fresh == nil || fresh.Value == "" || fresh.Value == old.Value {
+		t.Errorf("change did not set a fresh session cookie: old=%v new=%v", old, fresh)
+	}
+
+	// The old session cookie is revoked; a gated route now rejects it.
+	stale := do(t, h, "POST", "/auth/logout", "", &http.Cookie{Name: old.Name, Value: old.Value})
+	if stale.Code != http.StatusUnauthorized {
+		t.Errorf("old cookie after change status = %d, want 401", stale.Code)
+	}
+	// The fresh session cookie works.
+	ok := do(t, h, "POST", "/auth/logout", "", &http.Cookie{Name: fresh.Name, Value: fresh.Value})
+	if ok.Code != http.StatusOK {
+		t.Errorf("fresh cookie logout status = %d, want 200", ok.Code)
+	}
+	// Re-login with the new password succeeds.
+	relogin := do(t, h, "POST", "/auth/login", `{"email":"i@example.com","password":"newpassword456"}`)
+	if relogin.Code != http.StatusOK {
+		t.Errorf("re-login with new password status = %d, want 200", relogin.Code)
 	}
 }
 

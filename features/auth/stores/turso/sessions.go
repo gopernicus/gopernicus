@@ -10,10 +10,11 @@ import (
 )
 
 // SessionStore implements session.SessionRepository over a libSQL database.
-// Sessions are opaque: the token is stored plainly as the primary key and the
-// service looks a session up by that same raw token (no hashing), matching the
-// session entity and the storetest reference. Get enforces expired-at-read: a
-// row past its expires_at surfaces errs.ErrExpired rather than a dead session.
+// Sessions are opaque: the token column holds whatever value the auth service
+// supplies as the primary key — the service hashes the cookie token before every
+// call (design §7.3), so the store persists and looks up by that opaque value
+// and does no hashing itself. Get enforces expired-at-read: a row past its
+// expires_at surfaces errs.ErrExpired rather than a dead session.
 type SessionStore struct {
 	db *tursodb.DB
 }
@@ -65,6 +66,14 @@ func (s *SessionStore) Delete(ctx context.Context, token string) error {
 		return errs.ErrNotFound
 	}
 	return nil
+}
+
+// DeleteByUser removes every session for userID. It is bulk and idempotent: zero
+// matching rows returns nil (never errs.ErrNotFound), so it doubles as the
+// logout-everywhere primitive a password change uses.
+func (s *SessionStore) DeleteByUser(ctx context.Context, userID string) error {
+	_, err := s.db.Exec(ctx, "DELETE FROM sessions WHERE user_id = ?", userID)
+	return err
 }
 
 // scanSession scans one sessions row, mapping sql.ErrNoRows to errs.ErrNotFound.

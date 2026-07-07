@@ -2,9 +2,12 @@ package session
 
 import "context"
 
-// SessionRepository persists opaque server-side sessions keyed by token.
-// Implemented by feature store adapters (features/auth/stores/turso) or any
-// host-provided implementation (see the storetest reference).
+// SessionRepository persists opaque server-side sessions keyed by their stored
+// token value. Implemented by feature store adapters (features/auth/stores/turso)
+// or any host-provided implementation (see the storetest reference). The auth
+// service hashes the cookie token before every Create/Get/Delete (design §7.3),
+// so the token the store persists and looks up by is opaque to the store; the
+// store does no hashing itself.
 //
 // Sentinel contract (the storetest conformance suite executes these):
 //   - Get for an unknown token → errs.ErrNotFound.
@@ -12,6 +15,8 @@ import "context"
 //     errs.ErrExpired (expired-at-read: the store reports expiry rather than
 //     returning a dead session; it MAY also delete the row).
 //   - Delete for an unknown token → errs.ErrNotFound.
+//   - DeleteByUser is bulk and idempotent: it removes every session for the
+//     user and returns nil even when none exist (never errs.ErrNotFound).
 type SessionRepository interface {
 	// Create persists a new session.
 	Create(ctx context.Context, s Session) (Session, error)
@@ -20,4 +25,8 @@ type SessionRepository interface {
 	Get(ctx context.Context, token string) (Session, error)
 	// Delete removes the session for token; unknown → errs.ErrNotFound.
 	Delete(ctx context.Context, token string) error
+	// DeleteByUser removes every session belonging to userID. It is bulk and
+	// idempotent: zero matching rows returns nil, never errs.ErrNotFound. It is
+	// the logout-everywhere primitive (a password change revokes all sessions).
+	DeleteByUser(ctx context.Context, userID string) error
 }

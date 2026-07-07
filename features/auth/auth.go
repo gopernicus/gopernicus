@@ -49,6 +49,12 @@ var (
 	ErrMailerRequired = errors.New("auth: Config.Mailer is required")
 )
 
+// ErrEmailNotVerified is returned (as the wrapped cause) by login when
+// Config.RequireVerifiedEmail is set and the caller's email is unverified. It
+// wraps errs.ErrForbidden, so the transport maps it to 403. Hosts detect it with
+// errors.Is(err, auth.ErrEmailNotVerified).
+var ErrEmailNotVerified = authsvc.ErrEmailNotVerified
+
 // PasswordHasher hashes and verifies passwords. It is feature-owned (not an sdk
 // facility) because it has one consumer today and none genuinely foreseen
 // elsewhere. integrations/cryptids/bcrypt satisfies it structurally, with zero
@@ -103,6 +109,10 @@ type Config struct {
 	RateLimiter ratelimiter.Limiter
 	// SessionCookie configures the session cookie; the zero value is usable.
 	SessionCookie CookieConfig
+	// RequireVerifiedEmail, when true, makes login refuse an unverified user
+	// with a 403 (ErrEmailNotVerified). Default false (design §7.1, AV8):
+	// flipping it on requires a working Mailer so users can verify.
+	RequireVerifiedEmail bool
 }
 
 // Service is the auth feature's identity capability without HTTP routes — the
@@ -144,6 +154,7 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 			Secure: cfg.SessionCookie.Secure,
 			MaxAge: cfg.SessionCookie.MaxAge,
 		},
+		RequireVerifiedEmail: cfg.RequireVerifiedEmail,
 	})
 	return &Service{svc: svc}, nil
 }

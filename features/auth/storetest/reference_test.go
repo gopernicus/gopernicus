@@ -161,6 +161,17 @@ func (r refSessions) Delete(_ context.Context, token string) error {
 	return nil
 }
 
+func (r refSessions) DeleteByUser(_ context.Context, userID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for token, s := range r.sessions {
+		if s.UserID == userID {
+			delete(r.sessions, token)
+		}
+	}
+	return nil
+}
+
 // --- verification.CodeRepository ---
 
 type refCodes struct{ *reference }
