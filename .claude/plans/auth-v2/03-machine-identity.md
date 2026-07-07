@@ -110,3 +110,98 @@ run-and-look is A9's.
 ## Execution log
 
 (append dated entries here)
+
+### A3 — 2026-07-07 — PASS
+
+Executor: opus. Depends on A1/A2 (main tip `6a0ab0d`). All nine work items
+landed; no ratified pin relitigated.
+
+**Work items**
+
+1. `logic/serviceaccount` — `ServiceAccount{ID,Name,Description,CreatedBy,
+   ActAsUser,OwnerUserID,CreatedAt,UpdatedAt}` + `New` enforcing the invariant
+   `ActAsUser → OwnerUserID != ""` (errs.ErrInvalidInput). `ServiceAccountRepository`
+   = Create/Get/List(crud.ListRequest)/Update/Delete; port doc pins
+   `ORDER BY created_at DESC, id DESC`.
+2. `logic/apikey` — `APIKey{ID,ServiceAccountID,Name,KeyPrefix,KeyHash,ExpiresAt,
+   RevokedAt,LastUsedAt,CreatedAt}` (zero ExpiresAt/RevokedAt/LastUsedAt = absent)
+   + `Revoked()`/`Expired(now)`. `APIKeyRepository` = Create/GetByHash/
+   ListByServiceAccount/Revoke/TouchLastUsed. GetByHash doc states THE PINNED
+   CONTRACT verbatim (select by key_hash alone; return ANY present row incl.
+   revoked/expired; NULL ExpiresAt = never; ErrNotFound only for unknown; NO
+   ErrExpired sentinel). No last_used_ip, no scopes.
+3. Key mint (`authsvc.mintAPIKeySecret`): prefix = first 8 chars of `id.New()`
+   (dotless base32, stored plain); raw = `prefix + "_" + secret`, secret =
+   `id.New()+id.New()` (~256 bits). SHA-256 of the whole raw at rest
+   (`s.tokenHasher`, the cryptids SHA256 primitive); plaintext returned once from
+   MintAPIKey. Zero dots guaranteed (unit-asserted via isJWTToken).
+4. `auth.Principal = authsvc.Principal` (alias → exactly one value type, no import
+   cycle). `AuthenticateAPIKey` hashes → GetByHash → SERVICE branches: revoked →
+   deny (comment marks the A5 `blocked` audit + sa attribution via
+   key.ServiceAccountID); expired → deny (comment marks A5 failure audit); valid
+   → effectivePrincipal (ActAsUser → {user,OwnerUserID}, else
+   {service_account,sa.ID}) + best-effort TouchLastUsed. Every deny returns a
+   generic errs.ErrUnauthorized.
+5. Middleware: `RequireServiceAccount` (API-key bearer only), `RequirePrincipal`
+   (session or API-key bearer; JWT arm inert until A4), `CurrentPrincipal`.
+   Two-dot classing (`isJWTToken`); each path active only when its class is
+   configured. RequireUser untouched.
+6. Routes (session-gated, `mountMachine`, mounted only when MachineEnabled):
+   POST/GET `/auth/service-accounts`, POST/GET
+   `/auth/service-accounts/{id}/keys`, POST `/auth/api-keys/{id}/revoke`. Strict
+   decode; mint response carries the plaintext once, listing never re-exposes it.
+7. Both-or-neither: `ErrMachineReposRequired` in NewService when exactly one of
+   Repositories.{ServiceAccounts,APIKeys} is wired; both nil → off (routes not
+   registered, bearer API-key path inert).
+8. storetest: header "no port paginates" comment replaced (the first paged ports
+   land here). ServiceAccounts + APIKeys sub-runners (skip-loud when nil) with
+   the FOUR pinned GetByHash cases (unknown→NotFound / valid-NULL-expiry / revoked
+   / expired all return the record), mint-uniqueness (+ hash-collision
+   ErrAlreadyExists), List ordering+cursor pagination, and same-created_at
+   collision (id tiebreak) for BOTH paged ports. Reference impl sorts the full
+   population then keyset-pages (`pageDESC`/`afterCursorDESC`).
+9. Tests: authsvc unit (round-trip, act-as-user, revoked/expired/valid branches,
+   never-expires, unknown, TouchLastUsed best-effort, subsystem-off) + middleware
+   (classing, configured-class gating, session vs API-key resolution); http route
+   tests (deny-by-absence 404, 401 unauthenticated, strict decode, mint-once,
+   unknown-sa 404, bad expires_at 400, revoke 404/200); auth_test both-or-neither
+   + Register deny/mount; domain New-invariant tests.
+
+**Acceptance**
+
+- `cd features/auth && go build ./... && go vet ./... && go test ./...` → PASS
+  (all packages ok; new sub-runners + tests green).
+- `make check` → `all checks passed` (26-module set + 4 guards + integration-tag
+  vet).
+- Rule-6 grep `grep -rn --include='*.go' -E
+  '"github.com/gopernicus/gopernicus/features/(cms|jobs|authorization)'
+  features/auth/` → empty (exit 1).
+- `features/auth/go.mod` requires exactly `sdk`.
+
+**Real-interaction checks**
+
+- (a) `make check` green; `examples/minimal` :8081 → `GET /` 200, `GET
+  /products/widget-3000` 200; killed; port free (000).
+- (b) `examples/auth-cms` :8082 cookie-jar (`/terms` is the admin route):
+  GET /terms 401 → register 201 → login 200+cookie → GET /terms 200 → logout 200
+  → GET /terms 401. Exact codes: `401,201,200,200,200,401`.
+- (c) same booted host (machine repos unwired): `GET /auth/service-accounts` →
+  **404**; `Authorization: Bearer not-a-jwt` on `/terms` → **401** (API-key path
+  inert; RequireUser ignores the bearer). Killed; port free (000).
+
+**Divergences / notes**
+
+- Naming: the phase file's WI1 says `List` (design §4.1 said `ListPage`); followed
+  the phase file (authoritative) — the repo method is `List(ctx, crud.ListRequest)`.
+- `Principal` is defined canonically in internal `authsvc` and re-exported as
+  `auth.Principal` via a type alias (Go can't have the public pkg import its own
+  internal pkg's owner without a cycle; the alias yields exactly one value type
+  per AV5). Fields exported, host-constructable.
+- TouchLastUsed best-effort: the error is SWALLOWED (`_ =`) rather than logged —
+  `authsvc` holds no logger and threading one is outside A3's surgical scope. The
+  design's "errors logged" and the `blocked`/failure/success audit calls arrive in
+  A5 (the branch sites carry `A5:` comments). WI9's requirement (a failing repo
+  does not fail auth) is asserted.
+- expires_at on mint accepted as optional RFC3339 (empty → never-expires); a
+  malformed value is a 400.
+- No store-module code (A7a/A7b) and no audit writes (A5), per scope.

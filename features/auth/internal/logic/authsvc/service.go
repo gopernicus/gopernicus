@@ -20,8 +20,10 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/auth/internal/redirect"
+	"github.com/gopernicus/gopernicus/features/auth/logic/apikey"
 	"github.com/gopernicus/gopernicus/features/auth/logic/oauthaccount"
 	"github.com/gopernicus/gopernicus/features/auth/logic/oauthstate"
+	"github.com/gopernicus/gopernicus/features/auth/logic/serviceaccount"
 	"github.com/gopernicus/gopernicus/features/auth/logic/session"
 	"github.com/gopernicus/gopernicus/features/auth/logic/user"
 	"github.com/gopernicus/gopernicus/features/auth/logic/verification"
@@ -107,6 +109,13 @@ type Deps struct {
 	TokenEncrypter    cryptids.Encrypter // nil → provider tokens are dropped (not persisted)
 	OAuthCallbackBase string
 	RedirectAllowlist []string
+
+	// Machine-identity collaborators (design §4.1). Both nil → the API-key /
+	// service-account subsystem is off (routes not registered, the bearer
+	// API-key path is inert). The auth package enforces both-or-neither at
+	// construction (auth.ErrMachineReposRequired).
+	ServiceAccounts serviceaccount.ServiceAccountRepository
+	APIKeys         apikey.APIKeyRepository
 }
 
 // Service implements the auth use cases over the repository ports.
@@ -138,6 +147,10 @@ type Service struct {
 	tokenEncrypter cryptids.Encrypter
 	callbackBase   string
 	redirects      redirect.Allowlist
+
+	// Machine-identity state (design §4.1). Both nil when the subsystem is off.
+	serviceAccounts serviceaccount.ServiceAccountRepository
+	apiKeys         apikey.APIKeyRepository
 }
 
 // NewService builds a Service from its dependencies, applying cookie name/path
@@ -178,6 +191,8 @@ func NewService(d Deps) *Service {
 		tokenEncrypter:       d.TokenEncrypter,
 		callbackBase:         d.OAuthCallbackBase,
 		redirects:            redirect.New(d.RedirectAllowlist),
+		serviceAccounts:      d.ServiceAccounts,
+		apiKeys:              d.APIKeys,
 	}
 }
 

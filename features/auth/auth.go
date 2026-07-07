@@ -31,8 +31,10 @@ import (
 
 	internalhttp "github.com/gopernicus/gopernicus/features/auth/internal/inbound/http"
 	"github.com/gopernicus/gopernicus/features/auth/internal/logic/authsvc"
+	"github.com/gopernicus/gopernicus/features/auth/logic/apikey"
 	"github.com/gopernicus/gopernicus/features/auth/logic/oauthaccount"
 	"github.com/gopernicus/gopernicus/features/auth/logic/oauthstate"
+	"github.com/gopernicus/gopernicus/features/auth/logic/serviceaccount"
 	"github.com/gopernicus/gopernicus/features/auth/logic/session"
 	"github.com/gopernicus/gopernicus/features/auth/logic/user"
 	"github.com/gopernicus/gopernicus/features/auth/logic/verification"
@@ -60,6 +62,14 @@ var (
 // error (design §3, the Hasher/Mailer precedent), never a silent half-on state.
 var ErrOAuthReposRequired = errors.New("auth: Config.Providers set but Repositories.OAuthAccounts/OAuthStates is nil")
 
+// ErrMachineReposRequired is returned by NewService/Register when exactly one of
+// Repositories.ServiceAccounts and Repositories.APIKeys is wired. The machine
+// identity subsystem (API keys + service accounts, design §4.1) is both-or-
+// neither: both nil → subsystem off (routes not registered, the bearer API-key
+// path inert); both set → on; one without the other is a loud construction error
+// (cut refinement 5), never a silent half-on state.
+var ErrMachineReposRequired = errors.New("auth: Repositories.ServiceAccounts and Repositories.APIKeys must be wired together (both or neither)")
+
 // ErrOAuthLastMethod is returned (as the wrapped cause) by Service.Unlink when the
 // target link is the user's only authentication method and no password is set —
 // unlinking it would lock the account out. It wraps errs.ErrConflict, so the
@@ -72,6 +82,15 @@ var ErrOAuthLastMethod = authsvc.ErrLastAuthMethod
 // wraps errs.ErrForbidden, so the transport maps it to 403. Hosts detect it with
 // errors.Is(err, auth.ErrEmailNotVerified).
 var ErrEmailNotVerified = authsvc.ErrEmailNotVerified
+
+// Principal is the effective caller resolved from a credential (a session, an
+// API key, or — once Config.TokenSigner is wired in A4 — a bearer JWT). AV5
+// pins it as the one value type: actor references are (subject_type, subject_id)
+// string pairs everywhere, with no principals registry table. Type is a string
+// convention (Service.AuthenticateAPIKey yields "user" for an act-as-user key or
+// "service_account" otherwise); the alias keeps exactly one type across the
+// public and internal packages.
+type Principal = authsvc.Principal
 
 // PasswordHasher hashes and verifies passwords. It is feature-owned (not an sdk
 // facility) because it has one consumer today and none genuinely foreseen
@@ -100,6 +119,12 @@ type Repositories struct {
 	// them is ErrOAuthReposRequired at construction.
 	OAuthAccounts oauthaccount.OAuthAccountRepository
 	OAuthStates   oauthstate.StateRepository
+	// ServiceAccounts and APIKeys back machine identity (design §4.1). They are
+	// both-or-neither: both nil → the subsystem is off (routes not registered,
+	// the bearer API-key path inert); one without the other →
+	// ErrMachineReposRequired at construction.
+	ServiceAccounts serviceaccount.ServiceAccountRepository
+	APIKeys         apikey.APIKeyRepository
 }
 
 // CookieConfig is the session-cookie policy. Zero values are safe: an empty Name
@@ -180,6 +205,9 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 	if len(cfg.Providers) > 0 && (repos.OAuthAccounts == nil || repos.OAuthStates == nil) {
 		return nil, ErrOAuthReposRequired
 	}
+	if (repos.ServiceAccounts == nil) != (repos.APIKeys == nil) {
+		return nil, ErrMachineReposRequired
+	}
 	limiter := cfg.RateLimiter
 	if limiter == nil {
 		limiter = ratelimiter.NewMemory()
@@ -208,6 +236,8 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 		TokenEncrypter:       cfg.TokenEncrypter,
 		OAuthCallbackBase:    cfg.OAuthCallbackBase,
 		RedirectAllowlist:    cfg.RedirectAllowlist,
+		ServiceAccounts:      repos.ServiceAccounts,
+		APIKeys:              repos.APIKeys,
 	})
 	return &Service{svc: svc}, nil
 }
@@ -225,6 +255,35 @@ func (s *Service) RequireUser(next http.Handler) http.Handler {
 // CurrentUser) with zero import in either direction.
 func (s *Service) CurrentUser(ctx context.Context) (userID string, ok bool) {
 	return s.svc.CurrentUser(ctx)
+}
+
+// RequireServiceAccount is HTTP middleware gating a route on an API-key bearer
+// credential (design §4.3). A host wires it like RequireUser; it stashes the
+// resolved Principal, read via CurrentPrincipal.
+func (s *Service) RequireServiceAccount(next http.Handler) http.Handler {
+	return s.svc.RequireServiceAccount(next)
+}
+
+// RequirePrincipal is HTTP middleware gating a route on either credential class
+// (session or API-key bearer; the JWT arm activates in A4). It stashes the
+// resolved Principal, read via CurrentPrincipal.
+func (s *Service) RequirePrincipal(next http.Handler) http.Handler {
+	return s.svc.RequirePrincipal(next)
+}
+
+// AuthenticateAPIKey resolves the effective Principal for a raw API key (design
+// §4.1): a personal act-as-user key yields Principal{Type: "user"}, otherwise
+// Principal{Type: "service_account"}. Revoked, expired, or unknown keys return a
+// generic errs.ErrUnauthorized.
+func (s *Service) AuthenticateAPIKey(ctx context.Context, rawKey string) (Principal, error) {
+	return s.svc.AuthenticateAPIKey(ctx, rawKey)
+}
+
+// CurrentPrincipal returns the effective Principal stashed by
+// RequireServiceAccount / RequirePrincipal, if any — the machine-or-human
+// identity port a consuming feature reads alongside CurrentUser.
+func (s *Service) CurrentPrincipal(ctx context.Context) (Principal, bool) {
+	return s.svc.CurrentPrincipal(ctx)
 }
 
 // Register wires the auth feature's own HTTP routes onto the host's mount. It

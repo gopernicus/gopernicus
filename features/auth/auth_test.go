@@ -6,9 +6,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/gopernicus/gopernicus/features/auth/logic/apikey"
 	"github.com/gopernicus/gopernicus/features/auth/logic/oauthaccount"
 	"github.com/gopernicus/gopernicus/features/auth/logic/oauthstate"
+	"github.com/gopernicus/gopernicus/features/auth/logic/serviceaccount"
+	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/email"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/oauth"
@@ -75,6 +79,38 @@ func (stubOAuthStates) Create(context.Context, oauthstate.State) (oauthstate.Sta
 func (stubOAuthStates) Consume(context.Context, string) (oauthstate.State, error) {
 	return oauthstate.State{}, nil
 }
+
+// stub machine repos satisfy the machine ports for the both-or-neither
+// construction tests. None is driven — the tests assert construction/routing.
+type stubServiceAccounts struct{}
+
+func (stubServiceAccounts) Create(context.Context, serviceaccount.ServiceAccount) (serviceaccount.ServiceAccount, error) {
+	return serviceaccount.ServiceAccount{}, nil
+}
+func (stubServiceAccounts) Get(context.Context, string) (serviceaccount.ServiceAccount, error) {
+	return serviceaccount.ServiceAccount{}, nil
+}
+func (stubServiceAccounts) List(context.Context, crud.ListRequest) (crud.Page[serviceaccount.ServiceAccount], error) {
+	return crud.Page[serviceaccount.ServiceAccount]{}, nil
+}
+func (stubServiceAccounts) Update(context.Context, string, serviceaccount.ServiceAccount) (serviceaccount.ServiceAccount, error) {
+	return serviceaccount.ServiceAccount{}, nil
+}
+func (stubServiceAccounts) Delete(context.Context, string) error { return nil }
+
+type stubAPIKeys struct{}
+
+func (stubAPIKeys) Create(context.Context, apikey.APIKey) (apikey.APIKey, error) {
+	return apikey.APIKey{}, nil
+}
+func (stubAPIKeys) GetByHash(context.Context, string) (apikey.APIKey, error) {
+	return apikey.APIKey{}, nil
+}
+func (stubAPIKeys) ListByServiceAccount(context.Context, string, crud.ListRequest) (crud.Page[apikey.APIKey], error) {
+	return crud.Page[apikey.APIKey]{}, nil
+}
+func (stubAPIKeys) Revoke(context.Context, string, time.Time) error        { return nil }
+func (stubAPIKeys) TouchLastUsed(context.Context, string, time.Time) error { return nil }
 
 func TestNewServiceRequiresHasher(t *testing.T) {
 	_, err := NewService(Repositories{}, Config{Mailer: stubMailer{}})
@@ -147,6 +183,57 @@ func TestRegisterOAuthDenyByAbsence(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("oauth start (no providers) status = %d, want 404", rec.Code)
+	}
+}
+
+// TestNewServiceMachinePartialWiring proves the both-or-neither rule (cut
+// refinement 5): one machine repo without the other → ErrMachineReposRequired;
+// both wired → ok; neither → ok (subsystem off).
+func TestNewServiceMachinePartialWiring(t *testing.T) {
+	base := Config{Hasher: stubHasher{}, Mailer: stubMailer{}}
+
+	if _, err := NewService(Repositories{ServiceAccounts: stubServiceAccounts{}}, base); !errors.Is(err, ErrMachineReposRequired) {
+		t.Errorf("service accounts only: err=%v, want ErrMachineReposRequired", err)
+	}
+	if _, err := NewService(Repositories{APIKeys: stubAPIKeys{}}, base); !errors.Is(err, ErrMachineReposRequired) {
+		t.Errorf("api keys only: err=%v, want ErrMachineReposRequired", err)
+	}
+	if _, err := NewService(Repositories{ServiceAccounts: stubServiceAccounts{}, APIKeys: stubAPIKeys{}}, base); err != nil {
+		t.Errorf("both machine repos wired: err=%v, want nil", err)
+	}
+	if _, err := NewService(Repositories{}, base); err != nil {
+		t.Errorf("no machine repos (subsystem off): err=%v, want nil", err)
+	}
+}
+
+// TestRegisterMachineDenyByAbsence proves the machine lifecycle routes are absent
+// (404) when no machine repos are wired, at the public Register surface.
+func TestRegisterMachineDenyByAbsence(t *testing.T) {
+	h := web.NewWebHandler()
+	if err := Register(feature.Mount{Router: h}, Repositories{}, Config{Hasher: stubHasher{}, Mailer: stubMailer{}}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	req := httptest.NewRequest("GET", "/auth/service-accounts", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("service-accounts (no machine repos) status = %d, want 404", rec.Code)
+	}
+}
+
+// TestRegisterMachineMountsRoutes proves the machine routes ARE mounted and
+// session-gated (401 without one) when both machine repos are wired.
+func TestRegisterMachineMountsRoutes(t *testing.T) {
+	h := web.NewWebHandler()
+	repos := Repositories{ServiceAccounts: stubServiceAccounts{}, APIKeys: stubAPIKeys{}}
+	if err := Register(feature.Mount{Router: h}, repos, Config{Hasher: stubHasher{}, Mailer: stubMailer{}}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	req := httptest.NewRequest("GET", "/auth/service-accounts", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("service-accounts status = %d, want 401 (route mounted + gated)", rec.Code)
 	}
 }
 
