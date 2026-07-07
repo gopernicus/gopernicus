@@ -741,3 +741,18 @@ tidy resolution, non-source. No design-point divergences.
   (single-file small milestone; closed-milestone plan dirs moved from
   `.claude/plans/` to `.claude/past/` on 2026-07-07 — flag-origin citations in
   this plan reference NOTES.md entries, which did not move).
+
+**task-2 addendum — 2026-07-07, main-session browser leg (run-and-look):**
+after the implementer's curl drive, a real-browser pass (playwright/chromium)
+against `TRACING_ENABLED=true make run` (remote playground DSN) loaded `/`
+("Home · ACME") and the drive's article page
+(`/articles/telemetry-drive-1783459281`), which rendered the EDITED body —
+save-then-view confirmed visually; screenshots in the session scratchpad.
+Server stdout for the browser session emitted pattern-named spans
+(`GET /{$}` ×2, `GET /articles/{slug}`, `GET /{slug}`) and the matching
+request log line carried `trace_id=5fbcf925…`/`span_id=411622bf…` — the
+task-1 linkage observed from a real browser client. Server killed; port
+8080 free. Note of record: `examples/cms` mounts admin routes ungated (no
+login exists in that host) — the plan's "login →" step had nothing to
+drive; flagged for jrazmi's awareness (auth-gating an example host is
+auth-v2/examples scope, not telemetry scope).
