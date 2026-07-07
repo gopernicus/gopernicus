@@ -886,3 +886,126 @@ strict security superset). **CUT-RATIFIED 2026-07-07 (jrazmi).**
 Execution queues behind repo-hardening phases 1–3; first leg A1
 (`01-debts.md`, implementer on opus). authorization-v1 (Z1–Z5) is cut
 separately when its window opens.
+
+## 2026-07-07 — telemetry-closeout EXECUTED: web.Tracing shipped, real-drive proof on remote playground Turso, hygiene flags dispositioned
+
+Workstream 1 closed with a real drive, never green tests alone. Shipped:
+task-1's `sdk/web.Tracing(tracing.Tracer)` middleware (span name from
+`r.Pattern`, status attribute, 5xx RecordError, Noop-safe) plus the NAMED
+optional interface `tracing.SpanIdentity` in `sdk/tracing` (TC5, steward
+default stands); task-2's otel finisher `TraceID()`/`SpanID()` + the
+`examples/cms` wiring (`TRACING_ENABLED` gates the tracer choice, never
+the middleware; Tracing outer of Logger; `tracer.Shutdown` on a fresh
+timeout context). Hygiene fixes landed as code: the stale `sdk/tracing`
+package doc (task-1), `sdk/ratelimiter` doc staleness (task-3), and the
+`jobs.Config.Logger` runtime-pool knob (task-5, wired in
+examples/jobs-minimal). Drive evidence — exact commands, span + log
+excerpts — lives in `.claude/plans/telemetry-closeout/plan.md`'s
+Execution log: DSN class of the evidence is **remote playground Turso**;
+the OTLP shutdown-flush leg PASSED via Jaeger (SIGTERM inside the batch
+window, all final spans arrived — the fresh-context Shutdown flush
+proved); a main-session browser leg observed pattern-named spans and the
+trace_id/span_id log linkage from a real browser client.
+
+Flag closures (TC2/TC3/TC4 per this file's 2026-07-07 "planning wave
+RATIFIED" entry):
+
+- **JobID/JobStatus/Retries backing-field rename → WONT-DO** (origin:
+  2026-07-02 jobs-v1 close entry, "open to a pre-v1 rename"). v1 shipped
+  and is consumed (memstore, two dialect stores, storetest,
+  examples/jobs-minimal) — the rename is now a breaking change with zero
+  behavior payoff.
+- **`AddAcronym`/`Caser` seam → ALREADY-SHIPPED** (origin: 2026-07-06
+  sdk-parity entry, open flag #1). Corrects the "parked" framing:
+  fast-follows task-0 already shipped the seam (`sdk/conversion/caser.go`,
+  immutable `NewCaser(WithAcronyms(...))`, package funcs delegating to an
+  immutable default).
+- **gcs deprecated `option.WithCredentialsJSON` → per TC4 (DEFER), closed
+  WONT-DO-until-a-live-GCS-run** (origin: 2026-07-06 throttler entry,
+  "Also pre-existing"). The verified correct form for the future fix:
+  `option.WithAuthCredentialsJSON(option.ServiceAccount, []byte(cfg.CredentialsJSON))`.
+  NEVER the `option.WithAuthCredentials(credentials.DetectDefault(...))`
+  form — it pre-builds scope-less credentials, the storage client
+  short-circuits its OAuth scope injection, and every object op 403s in a
+  real host while hermetic tests stay green (the emulator path uses
+  `WithoutAuthentication`).
+- **`ß` → `s` → KEPT (TC2)** (origin: 2026-07-06 sdk-parity entry, open
+  flag #3). Matches the old table, already live; switching would deepen
+  the D-5 mixed-slug-corpus caveat. The `ss` branch is not taken.
+- **turso naming → KEPT (TC3)** (origin: 2026-07-06 kvstore-consolidation
+  entry, R-KV2/R-KV3 open flag). Turso is the provider name and the module
+  carries the vendor's live-service assumptions; a rename would touch two
+  module paths, host imports, and docs for zero behavior.
+- **C1 non-root-prefix links → ASSESS-ONLY DONE** (origin: 2026-07-02
+  ROADMAP LOOP FINAL SUMMARY open flags; documented limitation in
+  features/README.md §4). Forward-plan shape at
+  `.claude/plans/telemetry-closeout/c1-assessment.md`: inventory of 36
+  templ link sites + 25 Go-side sites; recommended seam is a named
+  optional `BasePath()` interface in `sdk/feature` satisfied by
+  `PrefixRegistrar`. The fix stays future-milestone scope, trigger-gated
+  (ledger entry below).
+
+Two execution facts of record: (1) `examples/cms` mounts its admin routes
+UNGATED — no login exists in that host; flagged for jrazmi's awareness
+(auth-gating an example host is auth-v2/examples scope, not telemetry
+scope). (2) examples/jobs-minimal's `slog.SetDefault(log)` workaround was
+removed when the `Config.Logger` knob landed — the knob is now the only
+path from the runtime pools to the host logger.
+
+## 2026-07-07 — demand-gated deferral ledger (telemetry-closeout; every deferral gets a wake-up TRIGGER)
+
+Deferrals without triggers evaporate. Every deliberately-deferred item now
+carries the observable condition that reopens it. Nothing below is scheduled;
+each waits for its trigger, then gets its own plan.
+
+- **jobs v2 — `Mount.Jobs` + jobs admin surface** (R8/J3 designed-deferred;
+  jobs-v1 close). TRIGGER: a real scheduled-publishing consumer (e.g. cms
+  scheduled publish) OR an operator need for a jobs admin surface. Note: once
+  events-v1 ships its SSE gateway, an admin surface gets live job status
+  nearly free — if both triggers fire, build the surface after events-v1.
+- **Tenancy** (capability-map ratified call #3: an auth v2+ subdomain, never a
+  standalone feature). TRIGGER: a real multi-tenant host exists.
+- **otel W3C trace-context propagation helpers** (fast-follows open flag #3;
+  ruled wait-until-needed 2026-07-06). TRIGGER: the first host needing
+  cross-service propagation — calling a downstream traced service or sitting
+  behind a traced edge — reopens it as a small addition to
+  integrations/tracing/otel. Until then every request is a fresh root trace,
+  accepted consciously at the telemetry closeout.
+- **s3 manager-backed streaming multipart** for the plain upload path
+  (fast-follows open flag #4). TRIGGER: a host uploads objects large enough
+  that whole-object buffering hurts. Needs a network fetch of
+  feature/s3/manager.
+- **goredis smooth token-bucket Acquire variant** (throttler ruling entry: the
+  old NewTokenBucket salvage). TRIGGER: a consumer needs even pacing instead
+  of burst-then-wait — one more file in integrations/kvstores/goredis
+  (R-KV1).
+- **sdk/web transit-middleware residue** — trust-proxy IP resolution,
+  client-info extraction, idempotency-key dedupe, max-body-size limiter
+  (original `bridge/transit/httpmid/{trust_proxies,client_info,unique_to_id,
+  body_limit}.go`; capability-map "Bridge transit middleware" row, sdk/web
+  backlog). TRIGGER: first host need — a deployment behind a reverse proxy
+  (trust-proxy + client-info) or a public write API (idempotency-key +
+  body-limit).
+- **Generic HTTP rate-limit middleware** (`RateLimit` over `sdk/ratelimiter`;
+  original `bridge/transit/httpmid/rate_limit.go`; capability-map Rate
+  limiting section, ratified home sdk/web, backlog). TRIGGER: first host
+  exposing an endpoint that needs HTTP-surface rate limiting. Both backends
+  already exist (`ratelimiter.Memory`, `goredis.Limiter`) — this is
+  middleware-shape work only.
+- **C1 — cms non-root-prefix link fix** (documented limitation,
+  features/README §4; forward-plan shape produced at the telemetry closeout,
+  `.claude/plans/telemetry-closeout/c1-assessment.md`). TRIGGER: a host needs
+  cms mounted under a non-root prefix, or a multi-feature mount forces
+  non-root prefixes.
+- **Span vocabulary — server/client span kinds** (conscious loss at the
+  telemetry closeout): the string-attribute-only `sdk/tracing` port carries no
+  span kind, so HTTP request spans render as INTERNAL in trace viewers, vs the
+  original's `SpanKindServer`. TRIGGER: a host needs server/client span
+  differentiation in its trace backend — reopens as a port-vocabulary
+  question (capability-map ruling: richer vocabulary belongs to the otel
+  integration side), not a silent middleware patch.
+- **ReBAC** — pointer, not a deferral: the 2026-07-02 "defer entirely" ruling
+  is SUPERSEDED by the 2026-07-06 authorization ruling (auth-v2 ships
+  authorization as a port-shaped capability; first-party ReBAC authorizer is
+  the flagship implementation, never required). Owned by the auth-v2 design
+  doc, not this ledger.
