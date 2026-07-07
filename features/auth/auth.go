@@ -28,6 +28,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	internalhttp "github.com/gopernicus/gopernicus/features/auth/internal/inbound/http"
 	"github.com/gopernicus/gopernicus/features/auth/internal/logic/authsvc"
@@ -84,7 +85,7 @@ var ErrOAuthLastMethod = authsvc.ErrLastAuthMethod
 var ErrEmailNotVerified = authsvc.ErrEmailNotVerified
 
 // Principal is the effective caller resolved from a credential (a session, an
-// API key, or — once Config.TokenSigner is wired in A4 — a bearer JWT). AV5
+// API key, or — when Config.TokenSigner is wired — a bearer JWT). AV5
 // pins it as the one value type: actor references are (subject_type, subject_id)
 // string pairs everywhere, with no principals registry table. Type is a string
 // convention (Service.AuthenticateAPIKey yields "user" for an act-as-user key or
@@ -182,6 +183,24 @@ type Config struct {
 	// allowed; any other requested target must appear verbatim here or it falls
 	// back to "/".
 	RedirectAllowlist []string
+
+	// TokenSigner enables stateless bearer-JWT mode (design §4.4, AV6). Nil → the
+	// mode is OFF: bearer JWTs are NEVER parsed and POST /auth/token is not
+	// registered (deny-by-absence). When wired (integrations/cryptids/golang-jwt
+	// satisfies it structurally), POST /auth/token issues short-TTL user tokens
+	// and RequireUser/RequirePrincipal accept an Authorization: Bearer <jwt>,
+	// resolving it to the same user identity the session path produces.
+	//
+	// The revocation asymmetry (a JWT outlives a password change until expiry) is
+	// documented on the Config field — short TTL is the mitigation, mirroring the
+	// events design's MaxConnAge posture. There are NO refresh tokens (AV6):
+	// sessions remain the revocable long-lived identity; JWTs are short-lived API
+	// conveniences, and machine clients authenticate via API keys, not JWTs.
+	TokenSigner cryptids.JWTSigner
+	// TokenTTL is the lifetime of a bearer JWT minted by POST /auth/token. Zero →
+	// 1h (design §4.4). Keep it short: it bounds the revocation-asymmetry window
+	// documented on TokenSigner above. Meaningful only when TokenSigner is wired.
+	TokenTTL time.Duration
 }
 
 // Service is the auth feature's identity capability without HTTP routes — the
@@ -238,6 +257,8 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 		RedirectAllowlist:    cfg.RedirectAllowlist,
 		ServiceAccounts:      repos.ServiceAccounts,
 		APIKeys:              repos.APIKeys,
+		TokenSigner:          cfg.TokenSigner,
+		TokenTTL:             cfg.TokenTTL,
 	})
 	return &Service{svc: svc}, nil
 }
@@ -265,8 +286,8 @@ func (s *Service) RequireServiceAccount(next http.Handler) http.Handler {
 }
 
 // RequirePrincipal is HTTP middleware gating a route on either credential class
-// (session or API-key bearer; the JWT arm activates in A4). It stashes the
-// resolved Principal, read via CurrentPrincipal.
+// (session or API-key bearer, plus a bearer JWT when Config.TokenSigner is
+// wired). It stashes the resolved Principal, read via CurrentPrincipal.
 func (s *Service) RequirePrincipal(next http.Handler) http.Handler {
 	return s.svc.RequirePrincipal(next)
 }
