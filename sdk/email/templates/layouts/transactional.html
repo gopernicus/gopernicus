@@ -1,0 +1,75 @@
+{{define "layout:transactional"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>{{.Subject}}</title>
+    <!--[if mso]>
+    <style type="text/css">
+        table {border-collapse: collapse;}
+    </style>
+    <![endif]-->
+</head>
+<body style="margin: 0; padding: 0; background-color: #f4f4f4; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+    <!-- Wrapper Table -->
+    <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color: #f4f4f4;">
+        <tr>
+            <td align="center" style="padding: 20px 0;">
+                <!-- Main Container -->
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="600" style="max-width: 600px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+
+                    <!-- Header -->
+                    <tr>
+                        <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
+                            <h1 style="margin: 0; color: #ffffff; font-size: 24px; font-weight: 700;">
+                                {{if .Brand.Name}}{{.Brand.Name}}{{else}}Your Company{{end}}
+                            </h1>
+                            {{if .Brand.Tagline}}
+                            <p style="margin: 8px 0 0 0; color: #e0e7ff; font-size: 14px;">
+                                {{.Brand.Tagline}}
+                            </p>
+                            {{end}}
+                        </td>
+                    </tr>
+
+                    <!-- Content -->
+                    <tr>
+                        <td style="padding: 40px 30px;">
+                            {{.Content}}
+                        </td>
+                    </tr>
+
+                    <!-- Footer -->
+                    <tr>
+                        <td style="background-color: #1f2937; padding: 24px 30px; text-align: center; border-radius: 0 0 8px 8px;">
+                            {{if .Brand.SocialLinks}}
+                            <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 0 auto 16px auto;">
+                                <tr>
+                                    {{range $i, $link := .Brand.SocialLinks}}
+                                    {{if $i}}<td style="padding: 0 8px; color: #4b5563;">|</td>{{end}}
+                                    <td style="padding: 0 8px;">
+                                        <a href="{{$link.URL}}" style="color: #9ca3af; text-decoration: none; font-size: 14px;">{{$link.Name}}</a>
+                                    </td>
+                                    {{end}}
+                                </tr>
+                            </table>
+                            {{end}}
+
+                            <p style="margin: 0; color: #6b7280; font-size: 12px;">
+                                {{if .Brand.Address}}{{.Brand.Address}}<br>{{end}}
+                                This is an automated message. Please do not reply directly to this email.
+                            </p>
+                        </td>
+                    </tr>
+
+                </table>
+                <!-- End Main Container -->
+            </td>
+        </tr>
+    </table>
+    <!-- End Wrapper Table -->
+</body>
+</html>
+{{end}}

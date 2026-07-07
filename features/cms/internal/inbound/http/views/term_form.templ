@@ -1,0 +1,31 @@
+package views
+
+templ TermForm(m TermFormModel) {
+	@Layout(m.Heading) {
+		<h1>{ m.Heading }</h1>
+		if m.FormError != "" {
+			<p class="error">{ m.FormError }</p>
+		}
+		<form method="post" action={ templ.SafeURL(m.Action) }>
+			if m.Kind != "" {
+				<input type="hidden" name="kind" value={ m.Kind }/>
+			}
+			<p>
+				<label>
+					Name<br/>
+					<input type="text" name="name" value={ m.Name }/>
+				</label>
+			</p>
+			if m.Kind == "category" {
+				<p>
+					<label>
+						Parent category ID (optional)<br/>
+						<input type="text" name="parent_id" value={ m.ParentID }/>
+					</label>
+				</p>
+			}
+			<button type="submit">Save</button>
+			· <a href="/terms">Cancel</a>
+		</form>
+	}
+}

@@ -1,0 +1,21 @@
+# local env (unanchored: matches ./.env and examples/cms/.env; .env.example stays tracked)
+.env
+
+# built binaries (host apps build to examples/<app>/server)
+examples/*/server
+
+# local sqlite/libsql files
+*.db
+*.db-*
+
+# macOS
+.DS_Store
+
+# local uploaded assets (disk filestore)
+media-data/
+
+# workspace sum — exact name only; per-module go.sum files stay tracked (never a *.sum glob)
+go.work.sum
+
+# transient local tooling artifact
+.claude/scheduled_tasks.lock

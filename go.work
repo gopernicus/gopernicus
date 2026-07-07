@@ -1,0 +1,30 @@
+go 1.26.1
+
+use (
+	./sdk
+	./integrations/cryptids/bcrypt
+	./integrations/cryptids/golang-jwt
+	./integrations/datastores/pgxdb
+	./integrations/datastores/turso
+	./integrations/email/sendgrid
+	./integrations/filestorage/gcs
+	./integrations/filestorage/s3
+	./integrations/kvstores/goredis
+	./integrations/oauth/github
+	./integrations/oauth/google
+	./integrations/scheduling/robfig-cron
+	./integrations/tracing/otel
+	./features/auth
+	./features/auth/stores/pgx
+	./features/auth/stores/turso
+	./features/cms
+	./features/cms/stores/pgx
+	./features/cms/stores/turso
+	./features/jobs
+	./features/jobs/stores/pgx
+	./features/jobs/stores/turso
+	./examples/auth-cms
+	./examples/cms
+	./examples/jobs-minimal
+	./examples/minimal
+)

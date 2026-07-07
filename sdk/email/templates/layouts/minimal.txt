@@ -1,0 +1,6 @@
+{{define "layout:minimal.text"}}
+{{.Content}}
+
+---
+This is an automated message.
+{{end}}

@@ -1,0 +1,30 @@
+package storetest
+
+import (
+	"testing"
+
+	"github.com/gopernicus/gopernicus/features/jobs/logic/job"
+	"github.com/gopernicus/gopernicus/features/jobs/logic/schedule"
+	"github.com/gopernicus/gopernicus/features/jobs/memstore"
+)
+
+// TestReferenceQueue runs the queue conformance suite against the in-core
+// memstore reference. This is what lets features/jobs self-verify under guard G2
+// (the core cannot import a driver, so without an in-core implementation the
+// suite would compile but never execute). The queue is constructed with the
+// exported Lease so the lease-expiry case is honored identically here and in the
+// dialect stores. Each call returns a fresh, empty store — the clean-isolation
+// contract RunQueue documents.
+func TestReferenceQueue(t *testing.T) {
+	RunQueue(t, func(t *testing.T) job.QueueRepository {
+		return memstore.NewQueue(memstore.WithLease(Lease))
+	})
+}
+
+// TestReferenceSchedules runs the schedule conformance suite against a fresh
+// in-core memstore per call.
+func TestReferenceSchedules(t *testing.T) {
+	RunSchedules(t, func(t *testing.T) schedule.Repository {
+		return memstore.NewSchedules()
+	})
+}

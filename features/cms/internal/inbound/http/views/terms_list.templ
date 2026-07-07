@@ -1,0 +1,32 @@
+package views
+
+import "github.com/gopernicus/gopernicus/features/cms/logic/taxonomy"
+
+templ TermsList(categories, tags []taxonomy.Term) {
+	@Layout("Taxonomy") {
+		<h1>Taxonomy</h1>
+		<h2>Categories <a href="/terms/new?kind=category">+ new</a></h2>
+		@termItems(categories)
+		<h2>Tags <a href="/terms/new?kind=tag">+ new</a></h2>
+		@termItems(tags)
+	}
+}
+
+templ termItems(terms []taxonomy.Term) {
+	if len(terms) == 0 {
+		<p>None yet.</p>
+	} else {
+		<ul>
+			for _, t := range terms {
+				<li>
+					<a href={ templ.SafeURL("/" + string(t.Kind) + "/" + t.Slug) }>{ t.Name }</a>
+					<span>({ t.Slug })</span>
+					<a href={ templ.SafeURL("/terms/" + t.ID + "/edit") }>edit</a>
+					<form method="post" action={ templ.SafeURL("/terms/" + t.ID + "/delete") } style="display:inline">
+						<button type="submit">delete</button>
+					</form>
+				</li>
+			}
+		</ul>
+	}
+}
