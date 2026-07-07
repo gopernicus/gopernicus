@@ -8,12 +8,12 @@
 # superseded runs per ref so only the latest survives, and the two event
 # contexts share the same job/check-run name.
 #
-# The check-run context name this workflow reports is "check / check" (workflow
-# name "check" + job id "check"). Branch protection at task-11 pins the required
-# status check to that EXACT literal string — renaming this workflow or the
-# `check` job silently un-enforces the gate unless the protection rule is
-# updated in the SAME change. Do not rename either half without updating
-# protection.
+# The check-run context name this workflow reports is "check" — the job id,
+# confirmed via the commit check-runs API (.check_runs[].name) and `gh pr
+# checks`. Branch protection at task-11 pins the required status check to that
+# EXACT literal string ("check") — renaming the `check` job (or the workflow, if
+# a future rename ever changes the reported context) silently un-enforces the
+# gate unless the protection rule is updated in the SAME change.
 #
 # Hermetic by design: no live creds, no service containers. The store
 # conformance suites skip loudly without their datastore env vars, so `make
