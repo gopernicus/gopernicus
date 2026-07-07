@@ -109,6 +109,42 @@ func (s *noopSchedules) Delete(ctx context.Context, id string) error { return ni
 
 func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
+// captureHandler is a distinguishable slog.Handler that records the message of
+// every record it handles, so a test can prove which logger the runtime pools
+// wrote through.
+type captureHandler struct {
+	mu   sync.Mutex
+	msgs []string
+}
+
+func (h *captureHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.msgs = append(h.msgs, r.Message)
+	return nil
+}
+func (h *captureHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *captureHandler) WithGroup(string) slog.Handler      { return h }
+
+// saw reports whether any recorded message equals msg.
+func (h *captureHandler) saw(msg string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, m := range h.msgs {
+		if m == msg {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *captureHandler) messages() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.msgs...)
+}
+
 func demoHandlers() map[string]HandlerFunc {
 	return map[string]HandlerFunc{"demo": func(context.Context, job.Job) error { return nil }}
 }
@@ -267,6 +303,88 @@ func TestEnsureSchedule_EveryPath(t *testing.T) {
 	if len(sched.ensured) != 1 {
 		t.Fatalf("ensured %d schedules, want 1", len(sched.ensured))
 	}
+}
+
+// runOneJob starts the runtime for cfg, enqueues one demo job, waits for it to
+// run, then drains — enough for the pools to emit their operational log lines.
+func runOneJob(t *testing.T, cfg Config) {
+	t.Helper()
+	handled := make(chan struct{}, 1)
+	cfg.Handlers = map[string]HandlerFunc{"demo": func(context.Context, job.Job) error {
+		select {
+		case handled <- struct{}{}:
+		default:
+		}
+		return nil
+	}}
+
+	svc, err := NewService(Repositories{Queue: newMemQueue()}, cfg)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	rt, err := NewRuntime(svc)
+	if err != nil {
+		t.Fatalf("NewRuntime: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runErr := make(chan error, 1)
+	go func() { runErr <- rt.Run(ctx) }()
+
+	if _, err := svc.Enqueue(context.Background(), "demo", nil); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	select {
+	case <-handled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("demo job did not run")
+	}
+
+	cancel()
+	select {
+	case <-runErr:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not drain after cancel")
+	}
+}
+
+// TestConfigLogger_RuntimePoolsLogThroughIt proves the task-5 knob: a
+// distinguishable handler-backed Config.Logger receives the runtime pools'
+// operational lines, and a nil Config.Logger still falls back to slog.Default().
+func TestConfigLogger_RuntimePoolsLogThroughIt(t *testing.T) {
+	const poolLine = "processing job" // runner logs this before invoking a handler
+
+	t.Run("wired logger receives pool lines", func(t *testing.T) {
+		capture := &captureHandler{}
+		runOneJob(t, Config{
+			Handlers:     demoHandlers(),
+			Logger:       slog.New(capture),
+			Workers:      1,
+			PollInterval: 30 * time.Second,
+			IdleInterval: 30 * time.Second,
+		})
+		if !capture.saw(poolLine) {
+			t.Fatalf("wired Config.Logger saw no %q line; messages=%v", poolLine, capture.messages())
+		}
+	})
+
+	t.Run("nil logger falls back to slog.Default", func(t *testing.T) {
+		capture := &captureHandler{}
+		prev := slog.Default()
+		slog.SetDefault(slog.New(capture))
+		defer slog.SetDefault(prev)
+
+		runOneJob(t, Config{
+			Handlers:     demoHandlers(),
+			Workers:      1,
+			PollInterval: 30 * time.Second,
+			IdleInterval: 30 * time.Second,
+		})
+		if !capture.saw(poolLine) {
+			t.Fatalf("nil Config.Logger did not fall back to slog.Default; messages=%v", capture.messages())
+		}
+	})
 }
 
 // TestSeamAssertions is a runtime witness that the compile-time seams in

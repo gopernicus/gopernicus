@@ -791,3 +791,60 @@ task-1 linkage observed from a real browser client. Server killed; port
 login exists in that host) — the plan's "login →" step had nothing to
 drive; flagged for jrazmi's awareness (auth-gating an example host is
 auth-v2/examples scope, not telemetry scope).
+
+### task-5 — 2026-07-07 (jobs runtime-logger Config knob) — PASS
+
+**Landed:**
+- `features/jobs/jobs.go`: added optional `Logger *slog.Logger` to `Config`
+  (additive; nil keeps the seams' existing `slog.Default()` fallback), with godoc
+  distinguishing it from `feature.Mount.Logger` ("Config.Logger is the runtime
+  pools' operational logger, while Mount.Logger is registration-time logging — do
+  not unify them by threading Mount into NewService"). Carried on `resolvedConfig`
+  (`logger`), threaded to `schedulesvc.Deps.Logger` in `NewService` (= `cfg.Logger`)
+  and `runtime.Deps.Logger` in `NewRuntime` (= `svc.cfg.logger`). `queuesvc.NewService`'s
+  third param is a clock — left untouched. Added the `log/slog` import.
+- `features/jobs/jobs_test.go`: added a distinguishable `captureHandler`
+  (slog.Handler recording record messages) + `runOneJob` helper, and
+  `TestConfigLogger_RuntimePoolsLogThroughIt` with two subtests: "wired logger
+  receives pool lines" (Config.Logger = capture → asserts the runner's
+  `"processing job"` line) and "nil logger falls back to slog.Default"
+  (Config.Logger nil + `slog.SetDefault(capture)` save/restore → same assertion).
+- `examples/jobs-minimal/cmd/server/main.go`: wired `Logger: log` in the Config
+  literal (the flag's origin host) and removed the now-obsolete pre-knob workaround
+  (the `slog.SetDefault(log)` block whose comment claimed "jobs.NewRuntime leaves
+  the runtime logger unset" — false once the knob is wired); the knob is now the
+  mechanism routing pool lines to the host logger.
+
+**Verify (plan) — all PASS:**
+- `cd features/jobs && go build ./... && go test ./... && go vet ./...` — PASS
+  (`TestConfigLogger_RuntimePoolsLogThroughIt` + both subtests green; all jobs
+  packages ok).
+- `cd examples/jobs-minimal && go build ./... && go test ./... && go vet ./...` — PASS.
+
+**Standing per-leg check:**
+- root `make check` — PASS ("all checks passed": 26 modules build/vet/test +
+  integration-tag vet + four guards).
+- `examples/minimal` on :8081 — `GET /` 200, `GET /products/widget-3000` 200;
+  killed by port; port 8081 free.
+
+**Live jobs-minimal proof (knob live, unambiguous):** ran
+`PORT=8083 LOG_FORMAT=json go run ./cmd/server`, POST `/enqueue`
+`{"kind":"demo.print","payload":{"source":"task5-live-proof"}}` →
+`{"job_id":"job_3d6fc8429a59dc453ad705be134e7ba0"}`. With `slog.SetDefault`
+removed, the ONLY path from the pools to the host logger is `Config.Logger`, so
+the pools emitting **JSON** (the host logger's `LOG_FORMAT=json`, not the stdlib
+default text handler) proves the knob:
+```
+{"level":"INFO","msg":"worker pool starting","pool":"jobs-queue",...}
+{"level":"INFO","msg":"processing job","worker_id":"jobs-queue-worker-3","job_id":"job_3d6fc8429a59dc453ad705be134e7ba0"}
+{"level":"INFO","msg":"demo.print","job_id":"job_3d6fc8429a59dc453ad705be134e7ba0","payload":"{\"source\":\"task5-live-proof\"}"}
+{"level":"INFO","msg":"job completed","worker_id":"jobs-queue-worker-3","job_id":"job_3d6fc8429a59dc453ad705be134e7ba0","duration":38250}
+```
+Server SIGTERM'd; port 8083 free.
+
+**Divergence:** the plan named the host change a "one-line Config wire", but the
+origin host also carried the pre-knob `slog.SetDefault(log)` workaround whose
+comment becomes false once the knob is wired. Removed that 5-line workaround
+block so the host demonstrates the knob AS the mechanism (and the live proof is
+unambiguous — no default-logger path to confound it). Behavior-neutral: no other
+`slog.Default()` consumer remains in that host. Nothing else diverged.

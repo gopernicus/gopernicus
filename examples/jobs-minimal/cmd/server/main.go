@@ -41,11 +41,6 @@ func main() {
 		Format: environment.GetEnvOrDefault("LOG_FORMAT", "text"),
 		Output: environment.GetEnvOrDefault("LOG_OUTPUT", "STDERR"),
 	})
-	// The jobs Runtime pools log through slog.Default (jobs.NewRuntime leaves the
-	// runtime logger unset), so route them to the host logger too — this is what
-	// makes "processing job"/"job completed"/"job failed" lines carry the same
-	// format and land in the same stream as the handler logs.
-	slog.SetDefault(log)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -80,6 +75,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 		PollInterval: 1 * time.Second,
 		IdleInterval: 2 * time.Second,
 		MaxAttempts:  3,
+		// Route the runtime pools' operational lines ("processing job"/"job
+		// completed"/…) through the host logger, same format and stream as the
+		// handler logs — instead of the slog.Default() fallback.
+		Logger: log,
 	}
 
 	svc, err := jobs.NewService(repos, cfg)
