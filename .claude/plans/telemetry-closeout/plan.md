@@ -742,6 +742,41 @@ tidy resolution, non-source. No design-point divergences.
   `.claude/plans/` to `.claude/past/` on 2026-07-07 — flag-origin citations in
   this plan reference NOTES.md entries, which did not move).
 
+### task-3 — 2026-07-07 (sdk/ratelimiter doc staleness) — PASS
+
+Comment-only; zero behavior change. Every rewritten claim cross-checked against
+the code (`memory.go`, `acquire.go`, `resolver.go`,
+`integrations/kvstores/goredis/limiter.go`) before writing.
+
+**The three spots (`sdk/ratelimiter/ratelimiter.go`):**
+1. Package comment: "Limiter implementations are in the memorylimiter/
+   subpackage" → "Memory is the in-package default Limiter; Acquire is the
+   blocking helper that waits for quota instead of rejecting." (`Memory` is
+   in-package at memory.go:24; `Acquire(ctx, limiter, key, limit) error` at
+   acquire.go:23.)
+2. `Limiter` doc: "Memory, Redis, and SQLite backends satisfy it" → "Memory
+   satisfies it in-package; goredis.Limiter (integrations/kvstores/goredis) is
+   the Redis-backed implementation." (SQLite dropped by ruling; `goredis.Limiter`
+   verified at limiter.go:97 with `var _ ratelimiter.Limiter = (*Limiter)(nil)`.)
+3. Usage example: `memorylimiter.New()` → `ratelimiter.NewMemory()` (the real
+   constructor, memory.go:38). Same example block: `ratelimiter.New(store,
+   resolver, log)` → `ratelimiter.New(store, resolver,
+   ratelimiter.WithLogger(log))` — the real signature is
+   `New(Limiter, LimitResolver, ...Option)`, so the positional `log` was itself
+   drift inside the stale example; leaving it would have kept a non-compiling
+   snippet.
+
+**Verify (all PASS):**
+- `cd sdk && go build ./... && go vet ./...` — PASS.
+- Standing per-leg check: root `make check` — PASS ("all checks passed", all
+  modules + integration-tag vet + four guards). `examples/minimal` booted on
+  :8081 → `GET /` 200, `GET /products/widget-3000` 200; killed by port
+  (pid 34836); port 8081 confirmed free.
+
+**Divergences:** the `WithLogger` fix in spot 3's example (above) is one line
+beyond the task's literal constructor swap, inside the same usage-example spot —
+included because the task's charter is removing doc/reality drift.
+
 **task-2 addendum — 2026-07-07, main-session browser leg (run-and-look):**
 after the implementer's curl drive, a real-browser pass (playwright/chromium)
 against `TRACING_ENABLED=true make run` (remote playground DSN) loaded `/`
