@@ -1,0 +1,36 @@
+// Package session is the server-side session domain: an opaque, cookie-delivered
+// token that identifies an authenticated user until it expires. Sessions carry
+// no claims; all state is server-side (no JWT in v1).
+package session
+
+import (
+	"time"
+
+	"github.com/gopernicus/gopernicus/sdk/id"
+)
+
+// Session is an opaque server-side session. Token is the primary key and the
+// value delivered to the client in a cookie.
+type Session struct {
+	Token     string
+	UserID    string
+	CreatedAt time.Time
+	ExpiresAt time.Time
+}
+
+// NewSession mints a session for userID that expires ttl after now. The token
+// is an opaque random value (sdk/id), never derived from the user's identity.
+func NewSession(userID string, ttl time.Duration, now time.Time) Session {
+	now = now.UTC()
+	return Session{
+		Token:     id.New(),
+		UserID:    userID,
+		CreatedAt: now,
+		ExpiresAt: now.Add(ttl),
+	}
+}
+
+// Expired reports whether the session is at or past its expiry at now.
+func (s Session) Expired(now time.Time) bool {
+	return !now.Before(s.ExpiresAt)
+}

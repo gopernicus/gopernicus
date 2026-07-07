@@ -1,0 +1,85 @@
+# gopernicus
+
+A Go framework for building hexagonal, server-rendered apps: a stdlib-only
+kernel (`sdk`), reusable third-party connectors (`integrations/`), pluggable
+feature modules (`features/`), and worked example hosts (`examples/`) that
+prove the design end to end — one on Turso, one with zero external
+infrastructure. See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layering
+rules and [NOTES.md](NOTES.md) for the decision log.
+
+## The twenty-six modules
+
+```
+sdk/                                stdlib-only framework kernel (empty go.mod = structural enforcement)
+integrations/cryptids/bcrypt/       password-hashing connector (x/crypto), its own module
+integrations/cryptids/golang-jwt/   JWT-signing connector (golang-jwt/jwt v5), its own module
+integrations/datastores/pgxdb/        reusable Postgres connector (sdk + pgx/v5), its own module
+integrations/datastores/turso/      reusable Turso/libSQL connector (sdk + libsql), its own module
+integrations/email/sendgrid/        SendGrid email connector (sendgrid-go), its own module
+integrations/filestorage/gcs/       Google Cloud Storage connector (cloud.google.com/go/storage), its own module
+integrations/filestorage/s3/        S3-compatible object-storage connector (aws-sdk-go-v2; MinIO/DO Spaces via endpoint + path-style), its own module
+integrations/kvstores/goredis/      Redis connector — events bus, cacher, ratelimiter over one go-redis client, its own module
+integrations/oauth/github/          GitHub OAuth provider (vendor API contract; zero external libs), its own module
+integrations/oauth/google/          Google OIDC provider connector (coreos/go-oidc v3), its own module
+integrations/scheduling/robfig-cron/ cron-expression connector (robfig/cron v3), its own module
+integrations/tracing/otel/          OpenTelemetry tracing connector (stdout/OTLP-gRPC exporters or caller-supplied provider), its own module
+features/auth/                      session-auth hexagon — datastore-free; logic/ public rim, internal/ interior
+features/auth/stores/pgx/           auth's pgx store adapter, its own module
+features/auth/stores/turso/         auth's Turso store adapter, its own module
+features/cms/                       the CMS hexagon — datastore-free; logic/ public rim, internal/ interior
+features/cms/stores/pgx/            the CMS feature's pgx store adapter, its own module
+features/cms/stores/turso/          the CMS feature's Turso store adapter, its own module
+features/jobs/                      durable queue + schedules hexagon — datastore-free; public memstore/
+features/jobs/stores/pgx/           jobs' pgx store adapter, its own module
+features/jobs/stores/turso/         jobs' Turso store adapter, its own module
+examples/cms/                       a host app: features/cms on Turso, with a custom theme
+examples/minimal/                   a host app: features/cms on an in-memory store — zero libsql in its module graph
+examples/auth-cms/                  a host app: auth + cms composed in-memory — auth gates cms admin (rule 6, live)
+examples/jobs-minimal/              a host app: features/jobs on its memstore — zero drivers, the §8 protocol host
+```
+
+`go.work` resolves these locally for development; real consumers would pin
+tagged versions, not the workspace.
+
+## The rules
+
+- **`sdk` imports only the standard library.** Third-party types cross into
+  `sdk` only via structural typing seams (e.g. `templ.Component` satisfying
+  `sdk/web.Renderer`).
+- **One external dependency ⇒ its own module.** A stdlib-only implementation
+  of an `sdk` port ships *inside* `sdk` as a default (`cacher.Memory`,
+  `filestorage.Disk`, `email.SMTP`/`Console`); anything needing a third-party
+  library is an `integrations/<category>/<tech>` module.
+- **A feature is a datastore-free core + store-adapter modules.**
+  `features/<name>` never imports `integrations/`, `examples/`, or its own
+  `stores/`; each `features/<name>/stores/<dialect>` is its own module owning
+  that dialect's SQL and migrations.
+- **No init() registration, no service locator.** A host wires a feature
+  explicitly via `feature.Mount` + `Register(mount, repos, cfg)` in its `main`.
+- **Dependencies point inward.** `examples` → `features`/`integrations` →
+  `sdk`, never the reverse. `make check`'s four layering guards enforce this.
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full detail, including the
+feature contract (`sdk/feature`), the app-hexagon pattern (`internal/logic`),
+and the Registry content model.
+
+## Quickstart
+
+Zero external infrastructure — an in-memory store, no libsql in the build:
+
+```sh
+cd examples/minimal && go run ./cmd/server   # localhost:8081 by default
+```
+
+The Turso-backed host (needs `.env` with `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN`):
+
+```sh
+cp .env.example .env   # fill in Turso credentials
+make migrate           # applies examples/cms/workshop/migrations pre-boot
+make run                # or: cd examples/cms && go run ./cmd/server
+```
+
+From the repo root, `make check` builds, vets, and tests all twenty-six modules
+and runs the four layering guards; `make test-stores` runs the live dialect
+conformance suites (expects `POSTGRES_TEST_DSN` / `TURSO_*`). See [examples/cms/README.md](examples/cms/README.md)
+for that host's full env/make-target reference.

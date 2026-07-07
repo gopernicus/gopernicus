@@ -1,0 +1,127 @@
+package views
+
+import (
+	"strconv"
+
+	"github.com/gopernicus/gopernicus/features/cms/logic/menus"
+)
+
+templ MenusList(ms []menus.Menu) {
+	@Layout("Menus") {
+		<h1>Menus</h1>
+		<p><a href="/menus/new">New menu</a></p>
+		if len(ms) == 0 {
+			<p>No menus yet.</p>
+		} else {
+			<ul>
+				for _, m := range ms {
+					<li>
+						<a href={ templ.SafeURL("/menus/" + m.ID) }>{ m.Name }</a>
+						<span>({ m.Slug })</span>
+						<a href={ templ.SafeURL("/menu/" + m.Slug) }>public nav</a>
+					</li>
+				}
+			</ul>
+		}
+	}
+}
+
+templ MenuNew(formError string) {
+	@Layout("New Menu") {
+		<h1>New Menu</h1>
+		if formError != "" {
+			<p class="error">{ formError }</p>
+		}
+		<form method="post" action="/menus">
+			<p>
+				<label>Name<br/><input type="text" name="name"/></label>
+			</p>
+			<button type="submit">Create</button>
+		</form>
+	}
+}
+
+templ MenuDetail(m menus.Menu, items []menus.MenuItem) {
+	@Layout(m.Name) {
+		<h1>{ m.Name } <small>({ m.Slug })</small></h1>
+		<p><a href={ templ.SafeURL("/menu/" + m.Slug) }>view public nav</a> · <a href="/menus">all menus</a></p>
+		<h2>Items</h2>
+		if len(items) == 0 {
+			<p>No items yet.</p>
+		} else {
+			<ul>
+				for _, it := range items {
+					<li>
+						if it.ParentID != "" {
+							<span>&mdash;</span>
+						}
+						<strong>{ it.Label }</strong>
+						<span>{ it.URL }</span>
+						<span>(pos { strconv.Itoa(it.Position) })</span>
+						<a href={ templ.SafeURL("/menu-items/" + it.ID + "/edit") }>edit</a>
+						<form method="post" action={ templ.SafeURL("/menu-items/" + it.ID + "/delete") } style="display:inline">
+							<button type="submit">delete</button>
+						</form>
+					</li>
+				}
+			</ul>
+		}
+		<h2>Add item</h2>
+		<form method="post" action={ templ.SafeURL("/menus/" + m.ID + "/items") }>
+			<p><label>Label<br/><input type="text" name="label"/></label></p>
+			<p><label>URL<br/><input type="text" name="url" placeholder="/page/about"/></label></p>
+			<p>
+				<label>Parent<br/>
+					<select name="parent_id">
+						<option value="">(top level)</option>
+						for _, it := range items {
+							<option value={ it.ID }>{ it.Label }</option>
+						}
+					</select>
+				</label>
+			</p>
+			<p><label>Position<br/><input type="number" name="position" value="0"/></label></p>
+			<button type="submit">Add</button>
+		</form>
+	}
+}
+
+templ MenuItemForm(it menus.MenuItem) {
+	@Layout("Edit menu item") {
+		<h1>Edit item</h1>
+		<form method="post" action={ templ.SafeURL("/menu-items/" + it.ID) }>
+			<p><label>Label<br/><input type="text" name="label" value={ it.Label }/></label></p>
+			<p><label>URL<br/><input type="text" name="url" value={ it.URL }/></label></p>
+			<p><label>Parent ID<br/><input type="text" name="parent_id" value={ it.ParentID }/></label></p>
+			<p><label>Position<br/><input type="number" name="position" value={ strconv.Itoa(it.Position) }/></label></p>
+			<button type="submit">Save</button>
+			· <a href={ templ.SafeURL("/menus/" + it.MenuID) }>cancel</a>
+		</form>
+	}
+}
+
+templ MenuNav(m menus.Menu, items []menus.MenuItem) {
+	@Layout(m.Name) {
+		<h1>{ m.Name }</h1>
+		<nav>
+			@navItems(items, "")
+		</nav>
+	}
+}
+
+templ navItems(items []menus.MenuItem, parentID string) {
+	<ul>
+		for _, it := range items {
+			if it.ParentID == parentID {
+				<li>
+					if it.URL != "" {
+						<a href={ templ.SafeURL(it.URL) }>{ it.Label }</a>
+					} else {
+						<span>{ it.Label }</span>
+					}
+					@navItems(items, it.ID)
+				</li>
+			}
+		}
+	</ul>
+}

@@ -1,0 +1,109 @@
+package views
+
+import "github.com/gopernicus/gopernicus/features/cms/logic/menus"
+
+// ListItem is one entry in a public listing (home / archive). The handler
+// pre-computes Href from the type's route scheme so the view stays type-blind.
+type ListItem struct {
+	Title   string
+	Href    string
+	Excerpt string
+}
+
+// PublicShell is the public site chrome: nav, basic styling, SEO/OpenGraph meta.
+// Every public page (home, archive, single entry, error) renders inside it. The
+// per-entry body comes from a registered TemplateFunc (plan §5/§6) and is passed
+// as body — site chrome and per-entry rendering are two separate seams.
+templ PublicShell(title, metaDesc string, nav []menus.MenuItem, body templ.Component) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title }</title>
+			if metaDesc != "" {
+				<meta name="description" content={ metaDesc }/>
+				<meta property="og:description" content={ metaDesc }/>
+			}
+			<meta property="og:title" content={ title }/>
+			<meta property="og:type" content="website"/>
+			<style>
+				body{font-family:system-ui,sans-serif;max-width:42rem;margin:2rem auto;padding:0 1rem;line-height:1.6}
+				header nav ul{list-style:none;padding:0;display:flex;gap:1rem;flex-wrap:wrap}
+				article img{max-width:100%}
+			</style>
+		</head>
+		<body>
+			<header>
+				<nav>
+					<ul>
+						for _, it := range nav {
+							<li><a href={ templ.SafeURL(it.URL) }>{ it.Label }</a></li>
+						}
+					</ul>
+				</nav>
+			</header>
+			<main>
+				@body
+			</main>
+		</body>
+	</html>
+}
+
+// PublicHome renders recent published entries.
+templ PublicHome(nav []menus.MenuItem, items []ListItem) {
+	@PublicShell("Home", "Latest content", nav, homeBody(items))
+}
+
+templ homeBody(items []ListItem) {
+	<h1>Latest posts</h1>
+	if len(items) == 0 {
+		<p>Nothing published yet.</p>
+	} else {
+		for _, it := range items {
+			<article>
+				<h2><a href={ templ.SafeURL(it.Href) }>{ it.Title }</a></h2>
+				if it.Excerpt != "" {
+					<p>{ it.Excerpt }</p>
+				}
+			</article>
+		}
+	}
+}
+
+// PublicArchive renders a taxonomy archive listing (entries sharing a term).
+templ PublicArchive(heading string, nav []menus.MenuItem, items []ListItem, nextCursor, baseHref string) {
+	@PublicShell(heading, "", nav, archiveBody(heading, items, nextCursor, baseHref))
+}
+
+templ archiveBody(heading string, items []ListItem, nextCursor, baseHref string) {
+	<h1>{ heading }</h1>
+	if len(items) == 0 {
+		<p>Nothing here yet.</p>
+	} else {
+		<ul>
+			for _, it := range items {
+				<li><a href={ templ.SafeURL(it.Href) }>{ it.Title }</a></li>
+			}
+		</ul>
+	}
+	if nextCursor != "" {
+		<p><a href={ templ.SafeURL(baseHref + "?cursor=" + nextCursor) }>Older &rarr;</a></p>
+	}
+}
+
+// PublicSingle wraps a registered per-entry body in the site chrome.
+templ PublicSingle(title, metaDesc string, nav []menus.MenuItem, body templ.Component) {
+	@PublicShell(title, metaDesc, nav, body)
+}
+
+// PublicError renders an error page in the site chrome.
+templ PublicError(status int, message string) {
+	@PublicShell("Error", "", nil, errorBody(status, message))
+}
+
+templ errorBody(status int, message string) {
+	<h1>{ statusText(status) }</h1>
+	<p>{ message }</p>
+	<p><a href="/">Back home &rarr;</a></p>
+}

@@ -1,0 +1,11 @@
+{{define "layout:transactional.text"}}
+{{if .Brand.Name}}{{.Brand.Name}}{{else}}Your Company{{end}}
+{{if .Brand.Tagline}}{{.Brand.Tagline}}{{end}}
+================================================================================
+
+{{.Content}}
+
+--------------------------------------------------------------------------------
+{{if .Brand.Address}}{{.Brand.Address}}{{end}}
+This is an automated message. Please do not reply directly to this email.
+{{end}}

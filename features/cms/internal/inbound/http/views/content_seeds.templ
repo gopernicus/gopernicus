@@ -1,0 +1,31 @@
+package views
+
+import "github.com/gopernicus/gopernicus/features/cms/logic/content"
+
+// ArticleContent is the default per-entry body for the Article seed type — the
+// port of the former PublicPost view, now body-only (site chrome wraps it). It
+// is registered as the Article "default" TemplateFunc.
+templ ArticleContent(e content.Entry) {
+	<article>
+		<h1>{ e.Title }</h1>
+		<p>
+			if e.Author != "" {
+				by { e.Author }
+			}
+			if e.PublishedAt != nil {
+				· { e.PublishedAt.Format("January 2, 2006") }
+			}
+		</p>
+		@templ.Raw(RenderMarkdown(e.Body))
+	</article>
+}
+
+// PageContent is the default per-entry body for the Page seed type — the port of
+// the former PublicPage view, body-only. Registered as the Page "default"
+// TemplateFunc.
+templ PageContent(e content.Entry) {
+	<article>
+		<h1>{ e.Title }</h1>
+		@templ.Raw(RenderMarkdown(e.Body))
+	</article>
+}

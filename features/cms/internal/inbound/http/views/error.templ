@@ -1,0 +1,11 @@
+package views
+
+import "strconv"
+
+templ ErrorPage(status int, message string) {
+	@Layout("Error " + strconv.Itoa(status)) {
+		<h1>{ strconv.Itoa(status) }</h1>
+		<p>{ message }</p>
+		<p><a href="/articles">Back to articles</a></p>
+	}
+}
