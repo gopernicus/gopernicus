@@ -115,5 +115,7 @@ check:
 		if [ "$$before" != "$$after" ]; then echo "ERROR: templ generation drift"; exit 1; fi; \
 	fi
 	@for m in $(MODULES); do echo "== $$m =="; (cd $$m && go vet ./... && go build ./... && go test ./...) || exit 1; done
+	@echo "== integration-tag vet (compile-only, no DB) =="
+	@for m in $(filter %/turso,$(STORE_MODULES)); do echo "== vet -tags=integration $$m =="; (cd $$m && go vet -tags=integration ./...) || exit 1; done
 	@$(MAKE) guard
 	@echo "all checks passed"
