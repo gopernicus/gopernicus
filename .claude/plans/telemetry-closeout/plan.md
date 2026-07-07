@@ -629,6 +629,99 @@ task-8 confirms it exists before closing._
 descriptively ("peer host from RemoteAddr") without pinning a key. `user_agent`
 key follows the plan text verbatim (not the salvage's `http.user_agent`).
 
+### task-2 — 2026-07-07 (otel IDs + cms wiring + observability drive) — PASS
+
+**Landed:**
+- `integrations/tracing/otel/tracer.go`: `*spanFinisher` gained `TraceID()` /
+  `SpanID()` off `span.SpanContext()` (return `""` when
+  `!HasTraceID()`/`!HasSpanID()`), plus the compile assertion
+  `var _ tracing.SpanIdentity = (*spanFinisher)(nil)` alongside the existing
+  Tracer/SpanFinisher assertions.
+- `integrations/tracing/otel/otel_test.go`: `TestSpanFinisherExposesIDs` drives
+  the SpanIdentity path through the existing tracetest SpanRecorder — asserts the
+  finisher's IDs are 32-/16-hex and equal the recorded span's own SpanContext.
+- `examples/cms/cmd/server/main.go`: `buildTracer(ctx)` gates the TRACER CHOICE
+  on `TRACING_ENABLED` — true → `otel.Open` with a `Config` filled by
+  `environment.ParseEnvTags("", &cfg)` from the `TRACING_*` env tags; else
+  `tracing.Noop{}`. Middleware order is now
+  `router.Use(web.RequestID(), web.Tracing(tracer), web.Logger(log), web.Panics(log))`
+  (Tracing outer of Logger). `tracer.Shutdown` is deferred with a FRESH
+  `context.WithTimeout(context.Background(), SHUTDOWN_TIMEOUT)` — never the
+  run-scoped ctx.
+- `examples/cms/go.mod` (+ go.sum): added require/replace for
+  `integrations/tracing/otel`; `go mod tidy` pulled the otel indirect deps into
+  go.sum (and bumped the templ-tool indirects golang.org/x/{tools,mod,sync} to
+  their tidy-resolved minimums — natural tidy churn, no source effect).
+- `examples/cms/.env.example` (CREATED): documents the `TRACING_ENABLED` gate and
+  every `TRACING_*` knob (all non-secret), including the note that enabling
+  tracing sends client IP + user-agent to the trace backend.
+
+**Verify (all PASS):**
+- `cd integrations/tracing/otel && go build ./... && go test ./... && go vet ./...` — PASS.
+- root `make check` — PASS (26 modules build/vet/test + integration-tag vet +
+  four guards; "all checks passed"), run both before and after the drive.
+- Standing per-leg boot: `examples/minimal` on :8081 → `GET /` 200,
+  `GET /products/widget-3000` 200; killed by pid; port 8081 free. (minimal stays
+  Noop-only — not wired.)
+
+**Real-interaction drive — stdout leg (closes workstream 1):**
+- DSN class: **remote playground Turso** (`libsql://gopernicus-cms-playground-…turso.io`,
+  the authorized DB). Pre-boot migrate ran against it (`make run` log:
+  `msg="running migrations" dir=primary` → `msg="migrations complete"`).
+- Command: `TRACING_ENABLED=true TRACING_SERVICE_NAME=cms-playground make run`
+  (stdout→spans file, stderr→logs file).
+- Admin auth: **the `examples/cms` host mounts CMS admin routes UNGATED — there
+  is no login** (Register passes no adminMW; router.go Mount leaves admin routes
+  ungated when adminMW is nil). Drive flow was therefore direct: `GET /` →
+  `GET /articles` (admin list) → `GET /articles/new` (form; fields
+  title/excerpt/body/author/status) → `POST /articles` (create, status=published,
+  303) → `GET /articles/{slug}` (public page reflects the new entry) →
+  `GET /articles/{id}/edit` → `POST /articles/{id}` (edit body, 303) →
+  admin edit form shows the edited body (uncached) → `GET /articles/{slug}?v=edited`
+  (cache-busted public page reflects the EDITED body).
+- Spans (stdout exporter) are named by route PATTERN with `http.status_code` +
+  `http.route`; each matches its request log line's `trace_id`/`span_id`:
+
+  ```
+  span GET /{$}              status=200  trace_id=1a4f7b11de0fca32e1cc3cfdbbed9be9 span_id=043e9f42d9504f15
+  log  {"msg":"request","method":"GET","path":"/","status":200,"trace_id":"1a4f7b11de0fca32e1cc3cfdbbed9be9","span_id":"043e9f42d9504f15"}
+
+  span POST /articles        status=303  trace_id=f05d48ab23ff383be5492f74b3b262a4 span_id=dba52597bc808e51
+  log  {"msg":"request","method":"POST","path":"/articles","status":303,"trace_id":"f05d48ab23ff383be5492f74b3b262a4","span_id":"dba52597bc808e51"}
+
+  span GET /articles/{slug}  status=200  trace_id=4a106ae116f46836efdc8c07fd440835 span_id=edfbfc6facc5a0bd
+  log  {"msg":"request","method":"GET","path":"/articles/telemetry-drive-…","status":200,"trace_id":"4a106ae116f46836efdc8c07fd440835","span_id":"edfbfc6facc5a0bd"}
+  ```
+  Other observed span names: `GET /articles`, `GET /articles/new`,
+  `GET /articles/{id}/edit`, `POST /articles/{id}` — all carry status + route +
+  `user_agent=curl/8.14.1` + `net.peer.ip=127.0.0.1`. Server killed by pid;
+  port 8080 free.
+
+**OTLP shutdown-flush leg (Risk 1 proof) — RAN, PASS:**
+- Docker 27.5.1 available. Host 4317/16686 were already held by an unrelated
+  project's Jaeger, so a fresh `jaegertracing/all-in-one` (COLLECTOR_OTLP_ENABLED)
+  was run on alternate host ports `-p 14317:4317 -p 26686:16686`.
+- Reran `TRACING_ENABLED=true TRACING_EXPORTER=otlpgrpc
+  TRACING_OTLP_ENDPOINT=localhost:14317 TRACING_OTLP_INSECURE=true
+  TRACING_SERVICE_NAME=cms-otlp-drive make run`; drove 4 requests
+  (`GET /`,`GET /articles`,`GET /articles/{slug}`,`GET /contact`), then `kill -TERM`
+  the server binary WITHIN the batch window (spans still buffered, not yet
+  batch-flushed).
+- After graceful exit (code 0), Jaeger query
+  `http://localhost:26686/api/traces?service=cms-otlp-drive` returned all 5 of the
+  final requests' spans (route-pattern operationNames + `http.status_code`); every
+  captured request trace_id (`ab0f9476…`, `463e01ad…`, `b6359ded…`, `fd063b6b…`,
+  `01cf0a71…`) = ARRIVED. This proves the deferred fresh-`context.Background()`
+  `tracer.Shutdown` flushes the OTLP batch exporter on SIGTERM — the drop the
+  run-scoped (already-cancelled) ctx would have caused is avoided. Container
+  stopped; ports 14317/8080 free; the unrelated project's Jaeger left untouched.
+
+**Divergences:** (1) OTLP Jaeger used alternate host ports 14317/26686 because a
+foreign container already held 4317/16686 — the server's OTLP endpoint was
+pointed at 14317 accordingly; no code impact. (2) `go mod tidy` bumped the
+templ-tool indirect deps (golang.org/x/{tools,mod,sync}) in examples/cms — normal
+tidy resolution, non-source. No design-point divergences.
+
 ## Notes
 
 - **Execution readiness (context from the same 2026-07-07 ratification):**

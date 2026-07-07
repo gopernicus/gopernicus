@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -17,12 +18,14 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms"
 	cmsturso "github.com/gopernicus/gopernicus/features/cms/stores/turso"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	"github.com/gopernicus/gopernicus/integrations/tracing/otel"
 	"github.com/gopernicus/gopernicus/sdk/cacher"
 	"github.com/gopernicus/gopernicus/sdk/email"
 	"github.com/gopernicus/gopernicus/sdk/environment"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/filestorage"
 	"github.com/gopernicus/gopernicus/sdk/logging"
+	"github.com/gopernicus/gopernicus/sdk/tracing"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
 
@@ -60,10 +63,33 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 	defer db.Close()
 
+	// Tracing. Gate the tracer CHOICE, not the middleware: TRACING_ENABLED=true
+	// builds an OpenTelemetry tracer from the TRACING_* env knobs (see
+	// .env.example); otherwise a no-op tracer keeps the always-wired middleware
+	// inert. With tracing enabled, client IP + user-agent leave the process to
+	// the configured trace backend.
+	tracer, shutdownTracer, err := buildTracer(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		// Fresh context: the run-scoped ctx is already cancelled by the time
+		// web.Run returns, which would make the OTLP batch exporter skip its
+		// final flush (mirrors web.Run's own srv.Shutdown pattern).
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), durEnv("SHUTDOWN_TIMEOUT", 10*time.Second))
+		defer cancel()
+		if err := shutdownTracer(shutdownCtx); err != nil {
+			log.ErrorContext(shutdownCtx, "tracer shutdown failed", "error", err)
+		}
+	}()
+
 	// Host-owned HTTP router + middleware stack. The feature mounts its routes
 	// onto this via the narrow RouteRegistrar; it never sees the concrete handler.
+	// Tracing sits OUTER of Logger so the traced context (and its trace_id/span_id)
+	// is on the request when Logger emits its access line, and so web.RecordError's
+	// direct writer type-assert keeps landing on Logger's writer.
 	router := web.NewWebHandler(web.WithLogging(log))
-	router.Use(web.RequestID(), web.Logger(log), web.Panics(log))
+	router.Use(web.RequestID(), web.Tracing(tracer), web.Logger(log), web.Panics(log))
 
 	// The host owns its database lifecycle: migrations are scaffolded into
 	// ./workshop/migrations and applied PRE-BOOT by that runner (go run
@@ -107,6 +133,26 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 
 	return web.Run(ctx, router, serverConfig(), log)
+}
+
+// buildTracer gates the TRACER CHOICE on TRACING_ENABLED (the Tracing middleware
+// is always wired). Enabled → an OpenTelemetry tracer built from the TRACING_*
+// env tags via environment.ParseEnvTags; disabled → tracing.Noop. The returned
+// shutdown func flushes+stops an owned provider and is a no-op for Noop.
+func buildTracer(ctx context.Context) (tracing.Tracer, func(context.Context) error, error) {
+	enabled, _ := strconv.ParseBool(os.Getenv("TRACING_ENABLED"))
+	if !enabled {
+		return tracing.Noop{}, func(context.Context) error { return nil }, nil
+	}
+	var cfg otel.Config
+	if err := environment.ParseEnvTags("", &cfg); err != nil {
+		return nil, nil, err
+	}
+	tracer, err := otel.Open(ctx, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	return tracer, tracer.Shutdown, nil
 }
 
 // serverConfig reads HTTP server settings from the environment with defaults.
