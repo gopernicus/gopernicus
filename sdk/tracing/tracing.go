@@ -3,15 +3,20 @@
 // string attributes, records an error, and finishes. That is the whole stdlib
 // decoupling boundary — sdk never imports OpenTelemetry. The richer span
 // vocabulary (span kind, typed/nested attributes, links, baggage, and any
-// exporter) lives in the future integrations/tracing/otel module that
-// implements these interfaces; this port stays minimal by design
-// (capability-map ruling #4, ratified). sdk/tracing itself is stdlib-only.
+// exporter) lives in the integrations/tracing/otel module that implements these
+// interfaces; this port stays minimal by design (capability-map ruling #4,
+// ratified). sdk/tracing itself is stdlib-only.
 //
 // Noop is the shipped default (named for what it does, like email.Console): it
 // starts spans that record nothing, so call sites can start and finish spans
-// unconditionally whether or not a real tracer is wired. Exporters are the
-// deferred integrations/tracing/otel fast-follow; this package ships the port
-// and the Noop default only.
+// unconditionally whether or not a real tracer is wired.
+//
+// SpanIdentity is the optional linkage convention between a tracer's spans and
+// sdk/logging's trace_id/span_id fields: a finisher whose span has stable trace
+// and span IDs also implements SpanIdentity, so a caller (e.g. web.Tracing) can
+// stash those IDs via logging.WithTraceID/WithSpanID and have them appear on log
+// lines. An implementer that adds it must keep the method set in sync with this
+// interface; integrations/tracing/otel satisfies it, Noop does not.
 package tracing
 
 import "context"
@@ -34,6 +39,18 @@ type SpanFinisher interface {
 
 	// Finish completes the span. Call it exactly once.
 	Finish()
+}
+
+// SpanIdentity is an optional interface a SpanFinisher may also implement to
+// expose the stable identity of its span. It is the compile-checked home for
+// the cross-module method-set contract that links a tracer's spans to
+// sdk/logging's trace_id/span_id fields: a caller type-asserts it on the
+// returned SpanFinisher and, when it is satisfied with non-empty IDs, stashes
+// them via logging.WithTraceID/WithSpanID so they land on log lines. Optional;
+// implementations without stable span identity simply omit it.
+type SpanIdentity interface {
+	TraceID() string
+	SpanID() string
 }
 
 // Attribute is a key-value pair of span metadata. The port is intentionally
