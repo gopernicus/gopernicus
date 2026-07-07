@@ -742,3 +742,86 @@ now carries the original repo (PUBLIC, main, pushedAt 2026-06-17 intact);
 the bare name currently redirects there (GitHub rename redirect), which
 task-4's `gh repo create gopernicus/gopernicus` severs when it claims the
 name — expected and intended. Task-4 is UNBLOCKED and re-runs verbatim.
+
+### task-4 — 2026-07-07 (create remote + push) — PASS
+
+Public push authorization restated loudly: **pushing this repo PUBLIC is
+already RATIFIED (RH1)** — world-readable `.claude/` set consciously
+confirmed by jrazmi (RH1/RH2, NOTES.md 2026-07-07). No stall on visibility.
+
+**Pre-flight (post-resolution state confirmed):**
+- Local `main`: tip `bd8f3bdf2078a4f219f3323e079ebf90e664bd4c`, root
+  `fa4d1c29444f932d31a22a8d4218312420da8594` (`git rev-list --max-parents=0
+  HEAD`), clean tree, NO remote.
+- `gh auth status` → jrazmi, scopes `repo`,`workflow` (+gist/project/read:org).
+- `gh api /user/memberships/orgs/gopernicus` → `admin / active`.
+- `gh repo view gopernicus/gopernicus-original` → PUBLIC, main, pushedAt
+  `2026-06-17T19:16:36Z` (original intact, untouched).
+- `gh api /repos/gopernicus/gopernicus --jq '.full_name'` (pre-create) →
+  `gopernicus/gopernicus-original` (bare name still redirecting).
+
+**Faithful create→secure→push ordering (security active before any commit
+lands, per RH1-public + SRE amendment):**
+
+1. **Create WITHOUT push:** `gh repo create gopernicus/gopernicus --public
+   --source . --remote origin` → `https://github.com/gopernicus/gopernicus`,
+   exit 0. `origin` set to
+   `https://github.com/gopernicus/gopernicus.git`. Creation succeeded — the
+   rename redirect did NOT block it.
+   - **Redirect severed (confirmed):** `gh api /repos/gopernicus/gopernicus
+     --jq '.full_name'` now → `gopernicus/gopernicus` (was
+     `-original`); new repo `size:0`, `private:false`, `default_branch:main`.
+   - **Original untouched:** `gopernicus/gopernicus-original` still resolves,
+     pushedAt still `2026-06-17T19:16:36Z`.
+2. **Security posture enabled (before push):** `gh api -X PATCH
+   /repos/gopernicus/gopernicus -f
+   'security_and_analysis[secret_scanning][status]=enabled' -f
+   'security_and_analysis[secret_scanning_push_protection][status]=enabled'`,
+   exit 0. Verify `gh api repos/gopernicus/gopernicus --jq
+   '.security_and_analysis'` →
+   `secret_scanning: enabled`, `secret_scanning_push_protection: enabled`
+   (dependabot/non_provider/validity_checks remain `disabled` — not in scope).
+3. **Push:** `git push -u origin main` → `[new branch] main -> main`, upstream
+   tracking set, exit 0. Push protection was ACTIVE for this first landing —
+   passed cleanly, no secret blocked (three-layer pre-commit gate held).
+4. **NO branch protection** — deferred to task-11 (after CI exists), per plan.
+
+**Verify — all PASS:**
+- `git ls-remote origin main` → `bd8f3bdf2078a4f219f3323e079ebf90e664bd4c`
+  = local tip. **Divergence (benign, expected):** plan verify text says
+  "the initial commit SHA", but two execution-log commits (`b31fb8c`,
+  `bd8f3bd`) landed after root — recorded in this log. Correct expectation
+  is the tip `bd8f3bd…`; root confirmed `fa4d1c2…`.
+- `gh repo view gopernicus/gopernicus --json visibility,defaultBranchRef` →
+  `visibility: PUBLIC`, `defaultBranchRef.name: main`.
+- `gh api repos/gopernicus/gopernicus --jq '.security_and_analysis'` →
+  secret_scanning + secret_scanning_push_protection both `enabled`.
+- Redirect-severed evidence: `.full_name` = `gopernicus/gopernicus`;
+  `gopernicus/gopernicus-original` intact.
+- **Real-interaction (headless approximation of the browser eyeball):**
+  - `gh api /repos/gopernicus/gopernicus/contents/.env` → 404 (absent).
+  - `gh api …/contents/examples/cms/.env` → 404 (absent).
+  - `gh api …/contents/NOTES.md --jq '.name'` → `NOTES.md` (present).
+  - `gh api …/contents/.env.example --jq '.name'` → `.env.example` (present,
+    tracked placeholder).
+  - `curl https://github.com/gopernicus/gopernicus` → 200.
+  - `curl …/blob/main/NOTES.md` → 200; `curl …/blob/main/.env` → 404.
+  - **Human browser eyeball remains for jrazmi** (headless checks stand in).
+
+**Standing per-leg check — PASS:**
+- `make check` (root) exit 0, ended `all checks passed`; templ-drift took the
+  **git-diff branch** (checksum-fallback string `templ generation drift`
+  absent, count 0; `git status --porcelain -- '*_templ.go'` empty).
+- Boot `examples/minimal` on :8081 (`PORT=8081 go run ./cmd/server`): `GET /`
+  → 200, `GET /products/widget-3000` → 200; killed by port; port 8081 free
+  (post-kill curl → `000`, connection refused).
+
+**Divergences (none are failures):**
+1. Remote tip is `bd8f3bd…` not the root/initial `fa4d1c2…` — two prior
+   execution-log commits landed after root (logged); the plan's "initial
+   commit SHA" verify text predates them.
+
+**Result: PASS** — remote created (redirect severed, original preserved),
+secret scanning + push protection enabled before the first push, `main`
+pushed clean, all content/HTTP checks and the standing gate green. This log
+commit is the SECOND push landing with push protection active.
