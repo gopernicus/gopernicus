@@ -1,0 +1,56 @@
+# Required CI gate: `make check` (templ drift in git mode, per-module
+# vet/build/test across every Makefile MODULE, the four layering guards, and
+# the compile-only -tags=integration vet of the turso stores).
+#
+# Triggered on every push and every pull_request (plain push + PR, as the task
+# title "make check on every push/PR" implies). A push to a PR branch does run
+# twice (push event + pull_request event); the concurrency group below cancels
+# superseded runs per ref so only the latest survives, and the two event
+# contexts share the same job/check-run name.
+#
+# The check-run context name this workflow reports is "check / check" (workflow
+# name "check" + job id "check"). Branch protection at task-11 pins the required
+# status check to that EXACT literal string — renaming this workflow or the
+# `check` job silently un-enforces the gate unless the protection rule is
+# updated in the SAME change. Do not rename either half without updating
+# protection.
+#
+# Hermetic by design: no live creds, no service containers. The store
+# conformance suites skip loudly without their datastore env vars, so `make
+# check` stays deterministic. Live legs live in live-stores.yml (task-6).
+#
+# templ comes ONLY from `go tool templ`, pinned via the `tool` directive in
+# features/cms/go.mod (invoked by `make generate` inside `make check`). CI never
+# `go install`s templ separately — if it did, the drift gate would compare
+# against an unpinned templ and be meaningless.
+name: check
+
+on:
+  push:
+  pull_request:
+
+# Least-privilege: this gate only reads the tree.
+permissions:
+  contents: read
+
+# Cancel superseded runs for the same ref (covers the push+PR double-fire and
+# rapid re-pushes); the newest commit's run is the one that matters.
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          # go.work declares `go 1.26.1`; GOTOOLCHAIN stays auto (unset) so the
+          # exact toolchain self-downloads if the runner's Go differs.
+          go-version-file: go.work
+          # Module caching keyed off every module's go.sum (no root go.sum in a
+          # go.work multi-module tree).
+          cache: true
+          cache-dependency-path: "**/go.sum"
+      - run: make check
