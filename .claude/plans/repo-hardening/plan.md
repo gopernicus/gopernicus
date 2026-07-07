@@ -1049,3 +1049,112 @@ and record the turso conformance subtest names actually running.
 pgx legs, goredis `-race`, and pgxdb live test all RAN green against their
 services; the three turso legs SKIPPED LOUDLY as expected with no secrets.
 turso-live conformance remains OUTSTANDING pending the secret upload.
+
+### task-7 — 2026-07-07 (phase 4 — module-path verification pass) — PASS
+
+**Nature of the leg:** RH1 chose exactly the remote the module paths already
+carry (`github.com/gopernicus/gopernicus`, public), so D8 collapses to a
+verification pass. Zero code/file changes outside this execution-log entry.
+The not-taken rewrite branch stays not-taken (recorded below).
+
+**Environment:** local `main` tip `f85ad6ec3e4244a230be8911bb0c93804d05f02f`
+(matches the plan's "f85ad6e or later"), `git status --porcelain` empty
+(clean tree). Deps satisfied: tasks 1–6 all landed PASS; task-5 recorded the
+required `check` context name.
+
+**1. Prefix inventory — PASS.**
+- `grep -rn 'github.com/gopernicus/gopernicus' . --exclude-dir=.git` → **722
+  total hits**, per-filetype: **189 `.go`**, **26 `.mod`**, **22 `.md`**,
+  **6 `.templ`**, **1 `Makefile`** (matches the plan's recon counts: 189 `.go`,
+  26 `go.mod`, 6 `.templ` sources, Makefile guards).
+- Every `go.mod` module line carries the exact prefix:
+  `grep -rn '^module github.com/gopernicus/gopernicus' --include='go.mod'` →
+  **26 modules, all rooted at `github.com/gopernicus/gopernicus/…`** (sdk; 13
+  integrations; features/{auth,cms,jobs} + their 6 pgx/turso stores;
+  examples/{auth-cms,cms,jobs-minimal,minimal}).
+- **Three-way module-count agreement = 26:** go.mod module lines = **26**;
+  `go.work` `use` directives = **26**; Makefile `MODULES` (line 7) word count
+  = **26**. No divergence.
+- **Guards G1–G3 pin exactly the ratified prefix** (Makefile):
+  - G1 `guard-sdk-stdlib` (line 82) greps
+    `'"github.com/'` in `sdk/` excluding `'"github.com/gopernicus/gopernicus/sdk'`.
+  - G2 `guard-feature-isolation` (line 90) pins
+    `"github.com/gopernicus/gopernicus/(integrations|examples|features/[a-z0-9]+/stores)`.
+  - G3 `guard-sdk-no-outward` (line 95) pins
+    `"github.com/gopernicus/gopernicus/(features|integrations|examples)`.
+- **Inverse (no stale/foreign prefix) — clean.**
+  `grep -rn --include='*.go' --include='*.mod' -E '"(github|gitlab)\.com/[^"]*gopernicus' . --exclude-dir=.git | grep -v 'github.com/gopernicus/gopernicus'`
+  → **zero output** (`grep -v` exit 1). No foreign-host or personal-owner
+  gopernicus path exists.
+- **Guard G4 no-legacy-path grep — clean.** G4 `guard-no-legacy-path`
+  (line 100) greps `'"gopernicus/'` across `--include='*.go' .`; run directly →
+  **zero output, grep exit 1**. No bare-`gopernicus/`-era import survives.
+
+**2. Gate — PASS.** `make check` (root) → **exit 0**, ended `all checks
+passed`. The templ-drift gate took the **git-diff branch** (`cd features/cms
+&& go tool templ generate` ran; no `ERROR: templ generation drift`
+checksum-fallback string). A `== <module> ==` block for all **26** `MODULES`
+entries; the `== integration-tag vet (compile-only, no DB) ==` step with a
+`vet -tags=integration` line for each of the three turso stores; all **four**
+guard headers (sdk-stdlib, feature-isolation, sdk-no-outward, no-legacy-path).
+
+**3. Migration source names byte-identical — PASS (with a logged
+mechanism-drift note, not a failure).**
+- The literal plan grep `grep -rn 'Name:' features/*/stores/*/` returns **two
+  hits, both `Name: in.Name`**:
+  `features/jobs/stores/pgx/schedules.go:70` and
+  `features/jobs/stores/turso/schedules.go:66` — these are entity-field
+  assignments (schedule `Name`), not module-path-derived strings.
+- **Mechanism note:** the current tree has no `MigrationSource.Name` string
+  field carrying `"cms"`. Feature store adapters expose migrations via an
+  embedded `MigrationsFS`/`MigrationsDir` + `ExportMigrations` (e.g.
+  `features/cms/stores/turso/turso.go`), and hosts apply them by directory name
+  via `tursodb.RunMigrations(ctx, db, fs, "primary")`
+  (`examples/cms/workshop/migrations/main.go:47`). The plan's `"cms"`
+  expectation is a carry-over convention reference from prior milestones. The
+  verification's INTENT — module-path work never touches migration naming — is
+  satisfied conclusively: RH1 is a no-op (zero files changed, clean tree), so
+  every migration-related string is trivially byte-identical to before.
+
+**4. Standing per-leg boot check (examples/minimal, :8081) — PASS.**
+- Port 8081 free pre-boot.
+- `cd examples/minimal && PORT=8081 go run ./cmd/server`.
+- `GET http://localhost:8081/` → **200**; `GET
+  http://localhost:8081/products/widget-3000` → **200**.
+- Killed by port (`lsof -tiTCP:8081 -sTCP:LISTEN | xargs kill`); port confirmed
+  free; post-kill curl → **000** / connection refused (exit 7).
+
+**5. RELEASING.md precondition 1 — SATISFIED (recorded here; RELEASING.md
+itself NOT edited — that is task-12's scope).** RELEASING.md lines 35–36 read:
+"**Module paths are final.** Every `go.mod` module line and internal import is
+rooted at `github.com/gopernicus/gopernicus/...`." Verified satisfied by
+step 1: all 26 `go.mod` module lines and all 189 `.go`-file imports carry the
+exact prefix; no foreign prefix; no legacy path (G4 clean). Precondition 1 is
+met on tip `f85ad6e`.
+
+**6. CI green on the remote for the verified commit — PASS.** Baseline: the
+current tip `f85ad6e`'s `check` run **28898169111** is `completed / success` on
+`gopernicus/gopernicus` (`gh run list --commit f85ad6e…`). The real-interaction
+confirmation for THIS log commit's own `check` run is recorded at push time
+below.
+
+**Not-taken branch — one-line record (plan requirement):** the full mechanical
+rewrite (every `go.mod` + ~189 `.go` files incl. build-tagged ones + 6
+`.templ` sources with the sed→generate→stage ordering + guard rewrite + live
+docs) was fully specified in this plan's pre-ratification revisions and is
+retrievable from plan history if a future re-homing ever fires; it is NOT
+executable scope under RH1 (org-match).
+
+**Divergences (none are failures):**
+1. The plan's migration grep targets `MigrationSource.Name` / `"cms"`, but the
+   current tree uses embedded-FS + directory-name (`"primary"`) migration
+   wiring; the literal grep returns two benign `Name: in.Name` entity-field
+   hits. No module-path string is involved either way; RH1 no-op guarantees
+   byte-identity. Logged, not a re-decision.
+
+**Result: PASS** — prefix inventory confirms all 26 module lines / 189 `.go`
+imports / 6 `.templ` sources / guards G1–G3 carry exactly the ratified prefix;
+inverse foreign-prefix and G4 legacy greps clean; `make check` green (git-diff
+drift branch, 26 module blocks, integration-tag vet, four guards); migration
+strings byte-identical (RH1 no-op); boot check green; RELEASING.md
+precondition 1 satisfied. Zero file changes outside this log entry.
