@@ -60,6 +60,11 @@ type authService interface {
 	MintAPIKey(ctx context.Context, serviceAccountID, name string, expiresAt time.Time) (apikey.APIKey, string, error)
 	ListAPIKeys(ctx context.Context, serviceAccountID string, req crud.ListRequest) (crud.Page[apikey.APIKey], error)
 	RevokeAPIKey(ctx context.Context, keyID string) error
+
+	// JWT bearer mode (design §4.4). TokenEnabled gates whether POST /auth/token
+	// is registered at all (deny-by-absence).
+	TokenEnabled() bool
+	IssueToken(ctx context.Context, email, password, clientIP string) (token string, expiresAt time.Time, err error)
 }
 
 // handlers holds the auth service the route handlers delegate to.
@@ -98,6 +103,13 @@ type resetRequest struct {
 type changePasswordRequest struct {
 	CurrentPassword string `json:"current_password"`
 	NewPassword     string `json:"new_password"`
+}
+
+// tokenResponse is the POST /auth/token success body (design §4.4): the signed
+// bearer JWT and its absolute expiry (RFC3339).
+type tokenResponse struct {
+	Token     string `json:"token"`
+	ExpiresAt string `json:"expires_at"`
 }
 
 type userResponse struct {
@@ -141,6 +153,12 @@ func Mount(r feature.RouteRegistrar, svc authService) {
 	if svc.MachineEnabled() {
 		mountMachine(r, h, svc.RequireUser)
 	}
+
+	// The bearer-JWT token endpoint is registered only when a TokenSigner is
+	// wired (deny-by-absence, design §4.4); an unwired host returns 404 for it.
+	if svc.TokenEnabled() {
+		r.Handle("POST", "/auth/token", h.token)
+	}
 }
 
 func (h *handlers) register(w http.ResponseWriter, r *http.Request) {
@@ -172,6 +190,27 @@ func (h *handlers) login(w http.ResponseWriter, r *http.Request) {
 	}
 	h.svc.SetSessionCookie(w, token)
 	writeJSON(w, http.StatusOK, newUserResponse(u))
+}
+
+// token issues a stateless bearer JWT for login-shaped credentials (design
+// §4.4). It shares /auth/login's request shape, pre-credential rate-limit
+// discipline, and verified-email gating; on success it returns {token,
+// expires_at}. Registered only when a TokenSigner is wired.
+func (h *handlers) token(w http.ResponseWriter, r *http.Request) {
+	var req loginRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	tok, expiresAt, err := h.svc.IssueToken(r.Context(), req.Email, req.Password, clientIP(r))
+	if err != nil {
+		if errors.Is(err, authsvc.ErrRateLimited) {
+			writeError(w, web.NewError(http.StatusTooManyRequests, "too many login attempts").WithCode("rate_limited"))
+			return
+		}
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, tokenResponse{Token: tok, ExpiresAt: expiresAt.Format(time.RFC3339)})
 }
 
 func (h *handlers) verify(w http.ResponseWriter, r *http.Request) {

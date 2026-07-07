@@ -30,8 +30,8 @@ const (
 const apiKeyPrefixLen = 8
 
 // Principal is the effective caller resolved from a credential (session, API
-// key, or — once TokenSigner is wired in A4 — a bearer JWT). It is the single
-// value type AV5 pins; the public auth package re-exports it as auth.Principal.
+// key, or — when a TokenSigner is wired — a bearer JWT). It is the single value
+// type AV5 pins; the public auth package re-exports it as auth.Principal.
 type Principal struct {
 	Type string
 	ID   string
@@ -178,9 +178,9 @@ func (s *Service) RequireServiceAccount(next http.Handler) http.Handler {
 // RequirePrincipal gates next on either credential class and stashes the
 // resolved Principal (read via CurrentPrincipal). A bearer credential is classed
 // by shape: exactly two dots ⇒ the JWT path (active only when a TokenSigner is
-// wired — A4; inert here), otherwise the API-key path (active only when the
-// machine repos are wired). With no bearer header it falls back to the session
-// cookie → a user Principal. Any failure writes 401.
+// wired — design §4.4; inert otherwise), otherwise the API-key path (active only
+// when the machine repos are wired). With no bearer header it falls back to the
+// session cookie → a user Principal. Any failure writes 401.
 func (s *Service) RequirePrincipal(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, ok := s.resolvePrincipal(r)
@@ -199,8 +199,17 @@ func (s *Service) resolvePrincipal(r *http.Request) (Principal, bool) {
 	if raw, ok := bearerToken(r); ok {
 		if isJWTToken(raw) {
 			// JWT bearer classing is active only when a TokenSigner is wired
-			// (A4); until then a JWT bearer is never parsed (deny-by-absence).
-			return Principal{}, false
+			// (design §4.4). Nil → inert: a JWT bearer is never parsed
+			// (deny-by-absence, A3 behavior unchanged), and it never falls
+			// through to the session path. A wired-but-invalid JWT also denies.
+			if s.tokenSigner == nil {
+				return Principal{}, false
+			}
+			userID, ok := s.verifyBearer(raw)
+			if !ok {
+				return Principal{}, false
+			}
+			return Principal{Type: PrincipalUser, ID: userID}, true
 		}
 		if !s.MachineEnabled() {
 			return Principal{}, false

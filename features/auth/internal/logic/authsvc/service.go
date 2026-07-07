@@ -47,6 +47,9 @@ const (
 	// loginAttemptsPerMinute caps failed+successful login attempts per
 	// (email, client-IP) window before Login refuses with ErrRateLimited.
 	loginAttemptsPerMinute = 5
+	// defaultTokenTTL is the bearer-JWT lifetime when Config.TokenTTL is unset
+	// (design §4.4). Kept short: it bounds the JWT revocation-asymmetry window.
+	defaultTokenTTL = time.Hour
 )
 
 // ErrRateLimited is returned by Login when the per-(email, IP) attempt budget is
@@ -116,6 +119,12 @@ type Deps struct {
 	// construction (auth.ErrMachineReposRequired).
 	ServiceAccounts serviceaccount.ServiceAccountRepository
 	APIKeys         apikey.APIKeyRepository
+
+	// JWT bearer mode (design §4.4, AV6). TokenSigner nil → the mode is off:
+	// bearer JWTs are never parsed and POST /auth/token is not registered.
+	// TokenTTL is the minted-token lifetime; ≤0 → defaultTokenTTL (1h).
+	TokenSigner cryptids.JWTSigner
+	TokenTTL    time.Duration
 }
 
 // Service implements the auth use cases over the repository ports.
@@ -151,6 +160,12 @@ type Service struct {
 	// Machine-identity state (design §4.1). Both nil when the subsystem is off.
 	serviceAccounts serviceaccount.ServiceAccountRepository
 	apiKeys         apikey.APIKeyRepository
+
+	// JWT bearer mode (design §4.4). tokenSigner nil → the mode is off (bearer
+	// JWTs never parsed, POST /auth/token not registered). tokenTTL is the
+	// resolved minted-token lifetime (default applied in NewService).
+	tokenSigner cryptids.JWTSigner
+	tokenTTL    time.Duration
 }
 
 // NewService builds a Service from its dependencies, applying cookie name/path
@@ -170,6 +185,10 @@ func NewService(d Deps) *Service {
 	providers := make(map[string]oauth.Provider, len(d.Providers))
 	for _, p := range d.Providers {
 		providers[p.Name()] = p
+	}
+	tokenTTL := d.TokenTTL
+	if tokenTTL <= 0 {
+		tokenTTL = defaultTokenTTL
 	}
 	return &Service{
 		users:                d.Users,
@@ -193,6 +212,8 @@ func NewService(d Deps) *Service {
 		redirects:            redirect.New(d.RedirectAllowlist),
 		serviceAccounts:      d.ServiceAccounts,
 		apiKeys:              d.APIKeys,
+		tokenSigner:          d.TokenSigner,
+		tokenTTL:             tokenTTL,
 	}
 }
 
@@ -418,24 +439,46 @@ func (s *Service) ValidateSession(ctx context.Context, token string) (session.Se
 	return s.sessions.Get(ctx, hashed)
 }
 
-// RequireUser is HTTP middleware that gates next on a valid session cookie. On a
-// missing/invalid/expired session it writes a 401 JSON error; on success it
+// RequireUser is HTTP middleware that gates next on a valid user credential. On
+// a missing/invalid/expired credential it writes a 401 JSON error; on success it
 // stashes the user id on the request context (read via CurrentUser) and calls
 // next. It satisfies web.Middleware via the method value s.RequireUser.
+//
+// It keeps its exact v1 semantics — the session cookie resolves to a user — and
+// gains one addition (design §4.3): when a TokenSigner is wired, an
+// Authorization: Bearer JWT resolves to the same user identity. With no
+// TokenSigner a bearer JWT is never parsed (A3 behavior unchanged).
 func (s *Service) RequireUser(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, err := r.Cookie(s.cookie.Name)
-		if err != nil {
+		userID, ok := s.resolveUserID(r)
+		if !ok {
 			writeUnauthorized(w)
 			return
 		}
-		sess, err := s.ValidateSession(r.Context(), c.Value)
-		if err != nil {
-			writeUnauthorized(w)
-			return
-		}
-		next.ServeHTTP(w, r.WithContext(withUserID(r.Context(), sess.UserID)))
+		next.ServeHTTP(w, r.WithContext(withUserID(r.Context(), userID)))
 	})
+}
+
+// resolveUserID resolves the request's user identity for RequireUser. When a
+// TokenSigner is wired and the request carries a JWT-shaped bearer, the JWT is
+// authoritative (a bad one denies, never falling through to the cookie —
+// design §4.3/§4.4); otherwise it keeps RequireUser's v1 semantics: the session
+// cookie resolves to its user. With no TokenSigner a bearer JWT is never parsed.
+func (s *Service) resolveUserID(r *http.Request) (string, bool) {
+	if s.tokenSigner != nil {
+		if raw, ok := bearerToken(r); ok && isJWTToken(raw) {
+			return s.verifyBearer(raw)
+		}
+	}
+	c, err := r.Cookie(s.cookie.Name)
+	if err != nil {
+		return "", false
+	}
+	sess, err := s.ValidateSession(r.Context(), c.Value)
+	if err != nil {
+		return "", false
+	}
+	return sess.UserID, true
 }
 
 // CurrentUser returns the authenticated user id stashed by RequireUser, if any.
