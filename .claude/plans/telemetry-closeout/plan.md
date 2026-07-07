@@ -848,3 +848,37 @@ comment becomes false once the knob is wired. Removed that 5-line workaround
 block so the host demonstrates the knob AS the mechanism (and the live proof is
 unambiguous — no default-logger path to confound it). Behavior-neutral: no other
 `slog.Default()` consumer remains in that host. Nothing else diverged.
+
+### task-6 — 2026-07-07 (C1 assessment, assess-only) — PASS
+
+**Deliverable:** `.claude/plans/telemetry-closeout/c1-assessment.md` — the
+forward-plan shape for the cms non-root-prefix link limitation. No code
+changed (assess-only per Risk 3; the fix stays future-milestone scope).
+
+**Inventory totals:** 36 path-valued link sites across 10 of 11 cms `.templ`
+files (12 static literals, 14 built inside templ expressions, 10 fed by
+Go-computed model values or stored data — 2 of those are menu-item DATA
+URLs); 14 handler redirects (all admin: entries 5, menus 4, terms 3, media 2)
++ 11 Go-side link-construction sites feeding views (entries 5, terms 4,
+public 2) = 25 Go-side sites. Admin/public split (templ): 27 admin, 8 public,
+1 shared chrome (`layout.templ:14`). Plus two data-level classes a code fix
+cannot reach: seeded menu-item URLs (`examples/{minimal,auth-cms}` seed
+`"/"`/`"/about"`) and markdown entry bodies. Grep commands recorded in the
+deliverable for reproducibility.
+
+**Recommendation (one line):** option (a) — base path discovered from the
+registrar via a named optional `BasePath() string` interface in `sdk/feature`
+(satisfied by `PrefixRegistrar`, composing), threaded explicitly
+(handler-held URL builder → model fields / template base params); (b)
+view-context rejected as an invisible dependency, (c) relative links rejected
+as per-route-depth arithmetic. Size: ~360–510 hand-written lines across ~24
+files + 11 regenerated `*_templ.go`; three-phase split (seam+Go side → views
+→ data policy + real-interaction proof).
+
+**Verify (all PASS):** deliverable file exists; `git status` shows only the
+new .md + this plan-file entry (no code touched). Standing per-leg check:
+root `make check` — PASS ("all checks passed"); `examples/minimal` booted on
+:8081 → `GET /` 200, `GET /products/widget-3000` 200; killed by port; port
+8081 confirmed free.
+
+**Divergences:** none.
