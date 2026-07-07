@@ -1,0 +1,131 @@
+# Live-store conformance — service-container + secret-gated, NEVER a merge
+# requirement. Runs the datastore/kv conformance suites against real backends
+# that make check (hermetic) only skips: postgres:17 + redis:7 as GitHub Actions
+# service containers, and the turso legs against the playground DB via repo
+# secrets.
+#
+# Trigger: manual workflow_dispatch ONLY — no schedule (RULING RH4). The value is
+# the button, pressed before cutting a tag or after a store change; a calendar
+# run would be needless destructive traffic against the shared playground DB.
+#
+# Failure-signal ownership (SRE): this workflow is NOT a required check, so no PR
+# gate surfaces its result. The explicit alarm is GitHub's workflow-run-failure
+# email to the person who pressed the dispatch button — owner jrazmi. Four prior
+# milestones closed "live legs not run, no creds"; the button + that email are
+# how this one does not. If a run goes dark-red, jrazmi is the one paged.
+#
+# Turso token (repo secret TURSO_AUTH_TOKEN): owner jrazmi, scoped to the
+# gps-impact CMS playground DB; expiry UNKNOWN. Rotation is one action — update
+# the repo secret TURSO_AUTH_TOKEN, nothing else in this file changes. The paired
+# TURSO_DATABASE_URL secret pins EXACTLY the authorized playground URL (RH3/RH4),
+# honoring the standing destructive-run rule — the conformance suites truncate,
+# so they may only ever point at that one blessed DB.
+#
+# Secrets status as of 2026-07-07: TURSO_DATABASE_URL / TURSO_AUTH_TOKEN are
+# PENDING UPLOAD (jrazmi uploads them himself). Until then ${{ secrets.* }}
+# expands to empty and the three turso `-tags=integration` legs SKIP LOUDLY
+# ("TURSO_DATABASE_URL/TURSO_AUTH_TOKEN not set — turso conformance NOT
+# verified") — the correct, expected mid-milestone outcome, not a failure.
+#
+# NOT testcontainers (that harness is workshop-v2 scope): the services here are
+# workflow infrastructure; the Go tests stay env-gated exactly as written. gcs /
+# s3 / sendgrid have no legs here (no CI creds; out of scope).
+#
+# DSN-host consistency: these jobs run directly on the runner, NOT inside a
+# container, so each service's port is published to the runner's localhost —
+# every DSN/addr below uses localhost:<published-port>.
+name: live-stores
+
+on:
+  workflow_dispatch:
+
+# Least-privilege: these jobs only read the tree and talk to their own services.
+permissions:
+  contents: read
+
+jobs:
+  # Job A — postgres pgx store conformance (cms/auth/jobs) + turso store
+  # conformance (cms/auth/jobs), driven through `make test-stores`.
+  postgres-turso:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        # Published to the runner's localhost:5432 (job runs on the runner).
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          # Same toolchain/caching posture as check.yml: go.work declares
+          # `go 1.26.1`, GOTOOLCHAIN stays auto, cache keyed off every go.sum.
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+      - name: make test-stores (pgx live + turso -tags=integration)
+        env:
+          # pgx legs (cms/auth/jobs) connect here; matches the canonical
+          # local-dev DSN. postgres:17 defaults db=postgres user=postgres.
+          POSTGRES_TEST_DSN: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+          # Turso legs. Secrets PENDING UPLOAD (2026-07-07) ⇒ empty ⇒ the three
+          # turso legs skip loudly, which is correct until jrazmi uploads them.
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+        run: make test-stores
+
+  # Job B — goredis conformance (-race) against redis, plus pgxdb's env-gated
+  # live migrate test against postgres. goredis is NOT in STORE_MODULES /
+  # `make test-stores`, and the redis service alone gates nothing (the suites key
+  # off REDIS_TEST_ADDR), so this is a separate job by necessity.
+  redis-pgxdb:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7
+        # Published to the runner's localhost:6379.
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        # Published to the runner's localhost:5432.
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+      - name: goredis conformance (-race) against redis
+        working-directory: integrations/kvstores/goredis
+        env:
+          # goredis conformance keys off this var; unset ⇒ loud skip.
+          REDIS_TEST_ADDR: localhost:6379
+        run: go test -race ./...
+      - name: pgxdb live migrate test against postgres
+        working-directory: integrations/datastores/pgxdb
+        env:
+          # pgxdb's TestLive_OpenAndMigrate gates on this var; unset ⇒ loud skip.
+          POSTGRES_TEST_DSN: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+        run: go test ./...
