@@ -688,3 +688,49 @@ and the final cached-grep re-check recorded inline below at amend time.
 **Result: PASS** — ignore-layer, index-layer, tracked-set sanity, commit,
 git-diff drift branch, and boot check all green. No secret entered the
 index; the milestone is not blocked.
+
+### task-4 — 2026-07-07 (create remote + push) — STOPPED, stop-and-flag: remote name already occupied
+
+Precondition checks (protocol step 2, before any GitHub action):
+
+- `gh auth status` → jrazmi authenticated, scopes `repo`, `workflow` (+gist/project/read:org). PASS.
+- `gh api /orgs/gopernicus` → org EXISTS; `gh api /user/memberships/orgs/gopernicus` → jrazmi is `admin / active`. PASS.
+- `gh repo view gopernicus/gopernicus` → **repo ALREADY EXISTS** — premise
+  of this task ("create the remote"; "create the gopernicus org via the web
+  UI first if needed") is FALSE.
+
+State of the existing remote (observed 2026-07-07):
+
+- PUBLIC, non-empty: created 2026-03-25, last pushed 2026-06-17,
+  ~6.8 MB, default branch `main`, 6 branches (`main`,
+  `auth_flows_accounts`, `chore/shed-cli-references`,
+  `docs/fix-cli-and-framework-reference-drift`, `httpmid_streamers_flush`,
+  `v0.3.1-segovia-migration-fixes`).
+- Root contents: `bridge/`, `core/`, `workshop/`, `sdk/`, `telemetry/`,
+  `infrastructure/`, `gopernicus.yml`, `CHANGELOG.md`, … — this is the
+  **ORIGINAL gopernicus repo** (the salvage source the planning corpus
+  calls gopernicus-original).
+- Secret scanning + push protection: DISABLED on the existing repo.
+
+Why this stops the leg: every path forward is a destructive owner-level
+action against a repo with live history — rename, delete, or force-push —
+none of which RH1's ratification contemplated (the plan text assumed the
+name was vacant, to the point of allowing for the org not existing). Per
+the stop-and-flag rules (contradicted premise + destructive action), the
+leg ends here; no push, no repo mutation performed. Tasks 5–7 depend on
+task-4; the loop stops with every queue item gated on jrazmi.
+
+Options for the YOUR CALL (loop's recommendation: option 1):
+
+1. **Rename the original** to e.g. `gopernicus/gopernicus-original`
+   (`gh repo rename` preserves all history/branches; old-name redirects
+   are then intentionally severed when the new repo claims the name), then
+   re-run task-4 verbatim (`gh repo create gopernicus/gopernicus --public
+   --source . --push`).
+2. Push the monorepo into the existing repo (force-push over `main`) —
+   mixes two unrelated histories in one repo, leaves 5 stale branches;
+   NOT recommended.
+3. Delete the original repo and recreate fresh — destroys the original's
+   history unless it is fully preserved elsewhere; most destructive.
+4. Choose a different remote name — contradicts ratified RH1 and would
+   re-arm phase 4's full rename branch; a scope change, not a default.
