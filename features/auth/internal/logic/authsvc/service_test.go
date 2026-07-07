@@ -195,6 +195,17 @@ func (f *fakeSessions) Delete(_ context.Context, token string) error {
 	return nil
 }
 
+func (f *fakeSessions) DeleteByUser(_ context.Context, userID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for token, s := range f.m {
+		if s.UserID == userID {
+			delete(f.m, token)
+		}
+	}
+	return nil
+}
+
 type fakeCodes struct {
 	mu sync.Mutex
 	m  map[string]verification.Code
@@ -292,6 +303,11 @@ type harness struct {
 }
 
 func newHarness(t *testing.T, limiter ratelimiter.Limiter) *harness {
+	return newHarnessDeps(t, limiter, false)
+}
+
+// newHarnessDeps builds a harness, optionally requiring verified email at login.
+func newHarnessDeps(t *testing.T, limiter ratelimiter.Limiter, requireVerifiedEmail bool) *harness {
 	t.Helper()
 	h := &harness{
 		users:  newFakeUsers(),
@@ -306,16 +322,17 @@ func newHarness(t *testing.T, limiter ratelimiter.Limiter) *harness {
 		limiter = ratelimiter.NewMemory()
 	}
 	h.svc = NewService(Deps{
-		Users:     h.users,
-		Passwords: h.pw,
-		Sessions:  h.sess,
-		Codes:     h.codes,
-		Tokens:    h.tokens,
-		Hasher:    h.hasher,
-		Mailer:    h.mailer,
-		MailFrom:  "noreply@example.com",
-		Limiter:   limiter,
-		Cookie:    CookieConfig{},
+		Users:                h.users,
+		Passwords:            h.pw,
+		Sessions:             h.sess,
+		Codes:                h.codes,
+		Tokens:               h.tokens,
+		Hasher:               h.hasher,
+		Mailer:               h.mailer,
+		MailFrom:             "noreply@example.com",
+		Limiter:              limiter,
+		Cookie:               CookieConfig{},
+		RequireVerifiedEmail: requireVerifiedEmail,
 	})
 	return h
 }
@@ -403,16 +420,90 @@ func TestVerifyUnknownCode(t *testing.T) {
 
 func TestLogin(t *testing.T) {
 	h := newHarness(t, nil)
-	h.mustRegister(t, "login@example.com", "password123")
-	sess, u, err := h.svc.Login(context.Background(), "Login@example.com", "password123", "1.2.3.4")
+	u := h.mustRegister(t, "login@example.com", "password123")
+	token, gotU, err := h.svc.Login(context.Background(), "Login@example.com", "password123", "1.2.3.4")
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
-	if sess.Token == "" || sess.UserID != u.ID {
-		t.Errorf("bad session: %+v", sess)
+	if token == "" || gotU.ID != u.ID {
+		t.Errorf("bad login: token=%q user=%+v", token, gotU)
 	}
-	if _, err := h.sess.Get(context.Background(), sess.Token); err != nil {
-		t.Errorf("session not persisted: %v", err)
+	if _, err := h.svc.ValidateSession(context.Background(), token); err != nil {
+		t.Errorf("minted session not valid: %v", err)
+	}
+}
+
+// TestSessionTokenHashRoundTrip proves the service-side hashing (design §7.3):
+// the plaintext cookie Login returns is NOT what the store holds (the store is
+// keyed by the token's SHA-256 hash), ValidateSession still matches via the same
+// hashing, and Logout deletes by the hash.
+func TestSessionTokenHashRoundTrip(t *testing.T) {
+	h := newHarness(t, nil)
+	h.mustRegister(t, "hash@example.com", "password123")
+	token, _, err := h.svc.Login(context.Background(), "hash@example.com", "password123", "1.2.3.4")
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	hashed, err := h.svc.hashSessionToken(token)
+	if err != nil {
+		t.Fatalf("hashSessionToken: %v", err)
+	}
+	if hashed == token {
+		t.Fatal("stored token equals plaintext — not hashed")
+	}
+	h.sess.mu.Lock()
+	_, rawPresent := h.sess.m[token]
+	_, hashPresent := h.sess.m[hashed]
+	h.sess.mu.Unlock()
+	if rawPresent {
+		t.Error("store holds the raw plaintext token")
+	}
+	if !hashPresent {
+		t.Error("store is not keyed by the hashed token")
+	}
+	if _, err := h.svc.ValidateSession(context.Background(), token); err != nil {
+		t.Errorf("ValidateSession(plaintext): %v", err)
+	}
+	if err := h.svc.Logout(context.Background(), token); err != nil {
+		t.Fatalf("Logout: %v", err)
+	}
+	if _, err := h.svc.ValidateSession(context.Background(), token); !errors.Is(err, errs.ErrNotFound) {
+		t.Errorf("session survived logout: err=%v, want ErrNotFound", err)
+	}
+}
+
+func TestLoginRequireVerifiedEmailBlocksUnverified(t *testing.T) {
+	h := newHarnessDeps(t, nil, true)
+	h.mustRegister(t, "unv@example.com", "password123") // unverified by default
+	_, _, err := h.svc.Login(context.Background(), "unv@example.com", "password123", "1.2.3.4")
+	if !errors.Is(err, ErrEmailNotVerified) {
+		t.Errorf("unverified login: err=%v, want ErrEmailNotVerified", err)
+	}
+	if !errors.Is(err, errs.ErrForbidden) {
+		t.Errorf("ErrEmailNotVerified must wrap ErrForbidden (403 mapping): %v", err)
+	}
+}
+
+func TestLoginRequireVerifiedEmailAllowsVerified(t *testing.T) {
+	h := newHarnessDeps(t, nil, true)
+	h.mustRegister(t, "ver@example.com", "password123")
+	var code string
+	for c := range h.codes.m {
+		code = c
+	}
+	if err := h.svc.Verify(context.Background(), code); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if _, _, err := h.svc.Login(context.Background(), "ver@example.com", "password123", "1.2.3.4"); err != nil {
+		t.Errorf("verified login: %v", err)
+	}
+}
+
+func TestLoginVerifiedGateOffByDefault(t *testing.T) {
+	h := newHarness(t, nil) // RequireVerifiedEmail defaults false
+	h.mustRegister(t, "off@example.com", "password123")
+	if _, _, err := h.svc.Login(context.Background(), "off@example.com", "password123", "1.2.3.4"); err != nil {
+		t.Errorf("gate-off unverified login: %v", err)
 	}
 }
 
@@ -449,34 +540,65 @@ func TestLoginRateLimitedFirst(t *testing.T) {
 func TestLogout(t *testing.T) {
 	h := newHarness(t, nil)
 	h.mustRegister(t, "lo@example.com", "password123")
-	sess, _, _ := h.svc.Login(context.Background(), "lo@example.com", "password123", "1.2.3.4")
-	if err := h.svc.Logout(context.Background(), sess.Token); err != nil {
+	token, _, _ := h.svc.Login(context.Background(), "lo@example.com", "password123", "1.2.3.4")
+	if err := h.svc.Logout(context.Background(), token); err != nil {
 		t.Fatalf("Logout: %v", err)
 	}
-	if _, err := h.sess.Get(context.Background(), sess.Token); !errors.Is(err, errs.ErrNotFound) {
-		t.Errorf("session not deleted: err=%v", err)
+	if _, err := h.svc.ValidateSession(context.Background(), token); !errors.Is(err, errs.ErrNotFound) {
+		t.Errorf("session not deleted: err=%v, want ErrNotFound", err)
 	}
 	// Idempotent: logging out an already-gone token is not an error.
-	if err := h.svc.Logout(context.Background(), sess.Token); err != nil {
+	if err := h.svc.Logout(context.Background(), token); err != nil {
 		t.Errorf("second Logout: %v", err)
 	}
 }
 
+// TestChangePassword covers the amended §7.2 policy: the new password works, ALL
+// pre-existing sessions are revoked, a fresh session is minted for the caller,
+// and the old password no longer authenticates.
 func TestChangePassword(t *testing.T) {
 	h := newHarness(t, nil)
 	u := h.mustRegister(t, "cp@example.com", "password123")
-	if err := h.svc.ChangePassword(context.Background(), u.ID, "password123", "newpassword456"); err != nil {
+	tokenA, _, err := h.svc.Login(context.Background(), "cp@example.com", "password123", "1.2.3.4")
+	if err != nil {
+		t.Fatalf("Login A: %v", err)
+	}
+	tokenB, _, err := h.svc.Login(context.Background(), "cp@example.com", "password123", "5.6.7.8")
+	if err != nil {
+		t.Fatalf("Login B: %v", err)
+	}
+
+	newToken, err := h.svc.ChangePassword(context.Background(), u.ID, "password123", "newpassword456")
+	if err != nil {
 		t.Fatalf("ChangePassword: %v", err)
 	}
+
+	// Every pre-existing session is revoked.
+	for name, tok := range map[string]string{"A": tokenA, "B": tokenB} {
+		if _, err := h.svc.ValidateSession(context.Background(), tok); !errors.Is(err, errs.ErrNotFound) {
+			t.Errorf("session %s survived password change: err=%v, want ErrNotFound", name, err)
+		}
+	}
+	// A fresh session is minted for the caller.
+	if newToken == "" {
+		t.Fatal("ChangePassword returned an empty session token")
+	}
+	if _, err := h.svc.ValidateSession(context.Background(), newToken); err != nil {
+		t.Errorf("minted session not valid: %v", err)
+	}
+	// New password works; old password no longer does.
 	if _, _, err := h.svc.Login(context.Background(), "cp@example.com", "newpassword456", "1.2.3.4"); err != nil {
 		t.Errorf("login with new password: %v", err)
+	}
+	if _, _, err := h.svc.Login(context.Background(), "cp@example.com", "password123", "1.2.3.4"); !errors.Is(err, errs.ErrUnauthorized) {
+		t.Errorf("login with old password: err=%v, want ErrUnauthorized", err)
 	}
 }
 
 func TestChangePasswordWrongCurrent(t *testing.T) {
 	h := newHarness(t, nil)
 	u := h.mustRegister(t, "cpw@example.com", "password123")
-	err := h.svc.ChangePassword(context.Background(), u.ID, "wrongcurrent", "newpassword456")
+	_, err := h.svc.ChangePassword(context.Background(), u.ID, "wrongcurrent", "newpassword456")
 	if !errors.Is(err, errs.ErrUnauthorized) {
 		t.Errorf("wrong current: err=%v, want ErrUnauthorized", err)
 	}
@@ -535,7 +657,7 @@ func TestResetPasswordExpiredToken(t *testing.T) {
 func TestRequireUserValidSession(t *testing.T) {
 	h := newHarness(t, nil)
 	h.mustRegister(t, "ru@example.com", "password123")
-	sess, _, _ := h.svc.Login(context.Background(), "ru@example.com", "password123", "1.2.3.4")
+	token, u, _ := h.svc.Login(context.Background(), "ru@example.com", "password123", "1.2.3.4")
 
 	var gotUserID string
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -548,15 +670,15 @@ func TestRequireUserValidSession(t *testing.T) {
 	})
 
 	req := httptest.NewRequest("GET", "/x", nil)
-	req.AddCookie(&http.Cookie{Name: h.svc.SessionCookieName(), Value: sess.Token})
+	req.AddCookie(&http.Cookie{Name: h.svc.SessionCookieName(), Value: token})
 	rec := httptest.NewRecorder()
 	h.svc.RequireUser(next).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNoContent {
 		t.Errorf("status = %d, want 204", rec.Code)
 	}
-	if gotUserID != sess.UserID {
-		t.Errorf("CurrentUser = %q, want %q", gotUserID, sess.UserID)
+	if gotUserID != u.ID {
+		t.Errorf("CurrentUser = %q, want %q", gotUserID, u.ID)
 	}
 }
 
@@ -577,11 +699,19 @@ func TestRequireUserNoCookie(t *testing.T) {
 
 func TestRequireUserExpiredSession(t *testing.T) {
 	h := newHarness(t, nil)
+	// Store the expired session under the HASHED token, mirroring a real mint, so
+	// the plaintext cookie resolves to it through the service's hashing.
+	plaintext := "raw-expired-token"
+	hashed, err := h.svc.hashSessionToken(plaintext)
+	if err != nil {
+		t.Fatalf("hashSessionToken: %v", err)
+	}
 	expired := session.NewSession("u1", time.Minute, time.Now().Add(-time.Hour))
+	expired.Token = hashed
 	h.sess.Create(context.Background(), expired)
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	req := httptest.NewRequest("GET", "/x", nil)
-	req.AddCookie(&http.Cookie{Name: h.svc.SessionCookieName(), Value: expired.Token})
+	req.AddCookie(&http.Cookie{Name: h.svc.SessionCookieName(), Value: plaintext})
 	rec := httptest.NewRecorder()
 	h.svc.RequireUser(next).ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {

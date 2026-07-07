@@ -55,6 +55,7 @@ func Run(t *testing.T, newRepos func(t *testing.T) auth.Repositories) {
 		t.Run("CreateGetDelete", func(t *testing.T) { testSessionsCRUD(t, newRepos(t)) })
 		t.Run("AbsentNotFound", func(t *testing.T) { testSessionsAbsent(t, newRepos(t)) })
 		t.Run("ExpiredAtRead", func(t *testing.T) { testSessionsExpired(t, newRepos(t)) })
+		t.Run("DeleteByUser", func(t *testing.T) { testSessionsDeleteByUser(t, newRepos(t)) })
 	})
 
 	t.Run("VerificationCodes", func(t *testing.T) {
@@ -216,6 +217,40 @@ func testSessionsExpired(t *testing.T, repos auth.Repositories) {
 	}
 	if _, err := repo.Get(ctx, sess.Token); !errors.Is(err, errs.ErrExpired) {
 		t.Errorf("Get(expired): err=%v, want ErrExpired", err)
+	}
+}
+
+// testSessionsDeleteByUser asserts the bulk, idempotent DeleteByUser contract:
+// it removes every session for the target user, leaves other users' sessions
+// intact, and returns nil on a second call when none remain (never ErrNotFound).
+func testSessionsDeleteByUser(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	repo := repos.Sessions
+
+	a1 := session.NewSession("userA", time.Hour, time.Now())
+	a2 := session.NewSession("userA", time.Hour, time.Now())
+	b1 := session.NewSession("userB", time.Hour, time.Now())
+	for _, s := range []session.Session{a1, a2, b1} {
+		if _, err := repo.Create(ctx, s); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+	}
+
+	if err := repo.DeleteByUser(ctx, "userA"); err != nil {
+		t.Fatalf("DeleteByUser(userA): %v", err)
+	}
+	for _, tok := range []string{a1.Token, a2.Token} {
+		if _, err := repo.Get(ctx, tok); !errors.Is(err, errs.ErrNotFound) {
+			t.Errorf("Get(userA session after DeleteByUser): err=%v, want ErrNotFound", err)
+		}
+	}
+	if got, err := repo.Get(ctx, b1.Token); err != nil || got.UserID != "userB" {
+		t.Errorf("userB session removed by DeleteByUser(userA): user=%q err=%v", got.UserID, err)
+	}
+
+	// Idempotent: a repeat with zero matching rows returns nil, not ErrNotFound.
+	if err := repo.DeleteByUser(ctx, "userA"); err != nil {
+		t.Errorf("second DeleteByUser(userA): err=%v, want nil", err)
 	}
 }
 

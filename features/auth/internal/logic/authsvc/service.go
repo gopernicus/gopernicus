@@ -22,6 +22,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/auth/logic/session"
 	"github.com/gopernicus/gopernicus/features/auth/logic/user"
 	"github.com/gopernicus/gopernicus/features/auth/logic/verification"
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/email"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
@@ -47,6 +48,12 @@ const (
 // (errs.ErrUnauthorized) so the transport can map it to 429 and clients can back
 // off. Checked with errors.Is.
 var ErrRateLimited = errors.New("too many login attempts")
+
+// ErrEmailNotVerified is returned by Login when Config.RequireVerifiedEmail is
+// set and the caller's email is unverified. It wraps errs.ErrForbidden so the
+// transport maps it to 403 (design §7.1). The public auth package re-exports it
+// as auth.ErrEmailNotVerified. Checked with errors.Is.
+var ErrEmailNotVerified = fmt.Errorf("email not verified: %w", errs.ErrForbidden)
 
 // Hasher hashes and verifies passwords. auth.PasswordHasher satisfies it
 // structurally; it is declared here rather than imported from the auth package
@@ -81,21 +88,29 @@ type Deps struct {
 	Limiter   ratelimiter.Limiter
 	Cookie    CookieConfig
 	Clock     func() time.Time // nil → time.Now
+	// RequireVerifiedEmail, when true, makes Login refuse an unverified user
+	// with ErrEmailNotVerified (403). Default false (design §7.1, AV8).
+	RequireVerifiedEmail bool
 }
 
 // Service implements the auth use cases over the repository ports.
 type Service struct {
-	users     user.UserRepository
-	passwords user.PasswordRepository
-	sessions  session.SessionRepository
-	codes     verification.CodeRepository
-	tokens    verification.TokenRepository
-	hasher    Hasher
-	mailer    email.Sender
-	mailFrom  string
-	limiter   ratelimiter.Limiter
-	cookie    CookieConfig
-	now       func() time.Time
+	users                user.UserRepository
+	passwords            user.PasswordRepository
+	sessions             session.SessionRepository
+	codes                verification.CodeRepository
+	tokens               verification.TokenRepository
+	hasher               Hasher
+	mailer               email.Sender
+	mailFrom             string
+	limiter              ratelimiter.Limiter
+	cookie               CookieConfig
+	now                  func() time.Time
+	requireVerifiedEmail bool
+	// tokenHasher is the fixed SHA-256 hasher for session cookie tokens. It is
+	// an internal implementation detail, not a host-provided port: the stored
+	// session value is always the SHA-256 hash of the cookie (design §7.3).
+	tokenHasher *cryptids.SHA256Hasher
 }
 
 // NewService builds a Service from its dependencies, applying cookie name/path
@@ -113,17 +128,19 @@ func NewService(d Deps) *Service {
 		cookie.Path = "/"
 	}
 	return &Service{
-		users:     d.Users,
-		passwords: d.Passwords,
-		sessions:  d.Sessions,
-		codes:     d.Codes,
-		tokens:    d.Tokens,
-		hasher:    d.Hasher,
-		mailer:    d.Mailer,
-		mailFrom:  d.MailFrom,
-		limiter:   d.Limiter,
-		cookie:    cookie,
-		now:       clock,
+		users:                d.Users,
+		passwords:            d.Passwords,
+		sessions:             d.Sessions,
+		codes:                d.Codes,
+		tokens:               d.Tokens,
+		hasher:               d.Hasher,
+		mailer:               d.Mailer,
+		mailFrom:             d.MailFrom,
+		limiter:              d.Limiter,
+		cookie:               cookie,
+		now:                  clock,
+		requireVerifiedEmail: d.RequireVerifiedEmail,
+		tokenHasher:          cryptids.NewSHA256Hasher(),
 	}
 }
 
@@ -187,74 +204,104 @@ func (s *Service) Verify(ctx context.Context, code string) error {
 }
 
 // Login rate-limits FIRST on (email, client-IP), then verifies the password and
-// mints a session. Rate-limit exhaustion returns ErrRateLimited; any credential
-// mismatch (unknown email, missing password, wrong password) returns the same
-// generic errs.ErrUnauthorized so the response cannot distinguish them.
+// mints a session, returning the plaintext cookie token (the stored session
+// value is that token's hash — see mintSession). Rate-limit exhaustion returns
+// ErrRateLimited; any credential mismatch (unknown email, missing password,
+// wrong password) returns the same generic errs.ErrUnauthorized so the response
+// cannot distinguish them.
 //
-// v1 does not gate login on email verification: the verified flag is tracked
-// but a user may sign in before confirming their address (documented v1 scope).
-func (s *Service) Login(ctx context.Context, emailAddr, password, clientIP string) (session.Session, user.User, error) {
+// When Config.RequireVerifiedEmail is set, a caller with correct credentials but
+// an unverified email is refused with ErrEmailNotVerified (403) — the check runs
+// AFTER password verification so it never leaks a verified/unverified signal to
+// an unauthenticated attacker. Default off (design §7.1).
+func (s *Service) Login(ctx context.Context, emailAddr, password, clientIP string) (string, user.User, error) {
 	normalized, err := user.NormalizeEmail(emailAddr)
 	if err != nil {
-		return session.Session{}, user.User{}, invalidCredentials()
+		return "", user.User{}, invalidCredentials()
 	}
 
 	res, err := s.limiter.Allow(ctx, loginKey(normalized, clientIP), ratelimiter.PerMinute(loginAttemptsPerMinute))
 	if err != nil {
-		return session.Session{}, user.User{}, err
+		return "", user.User{}, err
 	}
 	if !res.Allowed {
-		return session.Session{}, user.User{}, ErrRateLimited
+		return "", user.User{}, ErrRateLimited
 	}
 
 	u, err := s.users.GetByEmail(ctx, normalized)
 	if err != nil {
-		return session.Session{}, user.User{}, invalidCredentials()
+		return "", user.User{}, invalidCredentials()
 	}
 	hash, err := s.passwords.Get(ctx, u.ID)
 	if err != nil {
-		return session.Session{}, user.User{}, invalidCredentials()
+		return "", user.User{}, invalidCredentials()
 	}
 	if err := s.hasher.VerifyPassword(hash, password); err != nil {
-		return session.Session{}, user.User{}, invalidCredentials()
+		return "", user.User{}, invalidCredentials()
+	}
+	if s.requireVerifiedEmail && !u.EmailVerified {
+		return "", user.User{}, ErrEmailNotVerified
 	}
 
-	sess := session.NewSession(u.ID, s.sessionTTL(), s.now())
-	created, err := s.sessions.Create(ctx, sess)
+	token, _, err := s.mintSession(ctx, u.ID)
 	if err != nil {
-		return session.Session{}, user.User{}, err
+		return "", user.User{}, err
 	}
-	return created, u, nil
+	return token, u, nil
 }
 
-// Logout deletes the session for token. A token that is already gone is not an
-// error (logout is idempotent).
+// Logout deletes the session for the cookie token. A blank token, or one already
+// gone, is not an error (logout is idempotent). The token is hashed before the
+// delete so it matches the stored value (design §7.3).
 func (s *Service) Logout(ctx context.Context, token string) error {
-	if err := s.sessions.Delete(ctx, token); err != nil && !errors.Is(err, errs.ErrNotFound) {
+	if token == "" {
+		return nil
+	}
+	hashed, err := s.hashSessionToken(token)
+	if err != nil {
+		return err
+	}
+	if err := s.sessions.Delete(ctx, hashed); err != nil && !errors.Is(err, errs.ErrNotFound) {
 		return err
 	}
 	return nil
 }
 
-// ChangePassword verifies the current password, then stores a new hash. A wrong
-// current password returns errs.ErrUnauthorized; a too-short new password
+// ChangePassword verifies the current password, stores the new hash, then
+// revokes ALL of the user's sessions and mints a fresh one for the caller,
+// returning the new plaintext cookie token (design §7.2, amended 2026-07-07). A
+// wrong current password returns errs.ErrUnauthorized; a too-short new password
 // returns errs.ErrInvalidInput.
-func (s *Service) ChangePassword(ctx context.Context, userID, currentPassword, newPassword string) error {
+//
+// Atomicity pin (design §7.2): once the new hash is stored, a DeleteByUser
+// failure is RETURNED, never best-effort-logged — the password changed but stale
+// sessions may survive, and that must surface to the operator.
+func (s *Service) ChangePassword(ctx context.Context, userID, currentPassword, newPassword string) (string, error) {
 	hash, err := s.passwords.Get(ctx, userID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := s.hasher.VerifyPassword(hash, currentPassword); err != nil {
-		return fmt.Errorf("current password is incorrect: %w", errs.ErrUnauthorized)
+		return "", fmt.Errorf("current password is incorrect: %w", errs.ErrUnauthorized)
 	}
 	if err := validatePassword(newPassword); err != nil {
-		return err
+		return "", err
 	}
 	newHash, err := s.hasher.HashPassword(newPassword)
 	if err != nil {
-		return fmt.Errorf("hash password: %w", err)
+		return "", fmt.Errorf("hash password: %w", err)
 	}
-	return s.passwords.Set(ctx, userID, newHash)
+	if err := s.passwords.Set(ctx, userID, newHash); err != nil {
+		return "", err
+	}
+	if err := s.sessions.DeleteByUser(ctx, userID); err != nil {
+		return "", err
+	}
+	token, _, err := s.mintSession(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	return token, nil
 }
 
 // ForgotPassword issues a reset token and mails it — but only when the email is
@@ -304,14 +351,19 @@ func (s *Service) ResetPassword(ctx context.Context, token, newPassword string) 
 	return nil
 }
 
-// ValidateSession returns the live session for token. A blank token returns
-// errs.ErrUnauthorized; unknown/expired tokens surface errs.ErrNotFound /
-// errs.ErrExpired from the store.
+// ValidateSession returns the live session for the cookie token. A blank token
+// returns errs.ErrUnauthorized; unknown/expired tokens surface errs.ErrNotFound
+// / errs.ErrExpired from the store. The token is hashed before the lookup so it
+// matches the stored value (design §7.3).
 func (s *Service) ValidateSession(ctx context.Context, token string) (session.Session, error) {
 	if token == "" {
 		return session.Session{}, fmt.Errorf("no session: %w", errs.ErrUnauthorized)
 	}
-	return s.sessions.Get(ctx, token)
+	hashed, err := s.hashSessionToken(token)
+	if err != nil {
+		return session.Session{}, err
+	}
+	return s.sessions.Get(ctx, hashed)
 }
 
 // RequireUser is HTTP middleware that gates next on a valid session cookie. On a
@@ -380,6 +432,35 @@ func (s *Service) sessionTTL() time.Duration {
 		return time.Duration(s.cookie.MaxAge) * time.Second
 	}
 	return defaultSessionTTL
+}
+
+// mintSession creates a fresh session for userID, persists it under the HASHED
+// token, and returns the plaintext cookie value alongside the stored session
+// (whose Token field is the hash). It is the single mint path Login and
+// ChangePassword share (design §7.3, plan-cut WI1/WI3); future OAuth-/JWT-minted
+// sessions route through it too, so no call site persists a raw token.
+func (s *Service) mintSession(ctx context.Context, userID string) (string, session.Session, error) {
+	sess := session.NewSession(userID, s.sessionTTL(), s.now())
+	token := sess.Token
+	hashed, err := s.hashSessionToken(token)
+	if err != nil {
+		return "", session.Session{}, err
+	}
+	sess.Token = hashed
+	created, err := s.sessions.Create(ctx, sess)
+	if err != nil {
+		return "", session.Session{}, err
+	}
+	return token, created, nil
+}
+
+// hashSessionToken returns the stored form of a session cookie token — its
+// SHA-256 hex digest. This is the ONLY place a session token is hashed (design
+// §7.3): mintSession's create, ValidateSession's get, and Logout's delete all
+// route through it, so the plaintext cookie value never reaches a repository and
+// no second call site can drift.
+func (s *Service) hashSessionToken(token string) (string, error) {
+	return s.tokenHasher.Hash(token)
 }
 
 func (s *Service) sendVerificationEmail(ctx context.Context, u user.User, code string) error {
