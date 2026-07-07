@@ -825,3 +825,97 @@ lands, per RH1-public + SRE amendment):**
 secret scanning + push protection enabled before the first push, `main`
 pushed clean, all content/HTTP checks and the standing gate green. This log
 commit is the SECOND push landing with push protection active.
+
+### task-5 — 2026-07-07 (required CI gate) — PASS
+
+**CHECK-RUN CONTEXT NAME (task-11 pins branch protection to this EXACT literal
+string):** `check`. Confirmed via
+`gh api /repos/gopernicus/gopernicus/commits/<sha>/check-runs --jq
+'.check_runs[].name'` → `check` (per event), and `gh pr checks 1` first column
+→ `check`. It is the JOB id, NOT the "workflow / job" form — the initial
+workflow comment said "check / check" and was CORRECTED to `check` in a
+follow-up commit before merge (see divergence 2). A rename of the `check` job
+silently un-enforces the task-11 gate unless the protection rule is updated in
+the same change.
+
+**Files changed:**
+- `.github/workflows/check.yml` (new) — one job `check` on `ubuntu-latest`;
+  `permissions: contents: read`; triggers `push:` + `pull_request:` (plain
+  push + PR, per the task title); `concurrency: group: check-${{ github.ref }}`,
+  `cancel-in-progress: true`; `actions/checkout@v4`; `actions/setup-go@v5` with
+  `go-version-file: go.work` (declares `go 1.26.1`; `GOTOOLCHAIN` left auto so
+  the exact toolchain self-downloads), `cache: true`,
+  `cache-dependency-path: "**/go.sum"` (no root `go.sum` in a `go.work` tree);
+  step `run: make check`. templ comes only from `go tool templ` via the Makefile
+  (`tool` directive in `features/cms/go.mod`) — CI never `go install`s templ
+  (noted in a workflow comment, alongside the pinned-context-name warning).
+- `Makefile` — 2-line addition to `check` (surgical): after the `MODULES`
+  vet/build/test loop and before `$(MAKE) guard`, an integration-tag vet step:
+  `@echo "== integration-tag vet (compile-only, no DB) =="` then
+  `@for m in $(filter %/turso,$(STORE_MODULES)); do echo "== vet -tags=integration $$m =="; (cd $$m && go vet -tags=integration ./...) || exit 1; done`.
+  DERIVED from the turso subset of `STORE_MODULES` via `$(filter %/turso,…)`
+  (never a hardcoded list — a future 4th turso store is picked up automatically;
+  filter currently expands to `features/cms/stores/turso
+  features/auth/stores/turso features/jobs/stores/turso`). Compile-only (`go
+  vet` compiles the `//go:build integration` test files but runs nothing) and
+  needs no DB — the suites stay env-gated.
+
+**Verify — in plan order:**
+1. **`make check` locally FIRST — PASS.** New integration-vet step ran for all
+   three turso stores with no DB; ended `all checks passed`. Drift gate took the
+   git-diff branch (checksum-fallback string absent).
+2. **Push branch + PR + observe green on remote — PASS.** Branch
+   `ci/required-check`, PR **#1** (https://github.com/gopernicus/gopernicus/pull/1).
+   Initial head `f87e96a`: push run **28896578463** = success, PR run
+   **28896590067** = success (2m48s). After the context-name comment fix
+   (follow-up commit, non-force push — the amend/force-push path was denied by
+   the sandbox as a remote-history rewrite, so a normal follow-up commit was
+   used instead), amended head `3a46fea`: push run **28896931836** = success,
+   PR run **28896934807** = success (37s, cache-warm).
+3. **Remote log content — PASS.** In run 28896590067's log: the `go tool templ
+   generate` step ran (git-diff drift branch — actions/checkout provides `.git`,
+   so `[ -d .git ]` is true; the checksum `shasum` fallback and the "templ
+   generation drift" string never appeared); a `== <module> ==` block for
+   **all 26** entries in the Makefile `MODULES` set (verified list: sdk, the 13
+   integrations, features/{auth,cms,jobs} + their 6 pgx/turso stores, and
+   examples/{auth-cms,cms,jobs-minimal,minimal}); the `== integration-tag vet
+   (compile-only, no DB) ==` step with a `vet -tags=integration` line for each
+   of the three turso stores; all **four** guard headers (sdk-stdlib,
+   feature-isolation, sdk-no-outward, no-legacy-path); final `all checks passed`.
+4. **Workspace-mode `go.work.sum` — PASS.** No `go.work.sum` / `missing go.sum`
+   / `inconsistent` / `-mod=readonly` complaint in the remote log; workspace
+   mode regenerated it silently. SRE fallback (tracking `go.work.sum`) NOT
+   needed.
+5. **Merge + green on main — PASS.** Squash-merged (`gh pr merge 1 --squash
+   --delete-branch`; chose squash to collapse the 2 branch commits into one
+   clean main commit), merge SHA **8d313dc**, branch deleted. Post-merge main
+   push run **28897009296** = success; check-run name on `8d313dc` = `check`.
+6. **Context name recorded** — `check` (top of this entry + the workflow
+   comment).
+7. **Standing per-leg check — PASS.** Local `make check` green (step 1; local
+   tree == merged content, unchanged after `git pull --ff-only`). Boot
+   `examples/minimal` on :8081 (`PORT=8081 go run ./cmd/server`): `GET /` →
+   **200**, `GET /products/widget-3000` → **200**; killed by port; port 8081
+   free (post-kill curl → `000` connection refused).
+
+**Divergences (none are failures):**
+1. **Node 20 deprecation annotation** on every run: `actions/checkout@v4` and
+   `actions/setup-go@v5` target Node 20 and are auto-forced onto Node 24 by the
+   runner — a benign warning, not a failure (runs are green). Follow-up: bump to
+   the Node-24 action majors when convenient; left as-is here (surgical diff,
+   actions function correctly).
+2. **Context-name comment correction.** The first commit's workflow comment
+   read "check / check"; the check-runs API + `gh pr checks` both report `check`.
+   Corrected in a follow-up commit before merge (non-force). The recorded,
+   authoritative string task-11 must pin is **`check`**.
+3. **Two CI runs per branch push** (push event + pull_request event) — they
+   carry different `github.ref` (`refs/heads/…` vs `refs/pull/1/merge`) so the
+   per-ref concurrency group does not cancel across them; both are the same
+   `check` check-run name and both must be green. Documented in a workflow
+   comment. Not a defect — the plan permits plain push+PR triggering.
+
+**Result: PASS** — required gate live; observed green on branch, PR, and `main`
+post-merge; log shows the drift git-diff step, all 26 module blocks, the
+integration-tag vet step, and the four guards; context name `check` recorded for
+task-11. No branch protection applied yet (task-11). This log commit's own run
+is confirmed green on the remote below at push time.
