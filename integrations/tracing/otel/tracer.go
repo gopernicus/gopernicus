@@ -14,6 +14,7 @@ import (
 var (
 	_ tracing.Tracer       = (*Tracer)(nil)
 	_ tracing.SpanFinisher = (*spanFinisher)(nil)
+	_ tracing.SpanIdentity = (*spanFinisher)(nil)
 )
 
 // Tracer implements sdk/tracing.Tracer over an OpenTelemetry tracer. Build one
@@ -85,4 +86,25 @@ func (f *spanFinisher) RecordError(err error) {
 // Finish ends the span. Call it exactly once.
 func (f *spanFinisher) Finish() {
 	f.span.End()
+}
+
+// TraceID returns the span's trace ID as a hex string, satisfying
+// tracing.SpanIdentity so a caller (e.g. web.Tracing) can stash it via
+// logging.WithTraceID. It returns "" when the span context has no valid trace ID.
+func (f *spanFinisher) TraceID() string {
+	sc := f.span.SpanContext()
+	if !sc.HasTraceID() {
+		return ""
+	}
+	return sc.TraceID().String()
+}
+
+// SpanID returns the span's span ID as a hex string, satisfying
+// tracing.SpanIdentity. It returns "" when the span context has no valid span ID.
+func (f *spanFinisher) SpanID() string {
+	sc := f.span.SpanContext()
+	if !sc.HasSpanID() {
+		return ""
+	}
+	return sc.SpanID().String()
 }

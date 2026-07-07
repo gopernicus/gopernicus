@@ -67,6 +67,50 @@ func TestProviderExporter(t *testing.T) {
 	}
 }
 
+// TestSpanFinisherExposesIDs drives the SpanIdentity path through the tracetest
+// SpanRecorder: the finisher's TraceID/SpanID must be valid hex and match the
+// recorded span's own SpanContext, so web.Tracing can link them onto log lines.
+func TestSpanFinisherExposesIDs(t *testing.T) {
+	rec := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
+
+	tracer, err := otel.Open(context.Background(), otel.Config{
+		Exporter:    otel.ExporterProvider,
+		ServiceName: "identity-test",
+		Provider:    provider,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	_, span := tracer.StartSpan(context.Background(), "identity.span")
+	id, ok := span.(tracing.SpanIdentity)
+	if !ok {
+		t.Fatal("spanFinisher does not satisfy tracing.SpanIdentity")
+	}
+	traceID, spanID := id.TraceID(), id.SpanID()
+	span.Finish()
+
+	if len(traceID) != 32 {
+		t.Errorf("TraceID() = %q, want a 32-hex-char trace id", traceID)
+	}
+	if len(spanID) != 16 {
+		t.Errorf("SpanID() = %q, want a 16-hex-char span id", spanID)
+	}
+
+	ended := rec.Ended()
+	if len(ended) != 1 {
+		t.Fatalf("recorded spans = %d, want 1", len(ended))
+	}
+	sc := ended[0].SpanContext()
+	if got := sc.TraceID().String(); got != traceID {
+		t.Errorf("finisher TraceID = %q, recorded span TraceID = %q", traceID, got)
+	}
+	if got := sc.SpanID().String(); got != spanID {
+		t.Errorf("finisher SpanID = %q, recorded span SpanID = %q", spanID, got)
+	}
+}
+
 // TestStdoutExporter redirects the stdout exporter to a buffer and asserts the
 // emitted JSON carries the span name and attribute — the exporter is
 // synchronous, so the span is present as soon as Finish returns.
