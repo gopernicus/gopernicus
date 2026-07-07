@@ -882,3 +882,62 @@ root `make check` — PASS ("all checks passed"); `examples/minimal` booted on
 8081 confirmed free.
 
 **Divergences:** none.
+
+### task-7 — 2026-07-07 (flag closures + ledger + doc sync) — PASS
+
+Docs-only; no Go code touched.
+
+**Landed — NOTES.md (two appended entries, in order):**
+1. `## 2026-07-07 — telemetry-closeout EXECUTED: web.Tracing shipped,
+   real-drive proof on remote playground Turso, hygiene flags dispositioned`
+   — records what shipped (task-1 `web.Tracing` + `tracing.SpanIdentity` TC5;
+   task-2 otel finisher IDs + cms wiring; task-3/task-5 hygiene fixes), the
+   drive evidence pointer (this plan's Execution log; DSN class = **remote
+   playground Turso**; OTLP shutdown-flush leg PASSED via Jaeger; main-session
+   browser leg observed spans + linkage), and the flag closures each citing
+   its origin entry: JobID/JobStatus/Retries → WONT-DO; Caser/AddAcronym →
+   ALREADY-SHIPPED (corrects the "parked" framing); gcs credential swap → per
+   TC4 DEFER, closed WONT-DO-until-a-live-GCS-run (verified form
+   `option.WithAuthCredentialsJSON(option.ServiceAccount, []byte(cfg.CredentialsJSON))`
+   recorded + the scope-drop warning against the
+   `WithAuthCredentials`/`DetectDefault` form); ß→`s` KEPT (TC2); turso naming
+   KEPT (TC3) — all three citing the 2026-07-07 "planning wave RATIFIED"
+   entry; C1 assess-only done (forward-plan shape at
+   `.claude/plans/telemetry-closeout/c1-assessment.md`). Plus the two
+   execution facts: `examples/cms` admin routes ungated (auth-v2/examples
+   scope), and jobs-minimal's `slog.SetDefault` workaround removed when the
+   `Config.Logger` knob landed.
+2. `## 2026-07-07 — demand-gated deferral ledger (telemetry-closeout; every
+   deferral gets a wake-up TRIGGER)` — appended VERBATIM from this plan's
+   "Ledger entry" section, heading date filled 2026-07-07; rows unedited
+   (jobs v2, tenancy, otel W3C propagation, s3 streaming multipart, goredis
+   token-bucket, sdk/web transit-middleware residue, generic HTTP rate-limit
+   middleware, C1, span-kind vocabulary, ReBAC pointer).
+
+**Landed — sdk/README.md (web row extended):** the `web` package row's
+middleware list now reads "request-id, **tracing**, logger, panic recovery,
+CORS, default headers — **place `Tracing` outer of `Logger`** so the traced
+context reaches the access log line and `RecordError` keeps landing on
+Logger's writer" (steward/PM amendment: the ordering constraint lives on the
+reusable surface's docs, not only in example wiring).
+
+**Landed — capability-map.md (execution note):** appended
+`**Execution note (2026-07-07, telemetry-closeout):**` to the file's
+top-of-file execution-note block — Telemetry section rows BUILT (`sdk/tracing`
++ `Noop`, `integrations/tracing/otel`, trace-aware `sdk/logging`,
+`sdk/web.Tracing`), real-drive-verified on `examples/cms` (remote playground
+Turso); Metrics stay N/A; the Bridge transit-middleware residue rows + generic
+HTTP rate-limit middleware remain backlog, now trigger-gated in the NOTES.md
+2026-07-07 demand-gated deferral ledger.
+
+**Verify (all PASS):**
+- `git status` docs-only — PASS: only `NOTES.md`, `sdk/README.md`,
+  `.claude/plans/restructure/capability-map.md`, and this plan file modified.
+- `make guard` — PASS (all four guards ran green; cheap confirmation nothing
+  moved).
+- Standing per-leg check: root `make check` — PASS ("all checks passed", 26
+  modules build/vet/test + integration-tag vet + four guards).
+  `examples/minimal` booted on :8081 → `GET /` 200,
+  `GET /products/widget-3000` 200; killed by port; port 8081 confirmed free.
+
+**Divergences:** none.

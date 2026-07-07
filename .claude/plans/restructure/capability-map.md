@@ -19,6 +19,18 @@ revision) — as `features/auth` + `stores/{turso,postgres}` +
 connector row is BUILT (`integrations/datastores/postgres`, portability
 P1). v2 rows (OAuth, API keys, JWT, invitations, ReBAC, tenancy) remain
 deferred as classified.
+**Execution note (2026-07-07, telemetry-closeout):** the Telemetry
+section's rows are BUILT — `sdk/tracing` port + `Noop`,
+`integrations/tracing/otel` (stdout/OTLP exporters), the trace-aware
+`sdk/logging` handler, and the request-scoped span middleware
+(`sdk/web.Tracing`, place outer of `web.Logger`), all real-drive-verified
+on `examples/cms` (remote playground Turso; span/log excerpts in
+`.claude/plans/telemetry-closeout/plan.md`). Metrics stay N/A (no original
+capability). The "Bridge transit middleware" residue rows (max-body-size /
+client-info / trust-proxy / idempotency-key, and the generic HTTP
+rate-limit middleware under Rate limiting) remain backlog — now
+trigger-gated in the NOTES.md 2026-07-07 demand-gated deferral ledger, not
+scheduled.
 Source: exhaustive walk of `/Users/jrazmi/code/gopernicus-ecosystem/gopernicus-original`
 (`github.com/gopernicus/gopernicus`, the old single-module framework), top-level by
 top-level: `bridge/`, `core/`, `infrastructure/`, `sdk/`, `telemetry/`, `workshop/`.
