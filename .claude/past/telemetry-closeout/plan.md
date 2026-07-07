@@ -941,3 +941,47 @@ HTTP rate-limit middleware remain backlog, now trigger-gated in the NOTES.md
   `GET /products/widget-3000` 200; killed by port; port 8081 confirmed free.
 
 **Divergences:** none.
+
+### task-8 — 2026-07-07 (final gate) — PASS
+
+Fresh, uncached full gate: `go clean -testcache && make check`. Ended
+`all checks passed`.
+
+**Per-module results:** all 26 modules green (vet + build + test), no
+failures. The `== module ==` blocks, in gate order: `sdk`,
+`integrations/cryptids/bcrypt`, `integrations/cryptids/golang-jwt`,
+`integrations/datastores/pgxdb`, `integrations/datastores/turso`,
+`integrations/email/sendgrid`, `integrations/filestorage/gcs`,
+`integrations/filestorage/s3`, `integrations/kvstores/goredis`,
+`integrations/oauth/github`, `integrations/oauth/google`,
+`integrations/scheduling/robfig-cron`, `integrations/tracing/otel`,
+`features/auth`, `features/auth/stores/pgx`, `features/auth/stores/turso`,
+`features/cms`, `features/cms/stores/pgx`, `features/cms/stores/turso`,
+`features/jobs`, `features/jobs/stores/pgx`, `features/jobs/stores/turso`,
+`examples/auth-cms`, `examples/cms`, `examples/jobs-minimal`,
+`examples/minimal` — 26/26 PASS. Templ generation was a no-op (no
+`*_templ.go` git-diff drift). Integration-tag vet (compile-only, no DB) clean
+for the three turso store modules. All four guards ran clean
+(guard-sdk-stdlib, guard-feature-isolation, guard-sdk-no-outward,
+guard-no-legacy-path).
+
+**Module-count agreement:** go.work `use` block = 26 entries; Makefile
+`MODULES` = 26 entries; 26 = 26, unchanged this milestone (no go.work/Makefile
+edits landed anywhere in this plan).
+
+**Drive-evidence confirmation (the gate does NOT substitute for it):** the
+workstream-1 real-interaction evidence IS recorded above in this Execution
+log — the task-2 entry carries the remote-playground DSN class ("DSN class:
+**remote playground Turso** (`libsql://gopernicus-cms-playground-…turso.io`,
+the authorized DB)"), the stdout span↔log excerpts with matching
+`trace_id`/`span_id`, and the OTLP shutdown-flush leg ("**OTLP
+shutdown-flush leg (Risk 1 proof) — RAN, PASS:**", spans confirmed arrived at
+Jaeger after SIGTERM); the task-2 browser addendum records the real-browser
+leg ("a real-browser pass (playwright/chromium) against
+`TRACING_ENABLED=true make run` (remote playground DSN)"). Both present.
+
+**Standing per-leg check:** `examples/minimal` booted on :8081 → `GET /` 200,
+`GET /products/widget-3000` 200; killed by port (pid 97329); port 8081
+confirmed free.
+
+**Divergences:** none.
