@@ -29,6 +29,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/jobs/internal/logic/queuesvc"
@@ -128,6 +129,12 @@ type Config struct {
 	// ScheduleBatch is the number of due schedules handled per tick; 0 →
 	// defaultScheduleBatch.
 	ScheduleBatch int
+	// Logger is the operational logger for the runtime pools (queue and
+	// scheduler); nil → slog.Default(). It is distinct from feature.Mount.Logger:
+	// Config.Logger is the runtime pools' operational logger, while Mount.Logger
+	// is registration-time logging — do not unify them by threading Mount into
+	// NewService.
+	Logger *slog.Logger
 }
 
 // resolvedConfig is Config with defaults applied.
@@ -136,6 +143,7 @@ type resolvedConfig struct {
 	pollInterval time.Duration
 	idleInterval time.Duration
 	maxAttempts  int
+	logger       *slog.Logger // nil → the seams fall back to slog.Default()
 }
 
 // Service is the jobs feature's enqueue + scheduling capability, minus the run
@@ -167,6 +175,7 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 		pollInterval: cfg.PollInterval,
 		idleInterval: cfg.IdleInterval,
 		maxAttempts:  cfg.MaxAttempts,
+		logger:       cfg.Logger,
 	}
 	if rc.workers <= 0 {
 		rc.workers = defaultWorkers
@@ -188,6 +197,7 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 			Enqueuer:  svc.queue,
 			CronNext:  cronNextFunc(cfg.Cron),
 			Batch:     cfg.ScheduleBatch,
+			Logger:    cfg.Logger,
 		})
 	}
 
@@ -255,6 +265,7 @@ func NewRuntime(svc *Service) (*Runtime, error) {
 		PollInterval: svc.cfg.pollInterval,
 		IdleInterval: svc.cfg.idleInterval,
 		MaxAttempts:  svc.cfg.maxAttempts,
+		Logger:       svc.cfg.logger,
 	})
 
 	return &Runtime{rt: rt, wake: svc.queue.Wake()}, nil
