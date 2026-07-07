@@ -575,8 +575,59 @@ ratified 2026-07-07 (TC1–TC5) — no further review pending.
 
 ## Execution log
 
-_Empty until execution. Task-2's drive evidence (exact commands, span + log
-excerpts) lands here; task-8 confirms it exists before closing._
+_Task-2's drive evidence (exact commands, span + log excerpts) lands here;
+task-8 confirms it exists before closing._
+
+### task-1 — 2026-07-07 (sdk/web Tracing middleware) — PASS
+
+**Landed:**
+- `sdk/tracing/tracing.go`: added the NAMED optional interface
+  `SpanIdentity interface { TraceID() string; SpanID() string }` (TC5) with the
+  doc line "optional; implementations without stable span identity simply omit
+  it"; fixed the stale package doc (dropped "future"/"deferred" otel wording —
+  the module shipped) and added the SpanIdentity linkage-convention pointer for
+  implementers.
+- `sdk/web/middleware.go`: added `func Tracing(t tracing.Tracer) Middleware`
+  mirroring the Logger/Panics shape; nil tracer → `tracing.Noop{}`. Span name
+  from `r.Pattern` alone, static `"http.request"` fallback (never `URL.Path`).
+  Attributes via `tracing.StringAttribute`: `http.method`, `http.host`,
+  `user_agent`, `net.peer.ip` (peer host from `RemoteAddr` via a new `peerHost`
+  helper), `http.route` (only when pattern non-empty), and `http.status_code`
+  from the package's own `statusWriter` after `next`. 5xx → `RecordError` with a
+  synthesized `fmt.Errorf("server error: %d", status)` — the wrapper's recorded
+  error is never read. Type-asserts `tracing.SpanIdentity` on the returned
+  finisher and, on non-empty IDs, stashes via `logging.WithTraceID`/`WithSpanID`
+  before `r.WithContext(ctx)`. Godoc states "place outer of `web.Logger`" with
+  both consequences (traced ctx into the access line; RecordError landing on
+  Logger's writer) plus the accepted Noop cost (per-request attr slice +
+  RemoteAddr parse, no fast path).
+- `sdk/tracing/tracing_test.go`: `TestNoopFinisherDoesNotSatisfySpanIdentity`,
+  `TestSpanIdentityExposesIDs` (+ compile assertion `var _ SpanIdentity`).
+- `sdk/web/middleware_test.go`: recording + identity tracer stubs;
+  `TestTracing_StartsAndFinishesSpanPerRequest`,
+  `TestTracing_StaticNameFallbackWhenNoPattern`,
+  `TestTracing_StatusCodeAttribute`, `TestTracing_RecordsServerError`,
+  `TestTracing_ClientErrorDoesNotRecord`,
+  `TestTracing_SpanIdentityStashesTraceAndSpanIDs` (asserts trace_id/span_id via
+  `logging.TracingHandler` JSON output), `TestTracing_NoopPathCarriesNoIDs`.
+
+**Verify (all PASS):**
+- `cd sdk && go build ./...` — PASS.
+- `cd sdk && go test ./...` — PASS (all packages ok; new Tracing/SpanIdentity
+  tests green).
+- `cd sdk && go vet ./...` — PASS (clean).
+- `make guard` — PASS (all four guards green; the intra-sdk `sdk/web` →
+  `sdk/tracing` edge passes guard-sdk-stdlib as expected).
+- Standing per-leg check: root `make check` — PASS (all 26 modules
+  build/vet/test + four guards, "all checks passed"). `examples/minimal` booted
+  on :8081 — `GET /` → 200, `GET /products/widget-3000` → 200; killed by pid,
+  port confirmed free.
+
+**Divergences:** none affecting design points. Peer-host attribute key uses
+`net.peer.ip` (salvage-reference precedent from
+`gopernicus-original/.../httpmid/telemetry.go`); the plan named that attribute
+descriptively ("peer host from RemoteAddr") without pinning a key. `user_agent`
+key follows the plan text verbatim (not the salvage's `http.user_agent`).
 
 ## Notes
 
