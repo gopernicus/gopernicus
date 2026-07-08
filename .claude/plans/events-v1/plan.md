@@ -1746,3 +1746,59 @@ Every phase-2 DoD clause with its verifying artifact:
 - **storetest green hermetically** — `TestReference` runs `Run` against the
   honest in-memory reference on every `features/events` `go test` and every
   `make check`; verified this leg (race-clean, no driver in the graph — guard G2).
+
+### 2026-07-08 — task-7 (cms core — nil-guarded emits from `entrysvc`) executed
+
+- **cms-internal typed events** — new `features/cms/internal/logic/entrysvc/events.go`:
+  three structs embedding `sdkevents.BaseEvent` — `ContentPublished`,
+  `ContentUpdated`, `ContentDeleted` — with private constructors that stamp the
+  ratified type name + aggregate metadata via `NewBaseEvent(type).WithAggregate("entry", entryID)`.
+  Type-name consts: `content.published` / `content.updated` / `content.deleted`
+  only; aggregate_type const `"entry"`. No shared struct crosses the feature
+  boundary (§4 rule-6 note) — consumers subscribe by topic, project metadata only.
+- **Emitter collaborator** — `Service` gained an `events sdkevents.Emitter`
+  field. `NewService` signature extended with a **trailing optional**
+  `emitter ...sdkevents.Emitter` (variadic, not a new required positional) so
+  the ~11 existing 3-arg `NewService(...)` call sites — including the whole
+  existing `service_test.go` suite — compile and pass **unmodified**; omitted or
+  nil ⇒ `sdkevents.Noop{}`, so emit call sites stay unconditional. `cms.Register`
+  now passes `m.Events` as that trailing arg (`entrysvc.NewService(repos.Entries,
+  registry, nil, m.Events)`). cms is still package-func `Register` (B3 deferred) —
+  it receives the `feature.Mount` and threads `m.Events`.
+- **Emit points (all AFTER the domain write returns, never inside/around a repo
+  call — best-effort §3), by method:line in service.go:**
+  - `Create` emit L98 → `content.updated` (aggregate_id = created entry ID)
+  - `Edit` emit L129 → `content.updated`
+  - `Publish` emit L166 → `content.published`
+  - `Unpublish` emit L181 → `content.updated`
+  - `Delete` emit L190 → `content.deleted` (aggregate_id = the id arg)
+  - `SetTerms` emit L199 → `content.updated` (aggregate_id = entryID)
+  Each write method now captures the repo result, returns early on error
+  (no emit on a failed write), then calls the private `emit(ctx, evt)` helper.
+- **Emit is swallowed, never returned** — `emit` calls `s.events.Emit(ctx, evt)`
+  and on error logs via `slog.Default().ErrorContext` at most; the write already
+  succeeded so the caller never sees an emit error (§3 best-effort).
+- **Tests (service_test.go, additive only — existing functions byte-identical):**
+  `TestService_Emits` drives Create/Edit/Publish/Unpublish/SetTerms/Delete
+  through a `recordingBus` (wraps `sdkevents.NewMemory()`, forces `WithSync()` so
+  delivery is deterministic) subscribed on `"*"`, asserting each path's exact
+  event type + aggregate metadata (aggregate_type "entry", aggregate_id = entry
+  ID). `TestService_EmitErrorNotReturned` uses a `failingEmitter` (always errors)
+  and asserts Create returns nil error + a created entry. `TestService_NilEmitterNoPanic`
+  proves the nil-emitter default path. The pre-existing suite ran **unmodified**
+  and green — no behavior drift.
+- **Rule-6 grep clean** — `grep -rn '"…/features/\(authentication\|events\|jobs\)'
+  features/cms/ --exclude-dir=stores` → empty (exit 1). Independent
+  `grep -rn 'features/events' features/cms/` → empty: cms rides the emitter on
+  `sdk/events` only, never imports `features/events`.
+- **Verify:** `cd features/cms && go build ./... && go test ./... && go vet ./...`
+  all green (entrysvc suite ok). `make check` → "all checks passed"; `make guard`
+  green (all six guards). Real-interaction (nil-emitter host, proves unchanged
+  behavior): booted `examples/minimal` on :8081 → `GET /` 200, `GET
+  /products/widget-3000` 200; listener killed, port confirmed free.
+- **DIVERGENCE (pre-reasoned, not silent):** the plan's "signature change is
+  free" and "existing tests pass UNMODIFIED" are only jointly satisfiable if the
+  new arg does not break the existing 3-arg call sites — hence the trailing
+  **variadic** emitter rather than a required 4th positional param. Behavior is
+  identical (single emitter, nil→Noop); the variadic is purely a
+  backward-compatibility affordance for the unmodified-tests requirement.

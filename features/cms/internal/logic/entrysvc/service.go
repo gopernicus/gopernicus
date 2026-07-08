@@ -10,11 +10,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/cms/logic/content"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/errs"
+	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
 )
 
 // Clock returns the current time. Injected so tests can pin timestamps.
@@ -43,14 +45,30 @@ type Service struct {
 	entries  content.EntryRepository
 	registry *content.Registry
 	clock    Clock
+	events   sdkevents.Emitter
 }
 
-// NewService constructs a Service. A nil clock defaults to time.Now.
-func NewService(entries content.EntryRepository, registry *content.Registry, clock Clock) *Service {
+// NewService constructs a Service. A nil clock defaults to time.Now. The
+// optional trailing emitter is the best-effort content-event rail (Mount.Events):
+// omitted or nil, it defaults to sdkevents.Noop so emit call sites stay
+// unconditional and a nil host bus simply drops events.
+func NewService(entries content.EntryRepository, registry *content.Registry, clock Clock, emitter ...sdkevents.Emitter) *Service {
 	if clock == nil {
 		clock = time.Now
 	}
-	return &Service{entries: entries, registry: registry, clock: clock}
+	var out sdkevents.Emitter = sdkevents.Noop{}
+	if len(emitter) > 0 && emitter[0] != nil {
+		out = emitter[0]
+	}
+	return &Service{entries: entries, registry: registry, clock: clock, events: out}
+}
+
+// emit publishes a content event best-effort AFTER a domain write has already
+// succeeded (design §3): an emit error is logged, never returned to the caller.
+func (s *Service) emit(ctx context.Context, evt sdkevents.Event) {
+	if err := s.events.Emit(ctx, evt); err != nil {
+		slog.Default().ErrorContext(ctx, "entrysvc: content event emit failed", "type", evt.Type(), "error", err)
+	}
 }
 
 // Create validates and persists a new entry of the given type.
@@ -73,7 +91,12 @@ func (s *Service) Create(ctx context.Context, typeSlug string, in Input) (conten
 	if e.Fields, err = s.validateFields(ctx, typeSlug, in.Fields); err != nil {
 		return content.Entry{}, err
 	}
-	return s.entries.Create(ctx, e)
+	created, err := s.entries.Create(ctx, e)
+	if err != nil {
+		return content.Entry{}, err
+	}
+	s.emit(ctx, newContentUpdated(created.ID))
+	return created, nil
 }
 
 // Edit loads the entry, applies the spine edit and revalidated fields, and
@@ -99,7 +122,12 @@ func (s *Service) Edit(ctx context.Context, id string, in Input) (content.Entry,
 	if e.Fields, err = s.validateFields(ctx, e.Type, in.Fields); err != nil {
 		return content.Entry{}, err
 	}
-	return s.entries.Update(ctx, id, e)
+	updated, err := s.entries.Update(ctx, id, e)
+	if err != nil {
+		return content.Entry{}, err
+	}
+	s.emit(ctx, newContentUpdated(updated.ID))
+	return updated, nil
 }
 
 // Get returns the entry with the given id, or errs.ErrNotFound.
@@ -131,7 +159,12 @@ func (s *Service) Publish(ctx context.Context, id string) (content.Entry, error)
 		return content.Entry{}, err
 	}
 	e.Publish(s.clock())
-	return s.entries.Update(ctx, id, e)
+	updated, err := s.entries.Update(ctx, id, e)
+	if err != nil {
+		return content.Entry{}, err
+	}
+	s.emit(ctx, newContentPublished(updated.ID))
+	return updated, nil
 }
 
 // Unpublish loads the entry, returns it to draft, and persists it.
@@ -141,17 +174,30 @@ func (s *Service) Unpublish(ctx context.Context, id string) (content.Entry, erro
 		return content.Entry{}, err
 	}
 	e.Unpublish(s.clock())
-	return s.entries.Update(ctx, id, e)
+	updated, err := s.entries.Update(ctx, id, e)
+	if err != nil {
+		return content.Entry{}, err
+	}
+	s.emit(ctx, newContentUpdated(updated.ID))
+	return updated, nil
 }
 
 // Delete removes the entry.
 func (s *Service) Delete(ctx context.Context, id string) error {
-	return s.entries.Delete(ctx, id)
+	if err := s.entries.Delete(ctx, id); err != nil {
+		return err
+	}
+	s.emit(ctx, newContentDeleted(id))
+	return nil
 }
 
 // SetTerms replaces the entry's taxonomy associations.
 func (s *Service) SetTerms(ctx context.Context, entryID string, termIDs []string) error {
-	return s.entries.SetTerms(ctx, entryID, termIDs)
+	if err := s.entries.SetTerms(ctx, entryID, termIDs); err != nil {
+		return err
+	}
+	s.emit(ctx, newContentUpdated(entryID))
+	return nil
 }
 
 // validateFields runs the Registry's schema validation (required + kind
