@@ -156,47 +156,10 @@ func (s *Schedules) List(ctx context.Context, req crud.ListRequest) (crud.Page[s
 	where := "WHERE 1 = 1"
 	var args []any
 
-	cur, err := crud.DecodeCursor(req.Cursor, orderField)
-	if err != nil {
-		return crud.Page[schedule.Schedule]{}, err
-	}
-	if cur != nil {
-		cv, _ := cur.OrderValue.(time.Time)
-		args = append(args, cv.UTC())
-		lt := len(args)
-		args = append(args, cv.UTC())
-		eq := len(args)
-		args = append(args, cur.PK)
-		pk := len(args)
-		where += fmt.Sprintf(" AND ((created_at < $%d) OR (created_at = $%d AND schedule_id < $%d))", lt, eq, pk)
-	}
-
-	limit := req.NormalizedLimit()
-	args = append(args, limit+1)
-	query := `SELECT ` + scheduleSelect + ` FROM job_schedules ` + where +
-		fmt.Sprintf(` ORDER BY created_at DESC, schedule_id DESC LIMIT $%d`, len(args))
-
-	rows, err := s.db.Query(ctx, query, args...)
-	if err != nil {
-		return crud.Page[schedule.Schedule]{}, err
-	}
-	defer rows.Close()
-
-	var items []schedule.Schedule
-	for rows.Next() {
-		sch, err := scanSchedule(rows)
-		if err != nil {
-			return crud.Page[schedule.Schedule]{}, err
-		}
-		items = append(items, sch)
-	}
-	if err := rows.Err(); err != nil {
-		return crud.Page[schedule.Schedule]{}, pgxdb.MapError(err)
-	}
-
-	return crud.TrimPage(items, limit, func(sch schedule.Schedule) (string, error) {
-		return crud.EncodeCursor(orderField, sch.CreatedAt, sch.ID)
-	})
+	return pgxdb.ListPage(ctx, s.db, scheduleSelect, "job_schedules", where, args, orderField, "schedule_id", req,
+		scanSchedule,
+		func(sch schedule.Schedule) (time.Time, string) { return sch.CreatedAt, sch.ID },
+	)
 }
 
 // SetEnabled toggles a schedule's enabled flag. A missing id yields

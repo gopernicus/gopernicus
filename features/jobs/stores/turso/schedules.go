@@ -160,42 +160,10 @@ func (s *Schedules) List(ctx context.Context, req crud.ListRequest) (crud.Page[s
 	where := "WHERE 1 = 1"
 	var args []any
 
-	cur, err := crud.DecodeCursor(req.Cursor, orderField)
-	if err != nil {
-		return crud.Page[schedule.Schedule]{}, err
-	}
-	if cur != nil {
-		cv, _ := cur.OrderValue.(time.Time)
-		ts := tursodb.FormatTime(cv)
-		where += " AND ((created_at < ?) OR (created_at = ? AND schedule_id < ?))"
-		args = append(args, ts, ts, cur.PK)
-	}
-
-	limit := req.NormalizedLimit()
-	query := `SELECT ` + scheduleColumns + ` FROM job_schedules ` + where + ` ORDER BY created_at DESC, schedule_id DESC LIMIT ?`
-	args = append(args, limit+1)
-
-	rows, err := s.db.Query(ctx, query, args...)
-	if err != nil {
-		return crud.Page[schedule.Schedule]{}, err
-	}
-	defer rows.Close()
-
-	var items []schedule.Schedule
-	for rows.Next() {
-		sch, err := scanSchedule(rows)
-		if err != nil {
-			return crud.Page[schedule.Schedule]{}, err
-		}
-		items = append(items, sch)
-	}
-	if err := rows.Err(); err != nil {
-		return crud.Page[schedule.Schedule]{}, tursodb.MapError(err)
-	}
-
-	return crud.TrimPage(items, limit, func(sch schedule.Schedule) (string, error) {
-		return crud.EncodeCursor(orderField, sch.CreatedAt, sch.ID)
-	})
+	return tursodb.ListPage(ctx, s.db, scheduleColumns, "job_schedules", where, args, orderField, "schedule_id", req,
+		scanSchedule,
+		func(sch schedule.Schedule) (time.Time, string) { return sch.CreatedAt, sch.ID },
+	)
 }
 
 // SetEnabled toggles a schedule's enabled flag. A missing id yields

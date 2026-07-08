@@ -70,7 +70,7 @@ func (s *InvitationStore) GetByTokenHash(ctx context.Context, tokenHash string) 
 // ListByResource returns a cursor-paginated page of a resource's invitations,
 // ordered created_at DESC, id DESC.
 func (s *InvitationStore) ListByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
-	return listPage(ctx, s.db, invitationColumns, "invitations", "WHERE resource_type = ? AND resource_id = ?", []any{resourceType, resourceID}, "id", req,
+	return tursodb.ListPage(ctx, s.db, invitationColumns, "invitations", "WHERE resource_type = ? AND resource_id = ?", []any{resourceType, resourceID}, orderField, "id", req,
 		scanInvitation,
 		func(inv invitation.Invitation) (time.Time, string) { return inv.CreatedAt, inv.ID },
 	)
@@ -79,7 +79,7 @@ func (s *InvitationStore) ListByResource(ctx context.Context, resourceType, reso
 // ListBySubject returns a cursor-paginated page of invitations addressed to
 // identifier (the invitee email), ordered created_at DESC, id DESC.
 func (s *InvitationStore) ListBySubject(ctx context.Context, identifier string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
-	return listPage(ctx, s.db, invitationColumns, "invitations", "WHERE identifier = ?", []any{identifier}, "id", req,
+	return tursodb.ListPage(ctx, s.db, invitationColumns, "invitations", "WHERE identifier = ?", []any{identifier}, orderField, "id", req,
 		scanInvitation,
 		func(inv invitation.Invitation) (time.Time, string) { return inv.CreatedAt, inv.ID },
 	)

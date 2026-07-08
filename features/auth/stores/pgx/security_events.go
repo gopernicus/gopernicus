@@ -78,7 +78,7 @@ func (s *SecurityEventStore) List(ctx context.Context, filter securityevent.List
 		args = append(args, filter.Until.UTC())
 		where += fmt.Sprintf(" AND created_at < $%d", len(args))
 	}
-	return listPage(ctx, s.db, securityEventColumns, "security_events", where, args, "id", req,
+	return pgxdb.ListPage(ctx, s.db, securityEventColumns, "security_events", where, args, orderField, "id", req,
 		scanSecurityEvent,
 		func(evt securityevent.SecurityEvent) (time.Time, string) { return evt.CreatedAt, evt.ID },
 	)
