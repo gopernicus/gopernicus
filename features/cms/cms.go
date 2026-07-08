@@ -101,7 +101,7 @@ func Register(m feature.Mount, repos Repositories, cfg Config) error {
 		}
 	}
 
-	entrySvc := entrysvc.NewService(repos.Entries, registry, nil)
+	entrySvc := entrysvc.NewService(repos.Entries, registry, nil, m.Events)
 	termSvc := taxonomysvc.NewService(repos.Terms, nil)
 	menuSvc := menussvc.NewService(repos.Menus, nil)
 	mediaSvc := mediasvc.NewService(repos.Media, cfg.Blobs, nil)
