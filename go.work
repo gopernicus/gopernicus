@@ -21,6 +21,7 @@ use (
 	./features/cms/stores/pgx
 	./features/cms/stores/turso
 	./features/cms/views/templ
+	./features/events
 	./features/jobs
 	./features/jobs/stores/pgx
 	./features/jobs/stores/turso

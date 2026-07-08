@@ -1442,3 +1442,47 @@ unmodified — the conformance proof).
   no longer lists the event bus as a candidate (grep: the only remaining
   "candidate" mentions are the unrelated views-scope note and the
   jobs-registrar section).
+
+### 2026-07-08 — task-3 (module skeleton + `logic/outbox` + registration) executed
+
+- **Module created:** `github.com/gopernicus/gopernicus/features/events`
+  (go 1.26.1; `require` + sibling `replace` = sdk only, `features/jobs/go.mod`
+  template verbatim). Born FS1/G5-conforming — go.mod has no dependency
+  beyond sdk.
+- **`logic/outbox/outbox.go`:** `Entry` embeds `sdkevents.Record` +
+  `CreatedAt time.Time` + `PublishedAt *time.Time` (nil = unpublished), per
+  design §5. `EntryRepository` with the four §5 methods —
+  `Append(ctx, ...Record)` (non-transactional convenience; duplicate EventID
+  → `errs.ErrAlreadyExists`, zero records → no-op nil), `ListUnpublished(ctx,
+  limit) ([]Entry, error)` (CreatedAt ascending), `MarkPublished(ctx,
+  eventID)` (idempotent — already-published and unknown-id both return nil),
+  `PurgePublished(ctx, before) (int, error)` (published-only, strictly-before
+  retention). Doc comments written AS the spec the task-6 storetest suite
+  executes; the suite itself is NOT built here.
+- **O5 alias applied:** `sdkevents "…/sdk/events"` everywhere in the module.
+- **`logic/outbox/outbox_test.go`:** port-level only — a `stubRepo`
+  compile-check pinning the exact `EntryRepository` signatures, plus
+  `Entry` zero-value semantics (nil `PublishedAt` = unpublished, zero
+  `CreatedAt`) and embedded-`Record` field promotion (`EventID`/`Type`).
+- **Registration:** `go.work` `use` line and Makefile `MODULES` both gained
+  `features/events` in strict alphabetical order — placed **after
+  `features/cms/views/templ`, before `features/jobs`**. DIVERGENCE (logged,
+  pre-flagged in the task): the plan text said "after
+  `features/cms/stores/turso`" but `features/cms/views/templ` landed after
+  this plan was written and sorts between them, so events lands after
+  views/templ; strict alphabetical order preserved. Makefile header comment
+  bumped 27 → 28 modules.
+- **Module-count observation:** `make check` now iterates **28 modules** —
+  the Phase 2 DoD/table predicted 27 (written before `features/cms/views/templ`
+  existed). Same off-by-one as the go.work placement adjustment above; no
+  scope change.
+- **Verify:** `cd features/events && go build ./... && go test ./... &&
+  go vet ./...` green (`logic/outbox` ok); `gofmt -l` clean. `make check`
+  → "all checks passed" (28 modules); `make guard` green (all six). Note:
+  the FS1 guard's explicit `for f in features/authentication features/cms
+  features/jobs` loop does NOT yet include `features/events` — adding it is
+  a phase-8 concern (design §12 item 3, G2 module-list flagged for phase 8);
+  the module's go.mod is sdk-only regardless, so it is born-conforming.
+  Run-and-look: `examples/minimal` on :8081, `GET /` → 200 and
+  `GET /products/widget-3000` → 200 (the new module is not yet wired into any
+  host, so behavior is unchanged); server killed, port 8081 free.
