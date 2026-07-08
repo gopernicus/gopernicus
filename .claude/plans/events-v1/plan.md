@@ -2180,3 +2180,135 @@ Wiring only (rule 8, FS2 method form) — two files:
   `SIGTERM` → processes stopped clean; `lsof -iTCP:8082 -sTCP:LISTEN` → port 8082
   free. Did NOT commit. (Steps 5–6 — the `EVENTS_OUTBOX=memory` poller variant and
   shutdown-order log — are task-12's gate.)
+
+### 2026-07-08 — task-12 (`outboxmem` + poller variant + shutdown ordering) executed
+
+Four files: `examples/auth-cms/internal/outboxmem/{outboxmem.go,outboxmem_test.go}`,
+`examples/auth-cms/cmd/server/main.go`, `examples/auth-cms/README.md`. No
+feature/port/store changes; zero driver added to the host graph.
+
+- **`internal/outboxmem`** — the example-local, runnable in-memory
+  `outbox.EntryRepository` (R3/S6: no `stores/memory` module; the runnable
+  memstore is host-local, the hermetic reference stays test-scoped in
+  `features/events/storetest`). `Store` is a mutex-backed
+  `map[string]*outbox.Entry` keyed by EventID; it HAND-ENFORCES EventID
+  uniqueness exactly like the storetest reference — `Append` pre-checks the whole
+  batch against existing rows AND a within-batch `seen` set before writing any
+  row (a colliding batch commits nothing → `errs.ErrAlreadyExists`), so the
+  honesty proof is real, not vacuous. `ListUnpublished` CreatedAt-ascending
+  (EventID tie-break), `MarkPublished` idempotent, `PurgePublished`
+  strictly-before. `var _ outbox.EntryRepository = (*Store)(nil)`.
+- **Honesty proof** — `outboxmem_test.go`'s `TestConformance` runs the FULL
+  shared `features/events/storetest.Run` suite against `outboxmem.New()` (the
+  auth-cms memstore precedent). The suite's `EventIDUniqueness` case passes only
+  because `Append` genuinely enforces the primary-key invariant; a store that
+  overwrote/blindly-appended a duplicate would fail it. Race-clean (`0.2–1.3s`
+  under `-race`).
+- **Variant selection** — `durableOutbox()` reads `EVENTS_OUTBOX=memory`. When
+  set, the host builds `outboxmem.New()` and wires
+  `eventsfeature.Repositories{Outbox: outboxStore}` into `NewService` (boot log
+  `durable_outbox=true`); default keeps `Repositories{}` (direct-emit,
+  `durable_outbox=false`). The gateway is unchanged either way — only the emit
+  path in front of the shared bus differs.
+- **Poller drive (gate edit 2)** — `eventsfeature.NewPoller(outboxStore, bus)` on
+  a `workers.NewPool(poller.Poll, WithName("outbox-poller"), WithWakeChannel(wake),
+  WithLogger(log))`. The pool runs on its OWN `context.WithCancel(context.Background())`
+  context in a goroutine (`poolDone` closed on exit). A host-owned
+  `POST /outbox-demo` handler builds `sdkevents.NewRecord(NewBaseEvent("demo.outbox")
+  .WithAggregate("demo","outbox-demo"))`, `Append`s it, then does a non-blocking
+  cap-1 send on `wake` — the canonical append-then-signal pattern. `WakeChannel(bus,…)`
+  was NOT used (it fires on bus emits, not the append; the poller's own emits
+  would self-wake it — plan rationale). cms never touches the outbox (O2).
+- **Shutdown order (§7, P3 idiom)** — documented in `main.go`'s run-tail comment
+  and observed live: `web.Run` returns (parent ctx already canceled, HTTP drained
+  on run.go's own fresh ctx) → cancel the pool's Background-derived context +
+  bounded 5s wait on `poolDone` → `bus.Close` on a fresh
+  `context.WithTimeout(context.Background(), 5s)`. Order: **HTTP server → poller
+  pool → bus.Close**. The poller-on-its-own-context is why the closed-bus edge
+  never fires (poller stops before Close).
+- **main.go package doc** — extended to name features/events alongside cms +
+  authentication (task-11 flag), with a paragraph on the two rails
+  (direct-emit default vs `EVENTS_OUTBOX=memory` durable) and the shutdown order.
+- **README** — added "Leg 6b — the durable outbox variant (`EVENTS_OUTBOX=memory`)"
+  (outbox→poll→emit→SSE, the `POST /outbox-demo` curl, `id:` = durable EventID vs
+  the direct rail's CorrelationID, the HTTP→poller→bus.Close shutdown order) and a
+  `/outbox-demo` note in the Route surface.
+
+- **Verify:** `cd examples/auth-cms && go build ./... && go test -race ./... &&
+  go vet ./...` → all green (outboxmem conformance ok; memstore + authmem ok;
+  cmd/server no tests). `make check` → **"all checks passed"** (30 modules, six
+  guards green, templ no drift, integration-tag vet incl. events/stores/turso).
+
+- **Run-and-look — protocol steps 5–6, verbatim.** Server
+  `AUTH_JWT_SECRET=… EVENTS_OUTBOX=memory go run ./cmd/server` on `localhost:8082`.
+  Boot log confirmed `registered events feature resource_streams=false
+  durable_outbox=true` and `events durable outbox variant ENABLED
+  (EVENTS_OUTBOX=memory) outbox="in-memory (internal/outboxmem)"
+  trigger="POST /outbox-demo"`, plus `worker pool starting pool=outbox-poller`.
+
+  **Step 5 — durable rail via outbox → poller → bus → SSE.** Register
+  `admin@example.com` (201) → verify with mailer-logged code
+  `pzjy3rt5isuwuzphuc4vchbndq` (200) → login cookie jar (200,
+  `session=tu2cknfl2jrjwy6xffu2hfwyti`) → authed `GET /articles` (200). Opened
+  `curl -sN -b jar http://localhost:8082/events`, then in a second session:
+  ```
+  curl -sX POST -b jar http://localhost:8082/outbox-demo
+    -> 202  {"event_id":"glfp4qmtyvfvsj7atfa4xfstiu"}
+  ```
+  Frame observed on the open stream **37ms** after the POST (sub-second —
+  observably NOT the 30s idle interval), raw bytes:
+  ```
+  event: demo.outbox
+  id: glfp4qmtyvfvsj7atfa4xfstiu
+  data: {"type":"demo.outbox","occurred_at":"2026-07-08T17:52:21.363829Z","aggregate_type":"demo","aggregate_id":"outbox-demo"}
+  ```
+  **Provenance check:** the SSE `id:` = `glfp4qmtyvfvsj7atfa4xfstiu` is EXACTLY the
+  POST response `event_id` — the durable outbox EventID the poller's rehydrated
+  `outboxEvent.EventID()` surfaces, NOT a CorrelationID. This differs in
+  provenance from the direct-emit variant (task-11 step 3, where `id:` was a
+  per-request correlation id `vtr6y7dq64iqqadda76ebyr7oq`): the durable rail's id
+  is the row primary key / de-dupe key.
+
+  **Step 6 — SIGTERM → documented shutdown order.** `kill -TERM <pid 13079>`.
+  Server log tail, verbatim (order HTTP server → poller pool → bus.Close):
+  ```
+  msg="server shutting down"
+  msg="server stopped"
+  msg="stopping outbox poller pool"
+  msg="worker stopped" pool=outbox-poller worker_id=outbox-poller-worker-1
+  msg="worker pool stopped" pool=outbox-poller runtime=1m11.378635667s stats="{ActiveWorkers:0 Iterations:4 Errors:0 Panics:0}"
+  msg="outbox poller pool stopped"
+  msg="closing event bus"
+  ```
+  Exit clean (Errors:0 Panics:0); `lsof -iTCP:8082 -sTCP:LISTEN` → **port 8082
+  free**. Did NOT commit.
+
+### 2026-07-08 — Phase 5 (tasks 11–12, design-phase 7) complete — DoD holds
+
+The proof host mounts the gateway in BOTH variants and the mandatory
+real-interaction protocol passed and is recorded verbatim across the two task
+entries. Green tests alone did not close it. Phase 5 DoD lines against artifacts:
+
+- **"`examples/auth-cms` mounts the gateway (default: `Outbox: nil`, best-effort
+  — O2)"** — ✅ task-11: `NewService(Repositories{}, Config{Bus, StreamMiddleware:
+  RequireUser})`, `durable_outbox=false`; direct-emit `content.*` frames observed
+  (steps 1–4), `id:` = CorrelationID.
+- **"a flag-selected second variant proving the durable rail on the example-local
+  in-memory outbox"** — ✅ task-12: `EVENTS_OUTBOX=memory` wires
+  `Repositories{Outbox: outboxmem}` + `NewPoller` on an `sdk/workers` pool with
+  the append-then-signal wake; `POST /outbox-demo` → frame via outbox→poller→bus
+  in 37ms, `id:` = durable outbox EventID (distinct provenance from the direct
+  rail — verified against task-11's correlation-id frame).
+- **"the real-interaction protocol below passed and recorded verbatim (commands,
+  ports, observed frames)"** — ✅ steps 1–4 in the task-11 entry, steps 5–6 in the
+  task-12 entry: exact curls, ports (8082), raw SSE bytes, and the verbatim
+  shutdown-order log lines.
+- **"shutdown order HTTP → poller → `bus.Close` observed clean"** — ✅ step 6 log
+  tail above; port freed, Errors:0/Panics:0.
+- **Zero-infra proof (charter §3)** — memory bus + in-memory outbox + poller + SSE
+  over `go run`, no driver in the graph (`GOWORK=off go list -m all | grep -i
+  libsql` empty, re-asserted task-11).
+
+Artifacts: `make check` green at 30 modules (six guards); the two dated protocol
+transcripts (direct-emit + durable) with observed frames, latencies (34ms
+invalidation / 37ms durable pickup), and shutdown log lines.

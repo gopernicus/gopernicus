@@ -248,12 +248,44 @@ curl -N -b jar http://localhost:8082/events
 # reload the public page -> fresh content (phase-3 cache invalidation).
 ```
 
+### Leg 6b — the durable outbox variant (`EVENTS_OUTBOX=memory`)
+
+Reboot with `EVENTS_OUTBOX=memory` to swap the emit path in front of the bus from
+direct-emit to the **durable at-least-once rail**. The host wires an example-local
+in-memory outbox (`internal/outboxmem`, an honest `outbox.EntryRepository`) into
+`Repositories.Outbox` and drives an `events.Poller` on an `sdk/workers` pool. A
+host-owned `POST /outbox-demo` route appends a record, then signals a cap-1 wake
+channel (the canonical append-then-signal pattern) so the poller drains it
+sub-second rather than waiting out the idle interval: **outbox → poll → emit →
+SSE**. The frame's SSE `id:` is the durable **outbox EventID** the poller surfaces
+(not the CorrelationID the direct-emit rail uses) — the de-dupe key consumers key
+on. The gateway is unchanged; only the path feeding the bus differs. cms itself
+never touches the outbox (O2).
+
+```sh
+EVENTS_OUTBOX=memory go run ./cmd/server
+# as the logged-in admin: open the stream and leave it running
+curl -N -b jar http://localhost:8082/events
+# in another shell, trigger a durable append:
+curl -sX POST -b jar http://localhost:8082/outbox-demo        # -> 202 {"event_id":"<outbox EventID>"}
+# -> a demo.outbox frame arrives promptly via outbox -> poller -> bus:
+#      event: demo.outbox
+#      id: <outbox EventID>            # the durable EventID, NOT a correlation id
+#      data: {"type":"demo.outbox","occurred_at":"…","aggregate_type":"demo","aggregate_id":"outbox-demo"}
+```
+
+Shutdown order (SIGTERM): **HTTP server → poller pool → `bus.Close`** — the poller
+pool runs on its own Background-derived context so it stops only after HTTP has
+drained, and the bus closes last on a fresh bounded context.
+
 ## Route surface
 
 - **events** (SSE, `features/events`): `GET /events` — the authenticated
   subject's stream (best-effort `content.*` fan-out), gated by `RequireUser`
   (401 when absent). The resource-scoped `/events/{resource_type}/{resource_id}`
-  route is not registered (nil `Authorize`, deny by absence).
+  route is not registered (nil `Authorize`, deny by absence). Under
+  `EVENTS_OUTBOX=memory` the host also mounts `POST /outbox-demo` (host-owned
+  durable-rail trigger, not feature surface).
 - **auth** (JSON, `features/authentication`): `POST /auth/{register,login,logout,verify,
   password/forgot,password/reset,password/change,token}`; OAuth
   `/auth/oauth/{provider}/{start,callback,link/start,link}`,

@@ -1,8 +1,10 @@
-// Command server is the auth-v2 A9 proof host: it mounts BOTH features/cms and
-// features/authentication onto one host router, with in-memory stores and no datastore
-// driver in its module graph (verify: `GOWORK=off go list -m all | grep -i
-// libsql` is empty). The host is the only party that imports both features —
-// features/cms never imports features/authentication and vice versa (constitution rule 6).
+// Command server is the auth-v2 A9 / events-v1 proof host: it mounts
+// features/cms, features/authentication, AND features/events onto one host
+// router, with in-memory stores and no datastore driver in its module graph
+// (verify: `GOWORK=off go list -m all | grep -i libsql` is empty). The host is
+// the only party that imports the features — no feature imports another
+// (constitution rule 6); the cross-feature flow rides sdk vocabulary
+// (sdk/web.Middleware, sdk/identity, sdk/events) the host wires between them.
 //
 // The cross-feature wiring is the point: cms's admin surface (the CRUD routes)
 // is gated by auth's identity middleware via cms.Config.AdminMiddleware ←
@@ -20,11 +22,22 @@
 // invitations work with NO ReBAC anywhere in this host's module graph. The two
 // host-local demo routes (demo.go) are gated on a resolved principal and on toy
 // membership respectively.
+//
+// features/events adds the SSE gateway at GET /events (authenticated via
+// authSvc.RequireUser on StreamMiddleware): a cms edit fans out as a
+// content.updated frame to any open stream. Two rails prove out here. The
+// DEFAULT variant is direct-emit/best-effort — cms emits straight onto the bus
+// (SSE id: = CorrelationID). The DURABLE variant (EVENTS_OUTBOX=memory) routes a
+// host-owned POST /outbox-demo append through an example-local in-memory outbox
+// (internal/outboxmem) and a host-driven events.Poller on an sdk/workers pool:
+// outbox -> poll -> emit -> SSE, id: = the durable outbox EventID. The shutdown
+// order is HTTP server -> poller pool -> bus.Close (see run's tail comment).
 package main
 
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -33,6 +46,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/memstore"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/outboxmem"
 	auth "github.com/gopernicus/gopernicus/features/authentication"
 	"github.com/gopernicus/gopernicus/features/cms"
 	"github.com/gopernicus/gopernicus/features/cms/logic/content"
@@ -48,6 +62,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/logging"
 	"github.com/gopernicus/gopernicus/sdk/oauth"
 	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/workers"
 )
 
 func main() {
@@ -186,7 +201,19 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// /events/{resource_type}/{resource_id} route is NOT registered (deny by
 	// absence). The subject stream lands at GET /events (host mounts at root, no
 	// prefix — same as cms/auth).
-	eventsSvc, err := eventsfeature.NewService(eventsfeature.Repositories{}, eventsfeature.Config{
+	// Variant selection (design §8): the DEFAULT is direct-emit (Repositories.Outbox
+	// nil — cms emits straight onto the bus). With EVENTS_OUTBOX=memory the host
+	// instead wires an example-local in-memory outbox and drives a poller that
+	// drains it onto the SAME bus — the durable at-least-once rail. Either way the
+	// gateway is a plain bus consumer; only the emit path in front of the bus
+	// changes.
+	var eventsRepos eventsfeature.Repositories
+	var outboxStore *outboxmem.Store
+	if durableOutbox() {
+		outboxStore = outboxmem.New()
+		eventsRepos = eventsfeature.Repositories{Outbox: outboxStore}
+	}
+	eventsSvc, err := eventsfeature.NewService(eventsRepos, eventsfeature.Config{
 		Bus:              bus,
 		StreamMiddleware: []web.Middleware{authSvc.RequireUser},
 	})
@@ -197,24 +224,114 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return err
 	}
 
+	// Durable-outbox variant plumbing (EVENTS_OUTBOX=memory): the host owns the
+	// poller lifecycle (the feature owns no goroutines — D4). The poller runs on
+	// an sdk/workers pool woken by the canonical append-then-signal pattern
+	// (gate edit 2): a dedicated cap-1 wake channel the POST /outbox-demo handler
+	// signals right after Append, so a fresh record drains sub-second instead of
+	// waiting out the pool's idle interval. The pool runs on its OWN
+	// Background-derived context (NOT the request/signal ctx) so shutdown can stop
+	// it AFTER HTTP has drained, in the documented order below.
+	var (
+		cancelPool context.CancelFunc
+		poolDone   chan struct{}
+	)
+	if outboxStore != nil {
+		poller := eventsfeature.NewPoller(outboxStore, bus)
+		wake := make(chan struct{}, 1)
+		router.Handle(http.MethodPost, "/outbox-demo", outboxDemoHandler(outboxStore, wake, log))
+
+		pool := workers.NewPool(poller.Poll,
+			workers.WithName("outbox-poller"),
+			workers.WithWakeChannel(wake),
+			workers.WithLogger(log),
+		)
+		var poolCtx context.Context
+		poolCtx, cancelPool = context.WithCancel(context.Background())
+		poolDone = make(chan struct{})
+		go func() {
+			defer close(poolDone)
+			_ = pool.Run(poolCtx)
+		}()
+		log.InfoContext(ctx, "events durable outbox variant ENABLED (EVENTS_OUTBOX=memory)",
+			"outbox", "in-memory (internal/outboxmem)", "trigger", "POST /outbox-demo")
+	}
+
 	// Host-local demo + debug routes (host code, not feature surface).
 	registerDemoRoutes(router, authSvc, members)
 	registerDebugRoutes(router, authSvc, authRepos, log)
 
-	// Shutdown order (design §7, corrected context idiom P3): web.Run blocks until
-	// ctx is canceled, then drains in-flight HTTP on its OWN fresh
-	// Background+ShutdownTimeout context (run.go) — so by the time it returns the
-	// parent ctx is already canceled. Closing the bus on that canceled ctx would
-	// drain nothing (Memory.Close drains only up to the context deadline), so use
-	// a FRESH bounded context. Order is HTTP → bus.Close today; phase 5 inserts the
-	// outbox poller between them (stopped after HTTP, before bus.Close).
+	// Shutdown order (design §7, phase 5 — with the poller, corrected context idiom
+	// P3):
+	//  1. web.Run blocks until ctx is canceled, then drains in-flight HTTP on its
+	//     OWN fresh Background+ShutdownTimeout context (run.go), closing every open
+	//     SSE stream via its request context. By the time web.Run returns, the
+	//     parent ctx is already canceled.
+	//  2. THEN stop the poller pool. It runs on its OWN Background-derived context
+	//     (never the parent ctx — a canceled parent would tear it down before HTTP
+	//     finished draining), so cancel that context now and wait, bounded, for the
+	//     in-flight batch to finish.
+	//  3. Close the bus LAST, on a FRESH bounded context (a canceled parent ctx
+	//     would make Memory.Close drain nothing). Closing after the poller stops is
+	//     why the poller's closed-bus edge (Poll emitting into a closed bus) never
+	//     happens.
 	runErr := web.Run(ctx, router, serverConfig(), log)
 
+	if cancelPool != nil {
+		log.InfoContext(context.Background(), "stopping outbox poller pool")
+		cancelPool()
+		select {
+		case <-poolDone:
+		case <-time.After(5 * time.Second):
+			log.WarnContext(context.Background(), "outbox poller pool did not stop within 5s")
+		}
+		log.InfoContext(context.Background(), "outbox poller pool stopped")
+	}
+
+	log.InfoContext(context.Background(), "closing event bus")
 	closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = bus.Close(closeCtx)
 
 	return runErr
+}
+
+// durableOutbox reports whether the durable-outbox second variant is selected
+// (EVENTS_OUTBOX=memory). Default (unset/other) keeps the direct-emit rail.
+func durableOutbox() bool {
+	return environment.GetEnvOrDefault("EVENTS_OUTBOX", "") == "memory"
+}
+
+// outboxDemoHandler is the host-owned demo trigger for the EVENTS_OUTBOX=memory
+// variant (the jobs-minimal POST /enqueue precedent): it appends one record to
+// the example-local outbox, then wakes the poller with the canonical
+// append-then-signal pattern (gate edit 2) so the drain runs promptly instead of
+// waiting out the pool's idle interval. cms itself never touches the outbox (O2)
+// — this is a host route, not feature surface. The frame that reaches the open
+// stream carries the durable outbox EventID as its SSE id: (the poller's
+// rehydrated event surfaces it), distinct in provenance from the direct-emit
+// rail's CorrelationID.
+func outboxDemoHandler(store *outboxmem.Store, wake chan<- struct{}, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		evt := sdkevents.NewBaseEvent("demo.outbox").WithAggregate("demo", "outbox-demo")
+		rec, err := sdkevents.NewRecord(evt)
+		if err != nil {
+			writeHostJSON(w, http.StatusInternalServerError, map[string]string{"error": "build record"})
+			return
+		}
+		if err := store.Append(r.Context(), rec); err != nil {
+			writeHostJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		// Non-blocking cap-1 send: coalesced signals never block the handler, and
+		// the pool's idle interval is the backstop for any dropped signal.
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
+		log.InfoContext(r.Context(), "outbox demo appended", "event_id", rec.EventID)
+		writeHostJSON(w, http.StatusAccepted, map[string]string{"event_id": rec.EventID})
+	}
 }
 
 // seed populates a little content so the public site renders something. No user
