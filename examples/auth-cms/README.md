@@ -57,6 +57,19 @@ bearer, security-event audit, and ReBAC-decoupled invitations) with zero infra.
   `resource→relation→subject` map, read back by the membership-gated demo route.
 - **`RequireVerifiedEmail: true`** — login and `/auth/token` refuse an unverified
   user with 403.
+- **event bus + cache invalidation**: the host builds one shared
+  `sdkevents.NewMemory` bus and passes it as `Mount.Events`, so cms emits its
+  `content.*` events post-write (best-effort). The public-page cache
+  (`cacher.NewMemory`, held in a variable and handed to `cms.Config.Cache`) is
+  `web.CachePages` keyed as `page:<uri>`. The host subscribes on `"*"`, filters
+  `content.*` in the handler, and calls `cache.DeletePattern(ctx, "page:*")` to
+  drop every cached page so the next request re-renders fresh content. Delivery
+  is async (ratified: an emitter's latency must not depend on its subscribers),
+  so invalidation runs shortly *after* the admin write returns, not
+  synchronously — a re-fetch trigger, not a transactional write. Before this
+  wiring an edited page stayed stale until its 60s TTL expired. On shutdown the
+  bus is closed on a fresh bounded context (HTTP drains first inside `web.Run`,
+  which returns only after the parent ctx is already canceled).
 
 ### Config / port nil-semantics (host view)
 
