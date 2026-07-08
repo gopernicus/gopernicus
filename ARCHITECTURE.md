@@ -30,6 +30,10 @@ worked example `examples/cms`.
     cms/                  module github.com/gopernicus/gopernicus/features/cms                — the CMS hexagon (datastore-free)
       stores/pgx/         module …/features/cms/stores/pgx              — the CMS feature's pgx store adapter
       stores/turso/       module …/features/cms/stores/turso            — the CMS feature's Turso store adapter
+      views/templ/        module …/features/cms/views/templ             — cms's bundled default views (templ; FS3 sibling)
+    events/               module github.com/gopernicus/gopernicus/features/events             — durable outbox + SSE gateway hexagon (datastore-free)
+      stores/pgx/         module …/features/events/stores/pgx           — events' pgx store adapter
+      stores/turso/       module …/features/events/stores/turso         — events' Turso store adapter
     jobs/                 module github.com/gopernicus/gopernicus/features/jobs               — durable queue + schedules hexagon (datastore-free; public memstore/)
       stores/pgx/         module …/features/jobs/stores/pgx             — jobs' pgx store adapter
       stores/turso/       module …/features/jobs/stores/turso           — jobs' Turso store adapter
@@ -44,7 +48,7 @@ worked example `examples/cms`.
       cmd/
 ```
 
-**Twenty-six modules today.** `sdk` is the kernel; `integrations/*` are reusable
+**Thirty modules today.** `sdk` is the kernel; `integrations/*` are reusable
 third-party connectors (one external dependency each, each its own module);
 `features/<name>` is a datastore-free feature core with its store adapters as
 sibling modules — one per supported store implementation; `examples/*` are host apps that
@@ -85,7 +89,8 @@ nil-safe port field, wired (or not) in the host's `main`.
 
 - **`sdk/` — the kernel.** Stdlib-only. It holds the facility **ports** (`Storer`,
   `Sender`, `cacher.Storer`, the generic `crud` CRUD shape), the **services**
-  (`web`, `logging`, `config`, `errs`, `id`, `slug`), **and a zero-dependency
+  (`web`, `logging`, `config`, `errs`, `id`, `slug`, `identity` — the
+  request-identity vocabulary, A-I1), **and a zero-dependency
   default implementation of each facility port, shipped right next to it**
   (slog-style): `cacher.Memory`, `filestorage.Disk`, `email.SMTP` + `email.Console`.
   Its `go.mod` has **no `require` block** — "imports only the standard library" is

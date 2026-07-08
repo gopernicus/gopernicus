@@ -1290,3 +1290,72 @@ events-v1 phase 4's docker run.
 
 Plans housekeeping: `.claude/plans/feature-standard/` →
 `.claude/past/feature-standard/` this session, README table updated.
+
+## 2026-07-08 — events-v1 milestone CLOSED
+
+Three new modules (27→30 with feature-standard's views/templ the same day):
+`features/events` + `stores/{turso,pgx}`. Shipped per
+`.claude/plans/events-v1/plan.md` (phases 0–6, every leg committed and
+CI-green before the next): **task-0** the A-R1 rename
+(`features/auth` → `features/authentication`, 43 files, alias-based — the
+example's call sites unchanged); **phase 1** `Mount.Events` (emit-only,
+best-effort at-most-once, nil = silent no-op), `sdk/identity` (A-I1:
+vocabulary only — Principal/constants/WithPrincipal/FromContext), auth
+conformance onto the one carrier with its public API provably unchanged
+(existing tests unmodified), charter C3 cashed in features/README §6;
+**phase 2** the feature core — `logic/outbox` port, the exported
+host-driven poller (P1 emit discipline: WithSync, mark only after a
+successful emit), the SSE gateway (hub + routes; NewService validates nil
+Bus per FS2, absent identity fails closed 401 per A-I1 E1, MaxConnAge
+no-disable per P5), and the storetest suite with a memstore-honest
+reference; **phase 3** cms emits `content.*` post-write (nil-guarded,
+best-effort) and the proof host's cache-invalidation subscriber (edit →
+X-Cache MISS in 34ms where a 60s TTL previously served stale); **phase 4**
+both store modules — identical migration filename sets, source `"events"`,
+boot-time table probes, dialect-typed AppendTx (tested, unconsumed,
+unguarded — revisit at the third emitting feature); **phase 5** the proof
+host end-to-end; **phase 6** the G7 rule-6 cross-feature guard
+(prove-can-fail recorded; the plan's "G5" label was taken — landed as G7,
+seven guards now), the feature README with the mandated wiring-tour page
+(five stops, verbatim-from-twin listing, swap snippet scratch-compiled),
+and this docs sync.
+
+**Live-store conformance artifacts (both dialects, 2026-07-08):**
+
+- **turso:** `features/events/stores/turso` against the authorized
+  playground DB (URL asserted pre-run): `TestConformance` 5/5 subtests
+  PASS (9.87s), `TestAppendTx` PASS (2.56s — visible after commit, gone on
+  rollback), `TestExportMigrations` PASS; 6 top-level PASS / 0 FAIL.
+- **pgx:** `features/events/stores/pgx` against postgres:17 in docker
+  (:55432): `TestConformance` 5/5 PASS, `TestAppendTx` PASS,
+  `TestExportMigrations` PASS — 3/3; container removed, port freed.
+
+**Phase-5 real-interaction protocol (recorded verbatim in the plan log):**
+steps 1–4 (default/direct-emit variant) — login flow, `curl -N /events`
+with ping heartbeats, admin edit → raw SSE frame
+(`event: content.updated`, metadata-only body, `id:` = CorrelationID) on
+the open stream, unauthenticated 401; steps 5–6 (`EVENTS_OUTBOX=memory`
+durable variant) — `/outbox-demo` 202 → frame in 37ms with `id:` = the
+durable outbox EventID (provenance distinct from the correlation id), then
+SIGTERM showing the documented order verbatim: HTTP server → poller pool →
+bus.Close, clean exit.
+
+**Deltas of record:** the plan's supersessions (S1–S6), eight ratification
+gate edits, and P1–P5 post-gate amendments are logged in the plan +
+design-doc header — headline items: A-I1 (no `Config.Identity`; fails
+closed), P5 (`MaxConnAge` cannot be disabled), gate edit 1 (best-effort
+SSE `id:` is CorrelationID, no de-dupe; durable `id:` is EventID),
+AuthorizeStream takes `identity.Principal` (faithful post-A-I1 shape, a
+logged divergence from the design's `userID string`).
+
+**Open flags (jrazmi):** (1) events `Config` has no `Logger` field — the
+hub logs via `slog.Default()`; the enumerated Config set was kept exact,
+but jobs/auth carry the Config.Logger precedent — decide at first real
+need. (2) Each admin edit emits TWO `content.updated` frames (Edit +
+SetTerms in the update handler) — harmless for re-fetch consumers,
+observation logged at task-11. (3) The D5-era storetest empty-page gap
+(auth/jobs) still stands from feature-standard's close. (4) The appender
+seam is unguarded by design (§5 cost 1).
+
+Plans housekeeping: `.claude/plans/events-v1/` → `.claude/past/events-v1/`
+this session, README table updated.

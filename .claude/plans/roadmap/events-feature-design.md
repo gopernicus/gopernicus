@@ -5,6 +5,15 @@ Status: **RATIFIED 2026-07-02 (jrazmi)** — O1–O8 to their proposed defaults
 `features/events/storetest`, not `outbox/outboxtest`) and R5 (the Transactor
 gap is owned by the portability plan's addendum). Amendments applied
 in-place below.
+Status amendment (2026-07-08, events-v1 CLOSED): **phases 3–8 EXECUTED** via
+`.claude/plans/events-v1/plan.md` — see that plan for the operational record:
+its supersession log (S1–S6), the eight ratification gate edits, the P1–P5
+post-gate amendments, and the A-I1 (`sdk/identity`; `Config.Identity`
+removed, absent identity fails closed 401) and A-R1
+(`features/authentication` rename) amendments, all executed. **P5
+micro-amendment of record: §6/O7's "hosts can set 0 explicitly" sentence is
+superseded — `MaxConnAge` is no-disable in v1** (zero → the 15m default;
+unlimited is not offered; a negative sentinel is the documented future seam).
 Status amendment (2026-07-06, sdk-parity): this design's **phase 1 (sdk/web
 SSE primitives) and phase 2 (`sdk/events` + `eventstest`) LANDED early** in
 the sdk-parity milestone, built to §2 verbatim; and

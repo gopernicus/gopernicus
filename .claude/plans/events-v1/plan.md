@@ -2408,3 +2408,29 @@ task-14's in-flight work, left untouched.
   (task-12's conformance run). The swap-variant listing pasted into a
   scratch module (GOWORK=off, path replaces) and built once —
   "SWAP SNIPPET COMPILES": compiling verified, not asserted.
+
+### 2026-07-08 — task-15 (repo docs sync + records) executed — phase 6 + milestone COMPLETE
+
+- ARCHITECTURE.md: tree gains cms views/templ + the three events rows;
+  "Twenty-six modules today" → thirty; sdk services enumeration gains
+  `identity` (A-I1 E6). README.md: listing + heading → thirty (views/templ
+  + events rows added); "six layering guards" → seven (both mentions).
+  RELEASING.md: twenty-seven → thirty, events added to the enumeration.
+  Makefile counts were already current (tasks 9/10/13).
+- sdk/README.md: events row cross-references features/events (closes the
+  straddle perception artifact); `identity` row added with the A-I1.1
+  admission trace (E6).
+- features/README.md §5 corollary marked CASHED for identity-in-context
+  (sdk/identity; the illustrative CurrentUser port stays as the general C2
+  pattern).
+- roadmap/00-intersections.md: §2 events Config.Identity row + §3 identity
+  seam row carry dated AMENDED markers citing A-I1; §2's prose adjusted.
+  G2 verified generic (no edit needed); G7 was task-13's.
+- Design doc header: dated status amendment — phases 3–8 EXECUTED via this
+  plan; S1–S6/gate-edits/P1–P5/A-I1/A-R1 pointed at the records; the P5
+  micro-amendment recorded (O7 "hosts can set 0 explicitly" superseded).
+- NOTES.md: the dated events-v1 CLOSED milestone entry (shipped scope,
+  both live-store artifacts, the phase-5 protocol summary, deltas of
+  record, open flags for jrazmi).
+- Verify: stale-count grep over the five docs returns nothing; full
+  `make check` green (30 modules, seven guards).

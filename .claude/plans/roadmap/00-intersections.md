@@ -91,14 +91,15 @@ The executable form of "no feature variants." Verified against
 | jobs | `Config.Cron` | error **only when** a `Spec.Cron` schedule appears; `Spec.Every` is the stdlib path | conditionally required |
 | jobs | `Mount.Jobs` (designed, deferred — jobs plan §5) | features can't self-register background work; host-authored handler closures cover it | — |
 | events | `Config.Bus` | **hard error** — a gateway with no bus is misconfiguration | required |
-| events | `Config.Identity` | **hard error** for streams | required |
+| events | `Config.Identity` — **AMENDED 2026-07-07 (A-I1): field removed**; identity rides `sdk/identity`, stashed by `StreamMiddleware` | absent principal **fails closed** — 401 per stream at request time (was: hard error at construction) | — |
 | events | `Config.Authorize` | resource-scoped stream routes not registered (deny by absence) | — |
 | events | `Repositories.Outbox` | direct-emit mode: no poller, no durable rail | — |
 | any feature | `Mount.Migrations` | no migration collection (examples/minimal's shape) | — |
 
 Pattern confirmed across all four features: **safe degradation gets a
 silent default; unsafe degradation gets a loud constructor error** (auth's
-Hasher/Mailer precedent, adopted by events for Bus/Identity and by jobs for
+Hasher/Mailer precedent, adopted by events for Bus — Identity's row was
+amended by A-I1 to fail closed at request time — and by jobs for
 conditional Cron). New features must declare each optional port's row in
 their README — proposed as charter checklist item 12 (§6, R6).
 
@@ -106,7 +107,7 @@ their README — proposed as charter checklist item 12 (§6, R6).
 
 | seam | provider | consumers | contract | status |
 |---|---|---|---|---|
-| identity middleware + current-user | `auth.Service` (`RequireUser`, `CurrentUser`) | cms admin gating (via `Config.AdminMiddleware`, A3); events SSE connect-time (`CurrentUser` port + `StreamMiddleware`) | structural satisfaction of consumer-declared ports; host wires; no feature→feature import | auth-v1 phases 1+3; events consumes later |
+| identity middleware + current-user | `auth.Service` (`RequireUser`, `CurrentUser`) | cms admin gating (via `Config.AdminMiddleware`, A3); events SSE connect-time — **AMENDED 2026-07-07 (A-I1): the consumer-declared `CurrentUser` port is retired; `RequireUser` on `StreamMiddleware` stashes an `identity.Principal` (`sdk/identity`) the gateway reads unadapted** | structural satisfaction of consumer-declared ports (general case); the identity carrier is sdk vocabulary (A-I1); host wires; no feature→feature import | auth-v1 phases 1+3; events consumed at events-v1 (2026-07-08) |
 | worker execution | `sdk/workers` (Pool, Runner, `ErrNoWork`, `WithWakeChannel`, Middleware) | `features/jobs` runtime (first); `features/events` outbox poller (second — needs Pool/WorkFunc/wake only, stated as requirements in events §5); any host loop | jobs plan §2 owns the surface; events plan adds no demands beyond it (verified: requirement lists match) | jobs-v1 phase 1 |
 | event emission | `sdk/events` `Emitter` via `Mount.Events` | cms `entrysvc` (first emitter); auth v2 security events (first **durable** emitter, via outbox not Mount) | best-effort at-most-once on Mount; durable at-least-once rides Repositories (events §3 guarantee table) | events-v1 phases 2–3 |
 | event consumption | `sdk/events` `Bus` (full port, via events feature `Config.Bus`) | SSE gateway; host cache-invalidation subscriber | one bus instance flows to both `Mount.Events` and gateway `Config.Bus` | events-v1 |
