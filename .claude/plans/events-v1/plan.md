@@ -1802,3 +1802,78 @@ Every phase-2 DoD clause with its verifying artifact:
   **variadic** emitter rather than a required 4th positional param. Behavior is
   identical (single emitter, nil→Noop); the variadic is purely a
   backward-compatibility affordance for the unmodified-tests requirement.
+
+### 2026-07-08 — task-8 (host wiring — shared bus + cache-invalidation subscriber) executed
+
+Wiring only (rule 8) — two files: `examples/auth-cms/cmd/server/main.go`,
+`examples/auth-cms/README.md`. No feature/port/store changes.
+
+- **Shared bus** — one `bus := sdkevents.NewMemory(sdkevents.WithLogger(log))`
+  built in `run()` before the mount (import aliased `sdkevents` per O5). Set as
+  `feature.Mount{Router: router, Logger: log, Events: bus}` — cms (the emitter,
+  task-7) now publishes `content.*` through `m.Events`.
+- **Page cache held in a variable** — `pageCache := cacher.NewMemory()` (was the
+  inline `cacher.NewMemory()` flowing straight into `cms.Config.Cache`); the
+  cms `Cache:` field now reads `pageCache` so the host subscriber can drop it.
+- **Cache-invalidation subscriber (S5/O6)** — `bus.Subscribe("*", …)` with the
+  handler filtering `strings.HasPrefix(e.Type(), "content.")` and calling
+  `pageCache.DeletePattern(ctx, "page:*")` (S4 — verified the real key prefix in
+  `sdk/web/cache.go:24`: `"page:" + r.URL.RequestURI()`; `Memory.DeletePattern`
+  trims the `*` to a prefix delete). Plain `"*"` fan-out, filter-in-handler — no
+  prefix routing built (O6).
+- **Shutdown (§7 / P3 idiom)** — `web.Run` blocks until the parent ctx is
+  canceled and drains HTTP on its OWN fresh Background+ShutdownTimeout context
+  (`run.go:32`), so by return the parent ctx is already canceled. The bus is
+  therefore closed on a FRESH bounded context:
+  `closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second); defer cancel(); bus.Close(closeCtx)`.
+  A §7 ordering comment in `main.go` states HTTP → bus.Close today and marks
+  where phase 5 inserts the outbox poller (stopped after HTTP, before bus.Close).
+- **Rejected alternative, logged (P2):** making cms emits synchronous would give
+  a deterministic invalidation check but re-decides ratified O3 (emitter latency
+  must not be hostage to subscribers) and contradicts §3's re-fetch-trigger
+  semantics — async stays; the run-and-look uses bounded-poll wording instead.
+- **README** — added an "event bus + cache invalidation" bullet to the Wiring
+  section: one shared `sdkevents.NewMemory` as `Mount.Events`, cms emits
+  `content.*` post-write, host subscribes `"*"`/filters `content.*`/clears
+  `page:*`, async (re-fetch trigger not transactional write), pre-change page was
+  TTL-bound, bus closed on a fresh bounded context at shutdown.
+
+- **Verify:** `cd examples/auth-cms && go build ./... && go test ./... && go vet
+  ./...` all green (memstore + authmem suites ok; cmd/server no test files).
+  `make check` → "all checks passed" (27 modules; six guards green).
+- **Run-and-look (bounded-poll per P2), :8082, `AUTH_JWT_SECRET` set:**
+  register `admin@example.com` (201) → verify with mailer-logged code (200) →
+  login cookie jar (200) → authed `GET /articles` (200). Article
+  `saf7a5i6krivhyepxfnzyv7t7m` = "Two features, one host", public
+  `/articles/two-features-one-host`.
+  - prime `GET` → **X-Cache: MISS** (renders original, caches).
+  - second `GET` → **X-Cache: HIT** (served from cache).
+  - `POST /articles/saf7a5i6krivhyepxfnzyv7t7m` (title unchanged so slug stable,
+    status=published, body carrying `EDITED-1783530326`) → **303** — cms emits
+    `content.updated` async; host handler clears `page:*`.
+  - poll public page (retry ≤ ~2s): **MISS observed on poll #1 after 34ms**, and
+    the re-rendered page contains the `EDITED-1783530326` marker (fresh content).
+  - next `GET` → **X-Cache: HIT** again (re-cached), marker still present.
+  - **Pre-change contrast:** load 2 was a HIT only 34ms before the invalidated
+    MISS — well inside the 60s `publicPageTTL`. Without this subscriber the cache
+    is purely TTL-bound: that HIT would have kept serving the pre-edit bytes (no
+    marker) for up to 60s. The 34ms MISS with fresh content is exactly the
+    non-TTL-bound behavior the wiring adds.
+  - `SIGTERM` → "server shutting down" → "server stopped" (clean; `bus.Close` on
+    the fresh context logged no close-timeout warning); port 8082 freed. Did NOT
+    commit.
+
+### 2026-07-08 — Phase 3 (tasks 7–8, design-phase 5) complete — DoD holds
+
+Phase 3 DoD (plan ~line 877) satisfied and evidenced:
+
+- `entrysvc` emits `content.*` post-write via the mount's emitter behind a
+  nil→Noop guard, zero port/store changes, best-effort (§3/O2) — task-7's
+  events.go + service.go emit points, existing suite unmodified/green.
+- `examples/auth-cms` carries the shared bus (`Mount.Events`) and invalidates its
+  public-page cache on `content.*` — task-8's subscriber + fresh-context
+  shutdown.
+- Run-and-look passed and recorded (above): edit → MISS-within-window (34ms) with
+  fresh content → HIT; TTL-bound pre-change contrast noted.
+- Artifacts: `make check` green at 27 modules; the :8082 register→verify→login→
+  edit→invalidate transcript with observed X-Cache transitions and timing.

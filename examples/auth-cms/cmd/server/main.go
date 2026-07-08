@@ -27,6 +27,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -41,6 +42,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/cacher"
 	"github.com/gopernicus/gopernicus/sdk/email"
 	"github.com/gopernicus/gopernicus/sdk/environment"
+	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/logging"
 	"github.com/gopernicus/gopernicus/sdk/oauth"
@@ -82,7 +84,17 @@ func run(ctx context.Context, log *slog.Logger) error {
 	router := web.NewWebHandler(web.WithLogging(log))
 	router.Use(web.RequestID(), web.Logger(log), web.Panics(log))
 
-	mount := feature.Mount{Router: router, Logger: log}
+	// Shared in-process event bus (sdk default Memory). cms is the emitter (it
+	// publishes content.* post-write through mount.Events); the host subscribes
+	// below to invalidate the public-page cache. Delivery is async (O3): an
+	// emitter's latency never depends on its slowest subscriber.
+	bus := sdkevents.NewMemory(sdkevents.WithLogger(log))
+
+	// The public-page cache, held in a variable (it previously flowed straight
+	// into cms.Config.Cache) so the host's content-event subscriber can drop it.
+	pageCache := cacher.NewMemory()
+
+	mount := feature.Mount{Router: router, Logger: log, Events: bus}
 
 	// The TOY membership Granter (design §6, ratified AV4): invitations grant
 	// through this in-memory map with NO ReBAC in the module graph.
@@ -136,7 +148,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		Views:           cmstempl.New(),                          // FS3 one-line default: the bundled views module
 		Types:           []content.ContentType{productType()},    // host-registered custom type (zero migration)
 		Templates:       []cms.TemplateBinding{productBinding()}, // its dev-authored renderer
-		Cache:           cacher.NewMemory(),
+		Cache:           pageCache,
 		Mailer:          email.NewConsole(log),
 		MailFrom:        "cms@localhost",
 		ContactTo:       "ops@localhost",
@@ -145,11 +157,41 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return err
 	}
 
+	// Host cache-invalidation subscriber (S5/O6): subscribe to every event ("*")
+	// and filter content.* in the handler — the bus stays a plain fan-out with no
+	// prefix routing. On a cms content event, drop the whole public-page cache
+	// (web.CachePages keys pages "page:"+RequestURI, so "page:*" clears them all);
+	// the next request re-renders fresh. Before this wiring the page was purely
+	// TTL-bound: an edit within the 60s TTL kept serving stale bytes. Because cms
+	// emits are async (O3), this runs shortly AFTER the admin write returns rather
+	// than synchronously with it — a re-fetch trigger, not a transactional write.
+	if _, err := bus.Subscribe("*", func(ctx context.Context, e sdkevents.Event) error {
+		if !strings.HasPrefix(e.Type(), "content.") {
+			return nil
+		}
+		return pageCache.DeletePattern(ctx, "page:*")
+	}); err != nil {
+		return err
+	}
+
 	// Host-local demo + debug routes (host code, not feature surface).
 	registerDemoRoutes(router, authSvc, members)
 	registerDebugRoutes(router, authSvc, authRepos, log)
 
-	return web.Run(ctx, router, serverConfig(), log)
+	// Shutdown order (design §7, corrected context idiom P3): web.Run blocks until
+	// ctx is canceled, then drains in-flight HTTP on its OWN fresh
+	// Background+ShutdownTimeout context (run.go) — so by the time it returns the
+	// parent ctx is already canceled. Closing the bus on that canceled ctx would
+	// drain nothing (Memory.Close drains only up to the context deadline), so use
+	// a FRESH bounded context. Order is HTTP → bus.Close today; phase 5 inserts the
+	// outbox poller between them (stopped after HTTP, before bus.Close).
+	runErr := web.Run(ctx, router, serverConfig(), log)
+
+	closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = bus.Close(closeCtx)
+
+	return runErr
 }
 
 // seed populates a little content so the public site renders something. No user
