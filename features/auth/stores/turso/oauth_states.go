@@ -29,7 +29,7 @@ const oauthStateColumns = "token, provider, purpose, payload, expires_at"
 // Create persists a new flow state.
 func (s *OAuthStateStore) Create(ctx context.Context, st oauthstate.State) (oauthstate.State, error) {
 	const q = `INSERT INTO oauth_states (` + oauthStateColumns + `) VALUES (?, ?, ?, ?, ?)`
-	_, err := s.db.Exec(ctx, q, st.Token, st.Provider, st.Purpose, string(st.Payload), formatTS(st.ExpiresAt))
+	_, err := s.db.Exec(ctx, q, st.Token, st.Provider, st.Purpose, string(st.Payload), tursodb.FormatTime(st.ExpiresAt))
 	if err != nil {
 		return oauthstate.State{}, err
 	}
@@ -64,7 +64,7 @@ func scanOAuthState(sc scanner) (oauthstate.State, error) {
 	}
 	st.Payload = []byte(payload)
 	var err error
-	if st.ExpiresAt, err = parseTime(expiresAt); err != nil {
+	if st.ExpiresAt, err = tursodb.ParseTime(expiresAt); err != nil {
 		return oauthstate.State{}, err
 	}
 	return st, nil

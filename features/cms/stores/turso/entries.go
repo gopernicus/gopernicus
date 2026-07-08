@@ -34,8 +34,8 @@ func (s *EntryStore) Create(ctx context.Context, e content.Entry) (content.Entry
 		const q = `INSERT INTO entries (` + entryColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		if _, err := tx.Exec(ctx, q,
 			e.ID, e.Type, e.Slug, e.Title, string(e.Status), e.Body, e.Excerpt, e.Author,
-			e.Template, e.ParentID, e.MenuOrder, nullableTS(e.PublishedAt),
-			e.CreatedAt.UTC().Format(tsLayout), e.UpdatedAt.UTC().Format(tsLayout),
+			e.Template, e.ParentID, e.MenuOrder, tursodb.NullTimePtr(e.PublishedAt),
+			tursodb.FormatTime(e.CreatedAt), tursodb.FormatTime(e.UpdatedAt),
 		); err != nil {
 			return err
 		}
@@ -54,8 +54,8 @@ func (s *EntryStore) Update(ctx context.Context, id string, e content.Entry) (co
 		const q = `UPDATE entries SET type=?, slug=?, title=?, status=?, body=?, excerpt=?, author=?, template=?, parent_id=?, menu_order=?, published_at=?, updated_at=? WHERE id=?`
 		res, err := tx.Exec(ctx, q,
 			e.Type, e.Slug, e.Title, string(e.Status), e.Body, e.Excerpt, e.Author,
-			e.Template, e.ParentID, e.MenuOrder, nullableTS(e.PublishedAt),
-			e.UpdatedAt.UTC().Format(tsLayout), id,
+			e.Template, e.ParentID, e.MenuOrder, tursodb.NullTimePtr(e.PublishedAt),
+			tursodb.FormatTime(e.UpdatedAt), id,
 		)
 		if err != nil {
 			return err
@@ -139,7 +139,7 @@ func (s *EntryStore) listWhere(ctx context.Context, where string, args []any, q 
 	}
 	if cur != nil {
 		cv, _ := cur.OrderValue.(time.Time)
-		ts := cv.UTC().Format(tsLayout)
+		ts := tursodb.FormatTime(cv)
 		where += " AND ((created_at < ?) OR (created_at = ? AND id < ?))"
 		args = append(args, ts, ts, cur.PK)
 	}
@@ -276,16 +276,16 @@ func scanEntry(sc scanner) (content.Entry, error) {
 	}
 	e.Status = content.Status(status)
 	if publishedAt.Valid && publishedAt.String != "" {
-		t, err := parseTime(publishedAt.String)
+		t, err := tursodb.ParseTime(publishedAt.String)
 		if err != nil {
 			return content.Entry{}, err
 		}
 		e.PublishedAt = &t
 	}
-	if e.CreatedAt, err = parseTime(createdAt); err != nil {
+	if e.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
 		return content.Entry{}, err
 	}
-	if e.UpdatedAt, err = parseTime(updatedAt); err != nil {
+	if e.UpdatedAt, err = tursodb.ParseTime(updatedAt); err != nil {
 		return content.Entry{}, err
 	}
 	return e, nil

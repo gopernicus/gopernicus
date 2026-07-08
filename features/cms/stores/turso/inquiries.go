@@ -24,7 +24,7 @@ const inquiryColumns = "id, name, email, message, created_at"
 // Create persists a new inquiry.
 func (s *InquiryStore) Create(ctx context.Context, in messaging.Inquiry) (messaging.Inquiry, error) {
 	const q = `INSERT INTO inquiries (` + inquiryColumns + `) VALUES (?, ?, ?, ?, ?)`
-	_, err := s.db.Exec(ctx, q, in.ID, in.Name, in.Email, in.Message, in.CreatedAt.UTC().Format(tsLayout))
+	_, err := s.db.Exec(ctx, q, in.ID, in.Name, in.Email, in.Message, tursodb.FormatTime(in.CreatedAt))
 	if err != nil {
 		return messaging.Inquiry{}, err
 	}
@@ -48,7 +48,7 @@ func (s *InquiryStore) List(ctx context.Context) ([]messaging.Inquiry, error) {
 		if err := rows.Scan(&in.ID, &in.Name, &in.Email, &in.Message, &createdAt); err != nil {
 			return nil, tursodb.MapError(err)
 		}
-		if in.CreatedAt, err = parseTime(createdAt); err != nil {
+		if in.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
 			return nil, err
 		}
 		out = append(out, in)

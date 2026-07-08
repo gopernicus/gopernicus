@@ -55,7 +55,7 @@ func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Ti
 				existing.UpdatedAt = now
 				cron, every := specColumns(existing.Spec)
 				const upd = `UPDATE job_schedules SET kind = ?, cron_expr = ?, every_secs = ?, payload = ?, next_run_at = ?, updated_at = ? WHERE schedule_id = ?`
-				if _, err := tx.Exec(ctx, upd, existing.Kind, cron, every, payloadValue(existing.Payload), formatTS(existing.NextRunAt), formatTS(existing.UpdatedAt), existing.ID); err != nil {
+				if _, err := tx.Exec(ctx, upd, existing.Kind, cron, every, payloadValue(existing.Payload), tursodb.FormatTime(existing.NextRunAt), tursodb.FormatTime(existing.UpdatedAt), existing.ID); err != nil {
 					return err
 				}
 				out = existing
@@ -74,7 +74,7 @@ func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Ti
 				}
 				cron, every := specColumns(sch.Spec)
 				const ins = `INSERT INTO job_schedules (` + scheduleColumns + `) VALUES (?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, ?, ?)`
-				if _, err := tx.Exec(ctx, ins, sch.ID, sch.Name, sch.Kind, cron, every, payloadValue(sch.Payload), formatTS(sch.NextRunAt), formatTS(sch.CreatedAt), formatTS(sch.UpdatedAt)); err != nil {
+				if _, err := tx.Exec(ctx, ins, sch.ID, sch.Name, sch.Kind, cron, every, payloadValue(sch.Payload), tursodb.FormatTime(sch.NextRunAt), tursodb.FormatTime(sch.CreatedAt), tursodb.FormatTime(sch.UpdatedAt)); err != nil {
 					return err
 				}
 				out = sch
@@ -101,7 +101,7 @@ func (s *Schedules) ListDue(ctx context.Context, now time.Time, limit int) ([]sc
 	if lim <= 0 {
 		lim = -1 // SQLite: no limit
 	}
-	rows, err := s.db.Query(ctx, q, formatTS(now.UTC()), lim)
+	rows, err := s.db.Query(ctx, q, tursodb.FormatTime(now.UTC()), lim)
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +127,7 @@ func (s *Schedules) ClaimDue(ctx context.Context, id string, prevNextRunAt, newN
 		WHERE schedule_id = ? AND next_run_at = ? AND enabled = 1`
 	var won bool
 	err := retryBusy(ctx, func() error {
-		res, err := s.db.Exec(ctx, q, formatTS(newNextRunAt.UTC()), formatTS(now.UTC()), formatTS(now.UTC()), id, formatTS(prevNextRunAt.UTC()))
+		res, err := s.db.Exec(ctx, q, tursodb.FormatTime(newNextRunAt.UTC()), tursodb.FormatTime(now.UTC()), tursodb.FormatTime(now.UTC()), id, tursodb.FormatTime(prevNextRunAt.UTC()))
 		if err != nil {
 			return err
 		}
@@ -145,7 +145,7 @@ func (s *Schedules) ClaimDue(ctx context.Context, id string, prevNextRunAt, newN
 // id yields errs.ErrNotFound.
 func (s *Schedules) SetLastJob(ctx context.Context, id, jobID string, now time.Time) error {
 	const q = `UPDATE job_schedules SET last_job_id = ?, updated_at = ? WHERE schedule_id = ?`
-	return s.execAffecting(ctx, q, jobID, formatTS(now.UTC()), id)
+	return s.execAffecting(ctx, q, jobID, tursodb.FormatTime(now.UTC()), id)
 }
 
 // Get returns the schedule with the given id, or errs.ErrNotFound.
@@ -166,7 +166,7 @@ func (s *Schedules) List(ctx context.Context, req crud.ListRequest) (crud.Page[s
 	}
 	if cur != nil {
 		cv, _ := cur.OrderValue.(time.Time)
-		ts := formatTS(cv)
+		ts := tursodb.FormatTime(cv)
 		where += " AND ((created_at < ?) OR (created_at = ? AND schedule_id < ?))"
 		args = append(args, ts, ts, cur.PK)
 	}
@@ -202,7 +202,7 @@ func (s *Schedules) List(ctx context.Context, req crud.ListRequest) (crud.Page[s
 // errs.ErrNotFound.
 func (s *Schedules) SetEnabled(ctx context.Context, id string, enabled bool, now time.Time) error {
 	const q = `UPDATE job_schedules SET enabled = ?, updated_at = ? WHERE schedule_id = ?`
-	return s.execAffecting(ctx, q, boolToInt(enabled), formatTS(now.UTC()), id)
+	return s.execAffecting(ctx, q, tursodb.BoolToInt(enabled), tursodb.FormatTime(now.UTC()), id)
 }
 
 // Delete removes a schedule; a missing id yields errs.ErrNotFound.
@@ -267,17 +267,17 @@ func scanSchedule(sc scanner) (schedule.Schedule, error) {
 	sch.Enabled = enabled != 0
 	sch.LastJobID = lastJobID.String
 
-	if sch.NextRunAt, err = parseTime(nextRunAt); err != nil {
+	if sch.NextRunAt, err = tursodb.ParseTime(nextRunAt); err != nil {
 		return schedule.Schedule{}, err
 	}
-	if sch.CreatedAt, err = parseTime(createdAt); err != nil {
+	if sch.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
 		return schedule.Schedule{}, err
 	}
-	if sch.UpdatedAt, err = parseTime(updatedAt); err != nil {
+	if sch.UpdatedAt, err = tursodb.ParseTime(updatedAt); err != nil {
 		return schedule.Schedule{}, err
 	}
 	if lastRunAt.Valid && lastRunAt.String != "" {
-		t, err := parseTime(lastRunAt.String)
+		t, err := tursodb.ParseTime(lastRunAt.String)
 		if err != nil {
 			return schedule.Schedule{}, err
 		}

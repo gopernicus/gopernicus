@@ -26,7 +26,7 @@ func (s *AssetStore) Create(ctx context.Context, a media.Asset) (media.Asset, er
 	const q = `INSERT INTO assets (` + assetColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?)`
 	_, err := s.db.Exec(ctx, q,
 		a.ID, a.Filename, a.ContentType, a.Size, a.StorageKey, a.Alt,
-		a.CreatedAt.UTC().Format(tsLayout),
+		tursodb.FormatTime(a.CreatedAt),
 	)
 	if err != nil {
 		return media.Asset{}, err
@@ -74,7 +74,7 @@ func scanAsset(sc scanner) (media.Asset, error) {
 	if err != nil {
 		return media.Asset{}, tursodb.MapError(err)
 	}
-	if a.CreatedAt, err = parseTime(createdAt); err != nil {
+	if a.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
 		return media.Asset{}, err
 	}
 	return a, nil

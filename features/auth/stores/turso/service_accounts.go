@@ -30,8 +30,8 @@ const serviceAccountColumns = "id, name, description, created_by, act_as_user, o
 func (s *ServiceAccountStore) Create(ctx context.Context, sa serviceaccount.ServiceAccount) (serviceaccount.ServiceAccount, error) {
 	const q = `INSERT INTO service_accounts (` + serviceAccountColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err := s.db.Exec(ctx, q,
-		sa.ID, sa.Name, sa.Description, sa.CreatedBy, boolToInt(sa.ActAsUser),
-		sa.OwnerUserID, formatTS(sa.CreatedAt), formatTS(sa.UpdatedAt),
+		sa.ID, sa.Name, sa.Description, sa.CreatedBy, tursodb.BoolToInt(sa.ActAsUser),
+		sa.OwnerUserID, tursodb.FormatTime(sa.CreatedAt), tursodb.FormatTime(sa.UpdatedAt),
 	)
 	if err != nil {
 		return serviceaccount.ServiceAccount{}, err
@@ -58,7 +58,7 @@ func (s *ServiceAccountStore) List(ctx context.Context, req crud.ListRequest) (c
 func (s *ServiceAccountStore) Update(ctx context.Context, id string, sa serviceaccount.ServiceAccount) (serviceaccount.ServiceAccount, error) {
 	const q = `UPDATE service_accounts SET name=?, description=?, created_by=?, act_as_user=?, owner_user_id=?, updated_at=? WHERE id=?`
 	res, err := s.db.Exec(ctx, q,
-		sa.Name, sa.Description, sa.CreatedBy, boolToInt(sa.ActAsUser), sa.OwnerUserID, formatTS(sa.UpdatedAt), id,
+		sa.Name, sa.Description, sa.CreatedBy, tursodb.BoolToInt(sa.ActAsUser), sa.OwnerUserID, tursodb.FormatTime(sa.UpdatedAt), id,
 	)
 	if err != nil {
 		return serviceaccount.ServiceAccount{}, err
@@ -102,10 +102,10 @@ func scanServiceAccount(sc scanner) (serviceaccount.ServiceAccount, error) {
 	}
 	sa.ActAsUser = actAsUser != 0
 	var err error
-	if sa.CreatedAt, err = parseTime(createdAt); err != nil {
+	if sa.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
 		return serviceaccount.ServiceAccount{}, err
 	}
-	if sa.UpdatedAt, err = parseTime(updatedAt); err != nil {
+	if sa.UpdatedAt, err = tursodb.ParseTime(updatedAt); err != nil {
 		return serviceaccount.ServiceAccount{}, err
 	}
 	return sa, nil

@@ -37,9 +37,9 @@ func (s *InvitationStore) Create(ctx context.Context, inv invitation.Invitation)
 	const q = `INSERT INTO invitations (` + invitationColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err := s.db.Exec(ctx, q,
 		inv.ID, inv.ResourceType, inv.ResourceID, inv.Relation, inv.Identifier,
-		inv.ResolvedSubjectID, inv.InvitedBy, inv.TokenHash, boolToInt(inv.AutoAccept),
-		inv.Status, formatTS(inv.ExpiresAt), nullableTS(inv.AcceptedAt),
-		formatTS(inv.CreatedAt), formatTS(inv.UpdatedAt),
+		inv.ResolvedSubjectID, inv.InvitedBy, inv.TokenHash, tursodb.BoolToInt(inv.AutoAccept),
+		inv.Status, tursodb.FormatTime(inv.ExpiresAt), tursodb.NullTime(inv.AcceptedAt),
+		tursodb.FormatTime(inv.CreatedAt), tursodb.FormatTime(inv.UpdatedAt),
 	)
 	if err != nil {
 		return invitation.Invitation{}, err
@@ -93,8 +93,8 @@ func (s *InvitationStore) UpdateStatus(ctx context.Context, id string, upd invit
 		WHERE id = ?
 		RETURNING ` + invitationColumns
 	return scanInvitation(s.db.QueryRow(ctx, q,
-		upd.Status, upd.TokenHash, formatTS(upd.ExpiresAt), nullableTS(upd.AcceptedAt),
-		upd.ResolvedSubjectID, formatTS(upd.UpdatedAt), id,
+		upd.Status, upd.TokenHash, tursodb.FormatTime(upd.ExpiresAt), tursodb.NullTime(upd.AcceptedAt),
+		upd.ResolvedSubjectID, tursodb.FormatTime(upd.UpdatedAt), id,
 	))
 }
 
@@ -116,16 +116,16 @@ func scanInvitation(sc scanner) (invitation.Invitation, error) {
 	}
 	inv.AutoAccept = autoAccept != 0
 	var err error
-	if inv.ExpiresAt, err = parseTime(expiresAt); err != nil {
+	if inv.ExpiresAt, err = tursodb.ParseTime(expiresAt); err != nil {
 		return invitation.Invitation{}, err
 	}
-	if inv.AcceptedAt, err = parseNullTime(acceptedAt); err != nil {
+	if inv.AcceptedAt, err = tursodb.ParseNullTime(acceptedAt); err != nil {
 		return invitation.Invitation{}, err
 	}
-	if inv.CreatedAt, err = parseTime(createdAt); err != nil {
+	if inv.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
 		return invitation.Invitation{}, err
 	}
-	if inv.UpdatedAt, err = parseTime(updatedAt); err != nil {
+	if inv.UpdatedAt, err = tursodb.ParseTime(updatedAt); err != nil {
 		return invitation.Invitation{}, err
 	}
 	return inv, nil

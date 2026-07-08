@@ -27,7 +27,7 @@ func (s *TermStore) Create(ctx context.Context, t taxonomy.Term) (taxonomy.Term,
 	const q = `INSERT INTO terms (` + termColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?)`
 	_, err := s.db.Exec(ctx, q,
 		t.ID, string(t.Kind), t.Slug, t.Name, t.ParentID,
-		t.CreatedAt.UTC().Format(tsLayout), t.UpdatedAt.UTC().Format(tsLayout),
+		tursodb.FormatTime(t.CreatedAt), tursodb.FormatTime(t.UpdatedAt),
 	)
 	if err != nil {
 		return taxonomy.Term{}, err
@@ -39,7 +39,7 @@ func (s *TermStore) Create(ctx context.Context, t taxonomy.Term) (taxonomy.Term,
 func (s *TermStore) Update(ctx context.Context, id string, t taxonomy.Term) (taxonomy.Term, error) {
 	const q = `UPDATE terms SET kind=?, slug=?, name=?, parent_id=?, updated_at=? WHERE id=?`
 	res, err := s.db.Exec(ctx, q,
-		string(t.Kind), t.Slug, t.Name, t.ParentID, t.UpdatedAt.UTC().Format(tsLayout), id,
+		string(t.Kind), t.Slug, t.Name, t.ParentID, tursodb.FormatTime(t.UpdatedAt), id,
 	)
 	if err != nil {
 		return taxonomy.Term{}, err
@@ -111,10 +111,10 @@ func scanTerm(sc scanner) (taxonomy.Term, error) {
 		return taxonomy.Term{}, tursodb.MapError(err)
 	}
 	t.Kind = taxonomy.Kind(kind)
-	if t.CreatedAt, err = parseTime(createdAt); err != nil {
+	if t.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
 		return taxonomy.Term{}, err
 	}
-	if t.UpdatedAt, err = parseTime(updatedAt); err != nil {
+	if t.UpdatedAt, err = tursodb.ParseTime(updatedAt); err != nil {
 		return taxonomy.Term{}, err
 	}
 	return t, nil
