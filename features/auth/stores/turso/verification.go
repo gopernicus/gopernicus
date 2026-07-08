@@ -27,7 +27,7 @@ const codeColumns = "code, user_id, created_at, expires_at"
 // Create persists a new verification code.
 func (s *CodeStore) Create(ctx context.Context, c verification.Code) (verification.Code, error) {
 	const q = `INSERT INTO verification_codes (` + codeColumns + `) VALUES (?, ?, ?, ?)`
-	_, err := s.db.Exec(ctx, q, c.Code, c.UserID, formatTS(c.CreatedAt), formatTS(c.ExpiresAt))
+	_, err := s.db.Exec(ctx, q, c.Code, c.UserID, tursodb.FormatTime(c.CreatedAt), tursodb.FormatTime(c.ExpiresAt))
 	if err != nil {
 		return verification.Code{}, err
 	}
@@ -45,10 +45,10 @@ func (s *CodeStore) Get(ctx context.Context, code string) (verification.Code, er
 		return verification.Code{}, tursodb.MapError(err)
 	}
 	var err error
-	if c.CreatedAt, err = parseTime(createdAt); err != nil {
+	if c.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
 		return verification.Code{}, err
 	}
-	if c.ExpiresAt, err = parseTime(expiresAt); err != nil {
+	if c.ExpiresAt, err = tursodb.ParseTime(expiresAt); err != nil {
 		return verification.Code{}, err
 	}
 	if c.Expired(time.Now()) {
@@ -91,7 +91,7 @@ const tokenColumns = "token, user_id, created_at, expires_at"
 // Create persists a new reset token.
 func (s *TokenStore) Create(ctx context.Context, t verification.Token) (verification.Token, error) {
 	const q = `INSERT INTO verification_tokens (` + tokenColumns + `) VALUES (?, ?, ?, ?)`
-	_, err := s.db.Exec(ctx, q, t.Token, t.UserID, formatTS(t.CreatedAt), formatTS(t.ExpiresAt))
+	_, err := s.db.Exec(ctx, q, t.Token, t.UserID, tursodb.FormatTime(t.CreatedAt), tursodb.FormatTime(t.ExpiresAt))
 	if err != nil {
 		return verification.Token{}, err
 	}
@@ -109,10 +109,10 @@ func (s *TokenStore) Get(ctx context.Context, token string) (verification.Token,
 		return verification.Token{}, tursodb.MapError(err)
 	}
 	var err error
-	if t.CreatedAt, err = parseTime(createdAt); err != nil {
+	if t.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
 		return verification.Token{}, err
 	}
-	if t.ExpiresAt, err = parseTime(expiresAt); err != nil {
+	if t.ExpiresAt, err = tursodb.ParseTime(expiresAt); err != nil {
 		return verification.Token{}, err
 	}
 	if t.Expired(time.Now()) {

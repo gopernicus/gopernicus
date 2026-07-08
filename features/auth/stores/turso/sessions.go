@@ -31,7 +31,7 @@ const sessionColumns = "token, user_id, created_at, expires_at"
 // Create persists a new session.
 func (s *SessionStore) Create(ctx context.Context, sess session.Session) (session.Session, error) {
 	const q = `INSERT INTO sessions (` + sessionColumns + `) VALUES (?, ?, ?, ?)`
-	_, err := s.db.Exec(ctx, q, sess.Token, sess.UserID, formatTS(sess.CreatedAt), formatTS(sess.ExpiresAt))
+	_, err := s.db.Exec(ctx, q, sess.Token, sess.UserID, tursodb.FormatTime(sess.CreatedAt), tursodb.FormatTime(sess.ExpiresAt))
 	if err != nil {
 		return session.Session{}, err
 	}
@@ -86,10 +86,10 @@ func scanSession(sc scanner) (session.Session, error) {
 		return session.Session{}, tursodb.MapError(err)
 	}
 	var err error
-	if sess.CreatedAt, err = parseTime(createdAt); err != nil {
+	if sess.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
 		return session.Session{}, err
 	}
-	if sess.ExpiresAt, err = parseTime(expiresAt); err != nil {
+	if sess.ExpiresAt, err = tursodb.ParseTime(expiresAt); err != nil {
 		return session.Session{}, err
 	}
 	return sess, nil

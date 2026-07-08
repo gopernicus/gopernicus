@@ -28,8 +28,8 @@ const userColumns = "id, email, display_name, email_verified, created_at, update
 func (s *UserStore) Create(ctx context.Context, u user.User) (user.User, error) {
 	const q = `INSERT INTO users (` + userColumns + `) VALUES (?, ?, ?, ?, ?, ?)`
 	_, err := s.db.Exec(ctx, q,
-		u.ID, u.Email, u.DisplayName, boolToInt(u.EmailVerified),
-		formatTS(u.CreatedAt), formatTS(u.UpdatedAt),
+		u.ID, u.Email, u.DisplayName, tursodb.BoolToInt(u.EmailVerified),
+		tursodb.FormatTime(u.CreatedAt), tursodb.FormatTime(u.UpdatedAt),
 	)
 	if err != nil {
 		return user.User{}, err
@@ -54,7 +54,7 @@ func (s *UserStore) GetByEmail(ctx context.Context, email string) (user.User, er
 func (s *UserStore) Update(ctx context.Context, id string, u user.User) (user.User, error) {
 	const q = `UPDATE users SET email=?, display_name=?, email_verified=?, updated_at=? WHERE id=?`
 	res, err := s.db.Exec(ctx, q,
-		u.Email, u.DisplayName, boolToInt(u.EmailVerified), formatTS(u.UpdatedAt), id,
+		u.Email, u.DisplayName, tursodb.BoolToInt(u.EmailVerified), tursodb.FormatTime(u.UpdatedAt), id,
 	)
 	if err != nil {
 		return user.User{}, err
@@ -82,10 +82,10 @@ func scanUser(sc scanner) (user.User, error) {
 	}
 	u.EmailVerified = verified != 0
 	var err error
-	if u.CreatedAt, err = parseTime(createdAt); err != nil {
+	if u.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
 		return user.User{}, err
 	}
-	if u.UpdatedAt, err = parseTime(updatedAt); err != nil {
+	if u.UpdatedAt, err = tursodb.ParseTime(updatedAt); err != nil {
 		return user.User{}, err
 	}
 	return u, nil

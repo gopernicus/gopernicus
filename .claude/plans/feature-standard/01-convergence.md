@@ -455,3 +455,66 @@ no runtime call) are untouched.
 - **Divergence** — none. Placement note: `Scanner` sits beside `Querier` in
   pgxdb but in `turso/db.go` because turso has no Querier interface yet (D5
   mirrors it). D3–D6 still remaining.
+
+### 2026-07-07 — task-D3 executed (promote the turso timestamp/bool bundle)
+
+**The `tursodb` connector now owns the timestamp/bool bundle; the three turso
+stores delegate.** New file `integrations/datastores/turso/timestamps.go`
+(stdlib-only — `database/sql`, `time`; no go.mod change) exports:
+`const TimeLayout = "2006-01-02T15:04:05.000000000Z07:00"`;
+`FormatTime(time.Time) string` (= `t.UTC().Format(TimeLayout)`);
+`ParseTime(string) (time.Time, error)` (fixed-width, RFC3339Nano fallback,
+UTC-normalized); `ParseNullTime(sql.NullString) (time.Time, error)` (NULL/empty
+→ zero); `BoolToInt(bool) int`; and the reconciled absent-model **pair** —
+`NullTime(time.Time)` (zero → NULL, auth's value-typed contract) and
+`NullTimePtr(*time.Time)` (nil → NULL, cms's pointer-typed contract). Divergence
+1 shipped as BOTH, never collapsed; doc comments cross-reference the two.
+
+- **auth turso** — adopted `NullTime` (its `nullableTS(time.Time)` maps 1:1);
+  deleted `helpers.go`'s `tsLayout`, `formatTS`, `nullableTS`, `parseNullTime`,
+  `parseTime`, `boolToInt` (6 helpers) + the now-orphan `database/sql`/`time`
+  imports; call sites across 11 files rewired to `tursodb.*`. Kept `orderField`,
+  the `scanner` alias, `MigrationsFS`/`MigrationsDir` (feature-specific per D1).
+  The `pagination.go` cursor site's `formatTS(cv)` converged to
+  `tursodb.FormatTime(cv)` — a format-call convergence only; keyset structure
+  (D5) untouched.
+- **cms turso** — adopted `NullTimePtr` (its `nullableTS(*time.Time)` maps 1:1);
+  deleted `tsLayout`, `nullableTS`, `parseTime` (3 helpers); converged **15**
+  open-coded `X.UTC().Format(tsLayout)` sites (terms 3, inquiries 1, entries 4
+  incl. the `listWhere` cursor site, assets 1, menus 5, plus the two write
+  paths) onto `tursodb.FormatTime`. Kept `orderField`, `scanner`.
+- **jobs turso** — adopted the `FormatTime`/`ParseTime`/`BoolToInt` subset it
+  duplicated; deleted `tsLayout`, `formatTS`, `parseTime`, `boolToInt` (4).
+  Kept the feature-specific `newID`, `payloadValue`, `isBusy`, `retryBusy` +
+  the busy-retry consts, `orderField`, `scanner` (per D1).
+
+Byte-identity holds by construction: `TimeLayout` is the exact former `tsLayout`
+string, `FormatTime`/`ParseTime`/`NullTime`/`NullTimePtr`/`ParseNullTime`/
+`BoolToInt` bodies are the former helper bodies verbatim. No store public API
+changed (all six deleted helpers were private).
+
+- **Connector test** — `timestamps_test.go` (follows the module's `package
+  turso` internal-test convention): fixed-width round-trip identity + width/UTC
+  assertions, RFC3339 tolerance (trimmed-zero, no-fraction, offset, microsecond
+  cases), invalid-input rejection, BOTH null encodings BOTH directions
+  (`NullTime` zero→NULL / set→string, `NullTimePtr` nil→NULL / set→string, their
+  parity on a set value), `ParseNullTime` NULL/empty→zero and set→instant, and a
+  `NullTime`→`ParseNullTime` round-trip — the test that would have caught
+  divergence 1. All PASS.
+- **Verification** — connector `go test ./...` PASS; the three turso store
+  modules build/vet/`go test ./...` PASS (hermetic run is `TestExportMigrations`
+  only; the tagged `TestConformance_Turso`/`_Postgres`/`_Queue` skip loudly
+  without live creds — `TURSO_DATABASE_URL … NOT verified`). Per-feature
+  storetest gate green: `features/{auth,cms,jobs}` roots + all three `storetest`
+  packages PASS. `make check` → **all checks passed** (27 modules build/vet/test,
+  three integration-tag vets, all six guards; no templ touched).
+- **Real-interaction** — `examples/minimal` :8081 `GET /` + `/products/widget-3000`
+  → 200/200, killed, port free. **turso-real drive:** `.env` URL check PASSED —
+  `TURSO_DATABASE_URL=libsql://gopernicus-cms-playground-gps-impact.aws-us-east-2.turso.io`
+  matches the authorized playground DB, so the live drive ran: `examples/cms`
+  :8080 `GET /` → 200 and `GET /articles/b2-baseline-article` → 200, rendering
+  "B2 Baseline Article" read from live turso — exercising the new
+  `FormatTime`/`ParseTime` path (every entry scan parses created_at/updated_at
+  and the nullable published_at). Killed, port free.
+- **Divergence** — none. D4 (pgx nullable-time), D5 (keyset `ListPage`), D6
+  (rows-affected) still remaining.

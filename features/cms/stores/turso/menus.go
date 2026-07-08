@@ -27,7 +27,7 @@ const itemColumns = "id, menu_id, label, url, parent_id, position, created_at, u
 func (s *MenuStore) CreateMenu(ctx context.Context, m menus.Menu) (menus.Menu, error) {
 	const q = `INSERT INTO menus (` + menuColumns + `) VALUES (?, ?, ?, ?, ?)`
 	_, err := s.db.Exec(ctx, q, m.ID, m.Name, m.Slug,
-		m.CreatedAt.UTC().Format(tsLayout), m.UpdatedAt.UTC().Format(tsLayout))
+		tursodb.FormatTime(m.CreatedAt), tursodb.FormatTime(m.UpdatedAt))
 	if err != nil {
 		return menus.Menu{}, err
 	}
@@ -87,7 +87,7 @@ func (s *MenuStore) ItemsForMenu(ctx context.Context, menuID string) ([]menus.Me
 func (s *MenuStore) AddItem(ctx context.Context, it menus.MenuItem) (menus.MenuItem, error) {
 	const q = `INSERT INTO menu_items (` + itemColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err := s.db.Exec(ctx, q, it.ID, it.MenuID, it.Label, it.URL, it.ParentID, it.Position,
-		it.CreatedAt.UTC().Format(tsLayout), it.UpdatedAt.UTC().Format(tsLayout))
+		tursodb.FormatTime(it.CreatedAt), tursodb.FormatTime(it.UpdatedAt))
 	if err != nil {
 		return menus.MenuItem{}, err
 	}
@@ -104,7 +104,7 @@ func (s *MenuStore) GetItem(ctx context.Context, id string) (menus.MenuItem, err
 func (s *MenuStore) UpdateItem(ctx context.Context, id string, it menus.MenuItem) (menus.MenuItem, error) {
 	const q = `UPDATE menu_items SET label=?, url=?, parent_id=?, position=?, updated_at=? WHERE id=?`
 	res, err := s.db.Exec(ctx, q, it.Label, it.URL, it.ParentID, it.Position,
-		it.UpdatedAt.UTC().Format(tsLayout), id)
+		tursodb.FormatTime(it.UpdatedAt), id)
 	if err != nil {
 		return menus.MenuItem{}, err
 	}
@@ -133,10 +133,10 @@ func scanMenu(sc scanner) (menus.Menu, error) {
 		return menus.Menu{}, tursodb.MapError(err)
 	}
 	var err error
-	if m.CreatedAt, err = parseTime(createdAt); err != nil {
+	if m.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
 		return menus.Menu{}, err
 	}
-	if m.UpdatedAt, err = parseTime(updatedAt); err != nil {
+	if m.UpdatedAt, err = tursodb.ParseTime(updatedAt); err != nil {
 		return menus.Menu{}, err
 	}
 	return m, nil
@@ -151,10 +151,10 @@ func scanItem(sc scanner) (menus.MenuItem, error) {
 		return menus.MenuItem{}, tursodb.MapError(err)
 	}
 	var err error
-	if it.CreatedAt, err = parseTime(createdAt); err != nil {
+	if it.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
 		return menus.MenuItem{}, err
 	}
-	if it.UpdatedAt, err = parseTime(updatedAt); err != nil {
+	if it.UpdatedAt, err = tursodb.ParseTime(updatedAt); err != nil {
 		return menus.MenuItem{}, err
 	}
 	return it, nil

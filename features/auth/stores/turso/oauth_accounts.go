@@ -35,9 +35,9 @@ func (s *OAuthAccountStore) Create(ctx context.Context, a oauthaccount.OAuthAcco
 	const q = `INSERT INTO oauth_accounts (` + oauthAccountColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err := s.db.Exec(ctx, q,
 		a.Provider, a.ProviderUserID, a.UserID, a.ProviderEmail,
-		boolToInt(a.ProviderEmailVerified), boolToInt(a.AccountVerified),
-		formatTS(a.LinkedAt), a.AccessToken, a.RefreshToken,
-		nullableTS(a.TokenExpiresAt), a.TokenType, a.Scope,
+		tursodb.BoolToInt(a.ProviderEmailVerified), tursodb.BoolToInt(a.AccountVerified),
+		tursodb.FormatTime(a.LinkedAt), a.AccessToken, a.RefreshToken,
+		tursodb.NullTime(a.TokenExpiresAt), a.TokenType, a.Scope,
 	)
 	if err != nil {
 		return oauthaccount.OAuthAccount{}, err
@@ -108,10 +108,10 @@ func scanOAuthAccount(sc scanner) (oauthaccount.OAuthAccount, error) {
 	a.ProviderEmailVerified = emailVerified != 0
 	a.AccountVerified = acctVerified != 0
 	var err error
-	if a.LinkedAt, err = parseTime(linkedAt); err != nil {
+	if a.LinkedAt, err = tursodb.ParseTime(linkedAt); err != nil {
 		return oauthaccount.OAuthAccount{}, err
 	}
-	if a.TokenExpiresAt, err = parseNullTime(tokenExpiresAt); err != nil {
+	if a.TokenExpiresAt, err = tursodb.ParseNullTime(tokenExpiresAt); err != nil {
 		return oauthaccount.OAuthAccount{}, err
 	}
 	return a, nil

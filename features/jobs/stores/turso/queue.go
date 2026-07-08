@@ -90,7 +90,7 @@ func (q *Queue) Enqueue(ctx context.Context, in job.Enqueue) (job.Job, error) {
 	err := retryBusy(ctx, func() error {
 		_, e := q.db.Exec(ctx, insert,
 			j.JobID, j.Kind, payloadValue(j.Payload), j.Priority, j.MaxAttempts,
-			formatTS(j.ScheduledFor), formatTS(j.CreatedAt), formatTS(j.UpdatedAt))
+			tursodb.FormatTime(j.ScheduledFor), tursodb.FormatTime(j.CreatedAt), tursodb.FormatTime(j.UpdatedAt))
 		return e
 	})
 	if err != nil {
@@ -106,8 +106,8 @@ func (q *Queue) Enqueue(ctx context.Context, in job.Enqueue) (job.Job, error) {
 // WHERE (SQLite has no FOR UPDATE SKIP LOCKED); selection order is priority DESC,
 // then created_at, with job_id as a deterministic final tie-break.
 func (q *Queue) Claim(ctx context.Context, workerID string, now time.Time) (job.Job, error) {
-	nowTS := formatTS(now.UTC())
-	staleTS := formatTS(now.UTC().Add(-q.lease))
+	nowTS := tursodb.FormatTime(now.UTC())
+	staleTS := tursodb.FormatTime(now.UTC().Add(-q.lease))
 
 	const claim = `UPDATE job_queue
 		SET status = 'running', worker_name = ?, claimed_at = ?, updated_at = ?
@@ -141,7 +141,7 @@ func (q *Queue) Claim(ctx context.Context, workerID string, now time.Time) (job.
 
 // Complete marks the job done. A missing id yields errs.ErrNotFound.
 func (q *Queue) Complete(ctx context.Context, jobID string, now time.Time) error {
-	ts := formatTS(now.UTC())
+	ts := tursodb.FormatTime(now.UTC())
 	const q1 = `UPDATE job_queue SET status = 'completed', completed_at = ?, updated_at = ? WHERE job_id = ?`
 	return q.execAffecting(ctx, q1, ts, ts, jobID)
 }
@@ -151,7 +151,7 @@ func (q *Queue) Complete(ctx context.Context, jobID string, now time.Time) error
 // or dead-letters it once retry_count + 1 reaches maxAttempts. reason is recorded
 // as the failure cause. A missing id yields errs.ErrNotFound.
 func (q *Queue) Fail(ctx context.Context, jobID string, now time.Time, reason string, maxAttempts int) error {
-	ts := formatTS(now.UTC())
+	ts := tursodb.FormatTime(now.UTC())
 	const fail = `UPDATE job_queue
 		SET retry_count = retry_count + 1,
 		    failure_reason = ?,
@@ -189,7 +189,7 @@ func (q *Queue) List(ctx context.Context, f job.ListFilter, req crud.ListRequest
 	}
 	if cur != nil {
 		cv, _ := cur.OrderValue.(time.Time)
-		ts := formatTS(cv)
+		ts := tursodb.FormatTime(cv)
 		where += " AND ((created_at < ?) OR (created_at = ? AND job_id < ?))"
 		args = append(args, ts, ts, cur.PK)
 	}
@@ -262,24 +262,24 @@ func scanJob(sc scanner) (job.Job, error) {
 	j.WorkerName = workerName.String
 	j.FailureReason = failureReason.String
 
-	if j.ScheduledFor, err = parseTime(scheduledFor); err != nil {
+	if j.ScheduledFor, err = tursodb.ParseTime(scheduledFor); err != nil {
 		return job.Job{}, err
 	}
-	if j.CreatedAt, err = parseTime(createdAt); err != nil {
+	if j.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
 		return job.Job{}, err
 	}
-	if j.UpdatedAt, err = parseTime(updatedAt); err != nil {
+	if j.UpdatedAt, err = tursodb.ParseTime(updatedAt); err != nil {
 		return job.Job{}, err
 	}
 	if claimedAt.Valid && claimedAt.String != "" {
-		t, err := parseTime(claimedAt.String)
+		t, err := tursodb.ParseTime(claimedAt.String)
 		if err != nil {
 			return job.Job{}, err
 		}
 		j.ClaimedAt = &t
 	}
 	if completedAt.Valid && completedAt.String != "" {
-		t, err := parseTime(completedAt.String)
+		t, err := tursodb.ParseTime(completedAt.String)
 		if err != nil {
 			return job.Job{}, err
 		}

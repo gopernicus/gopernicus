@@ -37,8 +37,8 @@ func (s *APIKeyStore) Create(ctx context.Context, k apikey.APIKey) (apikey.APIKe
 	const q = `INSERT INTO api_keys (` + apiKeyColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err := s.db.Exec(ctx, q,
 		k.ID, k.ServiceAccountID, k.Name, k.KeyPrefix, k.KeyHash,
-		nullableTS(k.ExpiresAt), nullableTS(k.RevokedAt), nullableTS(k.LastUsedAt),
-		formatTS(k.CreatedAt),
+		tursodb.NullTime(k.ExpiresAt), tursodb.NullTime(k.RevokedAt), tursodb.NullTime(k.LastUsedAt),
+		tursodb.FormatTime(k.CreatedAt),
 	)
 	if err != nil {
 		return apikey.APIKey{}, err
@@ -64,7 +64,7 @@ func (s *APIKeyStore) ListByServiceAccount(ctx context.Context, serviceAccountID
 
 // Revoke marks the key revoked as of revokedAt; unknown id → errs.ErrNotFound.
 func (s *APIKeyStore) Revoke(ctx context.Context, id string, revokedAt time.Time) error {
-	res, err := s.db.Exec(ctx, "UPDATE api_keys SET revoked_at = ? WHERE id = ?", formatTS(revokedAt), id)
+	res, err := s.db.Exec(ctx, "UPDATE api_keys SET revoked_at = ? WHERE id = ?", tursodb.FormatTime(revokedAt), id)
 	if err != nil {
 		return err
 	}
@@ -74,7 +74,7 @@ func (s *APIKeyStore) Revoke(ctx context.Context, id string, revokedAt time.Time
 // TouchLastUsed records that the key authenticated at usedAt; unknown id →
 // errs.ErrNotFound. It is a plain UPDATE (callers treat it as best-effort).
 func (s *APIKeyStore) TouchLastUsed(ctx context.Context, id string, usedAt time.Time) error {
-	res, err := s.db.Exec(ctx, "UPDATE api_keys SET last_used_at = ? WHERE id = ?", formatTS(usedAt), id)
+	res, err := s.db.Exec(ctx, "UPDATE api_keys SET last_used_at = ? WHERE id = ?", tursodb.FormatTime(usedAt), id)
 	if err != nil {
 		return err
 	}
@@ -97,16 +97,16 @@ func scanAPIKey(sc scanner) (apikey.APIKey, error) {
 		return apikey.APIKey{}, tursodb.MapError(err)
 	}
 	var err error
-	if k.ExpiresAt, err = parseNullTime(expiresAt); err != nil {
+	if k.ExpiresAt, err = tursodb.ParseNullTime(expiresAt); err != nil {
 		return apikey.APIKey{}, err
 	}
-	if k.RevokedAt, err = parseNullTime(revokedAt); err != nil {
+	if k.RevokedAt, err = tursodb.ParseNullTime(revokedAt); err != nil {
 		return apikey.APIKey{}, err
 	}
-	if k.LastUsedAt, err = parseNullTime(lastUsedAt); err != nil {
+	if k.LastUsedAt, err = tursodb.ParseNullTime(lastUsedAt); err != nil {
 		return apikey.APIKey{}, err
 	}
-	if k.CreatedAt, err = parseTime(createdAt); err != nil {
+	if k.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
 		return apikey.APIKey{}, err
 	}
 	return k, nil

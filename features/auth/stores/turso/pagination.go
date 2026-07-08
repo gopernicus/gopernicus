@@ -30,7 +30,7 @@ func listPage[T any](
 	}
 	if cur != nil {
 		cv, _ := cur.OrderValue.(time.Time)
-		ts := formatTS(cv)
+		ts := tursodb.FormatTime(cv)
 		where += " AND ((created_at < ?) OR (created_at = ? AND " + pkCol + " < ?))"
 		args = append(args, ts, ts, cur.PK)
 	}

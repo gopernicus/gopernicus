@@ -37,7 +37,7 @@ func (s *SecurityEventStore) Create(ctx context.Context, evt securityevent.Secur
 	const q = `INSERT INTO security_events (` + securityEventColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if _, err := s.db.Exec(ctx, q,
 		evt.ID, evt.UserID, evt.Actor.Type, evt.Actor.ID, evt.EventType, evt.EventStatus,
-		details, evt.IPAddress, evt.UserAgent, formatTS(evt.CreatedAt),
+		details, evt.IPAddress, evt.UserAgent, tursodb.FormatTime(evt.CreatedAt),
 	); err != nil {
 		return securityevent.SecurityEvent{}, err
 	}
@@ -70,11 +70,11 @@ func (s *SecurityEventStore) List(ctx context.Context, filter securityevent.List
 	}
 	if !filter.Since.IsZero() {
 		where += " AND created_at >= ?"
-		args = append(args, formatTS(filter.Since))
+		args = append(args, tursodb.FormatTime(filter.Since))
 	}
 	if !filter.Until.IsZero() {
 		where += " AND created_at < ?"
-		args = append(args, formatTS(filter.Until))
+		args = append(args, tursodb.FormatTime(filter.Until))
 	}
 	return listPage(ctx, s.db, securityEventColumns, "security_events", where, args, "id", req,
 		scanSecurityEvent,
@@ -100,7 +100,7 @@ func scanSecurityEvent(sc scanner) (securityevent.SecurityEvent, error) {
 	if evt.Details, err = unmarshalDetails(details); err != nil {
 		return securityevent.SecurityEvent{}, err
 	}
-	if evt.CreatedAt, err = parseTime(createdAt); err != nil {
+	if evt.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
 		return securityevent.SecurityEvent{}, err
 	}
 	return evt, nil

@@ -20,14 +20,6 @@ var MigrationsFS embed.FS
 // MigrationsDir is the directory within MigrationsFS holding the .sql files.
 const MigrationsDir = "migrations"
 
-// tsLayout is a fixed-width UTC timestamp layout. Fixed width (always 9
-// fractional digits, always "Z") keeps stored timestamps lexicographically
-// ordered as TEXT — the ecosystem timestamp-storage convention, which the claim
-// ORDER BY, the scheduled_for/claimed_at range predicates, and keyset pagination
-// all rely on. time.RFC3339Nano trims trailing fractional zeros and would break
-// ordering.
-const tsLayout = "2006-01-02T15:04:05.000000000Z07:00"
-
 // orderField is the keyset order column List paginates by; it must match the
 // cursor's order field so a stale cursor from a different sort is ignored.
 const orderField = "created_at"
@@ -47,32 +39,6 @@ const (
 
 // scanner abstracts *sql.Row and *sql.Rows for shared scan helpers.
 type scanner = tursodb.Scanner
-
-// formatTS renders t in the fixed-width UTC layout used for storage.
-func formatTS(t time.Time) string {
-	return t.UTC().Format(tsLayout)
-}
-
-// parseTime parses a stored timestamp, tolerating both the fixed-width layout
-// and RFC3339 variants.
-func parseTime(s string) (time.Time, error) {
-	if t, err := time.Parse(tsLayout, s); err == nil {
-		return t.UTC(), nil
-	}
-	t, err := time.Parse(time.RFC3339Nano, s)
-	if err != nil {
-		return time.Time{}, err
-	}
-	return t.UTC(), nil
-}
-
-// boolToInt maps a Go bool to the 0/1 INTEGER stored in SQLite/libSQL.
-func boolToInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
-}
 
 // payloadValue returns a non-empty JSON text for storage: the raw payload, or
 // "{}" when it is empty (the column is NOT NULL).
