@@ -159,15 +159,17 @@ func (f *fakeAPIKeys) TouchLastUsed(_ context.Context, id string, usedAt time.Ti
 // --- harness ---
 
 type machineHarness struct {
-	svc  *Service
-	sas  *fakeServiceAccounts
-	keys *fakeAPIKeys
+	svc    *Service
+	sas    *fakeServiceAccounts
+	keys   *fakeAPIKeys
+	events *spySecurityEvents
 }
 
 func newMachineHarness(t *testing.T) *machineHarness {
 	t.Helper()
 	sas := newFakeServiceAccounts()
 	keys := newFakeAPIKeys()
+	events := newSpySecurityEvents()
 	svc := NewService(Deps{
 		Users:           newFakeUsers(),
 		Passwords:       newFakePasswords(),
@@ -181,8 +183,9 @@ func newMachineHarness(t *testing.T) *machineHarness {
 		Cookie:          CookieConfig{},
 		ServiceAccounts: sas,
 		APIKeys:         keys,
+		SecurityEvents:  events,
 	})
-	return &machineHarness{svc: svc, sas: sas, keys: keys}
+	return &machineHarness{svc: svc, sas: sas, keys: keys, events: events}
 }
 
 // --- AuthenticateAPIKey ---
@@ -430,7 +433,7 @@ func TestRequirePrincipalSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	token, _, err := h.svc.Login(ctx, "sess@example.com", "password123", "1.2.3.4")
+	token, _, err := h.svc.Login(ctx, "sess@example.com", "password123")
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}

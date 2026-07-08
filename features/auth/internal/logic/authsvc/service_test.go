@@ -300,6 +300,7 @@ type harness struct {
 	tokens *fakeTokens
 	hasher *fakeHasher
 	mailer *recordingMailer
+	events *spySecurityEvents
 }
 
 func newHarness(t *testing.T, limiter ratelimiter.Limiter) *harness {
@@ -317,6 +318,7 @@ func newHarnessDeps(t *testing.T, limiter ratelimiter.Limiter, requireVerifiedEm
 		tokens: newFakeTokens(),
 		hasher: &fakeHasher{},
 		mailer: &recordingMailer{},
+		events: newSpySecurityEvents(),
 	}
 	if limiter == nil {
 		limiter = ratelimiter.NewMemory()
@@ -333,6 +335,7 @@ func newHarnessDeps(t *testing.T, limiter ratelimiter.Limiter, requireVerifiedEm
 		Limiter:              limiter,
 		Cookie:               CookieConfig{},
 		RequireVerifiedEmail: requireVerifiedEmail,
+		SecurityEvents:       h.events,
 	})
 	return h
 }
@@ -421,7 +424,7 @@ func TestVerifyUnknownCode(t *testing.T) {
 func TestLogin(t *testing.T) {
 	h := newHarness(t, nil)
 	u := h.mustRegister(t, "login@example.com", "password123")
-	token, gotU, err := h.svc.Login(context.Background(), "Login@example.com", "password123", "1.2.3.4")
+	token, gotU, err := h.svc.Login(context.Background(), "Login@example.com", "password123")
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
@@ -440,7 +443,7 @@ func TestLogin(t *testing.T) {
 func TestSessionTokenHashRoundTrip(t *testing.T) {
 	h := newHarness(t, nil)
 	h.mustRegister(t, "hash@example.com", "password123")
-	token, _, err := h.svc.Login(context.Background(), "hash@example.com", "password123", "1.2.3.4")
+	token, _, err := h.svc.Login(context.Background(), "hash@example.com", "password123")
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
@@ -475,7 +478,7 @@ func TestSessionTokenHashRoundTrip(t *testing.T) {
 func TestLoginRequireVerifiedEmailBlocksUnverified(t *testing.T) {
 	h := newHarnessDeps(t, nil, true)
 	h.mustRegister(t, "unv@example.com", "password123") // unverified by default
-	_, _, err := h.svc.Login(context.Background(), "unv@example.com", "password123", "1.2.3.4")
+	_, _, err := h.svc.Login(context.Background(), "unv@example.com", "password123")
 	if !errors.Is(err, ErrEmailNotVerified) {
 		t.Errorf("unverified login: err=%v, want ErrEmailNotVerified", err)
 	}
@@ -494,7 +497,7 @@ func TestLoginRequireVerifiedEmailAllowsVerified(t *testing.T) {
 	if err := h.svc.Verify(context.Background(), code); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
-	if _, _, err := h.svc.Login(context.Background(), "ver@example.com", "password123", "1.2.3.4"); err != nil {
+	if _, _, err := h.svc.Login(context.Background(), "ver@example.com", "password123"); err != nil {
 		t.Errorf("verified login: %v", err)
 	}
 }
@@ -502,7 +505,7 @@ func TestLoginRequireVerifiedEmailAllowsVerified(t *testing.T) {
 func TestLoginVerifiedGateOffByDefault(t *testing.T) {
 	h := newHarness(t, nil) // RequireVerifiedEmail defaults false
 	h.mustRegister(t, "off@example.com", "password123")
-	if _, _, err := h.svc.Login(context.Background(), "off@example.com", "password123", "1.2.3.4"); err != nil {
+	if _, _, err := h.svc.Login(context.Background(), "off@example.com", "password123"); err != nil {
 		t.Errorf("gate-off unverified login: %v", err)
 	}
 }
@@ -510,7 +513,7 @@ func TestLoginVerifiedGateOffByDefault(t *testing.T) {
 func TestLoginWrongPassword(t *testing.T) {
 	h := newHarness(t, nil)
 	h.mustRegister(t, "wp@example.com", "password123")
-	_, _, err := h.svc.Login(context.Background(), "wp@example.com", "wrongpassword", "1.2.3.4")
+	_, _, err := h.svc.Login(context.Background(), "wp@example.com", "wrongpassword")
 	if !errors.Is(err, errs.ErrUnauthorized) {
 		t.Errorf("wrong password: err=%v, want ErrUnauthorized", err)
 	}
@@ -518,7 +521,7 @@ func TestLoginWrongPassword(t *testing.T) {
 
 func TestLoginUnknownEmail(t *testing.T) {
 	h := newHarness(t, nil)
-	_, _, err := h.svc.Login(context.Background(), "ghost@example.com", "password123", "1.2.3.4")
+	_, _, err := h.svc.Login(context.Background(), "ghost@example.com", "password123")
 	if !errors.Is(err, errs.ErrUnauthorized) {
 		t.Errorf("unknown email: err=%v, want ErrUnauthorized", err)
 	}
@@ -528,7 +531,7 @@ func TestLoginRateLimitedFirst(t *testing.T) {
 	h := newHarness(t, denyLimiter{})
 	h.mustRegister(t, "rl@example.com", "password123")
 	before := h.users.calls
-	_, _, err := h.svc.Login(context.Background(), "rl@example.com", "password123", "1.2.3.4")
+	_, _, err := h.svc.Login(context.Background(), "rl@example.com", "password123")
 	if !errors.Is(err, ErrRateLimited) {
 		t.Errorf("rate limited: err=%v, want ErrRateLimited", err)
 	}
@@ -540,7 +543,7 @@ func TestLoginRateLimitedFirst(t *testing.T) {
 func TestLogout(t *testing.T) {
 	h := newHarness(t, nil)
 	h.mustRegister(t, "lo@example.com", "password123")
-	token, _, _ := h.svc.Login(context.Background(), "lo@example.com", "password123", "1.2.3.4")
+	token, _, _ := h.svc.Login(context.Background(), "lo@example.com", "password123")
 	if err := h.svc.Logout(context.Background(), token); err != nil {
 		t.Fatalf("Logout: %v", err)
 	}
@@ -559,11 +562,11 @@ func TestLogout(t *testing.T) {
 func TestChangePassword(t *testing.T) {
 	h := newHarness(t, nil)
 	u := h.mustRegister(t, "cp@example.com", "password123")
-	tokenA, _, err := h.svc.Login(context.Background(), "cp@example.com", "password123", "1.2.3.4")
+	tokenA, _, err := h.svc.Login(context.Background(), "cp@example.com", "password123")
 	if err != nil {
 		t.Fatalf("Login A: %v", err)
 	}
-	tokenB, _, err := h.svc.Login(context.Background(), "cp@example.com", "password123", "5.6.7.8")
+	tokenB, _, err := h.svc.Login(context.Background(), "cp@example.com", "password123")
 	if err != nil {
 		t.Fatalf("Login B: %v", err)
 	}
@@ -587,10 +590,10 @@ func TestChangePassword(t *testing.T) {
 		t.Errorf("minted session not valid: %v", err)
 	}
 	// New password works; old password no longer does.
-	if _, _, err := h.svc.Login(context.Background(), "cp@example.com", "newpassword456", "1.2.3.4"); err != nil {
+	if _, _, err := h.svc.Login(context.Background(), "cp@example.com", "newpassword456"); err != nil {
 		t.Errorf("login with new password: %v", err)
 	}
-	if _, _, err := h.svc.Login(context.Background(), "cp@example.com", "password123", "1.2.3.4"); !errors.Is(err, errs.ErrUnauthorized) {
+	if _, _, err := h.svc.Login(context.Background(), "cp@example.com", "password123"); !errors.Is(err, errs.ErrUnauthorized) {
 		t.Errorf("login with old password: err=%v, want ErrUnauthorized", err)
 	}
 }
@@ -638,7 +641,7 @@ func TestForgotAndResetPassword(t *testing.T) {
 	if len(h.tokens.m) != 0 {
 		t.Error("reset token not consumed")
 	}
-	if _, _, err := h.svc.Login(context.Background(), "fr@example.com", "brandnewpass", "1.2.3.4"); err != nil {
+	if _, _, err := h.svc.Login(context.Background(), "fr@example.com", "brandnewpass"); err != nil {
 		t.Errorf("login after reset: %v", err)
 	}
 }
@@ -657,7 +660,7 @@ func TestResetPasswordExpiredToken(t *testing.T) {
 func TestRequireUserValidSession(t *testing.T) {
 	h := newHarness(t, nil)
 	h.mustRegister(t, "ru@example.com", "password123")
-	token, u, _ := h.svc.Login(context.Background(), "ru@example.com", "password123", "1.2.3.4")
+	token, u, _ := h.svc.Login(context.Background(), "ru@example.com", "password123")
 
 	var gotUserID string
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

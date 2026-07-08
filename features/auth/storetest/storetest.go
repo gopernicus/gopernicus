@@ -31,6 +31,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/auth/logic/apikey"
 	"github.com/gopernicus/gopernicus/features/auth/logic/oauthaccount"
 	"github.com/gopernicus/gopernicus/features/auth/logic/oauthstate"
+	"github.com/gopernicus/gopernicus/features/auth/logic/securityevent"
 	"github.com/gopernicus/gopernicus/features/auth/logic/serviceaccount"
 	"github.com/gopernicus/gopernicus/features/auth/logic/session"
 	"github.com/gopernicus/gopernicus/features/auth/logic/user"
@@ -129,6 +130,21 @@ func Run(t *testing.T, newRepos func(t *testing.T) auth.Repositories) {
 		t.Run("RevokeAbsentNotFound", func(t *testing.T) { testAPIKeysRevokeAbsent(t, newRepos(t)) })
 		t.Run("ListOrderingPagination", func(t *testing.T) { testAPIKeysListPaged(t, newRepos(t)) })
 		t.Run("ListSameCreatedAtCollision", func(t *testing.T) { testAPIKeysListCollision(t, newRepos(t)) })
+	})
+
+	// SecurityEvents is optional and independent (ratified AV9): a host that
+	// wires no audit rail leaves it nil. When present it is exercised in full;
+	// when absent the group skips LOUDLY — a silent green would falsely claim
+	// audit-rail conformance.
+	t.Run("SecurityEvents", func(t *testing.T) {
+		if newRepos(t).SecurityEvents == nil {
+			t.Skip("SecurityEvents not wired — audit-rail conformance NOT verified for this Repositories")
+		}
+		t.Run("CreateAndListOrdering", func(t *testing.T) { testSecurityEventsCreateList(t, newRepos(t)) })
+		t.Run("ListFilters", func(t *testing.T) { testSecurityEventsFilters(t, newRepos(t)) })
+		t.Run("ListPagination", func(t *testing.T) { testSecurityEventsListPaged(t, newRepos(t)) })
+		t.Run("ListSameCreatedAtCollision", func(t *testing.T) { testSecurityEventsListCollision(t, newRepos(t)) })
+		t.Run("DetailsRoundTrip", func(t *testing.T) { testSecurityEventsDetails(t, newRepos(t)) })
 	})
 }
 
@@ -945,4 +961,212 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// --- SecurityEvents ---
+
+// testSecurityEventsCreateList appends a mixed set and asserts an unfiltered List
+// returns them all in the pinned created_at DESC, id DESC order.
+func testSecurityEventsCreateList(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	repo := repos.SecurityEvents
+
+	created := make([]securityevent.SecurityEvent, 0, 4)
+	for i := 0; i < 4; i++ {
+		evt := securityevent.New(securityevent.TypeLogin, securityevent.StatusSuccess, suiteBase.Add(time.Duration(i)*time.Minute))
+		evt.UserID = "u1"
+		c, err := repo.Create(ctx, evt)
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if c.ID != evt.ID {
+			t.Errorf("Create round-trip lost the id: got %q want %q", c.ID, evt.ID)
+		}
+		created = append(created, c)
+	}
+
+	want := securityEventIDsSorted(created)
+	got := pageAllSecurityEvents(t, repo, securityevent.ListFilter{}, 25)
+	if !equalStrings(got, want) {
+		t.Errorf("List order = %v, want %v (created_at DESC, id DESC)", got, want)
+	}
+}
+
+// testSecurityEventsFilters asserts each filter dimension (user, type, status,
+// and the [Since, Until) time window) selects exactly the matching rows.
+func testSecurityEventsFilters(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	repo := repos.SecurityEvents
+
+	mk := func(userID, typ, status string, at time.Time) securityevent.SecurityEvent {
+		evt := securityevent.New(typ, status, at)
+		evt.UserID = userID
+		c, err := repo.Create(ctx, evt)
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		return c
+	}
+
+	uaLogin := mk("ua", securityevent.TypeLogin, securityevent.StatusSuccess, suiteBase)
+	uaFail := mk("ua", securityevent.TypeLogin, securityevent.StatusFailure, suiteBase.Add(time.Minute))
+	ubReg := mk("ub", securityevent.TypeRegister, securityevent.StatusSuccess, suiteBase.Add(2*time.Minute))
+	uaLater := mk("ua", securityevent.TypeLogout, securityevent.StatusSuccess, suiteBase.Add(time.Hour))
+
+	cases := []struct {
+		name   string
+		filter securityevent.ListFilter
+		want   []string
+	}{
+		{"by_user", securityevent.ListFilter{UserID: "ua"}, []string{uaLater.ID, uaFail.ID, uaLogin.ID}},
+		{"by_type", securityevent.ListFilter{EventType: securityevent.TypeLogin}, []string{uaFail.ID, uaLogin.ID}},
+		{"by_status", securityevent.ListFilter{EventStatus: securityevent.StatusFailure}, []string{uaFail.ID}},
+		{"by_user_and_type", securityevent.ListFilter{UserID: "ua", EventType: securityevent.TypeLogin}, []string{uaFail.ID, uaLogin.ID}},
+		{"time_window", securityevent.ListFilter{Since: suiteBase.Add(time.Minute), Until: suiteBase.Add(3 * time.Minute)}, []string{ubReg.ID, uaFail.ID}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := pageAllSecurityEvents(t, repo, tc.filter, 25)
+			if !equalStrings(got, tc.want) {
+				t.Errorf("filter %+v: got %v, want %v", tc.filter, got, tc.want)
+			}
+		})
+	}
+}
+
+// testSecurityEventsListPaged asserts List pages through the full population in
+// the pinned order across a small page size.
+func testSecurityEventsListPaged(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	repo := repos.SecurityEvents
+
+	created := make([]securityevent.SecurityEvent, 0, 5)
+	for i := 0; i < 5; i++ {
+		evt := securityevent.New(securityevent.TypeLogin, securityevent.StatusSuccess, suiteBase.Add(time.Duration(i)*time.Minute))
+		c, err := repo.Create(ctx, evt)
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		created = append(created, c)
+	}
+
+	want := securityEventIDsSorted(created)
+	got := pageAllSecurityEvents(t, repo, securityevent.ListFilter{}, 2)
+	if !equalStrings(got, want) {
+		t.Errorf("paged order = %v, want %v", got, want)
+	}
+}
+
+// testSecurityEventsListCollision proves the id tiebreak: several events with an
+// identical created_at page in a stable order determined by id DESC, with a
+// consistent NextCursor across implementations.
+func testSecurityEventsListCollision(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	repo := repos.SecurityEvents
+
+	created := make([]securityevent.SecurityEvent, 0, 4)
+	for i := 0; i < 4; i++ {
+		evt := securityevent.New(securityevent.TypeLogin, securityevent.StatusSuccess, suiteBase)
+		c, err := repo.Create(ctx, evt)
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		created = append(created, c)
+	}
+
+	want := securityEventIDsSorted(created)
+	got := pageAllSecurityEvents(t, repo, securityevent.ListFilter{}, 2)
+	if !equalStrings(got, want) {
+		t.Errorf("collision paged order = %v, want %v (id tiebreak)", got, want)
+	}
+}
+
+// testSecurityEventsDetails is the pinned Details round-trip: a nil map, an empty
+// map, and a populated map all store, and read back as a NON-NIL map — a non-nil
+// EMPTY map for the nil/empty cases, the same populated map for the third
+// (uniform across backends, whether the store persists '{}' or NULL).
+func testSecurityEventsDetails(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	repo := repos.SecurityEvents
+
+	nilEvt := securityevent.New(securityevent.TypeLogin, securityevent.StatusFailure, suiteBase)
+	nilEvt.UserID = "u-nil"
+	nilEvt.Details = nil
+
+	emptyEvt := securityevent.New(securityevent.TypeLogin, securityevent.StatusFailure, suiteBase.Add(time.Minute))
+	emptyEvt.UserID = "u-empty"
+	emptyEvt.Details = map[string]any{}
+
+	fullEvt := securityevent.New(securityevent.TypeAPIKeyAuth, securityevent.StatusSuccess, suiteBase.Add(2*time.Minute))
+	fullEvt.UserID = "u-full"
+	fullEvt.Details = map[string]any{"key_prefix": "abc12345", "provider": "google"}
+
+	for _, evt := range []securityevent.SecurityEvent{nilEvt, emptyEvt, fullEvt} {
+		if _, err := repo.Create(ctx, evt); err != nil {
+			t.Fatalf("Create(%s): %v", evt.UserID, err)
+		}
+	}
+
+	read := func(userID string) securityevent.SecurityEvent {
+		page, err := repo.List(ctx, securityevent.ListFilter{UserID: userID}, crud.ListRequest{Limit: 10})
+		if err != nil {
+			t.Fatalf("List(%s): %v", userID, err)
+		}
+		if len(page.Items) != 1 {
+			t.Fatalf("List(%s) len = %d, want 1", userID, len(page.Items))
+		}
+		return page.Items[0]
+	}
+
+	for _, userID := range []string{"u-nil", "u-empty"} {
+		got := read(userID)
+		if got.Details == nil {
+			t.Errorf("Details for %s read back nil, want a non-nil empty map", userID)
+		}
+		if len(got.Details) != 0 {
+			t.Errorf("Details for %s = %v, want empty", userID, got.Details)
+		}
+	}
+
+	full := read("u-full")
+	if full.Details == nil || full.Details["key_prefix"] != "abc12345" || full.Details["provider"] != "google" {
+		t.Errorf("populated Details round-trip lost data: %v", full.Details)
+	}
+}
+
+func securityEventIDsSorted(events []securityevent.SecurityEvent) []string {
+	sorted := append([]securityevent.SecurityEvent(nil), events...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if !sorted[i].CreatedAt.Equal(sorted[j].CreatedAt) {
+			return sorted[i].CreatedAt.After(sorted[j].CreatedAt)
+		}
+		return sorted[i].ID > sorted[j].ID
+	})
+	ids := make([]string, len(sorted))
+	for i, evt := range sorted {
+		ids[i] = evt.ID
+	}
+	return ids
+}
+
+func pageAllSecurityEvents(t *testing.T, repo securityevent.SecurityEventRepository, filter securityevent.ListFilter, limit int) []string {
+	t.Helper()
+	ctx := context.Background()
+	var ids []string
+	cursor := ""
+	for i := 0; i < 100; i++ { // bound against a runaway cursor
+		page, err := repo.List(ctx, filter, crud.ListRequest{Limit: limit, Cursor: cursor})
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		for _, evt := range page.Items {
+			ids = append(ids, evt.ID)
+		}
+		if !page.HasMore || page.NextCursor == "" {
+			return ids
+		}
+		cursor = page.NextCursor
+	}
+	t.Fatalf("pageAllSecurityEvents did not terminate")
+	return nil
 }

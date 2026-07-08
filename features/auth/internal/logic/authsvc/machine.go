@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/auth/logic/apikey"
+	"github.com/gopernicus/gopernicus/features/auth/logic/securityevent"
 	"github.com/gopernicus/gopernicus/features/auth/logic/serviceaccount"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/errs"
@@ -102,15 +103,19 @@ func (s *Service) RevokeAPIKey(ctx context.Context, keyID string) error {
 // hashes the key, looks it up by hash ALONE (the pinned GetByHash contract), and
 // then branches in the SERVICE per design §4.1:
 //
-//   - revoked → deny (A5 wires the `blocked` audit event WITH service-account
-//     attribution, available as key.ServiceAccountID);
-//   - expired (a set ExpiresAt in the past) → deny (A5 wires the failure audit);
+//   - revoked → deny, recording an apikey_auth `blocked` event WITH
+//     service-account attribution (key.ServiceAccountID — exactly why the pinned
+//     GetByHash contract returns revoked rows);
+//   - expired (a set ExpiresAt in the past) → deny, recording an apikey_auth
+//     `failure` event;
 //   - valid → resolve the effective principal (ActAsUser → the human owner, else
-//     the service account itself) and best-effort touch LastUsedAt.
+//     the service account itself), record an apikey_auth `success` event, and
+//     best-effort touch LastUsedAt.
 //
 // Every deny returns the same generic errs.ErrUnauthorized so the response
 // cannot distinguish unknown / revoked / expired. TouchLastUsed failures never
-// fail authentication.
+// fail authentication. The audit rows carry the key PREFIX only, never the raw
+// key (design §5.1 WI3).
 func (s *Service) AuthenticateAPIKey(ctx context.Context, rawKey string) (Principal, error) {
 	if !s.MachineEnabled() {
 		return Principal{}, invalidAPIKey()
@@ -131,10 +136,10 @@ func (s *Service) AuthenticateAPIKey(ctx context.Context, rawKey string) (Princi
 	now := s.now()
 	switch {
 	case key.Revoked():
-		// A5: emit a `blocked` security event attributed to key.ServiceAccountID.
+		s.recordAPIKeyAuth(ctx, key, saPrincipal(key.ServiceAccountID), securityevent.StatusBlocked)
 		return Principal{}, invalidAPIKey()
 	case key.Expired(now):
-		// A5: emit an apikey_auth failure security event.
+		s.recordAPIKeyAuth(ctx, key, saPrincipal(key.ServiceAccountID), securityevent.StatusFailure)
 		return Principal{}, invalidAPIKey()
 	}
 
@@ -142,10 +147,34 @@ func (s *Service) AuthenticateAPIKey(ctx context.Context, rawKey string) (Princi
 	if err != nil {
 		return Principal{}, err
 	}
+	p := effectivePrincipal(sa)
+	s.recordAPIKeyAuth(ctx, key, securityevent.Principal{Type: p.Type, ID: p.ID}, securityevent.StatusSuccess)
 	// Best-effort: a TouchLastUsed failure must never fail authentication
-	// (design §4.1). A5 attaches the apikey_auth success audit here.
-	_ = s.apiKeys.TouchLastUsed(ctx, key.ID, now)
-	return effectivePrincipal(sa), nil
+	// (design §4.1). Now that the service carries a logger (A5), the previously
+	// silently-swallowed error is logged at WARN with coarse fields only.
+	if err := s.apiKeys.TouchLastUsed(ctx, key.ID, now); err != nil {
+		s.logger.Warn("api key touch-last-used failed", "error_kind", errKind(err))
+	}
+	return p, nil
+}
+
+// recordAPIKeyAuth appends an apikey_auth audit row attributed to actor. Details
+// carries the key PREFIX only (never the raw key or its hash — design §5.1 WI3);
+// for a denied attempt the actor is the owning service account, so a blocked
+// key is traceable even though the credential itself is rejected.
+func (s *Service) recordAPIKeyAuth(ctx context.Context, key apikey.APIKey, actor securityevent.Principal, status string) {
+	s.recordSecurityEvent(ctx, securityEventInput{
+		Actor:   actor,
+		Type:    securityevent.TypeAPIKeyAuth,
+		Status:  status,
+		Details: map[string]any{"key_prefix": key.KeyPrefix},
+	})
+}
+
+// saPrincipal builds the service-account attribution for a key whose owning
+// account was not (or need not be) resolved — the denied-key audit path.
+func saPrincipal(serviceAccountID string) securityevent.Principal {
+	return securityevent.Principal{Type: PrincipalServiceAccount, ID: serviceAccountID}
 }
 
 // CurrentPrincipal returns the effective Principal stashed by

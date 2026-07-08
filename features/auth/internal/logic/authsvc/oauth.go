@@ -9,6 +9,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/auth/logic/oauthaccount"
 	"github.com/gopernicus/gopernicus/features/auth/logic/oauthstate"
+	"github.com/gopernicus/gopernicus/features/auth/logic/securityevent"
 	"github.com/gopernicus/gopernicus/features/auth/logic/user"
 	"github.com/gopernicus/gopernicus/sdk/email"
 	"github.com/gopernicus/gopernicus/sdk/errs"
@@ -164,6 +165,7 @@ func (s *Service) OAuthCallback(ctx context.Context, providerName, code, stateTo
 		if err != nil {
 			return OAuthResult{}, err
 		}
+		s.recordOAuth(ctx, fs.LinkUserID, providerName, securityevent.TypeOAuthLinked)
 		return OAuthResult{Action: ActionLinked, User: u, RedirectTo: fs.RedirectTo}, nil
 	}
 
@@ -179,6 +181,7 @@ func (s *Service) OAuthCallback(ctx context.Context, providerName, code, stateTo
 		if err != nil {
 			return OAuthResult{}, err
 		}
+		s.recordOAuth(ctx, existing.UserID, providerName, securityevent.TypeOAuthLogin)
 		return OAuthResult{Action: ActionLogin, Token: token, User: u, RedirectTo: fs.RedirectTo}, nil
 	case !errors.Is(err, errs.ErrNotFound):
 		return OAuthResult{}, err
@@ -231,6 +234,7 @@ func (s *Service) VerifyLink(ctx context.Context, token string) (OAuthResult, er
 	if err != nil {
 		return OAuthResult{}, err
 	}
+	s.recordOAuth(ctx, created.UserID, created.Provider, securityevent.TypeOAuthLinkVerified)
 	return OAuthResult{Action: ActionLinked, Token: sessionToken, User: u}, nil
 }
 
@@ -265,7 +269,11 @@ func (s *Service) Unlink(ctx context.Context, userID, providerName string) error
 			return err
 		}
 	}
-	return s.oauthAccounts.Delete(ctx, userID, providerName)
+	if err := s.oauthAccounts.Delete(ctx, userID, providerName); err != nil {
+		return err
+	}
+	s.recordOAuth(ctx, userID, providerName, securityevent.TypeOAuthUnlinked)
+	return nil
 }
 
 // linkAccount builds and persists a link, propagating a duplicate-identity
@@ -301,7 +309,19 @@ func (s *Service) registerAndLink(ctx context.Context, p oauth.Provider, provide
 	if err != nil {
 		return OAuthResult{}, err
 	}
+	s.recordOAuth(ctx, created.ID, providerName, securityevent.TypeOAuthRegister)
 	return OAuthResult{Action: ActionRegister, Token: token, User: created, RedirectTo: redirectTo}, nil
+}
+
+// recordOAuth appends an OAuth-flow audit row for userID. The provider name is an
+// identifier (never a secret), so it rides Details.
+func (s *Service) recordOAuth(ctx context.Context, userID, providerName, eventType string) {
+	s.recordSecurityEvent(ctx, securityEventInput{
+		UserID:  userID,
+		Type:    eventType,
+		Status:  securityevent.StatusSuccess,
+		Details: map[string]any{"provider": providerName},
+	})
 }
 
 // startPendingLink stores the would-be link as a single-use pending-link state

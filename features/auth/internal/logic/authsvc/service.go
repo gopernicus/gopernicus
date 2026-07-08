@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/auth/logic/apikey"
 	"github.com/gopernicus/gopernicus/features/auth/logic/oauthaccount"
 	"github.com/gopernicus/gopernicus/features/auth/logic/oauthstate"
+	"github.com/gopernicus/gopernicus/features/auth/logic/securityevent"
 	"github.com/gopernicus/gopernicus/features/auth/logic/serviceaccount"
 	"github.com/gopernicus/gopernicus/features/auth/logic/session"
 	"github.com/gopernicus/gopernicus/features/auth/logic/user"
@@ -97,9 +99,16 @@ type Deps struct {
 	Limiter   ratelimiter.Limiter
 	Cookie    CookieConfig
 	Clock     func() time.Time // nil → time.Now
+	Logger    *slog.Logger     // nil → slog.Default(); used only for best-effort WARN lines
 	// RequireVerifiedEmail, when true, makes Login refuse an unverified user
 	// with ErrEmailNotVerified (403). Default false (design §7.1, AV8).
 	RequireVerifiedEmail bool
+
+	// SecurityEvents is the optional append-only audit rail (design §5.1,
+	// ratified AV9). Nil → no audit trail: the synchronous recording site is a
+	// documented no-op. When wired, every sensitive op records synchronously and
+	// a write failure is logged at WARN, never failing the auth flow.
+	SecurityEvents securityevent.SecurityEventRepository
 
 	// OAuth flow collaborators (design §3). Providers empty → the OAuth
 	// subsystem is off and its routes are not registered (deny-by-absence); the
@@ -140,7 +149,11 @@ type Service struct {
 	limiter              ratelimiter.Limiter
 	cookie               CookieConfig
 	now                  func() time.Time
+	logger               *slog.Logger
 	requireVerifiedEmail bool
+	// securityEvents is the optional append-only audit rail (design §5.1). Nil →
+	// the recordSecurityEvent helper is a no-op (ratified AV9).
+	securityEvents securityevent.SecurityEventRepository
 	// tokenHasher is the fixed SHA-256 hasher for session cookie tokens. It is
 	// an internal implementation detail, not a host-provided port: the stored
 	// session value is always the SHA-256 hash of the cookie (design §7.3).
@@ -175,6 +188,10 @@ func NewService(d Deps) *Service {
 	if clock == nil {
 		clock = time.Now
 	}
+	logger := d.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
 	cookie := d.Cookie
 	if cookie.Name == "" {
 		cookie.Name = "session"
@@ -202,7 +219,9 @@ func NewService(d Deps) *Service {
 		limiter:              d.Limiter,
 		cookie:               cookie,
 		now:                  clock,
+		logger:               logger,
 		requireVerifiedEmail: d.RequireVerifiedEmail,
+		securityEvents:       d.SecurityEvents,
 		tokenHasher:          cryptids.NewSHA256Hasher(),
 		oauthAccounts:        d.OAuthAccounts,
 		oauthStates:          d.OAuthStates,
@@ -248,6 +267,11 @@ func (s *Service) Register(ctx context.Context, emailAddr, password, displayName
 	if _, err := s.codes.Create(ctx, code); err != nil {
 		return user.User{}, err
 	}
+	s.recordSecurityEvent(ctx, securityEventInput{
+		UserID: created.ID,
+		Type:   securityevent.TypeRegister,
+		Status: securityevent.StatusSuccess,
+	})
 	if err := s.sendVerificationEmail(ctx, created, code.Code); err != nil {
 		return created, err
 	}
@@ -273,6 +297,11 @@ func (s *Service) Verify(ctx context.Context, code string) error {
 	if err := s.codes.Delete(ctx, code); err != nil && !errors.Is(err, errs.ErrNotFound) {
 		return err
 	}
+	s.recordSecurityEvent(ctx, securityEventInput{
+		UserID: u.ID,
+		Type:   securityevent.TypeEmailVerified,
+		Status: securityevent.StatusSuccess,
+	})
 	return nil
 }
 
@@ -287,9 +316,17 @@ func (s *Service) Verify(ctx context.Context, code string) error {
 // an unverified email is refused with ErrEmailNotVerified (403) — the check runs
 // AFTER password verification so it never leaks a verified/unverified signal to
 // an unauthenticated attacker. Default off (design §7.1).
-func (s *Service) Login(ctx context.Context, emailAddr, password, clientIP string) (string, user.User, error) {
+//
+// The rate-limit IP is read from the request's client-info carrier (WithClientInfo,
+// set by the feature middleware) — the single source of truth for IP (design §5.1
+// WI4); there is no clientIP parameter. Every exit records a security event: a
+// rate-limited attempt is `blocked`, a credential/verification denial is
+// `failure`, and a minted session is `success`.
+func (s *Service) Login(ctx context.Context, emailAddr, password string) (string, user.User, error) {
+	clientIP := clientInfoFromContext(ctx).ip
 	normalized, err := user.NormalizeEmail(emailAddr)
 	if err != nil {
+		s.recordLogin(ctx, "", emailAddr, securityevent.StatusFailure)
 		return "", user.User{}, invalidCredentials()
 	}
 
@@ -298,21 +335,26 @@ func (s *Service) Login(ctx context.Context, emailAddr, password, clientIP strin
 		return "", user.User{}, err
 	}
 	if !res.Allowed {
+		s.recordLogin(ctx, "", normalized, securityevent.StatusBlocked)
 		return "", user.User{}, ErrRateLimited
 	}
 
 	u, err := s.users.GetByEmail(ctx, normalized)
 	if err != nil {
+		s.recordLogin(ctx, "", normalized, securityevent.StatusFailure)
 		return "", user.User{}, invalidCredentials()
 	}
 	hash, err := s.passwords.Get(ctx, u.ID)
 	if err != nil {
+		s.recordLogin(ctx, u.ID, normalized, securityevent.StatusFailure)
 		return "", user.User{}, invalidCredentials()
 	}
 	if err := s.hasher.VerifyPassword(hash, password); err != nil {
+		s.recordLogin(ctx, u.ID, normalized, securityevent.StatusFailure)
 		return "", user.User{}, invalidCredentials()
 	}
 	if s.requireVerifiedEmail && !u.EmailVerified {
+		s.recordLogin(ctx, u.ID, normalized, securityevent.StatusFailure)
 		return "", user.User{}, ErrEmailNotVerified
 	}
 
@@ -320,7 +362,20 @@ func (s *Service) Login(ctx context.Context, emailAddr, password, clientIP strin
 	if err != nil {
 		return "", user.User{}, err
 	}
+	s.recordLogin(ctx, u.ID, normalized, securityevent.StatusSuccess)
 	return token, u, nil
+}
+
+// recordLogin appends a `login` audit row. The attempted email is an identifier
+// (never a secret), so it rides Details to make failed-login auditing useful; a
+// resolved userID is attributed when one is known.
+func (s *Service) recordLogin(ctx context.Context, userID, email, status string) {
+	s.recordSecurityEvent(ctx, securityEventInput{
+		UserID:  userID,
+		Type:    securityevent.TypeLogin,
+		Status:  status,
+		Details: map[string]any{"email": email},
+	})
 }
 
 // Logout deletes the session for the cookie token. A blank token, or one already
@@ -337,6 +392,14 @@ func (s *Service) Logout(ctx context.Context, token string) error {
 	if err := s.sessions.Delete(ctx, hashed); err != nil && !errors.Is(err, errs.ErrNotFound) {
 		return err
 	}
+	// The user id is best-effort: RequireUser stashes it on the handler's ctx, so
+	// a session-gated logout attributes the row; a raw-token logout leaves it empty.
+	uid, _ := userIDFromContext(ctx)
+	s.recordSecurityEvent(ctx, securityEventInput{
+		UserID: uid,
+		Type:   securityevent.TypeLogout,
+		Status: securityevent.StatusSuccess,
+	})
 	return nil
 }
 
@@ -374,6 +437,11 @@ func (s *Service) ChangePassword(ctx context.Context, userID, currentPassword, n
 	if err != nil {
 		return "", err
 	}
+	s.recordSecurityEvent(ctx, securityEventInput{
+		UserID: userID,
+		Type:   securityevent.TypePasswordChange,
+		Status: securityevent.StatusSuccess,
+	})
 	return token, nil
 }
 
@@ -421,6 +489,11 @@ func (s *Service) ResetPassword(ctx context.Context, token, newPassword string) 
 	if err := s.tokens.Delete(ctx, token); err != nil && !errors.Is(err, errs.ErrNotFound) {
 		return err
 	}
+	s.recordSecurityEvent(ctx, securityEventInput{
+		UserID: rec.UserID,
+		Type:   securityevent.TypePasswordReset,
+		Status: securityevent.StatusSuccess,
+	})
 	return nil
 }
 

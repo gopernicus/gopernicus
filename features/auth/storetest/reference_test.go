@@ -12,6 +12,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/auth/logic/apikey"
 	"github.com/gopernicus/gopernicus/features/auth/logic/oauthaccount"
 	"github.com/gopernicus/gopernicus/features/auth/logic/oauthstate"
+	"github.com/gopernicus/gopernicus/features/auth/logic/securityevent"
 	"github.com/gopernicus/gopernicus/features/auth/logic/serviceaccount"
 	"github.com/gopernicus/gopernicus/features/auth/logic/session"
 	"github.com/gopernicus/gopernicus/features/auth/logic/user"
@@ -47,6 +48,7 @@ type reference struct {
 	oauthStates     map[string]oauthstate.State
 	serviceAccounts map[string]serviceaccount.ServiceAccount // by ID
 	apiKeys         map[string]apikey.APIKey                 // by ID
+	securityEvents  []securityevent.SecurityEvent            // append-only
 }
 
 func newReference() *reference {
@@ -73,6 +75,7 @@ func (r *reference) repositories() auth.Repositories {
 		OAuthStates:        refOAuthStates{r},
 		ServiceAccounts:    refServiceAccounts{r},
 		APIKeys:            refAPIKeys{r},
+		SecurityEvents:     refSecurityEvents{r},
 	}
 }
 
@@ -467,6 +470,43 @@ func (r refAPIKeys) TouchLastUsed(_ context.Context, id string, usedAt time.Time
 	k.LastUsedAt = usedAt.UTC()
 	r.apiKeys[id] = k
 	return nil
+}
+
+// --- securityevent.SecurityEventRepository ---
+
+type refSecurityEvents struct{ *reference }
+
+// Create appends an audit row. It normalizes Details to a NON-NIL map (nil and
+// empty both read back as a non-nil empty map — the uniform round-trip contract
+// a SQL store gives via '{}'/NULL handling), and copies the map so a later
+// caller mutation cannot rewrite the stored row (append-only).
+func (r refSecurityEvents) Create(_ context.Context, evt securityevent.SecurityEvent) (securityevent.SecurityEvent, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	details := map[string]any{}
+	for k, v := range evt.Details {
+		details[k] = v
+	}
+	evt.Details = details
+	r.securityEvents = append(r.securityEvents, evt)
+	return evt, nil
+}
+
+// List filters by the (parameterized-in-SQL) ListFilter, sorts the full matching
+// population by (created_at DESC, id DESC), then pages — the reference the SQL
+// stores must match.
+func (r refSecurityEvents) List(_ context.Context, filter securityevent.ListFilter, req crud.ListRequest) (crud.Page[securityevent.SecurityEvent], error) {
+	r.mu.RLock()
+	matched := make([]securityevent.SecurityEvent, 0, len(r.securityEvents))
+	for _, evt := range r.securityEvents {
+		if filter.Match(evt) {
+			matched = append(matched, evt)
+		}
+	}
+	r.mu.RUnlock()
+	return pageDESC(matched, req, func(evt securityevent.SecurityEvent) (time.Time, string) {
+		return evt.CreatedAt, evt.ID
+	})
 }
 
 // pageDESC sorts records by (created_at DESC, id DESC), applies the keyset

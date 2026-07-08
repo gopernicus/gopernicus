@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/gopernicus/gopernicus/features/auth/logic/securityevent"
 	"github.com/gopernicus/gopernicus/features/auth/logic/user"
 	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
 )
@@ -29,10 +30,15 @@ func (s *Service) TokenEnabled() bool {
 // RequireVerifiedEmail (ErrEmailNotVerified, 403) AFTER password verification so
 // it never leaks a verified/unverified signal. It returns the signed token and
 // its absolute expiry.
-func (s *Service) IssueToken(ctx context.Context, emailAddr, password, clientIP string) (string, time.Time, error) {
+//
+// The rate-limit IP is read from the request's client-info carrier (WithClientInfo)
+// — the single source of truth for IP (design §5.1 WI4); there is no clientIP
+// parameter. A successful issuance records a token_issued success event.
+func (s *Service) IssueToken(ctx context.Context, emailAddr, password string) (string, time.Time, error) {
 	if s.tokenSigner == nil {
 		return "", time.Time{}, invalidCredentials()
 	}
+	clientIP := clientInfoFromContext(ctx).ip
 	normalized, err := user.NormalizeEmail(emailAddr)
 	if err != nil {
 		return "", time.Time{}, invalidCredentials()
@@ -66,8 +72,11 @@ func (s *Service) IssueToken(ctx context.Context, emailAddr, password, clientIP 
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("sign token: %w", err)
 	}
-	// A5: record a token_issued security event here (deferred to A5 per the
-	// plan-cut amendment; A9 leg 5 asserts token_issued rows exist).
+	s.recordSecurityEvent(ctx, securityEventInput{
+		UserID: u.ID,
+		Type:   securityevent.TypeTokenIssued,
+		Status: securityevent.StatusSuccess,
+	})
 	return token, expiresAt, nil
 }
 
