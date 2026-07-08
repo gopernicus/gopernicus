@@ -7,7 +7,7 @@ prove the design end to end — one on Turso, one with zero external
 infrastructure. See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layering
 rules and [NOTES.md](NOTES.md) for the decision log.
 
-## The twenty-six modules
+## The thirty modules
 
 ```
 sdk/                                stdlib-only framework kernel (empty go.mod = structural enforcement)
@@ -29,6 +29,10 @@ features/authentication/stores/turso/         auth's Turso store adapter, its ow
 features/cms/                       the CMS hexagon — datastore-free; logic/ public rim, internal/ interior
 features/cms/stores/pgx/            the CMS feature's pgx store adapter, its own module
 features/cms/stores/turso/          the CMS feature's Turso store adapter, its own module
+features/cms/views/templ/           cms's bundled default views (templ) — the FS3 sibling, its own module
+features/events/                    durable outbox + SSE gateway hexagon — datastore-free; logic/ public rim
+features/events/stores/pgx/         events' pgx store adapter, its own module
+features/events/stores/turso/       events' Turso store adapter, its own module
 features/jobs/                      durable queue + schedules hexagon — datastore-free; public memstore/
 features/jobs/stores/pgx/           jobs' pgx store adapter, its own module
 features/jobs/stores/turso/         jobs' Turso store adapter, its own module
@@ -63,7 +67,7 @@ tagged versions, not the workspace.
   still takes the earlier `Register(mount, repos, cfg)` form until its
   public Service lands).
 - **Dependencies point inward.** `examples` → `features`/`integrations` →
-  `sdk`, never the reverse. `make check`'s six layering guards enforce this.
+  `sdk`, never the reverse. `make check`'s seven layering guards enforce this.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full detail, including the
 feature contract (`sdk/feature`), the app-hexagon pattern (`internal/logic`),
@@ -85,7 +89,7 @@ make migrate           # applies examples/cms/workshop/migrations pre-boot
 make run                # or: cd examples/cms && go run ./cmd/server
 ```
 
-From the repo root, `make check` builds, vets, and tests all twenty-six modules
-and runs the six layering guards; `make test-stores` runs the live dialect
+From the repo root, `make check` builds, vets, and tests all thirty modules
+and runs the seven layering guards; `make test-stores` runs the live dialect
 conformance suites (expects `POSTGRES_TEST_DSN` / `TURSO_*`). See [examples/cms/README.md](examples/cms/README.md)
 for that host's full env/make-target reference.

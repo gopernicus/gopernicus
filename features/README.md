@@ -279,7 +279,10 @@ knows both features exist; it builds the `auth` service and passes it into
 policy, the *only* thing allowed to move from a feature-declared port into
 `sdk` is genuinely shared **vocabulary** multiple features need identically —
 e.g. an identity-in-context convention, or an error sentinel — never a
-feature's domain-specific port. `cms`'s `CurrentUser` port above stays in
+feature's domain-specific port. **CASHED for identity-in-context, 2026-07-08
+(events-v1 A-I1): `sdk/identity` — authentication stashes the Principal, the
+events gateway reads it; vocabulary only, fails closed.** The `CurrentUser`
+port above stays as the general C2 pattern for domain-shaped needs. `cms`'s `CurrentUser` port above stays in
 `cms` unless a second, unrelated feature needs the *identical* shape and the
 admission policy's three tests (plurality, narrow + stable, real shared
 policy) all hold.
