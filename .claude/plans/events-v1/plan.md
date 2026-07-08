@@ -473,7 +473,7 @@ Everything below was checked in code while cutting this plan:
 | — | 1 | sdk/web SSE primitives | — | **DONE** (sdk-parity, verified above) | — |
 | — | 2 | `sdk/events` + `eventstest` | — | **DONE** (sdk-parity, verified above) | — |
 | 1 | 3 | `Mount.Events` + sdk/feature tests + charter C3 cash-in | S | — | 26 |
-| 2 | 4 | `features/events` core: `logic/outbox`, exported poller, gateway hub + HTTP, `Register`/`Repositories`/`Config`, `storetest` + hermetic reference (relocated here — gate edit 5) | L | 1 | **27** |
+| 2 | 4 | `features/events` core: `logic/outbox`, exported poller, gateway hub + HTTP, `NewService`/`Service.Register`/`Repositories`/`Config` (FS2 fold-in), `storetest` + hermetic reference (relocated here — gate edit 5) | L | 1 | **27** |
 | 3 | 5 | cms emitter (best-effort, nil-guarded) + host bus + cache-invalidation subscriber in `examples/auth-cms` | S–M | 1 (hard), 2 (ordering) | 27 |
 | 4 | 6 | `stores/turso` + `stores/pgx` (S1; the suite they execute is cut in phase 2 — gate edit 5) | L | 2 | **29** |
 | 5 | 7 | proof host: extend `examples/auth-cms` — gateway mount, SSE end-to-end, in-memory-outbox second variant, the real-interaction check | M | 2, 3 | 29 |
@@ -509,7 +509,9 @@ feature importing any other feature.
   no-op) with the §3 guarantee language in its doc; charter §6 C3's
   event-bus candidate is marked cashed.
 - `features/events` (module 27) compiles standalone with `go.mod` = sdk
-  only; `Register` errors on nil `Bus`; absent identity fails closed —
+  only; `NewService` errors on nil `Bus` (FS2 fold-in 2026-07-08:
+  validation at construction, the jobs Phase-E precedent; the built
+  `Service` mounts via `svc.Register(mount)`); absent identity fails closed —
   every stream 401s when no middleware stashed an `identity.Principal`
   (A-I1 E3); routes claim `/events/*`; hub is internal, poller is exported
   and host-driven.
@@ -701,7 +703,8 @@ no host or feature behavior changes (zero-value field).
 **DoD:** the feature module compiles standalone (`go.mod` = sdk only,
 charter item 2); `logic/outbox` public; poller exported and host-driven
 (returns `workers.ErrNoWork` when idle); gateway hub internal with the §6
-defaults; `Register` errors on nil `Bus`, and absent identity fails closed
+defaults; `NewService` errors on nil `Bus` (FS2 fold-in: construction-time
+validation; `svc.Register(mount)` mounts), and absent identity fails closed
 (401 on every stream — A-I1 E3); routes `/events` and
 `/events/{resource_type}/{resource_id}` (the latter only when `Authorize`
 is set); the `storetest` suite (R4) green hermetically via its test-scoped
@@ -712,7 +715,8 @@ Trio layout (plan-cut requirement 2 of the milestone brief, mirroring
 `features/authentication` — path per A-R1): public port layer at
 `logic/outbox/`; hub internals under
 `internal/logic/`; HTTP under `internal/inbound/http/`; host-facing surface
-in the root package — `Register`/`Repositories`/`Config` in `events.go`,
+in the root package — `NewService`/`Service` (mounting via the FS2 method
+form `svc.Register(mount)`)/`Repositories`/`Config` in `events.go`,
 the poller in `poller.go` (gate edit 6: a file split within the root
 package, logged as a refinement of design §12 item 4's "host-facing
 constructors live in `<name>.go`" — same public surface).
@@ -790,7 +794,9 @@ constructors live in `<name>.go`" — same public surface).
 - **files:** [features/events/events.go, features/events/events_test.go, features/events/internal/logic/hub/hub.go, features/events/internal/logic/hub/hub_test.go, features/events/internal/inbound/http/routes.go, features/events/internal/inbound/http/routes_test.go]
 - **verify:** `cd features/events && go build ./... && go test -race ./... && go vet ./...` then `make check` and `make guard`, plus the rule-6 grep at this boundary-creating moment (gate edit 8; path per A-R1): `! grep -rn '"github.com/gopernicus/gopernicus/features/\(authentication\|cms\|jobs\)' features/events/`
 - **description:** Implement design §6 whole. Hub
-  (`internal/logic/hub`): one per process; subscribes at `Register` —
+  (`internal/logic/hub`): one per process; subscribes at `NewService`
+  (FS2 fold-in: the hub exists once the service is built; `Register`
+  only mounts routes — build-once means behavior starts at construction) —
   `SubscribeBroadcast` when the bus satisfies `Broadcaster`, else
   `Subscribe("*")` with a logged single-instance warning; per-connection
   buffered channels (default 64), **drop-on-full** with a sampled warning
@@ -829,9 +835,10 @@ constructors live in `<name>.go`" — same public surface).
   documented), `Config` per §6 as amended by A-I1 E1 (`Bus`,
   `StreamMiddleware`, `Authorize`, `Projector`, `Heartbeat`, `BufferSize`,
   `MaxConnAge`, `MaxConnsPerSubject` — NO `Identity` field; the
-  consumer-declared `CurrentUser` port is retired), `Register`
-  hard-erroring on nil `Bus` (the `ErrHasherRequired` precedent — exported
-  error var). **Misconfiguration posture (A-I1 E1, amends the ratified
+  consumer-declared `CurrentUser` port is retired), `NewService`
+  hard-erroring on nil `Bus` (FS2 fold-in: construction-time validation,
+  the `ErrHasherRequired` precedent — exported error var; the built
+  `Service` mounts via `svc.Register(mount)`). **Misconfiguration posture (A-I1 E1, amends the ratified
   degraded-mode matrix row "events `Config.Identity` nil → hard error"):**
   a host that wires no identity-stashing middleware gets uniform 401s —
   fails CLOSED at request time, consistent with the deny-by-default stream
@@ -1010,21 +1017,25 @@ Record exact commands, ports, and observed frames in the execution log.
 - **description:** Add `features/events` to go.mod (+ sibling replace;
   the graph must stay driver-free — re-assert `go list -m all | grep -i
   libsql` empty, the host's own doc-comment claim). Wire (wiring only,
-  rule 8): `eventsfeature.Register(mount, eventsfeature.Repositories{},
+  rule 8, FS2 method form):
+  `eventsSvc, err := eventsfeature.NewService(eventsfeature.Repositories{},
   eventsfeature.Config{Bus: bus, StreamMiddleware:
-  []web.Middleware{authSvc.RequireUser}})` (A-I1 E2: no `Identity` field —
+  []web.Middleware{authSvc.RequireUser}})` then
+  `eventsSvc.Register(mount)` (A-I1 E2: no `Identity` field —
   `RequireUser` stashes the `identity.Principal` the gateway reads) — one
   bus instance flows to both `Mount.Events` and `Config.Bus` (§6's wiring
   note); `Outbox` nil = direct-emit mode; `Authorize` left nil
   (resource-scoped routes absent — deny by absence, documented in the
   README). README gains the stream
   section (route surface, auth requirement, curl examples).
-  [SYNC NOTE 2026-07-07, feature-standard ratification (FS2): the Register
-  shape here predates the ratified contract — events must ship the method
-  form, `svc, err := eventsfeature.NewService(repos, cfg)` then
-  `svc.Register(mount)`, matching auth/jobs post-convergence. Fold in
-  before execution; every `Register(mount, Repositories{}, Config{...})`
-  call in this plan reads accordingly.]
+  [SYNC NOTE 2026-07-07, feature-standard ratification (FS2) — **FOLDED
+  2026-07-08 (pre-execution leg)**: the method form is now spelled at every
+  operative site — this wiring snippet, the milestone DoD, the phase-2 DoD
+  + trio layout + phase table, task-5's hub-subscribe seam and nil-`Bus`
+  validation (both moved to `NewService`, the jobs Phase-E precedent).
+  The A-I1.4 ratification records were left as written (append-only);
+  read their `Register` mentions as `NewService`/`svc.Register(mount)`
+  per this fold-in.]
 
 ### task-12: `outboxmem` + poller variant + shutdown ordering
 
