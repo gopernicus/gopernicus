@@ -1,6 +1,6 @@
-// Command server is the auth-v1 two-feature proof host: it mounts BOTH
-// features/cms and features/auth onto one host router, with in-memory stores and
-// no datastore driver in its module graph (verify: `go list -m all | grep -i
+// Command server is the auth-v2 A9 proof host: it mounts BOTH features/cms and
+// features/auth onto one host router, with in-memory stores and no datastore
+// driver in its module graph (verify: `GOWORK=off go list -m all | grep -i
 // libsql` is empty). The host is the only party that imports both features —
 // features/cms never imports features/auth and vice versa (constitution rule 6).
 //
@@ -9,6 +9,17 @@
 // authSvc.RequireUser. Neither feature imports the other; structural typing on
 // sdk/web.Middleware and the auth Service is what lets the host connect them.
 // Public cms routes (the home page, published singles) stay ungated.
+//
+// On top of v1, this host exercises the whole auth-v2 surface for the A9 proof
+// protocol (see README): the verified-email login gate (RequireVerifiedEmail),
+// a host-local fake OAuth provider (oauthfake.go), machine identity (API keys +
+// service accounts), stateless bearer JWTs signed host-side by
+// integrations/cryptids/golang-jwt, security-event audit rows surfaced through a
+// DEFAULT-OFF debug route, and invitations that grant through a TOY in-memory
+// membership Granter (membership.go) — the demonstration of ratified AV4:
+// invitations work with NO ReBAC anywhere in this host's module graph. The two
+// host-local demo routes (demo.go) are gated on a resolved principal and on toy
+// membership respectively.
 package main
 
 import (
@@ -31,6 +42,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/environment"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/logging"
+	"github.com/gopernicus/gopernicus/sdk/oauth"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
 
@@ -59,27 +71,58 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if err := seed(ctx, cmsRepos); err != nil {
 		return err
 	}
-	authRepos := authmem.New().Repositories()
+	// authmem now fills all twelve auth ports (v1 + the v2 ports the A9 protocol
+	// drives). The Store is kept so the debug route can read the audit rail.
+	authStore := authmem.New()
+	authRepos := authStore.Repositories()
 
-	// Host-owned router + middleware. Both features mount their routes onto this.
+	// Host-owned router + middleware. Both features and the host demo routes mount
+	// onto this.
 	router := web.NewWebHandler(web.WithLogging(log))
 	router.Use(web.RequestID(), web.Logger(log), web.Panics(log))
 
 	mount := feature.Mount{Router: router, Logger: log}
 
-	// Auth config: a real bcrypt hasher and the console mailer (both zero-infra —
-	// bcrypt is CPU-bound, the console mailer just logs). Hasher and Mailer are
-	// REQUIRED by auth; a nil RateLimiter defaults to in-memory.
+	// The TOY membership Granter (design §6, ratified AV4): invitations grant
+	// through this in-memory map with NO ReBAC in the module graph.
+	members := newMembership()
+
+	// Host-side collaborators built from the environment (see demo.go): the JWT
+	// signer (golang-jwt, or nil when AUTH_JWT_DISABLED=1, or an ephemeral key
+	// when AUTH_JWT_SECRET is unset) and the optional provider-token encrypter.
+	signer, err := buildTokenSigner(log)
+	if err != nil {
+		return err
+	}
+	encrypter, err := buildTokenEncrypter()
+	if err != nil {
+		return err
+	}
+
+	// Auth config. Hasher + Mailer are REQUIRED; a nil RateLimiter defaults to
+	// in-memory. RequireVerifiedEmail is ON (A9): login/token refuse an unverified
+	// user with 403. Providers/TokenSigner/Granter are the v2 subsystems, each
+	// deny-by-absence when its collaborator is nil.
 	authCfg := auth.Config{
-		Hasher:   bcrypt.New(),
-		Mailer:   email.NewConsole(log),
-		MailFrom: "auth@localhost",
+		Hasher:               bcrypt.New(),
+		Mailer:               email.NewConsole(log),
+		MailFrom:             "auth@localhost",
+		RequireVerifiedEmail: true,
+		Providers:            []oauth.Provider{fakeOAuthProvider{}},
+		OAuthCallbackBase:    callbackBase(),
+		RedirectAllowlist:    []string{"/"},
+		TokenEncrypter:       encrypter,
+		TokenSigner:          signer,
+		TokenTTL:             tokenTTL(),
+		Granter:              members,
+		Logger:               log,
 	}
 
 	// authSvc is the cross-feature surface: its RequireUser method value is the
-	// middleware cms gates its admin routes on. The auth feature's own HTTP routes
-	// are mounted separately via auth.Register (§3's "built twice" seam — both
-	// point at the same repos/config, hold no independent state).
+	// middleware cms gates its admin routes on, and RequirePrincipal/CurrentPrincipal
+	// back the host demo routes. The auth feature's own HTTP routes are mounted
+	// separately via auth.Register (§3's "built twice" seam — both point at the
+	// same repos/config, hold no independent state).
 	authSvc, err := auth.NewService(authRepos, authCfg)
 	if err != nil {
 		return err
@@ -99,6 +142,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}); err != nil {
 		return err
 	}
+
+	// Host-local demo + debug routes (host code, not feature surface).
+	registerDemoRoutes(router, authSvc, members)
+	registerDebugRoutes(router, authSvc, authRepos, log)
 
 	return web.Run(ctx, router, serverConfig(), log)
 }
