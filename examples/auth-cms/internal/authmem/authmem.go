@@ -1,18 +1,28 @@
-// Package authmem is an in-memory implementation of the auth feature's five
-// repository ports (user.UserRepository, user.PasswordRepository,
+// Package authmem is an in-memory implementation of the auth feature's full
+// repository set: the v1 ports (user.UserRepository, user.PasswordRepository,
 // session.SessionRepository, verification.CodeRepository,
-// verification.TokenRepository). It is the auth-side sibling of this host's
-// cms memstore: a "bring your own store" proof that features/auth runs with no
-// datastore driver in its module graph — data lives in maps and is lost on exit.
+// verification.TokenRepository) plus the auth-v2 ports the A9 proof protocol
+// exercises — oauthaccount.OAuthAccountRepository, oauthstate.StateRepository,
+// serviceaccount.ServiceAccountRepository, apikey.APIKeyRepository,
+// securityevent.SecurityEventRepository, and invitation.InvitationRepository.
+// It is the auth-side sibling of this host's cms memstore: a "bring your own
+// store" proof that features/auth runs with no datastore driver in its module
+// graph — data lives in maps and is lost on exit.
 //
 // It mirrors the honesty the port doc comments promise (and the storetest
 // conformance suite proves), not just their shape: UserRepository.Create on a
-// colliding normalized email returns errs.ErrAlreadyExists, and the
-// session/code/token reads report expiry with errs.ErrExpired — exactly the
-// invariants a SQL store gives a dialect adapter for free and a naive memory
-// store silently loses.
+// colliding normalized email returns errs.ErrAlreadyExists; session/code/token
+// reads report expiry with errs.ErrExpired; the OAuth-account (Provider,
+// ProviderUserID) pair and API-key KeyHash are unique; oauthstate.Consume is a
+// single-use get-and-delete that deletes regardless of expiry; APIKeys.GetByHash
+// returns revoked/expired rows verbatim (the pinned service-layer-branch
+// contract); invitations enforce partial pending-tuple uniqueness; and the
+// paginated ports page in the pinned created_at DESC, id DESC order — exactly
+// the invariants a SQL store gives a dialect adapter for free and a naive memory
+// store silently loses. After A9 wires these six, storetest.Run exercises the
+// new sub-runners against authmem rather than skipping them.
 //
-// The five ports reuse method names (Create/Get/Delete) across different entity
+// The ports reuse method names (Create/Get/Delete) across different entity
 // types, so one Go type cannot satisfy all of them; each port is a thin value
 // over a shared *data holder.
 package authmem
@@ -24,13 +34,21 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/auth"
+	"github.com/gopernicus/gopernicus/features/auth/logic/apikey"
+	"github.com/gopernicus/gopernicus/features/auth/logic/invitation"
+	"github.com/gopernicus/gopernicus/features/auth/logic/oauthaccount"
+	"github.com/gopernicus/gopernicus/features/auth/logic/oauthstate"
+	"github.com/gopernicus/gopernicus/features/auth/logic/securityevent"
+	"github.com/gopernicus/gopernicus/features/auth/logic/serviceaccount"
 	"github.com/gopernicus/gopernicus/features/auth/logic/session"
 	"github.com/gopernicus/gopernicus/features/auth/logic/user"
 	"github.com/gopernicus/gopernicus/features/auth/logic/verification"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
-// data holds every auth entity in maps behind one mutex.
+// data holds every auth entity in maps behind one mutex. The v2 collections
+// (oauthAccounts, securityEvents) are slices where the port has no single-key
+// identity; the rest are keyed maps.
 type data struct {
 	mu        sync.RWMutex
 	users     map[string]user.User
@@ -38,6 +56,13 @@ type data struct {
 	sessions  map[string]session.Session
 	codes     map[string]verification.Code
 	tokens    map[string]verification.Token
+
+	oauthAccounts   []oauthaccount.OAuthAccount
+	oauthStates     map[string]oauthstate.State
+	serviceAccounts map[string]serviceaccount.ServiceAccount
+	apiKeys         map[string]apikey.APIKey
+	securityEvents  []securityevent.SecurityEvent
+	invitations     map[string]invitation.Invitation
 }
 
 // Store is an in-memory auth datastore. Its Repositories method yields the port
@@ -47,15 +72,21 @@ type Store struct{ d *data }
 // New returns an empty Store.
 func New() *Store {
 	return &Store{d: &data{
-		users:     map[string]user.User{},
-		passwords: map[string]string{},
-		sessions:  map[string]session.Session{},
-		codes:     map[string]verification.Code{},
-		tokens:    map[string]verification.Token{},
+		users:           map[string]user.User{},
+		passwords:       map[string]string{},
+		sessions:        map[string]session.Session{},
+		codes:           map[string]verification.Code{},
+		tokens:          map[string]verification.Token{},
+		oauthStates:     map[string]oauthstate.State{},
+		serviceAccounts: map[string]serviceaccount.ServiceAccount{},
+		apiKeys:         map[string]apikey.APIKey{},
+		invitations:     map[string]invitation.Invitation{},
 	}}
 }
 
-// Repositories bundles the per-port views as the feature's repository set.
+// Repositories bundles the per-port views as the feature's repository set. All
+// twelve ports are wired: the A9 proof host needs the v2 ports (OAuth, machine
+// identity, security events, invitations) live, not nil.
 func (s *Store) Repositories() auth.Repositories {
 	return auth.Repositories{
 		Users:              userRepo{s.d},
@@ -63,6 +94,12 @@ func (s *Store) Repositories() auth.Repositories {
 		Sessions:           sessionRepo{s.d},
 		VerificationCodes:  codeRepo{s.d},
 		VerificationTokens: tokenRepo{s.d},
+		OAuthAccounts:      oauthAccountRepo{s.d},
+		OAuthStates:        oauthStateRepo{s.d},
+		ServiceAccounts:    serviceAccountRepo{s.d},
+		APIKeys:            apiKeyRepo{s.d},
+		SecurityEvents:     securityEventRepo{s.d},
+		Invitations:        invitationRepo{s.d},
 	}
 }
 
