@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"strings"
 	"time"
+
+	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 )
 
 // MigrationsFS holds the embedded schema (app-owned). cmd wires it into the
@@ -44,9 +46,7 @@ const (
 )
 
 // scanner abstracts *sql.Row and *sql.Rows for shared scan helpers.
-type scanner interface {
-	Scan(dest ...any) error
-}
+type scanner = tursodb.Scanner
 
 // formatTS renders t in the fixed-width UTC layout used for storage.
 func formatTS(t time.Time) string {

@@ -17,6 +17,13 @@ type Querier interface {
 	QueryRow(ctx context.Context, query string, args ...any) jackpgx.Row
 }
 
+// Scanner abstracts pgx.Row and pgx.Rows for shared scan helpers, so a store
+// can scan a single-row QueryRow result and a Rows element through the same
+// function.
+type Scanner interface {
+	Scan(dest ...any) error
+}
+
 // Compile-time assertions that *DB and *Tx satisfy Querier.
 var (
 	_ Querier = (*DB)(nil)

@@ -3,6 +3,8 @@ package turso
 import (
 	"embed"
 	"time"
+
+	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 )
 
 // MigrationsFS holds the embedded schema (app-owned). cmd wires it into the
@@ -23,9 +25,7 @@ const tsLayout = "2006-01-02T15:04:05.000000000Z07:00"
 const orderField = "created_at"
 
 // scanner abstracts *sql.Row and *sql.Rows for shared scan helpers.
-type scanner interface {
-	Scan(dest ...any) error
-}
+type scanner = tursodb.Scanner
 
 // nullableTS formats a *time.Time for storage, or nil for NULL.
 func nullableTS(t *time.Time) any {

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -55,6 +57,35 @@ func RunMigrations(ctx context.Context, db *DB, migrationsFS fs.FS, migrationsDi
 	}
 
 	slog.InfoContext(ctx, "migrations complete")
+	return nil
+}
+
+// ExportMigrations copies the *.sql files at dir within migrationsFS into dst,
+// creating dst if needed. It is the scaffold step a store adapter exposes to
+// hosts: after export the files are the HOST's, applied by the host's own runner
+// and extended with the host's own migrations in the same directory, under one
+// app-owned schema_migrations ledger. Directory entries are skipped; the
+// connector never reads or applies the host's copies.
+func ExportMigrations(migrationsFS fs.FS, dir, dst string) error {
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+	entries, err := fs.ReadDir(migrationsFS, dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		data, err := fs.ReadFile(migrationsFS, path.Join(dir, e.Name()))
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(dst, e.Name()), data, 0o644); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

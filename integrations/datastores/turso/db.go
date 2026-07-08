@@ -6,6 +6,13 @@ import (
 	"time"
 )
 
+// Scanner abstracts *sql.Row and *sql.Rows for shared scan helpers, so a store
+// can scan a single-row QueryRow result and a Rows element through the same
+// function.
+type Scanner interface {
+	Scan(dest ...any) error
+}
+
 // DB wraps a *sql.DB connected to a remote libSQL database. Driver errors from
 // Exec/Query are mapped to sdk/errs sentinels via MapError.
 type DB struct {
