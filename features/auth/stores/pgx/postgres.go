@@ -32,6 +32,12 @@ func Repositories(db *pgxdb.DB) auth.Repositories {
 		Sessions:           NewSessionStore(db),
 		VerificationCodes:  NewCodeStore(db),
 		VerificationTokens: NewTokenStore(db),
+		OAuthAccounts:      NewOAuthAccountStore(db),
+		OAuthStates:        NewOAuthStateStore(db),
+		ServiceAccounts:    NewServiceAccountStore(db),
+		APIKeys:            NewAPIKeyStore(db),
+		SecurityEvents:     NewSecurityEventStore(db),
+		Invitations:        NewInvitationStore(db),
 	}
 }
 

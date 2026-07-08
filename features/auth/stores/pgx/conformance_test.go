@@ -18,14 +18,22 @@ import (
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 )
 
-// authTables are the feature's tables; a single TRUNCATE clears them so a
-// Repositories starts empty regardless of row order (no enforced FKs, matching
+// authTables are the feature's tables in child-before-parent order, so a
+// truncation pass respects any conventional user_id references: api_keys before
+// service_accounts, and the oauth/audit/invitation tables before users. A single
+// TRUNCATE clears them so a Repositories starts empty (no enforced FKs, matching
 // the turso store's logged decision).
 var authTables = []string{
 	"user_passwords",
 	"sessions",
 	"verification_codes",
 	"verification_tokens",
+	"api_keys",
+	"service_accounts",
+	"oauth_accounts",
+	"oauth_states",
+	"security_events",
+	"invitations",
 	"users",
 }
 
