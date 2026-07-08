@@ -1942,3 +1942,125 @@ Module surface (files per plan + one convention-match test): `go.mod`,
 - **Standing real-interaction check:** `examples/minimal` booted on `:8081` —
   `GET /` → **200**, `GET /products/widget-3000` → **200** (server log confirms
   both), process killed, port 8081 freed. Did NOT commit.
+
+### 2026-07-08 — task-10 (`features/events/stores/pgx`, module 30) executed
+
+Module surface (files per plan + one convention-match hermetic test): `go.mod`,
+`postgres.go` (package doc, `New(db) (*Store, error)` + boot probe,
+`ExportMigrations`, `MigrationsFS`/`MigrationsDir`, `scanner` alias), `outbox.go`
+(the `outbox.EntryRepository` impl + `AppendTx`), `migrations/0001_event_outbox.sql`,
+`conformance_test.go` + `appender_test.go` (both **plain env-gated, no build tag**
+— the pgx-sibling convention, distinct from task-9's tagged turso tests),
+`postgres_test.go` (hermetic `ExportMigrations`), `README.md`.
+
+- **Sibling-gating divergence (resolved):** the events **turso** sibling uses
+  `//go:build integration`; the **pgx** siblings (`features/{jobs,cms,
+  authentication}/stores/pgx`) use plain `POSTGRES_TEST_DSN` env-gating with a
+  loud `t.Skip`. Task-10's brief said "mirror the sibling pgx stores exactly" —
+  so this store is plain env-gated (no build tag), matching jobs pgx verbatim.
+  Consequence for the DoD's per-tree symmetry: both trees still run ONE
+  `storetest.Run` suite; only the gating mechanism differs by dialect, as it
+  already does across the other feature store pairs.
+- **Migration** — `migrations/0001_event_outbox.sql`, **identical filename/version
+  to the turso tree**, source `"events"`, **postgres dialect**: `event_id` PK,
+  `event_type`, `occurred_at TIMESTAMPTZ`, `correlation_id`, `payload`,
+  nullable `aggregate_type`/`aggregate_id`/`tenant_id`, `created_at TIMESTAMPTZ`,
+  nullable `published_at TIMESTAMPTZ`; partial index `idx_event_outbox_unpublished
+  ON (created_at) WHERE published_at IS NULL`.
+- **JSON vs JSONB decision (logged per Schema section + open-question 2):**
+  `payload` is **`JSON`, not `JSONB`** — KEPT the plan's ratified default (pgx
+  payload JSON), a deliberate deviation from the design's illustrative JSONB.
+  Rationale: the payload is opaque to this store (no jsonb operators/indexes),
+  `JSON` preserves the caller's exact bytes while `JSONB` re-canonicalizes
+  whitespace/key order, and the shared `storetest` suite asserts a **byte-exact
+  payload round-trip** (`string(first.Payload) == {"eid":"evt-1"}`, storetest.go:90)
+  — which only `JSON` satisfies. Same decision + rationale as
+  `features/jobs/stores/pgx` (jobs-v1 precedent). Logged in the migration file,
+  `postgres.go`-adjacent README, and here.
+- **`EntryRepository`** over the pgxdb connector — helpers reused (D2–D6):
+  `Querier` (shared `insertRecords` for `Append`/`AppendTx`), `FromNullTimePtr`
+  (`published_at` NULL → nil = unpublished, UTC-normalized on read),
+  `ExecAffecting` (PurgePublished count), `MapError` (SQLSTATE-based; scan +
+  `rows.Err`; unique-violation → `errs.ErrAlreadyExists` on duplicate `event_id`),
+  `ExportMigrations`, `Scanner` alias. Postgres scans timestamps natively into
+  `time.Time`/`*time.Time` and nullable text into `*string` (NULL → nil) — no
+  TEXT-parsing layer (the turso `FormatTime`/`ParseTime` twin is absent by
+  dialect). `MarkPublished` idempotent via `WHERE published_at IS NULL` zero-row
+  no-op; `ListUnpublished` is `created_at ASC, event_id` with `LIMIT ALL` for a
+  non-positive limit (postgres has no `LIMIT -1`; binds `$1` only when positive).
+  Payload arg goes through `$5` as JSON text; nullable `*string` metadata binds
+  directly (pgx: nil → NULL) — no `nullStr` helper needed.
+- **`AppendTx(ctx, tx *pgxdb.Tx, recs ...sdkevents.Record) error`** — the
+  dialect-typed transactional appender (§5); shares `insertRecords` with the
+  own-tx `Append`. Nothing consumes it in v1; future emitting stores
+  consumer-declare a matching one-method port satisfied structurally.
+- **Boot-time probe (§5 mitigation b), postgres mechanics:** `New` runs
+  `SELECT to_regclass('event_outbox')::text` and scans into a `*string`;
+  `to_regclass` returns the qualified relation text when the table is visible on
+  the search_path, or **NULL** (→ nil pointer) when absent → wrapped
+  `errs.ErrNotFound` naming the unapplied `"events"` source, before the host
+  serves traffic. (turso's twin is the `sqlite_master` lookup.) README states the
+  prerequisite loudly.
+- **Registration** — `go.work` (`./features/events/stores/pgx` inserted before
+  `./features/events/stores/turso`); Makefile `MODULES` (`features/events/stores/pgx`
+  before `features/events/stores/turso`), `STORE_MODULES` (now 8: pgx before turso
+  events legs), and a `test-stores` pgx leg (`cd features/events/stores/pgx && go
+  test ./...`, plain — no tag). Makefile header comment count `28 → 30`. go.work ↔
+  Makefile `MODULES` agree at **30** entries (the plan's "29" predates
+  `features/cms/views/templ`; adjustment logged here).
+
+- **Verify (hermetic):** `cd features/events/stores/pgx && go build ./... && go
+  test ./... && go vet ./...` — green (`ok … 0.221s`, `TestExportMigrations`
+  runs). Loud skip recorded without env: `go test -v` →
+  `--- SKIP: TestConformance` / `--- SKIP: TestAppendTx` —
+  `POSTGRES_TEST_DSN not set — postgres conformance NOT verified`, suite still
+  `PASS`. (No `-tags=integration` vet leg — this tree uses no build tag.)
+- **Verify (gates):** `make guard` — six guards green. `make check` — "all checks
+  passed" at **30 modules** (physically 30 — the plan's "29" predates
+  views/templ, adjustment logged).
+- **LIVE LEG (docker, milestone-close artifact), dated 2026-07-08:**
+  `docker run --rm -d -p 55432:5432 -e POSTGRES_PASSWORD=postgres --name
+  events-pgx-test postgres:17` (container `9c2356983a3d`), `pg_isready` green after
+  2s. Suite **`features/events/stores/pgx`** with
+  `POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:55432/postgres?sslmode=disable'
+  go test -v -count=1 ./...`:
+  - `TestAppendTx` — **PASS (0.06s)**: `AppendTx` inside `InTx` visible after
+    commit; rolled back on a sentinel error leaves no row.
+  - `TestConformance` — **PASS (0.27s)**, 5/5 subtests: `AppendAndListOrder`
+    (0.05s), `UnpublishedOnly` (0.06s), `MarkPublishedIdempotence` (0.05s),
+    `PurgePublishedRetention` (0.07s), `EventIDUniqueness` (0.04s).
+  - `TestExportMigrations` — **PASS**. Total `ok … 0.511s`. Migration
+    `0001_event_outbox.sql` applied once (checksum `0867fbb9`), reused across
+    subtests. **3 top-level PASS / 0 FAIL**, single executor.
+  - **Docker lifecycle:** `docker stop events-pgx-test` → container removed
+    (`--rm`), confirmed gone; port `55432` confirmed free.
+- **Standing real-interaction check:** `examples/minimal` booted on `:8081` —
+  `GET /` → **200**, `GET /products/widget-3000` → **200**, process killed, port
+  8081 freed. Did NOT commit.
+
+### 2026-07-08 — Phase 4 (tasks 9–10, design-phase 6) complete — DoD holds
+
+Both store trees landed; the phase gate is green. Restating the Phase 4 DoD
+lines against the artifacts:
+
+- **"the phase-2 `storetest` suite (R4) executed by `stores/turso` (live leg
+  `-tags=integration`, playground DB) and by `stores/pgx` (live leg
+  `POSTGRES_TEST_DSN`)"** — ✅ both live runs recorded above (task-9: playground
+  turso, 6 top-level PASS; task-10: dockered postgres:17, 3 top-level PASS). Both
+  trees pass **ONE** `storetest.Run` conformance suite.
+- **"canonical migrations source `"events"` with identical version sets across
+  both trees"** — ✅ both carry exactly `migrations/0001_event_outbox.sql`, source
+  `"events"`, per-dialect content (turso TEXT/ISO-8601; pgx TIMESTAMPTZ + JSON).
+- **"`AppendTx` per-store tested against its own integration"** — ✅ `TestAppendTx`
+  green on each (turso live 2.56s; pgx live 0.06s): commit-visible / rollback-clean.
+- **"boot-time probe in both constructors"** — ✅ turso `sqlite_master` lookup; pgx
+  `to_regclass`; each maps absence → wrapped `errs.ErrNotFound` naming `"events"`.
+- **"`make check` green at 29 modules"** — ✅ green; **count adjusted to 30**
+  physically (the plan's "29" predates `features/cms/views/templ`; logged).
+- **"live runs recorded as dated NOTES.md artifacts at milestone close"** — the two
+  dated live-run records are captured here in the execution log; the NOTES.md
+  milestone entry is task-15's docs-sync deliverable (phase 6).
+
+Registration parity: `go.work` ↔ Makefile `MODULES` agree at 30; `STORE_MODULES`
+= 8 (both events legs); `test-stores` runs both events legs (pgx plain, turso
+`-tags=integration`).
