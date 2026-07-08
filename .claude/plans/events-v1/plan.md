@@ -1323,3 +1323,56 @@ pure path churn, zero behavior change; existing tests pass unmodified.
   demo.go` has a gofmt import-order quirk (`sdk/crud` vs `sdk/cryptids`)
   present at HEAD before this leg; `make check` does not gate gofmt, so it
   stays untouched per surgical-diff rule.
+
+### task-1 (`Mount.Events`) — done 2026-07-08
+
+Added the emit-only rail to `feature.Mount` and named `sdk/events` in the
+package doc.
+
+- **Public surface:** new `Events events.Emitter` field on
+  `feature.Mount{Router, Logger, Events}`. Doc comment carries the ratified
+  semantics verbatim in intent: emit-only; best-effort at-most-once — never
+  transactional, lost on a crash between commit and emit; the durable path
+  rides feature `Repositories`, never this field; nil → the feature emits
+  nothing (nil-guard or wrap `events.Noop`, behavior identical).
+- **Package doc (gate edit 7):** `feature.go`'s "carries only stdlib types
+  plus sdk/web (itself stdlib-only)" now reads "plus sdk/web and sdk/events
+  (both stdlib-only)".
+- **Import edge:** `sdk/feature → sdk/events`, sdk-internal — G1/G3 stay
+  green, `sdk/go.mod` untouched (zero require block confirmed).
+- **Tests:** `TestMount_ZeroValueFieldsAreNilable` extended to assert nil
+  `Events` on a zero-value construction; new
+  `TestMount_EventsDeliversToSubscriber` wires `events.NewMemory()` into a
+  Mount, subscribes on `"*"`, and asserts a `WithSync` emit reaches the
+  subscriber. Existing `TestMount_RegisterHitsRouter` unchanged.
+- **Verify:** `cd sdk && go build ./... && go test ./... && go vet ./...`
+  green; `make check` → "all checks passed" (27 modules, every host/feature
+  construction site compiles unchanged — the zero-value proof); `make guard`
+  green. Run-and-look: `examples/minimal` on :8081, `GET /` and
+  `GET /products/widget-3000` → 200/200 (zero-value `Mount.Events` changes
+  nothing in a real host), server killed, port free.
+
+### task-1b (`sdk/identity`) — done 2026-07-08
+
+Added the vocabulary-only `sdk/identity` package per A-I1.1 (stdlib-only,
+`sdk/oauth`/`sdk/errs` shape — no default implementation, no middleware).
+
+- **Public surface:** `Principal{Type, ID string}` (AV5 shape); constants
+  `User = "user"`, `ServiceAccount = "service_account"`; functions
+  `WithPrincipal(ctx, p) context.Context` and
+  `FromContext(ctx) (Principal, bool)` (unexported key; zero-valued
+  empty-ID principal reports false).
+- **Package doc:** AV5 lineage (one Principal shape, string subject pairs,
+  no registry table); the fails-closed convention (absent identity means
+  deny/401, a reader treating it as anonymous-allowed is a bug); and the
+  scope fence verbatim in intent: vocabulary only — middleware and
+  credential resolution live with the credential owners
+  (features/authentication); authorization vocabulary deliberately absent.
+- **Tests:** With/From round-trip; explicitly-stashed zero-value Principal
+  reports false; absent value reports false; constants' literal values
+  locked.
+- **Verify:** `cd sdk && go build ./... && go test ./... && go vet ./...`
+  green; `make check` → "all checks passed" (27 modules); `make guard`
+  green; `sdk/go.mod` untouched (zero require block — G1/G3). No consumer
+  wiring yet (task-1c aliases `authsvc.Principal` onto it later); this leg
+  adds vocabulary only.

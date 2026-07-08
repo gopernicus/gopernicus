@@ -1,8 +1,8 @@
 // Package feature defines the registration contract between a host application
 // and a feature module (Django-app / Rails-engine shaped). It carries only
-// stdlib types plus sdk/web (itself stdlib-only): a feature depends on these
-// narrow ports, never on a service-locator god-object. The host owns the
-// concrete Router implementation and wires it into a Mount. Database
+// stdlib types plus sdk/web and sdk/events (both stdlib-only): a feature depends
+// on these narrow ports, never on a service-locator god-object. The host owns
+// the concrete Router implementation and wires it into a Mount. Database
 // migrations are host-owned and applied outside feature registration.
 package feature
 
@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/gopernicus/gopernicus/sdk/events"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
 
@@ -27,4 +28,12 @@ type RouteRegistrar interface {
 type Mount struct {
 	Router RouteRegistrar
 	Logger *slog.Logger
+
+	// Events is the emit-only rail a feature publishes ephemeral notifications
+	// on. It is best-effort at-most-once — never transactional, and an event is
+	// lost on a crash between a domain commit and the emit. The durable path
+	// rides feature Repositories, never this field. A nil Events means the
+	// feature emits nothing: features either nil-guard the field or wrap
+	// events.Noop, with identical behavior.
+	Events events.Emitter
 }

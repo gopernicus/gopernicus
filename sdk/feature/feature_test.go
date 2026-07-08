@@ -1,10 +1,12 @@
 package feature
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/sdk/events"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
 
@@ -45,9 +47,42 @@ func TestMount_RegisterHitsRouter(t *testing.T) {
 }
 
 func TestMount_ZeroValueFieldsAreNilable(t *testing.T) {
-	// A Mount with only a router must be constructible; Logger is optional.
+	// A Mount with only a router must be constructible; Logger and Events are
+	// optional (a nil Events means the feature emits nothing).
 	m := Mount{Router: &recordingRegistrar{}, Logger: slog.Default()}
 	if m.Router == nil {
 		t.Fatal("Router should be set")
+	}
+	if m.Events != nil {
+		t.Fatal("Events should be nil on a zero-value construction")
+	}
+}
+
+func TestMount_EventsDeliversToSubscriber(t *testing.T) {
+	bus := events.NewMemory()
+	t.Cleanup(func() { _ = bus.Close(context.Background()) })
+
+	got := make(chan events.Event, 1)
+	if _, err := bus.Subscribe("*", func(_ context.Context, e events.Event) error {
+		got <- e
+		return nil
+	}); err != nil {
+		t.Fatalf("Subscribe() error = %v", err)
+	}
+
+	m := Mount{Router: &recordingRegistrar{}, Logger: slog.Default(), Events: bus}
+
+	want := events.NewBaseEvent("widget.created")
+	if err := m.Events.Emit(context.Background(), want, events.WithSync()); err != nil {
+		t.Fatalf("Emit() error = %v", err)
+	}
+
+	select {
+	case e := <-got:
+		if e.Type() != "widget.created" {
+			t.Errorf("delivered event Type() = %q, want %q", e.Type(), "widget.created")
+		}
+	default:
+		t.Fatal("WithSync emit did not deliver to the subscriber")
 	}
 }
