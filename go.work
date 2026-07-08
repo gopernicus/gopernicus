@@ -22,6 +22,7 @@ use (
 	./features/cms/stores/turso
 	./features/cms/views/templ
 	./features/events
+	./features/events/stores/turso
 	./features/jobs
 	./features/jobs/stores/pgx
 	./features/jobs/stores/turso

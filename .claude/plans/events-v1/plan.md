@@ -1877,3 +1877,68 @@ Phase 3 DoD (plan ~line 877) satisfied and evidenced:
   fresh content → HIT; TTL-bound pre-change contrast noted.
 - Artifacts: `make check` green at 27 modules; the :8082 register→verify→login→
   edit→invalidate transcript with observed X-Cache transitions and timing.
+
+### 2026-07-08 — task-9 (`features/events/stores/turso`, module 28) executed
+
+Module surface (files per plan + one convention-match test): `go.mod`,
+`turso.go` (package doc, `New(db) (*Store, error)` + boot probe,
+`ExportMigrations`, `MigrationsFS`/`MigrationsDir`), `outbox.go` (the
+`outbox.EntryRepository` impl + `AppendTx`), `migrations/0001_event_outbox.sql`,
+`conformance_test.go` + `appender_test.go` (both `//go:build integration`),
+`turso_test.go` (hermetic `ExportMigrations`), `README.md`.
+
+- **Migration** — `migrations/0001_event_outbox.sql`, source `"events"` (turso
+  dialect: `event_id` PK/de-dupe key, `event_type`, `occurred_at`,
+  `correlation_id`, `payload` TEXT JSON, nullable `aggregate_type`/`aggregate_id`/
+  `tenant_id`, `created_at`, nullable `published_at`; partial index
+  `idx_event_outbox_unpublished ON (created_at) WHERE published_at IS NULL`). The
+  connector applied it under its internal `default` source name (the host's own
+  runner is what stamps it `"events"` post-scaffold — RunMigrations hardcodes
+  `defaultMigrationSource`).
+- **`EntryRepository`** over the tursodb connector — helpers reused: `Querier`
+  (shared `insertRecords` for `Append`/`AppendTx`), `FormatTime`/`ParseTime`,
+  `ExecAffecting` (PurgePublished count), `MapError` (rows.Err + scan;
+  UNIQUE→`ErrAlreadyExists` on duplicate `event_id`), `ExportMigrations`,
+  `Scanner` alias. `MarkPublished` idempotent via `WHERE published_at IS NULL`
+  zero-row no-op (unknown/already-published → nil); `ListUnpublished` is
+  `created_at ASC, event_id` with `LIMIT -1` for non-positive.
+- **`AppendTx(ctx, tx *tursodb.Tx, recs ...sdkevents.Record) error`** — the
+  dialect-typed transactional appender (§5); shares `insertRecords` with the
+  own-tx `Append`. Nothing consumes it in v1; future emitting stores
+  consumer-declare a matching one-method port satisfied structurally.
+- **Boot-time probe (§5 mitigation b)** — no sibling store probes; introduced
+  fresh here. `New` runs `SELECT name FROM sqlite_master WHERE type='table' AND
+  name='event_outbox'`; `sql.ErrNoRows` → wrapped `errs.ErrNotFound` naming the
+  unapplied `"events"` source, before the host serves traffic. README states the
+  prerequisite loudly.
+- **Registration** — `go.work` (`./features/events/stores/turso` after
+  `./features/events`); Makefile `MODULES` (after `features/events`),
+  `STORE_MODULES` (7th turso entry), and a `test-stores` turso leg (`cd
+  features/events/stores/turso && go test -tags=integration ./...`). go.work ↔
+  Makefile `MODULES` agree at **29** entries.
+
+- **Verify (hermetic):** `cd features/events/stores/turso && go build ./... && go
+  test ./... && go vet ./...` — green (`ok … 0.207s`, `TestExportMigrations`
+  runs). Loud skip recorded on the tagged path without env:
+  `go test -tags=integration ./...` → `--- SKIP: TestConformance` /
+  `--- SKIP: TestAppendTx` — `TURSO_DATABASE_URL/TURSO_AUTH_TOKEN not set — turso
+  conformance NOT verified`, suite still `PASS`.
+- **Verify (gates):** `make guard` — six guards green. `make check` — "all checks
+  passed" at 29 modules (incl. `vet -tags=integration features/events/stores/turso`).
+- **LIVE LEG (authorized, milestone-close artifact):** `.env`
+  `TURSO_DATABASE_URL` asserted equal to
+  `libsql://gopernicus-cms-playground-gps-impact.aws-us-east-2.turso.io` (MATCH,
+  recorded; token never echoed). Suite **`features/events/stores/turso`** (turso,
+  `-tags=integration -count=1`) against the **playground DB**, dated
+  **2026-07-08**:
+  - `TestAppendTx` — **PASS (2.56s)**: `AppendTx` inside `InTx` visible after
+    commit; rolled back on a sentinel error leaves no row.
+  - `TestConformance` — **PASS (9.87s)**, 5/5 subtests: `AppendAndListOrder`,
+    `UnpublishedOnly`, `MarkPublishedIdempotence`, `PurgePublishedRetention`,
+    `EventIDUniqueness`.
+  - `TestExportMigrations` — **PASS**. Total `ok … 12.660s`. Migration
+    `0001_event_outbox.sql` applied once (checksum `c4ac8338`), reused across
+    subtests. **6 top-level PASS / 0 FAIL**, single executor.
+- **Standing real-interaction check:** `examples/minimal` booted on `:8081` —
+  `GET /` → **200**, `GET /products/widget-3000` → **200** (server log confirms
+  both), process killed, port 8081 freed. Did NOT commit.
