@@ -31,7 +31,7 @@ import (
 type authService interface {
 	Register(ctx context.Context, email, password, displayName string) (user.User, error)
 	Verify(ctx context.Context, code string) error
-	Login(ctx context.Context, email, password, clientIP string) (token string, u user.User, err error)
+	Login(ctx context.Context, email, password string) (token string, u user.User, err error)
 	Logout(ctx context.Context, token string) error
 	ChangePassword(ctx context.Context, userID, currentPassword, newPassword string) (token string, err error)
 	ForgotPassword(ctx context.Context, email string) error
@@ -64,7 +64,7 @@ type authService interface {
 	// JWT bearer mode (design §4.4). TokenEnabled gates whether POST /auth/token
 	// is registered at all (deny-by-absence).
 	TokenEnabled() bool
-	IssueToken(ctx context.Context, email, password, clientIP string) (token string, expiresAt time.Time, err error)
+	IssueToken(ctx context.Context, email, password string) (token string, expiresAt time.Time, err error)
 }
 
 // handlers holds the auth service the route handlers delegate to.
@@ -131,7 +131,13 @@ func newUserResponse(u user.User) userResponse {
 // Mount registers the auth feature's routes on the registrar. The route surface
 // is POST /auth/{register,login,verify,password/forgot,password/reset} plus the
 // session-gated POST /auth/logout and POST /auth/password/change.
+//
+// It wraps the registrar so the client-info middleware rides EVERY route,
+// unauthenticated ones included (design §5.1 WI4): the ONE blanket write point
+// that stamps the request IP + User-Agent onto the context for login's
+// rate-limit key and the security-event audit rows.
 func Mount(r feature.RouteRegistrar, svc authService) {
+	r = clientInfoRegistrar{inner: r}
 	h := &handlers{svc: svc}
 	r.Handle("POST", "/auth/register", h.register)
 	r.Handle("POST", "/auth/login", h.login)
@@ -179,7 +185,7 @@ func (h *handlers) login(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	token, u, err := h.svc.Login(r.Context(), req.Email, req.Password, clientIP(r))
+	token, u, err := h.svc.Login(r.Context(), req.Email, req.Password)
 	if err != nil {
 		if errors.Is(err, authsvc.ErrRateLimited) {
 			writeError(w, web.NewError(http.StatusTooManyRequests, "too many login attempts").WithCode("rate_limited"))
@@ -201,7 +207,7 @@ func (h *handlers) token(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	tok, expiresAt, err := h.svc.IssueToken(r.Context(), req.Email, req.Password, clientIP(r))
+	tok, expiresAt, err := h.svc.IssueToken(r.Context(), req.Email, req.Password)
 	if err != nil {
 		if errors.Is(err, authsvc.ErrRateLimited) {
 			writeError(w, web.NewError(http.StatusTooManyRequests, "too many login attempts").WithCode("rate_limited"))
@@ -318,8 +324,32 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// clientIP derives the client IP for rate-limit keying, preferring the first
-// X-Forwarded-For hop and falling back to the request's remote address.
+// clientInfoRegistrar wraps a RouteRegistrar so the client-info middleware is
+// prepended to EVERY route it registers — the single blanket write point for the
+// request's IP + User-Agent (design §5.1 WI4). Being outermost, it runs before
+// any auth middleware, so unauthenticated routes (failed login, register, the
+// OAuth callback) are attributed too.
+type clientInfoRegistrar struct {
+	inner feature.RouteRegistrar
+}
+
+func (c clientInfoRegistrar) Handle(method, path string, handler http.HandlerFunc, middleware ...web.Middleware) {
+	all := append([]web.Middleware{clientInfoMiddleware}, middleware...)
+	c.inner.Handle(method, path, handler, all...)
+}
+
+// clientInfoMiddleware stamps the request IP and User-Agent onto the context via
+// the feature's exported carrier (authsvc.WithClientInfo). It is the ONE write
+// point; login/token read the IP from it and the audit rail reads IP + UA.
+func clientInfoMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := authsvc.WithClientInfo(r.Context(), clientIP(r), r.UserAgent())
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// clientIP derives the client IP, preferring the first X-Forwarded-For hop and
+// falling back to the request's remote address.
 func clientIP(r *http.Request) string {
 	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
 		if i := strings.IndexByte(fwd, ','); i >= 0 {

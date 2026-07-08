@@ -94,3 +94,90 @@ from the unit suite.
 ## Execution log
 
 (append dated entries here)
+
+### A5 — 2026-07-07 — PASS
+
+Synchronous audit rail landed; the deferred durable rail (§5.2) left zero
+trace. A4's `token_issued` was in scope and wired (main tip had A2+A3+A4).
+
+**WI1 — `logic/securityevent` rim.** New public package:
+`securityevent.go` (append-only `SecurityEvent{ID, UserID, Actor Principal,
+EventType, EventStatus, Details map[string]any, IPAddress, UserAgent,
+CreatedAt}`, a rim-local `Principal{Type,ID}` value type so the domain
+carries no import edge to authsvc, `New(type,status,now)` constructor) +
+`repository.go` (`SecurityEventRepository{Create, List}` crud-typed with a
+`ListFilter{UserID,EventType,EventStatus,Since,Until}` + `Match` predicate;
+port doc pins `ORDER BY created_at DESC, id DESC` as contractual and the
+parameterized-WHERE + Details non-nil-empty round-trip rules). No
+Update/Delete — append-only is structural.
+
+**WI2 — vocabulary.** All 13 in-scope types (register, login, logout,
+password_change, password_reset, email_verified, oauth_login,
+oauth_register, oauth_link_verified, oauth_linked, oauth_unlinked,
+apikey_auth, token_issued) + statuses success/failure/blocked. Invitation
+events left for A6.
+
+**WI3 — synchronous never-fail writes.** One private
+`recordSecurityEvent(ctx, securityEventInput)` in `authsvc/securityevent.go`;
+nil repo → no-op (AV9); write failure → WARN with COARSE fields only
+(`event_type`, `status`, `error_kind` via a sentinel-mapping `errKind`),
+never the event body, never fails the flow. Wired at every sensitive site,
+`A5:` markers removed: register (success), login (success/failure/blocked,
+email in Details as an identifier), logout (success, userID from the
+RequireUser ctx), verify (email_verified), password change/reset, all five
+OAuth ops, all three `apikey_auth` branches (revoked→blocked and
+expired→failure both carry service-account attribution via the pinned
+GetByHash record; success carries the effective principal), and
+token_issued. apikey_auth Details carries `key_prefix` ONLY (asserted the
+raw key never appears).
+
+**WI4 — client-info carrier.** Exported `authsvc.WithClientInfo(ctx, ip, ua)`
++ unexported `clientInfoFromContext`; the separate `clientIP(r)`-param
+plumbing is RETIRED — `Login`/`IssueToken` dropped the `clientIP` argument
+and read IP from the carrier (one write point, one read path). Blanket write
+point: a `clientInfoRegistrar` wraps the RouteRegistrar in `http.Mount` so
+`clientInfoMiddleware` (IP via X-Forwarded-For/RemoteAddr + `r.UserAgent()`)
+prepends to EVERY route, unauthenticated ones included. No sdk change.
+`TestLoginReadsIPFromCarrier` proves the rate-limit key uses the carrier IP.
+
+**Logger threading.** The service had no logger. Added `Deps.Logger` (nil →
+`slog.Default()`), surfaced as optional `auth.Config.Logger`; `auth.Register`
+falls back to `m.Logger` when unset — minimal, both the routed and
+cross-feature Service paths get a logger. A3's swallowed-TouchLastUsed
+divergence was trivial to resolve with the new logger, so it now logs a
+coarse WARN on failure (still best-effort, never fails auth).
+
+**WI5 — storetest sub-runner.** `SecurityEvents` group (skips LOUDLY when
+nil, AV9): CreateAndListOrdering, ListFilters (user/type/status/time-window),
+ListPagination, ListSameCreatedAtCollision (id tiebreak + NextCursor), and
+DetailsRoundTrip (nil/empty → non-nil empty map; populated preserved). New
+reference impl `refSecurityEvents` sorts the full population then pages via
+`pageDESC`, normalizing Details to a non-nil copy on Create.
+
+**WI6 — tests.** `authsvc/securityevent_test.go`: a spy repo wired into the
+base/oauth/machine/token harnesses; one test per sensitive op asserting the
+right type/status (+ actor attribution + key_prefix for apikey_auth);
+`TestSecurityEventNeverFailsFlow` (failing repo → register/login still
+succeed, 0 recorded); `TestSecurityEventNilRepoNoOp`; the carrier read-path
+test; and `TestSecurityEventWarnOnFailingRepo` capturing a real WARN and
+asserting coarse-only content.
+
+**Acceptance — all PASS.**
+- `cd features/auth && go build ./... && go vet ./... && go test ./...` → PASS.
+- `make check` → `all checks passed` (26-module set + 4 guards + integration-tag vet).
+- Deferred-rail grep (`sdk/events`|`features/events`) → empty (PASS).
+- Rule-6 import-anchored grep (cms|jobs|authorization) → empty (PASS).
+- `features/auth/go.mod` requires exactly `sdk` (unchanged).
+
+**Real-interaction — all PASS.**
+- (a) `examples/minimal` `HOST=localhost PORT=8081`: `GET /` → 200,
+  `GET /products/widget-3000` → 200; killed; port free.
+- (b) `examples/auth-cms` `HOST=localhost PORT=8082` cookie-jar:
+  `GET /products` (no cookie) 401 → register 201 → login 200+cookie →
+  `GET /products` (cookie) 200 → logout 200 → `GET /products` 401; port free.
+  (Host does not wire SecurityEvents yet — nil → no-op, AV9; A9 wires the
+  in-memory repo + debug route.)
+
+**Captured WARN line (failing-repo, coarse fields only):**
+`time=2026-07-07T17:03:55.206-07:00 level=WARN msg="security event write failed" event_type=login status=success error_kind=unknown`
+— no email, no raw error message, no event body.

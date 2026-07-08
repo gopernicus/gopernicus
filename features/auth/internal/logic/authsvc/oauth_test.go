@@ -205,6 +205,7 @@ type oauthHarness struct {
 	states   *fakeOAuthStates
 	mailer   *recordingMailer
 	provider *fakeProvider
+	events   *spySecurityEvents
 }
 
 func newOAuthHarness(t *testing.T, provider *fakeProvider, enc cryptids.Encrypter) *oauthHarness {
@@ -217,6 +218,7 @@ func newOAuthHarness(t *testing.T, provider *fakeProvider, enc cryptids.Encrypte
 		states:   newFakeOAuthStates(),
 		mailer:   &recordingMailer{},
 		provider: provider,
+		events:   newSpySecurityEvents(),
 	}
 	h.svc = NewService(Deps{
 		Users:             h.users,
@@ -235,6 +237,7 @@ func newOAuthHarness(t *testing.T, provider *fakeProvider, enc cryptids.Encrypte
 		TokenEncrypter:    enc,
 		OAuthCallbackBase: "https://app.example.com",
 		RedirectAllowlist: []string{"https://app.example.com/welcome"},
+		SecurityEvents:    h.events,
 	})
 	return h
 }

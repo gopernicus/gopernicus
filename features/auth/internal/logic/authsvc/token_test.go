@@ -95,6 +95,7 @@ func newTokenHarness(t *testing.T, signer cryptids.JWTSigner, requireVerified bo
 		tokens: newFakeTokens(),
 		hasher: &fakeHasher{},
 		mailer: &recordingMailer{},
+		events: newSpySecurityEvents(),
 	}
 	if limiter == nil {
 		limiter = ratelimiter.NewMemory()
@@ -112,6 +113,7 @@ func newTokenHarness(t *testing.T, signer cryptids.JWTSigner, requireVerified bo
 		Cookie:               CookieConfig{},
 		RequireVerifiedEmail: requireVerified,
 		TokenSigner:          signer,
+		SecurityEvents:       h.events,
 	})
 	return h
 }
@@ -153,7 +155,7 @@ func TestIssueTokenRoundTrip(t *testing.T) {
 	h := newTokenHarness(t, newFakeSigner(), false, nil)
 	u := h.mustRegister(t, "iss@example.com", "password123")
 
-	tok, expiresAt, err := h.svc.IssueToken(context.Background(), "Iss@example.com", "password123", "1.2.3.4")
+	tok, expiresAt, err := h.svc.IssueToken(context.Background(), "Iss@example.com", "password123")
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}
@@ -187,7 +189,7 @@ func TestIssueTokenCustomTTL(t *testing.T) {
 		TokenSigner: newFakeSigner(), TokenTTL: 5 * time.Minute,
 	})
 	h.mustRegister(t, "ttl@example.com", "password123")
-	_, expiresAt, err := h.svc.IssueToken(context.Background(), "ttl@example.com", "password123", "1.2.3.4")
+	_, expiresAt, err := h.svc.IssueToken(context.Background(), "ttl@example.com", "password123")
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}
@@ -200,14 +202,14 @@ func TestIssueTokenCustomTTL(t *testing.T) {
 func TestIssueTokenWrongPassword(t *testing.T) {
 	h := newTokenHarness(t, newFakeSigner(), false, nil)
 	h.mustRegister(t, "wp@example.com", "password123")
-	if _, _, err := h.svc.IssueToken(context.Background(), "wp@example.com", "nope", "1.2.3.4"); !errors.Is(err, errs.ErrUnauthorized) {
+	if _, _, err := h.svc.IssueToken(context.Background(), "wp@example.com", "nope"); !errors.Is(err, errs.ErrUnauthorized) {
 		t.Errorf("wrong password: err=%v, want ErrUnauthorized", err)
 	}
 }
 
 func TestIssueTokenUnknownEmail(t *testing.T) {
 	h := newTokenHarness(t, newFakeSigner(), false, nil)
-	if _, _, err := h.svc.IssueToken(context.Background(), "ghost@example.com", "password123", "1.2.3.4"); !errors.Is(err, errs.ErrUnauthorized) {
+	if _, _, err := h.svc.IssueToken(context.Background(), "ghost@example.com", "password123"); !errors.Is(err, errs.ErrUnauthorized) {
 		t.Errorf("unknown email: err=%v, want ErrUnauthorized", err)
 	}
 }
@@ -216,7 +218,7 @@ func TestIssueTokenRateLimitedFirst(t *testing.T) {
 	h := newTokenHarness(t, newFakeSigner(), false, denyLimiter{})
 	h.mustRegister(t, "rl@example.com", "password123")
 	before := h.users.calls
-	_, _, err := h.svc.IssueToken(context.Background(), "rl@example.com", "password123", "1.2.3.4")
+	_, _, err := h.svc.IssueToken(context.Background(), "rl@example.com", "password123")
 	if !errors.Is(err, ErrRateLimited) {
 		t.Errorf("rate limited: err=%v, want ErrRateLimited", err)
 	}
@@ -228,7 +230,7 @@ func TestIssueTokenRateLimitedFirst(t *testing.T) {
 func TestIssueTokenRequireVerifiedEmailBlocksUnverified(t *testing.T) {
 	h := newTokenHarness(t, newFakeSigner(), true, nil)
 	h.mustRegister(t, "unv@example.com", "password123") // unverified
-	_, _, err := h.svc.IssueToken(context.Background(), "unv@example.com", "password123", "1.2.3.4")
+	_, _, err := h.svc.IssueToken(context.Background(), "unv@example.com", "password123")
 	if !errors.Is(err, ErrEmailNotVerified) {
 		t.Errorf("unverified issue: err=%v, want ErrEmailNotVerified", err)
 	}
@@ -238,7 +240,7 @@ func TestIssueTokenRequireVerifiedEmailAllowsVerified(t *testing.T) {
 	h := newTokenHarness(t, newFakeSigner(), true, nil)
 	h.mustRegister(t, "ver@example.com", "password123")
 	h.mustVerify(t, "ver@example.com")
-	if _, _, err := h.svc.IssueToken(context.Background(), "ver@example.com", "password123", "1.2.3.4"); err != nil {
+	if _, _, err := h.svc.IssueToken(context.Background(), "ver@example.com", "password123"); err != nil {
 		t.Errorf("verified issue: %v", err)
 	}
 }
@@ -248,7 +250,7 @@ func TestIssueTokenRequireVerifiedEmailAllowsVerified(t *testing.T) {
 func TestRequireUserBearerJWT(t *testing.T) {
 	h := newTokenHarness(t, newFakeSigner(), false, nil)
 	u := h.mustRegister(t, "bru@example.com", "password123")
-	tok, _, err := h.svc.IssueToken(context.Background(), "bru@example.com", "password123", "1.2.3.4")
+	tok, _, err := h.svc.IssueToken(context.Background(), "bru@example.com", "password123")
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}
@@ -272,7 +274,7 @@ func TestRequireUserBearerJWT(t *testing.T) {
 func TestRequirePrincipalBearerJWT(t *testing.T) {
 	h := newTokenHarness(t, newFakeSigner(), false, nil)
 	u := h.mustRegister(t, "brp@example.com", "password123")
-	tok, _, _ := h.svc.IssueToken(context.Background(), "brp@example.com", "password123", "1.2.3.4")
+	tok, _, _ := h.svc.IssueToken(context.Background(), "brp@example.com", "password123")
 
 	var got Principal
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

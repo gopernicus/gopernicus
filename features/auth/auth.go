@@ -27,6 +27,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -35,6 +36,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/auth/logic/apikey"
 	"github.com/gopernicus/gopernicus/features/auth/logic/oauthaccount"
 	"github.com/gopernicus/gopernicus/features/auth/logic/oauthstate"
+	"github.com/gopernicus/gopernicus/features/auth/logic/securityevent"
 	"github.com/gopernicus/gopernicus/features/auth/logic/serviceaccount"
 	"github.com/gopernicus/gopernicus/features/auth/logic/session"
 	"github.com/gopernicus/gopernicus/features/auth/logic/user"
@@ -126,6 +128,13 @@ type Repositories struct {
 	// ErrMachineReposRequired at construction.
 	ServiceAccounts serviceaccount.ServiceAccountRepository
 	APIKeys         apikey.APIKeyRepository
+	// SecurityEvents backs the append-only audit rail (design §5.1). It is
+	// OPTIONAL (ratified AV9), independently of every other port: nil → the
+	// feature keeps NO audit trail (the synchronous recording site is a no-op),
+	// and no construction error is raised. When wired, every sensitive op records
+	// a security event synchronously and a write failure is logged at WARN,
+	// never failing the auth flow.
+	SecurityEvents securityevent.SecurityEventRepository
 }
 
 // CookieConfig is the session-cookie policy. Zero values are safe: an empty Name
@@ -201,6 +210,11 @@ type Config struct {
 	// 1h (design §4.4). Keep it short: it bounds the revocation-asymmetry window
 	// documented on TokenSigner above. Meaningful only when TokenSigner is wired.
 	TokenTTL time.Duration
+
+	// Logger receives the best-effort WARN line when a security-event audit write
+	// fails (design §5.1 — audit-write failures never fail the auth flow). Nil →
+	// slog.Default(); Register defaults it to the Mount's logger when unset.
+	Logger *slog.Logger
 }
 
 // Service is the auth feature's identity capability without HTTP routes — the
@@ -257,8 +271,10 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 		RedirectAllowlist:    cfg.RedirectAllowlist,
 		ServiceAccounts:      repos.ServiceAccounts,
 		APIKeys:              repos.APIKeys,
+		SecurityEvents:       repos.SecurityEvents,
 		TokenSigner:          cfg.TokenSigner,
 		TokenTTL:             cfg.TokenTTL,
+		Logger:               cfg.Logger,
 	})
 	return &Service{svc: svc}, nil
 }
@@ -315,6 +331,11 @@ func (s *Service) CurrentPrincipal(ctx context.Context) (Principal, bool) {
 // auth-feature-design doc, §3). Migrations are registered by the store adapter
 // (features/auth/stores/turso), not here — the core is dialect-blind.
 func Register(m feature.Mount, repos Repositories, cfg Config) error {
+	// The audit rail's best-effort WARN line rides the host's Mount logger unless
+	// the host set an explicit Config.Logger (design §5.1).
+	if cfg.Logger == nil {
+		cfg.Logger = m.Logger
+	}
 	svc, err := NewService(repos, cfg)
 	if err != nil {
 		return err
