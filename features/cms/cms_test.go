@@ -4,6 +4,11 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/features/cms/logic/content"
+	"github.com/gopernicus/gopernicus/features/cms/logic/media"
+	"github.com/gopernicus/gopernicus/features/cms/logic/menus"
+	"github.com/gopernicus/gopernicus/features/cms/logic/messaging"
+	"github.com/gopernicus/gopernicus/features/cms/logic/taxonomy"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
@@ -16,6 +21,35 @@ func (r *recordingRegistrar) Handle(method, path string, _ http.HandlerFunc, _ .
 	r.routes[method+" "+path] = true
 }
 
+// stubViews is a nil-rendering Views used to exercise Register's full HTML route
+// set without importing the bundled default (which would cycle: views/templ
+// imports cms). Handlers are never invoked here, so the renderers can be nil.
+type stubViews struct{}
+
+func (stubViews) Home([]menus.MenuItem, []ListItem) web.Renderer { return nil }
+func (stubViews) Archive(string, []menus.MenuItem, []ListItem, string, string) web.Renderer {
+	return nil
+}
+func (stubViews) Single(string, string, []menus.MenuItem, web.Renderer) web.Renderer { return nil }
+func (stubViews) Error(int, string) web.Renderer                                     { return nil }
+func (stubViews) ContactForm(ContactModel) web.Renderer                              { return nil }
+func (stubViews) ContactThanks() web.Renderer                                        { return nil }
+func (stubViews) MenuNav(menus.Menu, []menus.MenuItem) web.Renderer                  { return nil }
+func (stubViews) EntriesList(string, string, string, []EntryListItem, string) web.Renderer {
+	return nil
+}
+func (stubViews) EntryForm(EntryFormModel) web.Renderer                   { return nil }
+func (stubViews) TermsList([]taxonomy.Term, []taxonomy.Term) web.Renderer { return nil }
+func (stubViews) TermForm(TermFormModel) web.Renderer                     { return nil }
+func (stubViews) MenusList([]menus.Menu) web.Renderer                     { return nil }
+func (stubViews) MenuNew(string) web.Renderer                             { return nil }
+func (stubViews) MenuDetail(menus.Menu, []menus.MenuItem) web.Renderer    { return nil }
+func (stubViews) MenuItemForm(menus.MenuItem) web.Renderer                { return nil }
+func (stubViews) MediaLibrary([]media.Asset, string) web.Renderer         { return nil }
+func (stubViews) InquiriesList([]messaging.Inquiry) web.Renderer          { return nil }
+func (stubViews) AdminError(int, string) web.Renderer                     { return nil }
+func (stubViews) SeedTemplates() []content.TemplateBinding                { return nil }
+
 // TestRegister_MountsRouteSet verifies the public composition path: cms.Register
 // wires services from repositories and mounts the feature's full route set on the
 // host's RouteRegistrar. Repositories are nil because no handler is invoked here
@@ -24,7 +58,7 @@ func (r *recordingRegistrar) Handle(method, path string, _ http.HandlerFunc, _ .
 func TestRegister_MountsRouteSet(t *testing.T) {
 	rec := &recordingRegistrar{routes: map[string]bool{}}
 
-	err := Register(feature.Mount{Router: rec}, Repositories{}, Config{})
+	err := Register(feature.Mount{Router: rec}, Repositories{}, Config{Views: stubViews{}})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/gopernicus/gopernicus/features/cms/internal/inbound/http/views"
 	"github.com/gopernicus/gopernicus/features/cms/logic/menus"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/web"
@@ -26,12 +25,13 @@ type menuService interface {
 
 // MenuHandlers holds the menu admin handlers + a public nav render.
 type MenuHandlers struct {
-	svc menuService
+	svc   menuService
+	views Views
 }
 
-// NewMenuHandlers constructs the menu handlers over svc.
-func NewMenuHandlers(svc menuService) *MenuHandlers {
-	return &MenuHandlers{svc: svc}
+// NewMenuHandlers constructs the menu handlers over svc and the HTML port.
+func NewMenuHandlers(svc menuService, views Views) *MenuHandlers {
+	return &MenuHandlers{svc: svc, views: views}
 }
 
 // List renders all menus.
@@ -41,12 +41,12 @@ func (h *MenuHandlers) List(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, err)
 		return
 	}
-	web.Render(r.Context(), w, http.StatusOK, views.MenusList(ms))
+	web.Render(r.Context(), w, http.StatusOK, h.views.MenusList(ms))
 }
 
 // New renders the create-menu form.
 func (h *MenuHandlers) New(w http.ResponseWriter, r *http.Request) {
-	web.Render(r.Context(), w, http.StatusOK, views.MenuNew(""))
+	web.Render(r.Context(), w, http.StatusOK, h.views.MenuNew(""))
 }
 
 // Create handles the create-menu form.
@@ -58,7 +58,7 @@ func (h *MenuHandlers) Create(w http.ResponseWriter, r *http.Request) {
 	m, err := h.svc.CreateMenu(r.Context(), r.PostForm.Get("name"))
 	if err != nil {
 		if errors.Is(err, errs.ErrInvalidInput) || errors.Is(err, errs.ErrAlreadyExists) {
-			web.Render(r.Context(), w, http.StatusBadRequest, views.MenuNew(err.Error()))
+			web.Render(r.Context(), w, http.StatusBadRequest, h.views.MenuNew(err.Error()))
 			return
 		}
 		h.renderError(w, r, err)
@@ -79,7 +79,7 @@ func (h *MenuHandlers) Detail(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, err)
 		return
 	}
-	web.Render(r.Context(), w, http.StatusOK, views.MenuDetail(m, items))
+	web.Render(r.Context(), w, http.StatusOK, h.views.MenuDetail(m, items))
 }
 
 // AddItem appends an item to a menu.
@@ -106,7 +106,7 @@ func (h *MenuHandlers) EditItem(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, err)
 		return
 	}
-	web.Render(r.Context(), w, http.StatusOK, views.MenuItemForm(it))
+	web.Render(r.Context(), w, http.StatusOK, h.views.MenuItemForm(it))
 }
 
 // UpdateItem handles the edit-item form.
@@ -152,7 +152,7 @@ func (h *MenuHandlers) PublicNav(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, err)
 		return
 	}
-	web.Render(r.Context(), w, http.StatusOK, views.MenuNav(m, items))
+	web.Render(r.Context(), w, http.StatusOK, h.views.MenuNav(m, items))
 }
 
 func (h *MenuHandlers) renderError(w http.ResponseWriter, r *http.Request, err error) {
@@ -160,5 +160,5 @@ func (h *MenuHandlers) renderError(w http.ResponseWriter, r *http.Request, err e
 	if mapped.Status >= http.StatusInternalServerError {
 		web.RecordError(w, err)
 	}
-	web.Render(r.Context(), w, mapped.Status, views.ErrorPage(mapped.Status, mapped.Message))
+	web.Render(r.Context(), w, mapped.Status, h.views.AdminError(mapped.Status, mapped.Message))
 }

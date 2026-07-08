@@ -1,9 +1,7 @@
 package cms
 
 import (
-	"github.com/gopernicus/gopernicus/features/cms/internal/inbound/http/views"
 	"github.com/gopernicus/gopernicus/features/cms/logic/content"
-	"github.com/gopernicus/gopernicus/sdk/web"
 )
 
 // registerSeedTypes registers the two built-in content types every CMS ships
@@ -27,19 +25,5 @@ func registerSeedTypes(r *content.Registry) error {
 		Templates:    []string{"default"},
 		Hierarchical: true,
 		Routable:     true,
-	})
-}
-
-// registerSeedTemplates binds the seed types' default per-entry renderers, ported
-// from the former PublicPost/PublicPage views. A host may override either via
-// Config.Templates (the per-type seam).
-func registerSeedTemplates(r *content.Registry) error {
-	if err := r.RegisterTemplate("article", "default", func(e content.Entry) web.Renderer {
-		return views.ArticleContent(e)
-	}); err != nil {
-		return err
-	}
-	return r.RegisterTemplate("page", "default", func(e content.Entry) web.Renderer {
-		return views.PageContent(e)
 	})
 }

@@ -98,7 +98,7 @@ var publicRoutes = []struct{ method, path string }{
 }
 
 func newAdminRouter(rr *routeRecorder) http.Handler {
-	return BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, &fakeMenuSvc{}, &fakeMediaSvc{}, &fakeContactSvc{}, nil, logging.NewNoop(), WithAdminMiddleware(rr.middleware()))
+	return BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, &fakeMenuSvc{}, &fakeMediaSvc{}, &fakeContactSvc{}, nil, logging.NewNoop(), WithViews(stubViews{}), WithAdminMiddleware(rr.middleware()))
 }
 
 func TestAdminMiddleware_WrapsEveryAdminRoute(t *testing.T) {
@@ -128,7 +128,7 @@ func TestAdminMiddleware_SkipsEveryPublicRoute(t *testing.T) {
 // TestAdminMiddleware_NilPreservesBehavior documents the zero-value contract:
 // with no AdminMiddleware configured, an admin route still serves (no gating).
 func TestAdminMiddleware_NilPreservesBehavior(t *testing.T) {
-	h := BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, &fakeMenuSvc{}, &fakeMediaSvc{}, &fakeContactSvc{}, nil, logging.NewNoop())
+	h := BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, &fakeMenuSvc{}, &fakeMediaSvc{}, &fakeContactSvc{}, nil, logging.NewNoop(), WithViews(stubViews{}))
 
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest("GET", "/articles", nil))

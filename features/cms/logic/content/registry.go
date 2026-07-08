@@ -19,6 +19,15 @@ const templateSep = "\x00"
 // though the content core is dynamic. The host binds these via RegisterTemplate.
 type TemplateFunc func(e Entry) web.Renderer
 
+// TemplateBinding binds a render func to a registered type's template. It is the
+// per-entry render seam as data: a Views value carries its seed bindings (see
+// cms.Register), and a host supplies custom ones via cms.Config.Templates.
+type TemplateBinding struct {
+	Type     string
+	Template string
+	Fn       TemplateFunc
+}
+
 // Registry holds the registered content types and their per-(type, template)
 // render funcs (plan §3). It is the WordPress "post type" table built as code,
 // not data: adding a type is a registration, never a migration. Construct one

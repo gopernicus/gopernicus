@@ -36,6 +36,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms"
 	"github.com/gopernicus/gopernicus/features/cms/logic/content"
 	"github.com/gopernicus/gopernicus/features/cms/logic/menus"
+	cmstempl "github.com/gopernicus/gopernicus/features/cms/views/templ"
 	"github.com/gopernicus/gopernicus/integrations/cryptids/bcrypt"
 	"github.com/gopernicus/gopernicus/sdk/cacher"
 	"github.com/gopernicus/gopernicus/sdk/email"
@@ -132,6 +133,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 
 	if err := cms.Register(mount, cmsRepos, cms.Config{
+		Views:           cmstempl.New(),                          // FS3 one-line default: the bundled views module
 		Types:           []content.ContentType{productType()},    // host-registered custom type (zero migration)
 		Templates:       []cms.TemplateBinding{productBinding()}, // its dev-authored renderer
 		Cache:           cacher.NewMemory(),

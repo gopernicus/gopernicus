@@ -1,10 +1,12 @@
 // Package theme is a host-owned custom public-site theme for the cms example. It
-// implements features/cms/theme.PublicViews, so the CMS feature renders the
-// public site chrome through these views instead of the bundled default —
-// without forking the feature. Under the Registry model the theme is CHROME ONLY
-// (home, archive, the single-entry wrapper, error); per-entry bodies come from
-// the content types' registered TemplateFuncs and are passed to Single as a
-// web.Renderer this theme simply wraps.
+// implements the cms.Views port by EMBEDDING the bundled default from
+// features/cms/views/templ and overriding only the four public-chrome methods
+// (Home, Archive, Single, Error) with ACME-branded html/template chrome — the
+// blessed partial-override path (FS3). Every non-chrome method (admin pages,
+// contact form, seed templates) falls through to the embedded default. Under the
+// Registry model the theme is CHROME ONLY; per-entry bodies come from the content
+// types' registered TemplateFuncs and are passed to Single as a web.Renderer this
+// theme simply wraps.
 //
 // It uses html/template (no templ codegen) to show that a web.Renderer can be
 // anything that writes itself to an io.Writer.
@@ -16,8 +18,9 @@ import (
 	"html/template"
 	"io"
 
+	"github.com/gopernicus/gopernicus/features/cms"
 	"github.com/gopernicus/gopernicus/features/cms/logic/menus"
-	cmstheme "github.com/gopernicus/gopernicus/features/cms/theme"
+	cmstempl "github.com/gopernicus/gopernicus/features/cms/views/templ"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
 
@@ -67,14 +70,18 @@ var pages = template.Must(template.New("theme").Parse(`
 {{template "footer" .}}{{end}}
 `))
 
-// Theme is the host's custom PublicViews implementation (chrome only).
-type Theme struct{}
+// Theme is the host's custom cms.Views implementation. It embeds the bundled
+// default so every non-chrome method falls through, and overrides the four
+// public-chrome methods with ACME markup.
+type Theme struct {
+	cmstempl.Views
+}
 
 // New returns the custom theme. Pass it to cms.Config.Views to replace the
-// public site chrome entirely.
+// public site chrome while keeping the bundled admin/forms defaults.
 func New() Theme { return Theme{} }
 
-var _ cmstheme.PublicViews = Theme{}
+var _ cms.Views = Theme{}
 
 // rendererFunc adapts a render closure to web.Renderer.
 type rendererFunc func(context.Context, io.Writer) error
@@ -93,20 +100,20 @@ type base struct {
 }
 
 // Home renders the landing page with recent entries.
-func (Theme) Home(nav []menus.MenuItem, items []cmstheme.ListItem) web.Renderer {
+func (Theme) Home(nav []menus.MenuItem, items []cms.ListItem) web.Renderer {
 	return render("home", struct {
 		base
 		Heading string
-		Items   []cmstheme.ListItem
+		Items   []cms.ListItem
 	}{base{"Home", nav}, "Welcome to ACME", items})
 }
 
 // Archive renders a taxonomy archive listing.
-func (Theme) Archive(heading string, nav []menus.MenuItem, items []cmstheme.ListItem, nextCursor, baseHref string) web.Renderer {
+func (Theme) Archive(heading string, nav []menus.MenuItem, items []cms.ListItem, nextCursor, baseHref string) web.Renderer {
 	return render("archive", struct {
 		base
 		Heading string
-		Items   []cmstheme.ListItem
+		Items   []cms.ListItem
 		Next    string
 		Base    string
 	}{base{heading, nav}, heading, items, nextCursor, baseHref})

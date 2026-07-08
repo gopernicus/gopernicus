@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/gopernicus/gopernicus/features/cms/internal/inbound/http/views"
 	"github.com/gopernicus/gopernicus/features/cms/internal/logic/entrysvc"
 	"github.com/gopernicus/gopernicus/features/cms/logic/content"
 	"github.com/gopernicus/gopernicus/features/cms/logic/taxonomy"
@@ -42,12 +41,14 @@ type EntryHandlers struct {
 	svc   entryService
 	taxo  taxonomyService
 	media mediaService
+	views Views
 }
 
 // NewEntryHandlers constructs the entry handlers over the content + taxonomy +
-// media services (taxonomy powers term checkboxes; media powers image pickers).
-func NewEntryHandlers(svc entryService, taxo taxonomyService, media mediaService) *EntryHandlers {
-	return &EntryHandlers{svc: svc, taxo: taxo, media: media}
+// media services (taxonomy powers term checkboxes; media powers image pickers)
+// and the HTML rendering port.
+func NewEntryHandlers(svc entryService, taxo taxonomyService, media mediaService, views Views) *EntryHandlers {
+	return &EntryHandlers{svc: svc, taxo: taxo, media: media, views: views}
 }
 
 // List renders the admin index for ct.
@@ -58,18 +59,18 @@ func (h *EntryHandlers) List(w http.ResponseWriter, r *http.Request, ct content.
 		h.renderError(w, r, err)
 		return
 	}
-	items := make([]views.EntryListItem, 0, len(page.Items))
+	items := make([]EntryListItem, 0, len(page.Items))
 	for _, e := range page.Items {
-		items = append(items, views.EntryListItem{ID: e.ID, Title: e.Title, Slug: e.Slug, Status: string(e.Status)})
+		items = append(items, EntryListItem{ID: e.ID, Title: e.Title, Slug: e.Slug, Status: string(e.Status)})
 	}
 	base := "/" + ct.AdminBase()
-	web.Render(r.Context(), w, http.StatusOK, views.EntriesList(ct.Plural, base+"/new", base, items, page.NextCursor))
+	web.Render(r.Context(), w, http.StatusOK, h.views.EntriesList(ct.Plural, base+"/new", base, items, page.NextCursor))
 }
 
 // New renders an empty create form for ct.
 func (h *EntryHandlers) New(w http.ResponseWriter, r *http.Request, ct content.ContentType) {
 	model := h.formModel(r.Context(), ct, "New "+ct.Singular, "/"+ct.AdminBase(), content.Entry{}, nil)
-	web.Render(r.Context(), w, http.StatusOK, views.EntryForm(model))
+	web.Render(r.Context(), w, http.StatusOK, h.views.EntryForm(model))
 }
 
 // Create handles the create form submission for ct.
@@ -100,7 +101,7 @@ func (h *EntryHandlers) Edit(w http.ResponseWriter, r *http.Request, ct content.
 	}
 	action := "/" + ct.AdminBase() + "/" + e.ID
 	model := h.formModel(r.Context(), ct, "Edit "+ct.Singular, action, e, e.TermIDs)
-	web.Render(r.Context(), w, http.StatusOK, views.EntryForm(model))
+	web.Render(r.Context(), w, http.StatusOK, h.views.EntryForm(model))
 }
 
 // Update handles the edit form submission for ct.
@@ -178,8 +179,8 @@ func (h *EntryHandlers) formInput(r *http.Request, ct content.ContentType) entry
 
 // formModel builds the editor model for ct, prefilled from e (zero Entry for a
 // create form). checked are the term IDs to pre-check.
-func (h *EntryHandlers) formModel(ctx context.Context, ct content.ContentType, heading, action string, e content.Entry, checked []string) views.EntryFormModel {
-	m := views.EntryFormModel{
+func (h *EntryHandlers) formModel(ctx context.Context, ct content.ContentType, heading, action string, e content.Entry, checked []string) EntryFormModel {
+	m := EntryFormModel{
 		Heading:      heading,
 		Action:       action,
 		Title:        e.Title,
@@ -202,11 +203,11 @@ func (h *EntryHandlers) formModel(ctx context.Context, ct content.ContentType, h
 
 // fieldInputs builds one FieldInput per the type's FieldDefs, prefilled from e
 // and with options for image (media assets) and relation (entries of RelTo).
-func (h *EntryHandlers) fieldInputs(ctx context.Context, ct content.ContentType, e content.Entry) []views.FieldInput {
-	out := make([]views.FieldInput, 0, len(ct.Fields))
+func (h *EntryHandlers) fieldInputs(ctx context.Context, ct content.ContentType, e content.Entry) []FieldInput {
+	out := make([]FieldInput, 0, len(ct.Fields))
 	for _, def := range ct.Fields {
 		cur := e.Fields[def.Key].Raw
-		fi := views.FieldInput{
+		fi := FieldInput{
 			Key:      def.Key,
 			Label:    def.DisplayLabel(),
 			Kind:     string(def.Kind),
@@ -227,61 +228,61 @@ func (h *EntryHandlers) fieldInputs(ctx context.Context, ct content.ContentType,
 }
 
 // assetOptions lists media assets as select options, marking selected.
-func (h *EntryHandlers) assetOptions(ctx context.Context, selected string) []views.SelectOption {
+func (h *EntryHandlers) assetOptions(ctx context.Context, selected string) []SelectOption {
 	assets, err := h.media.ListAssets(ctx)
 	if err != nil {
 		return nil
 	}
-	out := make([]views.SelectOption, 0, len(assets))
+	out := make([]SelectOption, 0, len(assets))
 	for _, a := range assets {
-		out = append(out, views.SelectOption{Value: a.ID, Label: a.Filename, Selected: a.ID == selected})
+		out = append(out, SelectOption{Value: a.ID, Label: a.Filename, Selected: a.ID == selected})
 	}
 	return out
 }
 
 // relationOptions lists published+draft entries of relTo as select options.
-func (h *EntryHandlers) relationOptions(ctx context.Context, relTo, selected string) []views.SelectOption {
+func (h *EntryHandlers) relationOptions(ctx context.Context, relTo, selected string) []SelectOption {
 	page, err := h.svc.List(ctx, content.EntryQuery{Type: relTo, ListRequest: crud.ListRequest{Limit: crud.MaxLimit}})
 	if err != nil {
 		return nil
 	}
-	out := make([]views.SelectOption, 0, len(page.Items))
+	out := make([]SelectOption, 0, len(page.Items))
 	for _, e := range page.Items {
-		out = append(out, views.SelectOption{Value: e.ID, Label: e.Title, Selected: e.ID == selected})
+		out = append(out, SelectOption{Value: e.ID, Label: e.Title, Selected: e.ID == selected})
 	}
 	return out
 }
 
 // parentOptions lists candidate parents (entries of ct except exclude).
-func (h *EntryHandlers) parentOptions(ctx context.Context, ct content.ContentType, exclude, selected string) []views.SelectOption {
+func (h *EntryHandlers) parentOptions(ctx context.Context, ct content.ContentType, exclude, selected string) []SelectOption {
 	page, err := h.svc.List(ctx, content.EntryQuery{Type: ct.Slug, ListRequest: crud.ListRequest{Limit: crud.MaxLimit}})
 	if err != nil {
 		return nil
 	}
-	out := make([]views.SelectOption, 0, len(page.Items))
+	out := make([]SelectOption, 0, len(page.Items))
 	for _, e := range page.Items {
 		if e.ID == exclude {
 			continue
 		}
-		out = append(out, views.SelectOption{Value: e.ID, Label: e.Title, Selected: e.ID == selected})
+		out = append(out, SelectOption{Value: e.ID, Label: e.Title, Selected: e.ID == selected})
 	}
 	return out
 }
 
 // termChoices builds the term checkbox list, marking checked those in checked.
-func (h *EntryHandlers) termChoices(ctx context.Context, checked []string) []views.TermChoice {
+func (h *EntryHandlers) termChoices(ctx context.Context, checked []string) []TermChoice {
 	on := map[string]bool{}
 	for _, id := range checked {
 		on[id] = true
 	}
-	var out []views.TermChoice
+	var out []TermChoice
 	for _, kind := range []taxonomy.Kind{taxonomy.KindCategory, taxonomy.KindTag} {
 		terms, err := h.taxo.ListTerms(ctx, kind)
 		if err != nil {
 			return out
 		}
 		for _, t := range terms {
-			out = append(out, views.TermChoice{ID: t.ID, Label: string(t.Kind) + ": " + t.Name, Checked: on[t.ID]})
+			out = append(out, TermChoice{ID: t.ID, Label: string(t.Kind) + ": " + t.Name, Checked: on[t.ID]})
 		}
 	}
 	return out
@@ -293,7 +294,7 @@ func (h *EntryHandlers) renderError(w http.ResponseWriter, r *http.Request, err 
 	if mapped.Status >= http.StatusInternalServerError {
 		web.RecordError(w, err)
 	}
-	web.Render(r.Context(), w, mapped.Status, views.ErrorPage(mapped.Status, mapped.Message))
+	web.Render(r.Context(), w, mapped.Status, h.views.AdminError(mapped.Status, mapped.Message))
 }
 
 // renderFormError re-renders the editor with the validation/collision message.
@@ -310,7 +311,7 @@ func (h *EntryHandlers) renderFormError(w http.ResponseWriter, r *http.Request, 
 		h.renderError(w, r, err)
 		return
 	}
-	web.Render(r.Context(), w, status, views.EntryForm(model))
+	web.Render(r.Context(), w, status, h.views.EntryForm(model))
 }
 
 // entryFromInput reconstructs a partial Entry from a rejected form submission so
@@ -325,13 +326,13 @@ func entryFromInput(ct content.ContentType, in entrysvc.Input) content.Entry {
 }
 
 // templateOptions builds the template-picker options for ct.
-func templateOptions(ct content.ContentType, selected string) []views.SelectOption {
+func templateOptions(ct content.ContentType, selected string) []SelectOption {
 	if selected == "" {
 		selected = ct.DefaultTemplate()
 	}
-	out := make([]views.SelectOption, 0, len(ct.Templates))
+	out := make([]SelectOption, 0, len(ct.Templates))
 	for _, t := range ct.Templates {
-		out = append(out, views.SelectOption{Value: t, Label: t, Selected: t == selected})
+		out = append(out, SelectOption{Value: t, Label: t, Selected: t == selected})
 	}
 	return out
 }

@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/gopernicus/gopernicus/features/cms/internal/inbound/http/views"
 	"github.com/gopernicus/gopernicus/features/cms/logic/media"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
@@ -22,14 +21,18 @@ type mediaService interface {
 	DeleteAsset(ctx context.Context, id string) error
 }
 
-// MediaHandlers holds the media library + upload + serve handlers.
+// MediaHandlers holds the media library + upload + serve handlers. The admin
+// handlers (Library/Upload/Delete) render through views; Serve is the sole
+// non-HTML endpoint and never touches views (it mounts even when views is nil).
 type MediaHandlers struct {
-	svc mediaService
+	svc   mediaService
+	views Views
 }
 
-// NewMediaHandlers constructs the media handlers over svc.
-func NewMediaHandlers(svc mediaService) *MediaHandlers {
-	return &MediaHandlers{svc: svc}
+// NewMediaHandlers constructs the media handlers over svc and the HTML port. A
+// nil views is valid: only Serve is used in that case (see Mount's nil branch).
+func NewMediaHandlers(svc mediaService, views Views) *MediaHandlers {
+	return &MediaHandlers{svc: svc, views: views}
 }
 
 // Library lists assets and renders the upload form.
@@ -39,7 +42,7 @@ func (h *MediaHandlers) Library(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, err)
 		return
 	}
-	web.Render(r.Context(), w, http.StatusOK, views.MediaLibrary(assets, ""))
+	web.Render(r.Context(), w, http.StatusOK, h.views.MediaLibrary(assets, ""))
 }
 
 // Upload handles the multipart upload form.
@@ -63,11 +66,14 @@ func (h *MediaHandlers) Upload(w http.ResponseWriter, r *http.Request) {
 	web.RespondRedirect(w, r, "/media", http.StatusSeeOther)
 }
 
-// Serve streams an asset's bytes with its content type.
+// Serve streams an asset's bytes with its content type. Its error path responds
+// with JSON (web.RespondJSONDomainError): this is a byte endpoint, not part of
+// the HTML surface, so it mounts even when views is nil and never renders an
+// HTML error page.
 func (h *MediaHandlers) Serve(w http.ResponseWriter, r *http.Request) {
 	a, rc, err := h.svc.OpenAsset(r.Context(), r.PathValue("id"))
 	if err != nil {
-		h.renderError(w, r, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
 	defer rc.Close()
@@ -93,10 +99,10 @@ func (h *MediaHandlers) renderError(w http.ResponseWriter, r *http.Request, err 
 	if mapped.Status >= http.StatusInternalServerError {
 		web.RecordError(w, err)
 	}
-	web.Render(r.Context(), w, mapped.Status, views.ErrorPage(mapped.Status, mapped.Message))
+	web.Render(r.Context(), w, mapped.Status, h.views.AdminError(mapped.Status, mapped.Message))
 }
 
 func (h *MediaHandlers) renderLibraryError(w http.ResponseWriter, r *http.Request, msg string) {
 	assets, _ := h.svc.ListAssets(r.Context())
-	web.Render(r.Context(), w, http.StatusBadRequest, views.MediaLibrary(assets, msg))
+	web.Render(r.Context(), w, http.StatusBadRequest, h.views.MediaLibrary(assets, msg))
 }

@@ -1,6 +1,8 @@
-package views
+package templ
 
-templ TermForm(m TermFormModel) {
+import "github.com/gopernicus/gopernicus/features/cms"
+
+templ TermForm(m cms.TermFormModel) {
 	@Layout(m.Heading) {
 		<h1>{ m.Heading }</h1>
 		if m.FormError != "" {

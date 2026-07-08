@@ -1,6 +1,7 @@
 // Command server is a second CMS host that proves the feature-module opt-out
 // (plan §1.5): it mounts features/cms backed by an in-memory store, so its
-// module graph contains NO libsql — only features/cms (+ theme deps) and sdk.
+// module graph contains NO libsql — only features/cms, its bundled views module
+// features/cms/views/templ, and sdk.
 // Compare its go.mod to examples/cms: same feature, different datastore, and the
 // driver a host doesn't use never enters its build.
 package main
@@ -17,6 +18,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms"
 	"github.com/gopernicus/gopernicus/features/cms/logic/content"
 	"github.com/gopernicus/gopernicus/features/cms/logic/menus"
+	cmstempl "github.com/gopernicus/gopernicus/features/cms/views/templ"
 	"github.com/gopernicus/gopernicus/sdk/cacher"
 	"github.com/gopernicus/gopernicus/sdk/email"
 	"github.com/gopernicus/gopernicus/sdk/environment"
@@ -58,6 +60,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	mount := feature.Mount{Router: router, Logger: log}
 
 	if err := cms.Register(mount, repos, cms.Config{
+		Views:     cmstempl.New(),                          // FS3 one-line default: the bundled views module
 		Types:     []content.ContentType{productType()},    // host-registered custom type (zero migration)
 		Templates: []cms.TemplateBinding{productBinding()}, // its dev-authored renderer
 		Cache:     cacher.NewMemory(),

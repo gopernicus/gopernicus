@@ -1,4 +1,20 @@
-package views
+package http
+
+// ListItem is one entry in a public listing (home / archive). The handler
+// pre-computes Href from the type's route scheme so the view stays type-blind.
+type ListItem struct {
+	Title   string
+	Href    string
+	Excerpt string
+}
+
+// ContactModel holds the contact form values + an optional error.
+type ContactModel struct {
+	Name      string
+	Email     string
+	Message   string
+	FormError string
+}
 
 // TermChoice is a taxonomy term checkbox in the entry form.
 type TermChoice struct {

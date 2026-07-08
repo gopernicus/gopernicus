@@ -24,7 +24,6 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms/logic/menus"
 	"github.com/gopernicus/gopernicus/features/cms/logic/messaging"
 	"github.com/gopernicus/gopernicus/features/cms/logic/taxonomy"
-	"github.com/gopernicus/gopernicus/features/cms/theme"
 	"github.com/gopernicus/gopernicus/sdk/cacher"
 	"github.com/gopernicus/gopernicus/sdk/email"
 	"github.com/gopernicus/gopernicus/sdk/feature"
@@ -46,19 +45,16 @@ type Repositories struct {
 // TemplateBinding binds a dev-authored render func to a registered type's
 // template. Hosts supply these via Config.Templates to render their custom
 // content types (the per-type seam, complementing the chrome seam Config.Views).
-type TemplateBinding struct {
-	Type     string
-	Template string
-	Fn       content.TemplateFunc
-}
+type TemplateBinding = content.TemplateBinding
 
 // Config carries host-provided collaborators and overrides. Zero values fall
-// back to sensible defaults where possible: a nil Views uses the bundled site
-// chrome, a nil Cache disables public-page caching. Types/Templates let a host
-// register custom content types and their renderers on top of the Article/Page
-// seeds. Blobs and Mailer are host infrastructure the feature cannot default.
+// back to sensible defaults where possible: a nil Views leaves the HTML surface
+// unregistered (FS3 — only GET /media/{id}/file mounts), a nil Cache disables
+// public-page caching. Types/Templates let a host register custom content types
+// and their renderers on top of the Article/Page seeds. Blobs and Mailer are
+// host infrastructure the feature cannot default.
 type Config struct {
-	Views     theme.PublicViews     // site chrome only now; nil → bundled
+	Views     Views                 // HTML rendering port; nil → HTML surface not registered (FS3)
 	Types     []content.ContentType // host-registered custom types
 	Templates []TemplateBinding     // host (type,template) → render func
 	Cache     cacher.Storer         // nil → no public-page caching
@@ -92,8 +88,12 @@ func Register(m feature.Mount, repos Repositories, cfg Config) error {
 			return err
 		}
 	}
-	if err := registerSeedTemplates(registry); err != nil {
-		return err
+	if cfg.Views != nil {
+		for _, b := range cfg.Views.SeedTemplates() {
+			if err := registry.RegisterTemplate(b.Type, b.Template, b.Fn); err != nil {
+				return err
+			}
+		}
 	}
 	for _, b := range cfg.Templates {
 		if err := registry.RegisterTemplate(b.Type, b.Template, b.Fn); err != nil {
