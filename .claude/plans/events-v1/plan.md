@@ -2312,3 +2312,99 @@ entries. Green tests alone did not close it. Phase 5 DoD lines against artifacts
 Artifacts: `make check` green at 30 modules (six guards); the two dated protocol
 transcripts (direct-emit + durable) with observed frames, latencies (34ms
 invalidation / 37ms durable pickup), and shutdown log lines.
+
+### 2026-07-08 — task-13 (rule-6 feature-isolation guard) executed
+
+One file: `Makefile` (plus two temporary prove-can-fail edits, reverted). The
+tree at HEAD carried task-12; the untracked `features/events/README.md` is
+task-14's in-flight work, left untouched.
+
+- **Label adjustment (logged per the leg's instruction):** the plan calls this
+  guard "G5", but the Makefile's numbering moved on since the plan was cut — the
+  FS1 guard (feature-standard 2026-07-07) already took the G5 slot, and there
+  were six guards (G1–G6) on the clean tree. This guard therefore lands as **G7,
+  `guard-feature-no-cross-feature`**, the next free number/name consistent with
+  the existing `guard-*` targets. It is the same rule-6 semantics the plan
+  specified for "G5"; only the label changed. task-15's docs sync should record
+  it as G7 (not G5) in the guard enumeration.
+- **Guard shape (matches G2/G5/G6):** a `.PHONY` entry, an `== guard: ... ==`
+  echo line, and membership in the `guard:` aggregate (comment updated "all six"
+  → "all seven"). Matching logic: for each `features/<x>/` it greps the whole
+  subtree for `"github.com/gopernicus/gopernicus/features/[a-z0-9]+` imports and
+  drops self-imports (`features/<x>/…`) with a boundary-anchored `grep -v`
+  (`features/<x>(["/])`); what survives is an x-file reaching into some
+  `features/<y>`, y ≠ x → loud error naming rule 6, else nothing + exit 0.
+- **Exclusions rationale:** `stores/` is excluded via `--exclude-dir=stores`
+  (separate adapter modules, per the task spec, mirroring G2's stores
+  exclusion). `views/` is deliberately **NOT** excluded — the concern was that
+  `features/cms/views/templ` legitimately imports its OWN core, but that is a
+  self-import (y == x) dropped by the `grep -v` filter, so it never
+  false-positives; leaving views scanned still catches a views adapter reaching
+  a FOREIGN feature. Verified green with the current tree (cms/views/templ →
+  cms/… present and correctly ignored).
+- **FS1 list addition (tracked from task-3's log):** the FS1 guard's hardcoded
+  module list `for f in features/authentication features/cms features/jobs`
+  gained `features/events` → `… features/authentication features/cms
+  features/events features/jobs`. The events core is sdk-only and is now held to
+  it by the guard, not just by grep.
+- **Prove-can-fail #1 (G7, A4):** temporarily added `_
+  "github.com/gopernicus/gopernicus/features/authentication"` (path per A-R1) to
+  `features/events/events.go`; `make guard-feature-no-cross-feature` failed with
+  exit 2:
+
+  ```
+  == guard: no feature core imports a different feature (rule 6) ==
+  ERROR (rule 6): events reaches into a different feature core — declare a port and let the host wire the peer:
+  features/events/events.go:34:	_ "github.com/gopernicus/gopernicus/features/authentication"
+  make: *** [guard-feature-no-cross-feature] Error 1
+  ```
+
+  Reverted; `make guard` green.
+- **Prove-can-fail #2 (FS1 scans events, A4):** temporarily added `require
+  example.com/fake v1.0.0` to `features/events/go.mod`; `make
+  guard-feature-core-sdk-only` failed with exit 2, proving events is now in the
+  FS1 scan:
+
+  ```
+  == guard: feature core go.mod requires sdk only (FS1) ==
+  ERROR (FS1): features/events/go.mod requires more than sdk:
+  example.com/fake
+  make: *** [guard-feature-core-sdk-only] Error 1
+  ```
+
+  Reverted; `make guard` green.
+- **Guard count:** **seven** on the clean tree (G1–G7). The task's "8 presumably"
+  was off by one — the G5 slot was already spent on FS1, so this leg adds exactly
+  one guard (six → seven), not two.
+- **Verify:** `make guard` green (7 `== guard:` lines); full `make check` green
+  (exit 0) at 30 modules, all seven guards. Only `Makefile` changed;
+  `features/events/{events.go,go.mod}` diff-clean after reverts.
+
+### 2026-07-08 — task-14 (feature README + wiring-tour page) executed
+
+- **What:** `features/events/README.md` written (auth/jobs README shape):
+  trio layout; `/events/*` route table with the prefixability note (C1);
+  Config nil-semantics table (nil Bus = ErrBusRequired; the LOUD
+  StreamMiddleware requirement — absent principal ⇒ every stream 401s,
+  fails closed, A-I1 E5); the §3 two-emit-paths guarantee table reprinted
+  verbatim; per-rail delivery + SSE id: provenance (best-effort =
+  CorrelationID no de-dupe; durable = outbox EventID, consumers de-dupe —
+  gate edit 1); single-poller assumption (+ the non-Broadcaster
+  single-instance warning); MaxConnAge revocation posture (P5 no-disable);
+  the `events` migration-source prerequisite + boot probe; O5 aliasing
+  note; the unguarded-appender-seam note (risk 3). Top-level "Wiring: live
+  updates end-to-end" section: one ascii diagram of the five stops with
+  stop 4 starred as the substitution point; ONE listing assembled verbatim
+  from examples/auth-cms/cmd/server/main.go (the executable twin, named as
+  such — elisions explicitly marked); the stores/turso swap as a labeled
+  snippet (constructor + scaffold-and-own migration step, read against the
+  store README). The bus-fed WakeChannel variant is not shown (the twin
+  uses the plain cap-1 wake channel; nothing to correct per gate edit 3).
+- **Verify (gate edit 4 fresh-eyes):** `make guard` green (incl. the new
+  G7). Stops 1–3 + 5 line-for-line: six key lines grep-verified VERBATIM
+  in the twin (bus construction, Mount literal, NewService call, pool
+  construction, bounded close context, DeletePattern call). Stop 4
+  port-equivalence: outboxmem passed the full storetest suite under -race
+  (task-12's conformance run). The swap-variant listing pasted into a
+  scratch module (GOWORK=off, path replaces) and built once —
+  "SWAP SNIPPET COMPILES": compiling verified, not asserted.
