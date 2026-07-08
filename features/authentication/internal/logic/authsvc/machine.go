@@ -14,29 +14,29 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/id"
+	"github.com/gopernicus/gopernicus/sdk/identity"
 )
 
 // Principal subject-type conventions (AV5 — actor references are
-// (subject_type, subject_id) string pairs, never a registry table). They match
-// the ReBAC Subject vocabulary so a host's authorizer reads them unadapted.
+// (subject_type, subject_id) string pairs, never a registry table). They alias
+// the sdk/identity constants (amendment A-I1), which match the ReBAC Subject
+// vocabulary so a host's authorizer reads them unadapted.
 const (
 	// PrincipalUser is the subject type for a human user, and for a personal
 	// (act-as-user) API key resolved to its human owner.
-	PrincipalUser = "user"
+	PrincipalUser = identity.User
 	// PrincipalServiceAccount is the subject type for a machine identity.
-	PrincipalServiceAccount = "service_account"
+	PrincipalServiceAccount = identity.ServiceAccount
 )
 
 // apiKeyPrefixLen is the length of the displayable key prefix (stored plain).
 const apiKeyPrefixLen = 8
 
 // Principal is the effective caller resolved from a credential (session, API
-// key, or — when a TokenSigner is wired — a bearer JWT). It is the single value
-// type AV5 pins; the public auth package re-exports it as auth.Principal.
-type Principal struct {
-	Type string
-	ID   string
-}
+// key, or — when a TokenSigner is wired — a bearer JWT). It is a type alias for
+// identity.Principal (amendment A-I1): the single value type AV5 pins, which the
+// public auth package re-exports as auth.Principal.
+type Principal = identity.Principal
 
 // MachineEnabled reports whether the API-key / service-account subsystem is
 // wired. The transport registers the machine lifecycle routes only when it is
@@ -181,7 +181,7 @@ func saPrincipal(serviceAccountID string) securityevent.Principal {
 // RequireServiceAccount / RequirePrincipal, if any. It is the cross-feature
 // machine-or-human identity port, alongside CurrentUser.
 func (s *Service) CurrentPrincipal(ctx context.Context) (Principal, bool) {
-	return principalFromContext(ctx)
+	return identity.FromContext(ctx)
 }
 
 // RequireServiceAccount gates next on an API-key bearer credential. A missing
@@ -200,7 +200,7 @@ func (s *Service) RequireServiceAccount(next http.Handler) http.Handler {
 			writeUnauthorized(w)
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(withPrincipal(r.Context(), p)))
+		next.ServeHTTP(w, r.WithContext(identity.WithPrincipal(r.Context(), p)))
 	})
 }
 
@@ -217,7 +217,7 @@ func (s *Service) RequirePrincipal(next http.Handler) http.Handler {
 			writeUnauthorized(w)
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(withPrincipal(r.Context(), p)))
+		next.ServeHTTP(w, r.WithContext(identity.WithPrincipal(r.Context(), p)))
 	})
 }
 
