@@ -54,11 +54,7 @@ func (s *SessionStore) Get(ctx context.Context, token string) (session.Session, 
 
 // Delete removes the session for token; unknown → errs.ErrNotFound.
 func (s *SessionStore) Delete(ctx context.Context, token string) error {
-	res, err := s.db.Exec(ctx, "DELETE FROM sessions WHERE token = ?", token)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
+	n, err := tursodb.ExecAffecting(ctx, s.db, "DELETE FROM sessions WHERE token = ?", token)
 	if err != nil {
 		return err
 	}

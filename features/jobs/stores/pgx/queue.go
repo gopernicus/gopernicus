@@ -182,11 +182,11 @@ func (q *Queue) List(ctx context.Context, f job.ListFilter, req crud.ListRequest
 // execAffecting runs a write that must touch exactly one row, mapping zero rows
 // affected to errs.ErrNotFound. Driver errors are already mapped by the connector.
 func (q *Queue) execAffecting(ctx context.Context, query string, args ...any) error {
-	tag, err := q.db.Exec(ctx, query, args...)
+	n, err := pgxdb.ExecAffecting(ctx, q.db, query, args...)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	if n == 0 {
 		return errs.ErrNotFound
 	}
 	return nil

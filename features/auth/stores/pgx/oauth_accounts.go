@@ -75,11 +75,11 @@ func (s *OAuthAccountStore) ListByUser(ctx context.Context, userID string) ([]oa
 
 // Delete removes userID's link to provider; no such link → errs.ErrNotFound.
 func (s *OAuthAccountStore) Delete(ctx context.Context, userID, provider string) error {
-	res, err := s.db.Exec(ctx, "DELETE FROM oauth_accounts WHERE user_id = $1 AND provider = $2", userID, provider)
+	n, err := pgxdb.ExecAffecting(ctx, s.db, "DELETE FROM oauth_accounts WHERE user_id = $1 AND provider = $2", userID, provider)
 	if err != nil {
 		return err
 	}
-	if res.RowsAffected() == 0 {
+	if n == 0 {
 		return errs.ErrNotFound
 	}
 	return nil

@@ -193,11 +193,7 @@ func (q *Queue) List(ctx context.Context, f job.ListFilter, req crud.ListRequest
 // affected to errs.ErrNotFound and retrying transient busy errors.
 func (q *Queue) execAffecting(ctx context.Context, query string, args ...any) error {
 	return retryBusy(ctx, func() error {
-		res, err := q.db.Exec(ctx, query, args...)
-		if err != nil {
-			return err
-		}
-		n, err := res.RowsAffected()
+		n, err := tursodb.ExecAffecting(ctx, q.db, query, args...)
 		if err != nil {
 			return err
 		}

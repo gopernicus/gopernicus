@@ -57,13 +57,13 @@ func (s *ServiceAccountStore) List(ctx context.Context, req crud.ListRequest) (c
 // created_at unchanged.
 func (s *ServiceAccountStore) Update(ctx context.Context, id string, sa serviceaccount.ServiceAccount) (serviceaccount.ServiceAccount, error) {
 	const q = `UPDATE service_accounts SET name=$1, description=$2, created_by=$3, act_as_user=$4, owner_user_id=$5, updated_at=$6 WHERE id=$7`
-	res, err := s.db.Exec(ctx, q,
+	n, err := pgxdb.ExecAffecting(ctx, s.db, q,
 		sa.Name, sa.Description, sa.CreatedBy, sa.ActAsUser, sa.OwnerUserID, sa.UpdatedAt.UTC(), id,
 	)
 	if err != nil {
 		return serviceaccount.ServiceAccount{}, err
 	}
-	if res.RowsAffected() == 0 {
+	if n == 0 {
 		return serviceaccount.ServiceAccount{}, errs.ErrNotFound
 	}
 	return sa, nil
@@ -71,11 +71,11 @@ func (s *ServiceAccountStore) Update(ctx context.Context, id string, sa servicea
 
 // Delete removes the account for id; unknown → errs.ErrNotFound.
 func (s *ServiceAccountStore) Delete(ctx context.Context, id string) error {
-	res, err := s.db.Exec(ctx, "DELETE FROM service_accounts WHERE id = $1", id)
+	n, err := pgxdb.ExecAffecting(ctx, s.db, "DELETE FROM service_accounts WHERE id = $1", id)
 	if err != nil {
 		return err
 	}
-	if res.RowsAffected() == 0 {
+	if n == 0 {
 		return errs.ErrNotFound
 	}
 	return nil

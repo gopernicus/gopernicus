@@ -103,12 +103,8 @@ func (s *MenuStore) GetItem(ctx context.Context, id string) (menus.MenuItem, err
 // UpdateItem persists changes to an item.
 func (s *MenuStore) UpdateItem(ctx context.Context, id string, it menus.MenuItem) (menus.MenuItem, error) {
 	const q = `UPDATE menu_items SET label=?, url=?, parent_id=?, position=?, updated_at=? WHERE id=?`
-	res, err := s.db.Exec(ctx, q, it.Label, it.URL, it.ParentID, it.Position,
+	n, err := tursodb.ExecAffecting(ctx, s.db, q, it.Label, it.URL, it.ParentID, it.Position,
 		tursodb.FormatTime(it.UpdatedAt), id)
-	if err != nil {
-		return menus.MenuItem{}, err
-	}
-	n, err := res.RowsAffected()
 	if err != nil {
 		return menus.MenuItem{}, err
 	}

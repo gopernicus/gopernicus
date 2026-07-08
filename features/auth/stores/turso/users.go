@@ -53,13 +53,9 @@ func (s *UserStore) GetByEmail(ctx context.Context, email string) (user.User, er
 // leaves id and created_at unchanged.
 func (s *UserStore) Update(ctx context.Context, id string, u user.User) (user.User, error) {
 	const q = `UPDATE users SET email=?, display_name=?, email_verified=?, updated_at=? WHERE id=?`
-	res, err := s.db.Exec(ctx, q,
+	n, err := tursodb.ExecAffecting(ctx, s.db, q,
 		u.Email, u.DisplayName, tursodb.BoolToInt(u.EmailVerified), tursodb.FormatTime(u.UpdatedAt), id,
 	)
-	if err != nil {
-		return user.User{}, err
-	}
-	n, err := res.RowsAffected()
 	if err != nil {
 		return user.User{}, err
 	}

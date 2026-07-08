@@ -104,12 +104,12 @@ func (s *MenuStore) GetItem(ctx context.Context, id string) (menus.MenuItem, err
 // UpdateItem persists changes to an item.
 func (s *MenuStore) UpdateItem(ctx context.Context, id string, it menus.MenuItem) (menus.MenuItem, error) {
 	const q = `UPDATE menu_items SET label=$1, url=$2, parent_id=$3, position=$4, updated_at=$5 WHERE id=$6`
-	res, err := s.db.Exec(ctx, q, it.Label, it.URL, it.ParentID, it.Position,
+	n, err := pgxdb.ExecAffecting(ctx, s.db, q, it.Label, it.URL, it.ParentID, it.Position,
 		it.UpdatedAt.UTC(), id)
 	if err != nil {
 		return menus.MenuItem{}, err
 	}
-	if res.RowsAffected() == 0 {
+	if n == 0 {
 		return menus.MenuItem{}, crud.ErrNotFound
 	}
 	return it, nil

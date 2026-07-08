@@ -52,15 +52,11 @@ func (s *EntryStore) Create(ctx context.Context, e content.Entry) (content.Entry
 func (s *EntryStore) Update(ctx context.Context, id string, e content.Entry) (content.Entry, error) {
 	err := s.db.InTx(ctx, func(tx *tursodb.Tx) error {
 		const q = `UPDATE entries SET type=?, slug=?, title=?, status=?, body=?, excerpt=?, author=?, template=?, parent_id=?, menu_order=?, published_at=?, updated_at=? WHERE id=?`
-		res, err := tx.Exec(ctx, q,
+		n, err := tursodb.ExecAffecting(ctx, tx, q,
 			e.Type, e.Slug, e.Title, string(e.Status), e.Body, e.Excerpt, e.Author,
 			e.Template, e.ParentID, e.MenuOrder, tursodb.NullTimePtr(e.PublishedAt),
 			tursodb.FormatTime(e.UpdatedAt), id,
 		)
-		if err != nil {
-			return err
-		}
-		n, err := res.RowsAffected()
 		if err != nil {
 			return err
 		}
@@ -92,13 +88,9 @@ func (s *EntryStore) GetBySlug(ctx context.Context, typ, slug string) (content.E
 
 // Delete removes the entry; its fields and terms cascade.
 func (s *EntryStore) Delete(ctx context.Context, id string) error {
-	res, err := s.db.Exec(ctx, "DELETE FROM entries WHERE id = ?", id)
+	n, err := tursodb.ExecAffecting(ctx, s.db, "DELETE FROM entries WHERE id = ?", id)
 	if err != nil {
 		return tursodb.MapError(err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
 	}
 	if n == 0 {
 		return crud.ErrNotFound
