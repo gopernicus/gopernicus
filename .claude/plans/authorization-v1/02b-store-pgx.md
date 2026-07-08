@@ -15,21 +15,27 @@ boot probe, README, env-gated conformance) + the pgxdb D2–D6 helpers.
 - Module 33 registered (go.work, `MODULES`, `STORE_MODULES` 9 → 10, a
   `test-stores` pgx leg); `make check` green at **33 modules**, hermetic
   (loud skip without `POSTGRES_TEST_DSN`).
-- Migration filenames/versions **identical to Z2a's tree**; source
+- Migration filenames/versions **identical to Z2a's tree**
+  (`0001_iam_relationships.sql` + `0002_iam_roles.sql`); source
   `"authorization"`; PostgreSQL dialect (TIMESTAMPTZ where timestamps
   apply; if Q4 = KEEP, metadata as **JSONB + a GIN index** — the
   documented divergence vs turso's TEXT, same filename).
-- Full 14-method `relationship.Storer`; recursive-CTE expansion +
+- BOTH kinds' repositories: the full 14-method `relationship.Storer` —
+  recursive-CTE expansion +
   descendant lookup, cycle-safe (`WITH RECURSIVE` + UNION dedup),
   honoring **the same traversal bound as the engine's
   `MaxTraversalDepth`, the memstore, and Z2a** (review-gate fold, lead
-  refinement 8); counts direct-only.
+  refinement 8); counts direct-only — AND the 5-method `role.Storer`
+  (plain lookups, no recursion).
 - Constructor pinned (review-gate fold, steward minor 5; cut refinement
-  11): `Repositories(db) (authorization.Repositories, error)` with the
-  boot-time probe INSIDE it (charter checklist item 5; the jobs
+  11): `Repositories(db) (authorization.Repositories, error)` returning
+  BOTH kinds wired, with the
+  boot-time probes of both tables INSIDE it — the error names the
+  specific missing table (charter checklist item 5; the jobs
   turso.go:29 precedent), plus `ExportMigrations(dst)`.
 - Live leg: the full Z1 storetest — **all five named adversarial
-  sub-runners green against dockered postgres:17** — recorded for the
+  sub-runners AND the `Roles/*` family green against dockered
+  postgres:17** — recorded for the
   milestone-close NOTES artifact. With Z2a, both store trees pass ONE
   suite (DP1 parity).
 
@@ -48,33 +54,56 @@ boot probe, README, env-gated conformance) + the pgxdb D2–D6 helpers.
 - **model:** opus
 - **files:** [features/authorization/stores/pgx/go.mod,
   features/authorization/stores/pgx/postgres.go,
-  features/authorization/stores/pgx/migrations/0001_rebac.sql,
+  features/authorization/stores/pgx/migrations/0001_iam_relationships.sql,
+  features/authorization/stores/pgx/migrations/0002_iam_roles.sql,
   features/authorization/stores/pgx/README.md,
   go.work, Makefile]
 - **verify:** `cd features/authorization/stores/pgx && go build ./... && go test ./... && go vet ./...` (hermetic loud skip) then `make check` (33 modules) and `make guard`
 - **description:** The pgx pair per `features/events/stores/pgx`
   conventions (package `pgx`, `pgxdb` connector alias). Migration
   filenames **byte-identical to Z2a's set** (the kvstore-consolidation
-  vocabulary rule); PostgreSQL dialect: same tables/indexes,
+  vocabulary rule); PostgreSQL dialect: same tables/indexes for
+  `iam_relationships` AND `iam_roles` — the roles scope pair **pinned
+  explicitly `resource_type TEXT NOT NULL DEFAULT ''` +
+  `resource_id TEXT NOT NULL DEFAULT ''`** (re-review lead major 1: a
+  nullable scope makes two (subj, role, NULL, NULL) rows DISTINCT under
+  PostgreSQL's unique-index NULL semantics → duplicate global grants),
+  unique 5-tuple index (refinement 12),
   TIMESTAMPTZ, and — only if Q4 = KEEP — metadata as JSONB with a named
   GIN index (log the JSONB choice explicitly; the events-store
   JSON-not-JSONB precedent was for an opaque payload column — here the
   GIN index is the ratified point of the divergence, design §2.5).
   Constructor is the pinned `Repositories(db)
-  (authorization.Repositories, error)` form with the boot-time probe
-  inside (steward minor 5); README with the scaffold-and-own
-  prerequisite + the divergence note. Register module 33: go.work,
+  (authorization.Repositories, error)` form returning BOTH kinds, with
+  the boot-time probes of both tables
+  inside (steward minor 5; error names the missing table); README with
+  the scaffold-and-own
+  prerequisite + the divergence note + the kinds-are-port-optional/
+  schema-is-wholesale note — **including the roles-only adopter line
+  (re-review note 15): a roles-only host still applies the FULL
+  `"authorization"` source, `iam_relationships` included; both boot
+  probes expect both tables**. Register module 33: go.work,
   `MODULES`, `STORE_MODULES`, a `test-stores` pgx leg; header count
   32 → 33.
 
-### task-2: the `Storer` implementation + conformance
+### task-2: both kinds' `Storer` implementations + conformance
 
 - **depends_on:** [task-1]
 - **model:** opus
 - **files:** [features/authorization/stores/pgx/relationships.go,
+  features/authorization/stores/pgx/roles.go,
   features/authorization/stores/pgx/conformance_test.go]
-- **verify:** `cd features/authorization/stores/pgx && go build ./... && go test ./... && go vet ./...` (hermetic) then `make check` and `make guard`; live leg (executor-local): `docker run --rm -d -p 55432:5432 -e POSTGRES_PASSWORD=postgres postgres:17` then `POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:55432/postgres?sslmode=disable' go test ./...` — all storetest sub-runners incl. the five `Adversarial/*` names PASS; container removed, port freed; record for the NOTES artifact
-- **description:** All 14 methods over `pgxdb` with its D2–D6 helpers,
+- **verify:** `cd features/authorization/stores/pgx && go build ./... && go test ./... && go vet ./...` (hermetic) then `make check` and `make guard`; live leg (executor-local): `docker run --rm -d -p 55432:5432 -e POSTGRES_PASSWORD=postgres postgres:17` then `POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:55432/postgres?sslmode=disable' go test ./...` — all storetest sub-runners incl. the five `Adversarial/*` names AND the `Roles/*` family PASS; container removed, port freed; record for the NOTES artifact
+- **description:** All 14 relationship methods (`relationships.go`) and
+  the 5 role methods (`roles.go` — idempotent targeted
+  `ON CONFLICT (subject_type, subject_id, role, resource_type,
+  resource_id) DO NOTHING`
+  Assign (matching Z2a's targeted form — re-review lead major 2; a NOT
+  NULL breach still raises), store-stamped `created_at` via the
+  connector timestamp helpers with a duplicate retaining the original
+  (lead minor 9), `ExecAffecting` Unassign, exact-match `HasExactRole`
+  (lead minor 8), two keyset
+  listings; no recursion) over `pgxdb` with its D2–D6 helpers,
   mirroring Z2a's SQL semantics in the PostgreSQL dialect: recursive
   CTEs for `CheckRelationWithGroupExpansion` +
   `LookupDescendantResourceIDs` (cycle-safe; PostgreSQL and SQLite

@@ -20,6 +20,14 @@ superseding the "other sessions" wording (**CONFIRMED by jrazmi at cut
 ratification, 2026-07-07**); all other plan-cut amendments were
 operational and landed in `.claude/plans/auth-v2/`. The cut itself was
 **cut-ratified 2026-07-07 (jrazmi)**.
+**AMENDED 2026-07-08 (jrazmi, in-session owner direction):** the §13
+Z1–Z5 section is being executed via `.claude/plans/authorization-v1/`
+**as amended by the 2026-07-08 multi-kind owner direction** — the feature
+is the IAM/authorization domain with independently-wireable kinds; tables
+take the `iam_` prefix (`iam_relationships`, NEW `iam_roles`); a roles
+kind is added to v1 scope; the policy kind is a designed, named seam
+deferred with a demand trigger. The plan's 00-overview carries the
+verbatim direction + both Q&A rulings.
 Date: 2026-07-07
 Governing directive: NOTES.md 2026-07-06 (final entry) — **auth-v2 ships
 authorization, but as a port-shaped capability: a first-party ReBAC

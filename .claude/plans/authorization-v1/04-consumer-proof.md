@@ -1,4 +1,4 @@
-# Phase Z4 — consumer seams + proof host (the three postures, demonstrated)
+# Phase Z4 — consumer seams + proof host (the three postures + both kinds, demonstrated)
 
 Status: **DRAFT — awaiting jrazmi ratification (cut 2026-07-08, authorized
 as a planning-only leg)**
@@ -14,6 +14,11 @@ two demonstrations**. Host shape per **Q2** (overview) — this file is
 written to Q2's recommended Option A (extend `examples/auth-cms`;
 middle-posture demonstration as a two-commit protocol); if jrazmi picks
 Option B, task-1 is re-cut as a new-example task before execution.
+**Multi-kind (owner direction 2026-07-08):** the flagship host wires
+BOTH kinds; this phase gains the roles-kind leg (task-4, protocol steps
+10–11). The middle-posture demonstration is unchanged — it is now also
+the story for "helpers for other kinds": a host satisfies any Check seam
+with its own closure, no IAM in its graph.
 
 **The consumer seam's REAL shape (drift 4 — adapt to this, not the
 design's sketch):**
@@ -56,6 +61,10 @@ method form**: `svc, err := name.NewService(repos, cfg)` then
   (review-gate fold, major 1: platform-admin is DATA, a
   `platform:main#admin@…` tuple over a `platform` resource type in the
   schema, never a Config field) — an admin (`Unrestricted`).
+- **The roles-kind leg (owner direction):** the flagship host wires BOTH
+  kinds (`Repositories{Relationships: …, Roles: …}`, both
+  memstore-backed); a role assignment → a role-gated host check allows;
+  without it, denies — driven live (task-4, protocol steps 10–11).
 - The full real-interaction protocol below passed and recorded verbatim
   (commands, codes, frames). **Green tests alone do not close this
   phase.**
@@ -125,15 +134,19 @@ method form**: `svc, err := name.NewService(repos, cfg)` then
   legible — the wiring page will reprint this; add a `platform` resource
   type + seed the `platform:main#admin@user:<seed-admin>` tuple if the
   step-8 Unrestricted leg is wanted — platform-admin is data, never
-  Config). Note on `checkSelf` (review-gate fold, lead refinement 9):
+  Config). The model governs the relationship kind only — the roles kind
+  (task-4) needs none. Note on `checkSelf` (review-gate fold, lead
+  refinement 9):
   the demo's `view` permission on `project` sits outside checkSelf's
   scope (self-grants fire only for subject == resource on
   `user`/`service_account` types with read/update/delete), so no demo
   assertion can be silently satisfied by a self-grant — stated here so
-  the executor doesn't trip on it. (3) Build the engine:
+  the executor doesn't trip on it. (3) Build the service, BOTH kinds
+  wired (owner direction):
   `authorizer, err := authorization.NewService(
-  authorization.Repositories{Relationships: memstore.New()},
-  authorization.Config{Model: model})` and
+  authorization.Repositories{Relationships: mem, Roles: mem},
+  authorization.Config{Model: model})` (adjust to memstore's landed
+  constructor shape) and
   `authorizer.Register(mount)` (logs only — no routes; the FS2 shape on
   display). (4) **Swap the toy Granter** (design §6's promised
   completion): `auth.Granter` is a one-method INTERFACE
@@ -186,6 +199,37 @@ method form**: `svc, err := name.NewService(repos, cfg)` then
   §2.4 line: enumeration is flagship-specific API, never a consumer
   seam.
 
+### task-4: the roles-kind leg (owner direction)
+
+- **depends_on:** [task-2]
+- **model:** opus
+- **files:** [examples/auth-cms/cmd/server/demo.go,
+  examples/auth-cms/cmd/server/main.go,
+  examples/auth-cms/README.md]
+- **verify:** `cd examples/auth-cms && go build ./... && go test ./... && go vet ./...` then `make check`; run-and-look: protocol steps 10–11
+- **description:** Prove the roles kind end to end, host wiring only —
+  deliberately DISTINCT from the relationship demo (two kinds, two
+  checks, no entanglement): a host-local role-gated route (e.g.
+  `GET /demo/audit`) whose gate reads `identity.FromContext` and calls
+  `authorizer.HasRole(ctx, authorization.Subject{Type: p.Type, ID:
+  p.ID}, "auditor", demoResourceType, demoResourceID)` (adjust to Z1's
+  landed signature) — 403 on false, 200 on true; plus a minimal
+  assignment path — either a seed-admin-gated host route
+  (`POST /demo/roles/assign`, the `/outbox-demo` precedent) or boot-time
+  seeding via `authorizer.AssignRole`; pick whichever keeps `main`
+  legible, log the choice — **plus an unassign path** (the revoke leg,
+  re-review lead minor 11) and **one driven
+  `authorizer.ListRoleAssignmentsByResource` HTTP call** (a demo
+  read-back route or an extension of `/demo/audit`'s response —
+  symmetry with demonstration (b); the ListByResource direct-scope-only
+  pin, re-review lead major 3, makes the listing worth exercising and
+  its blind spot worth SEEING live). If Q5 ratified the global fallback,
+  the protocol also drives it once (a GLOBAL "auditor" assignment
+  satisfies
+  the scoped gate). README: one paragraph — the roles kind is
+  independently wireable; a roles-only host would wire
+  `Repositories{Roles: …}` alone and never construct a model.
+
 ## The real-interaction protocol (recorded verbatim in the execution log — commands, ports, exact codes, observed frames)
 
 Boot: `cd examples/auth-cms && go run ./cmd/server` (:8082 per README
@@ -231,6 +275,25 @@ user).
 9. Ctrl-C → the documented shutdown order (HTTP → poller pool if the
    outbox variant is on → bus.Close), clean exit, port free.
 
+**Roles-kind legs (task-4 — owner direction):**
+
+10. As user B (no role): `GET /demo/audit` → 403. Assign the `auditor`
+    role to B on `project/demo` (the task-4 assignment path); repeat →
+    200. **Assign → allows; without → denies.** Then the driven listing:
+    `ListRoleAssignmentsByResource(project/demo)` shows B's scoped
+    assignment. **Revoke leg (re-review lead minor 11):** scoped
+    `UnassignRole` for B → `GET /demo/audit` → 403 again. Note while
+    driving it: a scoped unassign revokes only the scoped grant — a
+    GLOBAL grant, if one existed, would keep the gate open (the
+    lingering-global-grant footgun; record the observation).
+11. As user C (never assigned): `GET /demo/audit` → 403 throughout. If
+    Q5 ratified the global fallback: assign C the GLOBAL `auditor` role
+    → the scoped gate now 200s for C (the fallback driven live) — and
+    the `ListRoleAssignmentsByResource(project/demo)` read-back does
+    NOT show C (the lead-major-3 enumeration-vs-decision divergence,
+    observed live and recorded); unassign
+    → 403 again. Record exact codes.
+
 ## Acceptance
 
 ```sh
@@ -241,7 +304,8 @@ make guard     # G7 continuously proves rule 6 across the new edges
 
 Rule-6 greps both directions (import-anchored) — empty; the commit-1
 `GOWORK=off go list -m all` capture present in the execution log; the protocol
-transcript complete. The two mandated demonstrations each traceable to a
+transcript complete (steps 1–11, roles leg included). The two mandated
+demonstrations each traceable to a
 commit hash in the log.
 
 ## Real-interaction check

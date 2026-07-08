@@ -1,23 +1,39 @@
-# Phase Z1 — `features/authorization` core (engine, DSL, socket, memstore, storetest)
+# Phase Z1 — `features/authorization` core: BOTH kinds (rims, engine, roles service, socket, memstore, storetest)
 
 Status: **DRAFT — awaiting jrazmi ratification (cut 2026-07-08, authorized
 as a planning-only leg)**
 Executor model: opus
 Depends on: — (first phase)
+Size: **XL** (grown from L at the 2026-07-08 multi-kind owner direction —
+resized honestly). **Pre-declared split boundary (multi-kind re-review
+fold, note 12):** if the relationship engine consumes the budget, Z1
+lands relationship-only — tasks 1/3/4 + the relationship socket methods
++ the memstore/adversarial slices — and **Z1b** is the roles slice —
+tasks 2/5 + the roles socket methods + the roles memstore/storetest
+slices; the socket (task-6) is the join. Flag and split rather than
+rush.
 Design doc: `.claude/plans/roadmap/auth-v2-feature-design.md` §2 (all of
 it — the ruling cashed, the anatomy, the port split, storage semantics),
-§9 (crud re-typing), §13 Z1, §14 (checklist trace). Module 31 after
-task-1.
+§9 (crud re-typing), §13 Z1, §14 (checklist trace) — **as amended by the
+2026-07-08 multi-kind owner direction (00-overview: iam_* tables, the
+roles kind, the deferred policy seam)**. Module 31 after task-1.
 
-Salvage source (reference-only; design ported, code re-typed fresh — the
-sdk-parity bar; never copy import paths):
+The feature this phase builds is the **IAM/authorization domain with two
+independently-wireable kinds**: the relationship kind (the ReBAC engine
+salvage — table `iam_relationships`) and the roles kind (NEW, minimal —
+table `iam_roles`). ReBAC is one kind, not the feature's identity.
+
+Salvage source for the RELATIONSHIP kind only (reference-only; design
+ported, code re-typed fresh — the sdk-parity bar; never copy import
+paths):
 `gopernicus-original/core/auth/authorization/{authorizer,model,builder,schema_validator,membership,explain,cache_store,errors}.go`
 + `authorization_test.go` (the ~2,650-line behavioral reference).
 The original's `Storer` is at `model.go:246` — **14 methods** (the
 design's §2.5 list is abbreviated; salvage the full surface — overview
 staleness finding 1). The original's Config is `{MaxTraversalDepth int}`
 ONLY (`authorizer.go:16`); platform-admin is a DATA TUPLE, not a Config
-field (review-gate fold, major 1).
+field (review-gate fold, major 1). The ROLES kind has **no salvage
+source** — it is new, deliberately minimal (overview cut refinement 12).
 
 ## DoD
 
@@ -30,12 +46,18 @@ field (review-gate fold, major 1).
   filters, listing row types, and the full 14-method `Storer` port —
   listing methods **crud-re-typed** (`sdk/crud.ListRequest`/`Page[T]`,
   design §9; the original's `fop` vocabulary does not survive).
+- `domain/role` public rim (NEW, refinement 12 as amended at the
+  multi-kind re-review fold): `Assignment` entity +
+  the 5-method `role.Storer` (`Assign`, `Unassign`, **`HasExactRole`**,
+  the two listings) — plain lookups, NO graph walk; the
+  `ListByResource` direct-scope-only pin and the store-stamped
+  `CreatedAt` provenance in the port docs.
 - Model DSL + schema validator: `NewSchema`/`ResourceSchema`/
   `PermissionRule` (`AnyOf` unions, `Through` traversals); unknown
   relations, bad through-targets, and schema cycles rejected loudly at
   `NewService` time.
-- The engine (`internal/logic/authorizersvc`): Check (incl. the
-  `checkSelf` self-grant rule), through-traversal, cycle guards, the
+- The relationship engine (`internal/logic/authorizersvc`): Check (incl.
+  the `checkSelf` self-grant rule), through-traversal, cycle guards, the
   `MaxTraversalDepth` bound, CheckBatch, FilterAuthorized,
   LookupResources
   (`LookupResult{Unrestricted, IDs}` — non-nil IDs when restricted),
@@ -44,30 +66,39 @@ field (review-gate fold, major 1).
   GetPermissionsForRelation, platform-admin bypass via the
   `platform:main#admin` DATA TUPLE (user AND service_account subjects —
   no Config field).
-- FS2 socket (cut refinements 1/6): `Repositories`/`Config`/
-  `NewService(repos, cfg) (*Service, error)` (loud validation) /
-  `(*Service) Register(mount) error` (logger-only, no routes;
-  `/authorization/*` claimed-unregistered); engine vocabulary aliased at
-  root (`Subject`, `CheckRequest`, `CheckResult`, `LookupResult`,
-  `Schema`, …).
-- `memstore/` public in-core (R3 allowance) — Go graph-walk group
-  expansion, mutex-backed, honest (unique-tuple enforcement, direct-only
-  counts).
+- The roles service (`internal/logic/rolesvc`, NEW): assign/unassign
+  delegation + the service-level scope rule (global fallback per Q5's
+  ratified answer); plain `(subjectType, subjectID)` pair signatures,
+  never importing the relationship engine (re-review steward minor 6).
+- Multi-kind FS2 socket (cut refinements 1/6/12/13): per-kind nil-safe
+  `Repositories` fields, per-kind loud validation, per-kind Service
+  method families, NO composed Check facade; `Register` logger-only,
+  no routes; `/authorization/*` claimed-unregistered; engine vocabulary
+  aliased at root (`Subject`, `Resource`, `CheckRequest`, `CheckResult`,
+  `LookupResult`, `Schema`, …).
+- `memstore/` public in-core (R3 allowance) — BOTH kinds: Go graph-walk
+  group expansion + plain role maps, mutex-backed, honest (unique
+  enforcement, direct-only counts).
 - `storetest/` two-layer suite (cut refinement 4) with the **five named
-  adversarial sub-runners** green against memstore hermetically inside
-  `make check`.
+  adversarial sub-runners** AND the `Roles/*` family, green against
+  memstore hermetically inside `make check`.
 - Rule-6 greps empty both directions; `make guard` green (G7 auto-covers
   the new feature).
 
 ## Preconditions
 
 - `make check` green on the current tree (30 modules, 7 guards).
-- Read the design §2 in full, then the salvage files above — especially
-  `model.go` (Storer + DSL + LookupResult doc contracts) and
-  `membership.go` (last-owner semantics) — before typing anything.
+- Read the design §2 in full, the 00-overview owner-direction section,
+  then the salvage files above — especially `model.go` (Storer + DSL +
+  LookupResult doc contracts) and `membership.go` (last-owner semantics)
+  — before typing anything.
 - Read `features/jobs/jobs.go` (FS2 socket + routeless Register +
   public `memstore/` precedents) and
-  `features/authentication/authentication.go` (alias-at-root precedent).
+  `features/authentication/authentication.go` (alias-at-root precedent +
+  the deny-by-absence subsystem validation shape this socket's per-kind
+  wiring mirrors).
+- Q5's answer known (role scope semantics — this phase implements it in
+  task-5 and pins it in task-8's `Roles/GlobalFallback` case).
 
 ## Tasks
 
@@ -98,7 +129,9 @@ field (review-gate fold, major 1).
   design §9), and the three LookupResources primitives
   (`LookupResourceIDs`, `LookupResourceIDsByRelationTarget`,
   `LookupDescendantResourceIDs` — doc: recursive transitive walk,
-  cycle-safe). Port doc comments are the spec storetest executes
+  cycle-safe). Package doc names the backing table `iam_relationships`
+  (owner direction — the `rebac_` name does not survive). Port doc
+  comments are the spec storetest executes
   (duplicate-tuple semantics pinned against the original's SQL — log
   what the original does: idempotent insert vs conflict — and state it
   on `CreateRelationships`). Rim test: compile-check stub pinning the
@@ -111,7 +144,58 @@ field (review-gate fold, major 1).
   defer-to-docs-phase staging: the store phases must not be a
   machine-unchecked window for the core).
 
-### task-2: model DSL + schema validator
+### task-2: `domain/role` rim — the roles kind's port (NEW)
+
+- **depends_on:** [task-1]
+- **model:** opus
+- **files:** [features/authorization/domain/role/role.go,
+  features/authorization/domain/role/role_test.go]
+- **verify:** `cd features/authorization && go build ./... && go test ./... && go vet ./...` then `make guard`
+- **description:** The roles kind's public rim, exactly as pinned in
+  overview refinement 12 (as amended at the multi-kind re-review fold) —
+  minimal by direction, no salvage:
+  `Assignment{SubjectType, SubjectID, Role, ResourceType, ResourceID,
+  CreatedAt}` where the empty `("", "")` resource pair means a GLOBAL
+  assignment (**empty strings, never NULL** — the DDLs pin the scope
+  columns `NOT NULL DEFAULT ''` so the pair participates
+  in the unique index under both dialects; doc comment says so —
+  re-review lead major 1). **`CreatedAt` provenance (lead minor 9,
+  in the port doc):** the STORE stamps it via the connector timestamp
+  helpers; a duplicate `Assign` retains the ORIGINAL timestamp (ON
+  CONFLICT DO NOTHING semantics).
+  `role.Storer` — **5 methods, plain lookups, NO graph walk**:
+  `Assign(ctx, Assignment) error` (idempotent — duplicate assignment is
+  a no-op nil), `Unassign(ctx, subjectType, subjectID, role,
+  resourceType, resourceID) error` (idempotent — zero rows deleted is
+  nil, the `DeleteByUser` bulk precedent), **`HasExactRole`**`(ctx,
+  subjectType,
+  subjectID, role, resourceType, resourceID) (bool, error)` (**exact
+  scope match at the store** — renamed from `HasRole` at the re-review
+  fold, lead minor 8, so store and Service never share one name across
+  two contracts; the doc comment states the exact-vs-fallback split and
+  points at `Service.HasRole` for the Q5 rule, which lives in the
+  service, task-5), `ListBySubject(ctx, subjectType, subjectID,
+  crud.ListRequest) (crud.Page[Assignment], error)` and
+  `ListByResource(ctx, resourceType, resourceID, crud.ListRequest)
+  (crud.Page[Assignment], error)` (keyset, same cursor/tiebreak
+  conventions as the relationship listing). **`ListByResource` doc pin
+  (re-review lead major 3, mirroring the ratified
+  CountByResourceAndRelation pin):** it returns direct-scope assignments
+  ONLY and never surfaces globally-granted subjects that
+  `Service.HasRole` would allow — an accepted-and-documented v1
+  limitation; "effective grants for a resource" enumeration is a named
+  deferred item. The port takes plain same-typed strings —
+  **deliberate** (lead note 16, decided keep-strings): it mirrors the
+  relationship `Storer`'s strings-only rim discipline and avoids a
+  second scope vocabulary; the argument-swap risk is covered by the
+  task-8 isolation cases. **Roles are opaque strings**
+  the host interprets (the invitation `Relation` opacity precedent — no
+  role registry/vocabulary in v1; a role model is policy-seam-adjacent;
+  package doc says so). Package doc names the backing table `iam_roles`.
+  Port doc comments are the spec the `Roles/*` storetest family
+  executes. Rim test: compile-check stub pinning the signatures.
+
+### task-3: model DSL + schema validator (relationship kind)
 
 - **depends_on:** [task-1]
 - **model:** opus
@@ -129,15 +213,17 @@ field (review-gate fold, major 1).
   and cycles — loud, enumerated errors (salvage the original's error
   vocabulary from `errors.go`, re-typed). Adding a resource type is a
   code change with zero migration — say so in the package doc (the
-  EAV-spine philosophy applied to permissions). Tests re-typed from the
+  EAV-spine philosophy applied to permissions). The model governs the
+  RELATIONSHIP kind only — the roles kind has no model (opaque strings,
+  task-2); say so. Tests re-typed from the
   original's model/validator coverage: valid schema round-trip, each
   rejection class, the builder helpers. Keep or drop the original's
   schema-merge `Remove()` affordance faithfully — log the call either
   way.
 
-### task-3: the engine
+### task-4: the relationship engine
 
-- **depends_on:** [task-2]
+- **depends_on:** [task-3]
 - **model:** opus
 - **files:** [features/authorization/internal/logic/authorizersvc/service.go,
   features/authorization/internal/logic/authorizersvc/membership.go,
@@ -149,7 +235,8 @@ field (review-gate fold, major 1).
 - **description:** Salvage the evaluation engine against the rim's
   `Storer`: `Check` (direct relation → group expansion → `Through`
   traversal, with cycle guards on traversal and the
-  **`MaxTraversalDepth` bound** — Config's only field, default 10,
+  **`MaxTraversalDepth` bound** — relationship-kind-scoped Config,
+  default 10,
   `<= 0` ⇒ 10; the SHARED bound memstore and both SQL CTEs must honor
   identically, review-gate fold lead refinement 8), **`checkSelf`
   explicitly in scope** (authorizer.go:~250, lead refinement 9:
@@ -178,62 +265,115 @@ field (review-gate fold, major 1).
   build-or-skip (never acceptance criteria). Tests: re-type the
   behavioral core of the original's 2,650-line suite for every method
   above against an in-package fake store (the memstore arrives in
-  task-5; the adversarial cases are storetest's in task-6 — do not
+  task-7; the adversarial cases are storetest's in task-8 — do not
   duplicate them here beyond what unit-level coverage needs), race-run.
 
-### task-4: the FS2 socket + root aliases
+### task-5: the roles service (`internal/logic/rolesvc`, NEW)
 
-- **depends_on:** [task-3]
+- **depends_on:** [task-2]
+- **model:** opus
+- **files:** [features/authorization/internal/logic/rolesvc/service.go,
+  features/authorization/internal/logic/rolesvc/service_test.go]
+- **verify:** `cd features/authorization && go build ./... && go test -race ./... && go vet ./...` then `make guard`
+- **description:** The roles kind's sealed service over `role.Storer` —
+  deliberately thin, with **plain `(subjectType, subjectID string)` pair
+  signatures throughout; it NEVER imports the relationship engine**
+  (re-review steward minor 6 — the root socket alone adapts `Subject` →
+  pair, task-6): `AssignRole`/`UnassignRole` delegation (input
+  validation: empty subject/role → loud error; a scoped assignment
+  requires BOTH resource fields or NEITHER — a half-scoped assignment is
+  a loud error), the two listing delegations, and the one piece of real
+  logic: `HasRole(ctx, subjectType, subjectID, role, resourceType,
+  resourceID)`
+  implementing **Q5's ratified scope rule** (recommended: exact-scoped
+  `HasExactRole` lookup first, then the global `("", "")` fallback — one
+  documented
+  rule, two store lookups worst case, no graph walk; if Q5 ratifies
+  no-fallback, this is a single exact lookup and the doc says callers
+  compose). Fail-closed: any store error returns `(false, err)`. Tests
+  against an in-package fake: idempotence pass-through, half-scoped
+  rejection, the scope rule both ways (scoped hit, global-fallback hit,
+  miss), error propagation, race-run.
+
+### task-6: the multi-kind FS2 socket + root aliases
+
+- **depends_on:** [task-4, task-5]
 - **model:** opus
 - **files:** [features/authorization/authorization.go,
   features/authorization/authorization_test.go]
 - **verify:** `cd features/authorization && go build ./... && go test ./... && go vet ./...` then `make check` and `make guard`, plus the rule-6 grep at this boundary-creating moment: `! grep -rn --include='*.go' -E '"github.com/gopernicus/gopernicus/features/(authentication|cms|events|jobs)' features/authorization/`
-- **description:** The host-facing surface (cut refinements 1/6/7, as
-  corrected at the review-gate fold):
-  `Repositories{Relationships relationship.Storer}` (required —
-  exported `ErrRelationshipsRequired`), `Config{Model Schema,
-  MaxTraversalDepth int}` (`ErrModelRequired`; schema validated at
-  construction — invalid model = the validator's loud error;
+- **description:** The host-facing surface (cut refinements 1/6/7/12/13,
+  as corrected at the review-gate fold and amended by the owner
+  direction). **Multi-kind wiring:**
+  `Repositories{Relationships relationship.Storer, Roles role.Storer}` —
+  each kind nil-safe; nil = that kind OFF structurally (the auth
+  Providers/Granter deny-by-absence precedent). `Config{Model Schema,
+  MaxTraversalDepth int}` — both relationship-kind-scoped;
   `MaxTraversalDepth <= 0` ⇒ default 10, never an error; **no
-  `PlatformAdmin` field** — platform-admin is the data tuple, task-3),
-  `NewService(repos, cfg) (*Service, error)`, `(*Service)
+  `PlatformAdmin` field** — platform-admin is the data tuple, task-4.
+  Validation at `NewService(repos, cfg) (*Service, error)`: zero kinds
+  wired → loud exported `ErrNoKindConfigured`; `Relationships` wired ⇔
+  `Model` set — either without the other is a loud partial-wiring error
+  (exported, the `ErrOAuthReposRequired` precedent); invalid model =
+  the validator's loud error. Calling an unwired kind's methods returns
+  a loud exported per-kind sentinel — **`ErrRelationshipsNotConfigured`
+  / `ErrRolesNotConfigured`** (re-review lead minor 10: errs discipline,
+  no string matching) — fail closed, never a silent
+  false/allow; document it on every method family. **The roles-kind
+  socket methods adapt `Subject` → the plain pair for `rolesvc` and
+  REJECT a `Subject` with non-empty `Relation` loudly** (re-review
+  steward minor 6, decided fail-closed: userset subjects are a
+  relationship-kind concept — silently dropping the field would treat
+  `group#member` as the group itself, a wrong-grant hazard). `(*Service)
   Register(m feature.Mount) error` — **registers no routes** (jobs
   precedent), logs one line via `m.Logger` when non-nil; the
   `/authorization/*` namespace is claimed for a future admin surface
-  (package doc says so). `Service` promotes the full §2.3 method set by
-  thin delegation: Check, CheckBatch, FilterAuthorized, LookupResources,
+  (package doc says so). **Per-kind method families, NO composed Check
+  facade (refinement 13** — a host composes kinds in its own closure;
+  say so in the package doc): relationship kind — Check, CheckBatch,
+  FilterAuthorized, LookupResources,
   CreateRelationships, DeleteRelationship, DeleteResourceRelationships,
   DeleteByResourceAndSubject, RemoveMember, ValidateRelation,
   ValidateRelationships, GetSchema, GetPermissionsForRelation,
-  ListRelationshipsBySubject, ListRelationshipsByResource. Root aliases
+  ListRelationshipsBySubject, ListRelationshipsByResource (promoted from
+  `authorizersvc`); roles kind — AssignRole, UnassignRole, HasRole,
+  ListRoleAssignmentsBySubject, ListRoleAssignmentsByResource (promoted
+  from `rolesvc`). Root aliases
   (the `auth.Granter` precedent): `Subject`, **`Resource`** (review-gate
   fold, lead refinement 7 — Z4 constructs `authorization.Resource{…}`;
   it won't compile otherwise), `CheckRequest`,
   `CheckResult`, `LookupResult`, `Schema`, `NewSchema`,
-  `ResourceSchema`, `PermissionRule` + builders — hosts write
+  `ResourceSchema`, `PermissionRule` + builders, and the roles kind's
+  `Assignment` (`= role.Assignment` — hosts construct it) — hosts write
   `authorization.CheckRequest{Subject: authorization.Subject{…}}`
   exactly as design §2.2's snippet shows; **verify that CheckBatch/
-  FilterAuthorized argument types need no further root aliases** (lead
-  refinement 7) and add any that do. Package doc opens with the
-  three-posture posture note (one paragraph; the full table is the
-  README's, Z5) and the AV2 split: consumer seams are Check-only;
-  everything on `Service` beyond Check is flagship-specific API, never a
-  seam. Tests: construction validation (nil repos / nil model / invalid
-  model), promoted-method delegation smoke, Register-with-logger,
-  zero-value `feature.Mount` tolerance.
+  FilterAuthorized/HasRole argument types need no further root aliases**
+  (lead refinement 7) and add any that do. Tests additionally cover the
+  non-empty-`Relation` rejection on every roles-kind method and both
+  named sentinels. Package doc opens with the
+  three-posture posture note plus the KINDS framing (one paragraph each;
+  the full tables are the README's, Z5) and the AV2 split: consumer
+  seams are Check-only; everything on `Service` beyond the boolean
+  checks is flagship-specific API, never a seam. Tests: construction
+  validation (zero kinds; each partial-wiring pair; invalid model;
+  roles-only wiring succeeds with no model), unwired-kind sentinel on
+  both families, promoted-method delegation smoke on both kinds,
+  Register-with-logger, zero-value `feature.Mount` tolerance.
 
-### task-5: `memstore/` — the public in-core reference
+### task-7: `memstore/` — the public in-core reference, BOTH kinds
 
-- **depends_on:** [task-4]
+- **depends_on:** [task-6]
 - **model:** opus
 - **files:** [features/authorization/memstore/memstore.go,
+  features/authorization/memstore/roles.go,
   features/authorization/memstore/memstore_test.go]
 - **verify:** `cd features/authorization && go build ./... && go test -race ./... && go vet ./...` then `make guard`
-- **description:** Public in-core `relationship.Storer` implementation
+- **description:** Public in-core implementation of BOTH kind ports
   (the R3 allowance: substantial — group expansion re-implemented as a
   Go graph walk — and host-needed: Z4's zero-infra proof runs on it;
   `features/jobs/memstore` is the placement precedent; never a
-  `stores/memory` module). Mutex-backed; unique-tuple enforcement honest
+  `stores/memory` module). Relationship kind: mutex-backed; unique-tuple
+  enforcement honest
   (duplicate semantics exactly as task-1 pinned); graph-walk group
   expansion with a visited-set cycle guard (the memstore must survive
   A∈B, B∈A data — the suite will prove it) **honoring the same traversal
@@ -246,33 +386,69 @@ field (review-gate fold, major 1).
   `LookupDescendantResourceIDs` as a transitive walk; keyset-shaped
   listing honoring `crud.ListRequest` with a stable tiebreak matching
   what the SQL stores will do (pin the cursor/order fields now — Z2
-  implements the same contract). memstore_test runs the task-6 suite
-  hermetically once it exists (wire the call in task-6; this task's
-  tests cover memstore-specific mechanics).
+  implements the same contract). Roles kind (`roles.go`): plain
+  mutex-backed maps implementing the 5-method `role.Storer` — exact-
+  scope `HasExactRole`, idempotent Assign/Unassign (duplicate retains
+  the original CreatedAt — the honest mirror of the stores' ON CONFLICT
+  semantics), keyset listing with the
+  same tiebreak conventions. memstore_test runs the task-8 suite
+  hermetically once it exists (wire the call in task-8; this task's
+  tests cover memstore-specific mechanics for both kinds).
 
-### task-6: `storetest/` — the two-layer conformance suite with the NAMED adversarial sub-runners
+### task-8: `storetest/` — the two-layer conformance suite: NAMED adversarial sub-runners + the `Roles/*` family
 
-- **depends_on:** [task-5]
+- **depends_on:** [task-7]
 - **model:** opus
 - **files:** [features/authorization/storetest/storetest.go,
   features/authorization/storetest/adversarial.go,
+  features/authorization/storetest/roles.go,
   features/authorization/memstore/conformance_test.go]
 - **verify:** `cd features/authorization && go build ./... && go test -race ./... && go vet ./...` then `make check` (the suite runs hermetically via memstore on every future `make check`) and `make guard`
-- **description:** `storetest.Run(t, newStore func(t *testing.T)
-  relationship.Storer)` — two layers (cut refinement 4). **Layer (a),
-  port contract against the Storer directly:** tuple CRUD round-trip +
-  duplicate semantics; the three delete variants; `CheckRelationExists`;
-  `GetRelationTargets`; `CheckBatchDirect` map semantics;
-  `CountByResourceAndRelation` direct-only; the three Lookup*
+- **description:** `storetest.Run(t, newRepos func(t *testing.T)
+  authorization.Repositories)` — the shipped implementations wire BOTH
+  kinds (cut refinement 4, amended multi-kind). **Nil-kind behavior
+  (re-review steward minor 5):** a nil `Repositories` field skips that
+  kind's families with a loud named `t.Skip` — deny-by-absence extended
+  to conformance, so a single-kind host store can prove conformance.
+  **Layer (a), port
+  contracts against the Storers directly.** Relationship kind: tuple
+  CRUD round-trip + duplicate semantics; the three delete variants;
+  `CheckRelationExists`; `GetRelationTargets`; `CheckBatchDirect` map
+  semantics; `CountByResourceAndRelation` direct-only; the three Lookup*
   primitives; listing pagination (keyset cursor round-trip + stable
   tiebreak + empty-page shape — pin the empty-page case here, closing
-  the D5-era gap for this feature from day one). **Layer (b),
-  engine-over-store:** construct `authorization.NewService` with a
-  fixture schema over the store under test and assert authorization
-  OUTCOMES — this is what proves the memstore and the recursive-CTE
-  stores authorize identically (design §2.3). The **named adversarial
-  sub-runners** (design §13 Z1, verbatim — these names appear literally
-  in `t.Run` and in the per-dialect live artifacts):
+  the D5-era gap for this feature from day one). Roles kind (the
+  **`Roles/*` named family**, `roles.go`):
+  - `Roles/AssignIdempotent` — duplicate assign is a no-op nil; the row
+    count stays 1 **including for the GLOBAL `("", "")` pair — asserted
+    via the listing so the dedup is proven at the CONSTRAINT level, not
+    application logic** (re-review lead major 1: a nullable scope column
+    would make two global rows distinct under both dialects'
+    unique-index NULL semantics); the retained-original-CreatedAt
+    semantics asserted too (lead minor 9).
+  - `Roles/UnassignIdempotent` — unassign of an absent assignment is
+    nil; repeat-unassign is nil.
+  - `Roles/HasExactRole` (renamed with the port method — lead minor 8) —
+    store-level exact matching: a global
+    assignment does NOT satisfy a scoped store lookup and vice versa;
+    **and scopedA-vs-scopedB isolation** (re-review lead major 4: an
+    assignment on resource A never satisfies a lookup on resource B —
+    the case that catches an accidentally 4-tuple unique index or
+    lookup silently collapsing distinct scopes). The service-level
+    fallback is layer (b)'s to prove.
+  - `Roles/DistinctAssignmentsCoexist` (NEW — re-review lead major 4) —
+    same subject, two roles → two rows, both `HasExactRole`-true; same
+    subject + role, two scopes → two rows, both true; the listings
+    return all of them.
+  - `Roles/ListPagination` — keyset round-trip + tiebreak + empty page,
+    both listing methods.
+  **Layer (b), engine/service-over-store:** construct
+  `authorization.NewService` with a fixture schema over the stores under
+  test and assert authorization OUTCOMES — this is what proves the
+  memstore and the SQL stores authorize identically (design §2.3). The
+  **named adversarial sub-runners** (design §13 Z1, verbatim — these
+  names appear literally in `t.Run` and in the per-dialect live
+  artifacts):
   - `Adversarial/MembershipCycle` — A∈B, B∈A: expansion terminates and
     answers correctly (both allowed-through-cycle and
     denied-outside-cycle assertions).
@@ -298,6 +474,11 @@ field (review-gate fold, major 1).
     non-admin ⇒ `Unrestricted=false` with non-nil (possibly empty) IDs.
     Cover a service_account admin subject too (the original's bypass
     tests).
+  - `Roles/GlobalFallback` (layer (b), service-level) — pins Q5's
+    ratified scope rule: under the recommended answer, a global
+    assignment satisfies a scoped `Service.HasRole` while the store-level
+    lookup stays exact; a scoped assignment never satisfies a
+    different scope; a miss is `(false, nil)`.
   **Fixture discipline (lead refinement 9):** fixtures must account for
   `checkSelf` — never model a case where subject == resource on a
   `user`/`service_account` type with a read/update/delete permission
