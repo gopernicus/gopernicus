@@ -76,7 +76,7 @@ func (s *SecurityEventStore) List(ctx context.Context, filter securityevent.List
 		where += " AND created_at < ?"
 		args = append(args, tursodb.FormatTime(filter.Until))
 	}
-	return listPage(ctx, s.db, securityEventColumns, "security_events", where, args, "id", req,
+	return tursodb.ListPage(ctx, s.db, securityEventColumns, "security_events", where, args, orderField, "id", req,
 		scanSecurityEvent,
 		func(evt securityevent.SecurityEvent) (time.Time, string) { return evt.CreatedAt, evt.ID },
 	)

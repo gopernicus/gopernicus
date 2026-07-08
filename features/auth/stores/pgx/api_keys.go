@@ -55,7 +55,7 @@ func (s *APIKeyStore) GetByHash(ctx context.Context, keyHash string) (apikey.API
 // ListByServiceAccount returns a cursor-paginated page of a service account's
 // keys, ordered created_at DESC, id DESC.
 func (s *APIKeyStore) ListByServiceAccount(ctx context.Context, serviceAccountID string, req crud.ListRequest) (crud.Page[apikey.APIKey], error) {
-	return listPage(ctx, s.db, apiKeyColumns, "api_keys", "WHERE service_account_id = $1", []any{serviceAccountID}, "id", req,
+	return pgxdb.ListPage(ctx, s.db, apiKeyColumns, "api_keys", "WHERE service_account_id = $1", []any{serviceAccountID}, orderField, "id", req,
 		scanAPIKey,
 		func(k apikey.APIKey) (time.Time, string) { return k.CreatedAt, k.ID },
 	)

@@ -173,47 +173,10 @@ func (q *Queue) List(ctx context.Context, f job.ListFilter, req crud.ListRequest
 		where += fmt.Sprintf(" AND status = $%d", len(args))
 	}
 
-	cur, err := crud.DecodeCursor(req.Cursor, orderField)
-	if err != nil {
-		return crud.Page[job.Job]{}, err
-	}
-	if cur != nil {
-		cv, _ := cur.OrderValue.(time.Time)
-		args = append(args, cv.UTC())
-		lt := len(args)
-		args = append(args, cv.UTC())
-		eq := len(args)
-		args = append(args, cur.PK)
-		pk := len(args)
-		where += fmt.Sprintf(" AND ((created_at < $%d) OR (created_at = $%d AND job_id < $%d))", lt, eq, pk)
-	}
-
-	limit := req.NormalizedLimit()
-	args = append(args, limit+1)
-	query := `SELECT ` + jobSelect + ` FROM job_queue ` + where +
-		fmt.Sprintf(` ORDER BY created_at DESC, job_id DESC LIMIT $%d`, len(args))
-
-	rows, err := q.db.Query(ctx, query, args...)
-	if err != nil {
-		return crud.Page[job.Job]{}, err
-	}
-	defer rows.Close()
-
-	var items []job.Job
-	for rows.Next() {
-		j, err := scanJob(rows)
-		if err != nil {
-			return crud.Page[job.Job]{}, err
-		}
-		items = append(items, j)
-	}
-	if err := rows.Err(); err != nil {
-		return crud.Page[job.Job]{}, pgxdb.MapError(err)
-	}
-
-	return crud.TrimPage(items, limit, func(j job.Job) (string, error) {
-		return crud.EncodeCursor(orderField, j.CreatedAt, j.JobID)
-	})
+	return pgxdb.ListPage(ctx, q.db, jobSelect, "job_queue", where, args, orderField, "job_id", req,
+		scanJob,
+		func(j job.Job) (time.Time, string) { return j.CreatedAt, j.JobID },
+	)
 }
 
 // execAffecting runs a write that must touch exactly one row, mapping zero rows

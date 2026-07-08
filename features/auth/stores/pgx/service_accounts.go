@@ -47,7 +47,7 @@ func (s *ServiceAccountStore) Get(ctx context.Context, id string) (serviceaccoun
 
 // List returns a cursor-paginated page ordered created_at DESC, id DESC.
 func (s *ServiceAccountStore) List(ctx context.Context, req crud.ListRequest) (crud.Page[serviceaccount.ServiceAccount], error) {
-	return listPage(ctx, s.db, serviceAccountColumns, "service_accounts", "WHERE 1 = 1", nil, "id", req,
+	return pgxdb.ListPage(ctx, s.db, serviceAccountColumns, "service_accounts", "WHERE 1 = 1", nil, orderField, "id", req,
 		scanServiceAccount,
 		func(sa serviceaccount.ServiceAccount) (time.Time, string) { return sa.CreatedAt, sa.ID },
 	)

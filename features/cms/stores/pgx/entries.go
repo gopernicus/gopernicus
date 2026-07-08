@@ -119,60 +119,30 @@ func (s *EntryStore) ListByTerm(ctx context.Context, termID string, q content.En
 // len(args)+1, so the base WHERE owns $1.. and the appended predicates continue
 // the sequence.
 func (s *EntryStore) listWhere(ctx context.Context, where string, args []any, q content.EntryQuery) (crud.Page[content.Entry], error) {
-	limit := q.NormalizedLimit()
-
 	if q.Status != "" {
 		where += " AND status = " + placeholder(len(args)+1)
 		args = append(args, string(q.Status))
 	}
 
-	cur, err := crud.DecodeCursor(q.Cursor, orderField)
+	page, err := pgxdb.ListPage(ctx, s.db, entryColumns, "entries", where, args, orderField, "id", q.ListRequest,
+		scanEntry,
+		func(e content.Entry) (time.Time, string) { return e.CreatedAt, e.ID },
+	)
 	if err != nil {
 		return crud.Page[content.Entry]{}, err
 	}
-	if cur != nil {
-		cv, _ := cur.OrderValue.(time.Time)
-		ts := cv.UTC()
-		// The cursor value is the STORED (µs-truncated) created_at read back on a
-		// prior page, so the keyset predicate compares like-for-like precision.
-		where += " AND ((created_at < " + placeholder(len(args)+1) + ") OR (created_at = " + placeholder(len(args)+2) + " AND id < " + placeholder(len(args)+3) + "))"
-		args = append(args, ts, ts, cur.PK)
-	}
-
-	query := `SELECT ` + entryColumns + ` FROM entries ` + where + ` ORDER BY created_at DESC, id DESC LIMIT ` + placeholder(len(args)+1)
-	args = append(args, limit+1)
-
-	rows, err := s.db.Query(ctx, query, args...)
-	if err != nil {
-		return crud.Page[content.Entry]{}, pgxdb.MapError(err)
-	}
-	defer rows.Close()
-
-	var items []content.Entry
-	for rows.Next() {
-		e, err := scanEntry(rows)
-		if err != nil {
-			return crud.Page[content.Entry]{}, err
-		}
-		items = append(items, e)
-	}
-	if err := rows.Err(); err != nil {
-		return crud.Page[content.Entry]{}, pgxdb.MapError(err)
-	}
 
 	// Hydrate fields + terms for the rows on this page only.
-	for i := range items {
-		if items[i].Fields, err = s.loadFields(ctx, items[i].ID); err != nil {
+	for i := range page.Items {
+		if page.Items[i].Fields, err = s.loadFields(ctx, page.Items[i].ID); err != nil {
 			return crud.Page[content.Entry]{}, err
 		}
-		if items[i].TermIDs, err = s.loadTermIDs(ctx, items[i].ID); err != nil {
+		if page.Items[i].TermIDs, err = s.loadTermIDs(ctx, page.Items[i].ID); err != nil {
 			return crud.Page[content.Entry]{}, err
 		}
 	}
 
-	return crud.TrimPage(items, limit, func(e content.Entry) (string, error) {
-		return crud.EncodeCursor(orderField, e.CreatedAt, e.ID)
-	})
+	return page, nil
 }
 
 // SetTerms replaces the entry's taxonomy associations in a single transaction.

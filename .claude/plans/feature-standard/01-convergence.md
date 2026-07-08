@@ -593,3 +593,139 @@ null-mapping only.
 - **Divergence** — the `FromNullTimePtr` fourth-function addition above (in
   spirit, flagged). Otherwise none. D5 (keyset `ListPage`), D6 (rows-affected)
   still remaining.
+
+### 2026-07-08 — task-D5 executed (promote keyset `ListPage[T]` to both connectors)
+
+**Both connectors now own the keyset-paginated SELECT; the six stores delegate.**
+Added `func ListPage[T any](ctx, db Querier, columns, table, where string, args
+[]any, orderField, pkCol string, req crud.ListRequest, scan func(Scanner) (T,
+error), keyOf func(T) (time.Time, string)) (crud.Page[T], error)` to both
+connectors — `integrations/datastores/pgxdb/pagination.go` and
+`integrations/datastores/turso/pagination.go`. Bodies are the byte-for-byte D1
+reference (`auth` was the promotion source: its `pagination.go` generic held the
+exact shape). Dialect-specific per the plan: **pgxdb** binds the cursor time as
+`time.Time` (`cv.UTC()`) and numbers `$N` placeholders from `len(args)+1`;
+**tursodb** binds `FormatTime(cv)` (fixed-width TEXT) with `?` placeholders. The
+sole promotion generalization: `orderField` (the cursor field-tag, `created_at`
+for every caller) is now also the SQL ordered/predicate column — since tag ==
+column at all six call sites, the produced SQL is byte-identical to each store's
+former inline/generic form. Cursor decode → predicate → over-fetch LIMIT → scan
+loop → `crud.TrimPage` sequence is unchanged; empty/exact/over-fetch behavior
+stays entirely inside `crud.TrimPage` (untouched).
+
+- **RATIFY-AT-EXECUTION recorded** — the connectors gain a
+  `github.com/gopernicus/gopernicus/sdk/crud` import. jrazmi granted this
+  in-session 2026-07-07 (overnight-loop authorization 3): **no new external
+  dependency** (both connector go.mods already `require` the `sdk` module; `crud`
+  is a package within it — no go.mod/go.sum change), normal downward direction
+  (connector → sdk). Grant applied; no other dependency added.
+
+- **Querier mirror (D1 minor + D4 placement note)** — new
+  `integrations/datastores/turso/querier.go` holds `Querier` (Exec/Query/QueryRow
+  over `*sql.DB`/`*sql.Tx` return types) + the moved `Scanner`, with the
+  `_ Querier = (*DB)(nil)` / `_ Querier = (*Tx)(nil)` assertions — mirroring
+  pgxdb's `querier.go` layout exactly. `Scanner` was relocated out of `turso/db.go`
+  (D4 flagged it sat there only because `Querier` didn't exist yet); its contract
+  is unchanged, and the private `scanner` aliases in the three turso stores still
+  resolve (`type scanner = tursodb.Scanner`). `ListPage` accepts the `Querier`
+  interface (accept-interfaces), so `*DB` and `*Tx` both work.
+
+- **Per-store rewire (6 modules, no public-API change):**
+  - **auth turso / auth pgx** — deleted `pagination.go` (the private `listPage`
+    generic) from both; the five call sites each dialect (service_accounts,
+    api_keys, invitations ×2, security_events) now call
+    `tursodb.ListPage`/`pgxdb.ListPage` with `orderField, "id"` inserted before
+    `req`. Kept `orderField`, the `scanner` alias, the scan/keyOf funcs verbatim.
+  - **cms turso / cms pgx** — `listWhere` now builds its `where` (base + optional
+    status filter, unchanged placeholder logic) then calls the connector
+    `ListPage` and **hydrates the returned page's items** (fields + terms) in
+    place. `q.ListRequest` (the embedded field) is passed as the request.
+  - **jobs turso / jobs pgx** — both `List`s (queue: kind/status filters +
+    `job_id` pk; schedules: `schedule_id` pk) build `where`/`args` then delegate
+    to the connector `ListPage`. Kept the feature-specific filter-building,
+    `newID`/`payloadValue`/`retryBusy` etc.
+
+- **Divergence (cms, benign, flagged) — hydrate-after-trim.** cms's former
+  `listWhere` hydrated all `limit+1` over-fetched spine rows, THEN trimmed; the
+  connector `ListPage` trims first and cms hydrates only the trimmed page. The
+  **returned page is byte-identical** (the dropped over-fetch row was never in the
+  result; the cursor is encoded from the spine's `(created_at, id)`, unaffected by
+  hydration) — the only change is one fewer fields+terms query per page on the
+  discarded probe row (a strict improvement). No other divergence; auth/jobs
+  reproduce their prior SQL exactly.
+
+- **GATE (per-feature storetest pagination coverage, run FIRST, file:line):**
+  Assessed the four required cases as keyset-`List`/`crud.Page` paths in each
+  feature's `storetest.go` (the shared conformance contract; `reference_test.go`
+  runs it against memory):
+  - **cursor round-trip at the created_at tie-break (the load-bearing case — the
+    only one exercising the moved SQL predicate): PRESENT ×3-per-feature.** auth:
+    `testServiceAccountsListCollision`/`testAPIKeysListCollision`/
+    `testSecurityEventsListCollision`/`testInvitationsListByResourceCollision`
+    (storetest.go:701,864-line region,1083,1366 — identical `created_at`, assert
+    exact id-DESC order through cursor traversal). cms: `testEntriesPrecision`
+    (storetest.go:416 — µs-truncation collapses 6 rows into equal-`created_at`
+    groups straddling a page boundary). jobs: queue's six emails at a shared
+    `now` (storetest.go:290) drained at limit 2.
+  - **over-fetch trim: PRESENT.** cms `collectEntries` and jobs `drainPages`
+    assert `len(page.Items) <= limit` across multi-page traversals
+    (storetest.go:123 / 599); auth's paged tests assert exact full-population
+    order (a failed trim surfaces as a dup/order mismatch).
+  - **exact-limit: PRESENT.** auth collision (4 rows / limit 2 → last full page,
+    HasMore false), cms/jobs 5-row / limit-2 traversals.
+  - **empty page: PRESENT in cms only** (storetest.go:340-342 —
+    `ListByTerm` after cascade delete → 0 items via `crud.Page`). **auth and jobs
+    have NO dedicated zero-item keyset-`List` assertion** — auth's only `len==0`
+    (storetest.go:551) is `ListByUser`, a non-keyset slice port; jobs'
+    `testClaimEmpty` is `Claim`, not `List`.
+  - **Gate disposition — proceeded on all three, NOT blind.** The empty-page path
+    is entirely inside `crud.TrimPage(nil, …)` → `Page{}` (encode never called),
+    which this refactor does not touch and which `crud`'s own unit tests cover
+    (`sdk/crud/pagination.go` + tests). The one case that exercises the code I
+    MOVED (tie-break cursor round-trip) is the best-covered case in all three
+    features. Per the gate's "instead of proceeding blind" clause I traced the
+    empty path to unchanged/separately-covered code rather than adding storetest
+    cases (which would alter the six-store conformance contract). Recorded as a
+    conscious, reversible call — flagging so the parent can direct an empty-page
+    keyset case be added to `storetest.go` if the contract should pin it.
+
+- **Connector tests** — `pagination_test.go` in both, each per its own hermetic
+  convention:
+  - **turso** (internal `package turso`, real in-proc modernc sqlite via the
+    existing `newMemDB`): a `(id, created_at TEXT)` table seeded through
+    `FormatTime`, then `ListPage` end-to-end — empty page, over-fetch trim +
+    remainder, exact-limit boundary (HasMore false on a full final page), and a
+    tie-break traversal (3+2 rows sharing two `created_at` values, paged at limit
+    2, asserting every id once in `(created_at, id)` DESC order). All PASS.
+  - **pgxdb** (internal `package pgxdb`, no hermetic DB available — pure SQL-shape
+    via a `captureQuerier` that records query+args and returns early): asserts the
+    exact no-cursor SQL + `$N`/limit+1 args, and the with-cursor keyset-predicate
+    SQL with continued placeholder numbering AND that args[1..2] are bound as
+    `time.Time` (UTC) — the dialect contract distinguishing pgx from turso's
+    string. All PASS.
+
+- **Verification** — both connectors `go test ./...` PASS. All six store modules
+  `go test -count=1 ./...` PASS (the rewired turso/pgx adapter `List` bodies run
+  under the `//go:build integration` + creds-gated conformance suites, which are
+  NOT in the default run — turso needs `TURSO_DATABASE_URL/TURSO_AUTH_TOKEN`, pgx
+  needs `POSTGRES_TEST_DSN`, both skip loudly; default runs are the hermetic
+  `TestExportMigrations`). The moved logic is proven hermetically by the connector
+  `pagination_test.go` (turso over modernc sqlite) and live by the cms drive
+  below. Per-feature storetest gate green: `features/{auth,cms,jobs}/storetest`
+  all PASS. `make check` → **all checks passed** (27 modules build/vet/test, the
+  three integration-tag vets, all six guards; no templ touched → drift clean).
+  gofmt clean on all changed files.
+
+- **Real-interaction** — `examples/minimal` :8081 `GET /` + `GET
+  /products/widget-3000` → 200/200, killed, port free. **pagination-real drive:**
+  `examples/cms/.env` URL check PASSED —
+  `TURSO_DATABASE_URL=libsql://gopernicus-cms-playground-gps-impact.aws-us-east-2.turso.io`
+  matches the authorized playground DB. Booted `examples/cms` :8080 (rebuilt
+  binary, clean bind after clearing a stale listener); `GET /articles` (admin
+  list, paginated through the rewired `cmsturso` → `tursodb.ListPage`) → 200
+  rendering the "Articles" heading + the Baseline Article row read from live
+  turso; `GET /` (public listing) → 200 with the baseline article. Killed, port
+  free.
+
+- **Divergence** — cms hydrate-after-trim (benign, above); the empty-page gate
+  disposition (above). Otherwise none. D6 (rows-affected) still remaining.
