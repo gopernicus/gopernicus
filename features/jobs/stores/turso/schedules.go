@@ -127,11 +127,7 @@ func (s *Schedules) ClaimDue(ctx context.Context, id string, prevNextRunAt, newN
 		WHERE schedule_id = ? AND next_run_at = ? AND enabled = 1`
 	var won bool
 	err := retryBusy(ctx, func() error {
-		res, err := s.db.Exec(ctx, q, tursodb.FormatTime(newNextRunAt.UTC()), tursodb.FormatTime(now.UTC()), tursodb.FormatTime(now.UTC()), id, tursodb.FormatTime(prevNextRunAt.UTC()))
-		if err != nil {
-			return err
-		}
-		n, err := res.RowsAffected()
+		n, err := tursodb.ExecAffecting(ctx, s.db, q, tursodb.FormatTime(newNextRunAt.UTC()), tursodb.FormatTime(now.UTC()), tursodb.FormatTime(now.UTC()), id, tursodb.FormatTime(prevNextRunAt.UTC()))
 		if err != nil {
 			return err
 		}
@@ -183,11 +179,7 @@ func (s *Schedules) Delete(ctx context.Context, id string) error {
 // affected to errs.ErrNotFound and retrying transient busy errors.
 func (s *Schedules) execAffecting(ctx context.Context, query string, args ...any) error {
 	return retryBusy(ctx, func() error {
-		res, err := s.db.Exec(ctx, query, args...)
-		if err != nil {
-			return err
-		}
-		n, err := res.RowsAffected()
+		n, err := tursodb.ExecAffecting(ctx, s.db, query, args...)
 		if err != nil {
 			return err
 		}

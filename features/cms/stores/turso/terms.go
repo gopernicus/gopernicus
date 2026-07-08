@@ -38,13 +38,9 @@ func (s *TermStore) Create(ctx context.Context, t taxonomy.Term) (taxonomy.Term,
 // Update persists changes to the term with the given id.
 func (s *TermStore) Update(ctx context.Context, id string, t taxonomy.Term) (taxonomy.Term, error) {
 	const q = `UPDATE terms SET kind=?, slug=?, name=?, parent_id=?, updated_at=? WHERE id=?`
-	res, err := s.db.Exec(ctx, q,
+	n, err := tursodb.ExecAffecting(ctx, s.db, q,
 		string(t.Kind), t.Slug, t.Name, t.ParentID, tursodb.FormatTime(t.UpdatedAt), id,
 	)
-	if err != nil {
-		return taxonomy.Term{}, err
-	}
-	n, err := res.RowsAffected()
 	if err != nil {
 		return taxonomy.Term{}, err
 	}

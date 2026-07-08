@@ -57,13 +57,9 @@ func (s *ServiceAccountStore) List(ctx context.Context, req crud.ListRequest) (c
 // created_at unchanged.
 func (s *ServiceAccountStore) Update(ctx context.Context, id string, sa serviceaccount.ServiceAccount) (serviceaccount.ServiceAccount, error) {
 	const q = `UPDATE service_accounts SET name=?, description=?, created_by=?, act_as_user=?, owner_user_id=?, updated_at=? WHERE id=?`
-	res, err := s.db.Exec(ctx, q,
+	n, err := tursodb.ExecAffecting(ctx, s.db, q,
 		sa.Name, sa.Description, sa.CreatedBy, tursodb.BoolToInt(sa.ActAsUser), sa.OwnerUserID, tursodb.FormatTime(sa.UpdatedAt), id,
 	)
-	if err != nil {
-		return serviceaccount.ServiceAccount{}, err
-	}
-	n, err := res.RowsAffected()
 	if err != nil {
 		return serviceaccount.ServiceAccount{}, err
 	}
@@ -75,11 +71,7 @@ func (s *ServiceAccountStore) Update(ctx context.Context, id string, sa servicea
 
 // Delete removes the account for id; unknown → errs.ErrNotFound.
 func (s *ServiceAccountStore) Delete(ctx context.Context, id string) error {
-	res, err := s.db.Exec(ctx, "DELETE FROM service_accounts WHERE id = ?", id)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
+	n, err := tursodb.ExecAffecting(ctx, s.db, "DELETE FROM service_accounts WHERE id = ?", id)
 	if err != nil {
 		return err
 	}

@@ -75,11 +75,7 @@ func (s *OAuthAccountStore) ListByUser(ctx context.Context, userID string) ([]oa
 
 // Delete removes userID's link to provider; no such link → errs.ErrNotFound.
 func (s *OAuthAccountStore) Delete(ctx context.Context, userID, provider string) error {
-	res, err := s.db.Exec(ctx, "DELETE FROM oauth_accounts WHERE user_id = ? AND provider = ?", userID, provider)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
+	n, err := tursodb.ExecAffecting(ctx, s.db, "DELETE FROM oauth_accounts WHERE user_id = ? AND provider = ?", userID, provider)
 	if err != nil {
 		return err
 	}

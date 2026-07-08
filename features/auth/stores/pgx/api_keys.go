@@ -63,11 +63,11 @@ func (s *APIKeyStore) ListByServiceAccount(ctx context.Context, serviceAccountID
 
 // Revoke marks the key revoked as of revokedAt; unknown id → errs.ErrNotFound.
 func (s *APIKeyStore) Revoke(ctx context.Context, id string, revokedAt time.Time) error {
-	res, err := s.db.Exec(ctx, "UPDATE api_keys SET revoked_at = $1 WHERE id = $2", revokedAt.UTC(), id)
+	n, err := pgxdb.ExecAffecting(ctx, s.db, "UPDATE api_keys SET revoked_at = $1 WHERE id = $2", revokedAt.UTC(), id)
 	if err != nil {
 		return err
 	}
-	if res.RowsAffected() == 0 {
+	if n == 0 {
 		return errs.ErrNotFound
 	}
 	return nil
@@ -76,11 +76,11 @@ func (s *APIKeyStore) Revoke(ctx context.Context, id string, revokedAt time.Time
 // TouchLastUsed records that the key authenticated at usedAt; unknown id →
 // errs.ErrNotFound. It is a plain UPDATE (callers treat it as best-effort).
 func (s *APIKeyStore) TouchLastUsed(ctx context.Context, id string, usedAt time.Time) error {
-	res, err := s.db.Exec(ctx, "UPDATE api_keys SET last_used_at = $1 WHERE id = $2", usedAt.UTC(), id)
+	n, err := pgxdb.ExecAffecting(ctx, s.db, "UPDATE api_keys SET last_used_at = $1 WHERE id = $2", usedAt.UTC(), id)
 	if err != nil {
 		return err
 	}
-	if res.RowsAffected() == 0 {
+	if n == 0 {
 		return errs.ErrNotFound
 	}
 	return nil

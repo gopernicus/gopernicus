@@ -64,21 +64,27 @@ func (s *APIKeyStore) ListByServiceAccount(ctx context.Context, serviceAccountID
 
 // Revoke marks the key revoked as of revokedAt; unknown id → errs.ErrNotFound.
 func (s *APIKeyStore) Revoke(ctx context.Context, id string, revokedAt time.Time) error {
-	res, err := s.db.Exec(ctx, "UPDATE api_keys SET revoked_at = ? WHERE id = ?", tursodb.FormatTime(revokedAt), id)
+	n, err := tursodb.ExecAffecting(ctx, s.db, "UPDATE api_keys SET revoked_at = ? WHERE id = ?", tursodb.FormatTime(revokedAt), id)
 	if err != nil {
 		return err
 	}
-	return affectedOne(res)
+	if n == 0 {
+		return errs.ErrNotFound
+	}
+	return nil
 }
 
 // TouchLastUsed records that the key authenticated at usedAt; unknown id →
 // errs.ErrNotFound. It is a plain UPDATE (callers treat it as best-effort).
 func (s *APIKeyStore) TouchLastUsed(ctx context.Context, id string, usedAt time.Time) error {
-	res, err := s.db.Exec(ctx, "UPDATE api_keys SET last_used_at = ? WHERE id = ?", tursodb.FormatTime(usedAt), id)
+	n, err := tursodb.ExecAffecting(ctx, s.db, "UPDATE api_keys SET last_used_at = ? WHERE id = ?", tursodb.FormatTime(usedAt), id)
 	if err != nil {
 		return err
 	}
-	return affectedOne(res)
+	if n == 0 {
+		return errs.ErrNotFound
+	}
+	return nil
 }
 
 // scanAPIKey scans one api_keys row, mapping sql.ErrNoRows to errs.ErrNotFound via
@@ -110,16 +116,4 @@ func scanAPIKey(sc scanner) (apikey.APIKey, error) {
 		return apikey.APIKey{}, err
 	}
 	return k, nil
-}
-
-// affectedOne maps a zero-rows-affected write to errs.ErrNotFound.
-func affectedOne(res sql.Result) error {
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return errs.ErrNotFound
-	}
-	return nil
 }

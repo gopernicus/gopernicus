@@ -51,7 +51,7 @@ func (s *EntryStore) Create(ctx context.Context, e content.Entry) (content.Entry
 func (s *EntryStore) Update(ctx context.Context, id string, e content.Entry) (content.Entry, error) {
 	err := s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
 		const q = `UPDATE entries SET type=$1, slug=$2, title=$3, status=$4, body=$5, excerpt=$6, author=$7, template=$8, parent_id=$9, menu_order=$10, published_at=$11, updated_at=$12 WHERE id=$13`
-		res, err := tx.Exec(ctx, q,
+		n, err := pgxdb.ExecAffecting(ctx, tx, q,
 			e.Type, e.Slug, e.Title, string(e.Status), e.Body, e.Excerpt, e.Author,
 			e.Template, e.ParentID, e.MenuOrder, pgxdb.NullTimePtr(e.PublishedAt),
 			e.UpdatedAt.UTC(), id,
@@ -59,7 +59,7 @@ func (s *EntryStore) Update(ctx context.Context, id string, e content.Entry) (co
 		if err != nil {
 			return err
 		}
-		if res.RowsAffected() == 0 {
+		if n == 0 {
 			return crud.ErrNotFound
 		}
 		if _, err := tx.Exec(ctx, "DELETE FROM entry_fields WHERE entry_id = $1", id); err != nil {
@@ -87,11 +87,11 @@ func (s *EntryStore) GetBySlug(ctx context.Context, typ, slug string) (content.E
 
 // Delete removes the entry; its fields and terms cascade.
 func (s *EntryStore) Delete(ctx context.Context, id string) error {
-	res, err := s.db.Exec(ctx, "DELETE FROM entries WHERE id = $1", id)
+	n, err := pgxdb.ExecAffecting(ctx, s.db, "DELETE FROM entries WHERE id = $1", id)
 	if err != nil {
 		return pgxdb.MapError(err)
 	}
-	if res.RowsAffected() == 0 {
+	if n == 0 {
 		return crud.ErrNotFound
 	}
 	return nil

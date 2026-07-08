@@ -39,13 +39,13 @@ func (s *TermStore) Create(ctx context.Context, t taxonomy.Term) (taxonomy.Term,
 // Update persists changes to the term with the given id.
 func (s *TermStore) Update(ctx context.Context, id string, t taxonomy.Term) (taxonomy.Term, error) {
 	const q = `UPDATE terms SET kind=$1, slug=$2, name=$3, parent_id=$4, updated_at=$5 WHERE id=$6`
-	res, err := s.db.Exec(ctx, q,
+	n, err := pgxdb.ExecAffecting(ctx, s.db, q,
 		string(t.Kind), t.Slug, t.Name, t.ParentID, t.UpdatedAt.UTC(), id,
 	)
 	if err != nil {
 		return taxonomy.Term{}, err
 	}
-	if res.RowsAffected() == 0 {
+	if n == 0 {
 		return taxonomy.Term{}, crud.ErrNotFound
 	}
 	return t, nil

@@ -729,3 +729,107 @@ stays entirely inside `crud.TrimPage` (untouched).
 
 - **Divergence** — cms hydrate-after-trim (benign, above); the empty-page gate
   disposition (above). Otherwise none. D6 (rows-affected) still remaining.
+
+### 2026-07-08 — task-D6 executed (normalize rows-affected)
+
+**Both connectors now own the exec + rows-affected normalization; the six stores
+delegate and keep their port semantic adapter-side.** New file
+`integrations/datastores/{pgxdb,turso}/exec.go` exports
+`func ExecAffecting(ctx, db Querier, query string, args ...any) (int64, error)` —
+`pgxdb` returns `tag.RowsAffected()` (int64, no driver error), `tursodb` returns
+`res.RowsAffected()` (int64, error) — both propagating the Exec error unchanged
+and normalizing ONLY to `(int64, error)`. Stdlib-only (`context`); no go.mod
+change. The connector never maps zero to ErrNotFound and never retries — those are
+the caller's, per D1 finding (3). `db` is the D5 `Querier`, so `*DB` pools and
+`*Tx` transactions both flow through it (used by cms's in-Tx entry Update).
+
+- **Shape map found (D1's three structural forms, site counts confirmed against
+  the 15 turso `RowsAffected` sites + the pgx side):**
+  - **inline** (Exec then `res.RowsAffected()`/`res.RowsAffected() == 0` open-coded
+    at the call site): auth turso 7 (users Update; verification codes/tokens
+    Delete ×2; sessions Delete; service_accounts Update+Delete; oauth Delete),
+    auth pgx 9 (the same set + api_keys Revoke/TouchLastUsed), cms turso 4 (terms
+    Update; entries Update in-Tx; entries Delete; menus UpdateItem), cms pgx 4
+    (same), jobs turso 1 (schedules ClaimDue), jobs pgx 1 (schedules ClaimDue).
+  - **`affectedOne(res sql.Result)` helper** (auth turso only): 1 private helper,
+    2 callers (api_keys Revoke + TouchLastUsed).
+  - **`execAffecting(ctx, query, args...)` method** (jobs only): 4 methods —
+    turso queue+schedules, pgx queue+schedules — serving 8 call sites (Complete,
+    Fail, SetLastJob, SetEnabled, Delete ×2 dialects).
+  - Two site semantics, kept where they were: expects-one → `errs.ErrNotFound`
+    (every site above except ClaimDue), and ClaimDue's compare-and-set → `won =
+    n == 1` (jobs turso/pgx schedules). Only the mechanical `(int64, error)`
+    extraction moved; both semantic checks stayed adapter-side.
+
+- **Per-store collapse:**
+  - **auth turso** — 7 inline sites rewired to `tursodb.ExecAffecting`; the
+    `affectedOne` helper DELETED and its 2 api_keys callers inlined to
+    `n, err := tursodb.ExecAffecting(...); if err …; if n == 0 { return
+    errs.ErrNotFound }` (collapsing the second of the three shapes entirely). No
+    orphaned imports (`database/sql` stays for `sql.NullString` in scanAPIKey).
+  - **auth pgx** — 9 inline sites → `pgxdb.ExecAffecting`.
+  - **cms turso / cms pgx** — 4 sites each → connector `ExecAffecting`; the in-Tx
+    entries Update passes `tx` (the `*Tx` Querier); entries Delete preserves its
+    `tursodb.MapError(err)`/`pgxdb.MapError(err)` on the error branch (uniqueness
+    is n/a there, but the wrapping is kept verbatim).
+  - **jobs turso** — the 2 `execAffecting` method BODIES rewired to
+    `tursodb.ExecAffecting` **inside the retained `retryBusy` wrap** (retry NOT
+    absorbed into the connector, per the task); ClaimDue's inline likewise rewired
+    inside its own `retryBusy`, keeping `won = n == 1`.
+  - **jobs pgx** — the 2 `execAffecting` method bodies + ClaimDue's inline →
+    `pgxdb.ExecAffecting` (no retry on the pgx side, unchanged).
+  No public API changed (every touched helper/method was private or internal).
+  Residual grep for `RowsAffected`/`affectedOne`/`res, err := ` under
+  `features/*/stores/` → zero.
+
+- **Connector tests** — `exec_test.go` in both:
+  - **turso** (internal `package turso`, real in-proc modernc sqlite via
+    `newMemDB`): affects-one → 1, affects-none → 0 (asserting the connector does
+    NOT map zero to ErrNotFound — the adapter owns that), affects-many → 2, and a
+    driver error (bad table) propagates rather than normalizing. All PASS.
+  - **pgxdb** (internal `package pgxdb`, hermetic `execQuerier` stub returning a
+    `pgconn.NewCommandTag("UPDATE 3")`/`"DELETE 0"` and recording query+args):
+    count normalization + query/args passthrough, zero-rows → `(0, nil)` (not
+    mapped), and a sentinel Exec error propagated via `errors.Is`. All PASS.
+
+- **Verification** — both connectors `go test ./...` PASS. All six store modules
+  `go build ./... && go vet ./... && go test ./...` PASS. Per-feature storetest
+  gate green: `features/{auth,cms,jobs}` roots + all three `storetest` suites PASS
+  (the rewired adapter write bodies run under the creds-gated conformance; default
+  runs are hermetic). DSN/creds-gated conformance skips loudly on every store:
+  auth/cms turso `SKIP TestConformance_Turso`, auth/cms pgx `SKIP
+  TestConformance_Postgres`, jobs turso/pgx `SKIP TestConformance_Queue` +
+  `SKIP TestConformance_Schedules` (no `TURSO_*`/`POSTGRES_TEST_DSN`). `make check`
+  → **all checks passed** (27 modules build/vet/test, the three integration-tag
+  vets, all six guards; no templ touched → drift clean). gofmt clean on all
+  changed files.
+
+- **Real-interaction** — `examples/minimal` :8081 `GET /` + `GET
+  /products/widget-3000` → 200/200, killed, port free. **cms mutating drive
+  crossing ExecAffecting:** `.env` URL check PASSED —
+  `TURSO_DATABASE_URL=libsql://gopernicus-cms-playground-gps-impact.aws-us-east-2.turso.io`
+  matches the authorized playground DB. Booted `examples/cms` :8080 (admin is open
+  in this host). Identified B2 Baseline Article (id `6weeujymank7a47kfqiolihr6q`,
+  published), read its edit form, and `POST /articles/6weeujymank7a47kfqiolihr6q`
+  re-submitting the *identical* field values (title/author/excerpt/body/status/
+  term_id — a non-destructive edit, only `updated_at` bumps) → **303 See Other**
+  → `/articles/…/edit`, i.e. `EntryStore.Update` returned n==1 through
+  `tursodb.ExecAffecting`; public `GET /articles/b2-baseline-article` still 200,
+  title intact; server log clean (no error/500). **Not-found mutation:** `POST
+  /articles/doesnotexist000000000000000` → **404** — the `ErrNotFound` mapping
+  yields the same status as before. Killed, port free.
+
+- **Divergences (flagged):**
+  1. **cms entries Delete error-branch (benign).** Formerly `res.RowsAffected()`'s
+     own error returned raw while the Exec error was MapError'd; `ExecAffecting`
+     merges Exec+count into one error, so a (practically-unreachable — modernc
+     sqlite / pgx never error from RowsAffected here) count error now also flows
+     through `MapError`. `MapError` passes non-driver errors through, so behavior
+     is unchanged in practice; recorded for completeness.
+  2. **Not-found HTTP path does not reach the ExecAffecting zero-rows branch.**
+     cms's entry service `Get`s before `Update` (entrysvc `Edit`/`Publish`), so a
+     not-found POST 404s at the read, never reaching `ExecAffecting`'s n==0 →
+     ErrNotFound branch. That branch is proven hermetically (connector
+     `exec_test` affects-none + the storetest conformance's missing-id Update/
+     Delete cases), not by the live drive — an honest note, not a gap.
+  Otherwise none. **Phase D (D1–D6) complete.**

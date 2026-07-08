@@ -54,13 +54,13 @@ func (s *UserStore) GetByEmail(ctx context.Context, email string) (user.User, er
 // leaves id and created_at unchanged.
 func (s *UserStore) Update(ctx context.Context, id string, u user.User) (user.User, error) {
 	const q = `UPDATE users SET email=$1, display_name=$2, email_verified=$3, updated_at=$4 WHERE id=$5`
-	res, err := s.db.Exec(ctx, q,
+	n, err := pgxdb.ExecAffecting(ctx, s.db, q,
 		u.Email, u.DisplayName, u.EmailVerified, u.UpdatedAt.UTC(), id,
 	)
 	if err != nil {
 		return user.User{}, err
 	}
-	if res.RowsAffected() == 0 {
+	if n == 0 {
 		return user.User{}, errs.ErrNotFound
 	}
 	return u, nil

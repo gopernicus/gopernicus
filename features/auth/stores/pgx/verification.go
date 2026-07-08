@@ -54,11 +54,11 @@ func (s *CodeStore) Get(ctx context.Context, code string) (verification.Code, er
 
 // Delete removes the code; unknown → errs.ErrNotFound.
 func (s *CodeStore) Delete(ctx context.Context, code string) error {
-	res, err := s.db.Exec(ctx, "DELETE FROM verification_codes WHERE code = $1", code)
+	n, err := pgxdb.ExecAffecting(ctx, s.db, "DELETE FROM verification_codes WHERE code = $1", code)
 	if err != nil {
 		return err
 	}
-	if res.RowsAffected() == 0 {
+	if n == 0 {
 		return errs.ErrNotFound
 	}
 	return nil
@@ -109,11 +109,11 @@ func (s *TokenStore) Get(ctx context.Context, token string) (verification.Token,
 
 // Delete removes the token; unknown → errs.ErrNotFound.
 func (s *TokenStore) Delete(ctx context.Context, token string) error {
-	res, err := s.db.Exec(ctx, "DELETE FROM verification_tokens WHERE token = $1", token)
+	n, err := pgxdb.ExecAffecting(ctx, s.db, "DELETE FROM verification_tokens WHERE token = $1", token)
 	if err != nil {
 		return err
 	}
-	if res.RowsAffected() == 0 {
+	if n == 0 {
 		return errs.ErrNotFound
 	}
 	return nil

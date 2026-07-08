@@ -130,11 +130,11 @@ func (s *Schedules) ListDue(ctx context.Context, now time.Time, limit int) ([]sc
 func (s *Schedules) ClaimDue(ctx context.Context, id string, prevNextRunAt, newNextRunAt, now time.Time) (bool, error) {
 	const q = `UPDATE job_schedules SET next_run_at = $1, last_run_at = $2, updated_at = $2
 		WHERE schedule_id = $3 AND next_run_at = $4 AND enabled = TRUE`
-	tag, err := s.db.Exec(ctx, q, newNextRunAt.UTC(), now.UTC(), id, prevNextRunAt.UTC())
+	n, err := pgxdb.ExecAffecting(ctx, s.db, q, newNextRunAt.UTC(), now.UTC(), id, prevNextRunAt.UTC())
 	if err != nil {
 		return false, err
 	}
-	return tag.RowsAffected() == 1, nil
+	return n == 1, nil
 }
 
 // SetLastJob records the id of the job fired for the most recent slot. A missing
@@ -178,11 +178,11 @@ func (s *Schedules) Delete(ctx context.Context, id string) error {
 // execAffecting runs a write that must touch exactly one row, mapping zero rows
 // affected to errs.ErrNotFound. Driver errors are already mapped by the connector.
 func (s *Schedules) execAffecting(ctx context.Context, query string, args ...any) error {
-	tag, err := s.db.Exec(ctx, query, args...)
+	n, err := pgxdb.ExecAffecting(ctx, s.db, query, args...)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
+	if n == 0 {
 		return errs.ErrNotFound
 	}
 	return nil

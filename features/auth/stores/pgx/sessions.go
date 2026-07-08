@@ -54,11 +54,11 @@ func (s *SessionStore) Get(ctx context.Context, token string) (session.Session, 
 
 // Delete removes the session for token; unknown → errs.ErrNotFound.
 func (s *SessionStore) Delete(ctx context.Context, token string) error {
-	res, err := s.db.Exec(ctx, "DELETE FROM sessions WHERE token = $1", token)
+	n, err := pgxdb.ExecAffecting(ctx, s.db, "DELETE FROM sessions WHERE token = $1", token)
 	if err != nil {
 		return err
 	}
-	if res.RowsAffected() == 0 {
+	if n == 0 {
 		return errs.ErrNotFound
 	}
 	return nil

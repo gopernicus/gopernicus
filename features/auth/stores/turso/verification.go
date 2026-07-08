@@ -59,11 +59,7 @@ func (s *CodeStore) Get(ctx context.Context, code string) (verification.Code, er
 
 // Delete removes the code; unknown → errs.ErrNotFound.
 func (s *CodeStore) Delete(ctx context.Context, code string) error {
-	res, err := s.db.Exec(ctx, "DELETE FROM verification_codes WHERE code = ?", code)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
+	n, err := tursodb.ExecAffecting(ctx, s.db, "DELETE FROM verification_codes WHERE code = ?", code)
 	if err != nil {
 		return err
 	}
@@ -123,11 +119,7 @@ func (s *TokenStore) Get(ctx context.Context, token string) (verification.Token,
 
 // Delete removes the token; unknown → errs.ErrNotFound.
 func (s *TokenStore) Delete(ctx context.Context, token string) error {
-	res, err := s.db.Exec(ctx, "DELETE FROM verification_tokens WHERE token = ?", token)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
+	n, err := tursodb.ExecAffecting(ctx, s.db, "DELETE FROM verification_tokens WHERE token = ?", token)
 	if err != nil {
 		return err
 	}
