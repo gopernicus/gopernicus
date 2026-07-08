@@ -26,7 +26,7 @@ A feature reaches its host through exactly three things (FS2, ratified
   mounts the feature's shipped HTTP surface — an optional convenience
   adapter over the Service. A host may mount it, mount part of it
   (subsystem deny-by-absence), or skip it entirely and write its own
-  handlers against the Service. `feature.Mount{Router, Logger}`
+  handlers against the Service. `feature.Mount{Router, Logger, Events}`
   (`sdk/feature`) is the only host context the feature can reach — no
   service locator, no global registry.
 
@@ -298,16 +298,24 @@ Pre-v1, adding a field to
 fields (`feature.Mount{Router: r, Logger: log}`), so a new zero-value field
 never breaks an existing call site.
 
+**Built from this list** (C3's sanctioned process — added the day a real
+feature needed it):
+
+- The **event bus port** — `Events events.Emitter`, added at events-v1 when
+  cms's first emit call landed (the SSE gateway + a host-side subscriber
+  are the multi-feature consumers that ended its speculative status).
+  Emit-only and **best-effort at-most-once** (`Mount.Events` is never
+  transactional — an event is lost on a crash between commit and emit);
+  durable delivery rides a feature's own `Repositories` (the events
+  feature's outbox), never this field. Nil → the feature emits nothing.
+
 **Candidate future fields** — named as candidates only, not built
 speculatively, added the day a real feature needs them:
 
 - A **jobs registrar** (background/async work a feature wants to schedule),
   if a real feature needs to contribute work registrations to the host.
-- An **event bus port** (a feature publishing domain events other features or
-  the host might react to), if a genuine multi-feature use case appears —
-  today's `cms` has no cross-feature consumer, so this stays speculative.
 
-Do not add either until a feature's design sketch calls for it by name.
+Do not add it until a feature's design sketch calls for it by name.
 
 ## 7. C4 — release & versioning
 
