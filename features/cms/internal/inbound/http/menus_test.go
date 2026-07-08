@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/cms/logic/menus"
+	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
 )
 
 func TestMenus_ListAndPublicNav(t *testing.T) {

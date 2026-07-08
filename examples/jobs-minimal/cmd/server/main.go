@@ -23,8 +23,8 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/jobs"
-	"github.com/gopernicus/gopernicus/features/jobs/logic/job"
-	"github.com/gopernicus/gopernicus/features/jobs/logic/schedule"
+	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
+	"github.com/gopernicus/gopernicus/features/jobs/domain/schedule"
 	"github.com/gopernicus/gopernicus/features/jobs/memstore"
 	robfigcron "github.com/gopernicus/gopernicus/integrations/scheduling/robfig-cron"
 	"github.com/gopernicus/gopernicus/sdk/environment"

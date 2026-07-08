@@ -7,7 +7,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/cms/logic/taxonomy"
+	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
 )
 
 // Clock returns the current time. Injected so tests can pin timestamps.

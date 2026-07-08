@@ -8,7 +8,7 @@ package templ
 import "github.com/a-h/templ"
 import templruntime "github.com/a-h/templ/runtime"
 
-import "github.com/gopernicus/gopernicus/features/cms/logic/content"
+import "github.com/gopernicus/gopernicus/features/cms/domain/content"
 
 // ArticleContent is the default per-entry body for the Article seed type — the
 // port of the former PublicPost view, now body-only (site chrome wraps it). It

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/jobs/logic/job"
+	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/errs"

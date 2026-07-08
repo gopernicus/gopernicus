@@ -3,7 +3,7 @@ package turso
 import (
 	"context"
 
-	"github.com/gopernicus/gopernicus/features/authentication/logic/user"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 )

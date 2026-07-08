@@ -13,7 +13,7 @@ facility). Design of record: `.claude/plans/roadmap/jobs-feature-design.md`.
 jobs.go                  the socket: Repositories, Config, CronParser/
                          CronSchedule ports, Service, NewService, Runtime,
                          NewRuntime, Register
-logic/                   the hexagon's public rim — entities + ports
+domain/                  the hexagon's public rim — entities + ports
   job/                   Job, Enqueue, QueueRepository (structurally
                          satisfies sdk/workers.JobStore[job.Job])
   schedule/              Schedule, Spec, Ensure, Repository

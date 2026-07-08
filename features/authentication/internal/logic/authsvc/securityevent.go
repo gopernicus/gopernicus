@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/gopernicus/gopernicus/features/authentication/logic/securityevent"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 

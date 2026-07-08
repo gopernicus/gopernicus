@@ -47,7 +47,7 @@ ratified 2026-07-02 — `.claude/plans/roadmap/feature-trio-relayout.md`):
 | path | contents | visibility |
 |---|---|---|
 | `<name>.go` | the feature's host-facing exported surface: `Repositories`, `Config`, `NewService(repos, cfg) (*Service, error)`, and the `Service` driving surface with its `Register(mount) error` mount method (FS2) — plus whatever additional exported types host-facing needs require (e.g. auth's `PasswordHasher` port, its `Principal` alias) | public — the socket |
-| `logic/<domain>/` (e.g. `logic/content/`, `logic/user/`) | the hexagon's public rim: entities + repository ports (interfaces store adapters and host stores implement) | public **by necessity** — hosts and store modules import these across module boundaries, and Go forbids importing another module's `internal/` |
+| `domain/<domain>/` (e.g. `domain/content/`, `domain/user/`) | the hexagon's public rim: entities + repository ports (interfaces store adapters and host stores implement) | public **by necessity** — hosts and store modules import these across module boundaries, and Go forbids importing another module's `internal/` |
 | `internal/logic/<domain>svc/` | domain services: business rules over the ports, no HTTP/SQL — the hexagon's sealed interior | internal |
 | `internal/inbound/http/` | driving adapter: route table (`Mount`), handlers — thin delegations to the Service, writing responses through `sdk/web` responders only (FS9). Views are consumed through the feature's `Views` port, never hardcoded (FS3; cms converged at feature-standard B2, 2026-07-07) | internal |
 | `stores/<package>/` | a **separate module** — the store implementation written against one driver package's API (`stores/pgx`, `stores/turso`; R-KV3), owning its SQL, canonical migrations, and `ExportMigrations` | public API, but never imported by the feature core |
@@ -62,11 +62,11 @@ module entirely.
 | app pattern | feature equivalent | why it moved |
 |---|---|---|
 | `cmd/` (composition root) | the HOST's `main` + `<name>.go`'s socket | features are composed *by* hosts; `Register` is the wiring point |
-| `internal/logic/domains/<d>` (entities + ports + services together) | split by visibility: entities + ports → public `logic/<domain>/`; services → `internal/logic/<domain>svc/` | store modules and hosts must import the ports; services stay sealed so the API surface is exactly the rim |
+| `internal/logic/domains/<d>` (entities + ports + services together) | split by visibility: entities + ports → public `domain/<domain>/`; services → `internal/logic/<domain>svc/` | store modules and hosts must import the ports; services stay sealed so the API surface is exactly the rim |
 | `internal/inbound` | `internal/inbound/http/` | same role, same privacy |
 | `internal/outbound` | `stores/<package>/` — separate modules | stronger than a directory split: drivers stay out of the core's go.mod entirely (guard G2) |
 
-Reading rule: **`logic/` is what outsiders implement, `internal/` is the
+Reading rule: **`domain/` is what outsiders implement, `internal/` is the
 interior wearing the app pattern's names, `stores/` is outbound
 module-ized.** The dependency arrows of constitution rule 8 are identical
 on both sides.

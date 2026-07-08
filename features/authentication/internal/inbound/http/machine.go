@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/authentication/logic/apikey"
-	"github.com/gopernicus/gopernicus/features/authentication/logic/serviceaccount"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/apikey"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/serviceaccount"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/web"

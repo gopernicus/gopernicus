@@ -15,8 +15,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/features/jobs/logic/job"
-	"github.com/gopernicus/gopernicus/features/jobs/logic/schedule"
+	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
+	"github.com/gopernicus/gopernicus/features/jobs/domain/schedule"
 	"github.com/gopernicus/gopernicus/features/jobs/storetest"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 )

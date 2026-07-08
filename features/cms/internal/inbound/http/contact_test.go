@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/features/cms/logic/messaging"
+	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 

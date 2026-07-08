@@ -7,7 +7,7 @@ import (
 
 	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
 
-	"github.com/gopernicus/gopernicus/features/events/logic/outbox"
+	"github.com/gopernicus/gopernicus/features/events/domain/outbox"
 )
 
 // stubRepo is a doc-contract compile check: it proves the EntryRepository

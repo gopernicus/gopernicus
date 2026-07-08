@@ -19,7 +19,7 @@ events.go                the socket: Repositories, Config, AuthorizeStream,
                          Projector, Service, NewService, Register
 poller.go                NewPoller/Poll — the durable rail's drain, exported
                          and host-driven (matches workers.WorkFunc)
-logic/                   the hexagon's public rim — entities + ports
+domain/                  the hexagon's public rim — entities + ports
   outbox/                Entry, EntryRepository (the port doc comments are
                          the spec; storetest executes them)
 internal/

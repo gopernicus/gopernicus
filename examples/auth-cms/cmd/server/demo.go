@@ -10,7 +10,7 @@ import (
 	"time"
 
 	auth "github.com/gopernicus/gopernicus/features/authentication"
-	"github.com/gopernicus/gopernicus/features/authentication/logic/securityevent"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
 	golangjwt "github.com/gopernicus/gopernicus/integrations/cryptids/golang-jwt"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/crud"

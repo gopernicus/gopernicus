@@ -1359,3 +1359,30 @@ seam is unguarded by design (§5 cost 1).
 
 Plans housekeeping: `.claude/plans/events-v1/` → `.claude/past/events-v1/`
 this session, README table updated.
+
+## 2026-07-08 — feature rim rename `logic/` → `domain/` (trio-relayout L1 amendment)
+
+jrazmi (2026-07-08): *"the top level logic directory feels named wrong...
+its really types (but does have constructor)"* → ratified: the feature
+hexagon's public rim directory is now `domain/<domain>`, not
+`logic/<domain>`. The rim holds domain entities + repository ports (the
+domain model + contracts store adapters and hosts implement); the
+services under `internal/logic/` are the logic and were NOT touched. Pure
+path churn across the four features (authentication, cms, jobs, events):
+`git mv features/<f>/logic features/<f>/domain` (17 domain packages ride
+along), then import-path rewrites — zero package-name renames, zero
+module-path renames, call sites untouched. Scope: ~129 .go files + 6
+`.templ` sources rewritten (`*_templ.go` regenerated, not hand-edited);
+trio-relayout L1 amendment-marked, authorization-v1 DRAFT synced
+(`domain/relationship`, `domain/group`), live docs swept (ARCHITECTURE,
+READMEs, features/README §2 trio contract).
+
+**Verification:** negative greps `features/[a-z]*/logic/` empty over
+go+templ and live docs; per-module build/vet/test + all seven guards green
+pre-commit, full `make check` green at commit (the drift gate compares
+moved `*_templ.go` against HEAD — the B2 same-commit precedent); templ
+idempotent (generate twice → identical porcelain); both boots real-driven
+(examples/minimal :8081 GET / + /products/widget-3000 → 200;
+examples/auth-cms :8082 the full five-step protocol 401→201→403→verify
+200→login 200→gated /articles 200, then authenticated GET /events → 200
+text/event-stream).

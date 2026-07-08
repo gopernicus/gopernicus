@@ -3,7 +3,7 @@ package turso
 import (
 	"context"
 
-	"github.com/gopernicus/gopernicus/features/cms/logic/media"
+	"github.com/gopernicus/gopernicus/features/cms/domain/media"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 )
 

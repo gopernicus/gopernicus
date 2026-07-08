@@ -23,14 +23,14 @@ integrations/oauth/github/          GitHub OAuth provider (vendor API contract; 
 integrations/oauth/google/          Google OIDC provider connector (coreos/go-oidc v3), its own module
 integrations/scheduling/robfig-cron/ cron-expression connector (robfig/cron v3), its own module
 integrations/tracing/otel/          OpenTelemetry tracing connector (stdout/OTLP-gRPC exporters or caller-supplied provider), its own module
-features/authentication/                      session-auth hexagon — datastore-free; logic/ public rim, internal/ interior
+features/authentication/                      session-auth hexagon — datastore-free; domain/ public rim, internal/ interior
 features/authentication/stores/pgx/           auth's pgx store adapter, its own module
 features/authentication/stores/turso/         auth's Turso store adapter, its own module
-features/cms/                       the CMS hexagon — datastore-free; logic/ public rim, internal/ interior
+features/cms/                       the CMS hexagon — datastore-free; domain/ public rim, internal/ interior
 features/cms/stores/pgx/            the CMS feature's pgx store adapter, its own module
 features/cms/stores/turso/          the CMS feature's Turso store adapter, its own module
 features/cms/views/templ/           cms's bundled default views (templ) — the FS3 sibling, its own module
-features/events/                    durable outbox + SSE gateway hexagon — datastore-free; logic/ public rim
+features/events/                    durable outbox + SSE gateway hexagon — datastore-free; domain/ public rim
 features/events/stores/pgx/         events' pgx store adapter, its own module
 features/events/stores/turso/       events' Turso store adapter, its own module
 features/jobs/                      durable queue + schedules hexagon — datastore-free; public memstore/

@@ -7,7 +7,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/jobs/logic/job"
+	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/errs"

@@ -33,7 +33,7 @@ import (
 
 	internalhttp "github.com/gopernicus/gopernicus/features/events/internal/inbound/http"
 	"github.com/gopernicus/gopernicus/features/events/internal/logic/hub"
-	"github.com/gopernicus/gopernicus/features/events/logic/outbox"
+	"github.com/gopernicus/gopernicus/features/events/domain/outbox"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/identity"
