@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"embed"
 	"time"
+
+	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 )
 
 // MigrationsFS holds the embedded schema (app-owned). cmd wires it into the
@@ -26,9 +28,7 @@ const tsLayout = "2006-01-02T15:04:05.000000000Z07:00"
 const orderField = "created_at"
 
 // scanner abstracts *sql.Row and *sql.Rows for shared scan helpers.
-type scanner interface {
-	Scan(dest ...any) error
-}
+type scanner = tursodb.Scanner
 
 // formatTS renders t in the fixed-width UTC layout used for storage.
 func formatTS(t time.Time) string {

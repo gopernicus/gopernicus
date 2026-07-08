@@ -3,6 +3,8 @@ package pgx
 import (
 	"embed"
 	"time"
+
+	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 )
 
 // MigrationsFS holds the embedded schema (app-owned). cmd wires it into the
@@ -19,9 +21,7 @@ const MigrationsDir = "migrations"
 const orderField = "created_at"
 
 // scanner abstracts pgx.Row and pgx.Rows for shared scan helpers.
-type scanner interface {
-	Scan(dest ...any) error
-}
+type scanner = pgxdb.Scanner
 
 // nullableTime maps a possibly-zero timestamp to a nullable TIMESTAMPTZ arg: a
 // zero time stores as NULL (never expires / not revoked / not set), any other

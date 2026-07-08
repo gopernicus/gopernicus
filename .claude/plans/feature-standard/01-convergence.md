@@ -410,3 +410,48 @@ check` fails ONLY at the templ drift gate (git-diff vs HEAD, uncommitted move �
 resolves at commit, per the same-commit constraint); build/vet/test across all
 27 modules, the three turso integration vets, and all six guards pass. Still
 remaining in this plan: B3 (deferred, demand-driven), D2–D6 (store promotions).
+
+### 2026-07-07 — task-D2 executed (promote ExportMigrations + Scanner)
+
+**Connectors gained the shared scaffold helper + scan surface; the six stores
+now delegate.** Added `func ExportMigrations(migrationsFS fs.FS, dir, dst string)
+error` to both connectors (`integrations/datastores/pgxdb/migrate.go`,
+`integrations/datastores/turso/migrate.go`) — body is the byte-for-byte D1
+helper (os.MkdirAll dst, fs.ReadDir dir, skip dirs, fs.ReadFile + os.WriteFile
+0o644), stdlib-only (`os`/`path` added; no external imports — the sdk/crud
+expansion is D5's, not touched). Added `type Scanner interface { Scan(dest
+...any) error }` — to `pgxdb/querier.go` (sibling of Querier) and `turso/db.go`
+(no Querier there yet; mirroring it stays a D5 item). The six store
+`ExportMigrations` bodies collapsed to one-line delegates (`return
+pgxdb.ExportMigrations(MigrationsFS, MigrationsDir, dst)` / `tursodb.…`),
+dropping their `io/fs`/`os`/`path`/`path/filepath` imports; the six private
+`scanner` interfaces became aliases (`type scanner = pgxdb.Scanner` /
+`tursodb.Scanner`), adding one connector import to each `helpers.go`.
+`MigrationsFS`/`MigrationsDir` embeds stayed feature-side (compile-local per
+D1); every store's public `ExportMigrations` signature is unchanged, so hosts
+(incl. `examples/cms/workshop/migrations`, which reads pre-scaffolded copies —
+no runtime call) are untouched.
+
+- **New connector tests** — `migrate_export_test.go` in both connectors:
+  fstest.MapFS with two top-level `.sql` + one nested file, exported into a
+  not-yet-existing `<tmp>/nested/migrations`; asserts dst auto-create, exact
+  two-file set (subdirectory skipped), and verbatim bytes. Both PASS.
+- **Verification** — `go test ./...` PASS in both connectors and all six store
+  modules. Per-feature storetest gate (`features/{auth,cms,jobs}` roots) PASS
+  incl. all three `storetest` hermetic suites. Env-gated live suites skip
+  loudly: auth-pgx `TestConformance_Postgres` + cms-pgx `TestConformance_Postgres`
+  + jobs-pgx `TestConformance_Queue`/`TestConformance_Schedules` all
+  `SKIP … POSTGRES_TEST_DSN not set — postgres conformance NOT verified`; the
+  turso store modules carry only the hermetic `TestExportMigrations` (their
+  conformance runs via modernc sqlite in storetest). `make check` → **all
+  checks passed** (27 modules build/vet/test, three integration-tag vets, all
+  six guards; templ drift clean — no templ touched). gofmt clean on every
+  changed file.
+- **Real-interaction** — `examples/minimal` on :8081: `GET /` → 200,
+  `GET /products/widget-3000` → 200 (server log confirms both); killed, port
+  free. No example/Makefile calls ExportMigrations at runtime (only a doc
+  comment in the cms workshop runner references it), so no migrate flow to
+  drive.
+- **Divergence** — none. Placement note: `Scanner` sits beside `Querier` in
+  pgxdb but in `turso/db.go` because turso has no Querier interface yet (D5
+  mirrors it). D3–D6 still remaining.

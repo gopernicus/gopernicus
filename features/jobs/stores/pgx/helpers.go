@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"embed"
 	"encoding/hex"
+
+	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 )
 
 // MigrationsFS holds the embedded schema (app-owned). cmd wires it into the
@@ -20,9 +22,7 @@ const MigrationsDir = "migrations"
 const orderField = "created_at"
 
 // scanner abstracts pgx.Row and pgx.Rows for shared scan helpers.
-type scanner interface {
-	Scan(dest ...any) error
-}
+type scanner = pgxdb.Scanner
 
 // payloadValue returns a non-empty JSON text for storage: the raw payload, or
 // "{}" when it is empty (the column is NOT NULL). It is stored into a JSON (not

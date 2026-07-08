@@ -10,11 +10,6 @@
 package turso
 
 import (
-	"io/fs"
-	"os"
-	"path"
-	"path/filepath"
-
 	"github.com/gopernicus/gopernicus/features/cms"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 )
@@ -40,24 +35,5 @@ func Repositories(db *tursodb.DB) cms.Repositories {
 // migrations in the same directory, under one app-owned schema_migrations ledger.
 // The framework never reads or applies the host's copies.
 func ExportMigrations(dst string) error {
-	if err := os.MkdirAll(dst, 0o755); err != nil {
-		return err
-	}
-	entries, err := fs.ReadDir(MigrationsFS, MigrationsDir)
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		data, err := fs.ReadFile(MigrationsFS, path.Join(MigrationsDir, e.Name()))
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(filepath.Join(dst, e.Name()), data, 0o644); err != nil {
-			return err
-		}
-	}
-	return nil
+	return tursodb.ExportMigrations(MigrationsFS, MigrationsDir, dst)
 }
