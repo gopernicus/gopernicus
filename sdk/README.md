@@ -83,7 +83,7 @@ interface).
 | `oauth` | OAuth 2.0/OIDC `Provider` port + PKCE S256 helper — providers live in `integrations/oauth/*` (no vendor-neutral default exists) |
 | `events` | in-process event bus port (`Bus`/`Broadcaster`/`Emitter`/`TypedHandler[T]`) + `Memory` default, `Noop`, `WakeChannel` — with `eventstest` conformance suite |
 | `cacher`, `filestorage` | facility ports — wired defaults `cacher.Memory` (used by every example) and `filestorage.Disk` (used by `examples/cms`; `examples/minimal` leaves blob storage unset); GCS/S3 backends in `integrations/filestorage/{gcs,s3}` |
-| `ratelimiter` | facility port — wired default `ratelimiter.Memory` (D6/phase-2); first real consumer is `features/auth`'s login-attempt limiting; `Acquire` is the blocking counterpart for workers (waits on `RetryAfter` instead of rejecting — no separate throttler port) |
+| `ratelimiter` | facility port — wired default `ratelimiter.Memory` (D6/phase-2); first real consumer is `features/authentication`'s login-attempt limiting; `Acquire` is the blocking counterpart for workers (waits on `RetryAfter` instead of rejecting — no separate throttler port) |
 | `workers` | facility: worker pool (adaptive polling, coalesced wake channel, middleware, panic recovery, graceful drain) + generic `Runner[T Job]` (claim → hooks → process → complete/fail); first consumer is `features/jobs`' runtime |
 | `feature` | the host↔feature pluggability contract (`Mount`, `RouteRegistrar`) — see [ARCHITECTURE.md](../ARCHITECTURE.md)'s Features section and the full charter, [features/README.md](../features/README.md) |
 

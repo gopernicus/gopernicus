@@ -23,9 +23,9 @@ integrations/oauth/github/          GitHub OAuth provider (vendor API contract; 
 integrations/oauth/google/          Google OIDC provider connector (coreos/go-oidc v3), its own module
 integrations/scheduling/robfig-cron/ cron-expression connector (robfig/cron v3), its own module
 integrations/tracing/otel/          OpenTelemetry tracing connector (stdout/OTLP-gRPC exporters or caller-supplied provider), its own module
-features/auth/                      session-auth hexagon — datastore-free; logic/ public rim, internal/ interior
-features/auth/stores/pgx/           auth's pgx store adapter, its own module
-features/auth/stores/turso/         auth's Turso store adapter, its own module
+features/authentication/                      session-auth hexagon — datastore-free; logic/ public rim, internal/ interior
+features/authentication/stores/pgx/           auth's pgx store adapter, its own module
+features/authentication/stores/turso/         auth's Turso store adapter, its own module
 features/cms/                       the CMS hexagon — datastore-free; logic/ public rim, internal/ interior
 features/cms/stores/pgx/            the CMS feature's pgx store adapter, its own module
 features/cms/stores/turso/          the CMS feature's Turso store adapter, its own module

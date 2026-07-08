@@ -1,7 +1,7 @@
 # examples/auth-cms — the two-feature proof host (auth-v2 A9)
 
 This host mounts **two real feature modules** — `features/cms` and
-`features/auth` — onto one host router, with in-memory stores and no datastore
+`features/authentication` — onto one host router, with in-memory stores and no datastore
 driver, and wires auth's identity middleware into cms's admin surface. It is the
 auth-v2 milestone's **A9 proof host**: on top of the v1 cross-feature seam it
 exercises the whole auth-v2 surface end to end (OAuth, machine identity, JWT
@@ -10,7 +10,7 @@ bearer, security-event audit, and ReBAC-decoupled invitations) with zero infra.
 ## What it proves
 
 - **Constitution rule 6 (features never import other features), with two real
-  features.** `features/cms` never imports `features/auth`; `features/auth`
+  features.** `features/cms` never imports `features/authentication`; `features/authentication`
   never imports `features/cms`. Only this host's `cmd/server/main.go` imports
   both. The cross-feature connection is made entirely in the composition root
   (`auth.Service.RequireUser` → `cms.Config.AdminMiddleware`), and the toy
@@ -43,7 +43,7 @@ bearer, security-event audit, and ReBAC-decoupled invitations) with zero infra.
 - **auth store**: `internal/authmem` — an in-memory implementation of **all
   twelve** auth ports (v1 user/password/session/verification, plus the v2
   oauth-account, oauth-state, service-account, api-key, security-event, and
-  invitation ports). It honors the contracts the shared `features/auth/storetest`
+  invitation ports). It honors the contracts the shared `features/authentication/storetest`
   suite proves (uniqueness, sentinels, expired-at-read, the pinned GetByHash and
   partial-pending-uniqueness contracts, and the created_at DESC, id DESC paging).
 - **hasher**: `bcrypt.New()`. **mailer**: `email.NewConsole(log)` (logs mail —
@@ -206,7 +206,7 @@ curl -i -c jar -b jar http://localhost:8082/debug/security-events               
 
 ## Route surface
 
-- **auth** (JSON, `features/auth`): `POST /auth/{register,login,logout,verify,
+- **auth** (JSON, `features/authentication`): `POST /auth/{register,login,logout,verify,
   password/forgot,password/reset,password/change,token}`; OAuth
   `/auth/oauth/{provider}/{start,callback,link/start,link}`,
   `/auth/oauth/{verify-link,linked}`; machine `/auth/service-accounts…`,

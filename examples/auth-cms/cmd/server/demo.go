@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/auth"
-	"github.com/gopernicus/gopernicus/features/auth/logic/securityevent"
+	auth "github.com/gopernicus/gopernicus/features/authentication"
+	"github.com/gopernicus/gopernicus/features/authentication/logic/securityevent"
 	golangjwt "github.com/gopernicus/gopernicus/integrations/cryptids/golang-jwt"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/crud"

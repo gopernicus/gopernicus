@@ -4,12 +4,12 @@
 # directive in features/cms/views/templ/go.mod (where the .templ sources live),
 # so `go tool templ` is reproducible.
 
-MODULES = sdk integrations/cryptids/bcrypt integrations/cryptids/golang-jwt integrations/datastores/pgxdb integrations/datastores/turso integrations/email/sendgrid integrations/filestorage/gcs integrations/filestorage/s3 integrations/kvstores/goredis integrations/oauth/github integrations/oauth/google integrations/scheduling/robfig-cron integrations/tracing/otel features/auth features/auth/stores/pgx features/auth/stores/turso features/cms features/cms/stores/pgx features/cms/stores/turso features/cms/views/templ features/jobs features/jobs/stores/pgx features/jobs/stores/turso examples/auth-cms examples/cms examples/jobs-minimal examples/minimal
+MODULES = sdk integrations/cryptids/bcrypt integrations/cryptids/golang-jwt integrations/datastores/pgxdb integrations/datastores/turso integrations/email/sendgrid integrations/filestorage/gcs integrations/filestorage/s3 integrations/kvstores/goredis integrations/oauth/github integrations/oauth/google integrations/scheduling/robfig-cron integrations/tracing/otel features/authentication features/authentication/stores/pgx features/authentication/stores/turso features/cms features/cms/stores/pgx features/cms/stores/turso features/cms/views/templ features/jobs features/jobs/stores/pgx features/jobs/stores/turso examples/auth-cms examples/cms examples/jobs-minimal examples/minimal
 
 # STORE_MODULES carry env-gated live conformance suites (storetest against a real
 # database). `make check`/`make test` run them hermetically (loud skips); `make
 # test-stores` runs them EXPECTING the datastore env vars set.
-STORE_MODULES = features/cms/stores/pgx features/cms/stores/turso features/auth/stores/pgx features/auth/stores/turso features/jobs/stores/pgx features/jobs/stores/turso
+STORE_MODULES = features/cms/stores/pgx features/cms/stores/turso features/authentication/stores/pgx features/authentication/stores/turso features/jobs/stores/pgx features/jobs/stores/turso
 
 .PHONY: generate build vet test test-stores run migrate check tidy guard \
 	guard-sdk-stdlib guard-feature-isolation guard-sdk-no-outward guard-no-legacy-path \
@@ -46,14 +46,14 @@ test-stores:
 	fi
 	@echo "== features/cms/stores/pgx (live) =="
 	@cd features/cms/stores/pgx && go test ./...
-	@echo "== features/auth/stores/pgx (live) =="
-	@cd features/auth/stores/pgx && go test ./...
+	@echo "== features/authentication/stores/pgx (live) =="
+	@cd features/authentication/stores/pgx && go test ./...
 	@echo "== features/jobs/stores/pgx (live) =="
 	@cd features/jobs/stores/pgx && go test ./...
 	@echo "== features/cms/stores/turso (live, -tags=integration) =="
 	@cd features/cms/stores/turso && go test -tags=integration ./...
-	@echo "== features/auth/stores/turso (live, -tags=integration) =="
-	@cd features/auth/stores/turso && go test -tags=integration ./...
+	@echo "== features/authentication/stores/turso (live, -tags=integration) =="
+	@cd features/authentication/stores/turso && go test -tags=integration ./...
 	@echo "== features/jobs/stores/turso (live, -tags=integration) =="
 	@cd features/jobs/stores/turso && go test -tags=integration ./...
 
@@ -109,7 +109,7 @@ guard-no-legacy-path:
 # require; the dev-only relative `replace` of sdk is permitted pre-tag.
 guard-feature-core-sdk-only:
 	@echo "== guard: feature core go.mod requires sdk only (FS1) =="
-	@fail=0; for f in features/auth features/cms features/jobs; do \
+	@fail=0; for f in features/authentication features/cms features/jobs; do \
 		extras=$$(awk '/^require \(/{inblk=1; next} inblk && /^\)/{inblk=0; next} inblk && !/\/\/ indirect/{print $$1} /^require [^(]/{print $$2}' $$f/go.mod \
 			| grep -v '^github.com/gopernicus/gopernicus/sdk$$' || true); \
 		tools=$$(grep -E '^tool ' $$f/go.mod | awk '{print $$2}' || true); \

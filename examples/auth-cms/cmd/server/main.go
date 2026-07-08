@@ -1,8 +1,8 @@
 // Command server is the auth-v2 A9 proof host: it mounts BOTH features/cms and
-// features/auth onto one host router, with in-memory stores and no datastore
+// features/authentication onto one host router, with in-memory stores and no datastore
 // driver in its module graph (verify: `GOWORK=off go list -m all | grep -i
 // libsql` is empty). The host is the only party that imports both features —
-// features/cms never imports features/auth and vice versa (constitution rule 6).
+// features/cms never imports features/authentication and vice versa (constitution rule 6).
 //
 // The cross-feature wiring is the point: cms's admin surface (the CRUD routes)
 // is gated by auth's identity middleware via cms.Config.AdminMiddleware ←
@@ -32,7 +32,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/memstore"
-	"github.com/gopernicus/gopernicus/features/auth"
+	auth "github.com/gopernicus/gopernicus/features/authentication"
 	"github.com/gopernicus/gopernicus/features/cms"
 	"github.com/gopernicus/gopernicus/features/cms/logic/content"
 	"github.com/gopernicus/gopernicus/features/cms/logic/menus"
@@ -177,7 +177,7 @@ func seed(ctx context.Context, repos cms.Repositories) error {
 	// Content is the Registry model: Articles and the About Page are content.Entry
 	// rows on the shared spine, distinguished by Type — no per-type tables.
 	articles := []struct{ title, excerpt, body string }{
-		{"Two features, one host", "auth gates cms's admin surface with zero cross-import.", "features/cms never imports features/auth; only this host's main imports both — constitution rule 6, proved with two real feature modules."},
+		{"Two features, one host", "auth gates cms's admin surface with zero cross-import.", "features/cms never imports features/authentication; only this host's main imports both — constitution rule 6, proved with two real feature modules."},
 		{"Bring your own stores", "Both features run on in-memory stores; no libsql in the graph.", "Swap datastores without forking a feature — the whole point of the module split."},
 	}
 	for _, a := range articles {

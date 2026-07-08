@@ -41,7 +41,7 @@ silently share state through package-level variables; explicit `Repositories`
 
 ## 2. Anatomy
 
-Mirrors `features/cms` and `features/auth`, generalized (trio layout,
+Mirrors `features/cms` and `features/authentication`, generalized (trio layout,
 ratified 2026-07-02 — `.claude/plans/roadmap/feature-trio-relayout.md`):
 
 | path | contents | visibility |
@@ -250,7 +250,7 @@ its own public package; the host wires an implementation, which may be backed
 by another feature's service. Neither feature imports the other — only the
 host imports both.
 
-**Worked example — now REAL, not illustrative** (2026-07-02): `features/auth`
+**Worked example — now REAL, not illustrative** (2026-07-02): `features/authentication`
 exists, and `examples/auth-cms` is the living proof — the host builds
 `authSvc, _ := auth.NewService(...)` and passes `authSvc.RequireUser` into
 `cms.Config.AdminMiddleware`; cms's admin surface is auth-gated with neither

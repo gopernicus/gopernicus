@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/gopernicus/gopernicus/features/auth"
+	auth "github.com/gopernicus/gopernicus/features/authentication"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
 

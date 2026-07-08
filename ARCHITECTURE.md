@@ -24,9 +24,9 @@ worked example `examples/cms`.
     scheduling/robfig-cron/ module …/integrations/scheduling/robfig-cron — a connector (robfig/cron v3)
     tracing/otel/         module …/integrations/tracing/otel            — a connector (OpenTelemetry family; stdout/OTLP exporters, R-KV1)
   features/                                                             — each: logic/ (public ports+entities) + internal/logic (+ internal/inbound where the feature registers routes — jobs v1 has none) + storetest/ + per-concern sibling modules (stores/<pkg>; views/<pkg> where the feature has HTML — FS3)
-    auth/                 module github.com/gopernicus/gopernicus/features/auth               — session-auth hexagon (datastore-free)
-      stores/pgx/         module …/features/auth/stores/pgx             — auth's pgx store adapter
-      stores/turso/       module …/features/auth/stores/turso           — auth's Turso store adapter
+    auth/                 module github.com/gopernicus/gopernicus/features/authentication               — session-auth hexagon (datastore-free)
+      stores/pgx/         module …/features/authentication/stores/pgx             — auth's pgx store adapter
+      stores/turso/       module …/features/authentication/stores/turso           — auth's Turso store adapter
     cms/                  module github.com/gopernicus/gopernicus/features/cms                — the CMS hexagon (datastore-free)
       stores/pgx/         module …/features/cms/stores/pgx              — the CMS feature's pgx store adapter
       stores/turso/       module …/features/cms/stores/turso            — the CMS feature's Turso store adapter
