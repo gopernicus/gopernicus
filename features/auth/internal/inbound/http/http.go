@@ -184,10 +184,10 @@ func (h *handlers) register(w http.ResponseWriter, r *http.Request) {
 	}
 	u, err := h.svc.Register(r.Context(), req.Email, req.Password, req.DisplayName)
 	if err != nil {
-		writeErr(w, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, newUserResponse(u))
+	web.RespondJSONCreated(w, newUserResponse(u))
 }
 
 func (h *handlers) login(w http.ResponseWriter, r *http.Request) {
@@ -198,14 +198,14 @@ func (h *handlers) login(w http.ResponseWriter, r *http.Request) {
 	token, u, err := h.svc.Login(r.Context(), req.Email, req.Password)
 	if err != nil {
 		if errors.Is(err, authsvc.ErrRateLimited) {
-			writeError(w, web.NewError(http.StatusTooManyRequests, "too many login attempts").WithCode("rate_limited"))
+			web.RespondJSONError(w, web.NewError(http.StatusTooManyRequests, "too many login attempts").WithCode("rate_limited"))
 			return
 		}
-		writeErr(w, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
 	h.svc.SetSessionCookie(w, token)
-	writeJSON(w, http.StatusOK, newUserResponse(u))
+	web.RespondJSONOK(w, newUserResponse(u))
 }
 
 // token issues a stateless bearer JWT for login-shaped credentials (design
@@ -220,13 +220,13 @@ func (h *handlers) token(w http.ResponseWriter, r *http.Request) {
 	tok, expiresAt, err := h.svc.IssueToken(r.Context(), req.Email, req.Password)
 	if err != nil {
 		if errors.Is(err, authsvc.ErrRateLimited) {
-			writeError(w, web.NewError(http.StatusTooManyRequests, "too many login attempts").WithCode("rate_limited"))
+			web.RespondJSONError(w, web.NewError(http.StatusTooManyRequests, "too many login attempts").WithCode("rate_limited"))
 			return
 		}
-		writeErr(w, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, tokenResponse{Token: tok, ExpiresAt: expiresAt.Format(time.RFC3339)})
+	web.RespondJSONOK(w, tokenResponse{Token: tok, ExpiresAt: expiresAt.Format(time.RFC3339)})
 }
 
 func (h *handlers) verify(w http.ResponseWriter, r *http.Request) {
@@ -235,10 +235,10 @@ func (h *handlers) verify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.Verify(r.Context(), req.Code); err != nil {
-		writeErr(w, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "verified"})
+	web.RespondJSONOK(w, map[string]string{"status": "verified"})
 }
 
 func (h *handlers) forgotPassword(w http.ResponseWriter, r *http.Request) {
@@ -250,10 +250,10 @@ func (h *handlers) forgotPassword(w http.ResponseWriter, r *http.Request) {
 	// internal failure (store/mail), which is a 500 for registered and
 	// unregistered emails alike — so the response still cannot enumerate.
 	if err := h.svc.ForgotPassword(r.Context(), req.Email); err != nil {
-		writeError(w, web.ErrInternal("could not process request"))
+		web.RespondJSONError(w, web.ErrInternal("could not process request"))
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+	web.RespondJSONAccepted(w, map[string]string{"status": "accepted"})
 }
 
 func (h *handlers) resetPassword(w http.ResponseWriter, r *http.Request) {
@@ -262,10 +262,10 @@ func (h *handlers) resetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.ResetPassword(r.Context(), req.Token, req.Password); err != nil {
-		writeErr(w, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "reset"})
+	web.RespondJSONOK(w, map[string]string{"status": "reset"})
 }
 
 // changePassword is session-gated (RequireUser has already validated the caller
@@ -279,16 +279,16 @@ func (h *handlers) changePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	userID, ok := h.svc.CurrentUser(r.Context())
 	if !ok {
-		writeError(w, web.ErrUnauthorized("authentication required"))
+		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return
 	}
 	token, err := h.svc.ChangePassword(r.Context(), userID, req.CurrentPassword, req.NewPassword)
 	if err != nil {
-		writeErr(w, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
 	h.svc.SetSessionCookie(w, token)
-	writeJSON(w, http.StatusOK, map[string]string{"status": "password_changed"})
+	web.RespondJSONOK(w, map[string]string{"status": "password_changed"})
 }
 
 func (h *handlers) logout(w http.ResponseWriter, r *http.Request) {
@@ -298,7 +298,7 @@ func (h *handlers) logout(w http.ResponseWriter, r *http.Request) {
 		_ = h.svc.Logout(r.Context(), c.Value)
 	}
 	h.svc.ClearSessionCookie(w)
-	writeJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
+	web.RespondJSONOK(w, map[string]string{"status": "logged_out"})
 }
 
 // ---------------------------------------------------------------------------
@@ -311,27 +311,10 @@ func decode(w http.ResponseWriter, r *http.Request, dst any) bool {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
-		writeError(w, web.ErrBadRequest("invalid request body"))
+		web.RespondJSONError(w, web.ErrBadRequest("invalid request body"))
 		return false
 	}
 	return true
-}
-
-// writeErr maps a domain error to its HTTP status via sdk/web and writes it.
-func writeErr(w http.ResponseWriter, err error) {
-	writeError(w, web.ErrFromDomain(err))
-}
-
-// writeError writes a *web.Error as JSON at its mapped status.
-func writeError(w http.ResponseWriter, e *web.Error) {
-	writeJSON(w, e.Status, e)
-}
-
-// writeJSON writes v as a JSON response at status.
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
 }
 
 // clientInfoRegistrar wraps a RouteRegistrar so the client-info middleware is

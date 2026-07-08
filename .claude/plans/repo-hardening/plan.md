@@ -269,7 +269,11 @@ phase 2 verifies that branch actually executes.
 
 ### task-9: tag layer 2 — features/cms + integrations/datastores/turso
 
-- **depends_on:** [task-8]
+- **depends_on:** [task-8; feature-standard B1+B2 landed or consciously
+  waived by jrazmi — cross-gate recorded at feature-standard ratification
+  2026-07-07 (`.claude/plans/feature-standard/01-convergence.md` Sequencing
+  rule 2): tagging `features/cms/v0.1.0` before its core sheds
+  templ/goldmark/bluemonday freezes those deps into the tagged API]
 - **model:** opus
 - **files:** [`/Users/jrazmi/code/gopernicus-ecosystem/gopernicus/features/cms/go.mod`, `/Users/jrazmi/code/gopernicus-ecosystem/gopernicus/integrations/datastores/turso/go.mod` — drop the relative `replace` of sdk, pin `require <prefix>/sdk v0.1.0`]
 - **verify:** per module, run the WHOLE dance off-workspace — `GOWORK=off go mod tidy && GOWORK=off go build ./... && GOWORK=off go test ./...` from inside the module dir (tidy included, so it sees the identical module graph a consumer sees); full `make check` from the root (workspace dev path still green); commit, tag `features/cms/v0.1.0` + `integrations/datastores/turso/v0.1.0`, push tags; both resolve from the scratch probe with `GOPROXY=direct`.
@@ -281,7 +285,7 @@ phase 2 verifies that branch actually executes.
 - **model:** opus
 - **files:** [`/Users/jrazmi/code/gopernicus-ecosystem/gopernicus/features/cms/stores/turso/go.mod` — drop all three relative replaces; pin `sdk`, `features/cms`, and `integrations/datastores/turso` at v0.1.0]
 - **verify:** `GOWORK=off go mod tidy && GOWORK=off go build ./... && GOWORK=off go test ./...` from the module dir (hermetic legs; live legs stay env-gated); full `make check`; commit, tag `features/cms/stores/turso/v0.1.0`, push; migration source name re-confirmed byte-identical (`"cms"`).
-- **description:** The layer-3 store dance on the smallest possible slice (the point of RH5): three replaces unwound, three pinned requires, tidy off-workspace — both layer-2 tags must already be pushed and directly fetchable. `features/cms@v0.1.0` drags templ/goldmark/bluemonday in as real requires, so this module's `// indirect` block reshuffles — expected. Examples KEEP their replaces under slice mode (they require untagged features; replaces are harmless for untagged demonstration hosts and `go.work` covers dev). Full-sweep variant (not taken per RH5, kept as record): all 6 store modules + example pinning.
+- **description:** The layer-3 store dance on the smallest possible slice (the point of RH5): three replaces unwound, three pinned requires, tidy off-workspace — both layer-2 tags must already be pushed and directly fetchable. `features/cms@v0.1.0` drags templ/goldmark/bluemonday in as real requires, so this module's `// indirect` block reshuffles — expected. [SYNC NOTE 2026-07-07, feature-standard ratification: stale after convergence — B1 removes goldmark/bluemonday and B2 removes templ from the cms core before task-9 tags it (task-9's cross-gate); re-derive the expected `// indirect` diff at execution.] Examples KEEP their replaces under slice mode (they require untagged features; replaces are harmless for untagged demonstration hosts and `go.work` covers dev). Full-sweep variant (not taken per RH5, kept as record): all 6 store modules + example pinning.
 
 ### task-11: branch protection + end-to-end resolution probe
 

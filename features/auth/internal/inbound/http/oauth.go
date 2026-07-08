@@ -53,7 +53,7 @@ func mountOAuth(r feature.RouteRegistrar, h *handlers, requireUser web.Middlewar
 func (h *handlers) oauthStart(w http.ResponseWriter, r *http.Request) {
 	url, err := h.svc.StartOAuth(r.Context(), web.Param(r, "provider"), r.URL.Query().Get("redirect"))
 	if err != nil {
-		writeErr(w, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
 	http.Redirect(w, r, url, http.StatusFound)
@@ -67,7 +67,7 @@ func (h *handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	res, err := h.svc.OAuthCallback(r.Context(), web.Param(r, "provider"), q.Get("code"), q.Get("state"))
 	if err != nil {
-		writeErr(w, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
 	if res.Action == authsvc.ActionLogin || res.Action == authsvc.ActionRegister {
@@ -85,38 +85,38 @@ func (h *handlers) oauthVerifyLink(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := h.svc.VerifyLink(r.Context(), req.Token)
 	if err != nil {
-		writeErr(w, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
 	h.svc.SetSessionCookie(w, res.Token)
-	writeJSON(w, http.StatusOK, newUserResponse(res.User))
+	web.RespondJSONOK(w, newUserResponse(res.User))
 }
 
 // oauthLinked lists the caller's provider links (session-gated).
 func (h *handlers) oauthLinked(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.svc.CurrentUser(r.Context())
 	if !ok {
-		writeError(w, web.ErrUnauthorized("authentication required"))
+		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return
 	}
 	accts, err := h.svc.ListLinked(r.Context(), userID)
 	if err != nil {
-		writeErr(w, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, newLinkedResponse(accts))
+	web.RespondJSONOK(w, newLinkedResponse(accts))
 }
 
 // oauthLinkStart begins a session-gated link round-trip for the caller.
 func (h *handlers) oauthLinkStart(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.svc.CurrentUser(r.Context())
 	if !ok {
-		writeError(w, web.ErrUnauthorized("authentication required"))
+		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return
 	}
 	url, err := h.svc.StartLink(r.Context(), userID, web.Param(r, "provider"), r.URL.Query().Get("redirect"))
 	if err != nil {
-		writeErr(w, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
 	http.Redirect(w, r, url, http.StatusFound)
@@ -127,14 +127,14 @@ func (h *handlers) oauthLinkStart(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) oauthUnlink(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.svc.CurrentUser(r.Context())
 	if !ok {
-		writeError(w, web.ErrUnauthorized("authentication required"))
+		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return
 	}
 	if err := h.svc.Unlink(r.Context(), userID, web.Param(r, "provider")); err != nil {
-		writeErr(w, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "unlinked"})
+	web.RespondJSONOK(w, map[string]string{"status": "unlinked"})
 }
 
 // redirectOrDefault falls back to the same-origin default when a flow carried no

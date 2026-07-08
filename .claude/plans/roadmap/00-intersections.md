@@ -40,6 +40,8 @@ uses "capability" to mean inventory rows):
 | **feature** | a mountable domain module: own entities, **own durable schema + migrations**, and/or **own route surface**; hosts `Register` it | `cms`; planned: `auth`, `jobs`, `events` | a `Register` call |
 | **store module** | a feature's per-dialect SQL + migrations (`stores/<dialect>`) | `cms/stores/turso`; planned: `*/stores/postgres` | a module import + one `Open` call |
 
+[AMENDED 2026-07-07, feature-standard FS3 (`.claude/plans/feature-standard/00-charter.md`): a fifth kind, the **views module** (`views/<pkg>`) — a feature's bundled presentation default implementing the core's `Views` port; swap unit = a module import + one `Config` field. The feature row's `Register` shape is superseded by FS2: `NewService` + `svc.Register(mount)`. ARCHITECTURE.md's table is the live form.]
+
 **The litmus tests** (both already stated in the sibling plans, unified here):
 
 1. *Facility vs store module* (portability §1): if swapping the adapter
@@ -74,7 +76,7 @@ The executable form of "no feature variants." Verified against
 
 | feature | port (where) | nil / absent means | required instead? |
 |---|---|---|---|
-| cms | `Config.Views` | bundled site chrome | — |
+| cms | `Config.Views` | bundled site chrome [SUPERSEDED 2026-07-07, feature-standard FS3: nil → the HTML surface is not registered, uniformly across features; the bundled default becomes one import + one Config field from `views/templ` at convergence B2] | — |
 | cms | `Config.Cache` | no public-page caching | — |
 | cms | `Config.Blobs` | media upload unusable — host infrastructure the feature cannot default | effectively required for media |
 | cms | `Config.Mailer` | contact-form delivery has no transport | effectively required for contact |

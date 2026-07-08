@@ -27,6 +27,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -44,12 +45,14 @@ import (
 	"github.com/gopernicus/gopernicus/features/auth/logic/session"
 	"github.com/gopernicus/gopernicus/features/auth/logic/user"
 	"github.com/gopernicus/gopernicus/features/auth/logic/verification"
+	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/email"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/oauth"
 	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
+	"github.com/gopernicus/gopernicus/sdk/web"
 )
 
 // ErrHasherRequired and ErrMailerRequired are returned by NewService/Register
@@ -84,6 +87,12 @@ var ErrMachineReposRequired = errors.New("auth: Repositories.ServiceAccounts and
 // half-on state.
 var ErrInvitationRepoRequired = errors.New("auth: Config.Granter set but Repositories.Invitations is nil")
 
+// ErrInvitationsDisabled is returned by the invitation use-cases (Create, Accept,
+// …) on a Service built with no Config.Granter: the invitation subsystem is off,
+// so — mirroring the transport, which registers no invitation routes and 404s
+// the whole surface (design §6) — the driving surface wraps errs.ErrNotFound.
+var ErrInvitationsDisabled = fmt.Errorf("auth: invitations are disabled (no Config.Granter): %w", errs.ErrNotFound)
+
 // Granter is the ReBAC-decoupled grant-on-accept seam for invitations (design
 // §2.2/§6, ratified AV4): Grant(ctx, resourceType, resourceID, relation,
 // subjectType, subjectID). A host adapts it to whatever authorizer it runs — a
@@ -96,6 +105,22 @@ type Granter = invitationsvc.Granter
 // MemberCheck is the optional duplicate-membership predicate consulted before a
 // direct-add grant (design §6). Nil → no dup check. Aliased from invitationsvc.
 type MemberCheck = invitationsvc.MemberCheck
+
+// CreateInput is the input to Service.Create (an invitation). Aliased from
+// invitationsvc per the Principal precedent so a host wiring its own invitation
+// handler names one type across the public and internal packages.
+type CreateInput = invitationsvc.CreateInput
+
+// CreateResult reports the outcome of Service.Create: DirectlyAdded true when a
+// known invitee was granted immediately, else Invitation is the pending record.
+type CreateResult = invitationsvc.CreateResult
+
+// AcceptInput is the input to Service.Accept: the mailed Token plus the accepting
+// caller's SubjectType/SubjectID and Identifier (email). Aliased from invitationsvc.
+type AcceptInput = invitationsvc.AcceptInput
+
+// AcceptResult reports the granted tuple's resource/relation. Aliased from invitationsvc.
+type AcceptResult = invitationsvc.AcceptResult
 
 // ErrOAuthLastMethod is returned (as the wrapped cause) by Service.Unlink when the
 // target link is the user's only authentication method and no password is set —
@@ -118,6 +143,11 @@ var ErrEmailNotVerified = authsvc.ErrEmailNotVerified
 // "service_account" otherwise); the alias keeps exactly one type across the
 // public and internal packages.
 type Principal = authsvc.Principal
+
+// OAuthResult is the outcome of Service.OAuthCallback / Service.VerifyLink: the
+// Action taken, the session Token (empty for a pending link), the resolved User,
+// and the validated RedirectTo. Aliased from authsvc per the Principal precedent.
+type OAuthResult = authsvc.OAuthResult
 
 // PasswordHasher hashes and verifies passwords. It is feature-owned (not an sdk
 // facility) because it has one consumer today and none genuinely foreseen
@@ -256,10 +286,14 @@ type Config struct {
 	Logger *slog.Logger
 }
 
-// Service is the auth feature's identity capability without HTTP routes — the
-// surface a host wires into another feature (its RequireUser middleware, its
-// CurrentUser port). It holds no mutable state beyond the shared Repositories/
-// Config values.
+// Service is the auth feature's driving surface — every use-case as a method
+// (session lifecycle, passwords, OAuth, machine identity, tokens, invitations),
+// plus the cross-feature identity seams (RequireUser middleware, CurrentUser
+// port) a host wires into another feature. It holds no mutable state beyond the
+// shared Repositories/Config values. The shipped HTTP layer is an optional
+// adapter over exactly this surface (FS2): a host may mount it (Register), mount
+// part of it (subsystem deny-by-absence), or skip it and call these methods from
+// its own handlers.
 type Service struct {
 	svc *authsvc.Service
 	// inv is the invitation service, nil when Config.Granter is unset. Register
@@ -413,29 +447,194 @@ func (s *Service) CurrentPrincipal(ctx context.Context) (Principal, bool) {
 	return s.svc.CurrentPrincipal(ctx)
 }
 
-// Register wires the auth feature's own HTTP routes onto the host's mount. It
-// builds a Service internally (validating the required Config fields) and mounts
-// the route table. A host that also needs cross-feature identity builds a second
-// Service via NewService — the two point at the same Repositories/Config and
-// hold no independent state, an accepted, documented duplication (see the
-// auth-feature-design doc, §3). Migrations are registered by the store adapter
-// (features/auth/stores/turso), not here — the core is dialect-blind.
-func Register(m feature.Mount, repos Repositories, cfg Config) error {
-	// The audit rail's best-effort WARN line rides the host's Mount logger unless
-	// the host set an explicit Config.Logger (design §5.1).
-	if cfg.Logger == nil {
-		cfg.Logger = m.Logger
+// RegisterUser creates an account and dispatches the email-verification code.
+func (s *Service) RegisterUser(ctx context.Context, email, password, displayName string) (user.User, error) {
+	return s.svc.Register(ctx, email, password, displayName)
+}
+
+// Login verifies credentials and returns the plaintext session cookie token to set.
+func (s *Service) Login(ctx context.Context, email, password string) (token string, u user.User, err error) {
+	return s.svc.Login(ctx, email, password)
+}
+
+// Logout revokes the session backing the cookie token (idempotent).
+func (s *Service) Logout(ctx context.Context, token string) error {
+	return s.svc.Logout(ctx, token)
+}
+
+// Verify redeems an email-verification code, marking the user verified.
+func (s *Service) Verify(ctx context.Context, code string) error {
+	return s.svc.Verify(ctx, code)
+}
+
+// ChangePassword verifies the current password, sets the new one, revokes all sessions, and returns a fresh cookie token.
+func (s *Service) ChangePassword(ctx context.Context, userID, currentPassword, newPassword string) (token string, err error) {
+	return s.svc.ChangePassword(ctx, userID, currentPassword, newPassword)
+}
+
+// ForgotPassword mails a reset token; an unknown email is a silent no-op.
+func (s *Service) ForgotPassword(ctx context.Context, email string) error {
+	return s.svc.ForgotPassword(ctx, email)
+}
+
+// ResetPassword redeems a reset token and sets the new password.
+func (s *Service) ResetPassword(ctx context.Context, token, newPassword string) error {
+	return s.svc.ResetPassword(ctx, token, newPassword)
+}
+
+// StartOAuth returns the provider authorization URL for an unauthenticated login/register flow.
+func (s *Service) StartOAuth(ctx context.Context, provider, redirectTo string) (authURL string, err error) {
+	return s.svc.StartOAuth(ctx, provider, redirectTo)
+}
+
+// StartLink returns the provider authorization URL for linking a provider to the signed-in user.
+func (s *Service) StartLink(ctx context.Context, userID, provider, redirectTo string) (authURL string, err error) {
+	return s.svc.StartLink(ctx, userID, provider, redirectTo)
+}
+
+// OAuthCallback processes a provider callback (code + state) into an OAuthResult.
+func (s *Service) OAuthCallback(ctx context.Context, provider, code, state string) (OAuthResult, error) {
+	return s.svc.OAuthCallback(ctx, provider, code, state)
+}
+
+// VerifyLink completes a pending account link from its emailed token.
+func (s *Service) VerifyLink(ctx context.Context, token string) (OAuthResult, error) {
+	return s.svc.VerifyLink(ctx, token)
+}
+
+// ListLinked returns the user's linked provider accounts.
+func (s *Service) ListLinked(ctx context.Context, userID string) ([]oauthaccount.OAuthAccount, error) {
+	return s.svc.ListLinked(ctx, userID)
+}
+
+// Unlink removes a provider link, refusing if it is the account's last auth method.
+func (s *Service) Unlink(ctx context.Context, userID, provider string) error {
+	return s.svc.Unlink(ctx, userID, provider)
+}
+
+// CreateServiceAccount creates a machine identity, optionally acting as ownerUserID.
+func (s *Service) CreateServiceAccount(ctx context.Context, createdBy, name, description string, actAsUser bool, ownerUserID string) (serviceaccount.ServiceAccount, error) {
+	return s.svc.CreateServiceAccount(ctx, createdBy, name, description, actAsUser, ownerUserID)
+}
+
+// ListServiceAccounts pages the service accounts.
+func (s *Service) ListServiceAccounts(ctx context.Context, req crud.ListRequest) (crud.Page[serviceaccount.ServiceAccount], error) {
+	return s.svc.ListServiceAccounts(ctx, req)
+}
+
+// MintAPIKey issues a key for a service account, returning the record and the one-time plaintext key.
+func (s *Service) MintAPIKey(ctx context.Context, serviceAccountID, name string, expiresAt time.Time) (apikey.APIKey, string, error) {
+	return s.svc.MintAPIKey(ctx, serviceAccountID, name, expiresAt)
+}
+
+// ListAPIKeys pages a service account's API keys.
+func (s *Service) ListAPIKeys(ctx context.Context, serviceAccountID string, req crud.ListRequest) (crud.Page[apikey.APIKey], error) {
+	return s.svc.ListAPIKeys(ctx, serviceAccountID, req)
+}
+
+// RevokeAPIKey revokes an API key by id (idempotent).
+func (s *Service) RevokeAPIKey(ctx context.Context, keyID string) error {
+	return s.svc.RevokeAPIKey(ctx, keyID)
+}
+
+// IssueToken mints a short-TTL bearer JWT for login-shaped credentials, returning the token and its expiry.
+func (s *Service) IssueToken(ctx context.Context, email, password string) (token string, expiresAt time.Time, err error) {
+	return s.svc.IssueToken(ctx, email, password)
+}
+
+// Create invites an identifier to a resource; ErrInvitationsDisabled when no Granter is wired.
+func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, error) {
+	if s.inv == nil {
+		return CreateResult{}, ErrInvitationsDisabled
 	}
-	svc, err := NewService(repos, cfg)
-	if err != nil {
-		return err
+	return s.inv.Create(ctx, in)
+}
+
+// ListByResource pages a resource's invitations; ErrInvitationsDisabled when no Granter is wired.
+func (s *Service) ListByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
+	if s.inv == nil {
+		return crud.Page[invitation.Invitation]{}, ErrInvitationsDisabled
 	}
+	return s.inv.ListByResource(ctx, resourceType, resourceID, req)
+}
+
+// Mine pages the caller's own invitations by identifier; ErrInvitationsDisabled when no Granter is wired.
+func (s *Service) Mine(ctx context.Context, identifier string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
+	if s.inv == nil {
+		return crud.Page[invitation.Invitation]{}, ErrInvitationsDisabled
+	}
+	return s.inv.Mine(ctx, identifier, req)
+}
+
+// Accept redeems an invitation token for the calling subject; ErrInvitationsDisabled when no Granter is wired.
+func (s *Service) Accept(ctx context.Context, in AcceptInput) (AcceptResult, error) {
+	if s.inv == nil {
+		return AcceptResult{}, ErrInvitationsDisabled
+	}
+	return s.inv.Accept(ctx, in)
+}
+
+// Decline declines a pending invitation by id + token; ErrInvitationsDisabled when no Granter is wired.
+func (s *Service) Decline(ctx context.Context, id, token string) error {
+	if s.inv == nil {
+		return ErrInvitationsDisabled
+	}
+	return s.inv.Decline(ctx, id, token)
+}
+
+// Cancel cancels a pending invitation the caller owns; ErrInvitationsDisabled when no Granter is wired.
+func (s *Service) Cancel(ctx context.Context, id, currentUserID string) error {
+	if s.inv == nil {
+		return ErrInvitationsDisabled
+	}
+	return s.inv.Cancel(ctx, id, currentUserID)
+}
+
+// Resend regenerates and re-mails a pending invitation the caller owns; ErrInvitationsDisabled when no Granter is wired.
+func (s *Service) Resend(ctx context.Context, id, currentUserID, redirectTo string) (invitation.Invitation, error) {
+	if s.inv == nil {
+		return invitation.Invitation{}, ErrInvitationsDisabled
+	}
+	return s.inv.Resend(ctx, id, currentUserID, redirectTo)
+}
+
+// SetSessionCookie writes the session cookie carrying token, per the configured policy.
+func (s *Service) SetSessionCookie(w http.ResponseWriter, token string) {
+	s.svc.SetSessionCookie(w, token)
+}
+
+// ClearSessionCookie expires the session cookie.
+func (s *Service) ClearSessionCookie(w http.ResponseWriter) {
+	s.svc.ClearSessionCookie(w)
+}
+
+// SessionCookieName returns the configured session cookie name.
+func (s *Service) SessionCookieName() string {
+	return s.svc.SessionCookieName()
+}
+
+// RateLimitByIP returns middleware throttling a public route on the client IP.
+func (s *Service) RateLimitByIP(keyPrefix string, perMinute int) web.Middleware {
+	return s.svc.RateLimitByIP(keyPrefix, perMinute)
+}
+
+// Register mounts the auth feature's shipped HTTP adapter — the /auth/* route
+// surface — onto the host's Mount, over this already-built Service (FS2: build
+// once via NewService, mount once). It is the optional convenience adapter over
+// the Service's use-case methods: subsystems the Service was built without
+// register no routes (deny-by-absence), and a host may skip Register entirely
+// and drive the methods from its own handlers. Migrations are registered by the
+// store adapter (features/auth/stores/turso), not here — the core is
+// dialect-blind. The audit rail's best-effort WARN sink (Config.Logger) is
+// captured at NewService time; set it there — it defaults to slog.Default() when
+// unset, no longer to the Mount logger, since the Service is built before Mount.
+func (s *Service) Register(m feature.Mount) error {
 	// Pass the invitation service as a GENUINE nil interface when it is off, so
 	// Mount's deny-by-absence check (design §6) is not fooled by a typed nil.
 	var inv internalhttp.InvitationService
-	if svc.inv != nil {
-		inv = svc.inv
+	if s.inv != nil {
+		inv = s.inv
 	}
-	internalhttp.Mount(m.Router, svc.svc, inv)
+	internalhttp.Mount(m.Router, s.svc, inv)
 	return nil
 }

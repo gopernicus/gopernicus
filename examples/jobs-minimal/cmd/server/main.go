@@ -116,10 +116,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 	router.Use(web.RequestID(), web.Logger(log), web.Panics(log))
 	router.Handle(http.MethodPost, "/enqueue", enqueueHandler(svc, log))
 
-	// Register validates the (repos, cfg) pair and logs; it starts nothing — the
-	// host owns the run loop.
+	// Register mounts the built Service and logs; it starts nothing — the host
+	// owns the run loop.
 	mount := feature.Mount{Router: router, Logger: log}
-	if err := jobs.Register(mount, repos, cfg); err != nil {
+	if err := svc.Register(mount); err != nil {
 		return err
 	}
 

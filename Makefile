@@ -12,7 +12,8 @@ MODULES = sdk integrations/cryptids/bcrypt integrations/cryptids/golang-jwt inte
 STORE_MODULES = features/cms/stores/pgx features/cms/stores/turso features/auth/stores/pgx features/auth/stores/turso features/jobs/stores/pgx features/jobs/stores/turso
 
 .PHONY: generate build vet test test-stores run migrate check tidy guard \
-	guard-sdk-stdlib guard-feature-isolation guard-sdk-no-outward guard-no-legacy-path
+	guard-sdk-stdlib guard-feature-isolation guard-sdk-no-outward guard-no-legacy-path \
+	guard-feature-core-sdk-only guard-feature-transport-sdk-web
 
 # Regenerate *_templ.go from .templ sources (templ sources live in features/cms).
 generate:
@@ -71,9 +72,11 @@ tidy:
 	@for m in $(MODULES); do (cd $$m && go mod tidy) || exit 1; done
 
 # Layering guards — each enforces one architectural boundary from the
-# constitution (00-overview.md); every target must print nothing and exit 0 on
-# a clean tree. `make guard` runs all four.
-guard: guard-sdk-stdlib guard-feature-isolation guard-sdk-no-outward guard-no-legacy-path
+# constitution (00-overview.md) or the feature-standard charter (FS rules,
+# 2026-07-07); every target must print nothing and exit 0 on a clean tree.
+# `make guard` runs all six.
+guard: guard-sdk-stdlib guard-feature-isolation guard-sdk-no-outward guard-no-legacy-path \
+	guard-feature-core-sdk-only guard-feature-transport-sdk-web
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -82,12 +85,13 @@ guard-sdk-stdlib:
 	@! grep -rn --include='*.go' '"github.com/' sdk/ | grep -v '"github.com/gopernicus/gopernicus/sdk' || { echo "ERROR: sdk imports an external module — sdk is the stdlib kernel and must stay dependency-free"; exit 1; }
 	@! grep -rnE '"(cloud\.google\.com|golang\.org/x|gopkg\.in)/' --include='*.go' sdk/ || { echo "ERROR: sdk imports an external module — sdk is the stdlib kernel and must stay dependency-free"; exit 1; }
 
-# G2: every feature core (features/*, excluding their own store adapter
-# modules) never imports integrations, examples, or any feature's stores (A4:
-# generalized from features/cms to all features/*).
+# G2: every feature core (features/*, excluding their own store/views adapter
+# modules) never imports integrations, examples, or any feature's stores or
+# views (A4: generalized from features/cms to all features/*; views added
+# 2026-07-07, feature-standard FS3).
 guard-feature-isolation:
-	@echo "== guard: features/* cores never import integrations/examples/their own stores =="
-	@! grep -rn --include='*.go' -E '"github.com/gopernicus/gopernicus/(integrations|examples|features/[a-z0-9]+/stores)' features --exclude-dir=stores || { echo "ERROR: a features/* core imports an adapter layer"; exit 1; }
+	@echo "== guard: features/* cores never import integrations/examples/their own stores/views =="
+	@! grep -rn --include='*.go' -E '"github.com/gopernicus/gopernicus/(integrations|examples|features/[a-z0-9]+/(stores|views))' features --exclude-dir=stores --exclude-dir=views || { echo "ERROR: a features/* core imports an adapter layer"; exit 1; }
 
 # G3: sdk never imports outward (features/integrations/examples).
 guard-sdk-no-outward:
@@ -98,6 +102,35 @@ guard-sdk-no-outward:
 guard-no-legacy-path:
 	@echo "== guard: no legacy gopernicus/ import =="
 	@! grep -rn --include='*.go' -E '"gopernicus/' . || { echo "ERROR: legacy gopernicus import found"; exit 1; }
+
+# G5 (FS1, feature-standard 2026-07-07): every feature core go.mod requires
+# exactly sdk — nothing else. Direct requires only ("// indirect" lines are
+# MVS bookkeeping, not a host-facing promise); a `tool` directive counts as a
+# require; the dev-only relative `replace` of sdk is permitted pre-tag.
+# TODO(2026-07-07, feature-standard B2): remove the features/cms templ
+# carve-out when views/templ extracts the templ require + tool directive.
+guard-feature-core-sdk-only:
+	@echo "== guard: feature core go.mod requires sdk only (FS1) =="
+	@fail=0; for f in features/auth features/cms features/jobs; do \
+		extras=$$(awk '/^require \(/{inblk=1; next} inblk && /^\)/{inblk=0; next} inblk && !/\/\/ indirect/{print $$1} /^require [^(]/{print $$2}' $$f/go.mod \
+			| grep -v '^github.com/gopernicus/gopernicus/sdk$$' || true); \
+		tools=$$(grep -E '^tool ' $$f/go.mod | awk '{print $$2}' || true); \
+		if [ "$$f" = "features/cms" ]; then \
+			extras=$$(echo "$$extras" | grep -v '^github.com/a-h/templ$$' || true); \
+			tools=$$(echo "$$tools" | grep -v '^github.com/a-h/templ/cmd/templ$$' || true); \
+		fi; \
+		bad=$$(printf '%s\n%s\n' "$$extras" "$$tools" | grep -v '^$$' || true); \
+		if [ -n "$$bad" ]; then echo "ERROR (FS1): $$f/go.mod requires more than sdk:"; echo "$$bad"; fail=1; fi; \
+	done; exit $$fail
+
+# G6 (FS9, feature-standard 2026-07-07): feature transports respond via
+# sdk/web — no hand-rolled JSON/error response writing anywhere in a feature's
+# sealed interior (production code; tests exempt). A legitimate future hit
+# (e.g. json.NewEncoder into a buffer or an SSE stream) gets a named per-line
+# exception HERE citing FS9 — never a regex weakening.
+guard-feature-transport-sdk-web:
+	@echo "== guard: feature transports use sdk/web responders (FS9) =="
+	@! grep -rn --include='*.go' --exclude='*_test.go' -E 'json\.NewEncoder\(|http\.Error\(' features/*/internal/ || { echo "ERROR (FS9): hand-rolled HTTP response writing in a feature core — use web.Respond* (features/README.md, FS9)"; exit 1; }
 
 # CI-style gate: templ generation must be a no-op (no drift), then per-module
 # vet/build/test across all MODULES, then the four layering guards. Drift

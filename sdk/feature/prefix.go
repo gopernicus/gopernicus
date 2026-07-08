@@ -30,6 +30,34 @@ func (p PrefixRegistrar) Handle(method, path string, handler http.HandlerFunc, m
 	p.Next.Handle(method, joinPrefix(p.Prefix, path), handler, middleware...)
 }
 
+// Group wraps a RouteRegistrar so every route registered through it is mounted
+// under a shared path prefix AND runs a shared Middleware stack first — the
+// two-in-one PrefixRegistrar (prefix only) does not cover. Like PrefixRegistrar
+// it is itself a RouteRegistrar, so a host builds one and passes it as
+// Mount.Router; the feature's Register never learns it was grouped. This is
+// where group ergonomics come from — composition, never widening the one-method
+// RouteRegistrar contract (FS7). The natural use is a subsystem whose routes
+// share both a mount point and a middleware policy, e.g. an admin section behind
+// an authorizer.
+type Group struct {
+	Prefix     string // e.g. "/admin"; "" or "/" mounts at the root (prefix a no-op)
+	Middleware []web.Middleware
+	Next       RouteRegistrar
+}
+
+// Handle prefixes path via joinPrefix and prepends the group's Middleware to any
+// route-local middleware, then delegates to Next. The group's middleware sits at
+// the front, so it runs before the route's own (web.WebHandler applies the slice
+// outermost-first). The combined slice is freshly allocated rather than appended
+// onto the shared Middleware field, so registering many routes through one Group
+// never corrupts the group's stack.
+func (g Group) Handle(method, path string, handler http.HandlerFunc, middleware ...web.Middleware) {
+	combined := make([]web.Middleware, 0, len(g.Middleware)+len(middleware))
+	combined = append(combined, g.Middleware...)
+	combined = append(combined, middleware...)
+	g.Next.Handle(method, joinPrefix(g.Prefix, path), handler, combined...)
+}
+
 // joinPrefix concatenates a mount prefix and a route path, normalizing the
 // slashes naive concatenation gets wrong: a trailing slash on prefix, a
 // missing leading slash on prefix, and the "{$}"-suffixed exact-match

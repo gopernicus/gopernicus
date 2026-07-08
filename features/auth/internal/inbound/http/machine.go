@@ -119,15 +119,15 @@ func (h *handlers) createServiceAccount(w http.ResponseWriter, r *http.Request) 
 	}
 	createdBy, ok := h.svc.CurrentUser(r.Context())
 	if !ok {
-		writeError(w, web.ErrUnauthorized("authentication required"))
+		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return
 	}
 	sa, err := h.svc.CreateServiceAccount(r.Context(), createdBy, req.Name, req.Description, req.ActAsUser, req.OwnerUserID)
 	if err != nil {
-		writeErr(w, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, newServiceAccountResponse(sa))
+	web.RespondJSONCreated(w, newServiceAccountResponse(sa))
 }
 
 // listServiceAccounts returns a cursor-paginated page of service accounts.
@@ -138,10 +138,10 @@ func (h *handlers) listServiceAccounts(w http.ResponseWriter, r *http.Request) {
 	}
 	page, err := h.svc.ListServiceAccounts(r.Context(), req)
 	if err != nil {
-		writeErr(w, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, newPageResponse(page, newServiceAccountResponse))
+	web.RespondJSONOK(w, newPageResponse(page, newServiceAccountResponse))
 }
 
 // mintAPIKey mints a key for the service account and returns the plaintext ONCE.
@@ -156,10 +156,10 @@ func (h *handlers) mintAPIKey(w http.ResponseWriter, r *http.Request) {
 	}
 	k, raw, err := h.svc.MintAPIKey(r.Context(), web.Param(r, "id"), req.Name, expiresAt)
 	if err != nil {
-		writeErr(w, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, mintedKeyResponse{apiKeyResponse: newAPIKeyResponse(k), Key: raw})
+	web.RespondJSONCreated(w, mintedKeyResponse{apiKeyResponse: newAPIKeyResponse(k), Key: raw})
 }
 
 // listAPIKeys returns a cursor-paginated page of a service account's keys.
@@ -170,19 +170,19 @@ func (h *handlers) listAPIKeys(w http.ResponseWriter, r *http.Request) {
 	}
 	page, err := h.svc.ListAPIKeys(r.Context(), web.Param(r, "id"), req)
 	if err != nil {
-		writeErr(w, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, newPageResponse(page, newAPIKeyResponse))
+	web.RespondJSONOK(w, newPageResponse(page, newAPIKeyResponse))
 }
 
 // revokeAPIKey revokes a key; an unknown key → 404.
 func (h *handlers) revokeAPIKey(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.RevokeAPIKey(r.Context(), web.Param(r, "id")); err != nil {
-		writeErr(w, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "revoked"})
+	web.RespondJSONOK(w, map[string]string{"status": "revoked"})
 }
 
 // parseListRequest parses the strict transport-edge page params (limit/cursor
@@ -190,7 +190,7 @@ func (h *handlers) revokeAPIKey(w http.ResponseWriter, r *http.Request) {
 func parseListRequest(w http.ResponseWriter, r *http.Request) (crud.ListRequest, bool) {
 	req, err := crud.ParseListRequest(r.URL.Query().Get("limit"), r.URL.Query().Get("cursor"), crud.MaxLimit)
 	if err != nil {
-		writeError(w, web.ErrBadRequest("invalid page parameters"))
+		web.RespondJSONError(w, web.ErrBadRequest("invalid page parameters"))
 		return crud.ListRequest{}, false
 	}
 	return req, true
@@ -205,7 +205,7 @@ func parseOptionalTime(w http.ResponseWriter, value string) (time.Time, bool) {
 	}
 	t, err := time.Parse(time.RFC3339, value)
 	if err != nil {
-		writeError(w, web.ErrBadRequest("invalid expires_at (want RFC3339)"))
+		web.RespondJSONError(w, web.ErrBadRequest("invalid expires_at (want RFC3339)"))
 		return time.Time{}, false
 	}
 	return t, true
