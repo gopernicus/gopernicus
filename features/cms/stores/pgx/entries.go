@@ -33,7 +33,7 @@ func (s *EntryStore) Create(ctx context.Context, e content.Entry) (content.Entry
 		const q = `INSERT INTO entries (` + entryColumns + `) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`
 		if _, err := tx.Exec(ctx, q,
 			e.ID, e.Type, e.Slug, e.Title, string(e.Status), e.Body, e.Excerpt, e.Author,
-			e.Template, e.ParentID, e.MenuOrder, publishedAt(e.PublishedAt),
+			e.Template, e.ParentID, e.MenuOrder, pgxdb.NullTimePtr(e.PublishedAt),
 			e.CreatedAt.UTC(), e.UpdatedAt.UTC(),
 		); err != nil {
 			return err
@@ -53,7 +53,7 @@ func (s *EntryStore) Update(ctx context.Context, id string, e content.Entry) (co
 		const q = `UPDATE entries SET type=$1, slug=$2, title=$3, status=$4, body=$5, excerpt=$6, author=$7, template=$8, parent_id=$9, menu_order=$10, published_at=$11, updated_at=$12 WHERE id=$13`
 		res, err := tx.Exec(ctx, q,
 			e.Type, e.Slug, e.Title, string(e.Status), e.Body, e.Excerpt, e.Author,
-			e.Template, e.ParentID, e.MenuOrder, publishedAt(e.PublishedAt),
+			e.Template, e.ParentID, e.MenuOrder, pgxdb.NullTimePtr(e.PublishedAt),
 			e.UpdatedAt.UTC(), id,
 		)
 		if err != nil {
@@ -270,10 +270,7 @@ func scanEntry(sc scanner) (content.Entry, error) {
 		return content.Entry{}, pgxdb.MapError(err)
 	}
 	e.Status = content.Status(status)
-	if published != nil {
-		t := published.UTC()
-		e.PublishedAt = &t
-	}
+	e.PublishedAt = pgxdb.FromNullTimePtr(published)
 	e.CreatedAt = createdAt.UTC()
 	e.UpdatedAt = updatedAt.UTC()
 	return e, nil

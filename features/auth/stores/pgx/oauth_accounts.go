@@ -37,7 +37,7 @@ func (s *OAuthAccountStore) Create(ctx context.Context, a oauthaccount.OAuthAcco
 		a.Provider, a.ProviderUserID, a.UserID, a.ProviderEmail,
 		a.ProviderEmailVerified, a.AccountVerified,
 		a.LinkedAt.UTC(), a.AccessToken, a.RefreshToken,
-		nullableTime(a.TokenExpiresAt), a.TokenType, a.Scope,
+		pgxdb.NullTime(a.TokenExpiresAt), a.TokenType, a.Scope,
 	)
 	if err != nil {
 		return oauthaccount.OAuthAccount{}, err
@@ -101,6 +101,6 @@ func scanOAuthAccount(sc scanner) (oauthaccount.OAuthAccount, error) {
 		return oauthaccount.OAuthAccount{}, pgxdb.MapError(err)
 	}
 	a.LinkedAt = linkedAt.UTC()
-	a.TokenExpiresAt = fromNullableTime(tokenExpiresAt)
+	a.TokenExpiresAt = pgxdb.FromNullTime(tokenExpiresAt)
 	return a, nil
 }

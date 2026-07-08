@@ -518,3 +518,78 @@ changed (all six deleted helpers were private).
   and the nullable published_at). Killed, port free.
 - **Divergence** — none. D4 (pgx nullable-time), D5 (keyset `ListPage`), D6
   (rows-affected) still remaining.
+
+### 2026-07-08 — task-D4 executed (reconcile the pgx nullable-time helpers)
+
+**The `pgxdb` connector now owns the nullable-time helpers; the two pgx stores
+delegate.** New file `integrations/datastores/pgxdb/timestamps.go` (stdlib-only —
+`time`; no go.mod change) exports the reconciled absent-model **pair plus its two
+read twins**, all returning/consuming `*time.Time` (pgx's native nullable
+TIMESTAMPTZ binding — nil → NULL — so the wire behavior is byte-identical to the
+former private helpers): `NullTime(time.Time) *time.Time` (zero → NULL, auth's
+value-typed contract), `FromNullTime(*time.Time) time.Time` (NULL → zero),
+`NullTimePtr(*time.Time) *time.Time` (nil → NULL, cms's pointer-typed contract),
+`FromNullTimePtr(*time.Time) *time.Time` (NULL → nil). Divergence 2 shipped as
+BOTH encodings, never collapsed; doc comments cross-reference each write/read
+twin. The pgx layer (unlike turso's TEXT storage) needs no format/parse primitive
+— the driver scans TIMESTAMPTZ directly into `*time.Time` — so the bundle is
+null-mapping only.
+
+- **auth pgx** (value-typed, zero → NULL) — adopted `NullTime`/`FromNullTime`;
+  deleted `helpers.go`'s `nullableTime`/`fromNullableTime` round-trip pair + the
+  now-orphan `time` import; the 9 call sites across `oauth_accounts.go`,
+  `invitations.go`, `api_keys.go` rewired to `pgxdb.NullTime`/`pgxdb.FromNullTime`
+  (all three files already imported `pgxdb` for `MapError`). Bodies map 1:1 —
+  `NullTime` ≡ former `nullableTime`, `FromNullTime` ≡ former `fromNullableTime`.
+- **cms pgx** (pointer-typed, nil → NULL) — adopted `NullTimePtr` (write) and
+  **closed the read-back gap D1 flagged** with `FromNullTimePtr`: the two write
+  sites in `entries.go` moved from the private `publishedAt(...)` to
+  `pgxdb.NullTimePtr(e.PublishedAt)`; `scanEntry`'s open-coded read
+  (`if published != nil { t := published.UTC(); e.PublishedAt = &t }`) collapsed
+  to `e.PublishedAt = pgxdb.FromNullTimePtr(published)`. Deleted `publishedAt` +
+  the now-orphan `time` import from `helpers.go` (`entries.go` keeps `time` for
+  its scan-var declarations). `NullTimePtr` ≡ former `publishedAt`.
+
+- **jobs pgx disposition** — **left untouched, per D1's "2 pgx stores + connector"
+  scope.** jobs pgx defines NO nullable-time helper functions (nothing to dedup);
+  it does open-code the same pointer read-back pattern that `FromNullTimePtr` now
+  replaces, at 3 sites (`queue.go` `claimedAt`/`completedAt`, `schedules.go`
+  `lastRunAt`). These are a latent adoption candidate — noted here the way D1
+  parked jobs turso's `retryBusy` — but adopting them was out of D4's ratified
+  scope, so this leg leaves them. Follow-on if a D-series cleanup revisits jobs.
+- **Note — the fourth function.** task-D4 names three (`NullTime`/`FromNullTime`
+  + `NullTimePtr`); shipping `FromNullTimePtr` is the minimal addition required to
+  satisfy the same task line's "migrate … including cms's open-coded read side …
+  preserving each feature's absent-model (cms pointer-typed, nil → NULL)" — a
+  value-returning read helper would have silently converted cms to the value
+  absent-model. It is `NullTimePtr`'s natural read twin and gives cms the symmetric
+  round-trip pair auth already had. Recorded as a conscious, in-spirit expansion
+  of the named surface, not a redesign.
+
+- **Connector test** — `timestamps_test.go` (`package pgxdb` internal-test
+  convention): both encodings both directions + round-trip identity — `NullTime`
+  zero→nil / set→UTC instant, `FromNullTime` nil→zero, their round-trip; the same
+  for `NullTimePtr`/`FromNullTimePtr` (nil↔NULL, set→UTC); and a
+  `NullTimePtr(&zero)` case pinning the value-vs-pointer semantic difference (a
+  pointer to a zero time is a present value, only nil is absent). Hermetic (pure
+  value-mapping, no DSN). All PASS.
+- **Verification** — connector `go test ./...` PASS; both pgx store modules
+  build/vet/`go test ./...` PASS. Per-feature storetest gate green:
+  `features/{auth,cms,jobs}` roots + all three `storetest` packages PASS (the
+  hermetic conformance runs the turso path over modernc sqlite; the pgx
+  read/write path I touched is exercised live only under the DSN-gated suites).
+  DSN-gated suites skip loudly: auth-pgx `TestConformance_Postgres` + cms-pgx
+  `TestConformance_Postgres` both `SKIP … POSTGRES_TEST_DSN not set — postgres
+  conformance NOT verified`; each pgx module's hermetic `TestExportMigrations`
+  PASS. `make check` → **all checks passed** (27 modules build/vet/test, three
+  integration-tag vets, all six guards; no templ touched → drift clean). gofmt
+  clean on all eight changed files.
+- **Real-interaction** — `examples/minimal` :8081 `GET /` + `GET
+  /products/widget-3000` → 200/200 (server log confirms both), killed, port free.
+  No live pgx drive this leg — a POSTGRES_TEST_DSN docker drive of the auth/cms
+  pgx nullable-time round-trip belongs to events-v1 phase 4; the hermetic-only
+  scope is honest here (connector helpers unit-tested; store code compiles + is
+  covered by the DSN-gated conformance when creds land).
+- **Divergence** — the `FromNullTimePtr` fourth-function addition above (in
+  spirit, flagged). Otherwise none. D5 (keyset `ListPage`), D6 (rows-affected)
+  still remaining.
