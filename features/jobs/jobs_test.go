@@ -222,34 +222,44 @@ func (r *recordingRouter) Handle(method, path string, h http.HandlerFunc, mw ...
 	r.calls++
 }
 
-func TestRegister_ValidationAndNoRoutes(t *testing.T) {
-	router := &recordingRouter{}
-	mount := feature.Mount{Router: router, Logger: discardLogger()}
-
+// TestNewService_Validation covers the construction-time rejections the host
+// gets at build (the seam Register no longer rebuilds).
+func TestNewService_Validation(t *testing.T) {
 	t.Run("nil queue", func(t *testing.T) {
-		err := Register(mount, Repositories{}, Config{Handlers: demoHandlers()})
+		_, err := NewService(Repositories{}, Config{Handlers: demoHandlers()})
 		if !errors.Is(err, ErrQueueRequired) {
 			t.Fatalf("err = %v, want ErrQueueRequired", err)
 		}
 	})
 
-	t.Run("empty handlers", func(t *testing.T) {
-		err := Register(mount, Repositories{Queue: newMemQueue()}, Config{})
-		if !errors.Is(err, ErrHandlersRequired) {
-			t.Fatalf("err = %v, want ErrHandlersRequired", err)
-		}
-	})
-
 	t.Run("nil handler value", func(t *testing.T) {
-		err := Register(mount, Repositories{Queue: newMemQueue()}, Config{Handlers: map[string]HandlerFunc{"demo": nil}})
+		_, err := NewService(Repositories{Queue: newMemQueue()}, Config{Handlers: map[string]HandlerFunc{"demo": nil}})
 		if !errors.Is(err, ErrInvalidHandler) {
 			t.Fatalf("err = %v, want ErrInvalidHandler", err)
 		}
 	})
+}
+
+func TestRegister_ValidationAndNoRoutes(t *testing.T) {
+	router := &recordingRouter{}
+	mount := feature.Mount{Router: router, Logger: discardLogger()}
+
+	t.Run("empty handlers", func(t *testing.T) {
+		svc, err := NewService(Repositories{Queue: newMemQueue()}, Config{})
+		if err != nil {
+			t.Fatalf("NewService: %v", err)
+		}
+		if err := svc.Register(mount); !errors.Is(err, ErrHandlersRequired) {
+			t.Fatalf("err = %v, want ErrHandlersRequired", err)
+		}
+	})
 
 	t.Run("happy path mounts no routes", func(t *testing.T) {
-		err := Register(mount, Repositories{Queue: newMemQueue()}, Config{Handlers: demoHandlers()})
+		svc, err := NewService(Repositories{Queue: newMemQueue()}, Config{Handlers: demoHandlers()})
 		if err != nil {
+			t.Fatalf("NewService: %v", err)
+		}
+		if err := svc.Register(mount); err != nil {
 			t.Fatalf("Register: %v", err)
 		}
 		if router.calls != 0 {

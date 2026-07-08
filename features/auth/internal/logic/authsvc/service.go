@@ -13,7 +13,6 @@ package authsvc
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -748,20 +747,14 @@ func (s *Service) RateLimitByIP(keyPrefix string, perMinute int) web.Middleware 
 	}
 }
 
-// writeUnauthorized writes a 401 JSON error mirroring the internal/http shape,
-// so RequireUser's rejection matches the feature's other error responses.
+// writeUnauthorized writes a 401 JSON error via the shared sdk responder, so
+// RequireUser's rejection matches the feature's other error responses (FS9).
 func writeUnauthorized(w http.ResponseWriter) {
-	e := web.ErrUnauthorized("authentication required")
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(e.Status)
-	_ = json.NewEncoder(w).Encode(e)
+	web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 }
 
-// writeTooManyRequests writes a 429 JSON error mirroring the login rate-limit
-// response, so a rate-limited public route matches the feature's error shape.
+// writeTooManyRequests writes a 429 JSON error via the shared sdk responder, so
+// a rate-limited public route matches the feature's error shape (FS9).
 func writeTooManyRequests(w http.ResponseWriter) {
-	e := web.NewError(http.StatusTooManyRequests, "too many requests").WithCode("rate_limited")
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(e.Status)
-	_ = json.NewEncoder(w).Encode(e)
+	web.RespondJSONError(w, web.NewError(http.StatusTooManyRequests, "too many requests").WithCode("rate_limited"))
 }

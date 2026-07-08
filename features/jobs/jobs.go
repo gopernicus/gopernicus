@@ -21,8 +21,8 @@
 //     and scheduling surface, including the cross-feature primitive-typed
 //     Enqueue.
 //   - NewRuntime(svc) / Runtime.Run — the runtime the host explicitly runs.
-//   - Register — validates the (repos, cfg) pair and logs; registers no routes
-//     and starts no goroutines.
+//   - Service.Register — validates the built Service carries handlers and logs;
+//     registers no routes and starts no goroutines.
 package jobs
 
 import (
@@ -278,23 +278,20 @@ func (r *Runtime) Run(ctx context.Context) error { return r.rt.Run(ctx) }
 // wakeChan exposes the Runtime's wake channel for the wiring assertion in tests.
 func (r *Runtime) wakeChan() <-chan struct{} { return r.wake }
 
-// Register validates the (repos, cfg) pair — the same errors NewService returns,
-// plus a non-empty Handlers requirement — and logs the registration. It
-// registers NO routes (the /jobs/* namespace is a documentation reservation
-// until the v2 admin surface) and starts NO goroutines: the host owns the run
-// loop and calls Runtime.Run explicitly. Migrations are the store adapter's
-// concern, not this feature core's.
-func Register(m feature.Mount, repos Repositories, cfg Config) error {
-	if _, err := NewService(repos, cfg); err != nil {
-		return err
-	}
-	if len(cfg.Handlers) == 0 {
+// Register mounts the already-built Service into the host: it requires the
+// Service to carry at least one handler and logs the registration. It registers
+// NO routes (the /jobs/* namespace is a documentation reservation until the v2
+// admin surface) and starts NO goroutines: the host owns the run loop and calls
+// Runtime.Run explicitly. Migrations are the store adapter's concern, not this
+// feature core's.
+func (s *Service) Register(m feature.Mount) error {
+	if len(s.handlers) == 0 {
 		return ErrHandlersRequired
 	}
 	if m.Logger != nil {
 		m.Logger.Info("registered jobs feature",
-			"handlers", len(cfg.Handlers),
-			"scheduler", repos.Schedules != nil,
+			"handlers", len(s.handlers),
+			"scheduler", s.repos.Schedules != nil,
 		)
 	}
 	return nil

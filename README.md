@@ -50,14 +50,20 @@ tagged versions, not the workspace.
   of an `sdk` port ships *inside* `sdk` as a default (`cacher.Memory`,
   `filestorage.Disk`, `email.SMTP`/`Console`); anything needing a third-party
   library is an `integrations/<category>/<tech>` module.
-- **A feature is a datastore-free core + store-adapter modules.**
-  `features/<name>` never imports `integrations/`, `examples/`, or its own
-  `stores/`; each `features/<name>/stores/<dialect>` is its own module owning
-  that dialect's SQL and migrations.
+- **A feature is an sdk-only core + per-concern sibling modules.**
+  `features/<name>`'s go.mod requires exactly `sdk` and never imports
+  `integrations/`, `examples/`, or its own `stores/`/`views/`; each
+  `features/<name>/stores/<dialect>` is its own module owning that dialect's
+  SQL and migrations, and presentation defaults ship the same way
+  (`views/<pkg>`, where a feature has HTML).
 - **No init() registration, no service locator.** A host wires a feature
-  explicitly via `feature.Mount` + `Register(mount, repos, cfg)` in its `main`.
+  explicitly in its `main`: `svc, err := name.NewService(repos, cfg)` then
+  `svc.Register(mount)` — the public `Service` is the feature's use-case
+  surface, and the shipped HTTP layer is an optional adapter over it (cms
+  still takes the earlier `Register(mount, repos, cfg)` form until its
+  public Service lands).
 - **Dependencies point inward.** `examples` → `features`/`integrations` →
-  `sdk`, never the reverse. `make check`'s four layering guards enforce this.
+  `sdk`, never the reverse. `make check`'s six layering guards enforce this.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full detail, including the
 feature contract (`sdk/feature`), the app-hexagon pattern (`internal/logic`),
@@ -80,6 +86,6 @@ make run                # or: cd examples/cms && go run ./cmd/server
 ```
 
 From the repo root, `make check` builds, vets, and tests all twenty-six modules
-and runs the four layering guards; `make test-stores` runs the live dialect
+and runs the six layering guards; `make test-stores` runs the live dialect
 conformance suites (expects `POSTGRES_TEST_DSN` / `TURSO_*`). See [examples/cms/README.md](examples/cms/README.md)
 for that host's full env/make-target reference.

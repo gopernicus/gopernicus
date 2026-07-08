@@ -118,16 +118,16 @@ func run(ctx context.Context, log *slog.Logger) error {
 		Logger:               log,
 	}
 
-	// authSvc is the cross-feature surface: its RequireUser method value is the
-	// middleware cms gates its admin routes on, and RequirePrincipal/CurrentPrincipal
-	// back the host demo routes. The auth feature's own HTTP routes are mounted
-	// separately via auth.Register (§3's "built twice" seam — both point at the
-	// same repos/config, hold no independent state).
+	// authSvc is the auth feature's driving surface (FS2): its RequireUser method
+	// value is the middleware cms gates its admin routes on, and RequirePrincipal/
+	// CurrentPrincipal back the host demo routes. The feature's own HTTP routes are
+	// the optional adapter over that surface — built once here, mounted once via
+	// authSvc.Register(mount).
 	authSvc, err := auth.NewService(authRepos, authCfg)
 	if err != nil {
 		return err
 	}
-	if err := auth.Register(mount, authRepos, authCfg); err != nil {
+	if err := authSvc.Register(mount); err != nil {
 		return err
 	}
 

@@ -23,7 +23,7 @@ worked example `examples/cms`.
     oauth/google/         module …/integrations/oauth/google            — a connector (coreos/go-oidc v3)
     scheduling/robfig-cron/ module …/integrations/scheduling/robfig-cron — a connector (robfig/cron v3)
     tracing/otel/         module …/integrations/tracing/otel            — a connector (OpenTelemetry family; stdout/OTLP exporters, R-KV1)
-  features/                                                             — each: logic/ (public ports+entities) + internal/logic (+ internal/inbound where the feature registers routes — jobs v1 has none) + storetest/
+  features/                                                             — each: logic/ (public ports+entities) + internal/logic (+ internal/inbound where the feature registers routes — jobs v1 has none) + storetest/ + per-concern sibling modules (stores/<pkg>; views/<pkg> where the feature has HTML — FS3)
     auth/                 module github.com/gopernicus/gopernicus/features/auth               — session-auth hexagon (datastore-free)
       stores/pgx/         module …/features/auth/stores/pgx             — auth's pgx store adapter
       stores/turso/       module …/features/auth/stores/turso           — auth's Turso store adapter
@@ -62,15 +62,17 @@ the workspace. Module paths are rooted at `github.com/gopernicus/gopernicus`.
 
 ## Kinds of module — the taxonomy
 
-Four kinds of thing live in this ecosystem (ratified 2026-07-02, R6 —
-`.claude/plans/roadmap/00-intersections.md` §1):
+Five kinds of thing live in this ecosystem (ratified 2026-07-02, R6 —
+`.claude/plans/roadmap/00-intersections.md` §1; amended 2026-07-07,
+feature-standard FS3, adding the views-module row):
 
 | kind | definition | examples | swap unit |
 |---|---|---|---|
 | **sdk facility** | a capability **port** + a first-party stdlib default + a conformance suite; its state is opaque to the host (no host-owned schema, no migrations, no routes) | `cacher`+`Memory`, `email`+`Console`/`SMTP`, `ratelimiter`+`Memory`, `filestorage`+`Disk`, `workers` (pool + `Runner[T]`) | a config value — the swap is invisible outside the process |
 | **integration** | a third-party backend for a port; isolates exactly one external dependency — a third-party library or an external vendor's live API contract; one module | `datastores/turso`, `datastores/pgxdb`, `kvstores/goredis` | a module import in the host's `main` |
-| **feature** | a mountable domain module: own entities, **own durable schema + migrations**, and/or **own route surface** | `cms`, `auth`, `jobs`; next: `events` | a `Register` call |
+| **feature** | a mountable domain module: own entities, **own durable schema + migrations**, and/or **own route surface**; its core module requires **sdk only** (FS1, 2026-07-07) | `cms`, `auth`, `jobs`; next: `events` | `NewService` + a `svc.Register` call |
 | **store module** | a feature's store implementation — SQL + migrations written against one driver package's API (`stores/<package>`) | `cms/stores/turso`, `cms/stores/pgx` | a module import + one `Open` call |
+| **views module** | a feature's bundled presentation default — the implementation of the core's `Views` port, written against one view package's API (`views/<package>`; FS3, 2026-07-07 — amends R6's four-kind table). Nil `Config.Views` → the feature's HTML surface is not registered, uniformly | `cms/views/templ` (lands at feature-standard B2) | a module import + one `Config` field |
 
 The two litmus tests: **if swapping the adapter changes what the host must
 migrate, it's a store module per implementation; if the swap is invisible outside
@@ -150,15 +152,24 @@ type Mount struct {
 
 (quoted from `sdk/feature/feature.go`)
 
-**Feature anatomy.** A feature module (`features/<name>`) is datastore-free —
-it never imports `integrations/`, `examples/`, or its own `stores/`; its
-public packages are ports + entities, its services and HTTP are `internal/`.
-The host supplies a `Repositories` struct (either a feature store adapter
-module, `features/<name>/stores/<package>`, or its own implementation — see
-`examples/minimal`'s `internal/memstore`) and a `Config` struct for
-view/infrastructure overrides; the feature exposes a single
-`Register(mount feature.Mount, repos Repositories, cfg Config) error` entry
-point the host calls from its `main`.
+**Feature anatomy.** A feature module (`features/<name>`) requires **sdk
+only** in its `go.mod` (FS1, ratified 2026-07-07 — the same structural move
+as sdk's empty go.mod, machine-checked in `make check`) and never imports
+`integrations/`, `examples/`, or its own `stores/`/`views/`; its public
+packages are ports + entities, its services and HTTP are `internal/`.
+Anything carrying a third-party dependency ships as a per-concern sibling
+module: persistence defaults in `stores/<package>`, presentation defaults in
+`views/<package>` (FS3/FS4 — a feature has a `views/` only if it has HTML;
+nil `Config.Views` → the HTML surface is not registered). The host supplies
+a `Repositories` struct (a store adapter module or its own implementation —
+see `examples/minimal`'s `internal/memstore`) and a `Config` struct for
+view/infrastructure overrides, then builds and mounts per FS2 (ratified
+2026-07-07, superseding the earlier single-`Register(mount, repos, cfg)`
+contract): `svc, err := name.NewService(repos, cfg)` — the public `Service`
+is the feature's **driving surface**, its use-cases promoted by thin
+delegation — and `svc.Register(mount)` mounts the shipped HTTP layer, an
+optional convenience adapter a host may skip entirely in favor of its own
+handlers over the Service.
 
 **Migrations (D4: scaffold-and-own).** A feature store's SQL is scaffolded
 into the host's own migration tree (e.g. `examples/cms/workshop/migrations`)

@@ -269,11 +269,12 @@ protocol).
                  │                                              │
                  └──────────────────┬───────────────────────────┘
                                     ▼
-        auth.NewService(repos, cfg) ──► RequireUser / RequirePrincipal /
-                 │                      CurrentUser / CurrentPrincipal
-                 │                      → wired into other features + host routes
-                 ▼
-        auth.Register(mount, repos, cfg) ──► the /auth/* route surface
+        auth.NewService(repos, cfg) ──► the driving surface (FS2): every use-case
+                 │                      as a method (Login, RegisterUser, …) plus
+                 │                      RequireUser / RequirePrincipal / CurrentUser /
+                 │                      CurrentPrincipal → wired into other features
+                 ▼                      + host routes
+        authSvc.Register(mount) ──► mounts the /auth/* route surface (optional adapter)
 ```
 
 ```go
@@ -374,14 +375,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 	router := web.NewWebHandler(web.WithLogging(log))
 	router.Use(web.RequestID(), web.Logger(log), web.Panics(log))
 
-	// Built twice on purpose (documented v1 seam): NewService for the
-	// cross-feature middleware surface, Register for auth's own routes. Both
-	// point at the same repos/config and hold no independent state.
+	// Built once, mounted once (FS2): NewService is the feature's driving surface
+	// — its use-case methods plus the cross-feature middleware — and authSvc.Register
+	// mounts the shipped HTTP adapter over exactly that surface.
 	authSvc, err := auth.NewService(repos, cfg)
 	if err != nil {
 		return err
 	}
-	if err := auth.Register(feature.Mount{Router: router, Logger: log}, repos, cfg); err != nil {
+	if err := authSvc.Register(feature.Mount{Router: router, Logger: log}); err != nil {
 		return err
 	}
 

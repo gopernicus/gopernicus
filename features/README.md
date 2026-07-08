@@ -9,16 +9,26 @@ the contract the *next* feature (auth, phase 4+) is held to.
 
 ## 1. The definition, and the dial
 
-A feature reaches its host through exactly two things:
+A feature reaches its host through exactly three things (FS2, ratified
+2026-07-07 — supersedes this section's earlier two-thing form, whose single
+`Register(mount, repos, cfg)` rebuilt the service a host may already hold):
 
 - **Explicit dependencies as data.** A `Repositories` struct of the outbound
   ports the feature needs (the host, or a `stores/<package>` adapter module,
   fills it) and a `Config` struct for view/infrastructure overrides and
   host-registered extensions.
-- **Narrow registration.** A single `Register(mount feature.Mount, repos
-  Repositories, cfg Config) error` entry point the host calls once from its
-  `main`. `feature.Mount{Router, Logger}` (`sdk/feature`) is the only host
-  context the feature can reach — no service locator, no global registry.
+- **One build.** `NewService(repos, cfg) (*Service, error)` validates the
+  wiring once and returns the feature's public `Service` — the **driving
+  surface**: the use-cases, promoted by thin delegation from the sealed
+  interior. This is what a host's own handlers, another feature's port, or
+  the shipped transport all consume.
+- **Narrow mount, optional.** `svc.Register(mount feature.Mount) error`
+  mounts the feature's shipped HTTP surface — an optional convenience
+  adapter over the Service. A host may mount it, mount part of it
+  (subsystem deny-by-absence), or skip it entirely and write its own
+  handlers against the Service. `feature.Mount{Router, Logger}`
+  (`sdk/feature`) is the only host context the feature can reach — no
+  service locator, no global registry.
 
 There is deliberately **no `init()` registration and no service locator**
 (constitution rule 5, `00-overview.md`). This mirrors ordinary Go idiom:
@@ -36,13 +46,13 @@ ratified 2026-07-02 — `.claude/plans/roadmap/feature-trio-relayout.md`):
 
 | path | contents | visibility |
 |---|---|---|
-| `<name>.go` | the feature's host-facing exported surface: `Repositories`, `Config`, `Register(mount, repos, cfg) error` — plus whatever additional exported constructors/types cross-feature or host-facing needs require (e.g. auth's `Service`/`NewService`, its `PasswordHasher` port) | public — the socket |
+| `<name>.go` | the feature's host-facing exported surface: `Repositories`, `Config`, `NewService(repos, cfg) (*Service, error)`, and the `Service` driving surface with its `Register(mount) error` mount method (FS2) — plus whatever additional exported types host-facing needs require (e.g. auth's `PasswordHasher` port, its `Principal` alias) | public — the socket |
 | `logic/<domain>/` (e.g. `logic/content/`, `logic/user/`) | the hexagon's public rim: entities + repository ports (interfaces store adapters and host stores implement) | public **by necessity** — hosts and store modules import these across module boundaries, and Go forbids importing another module's `internal/` |
 | `internal/logic/<domain>svc/` | domain services: business rules over the ports, no HTTP/SQL — the hexagon's sealed interior | internal |
-| `internal/inbound/http/` | driving adapter: route table (`Mount`), handlers, `templ` views | internal |
+| `internal/inbound/http/` | driving adapter: route table (`Mount`), handlers — thin delegations to the Service, writing responses through `sdk/web` responders only (FS9). Views are consumed through the feature's `Views` port, never hardcoded (FS3; cms converges at feature-standard B2) | internal |
 | `stores/<package>/` | a **separate module** — the store implementation written against one driver package's API (`stores/pgx`, `stores/turso`; R-KV3), owning its SQL, canonical migrations, and `ExportMigrations` | public API, but never imported by the feature core |
 | `storetest/` | the exported conformance suite (`Run(t, newRepos)`) + the test-scoped reference in-memory implementation; every store implementation runs it | public test-support package inside the feature core (stdlib + sdk only — G2 keeps drivers out) |
-| `theme/` (optional) | a view-override seam (`PublicViews` + `Default()`) for host chrome customization | public |
+| `views/<pkg>` (per-concern, only if the feature has HTML) | a **separate module** — the bundled default implementation of the feature core's `Views` port, named for the package it's built on (`views/templ`; R-KV2). The core defines the port (domain-typed params, `web.Renderer` returns) and registers its HTML surface only when `Config.Views` is non-nil — uniform nil → HTML off (FS3). A host wires the default with one import + one Config field, implements the port itself (`html/template` via `web.Template` works in three lines), or wires nothing and runs API-only with zero view tech in its graph. cms's in-core `theme/` (`PublicViews` + `Default()`) is the reference implementation that proved the shape; it migrates to `views/templ` at feature-standard B2 | public API, never imported by the feature core |
 
 **How a feature maps onto the app hexagon** (`internal/{inbound,logic,
 outbound}` — ARCHITECTURE.md's app pattern). A feature is the same hexagon,
@@ -61,10 +71,35 @@ interior wearing the app pattern's names, `stores/` is outbound
 module-ized.** The dependency arrows of constitution rule 8 are identical
 on both sides.
 
-**Extension model (the `internal/` discipline, ratified 2026-07-02):**
-hosts customize via deliberate seams — `Config` fields, registered data
-(cms content types/templates), and structural ports — never via interior
-reach-ins. If a host legitimately needs something `internal/` seals, that
+**Extension model (the four tiers, ratified 2026-07-07, feature-standard
+FS1–FS10; extends the `internal/` discipline ratified 2026-07-02):** hosts
+customize via deliberate seams — never via interior reach-ins. Every host
+need lands in exactly one of four tiers:
+
+1. **Configure** — nil-safe `Config` fields with safe defaults (auth's nil
+   `RateLimiter` → in-memory) and **deny-by-absence subsystems** (no
+   `Providers` → no OAuth routes; no `Granter` → no invitation routes).
+   Absent field = subsystem off, structurally.
+2. **Replace a component** — interface-valued `Config` fields with bundled
+   defaults (`Views`, FS3) and registered data (cms `Types`/`Templates`,
+   jobs `Handlers`). The port lives in the core; defaults that carry a
+   dependency ship as sibling modules (FS1/FS4).
+3. **Inject at the seams** — middleware fields (cms `AdminMiddleware`
+   taking auth's `RequireUser`; structural typing, zero imports either
+   way — the C2 pattern, §5).
+4. **Extend past the feature** — the public `Service` driving surface
+   (FS2): a host writes its own handlers, routes, or flows calling the
+   promoted use-cases directly; the shipped transport is never the only
+   door.
+
+Configuration is always a `Config` struct with documented nil semantics —
+never functional options (FS6; two idioms would deliver nothing the struct
+doesn't). Route tables are built as data (`[]feature.Route`) internally;
+the public per-route override hook is deliberately unshipped until a real
+host hits the gap tiers 1+4 don't cover (FS7). Behavior hooks
+(on-register, on-login) ride the events rail when it lands; a sync hook in
+`Config` earns a place only with veto/mutate semantics, argued case by
+case (FS8). If a host legitimately needs something `internal/` seals, that
 is the signal to **add a seam** (a Config field, a port — the
 `AdminMiddleware` precedent), not to export the interior. Every exported
 symbol is a compatibility promise; the sealed interior is what lets a
@@ -83,10 +118,27 @@ store isolates neither, so this refusal stands.
 
 ## 3. The rules
 
+- **sdk-only core** (FS1, ratified 2026-07-07 — supersedes D7's "accept for
+  now" via its own revisit clause). A feature core module's `go.mod`
+  requires exactly `github.com/gopernicus/gopernicus/sdk` — nothing else
+  (the dev-only relative `replace` is permitted pre-tag; a `tool` directive
+  counts as a require). Same structural move as sdk's empty `go.mod`.
+  Anything carrying a third-party dependency ships as a sibling module:
+  persistence → `stores/<pkg>`, presentation → `views/<pkg>`. Sibling
+  modules are **per-concern, never mandatory** (FS4): jobs, with no HTTP
+  and no views, is a fully conforming feature. Machine-checked in `make
+  check`.
 - **Datastore-free core.** `features/<name>` never imports `integrations/`,
-  `examples/`, or its own `stores/`. Guard G2 (`make guard-feature-isolation`)
-  enforces this by grep; violating it is a build-time architecture bug, not a
-  style note.
+  `examples/`, or its own `stores/` (or `views/`). Guard G2
+  (`make guard-feature-isolation`) enforces this by grep; violating it is a
+  build-time architecture bug, not a style note.
+- **Transport uses sdk/web** (FS9). Handlers respond through `web.Respond*`
+  / `web.Render` / `web.Err*`; a feature-local write helper is a red flag
+  in review and a guard failure. When the sdk is missing a capability a
+  feature needs, the fix lands in the sdk if it passes `sdk/README.md`'s
+  admission policy; otherwise the feature keeps one named local helper
+  with a comment citing the failed admission test — never a silent fork of
+  an existing sdk responder.
 - **Multi-datastore out of the box** (ratified 2026-07-02, DP1 —
   `.claude/plans/roadmap/datastore-portability.md` §2). The supported
   store-implementation set is **{turso, pgx}** — a named, amendable list
@@ -159,7 +211,9 @@ contract:
        Router: feature.PrefixRegistrar{Prefix: "/blog", Next: router},
        Logger: log,
    }
-   cms.Register(mount, repos, cfg)
+   svc.Register(mount) // FS2 shape (auth, jobs). cms still takes the
+                       // pre-FS2 cms.Register(mount, repos, cfg) until its
+                       // public Service lands (feature-standard B3).
    ```
 
    It normalizes the slash bookkeeping (trailing slash on the prefix, a
@@ -273,16 +327,18 @@ cite by item number:
 
 1. Module compiles standalone (`cd features/<name> && go build ./...`) with
    its own `go.mod`.
-2. `go.mod` has **no** datastore driver dependency — only stdlib + `sdk` (+
-   any view-rendering deps the feature legitimately owns, per D7's cms
-   precedent). Datastore drivers live in `stores/<package>`, a separate
-   module.
+2. `go.mod` requires **only** `sdk` (FS1; the D7 view-deps allowance is
+   superseded). Datastore drivers live in `stores/<package>`, view tech in
+   `views/<package>` — separate modules each.
 3. `features/<name>` never imports `integrations/`, `examples/`, or
    `features/<name>/stores/*` (guard G2 covers this once the guard's module
    list is extended to the new feature — flag if it isn't).
-4. The feature's root type conforms to the `sdk/feature` contract at compile
-   time: `Register(mount feature.Mount, repos Repositories, cfg Config)
-   error` exists and only reaches `mount.Router` / `mount.Logger`.
+4. The feature exposes the FS2 trio: `NewService(repos, cfg) (*Service,
+   error)` (loud validation), the `Service` driving surface (use-cases by
+   thin delegation), and `svc.Register(mount feature.Mount) error` that
+   only reaches `mount.Router` / `mount.Logger`. The shipped transport is
+   an optional adapter over the Service — a host must be able to skip it
+   and still reach every use-case.
 5. Each `stores/<package>` adapter module exposes `Repositories(db)` and
    `ExportMigrations(dst)`; it does not register or apply migrations itself.
 6. A minimal-host proof exists: a `go run`-able host with an in-memory (or

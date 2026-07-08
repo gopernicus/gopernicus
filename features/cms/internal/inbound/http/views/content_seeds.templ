@@ -16,7 +16,7 @@ templ ArticleContent(e content.Entry) {
 				· { e.PublishedAt.Format("January 2, 2006") }
 			}
 		</p>
-		@templ.Raw(RenderMarkdown(e.Body))
+		@templ.Raw(RenderPlainText(e.Body))
 	</article>
 }
 
@@ -26,6 +26,6 @@ templ ArticleContent(e content.Entry) {
 templ PageContent(e content.Entry) {
 	<article>
 		<h1>{ e.Title }</h1>
-		@templ.Raw(RenderMarkdown(e.Body))
+		@templ.Raw(RenderPlainText(e.Body))
 	</article>
 }

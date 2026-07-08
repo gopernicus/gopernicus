@@ -22,8 +22,8 @@ import (
 // --- compile-time seam assertions ---
 
 var (
-	// Register conforms to the feature contract's registration signature.
-	_ func(feature.Mount, Repositories, Config) error = Register
+	// Register conforms to the FS2 mount signature: a method on the built Service.
+	_ func(feature.Mount) error = (&Service{}).Register
 	// Service.RequireUser is a web.Middleware via its method value.
 	_ web.Middleware = (&Service{}).RequireUser
 )
@@ -137,13 +137,6 @@ func TestNewServiceDefaultsRateLimiter(t *testing.T) {
 	}
 }
 
-func TestRegisterRequiresHasher(t *testing.T) {
-	err := Register(feature.Mount{}, Repositories{}, Config{Mailer: stubMailer{}})
-	if !errors.Is(err, ErrHasherRequired) {
-		t.Errorf("Register nil Hasher: err=%v, want ErrHasherRequired", err)
-	}
-}
-
 // TestNewServiceOAuthPartialWiring proves the loud partial-wiring error: providers
 // set but either oauth repository nil → ErrOAuthReposRequired; both wired → ok.
 func TestNewServiceOAuthPartialWiring(t *testing.T) {
@@ -175,7 +168,11 @@ func TestNewServiceOAuthOffAllowsNilRepos(t *testing.T) {
 // provider is wired, at the public Register surface.
 func TestRegisterOAuthDenyByAbsence(t *testing.T) {
 	h := web.NewWebHandler()
-	if err := Register(feature.Mount{Router: h}, Repositories{}, Config{Hasher: stubHasher{}, Mailer: stubMailer{}}); err != nil {
+	svc, err := NewService(Repositories{}, Config{Hasher: stubHasher{}, Mailer: stubMailer{}})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	if err := svc.Register(feature.Mount{Router: h}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	req := httptest.NewRequest("GET", "/auth/oauth/github/start", nil)
@@ -210,7 +207,11 @@ func TestNewServiceMachinePartialWiring(t *testing.T) {
 // (404) when no machine repos are wired, at the public Register surface.
 func TestRegisterMachineDenyByAbsence(t *testing.T) {
 	h := web.NewWebHandler()
-	if err := Register(feature.Mount{Router: h}, Repositories{}, Config{Hasher: stubHasher{}, Mailer: stubMailer{}}); err != nil {
+	svc, err := NewService(Repositories{}, Config{Hasher: stubHasher{}, Mailer: stubMailer{}})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	if err := svc.Register(feature.Mount{Router: h}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	req := httptest.NewRequest("GET", "/auth/service-accounts", nil)
@@ -226,7 +227,11 @@ func TestRegisterMachineDenyByAbsence(t *testing.T) {
 func TestRegisterMachineMountsRoutes(t *testing.T) {
 	h := web.NewWebHandler()
 	repos := Repositories{ServiceAccounts: stubServiceAccounts{}, APIKeys: stubAPIKeys{}}
-	if err := Register(feature.Mount{Router: h}, repos, Config{Hasher: stubHasher{}, Mailer: stubMailer{}}); err != nil {
+	svc, err := NewService(repos, Config{Hasher: stubHasher{}, Mailer: stubMailer{}})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	if err := svc.Register(feature.Mount{Router: h}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	req := httptest.NewRequest("GET", "/auth/service-accounts", nil)
@@ -239,8 +244,11 @@ func TestRegisterMachineMountsRoutes(t *testing.T) {
 
 func TestRegisterMountsRoutes(t *testing.T) {
 	h := web.NewWebHandler()
-	err := Register(feature.Mount{Router: h}, Repositories{}, Config{Hasher: stubHasher{}, Mailer: stubMailer{}})
+	svc, err := NewService(Repositories{}, Config{Hasher: stubHasher{}, Mailer: stubMailer{}})
 	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	if err := svc.Register(feature.Mount{Router: h}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	// The mounted logout route exists and is session-gated (401 without one),

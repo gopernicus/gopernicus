@@ -106,7 +106,7 @@ func (h *handlers) createInvitation(w http.ResponseWriter, r *http.Request) {
 	}
 	invitedBy, ok := h.svc.CurrentUser(r.Context())
 	if !ok {
-		writeError(w, web.ErrUnauthorized("authentication required"))
+		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return
 	}
 	res, err := h.inv.Create(r.Context(), invitationsvc.CreateInput{
@@ -119,14 +119,14 @@ func (h *handlers) createInvitation(w http.ResponseWriter, r *http.Request) {
 		Redirect:     req.Redirect,
 	})
 	if err != nil {
-		writeErr(w, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
 	if res.DirectlyAdded {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "member_added"})
+		web.RespondJSONOK(w, map[string]string{"status": "member_added"})
 		return
 	}
-	writeJSON(w, http.StatusCreated, newInvitationResponse(res.Invitation))
+	web.RespondJSONCreated(w, newInvitationResponse(res.Invitation))
 }
 
 // listResourceInvitations pages a resource's invitations (session-gated).
@@ -137,10 +137,10 @@ func (h *handlers) listResourceInvitations(w http.ResponseWriter, r *http.Reques
 	}
 	page, err := h.inv.ListByResource(r.Context(), web.Param(r, "resource_type"), web.Param(r, "resource_id"), req)
 	if err != nil {
-		writeErr(w, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, newPageResponse(page, newInvitationResponse))
+	web.RespondJSONOK(w, newPageResponse(page, newInvitationResponse))
 }
 
 // listMyInvitations pages the caller's own invitations, keyed on their email
@@ -153,20 +153,20 @@ func (h *handlers) listMyInvitations(w http.ResponseWriter, r *http.Request) {
 	}
 	userID, ok := h.svc.CurrentUser(r.Context())
 	if !ok {
-		writeError(w, web.ErrUnauthorized("authentication required"))
+		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return
 	}
 	email, err := h.svc.EmailForUser(r.Context(), userID)
 	if err != nil {
-		writeErr(w, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
 	page, err := h.inv.Mine(r.Context(), email, req)
 	if err != nil {
-		writeErr(w, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, newPageResponse(page, newInvitationResponse))
+	web.RespondJSONOK(w, newPageResponse(page, newInvitationResponse))
 }
 
 // acceptInvitation redeems a token for the calling user (session-gated). The
@@ -178,12 +178,12 @@ func (h *handlers) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 	}
 	userID, ok := h.svc.CurrentUser(r.Context())
 	if !ok {
-		writeError(w, web.ErrUnauthorized("authentication required"))
+		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return
 	}
 	email, err := h.svc.EmailForUser(r.Context(), userID)
 	if err != nil {
-		writeErr(w, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
 	res, err := h.inv.Accept(r.Context(), invitationsvc.AcceptInput{
@@ -193,10 +193,10 @@ func (h *handlers) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 		Identifier:  email,
 	})
 	if err != nil {
-		writeErr(w, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{
+	web.RespondJSONOK(w, map[string]string{
 		"resource_type": res.ResourceType,
 		"resource_id":   res.ResourceID,
 		"relation":      res.Relation,
@@ -208,14 +208,14 @@ func (h *handlers) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) cancelInvitation(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.svc.CurrentUser(r.Context())
 	if !ok {
-		writeError(w, web.ErrUnauthorized("authentication required"))
+		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return
 	}
 	if err := h.inv.Cancel(r.Context(), web.Param(r, "id"), userID); err != nil {
-		writeErr(w, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "cancelled"})
+	web.RespondJSONOK(w, map[string]string{"status": "cancelled"})
 }
 
 // resendInvitation regenerates and re-mails a pending invitation the caller owns
@@ -223,15 +223,15 @@ func (h *handlers) cancelInvitation(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) resendInvitation(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.svc.CurrentUser(r.Context())
 	if !ok {
-		writeError(w, web.ErrUnauthorized("authentication required"))
+		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return
 	}
 	inv, err := h.inv.Resend(r.Context(), web.Param(r, "id"), userID, r.URL.Query().Get("redirect"))
 	if err != nil {
-		writeErr(w, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, newInvitationResponse(inv))
+	web.RespondJSONOK(w, newInvitationResponse(inv))
 }
 
 // declineInvitation declines a pending invitation (PUBLIC, IP-rate-limited). The
@@ -242,8 +242,8 @@ func (h *handlers) declineInvitation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.inv.Decline(r.Context(), web.Param(r, "id"), req.Token); err != nil {
-		writeErr(w, err)
+		web.RespondJSONDomainError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "declined"})
+	web.RespondJSONOK(w, map[string]string{"status": "declined"})
 }
