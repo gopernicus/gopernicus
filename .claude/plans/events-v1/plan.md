@@ -1654,3 +1654,95 @@ unmodified — the conformance proof).
   `routes_test.go` supplies them itself since it bypasses `NewService`. A real
   SSE drive (curl -N, observed frames) happens at the proof host
   (task-11/protocol), as the plan directs.
+
+### 2026-07-08 — task-6 (`features/events/storetest` + hermetic reference) executed
+
+- **`features/events/storetest/storetest.go`** (package `storetest`, a separate
+  package inside the events module — matching `features/jobs/storetest` and
+  `features/cms/storetest` exactly: same-module sibling package, not a separate
+  module). Exports `Run(t *testing.T, newRepo func(t *testing.T)
+  outbox.EntryRepository)` — one port set (the events feature has a single
+  outbound port), following the cms `Run(t, newImpl)` shape rather than jobs'
+  two-runner split. Imports stdlib + sdk (`sdkevents`, `errs`) + the events
+  feature's own `logic/outbox` only (no driver — guard G2). Five leaf cases,
+  each on a clean repo from `newRepo(t)`:
+  - **AppendAndListOrder** — empty `Append()` is a nil no-op; a clean repo lists
+    nothing; three records appended oldest-first (3ms real sleep between so
+    CreatedAt is strictly increasing even against a microsecond-truncating
+    store) come back CreatedAt-ascending; every returned entry is unpublished
+    (PublishedAt nil); the durable envelope round-trips (Type/OccurredAt/Payload
+    on the oldest); a positive `limit` caps the page to the oldest N. Records
+    share `suiteBase` as OccurredAt so ordering is proven against the
+    store-assigned CreatedAt, not the event's own timestamp.
+  - **UnpublishedOnly** — publishing a middle entry drops it from
+    ListUnpublished while the rest stay in append order; publishing all leaves
+    nothing unpublished.
+  - **MarkPublishedIdempotence** — re-marking an already-published entry returns
+    nil; marking an unknown eventID returns nil (row may have been purged) — the
+    poller can retry a mark without a hard failure.
+  - **PurgePublishedRetention** — reads the store-assigned CreatedAts, then a
+    cutoff equal to new-pub's CreatedAt purges only old-pub (strictly-before
+    semantics: new-pub is retained), returns count 1; a far-future cutoff purges
+    the remaining published row; the unpublished `keep-unpub` is never purged
+    regardless of age across both purges.
+  - **EventIDUniqueness** — a second `Append` of an existing EventID returns
+    `errs.ErrAlreadyExists` and leaves exactly the one original row.
+  - The dialect-typed `AppendTx` is deliberately absent (it takes a store Tx;
+    each store tests its own — design §8).
+- **`features/events/storetest/reference_test.go`** (`package storetest`, a
+  `_test.go` file so the reference is test-scoped and never ships in the module's
+  non-test build surface — matching jobs/cms). `TestReference` runs `Run`
+  against `newReference()`, a fresh instance per call (clean-isolation contract).
+  - **Reference honesty (R3/S6, phase-2-W7 lesson):** `reference` is a
+    mutex-guarded `map[string]*outbox.Entry` keyed by EventID. `Append`
+    pre-checks the whole batch against existing rows AND a within-batch `seen`
+    set before writing any row, returning `errs.ErrAlreadyExists` on a
+    collision — so a batch carrying a duplicate commits nothing (the atomicity a
+    SQL primary key gives for free). `ListUnpublished` filters PublishedAt==nil
+    and sorts CreatedAt-ascending (EventID breaking ties). `MarkPublished` is a
+    nil no-op for already-published/unknown. `PurgePublished` deletes published
+    rows strictly before the cutoff. A compile-time `var _
+    outbox.EntryRepository = (*reference)(nil)` pins conformance.
+  - **Uniqueness honesty proof:** the EventID map + pre-check genuinely enforce
+    uniqueness. If the reference instead blindly overwrote (`entries[id] = …`
+    with no pre-check) or appended a duplicate, its `Append` would return nil on
+    the second call and **testEventIDUniqueness would fail** at
+    `!errors.Is(err, errs.ErrAlreadyExists)` — the suite proves the contract,
+    it does not pass vacuously.
+- **Verify:** `cd features/events && go build ./... && go test -race ./... &&
+  go vet ./...` → all five packages ok, race clean (storetest 1.2s under -race).
+  `make check` → "all checks passed". `make guard` → green (all six). Run-and-
+  look: `examples/minimal` :8081 `GET /` → 200 and `GET /products/widget-3000`
+  → 200, server killed, port 8081 free.
+- **Convention check:** `features/jobs/storetest` and `features/cms/storetest`
+  are both separate packages within their feature module (import path
+  `…/features/<name>/storetest`, `package storetest`, reference in a
+  `_test.go`). `features/events/storetest` matches this verbatim.
+
+### 2026-07-08 — Phase 2 (tasks 3–6, design-phase 4) complete — DoD holds
+
+Every phase-2 DoD clause with its verifying artifact:
+
+- **Module standalone / go.mod sdk-only** — `features/events/go.mod` has a lone
+  `require github.com/gopernicus/gopernicus/sdk v0.0.0`; guard FS1 ("feature core
+  go.mod requires sdk only") green in `make check`/`make guard`.
+- **`logic/outbox` public** — `features/events/logic/outbox/outbox.go` is a
+  non-`internal` package exporting `Entry` + `EntryRepository`; imported by
+  `storetest` and by the future store adapters (tasks 9–10).
+- **Poller exported, host-driven, returns `workers.ErrNoWork`** —
+  `features/events/poller.go` `NewPoller`/`(*Poller)` at the module root; the
+  drain-empty path returns `workers.ErrNoWork` (task-4 log; poller_test.go).
+- **Hub internal** — `features/events/internal/logic/hub/hub.go` under
+  `internal/`; guard G2 keeps it unreachable from outside the module.
+- **`NewService` errors on nil Bus** — `var ErrBusRequired`; `events_test.go`
+  asserts `NewService` with nil `Config.Bus` returns it (task-5 log).
+- **Absent identity fails closed** — handlers read `identity.FromContext` and
+  401 when absent; `routes_test.go` + `events_test.go` no-middleware-⇒-401
+  cases (task-5 log).
+- **Routes `/events` always, scoped only when `Authorize` set** —
+  `internal/inbound/http/routes.go` registers `GET /events` unconditionally and
+  `GET /events/{resource_type}/{resource_id}` only when `Config.Authorize != nil`
+  (deny-by-absence); `events_test.go` register-on-recording-router case.
+- **storetest green hermetically** — `TestReference` runs `Run` against the
+  honest in-memory reference on every `features/events` `go test` and every
+  `make check`; verified this leg (race-clean, no driver in the graph — guard G2).
