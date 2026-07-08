@@ -217,8 +217,43 @@ curl -i http://localhost:8082/debug/security-events                             
 curl -i -c jar -b jar http://localhost:8082/debug/security-events                # 404
 ```
 
+### Leg 6 — the events SSE stream (`features/events`, best-effort)
+
+The host mounts the events feature's SSE gateway on the same root router (no
+prefix), so the subject stream lands at **`GET /events`**. It is wrapped by
+`authSvc.RequireUser` (`Config.StreamMiddleware`): the handler reads the stashed
+`identity.Principal` and **fails closed with 401 when no session/bearer is
+present**. `Config.Authorize` is left nil, so the resource-scoped
+`/events/{resource_type}/{resource_id}` route is **not registered** (deny by
+absence). `Repositories.Outbox` is nil — direct-emit mode: the gateway fans
+best-effort `content.*` frames out over SSE the moment cms emits them (async, O3),
+with no durable rail and no poller. Bodies are metadata-only (`{type, occurred_at,
+aggregate_type, aggregate_id, tenant_id}`); the SSE `id:` is the event's
+correlation id. Heartbeat comment frames (`: ping`) arrive on a ~25s cadence.
+
+```sh
+# unauthenticated -> 401 (RequireUser fails closed)
+curl -N http://localhost:8082/events                                             # 401
+
+# as the logged-in admin (cookie jar from Leg 0): open the stream and leave it running
+curl -N -b jar http://localhost:8082/events
+# in another shell, edit a seeded article via the admin form (RequireUser-gated):
+#   ID=$(curl -s -b jar http://localhost:8082/articles | grep -o '/articles/[a-z0-9]*/edit' | head -1 | sed 's#/articles/##;s#/edit##')
+#   curl -sX POST -b jar "http://localhost:8082/articles/$ID" \
+#     --data-urlencode 'title=Bring your own stores (edited)' --data-urlencode 'status=published'
+# -> a content.updated frame arrives on the open stream:
+#      event: content.updated
+#      id: <correlation-id>
+#      data: {"type":"content.updated","occurred_at":"…","aggregate_type":"entry","aggregate_id":"<id>"}
+# reload the public page -> fresh content (phase-3 cache invalidation).
+```
+
 ## Route surface
 
+- **events** (SSE, `features/events`): `GET /events` — the authenticated
+  subject's stream (best-effort `content.*` fan-out), gated by `RequireUser`
+  (401 when absent). The resource-scoped `/events/{resource_type}/{resource_id}`
+  route is not registered (nil `Authorize`, deny by absence).
 - **auth** (JSON, `features/authentication`): `POST /auth/{register,login,logout,verify,
   password/forgot,password/reset,password/change,token}`; OAuth
   `/auth/oauth/{provider}/{start,callback,link/start,link}`,
