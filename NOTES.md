@@ -1009,3 +1009,136 @@ each waits for its trigger, then gets its own plan.
   authorization as a port-shaped capability; first-party ReBAC authorizer is
   the flagship implementation, never required). Owned by the auth-v2 design
   doc, not this ledger.
+
+## 2026-07-07 — auth-v2 milestone CLOSED
+
+All ten phases green and live-verified, zero new modules (everything folded
+into `features/auth` + `stores/{turso,pgx}` + `examples/auth-cms`; the
+26-module set unchanged): A1 v1 debts (service-side session hashing — one
+authsvc hash helper, no DDL; `POST /auth/password/change` +
+`SessionRepository.DeleteByUser`, delete-ALL+remint per the confirmed §7.2
+amendment; `RequireVerifiedEmail` knob, AV8 default false), A2 OAuth
+(oauthaccount/oauthstate domains, PKCE/state/nonce flow, the pending-link
+anti-takeover gate, `ErrOAuthReposRequired`, AV7 trims held), A3 machine
+identity (serviceaccount/apikey domains, dotless key mint, the pinned
+GetByHash-returns-any-present-row contract, `auth.Principal` value type per
+AV5, `RequireServiceAccount`/`RequirePrincipal`, both-or-neither
+`ErrMachineReposRequired`), A4 JWT bearer mode (`TokenSigner`/`TokenTTL`,
+`POST /auth/token`, two-dot classing arm, AV6 — no refresh tokens), A5 the
+synchronous audit rail (13+5 event vocabulary, never-fail writes, coarse-WARN
++ key-prefix content hygiene, the exported `WithClientInfo` carrier as the
+single IP source, AV9 optional), A6 invitations (grant-on-accept `Granter` +
+`MemberCheck` seams per AV4, deny-by-absence routes,
+resolve-on-registration, `ErrInvitationRepoRequired`), A7a/A7b stores
+(migrations 0006–0011, identical filename sets, six repositories per
+dialect), A9 the proof host + full protocol, A10 docs sync (this entry). A8
+was STRUCK pre-execution (ratified AV10): the durable security-event rail is
+deferred, trigger = the first real durable consumer; design doc §5.2 governs
+it. AV11 held structurally — zero events imports, enforced at close (grep
+below).
+
+**Live-store conformance artifacts (charter item 11, both dialects):**
+
+- **2026-07-07, turso (A7a):** store `features/auth/stores/turso`; suite =
+  the full `features/auth/storetest` (v1 leaves + the six new sub-runners:
+  OAuthAccounts, OAuthStates, ServiceAccounts, APIKeys, SecurityEvents,
+  Invitations); DSN class = remote playground
+  (`libsql://gopernicus-cms-playground-gps-impact.aws-us-east-2.turso.io`,
+  env-verified pre-run); `go test -tags=integration -count=1 -p 1 -v ./...`
+  → **PASS**, 69 leaf PASS, 0 FAIL, ~205s wall. One wrinkle, resolved: the
+  first run tripped the checksum guard on `default:0003_sessions.sql` — A1's
+  comment-only header edit to an already-applied v1 file, not a new file;
+  the single stale ledger row was cleared and 0003 re-applied idempotently.
+  Token never appeared in output.
+- **2026-07-07, pgx (A7b):** store `features/auth/stores/pgx`; same full
+  suite; DSN class = disposable docker postgres:17
+  (`postgres://…@localhost:55432`, container `a7b-pg`, removed after);
+  `POSTGRES_TEST_DSN=… go test -count=1 -v ./...` → **PASS**, 69 leaf PASS,
+  0 FAIL, ~2s wall — leaf-count parity with the turso run (cross-dialect
+  DP1). Fresh container = fresh ledger; the 0003 wrinkle did not recur.
+
+**A9 proof protocol (run-and-look, exact codes; `examples/auth-cms` :8082,
+RequireVerifiedEmail=true):** leg 0 five-step: 401 → register 201 →
+login-before-verify **403** → verify 200 (code from the console-mailer log)
+→ login 200+cookie → gated 200 → logout 200 → 401. Leg 1 OAuth (fake
+provider): start **302** (state + PKCE S256 visible in Location), callback
+302 + session (new-user path), `/auth/oauth/linked` 200 single entry;
+re-run same identity → login path, still one link. Leg 2 API key: SA 201,
+mint 201 (plaintext once), no-cookie bearer on the RequirePrincipal route
+**200** (service_account), revoke 200 → same call **401**. Leg 3 JWT:
+`/auth/token` 200, bearer 200 (user); TTL=1s reboot → expired **401**;
+`AUTH_JWT_DISABLED=1` reboot → same JWT **401** (never parsed), `/auth/token`
+**404**. Leg 4 invitations (toy Granter): pre-grant 403 → invite 201 →
+accept 200 → members-only **200**; non-member C **403**; decline → declined,
+no grant. Leg 5 audit: debug route 200 with session+`AUTH_DEBUG=1`, 401
+without session, 404 without the flag — 22 rows across the vocabulary
+(3 register, 4 login/success + 1 login/failure, 3 email_verified, 1 logout,
+1 oauth_register + 1 oauth_login, 2 apikey_auth/success + 1
+apikey_auth/blocked, 1 token_issued, 2 invitation_created, 1
+invitation_granted, 1 invitation_declined).
+
+**Honest divergences of record (operational; each logged in its phase
+file):** (1) Login/ChangePassword return the plaintext token separately —
+forced by §7.3's `Session.Token`-is-the-hash (A1). (2) The GetByHash
+contract was re-pinned at the plan-cut gate: the store returns ANY present
+row and revocation/expiry branch in the SERVICE, restoring the `blocked`
+audit event's service-account attribution (supersedes cut refinement 3).
+(3) The forgot-password *request* records NO security event — it must not
+reveal email existence; `password_reset` is recorded on completed reset
+(A5). (4) `invitation.ListBySubject` keys on the invitee `Identifier`
+(email), not `ResolvedSubjectID` — the pinned 2-port set must find
+register-later invitees; visibility rides a table column, honoring the
+no-tuples rule (A6). (5) Invitation mail is plain-text via `Config.Mailer`
+(no sdk/email template registry in auth yet — v1 precedent). (6)
+`oauth_states.payload` is BYTEA on pgx, not JSONB — the storetest contract
+asserts a byte-exact round-trip including non-JSON payloads (the jobs
+JSON-not-JSONB reasoning); `security_events.details` stays JSONB (A7b).
+(7) The proof host ships TWO demo routes (whoami = RequirePrincipal-only,
+members-only = + toy membership) — one route cannot serve both leg 2 and
+leg 4 (A9). (8) The leg-5 "blocked login" is recorded as `login/failure`
+(the verified-email 403); `login/blocked` is the rate-limit branch, and
+`apikey_auth/failure` the expired-key branch — neither exercised by the
+protocol.
+
+**A10 docs sync:** `features/auth/README.md` rewritten — the grown `/auth/*`
+route surface grouped by gate; charter item-12 nil-semantics tables for
+EVERY new Config port (Providers, TokenEncrypter, OAuthCallbackBase,
+RedirectAllowlist, TokenSigner, TokenTTL, Granter, MemberCheck,
+RequireVerifiedEmail with the mailer-lockout WARNING, Logger) and
+Repositories port (OAuthAccounts, OAuthStates, ServiceAccounts, APIKeys,
+SecurityEvents, Invitations) including the deny-by-absence couplings and
+the three loud partial-wiring errors; the session-hashing note; the §7.3
+UPGRADE NOTE (forced logout incl. long-TTL sessions, vacuum note,
+single-cutover/drain guidance, rollback = second mass logout) in the README
+AND `RELEASING.md` (new upgrade-notes section keyed to the module's next
+tag); the wiring page in the README (no events-v1 precedent exists yet) —
+one diagram + one complete `main.go` (extracted verbatim from the README
+and compiled/vetted green in a scratch module; `examples/auth-cms` is the
+executable twin) + the corrected migration-source paragraph (connectors
+dedupe by FULL FILENAME under ledger source `"default"`; numeric-prefix
+overlap safe; hosts must NOT renumber). Capability map: v2 identity rows
+marked BUILT, principals NOT salvaged (AV5), durable rail deferred (AV10),
+ReBAC rows left pointing at authorization-v1. Module counts verified
+unchanged (26) across ARCHITECTURE/README/RELEASING. Fresh-eyes fixes
+logged in the A10 execution log (`.claude/past/auth-v2/10-docs-sync.md`) —
+notably the phase file's "both trees start at 0001" premise was false (cms
+scaffolds start at 0009); the README states the real overlap
+(`0009_api_keys.sql` vs `0009_terms.sql`).
+
+**Milestone-close acceptance (all PASS):** `make check` → all checks passed
+(26 modules + templ drift + integration-tag vet + 4 guards). Rule-6 both
+directions, import-anchored:
+`grep -rn --include='*.go' -E '"github.com/gopernicus/gopernicus/features/(cms|jobs|authorization)' features/auth/`
+→ empty; the cms→auth reverse → empty. Deferred-rail absence:
+`grep -rn --include='*.go' '"github.com/gopernicus/gopernicus/\(sdk/events\|features/events\)' features/auth/`
+→ empty. `features/auth/go.mod` requires exactly `sdk`. Real-interaction:
+`examples/minimal` (:8081) `GET /` 200, `GET /products/widget-3000` 200,
+killed, port free; and the A9 leg-0 five-step re-run against the shipped
+`examples/auth-cms` README's OWN curls verbatim → 401, 201, 403, 200
+(verify), 200 (login), 200 (gated), 200 (logout), 401 — the docs are
+executable as written. Ports freed.
+
+Next: authorization-v1 (Z1–Z5) is cut from design §13 when its window
+opens; the deferred durable rail waits on its trigger (first real durable
+consumer) + events-v1 shipped. Plans moved to `.claude/past/auth-v2/` per
+the standing housekeeping rule.

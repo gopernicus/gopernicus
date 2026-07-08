@@ -31,6 +31,31 @@ client-info / trust-proxy / idempotency-key, and the generic HTTP
 rate-limit middleware under Rate limiting) remain backlog — now
 trigger-gated in the NOTES.md 2026-07-07 demand-gated deferral ledger, not
 scheduled.
+**Execution note (2026-07-07, auth-v2 close):** the Authentication &
+identity section's v2 rows are BUILT into `features/auth` +
+`stores/{turso,pgx}` (zero new modules): the v2 entity-ports row — API
+keys, OAuth accounts, service accounts, security events (the synchronous
+audit table, §5.1) — **except principals, which is NOT SALVAGED per
+ratified AV5** (actor references are `(subject_type, subject_id)` string
+pairs; `auth.Principal` is a value type; registry demand-gated); the
+`JWTSigner` row (port consumed as `sdk/cryptids.JWTSigner`;
+`integrations/cryptids/golang-jwt` host-wired, stateless short-TTL user
+tokens per AV6); the `TokenEncrypter` row (AES-GCM shipped as
+`sdk/cryptids.AESGCM`); both invitations rows — **decoupled from ReBAC
+and events per ratified AV4** (grant-on-accept `Granter` port,
+deny-by-absence routes; this row's original "depends on: authorization,
+events" is dissolved — the A9 proof host grants through a toy membership
+map with no ReBAC in its module graph); the OAuth provider ports/flow
+(feature flow over the already-built `sdk/oauth` + `integrations/oauth/*`;
+mobile flow + code-gated unlink OUT per AV7); and the open-redirect
+allowlist matcher (feature-internal, per its row). The security-events
+**durable emission rail (outbox) is DEFERRED per ratified AV10** — trigger:
+the first real durable consumer (webhooks/alerting); governed by the
+auth-v2 design doc §5.2. The Authorization/ReBAC rows (engine + storage)
+remain deferred to the `authorization-v1` milestone (2026-07-06 ruling:
+supported, never required); tenancy remains trigger-gated as classified.
+Live-verified end to end (A9 protocol + per-dialect store runs; NOTES.md
+2026-07-07 auth-v2 close entry is the record).
 Source: exhaustive walk of `/Users/jrazmi/code/gopernicus-ecosystem/gopernicus-original`
 (`github.com/gopernicus/gopernicus`, the old single-module framework), top-level by
 top-level: `bridge/`, `core/`, `infrastructure/`, `sdk/`, `telemetry/`, `workshop/`.

@@ -16,6 +16,7 @@ Contents (each closed with dated NOTES.md entries and live-verified gates):
 | `kvstore-consolidation/` | R-KV1–R-KV3: goredis multi-port, pgx renames | 2026-07-06 |
 | `fast-follows/` | backends for every sdk port (21→26 modules) | 2026-07-06 |
 | `telemetry-closeout/` | sdk/web.Tracing middleware + otel observability proof, hygiene flags, demand-gated ledger | 2026-07-07 |
+| `auth-v2/` | identity remainder in features/auth: v1 debts (session hashing), OAuth, machine identity, JWT bearer, audit rail, invitations; both stores + A9 proof host | 2026-07-07 |
 
 Path note: NOTES.md entries and ratified/historical docs written before
 2026-07-07 cite these as `.claude/plans/<milestone>/...`; those citations

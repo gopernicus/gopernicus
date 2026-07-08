@@ -73,6 +73,28 @@ Standard Go module semver rules apply per-module:
   module should still move to `v1.0.0` deliberately once its contract is
   considered stable, not accidentally on the first tag.
 
+## Upgrade notes (keyed to each module's next tag)
+
+### features/auth — next tag: session hashing invalidates all live sessions
+
+auth-v2 (2026-07-07) moved session-token storage to service-side SHA-256
+hashing (design §7.3): the service hashes the cookie token before every
+repository call, and stores keep persisting an opaque string — no DDL. Any
+host upgrading `features/auth` across this change must know:
+
+- **Every live session is invalidated at deploy — a forced logout for all
+  users, remember-me/long-TTL sessions included** (a v1 plaintext row never
+  matches a hashed lookup again). Users just log in again; no data is lost.
+- The orphaned plaintext rows are unreachable and dead past their natural
+  `expires_at` TTL. No purge ships; hosts may vacuum them at leisure.
+- **Deploy in a single cutover or drain traffic first — do not roll.** On a
+  rolling deploy, mixed plaintext/hashed pods make the SAME session cookie
+  flap 401/200 depending on which pod answers, for the whole rollout window.
+- **A rollback forces a SECOND mass logout**: sessions minted by the new
+  binary are hashed rows the old binary cannot read.
+
+The same note lives in `features/auth/README.md` (the upgrade note section).
+
 ## What this repo is not doing (yet)
 
 - No CI-driven automated tagging — tags are cut by hand until a release
