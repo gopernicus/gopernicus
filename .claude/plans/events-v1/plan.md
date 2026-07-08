@@ -1546,3 +1546,111 @@ unmodified — the conformance proof).
   (the same `features/cms/views/templ` off-by-one task-3 logged — not a
   scope change). No other divergences; `NewPoller`'s variadic option tail is
   an additive refinement of the design's two-arg signature, not a change.
+
+### 2026-07-08 — task-5 (SSE gateway hub + HTTP + the feature socket) executed
+
+- **`features/events/events.go`** (root package `events`, host-facing
+  socket, O5 `sdkevents` alias). Exported surface:
+  - `AuthorizeStream func(ctx context.Context, principal identity.Principal,
+    resourceType, resourceID string) (bool, error)` — the consumer-declared
+    coarse ownership check. **DIVERGENCE (logged):** design §6 typed it
+    `userID string`; post-A-I1 the handler holds an `identity.Principal`, and
+    sdk/identity's stated lineage is "a host's authorizer reads the Principal
+    unadapted", so the check receives the full Principal (Type + ID), not a
+    lossy user-id string. E1 did not re-spec this signature; the Principal
+    shape is the faithful post-amendment form. With the shipped
+    `StreamMiddleware: RequireUser` wiring only user principals appear, so
+    proof-host behavior is unchanged.
+  - `Projector func(sdkevents.Event) any` — audited opt-in to a richer SSE
+    body; nil → metadata-only.
+  - `Repositories{ Outbox outbox.EntryRepository }` — nil Outbox documented as
+    direct-emit mode (no durable rail; the host wires+drives a Poller
+    separately via `NewPoller`; the gateway never owns the poller). Carried on
+    the Service; the gateway itself is a bus consumer and does not read it.
+  - `Config{ Bus, StreamMiddleware, Authorize, Projector, Heartbeat,
+    BufferSize, MaxConnAge, MaxConnsPerSubject }` — **NO `Identity` field**
+    (A-I1 E1: the consumer-declared `CurrentUser` port is retired). No
+    `Logger` field either — the plan's enumerated Config set omits it, so the
+    hub falls back to `slog.Default()` (noted; jobs' `Config.Logger` precedent
+    was NOT adopted to keep the enumerated set exact).
+  - `var ErrBusRequired = errors.New("events: Config.Bus is required")` — the
+    lone construction-time hard error (the `ErrHasherRequired` precedent).
+  - `NewService(repos Repositories, cfg Config) (*Service, error)` — validates
+    nil `Bus`, builds the hub (**subscribes to the bus here** — FS2
+    build-once: fan-out starts at construction), defaults `Heartbeat` 25s /
+    `MaxConnAge` 15m. `(*Service) Register(m feature.Mount) error` — mounts
+    routes ONLY; the resource-scoped route is registered only when
+    `Config.Authorize` was set (deny-by-absence); logs a registration line
+    when `m.Logger != nil`.
+  - **`MaxConnAge` (P5):** zero → 15m default, CANNOT be disabled;
+    effectively-unlimited is an explicitly large value. Documented on the
+    Config field.
+- **`features/events/internal/logic/hub/hub.go`** (logic tier — imports sdk
+  only, no sdk/web; produces a transport-neutral `Frame`). Behavior:
+  - **Subscription-mode selection at `New`:** `SubscribeBroadcast("*")` when
+    the bus satisfies `sdkevents.Broadcaster`, else `Subscribe("*")` with a
+    logged single-instance warning (the v1 memory-bus path — Memory satisfies
+    Broadcaster, so the warning fires only for a non-broadcaster backend).
+  - **Per-connection buffered channels** (default 64); **drop-on-full**
+    non-blocking send with a sampled warning counter (`atomic.Uint64`, logs
+    the 1st drop then every 100th).
+  - **Per-subject connection cap** (default 10); `Connect` returns
+    `ErrTooManyConnections` past the cap; a different subject is unaffected;
+    releasing a slot readmits.
+  - **Projection:** metadata-only `metaView{type, occurred_at,
+    aggregate_type, aggregate_id, tenant_id}` by default; raw payloads never
+    forwarded unless a `Projector` opts in.
+  - **SSE `id:`** sourced by asserting `interface{ EventID() string }` (the
+    poller's rehydrated events — gate edit 1), falling back to
+    `CorrelationID` for best-effort events (documented: no per-event de-dupe
+    guarantee).
+  - **Resource-scoped delivery filter (P4):** a scoped connection
+    (`ResourceType != ""`) delivers only events whose `Metadata` matches both
+    `AggregateType`/`AggregateID`; events with no/nil aggregate metadata are
+    suppressed (deny-by-default). Subject streams apply only the `?types`
+    allow-list.
+  - The Frame channel is never closed by the hub — the reader stops on its own
+    context and unregisters, so a late fan-out send lands in the buffer or is
+    dropped, never on a closed channel (no send-on-closed panic).
+- **`features/events/internal/inbound/http/routes.go`** (inbound tier).
+  Routes: `GET /events` (subject stream, `?types=a,b` exact-match allow-list —
+  O6) always; `GET /events/{resource_type}/{resource_id}` only when
+  `Config.Authorize != nil`. Handlers read `identity.FromContext(ctx)` and
+  **fail closed with 401 when absent** (A-I1 E1); resource stream 403s on
+  deny, 500s on authorize error. Per-subject key is the composite
+  `principal.Type + ":" + principal.ID` (A-I1 E1). Streams ride
+  `web.NewSSEStream` with `WithHeartbeat`; `MaxConnAge` bounds each stream via
+  a `context.WithTimeout` on the request context. Cap breach → 429. FS9: all
+  error responses go through `web.RespondJSONError`/`web.Err*`.
+- **Tests** (all `-race` clean):
+  - `hub_test.go` — broadcast-vs-subscribe mode selection (recording fake
+    buses); `Close` unsubscribes; metadata-only projection fields + id =
+    CorrelationID; `EventID()` sources id:; Projector override; types filter;
+    resource-scoped P4 (non-matching suppressed, no-metadata suppressed,
+    matching delivered); per-subject cap (+ cross-subject independence + slot
+    release); drop-on-full counter; unregister stops delivery.
+  - `events_test.go` (`package events_test`) — nil Bus ⇒ ErrBusRequired;
+    builds with a bus; **register on a recording router** proving resource
+    route deny-by-absence (absent without Authorize, present with it);
+    **httptest end-to-end** over `web.NewWebHandler` + an identity-stashing
+    middleware: emit on the Memory bus → SSE frame arrives with correct
+    `id:`/`event:`/metadata-only `data:` body; **no-middleware ⇒ 401**
+    (fails closed — A-I1 E1's replacement for the retired nil-Identity
+    constructor-error test).
+  - `routes_test.go` (`package http`) — subject + resource streams 401 without
+    identity; resource stream 403 on deny, 500 on authorize error; authorize
+    receives the correct Principal + path values; per-subject cap ⇒ 429.
+    (P4 delivery correctness lives in hub_test; the HTTP layer covers the
+    authorize-denied rejection.)
+- **Verify:** `cd features/events && go build ./... && go test -race ./... &&
+  go vet ./...` → all four packages ok, race clean. Rule-6 grep (gate edit 8)
+  `grep -rn '"…/features/\(authentication\|cms\|jobs\)' features/events/` →
+  empty (exit 1). `make guard` green (all six). `make check` → "all checks
+  passed". Run-and-look: `examples/minimal` :8081 `GET /` → 200 and
+  `GET /products/widget-3000` → 200 (events still unwired into any host —
+  task-11), server killed, port 8081 free.
+- **NOTE:** the http layer trusts `Heartbeat`/`MaxConnAge` are pre-defaulted
+  by `NewService` (documented on the internal `Config`); the direct
+  `routes_test.go` supplies them itself since it bypasses `NewService`. A real
+  SSE drive (curl -N, observed frames) happens at the proof host
+  (task-11/protocol), as the plan directs.
