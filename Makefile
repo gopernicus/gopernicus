@@ -13,7 +13,7 @@ STORE_MODULES = features/cms/stores/pgx features/cms/stores/turso features/authe
 
 .PHONY: generate build vet test test-stores run migrate check tidy guard \
 	guard-sdk-stdlib guard-feature-isolation guard-sdk-no-outward guard-no-legacy-path \
-	guard-feature-core-sdk-only guard-feature-transport-sdk-web
+	guard-feature-core-sdk-only guard-feature-transport-sdk-web guard-feature-no-cross-feature
 
 # Regenerate *_templ.go from .templ sources (they live in features/cms/views/templ).
 generate:
@@ -78,9 +78,9 @@ tidy:
 # Layering guards — each enforces one architectural boundary from the
 # constitution (00-overview.md) or the feature-standard charter (FS rules,
 # 2026-07-07); every target must print nothing and exit 0 on a clean tree.
-# `make guard` runs all six.
+# `make guard` runs all seven.
 guard: guard-sdk-stdlib guard-feature-isolation guard-sdk-no-outward guard-no-legacy-path \
-	guard-feature-core-sdk-only guard-feature-transport-sdk-web
+	guard-feature-core-sdk-only guard-feature-transport-sdk-web guard-feature-no-cross-feature
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -113,7 +113,7 @@ guard-no-legacy-path:
 # require; the dev-only relative `replace` of sdk is permitted pre-tag.
 guard-feature-core-sdk-only:
 	@echo "== guard: feature core go.mod requires sdk only (FS1) =="
-	@fail=0; for f in features/authentication features/cms features/jobs; do \
+	@fail=0; for f in features/authentication features/cms features/events features/jobs; do \
 		extras=$$(awk '/^require \(/{inblk=1; next} inblk && /^\)/{inblk=0; next} inblk && !/\/\/ indirect/{print $$1} /^require [^(]/{print $$2}' $$f/go.mod \
 			| grep -v '^github.com/gopernicus/gopernicus/sdk$$' || true); \
 		tools=$$(grep -E '^tool ' $$f/go.mod | awk '{print $$2}' || true); \
@@ -129,6 +129,25 @@ guard-feature-core-sdk-only:
 guard-feature-transport-sdk-web:
 	@echo "== guard: feature transports use sdk/web responders (FS9) =="
 	@! grep -rn --include='*.go' --exclude='*_test.go' -E 'json\.NewEncoder\(|http\.Error\(' features/*/internal/ || { echo "ERROR (FS9): hand-rolled HTTP response writing in a feature core — use web.Respond* (features/README.md, FS9)"; exit 1; }
+
+# G7 (constitution rule 6, events-v1 task-13; the plan called it "G5" but that
+# slot was already taken by FS1): no feature imports a DIFFERENT feature — a
+# feature declares a port and the host wires the peer (ARCHITECTURE.md rule 6).
+# For each features/<x> we grep its whole subtree for feature imports and drop
+# the self-imports (features/<x>/...); what remains is a features/<x> file
+# reaching into some features/<y>, y != x. The stores/ subtree is excluded
+# (separate adapter modules, per the task spec, matching G2's stores exclusion);
+# views/ is NOT excluded — an intra-feature views->own-core import is a self-
+# import (y == x) and is dropped by the filter, so it never false-positives,
+# while a views adapter reaching a foreign feature is still caught.
+guard-feature-no-cross-feature:
+	@echo "== guard: no feature core imports a different feature (rule 6) =="
+	@fail=0; for d in features/*/; do \
+		x=$$(basename $$d); \
+		hits=$$(grep -rn --include='*.go' --exclude-dir=stores -E '"github.com/gopernicus/gopernicus/features/[a-z0-9]+' $$d \
+			| grep -vE '"github.com/gopernicus/gopernicus/features/'"$$x"'([\"/])' || true); \
+		if [ -n "$$hits" ]; then echo "ERROR (rule 6): $$x reaches into a different feature core — declare a port and let the host wire the peer:"; echo "$$hits"; fail=1; fi; \
+	done; exit $$fail
 
 # CI-style gate: templ generation must be a no-op (no drift), then per-module
 # vet/build/test across all MODULES, then the four layering guards. Drift
