@@ -23,8 +23,9 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/id"
 )
 
-// Event-type vocabulary (design §5.1, salvaged). Invitation events are wired by
-// A6 (logic/invitation), not here.
+// Event-type vocabulary (design §5.1, salvaged). The invitation terms A5
+// reserved are wired here by A6 (logic/invitation): see the invitation block
+// below.
 const (
 	// TypeRegister is a password registration.
 	TypeRegister = "register"
@@ -52,6 +53,21 @@ const (
 	TypeAPIKeyAuth = "apikey_auth"
 	// TypeTokenIssued is a bearer-JWT issuance (POST /auth/token).
 	TypeTokenIssued = "token_issued"
+
+	// Invitation vocabulary (design §6, wired by A6's invitationsvc). Grants are
+	// the security-relevant events: TypeInvitationGranted is recorded success (the
+	// Granter accepted) or failure (the Granter rejected — the grant did not
+	// happen) on accept, direct-add, and resolve-on-registration.
+	//
+	// TypeInvitationCreated is a pending invitation being minted.
+	TypeInvitationCreated = "invitation_created"
+	// TypeInvitationGranted is a grant-on-accept attempt (StatusSuccess when the
+	// Granter granted, StatusFailure when it rejected).
+	TypeInvitationGranted = "invitation_granted"
+	// TypeInvitationDeclined is an invitee declining a pending invitation.
+	TypeInvitationDeclined = "invitation_declined"
+	// TypeInvitationCancelled is an owner cancelling a pending invitation.
+	TypeInvitationCancelled = "invitation_cancelled"
 )
 
 // Status vocabulary (design §5.1).

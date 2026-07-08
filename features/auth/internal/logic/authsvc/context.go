@@ -68,3 +68,14 @@ func clientInfoFromContext(ctx context.Context) clientInfo {
 	info, _ := ctx.Value(clientInfoKey).(clientInfo)
 	return info
 }
+
+// ClientInfoFromContext returns the request's client IP and User-Agent stashed by
+// WithClientInfo (empty when none). It is EXPORTED so the sibling invitationsvc
+// can attribute its audit rows from the SAME single carrier source as the rest
+// of the audit rail (design §5.1 WI4) without re-plumbing IP/UA — a read-only
+// utility, not a widening of the authsvc↔invitationsvc coupling (which stays the
+// resolveInvitations port; authsvc holds no invitation concern).
+func ClientInfoFromContext(ctx context.Context) (ip, ua string) {
+	info := clientInfoFromContext(ctx)
+	return info.ip, info.ua
+}

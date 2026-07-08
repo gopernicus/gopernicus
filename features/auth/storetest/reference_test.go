@@ -10,6 +10,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/auth"
 	"github.com/gopernicus/gopernicus/features/auth/logic/apikey"
+	"github.com/gopernicus/gopernicus/features/auth/logic/invitation"
 	"github.com/gopernicus/gopernicus/features/auth/logic/oauthaccount"
 	"github.com/gopernicus/gopernicus/features/auth/logic/oauthstate"
 	"github.com/gopernicus/gopernicus/features/auth/logic/securityevent"
@@ -49,6 +50,7 @@ type reference struct {
 	serviceAccounts map[string]serviceaccount.ServiceAccount // by ID
 	apiKeys         map[string]apikey.APIKey                 // by ID
 	securityEvents  []securityevent.SecurityEvent            // append-only
+	invitations     map[string]invitation.Invitation         // by ID
 }
 
 func newReference() *reference {
@@ -61,6 +63,7 @@ func newReference() *reference {
 		oauthStates:     map[string]oauthstate.State{},
 		serviceAccounts: map[string]serviceaccount.ServiceAccount{},
 		apiKeys:         map[string]apikey.APIKey{},
+		invitations:     map[string]invitation.Invitation{},
 	}
 }
 
@@ -76,6 +79,7 @@ func (r *reference) repositories() auth.Repositories {
 		ServiceAccounts:    refServiceAccounts{r},
 		APIKeys:            refAPIKeys{r},
 		SecurityEvents:     refSecurityEvents{r},
+		Invitations:        refInvitations{r},
 	}
 }
 
@@ -507,6 +511,103 @@ func (r refSecurityEvents) List(_ context.Context, filter securityevent.ListFilt
 	return pageDESC(matched, req, func(evt securityevent.SecurityEvent) (time.Time, string) {
 		return evt.CreatedAt, evt.ID
 	})
+}
+
+// --- invitation.InvitationRepository ---
+
+type refInvitations struct{ *reference }
+
+// Create enforces the PARTIAL pending-tuple uniqueness (design §6): a second
+// PENDING invitation for the same (resource_type, resource_id, identifier,
+// relation) → ErrAlreadyExists; once a prior one moves off pending, a new one
+// succeeds. Non-pending rows never block a Create.
+func (r refInvitations) Create(_ context.Context, inv invitation.Invitation) (invitation.Invitation, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, ex := range r.invitations {
+		if ex.Status == invitation.StatusPending &&
+			ex.ResourceType == inv.ResourceType &&
+			ex.ResourceID == inv.ResourceID &&
+			ex.Identifier == inv.Identifier &&
+			ex.Relation == inv.Relation {
+			return invitation.Invitation{}, errs.ErrAlreadyExists
+		}
+	}
+	r.invitations[inv.ID] = inv
+	return inv, nil
+}
+
+func (r refInvitations) Get(_ context.Context, id string) (invitation.Invitation, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	inv, ok := r.invitations[id]
+	if !ok {
+		return invitation.Invitation{}, errs.ErrNotFound
+	}
+	return inv, nil
+}
+
+// GetByTokenHash returns the invitation for tokenHash: unknown → ErrNotFound, a
+// present row past ExpiresAt → ErrExpired (the read-time expiry), else the
+// record. Expiry is checked against time.Now, matching a SQL store filtering on
+// the read clock.
+func (r refInvitations) GetByTokenHash(_ context.Context, tokenHash string) (invitation.Invitation, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, inv := range r.invitations {
+		if inv.TokenHash == tokenHash {
+			if inv.Expired(time.Now()) {
+				return invitation.Invitation{}, errs.ErrExpired
+			}
+			return inv, nil
+		}
+	}
+	return invitation.Invitation{}, errs.ErrNotFound
+}
+
+func (r refInvitations) ListByResource(_ context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
+	r.mu.RLock()
+	all := make([]invitation.Invitation, 0, len(r.invitations))
+	for _, inv := range r.invitations {
+		if inv.ResourceType == resourceType && inv.ResourceID == resourceID {
+			all = append(all, inv)
+		}
+	}
+	r.mu.RUnlock()
+	return pageDESC(all, req, func(inv invitation.Invitation) (time.Time, string) {
+		return inv.CreatedAt, inv.ID
+	})
+}
+
+func (r refInvitations) ListBySubject(_ context.Context, identifier string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
+	r.mu.RLock()
+	all := make([]invitation.Invitation, 0, len(r.invitations))
+	for _, inv := range r.invitations {
+		if inv.Identifier == identifier {
+			all = append(all, inv)
+		}
+	}
+	r.mu.RUnlock()
+	return pageDESC(all, req, func(inv invitation.Invitation) (time.Time, string) {
+		return inv.CreatedAt, inv.ID
+	})
+}
+
+func (r refInvitations) UpdateStatus(_ context.Context, id string, upd invitation.StatusUpdate) (invitation.Invitation, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	inv, ok := r.invitations[id]
+	if !ok {
+		return invitation.Invitation{}, errs.ErrNotFound
+	}
+	inv.Status = upd.Status
+	inv.TokenHash = upd.TokenHash
+	inv.ExpiresAt = upd.ExpiresAt
+	inv.AcceptedAt = upd.AcceptedAt
+	inv.ResolvedSubjectID = upd.ResolvedSubjectID
+	inv.UpdatedAt = upd.UpdatedAt
+	r.invitations[id] = inv
+	return inv, nil
 }
 
 // pageDESC sorts records by (created_at DESC, id DESC), applies the keyset

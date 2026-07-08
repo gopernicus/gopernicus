@@ -75,6 +75,15 @@ type Hasher interface {
 	VerifyPassword(hash, password string) error
 }
 
+// invitationResolver is the SINGLE narrow port authsvc holds on the sibling
+// invitationsvc (design §6 pin): the register/verify flow calls it to grant a
+// just-registered/verified email's pending auto-accept invitations. It is
+// declared here (structural) so authsvc carries NO import edge to invitationsvc
+// and never holds the Granter. Nil → invitations are off (a no-op).
+type invitationResolver interface {
+	ResolveInvitations(ctx context.Context, email, subjectType, subjectID string) (int, error)
+}
+
 // CookieConfig is the resolved session-cookie policy. The auth package fills it
 // from auth.Config.SessionCookie (applying name/path defaults).
 type CookieConfig struct {
@@ -109,6 +118,12 @@ type Deps struct {
 	// documented no-op. When wired, every sensitive op records synchronously and
 	// a write failure is logged at WARN, never failing the auth flow.
 	SecurityEvents securityevent.SecurityEventRepository
+
+	// Invitations is the optional resolve-on-registration collaborator (design
+	// §6). Nil when invitations are off; when wired (by package auth), Register
+	// and Verify grant a just-registered/verified email's pending auto-accept
+	// invitations best-effort. It is the ONE port authsvc holds on invitationsvc.
+	Invitations invitationResolver
 
 	// OAuth flow collaborators (design §3). Providers empty → the OAuth
 	// subsystem is off and its routes are not registered (deny-by-absence); the
@@ -154,6 +169,9 @@ type Service struct {
 	// securityEvents is the optional append-only audit rail (design §5.1). Nil →
 	// the recordSecurityEvent helper is a no-op (ratified AV9).
 	securityEvents securityevent.SecurityEventRepository
+	// invitations is the optional resolve-on-registration collaborator (design
+	// §6). Nil → resolvePendingInvitations is a no-op.
+	invitations invitationResolver
 	// tokenHasher is the fixed SHA-256 hasher for session cookie tokens. It is
 	// an internal implementation detail, not a host-provided port: the stored
 	// session value is always the SHA-256 hash of the cookie (design §7.3).
@@ -222,6 +240,7 @@ func NewService(d Deps) *Service {
 		logger:               logger,
 		requireVerifiedEmail: d.RequireVerifiedEmail,
 		securityEvents:       d.SecurityEvents,
+		invitations:          d.Invitations,
 		tokenHasher:          cryptids.NewSHA256Hasher(),
 		oauthAccounts:        d.OAuthAccounts,
 		oauthStates:          d.OAuthStates,
@@ -272,6 +291,7 @@ func (s *Service) Register(ctx context.Context, emailAddr, password, displayName
 		Type:   securityevent.TypeRegister,
 		Status: securityevent.StatusSuccess,
 	})
+	s.resolvePendingInvitations(ctx, created.Email, created.ID)
 	if err := s.sendVerificationEmail(ctx, created, code.Code); err != nil {
 		return created, err
 	}
@@ -302,7 +322,36 @@ func (s *Service) Verify(ctx context.Context, code string) error {
 		Type:   securityevent.TypeEmailVerified,
 		Status: securityevent.StatusSuccess,
 	})
+	s.resolvePendingInvitations(ctx, u.Email, u.ID)
 	return nil
+}
+
+// resolvePendingInvitations grants a just-registered/verified email's pending
+// auto-accept invitations, best-effort (design §6): a nil collaborator (off) or
+// any error never affects the register/verify outcome — one failed grant never
+// aborts registration. The invitation service audits each grant/failure itself;
+// here a resolve error is a coarse WARN line. Called from both Register (so a
+// no-verify host still resolves) and Verify; a second pass is a no-op because
+// resolved invitations move off pending.
+func (s *Service) resolvePendingInvitations(ctx context.Context, email, userID string) {
+	if s.invitations == nil {
+		return
+	}
+	if _, err := s.invitations.ResolveInvitations(ctx, email, PrincipalUser, userID); err != nil {
+		s.logger.Warn("resolve invitations failed", "error_kind", errKind(err))
+	}
+}
+
+// EmailForUser returns the normalized email for userID. The invitation HTTP
+// handlers key "mine" and the accept identifier check on the caller's own
+// address through it, so invitationsvc stays decoupled from the user store (the
+// auth feature owns user identity). Unknown id → the store's errs.ErrNotFound.
+func (s *Service) EmailForUser(ctx context.Context, userID string) (string, error) {
+	u, err := s.users.Get(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	return u.Email, nil
 }
 
 // Login rate-limits FIRST on (email, client-IP), then verifies the password and
@@ -678,10 +727,40 @@ func validatePassword(pw string) error {
 	return nil
 }
 
+// RateLimitByIP returns middleware that throttles a PUBLIC route on the client
+// IP, refusing with a 429 once the per-minute budget is spent. It reuses the
+// feature's configured RateLimiter (the one Login uses) and reads the IP from
+// the client-info carrier, so an unauthenticated route (invitation decline, the
+// design §6 case) is protected with no new plumbing. A limiter error fails OPEN
+// (the request proceeds) — the in-memory default never errors, and a public
+// decline must not be blocked by a limiter outage.
+func (s *Service) RateLimitByIP(keyPrefix string, perMinute int) web.Middleware {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ip := clientInfoFromContext(r.Context()).ip
+			res, err := s.limiter.Allow(r.Context(), keyPrefix+":"+ip, ratelimiter.PerMinute(perMinute))
+			if err == nil && !res.Allowed {
+				writeTooManyRequests(w)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // writeUnauthorized writes a 401 JSON error mirroring the internal/http shape,
 // so RequireUser's rejection matches the feature's other error responses.
 func writeUnauthorized(w http.ResponseWriter) {
 	e := web.ErrUnauthorized("authentication required")
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(e.Status)
+	_ = json.NewEncoder(w).Encode(e)
+}
+
+// writeTooManyRequests writes a 429 JSON error mirroring the login rate-limit
+// response, so a rate-limited public route matches the feature's error shape.
+func writeTooManyRequests(w http.ResponseWriter) {
+	e := web.NewError(http.StatusTooManyRequests, "too many requests").WithCode("rate_limited")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(e.Status)
 	_ = json.NewEncoder(w).Encode(e)

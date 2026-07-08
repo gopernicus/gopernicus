@@ -104,7 +104,7 @@ func newTokenHandler(t *testing.T, signer cryptids.JWTSigner, requireVerified bo
 		TokenSigner:          signer,
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc)
+	Mount(h, svc, nil)
 	return h
 }
 
