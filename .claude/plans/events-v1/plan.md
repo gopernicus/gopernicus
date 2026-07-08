@@ -1376,3 +1376,69 @@ Added the vocabulary-only `sdk/identity` package per A-I1.1 (stdlib-only,
   green; `sdk/go.mod` untouched (zero require block — G1/G3). No consumer
   wiring yet (task-1c aliases `authsvc.Principal` onto it later); this leg
   adds vocabulary only.
+
+### task-1c (auth conformance — one identity carrier) — done 2026-07-08
+
+Collapsed auth's two private identity context keys onto the single
+`sdk/identity` carrier; public API provably unchanged (existing tests pass
+unmodified — the conformance proof).
+
+- **Alias/carrier changes (file:line):**
+  - `authsvc/machine.go` — `type Principal = identity.Principal` (was a
+    local struct); `PrincipalUser = identity.User` /
+    `PrincipalServiceAccount = identity.ServiceAccount` (were bare string
+    literals); `CurrentPrincipal` reads `identity.FromContext` (was
+    `principalFromContext`); `RequireServiceAccount` and `RequirePrincipal`
+    stash via `identity.WithPrincipal` (were `withPrincipal`).
+  - `authsvc/service.go` — `RequireUser` stashes
+    `identity.WithPrincipal(ctx, identity.Principal{Type: identity.User, ID:
+    userID})` (was `withUserID`); `CurrentUser` reads `identity.FromContext`
+    and filters `Type == identity.User` (was `userIDFromContext`); logout's
+    best-effort attribution reads `s.CurrentUser(ctx)` (was
+    `userIDFromContext`). Added `sdk/identity` import.
+  - `authsvc/context.go` — deleted the `userIDKey`/`principalKey` pair and
+    their four helpers (`withUserID`, `userIDFromContext`, `withPrincipal`,
+    `principalFromContext`); the `contextKey` const now carries only
+    `clientInfoKey`. Rewrote the "It lives here (not sdk) by design" doc note
+    to cite A-I1 as the superseding decision — identity graduated to
+    `sdk/identity`; only `clientInfo` (audit plumbing, behavior not identity)
+    stays feature-private.
+  - `authentication.go` — UNTOUCHED; `auth.Principal = authsvc.Principal`
+    now chains through the alias to `identity.Principal`, so hosts see zero
+    API change.
+- **Conformance proof:** NO existing test file was modified
+  (`git status --porcelain features/authentication | grep _test.go` → empty).
+  All authsvc/http/invitationsvc suites pass with `-count=1`. The
+  key-collapse widens two never-asserted cross-reads (CurrentUser now
+  readable after a RequirePrincipal-session; CurrentPrincipal after
+  RequireUser) — the plan mandated the collapse and no existing test asserts
+  those negatives, so behavior in every tested path is unchanged.
+- **Coordination note (A3 ordering):** SATISFIED implicitly — feature-standard
+  A3 (the two hand-rolled response writers at the middleware region) landed
+  2026-07-07 and the milestone closed 2026-07-08 (folded into task-0's
+  rebase); this leg rebased over it, no service.go writer conflict.
+- **Verify:** `cd features/authentication && go build ./... && go test
+  -count=1 ./... && go vet ./...` green (no test file modified); `make check`
+  → "all checks passed"; `make guard` green. Run-and-look
+  (`examples/auth-cms`, :8082, AUTH_JWT_SECRET + AUTH_DEBUG=1): no-session
+  `/articles` 401 → register 201 → pre-verify login 403 → verify 200 → login
+  200 + session cookie → gated `/articles` 200 (RequireUser end-to-end
+  through the NEW identity carrier) → logout 200 → gated `/articles` 401 →
+  clean-jar unauth `/articles` 401; server killed, port free.
+
+### 2026-07-08 — task-2 (charter C3 cash-in) executed
+
+- **What:** `features/README.md` §6 — the event bus port moved from the
+  candidates list to a new "Built from this list" entry: `Mount.Events`,
+  emit-only, best-effort at-most-once (lost on crash between commit and
+  emit), durable delivery pointed at feature `Repositories`, nil → emits
+  nothing; added per C3's sanctioned process at events-v1. The candidates
+  list retains only the jobs registrar (closing sentence re-singularized).
+  §1's mount bullet now reads `feature.Mount{Router, Logger, Events}`.
+  §6's pre-v1 compatible-change paragraph kept its
+  `Mount{Router: r, Logger: log}` construction example (it illustrates
+  named-field construction, not the field inventory).
+- **Verify:** `make guard` green (docs-only change); read-back confirms §6
+  no longer lists the event bus as a candidate (grep: the only remaining
+  "candidate" mentions are the unrelated views-scope note and the
+  jobs-registrar section).

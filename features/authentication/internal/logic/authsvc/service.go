@@ -31,6 +31,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/email"
 	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk/identity"
 	"github.com/gopernicus/gopernicus/sdk/oauth"
 	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/web"
@@ -442,7 +443,7 @@ func (s *Service) Logout(ctx context.Context, token string) error {
 	}
 	// The user id is best-effort: RequireUser stashes it on the handler's ctx, so
 	// a session-gated logout attributes the row; a raw-token logout leaves it empty.
-	uid, _ := userIDFromContext(ctx)
+	uid, _ := s.CurrentUser(ctx)
 	s.recordSecurityEvent(ctx, securityEventInput{
 		UserID: uid,
 		Type:   securityevent.TypeLogout,
@@ -576,7 +577,7 @@ func (s *Service) RequireUser(next http.Handler) http.Handler {
 			writeUnauthorized(w)
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(withUserID(r.Context(), userID)))
+		next.ServeHTTP(w, r.WithContext(identity.WithPrincipal(r.Context(), identity.Principal{Type: identity.User, ID: userID})))
 	})
 }
 
@@ -606,7 +607,11 @@ func (s *Service) resolveUserID(r *http.Request) (string, bool) {
 // It is the cross-feature identity port other features consume structurally
 // (features/README.md §5's CurrentUser).
 func (s *Service) CurrentUser(ctx context.Context) (string, bool) {
-	return userIDFromContext(ctx)
+	p, ok := identity.FromContext(ctx)
+	if !ok || p.Type != identity.User {
+		return "", false
+	}
+	return p.ID, true
 }
 
 // SetSessionCookie writes the session cookie carrying token per the cookie
