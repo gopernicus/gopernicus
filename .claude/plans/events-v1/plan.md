@@ -1486,3 +1486,63 @@ unmodified — the conformance proof).
   Run-and-look: `examples/minimal` on :8081, `GET /` → 200 and
   `GET /products/widget-3000` → 200 (the new module is not yet wired into any
   host, so behavior is unchanged); server killed, port 8081 free.
+
+### 2026-07-08 — task-4 (the poller — exported, host-driven) executed
+
+- **`features/events/poller.go`** (root package `events`, gate edit 6 file
+  split): `Poller` + `NewPoller(repo outbox.EntryRepository, bus
+  sdkevents.Bus, opts ...PollerOption) *Poller` with functional-option
+  `WithBatchSize(n int)` (default 100) — option style follows the Memory
+  bus's `MemoryOption` in the same sdk module (design's stated two-arg
+  signature preserved; batch size is the variadic tail). `Poll(ctx) error`
+  matches `workers.WorkFunc` exactly, so a host feeds it straight to
+  `workers.NewPool`. Owns no goroutines and no lifecycle (design §5; D4
+  host-drives-execution).
+- **Emit discipline (P1), implementation points:** `Poll` reads
+  `ListUnpublished(ctx, batchSize)`, returns `workers.ErrNoWork` on an empty
+  batch (`poller.go` — `if len(entries) == 0`), else loops emitting each with
+  `sdkevents.WithSync()`. On emit error it `return`s immediately **without**
+  `MarkPublished` (the entry stays unpublished → next-poll retry); only after
+  a successful emit does it call `MarkPublished`. A mark error also returns
+  (entry stays unpublished → documented duplicate emit next poll; consumers
+  de-dupe on `EventID()`). The doc comment on `Poll` cites all three
+  semantics verbatim in intent: Memory + `WithSync` returns the first handler
+  error (failing subscriber ⇒ unpublished ⇒ redelivery, idempotent-handler
+  contract); goredis + `WithSync` returns the XADD error properly; the
+  closed-bus edge where BOTH buses return nil (dropped warning) and `Poll`
+  would mark-anyway — safe only because the documented shutdown order stops
+  the poller before `bus.Close`.
+- **Feature-local rehydrated event (gate edit 1):** unexported `outboxEvent`
+  embeds `sdkevents.RemoteEvent` (reusing sdk's frozen envelope
+  `Event`/`Metadata`/`Unmarshaler`/`EventEncoder` decoding) and adds
+  `EventID() string`. `newOutboxEvent(rec)` maps a `Record` onto it. Static
+  asserts pin `Event`, `Metadata`, `Unmarshaler`, and `interface{ EventID()
+  string }`. `RemoteEvent` carries no EventID (why the wrapper exists);
+  sdk/events stays frozen. The hub (task-5) will read `id:` via the
+  `interface{ EventID() string }` assertion — the concrete type stays
+  unexported.
+- **`features/events/poller_test.go`** (white-box `package events`, hermetic):
+  `fakeRepo` (in-memory `EntryRepository`, ascending-CreatedAt
+  `ListUnpublished`, MarkPublished call counter, injectable list/mark errors),
+  `stubBus` (records `Sync` flag + emitted EventIDs, injectable emit error,
+  delivers to no subscribers), `sampleEvent` (`BaseEvent` + `Name`). Tests:
+  `TestPoll_EmptyBatch_ReturnsErrNoWork`;
+  `TestPoll_DrainsInCreatedAtOrder_MarksEachOnce` (seeded out of order,
+  Memory bus + `*` subscriber, delivery order = CreatedAt ascending, each
+  marked once, second poll ⇒ ErrNoWork); `TestPoll_EmitsWithSync` (stubBus
+  `sawSync`); `TestPoll_EmitError_DoesNotMark_RetriedNextPoll` (P1: mark
+  count 0 after emit error, then 1 after the bus recovers);
+  `TestPoll_MarkError_LeavesUnpublished_DuplicateEmitNextPoll` (emit count
+  1 → 2 across two polls); `TestPoll_EventIDSurfacesOnRehydratedEvent`;
+  `TestPoll_TypedHandlerRehydratesViaUnmarshaler` (`TypedHandler[sampleEvent]`
+  slow path rehydrates `Name`/`Type`).
+- **Verify:** `cd features/events && go build ./... && go test -race ./... &&
+  go vet ./...` → all green (2 packages ok, race clean); `gofmt -l .` clean.
+  `make guard` green (all six). `make check` → "all checks passed" (28
+  modules). Run-and-look: `examples/minimal` on :8081, `GET /` → 200 and
+  `GET /products/widget-3000` → 200 (events module still unwired into any
+  host — behavior unchanged); server killed, port 8081 free.
+- **DIVERGENCE / note:** the DoD says "27 modules"; `make check` iterates 28
+  (the same `features/cms/views/templ` off-by-one task-3 logged — not a
+  scope change). No other divergences; `NewPoller`'s variadic option tail is
+  an additive refinement of the design's two-arg signature, not a change.
