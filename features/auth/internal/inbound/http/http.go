@@ -37,10 +37,12 @@ type authService interface {
 	ForgotPassword(ctx context.Context, email string) error
 	ResetPassword(ctx context.Context, token, newPassword string) error
 	CurrentUser(ctx context.Context) (userID string, ok bool)
+	EmailForUser(ctx context.Context, userID string) (string, error)
 	SetSessionCookie(w http.ResponseWriter, token string)
 	ClearSessionCookie(w http.ResponseWriter)
 	SessionCookieName() string
 	RequireUser(next http.Handler) http.Handler
+	RateLimitByIP(keyPrefix string, perMinute int) web.Middleware
 
 	// OAuth flow (design §3). OAuthEnabled gates whether the OAuth routes are
 	// registered at all (deny-by-absence).
@@ -67,9 +69,11 @@ type authService interface {
 	IssueToken(ctx context.Context, email, password string) (token string, expiresAt time.Time, err error)
 }
 
-// handlers holds the auth service the route handlers delegate to.
+// handlers holds the services the route handlers delegate to. inv is nil when no
+// Granter is wired (invitations off); its routes are then never registered.
 type handlers struct {
 	svc authService
+	inv InvitationService
 }
 
 // ---------------------------------------------------------------------------
@@ -136,9 +140,9 @@ func newUserResponse(u user.User) userResponse {
 // unauthenticated ones included (design §5.1 WI4): the ONE blanket write point
 // that stamps the request IP + User-Agent onto the context for login's
 // rate-limit key and the security-event audit rows.
-func Mount(r feature.RouteRegistrar, svc authService) {
+func Mount(r feature.RouteRegistrar, svc authService, inv InvitationService) {
 	r = clientInfoRegistrar{inner: r}
-	h := &handlers{svc: svc}
+	h := &handlers{svc: svc, inv: inv}
 	r.Handle("POST", "/auth/register", h.register)
 	r.Handle("POST", "/auth/login", h.login)
 	r.Handle("POST", "/auth/verify", h.verify)
@@ -164,6 +168,12 @@ func Mount(r feature.RouteRegistrar, svc authService) {
 	// wired (deny-by-absence, design §4.4); an unwired host returns 404 for it.
 	if svc.TokenEnabled() {
 		r.Handle("POST", "/auth/token", h.token)
+	}
+
+	// Invitation routes are registered only when a Granter is wired (deny-by-
+	// absence, design §6): an unwired host returns 404 for the entire surface.
+	if inv != nil {
+		mountInvitations(r, h, svc.RequireUser, svc.RateLimitByIP("invitation_decline", declineAttemptsPerMinute))
 	}
 }
 

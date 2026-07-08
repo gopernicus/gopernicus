@@ -29,6 +29,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/auth"
 	"github.com/gopernicus/gopernicus/features/auth/logic/apikey"
+	"github.com/gopernicus/gopernicus/features/auth/logic/invitation"
 	"github.com/gopernicus/gopernicus/features/auth/logic/oauthaccount"
 	"github.com/gopernicus/gopernicus/features/auth/logic/oauthstate"
 	"github.com/gopernicus/gopernicus/features/auth/logic/securityevent"
@@ -145,6 +146,25 @@ func Run(t *testing.T, newRepos func(t *testing.T) auth.Repositories) {
 		t.Run("ListPagination", func(t *testing.T) { testSecurityEventsListPaged(t, newRepos(t)) })
 		t.Run("ListSameCreatedAtCollision", func(t *testing.T) { testSecurityEventsListCollision(t, newRepos(t)) })
 		t.Run("DetailsRoundTrip", func(t *testing.T) { testSecurityEventsDetails(t, newRepos(t)) })
+	})
+
+	// Invitations is optional (deny-by-absence: a host wiring no Granter leaves
+	// it nil). When present it is exercised in full; when absent the group skips
+	// LOUDLY — a silent green would falsely claim invitation conformance.
+	t.Run("Invitations", func(t *testing.T) {
+		if newRepos(t).Invitations == nil {
+			t.Skip("Invitations not wired — invitation conformance NOT verified for this Repositories")
+		}
+		t.Run("CreateGetRoundTrip", func(t *testing.T) { testInvitationsCRUD(t, newRepos(t)) })
+		t.Run("PartialPendingUniqueness", func(t *testing.T) { testInvitationsUniqueness(t, newRepos(t)) })
+		t.Run("GetByTokenHashUnknown", func(t *testing.T) { testInvitationsTokenUnknown(t, newRepos(t)) })
+		t.Run("GetByTokenHashExpired", func(t *testing.T) { testInvitationsTokenExpired(t, newRepos(t)) })
+		t.Run("StatusTransitions", func(t *testing.T) { testInvitationsStatusTransitions(t, newRepos(t)) })
+		t.Run("UpdateStatusAbsentNotFound", func(t *testing.T) { testInvitationsUpdateAbsent(t, newRepos(t)) })
+		t.Run("ListByResourcePagination", func(t *testing.T) { testInvitationsListByResourcePaged(t, newRepos(t)) })
+		t.Run("ListByResourceCollision", func(t *testing.T) { testInvitationsListByResourceCollision(t, newRepos(t)) })
+		t.Run("ListBySubjectPagination", func(t *testing.T) { testInvitationsListBySubjectPaged(t, newRepos(t)) })
+		t.Run("ListBySubjectCollision", func(t *testing.T) { testInvitationsListBySubjectCollision(t, newRepos(t)) })
 	})
 }
 
@@ -1168,5 +1188,299 @@ func pageAllSecurityEvents(t *testing.T, repo securityevent.SecurityEventReposit
 		cursor = page.NextCursor
 	}
 	t.Fatalf("pageAllSecurityEvents did not terminate")
+	return nil
+}
+
+// --- Invitations ---
+
+func testInvitationsCRUD(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	repo := repos.Invitations
+
+	// A live (future-expiry) invite, so the GetByTokenHash read below returns the
+	// record rather than the read-time ErrExpired.
+	inv, err := invitation.New("project", "p1", "member", "invitee@example.com", "inviter-1", "hash-crud", false, time.Hour, time.Now())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	created, err := repo.Create(ctx, inv)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if created.ID != inv.ID || created.Status != invitation.StatusPending {
+		t.Errorf("Create round-trip lost data: %+v", created)
+	}
+
+	got, err := repo.Get(ctx, created.ID)
+	if err != nil || got.Identifier != "invitee@example.com" || got.Relation != "member" {
+		t.Fatalf("Get: %+v err=%v", got, err)
+	}
+
+	byHash, err := repo.GetByTokenHash(ctx, "hash-crud")
+	if err != nil || byHash.ID != created.ID {
+		t.Fatalf("GetByTokenHash: id=%q err=%v", byHash.ID, err)
+	}
+
+	if _, err := repo.Get(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
+		t.Errorf("Get(absent): err=%v, want ErrNotFound", err)
+	}
+}
+
+// testInvitationsUniqueness is the pinned PARTIAL-index case (plan-cut
+// amendment): a second PENDING invite for the same (resource_type, resource_id,
+// identifier, relation) → ErrAlreadyExists; a differing relation is fine; and
+// after UpdateStatus moves the first off pending, a NEW pending invite for the
+// same tuple SUCCEEDS.
+func testInvitationsUniqueness(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	repo := repos.Invitations
+
+	a := mustNewInvitation(t, "project", "p1", "member", "dup@example.com", "inviter-1", "hash-a", suiteBase)
+	if _, err := repo.Create(ctx, a); err != nil {
+		t.Fatalf("first Create: %v", err)
+	}
+	// Same pending tuple → collision.
+	b := mustNewInvitation(t, "project", "p1", "member", "dup@example.com", "inviter-1", "hash-b", suiteBase)
+	if _, err := repo.Create(ctx, b); !errors.Is(err, errs.ErrAlreadyExists) {
+		t.Errorf("Create colliding pending tuple: err=%v, want ErrAlreadyExists", err)
+	}
+	// A different relation is a different tuple → fine.
+	c := mustNewInvitation(t, "project", "p1", "admin", "dup@example.com", "inviter-1", "hash-c", suiteBase)
+	if _, err := repo.Create(ctx, c); err != nil {
+		t.Errorf("Create distinct relation: err=%v, want nil", err)
+	}
+
+	// Move the first off pending; a NEW pending invite for the same tuple now
+	// SUCCEEDS (partial uniqueness covers pending rows only).
+	if _, err := repo.UpdateStatus(ctx, a.ID, invitation.StatusUpdate{
+		Status:    invitation.StatusDeclined,
+		TokenHash: a.TokenHash,
+		ExpiresAt: a.ExpiresAt,
+		UpdatedAt: suiteBase.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("UpdateStatus(declined): %v", err)
+	}
+	d := mustNewInvitation(t, "project", "p1", "member", "dup@example.com", "inviter-1", "hash-d", suiteBase.Add(2*time.Minute))
+	if _, err := repo.Create(ctx, d); err != nil {
+		t.Errorf("Create pending after prior moved off pending: err=%v, want nil (partial index)", err)
+	}
+}
+
+func testInvitationsTokenUnknown(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	if _, err := repos.Invitations.GetByTokenHash(ctx, "no-such-hash"); !errors.Is(err, errs.ErrNotFound) {
+		t.Errorf("GetByTokenHash(unknown): err=%v, want ErrNotFound", err)
+	}
+}
+
+// testInvitationsTokenExpired asserts a token-hash read past ExpiresAt surfaces
+// errs.ErrExpired (mirroring the session/verification/oauthstate precedent).
+func testInvitationsTokenExpired(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	repo := repos.Invitations
+
+	// Created one hour ago with a one-minute lifetime → expired now.
+	inv, err := invitation.New("project", "p1", "member", "expired@example.com", "inviter-1", "hash-expired", false, time.Minute, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := repo.Create(ctx, inv); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := repo.GetByTokenHash(ctx, "hash-expired"); !errors.Is(err, errs.ErrExpired) {
+		t.Errorf("GetByTokenHash(expired): err=%v, want ErrExpired", err)
+	}
+}
+
+// testInvitationsStatusTransitions round-trips an accept transition through
+// UpdateStatus: status, accepted-at, and resolved-subject-id persist.
+func testInvitationsStatusTransitions(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	repo := repos.Invitations
+
+	inv := mustNewInvitation(t, "project", "p1", "member", "trans@example.com", "inviter-1", "hash-trans", suiteBase)
+	if _, err := repo.Create(ctx, inv); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	acceptedAt := suiteBase.Add(time.Minute)
+	updated, err := repo.UpdateStatus(ctx, inv.ID, invitation.StatusUpdate{
+		Status:            invitation.StatusAccepted,
+		TokenHash:         inv.TokenHash,
+		ExpiresAt:         inv.ExpiresAt,
+		AcceptedAt:        acceptedAt,
+		ResolvedSubjectID: "user-42",
+		UpdatedAt:         acceptedAt,
+	})
+	if err != nil {
+		t.Fatalf("UpdateStatus(accepted): %v", err)
+	}
+	if updated.Status != invitation.StatusAccepted || updated.ResolvedSubjectID != "user-42" || !updated.AcceptedAt.Equal(acceptedAt) {
+		t.Errorf("accept transition lost data: %+v", updated)
+	}
+
+	reget, err := repo.Get(ctx, inv.ID)
+	if err != nil || reget.Status != invitation.StatusAccepted || reget.ResolvedSubjectID != "user-42" {
+		t.Fatalf("Get after UpdateStatus: %+v err=%v", reget, err)
+	}
+}
+
+func testInvitationsUpdateAbsent(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	if _, err := repos.Invitations.UpdateStatus(ctx, "nope", invitation.StatusUpdate{Status: invitation.StatusCancelled, UpdatedAt: suiteBase}); !errors.Is(err, errs.ErrNotFound) {
+		t.Errorf("UpdateStatus(absent): err=%v, want ErrNotFound", err)
+	}
+}
+
+// testInvitationsListByResourcePaged pages a resource's invitations in the
+// pinned created_at DESC, id DESC order and excludes another resource's rows.
+func testInvitationsListByResourcePaged(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	repo := repos.Invitations
+
+	created := make([]invitation.Invitation, 0, 5)
+	for i := 0; i < 5; i++ {
+		// Distinct identifier per row keeps each a distinct pending tuple.
+		inv := mustNewInvitation(t, "project", "res-list", "member", fmt.Sprintf("u%d@example.com", i), "inviter-1", fmt.Sprintf("hash-r%d", i), suiteBase.Add(time.Duration(i)*time.Minute))
+		c, err := repo.Create(ctx, inv)
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		created = append(created, c)
+	}
+	// A row under a different resource must not appear.
+	other := mustNewInvitation(t, "project", "res-other", "member", "x@example.com", "inviter-1", "hash-other", suiteBase)
+	if _, err := repo.Create(ctx, other); err != nil {
+		t.Fatalf("Create(other): %v", err)
+	}
+
+	want := invitationIDsSorted(created)
+	got := pageAllInvitations(t, func(req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
+		return repo.ListByResource(ctx, "project", "res-list", req)
+	}, 2)
+	if !equalStrings(got, want) {
+		t.Errorf("ListByResource paged order = %v, want %v", got, want)
+	}
+}
+
+func testInvitationsListByResourceCollision(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	repo := repos.Invitations
+
+	created := make([]invitation.Invitation, 0, 4)
+	for i := 0; i < 4; i++ {
+		inv := mustNewInvitation(t, "project", "res-col", fmt.Sprintf("rel-%d", i), fmt.Sprintf("c%d@example.com", i), "inviter-1", fmt.Sprintf("hash-rc%d", i), suiteBase)
+		c, err := repo.Create(ctx, inv)
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		created = append(created, c)
+	}
+
+	want := invitationIDsSorted(created)
+	got := pageAllInvitations(t, func(req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
+		return repo.ListByResource(ctx, "project", "res-col", req)
+	}, 2)
+	if !equalStrings(got, want) {
+		t.Errorf("ListByResource collision order = %v, want %v (id tiebreak)", got, want)
+	}
+}
+
+// testInvitationsListBySubjectPaged pages an invitee's invitations (keyed on
+// identifier) in the pinned order and excludes another invitee's rows.
+func testInvitationsListBySubjectPaged(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	repo := repos.Invitations
+
+	created := make([]invitation.Invitation, 0, 5)
+	for i := 0; i < 5; i++ {
+		// Same identifier, distinct resource keeps each a distinct pending tuple.
+		inv := mustNewInvitation(t, "project", fmt.Sprintf("res-%d", i), "member", "subject@example.com", "inviter-1", fmt.Sprintf("hash-s%d", i), suiteBase.Add(time.Duration(i)*time.Minute))
+		c, err := repo.Create(ctx, inv)
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		created = append(created, c)
+	}
+	// A row for another invitee must not appear.
+	other := mustNewInvitation(t, "project", "res-x", "member", "someone@example.com", "inviter-1", "hash-sx", suiteBase)
+	if _, err := repo.Create(ctx, other); err != nil {
+		t.Fatalf("Create(other): %v", err)
+	}
+
+	want := invitationIDsSorted(created)
+	got := pageAllInvitations(t, func(req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
+		return repo.ListBySubject(ctx, "subject@example.com", req)
+	}, 2)
+	if !equalStrings(got, want) {
+		t.Errorf("ListBySubject paged order = %v, want %v", got, want)
+	}
+}
+
+func testInvitationsListBySubjectCollision(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	repo := repos.Invitations
+
+	created := make([]invitation.Invitation, 0, 4)
+	for i := 0; i < 4; i++ {
+		inv := mustNewInvitation(t, "project", fmt.Sprintf("resc-%d", i), "member", "collide@example.com", "inviter-1", fmt.Sprintf("hash-sc%d", i), suiteBase)
+		c, err := repo.Create(ctx, inv)
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		created = append(created, c)
+	}
+
+	want := invitationIDsSorted(created)
+	got := pageAllInvitations(t, func(req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
+		return repo.ListBySubject(ctx, "collide@example.com", req)
+	}, 2)
+	if !equalStrings(got, want) {
+		t.Errorf("ListBySubject collision order = %v, want %v (id tiebreak)", got, want)
+	}
+}
+
+func mustNewInvitation(t *testing.T, resourceType, resourceID, relation, identifier, invitedBy, tokenHash string, createdAt time.Time) invitation.Invitation {
+	t.Helper()
+	inv, err := invitation.New(resourceType, resourceID, relation, identifier, invitedBy, tokenHash, false, time.Hour, createdAt)
+	if err != nil {
+		t.Fatalf("invitation.New: %v", err)
+	}
+	return inv
+}
+
+func invitationIDsSorted(invs []invitation.Invitation) []string {
+	sorted := append([]invitation.Invitation(nil), invs...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if !sorted[i].CreatedAt.Equal(sorted[j].CreatedAt) {
+			return sorted[i].CreatedAt.After(sorted[j].CreatedAt)
+		}
+		return sorted[i].ID > sorted[j].ID
+	})
+	ids := make([]string, len(sorted))
+	for i, inv := range sorted {
+		ids[i] = inv.ID
+	}
+	return ids
+}
+
+func pageAllInvitations(t *testing.T, list func(crud.ListRequest) (crud.Page[invitation.Invitation], error), limit int) []string {
+	t.Helper()
+	var ids []string
+	cursor := ""
+	for i := 0; i < 100; i++ { // bound against a runaway cursor
+		page, err := list(crud.ListRequest{Limit: limit, Cursor: cursor})
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		for _, inv := range page.Items {
+			ids = append(ids, inv.ID)
+		}
+		if !page.HasMore || page.NextCursor == "" {
+			return ids
+		}
+		cursor = page.NextCursor
+	}
+	t.Fatalf("pageAllInvitations did not terminate")
 	return nil
 }

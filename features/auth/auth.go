@@ -33,7 +33,10 @@ import (
 
 	internalhttp "github.com/gopernicus/gopernicus/features/auth/internal/inbound/http"
 	"github.com/gopernicus/gopernicus/features/auth/internal/logic/authsvc"
+	"github.com/gopernicus/gopernicus/features/auth/internal/logic/invitationsvc"
+	"github.com/gopernicus/gopernicus/features/auth/internal/redirect"
 	"github.com/gopernicus/gopernicus/features/auth/logic/apikey"
+	"github.com/gopernicus/gopernicus/features/auth/logic/invitation"
 	"github.com/gopernicus/gopernicus/features/auth/logic/oauthaccount"
 	"github.com/gopernicus/gopernicus/features/auth/logic/oauthstate"
 	"github.com/gopernicus/gopernicus/features/auth/logic/securityevent"
@@ -43,6 +46,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/auth/logic/verification"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/email"
+	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/oauth"
 	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
@@ -72,6 +76,26 @@ var ErrOAuthReposRequired = errors.New("auth: Config.Providers set but Repositor
 // path inert); both set → on; one without the other is a loud construction error
 // (cut refinement 5), never a silent half-on state.
 var ErrMachineReposRequired = errors.New("auth: Repositories.ServiceAccounts and Repositories.APIKeys must be wired together (both or neither)")
+
+// ErrInvitationRepoRequired is returned by NewService/Register when Config.Granter
+// is wired but Repositories.Invitations is nil. Invitations are deny-by-absence —
+// no Granter means no routes and Invitations may be nil — but wiring a Granter
+// without its store is a loud partial-wiring error (design §6), never a silent
+// half-on state.
+var ErrInvitationRepoRequired = errors.New("auth: Config.Granter set but Repositories.Invitations is nil")
+
+// Granter is the ReBAC-decoupled grant-on-accept seam for invitations (design
+// §2.2/§6, ratified AV4): Grant(ctx, resourceType, resourceID, relation,
+// subjectType, subjectID). A host adapts it to whatever authorizer it runs — a
+// ReBAC CreateRelationships, a role-column write, or the proof host's toy
+// membership map — or wires none. The grant must be idempotent in the Granter's
+// world (a duplicate accept must not error). Aliased from invitationsvc so the
+// sibling service can call it without an import cycle.
+type Granter = invitationsvc.Granter
+
+// MemberCheck is the optional duplicate-membership predicate consulted before a
+// direct-add grant (design §6). Nil → no dup check. Aliased from invitationsvc.
+type MemberCheck = invitationsvc.MemberCheck
 
 // ErrOAuthLastMethod is returned (as the wrapped cause) by Service.Unlink when the
 // target link is the user's only authentication method and no password is set —
@@ -135,6 +159,10 @@ type Repositories struct {
 	// a security event synchronously and a write failure is logged at WARN,
 	// never failing the auth flow.
 	SecurityEvents securityevent.SecurityEventRepository
+	// Invitations backs the resource-invitation flow (design §6). It may be nil
+	// when Config.Granter is nil (invitations off); wiring a Granter without it is
+	// ErrInvitationRepoRequired at construction.
+	Invitations invitation.InvitationRepository
 }
 
 // CookieConfig is the session-cookie policy. Zero values are safe: an empty Name
@@ -211,6 +239,17 @@ type Config struct {
 	// documented on TokenSigner above. Meaningful only when TokenSigner is wired.
 	TokenTTL time.Duration
 
+	// Granter is the ReBAC-decoupled grant-on-accept seam for invitations (design
+	// §6, ratified AV4). Nil → the invitation subsystem is OFF and its routes are
+	// NOT registered (deny-by-absence); Repositories.Invitations may then be nil.
+	// Non-nil → Repositories.Invitations is required (ErrInvitationRepoRequired),
+	// and Register/verify resolve pending auto-accept invitations for the invitee.
+	Granter Granter
+	// MemberCheck is the optional duplicate-membership predicate for the direct-add
+	// path (known invitee + AutoAccept). Nil → no dup check (idempotent grants
+	// absorb duplicates). Meaningful only when Granter is wired.
+	MemberCheck MemberCheck
+
 	// Logger receives the best-effort WARN line when a security-event audit write
 	// fails (design §5.1 — audit-write failures never fail the auth flow). Nil →
 	// slog.Default(); Register defaults it to the Mount's logger when unset.
@@ -223,6 +262,10 @@ type Config struct {
 // Config values.
 type Service struct {
 	svc *authsvc.Service
+	// inv is the invitation service, nil when Config.Granter is unset. Register
+	// mounts its routes and NewService injects it into authsvc as the
+	// resolve-on-registration collaborator; both use this single instance.
+	inv *invitationsvc.Service
 }
 
 // NewService builds the auth Service, validating the required Config fields and
@@ -241,11 +284,32 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 	if (repos.ServiceAccounts == nil) != (repos.APIKeys == nil) {
 		return nil, ErrMachineReposRequired
 	}
+	if cfg.Granter != nil && repos.Invitations == nil {
+		return nil, ErrInvitationRepoRequired
+	}
 	limiter := cfg.RateLimiter
 	if limiter == nil {
 		limiter = ratelimiter.NewMemory()
 	}
-	svc := authsvc.NewService(authsvc.Deps{
+
+	// The invitation service is built only when a Granter is wired (deny-by-
+	// absence). Its Granter is injected HERE, never into authsvc (design §6 pin).
+	var invSvc *invitationsvc.Service
+	if cfg.Granter != nil {
+		invSvc = invitationsvc.New(invitationsvc.Deps{
+			Invitations:    repos.Invitations,
+			Granter:        cfg.Granter,
+			MemberCheck:    cfg.MemberCheck,
+			UserLookup:     userLookup(repos.Users),
+			Mailer:         cfg.Mailer,
+			MailFrom:       cfg.MailFrom,
+			Redirects:      redirect.New(cfg.RedirectAllowlist),
+			SecurityEvents: repos.SecurityEvents,
+			Logger:         cfg.Logger,
+		})
+	}
+
+	deps := authsvc.Deps{
 		Users:     repos.Users,
 		Passwords: repos.Passwords,
 		Sessions:  repos.Sessions,
@@ -275,8 +339,34 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 		TokenSigner:          cfg.TokenSigner,
 		TokenTTL:             cfg.TokenTTL,
 		Logger:               cfg.Logger,
-	})
-	return &Service{svc: svc}, nil
+	}
+	// Set the resolve-on-registration collaborator only when built, so the
+	// authsvc field stays a genuine nil interface when invitations are off.
+	if invSvc != nil {
+		deps.Invitations = invSvc
+	}
+	return &Service{svc: authsvc.NewService(deps), inv: invSvc}, nil
+}
+
+// userLookup builds the internal email→subject resolver invitationsvc uses for
+// the direct-add path, backed by the Users repository. It is wired here (package
+// auth has the repos) so invitationsvc stays decoupled from the user store; an
+// invalid or unknown email resolves to no user (found=false), never an error.
+func userLookup(users user.UserRepository) invitationsvc.UserLookup {
+	return func(ctx context.Context, emailAddr string) (string, bool, error) {
+		normalized, err := user.NormalizeEmail(emailAddr)
+		if err != nil {
+			return "", false, nil
+		}
+		u, err := users.GetByEmail(ctx, normalized)
+		if err != nil {
+			if errors.Is(err, errs.ErrNotFound) {
+				return "", false, nil
+			}
+			return "", false, err
+		}
+		return u.ID, true, nil
+	}
 }
 
 // RequireUser is HTTP middleware gating a route on a valid session. It satisfies
@@ -340,6 +430,12 @@ func Register(m feature.Mount, repos Repositories, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	internalhttp.Mount(m.Router, svc.svc)
+	// Pass the invitation service as a GENUINE nil interface when it is off, so
+	// Mount's deny-by-absence check (design §6) is not fooled by a typed nil.
+	var inv internalhttp.InvitationService
+	if svc.inv != nil {
+		inv = svc.inv
+	}
+	internalhttp.Mount(m.Router, svc.svc, inv)
 	return nil
 }
