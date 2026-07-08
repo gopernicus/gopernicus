@@ -190,6 +190,10 @@ phase 2 verifies that branch actually executes.
    ruling, not a waiver — cutting tags without a license would strand the
    milestone's headline value (legally un-adoptable modules), so phase 5
    now has two independent gates: events-v1 close (RH5) AND LICENSE (RH6).
+   **Owner update 2026-07-08 (jrazmi, in-session):** the no-LICENSE state is
+   deliberate and standing — stop flagging it in leg reports and morning
+   boards. Do not re-raise; jrazmi will rule when ready. Gate B itself is
+   unchanged (phase 5 simply stays blocked until then).
 
 ## Tasks
 
