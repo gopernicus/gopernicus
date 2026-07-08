@@ -6,7 +6,7 @@
 // serviceaccount.ServiceAccountRepository, apikey.APIKeyRepository,
 // securityevent.SecurityEventRepository, and invitation.InvitationRepository.
 // It is the auth-side sibling of this host's cms memstore: a "bring your own
-// store" proof that features/auth runs with no datastore driver in its module
+// store" proof that features/authentication runs with no datastore driver in its module
 // graph — data lives in maps and is lost on exit.
 //
 // It mirrors the honesty the port doc comments promise (and the storetest
@@ -33,16 +33,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/auth"
-	"github.com/gopernicus/gopernicus/features/auth/logic/apikey"
-	"github.com/gopernicus/gopernicus/features/auth/logic/invitation"
-	"github.com/gopernicus/gopernicus/features/auth/logic/oauthaccount"
-	"github.com/gopernicus/gopernicus/features/auth/logic/oauthstate"
-	"github.com/gopernicus/gopernicus/features/auth/logic/securityevent"
-	"github.com/gopernicus/gopernicus/features/auth/logic/serviceaccount"
-	"github.com/gopernicus/gopernicus/features/auth/logic/session"
-	"github.com/gopernicus/gopernicus/features/auth/logic/user"
-	"github.com/gopernicus/gopernicus/features/auth/logic/verification"
+	auth "github.com/gopernicus/gopernicus/features/authentication"
+	"github.com/gopernicus/gopernicus/features/authentication/logic/apikey"
+	"github.com/gopernicus/gopernicus/features/authentication/logic/invitation"
+	"github.com/gopernicus/gopernicus/features/authentication/logic/oauthaccount"
+	"github.com/gopernicus/gopernicus/features/authentication/logic/oauthstate"
+	"github.com/gopernicus/gopernicus/features/authentication/logic/securityevent"
+	"github.com/gopernicus/gopernicus/features/authentication/logic/serviceaccount"
+	"github.com/gopernicus/gopernicus/features/authentication/logic/session"
+	"github.com/gopernicus/gopernicus/features/authentication/logic/user"
+	"github.com/gopernicus/gopernicus/features/authentication/logic/verification"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
@@ -66,7 +66,7 @@ type data struct {
 }
 
 // Store is an in-memory auth datastore. Its Repositories method yields the port
-// set features/auth needs.
+// set features/authentication needs.
 type Store struct{ d *data }
 
 // New returns an empty Store.

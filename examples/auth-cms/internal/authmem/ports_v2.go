@@ -5,19 +5,19 @@ import (
 	"sort"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/auth/logic/apikey"
-	"github.com/gopernicus/gopernicus/features/auth/logic/invitation"
-	"github.com/gopernicus/gopernicus/features/auth/logic/oauthaccount"
-	"github.com/gopernicus/gopernicus/features/auth/logic/oauthstate"
-	"github.com/gopernicus/gopernicus/features/auth/logic/securityevent"
-	"github.com/gopernicus/gopernicus/features/auth/logic/serviceaccount"
+	"github.com/gopernicus/gopernicus/features/authentication/logic/apikey"
+	"github.com/gopernicus/gopernicus/features/authentication/logic/invitation"
+	"github.com/gopernicus/gopernicus/features/authentication/logic/oauthaccount"
+	"github.com/gopernicus/gopernicus/features/authentication/logic/oauthstate"
+	"github.com/gopernicus/gopernicus/features/authentication/logic/securityevent"
+	"github.com/gopernicus/gopernicus/features/authentication/logic/serviceaccount"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // orderField is the keyset order column every paginated auth port pages by; it
 // must match the cursor's order field so a stale cursor from a different sort is
-// ignored (the store precedent — features/auth/stores/turso uses "created_at").
+// ignored (the store precedent — features/authentication/stores/turso uses "created_at").
 const orderField = "created_at"
 
 // Compile-time proof that each thin view fills its exact port.

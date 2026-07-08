@@ -4,7 +4,7 @@ This repo is a multi-module workspace (`go.work`, dev-only) with twenty-seven
 modules today: `sdk`; `integrations/{cryptids/bcrypt, cryptids/golang-jwt,
 datastores/pgxdb, datastores/turso, email/sendgrid, filestorage/gcs,
 filestorage/s3, kvstores/goredis, oauth/github, oauth/google,
-scheduling/robfig-cron, tracing/otel}`; `features/auth`, `features/cms`
+scheduling/robfig-cron, tracing/otel}`; `features/authentication`, `features/cms`
 (+ `views/templ`, its bundled default views module — feature-standard B2,
 2026-07-07), `features/jobs` (each + `stores/{turso,pgx}`); `examples/{cms,
 minimal, auth-cms, jobs-minimal}`. Each importable module (everything except the four
@@ -76,12 +76,12 @@ Standard Go module semver rules apply per-module:
 
 ## Upgrade notes (keyed to each module's next tag)
 
-### features/auth — next tag: session hashing invalidates all live sessions
+### features/authentication — next tag: session hashing invalidates all live sessions
 
 auth-v2 (2026-07-07) moved session-token storage to service-side SHA-256
 hashing (design §7.3): the service hashes the cookie token before every
 repository call, and stores keep persisting an opaque string — no DDL. Any
-host upgrading `features/auth` across this change must know:
+host upgrading `features/authentication` across this change must know:
 
 - **Every live session is invalidated at deploy — a forced logout for all
   users, remember-me/long-TTL sessions included** (a v1 plaintext row never
@@ -94,7 +94,7 @@ host upgrading `features/auth` across this change must know:
 - **A rollback forces a SECOND mass logout**: sessions minted by the new
   binary are hashed rows the old binary cannot read.
 
-The same note lives in `features/auth/README.md` (the upgrade note section).
+The same note lives in `features/authentication/README.md` (the upgrade note section).
 
 ## What this repo is not doing (yet)
 

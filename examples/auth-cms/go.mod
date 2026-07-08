@@ -3,7 +3,7 @@ module github.com/gopernicus/gopernicus/examples/auth-cms
 go 1.26.1
 
 require (
-	github.com/gopernicus/gopernicus/features/auth v0.0.0
+	github.com/gopernicus/gopernicus/features/authentication v0.0.0
 	github.com/gopernicus/gopernicus/features/cms v0.0.0
 	github.com/gopernicus/gopernicus/features/cms/views/templ v0.0.0
 	github.com/gopernicus/gopernicus/integrations/cryptids/bcrypt v0.0.0
@@ -17,7 +17,7 @@ require (
 	golang.org/x/crypto v0.48.0 // indirect
 )
 
-replace github.com/gopernicus/gopernicus/features/auth => ../../features/auth
+replace github.com/gopernicus/gopernicus/features/authentication => ../../features/authentication
 
 replace github.com/gopernicus/gopernicus/features/cms => ../../features/cms
 

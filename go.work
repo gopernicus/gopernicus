@@ -14,9 +14,9 @@ use (
 	./integrations/oauth/google
 	./integrations/scheduling/robfig-cron
 	./integrations/tracing/otel
-	./features/auth
-	./features/auth/stores/pgx
-	./features/auth/stores/turso
+	./features/authentication
+	./features/authentication/stores/pgx
+	./features/authentication/stores/turso
 	./features/cms
 	./features/cms/stores/pgx
 	./features/cms/stores/turso

@@ -1269,3 +1269,57 @@ day. Kept as written for the decision trail.]
   `grep -rn "features/\(authentication\|cms\|jobs\)" features/events/`
   empty, and the reverse for `features/events` (cms's emitter uses only
   sdk types).
+
+## Execution log
+
+### task-0 (A-R1 rename) — done 2026-07-08, jrazmi
+
+Renamed `features/auth` → `features/authentication` (+ both store modules),
+pure path churn, zero behavior change; existing tests pass unmodified.
+
+- **Coordination order taken:** feature-standard convergence landed FIRST
+  (its working-tree edits were committed to HEAD before this leg; tree clean
+  at start), then this rename rebased over it — trivially, exactly as the
+  task predicted (path churn rebases over content edits, not vice versa).
+- **What moved:** `git mv features/auth features/authentication`; root file
+  `auth.go` → `authentication.go`; root package decl + package-doc first
+  line `auth` → `authentication`. Interior unchanged (`authsvc`, `authmem`,
+  `authSvc` vars, the `examples/auth-cms` directory). Three module paths
+  (`features/authentication{,/stores/turso,/stores/pgx}`) + both store
+  modules' sibling `replace` directives + `examples/auth-cms/go.mod`
+  require/replace all rewritten. All internal self-imports (storetest,
+  stores, in-package tests) and the six external importer files in
+  `examples/auth-cms` rewritten to the new path; every bare-root importer
+  (11 files: 6 internal + 5 example) aliased `auth "…/features/authentication"`
+  so all `auth.` call sites stay unchanged (O5 precedent).
+- **Importer re-verification:** fresh grep (post feature-standard/D-legs)
+  still shows exactly the six `examples/auth-cms` files the 2026-07-07
+  ratification count named — no drift.
+- **Registration surfaces:** go.work (3 use lines), Makefile `MODULES`,
+  `STORE_MODULES`, both `test-stores` legs, and the FS1 guard's module list
+  (`for f in features/authentication …`). G2/G5 `features/*` generic guards
+  needed no edit (verified). Migrations: nothing to do (confirmed).
+- **Docs swept (live only):** ARCHITECTURE.md, README.md, RELEASING.md,
+  features/README.md, sdk/README.md, the feature's own README (incl. its
+  host-usage snippet, now aliased), the pgx store README, and
+  examples/auth-cms/README.md. (No turso store README exists.) Historical
+  plans and NOTES.md left as written.
+- **DIVERGENCE from task file-list item 7 (pre-approved):** the listed sync
+  note into `.claude/plans/feature-standard/01-convergence.md` was SKIPPED —
+  that plan CLOSED 2026-07-08 and moved to `.claude/past/feature-standard/`
+  (historical, append-only). Per the blanket path-note convention in
+  `.claude/past/README.md`, past-plan citations of `features/auth` read
+  through the A-R1 rename; no edit made.
+- **Verify:** `make check` → "all checks passed" (27 modules); `make guard`
+  green. Negative grep `grep -rn 'features/auth' --include='*.go'
+  --include='go.mod' . go.work Makefile | grep -v 'features/authentication'`
+  → empty; same over ARCHITECTURE.md README.md RELEASING.md
+  features/README.md sdk/README.md → empty. Run-and-look
+  (`examples/auth-cms`, server on :8080 — its build default; README's :8082
+  is env-driven): no-session `/articles` 401 → register 201 → pre-verify
+  login 403 → verify 200 → login 200 → gated `/articles` 200 → logout 200 →
+  gated `/articles` 401; server killed, port free.
+- **Pre-existing (not fixed, out of scope):** `examples/auth-cms/cmd/server/
+  demo.go` has a gofmt import-order quirk (`sdk/crud` vs `sdk/cryptids`)
+  present at HEAD before this leg; `make check` does not gate gofmt, so it
+  stays untouched per surgical-diff rule.
