@@ -265,7 +265,7 @@ phase 2 verifies that branch actually executes.
 
 ### task-8: tag layer 1 — sdk/v0.1.0
 
-- **depends_on:** [task-7; **GATE A (RH5 timing):** events-v1 CLOSED so the first tags are coherent (cms carries its `Mount.Events` emitter); **GATE B (RH6, deferred but unsoftened):** a `LICENSE` file landed and present in the tagged commit — both gates independent, both must clear]
+- **depends_on:** [task-7; **GATE A (RH5 timing):** events-v1 CLOSED so the first tags are coherent (cms carries its `Mount.Events` emitter) — **SATISFIED 2026-07-08** (events-v1 CLOSED, NOTES.md entry same date); **GATE B (RH6, deferred but unsoftened):** a `LICENSE` file landed and present in the tagged commit — both gates independent, both must clear; Gate B stands per the RH6 owner update, so phase 5 remains gated]
 - **model:** opus
 - **files:** [none — tag only (sdk has no `require` block and no replaces to drop)]
 - **verify:** `LICENSE` exists at the repo root on the commit being tagged (GATE B); `make check` green on the tagged commit; `git push origin sdk/v0.1.0`; then from a scratch dir outside the workspace: `go mod init probe && GOPROXY=direct go get github.com/gopernicus/gopernicus/sdk@v0.1.0` resolves (direct on purpose — see description; ~~private-repo `GOPRIVATE`~~ not applicable per RH1-public).
