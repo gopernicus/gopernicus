@@ -1247,3 +1247,46 @@ authorization-v1 cutting allowed as a planning leg. The feature-standard
 convergence backlog (phases A/E/B1/C/D1) and today's planning edits were
 committed and pushed in the authorizing session — SHAs in git log, CI
 required-check green verified before loop start.
+
+## 2026-07-08 — feature-standard milestone CLOSED
+
+Both plan files fully executed; one new module (26→27:
+`features/cms/views/templ`). Charter (W1–W4 + ratification) landed
+2026-07-07 (its own entry above). Convergence: phases A/E/B1/C/D1 landed
+pre-loop (`54ea545`); the remainder landed across the overnight loop and
+the 2026-07-08 morning session — B2 `801d6b4` (views/templ extraction, Views
+port in core with public aliases, admin coverage gap closed, theme deleted,
+G5 carve-out removed, sub-plan + full log in the milestone dir's
+`02-b2-views-extraction.md`), D2 `d35aad8` (ExportMigrations + Scanner →
+both connectors), D3 `eb73a81` (turso timestamp/bool bundle incl. the
+divergence-1 NullTime/NullTimePtr pair), D4 `e9fa8a9` (pgx nullable-time
+pair + FromNullTimePtr read twin, logged in-spirit addition), D5 `8d8eeec`
+(keyset `ListPage[T]` both dialects; turso Querier mirror; the pre-granted
+`sdk/crud`-into-connectors ratification RECORDED), D6 `015a8b2`
+(ExecAffecting normalization; zero→ErrNotFound stayed adapter-side). Every
+commit CI-green on the remote before the next leg started.
+
+**Live-verified vs hermetic (honest):** B2 proven by pre/post byte-compare
+(11/11 identical pages on examples/cms), triple-host render checks,
+auth-gated admin 401→200, and a live nil-Views blackout; two intentional
+wire deltas of record — media file-serve errors are JSON, nil `Config.Views`
+unregisters the HTML surface. D3/D5/D6 each drove examples/cms against the
+authorized playground turso DB (URL verified per leg; D6's drive crossed a
+real mutation, 303 + not-found 404). D2/D4's pgx paths are hermetic-only —
+live postgres conformance stays DSN-gated; next natural live leg is
+events-v1 phase 4's docker run.
+
+**Deferrals + open flags (demand-gated ledger discipline):**
+- **task-B3 (cms public Service)** — deferred by design, demand-driven.
+  TRIGGER: the first host that needs a cms use-case without (or beside) the
+  shipped HTML transport.
+- **storetest empty-page keyset case** — cms pins it; auth/jobs do not
+  (D5 gate finding; empty path lives in `sdk/crud.TrimPage`, tested there).
+  OWNER CALL open: add the case to both storetests to pin the contract.
+- **Hygiene, parked for repo-hardening tasks 9/10:** stale
+  templ/goldmark/bluemonday `// indirect` entries in the two cms store
+  go.mods (pre-date B2); `tableExists` unused test helper in the turso
+  connector.
+
+Plans housekeeping: `.claude/plans/feature-standard/` →
+`.claude/past/feature-standard/` this session, README table updated.
