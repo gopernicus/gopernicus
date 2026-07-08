@@ -38,6 +38,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms/logic/content"
 	"github.com/gopernicus/gopernicus/features/cms/logic/menus"
 	cmstempl "github.com/gopernicus/gopernicus/features/cms/views/templ"
+	eventsfeature "github.com/gopernicus/gopernicus/features/events"
 	"github.com/gopernicus/gopernicus/integrations/cryptids/bcrypt"
 	"github.com/gopernicus/gopernicus/sdk/cacher"
 	"github.com/gopernicus/gopernicus/sdk/email"
@@ -171,6 +172,28 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}
 		return pageCache.DeletePattern(ctx, "page:*")
 	}); err != nil {
+		return err
+	}
+
+	// The events feature's SSE gateway, best-effort/direct-emit (design §6 wiring
+	// note): the SAME bus instance flows to both Mount.Events (cms is the emitter)
+	// and events.Config.Bus (the gateway is the consumer) — one fan-out, no second
+	// bus. A content.* frame fans out to any open stream the moment cms emits. The
+	// gateway reads connect-time identity from sdk/identity, stashed by
+	// authSvc.RequireUser on StreamMiddleware (A-I1 E2: no Identity field — absent
+	// principal fails closed with 401). Repositories.Outbox nil ⇒ direct-emit mode
+	// (no durable rail, no poller). Authorize left nil ⇒ the resource-scoped
+	// /events/{resource_type}/{resource_id} route is NOT registered (deny by
+	// absence). The subject stream lands at GET /events (host mounts at root, no
+	// prefix — same as cms/auth).
+	eventsSvc, err := eventsfeature.NewService(eventsfeature.Repositories{}, eventsfeature.Config{
+		Bus:              bus,
+		StreamMiddleware: []web.Middleware{authSvc.RequireUser},
+	})
+	if err != nil {
+		return err
+	}
+	if err := eventsSvc.Register(mount); err != nil {
 		return err
 	}
 

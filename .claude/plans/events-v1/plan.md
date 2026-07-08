@@ -2064,3 +2064,119 @@ lines against the artifacts:
 Registration parity: `go.work` ↔ Makefile `MODULES` agree at 30; `STORE_MODULES`
 = 8 (both events legs); `test-stores` runs both events legs (pgx plain, turso
 `-tags=integration`).
+
+### 2026-07-08 — task-11 (mount the gateway — default variant, best-effort) executed
+
+Wiring only (rule 8, FS2 method form) — two files:
+`examples/auth-cms/cmd/server/main.go`, `examples/auth-cms/README.md`, plus
+`examples/auth-cms/go.mod`. No feature/port/store changes.
+
+- **go.mod** — added `require github.com/gopernicus/gopernicus/features/events
+  v0.0.0` + the sibling `replace … => ../../features/events`.
+- **Driver-free graph re-asserted (host doc-comment claim)** —
+  `GOWORK=off go list -m all | grep -i libsql` → **empty (exit 1)** from
+  `examples/auth-cms`. The feature and its stores never pull a driver into the
+  host graph. (Under the workspace `go list -m all` sees the turso store module's
+  libsql via `go.work`, which is why the host's own doc comment pins the check to
+  `GOWORK=off` — the module-graph form.)
+- **Wire** — import aliased `eventsfeature` (O5: package is `events`, `sdkevents`
+  already taken by the sdk bus). After `authSvc.Register`/`cms.Register` and the
+  cache-invalidation subscriber, before the host demo/debug routes:
+  `eventsSvc, err := eventsfeature.NewService(eventsfeature.Repositories{},
+  eventsfeature.Config{Bus: bus, StreamMiddleware:
+  []web.Middleware{authSvc.RequireUser}})` then `eventsSvc.Register(mount)`. The
+  **same** `bus` instance flows to both `Mount.Events` (cms emitter) and
+  `Config.Bus` (gateway consumer) — one fan-out. `Repositories.Outbox` nil ⇒
+  direct-emit; `Authorize` nil ⇒ resource route not registered; no `Identity`
+  field (A-I1 E2 — `RequireUser` stashes the `identity.Principal` the gateway
+  reads). Boot log confirmed `registered events feature resource_streams=false
+  durable_outbox=false`.
+- **Route surface / prefix decision** — the host mounts every feature at the
+  root router (no prefix; same as cms/auth), so the subject stream lands at
+  **`GET /events`** — exactly the protocol's curl URL. The resource-scoped
+  `/events/{resource_type}/{resource_id}` is absent (nil `Authorize`).
+- **README** — added "Leg 6 — the events SSE stream" (route `/events`, 401 auth
+  requirement, direct-emit/best-effort, metadata-only body + `id:` correlation,
+  `: ping` heartbeat cadence, the open-stream + admin-edit + reload-public curls)
+  and an events bullet in the Route surface section.
+
+- **Verify:** `cd examples/auth-cms && go build ./... && go test ./... && go vet
+  ./...` all green (memstore + authmem suites ok; cmd/server no test files).
+  `make check` → "all checks passed" (30 modules; six guards green; templ no
+  drift).
+
+- **Run-and-look — the real-interaction protocol steps 1–4, verbatim.** Server
+  `AUTH_JWT_SECRET=… go run ./cmd/server` on `localhost:8082` (default variant,
+  `EVENTS_OUTBOX` unset). Commands + observed frames/statuses:
+
+  **Step 1 — register + login with a cookie jar** (`/tmp/jar`):
+  ```
+  curl -s -o /dev/null -w "%{http_code}" -c jar -b jar http://localhost:8082/articles
+    -> 401                          # no session, admin gate closed
+  curl -sX POST http://localhost:8082/auth/register -H 'Content-Type: application/json' \
+    -d '{"email":"admin@example.com","password":"correct horse battery staple","display_name":"Admin"}'
+    -> 201
+  # mailer log (console sender): text="Your verification code is: uxzdjpmbencedxkdacr4goc4f4"
+  curl -sX POST http://localhost:8082/auth/verify -H 'Content-Type: application/json' \
+    -d '{"code":"uxzdjpmbencedxkdacr4goc4f4"}'
+    -> 200
+  curl -s -D - -c jar -b jar -X POST http://localhost:8082/auth/login -H 'Content-Type: application/json' \
+    -d '{"email":"admin@example.com","password":"correct horse battery staple"}'
+    -> HTTP/1.1 200 OK
+       Set-Cookie: session=oehqpq7ayikypiv2sjythc2glu; Path=/; HttpOnly; SameSite=Lax
+  curl -s -o /dev/null -w "%{http_code}" -c jar -b jar http://localhost:8082/articles
+    -> 200                          # authed admin GET
+  ```
+
+  **Step 2 — open the stream; heartbeat comment frames arrive (~25s cadence):**
+  ```
+  curl -N -b jar http://localhost:8082/events      # stream opens, stays open
+  ```
+  After ~26s the open capture accumulated the heartbeat comments (raw bytes):
+  ```
+  : ping
+
+  : ping
+
+  : ping
+  ```
+
+  **Step 3 — in another session, edit a seeded cms entry → `content.updated`
+  frame on the open stream:**
+  ```
+  ID=$(curl -s -b jar http://localhost:8082/articles | grep -o '/articles/[a-z0-9]*/edit' \
+        | head -1 | sed 's#/articles/##;s#/edit##')   # -> odgfhfpmvn3il6iynr7yc4slvm ("Bring your own stores")
+  curl -s -o /dev/null -w "%{http_code}" -b jar -X POST "http://localhost:8082/articles/$ID" \
+    --data-urlencode 'title=Bring your own stores (edited)' \
+    --data-urlencode 'excerpt=Both features run on in-memory stores; no libsql in the graph.' \
+    --data-urlencode 'body=Swap datastores without forking a feature.' \
+    --data-urlencode 'author=demo' --data-urlencode 'status=published'
+    -> 303                          # admin update; cms emits content.updated async
+  ```
+  Raw SSE bytes observed on the open `/events` stream (metadata-only body, `id:`
+  = correlation id — gate edit 1 best-effort path):
+  ```
+  event: content.updated
+  id: vtr6y7dq64iqqadda76ebyr7oq
+  data: {"type":"content.updated","occurred_at":"2026-07-08T17:41:07.115485Z","aggregate_type":"entry","aggregate_id":"odgfhfpmvn3il6iynr7yc4slvm"}
+
+  event: content.updated
+  id: 4zyvr66gyulwq5m6rlmhswlt6y
+  data: {"type":"content.updated","occurred_at":"2026-07-08T17:41:07.115494Z","aggregate_type":"entry","aggregate_id":"odgfhfpmvn3il6iynr7yc4slvm"}
+  ```
+  (Two frames per admin edit: cms `entrysvc` emits `content.updated` on both the
+  `Edit` and the trailing `SetTerms` write — observation, not a task defect.)
+  Public reload after the edit — `curl -s http://localhost:8082/` contained
+  `Bring your own stores (edited)`: fresh content, phase-3 cache invalidation
+  holds.
+
+  **Step 4 — unauthenticated stream → 401 (`RequireUser` fails closed):**
+  ```
+  curl -s -N -w "status=%{http_code}" http://localhost:8082/events
+    -> status=401
+       {"message":"authentication required","code":"unauthenticated"}
+  ```
+
+  `SIGTERM` → processes stopped clean; `lsof -iTCP:8082 -sTCP:LISTEN` → port 8082
+  free. Did NOT commit. (Steps 5–6 — the `EVENTS_OUTBOX=memory` poller variant and
+  shutdown-order log — are task-12's gate.)

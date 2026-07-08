@@ -6,6 +6,7 @@ require (
 	github.com/gopernicus/gopernicus/features/authentication v0.0.0
 	github.com/gopernicus/gopernicus/features/cms v0.0.0
 	github.com/gopernicus/gopernicus/features/cms/views/templ v0.0.0
+	github.com/gopernicus/gopernicus/features/events v0.0.0
 	github.com/gopernicus/gopernicus/integrations/cryptids/bcrypt v0.0.0
 	github.com/gopernicus/gopernicus/integrations/cryptids/golang-jwt v0.0.0
 	github.com/gopernicus/gopernicus/sdk v0.0.0
@@ -22,6 +23,8 @@ replace github.com/gopernicus/gopernicus/features/authentication => ../../featur
 replace github.com/gopernicus/gopernicus/features/cms => ../../features/cms
 
 replace github.com/gopernicus/gopernicus/features/cms/views/templ => ../../features/cms/views/templ
+
+replace github.com/gopernicus/gopernicus/features/events => ../../features/events
 
 replace github.com/gopernicus/gopernicus/integrations/cryptids/bcrypt => ../../integrations/cryptids/bcrypt
 
