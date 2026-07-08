@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/gopernicus/gopernicus/features/cms/internal/inbound/http/views"
 	"github.com/gopernicus/gopernicus/features/cms/logic/taxonomy"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/web"
@@ -23,12 +22,13 @@ type taxonomyService interface {
 
 // TermHandlers holds the taxonomy admin handlers.
 type TermHandlers struct {
-	svc taxonomyService
+	svc   taxonomyService
+	views Views
 }
 
-// NewTermHandlers constructs the term handlers over svc.
-func NewTermHandlers(svc taxonomyService) *TermHandlers {
-	return &TermHandlers{svc: svc}
+// NewTermHandlers constructs the term handlers over svc and the HTML port.
+func NewTermHandlers(svc taxonomyService, views Views) *TermHandlers {
+	return &TermHandlers{svc: svc, views: views}
 }
 
 // List renders categories and tags.
@@ -43,7 +43,7 @@ func (h *TermHandlers) List(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, err)
 		return
 	}
-	web.Render(r.Context(), w, http.StatusOK, views.TermsList(cats, tags))
+	web.Render(r.Context(), w, http.StatusOK, h.views.TermsList(cats, tags))
 }
 
 // New renders an empty term form. The kind is taken from ?kind= (default tag).
@@ -52,7 +52,7 @@ func (h *TermHandlers) New(w http.ResponseWriter, r *http.Request) {
 	if !kind.Valid() {
 		kind = taxonomy.KindTag
 	}
-	web.Render(r.Context(), w, http.StatusOK, views.TermForm(views.TermFormModel{
+	web.Render(r.Context(), w, http.StatusOK, h.views.TermForm(TermFormModel{
 		Heading: "New " + string(kind),
 		Action:  "/terms",
 		Kind:    string(kind),
@@ -70,7 +70,7 @@ func (h *TermHandlers) Create(w http.ResponseWriter, r *http.Request) {
 	parentID := r.PostForm.Get("parent_id")
 
 	if _, err := h.svc.CreateTerm(r.Context(), kind, name, parentID); err != nil {
-		h.renderTermFormError(w, r, err, views.TermFormModel{
+		h.renderTermFormError(w, r, err, TermFormModel{
 			Heading: "New " + string(kind), Action: "/terms", Kind: string(kind), Name: name, ParentID: parentID,
 		})
 		return
@@ -85,7 +85,7 @@ func (h *TermHandlers) Edit(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, err)
 		return
 	}
-	web.Render(r.Context(), w, http.StatusOK, views.TermForm(views.TermFormModel{
+	web.Render(r.Context(), w, http.StatusOK, h.views.TermForm(TermFormModel{
 		Heading:  "Edit " + string(t.Kind),
 		Action:   "/terms/" + t.ID,
 		Kind:     string(t.Kind),
@@ -109,7 +109,7 @@ func (h *TermHandlers) Update(w http.ResponseWriter, r *http.Request) {
 			h.renderError(w, r, err)
 			return
 		}
-		h.renderTermFormError(w, r, err, views.TermFormModel{
+		h.renderTermFormError(w, r, err, TermFormModel{
 			Heading: "Edit term", Action: "/terms/" + id, Name: name, ParentID: parentID,
 		})
 		return
@@ -131,10 +131,10 @@ func (h *TermHandlers) renderError(w http.ResponseWriter, r *http.Request, err e
 	if mapped.Status >= http.StatusInternalServerError {
 		web.RecordError(w, err)
 	}
-	web.Render(r.Context(), w, mapped.Status, views.ErrorPage(mapped.Status, mapped.Message))
+	web.Render(r.Context(), w, mapped.Status, h.views.AdminError(mapped.Status, mapped.Message))
 }
 
-func (h *TermHandlers) renderTermFormError(w http.ResponseWriter, r *http.Request, err error, model views.TermFormModel) {
+func (h *TermHandlers) renderTermFormError(w http.ResponseWriter, r *http.Request, err error, model TermFormModel) {
 	status := http.StatusBadRequest
 	switch {
 	case errors.Is(err, errs.ErrAlreadyExists):
@@ -146,5 +146,5 @@ func (h *TermHandlers) renderTermFormError(w http.ResponseWriter, r *http.Reques
 		h.renderError(w, r, err)
 		return
 	}
-	web.Render(r.Context(), w, status, views.TermForm(model))
+	web.Render(r.Context(), w, status, h.views.TermForm(model))
 }

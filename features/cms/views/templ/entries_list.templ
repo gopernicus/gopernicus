@@ -1,9 +1,11 @@
-package views
+package templ
+
+import "github.com/gopernicus/gopernicus/features/cms"
 
 // EntriesList is the admin index for one content type: a table of entries with
 // links to edit, plus a "new" link. heading/newHref/editPrefix are supplied by
 // the handler from the registered ContentType so this view stays type-agnostic.
-templ EntriesList(heading, newHref, editPrefix string, items []EntryListItem, nextCursor string) {
+templ EntriesList(heading, newHref, editPrefix string, items []cms.EntryListItem, nextCursor string) {
 	@Layout(heading) {
 		<h1>{ heading }</h1>
 		<p><a href={ templ.SafeURL(newHref) }>New</a></p>

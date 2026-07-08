@@ -1,16 +1,11 @@
-package views
+package templ
 
-import "github.com/gopernicus/gopernicus/features/cms/logic/messaging"
+import (
+	"github.com/gopernicus/gopernicus/features/cms"
+	"github.com/gopernicus/gopernicus/features/cms/logic/messaging"
+)
 
-// ContactModel holds the contact form values + an optional error.
-type ContactModel struct {
-	Name      string
-	Email     string
-	Message   string
-	FormError string
-}
-
-templ ContactForm(m ContactModel) {
+templ ContactForm(m cms.ContactModel) {
 	@Layout("Contact") {
 		<h1>Contact</h1>
 		if m.FormError != "" {

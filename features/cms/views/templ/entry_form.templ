@@ -1,9 +1,11 @@
-package views
+package templ
+
+import "github.com/gopernicus/gopernicus/features/cms"
 
 // EntryForm is the generated entry editor: spine inputs plus one control per the
 // content type's FieldDefs, keyed off each field's Kind. It replaces the former
 // hand-written post/page forms — one form renders every content type.
-templ EntryForm(m EntryFormModel) {
+templ EntryForm(m cms.EntryFormModel) {
 	@Layout(m.Heading) {
 		<h1>{ m.Heading }</h1>
 		if m.FormError != "" {
@@ -95,7 +97,7 @@ templ EntryForm(m EntryFormModel) {
 }
 
 // fieldControl renders one custom-field input, choosing the control by Kind.
-templ fieldControl(f FieldInput) {
+templ fieldControl(f cms.FieldInput) {
 	<p>
 		<label>
 			{ f.Label }

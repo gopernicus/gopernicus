@@ -8,7 +8,6 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms/logic/content"
 	"github.com/gopernicus/gopernicus/features/cms/logic/menus"
 	"github.com/gopernicus/gopernicus/features/cms/logic/taxonomy"
-	"github.com/gopernicus/gopernicus/features/cms/theme"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
@@ -28,15 +27,11 @@ type PublicHandlers struct {
 	menus    menuService
 	taxo     taxonomyService
 	registry *content.Registry
-	views    theme.PublicViews
+	views    Views
 }
 
-// NewPublicHandlers constructs the public site handlers. A nil views uses the
-// bundled default chrome.
-func NewPublicHandlers(svc entryService, menusvc menuService, taxo taxonomyService, registry *content.Registry, views theme.PublicViews) *PublicHandlers {
-	if views == nil {
-		views = theme.Default()
-	}
+// NewPublicHandlers constructs the public site handlers over the HTML port.
+func NewPublicHandlers(svc entryService, menusvc menuService, taxo taxonomyService, registry *content.Registry, views Views) *PublicHandlers {
 	return &PublicHandlers{svc: svc, menus: menusvc, taxo: taxo, registry: registry, views: views}
 }
 
@@ -130,16 +125,16 @@ func (h *PublicHandlers) archive(w http.ResponseWriter, r *http.Request, kind ta
 	web.Render(r.Context(), w, http.StatusOK, h.views.Archive(heading, h.nav(r.Context()), h.listItems(page.Items), page.NextCursor, base))
 }
 
-// listItems maps entries to theme list items, computing each public href from
+// listItems maps entries to public list items, computing each public href from
 // its type's route scheme.
-func (h *PublicHandlers) listItems(entries []content.Entry) []theme.ListItem {
-	out := make([]theme.ListItem, 0, len(entries))
+func (h *PublicHandlers) listItems(entries []content.Entry) []ListItem {
+	out := make([]ListItem, 0, len(entries))
 	for _, e := range entries {
 		ct, ok := h.registry.Type(e.Type)
 		if !ok {
 			continue
 		}
-		out = append(out, theme.ListItem{Title: e.Title, Href: publicHref(ct, e.Slug), Excerpt: e.Excerpt})
+		out = append(out, ListItem{Title: e.Title, Href: publicHref(ct, e.Slug), Excerpt: e.Excerpt})
 	}
 	return out
 }

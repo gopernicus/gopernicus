@@ -72,7 +72,7 @@ feature-standard FS3, adding the views-module row):
 | **integration** | a third-party backend for a port; isolates exactly one external dependency — a third-party library or an external vendor's live API contract; one module | `datastores/turso`, `datastores/pgxdb`, `kvstores/goredis` | a module import in the host's `main` |
 | **feature** | a mountable domain module: own entities, **own durable schema + migrations**, and/or **own route surface**; its core module requires **sdk only** (FS1, 2026-07-07) | `cms`, `auth`, `jobs`; next: `events` | `NewService` + a `svc.Register` call |
 | **store module** | a feature's store implementation — SQL + migrations written against one driver package's API (`stores/<package>`) | `cms/stores/turso`, `cms/stores/pgx` | a module import + one `Open` call |
-| **views module** | a feature's bundled presentation default — the implementation of the core's `Views` port, written against one view package's API (`views/<package>`; FS3, 2026-07-07 — amends R6's four-kind table). Nil `Config.Views` → the feature's HTML surface is not registered, uniformly | `cms/views/templ` (lands at feature-standard B2) | a module import + one `Config` field |
+| **views module** | a feature's bundled presentation default — the implementation of the core's `Views` port, written against one view package's API (`views/<package>`; FS3, 2026-07-07 — amends R6's four-kind table). Nil `Config.Views` → the feature's HTML surface is not registered, uniformly | `cms/views/templ` (landed at feature-standard B2, 2026-07-07) | a module import + one `Config` field |
 
 The two litmus tests: **if swapping the adapter changes what the host must
 migrate, it's a store module per implementation; if the swap is invisible outside

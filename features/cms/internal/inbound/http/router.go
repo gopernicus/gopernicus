@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/cms/logic/content"
-	"github.com/gopernicus/gopernicus/features/cms/theme"
 	"github.com/gopernicus/gopernicus/sdk/cacher"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/web"
@@ -22,14 +21,14 @@ type RouterOption func(*routerConfig)
 
 // routerConfig collects host overrides applied during BuildRouter.
 type routerConfig struct {
-	publicViews theme.PublicViews
-	adminMW     []web.Middleware
+	views   Views
+	adminMW []web.Middleware
 }
 
-// WithPublicViews overrides the public-site chrome theme. When unset, the
-// bundled default chrome is used.
-func WithPublicViews(v theme.PublicViews) RouterOption {
-	return func(c *routerConfig) { c.publicViews = v }
+// WithViews sets the HTML rendering port. When unset (nil), the HTML surface is
+// not registered — only the media byte endpoint mounts (FS3).
+func WithViews(v Views) RouterOption {
+	return func(c *routerConfig) { c.views = v }
 }
 
 // WithAdminMiddleware wraps every admin route with the given middleware (see
@@ -49,23 +48,27 @@ type Deps struct {
 	Contact  messagingService
 }
 
-// Mount registers all CMS routes on the given registrar. Content routes are
+// Mount registers CMS routes on the given registrar. Content routes are
 // registry-driven: Mount iterates the registered content types and registers a
 // generic admin CRUD set per type plus a public route per routable type, instead
 // of hand-listing /posts…/pages…. Taxonomy/menus/media/contact routes are fixed.
-// A nil views uses the bundled chrome; a nil cache disables public-page caching.
-// adminMW wraps every admin route (the CRUD/management surface) and nothing
-// public; a nil adminMW leaves admin routes ungated (current behavior).
-func Mount(r feature.RouteRegistrar, d Deps, views theme.PublicViews, cache cacher.Storer, adminMW []web.Middleware) {
+// A nil cache disables public-page caching. adminMW wraps every admin route (the
+// CRUD/management surface) and nothing public; a nil adminMW leaves admin routes
+// ungated (current behavior).
+//
+// A nil views registers ONLY the media byte endpoint (GET /media/{id}/file) and
+// returns — the entire HTML surface (public site + admin) is not mounted (FS3).
+func Mount(r feature.RouteRegistrar, d Deps, views Views, cache cacher.Storer, adminMW []web.Middleware) {
+	md := NewMediaHandlers(d.Media, views)
 	if views == nil {
-		views = theme.Default()
+		r.Handle("GET", "/media/{id}/file", md.Serve)
+		return
 	}
 
-	eh := NewEntryHandlers(d.Entries, d.Taxo, d.Media)
-	th := NewTermHandlers(d.Taxo)
-	mn := NewMenuHandlers(d.Menus)
-	md := NewMediaHandlers(d.Media)
-	ct := NewContactHandlers(d.Contact)
+	eh := NewEntryHandlers(d.Entries, d.Taxo, d.Media, views)
+	th := NewTermHandlers(d.Taxo, views)
+	mn := NewMenuHandlers(d.Menus, views)
+	ct := NewContactHandlers(d.Contact, views)
 	pub := NewPublicHandlers(d.Entries, d.Menus, d.Taxo, d.Registry, views)
 
 	// Public pages are cacheable (TTL); admin pages never are.
@@ -160,7 +163,7 @@ func BuildRouter(registry *content.Registry, entries entryService, taxo taxonomy
 		Menus:    menusvc,
 		Media:    mediasvc,
 		Contact:  contact,
-	}, cfg.publicViews, cache, cfg.adminMW)
+	}, cfg.views, cache, cfg.adminMW)
 
 	return h
 }

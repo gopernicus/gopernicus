@@ -381,3 +381,32 @@ agents, same session as ratification)
 - **Remaining in this plan:** B2 (views/templ extraction — own sub-plan),
   B3 (cms public Service, demand-driven), D2–D6 (store promotions, after
   review of the D1 findings).
+
+### 2026-07-07 — Phase B2 executed (own sub-plan `02-b2-views-extraction.md`)
+
+**The cms carve-out is gone.** B2 extracted the bundled default views into the
+new `features/cms/views/templ` module (its own `go.mod`, `tool` directive, and
+`MODULES`/`go.work` entry — the 27th module), defined the core-owned `cms.Views`
+port (19 methods, public + admin chrome) exported from `internal/inbound/http`
+and re-exported via root `features/cms/views.go` aliases, threaded it through all
+six handler constructors, deleted `features/cms/theme`, and flipped nil
+`Config.Views` from "bundled default" to "HTML surface not registered" (only
+`GET /media/{id}/file` survives, now error-responding via
+`web.RespondJSONDomainError`). `features/cms/go.mod` is sdk-only (templ require +
+tool directive gone; `grep -c a-h/templ` → 0), and the Makefile G5 cms carve-out
++ dated TODO are deleted — **G5 now passes cms-clean**. All three example hosts
+rewired: `minimal` + `auth-cms` carry the FS3 one-line default
+(`Views: cmstempl.New()`), `examples/cms` embeds the default and overrides the
+four ACME chrome methods (partial-override demonstration). This fully meets this
+plan's **Acceptance** line "cms carve-out gone after B2" and "cms core go.mod:
+sdk-only after B2". Verification (task-4, 2026-07-07): byte-exact
+baseline-vs-after HTML compare on the 11-URL examples/cms set → all identical;
+minimal's 3 URLs identical modulo per-boot in-memory KSUIDs/order (proven by an
+after-vs-after reboot reproducing the same nondeterminism; deterministic-slug
+`/products/widget-3000` byte-identical); live renders on all three hosts incl.
+auth-cms login-gated admin (`GET /articles` → 200 behind `RequireUser`); both
+wire deltas confirmed live (media file error JSON; nil-Views blackout). `make
+check` fails ONLY at the templ drift gate (git-diff vs HEAD, uncommitted move —
+resolves at commit, per the same-commit constraint); build/vet/test across all
+27 modules, the three turso integration vets, and all six guards pass. Still
+remaining in this plan: B3 (deferred, demand-driven), D2–D6 (store promotions).

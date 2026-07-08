@@ -1,14 +1,9 @@
-package views
+package templ
 
-import "github.com/gopernicus/gopernicus/features/cms/logic/menus"
-
-// ListItem is one entry in a public listing (home / archive). The handler
-// pre-computes Href from the type's route scheme so the view stays type-blind.
-type ListItem struct {
-	Title   string
-	Href    string
-	Excerpt string
-}
+import (
+	"github.com/gopernicus/gopernicus/features/cms"
+	"github.com/gopernicus/gopernicus/features/cms/logic/menus"
+)
 
 // PublicShell is the public site chrome: nav, basic styling, SEO/OpenGraph meta.
 // Every public page (home, archive, single entry, error) renders inside it. The
@@ -51,11 +46,11 @@ templ PublicShell(title, metaDesc string, nav []menus.MenuItem, body templ.Compo
 }
 
 // PublicHome renders recent published entries.
-templ PublicHome(nav []menus.MenuItem, items []ListItem) {
+templ PublicHome(nav []menus.MenuItem, items []cms.ListItem) {
 	@PublicShell("Home", "Latest content", nav, homeBody(items))
 }
 
-templ homeBody(items []ListItem) {
+templ homeBody(items []cms.ListItem) {
 	<h1>Latest posts</h1>
 	if len(items) == 0 {
 		<p>Nothing published yet.</p>
@@ -72,11 +67,11 @@ templ homeBody(items []ListItem) {
 }
 
 // PublicArchive renders a taxonomy archive listing (entries sharing a term).
-templ PublicArchive(heading string, nav []menus.MenuItem, items []ListItem, nextCursor, baseHref string) {
+templ PublicArchive(heading string, nav []menus.MenuItem, items []cms.ListItem, nextCursor, baseHref string) {
 	@PublicShell(heading, "", nav, archiveBody(heading, items, nextCursor, baseHref))
 }
 
-templ archiveBody(heading string, items []ListItem, nextCursor, baseHref string) {
+templ archiveBody(heading string, items []cms.ListItem, nextCursor, baseHref string) {
 	<h1>{ heading }</h1>
 	if len(items) == 0 {
 		<p>Nothing here yet.</p>

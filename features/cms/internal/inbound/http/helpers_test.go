@@ -41,15 +41,15 @@ func newTestRegistry() *content.Registry {
 // the one under test ---
 
 func menuRouter(svc menuService) http.Handler {
-	return BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, svc, &fakeMediaSvc{}, &fakeContactSvc{}, nil, logging.NewNoop())
+	return BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, svc, &fakeMediaSvc{}, &fakeContactSvc{}, nil, logging.NewNoop(), WithViews(stubViews{}))
 }
 
 func mediaRouter(svc mediaService) http.Handler {
-	return BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, &fakeMenuSvc{}, svc, &fakeContactSvc{}, nil, logging.NewNoop())
+	return BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, &fakeMenuSvc{}, svc, &fakeContactSvc{}, nil, logging.NewNoop(), WithViews(stubViews{}))
 }
 
 func contactRouter(svc messagingService) http.Handler {
-	return BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, &fakeMenuSvc{}, &fakeMediaSvc{}, svc, nil, logging.NewNoop())
+	return BuildRouter(newTestRegistry(), &fakeEntrySvc{}, &fakeTaxo{}, &fakeMenuSvc{}, &fakeMediaSvc{}, svc, nil, logging.NewNoop(), WithViews(stubViews{}))
 }
 
 // --- fakeEntrySvc ---

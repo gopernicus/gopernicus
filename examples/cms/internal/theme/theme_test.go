@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/features/cms"
 	"github.com/gopernicus/gopernicus/features/cms/logic/menus"
-	cmstheme "github.com/gopernicus/gopernicus/features/cms/theme"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
 
@@ -30,7 +30,7 @@ func (s bodyRenderer) Render(_ context.Context, w io.Writer) error {
 
 func TestTheme_HomeUsesCustomMarkup(t *testing.T) {
 	nav := []menus.MenuItem{{Label: "Blog", URL: "/articles"}}
-	items := []cmstheme.ListItem{{Title: "Hello", Href: "/articles/hello", Excerpt: "hi there"}}
+	items := []cms.ListItem{{Title: "Hello", Href: "/articles/hello", Excerpt: "hi there"}}
 
 	out := renderToString(t, New().Home(nav, items))
 
@@ -62,5 +62,17 @@ func TestTheme_ErrorPage(t *testing.T) {
 	out := renderToString(t, New().Error(404, "not found"))
 	if !strings.Contains(out, "<h1>404</h1>") || !strings.Contains(out, "not found") {
 		t.Errorf("error page missing status/message:\n%s", out)
+	}
+}
+
+// TestTheme_NonOverriddenMethodUsesBundledDefault proves the partial-override
+// path: EntriesList is not overridden, so it falls through the embedded
+// cmstempl.Views and renders the bundled admin default — not ACME chrome.
+func TestTheme_NonOverriddenMethodUsesBundledDefault(t *testing.T) {
+	out := renderToString(t, New().EntriesList("Articles", "/articles/new", "/articles", []cms.EntryListItem{{ID: "x1", Title: "First", Status: "published"}}, ""))
+	for _, want := range []string{"<h1>Articles</h1>", "First", "/articles/x1/edit"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("bundled EntriesList missing %q\n---\n%s", want, out)
+		}
 	}
 }
