@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/cms/logic/content"
+	"github.com/gopernicus/gopernicus/features/cms/domain/content"
 	"github.com/gopernicus/gopernicus/sdk/cacher"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/web"

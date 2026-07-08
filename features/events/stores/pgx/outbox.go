@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/events/logic/outbox"
+	"github.com/gopernicus/gopernicus/features/events/domain/outbox"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
 )

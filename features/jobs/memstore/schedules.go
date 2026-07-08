@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/jobs/logic/schedule"
+	"github.com/gopernicus/gopernicus/features/jobs/domain/schedule"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 )

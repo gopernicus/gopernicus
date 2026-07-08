@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
-	"github.com/gopernicus/gopernicus/features/authentication/logic/session"
-	"github.com/gopernicus/gopernicus/features/authentication/logic/user"
-	"github.com/gopernicus/gopernicus/features/authentication/logic/verification"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/web"

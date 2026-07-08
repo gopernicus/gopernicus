@@ -19,7 +19,7 @@ import (
 	"io"
 
 	"github.com/gopernicus/gopernicus/features/cms"
-	"github.com/gopernicus/gopernicus/features/cms/logic/menus"
+	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
 	cmstempl "github.com/gopernicus/gopernicus/features/cms/views/templ"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )

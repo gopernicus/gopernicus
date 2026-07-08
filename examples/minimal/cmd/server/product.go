@@ -6,7 +6,7 @@ import (
 	"io"
 
 	"github.com/gopernicus/gopernicus/features/cms"
-	"github.com/gopernicus/gopernicus/features/cms/logic/content"
+	"github.com/gopernicus/gopernicus/features/cms/domain/content"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
 

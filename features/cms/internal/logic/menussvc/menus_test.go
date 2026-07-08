@@ -3,7 +3,7 @@ package menussvc
 import (
 	"context"
 	"errors"
-	"github.com/gopernicus/gopernicus/features/cms/logic/menus"
+	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
 	"sort"
 	"testing"
 	"time"

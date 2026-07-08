@@ -8,7 +8,7 @@ package templ
 import "github.com/a-h/templ"
 import templruntime "github.com/a-h/templ/runtime"
 
-import "github.com/gopernicus/gopernicus/features/cms/logic/taxonomy"
+import "github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
 
 func TermsList(categories, tags []taxonomy.Term) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {

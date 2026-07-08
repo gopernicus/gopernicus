@@ -5,12 +5,12 @@ import (
 	"sort"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/authentication/logic/apikey"
-	"github.com/gopernicus/gopernicus/features/authentication/logic/invitation"
-	"github.com/gopernicus/gopernicus/features/authentication/logic/oauthaccount"
-	"github.com/gopernicus/gopernicus/features/authentication/logic/oauthstate"
-	"github.com/gopernicus/gopernicus/features/authentication/logic/securityevent"
-	"github.com/gopernicus/gopernicus/features/authentication/logic/serviceaccount"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/apikey"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/invitation"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthaccount"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthstate"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/serviceaccount"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 )

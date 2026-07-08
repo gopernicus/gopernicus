@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/authentication/logic/oauthaccount"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthaccount"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 )

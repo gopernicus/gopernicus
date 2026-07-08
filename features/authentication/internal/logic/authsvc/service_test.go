@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/authentication/logic/session"
-	"github.com/gopernicus/gopernicus/features/authentication/logic/user"
-	"github.com/gopernicus/gopernicus/features/authentication/logic/verification"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
 	"github.com/gopernicus/gopernicus/sdk/email"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/ratelimiter"

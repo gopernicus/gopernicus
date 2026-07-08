@@ -1,7 +1,7 @@
 package cms
 
 import (
-	"github.com/gopernicus/gopernicus/features/cms/logic/content"
+	"github.com/gopernicus/gopernicus/features/cms/domain/content"
 )
 
 // registerSeedTypes registers the two built-in content types every CMS ships

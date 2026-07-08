@@ -12,6 +12,7 @@ own; the migrations + storetest suites are the durable assets under
 either; DP1's "out of the box" reads as "ports + conformance suite + a
 way to get a store." Executes BEFORE auth-v1 phase 6 so the docs phase
 documents the new shape + all three postures exactly once.
+**L1 `logic/<domain>` AMENDED 2026-07-08 (jrazmi): the public rim directory is `domain/<domain>` — entities + ports are the domain model + contracts; `internal/logic` (services) unchanged.**
 Date: 2026-07-02
 
 ## Context

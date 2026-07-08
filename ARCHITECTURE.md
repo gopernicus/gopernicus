@@ -23,7 +23,7 @@ worked example `examples/cms`.
     oauth/google/         module …/integrations/oauth/google            — a connector (coreos/go-oidc v3)
     scheduling/robfig-cron/ module …/integrations/scheduling/robfig-cron — a connector (robfig/cron v3)
     tracing/otel/         module …/integrations/tracing/otel            — a connector (OpenTelemetry family; stdout/OTLP exporters, R-KV1)
-  features/                                                             — each: logic/ (public ports+entities) + internal/logic (+ internal/inbound where the feature registers routes — jobs v1 has none) + storetest/ + per-concern sibling modules (stores/<pkg>; views/<pkg> where the feature has HTML — FS3)
+  features/                                                             — each: domain/ (public ports+entities) + internal/logic (+ internal/inbound where the feature registers routes — jobs v1 has none) + storetest/ + per-concern sibling modules (stores/<pkg>; views/<pkg> where the feature has HTML — FS3)
     auth/                 module github.com/gopernicus/gopernicus/features/authentication               — session-auth hexagon (datastore-free)
       stores/pgx/         module …/features/authentication/stores/pgx             — auth's pgx store adapter
       stores/turso/       module …/features/authentication/stores/turso           — auth's Turso store adapter
@@ -55,7 +55,7 @@ sibling modules — one per supported store implementation; `examples/*` are hos
 consume them — `examples/cms` (Turso), `examples/minimal` (in-memory, zero
 libsql in its module graph), and `examples/auth-cms` (two features composed;
 constitution rule 6 demonstrated live). Features wear the app hexagon's
-names (trio layout, 2026-07-02): `logic/<domain>` is the public rim
+names (trio layout, 2026-07-02): `domain/<domain>` is the public rim
 (entities + ports — public by necessity, since hosts and store modules
 import them across module boundaries), `internal/{logic,inbound}` is the
 sealed interior, `stores/` is the outbound tier module-ized; the full

@@ -27,7 +27,7 @@ Never sonnet.
 ## Inherited law
 
 The constitution (`restructure/00-overview.md`, rules 1–8), the roadmap
-rulings (R1–R10), the trio layout (`logic/<domain>` public rim;
+rulings (R1–R10), the trio layout (`domain/<domain>` public rim;
 `internal/logic/<svc>` + `internal/inbound` interior; `stores/` sibling
 modules), store posture C with the supported set **{turso, pgx}**
 (R-KV2/R-KV3), R3 (memstore placement — here the **public in-core
@@ -157,7 +157,7 @@ status-header amendment at Z5):**
    no cycle; root never imports storetest.)
 5. **DSL/engine type placement.** Public-rim split of the original's
    one-package layout: tuple-level types + the `Storer` port →
-   `logic/relationship` (stores implement them across the module
+   `domain/relationship` (stores implement them across the module
    boundary); engine API types (`Subject`, `CheckRequest`, `CheckResult`,
    `LookupResult`, `Schema`/`NewSchema`/`ResourceSchema`,
    `PermissionRule` builders) → `internal/logic/authorizersvc`, aliased
@@ -225,7 +225,7 @@ task boundary leaves all modules building and lands as a CI-green commit
 before the next leg (events discipline; the repo is a git repo with CI).
 
 **Z3 disposition (pending Q1; the struck-A8 row-kept precedent).** Scope
-if kept: `logic/group` (name/slug aggregate + membership sugar over
+if kept: `domain/group` (name/slug aggregate + membership sugar over
 tuples) + store tables in both dialects + storetest cases + a
 `03-groups.md` phase file cut from design §2.5. The engine needs no
 groups *table* — expansion is pure tuples
@@ -248,7 +248,7 @@ migration (0002+).
   authorize vocabulary — is recorded, not cashed).
 - `features/authorization/go.mod` requires exactly `sdk` (FS1) at every
   task boundary.
-- Public API born at Z1: the FS2 socket, the `logic/relationship` rim,
+- Public API born at Z1: the FS2 socket, the `domain/relationship` rim,
   the root-aliased engine vocabulary, `memstore`, `storetest`. Zero tags
   exist (RELEASING.md), so no version-bump obligation; RELEASING's module
   enumeration updates at Z5.
@@ -546,6 +546,15 @@ absorbed per the cutting brief; two additional staleness findings logged
 above (the 14-method `Storer`, the consumer-less metadata table → Q4).
 Cut-time refinements 1–9 recorded. Next: the plan-cut review gate, then
 jrazmi ratification (Q1–Q4), then leg 1 = Z1 (`01-core.md`, opus).
+
+### 2026-07-08 — pre-ratification sync: rim `logic/` → `domain/`
+
+Synced this DRAFT to the trio-relayout L1 amendment (jrazmi 2026-07-08):
+the public rim directory is `domain/<domain>`, not `logic/<domain>`.
+Rewrote `logic/relationship` → `domain/relationship`, `logic/group` →
+`domain/group`, and the `logic/<domain>` rim prose across all six files;
+`internal/logic/authorizersvc` (the sealed service) left unchanged. Docs
+sync only — no design change.
 
 ### 2026-07-08 — review-gate fold applied
 

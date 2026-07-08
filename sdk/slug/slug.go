@@ -30,7 +30,7 @@ var accentFold = map[rune]rune{
 // pass; previously accented letters were dropped as separators (Make("Café")
 // was "caf", now "cafe"). Persisted slugs are unaffected — cms entry, term, and
 // menu slugs are computed once at write time and stored, so no existing URL
-// moves. The one recompute path is features/cms/logic/content/schema.go, which
+// moves. The one recompute path is features/cms/domain/content/schema.go, which
 // derives content-type route segments from a registered type's Plural at
 // runtime; a host that registered a non-ASCII Plural sees its route segment
 // change on upgrade. Shipped seed types (Article, Page) are ASCII and unaffected.

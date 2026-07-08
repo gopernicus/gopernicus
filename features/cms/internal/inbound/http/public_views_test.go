@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/features/cms/logic/content"
-	"github.com/gopernicus/gopernicus/features/cms/logic/media"
-	"github.com/gopernicus/gopernicus/features/cms/logic/menus"
+	"github.com/gopernicus/gopernicus/features/cms/domain/content"
+	"github.com/gopernicus/gopernicus/features/cms/domain/media"
+	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/logging"
 	"github.com/gopernicus/gopernicus/sdk/web"

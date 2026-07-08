@@ -17,7 +17,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/features/events/logic/outbox"
+	"github.com/gopernicus/gopernicus/features/events/domain/outbox"
 	"github.com/gopernicus/gopernicus/features/events/storetest"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 )

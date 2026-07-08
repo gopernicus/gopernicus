@@ -3,7 +3,7 @@ package taxonomysvc
 import (
 	"context"
 	"errors"
-	"github.com/gopernicus/gopernicus/features/cms/logic/taxonomy"
+	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
 	"sort"
 	"testing"
 	"time"

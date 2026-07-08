@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/events/logic/outbox"
+	"github.com/gopernicus/gopernicus/features/events/domain/outbox"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
 )

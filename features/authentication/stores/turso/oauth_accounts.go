@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/gopernicus/gopernicus/features/authentication/logic/oauthaccount"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthaccount"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 )

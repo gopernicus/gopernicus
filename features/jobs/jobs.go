@@ -35,8 +35,8 @@ import (
 	"github.com/gopernicus/gopernicus/features/jobs/internal/logic/queuesvc"
 	"github.com/gopernicus/gopernicus/features/jobs/internal/logic/runtime"
 	"github.com/gopernicus/gopernicus/features/jobs/internal/logic/schedulesvc"
-	"github.com/gopernicus/gopernicus/features/jobs/logic/job"
-	"github.com/gopernicus/gopernicus/features/jobs/logic/schedule"
+	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
+	"github.com/gopernicus/gopernicus/features/jobs/domain/schedule"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/workers"
 )

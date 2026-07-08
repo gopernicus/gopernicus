@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/jobs/logic/job"
-	"github.com/gopernicus/gopernicus/features/jobs/logic/schedule"
+	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
+	"github.com/gopernicus/gopernicus/features/jobs/domain/schedule"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/workers"

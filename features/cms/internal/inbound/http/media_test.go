@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/features/cms/logic/media"
+	"github.com/gopernicus/gopernicus/features/cms/domain/media"
 )
 
 func TestMedia_LibraryAndServe(t *testing.T) {

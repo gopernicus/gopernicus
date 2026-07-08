@@ -3,7 +3,7 @@ package turso
 import (
 	"context"
 
-	"github.com/gopernicus/gopernicus/features/cms/logic/messaging"
+	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 )
 

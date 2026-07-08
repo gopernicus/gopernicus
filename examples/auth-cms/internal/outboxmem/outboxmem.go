@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/events/logic/outbox"
+	"github.com/gopernicus/gopernicus/features/events/domain/outbox"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
 )

@@ -20,7 +20,7 @@ Designs of record: `.claude/plans/restructure/auth-feature-design.md` (v1) and
 auth.go                  the socket: Repositories, Config, PasswordHasher,
                          Granter, MemberCheck, Principal, Service, NewService,
                          Register — the entire host-facing exported surface
-logic/                   the hexagon's public rim — entities + repository
+domain/                  the hexagon's public rim — entities + repository
   user/ session/         ports. Public BY NECESSITY: hosts and store modules
   verification/          implement/import these across module boundaries
   oauthaccount/ oauthstate/
@@ -31,7 +31,7 @@ internal/
   logic/invitationsvc/   the invitation service (built only when a Granter is wired)
   inbound/http/          driving adapter: JSON handlers + route table
   redirect/              exact-match open-redirect allowlist matcher
-storetest/               executable spec for logic/'s ports + the reference
+storetest/               executable spec for domain/'s ports + the reference
                          in-memory implementation
 stores/turso/            the outbound tier: per-dialect SQL + canonical
 stores/pgx/              migrations, each its own module

@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/authentication/logic/oauthaccount"
-	"github.com/gopernicus/gopernicus/features/authentication/logic/oauthstate"
-	"github.com/gopernicus/gopernicus/features/authentication/logic/user"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthaccount"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthstate"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/oauth"

@@ -3,7 +3,7 @@ package messagingsvc
 import (
 	"context"
 	"errors"
-	"github.com/gopernicus/gopernicus/features/cms/logic/messaging"
+	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
 	"testing"
 	"time"
 

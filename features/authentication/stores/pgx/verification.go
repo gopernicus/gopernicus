@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/authentication/logic/verification"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 )

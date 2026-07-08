@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/cms/logic/media"
+	"github.com/gopernicus/gopernicus/features/cms/domain/media"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 )
 

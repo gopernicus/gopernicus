@@ -3,7 +3,7 @@ package turso
 import (
 	"context"
 
-	"github.com/gopernicus/gopernicus/features/cms/logic/menus"
+	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 )

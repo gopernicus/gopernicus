@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/authentication/logic/oauthstate"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthstate"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 )

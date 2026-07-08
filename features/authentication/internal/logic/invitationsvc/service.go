@@ -25,8 +25,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/redirect"
-	"github.com/gopernicus/gopernicus/features/authentication/logic/invitation"
-	"github.com/gopernicus/gopernicus/features/authentication/logic/securityevent"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/invitation"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/email"

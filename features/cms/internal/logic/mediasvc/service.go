@@ -8,7 +8,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/cms/logic/media"
+	"github.com/gopernicus/gopernicus/features/cms/domain/media"
 )
 
 // Clock returns the current time. Injected so tests can pin timestamps.

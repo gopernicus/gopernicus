@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/authentication/logic/securityevent"
-	"github.com/gopernicus/gopernicus/features/authentication/logic/user"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
 )
 

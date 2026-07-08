@@ -3,7 +3,7 @@ package pgx
 import (
 	"context"
 
-	"github.com/gopernicus/gopernicus/features/authentication/logic/user"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 )
 

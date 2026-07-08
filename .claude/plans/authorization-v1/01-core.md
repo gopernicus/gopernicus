@@ -26,7 +26,7 @@ field (review-gate fold, major 1).
   in `go.work` + Makefile `MODULES` **and in the FS1 guard's hardcoded
   list with a recorded prove-can-fail** (review-gate fold, steward minor
   4); `make check` green at **31 modules**.
-- `logic/relationship` public rim: tuple entity, `CreateRelationship`,
+- `domain/relationship` public rim: tuple entity, `CreateRelationship`,
   filters, listing row types, and the full 14-method `Storer` port —
   listing methods **crud-re-typed** (`sdk/crud.ListRequest`/`Page[T]`,
   design §9; the original's `fop` vocabulary does not survive).
@@ -71,17 +71,17 @@ field (review-gate fold, major 1).
 
 ## Tasks
 
-### task-1: module skeleton + `logic/relationship` rim + registration
+### task-1: module skeleton + `domain/relationship` rim + registration
 
 - **depends_on:** []
 - **model:** opus
 - **files:** [features/authorization/go.mod,
-  features/authorization/logic/relationship/relationship.go,
-  features/authorization/logic/relationship/relationship_test.go,
+  features/authorization/domain/relationship/relationship.go,
+  features/authorization/domain/relationship/relationship_test.go,
   go.work, Makefile]
 - **verify:** `cd features/authorization && go build ./... && go test ./... && go vet ./...` then `make check` (31 modules; go.work ↔ MODULES agreement) and `make guard`; FS1 prove-can-fail (review-gate fold, steward minor 4): temporarily add a fake extra require to `features/authorization/go.mod`, observe `guard-feature-core-sdk-only` fail naming it, revert, `make guard` green again
 - **description:** Create the module (go version + sibling `replace`
-  per `features/jobs/go.mod`; requires sdk only). `logic/relationship`:
+  per `features/jobs/go.mod`; requires sdk only). `domain/relationship`:
   the tuple entity (resource_type, resource_id, relation, subject_type,
   subject_id, subject_relation — the optional userset relation),
   `CreateRelationship`, `RelationTarget`, the listing row types

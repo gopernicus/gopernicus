@@ -7,11 +7,11 @@ package templ
 
 import (
 	"github.com/gopernicus/gopernicus/features/cms"
-	"github.com/gopernicus/gopernicus/features/cms/logic/content"
-	"github.com/gopernicus/gopernicus/features/cms/logic/media"
-	"github.com/gopernicus/gopernicus/features/cms/logic/menus"
-	"github.com/gopernicus/gopernicus/features/cms/logic/messaging"
-	"github.com/gopernicus/gopernicus/features/cms/logic/taxonomy"
+	"github.com/gopernicus/gopernicus/features/cms/domain/content"
+	"github.com/gopernicus/gopernicus/features/cms/domain/media"
+	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
+	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
+	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
 

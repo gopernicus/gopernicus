@@ -16,8 +16,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/examples/minimal/internal/memstore"
 	"github.com/gopernicus/gopernicus/features/cms"
-	"github.com/gopernicus/gopernicus/features/cms/logic/content"
-	"github.com/gopernicus/gopernicus/features/cms/logic/menus"
+	"github.com/gopernicus/gopernicus/features/cms/domain/content"
+	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
 	cmstempl "github.com/gopernicus/gopernicus/features/cms/views/templ"
 	"github.com/gopernicus/gopernicus/sdk/cacher"
 	"github.com/gopernicus/gopernicus/sdk/email"

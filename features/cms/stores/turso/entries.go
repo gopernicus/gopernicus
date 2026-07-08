@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/cms/logic/content"
+	"github.com/gopernicus/gopernicus/features/cms/domain/content"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 )

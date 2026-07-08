@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/authentication/logic/securityevent"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 )

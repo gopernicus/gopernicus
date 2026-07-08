@@ -5,7 +5,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/gopernicus/gopernicus/features/cms/logic/media"
+	"github.com/gopernicus/gopernicus/features/cms/domain/media"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
 

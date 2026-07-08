@@ -10,7 +10,7 @@ import templruntime "github.com/a-h/templ/runtime"
 
 import (
 	"github.com/gopernicus/gopernicus/features/cms"
-	"github.com/gopernicus/gopernicus/features/cms/logic/messaging"
+	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
 )
 
 func ContactForm(m cms.ContactModel) templ.Component {

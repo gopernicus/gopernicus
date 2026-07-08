@@ -10,7 +10,7 @@ import (
 	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
 	"github.com/gopernicus/gopernicus/sdk/workers"
 
-	"github.com/gopernicus/gopernicus/features/events/logic/outbox"
+	"github.com/gopernicus/gopernicus/features/events/domain/outbox"
 )
 
 // =============================================================================

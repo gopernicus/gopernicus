@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"sort"
 
-	"github.com/gopernicus/gopernicus/features/cms/logic/content"
-	"github.com/gopernicus/gopernicus/features/cms/logic/menus"
-	"github.com/gopernicus/gopernicus/features/cms/logic/taxonomy"
+	"github.com/gopernicus/gopernicus/features/cms/domain/content"
+	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
+	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
