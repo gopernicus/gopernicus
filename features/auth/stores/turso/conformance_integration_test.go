@@ -20,12 +20,19 @@ import (
 )
 
 // authTables are the feature's tables in child-before-parent order, so a
-// truncation pass respects any conventional user_id references.
+// truncation pass respects any conventional user_id references: api_keys before
+// service_accounts, and the oauth/audit/invitation tables before users.
 var authTables = []string{
 	"user_passwords",
 	"sessions",
 	"verification_codes",
 	"verification_tokens",
+	"api_keys",
+	"service_accounts",
+	"oauth_accounts",
+	"oauth_states",
+	"security_events",
+	"invitations",
 	"users",
 }
 
