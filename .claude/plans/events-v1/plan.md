@@ -1,7 +1,13 @@
 # events-v1 — Mount.Events, features/events (transactional outbox + SSE gateway), dual stores, proof host
 
-Status: **DRAFT — tier-review gate PASSED 2026-07-06 (ship-with-edits, both
-reviewers; edits applied below), awaiting jrazmi ratification.**
+Status: **RATIFIED 2026-07-07 (jrazmi) — at defaults.** Open questions 1–4
+resolved at their recommended/decided defaults (wiring page in the feature
+README; pgx payload JSON; G5 guard STANDS; P5 MaxConnAge no-disable
+confirmed); amendments A-I1 + A-R1 ratified the same day (see below).
+Pre-execution pre-flight still owed: the FS2 fold-in (task-11 sync note /
+feature-standard W4) — first loop leg on this plan.
+Tier-review gate PASSED 2026-07-06 (ship-with-edits, both
+reviewers; edits applied below).
 The gate (design §11 plan-cut requirement 1) ran with exactly the prompt
 *"is any piece in the wrong tier, and is the host wiring tour acceptable?"*:
 `architecture-steward` and `lead-backend-engineer` both confirmed tier
@@ -11,6 +17,13 @@ no reopening**. Their consolidated edits are applied and logged in "Gate
 review amendments" below. jrazmi's independent post-gate review
 (2026-07-07) returned findings P1–P5 — verified against live code and
 applied, logged in "Post-gate review amendments" below.
+Amendment A-I1 (`sdk/identity` graduation) **RATIFIED 2026-07-07
+(jrazmi)** — edits E1–E8 applied through the body same day (marked
+"A-I1 EN" at landing sites). Amendment A-R1 (rename `features/auth` →
+`features/authentication`) **RATIFIED 2026-07-07 (jrazmi)** — lands as
+task-0, phase 0; forward-looking paths and greps in this plan read
+`features/authentication` accordingly (pre-rename verified-state prose
+stays as written).
 
 Design of record: `.claude/plans/roadmap/events-feature-design.md` —
 **RATIFIED 2026-07-02, O1–O8 all to their proposed defaults (R9)**, amended
@@ -117,6 +130,232 @@ stays DRAFT awaiting ratification.
   — recorded in the design-header amendment. (task-5; task-15; open
   question 4)
 
+## Amendment A-I1 — `sdk/identity` graduation (RATIFIED 2026-07-07, jrazmi)
+
+Origin: taxonomy discussion 2026-07-07 (jrazmi + Claude). The "foundational
+features" question resolved to: a feature is foundational exactly to the
+degree its **vocabulary** has graduated to sdk. events and jobs graduated
+theirs on day one (`sdk/events`, `sdk/workers`); auth's identity-in-context
+vocabulary is the one still sealed behind a private context key
+(`features/auth/internal/logic/authsvc/context.go:5-10`, whose doc comment
+says "It lives here (not sdk) by design" — that design note is what this
+amendment supersedes, via the graduation process the charter §5 corollary
+explicitly sanctions: "an identity-in-context convention" is its named
+example of the one thing allowed to move from a feature into sdk).
+
+### A-I1.1 The decision
+
+Add **`sdk/identity`** — a vocabulary-only package (the `sdk/oauth`/`sdk/errs`
+shape: no default implementation because there is nothing to implement — it
+is shared vocabulary, not a facility with swappable backends):
+
+- `Principal{Type, ID string}` — the effective caller, exactly the shape AV5
+  pinned (today `authsvc.Principal`, re-exported as `auth.Principal`).
+- `User = "user"` and `ServiceAccount = "service_account"` — the two
+  well-known subject-type constants (auth's resolution vocabulary today,
+  `authsvc/machine.go`; a future authorizer reads them unadapted — they
+  already deliberately match the ReBAC Subject vocabulary).
+- `WithPrincipal(ctx, p) context.Context` and
+  `FromContext(ctx) (Principal, bool)` — the identity-in-context convention:
+  unexported key, zero-valued (empty-ID) principal reports `false`.
+
+Nothing else graduates. `RequireUser`/`RequirePrincipal` middleware stays in
+`features/auth` (it needs the session/API-key stores — behavior, not
+vocabulary). `PasswordHasher`, session semantics, and client-attribution
+context (`clientInfo` — audit plumbing, not identity) all stay put. **No
+authorization vocabulary** — auth's `Granter` is write-shaped and this plan's
+`AuthorizeStream` is check-shaped; no convergence exists to graduate, and the
+standing revisit trigger (shape convergence / third consumer) is unchanged.
+
+Admission-policy trace (`sdk/README.md`): **plurality** — two real consumers
+(cms admin gating consumes the middleware side today via
+`Config.AdminMiddleware`; the events gateway reads the value on every stream
+connect); **narrow + stable** — one two-field struct, two functions, two
+constants, shape ratified AV5; **shared policy** — "identity rides the
+request context; absent identity fails closed" is platform semantics, not
+any feature's domain shape.
+
+### A-I1.2 What it buys (why decide now, not post-v1)
+
+Today a consuming feature needs a matched PAIR from one provider: the
+middleware that stashes identity AND a port back to that provider's Service
+to read it — because the context key is private. That pairing is exactly why
+design §6 carries both `StreamMiddleware` and `Config.Identity`. With the
+convention in sdk, the pair dissolves: middleware stashes
+`identity.Principal`; any feature reads `identity.FromContext(ctx)` — no
+`Identity` port, no per-consumer `CurrentUser` declarations, no
+same-provider pairing constraint. Deciding before execution avoids building
+`Config.Identity` in task-5 and deleting it a milestone later; nothing is
+tagged, so the alias-based auth conformance below is compatibility-free.
+
+### A-I1.3 New tasks (letter-suffixed — tasks 2–15 keep their numbers)
+
+### task-1b: `sdk/identity` package
+
+- **depends_on:** []
+- **model:** opus
+- **files:** [sdk/identity/identity.go, sdk/identity/identity_test.go]
+- **verify:** `cd sdk && go build ./... && go test ./... && go vet ./...` then `make check` and `make guard` (G1/G3: stdlib-only, zero-require go.mod unchanged)
+- **description:** The package exactly as A-I1.1 scopes it, stdlib-only.
+  Package doc carries: the AV5 lineage (one Principal shape, string subject
+  pairs, no registry table); the fails-closed convention (a reader treating
+  absent identity as anonymous-allowed is a bug — absence means deny/401);
+  and the scope fence, verbatim in intent: *vocabulary only — middleware
+  and credential resolution live with the credential owners
+  (features/auth); authorization vocabulary is deliberately absent.* Tests:
+  With/From round-trip; zero-value Principal reports false; absent value
+  reports false; the constants' literal values (they are a wire-adjacent
+  convention, locked by test).
+
+### task-1c: auth conformance — one identity carrier, public API unchanged
+
+- **depends_on:** [task-0, task-1b]
+- **model:** opus
+- **files:** [features/authentication/internal/logic/authsvc/context.go, features/authentication/internal/logic/authsvc/machine.go, features/authentication/internal/logic/authsvc/service.go, features/authentication/authentication.go, features/authentication/internal/logic/authsvc tests as touched]
+- **verify:** `cd features/authentication && go build ./... && go test ./... && go vet ./...` then `make check` and `make guard`; run-and-look (real-interaction rule): `cd examples/auth-cms && go run ./cmd/server` — register/login via the README flow, confirm the cms admin gate still admits the session and an unauthenticated hit still redirects/401s (RequireUser path exercised end-to-end)
+- **description:** `authsvc.Principal` becomes `= identity.Principal` (type
+  alias) and the subject-type constants alias `identity.User`/
+  `identity.ServiceAccount` — the public chain `auth.Principal =
+  authsvc.Principal` is untouched, so hosts see zero API change.
+  `RequireUser` stashes `identity.WithPrincipal(ctx,
+  identity.Principal{Type: identity.User, ID: userID})`;
+  `RequirePrincipal`/`RequireServiceAccount` stash their resolved Principal
+  the same way; the private `userIDKey`/`principalKey` pair collapses into
+  the one sdk carrier (`CurrentUser` reads `FromContext` and filters
+  `Type == identity.User`). `CurrentUser`/`CurrentPrincipal` signatures and
+  observable behavior are UNCHANGED — existing auth tests must pass
+  unmodified (that is the conformance proof). `clientInfo` stays
+  feature-private. Rewrite context.go's "It lives here (not sdk) by design"
+  comment to cite this amendment as the superseding decision. NOTE: the
+  feature-standard convergence pass (01-convergence A3) touches the same
+  middleware region (the two hand-rolled response writers at
+  service.go:757/766) — land A3 first or rebase this task over it;
+  executor logs the order taken.
+
+### A-I1.4 Edits applied at ratification (mechanical, enumerated)
+
+- **E1 — task-5:** delete the consumer-declared `CurrentUser` port and
+  `Config.Identity`. Handlers read `identity.FromContext(ctx)`; absent →
+  401. `Register` hard-errors on nil `Bus` only. Stream subject key becomes
+  the composite `Type + ":" + ID` (micro-decision: prevents user/machine ID
+  collisions under the per-subject connection cap; with the shipped
+  `StreamMiddleware: RequireUser` wiring only user principals appear, so
+  behavior is unchanged in the proof host). **Posture change, amends the
+  ratified degraded-mode matrix row "events `Config.Identity` nil → hard
+  error"**: a host that wires no identity-stashing middleware now gets
+  uniform 401s — the misconfiguration fails CLOSED at request time instead
+  of loudly at construction (consistent with the deny-by-default stream
+  posture; the README documents the StreamMiddleware requirement). Tests:
+  the nil-Identity constructor-error test is replaced by a
+  no-middleware → all-streams-401 test. task-5 gains `depends_on` task-1b.
+- **E2 — task-11:** the wiring snippet drops `Identity: authSvc,`.
+- **E3 — DoD (milestone + phase 2):** "`Register` errors on nil
+  `Bus`/`Identity`" → "errors on nil `Bus`; absent identity fails closed
+  (401) per A-I1 E1".
+- **E4 — "Verified current state" auth bullet:** gains a supersession note —
+  the §6 consumer-declared-port shape it verifies is retired by A-I1; what
+  the gateway now needs from auth is only that its middleware stashes
+  `identity.Principal` (task-1c).
+- **E5 — task-14 (README):** the Config table loses the `Identity` row and
+  gains the identity-in-context section: the sdk convention, the
+  StreamMiddleware requirement, fails-closed semantics.
+- **E6 — task-15 (docs sync) additions:** `sdk/README.md` gains the
+  `identity` entry with the A-I1.1 admission trace; ARCHITECTURE.md's sdk
+  package enumeration gains `identity`; `features/README.md` §5's corollary
+  is marked CASHED for identity-in-context (the illustrative `CurrentUser`
+  port stays as the general C2 pattern for domain-shaped needs); the
+  degraded-mode matrix row (roadmap/00-intersections.md §2, events
+  `Config.Identity`) and the §3 identity seam row gain dated AMENDED
+  markers; the NOTES.md milestone entry records A-I1.
+- **E7 — Module/API impact:** sdk gains one package (no module-count
+  change); `features/auth`'s public API is unchanged (alias conformance);
+  no new import edges outside sdk-internal ones.
+- **E8 — Sequencing:** task-1b joins task-1 at the front (independent of
+  it); task-1c after task-1b, before phase 5's proof-host work; task-5's
+  new edge per E1.
+
+### A-I1.5 Relation to the authentication/authorization split (jrazmi question, 2026-07-07)
+
+Already split, by v2 design: `features/auth` contains zero authorization
+decisions — AV4 deliberately kept the grant seam consumer-declared
+(`Granter`, host-implemented) and ReBAC-decoupled, and the feature's other
+surfaces (sessions, OAuth, machine identity, invitations, audit) are all
+authentication or attribution. A future authorization implementation lands
+as its OWN module — a feature if it owns tables (role/tuple stores), an
+integration if it wraps a vendor's live API — never as growth inside
+`features/auth`; `identity.Principal` is the vocabulary the two sides will
+exchange (its subject pairs already match the ReBAC Subject shape). The
+rename question this raised — `features/auth` → `features/authentication`
+for symmetry with a future `features/authorization` — was DECIDED
+2026-07-07 same session: see Amendment A-R1 immediately below.
+
+## Amendment A-R1 — rename `features/auth` → `features/authentication` (RATIFIED 2026-07-07, jrazmi)
+
+Companion to A-I1, same discussion: with authorization confirmed as a
+future sibling module (A-I1.5), the feature pair must be unambiguous —
+`features/authentication` today, `features/authorization` whenever a real
+implementation is wanted — and the repo naming rule (authentication /
+authorization, spelled out, never ambiguous) finally applies to the module
+itself. Zero tags are cut (RELEASING.md), so path churn is free now and
+dearer forever after. Lands as **task-0, phase 0** — before every other
+task, so events-v1 is born against the new path.
+
+Scope, verified by grep 2026-07-07 before ratification:
+
+- **Module paths (three) + replaces:** `…/features/auth`,
+  `…/features/auth/stores/turso`, `…/features/auth/stores/pgx` →
+  `…/features/authentication{,/stores/turso,/stores/pgx}`; the two store
+  modules' sibling `replace` directives; `examples/auth-cms/go.mod`'s
+  require + replace lines.
+- **External importers: `examples/auth-cms` ONLY** (six .go files across
+  `cmd/server` and `internal/authmem`) — no other module imports the
+  feature.
+- **Root package `auth` → `authentication`** (Go dir=package convention),
+  and the root file `auth.go` → `authentication.go` (charter: `<name>.go`
+  is the host-facing surface). `examples/auth-cms` imports under the alias
+  `auth "github.com/gopernicus/gopernicus/features/authentication"` so
+  every `auth.` call site is unchanged (the O5 aliasing precedent).
+  Interior names stay: `authsvc`, `authmem`, `authSvc` variables, the
+  `examples/auth-cms` directory — the naming rule bans the ambiguous
+  forms, not the stem, and interior churn buys nothing.
+- **Registration surfaces:** go.work (three lines); Makefile `MODULES`,
+  `STORE_MODULES`, the two `test-stores` legs (Makefile:49–56), and the
+  FS1 guard's module list (Makefile:114 `for f in features/auth …`).
+  G2/G5-style guards use regexes generic over `features/*` — no edit.
+- **Migrations: nothing to do.** No `"auth"` source string exists in store
+  code (verified — the ledger source is host-side vocabulary), no host
+  ledger anywhere holds auth rows (`examples/auth-cms` is in-memory;
+  `examples/cms`'s workshop tree is cms-only — verified), and migration
+  filenames 0001–0011 are unchanged. Store READMEs' ledger-source wording
+  says "authentication" going forward.
+- **Docs sweep (live docs only; historical plans/NOTES stay as written):**
+  ARCHITECTURE.md (tree, taxonomy, features section), features/README.md,
+  sdk/README.md cross-references, README.md, RELEASING.md enumerations,
+  the feature's own README + both store READMEs. In-flight plan files get
+  dated sync notes rather than rewrites: `feature-standard/
+  01-convergence.md`'s auth-path references; THIS plan's fold-in is
+  already done (task file lists and verify greps read
+  `features/authentication`; pre-rename verified-state prose stays).
+
+### task-0: the rename (phase 0 — before every other task)
+
+- **depends_on:** []
+- **model:** opus
+- **files:** [features/auth/** → features/authentication/** (root file → authentication.go), go.work, Makefile, examples/auth-cms/go.mod, examples/auth-cms/cmd/server/main.go, examples/auth-cms/cmd/server/demo.go, examples/auth-cms/cmd/server/membership.go, examples/auth-cms/internal/authmem/authmem.go, examples/auth-cms/internal/authmem/authmem_test.go, examples/auth-cms/internal/authmem/ports_v2.go, ARCHITECTURE.md, README.md, RELEASING.md, features/README.md, sdk/README.md, .claude/plans/feature-standard/01-convergence.md]
+- **verify:** full `make check` (module count unchanged) and `make guard`; then `grep -rn 'features/auth' --include='*.go' --include='go.mod' . go.work Makefile | grep -v 'features/authentication'` returns nothing; docs grep the same way over ARCHITECTURE.md README.md RELEASING.md features/README.md sdk/README.md; run-and-look (real-interaction rule): `cd examples/auth-cms && go run ./cmd/server` — register/login via the README flow, admin gate admits the session, unauthenticated hit 401s/redirects
+- **description:** Execute the scope list above verbatim: move the
+  directory, rewrite the three module lines + replaces + importer import
+  paths, rename the root package/file, alias the example back to `auth`,
+  update the registration surfaces and live docs, drop the dated sync
+  note into `01-convergence.md`. Pure mechanical churn — zero behavior
+  change; existing tests pass unmodified everywhere.
+  **COORDINATION (in-flight work, 2026-07-07):** feature-standard
+  convergence execution opened this session and is touching
+  `features/auth` files (NOTES.md entry same date; uncommitted working
+  tree). Land or park that work FIRST — this rename is pure path churn
+  and rebases trivially over content edits, not vice versa. Executor logs
+  the order taken.
+
 ## Context
 
 Ratified capability-map call #4 deferred the event bus until a second real
@@ -164,6 +403,11 @@ Everything below was checked in code while cutting this plan:
   (web middleware) and `Service.CurrentUser(ctx) (userID string, ok bool)`
   (`auth.go:151, :162`) — structurally satisfies the gateway's
   consumer-declared `CurrentUser` port with zero imports.
+  [SUPERSEDED by A-I1 (RATIFIED 2026-07-07): the consumer-declared-port
+  shape this bullet verifies is retired — what the gateway now needs from
+  the authentication feature is only that its middleware stashes
+  `identity.Principal` (task-1c). Path reads `features/authentication`
+  post task-0 (A-R1).]
 - **`feature.Mount` is `{Router RouteRegistrar, Logger *slog.Logger}`** —
   see supersession S3 below (the design's §4 snippet shows a `Migrations`
   field that does not exist in code).
@@ -265,8 +509,14 @@ feature importing any other feature.
   no-op) with the §3 guarantee language in its doc; charter §6 C3's
   event-bus candidate is marked cashed.
 - `features/events` (module 27) compiles standalone with `go.mod` = sdk
-  only; `Register` errors on nil `Bus`/`Identity`; routes claim `/events/*`;
-  hub is internal, poller is exported and host-driven.
+  only; `Register` errors on nil `Bus`; absent identity fails closed —
+  every stream 401s when no middleware stashed an `identity.Principal`
+  (A-I1 E3); routes claim `/events/*`; hub is internal, poller is exported
+  and host-driven.
+- A-R1 landed first: `features/authentication` everywhere (task-0's greps
+  clean); `sdk/identity` shipped with authentication-feature conformance
+  proven by unmodified passing tests + the login run-and-look (tasks
+  1b/1c).
 - cms emits `content.published`/`content.updated`/`content.deleted` via
   `mount.Events` behind a nil guard — best-effort path only; **no cms store
   or port contract changes** (O2: no v1 feature wires the outbox).
@@ -338,6 +588,12 @@ feature importing any other feature.
   pre-v1 (named-field construction, charter §6); the new import edge
   `sdk/feature → sdk/events` is sdk-internal, same class as the existing
   `sdk/web` edge. G1/G3 unaffected.
+- **sdk gains one package, `sdk/identity`** (A-I1 E7 — vocabulary only,
+  stdlib-only, no module-count change); the authentication feature's
+  public API is unchanged by conformance (type aliases, task-1c). A-R1
+  changes three module PATHS (`features/authentication{,/stores/turso,
+  /stores/pgx}`) and the root package name — one example updates its
+  import lines under an `auth` alias; no API surface changes.
 - cms's `entrysvc.NewService` signature changes — **internal package**, not
   public API (charter B3); `cms.Register`'s signature is untouched.
 - `examples/auth-cms/go.mod` gains `features/events` (+ replace).
@@ -445,14 +701,16 @@ no host or feature behavior changes (zero-value field).
 **DoD:** the feature module compiles standalone (`go.mod` = sdk only,
 charter item 2); `logic/outbox` public; poller exported and host-driven
 (returns `workers.ErrNoWork` when idle); gateway hub internal with the §6
-defaults; `Register` errors on nil `Bus`/`Identity`; routes `/events` and
+defaults; `Register` errors on nil `Bus`, and absent identity fails closed
+(401 on every stream — A-I1 E3); routes `/events` and
 `/events/{resource_type}/{resource_id}` (the latter only when `Authorize`
 is set); the `storetest` suite (R4) green hermetically via its test-scoped
 reference (gate edit 5 — relocated from the design's phase-6 grouping);
 in-module tests green; `make check` green at **27 modules**.
 
 Trio layout (plan-cut requirement 2 of the milestone brief, mirroring
-`features/auth`): public port layer at `logic/outbox/`; hub internals under
+`features/authentication` — path per A-R1): public port layer at
+`logic/outbox/`; hub internals under
 `internal/logic/`; HTTP under `internal/inbound/http/`; host-facing surface
 in the root package — `Register`/`Repositories`/`Config` in `events.go`,
 the poller in `poller.go` (gate edit 6: a file split within the root
@@ -527,10 +785,10 @@ constructors live in `<name>.go`" — same public surface).
 
 ### task-5: SSE gateway hub (internal) + HTTP + the feature socket
 
-- **depends_on:** [task-3]
+- **depends_on:** [task-3, task-1b]
 - **model:** opus
 - **files:** [features/events/events.go, features/events/events_test.go, features/events/internal/logic/hub/hub.go, features/events/internal/logic/hub/hub_test.go, features/events/internal/inbound/http/routes.go, features/events/internal/inbound/http/routes_test.go]
-- **verify:** `cd features/events && go build ./... && go test -race ./... && go vet ./...` then `make check` and `make guard`, plus the rule-6 grep at this boundary-creating moment (gate edit 8): `! grep -rn '"github.com/gopernicus/gopernicus/features/\(auth\|cms\|jobs\)' features/events/`
+- **verify:** `cd features/events && go build ./... && go test -race ./... && go vet ./...` then `make check` and `make guard`, plus the rule-6 grep at this boundary-creating moment (gate edit 8; path per A-R1): `! grep -rn '"github.com/gopernicus/gopernicus/features/\(authentication\|cms\|jobs\)' features/events/`
 - **description:** Implement design §6 whole. Hub
   (`internal/logic/hub`): one per process; subscribes at `Register` —
   `SubscribeBroadcast` when the bus satisfies `Broadcaster`, else
@@ -553,25 +811,37 @@ constructors live in `<name>.go`" — same public surface).
   path's (resource_type, resource_id) — `AggregateType`/`AggregateID`
   equality; events carrying no `Metadata` are SUPPRESSED on scoped streams
   (deny-by-default, consistent with the metadata-only projection posture).
-  Handlers call `cfg.Identity.CurrentUser(ctx)`, 401 when absent; streams
-  ride `web.NewSSEStream` with `Heartbeat` (default 25s) and `MaxConnAge`.
+  Handlers read `identity.FromContext(ctx)` (sdk/identity — A-I1 E1), 401
+  when absent; per-subject keys are the composite `Type + ":" + ID` (A-I1
+  E1 micro-decision: prevents user/machine ID collisions under the
+  per-subject cap; with the shipped `StreamMiddleware: RequireUser` wiring
+  only user principals appear, so proof-host behavior is unchanged);
+  streams ride `web.NewSSEStream` with `Heartbeat` (default 25s) and
+  `MaxConnAge`.
   **`MaxConnAge` semantics (post-gate edit P5, design micro-amendment):**
   plain `time.Duration`; zero value → **15m** (O7's posture, deliberately
   inverting the original); **unlimited NOT offered in v1** — a host
   wanting effectively-unlimited sets an explicitly large value (e.g.
   8760h); a negative sentinel is the documented future seam. O7's "hosts
   can set 0 explicitly" is superseded (P5). Socket
-  (`events.go`): `CurrentUser` port, `AuthorizeStream` func type,
+  (`events.go`): `AuthorizeStream` func type,
   `Repositories{Outbox outbox.EntryRepository}` (nil → direct-emit mode
-  documented), `Config` exactly per §6 (`Bus`, `Identity`,
+  documented), `Config` per §6 as amended by A-I1 E1 (`Bus`,
   `StreamMiddleware`, `Authorize`, `Projector`, `Heartbeat`, `BufferSize`,
-  `MaxConnAge`, `MaxConnsPerSubject`), `Register` hard-erroring on nil
-  `Bus`/`Identity` (auth's `ErrHasherRequired` precedent — exported error
-  vars). Tests: register on a recording router; httptest end-to-end —
+  `MaxConnAge`, `MaxConnsPerSubject` — NO `Identity` field; the
+  consumer-declared `CurrentUser` port is retired), `Register`
+  hard-erroring on nil `Bus` (the `ErrHasherRequired` precedent — exported
+  error var). **Misconfiguration posture (A-I1 E1, amends the ratified
+  degraded-mode matrix row "events `Config.Identity` nil → hard error"):**
+  a host that wires no identity-stashing middleware gets uniform 401s —
+  fails CLOSED at request time, consistent with the deny-by-default stream
+  posture; the README documents the StreamMiddleware requirement (task-14).
+  Tests: register on a recording router; httptest end-to-end —
   emit on the bus → frame on the response (id + metadata-only body);
   types filter; per-subject cap (11th connection rejected); Projector
-  override; nil-Authorize ⇒ resource route absent; nil Bus/Identity ⇒
-  errors; **resource-scoped (P4): matching event delivered, non-matching
+  override; nil-Authorize ⇒ resource route absent; nil Bus ⇒ error; **no
+  identity-stashing middleware ⇒ every stream 401s (fails closed — A-I1
+  E1)**; **resource-scoped (P4): matching event delivered, non-matching
   suppressed, no-Metadata event suppressed, Authorize-denied connection
   rejected**. No `init()`, no package-level state (checklist item 8).
 
@@ -607,7 +877,7 @@ cache on content events; run-and-look passed.
 - **depends_on:** [task-1]
 - **model:** opus
 - **files:** [features/cms/internal/logic/entrysvc/events.go, features/cms/internal/logic/entrysvc/service.go, features/cms/internal/logic/entrysvc/service_test.go, features/cms/cms.go]
-- **verify:** `cd features/cms && go build ./... && go test ./... && go vet ./...` then `make check` and `make guard`, plus the rule-6 grep at this boundary-creating moment (gate edit 8): `! grep -rn '"github.com/gopernicus/gopernicus/features/\(auth\|events\|jobs\)' features/cms/ --exclude-dir=stores`
+- **verify:** `cd features/cms && go build ./... && go test ./... && go vet ./...` then `make check` and `make guard`, plus the rule-6 grep at this boundary-creating moment (gate edit 8; path per A-R1): `! grep -rn '"github.com/gopernicus/gopernicus/features/\(authentication\|events\|jobs\)' features/cms/ --exclude-dir=stores`
 - **description:** Define cms-internal typed events (no shared struct
   crosses the feature boundary — §4 rule-6 note) embedding
   `sdkevents.BaseEvent` with aggregate metadata (`aggregate_type:
@@ -741,12 +1011,20 @@ Record exact commands, ports, and observed frames in the execution log.
   the graph must stay driver-free — re-assert `go list -m all | grep -i
   libsql` empty, the host's own doc-comment claim). Wire (wiring only,
   rule 8): `eventsfeature.Register(mount, eventsfeature.Repositories{},
-  eventsfeature.Config{Bus: bus, Identity: authSvc, StreamMiddleware:
-  []web.Middleware{authSvc.RequireUser}})` — one bus instance flows to
-  both `Mount.Events` and `Config.Bus` (§6's wiring note); `Outbox` nil =
-  direct-emit mode; `Authorize` left nil (resource-scoped routes absent —
-  deny by absence, documented in the README). README gains the stream
+  eventsfeature.Config{Bus: bus, StreamMiddleware:
+  []web.Middleware{authSvc.RequireUser}})` (A-I1 E2: no `Identity` field —
+  `RequireUser` stashes the `identity.Principal` the gateway reads) — one
+  bus instance flows to both `Mount.Events` and `Config.Bus` (§6's wiring
+  note); `Outbox` nil = direct-emit mode; `Authorize` left nil
+  (resource-scoped routes absent — deny by absence, documented in the
+  README). README gains the stream
   section (route surface, auth requirement, curl examples).
+  [SYNC NOTE 2026-07-07, feature-standard ratification (FS2): the Register
+  shape here predates the ratified contract — events must ship the method
+  form, `svc, err := eventsfeature.NewService(repos, cfg)` then
+  `svc.Register(mount)`, matching auth/jobs post-convergence. Fold in
+  before execution; every `Register(mount, Repositories{}, Config{...})`
+  call in this plan reads accordingly.]
 
 ### task-12: `outboxmem` + poller variant + shutdown ordering
 
@@ -798,7 +1076,7 @@ entry with the live-run artifacts; fresh full `make check` green.
 - **depends_on:** [task-3]
 - **model:** opus
 - **files:** [Makefile]
-- **verify:** `make guard` green on a clean tree; prove-can-fail (A4 practice): add a temporary `features/auth` import to a `features/events` file, observe G5 fail with its error message, remove it, re-run `make guard` green; then full `make check`
+- **verify:** `make guard` green on a clean tree; prove-can-fail (A4 practice): add a temporary `features/authentication` import (path per A-R1) to a `features/events` file, observe G5 fail with its error message, remove it, re-run `make guard` green; then full `make check`
 - **description:** Both gate reviewers pushed to close this gap now: G2
   catches feature-core → integrations/examples/stores but NOT feature-core
   → feature-core (rule 6), and events-v1 is the first milestone built
@@ -822,7 +1100,9 @@ entry with the live-run artifacts; fresh full `make check` green.
 - **description:** The feature README (auth/jobs READMEs are the shape):
   layout (trio), route surface `/events/*` (C1 claim; prefixable — JSON/SSE
   carries no HTML links), `Config` table with per-field nil semantics
-  (checklist item 12; nil `Bus`/`Identity` = hard error), the **two-emit-
+  (checklist item 12; nil `Bus` = hard error; identity rides
+  `sdk/identity` — absent principal ⇒ streams fail closed with 401, and
+  the StreamMiddleware requirement is documented loudly — A-I1 E5), the **two-emit-
   paths guarantee table (§3) reprinted**, delivery guarantees per rail
   (memory at-most-once / outbox at-least-once — de-dupe on `EventID()` via
   the poller's rehydrated event type, durable rail only; best-effort frames
@@ -851,7 +1131,7 @@ entry with the live-run artifacts; fresh full `make check` green.
 
 - **depends_on:** [task-13, task-14]
 - **model:** fable
-- **files:** [ARCHITECTURE.md, README.md, RELEASING.md, Makefile, sdk/README.md, features/README.md, .claude/plans/roadmap/events-feature-design.md, NOTES.md]
+- **files:** [ARCHITECTURE.md, README.md, RELEASING.md, Makefile, sdk/README.md, features/README.md, .claude/plans/roadmap/events-feature-design.md, .claude/plans/roadmap/00-intersections.md, NOTES.md]
 - **verify:** full `make check` (29 modules, all guards) then `grep -rn 'Twenty-six\|26 modules' ARCHITECTURE.md README.md RELEASING.md Makefile sdk/README.md` returns nothing unintentional
 - **description:** (1) ARCHITECTURE.md: module tree + "Twenty-six modules
   today" → twenty-nine; add the events rows (feature + two stores); add
@@ -868,20 +1148,33 @@ entry with the live-run artifacts; fresh full `make check` green.
   `MaxConnAge` is no-disable in v1** (zero → 15m, unlimited not offered,
   negative sentinel = the documented future seam). (7) NOTES.md dated
   milestone entry: what shipped, the S1–S6 deltas + the eight gate edits +
-  the P1–P5 post-gate amendments, both live-store artifacts
-  (suite/dialect/DSN-class/result), the phase-5 protocol results verbatim,
-  G5's landing (or strike + the manually-checked note), open flags for
-  jrazmi. G2 itself needs no edit (generic regex — verified); G5 is
-  task-13's.
+  the P1–P5 post-gate amendments + A-I1/A-R1 execution, both live-store
+  artifacts (suite/dialect/DSN-class/result), the phase-5 protocol results
+  verbatim, G5's landing (or strike + the manually-checked note), open
+  flags for jrazmi. G2 itself needs no edit (generic regex — verified);
+  G5 is task-13's. (8) A-I1/A-R1 doc landings (A-I1 E6): sdk/README.md
+  gains the `identity` entry with the A-I1.1 admission trace;
+  ARCHITECTURE.md's sdk package enumeration gains `identity` (the A-R1
+  path/name updates land in task-0, not here — this task only verifies no
+  stale `features/auth` reference survives in the live docs it touches);
+  features/README.md §5's corollary is marked CASHED for
+  identity-in-context (the illustrative `CurrentUser` port stays as the
+  general C2 pattern for domain-shaped needs);
+  roadmap/00-intersections.md §2's events-`Config.Identity` row and §3's
+  identity seam row gain dated AMENDED markers citing A-I1.
 
 ## Sequencing
 
-Phases run 1→6. Hard edges: task-1 before everything (the Mount field is
-the milestone's keystone); task-3 before tasks 4/5/6/13; task-6 before
-tasks 9/10/12; task-7 before task-8; task-5 + task-8 before task-11;
-task-11 + task-6 before task-12; task-13 before task-15's final gate;
-task-14 before task-15. Phase 3 hard-depends only on phase 1 and may swap
-ahead of phase 2 if phase 2 blocks. Phase 4 (stores) and phase 5 (proof
+Phases run 0→6 (A-I1 E8 + A-R1). Hard edges: task-0 before everything
+(the A-R1 rename — every later task reads the new path); then task-1 and
+task-1b front the milestone, independent of each other; task-1c after
+task-0 + task-1b and before phase 5 (the proof host logs in through the
+conformed middleware); task-3 before tasks 4/5/6/13; task-5 also needs
+task-1b (A-I1 E1 — the gateway reads `identity.FromContext`); task-6
+before tasks 9/10/12; task-7 before task-8; task-5 + task-8 before
+task-11; task-11 + task-6 before task-12; task-13 before task-15's final
+gate; task-14 before task-15. Phase 3 hard-depends only on phase 1 and
+may swap ahead of phase 2 if phase 2 blocks. Phase 4 (stores) and phase 5 (proof
 host) are independent of each other — the proof host never imports a store
 module (§8 zero-infra proof; storetest relocated to phase 2 per gate
 edit 5) — but default order keeps store conformance ahead of the demo.
@@ -905,6 +1198,11 @@ mark rows published, breaking the durable rail's at-least-once claim.
 
 ## Open questions
 
+[ALL RESOLVED at ratification 2026-07-07 (jrazmi): items 1–4 at their
+recommended/decided defaults — README placement (1), JSON payload (2), G5
+stands (3), P5 confirmed (4); item 5's amendments were ratified the same
+day. Kept as written for the decision trail.]
+
 1. **Wiring-page placement** — default: a section of
    `features/events/README.md` (per-feature READMEs are the only visible
    docs convention; no `docs/` dir exists). If jrazmi prefers a standalone
@@ -919,6 +1217,13 @@ mark rows published, breaking the durable rail's at-least-once claim.
    design micro-amendment (zero → 15m, unlimited not offered in v1,
    negative sentinel = the future seam; O7's "set 0 explicitly" sentence
    superseded); jrazmi confirms at ratification.
+5. **A-I1 `sdk/identity` graduation — RATIFIED 2026-07-07 (jrazmi)**,
+   same day as proposed; edits E1–E8 applied through the body (adds
+   tasks 1b/1c, drops `Config.Identity`, fails-closed posture change to
+   the ratified degraded-mode matrix row). A-R1 (the
+   `features/authentication` rename, task-0) ratified alongside it. No
+   longer open — listed here so the ratification trail stays in one
+   place.
 
 ## Recommended reviews
 
@@ -949,6 +1254,7 @@ mark rows published, breaking the durable rail's at-least-once claim.
 - Auth naming rule holds in every identifier and comment:
   authentication/authorization (authenticator/authorizer) — never
   abbreviated.
-- Rule-6 spot check at milestone close:
-  `grep -rn "features/\(auth\|cms\|jobs\)" features/events/` empty, and the
-  reverse for `features/events` (cms's emitter uses only sdk types).
+- Rule-6 spot check at milestone close (path per A-R1):
+  `grep -rn "features/\(authentication\|cms\|jobs\)" features/events/`
+  empty, and the reverse for `features/events` (cms's emitter uses only
+  sdk types).

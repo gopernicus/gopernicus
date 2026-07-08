@@ -1142,3 +1142,108 @@ Next: authorization-v1 (Z1–Z5) is cut from design §13 when its window
 opens; the deferred durable rail waits on its trigger (first real durable
 consumer) + events-v1 shipped. Plans moved to `.claude/past/auth-v2/` per
 the standing housekeeping rule.
+
+## 2026-07-07 — feature-standard RATIFIED (jrazmi): FS1–FS10 extension model; convergence execution opened
+
+Ratified at Claude's recommendations
+(`.claude/plans/feature-standard/{00-charter,01-convergence}.md`;
+architecture-steward reviewed, 14 findings folded pre-ratification). The
+decisions: **FS1** feature core modules import sdk only (machine-checked;
+supersedes D7 via its own revisit clause — the headless host materialized);
+**FS2** the public `Service` is the feature's driving surface — use-cases
+promoted by thin delegation, shipped transport is an optional adapter, and
+anything consuming the built feature takes the BUILT Service (supersedes
+the §1 `Register(mount, repos, cfg)` contract; jobs's rebuild-and-discard
+`Register` amended too); **FS3** presentation is a `Views` port in the
+core returning `web.Renderer`, bundled defaults ship as `views/<pkg>`
+sibling modules, uniform nil → HTML surface off (amends the R6 taxonomy +
+degraded-mode matrix row); **FS4** sibling modules are per-concern, never
+mandatory; **FS5** store adapters stay feature-owned — the
+stores-under-integrations alternative was examined and REJECTED (import
+inversion: feature-aware code below the features layer; plus release-train
+locality and the third-party-author test); connectors absorb shared
+helpers instead (rich connector, thin adapter); **FS6** Config structs
+remain the carrier, no functional options; **FS7** route tables become
+data, the public override hook HELD until demanded; **FS8** behavior hooks
+defer to the events rail; **FS9** feature transports use sdk/web — sdk
+gaps are fixed in the sdk if they pass sdk/README's admission policy,
+else one named local helper citing the failed test; **FS10** cms content
+is plain text for now (goldmark/bluemonday leave the core; markdown
+returns as its own decision at cms specifics).
+
+Owner rulings at ratification: Register = **method form**
+(`svc.Register(mount)`; auth's promoted user-registration use-case is
+`RegisterUser`); FS1 guard lands with a **cms carve-out scoped to templ
+only** (dated TODO, removed at convergence B2). Cross-gates recorded:
+repo-hardening task-9 now depends on feature-standard B1+B2 (or a
+conscious waiver) so `features/cms/v0.1.0` isn't tagged with deps it's
+about to shed; events-v1 task-11's Register wiring carries a sync note to
+ship the FS2 method form. Sequencing gate "after auth-v2 close" satisfied
+same day; "before first tags" holds (tags still double-gated on events-v1
+close + LICENSE). Convergence execution (Phases A/E/B1/C/D1) opened in
+this session.
+
+## 2026-07-07 — events-v1 amendments A-I1 + A-R1 RATIFIED (jrazmi): sdk/identity graduation; features/auth → features/authentication
+
+Origin: fresh-eyes taxonomy session (jrazmi's "should auth/events/jobs be
+sdk-with-adapters / foundational features be renamed?" question). Verdict
+recorded first: **R6's facility/feature litmus reaffirmed** — events and
+jobs already have the asked-for shape (sdk vocabulary + feature-owned
+durability); auth's facility-shaped parts already graduated at sdk-parity
+(oauth, cryptids, ratelimiter, email); no new module kind for
+"foundational" features (role ≠ structure; provider role confers no
+import privilege — rule 6 unbent). The one real asymmetry found: auth's
+identity-in-context vocabulary was still sealed behind a private context
+key, forcing every consumer to hold a matched middleware+port PAIR from
+the same provider.
+
+**A-I1 (`.claude/plans/events-v1/plan.md`): `sdk/identity`** — vocabulary
+only (`Principal{Type, ID}` per AV5, `User`/`ServiceAccount` constants,
+`WithPrincipal`/`FromContext`; the oauth/errs shape — no default, no
+middleware, no authorization vocabulary). Cashes the charter §5
+corollary's named graduation ("an identity-in-context convention");
+admission trace recorded in the amendment. Lands as events-v1 tasks
+1b/1c + edits E1–E8: the gateway loses `Config.Identity` and the
+`CurrentUser` port; absent identity now **fails closed** (401 per
+stream) — a recorded amendment to the degraded-mode matrix row "events
+`Config.Identity` nil → hard error". Auth conformance is alias-based;
+public API provably unchanged (existing tests pass unmodified + login
+run-and-look). Authorization stays unsplit and unbuilt: `Granter` is
+write-shaped, `AuthorizeStream` check-shaped — no vocabulary convergence;
+revisit trigger unchanged. A future authorization implementation is its
+own module, never growth inside the authentication feature.
+
+**A-R1 (same plan): rename `features/auth` → `features/authentication`**
+(+ both store modules; root package `authentication`, root file
+`authentication.go`; example keeps call sites via an `auth` import
+alias). Rationale: unambiguous pairing with a future
+`features/authorization`; zero tags cut, so the churn is free now.
+Scope verified pre-ratification: examples/auth-cms is the ONLY external
+importer; no migration-source string exists in store code; no host
+ledger holds auth rows. Lands as events-v1 task-0 (phase 0).
+COORDINATION FLAG: feature-standard convergence (opened this session)
+touches the same files — land/park convergence first; the rename rebases
+trivially over content edits, not vice versa.
+
+## 2026-07-07 — events-v1 RATIFIED (jrazmi, at defaults); overnight implementation loop authorized; backlog committed + pushed
+
+events-v1 (`.claude/plans/events-v1/plan.md`) RATIFIED at defaults: open
+questions 1–4 at their recommended/decided answers — wiring page in the
+feature README (1), pgx payload JSON (2), G5 guard stands (3), P5
+MaxConnAge no-disable confirmed (4). Amendments A-I1 (`sdk/identity`) and
+A-R1 (`features/authentication` rename) were ratified earlier the same
+day (previous entry). Remaining pre-execution plan edit: the FS2 fold-in
+(task-11 sync note / feature-standard W4) — assigned to the loop's
+pre-flight leg.
+
+Overnight implementation loop authorized and kicked off per
+`.claude/plans/roadmap/overnight-loop-2026-07-07.md` (queue:
+feature-standard remainder B2 + D2–D6 → events-v1 phases 0–6 →
+authorization-v1 plan CUT as DRAFT only; fences: no tags, no LICENSE,
+close-blocked-not-faked live legs). In-session confirmations: git
+discipline incl. pre-loop backlog commit+push ("this is a clean main"),
+D5's `sdk/crud`-into-connectors ratify-at-execution granted,
+authorization-v1 cutting allowed as a planning leg. The feature-standard
+convergence backlog (phases A/E/B1/C/D1) and today's planning edits were
+committed and pushed in the authorizing session — SHAs in git log, CI
+required-check green verified before loop start.
