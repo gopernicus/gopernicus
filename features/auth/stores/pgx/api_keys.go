@@ -36,7 +36,7 @@ func (s *APIKeyStore) Create(ctx context.Context, k apikey.APIKey) (apikey.APIKe
 	const q = `INSERT INTO api_keys (` + apiKeyColumns + `) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
 	_, err := s.db.Exec(ctx, q,
 		k.ID, k.ServiceAccountID, k.Name, k.KeyPrefix, k.KeyHash,
-		nullableTime(k.ExpiresAt), nullableTime(k.RevokedAt), nullableTime(k.LastUsedAt),
+		pgxdb.NullTime(k.ExpiresAt), pgxdb.NullTime(k.RevokedAt), pgxdb.NullTime(k.LastUsedAt),
 		k.CreatedAt.UTC(),
 	)
 	if err != nil {
@@ -101,9 +101,9 @@ func scanAPIKey(sc scanner) (apikey.APIKey, error) {
 	); err != nil {
 		return apikey.APIKey{}, pgxdb.MapError(err)
 	}
-	k.ExpiresAt = fromNullableTime(expiresAt)
-	k.RevokedAt = fromNullableTime(revokedAt)
-	k.LastUsedAt = fromNullableTime(lastUsedAt)
+	k.ExpiresAt = pgxdb.FromNullTime(expiresAt)
+	k.RevokedAt = pgxdb.FromNullTime(revokedAt)
+	k.LastUsedAt = pgxdb.FromNullTime(lastUsedAt)
 	k.CreatedAt = createdAt.UTC()
 	return k, nil
 }

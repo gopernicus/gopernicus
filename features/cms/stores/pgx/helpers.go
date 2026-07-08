@@ -3,7 +3,6 @@ package pgx
 import (
 	"embed"
 	"strconv"
-	"time"
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 )
@@ -27,15 +26,4 @@ type scanner = pgxdb.Scanner
 // with a dynamic WHERE clause number their placeholders from len(args)+1.
 func placeholder(n int) string {
 	return "$" + strconv.Itoa(n)
-}
-
-// publishedAt normalizes a nullable timestamp for storage: nil stays NULL, a
-// value is UTC-normalized (TIMESTAMPTZ stores the instant regardless, but this
-// keeps the wire value consistent with the store's UTC convention).
-func publishedAt(t *time.Time) *time.Time {
-	if t == nil {
-		return nil
-	}
-	u := t.UTC()
-	return &u
 }

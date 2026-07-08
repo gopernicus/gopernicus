@@ -37,7 +37,7 @@ func (s *InvitationStore) Create(ctx context.Context, inv invitation.Invitation)
 	_, err := s.db.Exec(ctx, q,
 		inv.ID, inv.ResourceType, inv.ResourceID, inv.Relation, inv.Identifier,
 		inv.ResolvedSubjectID, inv.InvitedBy, inv.TokenHash, inv.AutoAccept,
-		inv.Status, inv.ExpiresAt.UTC(), nullableTime(inv.AcceptedAt),
+		inv.Status, inv.ExpiresAt.UTC(), pgxdb.NullTime(inv.AcceptedAt),
 		inv.CreatedAt.UTC(), inv.UpdatedAt.UTC(),
 	)
 	if err != nil {
@@ -92,7 +92,7 @@ func (s *InvitationStore) UpdateStatus(ctx context.Context, id string, upd invit
 		WHERE id = $7
 		RETURNING ` + invitationColumns
 	return scanInvitation(s.db.QueryRow(ctx, q,
-		upd.Status, upd.TokenHash, upd.ExpiresAt.UTC(), nullableTime(upd.AcceptedAt),
+		upd.Status, upd.TokenHash, upd.ExpiresAt.UTC(), pgxdb.NullTime(upd.AcceptedAt),
 		upd.ResolvedSubjectID, upd.UpdatedAt.UTC(), id,
 	))
 }
@@ -113,7 +113,7 @@ func scanInvitation(sc scanner) (invitation.Invitation, error) {
 		return invitation.Invitation{}, pgxdb.MapError(err)
 	}
 	inv.ExpiresAt = expiresAt.UTC()
-	inv.AcceptedAt = fromNullableTime(acceptedAt)
+	inv.AcceptedAt = pgxdb.FromNullTime(acceptedAt)
 	inv.CreatedAt = createdAt.UTC()
 	inv.UpdatedAt = updatedAt.UTC()
 	return inv, nil
