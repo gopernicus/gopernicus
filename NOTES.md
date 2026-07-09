@@ -1386,3 +1386,92 @@ idempotent (generate twice → identical porcelain); both boots real-driven
 examples/auth-cms :8082 the full five-step protocol 401→201→403→verify
 200→login 200→gated /articles 200, then authenticated GET /events → 200
 text/event-stream).
+
+## 2026-07-08 — pgx-crud-v1 RATIFIED; authorization-v1 codex fold (two owner rulings)
+
+**pgx-crud-v1 cut and RATIFIED same day** (`.claude/plans/pgx-crud-v1/`,
+P1–P6): the pgx v5 idiom sweep (NamedArgs, CollectRows/RowToStructByName
+via store-local db-tagged row structs, UNNEST bulk writes) + the sdk/crud
+List standards — order wired end to end, bidirectional cursor pagination,
+opt-in `Total` counts, opt-in limit/offset mode. Pre-cut owner rulings:
+pgx-first (turso gets semantics-only updates; idiom parity is the
+declared follow-up `turso-crud-parity`), store-local row structs (no db
+tags on `features/*/domain`), one extended `ListRequest`/`Page` pair.
+Ratified at all recommendations: **Q1** order allow-lists in feature-core
+domain packages; **Q2** cms prev-link templ task IN; **Q3** SSR
+fallback-to-default on bad order params (JSON edges stay strict-400).
+**Sequencing ruling: pgx-crud-v1 executes BEFORE authorization-v1** —
+Z2a/Z2b store phases land on the new List standards.
+
+**authorization-v1 (still DRAFT): external Codex review folded** (A1–A8,
+itemized in the plan's consultation notes). Two owner rulings taken:
+**A1 — `MaxTraversalDepth` is engine-only**: the review caught that lead
+refinement 8 required store CTEs to honor the engine's bound by
+"mirroring how the original threads it" — but the original never threads
+it (its CTE is unbounded, UNION-dedup-terminated; the bound only guards
+the engine's Go recursion). Ruled: match the original; depth-boundary
+storetest pair dropped; refinement 8 supersession-marked. **A2 — the
+unique-subject index is ADOPTED**: the original's one-relation-per-
+subject-per-resource unique index was silently missing from the DDL
+bullets; ruled adopt, with a constraint-level storetest case. Plus:
+`subject_relation NOT NULL DEFAULT ''` (the iam_roles NOT-NULL precedent
+applied over the original's nullable+COALESCE), explicit
+relationship_id/created_at in the DDL bullets, `Adversarial/NestedUserset`
+reworded tuple-side (request-side `Subject.Relation` is dead in the
+original engine), `iam_roles` secondary index realigned to
+`ListByResource`'s (resource_type, resource_id, created_at), salvage
+paths corrected to `../gopernicus-original`, Q4-conditional metadata
+probe. Q1–Q5 ratification still owed.
+
+## 2026-07-09 — pgx-crud-v1a amendment CLOSED: explicit pagination Strategy + connector flow split
+
+Post-close amendment to pgx-crud-v1, owner-ratified in-conversation
+2026-07-08 after reviewing the shipped `List[T]`: (1) the single-function
+mode interleaving was split into linear `listCursor`/`listOffset` private
+flows behind the unchanged `List` signature (both dialects; the offset
+flow no longer strips cursors post-hoc); (2) **mode selection is now an
+explicit `crud.Strategy`** ("cursor" default via zero value, "offset")
+— the `Offset > 0` inference is REMOVED: a cursor-strategy request
+carrying an offset fails loudly (wrapping ErrInvalidInput) instead of
+silently flipping modes, and `offset=0` is now expressible offset mode
+(proven over live HTTP). `ParseListRequest` folded its five strings into
+one `ListParams` options struct (the Pager break-once lesson) carrying
+`DefaultStrategy`; strategy resolves at the edge by param PRESENCE
+(offset param even "0" → offset; cursor → cursor; both → 400; neither →
+the host default). `authentication.Config.ListStrategy`
+(`env:"AUTH_LIST_STRATEGY" default:"cursor"`, loud validation) is the
+env-configurable-default demonstration — note the tag bites only via
+sdk/config.ParseEnvTags; literal Configs resolve empty → cursor.
+Rejected at ratification: public per-mode List functions (the dispatch
+would copy into every store port). Wait-for-demand (recorded): a
+`strategy` query param; per-route strategy restriction; exporting the
+reverse-probe/resolveOrder flows for non-BaseSQL custom queries — the
+clause builders (QuoteIdentifier/ApplyCursorPagination/AddOrderByClause/
+AddLimitClause) are already exported and composable. Live artifacts
+(2026-07-09): pgx all five modules ok (docker postgres:17); turso all
+four `-count=1` ok (playground gate); storetest families extended
+(OffsetZero + per-strategy CursorOffsetExclusive pair). Plan file
+archived into `.claude/past/pgx-crud-v1/`. Still UNCOMMITTED with the
+parent milestone — jrazmi's commit call.
+
+## 2026-07-09 — pgx-crud-v1b amendment CLOSED: per-aggregate list Limits
+
+Second post-close amendment to pgx-crud-v1, owner-ratified
+in-conversation (max page size is a RESOURCE property — "a list of ids
+could be more than 100; a list of embeddings for moby dick should be
+limited"). `crud.Limits{Default, Max}` is the resource's policy,
+declared per-aggregate in the domain rim beside OrderFields (the Q1
+pattern) via `var ListLimits = crud.Limits{…}` — the DefaultLimit(25)/
+MaxLimit(100) constants survive as zero-value FALLBACKS, so sdk stays
+the zero-config starter. `NormalizedLimit(l Limits)` replaces the
+zero-arg store-edge clamp; `ListParams.Limits` replaces v1a's MaxLimit
+field (one vocabulary both edges; strict-vs-clamp split preserved:
+edge errors above max, store clamps); both connectors' `ListQuery[T]`
+carry Limits. Deliberately NO aggregate declares custom limits yet —
+every call site passes the zero value and behavior is identity
+(live-proven both dialects + the HTTP edge: bare list default-25,
+limit=100 → 200, limit=101 → 400). Ruled at ratification: limits are
+code-declared resource properties, never env-configured (strategy
+stays the only env-defaultable list knob); no ListRequest field growth.
+Archived as `.claude/past/pgx-crud-v1/v1b-list-limits.md`. Still
+UNCOMMITTED with the parent milestone + v1a — jrazmi's commit call.

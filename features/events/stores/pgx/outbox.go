@@ -4,12 +4,14 @@ import (
 	"context"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/gopernicus/gopernicus/features/events/domain/outbox"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
 )
 
-// outboxColumns is the event_outbox projection, in scanEntry's order.
+// outboxColumns is the event_outbox projection, matching outboxRow's db tags.
 const outboxColumns = "event_id, event_type, occurred_at, correlation_id, payload, aggregate_type, aggregate_id, tenant_id, created_at, published_at"
 
 // Compile-time seam: Store fills the exact outbox.EntryRepository port.
@@ -22,6 +24,40 @@ var _ outbox.EntryRepository = (*Store)(nil)
 // (design §5).
 type Store struct {
 	db *pgxdb.DB
+}
+
+// outboxRow is the store-local, db-tagged projection of an event_outbox row that
+// pgx.RowToStructByName scans into; toDomain maps it to the persistence-free
+// domain entity. Nullable metadata columns scan into *string (NULL → nil) and
+// published_at into *time.Time (NULL → nil = unpublished).
+type outboxRow struct {
+	EventID       string     `db:"event_id"`
+	Type          string     `db:"event_type"`
+	OccurredAt    time.Time  `db:"occurred_at"`
+	CorrelationID string     `db:"correlation_id"`
+	Payload       []byte     `db:"payload"`
+	AggregateType *string    `db:"aggregate_type"`
+	AggregateID   *string    `db:"aggregate_id"`
+	TenantID      *string    `db:"tenant_id"`
+	CreatedAt     time.Time  `db:"created_at"`
+	PublishedAt   *time.Time `db:"published_at"`
+}
+
+func (r outboxRow) toDomain() outbox.Entry {
+	return outbox.Entry{
+		Record: sdkevents.Record{
+			EventID:       r.EventID,
+			Type:          r.Type,
+			OccurredAt:    r.OccurredAt.UTC(),
+			CorrelationID: r.CorrelationID,
+			Payload:       r.Payload,
+			AggregateType: r.AggregateType,
+			AggregateID:   r.AggregateID,
+			TenantID:      r.TenantID,
+		},
+		CreatedAt:   r.CreatedAt.UTC(),
+		PublishedAt: pgxdb.FromNullTimePtr(r.PublishedAt),
+	}
 }
 
 // Append persists records in their own transaction — the non-transactional
@@ -62,29 +98,28 @@ func (s *Store) ListUnpublished(ctx context.Context, limit int) ([]outbox.Entry,
 		ORDER BY created_at, event_id `
 
 	// A non-positive limit drains everything (LIMIT ALL); a positive limit binds
-	// as $1 — one Query call either way, so rows keeps its inferred pgx type.
-	limitClause := "LIMIT ALL"
-	var args []any
+	// as @limit — one Query call either way.
+	query := base + "LIMIT ALL"
+	args := pgx.NamedArgs{}
 	if limit > 0 {
-		limitClause = "LIMIT $1"
-		args = append(args, limit)
+		query = base + "LIMIT @limit"
+		args["limit"] = limit
 	}
 
-	rows, err := s.db.Query(ctx, base+limitClause, args...)
+	rows, err := s.db.Query(ctx, query, args)
 	if err != nil {
-		return nil, err
+		return nil, pgxdb.MapError(err)
 	}
-	defer rows.Close()
+	items, err := pgx.CollectRows(rows, pgx.RowToStructByName[outboxRow])
+	if err != nil {
+		return nil, pgxdb.MapError(err)
+	}
 
-	var out []outbox.Entry
-	for rows.Next() {
-		e, err := scanEntry(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, e)
+	out := make([]outbox.Entry, len(items))
+	for i, r := range items {
+		out[i] = r.toDomain()
 	}
-	return out, pgxdb.MapError(rows.Err())
+	return out, nil
 }
 
 // MarkPublished records the entry with the given eventID as published. It is
@@ -92,8 +127,8 @@ func (s *Store) ListUnpublished(ctx context.Context, limit int) ([]outbox.Entry,
 // already-published entry a zero-row no-op, and an unknown eventID matches
 // nothing — both return nil, so the poller can retry a mark without a hard error.
 func (s *Store) MarkPublished(ctx context.Context, eventID string) error {
-	const q = `UPDATE event_outbox SET published_at = $1 WHERE event_id = $2 AND published_at IS NULL`
-	_, err := s.db.Exec(ctx, q, time.Now().UTC(), eventID)
+	const q = `UPDATE event_outbox SET published_at = @published_at WHERE event_id = @event_id AND published_at IS NULL`
+	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{"published_at": time.Now().UTC(), "event_id": eventID})
 	return err
 }
 
@@ -101,62 +136,58 @@ func (s *Store) MarkPublished(ctx context.Context, eventID string) error {
 // the cutoff and returns the number removed. Unpublished entries are never purged
 // regardless of age.
 func (s *Store) PurgePublished(ctx context.Context, before time.Time) (int, error) {
-	const q = `DELETE FROM event_outbox WHERE published_at IS NOT NULL AND created_at < $1`
-	n, err := pgxdb.ExecAffecting(ctx, s.db, q, before.UTC())
+	const q = `DELETE FROM event_outbox WHERE published_at IS NOT NULL AND created_at < @before`
+	n, err := pgxdb.ExecAffecting(ctx, s.db, q, pgx.NamedArgs{"before": before.UTC()})
 	if err != nil {
 		return 0, err
 	}
 	return int(n), nil
 }
 
-// insertRecords writes each record as an unpublished row (published_at NULL),
-// stamping created_at with the current time. It runs against a *DB connection or
-// a *Tx (both satisfy Querier), so Append and AppendTx share one INSERT. A UNIQUE
-// constraint violation on event_id is mapped to errs.ErrAlreadyExists by the
-// connector's Exec.
+// insertRecords writes the batch as unpublished rows (published_at NULL) in one
+// UNNEST array-param INSERT, stamping every row's created_at with the current
+// time. It runs against a *DB connection or a *Tx (both satisfy Querier), so
+// Append and AppendTx share one statement. The rows all carry the same created_at
+// (event_id is the ListUnpublished tie-break), so array order is not load-bearing
+// for the oldest-first ordering guarantee. A UNIQUE constraint violation on
+// event_id is mapped to errs.ErrAlreadyExists by the connector's Exec.
 func insertRecords(ctx context.Context, q pgxdb.Querier, recs ...sdkevents.Record) error {
+	n := len(recs)
+	eventIDs := make([]string, n)
+	types := make([]string, n)
+	occurred := make([]time.Time, n)
+	correlations := make([]string, n)
+	payloads := make([]string, n)
+	aggTypes := make([]*string, n)
+	aggIDs := make([]*string, n)
+	tenants := make([]*string, n)
+	for i, rc := range recs {
+		eventIDs[i] = rc.EventID
+		types[i] = rc.Type
+		occurred[i] = rc.OccurredAt.UTC()
+		correlations[i] = rc.CorrelationID
+		payloads[i] = payloadValue(rc.Payload)
+		aggTypes[i] = rc.AggregateType
+		aggIDs[i] = rc.AggregateID
+		tenants[i] = rc.TenantID
+	}
+
 	const insert = `INSERT INTO event_outbox (` + outboxColumns + `)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULL)`
-	now := time.Now().UTC()
-	for _, rc := range recs {
-		if _, err := q.Exec(ctx, insert,
-			rc.EventID, rc.Type, rc.OccurredAt.UTC(), rc.CorrelationID,
-			payloadValue(rc.Payload), rc.AggregateType, rc.AggregateID,
-			rc.TenantID, now); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// scanEntry scans one event_outbox row into an outbox.Entry, mapping pgx.ErrNoRows
-// to errs.ErrNotFound via the connector's MapError. Nullable metadata columns scan
-// into *string (NULL → nil), and published_at scans into a nullable *time.Time
-// normalized to UTC via FromNullTimePtr (NULL → nil = unpublished).
-func scanEntry(sc scanner) (outbox.Entry, error) {
-	var (
-		e                        outbox.Entry
-		occurredAt, createdAt    time.Time
-		payload                  []byte
-		aggType, aggID, tenantID *string
-		publishedAt              *time.Time
-	)
-	err := sc.Scan(
-		&e.EventID, &e.Type, &occurredAt, &e.CorrelationID, &payload,
-		&aggType, &aggID, &tenantID, &createdAt, &publishedAt,
-	)
-	if err != nil {
-		return outbox.Entry{}, pgxdb.MapError(err)
-	}
-
-	e.Payload = payload
-	e.AggregateType = aggType
-	e.AggregateID = aggID
-	e.TenantID = tenantID
-	e.OccurredAt = occurredAt.UTC()
-	e.CreatedAt = createdAt.UTC()
-	e.PublishedAt = pgxdb.FromNullTimePtr(publishedAt)
-	return e, nil
+		SELECT event_id, event_type, occurred_at, correlation_id, payload::json, aggregate_type, aggregate_id, tenant_id, @created_at, NULL
+		FROM UNNEST(@event_ids::text[], @types::text[], @occurred::timestamptz[], @correlations::text[], @payloads::text[], @agg_types::text[], @agg_ids::text[], @tenants::text[])
+			AS r(event_id, event_type, occurred_at, correlation_id, payload, aggregate_type, aggregate_id, tenant_id)`
+	_, err := q.Exec(ctx, insert, pgx.NamedArgs{
+		"event_ids":    eventIDs,
+		"types":        types,
+		"occurred":     occurred,
+		"correlations": correlations,
+		"payloads":     payloads,
+		"agg_types":    aggTypes,
+		"agg_ids":      aggIDs,
+		"tenants":      tenants,
+		"created_at":   time.Now().UTC(),
+	})
+	return err
 }
 
 // payloadValue returns a non-empty JSON text for storage: the raw payload, or

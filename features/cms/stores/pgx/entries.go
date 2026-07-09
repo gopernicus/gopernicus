@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/gopernicus/gopernicus/features/cms/domain/content"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/sdk/crud"
@@ -27,15 +29,73 @@ func NewEntryStore(db *pgxdb.DB) *EntryStore {
 
 const entryColumns = "id, type, slug, title, status, body, excerpt, author, template, parent_id, menu_order, published_at, created_at, updated_at"
 
+// entryRow is the store-local, db-tagged projection of an entries spine row that
+// pgx.RowToStructByName scans into; toDomain maps it to the persistence-free
+// domain entity (fields + terms hydrate separately).
+type entryRow struct {
+	ID          string     `db:"id"`
+	Type        string     `db:"type"`
+	Slug        string     `db:"slug"`
+	Title       string     `db:"title"`
+	Status      string     `db:"status"`
+	Body        string     `db:"body"`
+	Excerpt     string     `db:"excerpt"`
+	Author      string     `db:"author"`
+	Template    string     `db:"template"`
+	ParentID    string     `db:"parent_id"`
+	MenuOrder   int        `db:"menu_order"`
+	PublishedAt *time.Time `db:"published_at"`
+	CreatedAt   time.Time  `db:"created_at"`
+	UpdatedAt   time.Time  `db:"updated_at"`
+}
+
+func (r entryRow) toDomain() content.Entry {
+	return content.Entry{
+		ID:          r.ID,
+		Type:        r.Type,
+		Slug:        r.Slug,
+		Title:       r.Title,
+		Status:      content.Status(r.Status),
+		Body:        r.Body,
+		Excerpt:     r.Excerpt,
+		Author:      r.Author,
+		Template:    r.Template,
+		ParentID:    r.ParentID,
+		MenuOrder:   r.MenuOrder,
+		PublishedAt: pgxdb.FromNullTimePtr(r.PublishedAt),
+		CreatedAt:   r.CreatedAt.UTC(),
+		UpdatedAt:   r.UpdatedAt.UTC(),
+	}
+}
+
+// fieldRow is the store-local, db-tagged projection of an entry_fields row.
+type fieldRow struct {
+	Key   string `db:"key"`
+	Kind  string `db:"kind"`
+	Value string `db:"value"`
+}
+
 // Create persists a new entry and its custom fields in one transaction.
 func (s *EntryStore) Create(ctx context.Context, e content.Entry) (content.Entry, error) {
 	err := s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
-		const q = `INSERT INTO entries (` + entryColumns + `) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`
-		if _, err := tx.Exec(ctx, q,
-			e.ID, e.Type, e.Slug, e.Title, string(e.Status), e.Body, e.Excerpt, e.Author,
-			e.Template, e.ParentID, e.MenuOrder, pgxdb.NullTimePtr(e.PublishedAt),
-			e.CreatedAt.UTC(), e.UpdatedAt.UTC(),
-		); err != nil {
+		const q = `INSERT INTO entries (` + entryColumns + `)
+			VALUES (@id, @type, @slug, @title, @status, @body, @excerpt, @author, @template, @parent_id, @menu_order, @published_at, @created_at, @updated_at)`
+		if _, err := tx.Exec(ctx, q, pgx.NamedArgs{
+			"id":           e.ID,
+			"type":         e.Type,
+			"slug":         e.Slug,
+			"title":        e.Title,
+			"status":       string(e.Status),
+			"body":         e.Body,
+			"excerpt":      e.Excerpt,
+			"author":       e.Author,
+			"template":     e.Template,
+			"parent_id":    e.ParentID,
+			"menu_order":   e.MenuOrder,
+			"published_at": pgxdb.NullTimePtr(e.PublishedAt),
+			"created_at":   e.CreatedAt.UTC(),
+			"updated_at":   e.UpdatedAt.UTC(),
+		}); err != nil {
 			return err
 		}
 		return writeFields(ctx, tx, e.ID, e.Fields)
@@ -50,19 +110,33 @@ func (s *EntryStore) Create(ctx context.Context, e content.Entry) (content.Entry
 // fields, in one transaction.
 func (s *EntryStore) Update(ctx context.Context, id string, e content.Entry) (content.Entry, error) {
 	err := s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
-		const q = `UPDATE entries SET type=$1, slug=$2, title=$3, status=$4, body=$5, excerpt=$6, author=$7, template=$8, parent_id=$9, menu_order=$10, published_at=$11, updated_at=$12 WHERE id=$13`
-		n, err := pgxdb.ExecAffecting(ctx, tx, q,
-			e.Type, e.Slug, e.Title, string(e.Status), e.Body, e.Excerpt, e.Author,
-			e.Template, e.ParentID, e.MenuOrder, pgxdb.NullTimePtr(e.PublishedAt),
-			e.UpdatedAt.UTC(), id,
-		)
+		const q = `UPDATE entries
+			SET type = @type, slug = @slug, title = @title, status = @status, body = @body,
+				excerpt = @excerpt, author = @author, template = @template, parent_id = @parent_id,
+				menu_order = @menu_order, published_at = @published_at, updated_at = @updated_at
+			WHERE id = @id`
+		n, err := pgxdb.ExecAffecting(ctx, tx, q, pgx.NamedArgs{
+			"type":         e.Type,
+			"slug":         e.Slug,
+			"title":        e.Title,
+			"status":       string(e.Status),
+			"body":         e.Body,
+			"excerpt":      e.Excerpt,
+			"author":       e.Author,
+			"template":     e.Template,
+			"parent_id":    e.ParentID,
+			"menu_order":   e.MenuOrder,
+			"published_at": pgxdb.NullTimePtr(e.PublishedAt),
+			"updated_at":   e.UpdatedAt.UTC(),
+			"id":           id,
+		})
 		if err != nil {
 			return err
 		}
 		if n == 0 {
 			return crud.ErrNotFound
 		}
-		if _, err := tx.Exec(ctx, "DELETE FROM entry_fields WHERE entry_id = $1", id); err != nil {
+		if _, err := tx.Exec(ctx, "DELETE FROM entry_fields WHERE entry_id = @entry_id", pgx.NamedArgs{"entry_id": id}); err != nil {
 			return err
 		}
 		return writeFields(ctx, tx, id, e.Fields)
@@ -75,19 +149,27 @@ func (s *EntryStore) Update(ctx context.Context, id string, e content.Entry) (co
 
 // Get returns the entry with the given id — spine, fields, and term IDs.
 func (s *EntryStore) Get(ctx context.Context, id string) (content.Entry, error) {
-	const q = `SELECT ` + entryColumns + ` FROM entries WHERE id = $1`
-	return s.loadOne(ctx, s.db.QueryRow(ctx, q, id))
+	const q = `SELECT ` + entryColumns + ` FROM entries WHERE id = @id`
+	row, err := queryOne[entryRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
+	if err != nil {
+		return content.Entry{}, err
+	}
+	return s.hydrate(ctx, row.toDomain())
 }
 
 // GetBySlug returns the entry of type typ with the given slug.
 func (s *EntryStore) GetBySlug(ctx context.Context, typ, slug string) (content.Entry, error) {
-	const q = `SELECT ` + entryColumns + ` FROM entries WHERE type = $1 AND slug = $2`
-	return s.loadOne(ctx, s.db.QueryRow(ctx, q, typ, slug))
+	const q = `SELECT ` + entryColumns + ` FROM entries WHERE type = @type AND slug = @slug`
+	row, err := queryOne[entryRow](ctx, s.db, q, pgx.NamedArgs{"type": typ, "slug": slug})
+	if err != nil {
+		return content.Entry{}, err
+	}
+	return s.hydrate(ctx, row.toDomain())
 }
 
 // Delete removes the entry; its fields and terms cascade.
 func (s *EntryStore) Delete(ctx context.Context, id string) error {
-	n, err := pgxdb.ExecAffecting(ctx, s.db, "DELETE FROM entries WHERE id = $1", id)
+	n, err := pgxdb.ExecAffecting(ctx, s.db, "DELETE FROM entries WHERE id = @id", pgx.NamedArgs{"id": id})
 	if err != nil {
 		return pgxdb.MapError(err)
 	}
@@ -97,75 +179,87 @@ func (s *EntryStore) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// List returns a cursor-paginated page of entries matching q, ordered by
-// (created_at, id) descending.
+// List returns a page of entries matching q, in the resolved order (default
+// created_at DESC, id DESC).
 func (s *EntryStore) List(ctx context.Context, q content.EntryQuery) (crud.Page[content.Entry], error) {
-	where := "WHERE type = $1"
-	args := []any{q.Type}
-	return s.listWhere(ctx, where, args, q)
+	where, args := entryFilter(q, "")
+	return s.listPage(ctx, where, args, q.ListRequest)
 }
 
-// ListByTerm returns a cursor-paginated page of entries matching q that are
-// associated with termID.
+// ListByTerm returns a page of entries matching q that are associated with
+// termID, in the resolved order.
 func (s *EntryStore) ListByTerm(ctx context.Context, termID string, q content.EntryQuery) (crud.Page[content.Entry], error) {
-	where := "WHERE type = $1 AND id IN (SELECT entry_id FROM entry_terms WHERE term_id = $2)"
-	args := []any{q.Type, termID}
-	return s.listWhere(ctx, where, args, q)
+	where, args := entryFilter(q, termID)
+	return s.listPage(ctx, where, args, q.ListRequest)
 }
 
-// listWhere runs a keyset-paginated list given a base WHERE clause and its args.
-// It appends the optional status filter and the cursor predicate, then loads
-// fields + terms for each returned spine row. Placeholders are numbered from
-// len(args)+1, so the base WHERE owns $1.. and the appended predicates continue
-// the sequence.
-func (s *EntryStore) listWhere(ctx context.Context, where string, args []any, q content.EntryQuery) (crud.Page[content.Entry], error) {
-	if q.Status != "" {
-		where += " AND status = " + placeholder(len(args)+1)
-		args = append(args, string(q.Status))
+// entryFilter composes the type, optional term, and optional status filters into
+// a parameterized WHERE fragment and its NamedArgs — never string concatenation
+// of values. The list helper's keyset builder appends its predicate with AND;
+// the count wrap reuses the same fragment and args.
+func entryFilter(q content.EntryQuery, termID string) (string, pgx.NamedArgs) {
+	where := " WHERE type = @type"
+	args := pgx.NamedArgs{"type": q.Type}
+	if termID != "" {
+		where += " AND id IN (SELECT entry_id FROM entry_terms WHERE term_id = @term_id)"
+		args["term_id"] = termID
 	}
+	if q.Status != "" {
+		where += " AND status = @status"
+		args["status"] = string(q.Status)
+	}
+	return where, args
+}
 
-	page, err := pgxdb.ListPage(ctx, s.db, entryColumns, "entries", where, args, orderField, "id", q.ListRequest,
-		scanEntry,
-		func(e content.Entry) (time.Time, string) { return e.CreatedAt, e.ID },
-	)
+// listPage runs the paginated spine query via pgxdb.List over the entry row
+// struct, then hydrates fields + terms for the rows on this page only.
+func (s *EntryStore) listPage(ctx context.Context, where string, args pgx.NamedArgs, req crud.ListRequest) (crud.Page[content.Entry], error) {
+	lq := pgxdb.ListQuery[entryRow]{
+		BaseSQL:      `SELECT ` + entryColumns + ` FROM entries` + where,
+		Args:         args,
+		OrderFields:  content.OrderFields,
+		DefaultOrder: content.DefaultOrder,
+		PK:           "id",
+		OrderValueOf: func(r entryRow, _ string) any { return r.CreatedAt },
+		PKOf:         func(r entryRow) string { return r.ID },
+	}
+	page, err := pgxdb.List(ctx, s.db, lq, req)
 	if err != nil {
 		return crud.Page[content.Entry]{}, err
 	}
+	domainPage := crud.MapPage(page, entryRow.toDomain)
 
-	// Hydrate fields + terms for the rows on this page only.
-	for i := range page.Items {
-		if page.Items[i].Fields, err = s.loadFields(ctx, page.Items[i].ID); err != nil {
+	for i := range domainPage.Items {
+		if domainPage.Items[i].Fields, err = s.loadFields(ctx, domainPage.Items[i].ID); err != nil {
 			return crud.Page[content.Entry]{}, err
 		}
-		if page.Items[i].TermIDs, err = s.loadTermIDs(ctx, page.Items[i].ID); err != nil {
+		if domainPage.Items[i].TermIDs, err = s.loadTermIDs(ctx, domainPage.Items[i].ID); err != nil {
 			return crud.Page[content.Entry]{}, err
 		}
 	}
-
-	return page, nil
+	return domainPage, nil
 }
 
-// SetTerms replaces the entry's taxonomy associations in a single transaction.
+// SetTerms replaces the entry's taxonomy associations in a single transaction —
+// a DELETE of the prior rows and one UNNEST insert of the new set.
 func (s *EntryStore) SetTerms(ctx context.Context, entryID string, termIDs []string) error {
 	return s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
-		if _, err := tx.Exec(ctx, "DELETE FROM entry_terms WHERE entry_id = $1", entryID); err != nil {
+		if _, err := tx.Exec(ctx, "DELETE FROM entry_terms WHERE entry_id = @entry_id", pgx.NamedArgs{"entry_id": entryID}); err != nil {
 			return err
 		}
-		for _, tid := range termIDs {
-			if _, err := tx.Exec(ctx, "INSERT INTO entry_terms (entry_id, term_id) VALUES ($1, $2)", entryID, tid); err != nil {
-				return err
-			}
+		if len(termIDs) == 0 {
+			return nil
 		}
-		return nil
+		const q = `INSERT INTO entry_terms (entry_id, term_id)
+			SELECT @entry_id, term_id FROM UNNEST(@term_ids::text[]) AS a(term_id)`
+		_, err := tx.Exec(ctx, q, pgx.NamedArgs{"entry_id": entryID, "term_ids": termIDs})
+		return err
 	})
 }
 
-// loadOne scans a spine row then hydrates its fields and term IDs.
-func (s *EntryStore) loadOne(ctx context.Context, row scanner) (content.Entry, error) {
-	e, err := scanEntry(row)
-	if err != nil {
-		return content.Entry{}, err
-	}
+// hydrate loads an entry's fields and term IDs onto e.
+func (s *EntryStore) hydrate(ctx context.Context, e content.Entry) (content.Entry, error) {
+	var err error
 	if e.Fields, err = s.loadFields(ctx, e.ID); err != nil {
 		return content.Entry{}, err
 	}
@@ -178,70 +272,59 @@ func (s *EntryStore) loadOne(ctx context.Context, row scanner) (content.Entry, e
 // loadFields returns the custom fields for entryID, tagged with their stored
 // kind. Repeater ordinals are deferred, so flat fields are keyed by key.
 func (s *EntryStore) loadFields(ctx context.Context, entryID string) (content.Fields, error) {
-	rows, err := s.db.Query(ctx, "SELECT key, kind, value FROM entry_fields WHERE entry_id = $1 ORDER BY key, ordinal", entryID)
+	const q = `SELECT key, kind, value FROM entry_fields WHERE entry_id = @entry_id ORDER BY key, ordinal`
+	rows, err := s.db.Query(ctx, q, pgx.NamedArgs{"entry_id": entryID})
 	if err != nil {
 		return nil, pgxdb.MapError(err)
 	}
-	defer rows.Close()
-	fields := content.Fields{}
-	for rows.Next() {
-		var key, kind, value string
-		if err := rows.Scan(&key, &kind, &value); err != nil {
-			return nil, pgxdb.MapError(err)
-		}
-		fields[key] = content.Value{Kind: content.FieldKind(kind), Raw: value}
+	frows, err := pgx.CollectRows(rows, pgx.RowToStructByName[fieldRow])
+	if err != nil {
+		return nil, pgxdb.MapError(err)
 	}
-	return fields, pgxdb.MapError(rows.Err())
+	fields := content.Fields{}
+	for _, f := range frows {
+		fields[f.Key] = content.Value{Kind: content.FieldKind(f.Kind), Raw: f.Value}
+	}
+	return fields, nil
 }
 
 // loadTermIDs returns the taxonomy term IDs associated with entryID.
 func (s *EntryStore) loadTermIDs(ctx context.Context, entryID string) ([]string, error) {
-	rows, err := s.db.Query(ctx, "SELECT term_id FROM entry_terms WHERE entry_id = $1 ORDER BY term_id", entryID)
+	const q = `SELECT term_id FROM entry_terms WHERE entry_id = @entry_id ORDER BY term_id`
+	rows, err := s.db.Query(ctx, q, pgx.NamedArgs{"entry_id": entryID})
 	if err != nil {
 		return nil, pgxdb.MapError(err)
 	}
-	defer rows.Close()
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, pgxdb.MapError(err)
-		}
-		ids = append(ids, id)
-	}
-	return ids, pgxdb.MapError(rows.Err())
-}
-
-// writeFields inserts the entry's custom fields. Callers run it inside the same
-// Tx as the spine write (and after deleting prior rows on update).
-func writeFields(ctx context.Context, tx *pgxdb.Tx, entryID string, fields content.Fields) error {
-	for key, v := range fields {
-		if _, err := tx.Exec(ctx,
-			"INSERT INTO entry_fields (entry_id, key, kind, value, ordinal) VALUES ($1, $2, $3, $4, 0)",
-			entryID, key, string(v.Kind), v.Raw,
-		); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// scanEntry scans one spine row into an Entry (fields/terms loaded separately).
-func scanEntry(sc scanner) (content.Entry, error) {
-	var (
-		e                    content.Entry
-		status               string
-		published            *time.Time
-		createdAt, updatedAt time.Time
-	)
-	err := sc.Scan(&e.ID, &e.Type, &e.Slug, &e.Title, &status, &e.Body, &e.Excerpt, &e.Author,
-		&e.Template, &e.ParentID, &e.MenuOrder, &published, &createdAt, &updatedAt)
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
-		return content.Entry{}, pgxdb.MapError(err)
+		return nil, pgxdb.MapError(err)
 	}
-	e.Status = content.Status(status)
-	e.PublishedAt = pgxdb.FromNullTimePtr(published)
-	e.CreatedAt = createdAt.UTC()
-	e.UpdatedAt = updatedAt.UTC()
-	return e, nil
+	return ids, nil
+}
+
+// writeFields inserts the entry's custom fields as one UNNEST statement. Callers
+// run it inside the same Tx as the spine write (and after deleting prior rows on
+// update). Flat fields use ordinal 0 (repeaters deferred).
+func writeFields(ctx context.Context, tx *pgxdb.Tx, entryID string, fields content.Fields) error {
+	if len(fields) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(fields))
+	kinds := make([]string, 0, len(fields))
+	values := make([]string, 0, len(fields))
+	for key, v := range fields {
+		keys = append(keys, key)
+		kinds = append(kinds, string(v.Kind))
+		values = append(values, v.Raw)
+	}
+	const q = `INSERT INTO entry_fields (entry_id, key, kind, value, ordinal)
+		SELECT @entry_id, key, kind, value, 0
+		FROM UNNEST(@keys::text[], @kinds::text[], @values::text[]) AS f(key, kind, value)`
+	_, err := tx.Exec(ctx, q, pgx.NamedArgs{
+		"entry_id": entryID,
+		"keys":     keys,
+		"kinds":    kinds,
+		"values":   values,
+	})
+	return err
 }

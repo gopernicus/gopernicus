@@ -51,9 +51,17 @@ func NewEntryHandlers(svc entryService, taxo taxonomyService, media mediaService
 	return &EntryHandlers{svc: svc, taxo: taxo, media: media, views: views}
 }
 
-// List renders the admin index for ct.
+// List renders the admin index for ct. It parses order (against the content
+// allow-list; a bad value falls back to the default order per Q3 — never a
+// 4xx/5xx), limit (NormalizedLimit clamp semantics), and cursor, and threads the
+// page's bidirectional pagination state through the Pager.
 func (h *EntryHandlers) List(w http.ResponseWriter, r *http.Request, ct content.ContentType) {
-	q := content.EntryQuery{Type: ct.Slug, ListRequest: crud.ListRequest{Cursor: r.URL.Query().Get("cursor")}}
+	order, linkOrder := parseEntryOrder(r)
+	q := content.EntryQuery{Type: ct.Slug, ListRequest: crud.ListRequest{
+		Cursor: r.URL.Query().Get("cursor"),
+		Limit:  atoiOrZero(r.URL.Query().Get("limit")),
+		Order:  order,
+	}}
 	page, err := h.svc.List(r.Context(), q)
 	if err != nil {
 		h.renderError(w, r, err)
@@ -64,7 +72,27 @@ func (h *EntryHandlers) List(w http.ResponseWriter, r *http.Request, ct content.
 		items = append(items, EntryListItem{ID: e.ID, Title: e.Title, Slug: e.Slug, Status: string(e.Status)})
 	}
 	base := "/" + ct.AdminBase()
-	web.Render(r.Context(), w, http.StatusOK, h.views.EntriesList(ct.Plural, base+"/new", base, items, page.NextCursor))
+	pager := Pager{
+		NextCursor:     page.NextCursor,
+		HasPrev:        page.HasPrev,
+		PreviousCursor: page.PreviousCursor,
+		Order:          linkOrder,
+		BaseHref:       base,
+	}
+	web.Render(r.Context(), w, http.StatusOK, h.views.EntriesList(ct.Plural, base+"/new", base, items, pager))
+}
+
+// parseEntryOrder resolves the admin list's ?order param against the content
+// allow-list. Per Q3, an unknown field/direction falls back to the default order
+// (no 4xx/5xx) and is NOT propagated into the pagination links; a valid value is
+// returned verbatim as linkOrder so the "Older →"/"← Newer" links carry it.
+func parseEntryOrder(r *http.Request) (order crud.Order, linkOrder string) {
+	raw := r.URL.Query().Get("order")
+	resolved, err := crud.ParseOrder(content.OrderFields, raw, content.DefaultOrder)
+	if err != nil {
+		return content.DefaultOrder, ""
+	}
+	return resolved, raw
 }
 
 // New renders an empty create form for ct.

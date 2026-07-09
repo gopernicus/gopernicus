@@ -26,7 +26,7 @@ import (
 type Views interface {
 	// Public chrome.
 	Home(nav []menus.MenuItem, items []ListItem) web.Renderer
-	Archive(heading string, nav []menus.MenuItem, items []ListItem, nextCursor, baseHref string) web.Renderer
+	Archive(heading string, nav []menus.MenuItem, items []ListItem, pager Pager) web.Renderer
 	Single(title, metaDesc string, nav []menus.MenuItem, body web.Renderer) web.Renderer
 	Error(status int, message string) web.Renderer
 
@@ -36,7 +36,7 @@ type Views interface {
 	MenuNav(m menus.Menu, items []menus.MenuItem) web.Renderer
 
 	// Admin.
-	EntriesList(heading, newHref, editPrefix string, items []EntryListItem, nextCursor string) web.Renderer
+	EntriesList(heading, newHref, editPrefix string, items []EntryListItem, pager Pager) web.Renderer
 	EntryForm(m EntryFormModel) web.Renderer
 	TermsList(categories, tags []taxonomy.Term) web.Renderer
 	TermForm(m TermFormModel) web.Renderer

@@ -123,7 +123,7 @@ func newOAuthTestHandler(t *testing.T) http.Handler {
 		OAuthCallbackBase: "https://app.example.com",
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, nil)
+	Mount(h, svc, nil, "")
 	return h
 }
 

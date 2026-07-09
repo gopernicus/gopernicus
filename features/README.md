@@ -375,3 +375,19 @@ cite by item number:
     `Hasher`/`Mailer` precedent). A feature never forks into variants —
     optional capability is always a nil-safe port, decided in the host's
     `main`.
+13. Every crud-paginated list port follows the pgx-crud-v1 standards
+    (`sdk/crud`'s package doc is normative): the aggregate declares its
+    order allow-list (`map[string]crud.OrderField`) + default `crud.Order`
+    in its feature-core domain package (indexed spine columns only — EAV
+    fields are never sortable); the storetest suite carries the standard
+    six-case family per paginated port (`Order`, `PrevPage`, `OffsetMode`,
+    `WithCount`, `StaleCursorOrderChange`, `CursorOffsetExclusive`); and
+    any HTTP list endpoint parses the standard query-param vocabulary —
+    `limit`, `cursor`, `offset`, `count`, `order=field:direction` — strict
+    (400) at JSON edges, clamp/fallback at SSR edges. Store adapters build
+    on the connector `List[T]` helpers (`pgxdb.List` / `turso.List`), never
+    hand-rolled pagination. An aggregate whose resource needs non-default
+    page sizes declares a `var ListLimits = crud.Limits{…}` beside its
+    `OrderFields`/`DefaultOrder`, and its stores and handlers pass it to
+    `req.NormalizedLimit` / `crud.ListParams.Limits`; the zero value keeps
+    `crud`'s `DefaultLimit`/`MaxLimit`.

@@ -3,8 +3,9 @@ package pgx
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
@@ -30,17 +31,60 @@ func NewSecurityEventStore(db *pgxdb.DB) *SecurityEventStore {
 
 const securityEventColumns = "id, user_id, actor_type, actor_id, event_type, event_status, details, ip_address, user_agent, created_at"
 
+// securityEventRow is the store-local, db-tagged projection of a security_events
+// row. Details scans directly from JSONB into a map; toDomain normalizes a NULL
+// (nil map) to a non-nil empty map, honoring the uniform read-back contract.
+type securityEventRow struct {
+	ID          string         `db:"id"`
+	UserID      string         `db:"user_id"`
+	ActorType   string         `db:"actor_type"`
+	ActorID     string         `db:"actor_id"`
+	EventType   string         `db:"event_type"`
+	EventStatus string         `db:"event_status"`
+	Details     map[string]any `db:"details"`
+	IPAddress   string         `db:"ip_address"`
+	UserAgent   string         `db:"user_agent"`
+	CreatedAt   time.Time      `db:"created_at"`
+}
+
+func (r securityEventRow) toDomain() securityevent.SecurityEvent {
+	details := r.Details
+	if details == nil {
+		details = map[string]any{}
+	}
+	return securityevent.SecurityEvent{
+		ID:          r.ID,
+		UserID:      r.UserID,
+		Actor:       securityevent.Principal{Type: r.ActorType, ID: r.ActorID},
+		EventType:   r.EventType,
+		EventStatus: r.EventStatus,
+		Details:     details,
+		IPAddress:   r.IPAddress,
+		UserAgent:   r.UserAgent,
+		CreatedAt:   r.CreatedAt.UTC(),
+	}
+}
+
 // Create appends an audit row and returns the stored record.
 func (s *SecurityEventStore) Create(ctx context.Context, evt securityevent.SecurityEvent) (securityevent.SecurityEvent, error) {
 	details, err := marshalDetails(evt.Details)
 	if err != nil {
 		return securityevent.SecurityEvent{}, err
 	}
-	const q = `INSERT INTO security_events (` + securityEventColumns + `) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
-	if _, err := s.db.Exec(ctx, q,
-		evt.ID, evt.UserID, evt.Actor.Type, evt.Actor.ID, evt.EventType, evt.EventStatus,
-		details, evt.IPAddress, evt.UserAgent, evt.CreatedAt.UTC(),
-	); err != nil {
+	const q = `INSERT INTO security_events (` + securityEventColumns + `)
+		VALUES (@id, @user_id, @actor_type, @actor_id, @event_type, @event_status, @details, @ip_address, @user_agent, @created_at)`
+	if _, err := s.db.Exec(ctx, q, pgx.NamedArgs{
+		"id":           evt.ID,
+		"user_id":      evt.UserID,
+		"actor_type":   evt.Actor.Type,
+		"actor_id":     evt.Actor.ID,
+		"event_type":   evt.EventType,
+		"event_status": evt.EventStatus,
+		"details":      details,
+		"ip_address":   evt.IPAddress,
+		"user_agent":   evt.UserAgent,
+		"created_at":   evt.CreatedAt.UTC(),
+	}); err != nil {
 		return securityevent.SecurityEvent{}, err
 	}
 	// Return the stored shape: Details normalized to a non-nil map, matching the
@@ -54,56 +98,52 @@ func (s *SecurityEventStore) Create(ctx context.Context, evt securityevent.Secur
 }
 
 // List returns a cursor-paginated page of events matching filter, ordered
-// created_at DESC, id DESC. The dynamic WHERE is parameterized.
+// created_at DESC, id DESC. The dynamic WHERE is parameterized into NamedArgs.
 func (s *SecurityEventStore) List(ctx context.Context, filter securityevent.ListFilter, req crud.ListRequest) (crud.Page[securityevent.SecurityEvent], error) {
-	where := "WHERE 1 = 1"
-	var args []any
-	if filter.UserID != "" {
-		args = append(args, filter.UserID)
-		where += fmt.Sprintf(" AND user_id = $%d", len(args))
+	where, args := securityEventFilter(filter)
+	q := pgxdb.ListQuery[securityEventRow]{
+		BaseSQL:      `SELECT ` + securityEventColumns + ` FROM security_events` + where,
+		Args:         args,
+		OrderFields:  securityevent.OrderFields,
+		DefaultOrder: securityevent.DefaultOrder,
+		PK:           "id",
+		OrderValueOf: func(r securityEventRow, _ string) any { return r.CreatedAt },
+		PKOf:         func(r securityEventRow) string { return r.ID },
 	}
-	if filter.EventType != "" {
-		args = append(args, filter.EventType)
-		where += fmt.Sprintf(" AND event_type = $%d", len(args))
+	page, err := pgxdb.List(ctx, s.db, q, req)
+	if err != nil {
+		return crud.Page[securityevent.SecurityEvent]{}, err
 	}
-	if filter.EventStatus != "" {
-		args = append(args, filter.EventStatus)
-		where += fmt.Sprintf(" AND event_status = $%d", len(args))
-	}
-	if !filter.Since.IsZero() {
-		args = append(args, filter.Since.UTC())
-		where += fmt.Sprintf(" AND created_at >= $%d", len(args))
-	}
-	if !filter.Until.IsZero() {
-		args = append(args, filter.Until.UTC())
-		where += fmt.Sprintf(" AND created_at < $%d", len(args))
-	}
-	return pgxdb.ListPage(ctx, s.db, securityEventColumns, "security_events", where, args, orderField, "id", req,
-		scanSecurityEvent,
-		func(evt securityevent.SecurityEvent) (time.Time, string) { return evt.CreatedAt, evt.ID },
-	)
+	return crud.MapPage(page, securityEventRow.toDomain), nil
 }
 
-// scanSecurityEvent scans one security_events row, mapping pgx.ErrNoRows to
-// errs.ErrNotFound via the connector's MapError.
-func scanSecurityEvent(sc scanner) (securityevent.SecurityEvent, error) {
-	var (
-		evt       securityevent.SecurityEvent
-		details   []byte
-		createdAt time.Time
-	)
-	if err := sc.Scan(
-		&evt.ID, &evt.UserID, &evt.Actor.Type, &evt.Actor.ID, &evt.EventType, &evt.EventStatus,
-		&details, &evt.IPAddress, &evt.UserAgent, &createdAt,
-	); err != nil {
-		return securityevent.SecurityEvent{}, pgxdb.MapError(err)
+// securityEventFilter composes the set filter dimensions into a parameterized
+// WHERE fragment and its NamedArgs — never string concatenation of values. The
+// leading "WHERE 1 = 1" lets the keyset builder append its predicate with AND.
+func securityEventFilter(filter securityevent.ListFilter) (string, pgx.NamedArgs) {
+	where := " WHERE 1 = 1"
+	args := pgx.NamedArgs{}
+	if filter.UserID != "" {
+		where += " AND user_id = @user_id"
+		args["user_id"] = filter.UserID
 	}
-	var err error
-	if evt.Details, err = unmarshalDetails(details); err != nil {
-		return securityevent.SecurityEvent{}, err
+	if filter.EventType != "" {
+		where += " AND event_type = @event_type"
+		args["event_type"] = filter.EventType
 	}
-	evt.CreatedAt = createdAt.UTC()
-	return evt, nil
+	if filter.EventStatus != "" {
+		where += " AND event_status = @event_status"
+		args["event_status"] = filter.EventStatus
+	}
+	if !filter.Since.IsZero() {
+		where += " AND created_at >= @since"
+		args["since"] = filter.Since.UTC()
+	}
+	if !filter.Until.IsZero() {
+		where += " AND created_at < @until"
+		args["until"] = filter.Until.UTC()
+	}
+	return where, args
 }
 
 // marshalDetails renders an open details bag as JSON text for the JSONB column. A

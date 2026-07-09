@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/sdk/errs"
@@ -28,10 +30,33 @@ func NewSessionStore(db *pgxdb.DB) *SessionStore {
 
 const sessionColumns = "token, user_id, created_at, expires_at"
 
+// sessionRow is the store-local, db-tagged projection of a sessions row.
+type sessionRow struct {
+	Token     string    `db:"token"`
+	UserID    string    `db:"user_id"`
+	CreatedAt time.Time `db:"created_at"`
+	ExpiresAt time.Time `db:"expires_at"`
+}
+
+func (r sessionRow) toDomain() session.Session {
+	return session.Session{
+		Token:     r.Token,
+		UserID:    r.UserID,
+		CreatedAt: r.CreatedAt.UTC(),
+		ExpiresAt: r.ExpiresAt.UTC(),
+	}
+}
+
 // Create persists a new session.
 func (s *SessionStore) Create(ctx context.Context, sess session.Session) (session.Session, error) {
-	const q = `INSERT INTO sessions (` + sessionColumns + `) VALUES ($1, $2, $3, $4)`
-	_, err := s.db.Exec(ctx, q, sess.Token, sess.UserID, sess.CreatedAt.UTC(), sess.ExpiresAt.UTC())
+	const q = `INSERT INTO sessions (` + sessionColumns + `)
+		VALUES (@token, @user_id, @created_at, @expires_at)`
+	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
+		"token":      sess.Token,
+		"user_id":    sess.UserID,
+		"created_at": sess.CreatedAt.UTC(),
+		"expires_at": sess.ExpiresAt.UTC(),
+	})
 	if err != nil {
 		return session.Session{}, err
 	}
@@ -41,11 +66,12 @@ func (s *SessionStore) Create(ctx context.Context, sess session.Session) (sessio
 // Get returns the live session for token: unknown → errs.ErrNotFound,
 // present-but-expired → errs.ErrExpired (checked against the read clock).
 func (s *SessionStore) Get(ctx context.Context, token string) (session.Session, error) {
-	const q = `SELECT ` + sessionColumns + ` FROM sessions WHERE token = $1`
-	sess, err := scanSession(s.db.QueryRow(ctx, q, token))
+	const q = `SELECT ` + sessionColumns + ` FROM sessions WHERE token = @token`
+	row, err := queryOne[sessionRow](ctx, s.db, q, pgx.NamedArgs{"token": token})
 	if err != nil {
 		return session.Session{}, err
 	}
+	sess := row.toDomain()
 	if sess.Expired(time.Now()) {
 		return session.Session{}, errs.ErrExpired
 	}
@@ -54,7 +80,7 @@ func (s *SessionStore) Get(ctx context.Context, token string) (session.Session, 
 
 // Delete removes the session for token; unknown → errs.ErrNotFound.
 func (s *SessionStore) Delete(ctx context.Context, token string) error {
-	n, err := pgxdb.ExecAffecting(ctx, s.db, "DELETE FROM sessions WHERE token = $1", token)
+	n, err := pgxdb.ExecAffecting(ctx, s.db, "DELETE FROM sessions WHERE token = @token", pgx.NamedArgs{"token": token})
 	if err != nil {
 		return err
 	}
@@ -68,20 +94,6 @@ func (s *SessionStore) Delete(ctx context.Context, token string) error {
 // matching rows returns nil (never errs.ErrNotFound), so it doubles as the
 // logout-everywhere primitive a password change uses.
 func (s *SessionStore) DeleteByUser(ctx context.Context, userID string) error {
-	_, err := s.db.Exec(ctx, "DELETE FROM sessions WHERE user_id = $1", userID)
+	_, err := s.db.Exec(ctx, "DELETE FROM sessions WHERE user_id = @user_id", pgx.NamedArgs{"user_id": userID})
 	return err
-}
-
-// scanSession scans one sessions row, mapping pgx.ErrNoRows to errs.ErrNotFound.
-func scanSession(sc scanner) (session.Session, error) {
-	var (
-		sess                 session.Session
-		createdAt, expiresAt time.Time
-	)
-	if err := sc.Scan(&sess.Token, &sess.UserID, &createdAt, &expiresAt); err != nil {
-		return session.Session{}, pgxdb.MapError(err)
-	}
-	sess.CreatedAt = createdAt.UTC()
-	sess.ExpiresAt = expiresAt.UTC()
-	return sess, nil
 }

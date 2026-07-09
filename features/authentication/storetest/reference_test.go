@@ -2,6 +2,7 @@ package storetest
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -383,7 +384,7 @@ func (r refServiceAccounts) List(_ context.Context, req crud.ListRequest) (crud.
 		all = append(all, sa)
 	}
 	r.mu.RUnlock()
-	return pageDESC(all, req, func(sa serviceaccount.ServiceAccount) (time.Time, string) {
+	return pageMem(all, req, func(sa serviceaccount.ServiceAccount) (time.Time, string) {
 		return sa.CreatedAt, sa.ID
 	})
 }
@@ -447,7 +448,7 @@ func (r refAPIKeys) ListByServiceAccount(_ context.Context, serviceAccountID str
 		}
 	}
 	r.mu.RUnlock()
-	return pageDESC(all, req, func(k apikey.APIKey) (time.Time, string) {
+	return pageMem(all, req, func(k apikey.APIKey) (time.Time, string) {
 		return k.CreatedAt, k.ID
 	})
 }
@@ -508,7 +509,7 @@ func (r refSecurityEvents) List(_ context.Context, filter securityevent.ListFilt
 		}
 	}
 	r.mu.RUnlock()
-	return pageDESC(matched, req, func(evt securityevent.SecurityEvent) (time.Time, string) {
+	return pageMem(matched, req, func(evt securityevent.SecurityEvent) (time.Time, string) {
 		return evt.CreatedAt, evt.ID
 	})
 }
@@ -574,7 +575,7 @@ func (r refInvitations) ListByResource(_ context.Context, resourceType, resource
 		}
 	}
 	r.mu.RUnlock()
-	return pageDESC(all, req, func(inv invitation.Invitation) (time.Time, string) {
+	return pageMem(all, req, func(inv invitation.Invitation) (time.Time, string) {
 		return inv.CreatedAt, inv.ID
 	})
 }
@@ -588,7 +589,7 @@ func (r refInvitations) ListBySubject(_ context.Context, identifier string, req 
 		}
 	}
 	r.mu.RUnlock()
-	return pageDESC(all, req, func(inv invitation.Invitation) (time.Time, string) {
+	return pageMem(all, req, func(inv invitation.Invitation) (time.Time, string) {
 		return inv.CreatedAt, inv.ID
 	})
 }
@@ -610,47 +611,139 @@ func (r refInvitations) UpdateStatus(_ context.Context, id string, upd invitatio
 	return inv, nil
 }
 
-// pageDESC sorts records by (created_at DESC, id DESC), applies the keyset
-// cursor, and trims to a page — the reference keyset semantics the SQL stores
-// must reproduce. keyOf returns each record's (created_at, id).
-func pageDESC[T any](all []T, req crud.ListRequest, keyOf func(T) (time.Time, string)) (crud.Page[T], error) {
+// pageMem sorts the full population by (created_at, id) in the resolved
+// direction, then applies the sdk/crud list matrix — cursor or offset mode, the
+// reverse-probe prev page, and the optional count — the reference semantics the
+// SQL stores and the host memstores must reproduce. keyOf returns each record's
+// (created_at, id); created_at is the only sortable field.
+func pageMem[T any](all []T, req crud.ListRequest, keyOf func(T) (time.Time, string)) (crud.Page[T], error) {
+	if err := req.Validate(); err != nil {
+		return crud.Page[T]{}, err
+	}
+	if req.Order.Field != "" && req.Order.Field != "created_at" {
+		return crud.Page[T]{}, fmt.Errorf("unknown order field %q: %w", req.Order.Field, errs.ErrInvalidInput)
+	}
+	asc := req.Order.Direction == crud.ASC
+
 	sort.Slice(all, func(i, j int) bool {
 		ti, idi := keyOf(all[i])
 		tj, idj := keyOf(all[j])
 		if !ti.Equal(tj) {
+			if asc {
+				return ti.Before(tj)
+			}
 			return ti.After(tj)
+		}
+		if asc {
+			return idi < idj
 		}
 		return idi > idj
 	})
+
+	total := int64(len(all))
+	limit := req.NormalizedLimit(crud.Limits{})
+	encode := func(item T) (string, error) {
+		t, itemID := keyOf(item)
+		return crud.EncodeCursor("created_at", t, itemID)
+	}
+
+	if req.ResolvedStrategy() == crud.StrategyOffset {
+		window := all
+		if req.Offset < len(window) {
+			window = window[req.Offset:]
+		} else {
+			window = window[:0]
+		}
+		if len(window) > limit+1 {
+			window = window[:limit+1]
+		}
+		page, err := crud.TrimPage(window, limit, encode)
+		if err != nil {
+			return crud.Page[T]{}, err
+		}
+		page.NextCursor = ""
+		page.HasPrev = req.Offset > 0
+		if req.WithCount {
+			page.Total = &total
+		}
+		return page, nil
+	}
 
 	cur, err := crud.DecodeCursor(req.Cursor, "created_at")
 	if err != nil {
 		return crud.Page[T]{}, err
 	}
 
-	windowed := all
+	forward := all
 	if cur != nil {
 		curTime, _ := cur.OrderValue.(time.Time)
-		windowed = windowed[:0:0]
+		forward = forward[:0:0]
 		for _, item := range all {
 			t, itemID := keyOf(item)
-			if afterCursorDESC(t, itemID, curTime, cur.PK) {
-				windowed = append(windowed, item)
+			if afterCursorMem(t, itemID, curTime, cur.PK, asc) {
+				forward = append(forward, item)
 			}
 		}
 	}
+	window := forward
+	if len(window) > limit+1 {
+		window = window[:limit+1]
+	}
+	page, err := crud.TrimPage(window, limit, encode)
+	if err != nil {
+		return crud.Page[T]{}, err
+	}
 
-	return crud.TrimPage(windowed, req.NormalizedLimit(), func(item T) (string, error) {
-		t, itemID := keyOf(item)
-		return crud.EncodeCursor("created_at", t, itemID)
-	})
+	if cur != nil {
+		curTime, _ := cur.OrderValue.(time.Time)
+		var before []T
+		for _, item := range all {
+			t, itemID := keyOf(item)
+			if beforeCursorMem(t, itemID, curTime, cur.PK, asc) {
+				before = append(before, item)
+			}
+		}
+		// The previous page is the `limit` rows immediately before the cursor.
+		if len(before) > limit {
+			before = before[len(before)-limit:]
+		}
+		if err := crud.MarkPrevPage(&page, before, limit, encode); err != nil {
+			return crud.Page[T]{}, err
+		}
+	}
+
+	if req.WithCount {
+		page.Total = &total
+	}
+	return page, nil
 }
 
-// afterCursorDESC reports whether (itemTime, itemID) sorts strictly after
-// (curTime, curID) under created_at DESC, id DESC — the next-page predicate.
-func afterCursorDESC(itemTime time.Time, itemID string, curTime time.Time, curID string) bool {
+// afterCursorMem reports whether (itemTime, itemID) sorts strictly after the
+// cursor under the resolved direction — the next-page predicate.
+func afterCursorMem(itemTime time.Time, itemID string, curTime time.Time, curID string, asc bool) bool {
 	if !itemTime.Equal(curTime) {
+		if asc {
+			return itemTime.After(curTime)
+		}
 		return itemTime.Before(curTime)
 	}
+	if asc {
+		return itemID > curID
+	}
 	return itemID < curID
+}
+
+// beforeCursorMem reports whether (itemTime, itemID) sorts strictly before the
+// cursor under the resolved direction — the reverse-probe predicate.
+func beforeCursorMem(itemTime time.Time, itemID string, curTime time.Time, curID string, asc bool) bool {
+	if !itemTime.Equal(curTime) {
+		if asc {
+			return itemTime.Before(curTime)
+		}
+		return itemTime.After(curTime)
+	}
+	if asc {
+		return itemID < curID
+	}
+	return itemID > curID
 }

@@ -69,7 +69,7 @@ func TestTheme_ErrorPage(t *testing.T) {
 // path: EntriesList is not overridden, so it falls through the embedded
 // cmstempl.Views and renders the bundled admin default — not ACME chrome.
 func TestTheme_NonOverriddenMethodUsesBundledDefault(t *testing.T) {
-	out := renderToString(t, New().EntriesList("Articles", "/articles/new", "/articles", []cms.EntryListItem{{ID: "x1", Title: "First", Status: "published"}}, ""))
+	out := renderToString(t, New().EntriesList("Articles", "/articles/new", "/articles", []cms.EntryListItem{{ID: "x1", Title: "First", Status: "published"}}, cms.Pager{}))
 	for _, want := range []string{"<h1>Articles</h1>", "First", "/articles/x1/edit"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("bundled EntriesList missing %q\n---\n%s", want, out)

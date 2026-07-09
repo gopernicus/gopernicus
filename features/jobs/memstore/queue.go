@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -238,46 +239,148 @@ func (q *Queue) List(_ context.Context, f job.ListFilter, req crud.ListRequest) 
 		}
 		all = append(all, j)
 	}
-	return page(all, req, func(j job.Job) (time.Time, string) { return j.CreatedAt, j.JobID })
+	return page(all, req, job.OrderFields, func(j job.Job) (time.Time, string) { return j.CreatedAt, j.JobID })
 }
 
-// page sorts items by (created_at, id) DESC, applies the keyset cursor, and
-// trims via the shared codec — the keyset shape a dialect store implements in
-// SQL, hand-rolled here so the reference paginates identically.
-func page[T any](items []T, req crud.ListRequest, key func(T) (time.Time, string)) (crud.Page[T], error) {
+// page sorts items by (created_at, id) in the resolved direction, then applies
+// the sdk/crud list matrix — cursor or offset mode, the reverse-probe prev page,
+// and the optional count — the same keyset shape the dialect stores implement in
+// SQL, hand-rolled here so the reference paginates identically. orderFields is the
+// domain's allow-list (created_at only); an order field outside it is rejected
+// with errs.ErrInvalidInput. The cursor is keyed on the constant orderField, so a
+// token minted for a different sort decodes to the first page.
+func page[T any](items []T, req crud.ListRequest, orderFields map[string]crud.OrderField, key func(T) (time.Time, string)) (crud.Page[T], error) {
+	if err := req.Validate(); err != nil {
+		return crud.Page[T]{}, err
+	}
+	if req.Order.Field != "" {
+		if _, ok := orderFields[req.Order.Field]; !ok {
+			return crud.Page[T]{}, fmt.Errorf("unknown order field %q: %w", req.Order.Field, errs.ErrInvalidInput)
+		}
+	}
+	asc := req.Order.Direction == crud.ASC
+
 	sort.Slice(items, func(i, j int) bool {
 		ti, ii := key(items[i])
 		tj, ij := key(items[j])
-		if ti.Equal(tj) {
-			return ii > ij
+		if !ti.Equal(tj) {
+			if asc {
+				return ti.Before(tj)
+			}
+			return ti.After(tj)
 		}
-		return ti.After(tj)
+		if asc {
+			return ii < ij
+		}
+		return ii > ij
 	})
+
+	total := int64(len(items))
+	limit := req.NormalizedLimit(crud.Limits{})
+	encode := func(it T) (string, error) {
+		t, id := key(it)
+		return crud.EncodeCursor(orderField, t, id)
+	}
+
+	if req.ResolvedStrategy() == crud.StrategyOffset {
+		window := items
+		if req.Offset < len(window) {
+			window = window[req.Offset:]
+		} else {
+			window = window[:0]
+		}
+		if len(window) > limit+1 {
+			window = window[:limit+1]
+		}
+		pg, err := crud.TrimPage(window, limit, encode)
+		if err != nil {
+			return crud.Page[T]{}, err
+		}
+		pg.NextCursor = ""
+		pg.HasPrev = req.Offset > 0
+		if req.WithCount {
+			pg.Total = &total
+		}
+		return pg, nil
+	}
 
 	cur, err := crud.DecodeCursor(req.Cursor, orderField)
 	if err != nil {
 		return crud.Page[T]{}, err
 	}
+
+	forward := items
 	if cur != nil {
 		cv, _ := cur.OrderValue.(time.Time)
-		var after []T
+		forward = nil
 		for _, it := range items {
-			t, id := key(it)
-			if t.Before(cv) || (t.Equal(cv) && id < cur.PK) {
-				after = append(after, it)
+			if afterCursor(it, cv, cur.PK, asc, key) {
+				forward = append(forward, it)
 			}
 		}
-		items = after
+	}
+	window := forward
+	if len(window) > limit+1 {
+		window = window[:limit+1]
+	}
+	pg, err := crud.TrimPage(window, limit, encode)
+	if err != nil {
+		return crud.Page[T]{}, err
 	}
 
-	limit := req.NormalizedLimit()
-	if len(items) > limit+1 {
-		items = items[:limit+1]
+	if cur != nil {
+		cv, _ := cur.OrderValue.(time.Time)
+		var before []T
+		for _, it := range items {
+			if beforeCursor(it, cv, cur.PK, asc, key) {
+				before = append(before, it)
+			}
+		}
+		// The previous page is the `limit` rows immediately before the cursor.
+		if len(before) > limit {
+			before = before[len(before)-limit:]
+		}
+		if err := crud.MarkPrevPage(&pg, before, limit, encode); err != nil {
+			return crud.Page[T]{}, err
+		}
 	}
-	return crud.TrimPage(items, limit, func(it T) (string, error) {
-		t, id := key(it)
-		return crud.EncodeCursor(orderField, t, id)
-	})
+
+	if req.WithCount {
+		pg.Total = &total
+	}
+	return pg, nil
+}
+
+// afterCursor reports whether it sorts strictly after the cursor under the
+// resolved direction — the next-page predicate.
+func afterCursor[T any](it T, cv time.Time, cpk string, asc bool, key func(T) (time.Time, string)) bool {
+	t, id := key(it)
+	if !t.Equal(cv) {
+		if asc {
+			return t.After(cv)
+		}
+		return t.Before(cv)
+	}
+	if asc {
+		return id > cpk
+	}
+	return id < cpk
+}
+
+// beforeCursor reports whether it sorts strictly before the cursor under the
+// resolved direction — the reverse-probe predicate.
+func beforeCursor[T any](it T, cv time.Time, cpk string, asc bool, key func(T) (time.Time, string)) bool {
+	t, id := key(it)
+	if !t.Equal(cv) {
+		if asc {
+			return t.Before(cv)
+		}
+		return t.After(cv)
+	}
+	if asc {
+		return id < cpk
+	}
+	return id > cpk
 }
 
 // newID returns a random, collision-free identifier with the given prefix.

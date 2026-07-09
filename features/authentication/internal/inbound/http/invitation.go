@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/gopernicus/gopernicus/features/authentication/domain/invitation"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/invitationsvc"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/invitation"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/web"
@@ -131,7 +131,7 @@ func (h *handlers) createInvitation(w http.ResponseWriter, r *http.Request) {
 
 // listResourceInvitations pages a resource's invitations (session-gated).
 func (h *handlers) listResourceInvitations(w http.ResponseWriter, r *http.Request) {
-	req, ok := parseListRequest(w, r)
+	req, ok := h.parseListRequest(w, r, invitation.OrderFields, invitation.DefaultOrder)
 	if !ok {
 		return
 	}
@@ -147,7 +147,7 @@ func (h *handlers) listResourceInvitations(w http.ResponseWriter, r *http.Reques
 // (session-gated). The email is resolved from the caller's user record so
 // invitationsvc stays decoupled from the user store.
 func (h *handlers) listMyInvitations(w http.ResponseWriter, r *http.Request) {
-	req, ok := parseListRequest(w, r)
+	req, ok := h.parseListRequest(w, r, invitation.OrderFields, invitation.DefaultOrder)
 	if !ok {
 		return
 	}

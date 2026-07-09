@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/gopernicus/gopernicus/features/authentication/domain/invitation"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/sdk/crud"
@@ -30,16 +32,66 @@ func NewInvitationStore(db *pgxdb.DB) *InvitationStore {
 
 const invitationColumns = "id, resource_type, resource_id, relation, identifier, resolved_subject_id, invited_by, token_hash, auto_accept, status, expires_at, accepted_at, created_at, updated_at"
 
+// invitationRow is the store-local, db-tagged projection of an invitations row.
+// accepted_at is nullable (a pointer, zero-time when NULL); toDomain maps it.
+type invitationRow struct {
+	ID                string     `db:"id"`
+	ResourceType      string     `db:"resource_type"`
+	ResourceID        string     `db:"resource_id"`
+	Relation          string     `db:"relation"`
+	Identifier        string     `db:"identifier"`
+	ResolvedSubjectID string     `db:"resolved_subject_id"`
+	InvitedBy         string     `db:"invited_by"`
+	TokenHash         string     `db:"token_hash"`
+	AutoAccept        bool       `db:"auto_accept"`
+	Status            string     `db:"status"`
+	ExpiresAt         time.Time  `db:"expires_at"`
+	AcceptedAt        *time.Time `db:"accepted_at"`
+	CreatedAt         time.Time  `db:"created_at"`
+	UpdatedAt         time.Time  `db:"updated_at"`
+}
+
+func (r invitationRow) toDomain() invitation.Invitation {
+	return invitation.Invitation{
+		ID:                r.ID,
+		ResourceType:      r.ResourceType,
+		ResourceID:        r.ResourceID,
+		Relation:          r.Relation,
+		Identifier:        r.Identifier,
+		ResolvedSubjectID: r.ResolvedSubjectID,
+		InvitedBy:         r.InvitedBy,
+		TokenHash:         r.TokenHash,
+		AutoAccept:        r.AutoAccept,
+		Status:            r.Status,
+		ExpiresAt:         r.ExpiresAt.UTC(),
+		AcceptedAt:        pgxdb.FromNullTime(r.AcceptedAt),
+		CreatedAt:         r.CreatedAt.UTC(),
+		UpdatedAt:         r.UpdatedAt.UTC(),
+	}
+}
+
 // Create persists a new pending invitation; a pending-tuple collision →
 // errs.ErrAlreadyExists (the partial unique index).
 func (s *InvitationStore) Create(ctx context.Context, inv invitation.Invitation) (invitation.Invitation, error) {
-	const q = `INSERT INTO invitations (` + invitationColumns + `) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`
-	_, err := s.db.Exec(ctx, q,
-		inv.ID, inv.ResourceType, inv.ResourceID, inv.Relation, inv.Identifier,
-		inv.ResolvedSubjectID, inv.InvitedBy, inv.TokenHash, inv.AutoAccept,
-		inv.Status, inv.ExpiresAt.UTC(), pgxdb.NullTime(inv.AcceptedAt),
-		inv.CreatedAt.UTC(), inv.UpdatedAt.UTC(),
-	)
+	const q = `INSERT INTO invitations (` + invitationColumns + `)
+		VALUES (@id, @resource_type, @resource_id, @relation, @identifier, @resolved_subject_id,
+			@invited_by, @token_hash, @auto_accept, @status, @expires_at, @accepted_at, @created_at, @updated_at)`
+	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
+		"id":                  inv.ID,
+		"resource_type":       inv.ResourceType,
+		"resource_id":         inv.ResourceID,
+		"relation":            inv.Relation,
+		"identifier":          inv.Identifier,
+		"resolved_subject_id": inv.ResolvedSubjectID,
+		"invited_by":          inv.InvitedBy,
+		"token_hash":          inv.TokenHash,
+		"auto_accept":         inv.AutoAccept,
+		"status":              inv.Status,
+		"expires_at":          inv.ExpiresAt.UTC(),
+		"accepted_at":         pgxdb.NullTime(inv.AcceptedAt),
+		"created_at":          inv.CreatedAt.UTC(),
+		"updated_at":          inv.UpdatedAt.UTC(),
+	})
 	if err != nil {
 		return invitation.Invitation{}, err
 	}
@@ -48,18 +100,23 @@ func (s *InvitationStore) Create(ctx context.Context, inv invitation.Invitation)
 
 // Get returns the invitation for id, or errs.ErrNotFound.
 func (s *InvitationStore) Get(ctx context.Context, id string) (invitation.Invitation, error) {
-	const q = `SELECT ` + invitationColumns + ` FROM invitations WHERE id = $1`
-	return scanInvitation(s.db.QueryRow(ctx, q, id))
+	const q = `SELECT ` + invitationColumns + ` FROM invitations WHERE id = @id`
+	row, err := queryOne[invitationRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
+	if err != nil {
+		return invitation.Invitation{}, err
+	}
+	return row.toDomain(), nil
 }
 
 // GetByTokenHash returns the invitation for tokenHash; unknown → errs.ErrNotFound,
 // present-but-past-ExpiresAt → errs.ErrExpired, else the record.
 func (s *InvitationStore) GetByTokenHash(ctx context.Context, tokenHash string) (invitation.Invitation, error) {
-	const q = `SELECT ` + invitationColumns + ` FROM invitations WHERE token_hash = $1`
-	inv, err := scanInvitation(s.db.QueryRow(ctx, q, tokenHash))
+	const q = `SELECT ` + invitationColumns + ` FROM invitations WHERE token_hash = @token_hash`
+	row, err := queryOne[invitationRow](ctx, s.db, q, pgx.NamedArgs{"token_hash": tokenHash})
 	if err != nil {
 		return invitation.Invitation{}, err
 	}
+	inv := row.toDomain()
 	if inv.Expired(time.Now()) {
 		return invitation.Invitation{}, errs.ErrExpired
 	}
@@ -69,52 +126,61 @@ func (s *InvitationStore) GetByTokenHash(ctx context.Context, tokenHash string) 
 // ListByResource returns a cursor-paginated page of a resource's invitations,
 // ordered created_at DESC, id DESC.
 func (s *InvitationStore) ListByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
-	return pgxdb.ListPage(ctx, s.db, invitationColumns, "invitations", "WHERE resource_type = $1 AND resource_id = $2", []any{resourceType, resourceID}, orderField, "id", req,
-		scanInvitation,
-		func(inv invitation.Invitation) (time.Time, string) { return inv.CreatedAt, inv.ID },
-	)
+	q := pgxdb.ListQuery[invitationRow]{
+		BaseSQL:      `SELECT ` + invitationColumns + ` FROM invitations WHERE resource_type = @resource_type AND resource_id = @resource_id`,
+		Args:         pgx.NamedArgs{"resource_type": resourceType, "resource_id": resourceID},
+		OrderFields:  invitation.OrderFields,
+		DefaultOrder: invitation.DefaultOrder,
+		PK:           "id",
+		OrderValueOf: func(r invitationRow, _ string) any { return r.CreatedAt },
+		PKOf:         func(r invitationRow) string { return r.ID },
+	}
+	page, err := pgxdb.List(ctx, s.db, q, req)
+	if err != nil {
+		return crud.Page[invitation.Invitation]{}, err
+	}
+	return crud.MapPage(page, invitationRow.toDomain), nil
 }
 
 // ListBySubject returns a cursor-paginated page of invitations addressed to
 // identifier (the invitee email), ordered created_at DESC, id DESC.
 func (s *InvitationStore) ListBySubject(ctx context.Context, identifier string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
-	return pgxdb.ListPage(ctx, s.db, invitationColumns, "invitations", "WHERE identifier = $1", []any{identifier}, orderField, "id", req,
-		scanInvitation,
-		func(inv invitation.Invitation) (time.Time, string) { return inv.CreatedAt, inv.ID },
-	)
+	q := pgxdb.ListQuery[invitationRow]{
+		BaseSQL:      `SELECT ` + invitationColumns + ` FROM invitations WHERE identifier = @identifier`,
+		Args:         pgx.NamedArgs{"identifier": identifier},
+		OrderFields:  invitation.OrderFields,
+		DefaultOrder: invitation.DefaultOrder,
+		PK:           "id",
+		OrderValueOf: func(r invitationRow, _ string) any { return r.CreatedAt },
+		PKOf:         func(r invitationRow) string { return r.ID },
+	}
+	page, err := pgxdb.List(ctx, s.db, q, req)
+	if err != nil {
+		return crud.Page[invitation.Invitation]{}, err
+	}
+	return crud.MapPage(page, invitationRow.toDomain), nil
 }
 
 // UpdateStatus applies a lifecycle transition and returns the full row via
-// UPDATE … RETURNING; unknown id → errs.ErrNotFound.
+// UPDATE … RETURNING, scanned through the db-tagged row struct; unknown id →
+// errs.ErrNotFound.
 func (s *InvitationStore) UpdateStatus(ctx context.Context, id string, upd invitation.StatusUpdate) (invitation.Invitation, error) {
 	const q = `UPDATE invitations
-		SET status = $1, token_hash = $2, expires_at = $3, accepted_at = $4, resolved_subject_id = $5, updated_at = $6
-		WHERE id = $7
+		SET status = @status, token_hash = @token_hash, expires_at = @expires_at,
+			accepted_at = @accepted_at, resolved_subject_id = @resolved_subject_id, updated_at = @updated_at
+		WHERE id = @id
 		RETURNING ` + invitationColumns
-	return scanInvitation(s.db.QueryRow(ctx, q,
-		upd.Status, upd.TokenHash, upd.ExpiresAt.UTC(), pgxdb.NullTime(upd.AcceptedAt),
-		upd.ResolvedSubjectID, upd.UpdatedAt.UTC(), id,
-	))
-}
-
-// scanInvitation scans one invitations row, mapping pgx.ErrNoRows to
-// errs.ErrNotFound via the connector's MapError.
-func scanInvitation(sc scanner) (invitation.Invitation, error) {
-	var (
-		inv                             invitation.Invitation
-		expiresAt, createdAt, updatedAt time.Time
-		acceptedAt                      *time.Time
-	)
-	if err := sc.Scan(
-		&inv.ID, &inv.ResourceType, &inv.ResourceID, &inv.Relation, &inv.Identifier,
-		&inv.ResolvedSubjectID, &inv.InvitedBy, &inv.TokenHash, &inv.AutoAccept, &inv.Status,
-		&expiresAt, &acceptedAt, &createdAt, &updatedAt,
-	); err != nil {
-		return invitation.Invitation{}, pgxdb.MapError(err)
+	row, err := queryOne[invitationRow](ctx, s.db, q, pgx.NamedArgs{
+		"status":              upd.Status,
+		"token_hash":          upd.TokenHash,
+		"expires_at":          upd.ExpiresAt.UTC(),
+		"accepted_at":         pgxdb.NullTime(upd.AcceptedAt),
+		"resolved_subject_id": upd.ResolvedSubjectID,
+		"updated_at":          upd.UpdatedAt.UTC(),
+		"id":                  id,
+	})
+	if err != nil {
+		return invitation.Invitation{}, err
 	}
-	inv.ExpiresAt = expiresAt.UTC()
-	inv.AcceptedAt = pgxdb.FromNullTime(acceptedAt)
-	inv.CreatedAt = createdAt.UTC()
-	inv.UpdatedAt = updatedAt.UTC()
-	return inv, nil
+	return row.toDomain(), nil
 }

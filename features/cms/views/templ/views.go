@@ -31,8 +31,8 @@ func (Views) Home(nav []menus.MenuItem, items []cms.ListItem) web.Renderer {
 }
 
 // Archive renders a taxonomy archive listing in the site chrome.
-func (Views) Archive(heading string, nav []menus.MenuItem, items []cms.ListItem, nextCursor, baseHref string) web.Renderer {
-	return PublicArchive(heading, nav, items, nextCursor, baseHref)
+func (Views) Archive(heading string, nav []menus.MenuItem, items []cms.ListItem, pager cms.Pager) web.Renderer {
+	return PublicArchive(heading, nav, items, pager)
 }
 
 // Single wraps a registered per-entry body in the site chrome.
@@ -55,8 +55,8 @@ func (Views) ContactThanks() web.Renderer { return ContactThanks() }
 func (Views) MenuNav(m menus.Menu, items []menus.MenuItem) web.Renderer { return MenuNav(m, items) }
 
 // EntriesList renders the admin index for one content type.
-func (Views) EntriesList(heading, newHref, editPrefix string, items []cms.EntryListItem, nextCursor string) web.Renderer {
-	return EntriesList(heading, newHref, editPrefix, items, nextCursor)
+func (Views) EntriesList(heading, newHref, editPrefix string, items []cms.EntryListItem, pager cms.Pager) web.Renderer {
+	return EntriesList(heading, newHref, editPrefix, items, pager)
 }
 
 // EntryForm renders the generic create/edit entry editor.

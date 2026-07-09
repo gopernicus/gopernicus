@@ -3,7 +3,6 @@ package turso
 import (
 	"context"
 	"encoding/json"
-	"time"
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
@@ -76,10 +75,17 @@ func (s *SecurityEventStore) List(ctx context.Context, filter securityevent.List
 		where += " AND created_at < ?"
 		args = append(args, tursodb.FormatTime(filter.Until))
 	}
-	return tursodb.ListPage(ctx, s.db, securityEventColumns, "security_events", where, args, orderField, "id", req,
-		scanSecurityEvent,
-		func(evt securityevent.SecurityEvent) (time.Time, string) { return evt.CreatedAt, evt.ID },
-	)
+	q := tursodb.ListQuery[securityevent.SecurityEvent]{
+		BaseSQL:      `SELECT ` + securityEventColumns + ` FROM security_events ` + where,
+		Args:         args,
+		OrderFields:  securityevent.OrderFields,
+		DefaultOrder: securityevent.DefaultOrder,
+		PK:           "id",
+		Scan:         scanSecurityEvent,
+		OrderValueOf: func(evt securityevent.SecurityEvent, _ string) any { return evt.CreatedAt },
+		PKOf:         func(evt securityevent.SecurityEvent) string { return evt.ID },
+	}
+	return tursodb.List(ctx, s.db, q, req)
 }
 
 // scanSecurityEvent scans one security_events row, mapping sql.ErrNoRows to

@@ -70,19 +70,33 @@ func (s *InvitationStore) GetByTokenHash(ctx context.Context, tokenHash string) 
 // ListByResource returns a cursor-paginated page of a resource's invitations,
 // ordered created_at DESC, id DESC.
 func (s *InvitationStore) ListByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
-	return tursodb.ListPage(ctx, s.db, invitationColumns, "invitations", "WHERE resource_type = ? AND resource_id = ?", []any{resourceType, resourceID}, orderField, "id", req,
-		scanInvitation,
-		func(inv invitation.Invitation) (time.Time, string) { return inv.CreatedAt, inv.ID },
-	)
+	q := tursodb.ListQuery[invitation.Invitation]{
+		BaseSQL:      `SELECT ` + invitationColumns + ` FROM invitations WHERE resource_type = ? AND resource_id = ?`,
+		Args:         []any{resourceType, resourceID},
+		OrderFields:  invitation.OrderFields,
+		DefaultOrder: invitation.DefaultOrder,
+		PK:           "id",
+		Scan:         scanInvitation,
+		OrderValueOf: func(inv invitation.Invitation, _ string) any { return inv.CreatedAt },
+		PKOf:         func(inv invitation.Invitation) string { return inv.ID },
+	}
+	return tursodb.List(ctx, s.db, q, req)
 }
 
 // ListBySubject returns a cursor-paginated page of invitations addressed to
 // identifier (the invitee email), ordered created_at DESC, id DESC.
 func (s *InvitationStore) ListBySubject(ctx context.Context, identifier string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
-	return tursodb.ListPage(ctx, s.db, invitationColumns, "invitations", "WHERE identifier = ?", []any{identifier}, orderField, "id", req,
-		scanInvitation,
-		func(inv invitation.Invitation) (time.Time, string) { return inv.CreatedAt, inv.ID },
-	)
+	q := tursodb.ListQuery[invitation.Invitation]{
+		BaseSQL:      `SELECT ` + invitationColumns + ` FROM invitations WHERE identifier = ?`,
+		Args:         []any{identifier},
+		OrderFields:  invitation.OrderFields,
+		DefaultOrder: invitation.DefaultOrder,
+		PK:           "id",
+		Scan:         scanInvitation,
+		OrderValueOf: func(inv invitation.Invitation, _ string) any { return inv.CreatedAt },
+		PKOf:         func(inv invitation.Invitation) string { return inv.ID },
+	}
+	return tursodb.List(ctx, s.db, q, req)
 }
 
 // UpdateStatus applies a lifecycle transition and returns the full row via

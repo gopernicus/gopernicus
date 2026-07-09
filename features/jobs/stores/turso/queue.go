@@ -169,8 +169,9 @@ func (q *Queue) Get(ctx context.Context, id string) (job.Job, error) {
 	return scanJob(q.db.QueryRow(ctx, get, id))
 }
 
-// List returns a cursor-paginated page of jobs matching the filter, ordered by
-// (created_at, job_id) descending.
+// List returns a cursor- or offset-paginated page of jobs matching the filter,
+// in the resolved order (default created_at DESC, job_id DESC). The Kind/Status
+// filter is shared by the page query and the WithCount total.
 func (q *Queue) List(ctx context.Context, f job.ListFilter, req crud.ListRequest) (crud.Page[job.Job], error) {
 	where := "WHERE 1 = 1"
 	var args []any
@@ -183,10 +184,17 @@ func (q *Queue) List(ctx context.Context, f job.ListFilter, req crud.ListRequest
 		args = append(args, string(f.Status))
 	}
 
-	return tursodb.ListPage(ctx, q.db, jobColumns, "job_queue", where, args, orderField, "job_id", req,
-		scanJob,
-		func(j job.Job) (time.Time, string) { return j.CreatedAt, j.JobID },
-	)
+	lq := tursodb.ListQuery[job.Job]{
+		BaseSQL:      `SELECT ` + jobColumns + ` FROM job_queue ` + where,
+		Args:         args,
+		OrderFields:  job.OrderFields,
+		DefaultOrder: job.DefaultOrder,
+		PK:           "job_id",
+		Scan:         scanJob,
+		OrderValueOf: func(j job.Job, _ string) any { return j.CreatedAt },
+		PKOf:         func(j job.Job) string { return j.JobID },
+	}
+	return tursodb.List(ctx, q.db, lq, req)
 }
 
 // execAffecting runs a write that must touch exactly one row, mapping zero rows

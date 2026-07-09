@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 )
@@ -22,10 +24,36 @@ func NewInquiryStore(db *pgxdb.DB) *InquiryStore {
 
 const inquiryColumns = "id, name, email, message, created_at"
 
+// inquiryRow is the store-local, db-tagged projection of an inquiries row.
+type inquiryRow struct {
+	ID        string    `db:"id"`
+	Name      string    `db:"name"`
+	Email     string    `db:"email"`
+	Message   string    `db:"message"`
+	CreatedAt time.Time `db:"created_at"`
+}
+
+func (r inquiryRow) toDomain() messaging.Inquiry {
+	return messaging.Inquiry{
+		ID:        r.ID,
+		Name:      r.Name,
+		Email:     r.Email,
+		Message:   r.Message,
+		CreatedAt: r.CreatedAt.UTC(),
+	}
+}
+
 // Create persists a new inquiry.
 func (s *InquiryStore) Create(ctx context.Context, in messaging.Inquiry) (messaging.Inquiry, error) {
-	const q = `INSERT INTO inquiries (` + inquiryColumns + `) VALUES ($1, $2, $3, $4, $5)`
-	_, err := s.db.Exec(ctx, q, in.ID, in.Name, in.Email, in.Message, in.CreatedAt.UTC())
+	const q = `INSERT INTO inquiries (` + inquiryColumns + `)
+		VALUES (@id, @name, @email, @message, @created_at)`
+	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
+		"id":         in.ID,
+		"name":       in.Name,
+		"email":      in.Email,
+		"message":    in.Message,
+		"created_at": in.CreatedAt.UTC(),
+	})
 	if err != nil {
 		return messaging.Inquiry{}, err
 	}
@@ -37,20 +65,15 @@ func (s *InquiryStore) List(ctx context.Context) ([]messaging.Inquiry, error) {
 	const q = `SELECT ` + inquiryColumns + ` FROM inquiries ORDER BY created_at DESC, id DESC`
 	rows, err := s.db.Query(ctx, q)
 	if err != nil {
-		return nil, err
+		return nil, pgxdb.MapError(err)
 	}
-	defer rows.Close()
+	inquiries, err := pgx.CollectRows(rows, pgx.RowToStructByName[inquiryRow])
+	if err != nil {
+		return nil, pgxdb.MapError(err)
+	}
 	var out []messaging.Inquiry
-	for rows.Next() {
-		var (
-			in        messaging.Inquiry
-			createdAt time.Time
-		)
-		if err := rows.Scan(&in.ID, &in.Name, &in.Email, &in.Message, &createdAt); err != nil {
-			return nil, pgxdb.MapError(err)
-		}
-		in.CreatedAt = createdAt.UTC()
-		out = append(out, in)
+	for _, in := range inquiries {
+		out = append(out, in.toDomain())
 	}
-	return out, pgxdb.MapError(rows.Err())
+	return out, nil
 }

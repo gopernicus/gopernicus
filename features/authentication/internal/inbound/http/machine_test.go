@@ -144,7 +144,7 @@ func newMachineHandler(t *testing.T) http.Handler {
 		APIKeys:         &memAPIKeys{m: map[string]apikey.APIKey{}},
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, nil)
+	Mount(h, svc, nil, crud.StrategyCursor)
 	return h
 }
 

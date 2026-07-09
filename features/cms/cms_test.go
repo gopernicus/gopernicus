@@ -27,7 +27,7 @@ func (r *recordingRegistrar) Handle(method, path string, _ http.HandlerFunc, _ .
 type stubViews struct{}
 
 func (stubViews) Home([]menus.MenuItem, []ListItem) web.Renderer { return nil }
-func (stubViews) Archive(string, []menus.MenuItem, []ListItem, string, string) web.Renderer {
+func (stubViews) Archive(string, []menus.MenuItem, []ListItem, Pager) web.Renderer {
 	return nil
 }
 func (stubViews) Single(string, string, []menus.MenuItem, web.Renderer) web.Renderer { return nil }
@@ -35,7 +35,7 @@ func (stubViews) Error(int, string) web.Renderer                                
 func (stubViews) ContactForm(ContactModel) web.Renderer                              { return nil }
 func (stubViews) ContactThanks() web.Renderer                                        { return nil }
 func (stubViews) MenuNav(menus.Menu, []menus.MenuItem) web.Renderer                  { return nil }
-func (stubViews) EntriesList(string, string, string, []EntryListItem, string) web.Renderer {
+func (stubViews) EntriesList(string, string, string, []EntryListItem, Pager) web.Renderer {
 	return nil
 }
 func (stubViews) EntryForm(EntryFormModel) web.Renderer                   { return nil }

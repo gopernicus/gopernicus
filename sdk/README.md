@@ -71,7 +71,7 @@ interface).
 | `logging` | `slog` setup + request/trace/span-id-from-context handler |
 | `errs` | transport-agnostic sentinel errors (`ErrNotFound`, …) |
 | `web` | generic HTTP primitives: handler/route groups + verb sugar, middleware (request-id, tracing, logger, panic recovery, CORS, default headers — place `Tracing` outer of `Logger` so the traced context reaches the access log line and `RecordError` keeps landing on Logger's writer), error→status mapping, response helpers (SSR + JSON kit), request decoding (`DecodeJSON` + auto-validate), SSE streaming, static/SPA file server, app-driven OpenAPI 3.1 builder, page caching, and the `templ` render seam |
-| `crud` | optional generic CRUD contract (`Reader[T,F]`/`Writer`/`CRUD`), `Page`/`ListRequest`, ordering, strict-or-clamping limit parsing, cursor codec |
+| `crud` | optional generic CRUD contract (`Reader[T,F]`/`Writer`/`CRUD`), `Page`/`ListRequest` with two pagination modes (bidirectional keyset cursors — the default — and limit/offset), per-aggregate ordering allow-lists, opt-in total counts (`WithCount` → `Page.Total`), strict-or-clamping limit parsing, `Validate` store-edge mode check, `MapPage` row→domain bridging, cursor codec; the package doc carries the normative mode/count matrix and the `limit`/`cursor`/`offset`/`count`/`order` query-param vocabulary |
 | `id` | dependency-free random IDs (`crypto/rand`) |
 | `slug` | pure URL-safe slug generation with accent folding (no domain knowledge) |
 | `email` | `Sender`/`Message` port — wired defaults `SMTP` (`net/smtp`, multipart text+HTML) and `Console` (dev logger); optional template layer (`TemplateRegistry`/`Emailer` with layered layouts + branding); SendGrid backend in `integrations/email/sendgrid` |

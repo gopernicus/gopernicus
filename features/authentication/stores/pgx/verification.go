@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/sdk/errs"
@@ -24,10 +26,33 @@ func NewCodeStore(db *pgxdb.DB) *CodeStore {
 
 const codeColumns = "code, user_id, created_at, expires_at"
 
+// codeRow is the store-local, db-tagged projection of a verification_codes row.
+type codeRow struct {
+	Code      string    `db:"code"`
+	UserID    string    `db:"user_id"`
+	CreatedAt time.Time `db:"created_at"`
+	ExpiresAt time.Time `db:"expires_at"`
+}
+
+func (r codeRow) toDomain() verification.Code {
+	return verification.Code{
+		Code:      r.Code,
+		UserID:    r.UserID,
+		CreatedAt: r.CreatedAt.UTC(),
+		ExpiresAt: r.ExpiresAt.UTC(),
+	}
+}
+
 // Create persists a new verification code.
 func (s *CodeStore) Create(ctx context.Context, c verification.Code) (verification.Code, error) {
-	const q = `INSERT INTO verification_codes (` + codeColumns + `) VALUES ($1, $2, $3, $4)`
-	_, err := s.db.Exec(ctx, q, c.Code, c.UserID, c.CreatedAt.UTC(), c.ExpiresAt.UTC())
+	const q = `INSERT INTO verification_codes (` + codeColumns + `)
+		VALUES (@code, @user_id, @created_at, @expires_at)`
+	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
+		"code":       c.Code,
+		"user_id":    c.UserID,
+		"created_at": c.CreatedAt.UTC(),
+		"expires_at": c.ExpiresAt.UTC(),
+	})
 	if err != nil {
 		return verification.Code{}, err
 	}
@@ -36,16 +61,12 @@ func (s *CodeStore) Create(ctx context.Context, c verification.Code) (verificati
 
 // Get returns the live code: unknown → errs.ErrNotFound, expired → errs.ErrExpired.
 func (s *CodeStore) Get(ctx context.Context, code string) (verification.Code, error) {
-	const q = `SELECT ` + codeColumns + ` FROM verification_codes WHERE code = $1`
-	var (
-		c                    verification.Code
-		createdAt, expiresAt time.Time
-	)
-	if err := s.db.QueryRow(ctx, q, code).Scan(&c.Code, &c.UserID, &createdAt, &expiresAt); err != nil {
-		return verification.Code{}, pgxdb.MapError(err)
+	const q = `SELECT ` + codeColumns + ` FROM verification_codes WHERE code = @code`
+	row, err := queryOne[codeRow](ctx, s.db, q, pgx.NamedArgs{"code": code})
+	if err != nil {
+		return verification.Code{}, err
 	}
-	c.CreatedAt = createdAt.UTC()
-	c.ExpiresAt = expiresAt.UTC()
+	c := row.toDomain()
 	if c.Expired(time.Now()) {
 		return verification.Code{}, errs.ErrExpired
 	}
@@ -54,7 +75,7 @@ func (s *CodeStore) Get(ctx context.Context, code string) (verification.Code, er
 
 // Delete removes the code; unknown → errs.ErrNotFound.
 func (s *CodeStore) Delete(ctx context.Context, code string) error {
-	n, err := pgxdb.ExecAffecting(ctx, s.db, "DELETE FROM verification_codes WHERE code = $1", code)
+	n, err := pgxdb.ExecAffecting(ctx, s.db, "DELETE FROM verification_codes WHERE code = @code", pgx.NamedArgs{"code": code})
 	if err != nil {
 		return err
 	}
@@ -79,10 +100,33 @@ func NewTokenStore(db *pgxdb.DB) *TokenStore {
 
 const tokenColumns = "token, user_id, created_at, expires_at"
 
+// tokenRow is the store-local, db-tagged projection of a verification_tokens row.
+type tokenRow struct {
+	Token     string    `db:"token"`
+	UserID    string    `db:"user_id"`
+	CreatedAt time.Time `db:"created_at"`
+	ExpiresAt time.Time `db:"expires_at"`
+}
+
+func (r tokenRow) toDomain() verification.Token {
+	return verification.Token{
+		Token:     r.Token,
+		UserID:    r.UserID,
+		CreatedAt: r.CreatedAt.UTC(),
+		ExpiresAt: r.ExpiresAt.UTC(),
+	}
+}
+
 // Create persists a new reset token.
 func (s *TokenStore) Create(ctx context.Context, t verification.Token) (verification.Token, error) {
-	const q = `INSERT INTO verification_tokens (` + tokenColumns + `) VALUES ($1, $2, $3, $4)`
-	_, err := s.db.Exec(ctx, q, t.Token, t.UserID, t.CreatedAt.UTC(), t.ExpiresAt.UTC())
+	const q = `INSERT INTO verification_tokens (` + tokenColumns + `)
+		VALUES (@token, @user_id, @created_at, @expires_at)`
+	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
+		"token":      t.Token,
+		"user_id":    t.UserID,
+		"created_at": t.CreatedAt.UTC(),
+		"expires_at": t.ExpiresAt.UTC(),
+	})
 	if err != nil {
 		return verification.Token{}, err
 	}
@@ -91,16 +135,12 @@ func (s *TokenStore) Create(ctx context.Context, t verification.Token) (verifica
 
 // Get returns the live token: unknown → errs.ErrNotFound, expired → errs.ErrExpired.
 func (s *TokenStore) Get(ctx context.Context, token string) (verification.Token, error) {
-	const q = `SELECT ` + tokenColumns + ` FROM verification_tokens WHERE token = $1`
-	var (
-		t                    verification.Token
-		createdAt, expiresAt time.Time
-	)
-	if err := s.db.QueryRow(ctx, q, token).Scan(&t.Token, &t.UserID, &createdAt, &expiresAt); err != nil {
-		return verification.Token{}, pgxdb.MapError(err)
+	const q = `SELECT ` + tokenColumns + ` FROM verification_tokens WHERE token = @token`
+	row, err := queryOne[tokenRow](ctx, s.db, q, pgx.NamedArgs{"token": token})
+	if err != nil {
+		return verification.Token{}, err
 	}
-	t.CreatedAt = createdAt.UTC()
-	t.ExpiresAt = expiresAt.UTC()
+	t := row.toDomain()
 	if t.Expired(time.Now()) {
 		return verification.Token{}, errs.ErrExpired
 	}
@@ -109,7 +149,7 @@ func (s *TokenStore) Get(ctx context.Context, token string) (verification.Token,
 
 // Delete removes the token; unknown → errs.ErrNotFound.
 func (s *TokenStore) Delete(ctx context.Context, token string) error {
-	n, err := pgxdb.ExecAffecting(ctx, s.db, "DELETE FROM verification_tokens WHERE token = $1", token)
+	n, err := pgxdb.ExecAffecting(ctx, s.db, "DELETE FROM verification_tokens WHERE token = @token", pgx.NamedArgs{"token": token})
 	if err != nil {
 		return err
 	}

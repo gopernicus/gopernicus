@@ -236,7 +236,7 @@ func newTestHandler(t *testing.T, limiter ratelimiter.Limiter) http.Handler {
 		Cookie:    authsvc.CookieConfig{},
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, nil)
+	Mount(h, svc, nil, "")
 	return h
 }
 

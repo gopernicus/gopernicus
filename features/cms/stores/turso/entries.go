@@ -3,7 +3,6 @@ package turso
 import (
 	"context"
 	"database/sql"
-	"time"
 
 	"github.com/gopernicus/gopernicus/features/cms/domain/content"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
@@ -114,8 +113,9 @@ func (s *EntryStore) ListByTerm(ctx context.Context, termID string, q content.En
 	return s.listWhere(ctx, where, args, q)
 }
 
-// listWhere runs a keyset-paginated list given a base WHERE clause and its args.
-// It appends the optional status filter and the cursor predicate, then loads
+// listWhere runs an order-aware, bidirectionally pageable, offset-capable list
+// given a base WHERE clause and its args. It appends the optional status filter,
+// runs the shared turso.List matrix over the entry order allow-list, then loads
 // fields + terms for each returned spine row.
 func (s *EntryStore) listWhere(ctx context.Context, where string, args []any, q content.EntryQuery) (crud.Page[content.Entry], error) {
 	if q.Status != "" {
@@ -123,10 +123,17 @@ func (s *EntryStore) listWhere(ctx context.Context, where string, args []any, q 
 		args = append(args, string(q.Status))
 	}
 
-	page, err := tursodb.ListPage(ctx, s.db, entryColumns, "entries", where, args, orderField, "id", q.ListRequest,
-		scanEntry,
-		func(e content.Entry) (time.Time, string) { return e.CreatedAt, e.ID },
-	)
+	lq := tursodb.ListQuery[content.Entry]{
+		BaseSQL:      `SELECT ` + entryColumns + ` FROM entries ` + where,
+		Args:         args,
+		OrderFields:  content.OrderFields,
+		DefaultOrder: content.DefaultOrder,
+		PK:           "id",
+		Scan:         scanEntry,
+		OrderValueOf: func(e content.Entry, _ string) any { return e.CreatedAt },
+		PKOf:         func(e content.Entry) string { return e.ID },
+	}
+	page, err := tursodb.List(ctx, s.db, lq, q.ListRequest)
 	if err != nil {
 		return crud.Page[content.Entry]{}, err
 	}

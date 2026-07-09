@@ -14,11 +14,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/apikey"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthaccount"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/serviceaccount"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
+	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/web"
@@ -71,9 +71,12 @@ type authService interface {
 
 // handlers holds the services the route handlers delegate to. inv is nil when no
 // Granter is wired (invitations off); its routes are then never registered.
+// listStrategy is the transport-edge DefaultStrategy the list handlers pass to
+// crud.ParseListRequest (host-configured via authentication.Config.ListStrategy).
 type handlers struct {
-	svc authService
-	inv InvitationService
+	svc          authService
+	inv          InvitationService
+	listStrategy crud.Strategy
 }
 
 // ---------------------------------------------------------------------------
@@ -140,9 +143,9 @@ func newUserResponse(u user.User) userResponse {
 // unauthenticated ones included (design §5.1 WI4): the ONE blanket write point
 // that stamps the request IP + User-Agent onto the context for login's
 // rate-limit key and the security-event audit rows.
-func Mount(r feature.RouteRegistrar, svc authService, inv InvitationService) {
+func Mount(r feature.RouteRegistrar, svc authService, inv InvitationService, listStrategy crud.Strategy) {
 	r = clientInfoRegistrar{inner: r}
-	h := &handlers{svc: svc, inv: inv}
+	h := &handlers{svc: svc, inv: inv, listStrategy: listStrategy}
 	r.Handle("POST", "/auth/register", h.register)
 	r.Handle("POST", "/auth/login", h.login)
 	r.Handle("POST", "/auth/verify", h.verify)

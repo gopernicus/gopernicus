@@ -55,7 +55,7 @@ func newInvitationTestHandler(t *testing.T, inv InvitationService) http.Handler 
 		Cookie:    authsvc.CookieConfig{},
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, inv)
+	Mount(h, svc, inv, crud.StrategyCursor)
 	return h
 }
 
