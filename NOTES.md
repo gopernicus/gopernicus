@@ -1529,3 +1529,29 @@ guard is the first app-local domain in this repo or the workshop-v2
 mechanical enforcement point). Flags #2 (sdk/id kind-set — owner
 reviewing) and #3 (RELEASING.md old-monolith import-path collision note)
 remain QUEUED in the milestone ledger.
+
+## 2026-07-08 — segovia-lessons phase 02 CLOSED as amended: route.go deleted; Methods sugar built-then-DECLINED (D4); per-route override story documented
+
+Flag #4 (owner-raised — feature route tables can't use the sdk's verb
+helpers) closed with a shape nobody predicted at cut: **the answer to the
+flag was documentation, not surface.** D2 executed — `sdk/feature/route.go`
+(`Route`/`RegisterRoutes`, FS7's data form) deleted with zero consumers;
+supersession marker in features/README.md; the `capturingRegistrar` test
+fixture it hosted re-homed to prefix_test.go. `feature.Methods` (verb sugar
+over `RouteRegistrar`, D3 parity with web.WebHandler pinned by reflection
+test) was built, tested, all 62 feature registrations converted, both
+examples live-driven green — and then **DECLINED by the owner (D4) and
+reverted the same day**: one string argument per line becoming a method
+name does not buy a permanent exported sdk type, a forever-parity test, a
+ceremony line per Mount, and an accept-structs wart in the mountX
+signatures. The stringly `r.Handle("POST", …)` form is ruled deliberate
+signposting: a feature registers as a GUEST through a one-method seam; an
+app-local domain owns the concrete router and gets the verbs free
+(segovia's dashboards form). Resurrect trigger: real host-developer demand.
+The durable deliverable: features/README.md §4 item 3 — the per-route
+override pattern (wrap the registrar: deny/replace/re-path one route in ~8
+lines of host code, the `inviteOnly` example), framed as the route-level
+face of extension tier 4 and the reason FS7's public override hook stays
+unshipped. Session lesson recorded: building the thing was what produced
+the evidence to decline it — the accept-structs wart and the per-line
+delta were visible only in the diff.

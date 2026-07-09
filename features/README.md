@@ -94,9 +94,20 @@ need lands in exactly one of four tiers:
 
 Configuration is always a `Config` struct with documented nil semantics —
 never functional options (FS6; two idioms would deliver nothing the struct
-doesn't). Route tables are built as data (`[]feature.Route`) internally;
-the public per-route override hook is deliberately unshipped until a real
-host hits the gap tiers 1+4 don't cover (FS7). Behavior hooks
+doesn't). Route tables are direct `Handle` calls through the
+`RouteRegistrar` seam (`r.Handle("POST", "/auth/login", h.login)`) — the
+stringly form is deliberate signposting that a feature registers as a
+guest through a one-method port, where an app-local domain uses the
+concrete `web.WebHandler`'s verb helpers it owns (ruled 2026-07-08,
+segovia-lessons phase 02: a `feature.Methods` verb-sugar wrapper was
+built, live-proven, and DECLINED same day as cosmetics-only sdk surface —
+resurrect trigger: real host-developer demand). [FS7's `[]feature.Route`
+data form SUPERSEDED 2026-07-08: shipped at feature-standard with zero
+consumers, cut as premature; it returns when a real host needs a
+declarative route table.] The public per-route override hook remains
+deliberately unshipped — a host that needs to deny/replace/re-path a
+single route wraps the registrar (§4 item 3), which covers the gap tiers
+1+4 don't. Behavior hooks
 (on-register, on-login) ride the events rail when it lands; a sync hook in
 `Config` earns a place only with veto/mutate semantics, argued case by
 case (FS8). If a host legitimately needs something `internal/` seals, that
@@ -222,7 +233,30 @@ contract:
    missing leading slash, Go 1.22+ ServeMux's `"{$}"` exact-match suffix for a
    feature's root route) so a host doesn't have to. `""` or `"/"` as `Prefix`
    is a deliberate no-op. Unit-tested in `sdk/feature/prefix_test.go`.
-3. **Hosts resolve collisions.** A feature must not assume it owns `/`; if a
+3. **Per-route override — wrap the registrar** (the route-level face of
+   extension tier 4; segovia-lessons phase 02, 2026-07-08). `Mount.Router`
+   is a one-method interface precisely so a host can interpose on
+   registrations in code it cannot edit: deny a route, swap its handler,
+   re-path it, or add middleware to exactly one. ~8 lines of host code, no
+   framework support needed:
+
+   ```go
+   type inviteOnly struct{ feature.RouteRegistrar }
+
+   func (o inviteOnly) Handle(method, path string, h http.HandlerFunc, mw ...web.Middleware) {
+       if method == "POST" && path == "/auth/register" {
+           return // invite-only app: the route is never mounted
+       }
+       o.RouteRegistrar.Handle(method, path, h, mw...)
+   }
+   ```
+
+   Pass it as `Mount.Router`; it composes freely with `PrefixRegistrar` and
+   `Group`, since each wrapper is itself a `RouteRegistrar`. For
+   anything bigger than a route or two, use tier 4 proper — skip
+   `svc.Register` and hand-route over the public `Service`. This wrapper
+   pattern is why FS7's public override hook stays unshipped.
+4. **Hosts resolve collisions.** A feature must not assume it owns `/`; if a
    host mounts two features, or a feature alongside its own app-local routes,
    the host is responsible for choosing non-overlapping prefixes (or a single
    feature at the root).
