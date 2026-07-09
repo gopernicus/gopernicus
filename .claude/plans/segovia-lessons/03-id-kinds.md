@@ -1,6 +1,6 @@
 # Phase 03 — sdk/id kinds (flag #2): nanoid-shape generation + stdlib UUID; port typing stays string (wait-for-demand)
 
-Status: **RATIFIED 2026-07-09 (jrazmi, in-conversation: D5 + D6 "that works"; D7 recorded from the same exchange) — EXECUTING**
+Status: **CLOSED 2026-07-09 — RATIFIED (D5 + D6 "that works"; D7 recorded same exchange) and EXECUTED same day**
 Milestone: `segovia-lessons` (see `00-overview.md`)
 Executor model: **opus** (task 1), **fable** (task 2)
 Depends on: — (phases 01/02 closed)
@@ -179,4 +179,17 @@ close nothing.
 
 ## Execution log
 
-(append dated entries here)
+- 2026-07-09 — plan cut on the owner's ID-strategy direction; D5/D6
+  ratified in-conversation; D7 (pluggable generator) raised by owner and
+  recorded as wait-for-demand with the design pre-agreed.
+- 2026-07-09 — **task-1 done**: sdk/id reworked to the D5 API (mask
+  rejection sampling ported from the original cryptids; alphabet bug
+  fixed — 52 unique bytes, guarded by test; ~119.8-bit default). Full
+  test suite green incl. distribution coverage and UUIDv4 bit checks.
+  `make check` green (all 21 id.New consumers). Run-and-look: auth-cms
+  register 201 → verify 200 → login 200 → logout 200; observed IDs
+  21-char new-alphabet (`7xt9prLSMxb0HxRHvgTkF`).
+- 2026-07-09 — **task-2 done**: sdk/README id row enriched; NOTES.md
+  entry (D5 shipped, D6/D7 dispositions + triggers, behavior-change
+  ruling); ledger row #2 CLOSED. Owner carry-back to Segovia's flags doc:
+  flip #2, drop the interim-workaround wording.

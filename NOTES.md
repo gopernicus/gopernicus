@@ -1555,3 +1555,32 @@ face of extension tier 4 and the reason FS7's public override hook stays
 unshipped. Session lesson recorded: building the thing was what produced
 the evidence to decline it — the accept-structs wart and the per-line
 delta were visible only in the diff.
+
+## 2026-07-09 — segovia-lessons phase 03 CLOSED: sdk/id nanoid rework (flag #2); port typing wait-for-demand
+
+Flag #2 closed same-day: cut on the owner's ID-strategy direction (nanoid
+shape with custom length/alphabet like the original; no third-party libs
+in sdk — UUID needs none, ~15 lines of stdlib). **D5 shipped:** `New()`
+(21 chars, ~119.8 bits), `NewCustom(alphabet, size)` (validated: ≥2 chars,
+unique bytes, size ≥1 — the workshop-v2 per-aggregate seam the original's
+codegen consumed), `UUID()` (canonical lowercase v4), exported
+`Alphabet`/`DefaultLength`. Mask rejection sampling + 1.6× buffer ported
+from `gopernicus-original/infrastructure/cryptids/id.go`; **the original's
+default-alphabet bug fixed** (uppercase Z twice, lowercase z missing —
+biased generation toward Z; now 52 unique bytes, guarded by test). Panic
+posture split: `New`/`UUID` panic on crypto/rand failure (21 call sites
+stay clean); `NewCustom` returns validation errors. Behavior change ruled
+acceptable: New() output 26-char base32 → 21-char nanoid (TEXT columns,
+zero shape assertions verified, dev data only; segovia inherits via its
+replace directive). Live-proven: auth-cms register→verify→login→logout
+201/200/200/200 with observed 21-char new-alphabet IDs. **D6:** the
+int/uuid PORT-typing half is wait-for-demand — crud stays string-keyed
+(uuid flows as canonical strings already; int keys are DB-assigned; zero
+consumers embed crud over a non-string key, segovia v2 verified crud-free
+and all-string); Getter/Lister split and UUIDv7 likewise deferred with
+triggers. **D7 (owner-raised):** pluggable ID generation recorded, not
+shipped — app-local code needs no framework support (hosts own their call
+sites); the feature-side design is pre-agreed (sdk `id.Generator` func
+type + per-feature nil-safe `Config.IDGenerator`, extension tier 2);
+trigger = first host needing feature entities keyed by its own generator.
+Owner carry-back: flip Segovia flag #2, drop its interim-workaround note.
