@@ -4,7 +4,7 @@
 // sdk/web SSE primitives, and registers the resource-scoped route only when a
 // host Authorize check is wired (deny-by-absence). Mounted only through
 // feature.RouteRegistrar (see events.Service.Register).
-package http
+package events
 
 import (
 	"context"

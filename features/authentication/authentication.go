@@ -41,7 +41,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
-	internalhttp "github.com/gopernicus/gopernicus/features/authentication/internal/inbound/http"
+	inbound "github.com/gopernicus/gopernicus/features/authentication/internal/inbound/authentication"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/invitationsvc"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/redirect"
@@ -669,10 +669,10 @@ func (s *Service) RateLimitByIP(keyPrefix string, perMinute int) web.Middleware 
 func (s *Service) Register(m feature.Mount) error {
 	// Pass the invitation service as a GENUINE nil interface when it is off, so
 	// Mount's deny-by-absence check (design §6) is not fooled by a typed nil.
-	var inv internalhttp.InvitationService
+	var inv inbound.InvitationService
 	if s.inv != nil {
 		inv = s.inv
 	}
-	internalhttp.Mount(m.Router, s.svc, inv, s.listStrategy)
+	inbound.Mount(m.Router, s.svc, inv, s.listStrategy)
 	return nil
 }

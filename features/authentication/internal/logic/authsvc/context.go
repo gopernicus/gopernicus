@@ -26,7 +26,7 @@ type clientInfo struct {
 
 // WithClientInfo returns a copy of ctx carrying the request's client IP and
 // User-Agent. It is EXPORTED because the write site lives OUTSIDE authsvc — the
-// feature's HTTP middleware (internal/inbound/http) sets it over ALL routes,
+// feature's HTTP middleware (internal/inbound/authentication) sets it over ALL routes,
 // unauthenticated ones included, so failed logins, registrations, and OAuth
 // callbacks all produce attributed audit rows. It is the ONE write point: login
 // and token issuance read their rate-limit IP from the same carrier, and the

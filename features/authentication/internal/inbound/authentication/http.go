@@ -3,7 +3,7 @@
 // (no server-rendered views), so a host that wants login pages renders its own
 // form and calls these endpoints, exactly as a SPA or mobile client would.
 // Mounted only through feature.RouteRegistrar (see auth.Register).
-package http
+package authentication
 
 import (
 	"context"

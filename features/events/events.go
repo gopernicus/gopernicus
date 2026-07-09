@@ -31,7 +31,7 @@ import (
 	"errors"
 	"time"
 
-	internalhttp "github.com/gopernicus/gopernicus/features/events/internal/inbound/http"
+	inbound "github.com/gopernicus/gopernicus/features/events/internal/inbound/events"
 	"github.com/gopernicus/gopernicus/features/events/internal/logic/hub"
 	"github.com/gopernicus/gopernicus/features/events/domain/outbox"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
@@ -166,7 +166,7 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 // and streams live for the duration of their request. Migrations are the store
 // adapter's concern, not this feature core's.
 func (s *Service) Register(m feature.Mount) error {
-	internalhttp.Mount(m.Router, internalhttp.Config{
+	inbound.Mount(m.Router, inbound.Config{
 		Hub:        s.hub,
 		Authorize:  s.authorize,
 		Middleware: s.middleware,

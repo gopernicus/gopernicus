@@ -1,4 +1,4 @@
-package http
+package cms
 
 // ListItem is one entry in a public listing (home / archive). The handler
 // pre-computes Href from the type's route scheme so the view stays type-blind.
