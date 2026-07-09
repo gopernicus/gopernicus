@@ -1,4 +1,4 @@
-// Package http is the SSR HTTP driving adapter for the CMS: the registry-driven
+// Package cms is the SSR HTTP driving adapter for the CMS: the registry-driven
 // route table, the generic entry admin + public handlers, and the supporting
 // taxonomy/menu/media/contact handlers. It depends on the domain + sdk, maps
 // domain errors to HTML responses, and renders templ views.

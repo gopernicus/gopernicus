@@ -1,4 +1,4 @@
-// Package http is the events feature's SSE transport: the /events route surface
+// Package events is the events feature's SSE transport: the /events route surface
 // over the internal hub. It reads the effective caller from sdk/identity (absent
 // → 401, fails closed — A-I1 E1), enforces MaxConnAge and heartbeats via the
 // sdk/web SSE primitives, and registers the resource-scoped route only when a
