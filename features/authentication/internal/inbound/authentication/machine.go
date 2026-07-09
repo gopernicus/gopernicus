@@ -114,12 +114,12 @@ func newPageResponse[E any, T any](p crud.Page[E], mapFn func(E) T) pageResponse
 // mountMachine registers the machine-identity lifecycle routes (design §4.1),
 // all session-gated. Called from Mount only when both machine repositories are
 // wired.
-func mountMachine(rt feature.Methods, h *handlers, requireUser web.Middleware) {
-	rt.POST("/auth/service-accounts", h.createServiceAccount, requireUser)
-	rt.GET("/auth/service-accounts", h.listServiceAccounts, requireUser)
-	rt.POST("/auth/service-accounts/{id}/keys", h.mintAPIKey, requireUser)
-	rt.GET("/auth/service-accounts/{id}/keys", h.listAPIKeys, requireUser)
-	rt.POST("/auth/api-keys/{id}/revoke", h.revokeAPIKey, requireUser)
+func mountMachine(r feature.RouteRegistrar, h *handlers, requireUser web.Middleware) {
+	r.Handle("POST", "/auth/service-accounts", h.createServiceAccount, requireUser)
+	r.Handle("GET", "/auth/service-accounts", h.listServiceAccounts, requireUser)
+	r.Handle("POST", "/auth/service-accounts/{id}/keys", h.mintAPIKey, requireUser)
+	r.Handle("GET", "/auth/service-accounts/{id}/keys", h.listAPIKeys, requireUser)
+	r.Handle("POST", "/auth/api-keys/{id}/revoke", h.revokeAPIKey, requireUser)
 }
 
 // createServiceAccount creates a machine identity owned by the calling user.

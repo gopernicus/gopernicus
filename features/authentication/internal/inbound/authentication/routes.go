@@ -36,39 +36,38 @@ type handlers struct {
 // rate-limit key and the security-event audit rows.
 func Mount(r feature.RouteRegistrar, svc authService, inv InvitationService, listStrategy crud.Strategy) {
 	r = clientInfoRegistrar{inner: r}
-	rt := feature.Methods{Next: r}
 	h := &handlers{svc: svc, inv: inv, listStrategy: listStrategy}
-	rt.POST("/auth/register", h.register)
-	rt.POST("/auth/login", h.login)
-	rt.POST("/auth/verify", h.verify)
-	rt.POST("/auth/password/forgot", h.forgotPassword)
-	rt.POST("/auth/password/reset", h.resetPassword)
-	rt.POST("/auth/logout", h.logout, svc.RequireUser)
-	rt.POST("/auth/password/change", h.changePassword, svc.RequireUser)
+	r.Handle("POST", "/auth/register", h.register)
+	r.Handle("POST", "/auth/login", h.login)
+	r.Handle("POST", "/auth/verify", h.verify)
+	r.Handle("POST", "/auth/password/forgot", h.forgotPassword)
+	r.Handle("POST", "/auth/password/reset", h.resetPassword)
+	r.Handle("POST", "/auth/logout", h.logout, svc.RequireUser)
+	r.Handle("POST", "/auth/password/change", h.changePassword, svc.RequireUser)
 
 	// OAuth routes are registered only when at least one provider is wired
 	// (deny-by-absence, design §3): an unwired host returns 404 for them.
 	if svc.OAuthEnabled() {
-		mountOAuth(rt, h, svc.RequireUser)
+		mountOAuth(r, h, svc.RequireUser)
 	}
 
 	// Machine-identity lifecycle routes are registered only when both machine
 	// repositories are wired (deny-by-absence, design §4.1); an unwired host
 	// returns 404 for them.
 	if svc.MachineEnabled() {
-		mountMachine(rt, h, svc.RequireUser)
+		mountMachine(r, h, svc.RequireUser)
 	}
 
 	// The bearer-JWT token endpoint is registered only when a TokenSigner is
 	// wired (deny-by-absence, design §4.4); an unwired host returns 404 for it.
 	if svc.TokenEnabled() {
-		rt.POST("/auth/token", h.token)
+		r.Handle("POST", "/auth/token", h.token)
 	}
 
 	// Invitation routes are registered only when a Granter is wired (deny-by-
 	// absence, design §6): an unwired host returns 404 for the entire surface.
 	if inv != nil {
-		mountInvitations(rt, h, svc.RequireUser, svc.RateLimitByIP("invitation_decline", declineAttemptsPerMinute))
+		mountInvitations(r, h, svc.RequireUser, svc.RateLimitByIP("invitation_decline", declineAttemptsPerMinute))
 	}
 }
 
