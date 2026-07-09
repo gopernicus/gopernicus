@@ -49,7 +49,7 @@ ratified 2026-07-02 — `.claude/plans/roadmap/feature-trio-relayout.md`):
 | `<name>.go` | the feature's host-facing exported surface: `Repositories`, `Config`, `NewService(repos, cfg) (*Service, error)`, and the `Service` driving surface with its `Register(mount) error` mount method (FS2) — plus whatever additional exported types host-facing needs require (e.g. auth's `PasswordHasher` port, its `Principal` alias) | public — the socket |
 | `domain/<domain>/` (e.g. `domain/content/`, `domain/user/`) | the hexagon's public rim: entities + repository ports (interfaces store adapters and host stores implement) | public **by necessity** — hosts and store modules import these across module boundaries, and Go forbids importing another module's `internal/` |
 | `internal/logic/<domain>svc/` | domain services: business rules over the ports, no HTTP/SQL — the hexagon's sealed interior | internal |
-| `internal/inbound/http/` | driving adapter: route table (`Mount`), handlers — thin delegations to the Service, writing responses through `sdk/web` responders only (FS9). Views are consumed through the feature's `Views` port, never hardcoded (FS3; cms converged at feature-standard B2, 2026-07-07) | internal |
+| `internal/inbound/<feature>/` (e.g. `internal/inbound/cms/` — D1, segovia-lessons phase 01, 2026-07-08) | driving adapter wearing the ratified file anatomy: `routes.go` is the ONE readable route table (a `Mount` dispatcher; per-resource deny-by-absence `mountX` helpers live in their resource files — the authentication shape); per-resource files at resource #2 (`entries.go`, `media.go`, …); transport-named `api.go`/`html.go` only as the single-resource degenerate form; the maximal flatten (single resource, small handler set → handlers stay in `routes.go`; `features/events/internal/inbound/events/routes.go` is the blessed example); **never** `/api`/`/html`/`/htmx` subdirectories. Handlers are thin delegations to the Service, writing responses through `sdk/web` responders only (FS9); views are consumed through the feature's `Views` port, never hardcoded (FS3; cms converged at feature-standard B2, 2026-07-07). `internal/inbound/http/` means transport plumbing only (middleware), mirroring the app pattern — a feature has none until real plumbing appears | internal |
 | `stores/<package>/` | a **separate module** — the store implementation written against one driver package's API (`stores/pgx`, `stores/turso`; R-KV3), owning its SQL, canonical migrations, and `ExportMigrations` | public API, but never imported by the feature core |
 | `storetest/` | the exported conformance suite (`Run(t, newRepos)`) + the test-scoped reference in-memory implementation; every store implementation runs it | public test-support package inside the feature core (stdlib + sdk only — G2 keeps drivers out) |
 | `views/<pkg>` (per-concern, only if the feature has HTML) | a **separate module** — the bundled default implementation of the feature core's `Views` port, named for the package it's built on (`views/templ`; R-KV2). The core defines the port (domain-typed params, `web.Renderer` returns) and registers its HTML surface only when `Config.Views` is non-nil — uniform nil → HTML off (FS3). A host wires the default with one import + one Config field, implements the port itself (`html/template` via `web.Template` works in three lines), or wires nothing and runs API-only with zero view tech in its graph. cms's in-core `theme/` (`PublicViews` + `Default()`) was the reference implementation that proved the shape; it migrated to `views/templ` at feature-standard B2 (2026-07-07; the in-core `theme/` is now deleted) | public API, never imported by the feature core |
@@ -63,7 +63,7 @@ module entirely.
 |---|---|---|
 | `cmd/` (composition root) | the HOST's `main` + `<name>.go`'s socket | features are composed *by* hosts; `Register` is the wiring point |
 | `internal/logic/domains/<d>` (entities + ports + services together) | split by visibility: entities + ports → public `domain/<domain>/`; services → `internal/logic/<domain>svc/` | store modules and hosts must import the ports; services stay sealed so the API surface is exactly the rim |
-| `internal/inbound` | `internal/inbound/http/` | same role, same privacy |
+| `internal/inbound/domains/<domain>/` (+ `inbound/http/` plumbing, `inbound/views/` global tree — ARCHITECTURE.md §Inbound anatomy) | `internal/inbound/<feature>/` — the one domain, flattened out of `domains/` | same role, same privacy. The deliberate deltas (FS1/FS3): feature templates never co-locate (templ is third-party, the core is sdk-only) — the render port lives in the core and the bundled default is the `views/<pkg>` sibling module; and there is no feature `inbound/views/` tree — the feature theming seam is embed-the-sibling-default (live override: `examples/cms/internal/theme/`) |
 | `internal/outbound` | `stores/<package>/` — separate modules | stronger than a directory split: drivers stay out of the core's go.mod entirely (guard G2) |
 
 Reading rule: **`domain/` is what outsiders implement, `internal/` is the
@@ -167,8 +167,9 @@ store isolates neither, so this refusal stands.
 - **Ports public, services internal.** Entities and repository interfaces
   (`content.EntryRepository`, …) are what a store adapter or a host's own
   store implements — they must be importable from outside the module.
-  Services (`internal/<domain>svc`) and HTTP (`internal/http`) are
-  implementation and stay unexported from the module's public API.
+  Services (`internal/logic/<domain>svc`) and HTTP
+  (`internal/inbound/<feature>`) are implementation and stay unexported
+  from the module's public API.
 - **No feature → feature imports** (constitution rule 6). Cross-feature needs
   are ports the *consuming* feature declares in its own public package; the
   host wires an implementation, which may be backed by another feature's
@@ -201,7 +202,8 @@ contract:
    each routable type's `PublicBase()` (`/products/{slug}`, or flat at the
    root for hierarchical types with no `RoutePrefix`, e.g. `/{slug}` for
    pages) plus a fixed `GET /{$}` home. See
-   `features/cms/internal/http/router.go`'s `Mount` for the literal table.
+   `features/cms/internal/inbound/cms/routes.go`'s `Mount` for the literal
+   table.
 2. **`feature.PrefixRegistrar`** (`sdk/feature/prefix.go`) wraps a
    `RouteRegistrar` and prefixes every path a feature registers through it, so
    a host *can* mount a feature under `/x/` without the feature's cooperation:
