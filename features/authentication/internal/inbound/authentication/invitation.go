@@ -87,14 +87,14 @@ func newInvitationResponse(inv invitation.Invitation) invitationResponse {
 // mountInvitations registers the invitation route surface (design §6). Called
 // from Mount only when a Granter is wired. All routes are session-gated except
 // decline, which is public and IP-rate-limited.
-func mountInvitations(r feature.RouteRegistrar, h *handlers, requireUser, declineLimit web.Middleware) {
-	r.Handle("POST", "/auth/invitations/{resource_type}/{resource_id}", h.createInvitation, requireUser)
-	r.Handle("GET", "/auth/invitations/{resource_type}/{resource_id}", h.listResourceInvitations, requireUser)
-	r.Handle("GET", "/auth/invitations/mine", h.listMyInvitations, requireUser)
-	r.Handle("POST", "/auth/invitations/accept", h.acceptInvitation, requireUser)
-	r.Handle("POST", "/auth/invitations/{id}/cancel", h.cancelInvitation, requireUser)
-	r.Handle("POST", "/auth/invitations/{id}/resend", h.resendInvitation, requireUser)
-	r.Handle("POST", "/auth/invitations/{id}/decline", h.declineInvitation, declineLimit)
+func mountInvitations(rt feature.Methods, h *handlers, requireUser, declineLimit web.Middleware) {
+	rt.POST("/auth/invitations/{resource_type}/{resource_id}", h.createInvitation, requireUser)
+	rt.GET("/auth/invitations/{resource_type}/{resource_id}", h.listResourceInvitations, requireUser)
+	rt.GET("/auth/invitations/mine", h.listMyInvitations, requireUser)
+	rt.POST("/auth/invitations/accept", h.acceptInvitation, requireUser)
+	rt.POST("/auth/invitations/{id}/cancel", h.cancelInvitation, requireUser)
+	rt.POST("/auth/invitations/{id}/resend", h.resendInvitation, requireUser)
+	rt.POST("/auth/invitations/{id}/decline", h.declineInvitation, declineLimit)
 }
 
 // createInvitation invites an identifier to the path resource (session-gated).

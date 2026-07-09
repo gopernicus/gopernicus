@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthaccount"
+	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
@@ -40,13 +40,13 @@ func newLinkedResponse(accts []oauthaccount.OAuthAccount) []linkedAccountRespons
 
 // mountOAuth registers the OAuth route surface (design §3). Called from Mount
 // only when a provider is wired. The session-gated routes take requireUser.
-func mountOAuth(r feature.RouteRegistrar, h *handlers, requireUser web.Middleware) {
-	r.Handle("GET", "/auth/oauth/{provider}/start", h.oauthStart)
-	r.Handle("GET", "/auth/oauth/{provider}/callback", h.oauthCallback)
-	r.Handle("POST", "/auth/oauth/verify-link", h.oauthVerifyLink)
-	r.Handle("GET", "/auth/oauth/linked", h.oauthLinked, requireUser)
-	r.Handle("GET", "/auth/oauth/{provider}/link/start", h.oauthLinkStart, requireUser)
-	r.Handle("DELETE", "/auth/oauth/{provider}/link", h.oauthUnlink, requireUser)
+func mountOAuth(rt feature.Methods, h *handlers, requireUser web.Middleware) {
+	rt.GET("/auth/oauth/{provider}/start", h.oauthStart)
+	rt.GET("/auth/oauth/{provider}/callback", h.oauthCallback)
+	rt.POST("/auth/oauth/verify-link", h.oauthVerifyLink)
+	rt.GET("/auth/oauth/linked", h.oauthLinked, requireUser)
+	rt.GET("/auth/oauth/{provider}/link/start", h.oauthLinkStart, requireUser)
+	rt.DELETE("/auth/oauth/{provider}/link", h.oauthUnlink, requireUser)
 }
 
 // oauthStart redirects the browser to the provider authorization URL.
