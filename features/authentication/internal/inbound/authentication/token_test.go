@@ -1,4 +1,4 @@
-package http
+package authentication
 
 import (
 	"crypto/hmac"

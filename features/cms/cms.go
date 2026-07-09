@@ -13,7 +13,7 @@
 package cms
 
 import (
-	internalhttp "github.com/gopernicus/gopernicus/features/cms/internal/inbound/http"
+	inbound "github.com/gopernicus/gopernicus/features/cms/internal/inbound/cms"
 	"github.com/gopernicus/gopernicus/features/cms/internal/logic/entrysvc"
 	"github.com/gopernicus/gopernicus/features/cms/internal/logic/mediasvc"
 	"github.com/gopernicus/gopernicus/features/cms/internal/logic/menussvc"
@@ -107,7 +107,7 @@ func Register(m feature.Mount, repos Repositories, cfg Config) error {
 	mediaSvc := mediasvc.NewService(repos.Media, cfg.Blobs, nil)
 	contactSvc := messagingsvc.NewService(repos.Inquiries, cfg.Mailer, cfg.MailFrom, cfg.ContactTo, nil)
 
-	internalhttp.Mount(m.Router, internalhttp.Deps{
+	inbound.Mount(m.Router, inbound.Deps{
 		Registry: registry,
 		Entries:  entrySvc,
 		Taxo:     termSvc,
