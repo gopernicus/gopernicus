@@ -1,6 +1,6 @@
 # Phase 02 — route ergonomics (flag #4): feature.Methods sugar; FS7 route.go demotion; override patterns documented
 
-Status: **RATIFIED 2026-07-08 (jrazmi, in-conversation, incl. D2 = delete) — EXECUTING**
+Status: **CLOSED 2026-07-08 — EXECUTED AS AMENDED: D2 kept (route.go deleted), §4 override story landed; D4 (post-build owner ruling) DECLINED the Methods sugar + conversions, reverted same day**
 Milestone: `segovia-lessons` (see `00-overview.md`)
 Executor model: **opus** for code tasks (1–3), **fable** for docs (4)
 Depends on: phase 01 (EXECUTED — the `internal/inbound/<feature>/` packages
@@ -46,7 +46,24 @@ reflection test). Consult caveat folded: the HEAD ruling holds *because*
 (handler.go:64–67) and Go 1.22 ServeMux matches HEAD against GET patterns —
 if Handle's pattern-building ever changes, D3's HEAD decline re-opens.
 
-## Design (task-1 shape)
+### D4 — RULED 2026-07-08 (owner, post-build): the Methods sugar is DECLINED
+
+Built, tested, converted, live-proven — then the owner asked the right
+question ("do we really need these method wrappers on features?") and the
+honest answer was no. The full accounting that decided it: the per-line
+benefit is one string argument becoming a method name; the price is a
+permanent exported sdk type, a parity test maintained forever, a ceremony
+line per `Mount`, and an accept-structs wart (the `mountX` helpers took the
+concrete `feature.Methods`, against the house accept-interfaces rule). The
+FS7-deletion rationale (D2) applies to Methods almost verbatim: surface
+shipped for aesthetics, not demand. The stringly `Handle` form is also
+honest signposting — a feature registers as a GUEST through a one-method
+seam; an app-local domain owns the concrete router and gets the verbs free.
+Tasks 1 and 3 reverted in one commit; task 2 stands on its own. Resurrect
+trigger: real host-developer demand for verb helpers through the seam (the
+55 lines are one revert away).
+
+## Design (task-1 shape — built, then reverted under D4; kept for the record)
 
 ```go
 // sdk/feature/methods.go — house style follows PrefixRegistrar/Group:
@@ -179,4 +196,26 @@ for this codebase's pattern construction.
 
 ## Execution log
 
-(append dated entries here)
+- 2026-07-08 — phase ratified in-conversation (incl. D2 = delete); plan
+  cut committed.
+- 2026-07-08 — **task-1 done**: `feature.Methods` + tests incl. the D3
+  parity reflection pin; sdk green.
+- 2026-07-08 — **task-2 done**: route.go/route_test.go deleted. Consult
+  miss caught live: the review's "zero consumers" held for
+  `Route`/`RegisterRoutes` but route_test.go also hosted the
+  `capturingRegistrar` fixture prefix_test.go consumes — re-homed to
+  prefix_test.go. `make check` green; grep confirms no code consumers.
+- 2026-07-08 — **task-3 done**: 62 registrations across six files
+  converted; `mountX` → `feature.Methods` params; both run-and-look legs
+  green (cms Turso 200s/404; auth-cms 201/200/200/200 cookie flow).
+- 2026-07-08 — **D4: owner declined the sugar post-build** ("do we really
+  need these method wrappers on features?"). Tasks 1+3 reverted in one
+  commit; task 2 stands. See the D4 section for the full accounting.
+- 2026-07-08 — **task-4 done (trimmed per D4)**: features/README.md —
+  FS7 sentence rewritten to the truthful post-revert state (stringly
+  Handle as deliberate guest signposting; Methods built-and-declined
+  recorded with resurrect trigger; `[]Route` supersession marker); §4
+  gains item 3, the per-route override wrapper (`inviteOnly` example),
+  framed as the route-level face of extension tier 4; NOTES.md entry.
+  Final `make check` green. The reverted states are byte-identical to
+  the phase-01 code both examples were live-driven against earlier today.
