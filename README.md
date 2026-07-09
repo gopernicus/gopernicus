@@ -7,12 +7,13 @@ prove the design end to end — one on Turso, one with zero external
 infrastructure. See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layering
 rules and [NOTES.md](NOTES.md) for the decision log.
 
-## The thirty modules
+## The thirty-four modules
 
 ```
 sdk/                                stdlib-only framework kernel (empty go.mod = structural enforcement)
 integrations/cryptids/bcrypt/       password-hashing connector (x/crypto), its own module
 integrations/cryptids/golang-jwt/   JWT-signing connector (golang-jwt/jwt v5), its own module
+integrations/cryptids/google-uuid/  uuid ID-generation connector (google/uuid v4/v7), its own module
 integrations/datastores/pgxdb/        reusable Postgres connector (sdk + pgx/v5), its own module
 integrations/datastores/turso/      reusable Turso/libSQL connector (sdk + libsql), its own module
 integrations/email/sendgrid/        SendGrid email connector (sendgrid-go), its own module
@@ -26,6 +27,9 @@ integrations/tracing/otel/          OpenTelemetry tracing connector (stdout/OTLP
 features/authentication/                      session-auth hexagon — datastore-free; domain/ public rim, internal/ interior
 features/authentication/stores/pgx/           auth's pgx store adapter, its own module
 features/authentication/stores/turso/         auth's Turso store adapter, its own module
+features/authorization/             IAM hexagon — independently wireable kinds (relationships/ReBAC + roles); datastore-free; public memstore/
+features/authorization/stores/pgx/  authorization's pgx store adapter, its own module
+features/authorization/stores/turso/ authorization's Turso store adapter, its own module
 features/cms/                       the CMS hexagon — datastore-free; domain/ public rim, internal/ interior
 features/cms/stores/pgx/            the CMS feature's pgx store adapter, its own module
 features/cms/stores/turso/          the CMS feature's Turso store adapter, its own module
@@ -38,7 +42,7 @@ features/jobs/stores/pgx/           jobs' pgx store adapter, its own module
 features/jobs/stores/turso/         jobs' Turso store adapter, its own module
 examples/cms/                       a host app: features/cms on Turso, with a custom theme
 examples/minimal/                   a host app: features/cms on an in-memory store — zero libsql in its module graph
-examples/auth-cms/                  a host app: auth + cms composed in-memory — auth gates cms admin (rule 6, live)
+examples/auth-cms/                  a host app: auth + cms + events + the authorization flagship composed in-memory (rule 6, live)
 examples/jobs-minimal/              a host app: features/jobs on its memstore — zero drivers, the §8 protocol host
 ```
 
@@ -67,7 +71,7 @@ tagged versions, not the workspace.
   still takes the earlier `Register(mount, repos, cfg)` form until its
   public Service lands).
 - **Dependencies point inward.** `examples` → `features`/`integrations` →
-  `sdk`, never the reverse. `make check`'s seven layering guards enforce this.
+  `sdk`, never the reverse. `make check`'s eight layering guards enforce this.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full detail, including the
 feature contract (`sdk/feature`), the app-hexagon pattern (`internal/logic`),
@@ -89,7 +93,7 @@ make migrate           # applies examples/cms/workshop/migrations pre-boot
 make run                # or: cd examples/cms && go run ./cmd/server
 ```
 
-From the repo root, `make check` builds, vets, and tests all thirty modules
-and runs the seven layering guards; `make test-stores` runs the live dialect
+From the repo root, `make check` builds, vets, and tests all thirty-four modules
+and runs the eight layering guards; `make test-stores` runs the live dialect
 conformance suites (expects `POSTGRES_TEST_DSN` / `TURSO_*`). See [examples/cms/README.md](examples/cms/README.md)
 for that host's full env/make-target reference.

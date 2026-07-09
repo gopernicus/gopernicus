@@ -1646,3 +1646,120 @@ work was the evidence that produced the cryptids design; 03 carries the
 marker. Segovia carry-over (task-2): `sdk/id` deletion breaks segovia v2's
 `id.New()` on next build (live replace directive) — migrate per-domain to
 `cryptids.IDGenerator{}`.MustGenerate() or thread its own Config strategy.
+
+## 2026-07-09 — correction: root-doc module counts (phase-04 miss) 30 → 31
+
+Phase 04's NOTES entry claimed "31 modules" but the ROOT docs
+(README.md "The thirty modules" heading + `make check` prose,
+RELEASING.md count + enumeration, Makefile header, ARCHITECTURE.md
+"Thirty modules today") were left saying thirty and omitting
+`integrations/cryptids/google-uuid` from the two enumerations — a doc-sync
+miss, caught during the authorization-v1 fresh review. Corrected to
+thirty-one with google-uuid added to the README and RELEASING enumerations.
+The pushed commit `8e426c7` carries the stale counts; these fixes are
+uncommitted (fold into the next push). No code affected — go.work and
+Makefile MODULES both correctly list 31.
+
+## 2026-07-09 — authorization-v1 EXECUTED: features/authorization, the IAM domain (modules 32–34)
+
+The 2026-07-06 authorization ruling cashed: **supported, never required** —
+three postures, all first-class, all demonstrated. Shipped per
+`.claude/plans/authorization-v1/` (design of record:
+`auth-v2-feature-design.md` §§2/10/13 as amended by the 2026-07-08
+multi-kind owner direction): `features/authorization` (module 32) with TWO
+independently-wireable KINDS — **relationships** (the ReBAC engine salvage,
+re-typed: schema DSL + validator, Check/CheckBatch/FilterAuthorized/
+LookupResources, group expansion, through-traversal, platform-admin DATA
+tuples, 14-method `relationship.Storer`) and **roles** (`iam_roles`,
+5-method `role.Storer`, opaque strings, Q5 global fallback) — plus
+`stores/turso` (33) and `stores/pgx` (34), `memstore/` (both kinds, real
+graph-walk), `storetest`, and the consumer-seam proof on
+`examples/auth-cms`. Tree closed at **34 modules**.
+
+**Ratifications (jrazmi, 2026-07-09, all at recommendations):** Q1 groups
+TRIM (return: first named-group UX demand) · Q2 Option A (extend auth-cms;
+middle posture = the two-commit protocol) · Q3 store-glue guard ADD · Q4
+metadata table TRIM (dead table; returns with its first consumer) · Q5
+service-level global fallback (store `HasExactRole` stays exact) · Q6
+`Config.IDs cryptids.IDGenerator` minting at the `CreateRelationships`
+seam, `cryptids.Database` honored by an omit-column branch + inline DDL
+DEFAULTs, NO RETURNING · Q7 second-relation-same-subject = silent no-op
+under the original's bare ON CONFLICT DO NOTHING (storetest asserts by
+re-read).
+
+**Live-store artifacts (milestone close):**
+
+- **turso** — the authorized playground DB (URL asserted pre-run;
+  `TURSO_*` env, `-tags=integration`): **21/21 leaf tests PASS, 40.9s** —
+  `Relationship/*` (9 incl. DBGeneratedIDOnEmpty), `Adversarial/
+  {MembershipCycle, DeepNesting, DiamondDedup, NestedUserset,
+  Unrestricted}` (all five named), `Roles/*` (6 incl. GlobalFallback),
+  ExportMigrations. Z2a execution log carries the transcript.
+- **pgx** — dockered postgres:17 (`POSTGRES_TEST_DSN`, plain env-gated):
+  **21/21 leaf tests PASS, 0.93s conformance** — identical sub-runner set.
+  Z2b execution log carries the transcript. **DP1 parity: memstore +
+  turso + pgx pass the ONE suite — the flagship provably authorizes
+  identically across all three backends.** Both stores' recursive CTEs
+  are UNBOUNDED, cycle-safe by UNION dedup (A1: `MaxTraversalDepth` is
+  engine-only); `CountByResourceAndRelation` is direct-only (the §2.5
+  security pin, asserted in DiamondDedup).
+
+**Z4 protocol (both mandated demonstrations + the roles leg, recorded in
+04-consumer-proof.md's log):** commit-1 **`2e1e5eb`** — the middle
+posture: a host ownership closure satisfies events' `Authorize` with
+`GOWORK=off go list -m all` captured CLEAN (authorization grep-count 0,
+no libsql); member stream 200 + heartbeat, non-member 403, unauth 401.
+commit-2 **`65fcb49`** — the flagship: schema in main, both kinds
+memstore-backed, the toy Granter swapped for `relationshipGranter` →
+`CreateRelationships` (design §6 completed), Check-backed stream + gate,
+`/demo/my-projects` (LookupResources; platform-admin returned
+`unrestricted:true`), `/demo/audit` (HasRole) with scoped assign → 200 →
+revoke → 403, and the Q5 global fallback driven live — including the
+lead-major-3 divergence OBSERVED: the globally-granted subject passes the
+scoped gate but does NOT appear in `ListRoleAssignmentsByResource`
+(direct-scope-only enumeration; "effective grants" is a named deferred
+item).
+
+**Guards:** `features/authorization` joined the FS1 hardcoded list at Z1
+task-1 (prove-can-fail recorded in 01-core's log). Q3 ADD landed at Z5:
+**G8 `guard-store-no-foreign-feature`** — every `features/<x>/stores/*`
+subtree greps clean of `features/<y>` (y ≠ x) AND `examples/` imports
+(the steward-minor-6 alternation; store→examples was previously unguarded
+by anything). Prove-can-fail recorded both ways (a features/events import
+and an examples/minimal import each failed the target loudly, reverted,
+green). `make guard` now runs all EIGHT.
+
+**Kind-boundary enforcement note (deliberate):** kind boundaries are
+enforced BEHAVIORALLY — construction validation (`ErrNoKindConfigured`,
+`ErrModelRequired`), per-kind sentinels, the userset rejection, and
+storetest — never guard-shaped: kinds are intra-module and invisible to
+import guards.
+
+**The policy seam (deferral-ledger entry):** the third kind is designed
+and NAMED (`domain/policy` rim, nil-safe `Repositories.Policies`,
+possibly `iam_policies` at the next migration number) but deferred.
+Demand trigger: the first host need neither a relationship model nor a
+role lookup expresses cleanly (attribute/condition rules, runtime-editable
+rules). The data-driven vs code-registered question is decided at ITS
+cut, not now. The feature README documents the seam verbatim in intent.
+
+**Execution notes:** the plan's salvage tree `../gopernicus-original/`
+does not exist on this machine — DDL verified against the identical copy
+under `/Users/jrazmi/code/menagerie/`; the pgx UNNEST insert + both
+dialects' CTEs were DERIVED from the port contract + memstore semantics
+(the shared suite is the equivalence proof, which is design risk 3's
+mitigation working as designed). Z1 exported no order allow-list from the
+domain rims — both stores declare a store-local created_at-only
+allow-list matching the memstore contract. The pgx roles keyset tiebreak
+is a derived `role_key` chr(1) column (PostgreSQL forbids NUL; cursors
+are backend-local).
+
+**Open flags for jrazmi:** (1) the roles listing's direct-scope-only
+enumeration (accepted v1 limitation — revisit if a host needs "effective
+grants for a resource"); (2) `created_at` carries no DDL default in
+either dialect (store-stamped, one timestamp per batch — the id tiebreak
+is fully load-bearing for keyset order); (3) the storetest suite leaves
+the ALL-non-empty and MIXED CreateRelationships branches hermetically
+untested (every conformance case mints via the default engine path);
+(4) the `.claude/plans/authorization-v1/` → `.claude/past/` archive move
+lands with this close.

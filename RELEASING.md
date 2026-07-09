@@ -1,10 +1,11 @@
 # Releasing gopernicus modules
 
-This repo is a multi-module workspace (`go.work`, dev-only) with thirty
-modules today: `sdk`; `integrations/{cryptids/bcrypt, cryptids/golang-jwt,
+This repo is a multi-module workspace (`go.work`, dev-only) with thirty-four
+modules today: `sdk`; `integrations/{cryptids/bcrypt, cryptids/golang-jwt, cryptids/google-uuid,
 datastores/pgxdb, datastores/turso, email/sendgrid, filestorage/gcs,
 filestorage/s3, kvstores/goredis, oauth/github, oauth/google,
-scheduling/robfig-cron, tracing/otel}`; `features/authentication`, `features/cms`
+scheduling/robfig-cron, tracing/otel}`; `features/authentication`,
+`features/authorization` (authorization-v1, 2026-07-09), `features/cms`
 (+ `views/templ`, its bundled default views module — feature-standard B2,
 2026-07-07), `features/events` (events-v1, 2026-07-08), `features/jobs`
 (each feature + `stores/{turso,pgx}`); `examples/{cms,

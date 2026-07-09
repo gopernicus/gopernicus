@@ -25,9 +25,12 @@ worked example `examples/cms`.
     scheduling/robfig-cron/ module …/integrations/scheduling/robfig-cron — a connector (robfig/cron v3)
     tracing/otel/         module …/integrations/tracing/otel            — a connector (OpenTelemetry family; stdout/OTLP exporters, R-KV1)
   features/                                                             — each: domain/ (public ports+entities) + internal/logic (+ internal/inbound where the feature registers routes — jobs v1 has none) + storetest/ + per-concern sibling modules (stores/<pkg>; views/<pkg> where the feature has HTML — FS3)
-    auth/                 module github.com/gopernicus/gopernicus/features/authentication               — session-auth hexagon (datastore-free)
+    authentication/       module github.com/gopernicus/gopernicus/features/authentication               — session-auth hexagon (datastore-free)
       stores/pgx/         module …/features/authentication/stores/pgx             — auth's pgx store adapter
       stores/turso/       module …/features/authentication/stores/turso           — auth's Turso store adapter
+    authorization/        module github.com/gopernicus/gopernicus/features/authorization              — IAM hexagon: independently wireable kinds (relationships/ReBAC + roles; datastore-free; public memstore/)
+      stores/pgx/         module …/features/authorization/stores/pgx            — authorization's pgx store adapter
+      stores/turso/       module …/features/authorization/stores/turso          — authorization's Turso store adapter
     cms/                  module github.com/gopernicus/gopernicus/features/cms                — the CMS hexagon (datastore-free)
       stores/pgx/         module …/features/cms/stores/pgx              — the CMS feature's pgx store adapter
       stores/turso/       module …/features/cms/stores/turso            — the CMS feature's Turso store adapter
@@ -43,18 +46,19 @@ worked example `examples/cms`.
       cmd/  internal/theme  workshop/migrations
     minimal/               module github.com/gopernicus/gopernicus/examples/minimal           — a host app: features/cms on an in-memory store
       cmd/  internal/memstore
-    auth-cms/              module github.com/gopernicus/gopernicus/examples/auth-cms          — a host app: auth + cms composed, in-memory, auth gates cms admin
+    auth-cms/              module github.com/gopernicus/gopernicus/examples/auth-cms          — a host app: auth + cms + events + the authorization flagship composed, in-memory (rule 6, live)
       cmd/  internal/authmem  internal/memstore
     jobs-minimal/          module github.com/gopernicus/gopernicus/examples/jobs-minimal      — a host app: features/jobs on its memstore, zero drivers
       cmd/
 ```
 
-**Thirty modules today.** `sdk` is the kernel; `integrations/*` are reusable
+**Thirty-four modules today.** `sdk` is the kernel; `integrations/*` are reusable
 third-party connectors (one external dependency each, each its own module);
 `features/<name>` is a datastore-free feature core with its store adapters as
 sibling modules — one per supported store implementation; `examples/*` are host apps that
 consume them — `examples/cms` (Turso), `examples/minimal` (in-memory, zero
-libsql in its module graph), and `examples/auth-cms` (two features composed;
+libsql in its module graph), and `examples/auth-cms` (auth + cms + events +
+the authorization flagship composed, all in-memory;
 constitution rule 6 demonstrated live). Features wear the app hexagon's
 names (trio layout, 2026-07-02): `domain/<domain>` is the public rim
 (entities + ports — public by necessity, since hosts and store modules
