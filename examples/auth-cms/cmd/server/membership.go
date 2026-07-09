@@ -3,74 +3,57 @@ package main
 import (
 	"context"
 	"net/http"
-	"sync"
 
 	auth "github.com/gopernicus/gopernicus/features/authentication"
+	authorization "github.com/gopernicus/gopernicus/features/authorization"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
 
-// The demo resource the membership-gated route checks against. An invitation
-// created at POST /auth/invitations/project/demo with relation "member" grants
-// through the toy Granter into exactly this (resource, relation).
+// The demo resource the flagship checks against. An invitation created at
+// POST /auth/invitations/project/demo with relation "member" grants — through the
+// relationshipGranter → authorizer.CreateRelationships — the tuple
+// project:demo#member@user:<id>. The demo `view` permission is AnyOf(owner,
+// member), so both an owner and a member pass the gate.
 const (
 	demoResourceType = "project"
 	demoResourceID   = "demo"
-	demoRelation     = "member"
+	demoRelation     = "member" // the relation the invitation grants (owner also satisfies view)
+	demoPermission   = "view"
 )
 
-// membership is the proof host's TOY Granter (design §6, ratified AV4): an
-// in-memory resource→relation→subject membership map. It structurally satisfies
-// auth.Granter (Grant grants a subject a relation on a resource) and is read back
-// by requireMembership to gate a route. It is the DEMONSTRATION of the ruling —
-// invitations grant with NO ReBAC anywhere in this host's module graph;
-// authorization-v1's proof host swaps authorizer.CreateRelationships in via the
-// same seam. Grants are idempotent (a set add), as the Granter contract requires.
-type membership struct {
-	mu sync.Mutex
-	// grants[resourceType/resourceID][relation][subjectType:subjectID].
-	grants map[string]map[string]map[string]struct{}
+// relationshipGranter adapts the authorization engine to auth.Granter — design
+// §6's promised completion (authorization-v1 Z4 commit 2). Invitation-accept now
+// writes a real ReBAC tuple via authorizer.CreateRelationships, retiring the A9
+// toy in-memory membership map. There is STILL no import edge between features:
+// the host is the only party that holds both auth and authorization, wiring them
+// through this host-local adapter over the sdk-shaped Granter seam.
+type relationshipGranter struct {
+	authorizer *authorization.Service
 }
 
-var _ auth.Granter = (*membership)(nil)
+var _ auth.Granter = relationshipGranter{}
 
-func newMembership() *membership {
-	return &membership{grants: map[string]map[string]map[string]struct{}{}}
-}
-
-// Grant records that (subjectType, subjectID) holds relation on the resource.
-func (m *membership) Grant(_ context.Context, resourceType, resourceID, relation, subjectType, subjectID string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	res := resourceType + "/" + resourceID
-	if m.grants[res] == nil {
-		m.grants[res] = map[string]map[string]struct{}{}
-	}
-	if m.grants[res][relation] == nil {
-		m.grants[res][relation] = map[string]struct{}{}
-	}
-	m.grants[res][relation][subjectType+":"+subjectID] = struct{}{}
-	return nil
-}
-
-// has reports whether (subjectType, subjectID) holds relation on the resource.
-func (m *membership) has(resourceType, resourceID, relation, subjectType, subjectID string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	rel := m.grants[resourceType+"/"+resourceID][relation]
-	if rel == nil {
-		return false
-	}
-	_, ok := rel[subjectType+":"+subjectID]
-	return ok
+// Grant records that (subjectType, subjectID) holds relation on the resource as a
+// relationship tuple. CreateRelationships is idempotent (a duplicate is a silent
+// no-op), satisfying the Granter contract's idempotence requirement.
+func (g relationshipGranter) Grant(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) error {
+	return g.authorizer.CreateRelationships(ctx, []authorization.CreateRelationship{{
+		ResourceType: resourceType,
+		ResourceID:   resourceID,
+		Relation:     relation,
+		SubjectType:  subjectType,
+		SubjectID:    subjectID,
+	}})
 }
 
 // requireMembership gates a route on the caller — already resolved by
-// RequirePrincipal into ctx — holding demoRelation on the demo resource in the
-// toy map. A resolved principal WITHOUT the grant → 403; no resolved principal
-// (RequirePrincipal should have blocked that already) → 401. It reads the
-// principal through the exported auth.Service.CurrentPrincipal port, with zero
-// import into the feature internals.
-func requireMembership(authSvc *auth.Service, m *membership) web.Middleware {
+// RequirePrincipal into ctx — holding the demo `view` permission on the demo
+// resource, checked THROUGH the authorization engine (authorizer.Check, the
+// flagship posture; the A9 toy-map read is retired). A resolved principal WITHOUT
+// access → 403; no resolved principal (RequirePrincipal should have blocked that
+// already) → 401. It reads the principal through the exported
+// auth.Service.CurrentPrincipal port, with zero import into the feature internals.
+func requireMembership(authSvc *auth.Service, authorizer *authorization.Service) web.Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			p, ok := authSvc.CurrentPrincipal(r.Context())
@@ -78,10 +61,19 @@ func requireMembership(authSvc *auth.Service, m *membership) web.Middleware {
 				writeHostJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
 				return
 			}
-			if !m.has(demoResourceType, demoResourceID, demoRelation, p.Type, p.ID) {
+			res, err := authorizer.Check(r.Context(), authorization.CheckRequest{
+				Subject:    authorization.Subject{Type: p.Type, ID: p.ID},
+				Permission: demoPermission,
+				Resource:   authorization.Resource{Type: demoResourceType, ID: demoResourceID},
+			})
+			if err != nil {
+				writeHostJSON(w, http.StatusInternalServerError, map[string]string{"error": "authorization check failed"})
+				return
+			}
+			if !res.Allowed {
 				writeHostJSON(w, http.StatusForbidden, map[string]string{
-					"error":    "not a member of " + demoResourceType + "/" + demoResourceID,
-					"relation": demoRelation,
+					"error":      "not authorized on " + demoResourceType + "/" + demoResourceID,
+					"permission": demoPermission,
 				})
 				return
 			}

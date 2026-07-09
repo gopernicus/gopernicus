@@ -17,11 +17,13 @@
 // a host-local fake OAuth provider (oauthfake.go), machine identity (API keys +
 // service accounts), stateless bearer JWTs signed host-side by
 // integrations/cryptids/golang-jwt, security-event audit rows surfaced through a
-// DEFAULT-OFF debug route, and invitations that grant through a TOY in-memory
-// membership Granter (membership.go) — the demonstration of ratified AV4:
-// invitations work with NO ReBAC anywhere in this host's module graph. The two
-// host-local demo routes (demo.go) are gated on a resolved principal and on toy
-// membership respectively.
+// DEFAULT-OFF debug route, and invitations that grant through the authorization
+// engine's relationshipGranter (membership.go) — authorization-v1's FLAGSHIP
+// posture (Z4 commit 2): invitation-accept writes a real ReBAC tuple via
+// authorizer.CreateRelationships, retiring the A9 toy membership map; the
+// memstore-backed engine keeps the host zero-infra (no libsql). The host-local
+// demo routes (demo.go) are gated variously on a resolved principal, an engine
+// Check, a LookupResources enumeration, and a roles-kind HasRole check.
 //
 // features/events adds the SSE gateway at GET /events (authenticated via
 // authSvc.RequireUser on StreamMiddleware): a cms edit fans out as a
@@ -48,6 +50,8 @@ import (
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/memstore"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/outboxmem"
 	auth "github.com/gopernicus/gopernicus/features/authentication"
+	authorization "github.com/gopernicus/gopernicus/features/authorization"
+	authzmem "github.com/gopernicus/gopernicus/features/authorization/memstore"
 	"github.com/gopernicus/gopernicus/features/cms"
 	"github.com/gopernicus/gopernicus/features/cms/domain/content"
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
@@ -114,9 +118,39 @@ func run(ctx context.Context, log *slog.Logger) error {
 
 	mount := feature.Mount{Router: router, Logger: log, Events: bus}
 
-	// The TOY membership Granter (design §6, ratified AV4): invitations grant
-	// through this in-memory map with NO ReBAC in the module graph.
-	members := newMembership()
+	// The authorization feature (authorization-v1 Z4 commit 2 — the FLAGSHIP
+	// posture): BOTH kinds wired, memstore-backed, so the host stays zero-infra (no
+	// driver in the graph — GOWORK=off go list -m all still has no libsql). The
+	// relationship kind's schema declares a `project` resource type (owner/member
+	// relations, view = AnyOf(owner, member)) and a `platform` resource type whose
+	// `admin` relation backs the platform-admin DATA tuple (platform-admin is data,
+	// never Config). The roles kind (demo.go) needs no model. Register logs only.
+	authzModel := authorization.NewSchema([]authorization.ResourceSchema{
+		{Name: demoResourceType, Def: authorization.ResourceTypeDef{
+			Relations: map[string]authorization.RelationDef{
+				"owner":  {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}}},
+				"member": {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}}},
+			},
+			Permissions: map[string]authorization.PermissionRule{
+				demoPermission: authorization.AnyOf(authorization.Direct("owner"), authorization.Direct("member")),
+			},
+		}},
+		{Name: "platform", Def: authorization.ResourceTypeDef{
+			Relations: map[string]authorization.RelationDef{
+				"admin": {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}}},
+			},
+		}},
+	})
+	authorizer, err := authorization.NewService(authorization.Repositories{
+		Relationships: authzmem.NewRelationships(),
+		Roles:         authzmem.NewRoles(),
+	}, authorization.Config{Model: authzModel})
+	if err != nil {
+		return err
+	}
+	if err := authorizer.Register(mount); err != nil {
+		return err
+	}
 
 	// Host-side collaborators built from the environment (see demo.go): the JWT
 	// signer (golang-jwt, or nil when AUTH_JWT_DISABLED=1, or an ephemeral key
@@ -145,7 +179,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		TokenEncrypter:       encrypter,
 		TokenSigner:          signer,
 		TokenTTL:             tokenTTL(),
-		Granter:              members,
+		Granter:              relationshipGranter{authorizer: authorizer},
 		Logger:               log,
 	}
 
@@ -199,11 +233,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// gateway reads connect-time identity from sdk/identity, stashed by
 	// authSvc.RequireUser on StreamMiddleware (A-I1 E2: no Identity field — absent
 	// principal fails closed with 401). Repositories.Outbox nil ⇒ direct-emit mode
-	// (no durable rail, no poller). Authorize is wired below with a PLAIN host
-	// ownership closure (the middle posture — authorization-v1 Z4 commit 1), so the
-	// resource-scoped /events/{resource_type}/{resource_id} route IS registered. The
-	// subject stream lands at GET /events (host mounts at root, no prefix — same as
-	// cms/auth).
+	// (no durable rail, no poller). Authorize is wired below through the
+	// authorization ENGINE (the flagship posture — authorization-v1 Z4 commit 2),
+	// so the resource-scoped /events/{resource_type}/{resource_id} route IS
+	// registered. The subject stream lands at GET /events (host mounts at root, no
+	// prefix — same as cms/auth).
 	// Variant selection (design §8): the DEFAULT is direct-emit (Repositories.Outbox
 	// nil — cms emits straight onto the bus). With EVENTS_OUTBOX=memory the host
 	// instead wires an example-local in-memory outbox and drives a poller that
@@ -219,16 +253,20 @@ func run(ctx context.Context, log *slog.Logger) error {
 	eventsSvc, err := eventsfeature.NewService(eventsRepos, eventsfeature.Config{
 		Bus:              bus,
 		StreamMiddleware: []web.Middleware{authSvc.RequireUser},
-		// Authorize (the MIDDLE POSTURE — authorization-v1 Z4 commit 1): a plain
-		// host ownership closure over the toy membership map satisfies the events
-		// Check seam, with NO features/authorization in this host's module graph
-		// (GOWORK=off go list -m all has no authorization module and no libsql). A
-		// non-nil Authorize registers the resource-scoped
-		// GET /events/{resource_type}/{resource_id} route; the closure reads the
-		// SAME map A9's invitation Granter writes (members.has). Commit 2 swaps this
-		// for authorizer.Check (the flagship posture) through the identical seam.
+		// Authorize (the FLAGSHIP posture — authorization-v1 Z4 commit 2): the SAME
+		// events Check seam, now backed by the authorization ENGINE instead of the
+		// retired toy map (commit 1). The host stays zero-infra (the authorizer is
+		// memstore-backed — no libsql). A non-nil Authorize registers the
+		// resource-scoped GET /events/{resource_type}/{resource_id} route; the
+		// closure maps the stream's identity.Principal onto an authorization.Subject
+		// unadapted and asks the engine for the `view` permission on the (type, id).
 		Authorize: func(ctx context.Context, p identity.Principal, resourceType, resourceID string) (bool, error) {
-			return members.has(resourceType, resourceID, demoRelation, p.Type, p.ID), nil
+			res, err := authorizer.Check(ctx, authorization.CheckRequest{
+				Subject:    authorization.Subject{Type: p.Type, ID: p.ID},
+				Permission: demoPermission,
+				Resource:   authorization.Resource{Type: resourceType, ID: resourceID},
+			})
+			return res.Allowed, err
 		},
 	})
 	if err != nil {
@@ -272,7 +310,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 
 	// Host-local demo + debug routes (host code, not feature surface).
-	registerDemoRoutes(router, authSvc, members)
+	registerDemoRoutes(router, authSvc, authorizer)
 	registerDebugRoutes(router, authSvc, authRepos, log)
 
 	// Shutdown order (design §7, phase 5 — with the poller, corrected context idiom
