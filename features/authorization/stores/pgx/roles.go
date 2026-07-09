@@ -121,8 +121,8 @@ func (s *roleStore) ListBySubject(ctx context.Context, subjectType, subjectID st
 	q := pgxdb.ListQuery[roleRow]{
 		BaseSQL:      rolesBaseSQL(" WHERE subject_type = @subject_type AND subject_id = @subject_id"),
 		Args:         pgx.NamedArgs{"subject_type": subjectType, "subject_id": subjectID},
-		OrderFields:  orderFields,
-		DefaultOrder: defaultOrder,
+		OrderFields:  role.OrderFields,
+		DefaultOrder: role.DefaultOrder,
 		PK:           "role_key",
 		OrderValueOf: func(r roleRow, _ string) any { return r.CreatedAt },
 		PKOf:         func(r roleRow) string { return r.RoleKey },
@@ -140,8 +140,8 @@ func (s *roleStore) ListByResource(ctx context.Context, resourceType, resourceID
 	q := pgxdb.ListQuery[roleRow]{
 		BaseSQL:      rolesBaseSQL(" WHERE resource_type = @resource_type AND resource_id = @resource_id"),
 		Args:         pgx.NamedArgs{"resource_type": resourceType, "resource_id": resourceID},
-		OrderFields:  orderFields,
-		DefaultOrder: defaultOrder,
+		OrderFields:  role.OrderFields,
+		DefaultOrder: role.DefaultOrder,
 		PK:           "role_key",
 		OrderValueOf: func(r roleRow, _ string) any { return r.CreatedAt },
 		PKOf:         func(r roleRow) string { return r.RoleKey },

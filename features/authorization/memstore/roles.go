@@ -13,10 +13,23 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
-// unknownOrderField is the error pageMem returns for an order field other than
-// created_at — the only sortable field these listings expose.
+// unknownOrderField is the error pageMem returns for an order field absent from
+// the kind's rim allow-list — the same errs.ErrInvalidInput-class error the SQL
+// stores' resolveOrder produces, so storetest asserts one rejection shape across
+// every backend.
 func unknownOrderField(field string) error {
 	return fmt.Errorf("unknown order field %q: %w", field, errs.ErrInvalidInput)
+}
+
+// orderAllowed reports whether field names a column in the kind's rim allow-list,
+// mirroring the connectors' resolveOrder membership check (match by column).
+func orderAllowed(field string, fields map[string]crud.OrderField) bool {
+	for _, of := range fields {
+		if of.Column == field {
+			return true
+		}
+	}
+	return false
 }
 
 // roleRow is one stored role assignment. The empty (resourceType, resourceID)
@@ -92,7 +105,7 @@ func (r *Roles) ListBySubject(ctx context.Context, subjectType, subjectID string
 			items = append(items, row.toAssignment())
 		}
 	}
-	return pageMem(items, req, assignmentKey)
+	return pageMem(items, req, role.OrderFields, assignmentKey)
 }
 
 // ListByResource pages the assignments scoped to a resource (direct-scope only).
@@ -105,7 +118,7 @@ func (r *Roles) ListByResource(ctx context.Context, resourceType, resourceID str
 			items = append(items, row.toAssignment())
 		}
 	}
-	return pageMem(items, req, assignmentKey)
+	return pageMem(items, req, role.OrderFields, assignmentKey)
 }
 
 // index returns the row position of an exact 5-tuple, or -1. Caller holds lock.
@@ -143,13 +156,15 @@ func assignmentKey(a role.Assignment) (time.Time, string) {
 
 // pageMem paginates items by the contractual order (created_at DESC, tiebreak
 // DESC) with cursor and offset strategies, mirroring the SQL stores' keyset
-// contract so storetest proves the same shape against every backend. keyOf
+// contract so storetest proves the same shape against every backend. It rejects
+// an order field absent from the kind's rim allow-list (fields) with
+// errs.ErrInvalidInput, exactly as the connectors' resolveOrder does. keyOf
 // returns each item's (created_at, tiebreak-pk).
-func pageMem[T any](all []T, req crud.ListRequest, keyOf func(T) (time.Time, string)) (crud.Page[T], error) {
+func pageMem[T any](all []T, req crud.ListRequest, fields map[string]crud.OrderField, keyOf func(T) (time.Time, string)) (crud.Page[T], error) {
 	if err := req.Validate(); err != nil {
 		return crud.Page[T]{}, err
 	}
-	if req.Order.Field != "" && req.Order.Field != "created_at" {
+	if req.Order.Field != "" && !orderAllowed(req.Order.Field, fields) {
 		return crud.Page[T]{}, unknownOrderField(req.Order.Field)
 	}
 	asc := req.Order.Direction == crud.ASC

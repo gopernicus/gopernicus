@@ -227,8 +227,8 @@ func (s *relationshipStore) ListRelationshipsBySubject(ctx context.Context, subj
 	q := tursodb.ListQuery[relationship.SubjectRelationship]{
 		BaseSQL:      `SELECT relationship_id, resource_type, resource_id, relation, created_at FROM iam_relationships ` + where,
 		Args:         args,
-		OrderFields:  orderFields,
-		DefaultOrder: defaultOrder,
+		OrderFields:  relationship.OrderFields,
+		DefaultOrder: relationship.DefaultOrder,
 		PK:           "relationship_id",
 		Scan:         scanSubjectRelationship,
 		OrderValueOf: func(r relationship.SubjectRelationship, _ string) any { return r.CreatedAt },
@@ -253,8 +253,8 @@ func (s *relationshipStore) ListRelationshipsByResource(ctx context.Context, res
 	q := tursodb.ListQuery[relationship.ResourceRelationship]{
 		BaseSQL:      `SELECT relationship_id, subject_type, subject_id, relation, created_at FROM iam_relationships ` + where,
 		Args:         args,
-		OrderFields:  orderFields,
-		DefaultOrder: defaultOrder,
+		OrderFields:  relationship.OrderFields,
+		DefaultOrder: relationship.DefaultOrder,
 		PK:           "relationship_id",
 		Scan:         scanResourceRelationship,
 		OrderValueOf: func(r relationship.ResourceRelationship, _ string) any { return r.CreatedAt },

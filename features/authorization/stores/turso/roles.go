@@ -68,8 +68,8 @@ func (s *roleStore) ListBySubject(ctx context.Context, subjectType, subjectID st
 	q := tursodb.ListQuery[role.Assignment]{
 		BaseSQL:      `SELECT ` + roleColumns + ` FROM iam_roles WHERE subject_type = ? AND subject_id = ?`,
 		Args:         []any{subjectType, subjectID},
-		OrderFields:  orderFields,
-		DefaultOrder: defaultOrder,
+		OrderFields:  role.OrderFields,
+		DefaultOrder: role.DefaultOrder,
 		PK:           roleTiebreak,
 		Scan:         scanAssignment,
 		OrderValueOf: func(a role.Assignment, _ string) any { return a.CreatedAt },
@@ -84,8 +84,8 @@ func (s *roleStore) ListByResource(ctx context.Context, resourceType, resourceID
 	q := tursodb.ListQuery[role.Assignment]{
 		BaseSQL:      `SELECT ` + roleColumns + ` FROM iam_roles WHERE resource_type = ? AND resource_id = ?`,
 		Args:         []any{resourceType, resourceID},
-		OrderFields:  orderFields,
-		DefaultOrder: defaultOrder,
+		OrderFields:  role.OrderFields,
+		DefaultOrder: role.DefaultOrder,
 		PK:           roleTiebreak,
 		Scan:         scanAssignment,
 		OrderValueOf: func(a role.Assignment, _ string) any { return a.CreatedAt },
