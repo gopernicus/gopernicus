@@ -326,7 +326,7 @@ func (r *Relationships) ListRelationshipsBySubject(ctx context.Context, subjectT
 			CreatedAt:    row.createdAt,
 		})
 	}
-	return pageMem(items, req, func(s relationship.SubjectRelationship) (time.Time, string) {
+	return pageMem(items, req, relationship.OrderFields, func(s relationship.SubjectRelationship) (time.Time, string) {
 		return s.CreatedAt, s.ID
 	})
 }
@@ -354,7 +354,7 @@ func (r *Relationships) ListRelationshipsByResource(ctx context.Context, resourc
 			CreatedAt:   row.createdAt,
 		})
 	}
-	return pageMem(items, req, func(s relationship.ResourceRelationship) (time.Time, string) {
+	return pageMem(items, req, relationship.OrderFields, func(s relationship.ResourceRelationship) (time.Time, string) {
 		return s.CreatedAt, s.ID
 	})
 }

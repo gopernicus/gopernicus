@@ -44,7 +44,6 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authorization"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
@@ -57,16 +56,6 @@ var MigrationsFS embed.FS
 
 // MigrationsDir is the directory within MigrationsFS holding the .sql files.
 const MigrationsDir = "migrations"
-
-// orderFields is the listings' order allow-list and defaultOrder its default:
-// created_at is the only sortable column both kinds' keyset listings expose
-// (mirroring the memstore reference, which rejects any other order field). The
-// PK tiebreak is per-kind (relationship_id for relationships; the derived
-// role_key for roles) and set on each ListQuery, not here.
-var (
-	orderFields  = map[string]crud.OrderField{"created_at": {Column: "created_at"}}
-	defaultOrder = crud.Order{Field: "created_at", Direction: crud.DESC}
-)
 
 // Repositories returns the authorization repository set backed by db — BOTH
 // kinds wired — AFTER verifying the iam_relationships AND iam_roles tables exist

@@ -375,3 +375,22 @@ carries its "Gate fold" bullets); the record:
   bookkeeping verified (steward 9 / lead cross-check: eight today → ten
   at P6). Both reviewers independently verified the G9/G10 baselines
   clean and P1's "authorization is the only divergence" claim.
+
+### 2026-07-09 — P1 CLOSED (order allow-lists → domain rims)
+
+`domain/relationship/order.go` + `domain/role/order.go` authored (apikey
+mirror: exported `OrderFields` created_at-only + `DefaultOrder` DESC);
+store-local copies deleted from both stores (consumption sites in each
+store's relationships.go/roles.go updated — necessary compile scope
+beyond the named files, logged); memstore's `pageMem` now validates
+`req.Order` by rim-allow-list membership; NEW storetest cases
+`Relationship/RejectsUnknownOrderField` + `Roles/RejectsUnknownOrderField`
+green across all three backends on one `errors.Is(err,
+errs.ErrInvalidInput)` assertion. **Premise-correction (logged):** the
+gate fold's "memstore IGNORES req.Order" was partly false — pageMem
+already rejected non-created_at fields with the same error kind, so this
+is single-source-of-truth consolidation, not a behavior fix; observable
+behavior unchanged. Verify: authorization module + both stores
+build/test/vet green (incl. `-tags=integration` vet), `make check` +
+`make guard` green, gofmt clean; standing check `examples/minimal` 200,
+port freed. Committed CI-green. **Next: P2.**

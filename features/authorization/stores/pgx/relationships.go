@@ -327,8 +327,8 @@ func (s *relationshipStore) ListRelationshipsBySubject(ctx context.Context, subj
 	q := pgxdb.ListQuery[subjectRelationshipRow]{
 		BaseSQL:      `SELECT relationship_id, resource_type, resource_id, relation, created_at FROM iam_relationships` + where,
 		Args:         args,
-		OrderFields:  orderFields,
-		DefaultOrder: defaultOrder,
+		OrderFields:  relationship.OrderFields,
+		DefaultOrder: relationship.DefaultOrder,
 		PK:           "relationship_id",
 		OrderValueOf: func(r subjectRelationshipRow, _ string) any { return r.CreatedAt },
 		PKOf:         func(r subjectRelationshipRow) string { return r.ID },
@@ -356,8 +356,8 @@ func (s *relationshipStore) ListRelationshipsByResource(ctx context.Context, res
 	q := pgxdb.ListQuery[resourceRelationshipRow]{
 		BaseSQL:      `SELECT relationship_id, subject_type, subject_id, relation, created_at FROM iam_relationships` + where,
 		Args:         args,
-		OrderFields:  orderFields,
-		DefaultOrder: defaultOrder,
+		OrderFields:  relationship.OrderFields,
+		DefaultOrder: relationship.DefaultOrder,
 		PK:           "relationship_id",
 		OrderValueOf: func(r resourceRelationshipRow, _ string) any { return r.CreatedAt },
 		PKOf:         func(r resourceRelationshipRow) string { return r.ID },

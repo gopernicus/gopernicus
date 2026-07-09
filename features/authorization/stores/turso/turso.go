@@ -44,7 +44,6 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authorization"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
@@ -60,16 +59,6 @@ const MigrationsDir = "migrations"
 
 // scanner abstracts *sql.Row and *sql.Rows for shared scan helpers.
 type scanner = tursodb.Scanner
-
-// orderFields is the listings' order allow-list and defaultOrder its default:
-// created_at is the only sortable column both kinds' keyset listings expose
-// (mirroring the memstore reference, which rejects any other order field). The
-// PK tiebreak is per-kind (relationship_id for relationships; the 5-tuple
-// composite for roles) and set on each ListQuery, not here.
-var (
-	orderFields  = map[string]crud.OrderField{"created_at": {Column: "created_at"}}
-	defaultOrder = crud.Order{Field: "created_at", Direction: crud.DESC}
-)
 
 // Repositories returns the authorization repository set backed by db — BOTH
 // kinds wired — AFTER verifying the iam_relationships AND iam_roles tables exist
