@@ -1,6 +1,6 @@
 # segovia-lessons — milestone overview
 
-Status: **DRAFT — pending owner ratification (cut 2026-07-08)**
+Status: **OPEN (standing intake) — ratified 2026-07-08; phase 01 EXECUTED 2026-07-08**
 Milestone: `segovia-lessons` — the **standing intake** for framework gaps
 surfaced by Segovia v2, the host app being built in tandem with gopernicus
 in a separate repo. Segovia records gaps as **flags** in its own flags doc;
@@ -39,7 +39,7 @@ Never sonnet.
 
 | # | Flag (short) | Raised | Status here | Disposition |
 |---|---|---|---|---|
-| 1 | **App-local inbound anatomy is underspecified** — ratify Segovia's `internal/inbound/domains/<domain>/` anatomy (routes/api/html/views-port/templates, growth rule, theming seam, override-via-embedding); features somewhat mirror it | 2026-07-08 | **PLANNED** — `01-inbound-anatomy.md` (this cut) | Ratify + document in ARCHITECTURE.md and `features/README.md`; re-slice the three feature inbound packages; D1 RATIFIED (d) `internal/inbound/<feature>/` 2026-07-08 (phase file §D1) |
+| 1 | **App-local inbound anatomy is underspecified** — ratify Segovia's `internal/inbound/domains/<domain>/` anatomy (routes/api/html/views-port/templates, growth rule, theming seam, override-via-embedding); features somewhat mirror it | 2026-07-08 | **EXECUTED 2026-07-08** — `01-inbound-anatomy.md` | Ratify + document in ARCHITECTURE.md and `features/README.md`; re-slice the three feature inbound packages; D1 RATIFIED (d) `internal/inbound/<feature>/` 2026-07-08 (phase file §D1) |
 | 2 | **`sdk/id` is string-only** (26-char lowercase base32) — Segovia needs int, string, AND uuid identifiers | 2026-07-08 | **QUEUED** — no phase file yet | Owner is reviewing ID strategy; cut a phase (`02-…` or later) when that review lands. Do NOT pre-design here — the kind-set and port shape are the owner's open question |
 | 3 | **Old-monolith import-path collision** — `github.com/gopernicus/gopernicus v0.5.4` (the original monolith) and this multi-module repo share import-path prefixes, so one Go workspace can never hold both; needs a note in RELEASING.md / migration docs | 2026-07-08 | **QUEUED** — docs-only micro-phase when scheduled | Deliberately NOT folded into phase 01 (scope discipline: 01 is inbound anatomy; a RELEASING.md compatibility note shares nothing with it). Small enough to cut as a one-task phase, or to ride along the next RELEASING.md-touching plan — owner's call at that moment |
 

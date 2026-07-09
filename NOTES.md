@@ -1475,3 +1475,57 @@ code-declared resource properties, never env-configured (strategy
 stays the only env-defaultable list knob); no ListRequest field growth.
 Archived as `.claude/past/pgx-crud-v1/v1b-list-limits.md`. Still
 UNCOMMITTED with the parent milestone + v1a — jrazmi's commit call.
+
+## 2026-07-08 — segovia-lessons phase 01 EXECUTED: inbound anatomy ratified (flag #1); D1 = `internal/inbound/<feature>/`
+
+The segovia-lessons milestone opened as the standing intake for framework
+gaps flagged by Segovia v2 (flags adopted VERBATIM from Segovia's
+`04-gopernicus-flags.md`; that doc is never edited from here — owner flips
+statuses there). Flag #1 ratified and executed same day: ARCHITECTURE.md
+gained the §"Inbound anatomy" subsection (per-domain
+`internal/inbound/domains/<domain>/` with routes.go/api.go/html.go/
+views.go/templates/; `inbound/http/` plumbing-only; `inbound/views/`
+global tree + theming seam; override-via-embedding; the resource-axis
+growth rule; never `/api`/`/html`/`/htmx` subdirs). One gopernicus-side
+extension of the flag text, marked as such: the **maximal flatten** —
+single-resource, single-transport, small handler set may keep handlers in
+`routes.go` (`features/events/internal/inbound/events/routes.go` is the
+blessed example); candidate to flow back to Segovia's doc.
+
+**D1 ratified (d)** after the owner declined the three post-cut reviews'
+keep-`inbound/http` recommendation and withdrew the original
+`inbound/domain` lean: the feature inbound package is
+`internal/inbound/<feature>/` — Segovia names handler packages for the
+DOMAIN, never the transport, so `http/` means plumbing on BOTH sides of
+the app/feature line (a feature has none until real plumbing appears).
+Root-socket aliases `internalhttp` → `inbound`. The mirror stays
+deliberately partial per FS1/FS3: feature templates never co-locate; the
+render port lives in the core with the `views/<pkg>` sibling default; the
+feature theming seam is embed-the-sibling-default.
+
+Executed as four CI-green commits: task-2 dir renames (32 files, alias +
+package + comment lines only); task-3 cms `router.go` → `routes.go` (pure
+0-line rename); task-4 authentication `http.go` split → `routes.go`
+(package doc, `Mount`, the package-wide `handlers` struct, clientInfo
+plumbing) + `sessions.go` (authService port, DTOs, `decode`,
+session/account handlers), shared test fixtures re-homed to
+`helpers_test.go`, `http_test.go` → `sessions_test.go`; the
+`mountOAuth`/`mountMachine`/`mountInvitations` helpers stay in their
+resource files — that IS the ratified feature form. `token_test.go` still
+pairs with a handler in sessions.go (no token.go) — deliberate,
+growth-rule only-split-when-heavy. Live legs, both driven: examples/cms
+on Turso (`GET /` 200 rendered, `/terms` 200, `/menus` 200, bogus media
+404); auth-cms cookie flow register 201 → verify 200 → login 200 →
+logout 200 → stale-cookie 401. `features/README.md` §2 rows rewritten
+(anatomy + app↔feature mapping) and the two stale `internal/http`
+citations fixed.
+
+**Guard-or-decline (the mechanically-guardable "never `/api`/`/html`/
+`/htmx` subdirs" rule): DECLINED for now** — zero such subdirs exist, the
+guard family G1–G7 is deliberately import/module-shaped, and the anatomy
+is doc- and review-enforced; the named trigger to add a find-over-dirs
+guard is the first app-local domain in this repo or the workshop-v2
+`gopernicus new domain` scaffold (which should emit this shape and is the
+mechanical enforcement point). Flags #2 (sdk/id kind-set — owner
+reviewing) and #3 (RELEASING.md old-monolith import-path collision note)
+remain QUEUED in the milestone ledger.

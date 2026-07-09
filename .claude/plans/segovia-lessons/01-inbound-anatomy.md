@@ -1,6 +1,6 @@
 # Phase 01 — inbound anatomy (flag #1): ratify the app-local inbound anatomy; features mirror the file axis
 
-Status: **DRAFT — pending owner ratification (cut 2026-07-08)**
+Status: **RATIFIED 2026-07-08 (jrazmi, in-conversation) — EXECUTED 2026-07-08 (tasks 1–5; see Execution log)**
 Milestone: `segovia-lessons` (see `00-overview.md` — the flag ledger, the
 provenance discipline, the inherited law)
 Executor model: **fable** for the doc tasks (1, 5 — design/doc judgment),
@@ -661,4 +661,46 @@ frontend doctrine was already consulted pre-cut.)
 
 ## Execution log
 
-(append dated entries here)
+- 2026-07-08 — phase ratified in-conversation (jrazmi: "ratified, can we
+  update our features/"). Precondition wait: an unrelated session held the
+  tree dirty (121 files, overlapping the auth inbound package); executed
+  only after it committed (`621ef38 crud work`) and `git status` came back
+  clean. Baseline `make check` green before task-1.
+- 2026-07-08 — **task-1 done** (`212b473`): ARCHITECTURE.md §"Inbound
+  anatomy — inside `internal/inbound/`" added after the app-pattern dir
+  table; proofread against the verbatim flag — all rules present, plus
+  the marked maximal-flatten clarification and the view-tech scoping
+  sentence. `make guard` green.
+- 2026-07-08 — **task-2 done** (implementer agent; committed next SHA):
+  three dir renames to `internal/inbound/{authentication,cms,events}`,
+  package clauses, root-socket aliases `internalhttp` → `inbound`,
+  `authsvc/context.go` comment path. 32 files, 46+/46−, renames + line
+  edits only. Per-module build/test/vet + `make check` + `make guard`
+  green.
+- 2026-07-08 — **task-3 done**: cms `router.go` → `routes.go`, pure
+  0-line rename (no `router_test.go` existed). Run-and-look on
+  examples/cms (live Turso): `GET /` 200 rendered HTML, `/terms` 200,
+  `/menus` 200, bogus `/media/{id}/file` 404, clean shutdown. Note: this
+  example mounts admin routes without auth middleware, so 200 (not a
+  redirect) is the correct pre-existing behavior.
+- 2026-07-08 — **task-4 done**: fixture survey found the shared set
+  (`do`, `newTestHandler`, `mem*` stores, `fakeHasher`, `nopMailer`,
+  `sessionCookie`, `denyLimiter`, the `authService` seam pin) → ONE home
+  `helpers_test.go`; abort line not triggered. Split landed as specified:
+  `routes.go` (package doc, `Mount`, `handlers` struct, clientInfo
+  plumbing) + `sessions.go` (git-tracked rename of `http.go`: port, DTOs,
+  `decode`, session/account handlers); `http_test.go` →
+  `sessions_test.go`. Also fixed the three stale `// Package http` doc
+  comments the task-2 rename orphaned (flagged by the executor, folded
+  into the task-4 commit). Run-and-look on auth-cms (:8123): register
+  201 → verify 200 → login 200 → logout 200 → stale-cookie 401.
+  Line-citation drift from the interleaved `crud work` commit was
+  re-surveyed as instructed; symbol inventory held.
+- 2026-07-08 — **task-5 done**: `features/README.md` §2 anatomy row +
+  app↔feature mapping row rewritten; §3/§4 stale `internal/http` paths
+  fixed; ARCHITECTURE.md repo-tree line untouched (its `internal/inbound`
+  mention was path-generic — the "only if D1 changed the path" condition
+  did not fire); NOTES.md dated entry appended, including the
+  **guard-or-decline record: DECLINED for now** (zero such subdirs exist;
+  G1–G7 are import/module-shaped; named trigger = first in-repo app-local
+  domain or the workshop-v2 scaffold). Final `make check` green.
