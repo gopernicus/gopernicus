@@ -19,6 +19,7 @@ use (
 	./features/authentication/stores/pgx
 	./features/authentication/stores/turso
 	./features/authorization
+	./features/authorization/stores/turso
 	./features/cms
 	./features/cms/stores/pgx
 	./features/cms/stores/turso
