@@ -1,7 +1,6 @@
 # Phase Z4 — consumer seams + proof host (the three postures + both kinds, demonstrated)
 
-Status: **DRAFT — awaiting jrazmi ratification (cut 2026-07-08, authorized
-as a planning-only leg)**
+Status: **RATIFIED 2026-07-09 (jrazmi) — Q1-Q7 at recommendations; EXECUTING**
 Executor model: opus
 Depends on: Z1 (hard), Z2a/Z2b (default order — this phase itself runs
 zero-infra on `memstore/`, the events phase-4/5 independence precedent),
@@ -68,7 +67,7 @@ method form**: `svc, err := name.NewService(repos, cfg)` then
 - The full real-interaction protocol below passed and recorded verbatim
   (commands, codes, frames). **Green tests alone do not close this
   phase.**
-- Rule-6 greps clean both directions; `make check` green (33 modules);
+- Rule-6 greps clean both directions; `make check` green (34 modules);
   `examples/auth-cms/go.mod` gains `features/authorization` (+ sibling
   replace) at commit 2 only.
 
@@ -298,7 +297,7 @@ user).
 
 ```sh
 cd examples/auth-cms && go build ./... && go vet ./... && go test ./...
-make check     # 33 modules
+make check     # 34 modules
 make guard     # G7 continuously proves rule 6 across the new edges
 ```
 
@@ -318,3 +317,79 @@ The protocol above IS this phase's check — plus standing check (a)
 (append dated entries here; commit hashes for commit 1 / commit 2 are
 load-bearing — Q2 Option A makes the middle-posture demonstration a
 recorded-protocol-plus-commit artifact)
+
+### 2026-07-09 — task-1 DONE — **commit 1 = `2e1e5eb`** (the middle-posture artifact)
+
+`events.Config.Authorize` wired with the host ownership closure over the
+toy membership map — reusing the EXISTING `membership.has(rt, rid,
+relation, st, sid)` (premise-false logged: the phase's "add a
+hasRelation-style read" already existed; no redundant method added, so
+`membership.go` needed no edit). README gained the postures section
+naming this commit as the middle-posture reference.
+
+**Clean-graph captures (verbatim, workspace-independent form):**
+`GOWORK=off go list -m all | grep -c authorization` → **0**;
+`GOWORK=off go list -m all | grep -i libsql` → **empty** (zero-driver).
+
+**Protocol steps 1–4 (recorded):** admin/B/C registered 201 + verified
+200 + logged in 200 (no seed user exists — premise-false logged; the A9
+host deliberately seeds none, so `admin@example.com` registers as the
+inviter; verify "codes" are alphanumeric tokens). Invite B →
+`project/demo#member` 201; accept 200 (toy Granter). B scoped stream
+`GET /events/project/demo` → **200**, `text/event-stream`, `: ping`
+heartbeat observed over a 27s capture (the route EXISTS now — Authorize
+non-nil). C (non-member) → **403** (denied, not 404); unauthenticated →
+**401**. SIGTERM → documented shutdown order; port 8082 freed.
+`make check` green @ 34; standing check (a) 200s (run by the
+coordinator at the commit boundary).
+
+### 2026-07-09 — tasks 2+3+4 DONE — **commit 2 = `65fcb49`** — **Z4 CLOSED, full protocol green**
+
+**task-2 (flagship):** go.mod + sibling replace (memstore-backed —
+`GOWORK=off … | grep -i libsql` still **empty**, zero-driver preserved);
+schema in `main` (`project` owner/member, `view` = AnyOf(owner, member);
+`platform` type for the admin DATA tuple); `NewService` with BOTH kinds
+memstore-backed + `Register(mount)`; the toy `membership` type RETIRED —
+`relationshipGranter.Grant` → `authorizer.CreateRelationships` (design
+§6's promised completion) wired into `auth.Config.Granter`;
+`AuthorizeStream` and `requireMembership` both delegate to
+`authorizer.Check` (requireMembership now gates on `view` — strictly
+broader than the toy fixed-`member` read, an owner also passes; logged).
+**Seeding judgment call (logged):** boot-registering the admin collides
+with the README's Leg-0 `register → 201`, so seeding is the runtime
+session-gated `POST /demo/admin/bootstrap` (idempotent; admin seeds
+itself `project:demo#owner` + `platform:main#admin` — platform-admin is
+DATA, never Config). **task-3:** `GET /demo/my-projects` →
+`LookupResources` with `{unrestricted, ids}` JSON (+ the pre-existing
+demo.go gofmt import-order issue fixed in-scope). **task-4:**
+`GET /demo/audit` gated on `HasRole("auditor")` with a
+`ListRoleAssignmentsByResource` read-back in the response;
+`POST /demo/roles/{assign,unassign}` admin-driven (roles = opaque
+strings).
+
+**Protocol steps 5–11 (recorded, exact codes):**
+(5) invite → accept now grants through `CreateRelationships`; tuple
+asserted via `/demo/my-projects` (B) `{"ids":["demo"]}`; B stream
+**200**; B gated surface **200**. (6) C: stream **403**, gated surface
+**403**, unauthenticated **401** — denies without the tuple. (7) decline
+leg **200** → declined, no grant (invitation semantics untouched by the
+swap). (8) `/demo/my-projects`: B `{"ids":["demo"],"unrestricted":false}`;
+C `{"ids":[],"unrestricted":false}`; platform-admin
+`{"ids":[],"unrestricted":true}` — the `LookupResult.Unrestricted`
+contract in real JSON. (9) SIGTERM → `server shutting down` → `server
+stopped` → `closing event bus`; port free. (10) B: audit **403** → scoped
+assign **200** → audit **200** with read-back showing B's scoped
+assignment → scoped unassign **200** → **403** (revoke leg; the
+lingering-global-grant caveat noted while driving). (11) C: **403** →
+GLOBAL `auditor` assign → audit **200** (the Q5 fallback driven live)
+with read-back `"scoped_auditors":[]` — **allowed but NOT listed** (the
+lead-major-3 enumeration-vs-decision divergence OBSERVED live) → unassign
+→ **403**.
+
+**Acceptance:** build/test/vet + `GOWORK=off` build green; `make check`
+green @ 34; `make guard` green; rule-6 greps clean both directions;
+`gofmt -l` clean; standing check (a) `examples/minimal` 200s + the
+coordinator's independent boot smoke (all three demo surfaces fail
+closed 401 unauthenticated). **Both mandated demonstrations traceable:
+(a) middle posture = `2e1e5eb`; (b) LookupResources = `65fcb49`. Z4
+acceptance met. Next leg: Z5 (`05-docs-guards.md`).**

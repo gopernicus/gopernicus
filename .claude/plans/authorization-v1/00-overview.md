@@ -1145,6 +1145,26 @@ three backends.** `make check` green @ 34 modules; `make guard` green;
 rule-6 clean both directions; `examples/minimal` no-regression 200s.
 **Next: Z4 (`04-consumer-proof.md`) — consumer seams + proof host.**
 
+### 2026-07-09 — Z4 CLOSED (`04-consumer-proof.md`) — the three postures + both kinds, driven live
+
+The Q2 Option A two-commit protocol executed on `examples/auth-cms`:
+**commit 1 = `2e1e5eb`** — the middle posture (host ownership closure
+satisfies `events.Config.Authorize`; `GOWORK=off` graph captured CLEAN of
+`features/authorization` and libsql; member 200 + heartbeat / non-member
+403 / unauthenticated 401). **commit 2 = `65fcb49`** — the flagship
+(schema in main; both kinds memstore-backed; toy Granter swapped for
+`relationshipGranter` → `CreateRelationships`, completing design §6;
+Check-backed stream + gate; `/demo/my-projects` LookupResources with the
+Unrestricted platform-admin DATA tuple; `/demo/audit` HasRole +
+ListRoleAssignmentsByResource read-back + assign/unassign routes).
+Protocol steps 1–11 recorded verbatim in 04's log — incl. the revoke
+leg, the Q5 global fallback driven live, and the lead-major-3
+enumeration-vs-decision divergence OBSERVED (global-granted C allowed by
+the gate, absent from the scoped listing). Rule-6 clean both directions;
+`make check` @ 34; standing checks 200s. **Next: Z5
+(`05-docs-guards.md`) — docs, guards, the parked root-doc
+reconciliation; milestone close.**
+
 ### 2026-07-08 — planning leg: milestone cut (DRAFT)
 
 Cut `00-overview.md` + phases Z1, Z2a, Z2b, Z4, Z5 from the ratified
