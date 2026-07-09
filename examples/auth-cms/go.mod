@@ -4,6 +4,7 @@ go 1.26.1
 
 require (
 	github.com/gopernicus/gopernicus/features/authentication v0.0.0
+	github.com/gopernicus/gopernicus/features/authorization v0.0.0
 	github.com/gopernicus/gopernicus/features/cms v0.0.0
 	github.com/gopernicus/gopernicus/features/cms/views/templ v0.0.0
 	github.com/gopernicus/gopernicus/features/events v0.0.0
@@ -19,6 +20,8 @@ require (
 )
 
 replace github.com/gopernicus/gopernicus/features/authentication => ../../features/authentication
+
+replace github.com/gopernicus/gopernicus/features/authorization => ../../features/authorization
 
 replace github.com/gopernicus/gopernicus/features/cms => ../../features/cms
 

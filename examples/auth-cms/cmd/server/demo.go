@@ -11,28 +11,207 @@ import (
 
 	auth "github.com/gopernicus/gopernicus/features/authentication"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
+	authorization "github.com/gopernicus/gopernicus/features/authorization"
 	golangjwt "github.com/gopernicus/gopernicus/integrations/cryptids/golang-jwt"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/environment"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
 
-// registerDemoRoutes mounts the two host-local demo routes the A9 protocol
-// drives (host code, NOT feature surface):
+// registerDemoRoutes mounts the host-local demo routes (host code, NOT feature
+// surface):
 //
 //   - GET /demo/whoami — RequirePrincipal-gated: 200 for ANY valid credential
 //     class (session cookie, API-key bearer, or bearer JWT), echoing the resolved
-//     principal. The API-key leg (2) and the JWT leg (3) hit this. A missing or
-//     invalid/expired/revoked credential → 401.
-//   - GET /demo/members-only — RequirePrincipal + toy-membership gated: 200 only
-//     when the resolved principal holds the demo relation on the demo resource in
-//     the toy Granter map. The invitation leg (4) hits this: B (granted on accept)
-//     → 200; a third, ungranted user → 403.
-func registerDemoRoutes(router *web.WebHandler, authSvc *auth.Service, members *membership) {
+//     principal. A missing/invalid/expired/revoked credential → 401.
+//   - GET /demo/members-only — RequirePrincipal + engine-Check gated (the flagship
+//     posture): 200 only when the resolved principal holds `view` on project/demo
+//     through the authorization engine. B (granted on invitation accept) → 200; an
+//     ungranted user → 403.
+//   - GET /demo/my-projects — RequirePrincipal-gated: the relationship kind's
+//     LookupResources enumeration (demonstration (b)); {unrestricted, ids}.
+//   - GET /demo/audit — RequirePrincipal + roles-kind HasRole gated: 200 with a
+//     driven ListRoleAssignmentsByResource read-back, 403 without the role.
+//   - POST /demo/roles/{assign,unassign} — RequireUser-gated (the admin drives
+//     them): assign/unassign a role to a subject, scoped to project/demo or GLOBAL.
+//   - POST /demo/admin/bootstrap — RequireUser-gated: seeds the CALLER as
+//     project:demo#owner + the platform-admin data tuple (the runtime seed step).
+func registerDemoRoutes(router *web.WebHandler, authSvc *auth.Service, authorizer *authorization.Service) {
 	router.Handle("GET", "/demo/whoami", demoWhoami(authSvc), authSvc.RequirePrincipal)
 	router.Handle("GET", "/demo/members-only", demoMembersOnly(authSvc),
-		authSvc.RequirePrincipal, requireMembership(authSvc, members))
+		authSvc.RequirePrincipal, requireMembership(authSvc, authorizer))
+	router.Handle("GET", "/demo/my-projects", demoMyProjects(authSvc, authorizer), authSvc.RequirePrincipal)
+	router.Handle("GET", "/demo/audit", demoAudit(authSvc, authorizer), authSvc.RequirePrincipal)
+	router.Handle("POST", "/demo/roles/assign", demoAssignRole(authorizer), authSvc.RequireUser)
+	router.Handle("POST", "/demo/roles/unassign", demoUnassignRole(authorizer), authSvc.RequireUser)
+	router.Handle("POST", "/demo/admin/bootstrap", demoBootstrapAdmin(authSvc, authorizer), authSvc.RequireUser)
+}
+
+// demoBootstrapAdmin (authorization-v1 Z4, seeding choice — LOGGED in the report)
+// is a session-gated host route the protocol drives ONCE as the admin: it seeds
+// the CALLER as project:demo#owner AND the platform-admin DATA tuple
+// (platform:main#admin) via CreateRelationships. The A9 host seeds no user, so the
+// admin's principal id is only known once it has registered + logged in — hence a
+// runtime seed rather than a boot seed (the A9 protocol legs stay intact).
+// platform-admin is DATA (a tuple over a `platform` resource type), never Config.
+// Demo-only host surface. CreateRelationships is idempotent, so a repeat call is a
+// no-op.
+func demoBootstrapAdmin(authSvc *auth.Service, authorizer *authorization.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p, ok := authSvc.CurrentPrincipal(r.Context())
+		if !ok {
+			writeHostJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+			return
+		}
+		if err := authorizer.CreateRelationships(r.Context(), []authorization.CreateRelationship{
+			{ResourceType: demoResourceType, ResourceID: demoResourceID, Relation: "owner", SubjectType: p.Type, SubjectID: p.ID},
+			{ResourceType: "platform", ResourceID: "main", Relation: "admin", SubjectType: p.Type, SubjectID: p.ID},
+		}); err != nil {
+			writeHostJSON(w, http.StatusInternalServerError, map[string]string{"error": "seed failed"})
+			return
+		}
+		writeHostJSON(w, http.StatusOK, map[string]any{
+			"status":         "bootstrapped",
+			"subject":        p.Type + ":" + p.ID,
+			"owner":          demoResourceType + "/" + demoResourceID,
+			"platform_admin": "platform/main",
+		})
+	}
+}
+
+// demoRole is the opaque role the audit route gates on (roles are host-interpreted
+// strings — no registry).
+const demoRole = "auditor"
+
+// demoMyProjects (authorization-v1 Z4, demonstration (b)) exercises the
+// relationship kind's ENUMERATION API — flagship-specific, NEVER a consumer seam.
+// It maps the resolved principal onto an authorization.Subject and asks the engine
+// which `project` resources the subject may `view`, surfacing the
+// LookupResult.Unrestricted contract in real JSON: a platform admin is
+// Unrestricted (no ids), a member gets the ids, a stranger gets an empty list.
+func demoMyProjects(authSvc *auth.Service, authorizer *authorization.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p, ok := authSvc.CurrentPrincipal(r.Context())
+		if !ok {
+			writeHostJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+			return
+		}
+		res, err := authorizer.LookupResources(r.Context(), authorization.Subject{Type: p.Type, ID: p.ID}, demoPermission, demoResourceType)
+		if err != nil {
+			writeHostJSON(w, http.StatusInternalServerError, map[string]string{"error": "lookup failed"})
+			return
+		}
+		ids := res.IDs
+		if ids == nil {
+			ids = []string{}
+		}
+		writeHostJSON(w, http.StatusOK, map[string]any{"unrestricted": res.Unrestricted, "ids": ids})
+	}
+}
+
+// demoAudit (authorization-v1 Z4, the roles-kind leg) gates on the roles kind:
+// authorizer.HasRole (with the Q5 GLOBAL fallback — a global auditor grant
+// satisfies the scoped check) decides 200 vs 403, and on success the response
+// carries a DRIVEN ListRoleAssignmentsByResource read-back. That listing is
+// DIRECT-SCOPE ONLY: a subject who passes the gate via a GLOBAL grant is allowed
+// yet never appears in the resource's listing — the documented v1
+// enumeration-vs-decision divergence, visible right here.
+func demoAudit(authSvc *auth.Service, authorizer *authorization.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		p, ok := authSvc.CurrentPrincipal(r.Context())
+		if !ok {
+			writeHostJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+			return
+		}
+		allowed, err := authorizer.HasRole(r.Context(), authorization.Subject{Type: p.Type, ID: p.ID}, demoRole, demoResourceType, demoResourceID)
+		if err != nil {
+			writeHostJSON(w, http.StatusInternalServerError, map[string]string{"error": "role check failed"})
+			return
+		}
+		if !allowed {
+			writeHostJSON(w, http.StatusForbidden, map[string]string{"error": "missing role", "role": demoRole})
+			return
+		}
+		page, err := authorizer.ListRoleAssignmentsByResource(r.Context(), demoResourceType, demoResourceID, crud.ListRequest{})
+		if err != nil {
+			writeHostJSON(w, http.StatusInternalServerError, map[string]string{"error": "list assignments failed"})
+			return
+		}
+		scoped := make([]map[string]string, 0, len(page.Items))
+		for _, a := range page.Items {
+			scoped = append(scoped, map[string]string{"subject_id": a.SubjectID, "role": a.Role})
+		}
+		writeHostJSON(w, http.StatusOK, map[string]any{
+			"resource": demoResourceType + "/" + demoResourceID,
+			// DIRECT-scope only: a subject allowed via a GLOBAL grant is NOT listed here.
+			"scoped_auditors": scoped,
+		})
+	}
+}
+
+// roleAssignRequest is the body of the admin-driven role assign/unassign routes.
+type roleAssignRequest struct {
+	SubjectID string `json:"subject_id"`
+	Role      string `json:"role"`
+	Global    bool   `json:"global"` // true → the empty-scope GLOBAL grant (Q5 fallback); else scoped to project/demo
+}
+
+// demoAssignRole (authorization-v1 Z4 roles leg) is a session-gated host route
+// (the /outbox-demo precedent) the protocol drives as the admin: it assigns a role
+// to a subject, either scoped to project/demo or GLOBAL. Roles are opaque strings.
+func demoAssignRole(authorizer *authorization.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		req, ok := decodeRoleRequest(w, r)
+		if !ok {
+			return
+		}
+		rt, rid := roleScope(req.Global)
+		if err := authorizer.AssignRole(r.Context(), authorization.Subject{Type: "user", ID: req.SubjectID}, req.Role, rt, rid); err != nil {
+			writeHostJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeHostJSON(w, http.StatusOK, map[string]any{"status": "assigned", "subject_id": req.SubjectID, "role": req.Role, "global": req.Global})
+	}
+}
+
+// demoUnassignRole is the revoke leg — the exact-scope inverse of demoAssignRole.
+func demoUnassignRole(authorizer *authorization.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		req, ok := decodeRoleRequest(w, r)
+		if !ok {
+			return
+		}
+		rt, rid := roleScope(req.Global)
+		if err := authorizer.UnassignRole(r.Context(), authorization.Subject{Type: "user", ID: req.SubjectID}, req.Role, rt, rid); err != nil {
+			writeHostJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		writeHostJSON(w, http.StatusOK, map[string]any{"status": "unassigned", "subject_id": req.SubjectID, "role": req.Role, "global": req.Global})
+	}
+}
+
+// roleScope maps the request's global flag to a scope pair: the empty ("","")
+// pair is a GLOBAL grant, otherwise the demo project scope.
+func roleScope(global bool) (resourceType, resourceID string) {
+	if global {
+		return "", ""
+	}
+	return demoResourceType, demoResourceID
+}
+
+// decodeRoleRequest reads and validates the assign/unassign body.
+func decodeRoleRequest(w http.ResponseWriter, r *http.Request) (roleAssignRequest, bool) {
+	var req roleAssignRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeHostJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return roleAssignRequest{}, false
+	}
+	if req.SubjectID == "" || req.Role == "" {
+		writeHostJSON(w, http.StatusBadRequest, map[string]string{"error": "subject_id and role are required"})
+		return roleAssignRequest{}, false
+	}
+	return req, true
 }
 
 // demoWhoami echoes the resolved principal (RequirePrincipal ran first).

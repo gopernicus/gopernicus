@@ -9,12 +9,14 @@ bearer, security-event audit, and ReBAC-decoupled invitations) with zero infra.
 
 ## What it proves
 
-- **Constitution rule 6 (features never import other features), with two real
-  features.** `features/cms` never imports `features/authentication`; `features/authentication`
-  never imports `features/cms`. Only this host's `cmd/server/main.go` imports
-  both. The cross-feature connection is made entirely in the composition root
-  (`auth.Service.RequireUser` → `cms.Config.AdminMiddleware`), and the toy
-  membership `Granter` (below) → `auth.Config.Granter`.
+- **Constitution rule 6 (features never import other features), with THREE real
+  features.** `features/cms`, `features/authentication`, and
+  `features/authorization` never import one another. Only this host's
+  `cmd/server/main.go` imports all three. The cross-feature connections are made
+  entirely in the composition root (`auth.Service.RequireUser` →
+  `cms.Config.AdminMiddleware`; the engine `relationshipGranter` →
+  `auth.Config.Granter`; `authorizer.Check` → `events.Config.Authorize`) — over
+  sdk-shaped seams, with zero import edges between the features.
 
 - **The feature-module opt-out holds for a second feature — no libsql in the
   module graph:**
@@ -32,29 +34,65 @@ bearer, security-event audit, and ReBAC-decoupled invitations) with zero infra.
 - **The whole auth-v2 surface, live:** the verified-email login gate, a
   host-local fake OAuth provider, API-key machine calls, stateless bearer JWTs
   (host-signed by `integrations/cryptids/golang-jwt`), security-event audit rows,
-  and invitations that grant through a **toy in-memory membership `Granter`** —
-  the demonstration of ratified AV4: invitations work with **no ReBAC anywhere in
-  the module graph**. `authorization-v1` later swaps `CreateRelationships` in via
-  the same seam.
+  and invitations that grant through the **`features/authorization` engine's
+  `relationshipGranter`** — invitation-accept writes a real ReBAC tuple via
+  `authorizer.CreateRelationships` (the flagship posture; the memstore-backed
+  engine keeps the host **driver-free** — no libsql in the graph). The A9 milestone
+  shipped this seam with a toy in-memory `Granter` instead (ratified AV4:
+  invitations work with no ReBAC in the graph); `authorization-v1` Z4 commit 2
+  swapped the engine in through the identical `auth.Config.Granter` seam.
 
-## Authorization postures — the middle posture, demonstrated
+## Authorization postures — the flagship, demonstrated (both kinds)
 
 Authorization is "supported, never required": a host runs with no checks, with a
-**host-authored Check closure**, or with the mounted `features/authorization` IAM
-domain. **This host is the MIDDLE-POSTURE reference.** `events.Config.Authorize`
-is satisfied by a plain ownership closure over the toy membership map
-(`cmd/server/membership.go`, `members.has`), which gates the resource-scoped
-stream `GET /events/{resource_type}/{resource_id}` — a member is allowed, a
-non-member gets 403 — with **no `features/authorization` in the module graph**:
+**host-authored Check closure** (the middle posture), or with the mounted
+`features/authorization` IAM domain (the flagship). This host now demonstrates the
+**flagship** — and the middle posture stays a permanent, recorded artifact in git
+history:
 
-```sh
-cd examples/auth-cms && GOWORK=off go list -m all | grep -c authorization   # 0
-```
+- **Middle posture (commit 1, `2e1e5eb`):** `events.Config.Authorize` was
+  satisfied by a plain ownership closure over a toy membership map, with **no
+  `features/authorization` in the module graph** (`GOWORK=off go list -m all |
+  grep -c authorization` → `0`) — a Check seam met entirely by host code, no IAM
+  module required. Retained as a git artifact, not the current wiring.
+- **Flagship posture (current):** the host mounts `features/authorization`, **both
+  kinds** wired and **memstore-backed** (so the graph stays driver-free —
+  `GOWORK=off go list -m all | grep -i libsql` is still empty). The SAME
+  `events.Config.Authorize` seam now delegates to `authorizer.Check`, and the
+  invitation `Granter` is the engine's `relationshipGranter`.
 
-A Check seam met entirely by host code, no IAM module required — the ruling's
-point demonstrated, not asserted. (A later `authorization-v1` commit swaps this
-closure for the `features/authorization` engine — the flagship posture — through
-the identical `events.Config.Authorize` seam.)
+**The relationship kind.** `main` declares a schema (`authorization.NewSchema`) with
+a `project` resource type (`owner`/`member` relations, `view` = `AnyOf(owner,
+member)`) and a `platform` resource type (`admin`). The boot seed registers a demo
+admin (`admin@example.com`), then writes `project:demo#owner@user:<admin>` and the
+**platform-admin data tuple** `platform:main#admin@user:<admin>` via
+`CreateRelationships` — platform-admin is DATA (a tuple over a `platform` resource
+type), never a Config field. A member gets `view` on `project/demo` the moment the
+invitation is accepted (the Granter writes the tuple). Demo routes:
+
+- `GET /demo/members-only` — gated through `authorizer.Check` (`view` on
+  `project/demo`): member/owner → 200, non-member → 403.
+- `GET /demo/my-projects` — the relationship kind's **enumeration** via
+  `authorizer.LookupResources(..., "view", "project")`, returned as
+  `{"unrestricted", "ids"}`: a member → `{"unrestricted":false,"ids":["demo"]}`, a
+  stranger → empty ids, the platform admin → `{"unrestricted":true}`. This is a
+  **demo-only host surface** exercising a **flagship-specific API** — enumeration is
+  NEVER a consumer seam (§2.4); consumer seams are Check-only.
+
+**The roles kind** is **independently wireable** — a roles-only host would wire
+`authorization.Repositories{Roles: …}` alone and never construct a model. Here it
+rides alongside the relationship kind (two kinds, two checks, no entanglement).
+Roles are **opaque strings** the host interprets. Demo routes:
+
+- `GET /demo/audit` — gated through `authorizer.HasRole(..., "auditor",
+  "project", "demo")`: 403 without the role, 200 with it. On success it drives a
+  `ListRoleAssignmentsByResource` read-back. The engine's `HasRole` honors the
+  **global fallback** (a GLOBAL `auditor` grant satisfies the scoped check), but
+  the listing is **direct-scope only** — so a subject allowed via a global grant is
+  allowed yet does NOT appear in the read-back (the documented v1
+  enumeration-vs-decision divergence, visible in the JSON).
+- `POST /demo/roles/{assign,unassign}` — session-gated (the admin drives them):
+  assign/unassign a role to a subject, scoped to `project/demo` or `{"global":true}`.
 
 ## Wiring
 
@@ -72,8 +110,13 @@ the identical `events.Config.Authorize` seam.)
   from the authorization `code`.
 - **TokenSigner**: `golang-jwt` from `AUTH_JWT_SECRET`; absent → an **ephemeral**
   per-boot key (tokens don't survive a restart); `AUTH_JWT_DISABLED=1` → nil.
-- **Granter**: `membership` (`cmd/server/membership.go`) — a toy in-memory
-  `resource→relation→subject` map, read back by the membership-gated demo route.
+- **Granter**: `relationshipGranter` (`cmd/server/membership.go`) — a host-local
+  adapter whose `Grant` calls `authorizer.CreateRelationships`, so invitation-accept
+  writes a real ReBAC tuple (the flagship posture; the A9 toy map is retired).
+- **authorization**: `features/authorization` (`cmd/server/main.go`) — BOTH kinds
+  (relationships + roles), memstore-backed (no driver in the graph). Backs
+  `auth.Config.Granter`, `events.Config.Authorize` (`authorizer.Check`), and the
+  host demo routes.
 - **`RequireVerifiedEmail: true`** — login and `/auth/token` refuse an unverified
   user with 403.
 - **event bus + cache invalidation**: the host builds one shared
@@ -97,7 +140,7 @@ the identical `events.Config.Authorize` seam.)
 | `Config.Providers` | the fake provider | OAuth routes not registered (deny-by-absence) |
 | `Config.TokenSigner` | golang-jwt (or ephemeral / nil) | `POST /auth/token` 404; bearer JWTs never parsed |
 | `Config.TokenEncrypter` | AES-GCM iff `AUTH_TOKEN_ENCRYPTER_KEY` | provider tokens not persisted (login/link still work) |
-| `Config.Granter` | toy membership map | invitation routes not registered (deny-by-absence) |
+| `Config.Granter` | engine `relationshipGranter` (`authorizer.CreateRelationships`) | invitation routes not registered (deny-by-absence) |
 | `Repositories.SecurityEvents` | authmem | no audit trail (recording site is a no-op) |
 | `AUTH_DEBUG` | off by default | `/debug/security-events` not registered (404) |
 
@@ -201,10 +244,14 @@ curl -i -H "Authorization: Bearer <JWT>" http://localhost:8082/demo/whoami      
 curl -i -X POST http://localhost:8082/auth/token                                 # 404 (route absent)
 ```
 
-### Leg 4 — invitations (toy membership `Granter`)
+### Leg 4 — invitations (the authorization engine `Granter`)
 
-The membership-gated route is `GET /demo/members-only` — it checks the toy map
-for the `member` relation on the `project/demo` resource.
+The membership-gated route is `GET /demo/members-only` — it checks `view` on the
+`project/demo` resource through `authorizer.Check` (the flagship posture). An
+accepted invitation grants the `member` tuple via the engine `relationshipGranter`
+(`authorizer.CreateRelationships`), and `view = AnyOf(owner, member)`, so the
+member passes the gate. The observable codes are identical to the A9 toy-Granter
+run — the swap is invisible at the seam.
 
 ```sh
 # register + verify user B (b@example.com) and user C (c@example.com), each with its own cookie jar.
@@ -213,7 +260,7 @@ curl -i -c bjar -b bjar http://localhost:8082/demo/members-only                 
 # A (admin session) invites B on project/demo -> 201 pending; token is in the mailer log
 curl -sX POST -c jar -b jar http://localhost:8082/auth/invitations/project/demo \
   -H 'Content-Type: application/json' -d '{"identifier":"b@example.com","relation":"member"}'
-# B accepts with the token -> 200, and the toy Granter grants B
+# B accepts with the token -> 200, and the engine Granter writes B's member tuple
 curl -sX POST -c bjar -b bjar http://localhost:8082/auth/invitations/accept \
   -H 'Content-Type: application/json' -d '{"token":"<INVITE_TOKEN_FROM_LOG>"}'
 curl -i -c bjar -b bjar http://localhost:8082/demo/members-only                  # 200 (granted)
@@ -242,11 +289,12 @@ The host mounts the events feature's SSE gateway on the same root router (no
 prefix), so the subject stream lands at **`GET /events`**. It is wrapped by
 `authSvc.RequireUser` (`Config.StreamMiddleware`): the handler reads the stashed
 `identity.Principal` and **fails closed with 401 when no session/bearer is
-present**. `Config.Authorize` is wired with a plain host ownership closure (the
-middle posture — see "Authorization postures" above), so the resource-scoped
-`GET /events/{resource_type}/{resource_id}` route **is registered**: a member of
-the resource is allowed, a resolved non-member gets 403, an unauthenticated caller
-401. `Repositories.Outbox` is nil — direct-emit mode: the gateway fans
+present**. `Config.Authorize` is wired through the **authorization engine**
+(`authorizer.Check`, the flagship posture — see "Authorization postures" above),
+so the resource-scoped `GET /events/{resource_type}/{resource_id}` route **is
+registered**: a member of the resource is allowed, a resolved non-member gets 403,
+an unauthenticated caller 401. `Repositories.Outbox` is nil — direct-emit mode: the
+gateway fans
 best-effort `content.*` frames out over SSE the moment cms emits them (async, O3),
 with no durable rail and no poller. Bodies are metadata-only (`{type, occurred_at,
 aggregate_type, aggregate_id, tenant_id}`); the SSE `id:` is the event's
@@ -299,15 +347,47 @@ Shutdown order (SIGTERM): **HTTP server → poller pool → `bus.Close`** — th
 pool runs on its own Background-derived context so it stops only after HTTP has
 drained, and the bus closes last on a fresh bounded context.
 
+### Leg 7 — the authorization flagship (both kinds)
+
+The admin (any verified session) seeds itself as `project:demo` owner + platform
+admin, then drives both kinds. `<BID>`/`<CID>` are B/C's principal ids from
+`GET /demo/whoami`.
+
+```sh
+# admin session (jar) bootstraps itself: project:demo#owner + platform:main#admin
+curl -sX POST -c jar -b jar http://localhost:8082/demo/admin/bootstrap            # 200 {"status":"bootstrapped",...}
+
+# relationship kind — B is a member (Leg 4 accept); enumeration (demonstration b):
+curl -s -b bjar http://localhost:8082/demo/my-projects                            # {"ids":["demo"],"unrestricted":false}
+curl -s -b cjar http://localhost:8082/demo/my-projects                            # {"ids":[],"unrestricted":false}
+curl -s -b jar  http://localhost:8082/demo/my-projects                            # {"ids":[],"unrestricted":true}  (platform admin)
+# resource-scoped stream gated through authorizer.Check:
+curl -N --max-time 2 -b bjar http://localhost:8082/events/project/demo            # 200 (member)
+curl -N --max-time 2 -b cjar http://localhost:8082/events/project/demo            # 403 (non-member)
+
+# roles kind — independently wireable, opaque-string roles, scoped + global:
+curl -i -b bjar http://localhost:8082/demo/audit                                  # 403 (no role)
+curl -sX POST -c jar -b jar http://localhost:8082/demo/roles/assign \
+  -H 'Content-Type: application/json' -d '{"subject_id":"<BID>","role":"auditor","global":false}'   # 200
+curl -s -b bjar http://localhost:8082/demo/audit    # 200 {"resource":"project/demo","scoped_auditors":[{"subject_id":"<BID>","role":"auditor"}]}
+curl -sX POST -c jar -b jar http://localhost:8082/demo/roles/unassign \
+  -H 'Content-Type: application/json' -d '{"subject_id":"<BID>","role":"auditor","global":false}'   # 200 -> /demo/audit 403 again
+
+# Q5 global fallback + the enumeration-vs-decision divergence:
+curl -sX POST -c jar -b jar http://localhost:8082/demo/roles/assign \
+  -H 'Content-Type: application/json' -d '{"subject_id":"<CID>","role":"auditor","global":true}'    # 200 (GLOBAL)
+curl -s -b cjar http://localhost:8082/demo/audit    # 200 (global satisfies the scoped gate) BUT "scoped_auditors":[] — C is NOT listed
+```
+
 ## Route surface
 
 - **events** (SSE, `features/events`): `GET /events` — the authenticated
   subject's stream (best-effort `content.*` fan-out), gated by `RequireUser`
   (401 when absent). `GET /events/{resource_type}/{resource_id}` — the
-  resource-scoped stream, registered because `Config.Authorize` is wired with the
-  host ownership closure (the middle posture): member → stream, resolved
-  non-member → 403. Under `EVENTS_OUTBOX=memory` the host also mounts
-  `POST /outbox-demo` (host-owned durable-rail trigger, not feature surface).
+  resource-scoped stream, registered because `Config.Authorize` is wired through
+  the authorization engine (`authorizer.Check`, the flagship posture): member →
+  stream, resolved non-member → 403. Under `EVENTS_OUTBOX=memory` the host also
+  mounts `POST /outbox-demo` (host-owned durable-rail trigger, not feature surface).
 - **auth** (JSON, `features/authentication`): `POST /auth/{register,login,logout,verify,
   password/forgot,password/reset,password/change,token}`; OAuth
   `/auth/oauth/{provider}/{start,callback,link/start,link}`,
@@ -318,6 +398,11 @@ drained, and the bus closes last on a fresh bounded context.
   `AdminMiddleware` (auth's `RequireUser`).
 - **host-local demo/debug** (host code, not feature surface):
   `GET /demo/whoami` (RequirePrincipal-gated: any credential class → 200),
-  `GET /demo/members-only` (RequirePrincipal + toy-membership gated: member →
-  200, resolved non-member → 403), and `GET /debug/security-events`
-  (`AUTH_DEBUG=1` + `RequireUser`).
+  `GET /demo/members-only` (RequirePrincipal + engine-Check gated: member/owner →
+  200, resolved non-member → 403), `GET /demo/my-projects` (the relationship
+  kind's `LookupResources` enumeration → `{unrestricted, ids}`), `GET /demo/audit`
+  (the roles kind's `HasRole` gate + a direct-scope `ListRoleAssignmentsByResource`
+  read-back), `POST /demo/roles/{assign,unassign}` and `POST /demo/admin/bootstrap`
+  (RequireUser-gated, admin-driven), and `GET /debug/security-events`
+  (`AUTH_DEBUG=1` + `RequireUser`). See "Authorization postures" for the flagship
+  demo flow.
