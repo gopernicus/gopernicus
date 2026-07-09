@@ -4,13 +4,15 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/gopernicus/gopernicus/features/cms/domain/media"
 	"io"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gopernicus/gopernicus/features/cms/domain/media"
+
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
@@ -72,14 +74,14 @@ func TestMedia_UploadOpenDelete(t *testing.T) {
 	ctx := context.Background()
 	blobs := newMemBlobs()
 	now := time.Date(2026, 6, 22, 0, 0, 0, 0, time.UTC)
-	svc := NewService(newFakeAssets(), blobs, func() time.Time { return now })
+	svc := NewService(newFakeAssets(), blobs, cryptids.IDGenerator{}, func() time.Time { return now })
 
 	content := "PNG-BYTES"
 	a, err := svc.Upload(ctx, "My Logo.PNG", "image/png", int64(len(content)), strings.NewReader(content))
 	if err != nil {
 		t.Fatalf("upload: %v", err)
 	}
-	if !strings.HasPrefix(a.StorageKey, "assets/"+a.ID+"/my-logo.png") {
+	if !strings.HasPrefix(a.StorageKey, "assets/") || !strings.HasSuffix(a.StorageKey, "/my-logo.png") {
 		t.Errorf("unexpected storage key: %q", a.StorageKey)
 	}
 	if _, ok := blobs.data[a.StorageKey]; !ok {
@@ -116,7 +118,7 @@ func TestMedia_UploadOpenDelete(t *testing.T) {
 
 func TestMedia_UploadValidation(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(newFakeAssets(), newMemBlobs(), nil)
+	svc := NewService(newFakeAssets(), newMemBlobs(), cryptids.IDGenerator{}, nil)
 
 	if _, err := svc.Upload(ctx, "", "image/png", 1, strings.NewReader("x")); !errors.Is(err, errs.ErrInvalidInput) {
 		t.Errorf("blank filename: %v", err)

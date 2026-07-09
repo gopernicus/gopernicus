@@ -236,6 +236,17 @@ type Config struct {
 	// flipping it on requires a working Mailer so users can verify.
 	RequireVerifiedEmail bool
 
+	// IDs is the app's entity-ID strategy, decided once at wiring (amended D9):
+	// it mints the keys of users, service accounts, API-key records, security
+	// events, and invitations. The zero value generates default nanoids;
+	// cryptids.Database delegates key generation to the database (the bundled
+	// stores omit the id column and read it back with RETURNING); an
+	// integration's GenerateFunc (e.g. google-uuid) chooses another shape. It
+	// never mints SECRETS — session tokens, verification codes/reset tokens,
+	// OAuth state, API-key material, and invitation secrets keep their own
+	// unconditional high-entropy generator regardless of this strategy.
+	IDs cryptids.IDGenerator
+
 	// ListStrategy is the DEFAULT pagination strategy the feature's JSON list
 	// endpoints (service accounts, API keys, invitations) apply when a request
 	// names neither a cursor nor an offset param (sdk/crud ParseListRequest).
@@ -378,6 +389,7 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 			Redirects:      redirect.New(cfg.RedirectAllowlist),
 			SecurityEvents: repos.SecurityEvents,
 			Logger:         cfg.Logger,
+			IDs:            cfg.IDs,
 		})
 	}
 
@@ -411,6 +423,7 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 		TokenSigner:          cfg.TokenSigner,
 		TokenTTL:             cfg.TokenTTL,
 		Logger:               cfg.Logger,
+		IDs:                  cfg.IDs,
 	}
 	// Set the resolve-on-registration collaborator only when built, so the
 	// authsvc field stays a genuine nil interface when invitations are off.

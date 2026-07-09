@@ -50,18 +50,29 @@ func (r termRow) toDomain() taxonomy.Term {
 
 // Create persists a new term.
 func (s *TermStore) Create(ctx context.Context, t taxonomy.Term) (taxonomy.Term, error) {
-	const q = `INSERT INTO terms (` + termColumns + `)
-		VALUES (@id, @kind, @slug, @name, @parent_id, @created_at, @updated_at)`
-	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
-		"id":         t.ID,
+	args := pgx.NamedArgs{
 		"kind":       string(t.Kind),
 		"slug":       t.Slug,
 		"name":       t.Name,
 		"parent_id":  t.ParentID,
 		"created_at": t.CreatedAt.UTC(),
 		"updated_at": t.UpdatedAt.UTC(),
-	})
-	if err != nil {
+	}
+	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// column so the schema default generates the key, read back with RETURNING.
+	if t.ID == "" {
+		const q = `INSERT INTO terms (kind, slug, name, parent_id, created_at, updated_at)
+			VALUES (@kind, @slug, @name, @parent_id, @created_at, @updated_at)
+			RETURNING id`
+		if err := s.db.QueryRow(ctx, q, args).Scan(&t.ID); err != nil {
+			return taxonomy.Term{}, pgxdb.MapError(err)
+		}
+		return t, nil
+	}
+	const q = `INSERT INTO terms (` + termColumns + `)
+		VALUES (@id, @kind, @slug, @name, @parent_id, @created_at, @updated_at)`
+	args["id"] = t.ID
+	if _, err := s.db.Exec(ctx, q, args); err != nil {
 		return taxonomy.Term{}, err
 	}
 	return t, nil

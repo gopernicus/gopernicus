@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/cms/domain/media"
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 )
 
 // Clock returns the current time. Injected so tests can pin timestamps.
@@ -19,20 +20,24 @@ type Clock func() time.Time
 type MediaService struct {
 	assets media.AssetRepository
 	blobs  media.BlobStore
-	clock  Clock
+	// ids is the app-chosen entity-ID strategy (cms.Config.IDs); zero value →
+	// default nanoids.
+	ids   cryptids.IDGenerator
+	clock Clock
 }
 
-// NewService constructs a MediaService. A nil clock defaults to time.Now.
-func NewService(assets media.AssetRepository, blobs media.BlobStore, clock Clock) *MediaService {
+// NewService constructs a MediaService. A nil clock defaults to time.Now. ids is
+// the app's entity-ID strategy (cms.Config.IDs).
+func NewService(assets media.AssetRepository, blobs media.BlobStore, ids cryptids.IDGenerator, clock Clock) *MediaService {
 	if clock == nil {
 		clock = time.Now
 	}
-	return &MediaService{assets: assets, blobs: blobs, clock: clock}
+	return &MediaService{assets: assets, blobs: blobs, ids: ids, clock: clock}
 }
 
 // Upload validates, stores the bytes, and persists the asset metadata.
 func (s *MediaService) Upload(ctx context.Context, filename, contentType string, size int64, reader io.Reader) (media.Asset, error) {
-	a, err := media.NewAsset(filename, contentType, size, s.clock())
+	a, err := media.NewAsset(s.ids, filename, contentType, size, s.clock())
 	if err != nil {
 		return media.Asset{}, err
 	}

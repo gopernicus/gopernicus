@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/email"
 )
 
@@ -22,22 +23,26 @@ type Service struct {
 	sender    email.Sender
 	from      string // From address for notification emails
 	notifyTo  string // operator address that receives inquiries
-	clock     Clock
+	// ids is the app-chosen entity-ID strategy (cms.Config.IDs); zero value →
+	// default nanoids.
+	ids   cryptids.IDGenerator
+	clock Clock
 }
 
-// NewService constructs a Service. A nil clock defaults to time.Now.
-func NewService(inquiries messaging.InquiryRepository, sender email.Sender, from, notifyTo string, clock Clock) *Service {
+// NewService constructs a Service. A nil clock defaults to time.Now. ids is the
+// app's entity-ID strategy (cms.Config.IDs).
+func NewService(inquiries messaging.InquiryRepository, sender email.Sender, from, notifyTo string, ids cryptids.IDGenerator, clock Clock) *Service {
 	if clock == nil {
 		clock = time.Now
 	}
-	return &Service{inquiries: inquiries, sender: sender, from: from, notifyTo: notifyTo, clock: clock}
+	return &Service{inquiries: inquiries, sender: sender, from: from, notifyTo: notifyTo, ids: ids, clock: clock}
 }
 
 // Submit validates and persists the inquiry, then emails the operator. The
 // inquiry is persisted before the notification is attempted, so a send failure
 // still leaves the submission captured (and is returned to the caller).
 func (s *Service) Submit(ctx context.Context, name, fromEmail, message string) (messaging.Inquiry, error) {
-	inq, err := messaging.NewInquiry(name, fromEmail, message, s.clock())
+	inq, err := messaging.NewInquiry(s.ids, name, fromEmail, message, s.clock())
 	if err != nil {
 		return messaging.Inquiry{}, err
 	}

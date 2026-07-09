@@ -109,6 +109,13 @@ type Deps struct {
 	Cookie    CookieConfig
 	Clock     func() time.Time // nil → time.Now
 	Logger    *slog.Logger     // nil → slog.Default(); used only for best-effort WARN lines
+	// IDs is the app-chosen entity-ID strategy (amended D9): it mints the keys
+	// of users, service accounts, API-key records, and security events. The
+	// zero value generates default nanoids; cryptids.Database delegates to the
+	// store. It NEVER mints secrets — session tokens, verification codes, API
+	// key material, and PKCE/nonce values keep their own unconditional random
+	// generator regardless of this strategy.
+	IDs cryptids.IDGenerator
 	// RequireVerifiedEmail, when true, makes Login refuse an unverified user
 	// with ErrEmailNotVerified (403). Default false (design §7.1, AV8).
 	RequireVerifiedEmail bool
@@ -166,6 +173,9 @@ type Service struct {
 	now                  func() time.Time
 	logger               *slog.Logger
 	requireVerifiedEmail bool
+	// ids is the app-chosen entity-ID strategy (Deps.IDs); zero value → default
+	// nanoids. Entity keys only, never secrets.
+	ids cryptids.IDGenerator
 	// securityEvents is the optional append-only audit rail (design §5.1). Nil →
 	// the recordSecurityEvent helper is a no-op (ratified AV9).
 	securityEvents securityevent.SecurityEventRepository
@@ -239,6 +249,7 @@ func NewService(d Deps) *Service {
 		now:                  clock,
 		logger:               logger,
 		requireVerifiedEmail: d.RequireVerifiedEmail,
+		ids:                  d.IDs,
 		securityEvents:       d.SecurityEvents,
 		invitations:          d.Invitations,
 		tokenHasher:          cryptids.NewSHA256Hasher(),
@@ -265,7 +276,7 @@ func (s *Service) Register(ctx context.Context, emailAddr, password, displayName
 		return user.User{}, err
 	}
 	now := s.now()
-	u, err := user.NewUser(emailAddr, displayName, now)
+	u, err := user.NewUser(s.ids, emailAddr, displayName, now)
 	if err != nil {
 		return user.User{}, err
 	}

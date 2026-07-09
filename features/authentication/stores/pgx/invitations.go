@@ -73,11 +73,7 @@ func (r invitationRow) toDomain() invitation.Invitation {
 // Create persists a new pending invitation; a pending-tuple collision →
 // errs.ErrAlreadyExists (the partial unique index).
 func (s *InvitationStore) Create(ctx context.Context, inv invitation.Invitation) (invitation.Invitation, error) {
-	const q = `INSERT INTO invitations (` + invitationColumns + `)
-		VALUES (@id, @resource_type, @resource_id, @relation, @identifier, @resolved_subject_id,
-			@invited_by, @token_hash, @auto_accept, @status, @expires_at, @accepted_at, @created_at, @updated_at)`
-	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
-		"id":                  inv.ID,
+	args := pgx.NamedArgs{
 		"resource_type":       inv.ResourceType,
 		"resource_id":         inv.ResourceID,
 		"relation":            inv.Relation,
@@ -91,8 +87,25 @@ func (s *InvitationStore) Create(ctx context.Context, inv invitation.Invitation)
 		"accepted_at":         pgxdb.NullTime(inv.AcceptedAt),
 		"created_at":          inv.CreatedAt.UTC(),
 		"updated_at":          inv.UpdatedAt.UTC(),
-	})
-	if err != nil {
+	}
+	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// column so the schema default generates the key, read back with RETURNING.
+	if inv.ID == "" {
+		const q = `INSERT INTO invitations (resource_type, resource_id, relation, identifier, resolved_subject_id,
+			invited_by, token_hash, auto_accept, status, expires_at, accepted_at, created_at, updated_at)
+			VALUES (@resource_type, @resource_id, @relation, @identifier, @resolved_subject_id,
+				@invited_by, @token_hash, @auto_accept, @status, @expires_at, @accepted_at, @created_at, @updated_at)
+			RETURNING id`
+		if err := s.db.QueryRow(ctx, q, args).Scan(&inv.ID); err != nil {
+			return invitation.Invitation{}, pgxdb.MapError(err)
+		}
+		return inv, nil
+	}
+	const q = `INSERT INTO invitations (` + invitationColumns + `)
+		VALUES (@id, @resource_type, @resource_id, @relation, @identifier, @resolved_subject_id,
+			@invited_by, @token_hash, @auto_accept, @status, @expires_at, @accepted_at, @created_at, @updated_at)`
+	args["id"] = inv.ID
+	if _, err := s.db.Exec(ctx, q, args); err != nil {
 		return invitation.Invitation{}, err
 	}
 	return inv, nil

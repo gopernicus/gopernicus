@@ -12,10 +12,16 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/serviceaccount"
 	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/errs"
-	"github.com/gopernicus/gopernicus/sdk/id"
 	"github.com/gopernicus/gopernicus/sdk/identity"
 )
+
+// secrets generates the opaque random values this service mints (API-key
+// prefixes and secrets, OAuth nonces, PKCE segments) with the default nanoid
+// shape. Deliberately NOT the app's entity-ID strategy (Deps.IDs): secret
+// entropy must never follow a wiring choice like cryptids.Database.
+var secrets = cryptids.IDGenerator{}
 
 // Principal subject-type conventions (AV5 — actor references are
 // (subject_type, subject_id) string pairs, never a registry table). They alias
@@ -50,7 +56,7 @@ func (s *Service) MachineEnabled() bool {
 // act-as-user account requires a non-empty ownerUserID (errs.ErrInvalidInput
 // from construction).
 func (s *Service) CreateServiceAccount(ctx context.Context, createdBy, name, description string, actAsUser bool, ownerUserID string) (serviceaccount.ServiceAccount, error) {
-	sa, err := serviceaccount.New(name, description, createdBy, actAsUser, ownerUserID, s.now())
+	sa, err := serviceaccount.New(s.ids, name, description, createdBy, actAsUser, ownerUserID, s.now())
 	if err != nil {
 		return serviceaccount.ServiceAccount{}, err
 	}
@@ -76,7 +82,7 @@ func (s *Service) MintAPIKey(ctx context.Context, serviceAccountID, name string,
 	if err != nil {
 		return apikey.APIKey{}, "", err
 	}
-	k, err := apikey.New(serviceAccountID, name, prefix, hashed, expiresAt, s.now())
+	k, err := apikey.New(s.ids, serviceAccountID, name, prefix, hashed, expiresAt, s.now())
 	if err != nil {
 		return apikey.APIKey{}, "", err
 	}
@@ -279,12 +285,12 @@ func effectivePrincipal(sa serviceaccount.ServiceAccount) Principal {
 }
 
 // mintAPIKeySecret builds a fresh key: a displayable prefix (stored plain) and
-// the full raw key `prefix_secret`. Both halves use sdk/id's dotless base32
+// the full raw key `prefix_secret`. Both halves use sdk/cryptids' dotless
 // alphabet and are joined with `_`, so a key can NEVER contain two dots and
 // collide with the §4.3 JWT-detection heuristic.
 func mintAPIKeySecret() (prefix, raw string) {
-	prefix = id.New()[:apiKeyPrefixLen]
-	secret := id.New() + id.New()
+	prefix = secrets.MustGenerate()[:apiKeyPrefixLen]
+	secret := secrets.MustGenerate() + secrets.MustGenerate()
 	return prefix, prefix + "_" + secret
 }
 

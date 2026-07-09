@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/errs"
-	"github.com/gopernicus/gopernicus/sdk/id"
 )
 
 // ServiceAccount is a machine identity. CreatedBy is the human user that minted
@@ -31,11 +31,12 @@ type ServiceAccount struct {
 	UpdatedAt   time.Time
 }
 
-// New builds a ServiceAccount created by createdBy as of now, generating an ID.
+// New builds a ServiceAccount created by createdBy as of now, minting its ID
+// from ids (empty under cryptids.Database — the store then assigns the key).
 // A blank name, a blank createdBy, or an act-as-user account with no OwnerUserID
 // wraps errs.ErrInvalidInput (the design §4.1 invariant: ActAsUser →
 // OwnerUserID != "").
-func New(name, description, createdBy string, actAsUser bool, ownerUserID string, now time.Time) (ServiceAccount, error) {
+func New(ids cryptids.IDGenerator, name, description, createdBy string, actAsUser bool, ownerUserID string, now time.Time) (ServiceAccount, error) {
 	name = strings.TrimSpace(name)
 	description = strings.TrimSpace(description)
 	createdBy = strings.TrimSpace(createdBy)
@@ -51,7 +52,7 @@ func New(name, description, createdBy string, actAsUser bool, ownerUserID string
 	}
 	now = now.UTC()
 	return ServiceAccount{
-		ID:          id.New(),
+		ID:          ids.MustGenerate(),
 		Name:        name,
 		Description: description,
 		CreatedBy:   createdBy,

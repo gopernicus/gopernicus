@@ -9,8 +9,14 @@ package oauthstate
 import (
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/id"
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 )
+
+// secrets mints one-time flow tokens with the default nanoid shape.
+// Deliberately NOT the app's entity-ID strategy (amended D9): a State token is
+// a credential, and its entropy must never follow a wiring choice like
+// cryptids.Database.
+var secrets = cryptids.IDGenerator{}
 
 // Purposes label a State so Consume's caller can reject a token minted for a
 // different step of the flow.
@@ -26,7 +32,7 @@ const (
 )
 
 // State is a one-time, expiring flow secret. Token is the opaque lookup key
-// (sdk/id); Payload is an opaque, purpose-specific blob (JSON, set by the
+// (sdk/cryptids); Payload is an opaque, purpose-specific blob (JSON, set by the
 // service). A State is redeemed exactly once via StateRepository.Consume.
 type State struct {
 	Token     string
@@ -37,10 +43,10 @@ type State struct {
 }
 
 // New mints a State for provider/purpose carrying payload, expiring ttl after
-// now. The token is an opaque random value (sdk/id).
+// now. The token is an opaque random value (sdk/cryptids).
 func New(provider, purpose string, payload []byte, ttl time.Duration, now time.Time) State {
 	return State{
-		Token:     id.New(),
+		Token:     secrets.MustGenerate(),
 		Provider:  provider,
 		Purpose:   purpose,
 		Payload:   payload,

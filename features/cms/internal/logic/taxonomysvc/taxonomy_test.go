@@ -3,11 +3,13 @@ package taxonomysvc
 import (
 	"context"
 	"errors"
-	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
 	"sort"
 	"testing"
 	"time"
 
+	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
+
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
@@ -75,7 +77,7 @@ func clock(start time.Time) Clock {
 
 func TestService_Terms(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(newFakeTerms(), clock(time.Date(2026, 6, 22, 0, 0, 0, 0, time.UTC)))
+	svc := NewService(newFakeTerms(), cryptids.IDGenerator{}, clock(time.Date(2026, 6, 22, 0, 0, 0, 0, time.UTC)))
 
 	cat, err := svc.CreateTerm(ctx, taxonomy.KindCategory, "News & Updates", "")
 	if err != nil {
@@ -122,7 +124,7 @@ func TestService_Terms(t *testing.T) {
 
 func TestService_TermErrors(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(newFakeTerms(), clock(time.Now()))
+	svc := NewService(newFakeTerms(), cryptids.IDGenerator{}, clock(time.Now()))
 
 	if _, err := svc.CreateTerm(ctx, taxonomy.Kind("bogus"), "x", ""); !errors.Is(err, errs.ErrInvalidInput) {
 		t.Errorf("bad kind: %v", err)

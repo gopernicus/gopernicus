@@ -17,8 +17,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/errs"
-	"github.com/gopernicus/gopernicus/sdk/id"
 )
 
 // Status values for an invitation's lifecycle. An invitation is created
@@ -59,12 +59,14 @@ type Invitation struct {
 }
 
 // New builds a StatusPending invitation from an already-minted tokenHash (the
-// service mints and hashes the secret; only it ever holds the plaintext). ttl
-// sets ExpiresAt from now. A blank resourceType/resourceID/relation/identifier/
-// invitedBy/tokenHash wraps errs.ErrInvalidInput. The identifier is stored
-// verbatim — the service normalizes it (email) before calling New so it matches
-// the value resolve-on-registration and "mine" look it up by.
-func New(resourceType, resourceID, relation, identifier, invitedBy, tokenHash string, autoAccept bool, ttl time.Duration, now time.Time) (Invitation, error) {
+// service mints and hashes the secret; only it ever holds the plaintext),
+// minting its record ID from ids (empty under cryptids.Database — the store
+// then assigns the key). ttl sets ExpiresAt from now. A blank resourceType/
+// resourceID/relation/identifier/invitedBy/tokenHash wraps errs.ErrInvalidInput.
+// The identifier is stored verbatim — the service normalizes it (email) before
+// calling New so it matches the value resolve-on-registration and "mine" look
+// it up by.
+func New(ids cryptids.IDGenerator, resourceType, resourceID, relation, identifier, invitedBy, tokenHash string, autoAccept bool, ttl time.Duration, now time.Time) (Invitation, error) {
 	resourceType = strings.TrimSpace(resourceType)
 	resourceID = strings.TrimSpace(resourceID)
 	relation = strings.TrimSpace(relation)
@@ -87,7 +89,7 @@ func New(resourceType, resourceID, relation, identifier, invitedBy, tokenHash st
 	}
 	now = now.UTC()
 	return Invitation{
-		ID:           id.New(),
+		ID:           ids.MustGenerate(),
 		ResourceType: resourceType,
 		ResourceID:   resourceID,
 		Relation:     relation,

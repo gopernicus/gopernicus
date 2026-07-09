@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/id"
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/slug"
 )
 
@@ -32,13 +32,14 @@ type Entry struct {
 	UpdatedAt   time.Time
 }
 
-// NewEntry validates the spine inputs, generates an ID and slug, and returns a
+// NewEntry validates the spine inputs, generates a slug, mints its ID from ids
+// (empty under cryptids.Database — the store then assigns the key), and returns a
 // new Entry of type typeSlug stamped with now. An empty status defaults to
 // draft; creating directly as published stamps PublishedAt. An empty template
 // defaults to "default". Fields and hierarchy are applied by the caller (the
 // service) after Registry field validation. Validation failures wrap
 // errs.ErrInvalidInput.
-func NewEntry(typeSlug, title, excerpt, body, author string, status Status, template string, now time.Time) (Entry, error) {
+func NewEntry(ids cryptids.IDGenerator, typeSlug, title, excerpt, body, author string, status Status, template string, now time.Time) (Entry, error) {
 	title = strings.TrimSpace(title)
 	if status == "" {
 		status = StatusDraft
@@ -52,7 +53,7 @@ func NewEntry(typeSlug, title, excerpt, body, author string, status Status, temp
 
 	now = now.UTC()
 	e := Entry{
-		ID:        id.New(),
+		ID:        ids.MustGenerate(),
 		Type:      typeSlug,
 		Slug:      slug.Make(title),
 		Title:     title,

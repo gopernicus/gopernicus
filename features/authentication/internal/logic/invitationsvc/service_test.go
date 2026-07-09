@@ -135,7 +135,7 @@ func hashOf(t *testing.T, secret string) string {
 // puts it straight into the repo (bypassing Create's minting).
 func seedInvite(t *testing.T, repo *fakeInvRepo, rt, rid, rel, ident, invitedBy, secret string, autoAccept bool, expiresAt time.Time) invitation.Invitation {
 	t.Helper()
-	inv, err := invitation.New(rt, rid, rel, ident, invitedBy, hashOf(t, secret), autoAccept, time.Hour, time.Now())
+	inv, err := invitation.New(cryptids.IDGenerator{}, rt, rid, rel, ident, invitedBy, hashOf(t, secret), autoAccept, time.Hour, time.Now())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

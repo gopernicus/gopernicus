@@ -1,6 +1,12 @@
 # Phase 03 — sdk/id kinds (flag #2): nanoid-shape generation + stdlib UUID; port typing stays string (wait-for-demand)
 
 Status: **CLOSED 2026-07-09 — RATIFIED (D5 + D6 "that works"; D7 recorded same exchange) and EXECUTED same day**
+SUPERSEDED: **2026-07-09, by `04-cryptids-facility.md` — D5's `sdk/id` API
+was folded into `sdk/cryptids` (`GenerateFunc`/`IDGenerator`) one day after
+this phase closed; D7's pluggable-generator demand arrived from the owner
+the same day (Config.IDs threading + the Database empty-ID store
+convention). The build-to-evaluate work here was the evidence that produced
+the better design.**
 Milestone: `segovia-lessons` (see `00-overview.md`)
 Executor model: **opus** (task 1), **fable** (task 2)
 Depends on: — (phases 01/02 closed)

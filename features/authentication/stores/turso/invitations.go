@@ -34,6 +34,22 @@ const invitationColumns = "id, resource_type, resource_id, relation, identifier,
 // Create persists a new pending invitation; a pending-tuple collision →
 // errs.ErrAlreadyExists (the partial unique index).
 func (s *InvitationStore) Create(ctx context.Context, inv invitation.Invitation) (invitation.Invitation, error) {
+	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// column so the schema default generates the key, read back with RETURNING.
+	if inv.ID == "" {
+		const q = `INSERT INTO invitations (resource_type, resource_id, relation, identifier, resolved_subject_id,
+			invited_by, token_hash, auto_accept, status, expires_at, accepted_at, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`
+		if err := s.db.QueryRow(ctx, q,
+			inv.ResourceType, inv.ResourceID, inv.Relation, inv.Identifier,
+			inv.ResolvedSubjectID, inv.InvitedBy, inv.TokenHash, tursodb.BoolToInt(inv.AutoAccept),
+			inv.Status, tursodb.FormatTime(inv.ExpiresAt), tursodb.NullTime(inv.AcceptedAt),
+			tursodb.FormatTime(inv.CreatedAt), tursodb.FormatTime(inv.UpdatedAt),
+		).Scan(&inv.ID); err != nil {
+			return invitation.Invitation{}, tursodb.MapError(err)
+		}
+		return inv, nil
+	}
 	const q = `INSERT INTO invitations (` + invitationColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err := s.db.Exec(ctx, q,
 		inv.ID, inv.ResourceType, inv.ResourceID, inv.Relation, inv.Identifier,

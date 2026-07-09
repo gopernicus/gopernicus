@@ -1584,3 +1584,65 @@ sites); the feature-side design is pre-agreed (sdk `id.Generator` func
 type + per-feature nil-safe `Config.IDGenerator`, extension tier 2);
 trigger = first host needing feature entities keyed by its own generator.
 Owner carry-back: flip Segovia flag #2, drop its interim-workaround note.
+
+## 2026-07-09 — segovia-lessons phase 04 EXECUTED (as amended in-session): the cryptids facility; sdk/id retired; ID strategy decided-once, threaded, and store-honored
+
+**D8 (as built):** `sdk/id` folded into `sdk/cryptids` — the original
+gopernicus "crypto tidbits" home. One port: zero-arg
+`GenerateFunc func() (string, error)`; consumers hold `IDGenerator` (zero
+value = the 21-char nanoid default over the fixed 52-byte alphabet;
+`Generate`/`MustGenerate`); `NanoID(alphabet, size)` validates ONCE at
+wiring (ai/nanoid + matoous/go-nanoid credited — stdlib reimplementation
+only because the sdk carries no deps); `Database` = the explicit
+delegate-to-the-database strategy. Owner-scaffolded siblings ratified:
+`Encrypter`+`AESGCM`, `SHA256Hasher`, `JWTSigner` (port-only).
+
+**D9 AMENDED (owner, in-session, superseding the D9a package-var cut):**
+the package-private `var ids` migration "hard-codes the generator into the
+feature" — the 21 sites split into two kinds and are treated differently.
+ENTITY KEYS (11 sites: auth user/serviceaccount/apikey/securityevent/
+invitation; cms entry/asset/menu/menuitem/inquiry/term) take the generator:
+each feature `Config` gains `IDs cryptids.IDGenerator` (zero value → nanoid
+default), threaded Config → service deps → domain constructor (generator
+as first param, `MustGenerate` inside). SECURITY MATERIAL (session tokens,
+verification codes/reset tokens, oauth states, API-key prefix+secret,
+PKCE/nonce, invitation secrets, sdk/events EventID/Correlation) NEVER
+follows the app strategy — package-private `secrets` generators, each with
+a doc stating why (a Database-generated session token would be an
+empty-string credential). Media's blob `StorageKey` decoupled from the
+entity ID for the same reason (its own random component).
+
+**Type ruling (owner):** IDs stay `string`; NO generics. Serial/int keys
+parked entirely — when a resource genuinely needs one it becomes an
+explicit int field on that resource (no generator func, no text casting;
+the store returns the int). Bundled stores stay text-keyed end to end;
+native uuid/serial columns are a host-owned adapter+migration concern.
+
+**D10 PULLED FORWARD (owner: "we need to honor that"):** the empty-ID
+convention is IMPLEMENTED, not just documented. Every entity-keyed
+`Create` in stores/pgx + stores/turso (auth ×5, cms ×6) branches on empty
+ID → omit the id column → `RETURNING id` (text columns, no casts).
+Schema defaults ship as NEW migrations (checksum guard forbids editing
+applied files): pgx `0012_id_defaults.sql` via `ALTER ... SET DEFAULT
+gen_random_uuid()::text`; turso `0012` via the SQLite table-rebuild dance
+(`DEFAULT (lower(hex(randomblob(16))))`, indexes recreated). Reference/mem
+stores (storetest references, examples memstore ×2, authmem) assign at
+insert. Conformance suites gained `DBGeneratedIDOnEmpty` per entity family
+— the footgun warning retired by proof. Secret-keyed tables get NO branch
+and NO default: an empty secret is a bug, never a strategy.
+
+**D11 (recorded):** the port reconciliation already existed — authentication
+consumes `cryptids.Encrypter`/`JWTSigner`/`SHA256Hasher`; `PasswordHasher`
+stays feature-owned by its recorded rationale; no duplicate vocabulary.
+
+**D12 (owner pulled forward):** `integrations/cryptids/google-uuid` ships
+now — `V4()`/`V7()` constructors returning `GenerateFunc` (canonical
+lowercase text; V7 recommended for DB keys: time-ordered text form, keyset-
+and B-tree-friendly). `go-nanoid` stays DECLINED (attribution comment is
+the honest relationship). 31 modules.
+
+Supersession story: phase 03's D5 API lived one day — the build-to-evaluate
+work was the evidence that produced the cryptids design; 03 carries the
+marker. Segovia carry-over (task-2): `sdk/id` deletion breaks segovia v2's
+`id.New()` on next build (live replace directive) — migrate per-domain to
+`cryptids.IDGenerator{}`.MustGenerate() or thread its own Config strategy.

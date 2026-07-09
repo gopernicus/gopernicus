@@ -3,10 +3,12 @@ package messagingsvc
 import (
 	"context"
 	"errors"
-	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
 	"testing"
 	"time"
 
+	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
+
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/email"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 )
@@ -37,7 +39,7 @@ func TestSubmit_PersistsAndNotifies(t *testing.T) {
 	repo := &fakeInquiries{}
 	sender := &recordSender{}
 	now := time.Date(2026, 6, 22, 0, 0, 0, 0, time.UTC)
-	svc := NewService(repo, sender, "site@example.com", "ops@example.com", func() time.Time { return now })
+	svc := NewService(repo, sender, "site@example.com", "ops@example.com", cryptids.IDGenerator{}, func() time.Time { return now })
 
 	inq, err := svc.Submit(ctx, "Alice", "alice@example.com", "Hello there")
 	if err != nil {
@@ -61,7 +63,7 @@ func TestSubmit_PersistsAndNotifies(t *testing.T) {
 func TestSubmit_PersistsEvenWhenSendFails(t *testing.T) {
 	ctx := context.Background()
 	repo := &fakeInquiries{}
-	svc := NewService(repo, &recordSender{fail: true}, "f", "t", func() time.Time { return time.Now() })
+	svc := NewService(repo, &recordSender{fail: true}, "f", "t", cryptids.IDGenerator{}, func() time.Time { return time.Now() })
 
 	saved, err := svc.Submit(ctx, "Bob", "bob@example.com", "Hi")
 	if err == nil {
@@ -74,7 +76,7 @@ func TestSubmit_PersistsEvenWhenSendFails(t *testing.T) {
 
 func TestSubmit_Validation(t *testing.T) {
 	ctx := context.Background()
-	svc := NewService(&fakeInquiries{}, &recordSender{}, "f", "t", func() time.Time { return time.Now() })
+	svc := NewService(&fakeInquiries{}, &recordSender{}, "f", "t", cryptids.IDGenerator{}, func() time.Time { return time.Now() })
 
 	for _, tc := range []struct{ name, email, msg string }{
 		{"", "a@b.com", "m"},

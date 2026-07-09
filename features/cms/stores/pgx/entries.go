@@ -78,10 +78,7 @@ type fieldRow struct {
 // Create persists a new entry and its custom fields in one transaction.
 func (s *EntryStore) Create(ctx context.Context, e content.Entry) (content.Entry, error) {
 	err := s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
-		const q = `INSERT INTO entries (` + entryColumns + `)
-			VALUES (@id, @type, @slug, @title, @status, @body, @excerpt, @author, @template, @parent_id, @menu_order, @published_at, @created_at, @updated_at)`
-		if _, err := tx.Exec(ctx, q, pgx.NamedArgs{
-			"id":           e.ID,
+		args := pgx.NamedArgs{
 			"type":         e.Type,
 			"slug":         e.Slug,
 			"title":        e.Title,
@@ -95,7 +92,23 @@ func (s *EntryStore) Create(ctx context.Context, e content.Entry) (content.Entry
 			"published_at": pgxdb.NullTimePtr(e.PublishedAt),
 			"created_at":   e.CreatedAt.UTC(),
 			"updated_at":   e.UpdatedAt.UTC(),
-		}); err != nil {
+		}
+		// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+		// column so the schema default generates the key, read back with RETURNING.
+		// The generated key must be assigned before writeFields writes the child rows.
+		if e.ID == "" {
+			const q = `INSERT INTO entries (type, slug, title, status, body, excerpt, author, template, parent_id, menu_order, published_at, created_at, updated_at)
+				VALUES (@type, @slug, @title, @status, @body, @excerpt, @author, @template, @parent_id, @menu_order, @published_at, @created_at, @updated_at)
+				RETURNING id`
+			if err := tx.QueryRow(ctx, q, args).Scan(&e.ID); err != nil {
+				return err
+			}
+			return writeFields(ctx, tx, e.ID, e.Fields)
+		}
+		const q = `INSERT INTO entries (` + entryColumns + `)
+			VALUES (@id, @type, @slug, @title, @status, @body, @excerpt, @author, @template, @parent_id, @menu_order, @published_at, @created_at, @updated_at)`
+		args["id"] = e.ID
+		if _, err := tx.Exec(ctx, q, args); err != nil {
 			return err
 		}
 		return writeFields(ctx, tx, e.ID, e.Fields)

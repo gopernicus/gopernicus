@@ -3,8 +3,6 @@ package events
 import (
 	"encoding/json"
 	"time"
-
-	"github.com/gopernicus/gopernicus/sdk/id"
 )
 
 // EventEncoder is an optional interface an event may implement to control its
@@ -50,7 +48,7 @@ func NewRecord(e Event) (Record, error) {
 		return Record{}, err
 	}
 	rec := Record{
-		EventID:       id.New(),
+		EventID:       ids.MustGenerate(),
 		Type:          e.Type(),
 		OccurredAt:    e.OccurredAt(),
 		CorrelationID: e.CorrelationID(),

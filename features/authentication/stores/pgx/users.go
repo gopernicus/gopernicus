@@ -50,17 +50,28 @@ func (r userRow) toDomain() user.User {
 
 // Create persists a new user; a colliding normalized email → errs.ErrAlreadyExists.
 func (s *UserStore) Create(ctx context.Context, u user.User) (user.User, error) {
-	const q = `INSERT INTO users (` + userColumns + `)
-		VALUES (@id, @email, @display_name, @email_verified, @created_at, @updated_at)`
-	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
-		"id":             u.ID,
+	args := pgx.NamedArgs{
 		"email":          u.Email,
 		"display_name":   u.DisplayName,
 		"email_verified": u.EmailVerified,
 		"created_at":     u.CreatedAt.UTC(),
 		"updated_at":     u.UpdatedAt.UTC(),
-	})
-	if err != nil {
+	}
+	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// column so the schema default generates the key, read back with RETURNING.
+	if u.ID == "" {
+		const q = `INSERT INTO users (email, display_name, email_verified, created_at, updated_at)
+			VALUES (@email, @display_name, @email_verified, @created_at, @updated_at)
+			RETURNING id`
+		if err := s.db.QueryRow(ctx, q, args).Scan(&u.ID); err != nil {
+			return user.User{}, pgxdb.MapError(err)
+		}
+		return u, nil
+	}
+	const q = `INSERT INTO users (` + userColumns + `)
+		VALUES (@id, @email, @display_name, @email_verified, @created_at, @updated_at)`
+	args["id"] = u.ID
+	if _, err := s.db.Exec(ctx, q, args); err != nil {
 		return user.User{}, err
 	}
 	return u, nil

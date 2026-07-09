@@ -27,6 +27,19 @@ const serviceAccountColumns = "id, name, description, created_by, act_as_user, o
 
 // Create persists a new service account.
 func (s *ServiceAccountStore) Create(ctx context.Context, sa serviceaccount.ServiceAccount) (serviceaccount.ServiceAccount, error) {
+	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// column so the schema default generates the key, read back with RETURNING.
+	if sa.ID == "" {
+		const q = `INSERT INTO service_accounts (name, description, created_by, act_as_user, owner_user_id, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`
+		if err := s.db.QueryRow(ctx, q,
+			sa.Name, sa.Description, sa.CreatedBy, tursodb.BoolToInt(sa.ActAsUser),
+			sa.OwnerUserID, tursodb.FormatTime(sa.CreatedAt), tursodb.FormatTime(sa.UpdatedAt),
+		).Scan(&sa.ID); err != nil {
+			return serviceaccount.ServiceAccount{}, tursodb.MapError(err)
+		}
+		return sa, nil
+	}
 	const q = `INSERT INTO service_accounts (` + serviceAccountColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err := s.db.Exec(ctx, q,
 		sa.ID, sa.Name, sa.Description, sa.CreatedBy, tursodb.BoolToInt(sa.ActAsUser),

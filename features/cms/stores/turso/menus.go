@@ -25,6 +25,16 @@ const itemColumns = "id, menu_id, label, url, parent_id, position, created_at, u
 
 // CreateMenu persists a new menu.
 func (s *MenuStore) CreateMenu(ctx context.Context, m menus.Menu) (menus.Menu, error) {
+	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// column so the schema default generates the key, read back with RETURNING.
+	if m.ID == "" {
+		const q = `INSERT INTO menus (name, slug, created_at, updated_at) VALUES (?, ?, ?, ?) RETURNING id`
+		if err := s.db.QueryRow(ctx, q, m.Name, m.Slug,
+			tursodb.FormatTime(m.CreatedAt), tursodb.FormatTime(m.UpdatedAt)).Scan(&m.ID); err != nil {
+			return menus.Menu{}, tursodb.MapError(err)
+		}
+		return m, nil
+	}
 	const q = `INSERT INTO menus (` + menuColumns + `) VALUES (?, ?, ?, ?, ?)`
 	_, err := s.db.Exec(ctx, q, m.ID, m.Name, m.Slug,
 		tursodb.FormatTime(m.CreatedAt), tursodb.FormatTime(m.UpdatedAt))
@@ -85,6 +95,16 @@ func (s *MenuStore) ItemsForMenu(ctx context.Context, menuID string) ([]menus.Me
 
 // AddItem persists a new menu item.
 func (s *MenuStore) AddItem(ctx context.Context, it menus.MenuItem) (menus.MenuItem, error) {
+	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// column so the schema default generates the key, read back with RETURNING.
+	if it.ID == "" {
+		const q = `INSERT INTO menu_items (menu_id, label, url, parent_id, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`
+		if err := s.db.QueryRow(ctx, q, it.MenuID, it.Label, it.URL, it.ParentID, it.Position,
+			tursodb.FormatTime(it.CreatedAt), tursodb.FormatTime(it.UpdatedAt)).Scan(&it.ID); err != nil {
+			return menus.MenuItem{}, tursodb.MapError(err)
+		}
+		return it, nil
+	}
 	const q = `INSERT INTO menu_items (` + itemColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err := s.db.Exec(ctx, q, it.ID, it.MenuID, it.Label, it.URL, it.ParentID, it.Position,
 		tursodb.FormatTime(it.CreatedAt), tursodb.FormatTime(it.UpdatedAt))

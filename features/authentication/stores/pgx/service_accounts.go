@@ -57,10 +57,7 @@ func (r serviceAccountRow) toDomain() serviceaccount.ServiceAccount {
 
 // Create persists a new service account.
 func (s *ServiceAccountStore) Create(ctx context.Context, sa serviceaccount.ServiceAccount) (serviceaccount.ServiceAccount, error) {
-	const q = `INSERT INTO service_accounts (` + serviceAccountColumns + `)
-		VALUES (@id, @name, @description, @created_by, @act_as_user, @owner_user_id, @created_at, @updated_at)`
-	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
-		"id":            sa.ID,
+	args := pgx.NamedArgs{
 		"name":          sa.Name,
 		"description":   sa.Description,
 		"created_by":    sa.CreatedBy,
@@ -68,8 +65,22 @@ func (s *ServiceAccountStore) Create(ctx context.Context, sa serviceaccount.Serv
 		"owner_user_id": sa.OwnerUserID,
 		"created_at":    sa.CreatedAt.UTC(),
 		"updated_at":    sa.UpdatedAt.UTC(),
-	})
-	if err != nil {
+	}
+	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// column so the schema default generates the key, read back with RETURNING.
+	if sa.ID == "" {
+		const q = `INSERT INTO service_accounts (name, description, created_by, act_as_user, owner_user_id, created_at, updated_at)
+			VALUES (@name, @description, @created_by, @act_as_user, @owner_user_id, @created_at, @updated_at)
+			RETURNING id`
+		if err := s.db.QueryRow(ctx, q, args).Scan(&sa.ID); err != nil {
+			return serviceaccount.ServiceAccount{}, pgxdb.MapError(err)
+		}
+		return sa, nil
+	}
+	const q = `INSERT INTO service_accounts (` + serviceAccountColumns + `)
+		VALUES (@id, @name, @description, @created_by, @act_as_user, @owner_user_id, @created_at, @updated_at)`
+	args["id"] = sa.ID
+	if _, err := s.db.Exec(ctx, q, args); err != nil {
 		return serviceaccount.ServiceAccount{}, err
 	}
 	return sa, nil

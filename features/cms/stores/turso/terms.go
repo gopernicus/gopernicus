@@ -24,6 +24,18 @@ const termColumns = "id, kind, slug, name, parent_id, created_at, updated_at"
 
 // Create persists a new term.
 func (s *TermStore) Create(ctx context.Context, t taxonomy.Term) (taxonomy.Term, error) {
+	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// column so the schema default generates the key, read back with RETURNING.
+	if t.ID == "" {
+		const q = `INSERT INTO terms (kind, slug, name, parent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING id`
+		if err := s.db.QueryRow(ctx, q,
+			string(t.Kind), t.Slug, t.Name, t.ParentID,
+			tursodb.FormatTime(t.CreatedAt), tursodb.FormatTime(t.UpdatedAt),
+		).Scan(&t.ID); err != nil {
+			return taxonomy.Term{}, tursodb.MapError(err)
+		}
+		return t, nil
+	}
 	const q = `INSERT INTO terms (` + termColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?)`
 	_, err := s.db.Exec(ctx, q,
 		t.ID, string(t.Kind), t.Slug, t.Name, t.ParentID,
