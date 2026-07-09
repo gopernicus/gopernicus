@@ -228,6 +228,74 @@ directly (the ambiguity this design fixes structurally via module boundaries).
 Go's `internal/` keeps the app's hexagon and adapters private to the app; the
 framework modules (`sdk`, `integrations/*`, `features/*`) never reach into them.
 
+### Inbound anatomy — inside `internal/inbound/` (ratified 2026-07-08)
+
+Adopted from Segovia v2 (segovia-lessons flag #1, 2026-07-08) — the host
+app built in tandem with this framework and the living reference
+implementation; no host in this repo has app-local domains yet, and the
+future `gopernicus new domain` scaffold (workshop-v2) should emit this
+shape. Until that scaffold exists, adoption is by hand: read this
+subsection, apply it, use Segovia v2 as the worked example.
+
+```
+internal/inbound/
+  domains/<domain>/     # one package per app-local domain
+    routes.go           #   the ONE readable route table — never split
+    api.go              #   JSON handlers (single-resource degenerate form)
+    html.go             #   HTML page handlers (fragments.go when htmx lands)
+    views.go            #   the render PORT — methods return web.Renderer
+    templates/          #   bundled default implementation (templ), co-located
+  http/                 # transport plumbing only (middleware) — never handlers
+  views/                # the GLOBAL presentation tree: shared Shell/layouts,
+                        #   the future UI kit — the theme root
+```
+
+- **The render port (FS3 scaled to app-local).** `views.go` defines the
+  domain's presentation port; methods return `web.Renderer`. templ is the
+  default, never the contract: `templates/` is the bundled implementation,
+  implements the port structurally, and never imports the transport.
+  View-tech dependencies ride the app module's go.mod and touch only
+  `internal/inbound` — `internal/logic` stays sdk-only (the one rule).
+- **The theming seam.** `internal/inbound/views/` holds the shared
+  `Shell`/layouts and the future UI kit, consumed by every domain's
+  templates; a themed kit is a new implementation of the ports plus one
+  `cmd` wiring change. **Partial override via embedding:** the default is
+  a concrete exported struct, so a host (or a single binary —
+  `cmd/<binary>/views/`) embeds it and overrides individual port methods;
+  method promotion supplies the rest. Override granularity is the port
+  method (the page), deliberately — reuse comes from exported building
+  blocks (Shell, kit primitives), never exported page internals.
+- **The growth rule (multi-resource domains).** The file axis flips from
+  transport to RESOURCE at resource #2: `grants.go` holds that resource's
+  api+html (`grants_api.go`/`grants_html.go`/`grants_fragments.go` only
+  when one grows heavy); `routes.go` stays singular — one domain, one
+  readable route table. Transport-named `api.go`/`html.go` are the
+  single-resource degenerate form. **Never `/api`, `/html`, or `/htmx`
+  subdirectories** — a subdirectory means a new contract (own
+  schema/vocabulary) or a swappable implementation behind a port
+  (`templates/`), never mere file count; a domain wanting its own package
+  tree is two domains. The same axis mirrors in `logic/domains/<domain>/`
+  and `templates/{resource}.templ`.
+- **The maximal flatten** (a gopernicus-side clarification of the Segovia
+  text): a single-resource, single-transport domain with a small handler
+  set may keep its handlers in `routes.go` itself —
+  `features/events/internal/inbound/events/routes.go` is the blessed
+  example. The never-split rule constrains the route *table*, not the
+  co-residence of a few handlers.
+- **Features mirror the file anatomy, not the tree** (D1, ratified
+  2026-07-08). A feature is its one domain, so the `domains/` level
+  flattens to `internal/inbound/<feature>/`
+  (`features/cms/internal/inbound/cms/`), carrying the same file anatomy
+  with a `Mount` dispatcher in `routes.go` and per-resource
+  deny-by-absence `mountX` helpers living in their resource files. `http/`
+  keeps one meaning on both sides of the line — plumbing — and a feature
+  has no `http/` until real plumbing appears. The global views tree and
+  co-located `templates/` are **app-only**: a feature core requires sdk
+  only (FS1), so its render port lives in the core and its bundled default
+  is the `views/<pkg>` sibling module (FS3); the feature theming seam is
+  embed-the-sibling-default (live override: `examples/cms/internal/theme/`).
+  See `features/README.md` §2.
+
 **`internal/outbound` vs `integrations`.** An `integration` is the *reusable*
 connection/client to an external system (the turso connector). `internal/outbound`
 is the *app-specific* code that implements a domain port using one (the post
