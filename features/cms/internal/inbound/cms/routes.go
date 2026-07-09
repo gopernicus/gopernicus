@@ -59,9 +59,10 @@ type Deps struct {
 // A nil views registers ONLY the media byte endpoint (GET /media/{id}/file) and
 // returns — the entire HTML surface (public site + admin) is not mounted (FS3).
 func Mount(r feature.RouteRegistrar, d Deps, views Views, cache cacher.Storer, adminMW []web.Middleware) {
+	rt := feature.Methods{Next: r}
 	md := NewMediaHandlers(d.Media, views)
 	if views == nil {
-		r.Handle("GET", "/media/{id}/file", md.Serve)
+		rt.GET("/media/{id}/file", md.Serve)
 		return
 	}
 
@@ -78,7 +79,7 @@ func Mount(r feature.RouteRegistrar, d Deps, views Views, cache cacher.Storer, a
 	}
 
 	// Public home.
-	r.Handle("GET", "/{$}", pub.Home, pubMW...)
+	rt.GET("/{$}", pub.Home, pubMW...)
 
 	// Registry-driven content routes. One generic admin CRUD set per type, plus a
 	// public single route per routable type (hierarchical types flat at the root,
@@ -88,60 +89,60 @@ func Mount(r feature.RouteRegistrar, d Deps, views Views, cache cacher.Storer, a
 	for _, t := range d.Registry.Types() {
 		t := t
 		base := "/" + t.AdminBase()
-		r.Handle("GET", base, func(w http.ResponseWriter, req *http.Request) { eh.List(w, req, t) }, adminMW...)
-		r.Handle("GET", base+"/new", func(w http.ResponseWriter, req *http.Request) { eh.New(w, req, t) }, adminMW...)
-		r.Handle("POST", base, func(w http.ResponseWriter, req *http.Request) { eh.Create(w, req, t) }, adminMW...)
-		r.Handle("GET", base+"/{id}/edit", func(w http.ResponseWriter, req *http.Request) { eh.Edit(w, req, t) }, adminMW...)
-		r.Handle("POST", base+"/{id}", func(w http.ResponseWriter, req *http.Request) { eh.Update(w, req, t) }, adminMW...)
-		r.Handle("POST", base+"/{id}/publish", func(w http.ResponseWriter, req *http.Request) { eh.Publish(w, req, t) }, adminMW...)
-		r.Handle("POST", base+"/{id}/unpublish", func(w http.ResponseWriter, req *http.Request) { eh.Unpublish(w, req, t) }, adminMW...)
-		r.Handle("POST", base+"/{id}/delete", func(w http.ResponseWriter, req *http.Request) { eh.Delete(w, req, t) }, adminMW...)
+		rt.GET(base, func(w http.ResponseWriter, req *http.Request) { eh.List(w, req, t) }, adminMW...)
+		rt.GET(base+"/new", func(w http.ResponseWriter, req *http.Request) { eh.New(w, req, t) }, adminMW...)
+		rt.POST(base, func(w http.ResponseWriter, req *http.Request) { eh.Create(w, req, t) }, adminMW...)
+		rt.GET(base+"/{id}/edit", func(w http.ResponseWriter, req *http.Request) { eh.Edit(w, req, t) }, adminMW...)
+		rt.POST(base+"/{id}", func(w http.ResponseWriter, req *http.Request) { eh.Update(w, req, t) }, adminMW...)
+		rt.POST(base+"/{id}/publish", func(w http.ResponseWriter, req *http.Request) { eh.Publish(w, req, t) }, adminMW...)
+		rt.POST(base+"/{id}/unpublish", func(w http.ResponseWriter, req *http.Request) { eh.Unpublish(w, req, t) }, adminMW...)
+		rt.POST(base+"/{id}/delete", func(w http.ResponseWriter, req *http.Request) { eh.Delete(w, req, t) }, adminMW...)
 
 		if !t.Routable {
 			continue
 		}
 		single := func(w http.ResponseWriter, req *http.Request) { pub.Single(w, req, t) }
 		if pb := t.PublicBase(); pb != "" {
-			r.Handle("GET", "/"+pb+"/{slug}", single, pubMW...)
+			rt.GET("/"+pb+"/{slug}", single, pubMW...)
 		} else if !rootFlatClaimed {
-			r.Handle("GET", "/{slug}", single, pubMW...)
+			rt.GET("/{slug}", single, pubMW...)
 			rootFlatClaimed = true
 		}
 	}
 
 	// Taxonomy admin.
-	r.Handle("GET", "/terms", th.List, adminMW...)
-	r.Handle("GET", "/terms/new", th.New, adminMW...)
-	r.Handle("POST", "/terms", th.Create, adminMW...)
-	r.Handle("GET", "/terms/{id}/edit", th.Edit, adminMW...)
-	r.Handle("POST", "/terms/{id}", th.Update, adminMW...)
-	r.Handle("POST", "/terms/{id}/delete", th.Delete, adminMW...)
+	rt.GET("/terms", th.List, adminMW...)
+	rt.GET("/terms/new", th.New, adminMW...)
+	rt.POST("/terms", th.Create, adminMW...)
+	rt.GET("/terms/{id}/edit", th.Edit, adminMW...)
+	rt.POST("/terms/{id}", th.Update, adminMW...)
+	rt.POST("/terms/{id}/delete", th.Delete, adminMW...)
 
 	// Public taxonomy archives.
-	r.Handle("GET", "/category/{slug}", pub.Category, pubMW...)
-	r.Handle("GET", "/tag/{slug}", pub.Tag, pubMW...)
+	rt.GET("/category/{slug}", pub.Category, pubMW...)
+	rt.GET("/tag/{slug}", pub.Tag, pubMW...)
 
 	// Menus (admin) + a public nav render by slug.
-	r.Handle("GET", "/menus", mn.List, adminMW...)
-	r.Handle("GET", "/menus/new", mn.New, adminMW...)
-	r.Handle("POST", "/menus", mn.Create, adminMW...)
-	r.Handle("GET", "/menus/{id}", mn.Detail, adminMW...)
-	r.Handle("POST", "/menus/{id}/items", mn.AddItem, adminMW...)
-	r.Handle("GET", "/menu-items/{id}/edit", mn.EditItem, adminMW...)
-	r.Handle("POST", "/menu-items/{id}", mn.UpdateItem, adminMW...)
-	r.Handle("POST", "/menu-items/{id}/delete", mn.DeleteItem, adminMW...)
-	r.Handle("GET", "/menu/{slug}", mn.PublicNav)
+	rt.GET("/menus", mn.List, adminMW...)
+	rt.GET("/menus/new", mn.New, adminMW...)
+	rt.POST("/menus", mn.Create, adminMW...)
+	rt.GET("/menus/{id}", mn.Detail, adminMW...)
+	rt.POST("/menus/{id}/items", mn.AddItem, adminMW...)
+	rt.GET("/menu-items/{id}/edit", mn.EditItem, adminMW...)
+	rt.POST("/menu-items/{id}", mn.UpdateItem, adminMW...)
+	rt.POST("/menu-items/{id}/delete", mn.DeleteItem, adminMW...)
+	rt.GET("/menu/{slug}", mn.PublicNav)
 
 	// Media management (admin) + public asset serving.
-	r.Handle("GET", "/media", md.Library, adminMW...)
-	r.Handle("POST", "/media", md.Upload, adminMW...)
-	r.Handle("GET", "/media/{id}/file", md.Serve)
-	r.Handle("POST", "/media/{id}/delete", md.Delete, adminMW...)
+	rt.GET("/media", md.Library, adminMW...)
+	rt.POST("/media", md.Upload, adminMW...)
+	rt.GET("/media/{id}/file", md.Serve)
+	rt.POST("/media/{id}/delete", md.Delete, adminMW...)
 
 	// Contact form (public) + inquiry list (admin).
-	r.Handle("GET", "/contact", ct.Form)
-	r.Handle("POST", "/contact", ct.Submit)
-	r.Handle("GET", "/inquiries", ct.Inquiries, adminMW...)
+	rt.GET("/contact", ct.Form)
+	rt.POST("/contact", ct.Submit)
+	rt.GET("/inquiries", ct.Inquiries, adminMW...)
 }
 
 // BuildRouter assembles a standalone CMS router with the global middleware stack

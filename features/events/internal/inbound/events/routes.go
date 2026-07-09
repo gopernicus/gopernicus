@@ -61,9 +61,10 @@ func Mount(r feature.RouteRegistrar, cfg Config) {
 		heartbeat:  cfg.Heartbeat,
 		maxConnAge: cfg.MaxConnAge,
 	}
-	r.Handle("GET", "/events", g.subjectStream, cfg.Middleware...)
+	rt := feature.Methods{Next: r}
+	rt.GET("/events", g.subjectStream, cfg.Middleware...)
 	if cfg.Authorize != nil {
-		r.Handle("GET", "/events/{resource_type}/{resource_id}", g.resourceStream, cfg.Middleware...)
+		rt.GET("/events/{resource_type}/{resource_id}", g.resourceStream, cfg.Middleware...)
 	}
 }
 
