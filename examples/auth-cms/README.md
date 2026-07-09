@@ -37,6 +37,25 @@ bearer, security-event audit, and ReBAC-decoupled invitations) with zero infra.
   the module graph**. `authorization-v1` later swaps `CreateRelationships` in via
   the same seam.
 
+## Authorization postures — the middle posture, demonstrated
+
+Authorization is "supported, never required": a host runs with no checks, with a
+**host-authored Check closure**, or with the mounted `features/authorization` IAM
+domain. **This host is the MIDDLE-POSTURE reference.** `events.Config.Authorize`
+is satisfied by a plain ownership closure over the toy membership map
+(`cmd/server/membership.go`, `members.has`), which gates the resource-scoped
+stream `GET /events/{resource_type}/{resource_id}` — a member is allowed, a
+non-member gets 403 — with **no `features/authorization` in the module graph**:
+
+```sh
+cd examples/auth-cms && GOWORK=off go list -m all | grep -c authorization   # 0
+```
+
+A Check seam met entirely by host code, no IAM module required — the ruling's
+point demonstrated, not asserted. (A later `authorization-v1` commit swaps this
+closure for the `features/authorization` engine — the flagship posture — through
+the identical `events.Config.Authorize` seam.)
+
 ## Wiring
 
 - **cms store**: `internal/memstore` (in-memory cms ports).
@@ -223,9 +242,11 @@ The host mounts the events feature's SSE gateway on the same root router (no
 prefix), so the subject stream lands at **`GET /events`**. It is wrapped by
 `authSvc.RequireUser` (`Config.StreamMiddleware`): the handler reads the stashed
 `identity.Principal` and **fails closed with 401 when no session/bearer is
-present**. `Config.Authorize` is left nil, so the resource-scoped
-`/events/{resource_type}/{resource_id}` route is **not registered** (deny by
-absence). `Repositories.Outbox` is nil — direct-emit mode: the gateway fans
+present**. `Config.Authorize` is wired with a plain host ownership closure (the
+middle posture — see "Authorization postures" above), so the resource-scoped
+`GET /events/{resource_type}/{resource_id}` route **is registered**: a member of
+the resource is allowed, a resolved non-member gets 403, an unauthenticated caller
+401. `Repositories.Outbox` is nil — direct-emit mode: the gateway fans
 best-effort `content.*` frames out over SSE the moment cms emits them (async, O3),
 with no durable rail and no poller. Bodies are metadata-only (`{type, occurred_at,
 aggregate_type, aggregate_id, tenant_id}`); the SSE `id:` is the event's
@@ -282,10 +303,11 @@ drained, and the bus closes last on a fresh bounded context.
 
 - **events** (SSE, `features/events`): `GET /events` — the authenticated
   subject's stream (best-effort `content.*` fan-out), gated by `RequireUser`
-  (401 when absent). The resource-scoped `/events/{resource_type}/{resource_id}`
-  route is not registered (nil `Authorize`, deny by absence). Under
-  `EVENTS_OUTBOX=memory` the host also mounts `POST /outbox-demo` (host-owned
-  durable-rail trigger, not feature surface).
+  (401 when absent). `GET /events/{resource_type}/{resource_id}` — the
+  resource-scoped stream, registered because `Config.Authorize` is wired with the
+  host ownership closure (the middle posture): member → stream, resolved
+  non-member → 403. Under `EVENTS_OUTBOX=memory` the host also mounts
+  `POST /outbox-demo` (host-owned durable-rail trigger, not feature surface).
 - **auth** (JSON, `features/authentication`): `POST /auth/{register,login,logout,verify,
   password/forgot,password/reset,password/change,token}`; OAuth
   `/auth/oauth/{provider}/{start,callback,link/start,link}`,
