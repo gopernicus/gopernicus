@@ -15,6 +15,22 @@ var _ RouteRegistrar = PrefixRegistrar{}
 // Group is likewise a RouteRegistrar, so a host can pass it as Mount.Router.
 var _ RouteRegistrar = Group{}
 
+// capturingRegistrar records every registration in order (re-homed from the
+// deleted route_test.go — phase 02 task-2 — because these tests consume it).
+type capturingRegistrar struct {
+	calls []capturedCall
+}
+
+type capturedCall struct {
+	method     string
+	path       string
+	middleware []web.Middleware
+}
+
+func (c *capturingRegistrar) Handle(method, path string, _ http.HandlerFunc, middleware ...web.Middleware) {
+	c.calls = append(c.calls, capturedCall{method: method, path: path, middleware: middleware})
+}
+
 func TestPrefixRegistrar_Handle(t *testing.T) {
 	tests := []struct {
 		name   string
