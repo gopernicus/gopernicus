@@ -1124,6 +1124,27 @@ transcript; recorded in 02a's execution log for the Z5 NOTES artifact).
 directions; `examples/minimal` no-regression 200s. **Next: Z2b
 (`02b-store-pgx.md`) — module 34, mirrors the canonical filename set.**
 
+### 2026-07-09 — Z2b CLOSED (`02b-store-pgx.md`) — module 34 live, pgx store both kinds — **DP1 parity holds**
+
+Both tasks landed: migrations filename-identical to Z2a's canonical set
+(diff → empty) with exactly two pinned dialect deltas (Q6
+`gen_random_uuid()::text` PK DEFAULT; TIMESTAMPTZ); the pinned HYBRID
+`Repositories(db)` constructor with dual `to_regclass` probes; all 14+5
+Storer methods — **CTEs re-derived in the PostgreSQL dialect** (risk-3
+mandate, never a turso port; UNION dedup, UNBOUNDED) and the **UNNEST
+bulk insert derived fresh** (the `rebacrelationshipspgx` salvage doesn't
+exist on this machine; menagerie's copy is SQLite-de-generated); Q6
+omit-branch + Q7 silent no-op + NO RETURNING; roles targeted ON CONFLICT.
+One logged divergence: the roles keyset tiebreak is a derived `role_key`
+chr(1) column (pg forbids NUL; cursors are backend-local — proven by
+`Roles/ListPagination` live). **Live leg green on dockered postgres:17 —
+all 21 storetest leaf tests PASS (`TestConformance` 0.93s); container
+removed, port freed.** With Z2a: **memstore + turso + pgx pass the ONE
+shared suite — the flagship provably authorizes identically across all
+three backends.** `make check` green @ 34 modules; `make guard` green;
+rule-6 clean both directions; `examples/minimal` no-regression 200s.
+**Next: Z4 (`04-consumer-proof.md`) — consumer seams + proof host.**
+
 ### 2026-07-08 — planning leg: milestone cut (DRAFT)
 
 Cut `00-overview.md` + phases Z1, Z2a, Z2b, Z4, Z5 from the ratified
