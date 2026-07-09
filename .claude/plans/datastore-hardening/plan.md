@@ -1,6 +1,9 @@
 # datastore-hardening — connector parity, strictness, and the scaffolded seams
 
-Status: **DRAFT 2026-07-09 — awaiting jrazmi ratification (Q1–Q4 below)**
+Status: **RATIFIED 2026-07-09 (jrazmi, in-session) — Q1 FULL SWEEP · Q2
+crud.Transactor (tx-in-context) · Q3 PURE OPT-IN · Q4 gate APPROVED (runs
+before execution; findings folded on return). EXECUTING under the
+2026-07-09 owner loop directive (autonomous while away).**
 Origin: the 2026-07-09 post-authorization-v1 connector audit (in-session;
 findings 1–9 with owner answers taken same session — recorded verbatim in
 "Owner rulings" below). No design doc — the audit + this plan are the record.
@@ -36,7 +39,7 @@ RELEASING's zero-tags posture means no version-bump obligation.
 | P2 | turso List identifier strictness + roles-tiebreak rework | M | — | opus |
 | P3 | health routes on the four example hosts | S | — | opus |
 | P4 | turso query logging + redaction parity | S–M | — | opus |
-| P5 | turso struct-scan helper + hand-scan sweep | M | P2 | opus |
+| P5 | turso struct-scan helper + row-struct sweep | **L** (resized at the gate fold — lead 5: ~20 row-struct + toDomain pairs authored, not a callback deletion) | P2 | opus |
 | P6 | sdk transaction seam scaffold + G9/G10 guards | S–M | — | fable (design) → opus (guards) |
 | P7 | connector retry policy (design-first) | M | — | fable (design) → opus |
 
@@ -61,11 +64,17 @@ stores + implicitly in memstore).
   declarations; delete the store-local copies)
 - **verify:** `cd features/authorization && go build ./... && go test
   ./... && go vet ./...` (memstore conformance hermetic-green), both
-  store modules build/vet, `make check` + `make guard`. Behavior change:
-  NONE (created_at-only, default DESC — the declarations move, values
-  identical; storetest is the proof).
+  store modules build/vet, `make check` + `make guard`.
 - Additive public rim API (pre-tag, no obligation). Mirror
   `features/authentication/domain/apikey/order.go` naming exactly.
+- **Gate fold (lead 7):** the memstore currently IGNORES `req.Order`
+  (hardcoded created_at sort) while the SQL stores reject unknown order
+  fields with `ErrInvalidInput` — a live backend divergence. P1 also
+  makes the memstore VALIDATE `req.Order` against the rim allow-lists
+  (unknown ⇒ `ErrInvalidInput`), and adds a storetest case asserting the
+  unknown-order-field rejection identically across all three backends.
+  The earlier "behavior change: NONE" claim is superseded — this is a
+  deliberate parity fix.
 
 ### P2 — turso List identifier strictness (owner ruling: STRICT)
 
@@ -83,13 +92,30 @@ that let the two roles stores diverge mechanically.
   column via a wrapping subquery, `PKOf` echoing the DB-scanned value;
   keep `char(1)`-vs-`char(0)` freedom — cursors are backend-local),
   plus any other raw-expression PK the executor's sweep finds
-  (`grep -rn 'PK:' features/*/stores/turso/` — audit expectation: roles
-  is the only one)
+  (**gate fold, steward 7: sweep BOTH axes —
+  `grep -rn 'PK:\|OrderFields' features/*/stores/turso/`**; lead
+  verified pre-execution: roles' PK is the only raw expression, every
+  order column is plain created_at)
 - **verify:** connector unit tests incl. NEW rejection cases
   (expression/whitespace/quote in PK or order column → loud error);
   affected store hermetic; `make check`/`make guard`; the milestone-close
   turso live leg re-proves `Roles/ListPagination` on the reworked
   tiebreak.
+- **Gate fold (lead 3+4) — the rework's real mechanics:**
+  (a) the reworked turso `rolesBaseSQL` MUST terminate in an outer
+  `WHERE 1 = 1` sentinel — turso's `appendCursorPredicate` picks
+  WHERE-vs-AND by substring, the inner subquery's WHERE trips it, and
+  the appended `AND (…)` is a syntax error without the outer sentinel
+  (the pgx precedent at `stores/pgx/roles.go:53` carries it for exactly
+  this reason); (b) introduce a `roleRow` with `RoleKey string`, switch
+  to `ListQuery[roleRow]` + `crud.MapPage(page, roleRow.toDomain)`, and
+  delete the now-dead `roleAssignmentKey` Go recompute — `role.Assignment`
+  has no field to carry the DB-computed key; (c) in the connector,
+  `appendOrderBy`/`appendCursorPredicate` gain `error` returns (mirror
+  pgxdb's `AddOrderByClause`/`ApplyCursorPagination`), rippling through
+  `listCursor`/`listOffset`/`markPrev`; validate `pkCol`
+  UNCONDITIONALLY in `appendOrderBy` (even when the pk term is omitted)
+  so a bad PK fails on page 1, as pgxdb does.
 - Divergence note for the log: this consciously supersedes the Z2b
   "turso's helper allowed one [raw expression]" state.
 
@@ -117,13 +143,27 @@ pgxdb has opt-in `LoggingQueryTracer` (slog; `Config.LogQueries` /
 database/sql exposes no tracer hook — implement in the `DB` wrapper's
 own `Exec/Query/QueryRow` (it already owns them).
 
-- **files:** integrations/datastores/turso/{db.go,tracers.go (new),
-  redact.go (new)} + tests
+- **files:** integrations/datastores/turso/{db.go,**tx.go**,tracers.go
+  (new), redact.go (new)} + tests; **integrations/datastores/pgxdb/
+  {postgres.go,README.md}** (the "no turso analogue" asymmetry record at
+  postgres.go:44-50 + the README note become FALSE the moment this
+  lands — both updated in the same phase)
 - **verify:** connector unit tests (opt-in only — zero output at
-  defaults; redaction of string args in logs); `make check`.
-- The ~30-line redaction helper is DUPLICATED from pgxdb (separate
-  modules; sdk is not its home — it's connector-log plumbing, not
-  vocabulary). Log the duplication as conscious.
+  defaults; the tx path logs too); `make check`.
+- **Gate fold (steward 1) — the parity posture, picked:** mirror pgxdb
+  EXACTLY. turso's `redact.go` is a `RedactDSN` twin (DSN password
+  masking on open/error paths — pgxdb's redact.go does NOT redact query
+  args); query logging logs args VERBATIM behind the same dev-only
+  opt-in-with-WARNING posture as pgxdb's `LoggingQueryTracer`. No
+  arg-redaction feature is invented in either connector.
+- **Gate fold (steward 6):** the tracer threads through
+  `Tx.Exec/Query/QueryRow` too (turso's Tx bypasses the DB wrapper) —
+  a query log that silently drops all transaction-path statements is a
+  debugging trap.
+- The ~25-line `RedactDSN` is DUPLICATED from pgxdb (separate modules;
+  sdk is not its home — connector-log plumbing, not vocabulary).
+  Conscious; promotion trigger: a third connector needing the identical
+  helper.
 
 ### P5 — turso struct scanning + the hand-scan sweep (scope: Q1)
 
@@ -136,15 +176,32 @@ file, matching `db` tags against `rows.Columns()`, **strict-only** —
 error on any unmatched column OR field; no Lax variant is offered, and
 G10 (P6) guards the pgx one.
 
-- **files:** integrations/datastores/turso/scan.go (new: `ScanStruct[T]`
-  or equivalent; `ListQuery[T].Scan` becomes optional — nil ⇒
-  struct-scan) + tests; then the sweep per Q1's answer across
+- **files:** integrations/datastores/turso/scan.go (new: `ScanStruct[T]`;
+  `ListQuery[T].Scan` becomes optional — nil ⇒ struct-scan) + **scan-side
+  `sql.Scanner` wrapper types** (`turso.Time`, `turso.NullTime`, a bool
+  type over 0/1 INTEGER) + tests; then the FULL sweep (Q1) across
   features/{authentication,cms,events,jobs,authorization}/stores/turso/
-  hand-scan callbacks
-- **verify:** connector unit tests (strict rejection cases); every swept
-  module hermetic; `make check`/`make guard`; the milestone-close turso
-  live leg (all five features' conformance suites are the net — this is
-  a mechanical rewrite with storetest as proof).
+- **Gate fold (lead 5) — NOT a mechanical rewrite; resized M → L.**
+  turso stores TEXT timestamps parsed via `ParseTime` and 0/1 bools —
+  every hand-scan does real conversion, and a strict name-matched
+  `&field` bind to `time.Time`/`bool` would bypass the connector's own
+  conversion discipline. So the helper only works with DECLARATIVE row
+  structs whose field types carry the conversion (`CreatedAt turso.Time
+  \x60db:"created_at"\x60` — the Scanner runs ParseTime inside
+  `rows.Scan`). The sweep therefore AUTHORS ~20 db-tagged row-struct +
+  `toDomain` pairs (the pgx-store discipline brought to turso), it does
+  not merely delete callbacks. Row-struct rules: nullable columns MUST
+  use `sql.Null*`/pointer/Scanner types (strict scan errors on NULL into
+  a plain field — correct, author around it); `db:"-"` skips; an
+  untagged exported field is a loud error. **(lead 6):** nil-Scan
+  requires `T` be a db-tagged row struct — stores keep returning domain
+  entities via `crud.MapPage(page, row.toDomain)`, never db tags on
+  domain types.
+- **verify:** connector unit tests (strict rejection cases incl. NULL
+  into plain field, unmatched column, unmatched field, untagged
+  exported); every swept module hermetic; `make check`/`make guard`; the
+  milestone-close turso live leg (all five features' conformance suites
+  are the net).
 
 ### P6 — sdk transaction seam scaffold + guards G9/G10 (shape: Q2)
 
@@ -158,11 +215,39 @@ around the missing seam. Guard baseline verified clean 2026-07-09 (zero
   consumer trigger named), Makefile (G9 `guard-no-underlying`: no
   `.Underlying()` outside `integrations/datastores/*`; G10
   `guard-no-lax-scan`: no `RowToStructByNameLax` anywhere;
-  both prove-can-fail, `make guard` → runs all TEN), README.md guard
+  both prove-can-fail, `make guard` → runs all TEN — and the guard-block
+  header comment "runs all eight" updates to ten), README.md guard
   count, features/README.md one-line pointer
+- **Gate fold (lead 1, MAJOR) — the method is `Transact`, NOT `InTx`.**
+  Both connectors already carry `InTx(ctx, fn func(*Tx) error)` at 18
+  live call sites; Go forbids a second same-named method with a
+  different signature, so a `crud.Transactor` named `InTx` would be
+  unimplementable by either DB without an 18-site breaking rename —
+  hidden until the first consumer, because the scaffold ships
+  unconsumed. Seam: `Transact(ctx context.Context, fn
+  func(context.Context) error) error`. Migration path, stated:
+  connectors keep `InTx(func(*Tx))` untouched; each adds `Transact`
+  ADDITIVELY when the seam is first consumed. (The Q2 ratification named
+  the shape, not the method name — logged as the closest correct thing.)
+- **Gate fold (steward 3):** NO sdk-owned context stash of any kind —
+  an sdk `WithTx(ctx, any)`/`TxFromContext(ctx) any` is a
+  service-locator hole, the same workaround class `Underlying()` is
+  being banned for. sdk owns the interface + the documented convention
+  ONLY; typed ctx keys/helpers (`turso.TxFromContext`,
+  `pgxdb.TxFromContext`) land per connector at first consumption.
+- **Gate fold (steward 4):** the doc comment pins observable semantics,
+  not just a name: commit on nil return, rollback on error (and on
+  panic), **nesting explicitly UNPINNED** until the consumer trigger
+  fires — so the two existing `InTx` implementations cannot silently
+  diverge into the contract.
+- **Gate fold (steward 5):** G9's comment carries the G6-style
+  named-exception discipline: "a legitimate future host/`cmd` hit gets a
+  named per-line exception HERE citing audit ruling 6 — never a regex
+  weakening." (Baseline verified clean by both reviewers: zero
+  `.Underlying()` sites, zero `Lax` sites.)
 - **verify:** `make guard` green + both prove-can-fail records;
-  `make check`; sdk builds stdlib-only (G1 unaffected — the seam is an
-  interface + context helpers, zero imports).
+  `make check`; sdk builds stdlib-only (G1 unaffected — the seam is one
+  interface, zero imports, no ctx helpers).
 - fable designs the seam (Q2), opus lands the guards.
 
 ### P7 — connector retry policy (design-first; default: Q3)
@@ -177,10 +262,19 @@ hatch stays DEFERRED until a real caller needs one (named trigger).
 - **task-1 (fable):** the design note IN THIS FILE's execution log —
   transient-error classification per dialect (pgx: `pgconn` error
   classes + net errors; turso: driver/net + SQLITE_BUSY), which
-  operations retry (**connection acquisition + read paths only; never
-  `Exec`** — blanket write-retry on non-idempotent statements is a
-  correctness hazard; stores wanting write-retry own it explicitly),
-  bounded attempts + jittered backoff, and the Q3 default.
+  operations retry, bounded attempts + jittered backoff, and the Q3
+  default. **Gate fold (steward 2 + lead 2, convergent MAJORs — the
+  original "read paths only; never Exec" axis was UNSOUND):** the
+  stores' non-idempotent writes flow through `Query`/`QueryRow` via
+  `RETURNING` (job claim `UPDATE…RETURNING`, consume-once
+  `DELETE…RETURNING`, `INSERT…RETURNING id` — verified at three named
+  sites), and the wrapper cannot see the statement verb, so
+  method-classified retry retries writes. Pinned instead: wrapper-level
+  auto-retry applies to **CONNECTION ACQUISITION ONLY** (pool
+  acquire/driver connect; note database/sql's own bounded bad-conn
+  retry overlap); **NO statement is ever auto-retried** — statement
+  retry (even pure SELECT) is per-call, store-owned, explicit opt-in,
+  because method does not encode idempotency.
 - **task-2 (opus):** implement `Config.Retry` on both wrappers per the
   ratified design; unit tests with injected transient failures; README
   rows in both connectors.
@@ -246,3 +340,38 @@ after P5's sweep).
 ## Execution log
 
 (append dated entries here)
+
+### 2026-07-09 — review-gate fold (Q4): both reviews returned, all findings folded
+
+**architecture-steward: ALIGNED-WITH-EDITS (9). lead-backend-engineer:
+SHIP-WITH-EDITS (7).** All majors + minors folded in place (each phase
+carries its "Gate fold" bullets); the record:
+
+- **Convergent MAJOR (steward 2 ≡ lead 2):** the P7 retry axis was
+  unsound — `Query`/`QueryRow` carry `RETURNING` writes throughout the
+  stores, so method-classified "read retry" retries writes. Re-pinned:
+  connection-acquisition-only auto-retry; statement retry is per-call
+  store opt-in, always.
+- **Lead MAJOR 1:** `crud.Transactor`'s method renamed `InTx` →
+  **`Transact`** — both connectors already carry an incompatible `InTx`
+  at 18 sites; the collision would hide until first consumption. Q2's
+  ratified SHAPE is unchanged; the name is the closest correct thing.
+- **Lead MAJOR 5:** P5 resized M → L and reframed — the turso
+  TEXT-timestamp/0-1-bool conversions mean the sweep authors ~20
+  declarative row-struct + toDomain pairs over new connector Scanner
+  types (`turso.Time`/`NullTime`/bool), not a callback deletion.
+- **Steward MAJOR 1:** P4's "parity" pinned to pgxdb's REAL posture
+  (RedactDSN twin + verbatim-args dev-only opt-in logging; no invented
+  arg-redaction) and P4 now sweeps pgxdb's "no turso analogue"
+  doc/README records that the phase falsifies.
+- Minors/notes folded: P1 memstore order-validation parity + the
+  cross-backend unknown-order storetest case (lead 7 — decided FIX, the
+  DP1 principle); P2 WHERE-1=1 sentinel, roleRow+MapPage, error-return
+  ripple, unconditional pkCol validation (lead 3+4), sweep widened to
+  OrderFields (steward 7); P4 tx-path tracer threading (steward 6) +
+  RedactDSN promotion trigger named (steward 8); P6 no-sdk-ctx-stash
+  (steward 3), Transact semantics doc-pinned with nesting UNPINNED
+  (steward 4), G9 named-exception discipline (steward 5); guard/count
+  bookkeeping verified (steward 9 / lead cross-check: eight today → ten
+  at P6). Both reviewers independently verified the G9/G10 baselines
+  clean and P1's "authorization is the only divergence" claim.
