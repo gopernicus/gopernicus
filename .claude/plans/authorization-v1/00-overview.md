@@ -1103,6 +1103,27 @@ check`. `make check` green @ 32 modules; `make guard` green; rule-6 clean both
 directions; `examples/minimal` no-regression 200s. **Next: Z2a (`02a-store-
 turso.md`) — module 33, the canonical migration filename set.**
 
+### 2026-07-09 — Z2a CLOSED (`02a-store-turso.md`) — module 33 live, turso store both kinds
+
+Both tasks landed: the canonical migration set authored
+(`0001_iam_relationships.sql` + `0002_iam_roles.sql`, source
+`"authorization"`; Q4 TRIM — no metadata table; Q6 inline
+`lower(hex(randomblob(16)))` DEFAULT; A2 both unique indexes; A3/lead-major-1
+NOT-NULL empty-string columns); the pinned HYBRID `Repositories(db)
+(authorization.Repositories, error)` constructor with dual boot probes; all
+14+5 Storer methods — recursive CTEs UNION-dedup, UNBOUNDED (A1), **derived
+from the port contract + memstore semantics** (the plan's
+`../gopernicus-original` salvage path doesn't exist on this machine;
+menagerie's identical copies used as cross-check — logged in 02a); Q6
+omit-column branch + Q7 silent no-op + NO RETURNING; roles Assign targeted
+ON CONFLICT (never OR IGNORE). **Live leg green on the asserted playground
+DB — all 21 storetest leaf tests PASS in 40.9s** (the five `Adversarial/*`
++ the `Roles/*` family + `Relationship/DBGeneratedIDOnEmpty` named in the
+transcript; recorded in 02a's execution log for the Z5 NOTES artifact).
+`make check` green @ 33 modules; `make guard` green; rule-6 clean both
+directions; `examples/minimal` no-regression 200s. **Next: Z2b
+(`02b-store-pgx.md`) — module 34, mirrors the canonical filename set.**
+
 ### 2026-07-08 — planning leg: milestone cut (DRAFT)
 
 Cut `00-overview.md` + phases Z1, Z2a, Z2b, Z4, Z5 from the ratified
