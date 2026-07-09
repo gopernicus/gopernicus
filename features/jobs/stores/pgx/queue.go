@@ -4,8 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
@@ -19,13 +20,18 @@ import (
 // reclaimable by a later Claim (design §6.3, default 15m).
 const DefaultLease = 15 * time.Minute
 
-// jobColumns is the job_queue column list, in INSERT order.
+// jobColumns is the job_queue column list, in Enqueue's INSERT order.
 const jobColumns = "job_id, kind, payload, status, priority, retry_count, max_attempts, worker_name, failure_reason, scheduled_for, claimed_at, completed_at, created_at, updated_at"
 
-// jobSelect is the job_queue read projection, in scanJob's order. Nullable text
-// columns are COALESCEd to ” so they scan into plain strings; the two nullable
-// timestamps scan into *time.Time.
+// jobSelect is the job_queue read projection Claim's RETURNING scans positionally
+// via scanJob. Nullable text columns are COALESCEd to ” so they scan into plain
+// strings; the two nullable timestamps scan into *time.Time.
 const jobSelect = "job_id, kind, payload, status, priority, retry_count, max_attempts, COALESCE(worker_name, ''), COALESCE(failure_reason, ''), scheduled_for, claimed_at, completed_at, created_at, updated_at"
+
+// jobRowColumns is the struct-scan projection for the NamedArgs read paths (Get,
+// List): every column is name-aliased so pgx.RowToStructByName matches it against
+// jobRow's db tags, with nullable text COALESCEd to ”.
+const jobRowColumns = "job_id, kind, payload, status, priority, retry_count, max_attempts, COALESCE(worker_name, '') AS worker_name, COALESCE(failure_reason, '') AS failure_reason, scheduled_for, claimed_at, completed_at, created_at, updated_at"
 
 // Compile-time seam: the Queue fills the exact job.QueueRepository port.
 var _ job.QueueRepository = (*Queue)(nil)
@@ -54,6 +60,44 @@ func WithLease(d time.Duration) QueueOption {
 type Queue struct {
 	db    *pgxdb.DB
 	lease time.Duration
+}
+
+// jobRow is the store-local, db-tagged projection of a job_queue row that
+// pgx.RowToStructByName scans into; toDomain maps it to the domain entity.
+type jobRow struct {
+	JobID         string     `db:"job_id"`
+	Kind          string     `db:"kind"`
+	Payload       []byte     `db:"payload"`
+	Status        string     `db:"status"`
+	Priority      int        `db:"priority"`
+	Retries       int        `db:"retry_count"`
+	MaxAttempts   int        `db:"max_attempts"`
+	WorkerName    string     `db:"worker_name"`
+	FailureReason string     `db:"failure_reason"`
+	ScheduledFor  time.Time  `db:"scheduled_for"`
+	ClaimedAt     *time.Time `db:"claimed_at"`
+	CompletedAt   *time.Time `db:"completed_at"`
+	CreatedAt     time.Time  `db:"created_at"`
+	UpdatedAt     time.Time  `db:"updated_at"`
+}
+
+func (r jobRow) toDomain() job.Job {
+	return job.Job{
+		JobID:         r.JobID,
+		Kind:          r.Kind,
+		Payload:       json.RawMessage(r.Payload),
+		JobStatus:     job.Status(r.Status),
+		Priority:      r.Priority,
+		Retries:       r.Retries,
+		MaxAttempts:   r.MaxAttempts,
+		WorkerName:    r.WorkerName,
+		FailureReason: r.FailureReason,
+		ScheduledFor:  r.ScheduledFor.UTC(),
+		ClaimedAt:     pgxdb.FromNullTimePtr(r.ClaimedAt),
+		CompletedAt:   pgxdb.FromNullTimePtr(r.CompletedAt),
+		CreatedAt:     r.CreatedAt.UTC(),
+		UpdatedAt:     r.UpdatedAt.UTC(),
+	}
 }
 
 // NewQueueStore returns a Queue backed by db, applying opts (WithLease).
@@ -89,10 +133,17 @@ func (q *Queue) Enqueue(ctx context.Context, in job.Enqueue) (job.Job, error) {
 	}
 
 	const insert = `INSERT INTO job_queue (` + jobColumns + `)
-		VALUES ($1, $2, $3, 'pending', $4, 0, $5, NULL, NULL, $6, NULL, NULL, $7, $8)`
-	if _, err := q.db.Exec(ctx, insert,
-		j.JobID, j.Kind, payloadValue(j.Payload), j.Priority, j.MaxAttempts,
-		j.ScheduledFor.UTC(), j.CreatedAt, j.UpdatedAt); err != nil {
+		VALUES (@job_id, @kind, @payload, 'pending', @priority, 0, @max_attempts, NULL, NULL, @scheduled_for, NULL, NULL, @created_at, @updated_at)`
+	if _, err := q.db.Exec(ctx, insert, pgx.NamedArgs{
+		"job_id":        j.JobID,
+		"kind":          j.Kind,
+		"payload":       payloadValue(j.Payload),
+		"priority":      j.Priority,
+		"max_attempts":  j.MaxAttempts,
+		"scheduled_for": j.ScheduledFor.UTC(),
+		"created_at":    j.CreatedAt,
+		"updated_at":    j.UpdatedAt,
+	}); err != nil {
 		return job.Job{}, err
 	}
 	return j, nil
@@ -105,6 +156,11 @@ func (q *Queue) Enqueue(ctx context.Context, in job.Enqueue) (job.Job, error) {
 // concurrent claimers each take a different job with no contention; selection
 // order is priority DESC, then created_at, with job_id as a deterministic final
 // tie-break.
+//
+// The claim statement and its positional scan are preserved VERBATIM from before
+// the pgx idiom sweep (pgx-crud-v1 P5 directive): SKIP LOCKED correctness is
+// load-bearing, so its args stay positional rather than risk any observable
+// change from a NamedArgs rewrite.
 func (q *Queue) Claim(ctx context.Context, workerID string, now time.Time) (job.Job, error) {
 	nowUTC := now.UTC()
 	stale := nowUTC.Add(-q.lease)
@@ -133,8 +189,8 @@ func (q *Queue) Claim(ctx context.Context, workerID string, now time.Time) (job.
 
 // Complete marks the job done. A missing id yields errs.ErrNotFound.
 func (q *Queue) Complete(ctx context.Context, jobID string, now time.Time) error {
-	const q1 = `UPDATE job_queue SET status = 'completed', completed_at = $1, updated_at = $1 WHERE job_id = $2`
-	return q.execAffecting(ctx, q1, now.UTC(), jobID)
+	const q1 = `UPDATE job_queue SET status = 'completed', completed_at = @now, updated_at = @now WHERE job_id = @job_id`
+	return q.execAffecting(ctx, q1, pgx.NamedArgs{"now": now.UTC(), "job_id": jobID})
 }
 
 // Fail increments retry_count and, in one statement, either reschedules the job
@@ -144,45 +200,68 @@ func (q *Queue) Complete(ctx context.Context, jobID string, now time.Time) error
 func (q *Queue) Fail(ctx context.Context, jobID string, now time.Time, reason string, maxAttempts int) error {
 	const fail = `UPDATE job_queue
 		SET retry_count = retry_count + 1,
-		    failure_reason = $1,
-		    updated_at = $2,
-		    status = CASE WHEN retry_count + 1 >= $3 THEN 'dead_letter' ELSE 'pending' END,
-		    worker_name = CASE WHEN retry_count + 1 >= $3 THEN worker_name ELSE NULL END,
-		    claimed_at = CASE WHEN retry_count + 1 >= $3 THEN claimed_at ELSE NULL END
-		WHERE job_id = $4`
-	return q.execAffecting(ctx, fail, reason, now.UTC(), maxAttempts, jobID)
+		    failure_reason = @reason,
+		    updated_at = @now,
+		    status = CASE WHEN retry_count + 1 >= @max THEN 'dead_letter' ELSE 'pending' END,
+		    worker_name = CASE WHEN retry_count + 1 >= @max THEN worker_name ELSE NULL END,
+		    claimed_at = CASE WHEN retry_count + 1 >= @max THEN claimed_at ELSE NULL END
+		WHERE job_id = @job_id`
+	return q.execAffecting(ctx, fail, pgx.NamedArgs{"reason": reason, "now": now.UTC(), "max": maxAttempts, "job_id": jobID})
 }
 
 // Get returns the job with the given id, or errs.ErrNotFound.
 func (q *Queue) Get(ctx context.Context, id string) (job.Job, error) {
-	const get = `SELECT ` + jobSelect + ` FROM job_queue WHERE job_id = $1`
-	return scanJob(q.db.QueryRow(ctx, get, id))
+	const get = `SELECT ` + jobRowColumns + ` FROM job_queue WHERE job_id = @job_id`
+	row, err := queryOne[jobRow](ctx, q.db, get, pgx.NamedArgs{"job_id": id})
+	if err != nil {
+		return job.Job{}, err
+	}
+	return row.toDomain(), nil
 }
 
-// List returns a cursor-paginated page of jobs matching the filter, ordered by
-// (created_at, job_id) descending.
+// List returns a cursor- or offset-paginated page of jobs matching the filter,
+// in the resolved order (default created_at DESC, job_id DESC). The Kind/Status
+// filter is shared by the page query and the WithCount total.
 func (q *Queue) List(ctx context.Context, f job.ListFilter, req crud.ListRequest) (crud.Page[job.Job], error) {
-	where := "WHERE 1 = 1"
-	var args []any
+	where, args := jobFilter(f)
+	lq := pgxdb.ListQuery[jobRow]{
+		BaseSQL:      `SELECT ` + jobRowColumns + ` FROM job_queue` + where,
+		Args:         args,
+		OrderFields:  job.OrderFields,
+		DefaultOrder: job.DefaultOrder,
+		PK:           "job_id",
+		OrderValueOf: func(r jobRow, _ string) any { return r.CreatedAt },
+		PKOf:         func(r jobRow) string { return r.JobID },
+	}
+	page, err := pgxdb.List(ctx, q.db, lq, req)
+	if err != nil {
+		return crud.Page[job.Job]{}, err
+	}
+	return crud.MapPage(page, jobRow.toDomain), nil
+}
+
+// jobFilter composes the optional Kind and Status filters into a parameterized
+// WHERE fragment and its NamedArgs — never string concatenation of values. The
+// list helper's keyset builder appends its predicate with AND; the count wrap
+// reuses the same fragment and args, so the total respects the filter.
+func jobFilter(f job.ListFilter) (string, pgx.NamedArgs) {
+	where := " WHERE 1 = 1"
+	args := pgx.NamedArgs{}
 	if f.Kind != "" {
-		args = append(args, f.Kind)
-		where += fmt.Sprintf(" AND kind = $%d", len(args))
+		where += " AND kind = @kind"
+		args["kind"] = f.Kind
 	}
 	if f.Status != "" {
-		args = append(args, string(f.Status))
-		where += fmt.Sprintf(" AND status = $%d", len(args))
+		where += " AND status = @status"
+		args["status"] = string(f.Status)
 	}
-
-	return pgxdb.ListPage(ctx, q.db, jobSelect, "job_queue", where, args, orderField, "job_id", req,
-		scanJob,
-		func(j job.Job) (time.Time, string) { return j.CreatedAt, j.JobID },
-	)
+	return where, args
 }
 
 // execAffecting runs a write that must touch exactly one row, mapping zero rows
 // affected to errs.ErrNotFound. Driver errors are already mapped by the connector.
-func (q *Queue) execAffecting(ctx context.Context, query string, args ...any) error {
-	n, err := pgxdb.ExecAffecting(ctx, q.db, query, args...)
+func (q *Queue) execAffecting(ctx context.Context, query string, args pgx.NamedArgs) error {
+	n, err := pgxdb.ExecAffecting(ctx, q.db, query, args)
 	if err != nil {
 		return err
 	}
@@ -192,8 +271,9 @@ func (q *Queue) execAffecting(ctx context.Context, query string, args ...any) er
 	return nil
 }
 
-// scanJob scans one job_queue row (jobSelect projection), mapping pgx.ErrNoRows
-// to errs.ErrNotFound via the connector's MapError.
+// scanJob scans one job_queue row (jobSelect projection) positionally, mapping
+// pgx.ErrNoRows to errs.ErrNotFound via the connector's MapError. It backs Claim's
+// preserved RETURNING statement.
 func scanJob(sc scanner) (job.Job, error) {
 	var (
 		j                      job.Job

@@ -1,6 +1,6 @@
 # Phase P4 — cms: entries pagination + EAV bulk writes + idiom sweep
 
-Status: **DRAFT — awaiting jrazmi ratification (cut 2026-07-08)**
+Status: **RATIFIED 2026-07-08 (jrazmi — Q1/Q2/Q3 at recommendations; see 00-overview.md)**
 Executor model: opus
 Depends on: P3 (the pattern; P3's storetest case family is copied here)
 
@@ -169,4 +169,58 @@ Live: task-2/3 pgx leg + task-4 turso leg recorded (dated) for NOTES.
 
 ## Execution log
 
-(append dated entries here)
+### 2026-07-08 — phase 4 executed (implementer on opus, one mid-phase
+owner ruling); PHASE COMPLETE
+
+Tasks 1–4 landed first: content order vocabulary (created_at only —
+updated_at un-indexed, published_at nullable + composite-indexed only,
+both deliberately excluded, the P3 precedent); the six-case family on
+Entries List + ListByTerm with both example memstores' `entryPageOf`
+extended in the same boundary (storetest/reference_test.go rebuilt to
+the full matrix — same forced amendment as P3's); pgx entries on
+`pgxdb.List[entryRow]` with the `entryFilter` NamedArgs builder shared
+by list+count, `writeFields` → ONE `INSERT…SELECT…FROM
+UNNEST(@keys::text[],@kinds,@values)`, `SetTerms` → DELETE + one UNNEST
+insert (InTx + MapError preserved); assets/inquiries/menus/terms swept
+to NamedArgs + Collect*/queryOne; turso entries semantics-only onto
+`turso.List`.
+
+**task-5 tripped the plan's pre-declared STOP:** prev links could not be
+threaded additively — the Views port passed pagination as a bare
+`nextCursor string`. Owner ruled mid-phase (2026-07-08): **the Views
+port grows via a single `Pager` view-model struct**
+{NextCursor, HasPrev, PreviousCursor, Order, BaseHref} — breaking once,
+additive forever after (Limit deliberately omitted: links carry
+cursor+order only, ?limit is a one-shot SSR override). Landed:
+`EntriesList(…, pager Pager)` / `Archive(…, pager Pager)`, root
+re-export `cms.Pager`, shared `PagerNav` templ ("← Newer" beside
+"Older →", empty-PreviousCursor→BaseHref rule, order carried in both
+links, invalid order never propagated), handlers (admin: ParseOrder
+with Q3 fallback + NormalizedLimit clamp; public: cursor-only with
+HasPrev threaded), and the examples/cms ACME theme's Archive override
+at the new signature. En passant fix: the old "Older →" href pointed at
+`/…/new?cursor=…` — a real pre-existing bug, now built off BaseHref.
+`*_templ.go` regenerated via `make generate` (idempotence verified;
+regenerated files staged so the drift gate passes pre-commit).
+
+**Live legs (2026-07-08, for NOTES):** pgx — docker postgres:17, run at
+task-2 AND task-3: **40 subtests PASS, 0 fail** (12 new family cases =
+6 × {List, ByTerm}); container removed, port free. turso — playground
+URL byte-verified (hard gate), `-tags=integration`: **ok, 170.6s, 40
+subtests PASS, 0 fail**; no tokens in logs.
+
+**Real-interaction (browser, driven by the main session via Playwright,
+28 seeded articles in a scratch category):** admin — page 1 (25 items,
+Older-only) → click "Older →" → page 2 (3 items) → click "← Newer" →
+**exactly page 1** (25 IDs identical); `?order=created_at:asc` → oldest
+first, links carry `order=created_at%3Aasc`, asc round-trips both
+directions; `?order=nope` → **200**, default DESC, no order in links;
+public `/category/…` (through the ACME theme override) — both
+directions round-trip exactly, screenshots captured. Curl-level SSR
+evidence run by the executor beforehand agreed on every point. Seeded
+rows + term deleted after (playground left at 0 articles); server
+killed, :8085 free. Main session also fresh-verified: cms module +
+both memstores + `make check` (all 30) + `make guard` green,
+`grep ListPage features/cms/stores/` → empty, exactly one
+`INSERT INTO entry_fields` (the UNNEST). Next: P5
+(`05-events-jobs.md`).

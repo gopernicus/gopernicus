@@ -25,7 +25,7 @@ func (stubViews) Home(_ []menus.MenuItem, _ []ListItem) web.Renderer {
 	return stringRenderer("STUB-HOME")
 }
 
-func (stubViews) Archive(heading string, _ []menus.MenuItem, _ []ListItem, _, _ string) web.Renderer {
+func (stubViews) Archive(heading string, _ []menus.MenuItem, _ []ListItem, _ Pager) web.Renderer {
 	return stringRenderer("STUB-ARCHIVE:" + heading)
 }
 
@@ -52,7 +52,7 @@ func (stubViews) MenuNav(_ menus.Menu, items []menus.MenuItem) web.Renderer {
 	return stringRenderer(b.String())
 }
 
-func (stubViews) EntriesList(heading, _, _ string, _ []EntryListItem, _ string) web.Renderer {
+func (stubViews) EntriesList(heading, _, _ string, _ []EntryListItem, _ Pager) web.Renderer {
 	return stringRenderer("STUB-ENTRIES:" + heading)
 }
 

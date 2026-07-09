@@ -37,7 +37,7 @@ func TestHome_RendersBundledChrome(t *testing.T) {
 // TestEntriesList_RendersBundledDefault asserts the admin index renders through
 // the bundled default.
 func TestEntriesList_RendersBundledDefault(t *testing.T) {
-	body := render(t, New().EntriesList("Articles", "/articles/new", "/articles", []cms.EntryListItem{{ID: "x1", Title: "First", Status: "published"}}, ""))
+	body := render(t, New().EntriesList("Articles", "/articles/new", "/articles", []cms.EntryListItem{{ID: "x1", Title: "First", Status: "published"}}, cms.Pager{}))
 	for _, want := range []string{"<h1>Articles</h1>", "First", "/articles/x1/edit"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("EntriesList missing %q in:\n%s", want, body)
@@ -74,7 +74,7 @@ func TestEmbed_OverrideOneMethod(t *testing.T) {
 	}
 
 	// A non-overridden method still renders the bundled default chrome.
-	list := render(t, v.EntriesList("Pages", "/pages/new", "/pages", nil, ""))
+	list := render(t, v.EntriesList("Pages", "/pages/new", "/pages", nil, cms.Pager{}))
 	if !strings.Contains(list, "<h1>Pages</h1>") {
 		t.Fatalf("non-overridden EntriesList did not render bundled default:\n%s", list)
 	}

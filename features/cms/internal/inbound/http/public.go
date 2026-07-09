@@ -122,7 +122,15 @@ func (h *PublicHandlers) archive(w http.ResponseWriter, r *http.Request, kind ta
 	}
 	heading := string(kind) + ": " + term.Name
 	base := "/" + string(kind) + "/" + term.Slug
-	web.Render(r.Context(), w, http.StatusOK, h.views.Archive(heading, h.nav(r.Context()), h.listItems(page.Items), page.NextCursor, base))
+	// The public archive pages by cursor only (no order param), but threads the
+	// page's reverse-probe prev state through so the "← Newer" control works.
+	pager := Pager{
+		NextCursor:     page.NextCursor,
+		HasPrev:        page.HasPrev,
+		PreviousCursor: page.PreviousCursor,
+		BaseHref:       base,
+	}
+	web.Render(r.Context(), w, http.StatusOK, h.views.Archive(heading, h.nav(r.Context()), h.listItems(page.Items), pager))
 }
 
 // listItems maps entries to public list items, computing each public href from

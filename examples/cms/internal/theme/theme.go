@@ -17,6 +17,7 @@ import (
 	"context"
 	"html/template"
 	"io"
+	"net/url"
 
 	"github.com/gopernicus/gopernicus/features/cms"
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
@@ -58,7 +59,7 @@ var pages = template.Must(template.New("theme").Parse(`
 {{define "archive"}}{{template "header" .}}
 <h1>{{.Heading}}</h1>
 {{range .Items}}<article><h2><a href="{{.Href}}">{{.Title}}</a></h2>{{if .Excerpt}}<p>{{.Excerpt}}</p>{{end}}</article>{{end}}
-{{if .Next}}<p><a href="{{.Base}}?cursor={{.Next}}">Older →</a></p>{{end}}
+{{if or .HasPrev .HasNext}}<p>{{if .HasPrev}}<a href="{{.NewerHref}}">← Newer</a> {{end}}{{if .HasNext}}<a href="{{.OlderHref}}">Older →</a>{{end}}</p>{{end}}
 {{template "footer" .}}{{end}}
 
 {{define "single"}}{{template "header" .}}
@@ -108,15 +109,36 @@ func (Theme) Home(nav []menus.MenuItem, items []cms.ListItem) web.Renderer {
 	}{base{"Home", nav}, "Welcome to ACME", items})
 }
 
-// Archive renders a taxonomy archive listing.
-func (Theme) Archive(heading string, nav []menus.MenuItem, items []cms.ListItem, nextCursor, baseHref string) web.Renderer {
+// Archive renders a taxonomy archive listing with bidirectional paging: "← Newer"
+// (driven by HasPrev/PreviousCursor, empty prev cursor ⇒ the bare base) beside
+// "Older →" (NextCursor). Both links carry the active order.
+func (Theme) Archive(heading string, nav []menus.MenuItem, items []cms.ListItem, pager cms.Pager) web.Renderer {
 	return render("archive", struct {
 		base
-		Heading string
-		Items   []cms.ListItem
-		Next    string
-		Base    string
-	}{base{heading, nav}, heading, items, nextCursor, baseHref})
+		Heading   string
+		Items     []cms.ListItem
+		HasPrev   bool
+		HasNext   bool
+		NewerHref string
+		OlderHref string
+	}{base{heading, nav}, heading, items, pager.HasPrev, pager.NextCursor != "", archiveHref(pager, pager.PreviousCursor), archiveHref(pager, pager.NextCursor)})
+}
+
+// archiveHref mirrors the bundled pager's href rule for this html/template theme:
+// the base plus optional cursor and active order (deterministically ordered). A
+// bare base is returned when neither is set — the first-page target.
+func archiveHref(pager cms.Pager, cursor string) string {
+	q := url.Values{}
+	if cursor != "" {
+		q.Set("cursor", cursor)
+	}
+	if pager.Order != "" {
+		q.Set("order", pager.Order)
+	}
+	if len(q) == 0 {
+		return pager.BaseHref
+	}
+	return pager.BaseHref + "?" + q.Encode()
 }
 
 // Single wraps a registered per-entry body in the ACME chrome.

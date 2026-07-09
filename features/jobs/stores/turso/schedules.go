@@ -150,16 +150,19 @@ func (s *Schedules) Get(ctx context.Context, id string) (schedule.Schedule, erro
 	return scanSchedule(s.db.QueryRow(ctx, q, id))
 }
 
-// List returns a cursor-paginated page of schedules, ordered by
-// (created_at, schedule_id) descending.
+// List returns a cursor- or offset-paginated page of schedules, in the resolved
+// order (default created_at DESC, schedule_id DESC).
 func (s *Schedules) List(ctx context.Context, req crud.ListRequest) (crud.Page[schedule.Schedule], error) {
-	where := "WHERE 1 = 1"
-	var args []any
-
-	return tursodb.ListPage(ctx, s.db, scheduleColumns, "job_schedules", where, args, orderField, "schedule_id", req,
-		scanSchedule,
-		func(sch schedule.Schedule) (time.Time, string) { return sch.CreatedAt, sch.ID },
-	)
+	lq := tursodb.ListQuery[schedule.Schedule]{
+		BaseSQL:      `SELECT ` + scheduleColumns + ` FROM job_schedules`,
+		OrderFields:  schedule.OrderFields,
+		DefaultOrder: schedule.DefaultOrder,
+		PK:           "schedule_id",
+		Scan:         scanSchedule,
+		OrderValueOf: func(sch schedule.Schedule, _ string) any { return sch.CreatedAt },
+		PKOf:         func(sch schedule.Schedule) string { return sch.ID },
+	}
+	return tursodb.List(ctx, s.db, lq, req)
 }
 
 // SetEnabled toggles a schedule's enabled flag. A missing id yields

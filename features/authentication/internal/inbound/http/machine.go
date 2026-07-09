@@ -85,11 +85,15 @@ type mintedKeyResponse struct {
 }
 
 // pageResponse is the JSON envelope for a paginated list. Items are the mapped
-// response DTOs; NextCursor/HasMore mirror crud.Page.
+// response DTOs; the remaining fields mirror crud.Page (both cursors, HasMore,
+// HasPrev, and the optional Total count).
 type pageResponse[T any] struct {
-	Items      []T    `json:"items"`
-	NextCursor string `json:"next_cursor,omitempty"`
-	HasMore    bool   `json:"has_more,omitempty"`
+	Items          []T    `json:"items"`
+	NextCursor     string `json:"next_cursor,omitempty"`
+	HasMore        bool   `json:"has_more,omitempty"`
+	HasPrev        bool   `json:"has_prev,omitempty"`
+	PreviousCursor string `json:"previous_cursor,omitempty"`
+	Total          *int64 `json:"total,omitempty"`
 }
 
 func newPageResponse[E any, T any](p crud.Page[E], mapFn func(E) T) pageResponse[T] {
@@ -97,7 +101,14 @@ func newPageResponse[E any, T any](p crud.Page[E], mapFn func(E) T) pageResponse
 	for _, e := range p.Items {
 		items = append(items, mapFn(e))
 	}
-	return pageResponse[T]{Items: items, NextCursor: p.NextCursor, HasMore: p.HasMore}
+	return pageResponse[T]{
+		Items:          items,
+		NextCursor:     p.NextCursor,
+		HasMore:        p.HasMore,
+		HasPrev:        p.HasPrev,
+		PreviousCursor: p.PreviousCursor,
+		Total:          p.Total,
+	}
 }
 
 // mountMachine registers the machine-identity lifecycle routes (design §4.1),
@@ -132,7 +143,7 @@ func (h *handlers) createServiceAccount(w http.ResponseWriter, r *http.Request) 
 
 // listServiceAccounts returns a cursor-paginated page of service accounts.
 func (h *handlers) listServiceAccounts(w http.ResponseWriter, r *http.Request) {
-	req, ok := parseListRequest(w, r)
+	req, ok := h.parseListRequest(w, r, serviceaccount.OrderFields, serviceaccount.DefaultOrder)
 	if !ok {
 		return
 	}
@@ -164,7 +175,7 @@ func (h *handlers) mintAPIKey(w http.ResponseWriter, r *http.Request) {
 
 // listAPIKeys returns a cursor-paginated page of a service account's keys.
 func (h *handlers) listAPIKeys(w http.ResponseWriter, r *http.Request) {
-	req, ok := parseListRequest(w, r)
+	req, ok := h.parseListRequest(w, r, apikey.OrderFields, apikey.DefaultOrder)
 	if !ok {
 		return
 	}
@@ -185,14 +196,32 @@ func (h *handlers) revokeAPIKey(w http.ResponseWriter, r *http.Request) {
 	web.RespondJSONOK(w, map[string]string{"status": "revoked"})
 }
 
-// parseListRequest parses the strict transport-edge page params (limit/cursor
-// query). On a bad param it writes a 400 and returns ok=false.
-func parseListRequest(w http.ResponseWriter, r *http.Request) (crud.ListRequest, bool) {
-	req, err := crud.ParseListRequest(r.URL.Query().Get("limit"), r.URL.Query().Get("cursor"), crud.MaxLimit)
+// parseListRequest parses the strict transport-edge page params
+// (limit/cursor/offset/count plus a per-aggregate order) into a crud.ListRequest.
+// orderFields is the aggregate's allow-list and defaultOrder its default sort;
+// the order field is validated against the allow-list. The host-configured
+// DefaultStrategy (h.listStrategy) applies when a request names neither a cursor
+// nor an offset param. On any bad param it writes a 400 (the existing
+// web.ErrBadRequest pattern) and returns ok=false.
+func (h *handlers) parseListRequest(w http.ResponseWriter, r *http.Request, orderFields map[string]crud.OrderField, defaultOrder crud.Order) (crud.ListRequest, bool) {
+	q := r.URL.Query()
+	req, err := crud.ParseListRequest(crud.ListParams{
+		Limit:           q.Get("limit"),
+		Cursor:          q.Get("cursor"),
+		Offset:          q.Get("offset"),
+		Count:           q.Get("count"),
+		DefaultStrategy: h.listStrategy,
+	})
 	if err != nil {
 		web.RespondJSONError(w, web.ErrBadRequest("invalid page parameters"))
 		return crud.ListRequest{}, false
 	}
+	order, err := crud.ParseOrder(orderFields, q.Get("order"), defaultOrder)
+	if err != nil {
+		web.RespondJSONError(w, web.ErrBadRequest("invalid order parameter"))
+		return crud.ListRequest{}, false
+	}
+	req.Order = order
 	return req, true
 }
 

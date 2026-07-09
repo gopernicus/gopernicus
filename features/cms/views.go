@@ -15,6 +15,7 @@ type Views = internalhttp.Views
 type (
 	ListItem       = internalhttp.ListItem
 	EntryListItem  = internalhttp.EntryListItem
+	Pager          = internalhttp.Pager
 	EntryFormModel = internalhttp.EntryFormModel
 	FieldInput     = internalhttp.FieldInput
 	SelectOption   = internalhttp.SelectOption

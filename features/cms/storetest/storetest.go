@@ -16,6 +16,7 @@ package storetest
 import (
 	"context"
 	"errors"
+	"sort"
 	"testing"
 	"time"
 
@@ -53,6 +54,22 @@ func Run(t *testing.T, newRepos func(t *testing.T) cms.Repositories) {
 		t.Run("CursorPagination", func(t *testing.T) { testEntriesPagination(t, newRepos(t)) })
 		t.Run("StaleAndEmptyCursor", func(t *testing.T) { testEntriesCursorEdges(t, newRepos(t)) })
 		t.Run("TimestampPrecision", func(t *testing.T) { testEntriesPrecision(t, newRepos(t)) })
+		t.Run("List", func(t *testing.T) {
+			runEntriesPagedFamily(t, newRepos,
+				func(repos cms.Repositories, ctx context.Context, req crud.ListRequest) (crud.Page[content.Entry], error) {
+					return repos.Entries.List(ctx, content.EntryQuery{Type: "article", ListRequest: req})
+				},
+				seedFamilyEntries,
+			)
+		})
+		t.Run("ByTerm", func(t *testing.T) {
+			runEntriesPagedFamily(t, newRepos,
+				func(repos cms.Repositories, ctx context.Context, req crud.ListRequest) (crud.Page[content.Entry], error) {
+					return repos.Entries.ListByTerm(ctx, "term-fam", content.EntryQuery{Type: "article", ListRequest: req})
+				},
+				seedFamilyEntriesByTerm,
+			)
+		})
 	})
 
 	t.Run("Terms", func(t *testing.T) {
@@ -758,3 +775,407 @@ func testInquiries(t *testing.T, repos cms.Repositories) {
 // cases so the (created_at, id) tie-break is deterministic.
 func entryID(prefix string, i int) string { return prefix + "-" + string(rune('a'+i)) }
 func slugFor(prefix string, i int) string { return prefix + "-slug-" + string(rune('a'+i)) }
+
+// --- the standard paginated-port case family (copied from P3, scoped to entries) ---
+//
+// Entries' two paginated ports (List, ListByTerm) each run the same six cases —
+// Order, PrevPage, OffsetMode, WithCount, StaleCursorOrderChange,
+// CursorOffsetExclusive — over a small seeded population. A port supplies a
+// scoped list closure and a fresh-population seed returning the in-scope
+// population plus its expected count (foreign rows a filter must exclude are not
+// counted).
+
+// familyMinutes is the created_at spread each seed uses: six rows with one
+// same-created_at pair (indices 2 and 3) so the family exercises three pages of
+// two plus the id tiebreak.
+var familyMinutes = []int{0, 1, 2, 2, 3, 4}
+
+// entryPagedScope runs a List against an already-scoped query for one paginated
+// entry port.
+type entryPagedScope func(repos cms.Repositories, ctx context.Context, req crud.ListRequest) (crud.Page[content.Entry], error)
+
+// runEntriesPagedFamily wires the six standard cases for one paginated entry
+// port. Each case obtains a clean, isolated Repositories from newRepos and seeds
+// its own population, matching the suite's per-leaf isolation contract.
+func runEntriesPagedFamily(
+	t *testing.T,
+	newRepos func(t *testing.T) cms.Repositories,
+	scope entryPagedScope,
+	seed func(t *testing.T, repos cms.Repositories) (created []content.Entry, wantTotal int),
+) {
+	t.Helper()
+
+	list := func(repos cms.Repositories) func(context.Context, crud.ListRequest) (crud.Page[content.Entry], error) {
+		return func(ctx context.Context, req crud.ListRequest) (crud.Page[content.Entry], error) {
+			return scope(repos, ctx, req)
+		}
+	}
+
+	t.Run("Order", func(t *testing.T) {
+		repos := newRepos(t)
+		created, _ := seed(t, repos)
+		runEntriesOrderCase(t, list(repos), created)
+	})
+	t.Run("PrevPage", func(t *testing.T) {
+		repos := newRepos(t)
+		created, _ := seed(t, repos)
+		runEntriesPrevPageCase(t, list(repos), created)
+	})
+	t.Run("OffsetMode", func(t *testing.T) {
+		repos := newRepos(t)
+		created, _ := seed(t, repos)
+		runEntriesOffsetModeCase(t, list(repos), created)
+	})
+	t.Run("WithCount", func(t *testing.T) {
+		repos := newRepos(t)
+		_, wantTotal := seed(t, repos)
+		runEntriesWithCountCase(t, list(repos), wantTotal)
+	})
+	t.Run("StaleCursorOrderChange", func(t *testing.T) {
+		repos := newRepos(t)
+		created, _ := seed(t, repos)
+		runEntriesStaleCursorCase(t, list(repos), created)
+	})
+	t.Run("CursorOffsetExclusive", func(t *testing.T) {
+		repos := newRepos(t)
+		_, _ = seed(t, repos)
+		runEntriesCursorOffsetExclusiveCase(t, list(repos))
+	})
+}
+
+type entryList func(context.Context, crud.ListRequest) (crud.Page[content.Entry], error)
+
+// runEntriesOrderCase asserts explicit asc + desc ordering on created_at pages
+// through the full population in the correct total order (created_at then id
+// tiebreak in the same direction), re-asserting the tiebreak under asc via the
+// seeded same-created_at pair.
+func runEntriesOrderCase(t *testing.T, list entryList, created []content.Entry) {
+	t.Helper()
+	wantAsc := entrySortedIDs(created, true)
+	gotAsc := pageEntriesOrdered(t, list, crud.NewOrder("created_at", crud.ASC), 2)
+	if !equalStrings(gotAsc, wantAsc) {
+		t.Errorf("asc order = %v, want %v", gotAsc, wantAsc)
+	}
+
+	wantDesc := entrySortedIDs(created, false)
+	gotDesc := pageEntriesOrdered(t, list, crud.NewOrder("created_at", crud.DESC), 2)
+	if !equalStrings(gotDesc, wantDesc) {
+		t.Errorf("desc order = %v, want %v", gotDesc, wantDesc)
+	}
+}
+
+// runEntriesPrevPageCase asserts the reverse-probe semantics: the first page has
+// no prev; page 2 has a prev whose (partial) window means "previous is the first
+// page" and round-trips to page 1's IDs; page 3 has a full prior window whose
+// PreviousCursor round-trips to page 2's IDs.
+func runEntriesPrevPageCase(t *testing.T, list entryList, created []content.Entry) {
+	t.Helper()
+	ctx := context.Background()
+	desc := entrySortedIDs(created, false)
+	if len(desc) < 6 {
+		t.Fatalf("prev-page case needs >= 6 seeded rows, got %d", len(desc))
+	}
+
+	page1, err := list(ctx, crud.ListRequest{Limit: 2})
+	if err != nil {
+		t.Fatalf("page1: %v", err)
+	}
+	if page1.HasPrev {
+		t.Errorf("first page HasPrev = true, want false")
+	}
+	if got := entryIDsOf(page1.Items); !equalStrings(got, desc[0:2]) {
+		t.Errorf("page1 = %v, want %v", got, desc[0:2])
+	}
+
+	page2, err := list(ctx, crud.ListRequest{Limit: 2, Cursor: page1.NextCursor})
+	if err != nil {
+		t.Fatalf("page2: %v", err)
+	}
+	if !page2.HasPrev {
+		t.Errorf("page2 HasPrev = false, want true")
+	}
+	if got := entryIDsOf(page2.Items); !equalStrings(got, desc[2:4]) {
+		t.Errorf("page2 = %v, want %v", got, desc[2:4])
+	}
+	// Only one row precedes the page-1 cursor, so page 2's prior window is
+	// partial ⇒ empty PreviousCursor meaning "the previous page is the first page".
+	if page2.PreviousCursor != "" {
+		t.Errorf("page2 PreviousCursor = %q, want empty (partial prior window)", page2.PreviousCursor)
+	}
+	back := backEntries(t, list, page2.PreviousCursor)
+	if got := entryIDsOf(back.Items); !equalStrings(got, desc[0:2]) {
+		t.Errorf("previous of page2 = %v, want page1 %v", got, desc[0:2])
+	}
+
+	page3, err := list(ctx, crud.ListRequest{Limit: 2, Cursor: page2.NextCursor})
+	if err != nil {
+		t.Fatalf("page3: %v", err)
+	}
+	if !page3.HasPrev {
+		t.Errorf("page3 HasPrev = false, want true")
+	}
+	if page3.PreviousCursor == "" {
+		t.Errorf("page3 PreviousCursor empty, want a full prior window")
+	}
+	back3 := backEntries(t, list, page3.PreviousCursor)
+	if got := entryIDsOf(back3.Items); !equalStrings(got, desc[2:4]) {
+		t.Errorf("previous of page3 = %v, want page2 %v", got, desc[2:4])
+	}
+}
+
+// runEntriesOffsetModeCase asserts offset traversal (explicit StrategyOffset)
+// yields the identical ID sequence as cursor traversal, HasPrev iff offset > 0,
+// that offset pages emit no cursors at any offset, and that Offset 0 under the
+// offset strategy is the first page.
+func runEntriesOffsetModeCase(t *testing.T, list entryList, created []content.Entry) {
+	t.Helper()
+	ctx := context.Background()
+
+	cursorIDs := pageEntriesOrdered(t, list, crud.Order{}, 2)
+
+	var offsetIDs []string
+	for off := 0; off < 100; off += 2 {
+		page, err := list(ctx, crud.ListRequest{Strategy: crud.StrategyOffset, Limit: 2, Offset: off})
+		if err != nil {
+			t.Fatalf("offset page at %d: %v", off, err)
+		}
+		offsetIDs = append(offsetIDs, entryIDsOf(page.Items)...)
+		// Offset strategy emits no cursors at any offset — the caller does the
+		// offset arithmetic.
+		if page.NextCursor != "" || page.PreviousCursor != "" {
+			t.Errorf("offset page at %d carried a cursor (next=%q prev=%q)", off, page.NextCursor, page.PreviousCursor)
+		}
+		if want := off > 0; page.HasPrev != want {
+			t.Errorf("offset page at %d HasPrev = %v, want %v", off, page.HasPrev, want)
+		}
+		if !page.HasMore {
+			break
+		}
+	}
+	if !equalStrings(offsetIDs, cursorIDs) {
+		t.Errorf("offset traversal = %v, want cursor traversal %v", offsetIDs, cursorIDs)
+	}
+
+	// OffsetZero: the offset strategy with Offset 0 is the first page — HasPrev
+	// false and no cursors. This is the wart the explicit strategy fixes: Offset 0
+	// no longer silently means cursor mode.
+	zero, err := list(ctx, crud.ListRequest{Strategy: crud.StrategyOffset, Limit: 2, Offset: 0})
+	if err != nil {
+		t.Fatalf("offset-zero page: %v", err)
+	}
+	if zero.HasPrev {
+		t.Errorf("offset-zero HasPrev = true, want false")
+	}
+	if zero.NextCursor != "" || zero.PreviousCursor != "" {
+		t.Errorf("offset-zero carried a cursor (next=%q prev=%q)", zero.NextCursor, zero.PreviousCursor)
+	}
+	if got, want := entryIDsOf(zero.Items), cursorIDs[:len(zero.Items)]; !equalStrings(got, want) {
+		t.Errorf("offset-zero page = %v, want first page %v", got, want)
+	}
+}
+
+// runEntriesWithCountCase asserts Total equals the filtered row count in both
+// modes and is nil when unrequested.
+func runEntriesWithCountCase(t *testing.T, list entryList, wantTotal int) {
+	t.Helper()
+	ctx := context.Background()
+
+	cursorPage, err := list(ctx, crud.ListRequest{Limit: 2, WithCount: true})
+	if err != nil {
+		t.Fatalf("cursor+count: %v", err)
+	}
+	if cursorPage.Total == nil || *cursorPage.Total != int64(wantTotal) {
+		t.Errorf("cursor-mode Total = %v, want %d", cursorPage.Total, wantTotal)
+	}
+
+	offsetPage, err := list(ctx, crud.ListRequest{Strategy: crud.StrategyOffset, Limit: 2, Offset: 2, WithCount: true})
+	if err != nil {
+		t.Fatalf("offset+count: %v", err)
+	}
+	if offsetPage.Total == nil || *offsetPage.Total != int64(wantTotal) {
+		t.Errorf("offset-mode Total = %v, want %d", offsetPage.Total, wantTotal)
+	}
+
+	noCount, err := list(ctx, crud.ListRequest{Limit: 2})
+	if err != nil {
+		t.Fatalf("no-count: %v", err)
+	}
+	if noCount.Total != nil {
+		t.Errorf("Total = %v, want nil when count not requested", *noCount.Total)
+	}
+}
+
+// runEntriesStaleCursorCase asserts a cursor minted under a different sort field
+// is treated as the first page (no error, no skew). The order field is the only
+// staleness key the cursor codec carries, so a token authored for a different
+// column decodes to nil and the store returns the first page.
+func runEntriesStaleCursorCase(t *testing.T, list entryList, created []content.Entry) {
+	t.Helper()
+	ctx := context.Background()
+
+	first, err := list(ctx, crud.ListRequest{Limit: 2})
+	if err != nil {
+		t.Fatalf("first page: %v", err)
+	}
+
+	stale, err := crud.EncodeCursor("updated_at", created[0].CreatedAt, created[0].ID)
+	if err != nil {
+		t.Fatalf("EncodeCursor: %v", err)
+	}
+	got, err := list(ctx, crud.ListRequest{Limit: 2, Cursor: stale})
+	if err != nil {
+		t.Fatalf("stale cursor: err=%v, want first page", err)
+	}
+	if g, w := entryIDsOf(got.Items), entryIDsOf(first.Items); !equalStrings(g, w) {
+		t.Errorf("stale cursor = %v, want first page %v (treated as first page)", g, w)
+	}
+	if got.HasPrev {
+		t.Errorf("stale-cursor first page HasPrev = true, want false")
+	}
+}
+
+// runEntriesCursorOffsetExclusiveCase asserts each per-strategy conflict is
+// rejected with the invalid-input kind: a cursor strategy carrying a non-zero
+// offset, and an offset strategy carrying a cursor.
+func runEntriesCursorOffsetExclusiveCase(t *testing.T, list entryList) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := list(ctx, crud.ListRequest{Strategy: crud.StrategyCursor, Limit: 2, Offset: 2}); !errors.Is(err, errs.ErrInvalidInput) {
+		t.Errorf("cursor strategy + offset: err=%v, want ErrInvalidInput", err)
+	}
+	if _, err := list(ctx, crud.ListRequest{Strategy: crud.StrategyOffset, Limit: 2, Cursor: "anything"}); !errors.Is(err, errs.ErrInvalidInput) {
+		t.Errorf("offset strategy + cursor: err=%v, want ErrInvalidInput", err)
+	}
+}
+
+// backEntries requests the previous page: an empty previousCursor means "the
+// previous page is the first page", so a first-page request is issued.
+func backEntries(t *testing.T, list entryList, previousCursor string) crud.Page[content.Entry] {
+	t.Helper()
+	page, err := list(context.Background(), crud.ListRequest{Limit: 2, Cursor: previousCursor})
+	if err != nil {
+		t.Fatalf("previous page: %v", err)
+	}
+	return page
+}
+
+// entrySortedIDs returns the ids of entries sorted by (created_at, id) in the
+// given direction — the total order every paginated port must page in.
+func entrySortedIDs(items []content.Entry, asc bool) []string {
+	sorted := append([]content.Entry(nil), items...)
+	sort.Slice(sorted, func(i, j int) bool {
+		ti, tj := sorted[i].CreatedAt, sorted[j].CreatedAt
+		if !ti.Equal(tj) {
+			if asc {
+				return ti.Before(tj)
+			}
+			return ti.After(tj)
+		}
+		if asc {
+			return sorted[i].ID < sorted[j].ID
+		}
+		return sorted[i].ID > sorted[j].ID
+	})
+	return entryIDsOf(sorted)
+}
+
+// entryIDsOf projects each entry's id.
+func entryIDsOf(items []content.Entry) []string {
+	out := make([]string, len(items))
+	for i, e := range items {
+		out[i] = e.ID
+	}
+	return out
+}
+
+// pageEntriesOrdered pages forward through the whole population under order,
+// threading order into every request, and returns the collected ids in traversal
+// order.
+func pageEntriesOrdered(t *testing.T, list entryList, order crud.Order, limit int) []string {
+	t.Helper()
+	ctx := context.Background()
+	var ids []string
+	cursor := ""
+	for i := 0; i < 100; i++ { // bound against a runaway cursor
+		page, err := list(ctx, crud.ListRequest{Limit: limit, Cursor: cursor, Order: order})
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		ids = append(ids, entryIDsOf(page.Items)...)
+		if !page.HasMore || page.NextCursor == "" {
+			return ids
+		}
+		cursor = page.NextCursor
+	}
+	t.Fatalf("pageEntriesOrdered did not terminate")
+	return nil
+}
+
+// equalStrings reports whether two id slices are equal element-wise.
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// seedFamilyEntries creates six article entries on the familyMinutes spread for
+// the List family. A page-typed entry is added to prove the type filter excludes
+// (and does not count) foreign rows.
+func seedFamilyEntries(t *testing.T, repos cms.Repositories) ([]content.Entry, int) {
+	t.Helper()
+	ctx := context.Background()
+	repo := repos.Entries
+	created := make([]content.Entry, 0, len(familyMinutes))
+	for i, m := range familyMinutes {
+		e := newEntry(entryID("fam", i), "article", slugFor("fam", i), "Family Entry", content.StatusDraft, suiteBase.Add(time.Duration(m)*time.Minute))
+		c, err := repo.Create(ctx, e)
+		if err != nil {
+			t.Fatalf("Create %s: %v", e.ID, err)
+		}
+		created = append(created, c)
+	}
+	// A foreign-type entry must not be listed or counted by an article-scoped list.
+	other := newEntry("fam-other", "page", "fam-other-slug", "Other", content.StatusDraft, suiteBase)
+	if _, err := repo.Create(ctx, other); err != nil {
+		t.Fatalf("Create(foreign): %v", err)
+	}
+	return created, len(created)
+}
+
+// seedFamilyEntriesByTerm creates six article entries associated with term-fam
+// for the ListByTerm family. Foreign entries under a different term must not be
+// listed or counted. entry_terms has no term FK, so a bare term id suffices.
+func seedFamilyEntriesByTerm(t *testing.T, repos cms.Repositories) ([]content.Entry, int) {
+	t.Helper()
+	ctx := context.Background()
+	repo := repos.Entries
+	created := make([]content.Entry, 0, len(familyMinutes))
+	for i, m := range familyMinutes {
+		e := newEntry(entryID("famt", i), "article", slugFor("famt", i), "Family Term Entry", content.StatusDraft, suiteBase.Add(time.Duration(m)*time.Minute))
+		c, err := repo.Create(ctx, e)
+		if err != nil {
+			t.Fatalf("Create %s: %v", e.ID, err)
+		}
+		if err := repo.SetTerms(ctx, e.ID, []string{"term-fam"}); err != nil {
+			t.Fatalf("SetTerms %s: %v", e.ID, err)
+		}
+		created = append(created, c)
+	}
+	// Foreign rows under a different term must not be listed or counted.
+	for i := 0; i < 2; i++ {
+		e := newEntry(entryID("famtf", i), "article", slugFor("famtf", i), "Foreign Term Entry", content.StatusDraft, suiteBase.Add(time.Duration(i)*time.Minute))
+		if _, err := repo.Create(ctx, e); err != nil {
+			t.Fatalf("Create(foreign): %v", err)
+		}
+		if err := repo.SetTerms(ctx, e.ID, []string{"term-other"}); err != nil {
+			t.Fatalf("SetTerms(foreign): %v", err)
+		}
+	}
+	return created, len(created)
+}

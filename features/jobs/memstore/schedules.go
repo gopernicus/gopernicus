@@ -146,7 +146,7 @@ func (s *Schedules) List(_ context.Context, req crud.ListRequest) (crud.Page[sch
 	for _, sch := range s.byID {
 		all = append(all, sch)
 	}
-	return page(all, req, func(sch schedule.Schedule) (time.Time, string) { return sch.CreatedAt, sch.ID })
+	return page(all, req, schedule.OrderFields, func(sch schedule.Schedule) (time.Time, string) { return sch.CreatedAt, sch.ID })
 }
 
 // SetEnabled toggles a schedule's enabled flag. A missing id yields

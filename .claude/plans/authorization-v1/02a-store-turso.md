@@ -11,7 +11,8 @@ precedent (cut refinement 2) — **the canonical migration version filename
 set is authored HERE**; Z2b mirrors it exactly.
 
 Salvage source for the RELATIONSHIP kind (reference-only, re-typed):
-`gopernicus-original/workshop/migrations/primary/0002_rebac.sql` (schema
+`../gopernicus-original/workshop/migrations/primary/0002_rebac.sql`
+(sibling of this repo's root — path corrected 2026-07-08, codex fold A7; schema
 shape — table renamed `iam_relationships` per the 2026-07-08 owner
 direction) + `core/repositories/rebac/rebacrelationships/` (SQL/repo
 shapes). The ROLES kind (`iam_roles`) has no salvage — overview
@@ -32,10 +33,11 @@ connector helpers (drift 5): `turso.Querier`/`Scanner`, `ExecAffecting`,
   metadata table in 0001 only if Q4 = KEEP).
 - BOTH kinds' repositories: the full 14-method `relationship.Storer` —
   group expansion and
-  descendant lookup as **recursive CTEs, cycle-safe**, honoring **the
-  same traversal bound as the engine's `MaxTraversalDepth` and the
-  memstore** (review-gate fold, lead refinement 8 — the storetest
-  depth-boundary pair is the parity proof); counts direct-only — AND the
+  descendant lookup as **recursive CTEs, cycle-safe by UNION dedup,
+  UNBOUNDED** (2026-07-08 owner ruling, codex fold A1, superseding lead
+  refinement 8: `MaxTraversalDepth` is engine-only, matching the
+  original's unbounded store CTE; the depth-boundary storetest pair is
+  dropped); counts direct-only — AND the
   5-method `role.Storer` (plain lookups, no recursion).
 - Constructor pinned (review-gate fold, steward minor 5; cut refinement
   11): `Repositories(db) (authorization.Repositories, error)` returning
@@ -80,11 +82,24 @@ connector helpers (drift 5): `turso.Querier`/`Scanner`, `ExecAffecting`,
   `ExportMigrations(dst)` via the connector helper.
   `0001_iam_relationships.sql` (source
   `"authorization"`, turso dialect): `iam_relationships`
-  (resource_type, resource_id, relation, subject_type, subject_id,
-  subject_relation; unique-tuple index; secondary indexes on resource,
+  (**relationship_id PK + created_at — immutable rows, no updated_at;
+  made explicit 2026-07-08, codex fold A4: the keyset listings need the
+  time order column and the PK tiebreak**; resource_type, resource_id,
+  relation, subject_type, subject_id, **subject_relation TEXT NOT NULL
+  DEFAULT ''** — codex fold A3, the iam_roles NOT-NULL-scope precedent
+  applied: the original's nullable column + `COALESCE(subject_relation,
+  '')` unique indexes collapse to a plain NOT NULL column so duplicate
+  direct tuples cannot coexist under either dialect's NULL semantics;
+  divergence-from-original logged; **TWO unique indexes: the unique-tuple
+  index on (resource_type, resource_id, relation, subject_type,
+  subject_id, subject_relation) AND the unique-SUBJECT index on
+  (resource_type, resource_id, subject_type, subject_id,
+  subject_relation)** — one relation per subject per resource, the
+  original's `idx_rebac_relationships_unique_subject` ADOPTED by the
+  2026-07-08 owner ruling (codex fold A2); secondary indexes on resource,
   subject, (resource_type, relation)) — columns/indexes verified against
   the original's `0002_rebac.sql` (table renamed per the owner
-  direction), divergences logged. Metadata table (`iam_relationship_
+  direction), remaining divergences logged. Metadata table (`iam_relationship_
   metadata`) in 0001
   only if Q4 = KEEP (plain JSON TEXT column here — the documented
   index-capability divergence vs pgx's GIN, same filename).
@@ -97,9 +112,14 @@ connector helpers (drift 5): `turso.Querier`/`Scanner`, `ExecAffecting`,
   index → duplicate global grants; the `Roles/AssignIdempotent`
   constraint-level case is the proof); unique index on the full 5-tuple;
   secondary
-  indexes on (subject_type, subject_id) and (role, resource_type,
-  resource_id). **Boot-time
-  probes** in the constructor (drift 5): both tables, erroring before
+  indexes on (subject_type, subject_id) and **(resource_type,
+  resource_id, created_at)** (changed 2026-07-08, codex fold A6:
+  `ListByResource` filters (resource_type, resource_id) with a
+  created_at keyset — the previously pinned role-led index served no
+  pinned query; exact-match lookups ride the unique 5-tuple index).
+  **Boot-time
+  probes** in the constructor (drift 5): both tables (**plus
+  `iam_relationship_metadata` if Q4 = KEEP — codex fold A8**), erroring before
   the host serves
   traffic if the `"authorization"` source isn't applied, the message
   naming the specific missing table — README states
@@ -142,13 +162,15 @@ connector helpers (drift 5): `turso.Querier`/`Scanner`, `ExecAffecting`,
   `NullTime` pairs where timestamps apply). **The recursion lands here**
   (design §2.5): `CheckRelationWithGroupExpansion` and
   `LookupDescendantResourceIDs` as recursive CTEs — **cycle-safe by
-  construction** (SQLite `WITH RECURSIVE` + UNION dedup / bounded-depth
-  guard; the `Adversarial/MembershipCycle` live run is the proof, but
-  the SQL must be safe by design, not by test luck) — and **bounded at
-  the SAME traversal depth the engine's `MaxTraversalDepth` and the
-  memstore use** (lead refinement 8: mirror however the original threads
-  the bound into the store SQL, log the mechanism; the
-  `Adversarial/DeepNesting` depth-boundary pair must pass live).
+  construction via UNION dedup** (SQLite `WITH RECURSIVE`; the
+  `Adversarial/MembershipCycle` live run is the proof, but
+  the SQL must be safe by design, not by test luck) — and **UNBOUNDED,
+  deliberately** (2026-07-08 owner ruling, codex fold A1, superseding
+  lead refinement 8: the original's CTE carries no depth term —
+  `../gopernicus-original/core/repositories/rebac/rebacrelationships/rebacrelationshipspgx/store.go:22-30`
+  — and `MaxTraversalDepth` bounds only the engine's Go recursion; no
+  depth parameter enters the store; the depth-boundary pair is dropped
+  from `Adversarial/DeepNesting`).
   `CountByResourceAndRelation` counts direct tuples ONLY (the §2.5
   security pin — no join into expansion anywhere near it).
   `CheckBatchDirect` returns the map shape the port pins.
@@ -183,4 +205,18 @@ Standing check (a): `make check` green (32 modules); `examples/minimal`
 
 ## Execution log
 
-(append dated entries here)
+### 2026-07-08 — cross-milestone note: pgx-crud-v1 LANDED (read before executing)
+
+pgx-crud-v1 executed to completion this date (P1–P6). This phase's list
+citations read accordingly: the connector helper is **`turso.List[T]`/
+`ListQuery[T]`** (legacy `ListPage[T]` is DELETED), driven by a
+per-aggregate order allow-list (`map[string]crud.OrderField` + default
+`crud.Order` declared in the feature-core domain package — the Q1
+standard) and the full `crud.ListRequest` (order, bidirectional cursors,
+offset mode, `WithCount` → `Page.Total`). The two keyset listings in
+task-2 implement the extended contract, and Z1's storetest should carry
+the standard six-case family per paginated port (`Order`, `PrevPage`,
+`OffsetMode`, `WithCount`, `StaleCursorOrderChange`,
+`CursorOffsetExclusive` — `features/authentication/storetest` is the
+pattern). D2–D6 helper references otherwise stand. A note, not a
+rewrite — this plan stays DRAFT under its own ratification.

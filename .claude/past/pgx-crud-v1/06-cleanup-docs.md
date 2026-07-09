@@ -1,6 +1,6 @@
 # Phase P6 — legacy deletion + docs + records
 
-Status: **DRAFT — awaiting jrazmi ratification (cut 2026-07-08)**
+Status: **RATIFIED 2026-07-08 (jrazmi — Q1/Q2/Q3 at recommendations; see 00-overview.md)**
 Executor model: opus (task-1) / fable (tasks 2–3)
 Depends on: P2–P5 (every `ListPage` call site migrated)
 
@@ -114,4 +114,42 @@ ports free.
 
 ## Execution log
 
-(append dated entries here)
+### 2026-07-08 — phase 6 executed (task-1 implementer on opus; tasks 2–3
+main session on fable); PHASE COMPLETE — MILESTONE CLOSED
+
+task-1: `ListPage` deleted from both connectors — pgxdb/pagination.go,
+turso/pagination.go, turso/pagination_test.go removed whole;
+pgxdb/pagination_test.go initially kept for the `errCapture` sentinel
+(its consumer is list_test.go), then the main session relocated
+errCapture into list_test.go and removed the file — all pagination.*
+files gone. Pre-delete grep confirmed zero external callers (the only
+non-definition hits were `ListPaged`/`ListPagination` substring
+collisions in auth storetest names); post-delete `\bListPage\b` grep →
+empty. Both connectors + `make check` + `make guard` green.
+
+task-2 (docs): pgxdb README — stale "no query builders/dialect helpers"
+line corrected, list-toolkit Surface rows added, new toolkit section
+(ListQuery contract, by-column order resolution, row-struct/toDomain +
+NamedArgs-filter-builder + UNNEST store conventions, sdk/crud package
+doc named normative); turso README CREATED (connector had none —
+semantic-twin List, deliberate non-idiomatic scope, `turso-crud-parity`
+follow-up named); sdk/README crud row extended (modes, counts,
+allow-lists, Validate/MapPage, param vocabulary); features/README
+authoring checklist gains item 13 (order allow-list placement, six-case
+family, query-param vocabulary, connector List helpers).
+
+task-3: dated landed-notes appended to authorization-v1
+00-overview/02a/02b (supersedes their ListPage citations; note-only,
+that plan stays DRAFT); NOTES.md milestone-close entry written with the
+full artifact set.
+
+**Close-out verification (main session):** full `make test-stores` exit
+0 post-deletion — pgx cms 2.669s / auth 4.159s / jobs 5.277s / events
+0.532s; turso events 10.354s; the three go-test-cached turso legs
+re-run `-count=1` FRESH: cms 167.4s / auth 374.2s / jobs 80.1s, all ok,
+zero FAIL (playground URL gate verified; postgres container removed,
+:5432 free). Real-interaction: examples/cms booted post-deletion, 4
+seeded entries paged BOTH directions over limit=2 (page 1 → Older →
+page 2 → Newer → page 1), seeds deleted (playground at 0), server
+killed, :8085 free. Milestone DoD satisfied in full; plans dir moves to
+`.claude/past/pgx-crud-v1/` this session per the standing rule.

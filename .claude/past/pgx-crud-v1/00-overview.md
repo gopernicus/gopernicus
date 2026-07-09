@@ -1,6 +1,9 @@
 # pgx-crud-v1 — milestone overview
 
-Status: **DRAFT — awaiting jrazmi ratification (cut 2026-07-08, planning-only leg)**
+Status: **RATIFIED 2026-07-08 (jrazmi) — Q1/Q2/Q3 at recommendations; execution-ready, leg 1 = P1.**
+Sequencing ruling (jrazmi, same session): **pgx-crud-v1 executes BEFORE
+authorization-v1** — its Z2a/Z2b store phases land on this milestone's
+standards (the default sequencing below, confirmed).
 Milestone: `pgx-crud-v1` — a sweeping pass over the pgx store implementations
 and the `sdk/crud` List/pagination standards: pgx v5 used to its full
 capabilities (NamedArgs, CollectRows/RowToStructByName, shared NamedArgs
@@ -239,7 +242,11 @@ endpoint.
    memstore, turso, and pgx; the cursor codec's stale-order rule is
    asserted, not assumed.
 
-## Open questions — FOR RATIFICATION (jrazmi)
+## Open questions — RATIFIED 2026-07-08 (jrazmi, all at recommendations)
+
+**Q1 = feature-core domain packages. Q2 = INCLUDE the cms prev-link view
+task. Q3 = SSR fallback-to-default on a bad order param.** The original
+question text is retained below for the record.
 
 1. **Q1 — where the order allow-list lives.** Recommend: each paginated
    aggregate declares `map[string]crud.OrderField` + a default
@@ -303,3 +310,16 @@ crud-paged List; jobs memstore is outside storetest; three example-host
 memstores are inside `make check`). No code touched. Next: review gate
 (recommended reviewers above), jrazmi ratification (Q1–Q3), then leg 1 =
 P1 (`01-sdk-crud.md`, opus).
+
+### 2026-07-08 — RATIFIED (jrazmi)
+
+Ratified same day at all recommendations: **Q1** order allow-lists live
+in feature-core domain packages (column-coincident names; stores validate
+before interpolation); **Q2** the cms prev-link view task stays IN
+(P4 task-5 — the human-visible bidirectional-paging proof); **Q3** SSR
+list pages fall back to the default order on a bad `order` param (JSON
+edges keep the strict 400). Owner skipped the optional pre-ratification
+review panel — the reviewers remain available per-phase if wanted.
+Sequencing ruling recorded in the header: this milestone executes before
+authorization-v1 (whose codex-review fold landed the same session).
+NOTES.md entry same date. Next: leg 1 = P1 (`01-sdk-crud.md`, opus).

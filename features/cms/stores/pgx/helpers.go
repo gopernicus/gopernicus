@@ -1,8 +1,10 @@
 package pgx
 
 import (
+	"context"
 	"embed"
-	"strconv"
+
+	"github.com/jackc/pgx/v5"
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 )
@@ -16,14 +18,19 @@ var MigrationsFS embed.FS
 // MigrationsDir is the directory within MigrationsFS holding the .sql files.
 const MigrationsDir = "migrations"
 
-// orderField is the keyset order column; must match the cursor's order field.
-const orderField = "created_at"
-
-// scanner abstracts pgx.Row and pgx.Rows for shared scan helpers.
-type scanner = pgxdb.Scanner
-
-// placeholder returns the postgres positional parameter marker $n. Statements
-// with a dynamic WHERE clause number their placeholders from len(args)+1.
-func placeholder(n int) string {
-	return "$" + strconv.Itoa(n)
+// queryOne runs a single-row query with NamedArgs and scans it into a db-tagged
+// row struct via pgx.RowToStructByName. A no-rows result maps to
+// errs.ErrNotFound (and every other driver error to its sentinel) through
+// MapError, so single-row reads keep the port's error semantics.
+func queryOne[T any](ctx context.Context, db pgxdb.Querier, sql string, args pgx.NamedArgs) (T, error) {
+	var zero T
+	rows, err := db.Query(ctx, sql, args)
+	if err != nil {
+		return zero, pgxdb.MapError(err)
+	}
+	row, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[T])
+	if err != nil {
+		return zero, pgxdb.MapError(err)
+	}
+	return row, nil
 }

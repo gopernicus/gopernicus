@@ -20,10 +20,6 @@ var MigrationsFS embed.FS
 // MigrationsDir is the directory within MigrationsFS holding the .sql files.
 const MigrationsDir = "migrations"
 
-// orderField is the keyset order column List paginates by; it must match the
-// cursor's order field so a stale cursor from a different sort is ignored.
-const orderField = "created_at"
-
 // busy-retry discipline: SQLite has no row locks, so under concurrent writers
 // (and Turso remote's serialized writes) contention surfaces as SQLITE_BUSY /
 // "database is locked" rather than a lost update. The store must make that

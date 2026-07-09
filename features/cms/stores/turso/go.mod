@@ -9,16 +9,10 @@ require (
 )
 
 require (
-	github.com/a-h/templ v0.3.1020 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.0 // indirect
-	github.com/aymerick/douceur v0.2.0 // indirect
 	github.com/coder/websocket v1.8.12 // indirect
-	github.com/gorilla/css v1.0.1 // indirect
-	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
 	github.com/tursodatabase/libsql-client-go v0.0.0-20260528064733-9d5d30a29a60 // indirect
-	github.com/yuin/goldmark v1.4.13 // indirect
 	golang.org/x/exp v0.0.0-20240325151524-a685a6edb6d8 // indirect
-	golang.org/x/net v0.51.0 // indirect
 )
 
 replace github.com/gopernicus/gopernicus/features/cms => ../..

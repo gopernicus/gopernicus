@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthstate"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/sdk/errs"
@@ -27,10 +29,37 @@ func NewOAuthStateStore(db *pgxdb.DB) *OAuthStateStore {
 
 const oauthStateColumns = "token, provider, purpose, payload, expires_at"
 
+// oauthStateRow is the store-local, db-tagged projection of an oauth_states row.
+// payload is BYTEA read back byte-exact.
+type oauthStateRow struct {
+	Token     string    `db:"token"`
+	Provider  string    `db:"provider"`
+	Purpose   string    `db:"purpose"`
+	Payload   []byte    `db:"payload"`
+	ExpiresAt time.Time `db:"expires_at"`
+}
+
+func (r oauthStateRow) toDomain() oauthstate.State {
+	return oauthstate.State{
+		Token:     r.Token,
+		Provider:  r.Provider,
+		Purpose:   r.Purpose,
+		Payload:   r.Payload,
+		ExpiresAt: r.ExpiresAt.UTC(),
+	}
+}
+
 // Create persists a new flow state.
 func (s *OAuthStateStore) Create(ctx context.Context, st oauthstate.State) (oauthstate.State, error) {
-	const q = `INSERT INTO oauth_states (` + oauthStateColumns + `) VALUES ($1, $2, $3, $4, $5)`
-	_, err := s.db.Exec(ctx, q, st.Token, st.Provider, st.Purpose, st.Payload, st.ExpiresAt.UTC())
+	const q = `INSERT INTO oauth_states (` + oauthStateColumns + `)
+		VALUES (@token, @provider, @purpose, @payload, @expires_at)`
+	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
+		"token":      st.Token,
+		"provider":   st.Provider,
+		"purpose":    st.Purpose,
+		"payload":    st.Payload,
+		"expires_at": st.ExpiresAt.UTC(),
+	})
 	if err != nil {
 		return oauthstate.State{}, err
 	}
@@ -39,31 +68,18 @@ func (s *OAuthStateStore) Create(ctx context.Context, st oauthstate.State) (oaut
 
 // Consume atomically deletes and returns the state for token. The row is deleted
 // regardless of expiry, so: unknown or already-consumed → errs.ErrNotFound;
-// expired → errs.ErrExpired (row already gone); live → the State.
+// expired → errs.ErrExpired (row already gone); live → the State. The delete is
+// the single atomic step (DELETE … RETURNING); the expiry decision is computed in
+// Go from the returned row.
 func (s *OAuthStateStore) Consume(ctx context.Context, token string) (oauthstate.State, error) {
-	const q = `DELETE FROM oauth_states WHERE token = $1 RETURNING ` + oauthStateColumns
-	st, err := scanOAuthState(s.db.QueryRow(ctx, q, token))
+	const q = `DELETE FROM oauth_states WHERE token = @token RETURNING ` + oauthStateColumns
+	row, err := queryOne[oauthStateRow](ctx, s.db, q, pgx.NamedArgs{"token": token})
 	if err != nil {
 		return oauthstate.State{}, err
 	}
+	st := row.toDomain()
 	if st.Expired(time.Now()) {
 		return oauthstate.State{}, errs.ErrExpired
 	}
-	return st, nil
-}
-
-// scanOAuthState scans one oauth_states row, mapping pgx.ErrNoRows to
-// errs.ErrNotFound via the connector's MapError.
-func scanOAuthState(sc scanner) (oauthstate.State, error) {
-	var (
-		st        oauthstate.State
-		payload   []byte
-		expiresAt time.Time
-	)
-	if err := sc.Scan(&st.Token, &st.Provider, &st.Purpose, &payload, &expiresAt); err != nil {
-		return oauthstate.State{}, pgxdb.MapError(err)
-	}
-	st.Payload = payload
-	st.ExpiresAt = expiresAt.UTC()
 	return st, nil
 }

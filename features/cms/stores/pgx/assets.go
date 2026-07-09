@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/gopernicus/gopernicus/features/cms/domain/media"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 )
@@ -23,13 +25,42 @@ func NewAssetStore(db *pgxdb.DB) *AssetStore {
 
 const assetColumns = "id, filename, content_type, size, storage_key, alt, created_at"
 
+// assetRow is the store-local, db-tagged projection of an assets row.
+type assetRow struct {
+	ID          string    `db:"id"`
+	Filename    string    `db:"filename"`
+	ContentType string    `db:"content_type"`
+	Size        int64     `db:"size"`
+	StorageKey  string    `db:"storage_key"`
+	Alt         string    `db:"alt"`
+	CreatedAt   time.Time `db:"created_at"`
+}
+
+func (r assetRow) toDomain() media.Asset {
+	return media.Asset{
+		ID:          r.ID,
+		Filename:    r.Filename,
+		ContentType: r.ContentType,
+		Size:        r.Size,
+		StorageKey:  r.StorageKey,
+		Alt:         r.Alt,
+		CreatedAt:   r.CreatedAt.UTC(),
+	}
+}
+
 // Create persists asset metadata.
 func (s *AssetStore) Create(ctx context.Context, a media.Asset) (media.Asset, error) {
-	const q = `INSERT INTO assets (` + assetColumns + `) VALUES ($1, $2, $3, $4, $5, $6, $7)`
-	_, err := s.db.Exec(ctx, q,
-		a.ID, a.Filename, a.ContentType, a.Size, a.StorageKey, a.Alt,
-		a.CreatedAt.UTC(),
-	)
+	const q = `INSERT INTO assets (` + assetColumns + `)
+		VALUES (@id, @filename, @content_type, @size, @storage_key, @alt, @created_at)`
+	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
+		"id":           a.ID,
+		"filename":     a.Filename,
+		"content_type": a.ContentType,
+		"size":         a.Size,
+		"storage_key":  a.StorageKey,
+		"alt":          a.Alt,
+		"created_at":   a.CreatedAt.UTC(),
+	})
 	if err != nil {
 		return media.Asset{}, err
 	}
@@ -38,8 +69,12 @@ func (s *AssetStore) Create(ctx context.Context, a media.Asset) (media.Asset, er
 
 // Get returns the asset with the given id, or crud.ErrNotFound.
 func (s *AssetStore) Get(ctx context.Context, id string) (media.Asset, error) {
-	const q = `SELECT ` + assetColumns + ` FROM assets WHERE id = $1`
-	return scanAsset(s.db.QueryRow(ctx, q, id))
+	const q = `SELECT ` + assetColumns + ` FROM assets WHERE id = @id`
+	row, err := queryOne[assetRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
+	if err != nil {
+		return media.Asset{}, err
+	}
+	return row.toDomain(), nil
 }
 
 // List returns all assets, newest first.
@@ -47,35 +82,21 @@ func (s *AssetStore) List(ctx context.Context) ([]media.Asset, error) {
 	const q = `SELECT ` + assetColumns + ` FROM assets ORDER BY created_at DESC, id DESC`
 	rows, err := s.db.Query(ctx, q)
 	if err != nil {
-		return nil, err
+		return nil, pgxdb.MapError(err)
 	}
-	defer rows.Close()
+	assets, err := pgx.CollectRows(rows, pgx.RowToStructByName[assetRow])
+	if err != nil {
+		return nil, pgxdb.MapError(err)
+	}
 	var out []media.Asset
-	for rows.Next() {
-		a, err := scanAsset(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, a)
+	for _, a := range assets {
+		out = append(out, a.toDomain())
 	}
-	return out, pgxdb.MapError(rows.Err())
+	return out, nil
 }
 
 // Delete removes asset metadata by id.
 func (s *AssetStore) Delete(ctx context.Context, id string) error {
-	_, err := s.db.Exec(ctx, `DELETE FROM assets WHERE id = $1`, id)
+	_, err := s.db.Exec(ctx, `DELETE FROM assets WHERE id = @id`, pgx.NamedArgs{"id": id})
 	return err
-}
-
-func scanAsset(sc scanner) (media.Asset, error) {
-	var (
-		a         media.Asset
-		createdAt time.Time
-	)
-	err := sc.Scan(&a.ID, &a.Filename, &a.ContentType, &a.Size, &a.StorageKey, &a.Alt, &createdAt)
-	if err != nil {
-		return media.Asset{}, pgxdb.MapError(err)
-	}
-	a.CreatedAt = createdAt.UTC()
-	return a, nil
 }

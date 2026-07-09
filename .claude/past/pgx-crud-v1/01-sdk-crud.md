@@ -1,6 +1,6 @@
 # Phase P1 — sdk/crud List standards
 
-Status: **DRAFT — awaiting jrazmi ratification (cut 2026-07-08)**
+Status: **RATIFIED 2026-07-08 (jrazmi — Q1/Q2/Q3 at recommendations; see 00-overview.md)**
 Executor model: opus
 Depends on: — (first leg)
 
@@ -187,4 +187,25 @@ close it.)
 
 ## Execution log
 
-(append dated entries here)
+### 2026-07-08 — phase 1 executed (implementer on opus); PHASE COMPLETE
+
+Both tasks landed. `ListRequest` gains `Offset`/`WithCount`, `Page` gains
+`Total *int64` (`total,omitempty`); `Validate` (wraps
+`errs.ErrInvalidInput`), `UsesOffset`, `MapPage` (nil Items preserved as
+nil — executor decision, JSON `null` vs `[]` fidelity, test-pinned);
+`ParseListRequest` extended to the pinned five-string signature (strict
+offset/count parse, cursor+offset rejection; new rejection strings follow
+the existing limit-error phrasing — transport-edge errors stay plain
+`fmt.Errorf` like the existing limit errors, `ErrInvalidInput` wrapping
+is Validate's per the pin). Package doc rewritten: two-semantics section
+extended to three postures (strict parse / NormalizedLimit clamp /
+Validate mode check), normative mode+count matrix, query-param
+vocabulary + Q1 order-vocabulary rule. Single mechanical caller update:
+`features/authentication/internal/inbound/http/machine.go:191` passes
+`""` for offset/count. Verified by the executor AND re-verified by the
+main session: sdk build/vet/test green, `make check` green (30 modules),
+`make guard` green (7 guards incl. guard-sdk-stdlib — sdk go.mod require
+block still empty). Real-interaction check driven by the main session:
+`examples/minimal` booted (`go run ./cmd/server` from the module dir),
+GET / and GET /products/widget-3000 → 200, killed, :8081 free. Next: P2
+(`02-connectors.md`).

@@ -2,6 +2,7 @@ package authmem
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"time"
 
@@ -354,42 +355,139 @@ func (r invitationRepo) UpdateStatus(_ context.Context, id string, upd invitatio
 
 // --- shared pagination ---
 
-// page sorts items by (created_at, id) DESC, applies the keyset cursor, and
-// trims via the shared codec — the keyset shape a dialect store implements in
-// SQL, hand-rolled here so the reference paginates identically (the jobs
-// memstore precedent).
+// page sorts items by (created_at, id) in the resolved direction, then applies
+// the sdk/crud list matrix — cursor or offset mode, the reverse-probe prev page,
+// and the optional count — the keyset shape a dialect store implements in SQL,
+// hand-rolled here so this memstore paginates identically (the jobs memstore
+// precedent). created_at is the only sortable field.
 func page[T any](items []T, req crud.ListRequest, key func(T) (time.Time, string)) (crud.Page[T], error) {
+	if err := req.Validate(); err != nil {
+		return crud.Page[T]{}, err
+	}
+	if req.Order.Field != "" && req.Order.Field != orderField {
+		return crud.Page[T]{}, fmt.Errorf("unknown order field %q: %w", req.Order.Field, errs.ErrInvalidInput)
+	}
+	asc := req.Order.Direction == crud.ASC
+
 	sort.Slice(items, func(i, j int) bool {
 		ti, ii := key(items[i])
 		tj, ij := key(items[j])
-		if ti.Equal(tj) {
-			return ii > ij
+		if !ti.Equal(tj) {
+			if asc {
+				return ti.Before(tj)
+			}
+			return ti.After(tj)
 		}
-		return ti.After(tj)
+		if asc {
+			return ii < ij
+		}
+		return ii > ij
 	})
+
+	total := int64(len(items))
+	limit := req.NormalizedLimit(crud.Limits{})
+	encode := func(it T) (string, error) {
+		t, id := key(it)
+		return crud.EncodeCursor(orderField, t, id)
+	}
+
+	if req.ResolvedStrategy() == crud.StrategyOffset {
+		window := items
+		if req.Offset < len(window) {
+			window = window[req.Offset:]
+		} else {
+			window = window[:0]
+		}
+		if len(window) > limit+1 {
+			window = window[:limit+1]
+		}
+		pg, err := crud.TrimPage(window, limit, encode)
+		if err != nil {
+			return crud.Page[T]{}, err
+		}
+		pg.NextCursor = ""
+		pg.HasPrev = req.Offset > 0
+		if req.WithCount {
+			pg.Total = &total
+		}
+		return pg, nil
+	}
 
 	cur, err := crud.DecodeCursor(req.Cursor, orderField)
 	if err != nil {
 		return crud.Page[T]{}, err
 	}
+
+	forward := items
 	if cur != nil {
 		cv, _ := cur.OrderValue.(time.Time)
-		var after []T
+		forward = forward[:0:0]
 		for _, it := range items {
 			t, id := key(it)
-			if t.Before(cv) || (t.Equal(cv) && id < cur.PK) {
-				after = append(after, it)
+			if afterCursor(t, id, cv, cur.PK, asc) {
+				forward = append(forward, it)
 			}
 		}
-		items = after
+	}
+	window := forward
+	if len(window) > limit+1 {
+		window = window[:limit+1]
+	}
+	pg, err := crud.TrimPage(window, limit, encode)
+	if err != nil {
+		return crud.Page[T]{}, err
 	}
 
-	limit := req.NormalizedLimit()
-	if len(items) > limit+1 {
-		items = items[:limit+1]
+	if cur != nil {
+		cv, _ := cur.OrderValue.(time.Time)
+		var before []T
+		for _, it := range items {
+			t, id := key(it)
+			if beforeCursor(t, id, cv, cur.PK, asc) {
+				before = append(before, it)
+			}
+		}
+		// The previous page is the `limit` rows immediately before the cursor.
+		if len(before) > limit {
+			before = before[len(before)-limit:]
+		}
+		if err := crud.MarkPrevPage(&pg, before, limit, encode); err != nil {
+			return crud.Page[T]{}, err
+		}
 	}
-	return crud.TrimPage(items, limit, func(it T) (string, error) {
-		t, id := key(it)
-		return crud.EncodeCursor(orderField, t, id)
-	})
+
+	if req.WithCount {
+		pg.Total = &total
+	}
+	return pg, nil
+}
+
+// afterCursor reports whether (t, id) sorts strictly after the cursor under the
+// resolved direction — the next-page predicate.
+func afterCursor(t time.Time, id string, cv time.Time, cpk string, asc bool) bool {
+	if !t.Equal(cv) {
+		if asc {
+			return t.After(cv)
+		}
+		return t.Before(cv)
+	}
+	if asc {
+		return id > cpk
+	}
+	return id < cpk
+}
+
+// beforeCursor reports whether (t, id) sorts strictly before the cursor under the
+// resolved direction — the reverse-probe predicate.
+func beforeCursor(t time.Time, id string, cv time.Time, cpk string, asc bool) bool {
+	if !t.Equal(cv) {
+		if asc {
+			return t.Before(cv)
+		}
+		return t.After(cv)
+	}
+	if asc {
+		return id < cpk
+	}
+	return id > cpk
 }

@@ -19,6 +19,7 @@ Contents (each closed with dated NOTES.md entries and live-verified gates):
 | `auth-v2/` | identity remainder in features/auth: v1 debts (session hashing), OAuth, machine identity, JWT bearer, audit rail, invitations; both stores + A9 proof host | 2026-07-07 |
 | `feature-standard/` | FS1–FS10 extension model (charter W1–W4) + convergence: auth driving surface, cms plain-text core + views/templ extraction with Views port, sdk view/route primitives, jobs Register, connector promotions D2–D6 | 2026-07-08 |
 | `events-v1/` | features/events (outbox + poller + SSE gateway) + both stores; sdk/identity (A-I1); features/auth → features/authentication (A-R1); Mount.Events; cms content.* emitter; G7 rule-6 guard; live turso + pgx conformance | 2026-07-08 |
+| `pgx-crud-v1/` | pgx v5 idiom sweep (NamedArgs, CollectRows/RowToStructByName over row structs, UNNEST bulk writes) + sdk/crud List standards: order allow-lists, bidirectional cursors, offset mode, WithCount totals; connector List[T] toolkits; six-case storetest family everywhere; cms Pager views; legacy ListPage deleted. `v1a-list-strategy.md`: explicit crud.Strategy (offset>0 inference removed), ListParams parse struct with env-configurable default, listCursor/listOffset flow split. `v1b-list-limits.md`: crud.Limits per-aggregate (rim ListLimits convention; constants demoted to fallbacks; NormalizedLimit(Limits)) | 2026-07-08/09 |
 
 Path note: NOTES.md entries and ratified/historical docs written before
 2026-07-07 cite these as `.claude/plans/<milestone>/...`; those citations

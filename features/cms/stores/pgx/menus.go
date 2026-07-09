@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/sdk/crud"
@@ -24,11 +26,61 @@ func NewMenuStore(db *pgxdb.DB) *MenuStore {
 const menuColumns = "id, name, slug, created_at, updated_at"
 const itemColumns = "id, menu_id, label, url, parent_id, position, created_at, updated_at"
 
+// menuRow is the store-local, db-tagged projection of a menus row.
+type menuRow struct {
+	ID        string    `db:"id"`
+	Name      string    `db:"name"`
+	Slug      string    `db:"slug"`
+	CreatedAt time.Time `db:"created_at"`
+	UpdatedAt time.Time `db:"updated_at"`
+}
+
+func (r menuRow) toDomain() menus.Menu {
+	return menus.Menu{
+		ID:        r.ID,
+		Name:      r.Name,
+		Slug:      r.Slug,
+		CreatedAt: r.CreatedAt.UTC(),
+		UpdatedAt: r.UpdatedAt.UTC(),
+	}
+}
+
+// menuItemRow is the store-local, db-tagged projection of a menu_items row.
+type menuItemRow struct {
+	ID        string    `db:"id"`
+	MenuID    string    `db:"menu_id"`
+	Label     string    `db:"label"`
+	URL       string    `db:"url"`
+	ParentID  string    `db:"parent_id"`
+	Position  int       `db:"position"`
+	CreatedAt time.Time `db:"created_at"`
+	UpdatedAt time.Time `db:"updated_at"`
+}
+
+func (r menuItemRow) toDomain() menus.MenuItem {
+	return menus.MenuItem{
+		ID:        r.ID,
+		MenuID:    r.MenuID,
+		Label:     r.Label,
+		URL:       r.URL,
+		ParentID:  r.ParentID,
+		Position:  r.Position,
+		CreatedAt: r.CreatedAt.UTC(),
+		UpdatedAt: r.UpdatedAt.UTC(),
+	}
+}
+
 // CreateMenu persists a new menu.
 func (s *MenuStore) CreateMenu(ctx context.Context, m menus.Menu) (menus.Menu, error) {
-	const q = `INSERT INTO menus (` + menuColumns + `) VALUES ($1, $2, $3, $4, $5)`
-	_, err := s.db.Exec(ctx, q, m.ID, m.Name, m.Slug,
-		m.CreatedAt.UTC(), m.UpdatedAt.UTC())
+	const q = `INSERT INTO menus (` + menuColumns + `)
+		VALUES (@id, @name, @slug, @created_at, @updated_at)`
+	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
+		"id":         m.ID,
+		"name":       m.Name,
+		"slug":       m.Slug,
+		"created_at": m.CreatedAt.UTC(),
+		"updated_at": m.UpdatedAt.UTC(),
+	})
 	if err != nil {
 		return menus.Menu{}, err
 	}
@@ -37,58 +89,73 @@ func (s *MenuStore) CreateMenu(ctx context.Context, m menus.Menu) (menus.Menu, e
 
 // GetMenu returns the menu with the given id.
 func (s *MenuStore) GetMenu(ctx context.Context, id string) (menus.Menu, error) {
-	const q = `SELECT ` + menuColumns + ` FROM menus WHERE id = $1`
-	return scanMenu(s.db.QueryRow(ctx, q, id))
+	const q = `SELECT ` + menuColumns + ` FROM menus WHERE id = @id`
+	row, err := queryOne[menuRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
+	if err != nil {
+		return menus.Menu{}, err
+	}
+	return row.toDomain(), nil
 }
 
 // GetMenuBySlug returns the menu with the given slug.
 func (s *MenuStore) GetMenuBySlug(ctx context.Context, slug string) (menus.Menu, error) {
-	const q = `SELECT ` + menuColumns + ` FROM menus WHERE slug = $1`
-	return scanMenu(s.db.QueryRow(ctx, q, slug))
+	const q = `SELECT ` + menuColumns + ` FROM menus WHERE slug = @slug`
+	row, err := queryOne[menuRow](ctx, s.db, q, pgx.NamedArgs{"slug": slug})
+	if err != nil {
+		return menus.Menu{}, err
+	}
+	return row.toDomain(), nil
 }
 
 // ListMenus returns all menus ordered by name.
 func (s *MenuStore) ListMenus(ctx context.Context) ([]menus.Menu, error) {
 	rows, err := s.db.Query(ctx, `SELECT `+menuColumns+` FROM menus ORDER BY name`)
 	if err != nil {
-		return nil, err
+		return nil, pgxdb.MapError(err)
 	}
-	defer rows.Close()
+	mrows, err := pgx.CollectRows(rows, pgx.RowToStructByName[menuRow])
+	if err != nil {
+		return nil, pgxdb.MapError(err)
+	}
 	var out []menus.Menu
-	for rows.Next() {
-		m, err := scanMenu(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, m)
+	for _, m := range mrows {
+		out = append(out, m.toDomain())
 	}
-	return out, pgxdb.MapError(rows.Err())
+	return out, nil
 }
 
 // ItemsForMenu returns a menu's items ordered by (parent_id, position).
 func (s *MenuStore) ItemsForMenu(ctx context.Context, menuID string) ([]menus.MenuItem, error) {
-	const q = `SELECT ` + itemColumns + ` FROM menu_items WHERE menu_id = $1 ORDER BY parent_id, position`
-	rows, err := s.db.Query(ctx, q, menuID)
+	const q = `SELECT ` + itemColumns + ` FROM menu_items WHERE menu_id = @menu_id ORDER BY parent_id, position`
+	rows, err := s.db.Query(ctx, q, pgx.NamedArgs{"menu_id": menuID})
 	if err != nil {
-		return nil, err
+		return nil, pgxdb.MapError(err)
 	}
-	defer rows.Close()
+	irows, err := pgx.CollectRows(rows, pgx.RowToStructByName[menuItemRow])
+	if err != nil {
+		return nil, pgxdb.MapError(err)
+	}
 	var out []menus.MenuItem
-	for rows.Next() {
-		it, err := scanItem(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, it)
+	for _, it := range irows {
+		out = append(out, it.toDomain())
 	}
-	return out, pgxdb.MapError(rows.Err())
+	return out, nil
 }
 
 // AddItem persists a new menu item.
 func (s *MenuStore) AddItem(ctx context.Context, it menus.MenuItem) (menus.MenuItem, error) {
-	const q = `INSERT INTO menu_items (` + itemColumns + `) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
-	_, err := s.db.Exec(ctx, q, it.ID, it.MenuID, it.Label, it.URL, it.ParentID, it.Position,
-		it.CreatedAt.UTC(), it.UpdatedAt.UTC())
+	const q = `INSERT INTO menu_items (` + itemColumns + `)
+		VALUES (@id, @menu_id, @label, @url, @parent_id, @position, @created_at, @updated_at)`
+	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
+		"id":         it.ID,
+		"menu_id":    it.MenuID,
+		"label":      it.Label,
+		"url":        it.URL,
+		"parent_id":  it.ParentID,
+		"position":   it.Position,
+		"created_at": it.CreatedAt.UTC(),
+		"updated_at": it.UpdatedAt.UTC(),
+	})
 	if err != nil {
 		return menus.MenuItem{}, err
 	}
@@ -97,15 +164,25 @@ func (s *MenuStore) AddItem(ctx context.Context, it menus.MenuItem) (menus.MenuI
 
 // GetItem returns the item with the given id.
 func (s *MenuStore) GetItem(ctx context.Context, id string) (menus.MenuItem, error) {
-	const q = `SELECT ` + itemColumns + ` FROM menu_items WHERE id = $1`
-	return scanItem(s.db.QueryRow(ctx, q, id))
+	const q = `SELECT ` + itemColumns + ` FROM menu_items WHERE id = @id`
+	row, err := queryOne[menuItemRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
+	if err != nil {
+		return menus.MenuItem{}, err
+	}
+	return row.toDomain(), nil
 }
 
 // UpdateItem persists changes to an item.
 func (s *MenuStore) UpdateItem(ctx context.Context, id string, it menus.MenuItem) (menus.MenuItem, error) {
-	const q = `UPDATE menu_items SET label=$1, url=$2, parent_id=$3, position=$4, updated_at=$5 WHERE id=$6`
-	n, err := pgxdb.ExecAffecting(ctx, s.db, q, it.Label, it.URL, it.ParentID, it.Position,
-		it.UpdatedAt.UTC(), id)
+	const q = `UPDATE menu_items SET label = @label, url = @url, parent_id = @parent_id, position = @position, updated_at = @updated_at WHERE id = @id`
+	n, err := pgxdb.ExecAffecting(ctx, s.db, q, pgx.NamedArgs{
+		"label":      it.Label,
+		"url":        it.URL,
+		"parent_id":  it.ParentID,
+		"position":   it.Position,
+		"updated_at": it.UpdatedAt.UTC(),
+		"id":         id,
+	})
 	if err != nil {
 		return menus.MenuItem{}, err
 	}
@@ -117,32 +194,6 @@ func (s *MenuStore) UpdateItem(ctx context.Context, id string, it menus.MenuItem
 
 // DeleteItem removes an item by id.
 func (s *MenuStore) DeleteItem(ctx context.Context, id string) error {
-	_, err := s.db.Exec(ctx, `DELETE FROM menu_items WHERE id = $1`, id)
+	_, err := s.db.Exec(ctx, `DELETE FROM menu_items WHERE id = @id`, pgx.NamedArgs{"id": id})
 	return err
-}
-
-func scanMenu(sc scanner) (menus.Menu, error) {
-	var (
-		m                    menus.Menu
-		createdAt, updatedAt time.Time
-	)
-	if err := sc.Scan(&m.ID, &m.Name, &m.Slug, &createdAt, &updatedAt); err != nil {
-		return menus.Menu{}, pgxdb.MapError(err)
-	}
-	m.CreatedAt = createdAt.UTC()
-	m.UpdatedAt = updatedAt.UTC()
-	return m, nil
-}
-
-func scanItem(sc scanner) (menus.MenuItem, error) {
-	var (
-		it                   menus.MenuItem
-		createdAt, updatedAt time.Time
-	)
-	if err := sc.Scan(&it.ID, &it.MenuID, &it.Label, &it.URL, &it.ParentID, &it.Position, &createdAt, &updatedAt); err != nil {
-		return menus.MenuItem{}, pgxdb.MapError(err)
-	}
-	it.CreatedAt = createdAt.UTC()
-	it.UpdatedAt = updatedAt.UTC()
-	return it, nil
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/sdk/errs"
@@ -25,13 +27,39 @@ func NewUserStore(db *pgxdb.DB) *UserStore {
 
 const userColumns = "id, email, display_name, email_verified, created_at, updated_at"
 
+// userRow is the store-local, db-tagged projection of a users row.
+type userRow struct {
+	ID            string    `db:"id"`
+	Email         string    `db:"email"`
+	DisplayName   string    `db:"display_name"`
+	EmailVerified bool      `db:"email_verified"`
+	CreatedAt     time.Time `db:"created_at"`
+	UpdatedAt     time.Time `db:"updated_at"`
+}
+
+func (r userRow) toDomain() user.User {
+	return user.User{
+		ID:            r.ID,
+		Email:         r.Email,
+		DisplayName:   r.DisplayName,
+		EmailVerified: r.EmailVerified,
+		CreatedAt:     r.CreatedAt.UTC(),
+		UpdatedAt:     r.UpdatedAt.UTC(),
+	}
+}
+
 // Create persists a new user; a colliding normalized email → errs.ErrAlreadyExists.
 func (s *UserStore) Create(ctx context.Context, u user.User) (user.User, error) {
-	const q = `INSERT INTO users (` + userColumns + `) VALUES ($1, $2, $3, $4, $5, $6)`
-	_, err := s.db.Exec(ctx, q,
-		u.ID, u.Email, u.DisplayName, u.EmailVerified,
-		u.CreatedAt.UTC(), u.UpdatedAt.UTC(),
-	)
+	const q = `INSERT INTO users (` + userColumns + `)
+		VALUES (@id, @email, @display_name, @email_verified, @created_at, @updated_at)`
+	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
+		"id":             u.ID,
+		"email":          u.Email,
+		"display_name":   u.DisplayName,
+		"email_verified": u.EmailVerified,
+		"created_at":     u.CreatedAt.UTC(),
+		"updated_at":     u.UpdatedAt.UTC(),
+	})
 	if err != nil {
 		return user.User{}, err
 	}
@@ -40,43 +68,42 @@ func (s *UserStore) Create(ctx context.Context, u user.User) (user.User, error) 
 
 // Get returns the user with the given id, or errs.ErrNotFound.
 func (s *UserStore) Get(ctx context.Context, id string) (user.User, error) {
-	const q = `SELECT ` + userColumns + ` FROM users WHERE id = $1`
-	return scanUser(s.db.QueryRow(ctx, q, id))
+	const q = `SELECT ` + userColumns + ` FROM users WHERE id = @id`
+	row, err := queryOne[userRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
+	if err != nil {
+		return user.User{}, err
+	}
+	return row.toDomain(), nil
 }
 
 // GetByEmail returns the user with the given normalized email, or errs.ErrNotFound.
 func (s *UserStore) GetByEmail(ctx context.Context, email string) (user.User, error) {
-	const q = `SELECT ` + userColumns + ` FROM users WHERE email = $1`
-	return scanUser(s.db.QueryRow(ctx, q, email))
+	const q = `SELECT ` + userColumns + ` FROM users WHERE email = @email`
+	row, err := queryOne[userRow](ctx, s.db, q, pgx.NamedArgs{"email": email})
+	if err != nil {
+		return user.User{}, err
+	}
+	return row.toDomain(), nil
 }
 
 // Update persists changes to an existing user; missing id → errs.ErrNotFound. It
 // leaves id and created_at unchanged.
 func (s *UserStore) Update(ctx context.Context, id string, u user.User) (user.User, error) {
-	const q = `UPDATE users SET email=$1, display_name=$2, email_verified=$3, updated_at=$4 WHERE id=$5`
-	n, err := pgxdb.ExecAffecting(ctx, s.db, q,
-		u.Email, u.DisplayName, u.EmailVerified, u.UpdatedAt.UTC(), id,
-	)
+	const q = `UPDATE users
+		SET email = @email, display_name = @display_name, email_verified = @email_verified, updated_at = @updated_at
+		WHERE id = @id`
+	n, err := pgxdb.ExecAffecting(ctx, s.db, q, pgx.NamedArgs{
+		"email":          u.Email,
+		"display_name":   u.DisplayName,
+		"email_verified": u.EmailVerified,
+		"updated_at":     u.UpdatedAt.UTC(),
+		"id":             id,
+	})
 	if err != nil {
 		return user.User{}, err
 	}
 	if n == 0 {
 		return user.User{}, errs.ErrNotFound
 	}
-	return u, nil
-}
-
-// scanUser scans one users row into a User, mapping pgx.ErrNoRows to
-// errs.ErrNotFound via the connector's MapError.
-func scanUser(sc scanner) (user.User, error) {
-	var (
-		u                    user.User
-		createdAt, updatedAt time.Time
-	)
-	if err := sc.Scan(&u.ID, &u.Email, &u.DisplayName, &u.EmailVerified, &createdAt, &updatedAt); err != nil {
-		return user.User{}, pgxdb.MapError(err)
-	}
-	u.CreatedAt = createdAt.UTC()
-	u.UpdatedAt = updatedAt.UTC()
 	return u, nil
 }

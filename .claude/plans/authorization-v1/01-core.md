@@ -26,7 +26,8 @@ table `iam_roles`). ReBAC is one kind, not the feature's identity.
 Salvage source for the RELATIONSHIP kind only (reference-only; design
 ported, code re-typed fresh — the sdk-parity bar; never copy import
 paths):
-`gopernicus-original/core/auth/authorization/{authorizer,model,builder,schema_validator,membership,explain,cache_store,errors}.go`
+`../gopernicus-original/core/auth/authorization/{authorizer,model,builder,schema_validator,membership,explain,cache_store,errors}.go`
+(sibling of this repo's root — path corrected 2026-07-08, codex fold A7)
 + `authorization_test.go` (the ~2,650-line behavioral reference).
 The original's `Storer` is at `model.go:246` — **14 methods** (the
 design's §2.5 list is abbreviated; salvage the full surface — overview
@@ -134,7 +135,13 @@ source** — it is new, deliberately minimal (overview cut refinement 12).
   comments are the spec storetest executes
   (duplicate-tuple semantics pinned against the original's SQL — log
   what the original does: idempotent insert vs conflict — and state it
-  on `CreateRelationships`). Rim test: compile-check stub pinning the
+  on `CreateRelationships`). **`CreateRelationships` doc also pins the
+  one-relation-per-subject-per-resource rule (2026-07-08 owner ruling,
+  codex fold A2 — the original's `idx_rebac_relationships_unique_subject`
+  ADOPTED): a subject holds at most ONE relation on a resource (owner OR
+  member, never both; schema `AnyOf` handles implication); a second
+  relation for the same subject on the same resource is a constraint
+  conflict, and role change stays delete+create.** Rim test: compile-check stub pinning the
   signatures. Register in `go.work` + Makefile `MODULES` (alphabetical:
   after `features/authentication/stores/turso`, before `features/cms`);
   bump the Makefile header count 30 → 31; **add `features/authorization`
@@ -237,8 +244,11 @@ source** — it is new, deliberately minimal (overview cut refinement 12).
   traversal, with cycle guards on traversal and the
   **`MaxTraversalDepth` bound** — relationship-kind-scoped Config,
   default 10,
-  `<= 0` ⇒ 10; the SHARED bound memstore and both SQL CTEs must honor
-  identically, review-gate fold lead refinement 8), **`checkSelf`
+  `<= 0` ⇒ 10; **ENGINE-ONLY (2026-07-08 owner ruling, codex fold A1,
+  superseding lead refinement 8): it bounds the engine's Go
+  through-traversal recursion exactly as the original does
+  (authorizer.go:167) and is never threaded into the stores — group
+  expansion in memstore/CTEs is unbounded-but-cycle-safe**), **`checkSelf`
   explicitly in scope** (authorizer.go:~250, lead refinement 9:
   self-grant with reason "self" when subject == resource for `user`/
   `service_account` resource types and permission ∈ {read, update,
@@ -374,14 +384,17 @@ source** — it is new, deliberately minimal (overview cut refinement 12).
   `features/jobs/memstore` is the placement precedent; never a
   `stores/memory` module). Relationship kind: mutex-backed; unique-tuple
   enforcement honest
-  (duplicate semantics exactly as task-1 pinned); graph-walk group
+  (duplicate semantics exactly as task-1 pinned, **including the
+  one-relation-per-subject-per-resource conflict — codex fold A2**);
+  graph-walk group
   expansion with a visited-set cycle guard (the memstore must survive
-  A∈B, B∈A data — the suite will prove it) **honoring the same traversal
-  bound the engine's `MaxTraversalDepth` implies and the SQL CTEs will
-  carry** (review-gate fold, lead refinement 8 — a bound skew is a
-  per-backend security divergence; the executor pins how the original
-  threads the bound between engine and store and mirrors it, logging the
-  mechanism);
+  A∈B, B∈A data — the suite will prove it) — **unbounded-but-cycle-safe
+  (2026-07-08 owner ruling, codex fold A1, superseding lead refinement
+  8: the original never threads `MaxTraversalDepth` into its store — its
+  CTE at `../gopernicus-original/core/repositories/rebac/rebacrelationships/rebacrelationshipspgx/store.go:22-30`
+  terminates by UNION dedup alone, and the engine bounds only its own Go
+  recursion; the memstore's visited set is the honest mirror, no depth
+  parameter anywhere in the port)**;
   `CountByResourceAndRelation` counts direct tuples only;
   `LookupDescendantResourceIDs` as a transitive walk; keyset-shaped
   listing honoring `crud.ListRequest` with a stable tiebreak matching
@@ -417,7 +430,13 @@ source** — it is new, deliberately minimal (overview cut refinement 12).
   semantics; `CountByResourceAndRelation` direct-only; the three Lookup*
   primitives; listing pagination (keyset cursor round-trip + stable
   tiebreak + empty-page shape — pin the empty-page case here, closing
-  the D5-era gap for this feature from day one). Roles kind (the
+  the D5-era gap for this feature from day one); **two constraint-level
+  cases (codex folds A2+A3): a duplicate direct tuple (same six columns,
+  empty subject_relation included) conflicts/no-ops per the task-1 pin —
+  proven at the CONSTRAINT level, not application logic (the
+  `Roles/AssignIdempotent` precedent) — and a SECOND relation for the
+  same subject on the same resource conflicts (the adopted
+  unique-subject index).** Roles kind (the
   **`Roles/*` named family**, `roles.go`):
   - `Roles/AssignIdempotent` — duplicate assign is a no-op nil; the row
     count stays 1 **including for the GLOBAL `("", "")` pair — asserted
@@ -453,18 +472,26 @@ source** — it is new, deliberately minimal (overview cut refinement 12).
     answers correctly (both allowed-through-cycle and
     denied-outside-cycle assertions).
   - `Adversarial/DeepNesting` — ≥3-level group nesting resolves
-    (user→G3→G2→G1→resource), **plus the depth-boundary pair
-    (review-gate fold, lead refinement 8): a membership chain exactly at
-    the traversal bound resolves; a chain at bound+1 does not** — the
-    ≥3-level case alone cannot detect a bound skew, and a bound skew is
-    a per-backend security divergence.
+    (user→G3→G2→G1→resource). **The depth-boundary pair is DROPPED
+    (2026-07-08 owner ruling, codex fold A1, superseding lead refinement
+    8): group expansion is unbounded-but-cycle-safe in every backend —
+    matching the original, whose CTE carries no depth term — so there is
+    no store-level bound to probe; `MaxTraversalDepth` bounds only the
+    engine's through-traversal recursion and stays engine-only.**
   - `Adversarial/DiamondDedup` — diamond/multi-path membership
     deduplicates, **with an explicit `CountByResourceAndRelation`
     assertion**: multiple expansion paths never inflate the direct count
     (§2.5 — a count divergence is a security divergence; last-owner
     protection depends on it).
-  - `Adversarial/NestedUserset` — `group#member@group#member`-style
-    subjects (`Subject.Relation` set) resolve through the userset.
+  - `Adversarial/NestedUserset` — **tuple-side** userset subjects
+    resolve: tuples STORED with `subject_relation` set
+    (`org:acme#member@group:eng#member`) grant access to the group's
+    members transitively. **(Reworded 2026-07-08, codex fold A5: the
+    check signatures never carry a subject relation and the original
+    engine ignores request-side `Subject.Relation` on checks —
+    model.go:44 is dead there; the userset resolves via stored tuples +
+    expansion, so the fixture seeds it tuple-side, never by setting
+    `Subject.Relation` on the CheckRequest.)**
   - `Adversarial/Unrestricted` — `LookupResult.Unrestricted` wildcard
     semantics: the fixture **declares a `platform` resource type in the
     schema and seeds the `platform:main#admin@<type>:<id>` tuple**

@@ -160,7 +160,7 @@ authentication/authenticator — never abbreviated.
 status-header amendment at Z5):**
 
 - **§2.5's `Storer` enumeration is incomplete.** The original's port
-  (`gopernicus-original/core/auth/authorization/model.go:246`) has
+  (`../gopernicus-original/core/auth/authorization/model.go:246`) has
   **14 methods** (count corrected at the review-gate fold): the design's
   list omits `CheckRelationExists` (the
   platform-admin tuple check) and the three LookupResources primitives
@@ -426,12 +426,23 @@ re-deciding anything, built when its trigger fires.
   language applies verbatim).
 - **`iam_relationships`** (`0001_iam_relationships.sql`; the salvage
   shape from the original's `0002_rebac.sql`, table renamed per the
-  owner direction): resource_type, resource_id, relation, subject_type,
+  owner direction): **relationship_id PK + created_at (immutable rows,
+  no updated_at — the keyset listing's order column and tiebreak; made
+  explicit 2026-07-08, codex fold A4)**; resource_type, resource_id,
+  relation, subject_type,
   subject_id, subject_relation (the optional userset relation —
-  `group#member`-style subjects); unique-tuple index; secondary indexes
+  `group#member`-style subjects; **`NOT NULL DEFAULT ''`, codex fold A3
+  — the iam_roles NOT-NULL-scope precedent applied in place of the
+  original's nullable column + COALESCE unique indexes; divergence
+  logged**); **unique-tuple index AND the unique-SUBJECT index (one
+  relation per subject per resource — the original's
+  `idx_rebac_relationships_unique_subject`, ADOPTED by the 2026-07-08
+  owner ruling, codex fold A2; role change stays delete+create; a
+  storetest case asserts the second-relation conflict at the CONSTRAINT
+  level)**; secondary indexes
   on resource, subject, and (resource_type, relation). Executor verifies
-  columns/indexes against the original file and logs any divergence
-  (rename aside).
+  columns/indexes against the original file and logs any remaining
+  divergence (rename aside).
 - **`iam_roles`** (`0002_iam_roles.sql`; NEW — refinement 12):
   subject_type, subject_id, role, resource_type, resource_id, created_at
   (store-stamped via the connector timestamp helpers — lead minor 9);
@@ -441,7 +452,9 @@ re-deciding anything, built when its trigger fires.
   storetest case asserts the duplicate-global rejection at the
   CONSTRAINT level); unique index on the
   full 5-tuple; secondary indexes on (subject_type, subject_id) and
-  (role, resource_type, resource_id). Plain lookups only — no recursion
+  **(resource_type, resource_id, created_at)** (changed 2026-07-08,
+  codex fold A6 — `ListByResource`'s filter + keyset order; the role-led
+  index served no pinned query). Plain lookups only — no recursion
   anywhere near this table. **Dialect-divergence note (lead major 2):**
   the turso Assign must be the targeted `INSERT … ON
   CONFLICT(subject_type, subject_id, role, resource_type, resource_id)
@@ -466,6 +479,11 @@ re-deciding anything, built when its trigger fires.
   The named adversarial sub-runners (Z1, run per-dialect in Z2a/Z2b) are
   the acceptance criteria, not nice-to-haves. CTE termination against
   cyclic data is itself asserted (the membership-cycle case).
+  **Expansion is unbounded-but-cycle-safe in every backend (2026-07-08
+  owner ruling, codex fold A1, superseding lead refinement 8): the
+  original never threads `MaxTraversalDepth` into the store — its CTE
+  terminates by UNION dedup alone — so the depth config stays
+  engine-only and the depth-boundary storetest pair is dropped.**
 - **`CountByResourceAndRelation` counts direct tuples only** — never
   expanded membership (design §2.5 pin; a count divergence is a
   **security divergence** — it feeds last-owner protection). The diamond-
@@ -530,8 +548,9 @@ feature imports.
   loudly, never falsely allow; `Register` mounts nothing and touches
   `mount.Logger` only; `/authorization/*` claimed-unregistered.
 - The five **named** adversarial sub-runners (membership cycle, ≥3-level
-  nesting incl. the depth-boundary pair, diamond dedup **with the Count
-  assertion**, nested userset, `LookupResult.Unrestricted`) AND the
+  nesting — depth-boundary pair dropped per the A1 ruling, diamond dedup
+  **with the Count
+  assertion**, tuple-side nested userset (A5), `LookupResult.Unrestricted`) AND the
   `Roles/*` sub-runner family green against memstore hermetically in
   `make check` AND against both dialect stores' live legs, recorded as
   dated NOTES.md artifacts per dialect.
@@ -727,7 +746,10 @@ checkSelf, the Resource alias, FS1-at-Z1), but the multi-kind deltas
   and both SQL CTEs honor identically, with a storetest depth-boundary
   case (chain at the bound and at bound+1) in the DeepNesting family — a
   bound skew is a per-backend security divergence the ≥3-level case
-  cannot detect; (9) `checkSelf` (self-grant on read/update/delete when
+  cannot detect **[SUPERSEDED 2026-07-08, codex fold A1: the refinement
+  assumed a threading mechanism the original doesn't have — its CTE is
+  unbounded, dedup-terminated; owner ruled the bound engine-only and the
+  pair dropped]**; (9) `checkSelf` (self-grant on read/update/delete when
   subject == resource for user/service_account types, authorizer.go:~250)
   explicitly in Z1 task-3's salvage scope, with storetest fixtures and
   Z4's model accounting for it; (10) Z4's Granter swap wording fixed —
@@ -829,6 +851,66 @@ folded in place (status stays DRAFT — jrazmi ratification still owed):
   confirmed `ErrNoKindConfigured`-on-zero-kinds is correct because the
   middle posture never constructs `NewService`.
 
+### Codex external-review fold (2026-07-08)
+
+An external Codex review of this DRAFT returned 6 findings + 2 open
+questions; all verified against the plan text, the original's code, and
+`0002_rebac.sql` before folding (two required owner rulings, taken
+2026-07-08). The fold IDs (A1–A8) are cited in place across the files:
+
+- **A1 (owner ruling): `MaxTraversalDepth` is ENGINE-ONLY.** The review
+  caught a real contradiction: lead refinement 8 required the store CTEs
+  to honor the engine's bound and told the executor to "mirror however
+  the original threads the bound into the store SQL" — but the original
+  never threads it. Its CTE
+  (`../gopernicus-original/core/repositories/rebac/rebacrelationships/rebacrelationshipspgx/store.go:22-30`)
+  is unbounded, terminated by UNION dedup; `MaxTraversalDepth` bounds
+  only the engine's Go recursion (authorizer.go:167), and the
+  depth-boundary storetest pair would have FAILED against the original's
+  own store. Owner ruled: match the original — unbounded-but-cycle-safe
+  expansion in every backend, bound stays engine-only, pair dropped.
+  Refinement 8 carries the supersession marker.
+- **A2 (owner ruling): the unique-SUBJECT index is ADOPTED.** The
+  original's `idx_rebac_relationships_unique_subject` (one relation per
+  subject per resource; `0002_rebac.sql:76-79`) was silently absent from
+  the DDL bullets. Owner ruled adopt: both unique indexes in 0001, the
+  one-relation rule pinned on `CreateRelationships`' doc, role change
+  stays delete+create, a constraint-level second-relation storetest case
+  in 01-core task-8.
+- **A3: `subject_relation` pinned `NOT NULL DEFAULT ''`** — the same
+  NULL-uniqueness hazard this plan already fixed for the iam_roles scope
+  pair existed here (the original used nullable + COALESCE in its unique
+  indexes); the NOT-NULL form is the consistent fix, divergence logged,
+  constraint-level duplicate-direct-tuple case added.
+- **A4: `relationship_id` PK + `created_at` made explicit** in the DDL
+  bullets (the keyset listings need the order column + PK tiebreak; they
+  were implied by "verified against the original," now stated).
+- **A5: `Adversarial/NestedUserset` reworded to tuple-side** — the check
+  signatures never carry a subject relation and the original engine
+  ignores request-side `Subject.Relation` on checks; the fixture seeds
+  the userset as STORED tuples (`…@group:eng#member`), never via
+  `CheckRequest.Subject.Relation`.
+- **A6: `iam_roles` secondary index realigned** — (role, resource_type,
+  resource_id) served no pinned query; replaced with (resource_type,
+  resource_id, created_at) for `ListByResource`'s filter + keyset order.
+- **A7: salvage paths corrected** to `../gopernicus-original/…` (sibling
+  of this repo's root; reading salvage is a precondition, so the paths
+  must resolve).
+- **A8: boot probes include `iam_relationship_metadata` if Q4 = KEEP**
+  (both store constructors) — probe set matches the applied schema.
+
+**Cross-milestone note (2026-07-08 owner sequencing ruling; updated same
+date at pgx-crud-v1 close):** pgx-crud-v1 **EXECUTED TO COMPLETION**
+(P1–P6) before this milestone's store phases. Z2a/Z2b's `ListPage[T]`
+citations are superseded: the connector helpers are `pgxdb.List[T]` /
+`turso.List[T]` (legacy `ListPage` deleted), driven by per-aggregate
+order allow-lists in the domain rim (Q1 standard) and the extended
+`crud.ListRequest`/`Page` (order, bidirectional cursors, offset mode,
+`WithCount` totals); Z1's storetest carries the standard six-case family
+per paginated port. Dated landed-notes appended to 02a/02b execution
+logs. Z1's listing ports re-type on `sdk/crud` and inherit the extended
+shape automatically.
+
 ## Recommended reviews (the plan-cut gate — run before jrazmi ratifies)
 
 - **architecture-steward + lead-backend-engineer — the targeted
@@ -924,3 +1006,20 @@ behavioral-not-guard-shaped kind enforcement; item-12 asymmetry
 rationale; the roles-only adopter line (both store READMEs + Z5);
 keep-strings decision recorded. Status unchanged: DRAFT, awaiting
 jrazmi ratification of Q1–Q5.
+
+### 2026-07-08 — Codex external-review fold applied (two owner rulings)
+
+Codex review findings verified against the original's code/SQL and
+folded across 00/01/02a/02b — the "Codex external-review fold
+(2026-07-08)" consultation-notes subsection is the itemized record
+(A1–A8). Owner rulings taken in-session: **A1 — `MaxTraversalDepth` is
+engine-only** (the original's CTE is unbounded/dedup-terminated; lead
+refinement 8 superseded, depth-boundary pair dropped) and **A2 — the
+unique-subject index is adopted** (one relation per subject per
+resource, constraint-level storetest case). Plus: `subject_relation NOT
+NULL DEFAULT ''` (A3), explicit relationship_id/created_at (A4),
+NestedUserset reworded tuple-side (A5), `iam_roles` ListByResource index
+realigned (A6), salvage paths corrected (A7), Q4-conditional metadata
+probe (A8). Cross-milestone sequencing ruling recorded: pgx-crud-v1
+executes first; Z2a/Z2b land on its new List standards. Status
+unchanged: DRAFT, awaiting jrazmi ratification of Q1–Q5.

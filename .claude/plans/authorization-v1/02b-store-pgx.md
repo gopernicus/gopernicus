@@ -23,9 +23,9 @@ boot probe, README, env-gated conformance) + the pgxdb D2–D6 helpers.
 - BOTH kinds' repositories: the full 14-method `relationship.Storer` —
   recursive-CTE expansion +
   descendant lookup, cycle-safe (`WITH RECURSIVE` + UNION dedup),
-  honoring **the same traversal bound as the engine's
-  `MaxTraversalDepth`, the memstore, and Z2a** (review-gate fold, lead
-  refinement 8); counts direct-only — AND the 5-method `role.Storer`
+  **UNBOUNDED like Z2a and the memstore** (2026-07-08 owner ruling,
+  codex fold A1, superseding lead refinement 8: `MaxTraversalDepth` is
+  engine-only); counts direct-only — AND the 5-method `role.Storer`
   (plain lookups, no recursion).
 - Constructor pinned (review-gate fold, steward minor 5; cut refinement
   11): `Repositories(db) (authorization.Repositories, error)` returning
@@ -76,7 +76,8 @@ boot probe, README, env-gated conformance) + the pgxdb D2–D6 helpers.
   Constructor is the pinned `Repositories(db)
   (authorization.Repositories, error)` form returning BOTH kinds, with
   the boot-time probes of both tables
-  inside (steward minor 5; error names the missing table); README with
+  inside (steward minor 5; error names the missing table; **plus
+  `iam_relationship_metadata` if Q4 = KEEP — codex fold A8**); README with
   the scaffold-and-own
   prerequisite + the divergence note + the kinds-are-port-optional/
   schema-is-wholesale note — **including the roles-only adopter line
@@ -109,9 +110,10 @@ boot probe, README, env-gated conformance) + the pgxdb D2–D6 helpers.
   `LookupDescendantResourceIDs` (cycle-safe; PostgreSQL and SQLite
   differ in recursive-CTE behavior — do NOT port the turso SQL
   blindly, re-derive and let the shared suite prove equivalence — this
-  is design risk 3's whole point) **bounded at the same traversal depth
-  as the engine/memstore/Z2a (lead refinement 8; the
-  `Adversarial/DeepNesting` depth-boundary pair must pass live)**,
+  is design risk 3's whole point) **UNBOUNDED, matching Z2a and the
+  memstore (2026-07-08 owner ruling, codex fold A1 — no depth term in
+  the CTE; cycle safety is UNION dedup, `MaxTraversalDepth` stays
+  engine-only)**,
   direct-only
   `CountByResourceAndRelation`, keyset `ListPage[T]` with the identical
   order/tiebreak/cursor contract, `ExecAffecting` deletes. Env-gated
@@ -138,4 +140,17 @@ Standing check (a): `make check` green (33 modules); `examples/minimal`
 
 ## Execution log
 
-(append dated entries here)
+### 2026-07-08 — cross-milestone note: pgx-crud-v1 LANDED (read before executing)
+
+pgx-crud-v1 executed to completion this date (P1–P6). This phase's list
+citations read accordingly: keyset listing is **`pgxdb.List[T]`/
+`ListQuery[T]`** (legacy `ListPage[T]` is DELETED) — NamedArgs
+throughout, db-tagged store-local row structs + `toDomain` +
+`crud.MapPage` (never db tags on domain types), order allow-lists from
+the domain rim (Q1 standard), reverse-probe prev pages, offset mode,
+`WithCount` counts via the BaseSQL `COUNT(*)` wrap. The store README
+convention section (`integrations/datastores/pgxdb/README.md`) documents
+the toolkit; `features/authentication/stores/pgx` is the pattern-setter
+implementation. Z1's storetest carries the standard six-case family per
+paginated port. A note, not a rewrite — this plan stays DRAFT under its
+own ratification.

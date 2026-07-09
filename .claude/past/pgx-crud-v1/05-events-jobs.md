@@ -1,6 +1,6 @@
 # Phase P5 — events (idiom pass) + jobs (pagination + idiom pass)
 
-Status: **DRAFT — awaiting jrazmi ratification (cut 2026-07-08)**
+Status: **RATIFIED 2026-07-08 (jrazmi — Q1/Q2/Q3 at recommendations; see 00-overview.md)**
 Executor model: opus
 Depends on: P3 (the pattern; independent of P4 — may swap with it)
 
@@ -144,4 +144,49 @@ clean — that host is the memstore's only production consumer.
 
 ## Execution log
 
-(append dated entries here)
+### 2026-07-08 — phase 5 executed (implementer on opus); PHASE COMPLETE
+
+All four tasks landed. events pgx: `outboxRow` + toDomain, NamedArgs +
+CollectRows throughout, `insertRecords` → ONE UNNEST INSERT (**plain
+UNNEST, no ORDINALITY — deliberate:** the batch shares one created_at
+and event_id tiebreaks, so array position never affects oldest-first;
+the live AppendAndListOrder case is the proof), Append/AppendTx Tx
+contracts unchanged, ListUnpublished keeps its plain-limit shape. jobs:
+order vocabularies (created_at only — **priority EXCLUDED, logged:**
+the only priority index is the partial claim-hot-path
+`idx_job_queue_claim` leading with scheduled_for; it cannot serve a
+List sort), six-case family on queue List (Kind-filtered, count
+respects the filter) + schedules List, memstore `page[T]` extended to
+the full matrix and **newly wired under conformance**
+(memstore/conformance_test.go — the found coverage gap closed), pgx
+Lists onto `pgxdb.List` + jobFilter builder + NamedArgs sweep with
+**Claim (SKIP LOCKED) and ClaimDue (CAS) preserved verbatim/positional**
+(contention cases ConcurrentClaim/ClaimDueCAS/LeaseExpiry green live),
+turso minimal migration of both call sites.
+
+**Flagged, accepted:** jobs family seeds separate rows by real 2ms
+sleeps (Enqueue/Ensure take no created_at), so the jobs family lacks a
+same-created_at tiebreak PAIR — id tiebreak still asserted structurally;
+documented in the storetest. **Open cleanup noted, owner's call:**
+`features/jobs/storetest/reference_test.go` (pre-existing, G2-guard
+rationale) and the new memstore conformance test now both run the
+memstore suite — consider retiring reference_test.go.
+
+**Live legs (2026-07-08, for NOTES):** events pgx — postgres:17, suite
+green incl. AppendAndListOrder + AppendTx. jobs pgx — postgres:17,
+Queue 4.35s incl. ConcurrentClaim + LeaseExpiry + 7 family cases,
+Schedules incl. ClaimDueCAS + 7 family cases; container removed, port
+free. jobs turso — playground URL byte-verified (hard gate), 41.5s
+green (queue family 16.5s, schedules 24.8s), no tokens emitted.
+
+Acceptance re-verified by the main session fresh: jobs + events-pgx
+build/vet/test green, `make check` all 30 modules, zero ListPage in
+both features' stores, exactly one `INSERT INTO event_outbox` (the
+UNNEST). Real-interaction (both executor and main session):
+examples/minimal :8081 → 200; examples/jobs-minimal :8083 booted on the
+extended memstore — main session enqueued `demo.print` via POST
+/enqueue → **200, executed and completed in 44µs**, minute-cron
+scheduler fired concurrently, SIGTERM → "jobs runtime drained", exit
+clean, port free. (Executor's earlier run additionally showed
+demo.flaky retry→success and demo.doomed exhaustion.) Next: P6
+(`06-cleanup-docs.md`) — the milestone's last phase.

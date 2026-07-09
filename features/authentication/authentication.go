@@ -32,10 +32,6 @@ import (
 	"net/http"
 	"time"
 
-	internalhttp "github.com/gopernicus/gopernicus/features/authentication/internal/inbound/http"
-	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
-	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/invitationsvc"
-	"github.com/gopernicus/gopernicus/features/authentication/internal/redirect"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/apikey"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/invitation"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthaccount"
@@ -45,6 +41,10 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
+	internalhttp "github.com/gopernicus/gopernicus/features/authentication/internal/inbound/http"
+	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
+	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/invitationsvc"
+	"github.com/gopernicus/gopernicus/features/authentication/internal/redirect"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/email"
@@ -86,6 +86,12 @@ var ErrMachineReposRequired = errors.New("auth: Repositories.ServiceAccounts and
 // without its store is a loud partial-wiring error (design §6), never a silent
 // half-on state.
 var ErrInvitationRepoRequired = errors.New("auth: Config.Granter set but Repositories.Invitations is nil")
+
+// ErrInvalidListStrategy is returned by NewService/Register when
+// Config.ListStrategy is set to a value other than "cursor" or "offset". Like
+// the Hasher/Mailer requirements it degrades loudly at construction (the Config
+// posture), never silently defaulting a typo.
+var ErrInvalidListStrategy = errors.New(`auth: Config.ListStrategy must be "cursor" or "offset"`)
 
 // ErrInvitationsDisabled is returned by the invitation use-cases (Create, Accept,
 // …) on a Service built with no Config.Granter: the invitation subsystem is off,
@@ -230,6 +236,16 @@ type Config struct {
 	// flipping it on requires a working Mailer so users can verify.
 	RequireVerifiedEmail bool
 
+	// ListStrategy is the DEFAULT pagination strategy the feature's JSON list
+	// endpoints (service accounts, API keys, invitations) apply when a request
+	// names neither a cursor nor an offset param (sdk/crud ParseListRequest).
+	// "cursor" (the default) or "offset"; empty is treated as "cursor". A host
+	// populates it from an env-tagged config field
+	// (`env:"AUTH_LIST_STRATEGY" default:"cursor"` via sdk/config ParseEnvTags),
+	// never from os.Getenv inside the feature. Any other value is
+	// ErrInvalidListStrategy at construction (the loud-Config posture).
+	ListStrategy string `env:"AUTH_LIST_STRATEGY" default:"cursor"`
+
 	// Providers are the wired OAuth/OIDC providers (integrations/oauth/* satisfy
 	// oauth.Provider). Empty/nil → the OAuth subsystem is OFF and its routes are
 	// NOT registered (deny-by-absence); Repositories.OAuthAccounts/OAuthStates
@@ -300,6 +316,24 @@ type Service struct {
 	// mounts its routes and NewService injects it into authsvc as the
 	// resolve-on-registration collaborator; both use this single instance.
 	inv *invitationsvc.Service
+	// listStrategy is the resolved Config.ListStrategy the shipped HTTP adapter
+	// passes as the transport-edge DefaultStrategy (Register → Mount → handlers).
+	listStrategy crud.Strategy
+}
+
+// resolveListStrategy validates Config.ListStrategy and maps it to a
+// crud.Strategy. Empty (the zero value of a literally-built Config) resolves to
+// the cursor default; "cursor"/"offset" pass through; anything else is
+// ErrInvalidListStrategy.
+func resolveListStrategy(s string) (crud.Strategy, error) {
+	switch s {
+	case "", string(crud.StrategyCursor):
+		return crud.StrategyCursor, nil
+	case string(crud.StrategyOffset):
+		return crud.StrategyOffset, nil
+	default:
+		return "", ErrInvalidListStrategy
+	}
 }
 
 // NewService builds the auth Service, validating the required Config fields and
@@ -320,6 +354,10 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 	}
 	if cfg.Granter != nil && repos.Invitations == nil {
 		return nil, ErrInvitationRepoRequired
+	}
+	listStrategy, err := resolveListStrategy(cfg.ListStrategy)
+	if err != nil {
+		return nil, err
 	}
 	limiter := cfg.RateLimiter
 	if limiter == nil {
@@ -379,7 +417,7 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 	if invSvc != nil {
 		deps.Invitations = invSvc
 	}
-	return &Service{svc: authsvc.NewService(deps), inv: invSvc}, nil
+	return &Service{svc: authsvc.NewService(deps), inv: invSvc, listStrategy: listStrategy}, nil
 }
 
 // userLookup builds the internal email→subject resolver invitationsvc uses for
@@ -635,6 +673,6 @@ func (s *Service) Register(m feature.Mount) error {
 	if s.inv != nil {
 		inv = s.inv
 	}
-	internalhttp.Mount(m.Router, s.svc, inv)
+	internalhttp.Mount(m.Router, s.svc, inv, s.listStrategy)
 	return nil
 }

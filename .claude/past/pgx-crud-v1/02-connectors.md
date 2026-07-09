@@ -1,6 +1,6 @@
 # Phase P2 — connector list toolkits (pgxdb full, turso semantic twin)
 
-Status: **DRAFT — awaiting jrazmi ratification (cut 2026-07-08)**
+Status: **RATIFIED 2026-07-08 (jrazmi — Q1/Q2/Q3 at recommendations; see 00-overview.md)**
 Executor model: opus
 Depends on: P1 (the crud semantics matrix is normative input)
 
@@ -191,4 +191,34 @@ phase's real-behavior evidence.
 
 ## Execution log
 
-(append dated entries here)
+### 2026-07-08 — phase 2 executed (implementer on opus); PHASE COMPLETE
+
+All three tasks landed, strictly additive (acceptance diff on both legacy
+pagination.go files → empty, re-verified by the main session). pgxdb:
+`identifier.go` (QuoteIdentifier — regex allow-list, per-segment
+double-quoting, dotted segments kept, alias forms dropped as permitted;
+wraps `errs.ErrInvalidInput`, an executor decision for the
+stable-error-kind rule), `listquery.go` (ApplyCursorPagination /
+AddOrderByClause / AddLimitClause + keysetOperator/resolvedDirection/
+normalizeOrderValue with time→UTC), `list.go` (`List[T]`/`ListQuery[T]`
+per the behavior contract: Validate → order resolution → mode branch →
+CollectRows+RowToStructByName → TrimPage / reverse-probe MarkPrevPage →
+COUNT(*) subquery wrap → MapError). turso: `list.go` twin (`Args []any` +
+`?` placeholders, Scan callback, FormatTime time binding, allow-list
+membership). README carries the no-SendBatch Querier decision.
+**Executor decision flagged and accepted: order resolution matches by
+COLUMN, not map key** — P1's ParseOrder returns `NewOrder(of.Column,
+dir)`, so `req.Order.Field` arrives column-valued and resolveOrder
+matches `OrderField.Column == req.Order.Field` (CastLower from the
+match); DefaultOrder.Field must likewise be an allow-listed column.
+Minor accepted scope addition: a lean turso behavioral suite over
+in-memory SQLite in list_test.go (real-driver evidence at this boundary;
+per-feature parity still proven by storetest in P3–P5). Verified by the
+executor AND re-verified by the main session: both connectors
+build/vet/test green hermetically, `make check` (30 modules) + `make
+guard` green. **Live leg run (executor): docker postgres:17,
+TestLive_ListBehavior — 9/9 subtests green** (forward asc/desc/
+string/int-cursor traversal, prev-probe full/partial/first-page windows,
+offset↔cursor equivalence, count-under-filter, stale-cursor-as-first-
+page); container removed, port freed. Boot check: examples/minimal :8081
+GET / → 200, killed, port free. Next: P3 (`03-authentication.md`).

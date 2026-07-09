@@ -64,6 +64,21 @@ type EntryListItem struct {
 	Status string
 }
 
+// Pager carries a list view's bidirectional pagination controls: the forward
+// cursor (NextCursor → "Older →") and the reverse-probe prev state (HasPrev +
+// PreviousCursor → "← Newer"), plus the active order carried in the pagination
+// links and the list's base URL. When HasPrev is true and PreviousCursor is
+// empty, the previous page is the first page, so the "← Newer" link targets
+// BaseHref (the bare list URL). Order is empty for the default sort. The zero
+// value is a single, unpaged first page (no links).
+type Pager struct {
+	NextCursor     string
+	HasPrev        bool
+	PreviousCursor string
+	Order          string // active order, carried in the pagination links ("" = default)
+	BaseHref       string // the list's base URL — the first-page target
+}
+
 // EntryFormModel drives the generic create/edit entry editor: the spine inputs
 // plus one FieldInput per the type's FieldDefs. It is rendered by EntryForm and
 // is type-agnostic — the handler fills it from the registered ContentType.

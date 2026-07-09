@@ -98,7 +98,7 @@ func TestPaginateSynthetic(t *testing.T) {
 	// fetch simulates a keyset query: returns up to limit+1 rows strictly
 	// after the cursor's PK (ids are monotonically sortable here).
 	fetch := func(req ListRequest) Page[row] {
-		limit := req.NormalizedLimit()
+		limit := req.NormalizedLimit(Limits{})
 		start := 0
 		if req.Cursor != "" {
 			c, err := DecodeCursor(req.Cursor, "id")

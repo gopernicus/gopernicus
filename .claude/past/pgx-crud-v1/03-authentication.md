@@ -1,6 +1,6 @@
 # Phase P3 — authentication: the pattern-setter feature
 
-Status: **DRAFT — awaiting jrazmi ratification (cut 2026-07-08)**
+Status: **RATIFIED 2026-07-08 (jrazmi — Q1/Q2/Q3 at recommendations; see 00-overview.md)**
 Executor model: opus
 Depends on: P2
 
@@ -198,4 +198,49 @@ verify code from the console-mailer log → login). Then, authenticated:
 
 ## Execution log
 
-(append dated entries here)
+### 2026-07-08 — phase 3 executed (implementer on opus); PHASE COMPLETE
+
+All six tasks landed in order. Order vocabulary (`OrderFields` +
+`DefaultOrder`, created_at DESC minimum) in the four domain rims; the
+six-case family wired into all five paginated ports via a generic
+`runPagedFamily` in storetest, with authmem's `page[T]` extended
+(order + id tiebreak, offset, reverse probe, counts) in the same
+boundary; pgx stores fully on the idiom set (db-tagged row structs +
+toDomain + `crud.MapPage`, `pgxdb.List` on all five paginated ports,
+NamedArgs everywhere incl. writes, `queryOne[T]` helper on
+CollectExactlyOneRow, UPDATE…RETURNING through the row struct; pgx/v5
+promoted to a direct require); turso migrated semantics-only to
+`turso.List` (hand-scan kept); HTTP edge parses limit/cursor/offset/
+count + per-aggregate order (bad param → 400 web.ErrBadRequest), page
+envelope carries has_prev/previous_cursor/total. Preserve-verbatim list
+honored (oauth_states consume, single-use flows, ExecAffecting
+zero-rows mappings, InTx boundaries).
+
+**Flagged executor decisions, accepted:** (1) `StaleCursorOrderChange`
+tests a FIELD change (updated_at-minted cursor → first page), not the
+plan's literal desc→asc phrasing — the codec keys staleness on the
+order field, and a same-field direction flip is deliberately NOT stale;
+the literal test would need a second indexed column (out of scope,
+logged as the known trade). (2) `storetest/reference_test.go` rebuilt
+(`pageDESC` → full-matrix `pageMem`) though not in task-2's file list —
+its own verify forced it. (3) task-6's `responses.go` doesn't exist;
+envelope/parser live in machine.go, edited there per the plan's
+adjust-to-actual-names note.
+
+**Live legs (dated 2026-07-08, for the milestone NOTES artifact):** pgx
+— docker postgres:17, full extended suite **101 subtests PASS, 0 fail**
+(30 new family cases = 6 × 5 ports), run at task-3 AND task-4;
+container removed, port free. turso — playground URL byte-verified
+pre-run (hard gate), `-tags=integration` suite **ok, 371.3s, 0 fail**;
+no tokens in logs. Real-interaction protocol (executor, examples/
+auth-cms :8082): register 201 → verify 200 → login 200 (cookie jar);
+order+count leg `total=5` ascending with next_cursor; prev round-trip
+exact (partial-window empty previous_cursor = first page; page-3
+previous_cursor round-trips to page 2); offset leg matches cursor page
+2 desc, no cursors in offset pages; `cursor+offset` → **400**; keys +
+invitations/mine legs green (`total=3`, ascending, cursors present).
+Main session re-verified: fresh module + both-store builds/tests,
+`make check` (30 modules) + `make guard` green, `grep ListPage
+features/authentication/stores/` → empty, auth-cms boot :8082 GET / →
+200 with unauthenticated list → 401 (middleware precedes param parse),
+killed, port free. Next: P4 (`04-cms.md`).

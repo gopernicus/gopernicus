@@ -56,10 +56,17 @@ func (s *APIKeyStore) GetByHash(ctx context.Context, keyHash string) (apikey.API
 // ListByServiceAccount returns a cursor-paginated page of a service account's
 // keys, ordered created_at DESC, id DESC.
 func (s *APIKeyStore) ListByServiceAccount(ctx context.Context, serviceAccountID string, req crud.ListRequest) (crud.Page[apikey.APIKey], error) {
-	return tursodb.ListPage(ctx, s.db, apiKeyColumns, "api_keys", "WHERE service_account_id = ?", []any{serviceAccountID}, orderField, "id", req,
-		scanAPIKey,
-		func(k apikey.APIKey) (time.Time, string) { return k.CreatedAt, k.ID },
-	)
+	q := tursodb.ListQuery[apikey.APIKey]{
+		BaseSQL:      `SELECT ` + apiKeyColumns + ` FROM api_keys WHERE service_account_id = ?`,
+		Args:         []any{serviceAccountID},
+		OrderFields:  apikey.OrderFields,
+		DefaultOrder: apikey.DefaultOrder,
+		PK:           "id",
+		Scan:         scanAPIKey,
+		OrderValueOf: func(k apikey.APIKey, _ string) any { return k.CreatedAt },
+		PKOf:         func(k apikey.APIKey) string { return k.ID },
+	}
+	return tursodb.List(ctx, s.db, q, req)
 }
 
 // Revoke marks the key revoked as of revokedAt; unknown id → errs.ErrNotFound.

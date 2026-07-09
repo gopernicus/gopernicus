@@ -21,6 +21,8 @@ package storetest
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sort"
 	"strconv"
 	"sync"
 	"testing"
@@ -67,7 +69,17 @@ func RunQueue(t *testing.T, newRepo func(t *testing.T) job.QueueRepository) {
 	t.Run("ScheduledForGating", func(t *testing.T) { testScheduledForGating(t, newRepo(t)) })
 	t.Run("RetryThenDeadLetter", func(t *testing.T) { testRetryThenDeadLetter(t, newRepo(t)) })
 	t.Run("LeaseExpiryReclaim", func(t *testing.T) { testLeaseExpiryReclaim(t, newRepo(t)) })
-	t.Run("ListFilterAndPaginate", func(t *testing.T) { testQueueListFilterAndPaginate(t, newRepo(t)) })
+	t.Run("ListFilterAndPaginate", func(t *testing.T) {
+		t.Run("FilterAndStatus", func(t *testing.T) { testQueueListFilterAndPaginate(t, newRepo(t)) })
+		runPagedFamily(t, newRepo,
+			func(repo job.QueueRepository, ctx context.Context, req crud.ListRequest) (crud.Page[job.Job], error) {
+				return repo.List(ctx, job.ListFilter{Kind: "email"}, req)
+			},
+			seedQueueFamily,
+			func(j job.Job) string { return j.ID() },
+			func(j job.Job) time.Time { return j.CreatedAt },
+		)
+	})
 	t.Run("ConcurrentClaim", func(t *testing.T) { testConcurrentClaim(t, newRepo(t)) })
 }
 
@@ -82,7 +94,17 @@ func RunSchedules(t *testing.T, newRepo func(t *testing.T) schedule.Repository) 
 	t.Run("ListDueEnabledGating", func(t *testing.T) { testListDueGating(t, newRepo(t)) })
 	t.Run("ClaimDueCAS", func(t *testing.T) { testClaimDueCAS(t, newRepo(t)) })
 	t.Run("SetLastJobAndEnabled", func(t *testing.T) { testSetLastJobAndEnabled(t, newRepo(t)) })
-	t.Run("ListPaginate", func(t *testing.T) { testSchedulesListPaginate(t, newRepo(t)) })
+	t.Run("ListPaginate", func(t *testing.T) {
+		t.Run("Traversal", func(t *testing.T) { testSchedulesListPaginate(t, newRepo(t)) })
+		runPagedFamily(t, newRepo,
+			func(repo schedule.Repository, ctx context.Context, req crud.ListRequest) (crud.Page[schedule.Schedule], error) {
+				return repo.List(ctx, req)
+			},
+			seedScheduleFamily,
+			func(s schedule.Schedule) string { return s.ID },
+			func(s schedule.Schedule) time.Time { return s.CreatedAt },
+		)
+	})
 	t.Run("Delete", func(t *testing.T) { testSchedulesDelete(t, newRepo(t)) })
 }
 
@@ -649,4 +671,387 @@ func scheduleIDs(s []schedule.Schedule) []string {
 		out[i] = sc.ID
 	}
 	return out
+}
+
+// --- the standard paginated-port case family (copied from P3, scoped to jobs) ---
+//
+// The queue's filtered List and the schedules List each run the same six cases —
+// Order, PrevPage, OffsetMode, WithCount, StaleCursorOrderChange,
+// CursorOffsetExclusive — over a small seeded population. Because neither
+// Enqueue nor Ensure lets a caller set created_at (the store stamps it), the
+// seeds separate rows with a real 2ms sleep so their created_at is strictly
+// ordered and distinct — the same wall-clock idiom testClaimOrdering already
+// uses. The consequence is the family does NOT exercise a same-created_at
+// tiebreak pair for jobs (the port gives no created_at control); the id tiebreak
+// is still asserted structurally by the sorted-order comparison.
+
+// pagedCase bundles the scoped list closure with the id/created_at projections a
+// case needs.
+type pagedCase[T any] struct {
+	list      func(ctx context.Context, req crud.ListRequest) (crud.Page[T], error)
+	idOf      func(T) string
+	createdAt func(T) time.Time
+}
+
+// runPagedFamily wires the six standard cases for one paginated port. Each case
+// obtains a clean, isolated repo from newRepo and seeds its own population,
+// matching the suite's per-leaf isolation contract.
+func runPagedFamily[R any, T any](
+	t *testing.T,
+	newRepo func(t *testing.T) R,
+	scope func(repo R, ctx context.Context, req crud.ListRequest) (crud.Page[T], error),
+	seed func(t *testing.T, repo R) (created []T, wantTotal int),
+	idOf func(T) string,
+	createdAt func(T) time.Time,
+) {
+	t.Helper()
+
+	newCase := func(repo R) pagedCase[T] {
+		return pagedCase[T]{
+			list:      func(ctx context.Context, req crud.ListRequest) (crud.Page[T], error) { return scope(repo, ctx, req) },
+			idOf:      idOf,
+			createdAt: createdAt,
+		}
+	}
+
+	t.Run("Order", func(t *testing.T) {
+		repo := newRepo(t)
+		created, _ := seed(t, repo)
+		runOrderCase(t, newCase(repo), created)
+	})
+	t.Run("PrevPage", func(t *testing.T) {
+		repo := newRepo(t)
+		created, _ := seed(t, repo)
+		runPrevPageCase(t, newCase(repo), created)
+	})
+	t.Run("OffsetMode", func(t *testing.T) {
+		repo := newRepo(t)
+		created, _ := seed(t, repo)
+		runOffsetModeCase(t, newCase(repo), created)
+	})
+	t.Run("WithCount", func(t *testing.T) {
+		repo := newRepo(t)
+		_, wantTotal := seed(t, repo)
+		runWithCountCase(t, newCase(repo), wantTotal)
+	})
+	t.Run("StaleCursorOrderChange", func(t *testing.T) {
+		repo := newRepo(t)
+		created, _ := seed(t, repo)
+		runStaleCursorCase(t, newCase(repo), created)
+	})
+	t.Run("CursorOffsetExclusive", func(t *testing.T) {
+		repo := newRepo(t)
+		_, _ = seed(t, repo)
+		runCursorOffsetExclusiveCase(t, newCase(repo))
+	})
+}
+
+// runOrderCase asserts explicit asc + desc ordering on created_at pages through
+// the full population in the correct total order (created_at then id tiebreak in
+// the same direction).
+func runOrderCase[T any](t *testing.T, pc pagedCase[T], created []T) {
+	t.Helper()
+	wantAsc := pagedSortedIDs(created, pc.idOf, pc.createdAt, true)
+	gotAsc := pageAllOrdered(t, pc, crud.NewOrder("created_at", crud.ASC), 2)
+	if !equalStrings(gotAsc, wantAsc) {
+		t.Errorf("asc order = %v, want %v", gotAsc, wantAsc)
+	}
+
+	wantDesc := pagedSortedIDs(created, pc.idOf, pc.createdAt, false)
+	gotDesc := pageAllOrdered(t, pc, crud.NewOrder("created_at", crud.DESC), 2)
+	if !equalStrings(gotDesc, wantDesc) {
+		t.Errorf("desc order = %v, want %v", gotDesc, wantDesc)
+	}
+}
+
+// runPrevPageCase asserts the reverse-probe semantics: the first page has no
+// prev; page 2 has a prev whose (partial) window means "previous is the first
+// page" and round-trips to page 1's IDs; page 3 has a full prior window whose
+// PreviousCursor round-trips to page 2's IDs.
+func runPrevPageCase[T any](t *testing.T, pc pagedCase[T], created []T) {
+	t.Helper()
+	ctx := context.Background()
+	desc := pagedSortedIDs(created, pc.idOf, pc.createdAt, false)
+	if len(desc) < 6 {
+		t.Fatalf("prev-page case needs >= 6 seeded rows, got %d", len(desc))
+	}
+
+	page1, err := pc.list(ctx, crud.ListRequest{Limit: 2})
+	if err != nil {
+		t.Fatalf("page1: %v", err)
+	}
+	if page1.HasPrev {
+		t.Errorf("first page HasPrev = true, want false")
+	}
+	if got := pagedIDsOf(page1.Items, pc.idOf); !equalStrings(got, desc[0:2]) {
+		t.Errorf("page1 = %v, want %v", got, desc[0:2])
+	}
+
+	page2, err := pc.list(ctx, crud.ListRequest{Limit: 2, Cursor: page1.NextCursor})
+	if err != nil {
+		t.Fatalf("page2: %v", err)
+	}
+	if !page2.HasPrev {
+		t.Errorf("page2 HasPrev = false, want true")
+	}
+	if got := pagedIDsOf(page2.Items, pc.idOf); !equalStrings(got, desc[2:4]) {
+		t.Errorf("page2 = %v, want %v", got, desc[2:4])
+	}
+	// Only one row precedes the page-1 cursor, so page 2's prior window is
+	// partial ⇒ empty PreviousCursor meaning "the previous page is the first page".
+	if page2.PreviousCursor != "" {
+		t.Errorf("page2 PreviousCursor = %q, want empty (partial prior window)", page2.PreviousCursor)
+	}
+	back := backPage(t, pc, page2.PreviousCursor)
+	if got := pagedIDsOf(back.Items, pc.idOf); !equalStrings(got, desc[0:2]) {
+		t.Errorf("previous of page2 = %v, want page1 %v", got, desc[0:2])
+	}
+
+	page3, err := pc.list(ctx, crud.ListRequest{Limit: 2, Cursor: page2.NextCursor})
+	if err != nil {
+		t.Fatalf("page3: %v", err)
+	}
+	if !page3.HasPrev {
+		t.Errorf("page3 HasPrev = false, want true")
+	}
+	if page3.PreviousCursor == "" {
+		t.Errorf("page3 PreviousCursor empty, want a full prior window")
+	}
+	back3 := backPage(t, pc, page3.PreviousCursor)
+	if got := pagedIDsOf(back3.Items, pc.idOf); !equalStrings(got, desc[2:4]) {
+		t.Errorf("previous of page3 = %v, want page2 %v", got, desc[2:4])
+	}
+}
+
+// runOffsetModeCase asserts offset traversal (explicit StrategyOffset) yields the
+// identical ID sequence as cursor traversal, HasPrev iff offset > 0, that offset
+// pages emit no cursors at any offset, and that Offset 0 under the offset strategy
+// is the first page.
+func runOffsetModeCase[T any](t *testing.T, pc pagedCase[T], created []T) {
+	t.Helper()
+	ctx := context.Background()
+
+	cursorIDs := pageAllOrdered(t, pc, crud.Order{}, 2)
+
+	var offsetIDs []string
+	for off := 0; off < 100; off += 2 {
+		page, err := pc.list(ctx, crud.ListRequest{Strategy: crud.StrategyOffset, Limit: 2, Offset: off})
+		if err != nil {
+			t.Fatalf("offset page at %d: %v", off, err)
+		}
+		offsetIDs = append(offsetIDs, pagedIDsOf(page.Items, pc.idOf)...)
+		// Offset strategy emits no cursors at any offset — the caller does the
+		// offset arithmetic.
+		if page.NextCursor != "" || page.PreviousCursor != "" {
+			t.Errorf("offset page at %d carried a cursor (next=%q prev=%q)", off, page.NextCursor, page.PreviousCursor)
+		}
+		if want := off > 0; page.HasPrev != want {
+			t.Errorf("offset page at %d HasPrev = %v, want %v", off, page.HasPrev, want)
+		}
+		if !page.HasMore {
+			break
+		}
+	}
+	if !equalStrings(offsetIDs, cursorIDs) {
+		t.Errorf("offset traversal = %v, want cursor traversal %v", offsetIDs, cursorIDs)
+	}
+
+	// OffsetZero: the offset strategy with Offset 0 is the first page — HasPrev
+	// false and no cursors. This is the wart the explicit strategy fixes: Offset 0
+	// no longer silently means cursor mode.
+	zero, err := pc.list(ctx, crud.ListRequest{Strategy: crud.StrategyOffset, Limit: 2, Offset: 0})
+	if err != nil {
+		t.Fatalf("offset-zero page: %v", err)
+	}
+	if zero.HasPrev {
+		t.Errorf("offset-zero HasPrev = true, want false")
+	}
+	if zero.NextCursor != "" || zero.PreviousCursor != "" {
+		t.Errorf("offset-zero carried a cursor (next=%q prev=%q)", zero.NextCursor, zero.PreviousCursor)
+	}
+	if got, want := pagedIDsOf(zero.Items, pc.idOf), cursorIDs[:len(zero.Items)]; !equalStrings(got, want) {
+		t.Errorf("offset-zero page = %v, want first page %v", got, want)
+	}
+}
+
+// runWithCountCase asserts Total equals the filtered row count in both modes and
+// is nil when unrequested.
+func runWithCountCase[T any](t *testing.T, pc pagedCase[T], wantTotal int) {
+	t.Helper()
+	ctx := context.Background()
+
+	cursorPage, err := pc.list(ctx, crud.ListRequest{Limit: 2, WithCount: true})
+	if err != nil {
+		t.Fatalf("cursor+count: %v", err)
+	}
+	if cursorPage.Total == nil || *cursorPage.Total != int64(wantTotal) {
+		t.Errorf("cursor-mode Total = %v, want %d", cursorPage.Total, wantTotal)
+	}
+
+	offsetPage, err := pc.list(ctx, crud.ListRequest{Strategy: crud.StrategyOffset, Limit: 2, Offset: 2, WithCount: true})
+	if err != nil {
+		t.Fatalf("offset+count: %v", err)
+	}
+	if offsetPage.Total == nil || *offsetPage.Total != int64(wantTotal) {
+		t.Errorf("offset-mode Total = %v, want %d", offsetPage.Total, wantTotal)
+	}
+
+	noCount, err := pc.list(ctx, crud.ListRequest{Limit: 2})
+	if err != nil {
+		t.Fatalf("no-count: %v", err)
+	}
+	if noCount.Total != nil {
+		t.Errorf("Total = %v, want nil when count not requested", *noCount.Total)
+	}
+}
+
+// runStaleCursorCase asserts a cursor minted under a different sort field is
+// treated as the first page (no error, no skew). The order field is the only
+// staleness key the cursor codec carries, so a token authored for a different
+// column decodes to nil and the store returns the first page.
+func runStaleCursorCase[T any](t *testing.T, pc pagedCase[T], created []T) {
+	t.Helper()
+	ctx := context.Background()
+
+	first, err := pc.list(ctx, crud.ListRequest{Limit: 2})
+	if err != nil {
+		t.Fatalf("first page: %v", err)
+	}
+
+	stale, err := crud.EncodeCursor("updated_at", pc.createdAt(created[0]), pc.idOf(created[0]))
+	if err != nil {
+		t.Fatalf("EncodeCursor: %v", err)
+	}
+	got, err := pc.list(ctx, crud.ListRequest{Limit: 2, Cursor: stale})
+	if err != nil {
+		t.Fatalf("stale cursor: err=%v, want first page", err)
+	}
+	if g, w := pagedIDsOf(got.Items, pc.idOf), pagedIDsOf(first.Items, pc.idOf); !equalStrings(g, w) {
+		t.Errorf("stale cursor = %v, want first page %v (treated as first page)", g, w)
+	}
+	if got.HasPrev {
+		t.Errorf("stale-cursor first page HasPrev = true, want false")
+	}
+}
+
+// runCursorOffsetExclusiveCase asserts each per-strategy conflict is rejected
+// with the invalid-input kind: a cursor strategy carrying a non-zero offset, and
+// an offset strategy carrying a cursor.
+func runCursorOffsetExclusiveCase[T any](t *testing.T, pc pagedCase[T]) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := pc.list(ctx, crud.ListRequest{Strategy: crud.StrategyCursor, Limit: 2, Offset: 2}); !errors.Is(err, errs.ErrInvalidInput) {
+		t.Errorf("cursor strategy + offset: err=%v, want ErrInvalidInput", err)
+	}
+	if _, err := pc.list(ctx, crud.ListRequest{Strategy: crud.StrategyOffset, Limit: 2, Cursor: "anything"}); !errors.Is(err, errs.ErrInvalidInput) {
+		t.Errorf("offset strategy + cursor: err=%v, want ErrInvalidInput", err)
+	}
+}
+
+// backPage requests the previous page: an empty previousCursor means "the
+// previous page is the first page", so a first-page request is issued.
+func backPage[T any](t *testing.T, pc pagedCase[T], previousCursor string) crud.Page[T] {
+	t.Helper()
+	page, err := pc.list(context.Background(), crud.ListRequest{Limit: 2, Cursor: previousCursor})
+	if err != nil {
+		t.Fatalf("previous page: %v", err)
+	}
+	return page
+}
+
+// pageAllOrdered pages forward through the whole population under order, threading
+// order into every request, and returns the collected ids in traversal order.
+func pageAllOrdered[T any](t *testing.T, pc pagedCase[T], order crud.Order, limit int) []string {
+	t.Helper()
+	ctx := context.Background()
+	var out []string
+	cursor := ""
+	for i := 0; i < 100; i++ { // bound against a runaway cursor
+		page, err := pc.list(ctx, crud.ListRequest{Limit: limit, Cursor: cursor, Order: order})
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		out = append(out, pagedIDsOf(page.Items, pc.idOf)...)
+		if !page.HasMore || page.NextCursor == "" {
+			return out
+		}
+		cursor = page.NextCursor
+	}
+	t.Fatalf("pageAllOrdered did not terminate")
+	return nil
+}
+
+// pagedSortedIDs returns the ids of items sorted by (created_at, id) in the given
+// direction — the total order every paginated port must page in.
+func pagedSortedIDs[T any](items []T, idOf func(T) string, createdAt func(T) time.Time, asc bool) []string {
+	sorted := append([]T(nil), items...)
+	sort.Slice(sorted, func(i, j int) bool {
+		ti, tj := createdAt(sorted[i]), createdAt(sorted[j])
+		if !ti.Equal(tj) {
+			if asc {
+				return ti.Before(tj)
+			}
+			return ti.After(tj)
+		}
+		if asc {
+			return idOf(sorted[i]) < idOf(sorted[j])
+		}
+		return idOf(sorted[i]) > idOf(sorted[j])
+	})
+	return pagedIDsOf(sorted, idOf)
+}
+
+// pagedIDsOf projects each item's id.
+func pagedIDsOf[T any](items []T, idOf func(T) string) []string {
+	out := make([]string, len(items))
+	for i, it := range items {
+		out[i] = idOf(it)
+	}
+	return out
+}
+
+// equalStrings reports whether two string slices are element-wise equal.
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// seedQueueFamily seeds six "email" jobs (the in-scope population) plus two "sms"
+// jobs a Kind filter must exclude, separating each email enqueue by a real 2ms
+// sleep so their created_at is strictly ordered and distinct. wantTotal is 6 —
+// the filtered count, not the eight rows written.
+func seedQueueFamily(t *testing.T, repo job.QueueRepository) ([]job.Job, int) {
+	t.Helper()
+	now := time.Now().UTC()
+	created := make([]job.Job, 0, 6)
+	for i := 0; i < 6; i++ {
+		j := mustEnqueue(t, repo, job.Enqueue{ID: fmt.Sprintf("fam-email-%d", i), Kind: "email", ScheduledFor: now})
+		created = append(created, j)
+		time.Sleep(2 * time.Millisecond)
+	}
+	// Foreign rows under a different kind must not be listed or counted.
+	mustEnqueue(t, repo, job.Enqueue{ID: "fam-sms-0", Kind: "sms", ScheduledFor: now})
+	mustEnqueue(t, repo, job.Enqueue{ID: "fam-sms-1", Kind: "sms", ScheduledFor: now})
+	return created, len(created)
+}
+
+// seedScheduleFamily seeds six schedules under distinct names, separating each
+// Ensure by a real 2ms sleep so their created_at is strictly ordered and
+// distinct. wantTotal is 6 — the schedules List has no filter.
+func seedScheduleFamily(t *testing.T, repo schedule.Repository) ([]schedule.Schedule, int) {
+	t.Helper()
+	created := make([]schedule.Schedule, 0, 6)
+	for i := 0; i < 6; i++ {
+		s := mustEnsure(t, repo, schedule.Ensure{Name: fmt.Sprintf("fam-sch-%d", i), Kind: "demo", Spec: schedule.Spec{Every: time.Hour}}, suiteBase.Add(time.Duration(i)*time.Minute))
+		created = append(created, s)
+		time.Sleep(2 * time.Millisecond)
+	}
+	return created, len(created)
 }

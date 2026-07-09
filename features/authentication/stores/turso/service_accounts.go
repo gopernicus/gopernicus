@@ -2,7 +2,6 @@ package turso
 
 import (
 	"context"
-	"time"
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/serviceaccount"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
@@ -47,10 +46,16 @@ func (s *ServiceAccountStore) Get(ctx context.Context, id string) (serviceaccoun
 
 // List returns a cursor-paginated page ordered created_at DESC, id DESC.
 func (s *ServiceAccountStore) List(ctx context.Context, req crud.ListRequest) (crud.Page[serviceaccount.ServiceAccount], error) {
-	return tursodb.ListPage(ctx, s.db, serviceAccountColumns, "service_accounts", "WHERE 1 = 1", nil, orderField, "id", req,
-		scanServiceAccount,
-		func(sa serviceaccount.ServiceAccount) (time.Time, string) { return sa.CreatedAt, sa.ID },
-	)
+	q := tursodb.ListQuery[serviceaccount.ServiceAccount]{
+		BaseSQL:      `SELECT ` + serviceAccountColumns + ` FROM service_accounts`,
+		OrderFields:  serviceaccount.OrderFields,
+		DefaultOrder: serviceaccount.DefaultOrder,
+		PK:           "id",
+		Scan:         scanServiceAccount,
+		OrderValueOf: func(sa serviceaccount.ServiceAccount, _ string) any { return sa.CreatedAt },
+		PKOf:         func(sa serviceaccount.ServiceAccount) string { return sa.ID },
+	}
+	return tursodb.List(ctx, s.db, q, req)
 }
 
 // Update replaces the account for id; unknown → errs.ErrNotFound. It leaves id and
