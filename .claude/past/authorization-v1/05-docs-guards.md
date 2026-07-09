@@ -1,9 +1,11 @@
 # Phase Z5 — docs sync + guards + milestone close
 
-Status: **DRAFT — awaiting jrazmi ratification (cut 2026-07-08, authorized
-as a planning-only leg)**
+Status: **RATIFIED 2026-07-09 (jrazmi) — Q1-Q7 at recommendations; EXECUTING**
 Executor model: fable (task-1 is Makefile mechanics — opus)
-Depends on: all (Z1, Z2a, Z2b, Z4; and Q1/Q3/Q4/Q5 answers)
+Depends on: all (Z1, Z2a, Z2b, Z4; and Q1/Q3/Q4/Q5/Q6/Q7 answers — Q6/Q7
+added 2026-07-09: Z5 documents `Config.IDs` in the nil-semantics table and
+the second-relation conflict semantics in the README's relationship-kind
+notes)
 Design doc: `.claude/plans/roadmap/auth-v2-feature-design.md` §13 Z5 —
 **as reconciled by overview drift item 1**: the design's "G5
 feature→feature guard (new Makefile target, prove-can-fail)" ALREADY
@@ -35,12 +37,12 @@ executing the Q3 decision on the store-module-glue guard.
 - Registration artifacts consistent: `go.work`, Makefile
   `MODULES`/`STORE_MODULES`/`test-stores` (landed in Z1/Z2a/Z2b —
   verified here), RELEASING.md module enumeration, ARCHITECTURE.md tree
-  + count (**33**), README.md counts.
+  + count (**34**), README.md counts.
 - Capability-map ReBAC rows marked BUILT; design status header amended
   (executed-via note + the overview's staleness findings); NOTES.md
   milestone entry with both live-store artifacts and the Z4 protocol
   results.
-- Fresh full `make check` green (33 modules, all guards).
+- Fresh full `make check` green (34 modules, all guards).
 
 ## Preconditions
 
@@ -106,7 +108,11 @@ executing the Q3 decision on the store-module-glue guard.
   boundary of this milestone, not a gap; fine-grained cms authorization
   is future demand-gated work.
   (4) Anatomy + socket (FS2 form), the `/authorization/*`
-  claimed-unregistered namespace (C1), the model DSL with the
+  claimed-unregistered namespace (C1) — **when a future admin surface
+  lands it mounts at `internal/inbound/authorization` per the
+  segovia-lessons phase-01 inbound anatomy (feature inbound =
+  `internal/inbound/<feature>`), 2026-07-09 fresh-review note** — the
+  model DSL with the
   zero-migration registered-data point (relationship kind only; roles
   are opaque strings, no model).
   (5) **Item-12 nil/required-semantics tables** per kind
@@ -118,12 +124,20 @@ executing the Q3 decision on the store-module-glue guard.
   `Config.Model`
   (required with Relationships, validated loudly),
   `Config.MaxTraversalDepth` (optional —
-  `<= 0` ⇒ default 10, never an error; relationship-kind-scoped; the
-  SHARED bound across
-  engine/memstore/CTEs). **One sentence on the asymmetry (re-review note
-  14):** an orphaned `Model` errors loudly because it is
+  `<= 0` ⇒ default 10, never an error; relationship-kind-scoped;
+  **ENGINE-ONLY — it bounds the engine's Go through-traversal recursion
+  (authorizer.go:167) and is NEVER threaded into the memstore or the store
+  CTEs, which are unbounded-but-cycle-safe by UNION dedup / visited-set;
+  codex fold A1, corrected 2026-07-09 — the earlier "SHARED bound" wording
+  was the superseded refinement 8**), **`Config.IDs` (Q6 — optional, zero value ⇒ the
+  nanoid default; relationship-kind-scoped; mints `relationship_id` at
+  `Service.CreateRelationships`, or `cryptids.Database` delegates to the
+  store's DDL DEFAULT; ignored-with-note under roles-only wiring; the
+  `iam_roles` kind has NO id strategy — 5-tuple-keyed, per
+  `features/README.md` item 14)**. **One sentence on the asymmetry
+  (re-review note 14):** an orphaned `Model` errors loudly because it is
   capability-defining (a model with no engine is a misconfiguration
-  trap), while an orphaned `MaxTraversalDepth` is ignored-with-note
+  trap), while an orphaned `MaxTraversalDepth`/`IDs` is ignored-with-note
   because it is a tuning knob (the auth MailFrom precedent). Plus a
   **platform-admin section documenting the
   DATA convention**: the `platform:main#admin@<type>:<id>` tuple over a
@@ -186,21 +200,25 @@ executing the Q3 decision on the store-module-glue guard.
 - **files:** [ARCHITECTURE.md, README.md, RELEASING.md, Makefile,
   features/README.md, .claude/plans/roadmap/auth-v2-feature-design.md,
   .claude/plans/restructure/capability-map.md, NOTES.md]
-- **verify:** full `make check` (33 modules, all guards) then `grep -rn 'Thirty modules\|30 modules' ARCHITECTURE.md README.md RELEASING.md Makefile` returns nothing unintentional; go.work ↔ MODULES ↔ STORE_MODULES ↔ RELEASING enumerations agree
+- **verify:** full `make check` (34 modules, all guards) then `grep -rniE 'thirty-one|thirty-two|thirty-three|31 modules|32 modules|33 modules' ARCHITECTURE.md README.md RELEASING.md Makefile` returns nothing unintentional (the grep catches every stale intermediate count — 31 at cut, 32/33 mid-milestone — not just one); go.work ↔ MODULES ↔ STORE_MODULES ↔ RELEASING enumerations agree
 - **description:** (1) ARCHITECTURE.md: module tree gains the
-  authorization trio; "Thirty modules today" → thirty-three; taxonomy
+  authorization trio; "Thirty-one modules today" → thirty-four; taxonomy
   examples updated where features are enumerated; **while in the tree,
   sweep the stale `auth/` directory label at ~line 27 to
   `authentication/` (pre-existing A-R1 staleness — review-gate fold,
   steward minor 11)**. (2) README.md +
-  RELEASING.md enumerations → 33. (3) Makefile header count (verified —
+  RELEASING.md enumerations → 34. (3) Makefile header count (verified —
   landed incrementally in Z1/Z2a/Z2b). (4) features/README.md:
   checklist-trace touch-ups for authorization (the §5 C2 section can
   cite the Granter-swap + Check-closure wiring as a second REAL worked
-  example). (5) Design status header amendment: extend the dated
+  example); **and — if the refinement-11 store constructor is ratified —
+  record `Repositories(db) (…, error)` as the accepted store surface for a
+  MULTI-KIND probing store (the bundle name + a boot-probe error return),
+  so item 5's "exposes `Repositories(db)`" no longer reads as error-less
+  by default (codex review 2026-07-09)**. (5) Design status header amendment: extend the dated
   2026-07-08 multi-kind amendment line with the execution record — Z1–Z5
   executed via
-  `.claude/plans/authorization-v1/` (Q1–Q5 outcomes named), plus the
+  `.claude/plans/authorization-v1/` (Q1–Q7 outcomes named), plus the
   overview's staleness findings recorded (14-method Storer; §2.2's
   user-shaped-seam note overtaken by the shipped Principal seam; stale
   module counts). (6) capability-map ReBAC/authorization rows → BUILT
@@ -227,7 +245,7 @@ executing the Q3 decision on the store-module-glue guard.
 ## Acceptance
 
 ```sh
-make check     # 33 modules, all guards (eight if Q3 = ADD)
+make check     # 34 modules, all guards (eight if Q3 = ADD)
 make guard
 ```
 
@@ -241,7 +259,7 @@ grep -rn --include='*.go' '"github.com/gopernicus/gopernicus/features/authorizat
 
 ## Real-interaction check
 
-Standing check (a) after the final commit: `make check` green (33);
+Standing check (a) after the final commit: `make check` green (34);
 `examples/minimal` :8081 → 200s; kill; port free. Plus one fresh boot of
 `examples/auth-cms` re-running Z4 protocol steps 5–6 and 10 (the docs
 phase must not close on a stale memory of the proof — both kinds).
@@ -249,3 +267,78 @@ phase must not close on a stale memory of the proof — both kinds).
 ## Execution log
 
 (append dated entries here)
+
+### 2026-07-09 — Z5 EXECUTED (all three tasks) — **MILESTONE CLOSED**
+
+Executor note: Z5 ran INLINE by the session coordinator (fable) — including
+task-1's Makefile mechanics (specced opus) — per the owner's in-session
+token-cost direction; logged as a deliberate deviation from the task-1
+model line.
+
+**task-1 (guards):** `features/authorization` verified present in the FS1
+guard's hardcoded list (landed Z1 task-1). Q3 = ADD executed: **G8
+`guard-store-no-foreign-feature`** — for each `features/<x>/stores/*`
+subtree, greps `features/<y>` (y ≠ x) AND `examples/` imports (the
+steward-minor-6 alternation included, not skipped), G7's self-import
+filter as the template; wired into the `guard` aggregate ("runs all
+eight"). **Prove-can-fail recorded BOTH ways:** a `features/events` string
+import appended to `stores/turso/turso.go` → the target failed naming the
+file/line; reverted; an `examples/minimal` import → failed likewise;
+reverted; baseline green. `make guard` green (all eight).
+
+**task-2 (feature README):** `features/authorization/README.md` shipped in
+the mandated order — the §2.1 three-posture table is the FIRST substantive
+section (with the AV2 Check-only line + graduation trigger + per-posture
+artifact pointers incl. the Z4 commit hashes), then the KINDS table
+(independence, port-optional/schema-wholesale, the roles-only adopter
+line, no-facade, the note-13 terminology guard), the explicit cms
+coarse-gating boundary, anatomy + FS2 socket + the claimed-unregistered
+`/authorization/*` namespace (future admin surface at
+`internal/inbound/authorization`), the item-12 nil/required-semantics
+table (Model/MaxTraversalDepth-ENGINE-ONLY/IDs + the note-14 asymmetry
+sentence + userset rejection), the platform-admin DATA-convention section,
+the Q5 rule with the lead-major-3 enumeration-vs-decision limitation named,
+consumer-side deny-by-absence rows, the policy-seam section (verbatim in
+intent), store parity (all five adversarial sub-runners named; the
+direct-count-as-security sentence; scaffold-and-own + probes + the Q4
+trim-with-return-trigger), and the wiring page (stops diagram; the
+auth-cms-twin listing verified against `authorization.go` + commit-2
+`main.go`/`membership.go` field-for-field; the labeled store-swap,
+roles-only, and composed-kinds/fail-closed snippets with the
+`allowed, _ :=` anti-pattern named), closing with the §11 cut lines.
+
+**task-3 (repo docs + records + close):** ARCHITECTURE.md — tree gains the
+authorization trio, count → thirty-four, the stale `auth/` tree label
+swept to `authentication/` (steward minor 11), auth-cms description
+updated (four features composed). README.md — heading + count →
+thirty-four, the three authorization module lines, guards seven → EIGHT.
+RELEASING.md — thirty-four + `features/authorization` in the enumeration.
+Makefile header verified (34, landed incrementally). features/README.md —
+the C2 section gains the SECOND real worked example (the Granter-swap +
+Check-closure wiring, commit `2e1e5eb` cited) and checklist item 5 records
+the refinement-11 multi-kind store surface (`Repositories(db) (…, error)`).
+Design doc status header — the dated EXECUTED amendment (Q1–Q7 outcomes,
+modules 32–34, live parity, both Z4 hashes, the staleness findings).
+capability-map — both ReBAC rows → BUILT with pointers (multi-kind shape
+noted; Q1/Q4 trims recorded with return triggers). NOTES.md — the dated
+milestone entry (both live-store artifacts, the Z4 protocol verbatim, G8
++ prove-can-fail, the policy-seam deferral-ledger entry, the note-13
+kind-boundary-is-behavioral note, open flags). The parked pre-milestone
+root-doc corrections (30 → 31, google-uuid) commit WITH this close —
+superseded in place by the 34-counts. `.claude/plans/authorization-v1/` →
+`.claude/past/` + archive README row (this file's final resting place).
+
+**Acceptance + real-interaction:** fresh full `make check` green (34
+modules + all EIGHT guards); the widened stale-count grep
+(31/32/33/thirty-one/-two/-three over ARCHITECTURE/README/RELEASING/
+Makefile) → clean; rule-6 greps clean both directions. **Fresh
+`examples/auth-cms` boot re-ran protocol steps 5–6 and 10 live** (the
+docs phase did not close on a stale memory): B stream 200 +
+members-only 200 + my-projects `{"ids":["demo"]}`; C 403/403; unauth
+401; roles leg B audit 403 → scoped assign 200 → audit 200 with the
+scoped_auditors read-back → unassign 200 → 403; port freed. (One
+false alarm during the re-run: an initial 400 on assign traced to the
+DRIVER SCRIPT's shell quoting — curl URL-globbing a mangled JSON body —
+not the host; fixed in the script, host behavior correct throughout.)
+`examples/minimal` standing check run at the close commit. **Z5
+acceptance met — authorization-v1 CLOSED at 34 modules.**

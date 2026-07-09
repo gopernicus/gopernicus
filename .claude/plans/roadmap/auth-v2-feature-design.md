@@ -28,6 +28,21 @@ take the `iam_` prefix (`iam_relationships`, NEW `iam_roles`); a roles
 kind is added to v1 scope; the policy kind is a designed, named seam
 deferred with a demand trigger. The plan's 00-overview carries the
 verbatim direction + both Q&A rulings.
+**EXECUTED 2026-07-09 (authorization-v1 Z1–Z5 complete):** ratified Q1–Q7
+all at recommendations (Q1 groups TRIM, Q2 Option A two-commit protocol,
+Q3 store-glue guard ADD, Q4 metadata TRIM, Q5 global fallback, Q6
+`Config.IDs` mint seam + inline DDL DEFAULTs, Q7 second-relation silent
+no-op). Shipped: `features/authorization` + `stores/{turso,pgx}` (modules
+32–34); memstore + both dialect stores pass the ONE storetest suite live
+(all five named adversarial sub-runners + the `Roles/*` family); the
+three postures demonstrated on `examples/auth-cms` (commit-1 `2e1e5eb`
+middle posture with the clean-graph capture, commit-2 `65fcb49` flagship,
+both kinds driven live). Staleness findings recorded at plan cut (read
+the design accordingly): §2.5's `Storer` enumeration is illustrative —
+the real salvaged port is 14 methods; §2.2's "events' seam is
+user-shaped" worry was overtaken by the shipped pair-shaped
+`identity.Principal` seam; §10's module arithmetic ("+3 → 29") predates
+later landings — the tree closed at 34.
 Date: 2026-07-07
 Governing directive: NOTES.md 2026-07-06 (final entry) — **auth-v2 ships
 authorization, but as a port-shaped capability: a first-party ReBAC

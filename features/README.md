@@ -294,7 +294,16 @@ feature importing the other (verified: the greps in both directions are
 empty; the five-step login flow passes over live HTTP). The middleware seam
 was the shape v1 actually needed; the narrow-port variant below remains the
 general pattern for data-shaped needs (e.g. attributing an inquiry to the
-current user):
+current user).
+
+**Second worked example (2026-07-09, authorization-v1 Z4):** the same host
+wires `features/authorization` into TWO consumer-declared seams with zero
+feature→feature imports — auth's `Granter` (a host-local adapter whose
+`Grant` calls `authorizer.CreateRelationships`; invitation-accept writes a
+real ReBAC tuple) and events' `Authorize` (a closure delegating to
+`authorizer.Check` gates the resource-scoped SSE stream). Both seams are
+Check-only shapes any host closure can satisfy instead — the middle
+posture, recorded as the Z4 commit-1 artifact (`2e1e5eb`):
 
 ```go
 // features/cms/identity.go (illustrative — not yet built)
@@ -388,6 +397,10 @@ cite by item number:
    and still reach every use-case.
 5. Each `stores/<package>` adapter module exposes `Repositories(db)` and
    `ExportMigrations(dst)`; it does not register or apply migrations itself.
+   For a MULTI-KIND store with boot-time table probes the accepted surface is
+   `Repositories(db) (<feature>.Repositories, error)` — the bundle name WITH
+   an error return (authorization-v1 refinement 11; a deliberate hybrid of
+   jobs' error-less bundle and events' probing single-Store `New(db)`).
 6. A minimal-host proof exists: a `go run`-able host with an in-memory (or
    otherwise zero-external-infra) `Repositories` implementation, mirroring
    `examples/minimal`.

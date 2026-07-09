@@ -13,7 +13,8 @@ STORE_MODULES = features/cms/stores/pgx features/cms/stores/turso features/authe
 
 .PHONY: generate build vet test test-stores run migrate check tidy guard \
 	guard-sdk-stdlib guard-feature-isolation guard-sdk-no-outward guard-no-legacy-path \
-	guard-feature-core-sdk-only guard-feature-transport-sdk-web guard-feature-no-cross-feature
+	guard-feature-core-sdk-only guard-feature-transport-sdk-web guard-feature-no-cross-feature \
+	guard-store-no-foreign-feature
 
 # Regenerate *_templ.go from .templ sources (they live in features/cms/views/templ).
 generate:
@@ -82,9 +83,10 @@ tidy:
 # Layering guards — each enforces one architectural boundary from the
 # constitution (00-overview.md) or the feature-standard charter (FS rules,
 # 2026-07-07); every target must print nothing and exit 0 on a clean tree.
-# `make guard` runs all seven.
+# `make guard` runs all eight.
 guard: guard-sdk-stdlib guard-feature-isolation guard-sdk-no-outward guard-no-legacy-path \
-	guard-feature-core-sdk-only guard-feature-transport-sdk-web guard-feature-no-cross-feature
+	guard-feature-core-sdk-only guard-feature-transport-sdk-web guard-feature-no-cross-feature \
+	guard-store-no-foreign-feature
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -151,6 +153,22 @@ guard-feature-no-cross-feature:
 		hits=$$(grep -rn --include='*.go' --exclude-dir=stores -E '"github.com/gopernicus/gopernicus/features/[a-z0-9]+' $$d \
 			| grep -vE '"github.com/gopernicus/gopernicus/features/'"$$x"'([\"/])' || true); \
 		if [ -n "$$hits" ]; then echo "ERROR (rule 6): $$x reaches into a different feature core — declare a port and let the host wire the peer:"; echo "$$hits"; fail=1; fi; \
+	done; exit $$fail
+
+# G8 (authorization-v1 Z5, Q3 ADD): store adapter modules never import a
+# DIFFERENT feature — a store implements exactly its own feature's ports over
+# one connector — covering the stores/ subtrees G7 deliberately excludes. The
+# pattern carries one extra alternation (steward minor 6): store→examples/
+# imports, which no other guard watches. Same shape as G7: drop self-imports
+# (features/<x>/...), anything left is a foreign reach.
+guard-store-no-foreign-feature:
+	@echo "== guard: store modules never import a foreign feature or examples (rule 6, stores) =="
+	@fail=0; for d in features/*/stores/; do \
+		[ -d "$$d" ] || continue; \
+		x=$$(basename $$(dirname $$d)); \
+		hits=$$(grep -rn --include='*.go' -E '"github.com/gopernicus/gopernicus/(features/[a-z0-9]+|examples)' $$d \
+			| grep -vE '"github.com/gopernicus/gopernicus/features/'"$$x"'([\"/])' || true); \
+		if [ -n "$$hits" ]; then echo "ERROR (rule 6, stores): a $$x store module reaches into a foreign feature or an example host:"; echo "$$hits"; fail=1; fi; \
 	done; exit $$fail
 
 # CI-style gate: templ generation must be a no-op (no drift), then per-module
