@@ -1,7 +1,6 @@
 # Phase Z1 — `features/authorization` core: BOTH kinds (rims, engine, roles service, socket, memstore, storetest)
 
-Status: **DRAFT — awaiting jrazmi ratification (cut 2026-07-08, authorized
-as a planning-only leg)**
+Status: **RATIFIED 2026-07-09 (jrazmi) — Q1-Q7 at recommendations; EXECUTING**
 Executor model: opus
 Depends on: — (first phase)
 Size: **XL** (grown from L at the 2026-07-08 multi-kind owner direction —
@@ -16,7 +15,7 @@ Design doc: `.claude/plans/roadmap/auth-v2-feature-design.md` §2 (all of
 it — the ruling cashed, the anatomy, the port split, storage semantics),
 §9 (crud re-typing), §13 Z1, §14 (checklist trace) — **as amended by the
 2026-07-08 multi-kind owner direction (00-overview: iam_* tables, the
-roles kind, the deferred policy seam)**. Module 31 after task-1.
+roles kind, the deferred policy seam)**. Module 32 after task-1 (31 at cut +1 — google-uuid landed 2026-07-09).
 
 The feature this phase builds is the **IAM/authorization domain with two
 independently-wireable kinds**: the relationship kind (the ReBAC engine
@@ -42,7 +41,7 @@ source** — it is new, deliberately minimal (overview cut refinement 12).
   compiles standalone, `go.mod` requires exactly `sdk` (FS1), registered
   in `go.work` + Makefile `MODULES` **and in the FS1 guard's hardcoded
   list with a recorded prove-can-fail** (review-gate fold, steward minor
-  4); `make check` green at **31 modules**.
+  4); `make check` green at **32 modules**.
 - `domain/relationship` public rim: tuple entity, `CreateRelationship`,
   filters, listing row types, and the full 14-method `Storer` port —
   listing methods **crud-re-typed** (`sdk/crud.ListRequest`/`Page[T]`,
@@ -88,7 +87,7 @@ source** — it is new, deliberately minimal (overview cut refinement 12).
 
 ## Preconditions
 
-- `make check` green on the current tree (30 modules, 7 guards).
+- `make check` green on the current tree (31 modules, 7 guards).
 - Read the design §2 in full, the 00-overview owner-direction section,
   then the salvage files above — especially `model.go` (Storer + DSL +
   LookupResult doc contracts) and `membership.go` (last-owner semantics)
@@ -100,6 +99,14 @@ source** — it is new, deliberately minimal (overview cut refinement 12).
   wiring mirrors).
 - Q5's answer known (role scope semantics — this phase implements it in
   task-5 and pins it in task-8's `Roles/GlobalFallback` case).
+- **Q6 + Q7 ratified (2026-07-09 fresh-review fold — these are Z1
+  execution gates, not just docs concerns): Q6 sets `Config.IDs`, the
+  `CreateRelationships` mint seam (task-4/task-6), the memstore
+  assign-at-insert + DO-NOTHING mirror (task-7), and the
+  `Relationship/DBGeneratedIDOnEmpty` + partial-batch conformance cases
+  (task-8); Q7 sets the second-relation-same-subject conflict semantics
+  the task-1 port doc and task-8 constraint case assert. Do not start Z1
+  until both are ruled — they change entity behavior, not just wording.**
 
 ## Tasks
 
@@ -111,7 +118,7 @@ source** — it is new, deliberately minimal (overview cut refinement 12).
   features/authorization/domain/relationship/relationship.go,
   features/authorization/domain/relationship/relationship_test.go,
   go.work, Makefile]
-- **verify:** `cd features/authorization && go build ./... && go test ./... && go vet ./...` then `make check` (31 modules; go.work ↔ MODULES agreement) and `make guard`; FS1 prove-can-fail (review-gate fold, steward minor 4): temporarily add a fake extra require to `features/authorization/go.mod`, observe `guard-feature-core-sdk-only` fail naming it, revert, `make guard` green again
+- **verify:** `cd features/authorization && go build ./... && go test ./... && go vet ./...` then `make check` (32 modules; go.work ↔ MODULES agreement) and `make guard`; FS1 prove-can-fail (review-gate fold, steward minor 4): temporarily add a fake extra require to `features/authorization/go.mod`, observe `guard-feature-core-sdk-only` fail naming it, revert, `make guard` green again
 - **description:** Create the module (go version + sibling `replace`
   per `features/jobs/go.mod`; requires sdk only). `domain/relationship`:
   the tuple entity (resource_type, resource_id, relation, subject_type,
@@ -140,11 +147,21 @@ source** — it is new, deliberately minimal (overview cut refinement 12).
   codex fold A2 — the original's `idx_rebac_relationships_unique_subject`
   ADOPTED): a subject holds at most ONE relation on a resource (owner OR
   member, never both; schema `AnyOf` handles implication); a second
-  relation for the same subject on the same resource is a constraint
-  conflict, and role change stays delete+create.** Rim test: compile-check stub pinning the
-  signatures. Register in `go.work` + Makefile `MODULES` (alphabetical:
+  relation for the same subject on the same resource is — under the
+  original's bare `ON CONFLICT DO NOTHING` — a SILENT NO-OP (nil error,
+  existing relation unchanged, NOT `ErrAlreadyExists`; pending Q7,
+  2026-07-09 data-integration fold), and role change stays
+  delete+create.** **ID strategy (Q6, 2026-07-09):
+  `CreateRelationships(...) error` is error-only; `relationship_id` is
+  minted at the engine delegation (task-4) from `Config.IDs`, never in the
+  rim — there is no `NewRelationship(IDs, …)` constructor (minting is a
+  service-seam concern here; the item-14 "constructor" letter carries this
+  recorded exception, documented on the port). Under `cryptids.Database`
+  the store omits the id column and the DDL DEFAULT fills it (task-1 DDL
+  is authored in Z2a; the rim doc just states the strategy).** Rim test:
+  compile-check stub pinning the signatures. Register in `go.work` + Makefile `MODULES` (alphabetical:
   after `features/authentication/stores/turso`, before `features/cms`);
-  bump the Makefile header count 30 → 31; **add `features/authorization`
+  bump the Makefile header count 31 → 32; **add `features/authorization`
   to the FS1 guard's hardcoded list** (`guard-feature-core-sdk-only`,
   Makefile:116) with the prove-can-fail in this task's verify —
   review-gate fold, steward minor 4 (supersedes the events-precedent
@@ -257,7 +274,17 @@ source** — it is new, deliberately minimal (overview cut refinement 12).
   `LookupResult{Unrestricted, IDs}` with the original's contract
   verbatim in intent (**explicit bool, fail-closed zero value; IDs
   always non-nil when restricted; Unrestricted ⇒ caller skips ID
-  filtering entirely**), relationship CRUD delegation, `RemoveMember`
+  filtering entirely**), relationship CRUD delegation — **`CreateRelation
+  ships` mints each tuple's `relationship_id` here from the injected
+  generator (Q6, 2026-07-09): the service holds a `cryptids.IDGenerator`
+  (from `Config.IDs`, threaded via the socket in task-6) and calls
+  `MustGenerate()` per tuple, exactly as the original's satisfier looped
+  `generateID()` into `CreateRebacRelationship.RelationshipID`
+  (`satisfiers/authorization_store.go:97-118`); under `cryptids.Database`
+  every id is `""` and the store omits the column. The mint is all-or-none
+  per batch (one generator), so the store's ALL-empty branch selection is
+  guaranteed by construction** —
+  `RemoveMember`
   with last-owner protection over `CountByResourceAndRelation` (direct
   counts — the §2.5 pin), the Validate*/GetSchema/
   GetPermissionsForRelation surface, and the **platform-admin bypass —
@@ -318,8 +345,13 @@ source** — it is new, deliberately minimal (overview cut refinement 12).
   `Repositories{Relationships relationship.Storer, Roles role.Storer}` —
   each kind nil-safe; nil = that kind OFF structurally (the auth
   Providers/Granter deny-by-absence precedent). `Config{Model Schema,
-  MaxTraversalDepth int}` — both relationship-kind-scoped;
-  `MaxTraversalDepth <= 0` ⇒ default 10, never an error; **no
+  MaxTraversalDepth int, IDs cryptids.IDGenerator}` — all three
+  relationship-kind-scoped; `MaxTraversalDepth <= 0` ⇒ default 10, never
+  an error; **`IDs` zero value ⇒ the nanoid default (Q6, 2026-07-09),
+  threaded into `authorizersvc` so `CreateRelationships` mints
+  `relationship_id`; ignored-with-documented-note under roles-only wiring,
+  exactly like `MaxTraversalDepth` (the auth `MailFrom` precedent — an
+  orphaned tuning field is silent, not a loud error)**; **no
   `PlatformAdmin` field** — platform-admin is the data tuple, task-4.
   Validation at `NewService(repos, cfg) (*Service, error)`: zero kinds
   wired → loud exported `ErrNoKindConfigured`; `Relationships` wired ⇔
@@ -385,7 +417,14 @@ source** — it is new, deliberately minimal (overview cut refinement 12).
   `stores/memory` module). Relationship kind: mutex-backed; unique-tuple
   enforcement honest
   (duplicate semantics exactly as task-1 pinned, **including the
-  one-relation-per-subject-per-resource conflict — codex fold A2**);
+  one-relation-per-subject-per-resource conflict — codex fold A2**;
+  **the honest DO-NOTHING mirror (Q6, 2026-07-09 data-integration fold):
+  on an in-batch conflict skip the row silently, keep the EXISTING row's
+  id + created_at, insert the non-conflicting siblings, return nil, and
+  never leak a minted id for a skipped row; an empty incoming
+  `relationship_id` gets a nanoid assigned at insert — the schema-DEFAULT
+  mirror, matching the reference-store pattern in the auth/cms
+  memstores**);
   graph-walk group
   expansion with a visited-set cycle guard (the memstore must survive
   A∈B, B∈A data — the suite will prove it) — **unbounded-but-cycle-safe
@@ -435,8 +474,22 @@ source** — it is new, deliberately minimal (overview cut refinement 12).
   empty subject_relation included) conflicts/no-ops per the task-1 pin —
   proven at the CONSTRAINT level, not application logic (the
   `Roles/AssignIdempotent` precedent) — and a SECOND relation for the
-  same subject on the same resource conflicts (the adopted
-  unique-subject index).** Roles kind (the
+  same subject on the same resource is a SILENT NO-OP (nil error, the
+  existing relation UNCHANGED on re-read — NOT `ErrAlreadyExists`; pending
+  Q7, asserted by re-read never error-shape; the adopted unique-subject
+  index under bare `ON CONFLICT DO NOTHING`, 2026-07-09 data-integration
+  fold).** **Plus `Relationship/DBGeneratedIDOnEmpty` (Q6, 2026-07-09):
+  a `cryptids.Database`-wired create batch → every `relationship_id`
+  comes back non-empty and each row is readable — asserted VIA THE LISTING
+  (`ListBySubject`/`ListByResource`), since `CreateRelationships` returns
+  no rows; and a partial-batch case [new, duplicate-tuple, new] → both new
+  rows present, duplicate skipped, nil error, identical across memstore +
+  both dialects (the RETURNING/DO-NOTHING row-count trap). Pagination
+  under DB-generated ids asserts per-backend coverage consistency (every
+  row exactly once across page boundaries) and NEVER compares id ordering
+  across backends — uuid-text (pgx) and hex (turso) sort differently, and
+  bulk create stamps one `created_at` for the whole batch so the id
+  tiebreak is fully load-bearing.** Roles kind (the
   **`Roles/*` named family**, `roles.go`):
   - `Roles/AssignIdempotent` — duplicate assign is a no-op nil; the row
     count stays 1 **including for the GLOBAL `("", "")` pair — asserted
@@ -519,7 +572,7 @@ source** — it is new, deliberately minimal (overview cut refinement 12).
 
 ```sh
 cd features/authorization && go build ./... && go vet ./... && go test -race ./...
-make check     # 31 modules, all seven guards
+make check     # 32 modules, all seven guards
 make guard
 ```
 
@@ -536,7 +589,7 @@ review-gate fold, steward minor 4).
 
 ## Real-interaction check
 
-Standing check (a): `make check` green (31 modules); boot
+Standing check (a): `make check` green (32 modules); boot
 `examples/minimal` (:8081), `GET /` and `GET /products/widget-3000` →
 200s (the new module is unwired in every host — behavior unchanged);
 kill, port free. No user-facing surface exists in this phase; the
@@ -545,3 +598,127 @@ run-and-look is the no-regression proof.
 ## Execution log
 
 (append dated entries here)
+
+### 2026-07-09 — task-1 DONE (relationship rim + module 32 registered)
+
+`features/authorization/go.mod` (sdk-only, sibling replace). `domain/
+relationship/relationship.go`: the tuple rim — `CreateRelationship` (carries
+`RelationshipID`, the engine-populated mint-seam field per Q6; hosts leave it
+zero, empty ⇒ store omits column ⇒ DDL DEFAULT), `RelationTarget`, projection
+rows `SubjectRelationship`/`ResourceRelationship` **each now carrying `ID`**
+(the surrogate relationship_id — needed as the keyset tiebreak AND as the
+vehicle the Q6 `DBGeneratedIDOnEmpty` case reads to prove a minted key
+non-empty via the listing; a justified add over the original, which had no id
+on projections), the two crud-re-typed listings (`crud.ListRequest` in,
+`crud.Page[T]` out — the original's `fop.Order`/`PageStringCursor`/`Pagination`
+vocabulary does not survive), and the full **14-method `Storer`** salvaged
+from `model.go:246` with the Q6 minting + Q7 silent-no-op + §2.5 direct-count
+doc pins. Compile-check stub test pins all 14 sigs. Registered module 32:
+go.work, Makefile `MODULES`, FS1 guard hardcoded list (+prove-can-fail: fake
+require ⇒ guard fails naming `features/authorization`, reverted, green),
+header 31→32. `make check` green (32 modules), `make guard` green.
+
+**Design note carried forward to Z2a/Z2b:** the mint stays at the engine
+(the original minted in the SATISFIER; Q6 moves it up to `authorizersvc`), so
+the store port's `CreateRelationship` — not a separate store-layer input —
+carries `RelationshipID`. Store `CreateRelationships` reads it: ""⇒omit column.
+
+### 2026-07-09 — task-2 + task-3 + task-4 DONE
+
+**task-2** (`domain/role/role.go`): `Assignment` + the 5-method `role.Storer`
+(`Assign`/`Unassign` idempotent, `HasExactRole` exact-scope, two crud-typed
+keyset listings). Doc pins: global `("","")` = empty-strings-not-NULL, scope
+cols `NOT NULL` empty-string default, `ListByResource` direct-scope-only,
+retained-original-`CreatedAt`, opaque-string roles, table `iam_roles`. Stub test.
+
+**task-3** (`authorizersvc` model/builder/validator): re-typed the schema DSL
+(`Schema`/`ResourceTypeDef`/`RelationDef`/`SubjectTypeRef`/`PermissionRule`/
+`PermissionCheck`/`ResourceSchema` + `Direct`/`Through`/`AnyOf`/`Remove`/
+`IsRemove`), the check types (`Subject`/`Resource`/`CheckRequest`/`CheckResult`/
+`LookupResult`), `NewSchema`/`MergeResourceType` (merge-Remove **KEPT**,
+logged), and the validator (unknown-direct, unknown-through, missing-target-
+permission, cycle — all four rejection classes tested). `maps.Copy` for the
+relations merge (idiom).
+
+**task-4** (`authorizersvc` service/membership/lookup): re-typed the full
+engine — `Config{MaxTraversalDepth, IDs}`, `NewService` (validates schema →
+`ErrInvalidSchema`, depth default 10), `Check` (admin→self→schema),
+`checkThrough`/`checkSelf`/`CheckBatch` (optimized + sequential)/
+`FilterAuthorized`, CRUD with **Q6 mint in `CreateRelationships` on a COPIED
+slice** (default nanoid stamps ids; `cryptids.Database` leaves ""; caller slice
+never mutated — tested), `RemoveMember` last-owner (direct count), the
+Validate*/GetSchema/GetPermissionsForRelation surface, crud-typed listing
+delegations, and `LookupResources`/`lookupThrough`/`lookupDirectOnly`
+(unbounded cycle-safe). **Dropped** (logged): the unused `log` field + `WithLogger`
+option, and `ChangeMemberRole` (not in the promoted surface — dead public API).
+`MaxTraversalDepth` engine-only (`maxDepth`), never passed to the store. Tests
+race-run green against an in-package fake store (Check direct/self/admin/through,
+batch+filter, mint both generators, validation, last-owner, lookup direct/empty-
+non-nil/unrestricted/through). Note: gofmt's doc-comment formatter rewrites a
+literal `''` to a smart quote — reworded to "empty-string default" to avoid it.
+
+### 2026-07-09 — task-5 + task-6 DONE (both services + socket; `make check` green @ 32)
+
+**task-5** (`rolesvc`): sealed roles service over `role.Storer`, plain
+(subjectType, subjectID) args, **no `authorizersvc` import** (verified — only a
+doc-comment mention). `AssignRole`/`UnassignRole` (validate empty subject/role
+→ `ErrInvalidRoleAssignment`; half-scoped → `ErrHalfScopedAssignment`),
+`HasRole` (Q5: exact-then-global-fallback; scoped grant never satisfies another
+scope), two listing delegations, fail-closed on store errors. Race tests green.
+
+**task-6** (`authorization.go` socket + `authorization_test.go`): `Repositories
+{Relationships, Roles}` nil-safe; `Config{Model, MaxTraversalDepth, IDs}`;
+`NewService` — zero kinds → `ErrNoKindConfigured`, `Relationships` XOR `Model` →
+`ErrModelRequired`, invalid model → validator error, roles-only OK. Per-kind
+method families guard nil → `ErrRelationshipsNotConfigured` /
+`ErrRolesNotConfigured`; roles methods take a root `Subject`, adapt → pair,
+reject non-empty `Relation` → `ErrUsersetSubjectOnRole` (every roles method).
+`Register` logs one line, no routes, tolerates zero `Mount`. Root aliases: the
+engine model/check vocab + DSL (`NewSchema`/`Direct`/`Through`/`AnyOf`/`Remove`/
+`MergeResourceType` as `var` re-exports), the relationship rim types, and
+`Assignment`. `GetSchema`/`GetPermissionsForRelation` gained an `error` return
+for the nil-kind guard (socket-local signature; engine's stays error-free).
+Tests: construction matrix, both sentinels, userset-rejection on all roles
+methods, both-kind delegation smoke, Register (logger + zero-Mount). Rule-6
+grep empty both directions. `make check` green @ **32 modules**, `make guard` green.
+
+**Remaining Z1:** task-7 (`memstore/` both kinds — real graph-walk expansion),
+task-8 (`storetest/` named adversarial + `Roles/*` families). Both kinds are
+already through the socket — NO Z1/Z1b split needed; landing Z1 whole.
+
+### 2026-07-09 — task-7 + task-8 DONE — **Z1 CLOSED, `make check` green @ 32 modules**
+
+**task-7** (`memstore/`): the public in-core reference, both kinds.
+`Relationships` — mutex-backed; unique (subject, resource) key with the ON
+CONFLICT DO NOTHING mirror (second relation same subject/resource skipped
+silently, existing row's id+created_at retained); empty incoming id assigned a
+nanoid (schema-DEFAULT mirror, `memIDs`); **graph-walk group expansion** over
+`member` edges with a visited-set (unbounded, cycle-safe — subject_relation
+stored-but-ignored in the walk, exactly like the salvage CTE); direct-only
+count; fixpoint descendant walk; keyset listings via a replicated `pageMem`
+(the auth storetest-reference paginator, using public `crud.TrimPage`/
+`MarkPrevPage`/`EncodeCursor`/`DecodeCursor`). `Roles` — 5-tuple exact,
+idempotent Assign retaining CreatedAt, keyset listings tie-broken on the 5-tuple
+composite (no surrogate id). Race tests green.
+
+**task-8** (`storetest/` + `memstore/conformance_test.go`): `Run(t, newRepos)`
+with nil-kind `t.Skip`. **Layer (a)** relationship port contracts (CRUD,
+duplicate no-op, second-relation silent no-op, 3 deletes, CheckBatchDirect,
+direct-only count, 3 lookups, listing pagination + empty page, and
+`Relationship/DBGeneratedIDOnEmpty` incl. the partial-batch full-coverage
+assertion). **Layer (b)** the five NAMED adversarial sub-runners —
+`Adversarial/{MembershipCycle,DeepNesting,DiamondDedup,NestedUserset,
+Unrestricted}` (Unrestricted covers both user AND service_account admins via
+the `platform:main#admin` data tuple; DiamondDedup asserts the direct count
+stays 1; NestedUserset seeds the userset tuple-side with subject_relation set,
+never on the CheckRequest) over `authorization.NewService` + the fixture schema.
+**`Roles/*`** family — AssignIdempotent (global-pair dedup), UnassignIdempotent,
+HasExactRole (+ scopedA-vs-scopedB isolation), DistinctAssignmentsCoexist,
+ListPagination (both methods + empty page), and the service-level GlobalFallback.
+checkSelf fixture discipline honored (no subject type == a resource type with
+r/u/d). Verified all 21 named sub-runners RUN + PASS (`-v`); `-race` green;
+`make check` @ **32 modules**; `make guard` green.
+
+**Real-interaction check (standing a):** `examples/minimal` booted on :8081 →
+`GET /` 200, `GET /products/widget-3000` 200 (module unwired everywhere — no
+regression); killed, port freed. **Z1 acceptance met. Next leg: Z2a (turso).**

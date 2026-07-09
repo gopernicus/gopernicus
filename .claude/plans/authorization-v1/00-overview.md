@@ -1,7 +1,6 @@
 # authorization-v1 — milestone overview
 
-Status: **DRAFT — awaiting jrazmi ratification (cut 2026-07-08, authorized
-as a planning-only leg)**
+Status: **RATIFIED 2026-07-09 (jrazmi) — Q1-Q7 at recommendations; EXECUTING**
 Milestone: `authorization-v1` — `features/authorization`: the **IAM /
 authorization domain, offering multiple KINDS of authorization, each
 independently wireable** (owner direction 2026-07-08, below). v1 ships
@@ -85,8 +84,10 @@ modules), store posture C with the supported set **{turso, pgx}**
 `memstore/`** allowance applies: substantial + host-needed, group
 expansion re-implemented in Go; never a `stores/memory` module), R4
 (`storetest` port-set sub-runners), the feature-standard charter FS1–FS10
-(ratified 2026-07-07), and `features/README.md` checklist items 1–12 all
-apply unchanged.
+(ratified 2026-07-07), and `features/README.md` checklist items 1–14 all
+apply (13 — pgx-crud list standards — is absorbed by the cross-milestone
+note below; 14 — the entity-ID strategy, added at segovia-lessons phase 04
+— is the subject of Q6).
 
 The **2026-07-06 authorization ruling** is this milestone's spine: ReBAC
 **supported, never required** — three postures, all first-class (design
@@ -147,8 +148,9 @@ authentication/authenticator — never abbreviated.
    is **adopted**: both store constructors probe `iam_relationships` AND
    `iam_roles`, and the error names the specific missing kind's table,
    before the host serves traffic.
-6. **Module count is 30 today.** This milestone adds core + two stores →
-   **33** (design §10's "+3 → 29" counts are stale). Z3's `groups`
+6. **Module count is 31 today** (30 at cut; `integrations/cryptids/google-uuid`
+   landed 2026-07-09, segovia-lessons phase 04). This milestone adds core +
+   two stores → **34** (design §10's "+3 → 29" counts are stale). Z3's `groups`
    aggregate, if kept, lives inside the core module (no count change) —
    and Z3 is a named trim candidate, presented for ratification (Q1).
 7. **Live-store gates** mirror events-v1/auth-v2 verbatim — see "Live-
@@ -253,7 +255,13 @@ status-header amendment at Z5):**
    loud partial-wiring error, the Providers/OAuthRepos precedent);
    `MaxTraversalDepth` is **relationship-kind-scoped** (ignored-with-
    documented-note when only Roles is wired); the roles kind needs no
-   Config knob in v1. Calling an unwired kind's Service methods returns
+   Config knob in v1. **`IDs cryptids.IDGenerator` (Q6, 2026-07-09):
+   relationship-kind-scoped, zero value → the nanoid default; mints
+   `relationship_id` at the engine's `CreateRelationships` delegation
+   (the original's `generateID`/`WithGenerateID` seam); ignored-with-
+   documented-note under roles-only wiring, exactly like
+   `MaxTraversalDepth`. The roles kind takes no id strategy — `iam_roles`
+   is 5-tuple-keyed, no id column exists.** Calling an unwired kind's Service methods returns
    a loud exported sentinel — **named `ErrRelationshipsNotConfigured` /
    `ErrRolesNotConfigured`** (re-review fold, lead minor 10: errs
    discipline, no string matching) — fail closed, never a silent
@@ -278,13 +286,23 @@ status-header amendment at Z5):**
    events-v1/auth-v2 recorded form) — under go.work the plain form lists
    every workspace module, so the middle-posture artifact would
    false-fail the moment Z1 registers the module.
-11. **Store constructor pinned:** `Repositories(db)
-   (authorization.Repositories, error)` with the boot probe inside
-   (charter checklist item 5; `features/jobs/stores/turso/turso.go:29`
-   precedent) — identical in Z2a and Z2b. The store modules always
-   return BOTH kinds wired (kind selection is the HOST's wiring choice —
-   a host wanting one kind zeroes the other field after construction, or
-   wires its own single-kind Repositories; documented in the READMEs).
+11. **Store constructor pinned — a DELIBERATE new store surface (citation
+   corrected 2026-07-09, codex review):** `Repositories(db)
+   (authorization.Repositories, error)`. This is a HYBRID of the two
+   existing shapes, not a copy of either: `features/jobs/stores/turso/
+   turso.go:29` is `Repositories(db, ...opts) jobs.Repositories` (the
+   bundle-name, but NO error and NO probe), while
+   `features/events/stores/turso/turso.go:43` is `New(db) (*Store, error)`
+   (the boot-probe + error, but the single-Store name). authorization
+   needs BOTH a repo-bundle (two kinds) AND a boot probe (two tables), so
+   it takes the bundle name WITH an error return — a new store-surface
+   variant. If ratified, Z5's features/README checklist-trace touch-up
+   records it as the accepted convention for a multi-kind probing store
+   (do not cite jobs as if it already had this shape). The store modules
+   always return BOTH kinds wired (kind selection is the HOST's wiring
+   choice — a host wanting one kind zeroes the other field after
+   construction, or wires its own single-kind Repositories; documented in
+   the READMEs).
 12. **Roles-kind shape pinned (new kind — no salvage source; minimal by
    direction; amended at the multi-kind re-review fold):** `domain/role`
    — entity
@@ -341,12 +359,12 @@ status-header amendment at Z5):**
 
 | Phase | File | What | Size | Depends on | Model | Modules after |
 |---|---|---|---|---|---|---|
-| Z1 | `01-core.md` | `features/authorization` core, BOTH kinds: `domain/relationship` rim + 14-method `Storer`, `domain/role` rim + 5-method `Storer` (refinement 12), model DSL + schema validator, relationship engine salvage (check/self-check/through/cycle guards/batch/lookup/membership/platform-admin-tuple), roles service (global fallback), multi-kind FS2 socket, `memstore/` (both kinds), `storetest` with the **named adversarial sub-runners** + the `Roles/*` family; FS1 guard-list add | **XL** (grown from L at the owner direction — resized honestly; **pre-declared split boundary, re-review note 12**: if the relationship engine consumes the budget, Z1 lands relationship-only — tasks 1/3/4 + the relationship socket methods + the memstore/adversarial slices — and **Z1b** is the roles slice — tasks 2/5 + the roles socket methods + the roles memstore/storetest slices; the socket is the join) | — | opus | **31** |
-| Z2a | `02a-store-turso.md` | `stores/turso`: 0001+0002 migrations (canonical set authored here), both kinds' repositories, recursive-CTE expansion (relationship kind), boot probes, conformance + live leg | L | Z1 | opus | **32** |
-| Z2b | `02b-store-pgx.md` | `stores/pgx`: identical version filename set, both kinds' repositories, recursive-CTE expansion, (GIN divergence if Q4 = KEEP), conformance + live leg | M | Z2a | opus | **33** |
-| Z3 | — (no file cut) | `groups` aggregate — **TRIM RECOMMENDED (Q1)**; disposition block below; `03-groups.md` is cut from design §2.5/§13 only if jrazmi overrides | M | Z1 | opus | 33 |
-| Z4 | `04-consumer-proof.md` | Consumer seams + proof host: model declaration, toy-Granter → `CreateRelationships` swap, Check closure into events' `AuthorizeStream` (real signature, drift 4), **the two mandated demonstrations** (middle-posture clean-graph; `LookupResources` exercised), **plus the roles-kind leg** (assign → role-gated check allows; without → denies), full real-interaction protocol | M–L | Z1 (hard), Z2 (default order), auth-v2 (shipped) | opus | 33 |
-| Z5 | `05-docs-guards.md` | Docs + guards: feature README (**three-posture table first**, then the KINDS table; cms-gating boundary; **the policy-seam section**), wiring page, the Q3 store-glue guard decision (FS1 list add moved to Z1), registration artifacts, ARCHITECTURE/README/RELEASING counts, capability-map ReBAC rows, design status-header amendment, NOTES artifacts | S–M | all | fable | 33 |
+| Z1 | `01-core.md` | `features/authorization` core, BOTH kinds: `domain/relationship` rim + 14-method `Storer`, `domain/role` rim + 5-method `Storer` (refinement 12), model DSL + schema validator, relationship engine salvage (check/self-check/through/cycle guards/batch/lookup/membership/platform-admin-tuple), roles service (global fallback), multi-kind FS2 socket, `memstore/` (both kinds), `storetest` with the **named adversarial sub-runners** + the `Roles/*` family; FS1 guard-list add | **XL** (grown from L at the owner direction — resized honestly; **pre-declared split boundary, re-review note 12**: if the relationship engine consumes the budget, Z1 lands relationship-only — tasks 1/3/4 + the relationship socket methods + the memstore/adversarial slices — and **Z1b** is the roles slice — tasks 2/5 + the roles socket methods + the roles memstore/storetest slices; the socket is the join) | — | opus | **32** |
+| Z2a | `02a-store-turso.md` | `stores/turso`: 0001+0002 migrations (canonical set authored here), both kinds' repositories, recursive-CTE expansion (relationship kind), boot probes, conformance + live leg | L | Z1 | opus | **33** |
+| Z2b | `02b-store-pgx.md` | `stores/pgx`: identical version filename set, both kinds' repositories, recursive-CTE expansion, (GIN divergence if Q4 = KEEP), conformance + live leg | M | Z2a | opus | **34** |
+| Z3 | — (no file cut) | `groups` aggregate — **TRIM RECOMMENDED (Q1)**; disposition block below; `03-groups.md` is cut from design §2.5/§13 only if jrazmi overrides | M | Z1 | opus | 34 |
+| Z4 | `04-consumer-proof.md` | Consumer seams + proof host: model declaration, toy-Granter → `CreateRelationships` swap, Check closure into events' `AuthorizeStream` (real signature, drift 4), **the two mandated demonstrations** (middle-posture clean-graph; `LookupResources` exercised), **plus the roles-kind leg** (assign → role-gated check allows; without → denies), full real-interaction protocol | M–L | Z1 (hard), Z2 (default order), auth-v2 (shipped) | opus | 34 |
+| Z5 | `05-docs-guards.md` | Docs + guards: feature README (**three-posture table first**, then the KINDS table; cms-gating boundary; **the policy-seam section**), wiring page, the Q3 store-glue guard decision (FS1 list add moved to Z1), registration artifacts, ARCHITECTURE/README/RELEASING counts, capability-map ReBAC rows, design status-header amendment, NOTES artifacts | S–M | all | fable | 34 |
 
 Sequencing: Z1 first (everything stands on it). Z2a → Z2b (the filename
 set is authored once). Z4 hard-depends only on Z1 + a shipped auth-v2 —
@@ -399,7 +417,7 @@ re-deciding anything, built when its trigger fires.
 
 ## Module / API impact
 
-- **+3 modules, 30 → 33**: `features/authorization` (Z1),
+- **+3 modules, 31 → 34**: `features/authorization` (Z1),
   `features/authorization/stores/turso` (Z2a),
   `features/authorization/stores/pgx` (Z2b). Each: own `go.mod`,
   sibling-replace pattern, registered in `go.work` + Makefile `MODULES`
@@ -428,7 +446,18 @@ re-deciding anything, built when its trigger fires.
   shape from the original's `0002_rebac.sql`, table renamed per the
   owner direction): **relationship_id PK + created_at (immutable rows,
   no updated_at — the keyset listing's order column and tiebreak; made
-  explicit 2026-07-08, codex fold A4)**; resource_type, resource_id,
+  explicit 2026-07-08, codex fold A4)**; **the PK carries an INLINE
+  DEFAULT (Q6, 2026-07-09 fresh-review fold — fresh source, so the default
+  rides the CREATE TABLE, never a separate `_id_defaults` retrofit
+  migration): pgx `TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text`,
+  turso `TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16))))` — the
+  proven phase-04 0012 expressions. Under `cryptids.Database` the engine
+  mints no ids, the store omits the relationship_id column for the whole
+  batch (keyed on ALL-empty; a mixed batch is a loud store error), the
+  DEFAULT fills the PK, and there is NO RETURNING — `CreateRelationships`
+  is error-only, so a key read-back would have no consumer and would
+  under-return on ON-CONFLICT skips. pgx drops the id array from the
+  UNNEST insert; turso drops it from the multi-row VALUES insert.** resource_type, resource_id,
   relation, subject_type,
   subject_id, subject_relation (the optional userset relation —
   `group#member`-style subjects; **`NOT NULL DEFAULT ''`, codex fold A3
@@ -437,9 +466,12 @@ re-deciding anything, built when its trigger fires.
   logged**); **unique-tuple index AND the unique-SUBJECT index (one
   relation per subject per resource — the original's
   `idx_rebac_relationships_unique_subject`, ADOPTED by the 2026-07-08
-  owner ruling, codex fold A2; role change stays delete+create; a
-  storetest case asserts the second-relation conflict at the CONSTRAINT
-  level)**; secondary indexes
+  owner ruling, codex fold A2; role change stays delete+create; **a
+  second, different relation for the same (resource, subject) is a
+  SILENT NO-OP under the original's bare `ON CONFLICT DO NOTHING` — nil
+  error, existing relation unchanged, NOT `ErrAlreadyExists` — pending
+  Q7; the storetest case asserts it by RE-READ, not error-shape,
+  2026-07-09 data-integration fold)**; secondary indexes
   on resource, subject, and (resource_type, relation). Executor verifies
   columns/indexes against the original file and logs any remaining
   divergence (rename aside).
@@ -577,7 +609,7 @@ feature imports.
   feature README.
 - Docs synced: feature README opening with the three-posture decision
   table then the kinds table, nil-semantics rows for every port and kind
-  (item 12), the policy-seam section, the wiring page, module count 33
+  (item 12), the policy-seam section, the wiring page, module count 34
   everywhere, capability-map ReBAC rows BUILT, design status header
   amended, NOTES.md milestone entry with live artifacts.
 
@@ -614,8 +646,10 @@ feature imports.
 3. **Recursive-CTE non-termination or dialect skew on cyclic data** —
    SQLite and PostgreSQL recursive CTEs differ in cycle behavior.
    Mitigation: the membership-cycle sub-runner runs live per dialect;
-   Z2a/Z2b tasks name cycle-safety (bounded recursion / UNION dedup) as
-   an implementation requirement, not an afterthought.
+   Z2a/Z2b tasks name cycle-safety by **UNION dedup** as an implementation
+   requirement, not an afterthought (the CTEs are UNBOUNDED — no depth
+   term; `MaxTraversalDepth` is engine-only, codex fold A1 — so "bounded
+   recursion" is NOT the mitigation; corrected 2026-07-09).
 4. **Proof-host posture entanglement (Q2)** — wiring the flagship into
    `examples/auth-cms` puts ReBAC in the only events-mounting host's
    graph, so the middle-posture demonstration needs the two-commit
@@ -636,7 +670,7 @@ feature imports.
    -m all` captured clean — cut refinement 10, protocol driven live,
    recorded); commit 2 lands the
    flagship swap (toy Granter → `CreateRelationships`, Check closure,
-   `LookupResources` route). Cost: zero new modules (33 stands); the
+   `LookupResources` route). Cost: zero new modules (34 stands); the
    middle-posture artifact is a recorded protocol + a permanent git
    commit rather than a living host. **Option B:** a new example host
    (module 34) as the permanent living middle-posture artifact — rejected
@@ -667,11 +701,16 @@ feature imports.
    scaffold a dead table + a port-less GIN index into every adopting
    host. Return trigger: the first metadata consumer; it lands as the
    next migration number
-   with the pgx-GIN/turso-TEXT divergence exactly as §2.5 documents. If
-   jrazmi keeps it: 0001 carries both relationship tables, Z1 salvages
-   the original's metadata repository surface onto the `Storer` (or a
-   second `Repositories` field — executor pins against the original),
-   and storetest gains a metadata round-trip case.
+   with the pgx-GIN/turso-TEXT divergence exactly as §2.5 documents. **If
+   jrazmi keeps it, KEEP is NOT execution-ready as the phase files stand
+   (codex review 2026-07-09): they only add conditional DDL + a boot probe
+   — the metadata Storer surface (its methods, whether it rides the
+   14-method `Storer` or a second `Repositories.Metadata` field, its
+   memstore impl, and its storetest round-trip) is unspecified. A KEEP
+   ratification REQUIRES cutting a concrete metadata-API task (pinned
+   against the original's metadata repository) into Z1 + a storetest case
+   before Z1 executes — the conditional DDL alone would ship a table no
+   code writes.** Default TRIM avoids this entirely.
 5. **Q5 — role scope semantics (NEW, raised by the roles kind).**
    Recommend: **the store-level lookup (`HasExactRole`, renamed at the
    multi-kind re-review fold) is exact-scope match; the
@@ -690,6 +729,39 @@ feature imports.
    `Service.HasRole` allows never appears in a resource's listing; a
    documented v1 limitation (the count-pin precedent), with "effective
    grants for a resource" enumeration as a named deferred item.
+6. **Q6 — the relationship-id ID strategy (NEW, 2026-07-09 fresh-review
+   fold; the phase-04 alignment).** The plan never said who mints
+   `relationship_id`; the original does it with the exact seam phase 04
+   ratified. Recommend **ADOPT:** `Config.IDs cryptids.IDGenerator`
+   (relationship-kind-scoped; zero value → the nanoid default), minting in
+   the engine's `CreateRelationships` delegation (the original's
+   `generateID`/`WithGenerateID` seam,
+   `satisfiers/authorization_store.go:34-51`); `cryptids.Database` honored
+   via an all-empty-batch omit-the-id-column branch in both stores (the
+   DDL DEFAULT fills the PK — **no RETURNING**, the port is error-only);
+   the DEFAULT inline in `0001_iam_relationships.sql` (fresh source, no
+   separate `_id_defaults` file); memstore assigns a nanoid at insert;
+   storetest gains `Relationship/DBGeneratedIDOnEmpty` (asserted via
+   listing, since Create returns no rows). The roles kind gets NO id
+   strategy — `iam_roles` is naturally keyed by its 5-tuple; inventing an
+   id column is out of scope. This is the `features/README.md` item-14
+   obligation discharged for this feature; ADOPT is the faithful salvage,
+   not new design. Declining leaves the feature the only entity-keyed
+   store in the repo that can't honor a host's wiring-time ID choice.
+7. **Q7 — second-relation-same-subject conflict semantics (NEW,
+   data-integration major 2).** The adopted unique-SUBJECT index makes a
+   SECOND, different relation for the same (resource, subject) a conflict;
+   the original suppresses it with a BARE `ON CONFLICT DO NOTHING`, so
+   it's a **silent no-op** (nil error, existing relation unchanged — which
+   is *why* role change is delete+create). The plan's "conflicts at the
+   CONSTRAINT level" wording read as an `ErrAlreadyExists` expectation.
+   Recommend **RATIFY the silent-no-op** (faithful to the original;
+   role-change stays delete+create) — the `storetest` case asserts it by
+   RE-READ (row unchanged, nil error), never by error-shape. Alternative
+   (raise `ErrAlreadyExists`): requires targeting only the tuple index and
+   a louder CreateRelationships contract — a real design change, not a
+   salvage. Whichever is ratified, the wording in 01-core task-1/task-8
+   and 02a/02b is corrected to match (currently error-ish).
 
 ## Consultation notes
 
@@ -911,6 +983,71 @@ per paginated port. Dated landed-notes appended to 02a/02b execution
 logs. Z1's listing ports re-type on `sdk/crud` and inherit the extended
 shape automatically.
 
+### Fresh-review fold (2026-07-09): phase 04 cryptids + segovia-lessons alignment
+
+Owner-requested fresh review of this DRAFT against the segovia-lessons
+landings the cut predates (phases 03/04 — `sdk/id` deleted, `sdk/cryptids`
+ratified, entity-ID threading + the Database empty-ID store convention,
+`features/README.md` checklist item 14, `integrations/cryptids/google-uuid`).
+Factual re-basings folded in place across all six files (no ratification
+needed): module arithmetic re-based 31-today → Z1 32 → Z2a 33 → Z2b 34
+(google-uuid landed 2026-07-09; the root docs' stale "thirty" counts were
+fixed in the same session); the inherited-law checklist line now reads
+items 1–14 (13 absorbed by the pgx-crud cross-milestone note; 14 raised
+Q6). Design-relevant findings, folded as Q6/Q7 + in-place pins:
+
+- **Provenance (the load-bearing find):** the plan is silent on who mints
+  `relationship_id` — and the ORIGINAL answers it with the exact seam
+  phase 04 ratified: its store satisfier holds
+  `generateID func() (string, error)` defaulting to `cryptids.GenerateID`
+  with a `WithGenerateID` injection option
+  (`../gopernicus-original/core/auth/authorization/satisfiers/authorization_store.go:34-51`),
+  minted per-tuple inside `CreateRelationships`. The salvage instructions
+  never mention it. D7's "pluggable generator when demanded" design
+  literally existed in the original at this spot.
+- **data-integration-reviewer (targeted pass, 2026-07-09):
+  SHIP-WITH-EDITS** on the proposed id amendment; all findings folded:
+  1. (major) `CreateRelationships` is `error`-only (original
+     `model.go:273`; the satisfier discards the bulk result) — so a
+     Database-branch `RETURNING relationship_id` would have NO consumer
+     and, combined with `ON CONFLICT DO NOTHING`, returns fewer rows than
+     inputs on in-batch conflicts (a divergence trap the moment anyone
+     keys off the count). **Resolved: the relationship Database branch
+     drops RETURNING entirely — the DDL DEFAULT fills the PK; nothing
+     reads it back.** (This is the one place the feature deviates from
+     the letter of the phase-04 users.go branch, for a pinned reason:
+     that branch returns the entity; this port doesn't.)
+  2. (major) The unique-SUBJECT-index conflict under the original's BARE
+     `ON CONFLICT DO NOTHING` is a **silent no-op** (nil error, relation
+     unchanged), not an error — the plan's "conflicts at the CONSTRAINT
+     level" wording read error-ish. Raised as **Q7** (semantics ruling);
+     the storetest case asserts whichever answer by RE-READ, never by
+     error-shape alone.
+  3. (major) The turso batch construction was unspecified (libsql has no
+     UNNEST): pinned as multi-row `VALUES` with the id column omitted for
+     the whole batch; a conformance case exercises libsql's
+     multi-row-VALUES + ON CONFLICT + omitted-DEFAULT-PK combination.
+  4. (minors, folded): the branch keys on ALL-empty vs ALL-non-empty and
+     rejects a mixed batch loudly (the single-strategy invariant is a
+     service guarantee the store verifies, never trusts); `Config.IDs`
+     gets the `MaxTraversalDepth`-style "relationship-kind-scoped;
+     ignored-with-documented-note under roles-only wiring" clause; the
+     service-seam minting (vs item 14's "constructor" letter) is
+     documented on the port; memstore mirrors DO-NOTHING partial-insert
+     semantics (skip silently, keep the existing row's id/created_at,
+     insert non-conflicting siblings, never leak a minted id for a
+     skipped row); pagination conformance asserts per-backend coverage
+     consistency and NEVER compares id ordering across backends
+     (uuid-text vs hex sort differently; bulk create stamps one
+     created_at for the whole batch, so the id tiebreak is fully
+     load-bearing).
+- **Segovia-lessons alignment (recorded, no change needed):** the
+  no-routes/no-facade minimalism already matches the phase-02
+  decline-cosmetics lesson; the feature mints no secrets (the phase-04
+  secrets rule is vacuous here); the future admin surface must land as
+  `internal/inbound/authorization` per the phase-01 anatomy (one line
+  added to Z5's claimed-namespace doc item).
+
 ## Recommended reviews (the plan-cut gate — run before jrazmi ratifies)
 
 - **architecture-steward + lead-backend-engineer — the targeted
@@ -918,10 +1055,14 @@ shape automatically.
   ship-with-edits; the "Multi-kind re-review fold" subsection is the
   record — 4 lead majors, 3 steward minors, 4 lead minors, 5 notes, all
   folded). Re-engage only if jrazmi's ratification changes scope.
-- **data-integration-reviewer** — recursive-CTE parity + cycle safety
-  per dialect, the named sub-runners' coverage vs the port docs, the
-  direct-count pin, the `iam_roles` unique-index/empty-string-scope
-  shape, migration shape vs salvage (rename included), Q4, Q5.
+- **data-integration-reviewer — the id-strategy delta pass: RAN
+  2026-07-09** (ship-with-edits; the "Fresh-review fold" subsection is the
+  record — 3 majors + 4 minors, all folded; Q6/Q7 raised). The recursive-
+  CTE parity + cycle safety per dialect, the named sub-runners' coverage
+  vs the port docs, the direct-count pin, the `iam_roles`
+  unique-index/empty-string-scope shape, and migration shape vs salvage
+  remain in-scope for its execution-time conformance review (Z2a/Z2b),
+  and Q4/Q5 remain owner calls.
 - **platform-sre** — migration phasing (new source 0001+), live-leg
   gating + playground discipline, guard coverage (Q3), module
   registration hygiene (go.work/MODULES/STORE_MODULES/test-stores).
@@ -932,6 +1073,35 @@ shape automatically.
 ## Execution log
 
 (planning-leg and cross-phase entries here; per-phase logs in each file)
+
+### 2026-07-09 — RATIFIED (jrazmi): Q1–Q7 at recommendations; execution begun
+
+Owner ratified in-session at every recommended answer: **Q1 TRIM** (no
+`groups`/`03-groups.md`), **Q2 Option A** (extend `examples/auth-cms`,
+middle-posture as a two-commit protocol), **Q3 ADD** (`guard-store-no-
+foreign-feature` at Z5), **Q4 TRIM** (no `iam_relationship_metadata` — 0001
+carries only `iam_relationships`; every "if Q4 = KEEP" branch is dead),
+**Q5 global-fallback** (store `HasExactRole` exact, service `HasRole`
+global fallback), **Q6 ADOPT** (`Config.IDs cryptids.IDGenerator`, the
+`CreateRelationships` mint seam, `Database` omit-branch, inline DDL
+DEFAULT), **Q7 silent-no-op** (second-relation-same-subject is a nil-error
+no-op under bare `ON CONFLICT DO NOTHING`; storetest asserts by re-read).
+All six status headers flipped RATIFIED/EXECUTING. Leg order: Z1 → Z2a →
+Z2b → Z4 → Z5 (Z3 struck). Starting Z1 (`01-core.md`).
+
+### 2026-07-09 — Z1 CLOSED (`01-core.md`) — module 32 live, both kinds
+
+All 8 tasks landed: module skeleton + `domain/relationship` rim (14-method
+Storer, Q6 mint-seam `RelationshipID`, projection rows carry `ID`) + `domain/
+role` rim (5-method) + `authorizersvc` engine (Check/through/lookup/last-owner,
+mint on a copied slice, `MaxTraversalDepth` engine-only) + `rolesvc` (Q5 global
+fallback, no engine import) + the multi-kind socket (deny-by-absence per kind,
+root aliases, userset-subject rejection on roles) + `memstore` both kinds (real
+graph-walk expansion) + `storetest` (all 5 named adversarial sub-runners + the
+`Roles/*` family + `Relationship/DBGeneratedIDOnEmpty`), hermetic in `make
+check`. `make check` green @ 32 modules; `make guard` green; rule-6 clean both
+directions; `examples/minimal` no-regression 200s. **Next: Z2a (`02a-store-
+turso.md`) — module 33, the canonical migration filename set.**
 
 ### 2026-07-08 — planning leg: milestone cut (DRAFT)
 
@@ -1006,6 +1176,52 @@ behavioral-not-guard-shaped kind enforcement; item-12 asymmetry
 rationale; the roles-only adopter line (both store READMEs + Z5);
 keep-strings decision recorded. Status unchanged: DRAFT, awaiting
 jrazmi ratification of Q1–Q5.
+
+### 2026-07-09 — codex review fold (5 findings, all applied)
+
+External codex pass on the fresh-review deltas; all five folded. (1) Major:
+`MaxTraversalDepth` still read "SHARED bound across engine/memstore/CTEs"
+in Z5's nil-semantics table and "bounded recursion" in the risk section —
+both contradict the folded A1 ruling (engine-only; stores unbounded, cycle-
+safe by UNION dedup); corrected in both places (the superseded refinement-8
+wording in the historical review-gate-fold subsection keeps its
+supersession marker and is left as record). (2) Major: stale "33" closeout
+survived my re-basing where line-wraps hid it — DoD "module count 34
+everywhere" and Z5 task-3 "Thirty-one modules today → thirty-four" fixed;
+Z5's verify grep widened to catch every stale intermediate (31/32/33), not
+just 31. (3) Major: Q6/Q7 are execution gates, not just docs — added to
+Z1, Z2a, Z2b preconditions and Z5's depends-on (they change ID minting,
+DDL defaults, store batch behavior, memstore semantics, conflict
+expectations). (4) Medium: the pinned `Repositories(db) (…, error)`
+constructor was miscited as the jobs precedent — jobs is error-less;
+events is `New(db) (*Store, error)`; refinement 11 now names it a
+deliberate HYBRID new store surface and Z5 records the convention. (5)
+Medium: Q4-KEEP was underspecified — pinned that KEEP requires cutting a
+concrete metadata-API task into Z1 before execution, else default TRIM.
+Status unchanged: DRAFT, awaiting Q1–Q7.
+
+### 2026-07-09 — fresh-review fold: phase 04 cryptids + segovia-lessons alignment
+
+Owner-requested fresh review against the segovia-lessons landings this cut
+predates (phases 03/04). Factual re-basings folded across all six files (no
+ratification): module arithmetic 31-today → 32/33/34 (google-uuid landed
+2026-07-09; the root docs' stale "thirty" counts fixed same session — a
+phase-04 miss this review surfaced); inherited-law checklist line → items
+1–14. Design deltas raised as **Q6** (the relationship-id ID strategy —
+`Config.IDs cryptids.IDGenerator` minting at the `CreateRelationships`
+service seam, the original's `generateID`/`WithGenerateID` seam faithfully
+salvaged; `cryptids.Database` honored via an all-empty-batch omit-column
+branch with the DEFAULT inline in `0001` and NO RETURNING; memstore
+assign-at-insert; a `Relationship/DBGeneratedIDOnEmpty` conformance case;
+roles kind takes NO id strategy — 5-tuple-keyed) and **Q7** (the
+second-relation-same-subject conflict is a silent no-op under the
+original's bare `ON CONFLICT DO NOTHING`, not `ErrAlreadyExists` — the
+plan's wording read error-ish). data-integration-reviewer ran the
+id-delta pass (ship-with-edits; 3 majors + 4 minors folded — the
+"Fresh-review fold" consultation subsection is the record). All pins
+threaded into 01-core tasks 1/4/6/7/8, 02a task-1/task-2, 02b task-1/task-2,
+Z5 task-2. Status unchanged: DRAFT, now awaiting jrazmi ratification of
+Q1–Q7.
 
 ### 2026-07-08 — Codex external-review fold applied (two owner rulings)
 
