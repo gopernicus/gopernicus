@@ -60,6 +60,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/environment"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
 	"github.com/gopernicus/gopernicus/sdk/feature"
+	"github.com/gopernicus/gopernicus/sdk/identity"
 	"github.com/gopernicus/gopernicus/sdk/logging"
 	"github.com/gopernicus/gopernicus/sdk/oauth"
 	"github.com/gopernicus/gopernicus/sdk/web"
@@ -198,10 +199,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// gateway reads connect-time identity from sdk/identity, stashed by
 	// authSvc.RequireUser on StreamMiddleware (A-I1 E2: no Identity field — absent
 	// principal fails closed with 401). Repositories.Outbox nil ⇒ direct-emit mode
-	// (no durable rail, no poller). Authorize left nil ⇒ the resource-scoped
-	// /events/{resource_type}/{resource_id} route is NOT registered (deny by
-	// absence). The subject stream lands at GET /events (host mounts at root, no
-	// prefix — same as cms/auth).
+	// (no durable rail, no poller). Authorize is wired below with a PLAIN host
+	// ownership closure (the middle posture — authorization-v1 Z4 commit 1), so the
+	// resource-scoped /events/{resource_type}/{resource_id} route IS registered. The
+	// subject stream lands at GET /events (host mounts at root, no prefix — same as
+	// cms/auth).
 	// Variant selection (design §8): the DEFAULT is direct-emit (Repositories.Outbox
 	// nil — cms emits straight onto the bus). With EVENTS_OUTBOX=memory the host
 	// instead wires an example-local in-memory outbox and drives a poller that
@@ -217,6 +219,17 @@ func run(ctx context.Context, log *slog.Logger) error {
 	eventsSvc, err := eventsfeature.NewService(eventsRepos, eventsfeature.Config{
 		Bus:              bus,
 		StreamMiddleware: []web.Middleware{authSvc.RequireUser},
+		// Authorize (the MIDDLE POSTURE — authorization-v1 Z4 commit 1): a plain
+		// host ownership closure over the toy membership map satisfies the events
+		// Check seam, with NO features/authorization in this host's module graph
+		// (GOWORK=off go list -m all has no authorization module and no libsql). A
+		// non-nil Authorize registers the resource-scoped
+		// GET /events/{resource_type}/{resource_id} route; the closure reads the
+		// SAME map A9's invitation Granter writes (members.has). Commit 2 swaps this
+		// for authorizer.Check (the flagship posture) through the identical seam.
+		Authorize: func(ctx context.Context, p identity.Principal, resourceType, resourceID string) (bool, error) {
+			return members.has(resourceType, resourceID, demoRelation, p.Type, p.ID), nil
+		},
 	})
 	if err != nil {
 		return err
