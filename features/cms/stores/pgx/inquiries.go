@@ -45,16 +45,27 @@ func (r inquiryRow) toDomain() messaging.Inquiry {
 
 // Create persists a new inquiry.
 func (s *InquiryStore) Create(ctx context.Context, in messaging.Inquiry) (messaging.Inquiry, error) {
-	const q = `INSERT INTO inquiries (` + inquiryColumns + `)
-		VALUES (@id, @name, @email, @message, @created_at)`
-	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
-		"id":         in.ID,
+	args := pgx.NamedArgs{
 		"name":       in.Name,
 		"email":      in.Email,
 		"message":    in.Message,
 		"created_at": in.CreatedAt.UTC(),
-	})
-	if err != nil {
+	}
+	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// column so the schema default generates the key, read back with RETURNING.
+	if in.ID == "" {
+		const q = `INSERT INTO inquiries (name, email, message, created_at)
+			VALUES (@name, @email, @message, @created_at)
+			RETURNING id`
+		if err := s.db.QueryRow(ctx, q, args).Scan(&in.ID); err != nil {
+			return messaging.Inquiry{}, pgxdb.MapError(err)
+		}
+		return in, nil
+	}
+	const q = `INSERT INTO inquiries (` + inquiryColumns + `)
+		VALUES (@id, @name, @email, @message, @created_at)`
+	args["id"] = in.ID
+	if _, err := s.db.Exec(ctx, q, args); err != nil {
 		return messaging.Inquiry{}, err
 	}
 	return in, nil

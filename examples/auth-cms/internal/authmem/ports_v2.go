@@ -117,6 +117,10 @@ type serviceAccountRepo struct{ *data }
 func (r serviceAccountRepo) Create(_ context.Context, sa serviceaccount.ServiceAccount) (serviceaccount.ServiceAccount, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// Empty ID → mimic a schema default (amended D10): assign the key at insert.
+	if sa.ID == "" {
+		sa.ID = ids.MustGenerate()
+	}
 	r.serviceAccounts[sa.ID] = sa
 	return sa, nil
 }
@@ -172,6 +176,10 @@ func (r apiKeyRepo) Create(_ context.Context, k apikey.APIKey) (apikey.APIKey, e
 		if ex.KeyHash == k.KeyHash {
 			return apikey.APIKey{}, errs.ErrAlreadyExists
 		}
+	}
+	// Empty ID → mimic a schema default (amended D10): assign the key at insert.
+	if k.ID == "" {
+		k.ID = ids.MustGenerate()
 	}
 	r.apiKeys[k.ID] = k
 	return k, nil
@@ -237,6 +245,10 @@ func (r securityEventRepo) Create(_ context.Context, evt securityevent.SecurityE
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	evt.Details = normalizeDetails(evt.Details)
+	// Empty ID → mimic a schema default (amended D10): assign the key at insert.
+	if evt.ID == "" {
+		evt.ID = ids.MustGenerate()
+	}
 	r.securityEvents = append(r.securityEvents, evt)
 	return evt, nil
 }
@@ -279,6 +291,10 @@ func (r invitationRepo) Create(_ context.Context, inv invitation.Invitation) (in
 			ex.Identifier == inv.Identifier && ex.Relation == inv.Relation {
 			return invitation.Invitation{}, errs.ErrAlreadyExists
 		}
+	}
+	// Empty ID → mimic a schema default (amended D10): assign the key at insert.
+	if inv.ID == "" {
+		inv.ID = ids.MustGenerate()
 	}
 	r.invitations[inv.ID] = inv
 	return inv, nil

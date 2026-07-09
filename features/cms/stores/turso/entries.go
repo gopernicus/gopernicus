@@ -30,6 +30,21 @@ const entryColumns = "id, type, slug, title, status, body, excerpt, author, temp
 // Create persists a new entry and its custom fields in one transaction.
 func (s *EntryStore) Create(ctx context.Context, e content.Entry) (content.Entry, error) {
 	err := s.db.InTx(ctx, func(tx *tursodb.Tx) error {
+		// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+		// column so the schema default generates the key, read back with RETURNING.
+		// The generated key must be assigned before writeFields writes the child rows.
+		if e.ID == "" {
+			const q = `INSERT INTO entries (type, slug, title, status, body, excerpt, author, template, parent_id, menu_order, published_at, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`
+			if err := tx.QueryRow(ctx, q,
+				e.Type, e.Slug, e.Title, string(e.Status), e.Body, e.Excerpt, e.Author,
+				e.Template, e.ParentID, e.MenuOrder, tursodb.NullTimePtr(e.PublishedAt),
+				tursodb.FormatTime(e.CreatedAt), tursodb.FormatTime(e.UpdatedAt),
+			).Scan(&e.ID); err != nil {
+				return err
+			}
+			return writeFields(ctx, tx, e.ID, e.Fields)
+		}
 		const q = `INSERT INTO entries (` + entryColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		if _, err := tx.Exec(ctx, q,
 			e.ID, e.Type, e.Slug, e.Title, string(e.Status), e.Body, e.Excerpt, e.Author,

@@ -14,16 +14,18 @@
 // never Emit. Because delivery can drop or duplicate depending on the backend,
 // Handler implementations must be idempotent.
 //
-// This package is stdlib-only apart from sdk/id (intra-module); a distributed
-// backend is a separate integration module.
+// This package is stdlib-only apart from sdk/cryptids (intra-module); a
+// distributed backend is a separate integration module.
 package events
 
 import (
 	"context"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/id"
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 )
+
+var ids = cryptids.IDGenerator{}
 
 // =============================================================================
 // Event vocabulary
@@ -95,7 +97,7 @@ func NewBaseEvent(eventType string) BaseEvent {
 	return BaseEvent{
 		EventType:   eventType,
 		Occurred:    time.Now().UTC(),
-		Correlation: id.New(),
+		Correlation: ids.MustGenerate(),
 	}
 }
 

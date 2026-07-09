@@ -43,8 +43,13 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 )
+
+// ids assigns entity keys when a Create arrives with an empty ID (the
+// cryptids.Database strategy, amended D10) — mimicking a schema default.
+var ids = cryptids.IDGenerator{}
 
 // data holds every auth entity in maps behind one mutex. The v2 collections
 // (oauthAccounts, securityEvents) are slices where the port has no single-key
@@ -114,6 +119,10 @@ func (r userRepo) Create(_ context.Context, u user.User) (user.User, error) {
 		if strings.EqualFold(ex.Email, u.Email) {
 			return user.User{}, errs.ErrAlreadyExists
 		}
+	}
+	// Empty ID → mimic a schema default (amended D10): assign the key at insert.
+	if u.ID == "" {
+		u.ID = ids.MustGenerate()
 	}
 	r.users[u.ID] = u
 	return u, nil

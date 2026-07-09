@@ -37,7 +37,7 @@ func (s *Service) recordSecurityEvent(ctx context.Context, in securityEventInput
 		return
 	}
 	info := clientInfoFromContext(ctx)
-	evt := securityevent.New(in.Type, in.Status, s.now())
+	evt := securityevent.New(s.ids, in.Type, in.Status, s.now())
 	evt.UserID = in.UserID
 	evt.Actor = in.Actor
 	evt.Details = in.Details

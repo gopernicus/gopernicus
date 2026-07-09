@@ -34,6 +34,20 @@ const apiKeyColumns = "id, service_account_id, name, key_prefix, key_hash, expir
 
 // Create persists a new key; a colliding key_hash → errs.ErrAlreadyExists.
 func (s *APIKeyStore) Create(ctx context.Context, k apikey.APIKey) (apikey.APIKey, error) {
+	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// column so the schema default generates the key, read back with RETURNING.
+	if k.ID == "" {
+		const q = `INSERT INTO api_keys (service_account_id, name, key_prefix, key_hash, expires_at, revoked_at, last_used_at, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`
+		if err := s.db.QueryRow(ctx, q,
+			k.ServiceAccountID, k.Name, k.KeyPrefix, k.KeyHash,
+			tursodb.NullTime(k.ExpiresAt), tursodb.NullTime(k.RevokedAt), tursodb.NullTime(k.LastUsedAt),
+			tursodb.FormatTime(k.CreatedAt),
+		).Scan(&k.ID); err != nil {
+			return apikey.APIKey{}, tursodb.MapError(err)
+		}
+		return k, nil
+	}
 	const q = `INSERT INTO api_keys (` + apiKeyColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err := s.db.Exec(ctx, q,
 		k.ID, k.ServiceAccountID, k.Name, k.KeyPrefix, k.KeyHash,

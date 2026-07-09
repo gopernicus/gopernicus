@@ -13,18 +13,19 @@
 package cms
 
 import (
+	"github.com/gopernicus/gopernicus/features/cms/domain/content"
+	"github.com/gopernicus/gopernicus/features/cms/domain/media"
+	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
+	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
+	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
 	inbound "github.com/gopernicus/gopernicus/features/cms/internal/inbound/cms"
 	"github.com/gopernicus/gopernicus/features/cms/internal/logic/entrysvc"
 	"github.com/gopernicus/gopernicus/features/cms/internal/logic/mediasvc"
 	"github.com/gopernicus/gopernicus/features/cms/internal/logic/menussvc"
 	"github.com/gopernicus/gopernicus/features/cms/internal/logic/messagingsvc"
 	"github.com/gopernicus/gopernicus/features/cms/internal/logic/taxonomysvc"
-	"github.com/gopernicus/gopernicus/features/cms/domain/content"
-	"github.com/gopernicus/gopernicus/features/cms/domain/media"
-	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
-	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
-	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
 	"github.com/gopernicus/gopernicus/sdk/cacher"
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/email"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/web"
@@ -62,6 +63,14 @@ type Config struct {
 	Mailer    email.Sender          // contact-form delivery; host-owned
 	MailFrom  string                // From address for contact notifications
 	ContactTo string                // recipient for contact notifications
+
+	// IDs is the app's entity-ID strategy, decided once at wiring (amended D9):
+	// it mints the keys of entries, assets, menus, menu items, inquiries, and
+	// terms. The zero value generates default nanoids; cryptids.Database delegates
+	// key generation to the database (the bundled stores omit the id column and
+	// read it back with RETURNING); an integration's GenerateFunc (e.g.
+	// google-uuid) chooses another shape.
+	IDs cryptids.IDGenerator
 
 	// AdminMiddleware wraps every admin route the feature mounts (the CRUD/
 	// management surface); public routes (site pages, asset serving, the contact
@@ -101,11 +110,11 @@ func Register(m feature.Mount, repos Repositories, cfg Config) error {
 		}
 	}
 
-	entrySvc := entrysvc.NewService(repos.Entries, registry, nil, m.Events)
-	termSvc := taxonomysvc.NewService(repos.Terms, nil)
-	menuSvc := menussvc.NewService(repos.Menus, nil)
-	mediaSvc := mediasvc.NewService(repos.Media, cfg.Blobs, nil)
-	contactSvc := messagingsvc.NewService(repos.Inquiries, cfg.Mailer, cfg.MailFrom, cfg.ContactTo, nil)
+	entrySvc := entrysvc.NewService(repos.Entries, registry, cfg.IDs, nil, m.Events)
+	termSvc := taxonomysvc.NewService(repos.Terms, cfg.IDs, nil)
+	menuSvc := menussvc.NewService(repos.Menus, cfg.IDs, nil)
+	mediaSvc := mediasvc.NewService(repos.Media, cfg.Blobs, cfg.IDs, nil)
+	contactSvc := messagingsvc.NewService(repos.Inquiries, cfg.Mailer, cfg.MailFrom, cfg.ContactTo, cfg.IDs, nil)
 
 	inbound.Mount(m.Router, inbound.Deps{
 		Registry: registry,

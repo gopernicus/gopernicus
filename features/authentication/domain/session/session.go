@@ -6,8 +6,13 @@ package session
 import (
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/id"
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 )
+
+// secrets mints session tokens with the default nanoid shape. Deliberately NOT
+// the app's entity-ID strategy (amended D9): a token is a credential, and its
+// entropy must never follow a wiring choice like cryptids.Database.
+var secrets = cryptids.IDGenerator{}
 
 // Session is an opaque server-side session. Token is the stored value (the
 // SHA-256 hash of the cookie value): the auth service hashes the minted cookie
@@ -21,13 +26,13 @@ type Session struct {
 }
 
 // NewSession mints a session for userID that expires ttl after now. The token
-// is an opaque random value (sdk/id), never derived from the user's identity;
+// is an opaque random value (sdk/cryptids), never derived from the user's identity;
 // the auth service replaces it with the token's hash before persisting (design
 // §7.3), keeping the plaintext for the cookie only.
 func NewSession(userID string, ttl time.Duration, now time.Time) Session {
 	now = now.UTC()
 	return Session{
-		Token:     id.New(),
+		Token:     secrets.MustGenerate(),
 		UserID:    userID,
 		CreatedAt: now,
 		ExpiresAt: now.Add(ttl),

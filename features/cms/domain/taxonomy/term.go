@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/errs"
-	"github.com/gopernicus/gopernicus/sdk/id"
 	"github.com/gopernicus/gopernicus/sdk/slug"
 )
 
@@ -35,9 +35,10 @@ type Term struct {
 	UpdatedAt time.Time
 }
 
-// NewTerm validates inputs, generates an ID and slug, and returns a new Term.
+// NewTerm validates inputs, generates a slug, mints its ID from ids (empty under
+// cryptids.Database — the store then assigns the key), and returns a new Term.
 // ParentID is ignored for tags. Validation failures wrap errs.ErrInvalidInput.
-func NewTerm(kind Kind, name, parentID string, now time.Time) (Term, error) {
+func NewTerm(ids cryptids.IDGenerator, kind Kind, name, parentID string, now time.Time) (Term, error) {
 	name = strings.TrimSpace(name)
 	if err := validate(kind, name); err != nil {
 		return Term{}, err
@@ -48,7 +49,7 @@ func NewTerm(kind Kind, name, parentID string, now time.Time) (Term, error) {
 
 	now = now.UTC()
 	return Term{
-		ID:        id.New(),
+		ID:        ids.MustGenerate(),
 		Kind:      kind,
 		Slug:      slug.Make(name),
 		Name:      name,

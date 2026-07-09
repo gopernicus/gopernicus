@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 )
 
 // Clock returns the current time. Injected so tests can pin timestamps.
@@ -16,20 +17,24 @@ type Clock func() time.Time
 // Service implements the taxonomy use cases over a taxonomy.TermRepository.
 type Service struct {
 	terms taxonomy.TermRepository
+	// ids is the app-chosen entity-ID strategy (cms.Config.IDs); zero value →
+	// default nanoids.
+	ids   cryptids.IDGenerator
 	clock Clock
 }
 
-// NewService constructs a Service. A nil clock defaults to time.Now.
-func NewService(terms taxonomy.TermRepository, clock Clock) *Service {
+// NewService constructs a Service. A nil clock defaults to time.Now. ids is the
+// app's entity-ID strategy (cms.Config.IDs).
+func NewService(terms taxonomy.TermRepository, ids cryptids.IDGenerator, clock Clock) *Service {
 	if clock == nil {
 		clock = time.Now
 	}
-	return &Service{terms: terms, clock: clock}
+	return &Service{terms: terms, ids: ids, clock: clock}
 }
 
 // CreateTerm validates and persists a new term.
 func (s *Service) CreateTerm(ctx context.Context, kind taxonomy.Kind, name, parentID string) (taxonomy.Term, error) {
-	t, err := taxonomy.NewTerm(kind, name, parentID, s.clock())
+	t, err := taxonomy.NewTerm(s.ids, kind, name, parentID, s.clock())
 	if err != nil {
 		return taxonomy.Term{}, err
 	}

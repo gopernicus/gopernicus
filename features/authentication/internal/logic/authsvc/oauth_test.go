@@ -566,7 +566,7 @@ func TestOAuthCallbackWrongProviderState(t *testing.T) {
 // returns it (mirroring an OAuth-registered account).
 func (h *oauthHarness) mustOAuthUser(t *testing.T, email string) user.User {
 	t.Helper()
-	u, err := user.NewUser(email, "", time.Now())
+	u, err := user.NewUser(cryptids.IDGenerator{}, email, "", time.Now())
 	if err != nil {
 		t.Fatalf("NewUser: %v", err)
 	}

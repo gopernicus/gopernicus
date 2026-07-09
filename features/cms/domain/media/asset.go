@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/errs"
-	"github.com/gopernicus/gopernicus/sdk/id"
 	"github.com/gopernicus/gopernicus/sdk/slug"
 )
 
@@ -26,9 +26,18 @@ type Asset struct {
 	CreatedAt   time.Time
 }
 
-// NewAsset validates inputs, generates an ID and a storage key, and returns a
-// new Asset. Validation failures wrap errs.ErrInvalidInput.
-func NewAsset(filename, contentType string, size int64, now time.Time) (Asset, error) {
+// storageKeys mints the random path component of a StorageKey with the default
+// nanoid shape. Deliberately NOT the app's entity-ID strategy: a blob needs its
+// collision-free path even when cryptids.Database leaves the entity ID empty
+// for the store to assign at insert.
+var storageKeys = cryptids.IDGenerator{}
+
+// NewAsset validates inputs, generates a storage key, mints its ID from ids
+// (empty under cryptids.Database — the store then assigns the key), and returns a
+// new Asset. The storage key carries its own random component, independent of
+// the entity ID, so it exists under every ID strategy. Validation failures wrap
+// errs.ErrInvalidInput.
+func NewAsset(ids cryptids.IDGenerator, filename, contentType string, size int64, now time.Time) (Asset, error) {
 	filename = strings.TrimSpace(filename)
 	if filename == "" {
 		return Asset{}, fmt.Errorf("filename is required: %w", errs.ErrInvalidInput)
@@ -40,23 +49,22 @@ func NewAsset(filename, contentType string, size int64, now time.Time) (Asset, e
 		return Asset{}, fmt.Errorf("file is empty: %w", errs.ErrInvalidInput)
 	}
 
-	assetID := id.New()
 	return Asset{
-		ID:          assetID,
+		ID:          ids.MustGenerate(),
 		Filename:    filename,
 		ContentType: contentType,
 		Size:        size,
-		StorageKey:  storageKey(assetID, filename),
+		StorageKey:  storageKey(storageKeys.MustGenerate(), filename),
 		CreatedAt:   now.UTC(),
 	}, nil
 }
 
-// storageKey builds a collision-free, sanitized path: assets/<id>/<slug><ext>.
-func storageKey(assetID, filename string) string {
+// storageKey builds a collision-free, sanitized path: assets/<key>/<slug><ext>.
+func storageKey(key, filename string) string {
 	ext := path.Ext(filename)
 	name := slug.Make(strings.TrimSuffix(filename, ext))
 	if name == "" {
 		name = "file"
 	}
-	return "assets/" + assetID + "/" + name + strings.ToLower(ext)
+	return "assets/" + key + "/" + name + strings.ToLower(ext)
 }

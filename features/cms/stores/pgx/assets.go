@@ -50,18 +50,29 @@ func (r assetRow) toDomain() media.Asset {
 
 // Create persists asset metadata.
 func (s *AssetStore) Create(ctx context.Context, a media.Asset) (media.Asset, error) {
-	const q = `INSERT INTO assets (` + assetColumns + `)
-		VALUES (@id, @filename, @content_type, @size, @storage_key, @alt, @created_at)`
-	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
-		"id":           a.ID,
+	args := pgx.NamedArgs{
 		"filename":     a.Filename,
 		"content_type": a.ContentType,
 		"size":         a.Size,
 		"storage_key":  a.StorageKey,
 		"alt":          a.Alt,
 		"created_at":   a.CreatedAt.UTC(),
-	})
-	if err != nil {
+	}
+	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// column so the schema default generates the key, read back with RETURNING.
+	if a.ID == "" {
+		const q = `INSERT INTO assets (filename, content_type, size, storage_key, alt, created_at)
+			VALUES (@filename, @content_type, @size, @storage_key, @alt, @created_at)
+			RETURNING id`
+		if err := s.db.QueryRow(ctx, q, args).Scan(&a.ID); err != nil {
+			return media.Asset{}, pgxdb.MapError(err)
+		}
+		return a, nil
+	}
+	const q = `INSERT INTO assets (` + assetColumns + `)
+		VALUES (@id, @filename, @content_type, @size, @storage_key, @alt, @created_at)`
+	args["id"] = a.ID
+	if _, err := s.db.Exec(ctx, q, args); err != nil {
 		return media.Asset{}, err
 	}
 	return a, nil

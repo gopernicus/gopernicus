@@ -26,6 +26,19 @@ const userColumns = "id, email, display_name, email_verified, created_at, update
 
 // Create persists a new user; a colliding normalized email → errs.ErrAlreadyExists.
 func (s *UserStore) Create(ctx context.Context, u user.User) (user.User, error) {
+	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// column so the schema default generates the key, read back with RETURNING.
+	if u.ID == "" {
+		const q = `INSERT INTO users (email, display_name, email_verified, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?) RETURNING id`
+		if err := s.db.QueryRow(ctx, q,
+			u.Email, u.DisplayName, tursodb.BoolToInt(u.EmailVerified),
+			tursodb.FormatTime(u.CreatedAt), tursodb.FormatTime(u.UpdatedAt),
+		).Scan(&u.ID); err != nil {
+			return user.User{}, tursodb.MapError(err)
+		}
+		return u, nil
+	}
 	const q = `INSERT INTO users (` + userColumns + `) VALUES (?, ?, ?, ?, ?, ?)`
 	_, err := s.db.Exec(ctx, q,
 		u.ID, u.Email, u.DisplayName, tursodb.BoolToInt(u.EmailVerified),

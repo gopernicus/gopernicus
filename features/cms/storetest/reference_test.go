@@ -79,6 +79,10 @@ func (r refEntries) Create(_ context.Context, e content.Entry) (content.Entry, e
 			return content.Entry{}, errs.ErrAlreadyExists
 		}
 	}
+	// Empty ID → mimic a schema default (amended D10): assign the key at insert.
+	if e.ID == "" {
+		e.ID = ids.MustGenerate()
+	}
 	r.entries[e.ID] = e
 	return e, nil
 }
@@ -346,6 +350,10 @@ func (r refTerms) Create(_ context.Context, t taxonomy.Term) (taxonomy.Term, err
 			return taxonomy.Term{}, errs.ErrAlreadyExists
 		}
 	}
+	// Empty ID → mimic a schema default (amended D10): assign the key at insert.
+	if t.ID == "" {
+		t.ID = ids.MustGenerate()
+	}
 	r.terms[t.ID] = t
 	return t, nil
 }
@@ -389,6 +397,10 @@ func (r refMenus) CreateMenu(_ context.Context, m menus.Menu) (menus.Menu, error
 		if ex.Slug == m.Slug {
 			return menus.Menu{}, errs.ErrAlreadyExists
 		}
+	}
+	// Empty ID → mimic a schema default (amended D10): assign the key at insert.
+	if m.ID == "" {
+		m.ID = ids.MustGenerate()
 	}
 	r.menus[m.ID] = m
 	return m, nil
@@ -447,6 +459,10 @@ func (r refMenus) ItemsForMenu(_ context.Context, menuID string) ([]menus.MenuIt
 func (r refMenus) AddItem(_ context.Context, item menus.MenuItem) (menus.MenuItem, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// Empty ID → mimic a schema default (amended D10): assign the key at insert.
+	if item.ID == "" {
+		item.ID = ids.MustGenerate()
+	}
 	r.items[item.ID] = item
 	return item, nil
 }
@@ -485,6 +501,10 @@ type refAssets struct{ *reference }
 func (r refAssets) Create(_ context.Context, a media.Asset) (media.Asset, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// Empty ID → mimic a schema default (amended D10): assign the key at insert.
+	if a.ID == "" {
+		a.ID = ids.MustGenerate()
+	}
 	r.assets[a.ID] = a
 	return a, nil
 }
@@ -529,6 +549,10 @@ type refInquiries struct{ *reference }
 func (r refInquiries) Create(_ context.Context, in messaging.Inquiry) (messaging.Inquiry, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// Empty ID → mimic a schema default (amended D10): assign the key at insert.
+	if in.ID == "" {
+		in.ID = ids.MustGenerate()
+	}
 	r.inquiries[in.ID] = in
 	return in, nil
 }

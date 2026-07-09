@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/errs"
-	"github.com/gopernicus/gopernicus/sdk/id"
 	"github.com/gopernicus/gopernicus/sdk/slug"
 )
 
@@ -36,15 +36,16 @@ type MenuItem struct {
 	UpdatedAt time.Time
 }
 
-// NewMenu validates the name, derives a slug, and returns a new Menu.
-func NewMenu(name string, now time.Time) (Menu, error) {
+// NewMenu validates the name, derives a slug, mints its ID from ids (empty under
+// cryptids.Database — the store then assigns the key), and returns a new Menu.
+func NewMenu(ids cryptids.IDGenerator, name string, now time.Time) (Menu, error) {
 	name = strings.TrimSpace(name)
 	if err := requireName(name); err != nil {
 		return Menu{}, err
 	}
 	now = now.UTC()
 	return Menu{
-		ID:        id.New(),
+		ID:        ids.MustGenerate(),
 		Name:      name,
 		Slug:      slug.Make(name),
 		CreatedAt: now,
@@ -64,15 +65,16 @@ func (m *Menu) Rename(name string, now time.Time) error {
 	return nil
 }
 
-// NewMenuItem validates and returns a new item belonging to menuID.
-func NewMenuItem(menuID, label, url, parentID string, position int, now time.Time) (MenuItem, error) {
+// NewMenuItem validates and returns a new item belonging to menuID, minting its
+// ID from ids (empty under cryptids.Database — the store then assigns the key).
+func NewMenuItem(ids cryptids.IDGenerator, menuID, label, url, parentID string, position int, now time.Time) (MenuItem, error) {
 	label = strings.TrimSpace(label)
 	if label == "" {
 		return MenuItem{}, fmt.Errorf("label is required: %w", errs.ErrInvalidInput)
 	}
 	now = now.UTC()
 	return MenuItem{
-		ID:        id.New(),
+		ID:        ids.MustGenerate(),
 		MenuID:    menuID,
 		Label:     label,
 		URL:       strings.TrimSpace(url),

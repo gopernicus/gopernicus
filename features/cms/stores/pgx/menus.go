@@ -72,16 +72,27 @@ func (r menuItemRow) toDomain() menus.MenuItem {
 
 // CreateMenu persists a new menu.
 func (s *MenuStore) CreateMenu(ctx context.Context, m menus.Menu) (menus.Menu, error) {
-	const q = `INSERT INTO menus (` + menuColumns + `)
-		VALUES (@id, @name, @slug, @created_at, @updated_at)`
-	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
-		"id":         m.ID,
+	args := pgx.NamedArgs{
 		"name":       m.Name,
 		"slug":       m.Slug,
 		"created_at": m.CreatedAt.UTC(),
 		"updated_at": m.UpdatedAt.UTC(),
-	})
-	if err != nil {
+	}
+	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// column so the schema default generates the key, read back with RETURNING.
+	if m.ID == "" {
+		const q = `INSERT INTO menus (name, slug, created_at, updated_at)
+			VALUES (@name, @slug, @created_at, @updated_at)
+			RETURNING id`
+		if err := s.db.QueryRow(ctx, q, args).Scan(&m.ID); err != nil {
+			return menus.Menu{}, pgxdb.MapError(err)
+		}
+		return m, nil
+	}
+	const q = `INSERT INTO menus (` + menuColumns + `)
+		VALUES (@id, @name, @slug, @created_at, @updated_at)`
+	args["id"] = m.ID
+	if _, err := s.db.Exec(ctx, q, args); err != nil {
 		return menus.Menu{}, err
 	}
 	return m, nil
@@ -144,10 +155,7 @@ func (s *MenuStore) ItemsForMenu(ctx context.Context, menuID string) ([]menus.Me
 
 // AddItem persists a new menu item.
 func (s *MenuStore) AddItem(ctx context.Context, it menus.MenuItem) (menus.MenuItem, error) {
-	const q = `INSERT INTO menu_items (` + itemColumns + `)
-		VALUES (@id, @menu_id, @label, @url, @parent_id, @position, @created_at, @updated_at)`
-	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
-		"id":         it.ID,
+	args := pgx.NamedArgs{
 		"menu_id":    it.MenuID,
 		"label":      it.Label,
 		"url":        it.URL,
@@ -155,8 +163,22 @@ func (s *MenuStore) AddItem(ctx context.Context, it menus.MenuItem) (menus.MenuI
 		"position":   it.Position,
 		"created_at": it.CreatedAt.UTC(),
 		"updated_at": it.UpdatedAt.UTC(),
-	})
-	if err != nil {
+	}
+	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// column so the schema default generates the key, read back with RETURNING.
+	if it.ID == "" {
+		const q = `INSERT INTO menu_items (menu_id, label, url, parent_id, position, created_at, updated_at)
+			VALUES (@menu_id, @label, @url, @parent_id, @position, @created_at, @updated_at)
+			RETURNING id`
+		if err := s.db.QueryRow(ctx, q, args).Scan(&it.ID); err != nil {
+			return menus.MenuItem{}, pgxdb.MapError(err)
+		}
+		return it, nil
+	}
+	const q = `INSERT INTO menu_items (` + itemColumns + `)
+		VALUES (@id, @menu_id, @label, @url, @parent_id, @position, @created_at, @updated_at)`
+	args["id"] = it.ID
+	if _, err := s.db.Exec(ctx, q, args); err != nil {
 		return menus.MenuItem{}, err
 	}
 	return it, nil

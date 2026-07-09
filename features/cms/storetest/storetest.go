@@ -27,8 +27,17 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
 	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
 	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 )
+
+// ids is the suite's entity-ID generator: the default nanoid strategy, matching
+// the feature's zero-value Config.IDs.
+var ids = cryptids.IDGenerator{}
+
+// dbIDs is the cryptids.Database strategy: entities reach Create with an empty
+// ID and the store must assign the database-generated key (amended D10).
+var dbIDs = cryptids.NewGenerator(cryptids.Database)
 
 // suiteBase is the reference instant the suite stamps its rows from. Kept
 // microsecond-aligned so the precision case (below) controls the sub-microsecond
@@ -50,6 +59,7 @@ func Run(t *testing.T, newRepos func(t *testing.T) cms.Repositories) {
 		t.Run("CRUDRoundTrip", func(t *testing.T) { testEntriesCRUD(t, newRepos(t)) })
 		t.Run("AbsentNotFound", func(t *testing.T) { testEntriesAbsent(t, newRepos(t)) })
 		t.Run("TypeSlugUniqueness", func(t *testing.T) { testEntriesUniqueness(t, newRepos(t)) })
+		t.Run("DBGeneratedIDOnEmpty", func(t *testing.T) { testEntriesDBGeneratedID(t, newRepos(t)) })
 		t.Run("TermAssociationAndCascade", func(t *testing.T) { testEntriesTerms(t, newRepos(t)) })
 		t.Run("CursorPagination", func(t *testing.T) { testEntriesPagination(t, newRepos(t)) })
 		t.Run("StaleAndEmptyCursor", func(t *testing.T) { testEntriesCursorEdges(t, newRepos(t)) })
@@ -76,6 +86,7 @@ func Run(t *testing.T, newRepos func(t *testing.T) cms.Repositories) {
 		t.Run("CRUDRoundTrip", func(t *testing.T) { testTermsCRUD(t, newRepos(t)) })
 		t.Run("AbsentNotFound", func(t *testing.T) { testTermsAbsent(t, newRepos(t)) })
 		t.Run("KindSlugUniqueness", func(t *testing.T) { testTermsUniqueness(t, newRepos(t)) })
+		t.Run("DBGeneratedIDOnEmpty", func(t *testing.T) { testTermsDBGeneratedID(t, newRepos(t)) })
 		t.Run("ListByKindOrdered", func(t *testing.T) { testTermsListByKind(t, newRepos(t)) })
 	})
 
@@ -84,16 +95,19 @@ func Run(t *testing.T, newRepos func(t *testing.T) cms.Repositories) {
 		t.Run("AbsentNotFound", func(t *testing.T) { testMenusAbsent(t, newRepos(t)) })
 		t.Run("SlugUniqueness", func(t *testing.T) { testMenusUniqueness(t, newRepos(t)) })
 		t.Run("Items", func(t *testing.T) { testMenuItems(t, newRepos(t)) })
+		t.Run("DBGeneratedIDOnEmpty", func(t *testing.T) { testMenusDBGeneratedID(t, newRepos(t)) })
 	})
 
 	t.Run("Media", func(t *testing.T) {
 		t.Run("CRUDRoundTrip", func(t *testing.T) { testMediaCRUD(t, newRepos(t)) })
 		t.Run("AbsentNotFound", func(t *testing.T) { testMediaAbsent(t, newRepos(t)) })
 		t.Run("ListNewestFirst", func(t *testing.T) { testMediaListOrder(t, newRepos(t)) })
+		t.Run("DBGeneratedIDOnEmpty", func(t *testing.T) { testMediaDBGeneratedID(t, newRepos(t)) })
 	})
 
 	t.Run("Inquiries", func(t *testing.T) {
 		t.Run("CreateAndListNewestFirst", func(t *testing.T) { testInquiries(t, newRepos(t)) })
+		t.Run("DBGeneratedIDOnEmpty", func(t *testing.T) { testInquiriesDBGeneratedID(t, newRepos(t)) })
 	})
 }
 
@@ -294,7 +308,7 @@ func testEntriesTerms(t *testing.T, repos cms.Repositories) {
 	ctx := context.Background()
 	entries := repos.Entries
 
-	term, err := taxonomy.NewTerm(taxonomy.KindTag, "News", "", suiteBase)
+	term, err := taxonomy.NewTerm(ids, taxonomy.KindTag, "News", "", suiteBase)
 	if err != nil {
 		t.Fatalf("NewTerm: %v", err)
 	}
@@ -456,7 +470,7 @@ func testTermsCRUD(t *testing.T, repos cms.Repositories) {
 	ctx := context.Background()
 	repo := repos.Terms
 
-	term, err := taxonomy.NewTerm(taxonomy.KindCategory, "News", "", suiteBase)
+	term, err := taxonomy.NewTerm(ids, taxonomy.KindCategory, "News", "", suiteBase)
 	if err != nil {
 		t.Fatalf("NewTerm: %v", err)
 	}
@@ -508,7 +522,7 @@ func testTermsAbsent(t *testing.T, repos cms.Repositories) {
 	if _, err := repo.GetBySlug(ctx, taxonomy.KindTag, "nope"); !errors.Is(err, errs.ErrNotFound) {
 		t.Errorf("GetBySlug(absent): err=%v, want ErrNotFound", err)
 	}
-	absent, _ := taxonomy.NewTerm(taxonomy.KindTag, "Ghost", "", suiteBase)
+	absent, _ := taxonomy.NewTerm(ids, taxonomy.KindTag, "Ghost", "", suiteBase)
 	if _, err := repo.Update(ctx, "nope", absent); !errors.Is(err, errs.ErrNotFound) {
 		t.Errorf("Update(absent): err=%v, want ErrNotFound", err)
 	}
@@ -518,16 +532,16 @@ func testTermsUniqueness(t *testing.T, repos cms.Repositories) {
 	ctx := context.Background()
 	repo := repos.Terms
 
-	t1, _ := taxonomy.NewTerm(taxonomy.KindCategory, "Duplicate", "", suiteBase)
+	t1, _ := taxonomy.NewTerm(ids, taxonomy.KindCategory, "Duplicate", "", suiteBase)
 	if _, err := repo.Create(ctx, t1); err != nil {
 		t.Fatalf("first Create: %v", err)
 	}
-	t2, _ := taxonomy.NewTerm(taxonomy.KindCategory, "Duplicate", "", suiteBase)
+	t2, _ := taxonomy.NewTerm(ids, taxonomy.KindCategory, "Duplicate", "", suiteBase)
 	if _, err := repo.Create(ctx, t2); !errors.Is(err, errs.ErrAlreadyExists) {
 		t.Errorf("Create colliding (kind,slug): err=%v, want ErrAlreadyExists", err)
 	}
 	// Same slug under a different kind does not collide — uniqueness is (kind,slug).
-	t3, _ := taxonomy.NewTerm(taxonomy.KindTag, "Duplicate", "", suiteBase)
+	t3, _ := taxonomy.NewTerm(ids, taxonomy.KindTag, "Duplicate", "", suiteBase)
 	if _, err := repo.Create(ctx, t3); err != nil {
 		t.Errorf("Create same slug different kind: err=%v, want nil", err)
 	}
@@ -538,13 +552,13 @@ func testTermsListByKind(t *testing.T, repos cms.Repositories) {
 	repo := repos.Terms
 
 	for _, name := range []string{"Zebra", "Apple", "Mango"} {
-		term, _ := taxonomy.NewTerm(taxonomy.KindCategory, name, "", suiteBase)
+		term, _ := taxonomy.NewTerm(ids, taxonomy.KindCategory, name, "", suiteBase)
 		if _, err := repo.Create(ctx, term); err != nil {
 			t.Fatalf("Create %s: %v", name, err)
 		}
 	}
 	// A tag should not appear in the category list.
-	tag, _ := taxonomy.NewTerm(taxonomy.KindTag, "Sidebar", "", suiteBase)
+	tag, _ := taxonomy.NewTerm(ids, taxonomy.KindTag, "Sidebar", "", suiteBase)
 	if _, err := repo.Create(ctx, tag); err != nil {
 		t.Fatalf("Create tag: %v", err)
 	}
@@ -570,7 +584,7 @@ func testMenusCRUD(t *testing.T, repos cms.Repositories) {
 	ctx := context.Background()
 	repo := repos.Menus
 
-	menu, err := menus.NewMenu("Main", suiteBase)
+	menu, err := menus.NewMenu(ids, "Main", suiteBase)
 	if err != nil {
 		t.Fatalf("NewMenu: %v", err)
 	}
@@ -607,7 +621,7 @@ func testMenusAbsent(t *testing.T, repos cms.Repositories) {
 	if _, err := repo.GetItem(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
 		t.Errorf("GetItem(absent): err=%v, want ErrNotFound", err)
 	}
-	item, _ := menus.NewMenuItem("m", "Home", "/", "", 0, suiteBase)
+	item, _ := menus.NewMenuItem(ids, "m", "Home", "/", "", 0, suiteBase)
 	if _, err := repo.UpdateItem(ctx, "nope", item); !errors.Is(err, errs.ErrNotFound) {
 		t.Errorf("UpdateItem(absent): err=%v, want ErrNotFound", err)
 	}
@@ -617,11 +631,11 @@ func testMenusUniqueness(t *testing.T, repos cms.Repositories) {
 	ctx := context.Background()
 	repo := repos.Menus
 
-	m1, _ := menus.NewMenu("Footer", suiteBase)
+	m1, _ := menus.NewMenu(ids, "Footer", suiteBase)
 	if _, err := repo.CreateMenu(ctx, m1); err != nil {
 		t.Fatalf("first CreateMenu: %v", err)
 	}
-	m2, _ := menus.NewMenu("Footer", suiteBase)
+	m2, _ := menus.NewMenu(ids, "Footer", suiteBase)
 	if _, err := repo.CreateMenu(ctx, m2); !errors.Is(err, errs.ErrAlreadyExists) {
 		t.Errorf("CreateMenu colliding slug: err=%v, want ErrAlreadyExists", err)
 	}
@@ -631,15 +645,15 @@ func testMenuItems(t *testing.T, repos cms.Repositories) {
 	ctx := context.Background()
 	repo := repos.Menus
 
-	menu, _ := menus.NewMenu("Nav", suiteBase)
+	menu, _ := menus.NewMenu(ids, "Nav", suiteBase)
 	menu, err := repo.CreateMenu(ctx, menu)
 	if err != nil {
 		t.Fatalf("CreateMenu: %v", err)
 	}
 
 	// Two top-level items in reverse position order to verify ordering.
-	second, _ := menus.NewMenuItem(menu.ID, "About", "/about", "", 1, suiteBase)
-	first, _ := menus.NewMenuItem(menu.ID, "Home", "/", "", 0, suiteBase)
+	second, _ := menus.NewMenuItem(ids, menu.ID, "About", "/about", "", 1, suiteBase)
+	first, _ := menus.NewMenuItem(ids, menu.ID, "Home", "/", "", 0, suiteBase)
 	if _, err := repo.AddItem(ctx, second); err != nil {
 		t.Fatalf("AddItem second: %v", err)
 	}
@@ -685,7 +699,7 @@ func testMediaCRUD(t *testing.T, repos cms.Repositories) {
 	ctx := context.Background()
 	repo := repos.Media
 
-	asset, err := media.NewAsset("photo.jpg", "image/jpeg", 1024, suiteBase)
+	asset, err := media.NewAsset(ids, "photo.jpg", "image/jpeg", 1024, suiteBase)
 	if err != nil {
 		t.Fatalf("NewAsset: %v", err)
 	}
@@ -723,8 +737,8 @@ func testMediaListOrder(t *testing.T, repos cms.Repositories) {
 	ctx := context.Background()
 	repo := repos.Media
 
-	older, _ := media.NewAsset("old.jpg", "image/jpeg", 10, suiteBase)
-	newer, _ := media.NewAsset("new.jpg", "image/jpeg", 20, suiteBase.Add(time.Hour))
+	older, _ := media.NewAsset(ids, "old.jpg", "image/jpeg", 10, suiteBase)
+	newer, _ := media.NewAsset(ids, "new.jpg", "image/jpeg", 20, suiteBase.Add(time.Hour))
 	if _, err := repo.Create(ctx, older); err != nil {
 		t.Fatalf("Create older: %v", err)
 	}
@@ -747,11 +761,11 @@ func testInquiries(t *testing.T, repos cms.Repositories) {
 	ctx := context.Background()
 	repo := repos.Inquiries
 
-	older, err := messaging.NewInquiry("Jane", "jane@example.com", "First", suiteBase)
+	older, err := messaging.NewInquiry(ids, "Jane", "jane@example.com", "First", suiteBase)
 	if err != nil {
 		t.Fatalf("NewInquiry older: %v", err)
 	}
-	newer, err := messaging.NewInquiry("John", "john@example.com", "Second", suiteBase.Add(time.Hour))
+	newer, err := messaging.NewInquiry(ids, "John", "john@example.com", "Second", suiteBase.Add(time.Hour))
 	if err != nil {
 		t.Fatalf("NewInquiry newer: %v", err)
 	}
@@ -768,6 +782,159 @@ func testInquiries(t *testing.T, repos cms.Repositories) {
 	}
 	if len(list) != 2 || list[0].ID != newer.ID || list[1].ID != older.ID {
 		t.Errorf("List order = %v, want newest first", list)
+	}
+}
+
+// --- amended D10: database-generated keys on empty ID ---
+//
+// The tests below prove the Create side of the cryptids.Database strategy: an
+// entity constructed with the Database generator reaches the store with an
+// empty ID, and Create must hand back a store-assigned, non-empty key under
+// which the row is readable. SQL adapters satisfy this by omitting the id
+// column and reading the schema default back with RETURNING (migration
+// 0022_id_defaults); memory implementations assign at insert.
+
+func testEntriesDBGeneratedID(t *testing.T, repos cms.Repositories) {
+	ctx := context.Background()
+	e, err := content.NewEntry(dbIDs, "article", "DB Gen", "", "", "", content.StatusDraft, "", suiteBase)
+	if err != nil {
+		t.Fatalf("NewEntry: %v", err)
+	}
+	if e.ID != "" {
+		t.Fatalf("Database strategy minted a non-empty ID: %q", e.ID)
+	}
+	created, err := repos.Entries.Create(ctx, e)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if created.ID == "" {
+		t.Fatal("Create returned an empty ID — the store did not assign a database-generated key")
+	}
+	got, err := repos.Entries.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("Get by generated id: %v", err)
+	}
+	if got.Title != "DB Gen" {
+		t.Errorf("row under generated key has title %q", got.Title)
+	}
+}
+
+func testTermsDBGeneratedID(t *testing.T, repos cms.Repositories) {
+	ctx := context.Background()
+	term, err := taxonomy.NewTerm(dbIDs, taxonomy.KindCategory, "DB Gen", "", suiteBase)
+	if err != nil {
+		t.Fatalf("NewTerm: %v", err)
+	}
+	created, err := repos.Terms.Create(ctx, term)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if created.ID == "" {
+		t.Fatal("Create returned an empty ID — the store did not assign a database-generated key")
+	}
+	got, err := repos.Terms.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("Get by generated id: %v", err)
+	}
+	if got.Name != "DB Gen" {
+		t.Errorf("row under generated key has name %q", got.Name)
+	}
+}
+
+func testMenusDBGeneratedID(t *testing.T, repos cms.Repositories) {
+	ctx := context.Background()
+	repo := repos.Menus
+
+	menu, err := menus.NewMenu(dbIDs, "DB Gen", suiteBase)
+	if err != nil {
+		t.Fatalf("NewMenu: %v", err)
+	}
+	createdMenu, err := repo.CreateMenu(ctx, menu)
+	if err != nil {
+		t.Fatalf("CreateMenu: %v", err)
+	}
+	if createdMenu.ID == "" {
+		t.Fatal("CreateMenu returned an empty ID — the store did not assign a database-generated key")
+	}
+	gotMenu, err := repo.GetMenu(ctx, createdMenu.ID)
+	if err != nil {
+		t.Fatalf("GetMenu by generated id: %v", err)
+	}
+	if gotMenu.Name != "DB Gen" {
+		t.Errorf("menu under generated key has name %q", gotMenu.Name)
+	}
+
+	item, err := menus.NewMenuItem(dbIDs, createdMenu.ID, "Home", "/", "", 0, suiteBase)
+	if err != nil {
+		t.Fatalf("NewMenuItem: %v", err)
+	}
+	createdItem, err := repo.AddItem(ctx, item)
+	if err != nil {
+		t.Fatalf("AddItem: %v", err)
+	}
+	if createdItem.ID == "" {
+		t.Fatal("AddItem returned an empty ID — the store did not assign a database-generated key")
+	}
+	gotItem, err := repo.GetItem(ctx, createdItem.ID)
+	if err != nil {
+		t.Fatalf("GetItem by generated id: %v", err)
+	}
+	if gotItem.Label != "Home" {
+		t.Errorf("item under generated key has label %q", gotItem.Label)
+	}
+}
+
+func testMediaDBGeneratedID(t *testing.T, repos cms.Repositories) {
+	ctx := context.Background()
+	asset, err := media.NewAsset(dbIDs, "photo.jpg", "image/jpeg", 1024, suiteBase)
+	if err != nil {
+		t.Fatalf("NewAsset: %v", err)
+	}
+	created, err := repos.Media.Create(ctx, asset)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if created.ID == "" {
+		t.Fatal("Create returned an empty ID — the store did not assign a database-generated key")
+	}
+	got, err := repos.Media.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("Get by generated id: %v", err)
+	}
+	if got.Filename != "photo.jpg" {
+		t.Errorf("row under generated key has filename %q", got.Filename)
+	}
+}
+
+func testInquiriesDBGeneratedID(t *testing.T, repos cms.Repositories) {
+	ctx := context.Background()
+	in, err := messaging.NewInquiry(dbIDs, "Jane", "jane@example.com", "DB Gen", suiteBase)
+	if err != nil {
+		t.Fatalf("NewInquiry: %v", err)
+	}
+	created, err := repos.Inquiries.Create(ctx, in)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if created.ID == "" {
+		t.Fatal("Create returned an empty ID — the store did not assign a database-generated key")
+	}
+	// Inquiries expose no Get; the row is read back through List by its key.
+	list, err := repos.Inquiries.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var found bool
+	for _, got := range list {
+		if got.ID == created.ID {
+			found = true
+			if got.Message != "DB Gen" {
+				t.Errorf("row under generated key has message %q", got.Message)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("inquiry with generated key %q not found in List", created.ID)
 	}
 }
 

@@ -71,10 +71,7 @@ func (s *SecurityEventStore) Create(ctx context.Context, evt securityevent.Secur
 	if err != nil {
 		return securityevent.SecurityEvent{}, err
 	}
-	const q = `INSERT INTO security_events (` + securityEventColumns + `)
-		VALUES (@id, @user_id, @actor_type, @actor_id, @event_type, @event_status, @details, @ip_address, @user_agent, @created_at)`
-	if _, err := s.db.Exec(ctx, q, pgx.NamedArgs{
-		"id":           evt.ID,
+	args := pgx.NamedArgs{
 		"user_id":      evt.UserID,
 		"actor_type":   evt.Actor.Type,
 		"actor_id":     evt.Actor.ID,
@@ -84,8 +81,23 @@ func (s *SecurityEventStore) Create(ctx context.Context, evt securityevent.Secur
 		"ip_address":   evt.IPAddress,
 		"user_agent":   evt.UserAgent,
 		"created_at":   evt.CreatedAt.UTC(),
-	}); err != nil {
-		return securityevent.SecurityEvent{}, err
+	}
+	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// column so the schema default generates the key, read back with RETURNING.
+	if evt.ID == "" {
+		const q = `INSERT INTO security_events (user_id, actor_type, actor_id, event_type, event_status, details, ip_address, user_agent, created_at)
+			VALUES (@user_id, @actor_type, @actor_id, @event_type, @event_status, @details, @ip_address, @user_agent, @created_at)
+			RETURNING id`
+		if err := s.db.QueryRow(ctx, q, args).Scan(&evt.ID); err != nil {
+			return securityevent.SecurityEvent{}, pgxdb.MapError(err)
+		}
+	} else {
+		const q = `INSERT INTO security_events (` + securityEventColumns + `)
+			VALUES (@id, @user_id, @actor_type, @actor_id, @event_type, @event_status, @details, @ip_address, @user_agent, @created_at)`
+		args["id"] = evt.ID
+		if _, err := s.db.Exec(ctx, q, args); err != nil {
+			return securityevent.SecurityEvent{}, err
+		}
 	}
 	// Return the stored shape: Details normalized to a non-nil map, matching the
 	// read-back contract.

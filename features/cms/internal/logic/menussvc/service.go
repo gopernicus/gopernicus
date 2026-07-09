@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 )
 
 // Clock returns the current time. Injected so tests can pin timestamps.
@@ -15,21 +16,25 @@ type Clock func() time.Time
 
 // Service implements the menu use cases over a menus.MenuRepository.
 type Service struct {
-	repo  menus.MenuRepository
+	repo menus.MenuRepository
+	// ids is the app-chosen entity-ID strategy (cms.Config.IDs); zero value →
+	// default nanoids.
+	ids   cryptids.IDGenerator
 	clock Clock
 }
 
-// NewService constructs a Service. A nil clock defaults to time.Now.
-func NewService(repo menus.MenuRepository, clock Clock) *Service {
+// NewService constructs a Service. A nil clock defaults to time.Now. ids is the
+// app's entity-ID strategy (cms.Config.IDs).
+func NewService(repo menus.MenuRepository, ids cryptids.IDGenerator, clock Clock) *Service {
 	if clock == nil {
 		clock = time.Now
 	}
-	return &Service{repo: repo, clock: clock}
+	return &Service{repo: repo, ids: ids, clock: clock}
 }
 
 // CreateMenu validates and persists a new menu.
 func (s *Service) CreateMenu(ctx context.Context, name string) (menus.Menu, error) {
-	m, err := menus.NewMenu(name, s.clock())
+	m, err := menus.NewMenu(s.ids, name, s.clock())
 	if err != nil {
 		return menus.Menu{}, err
 	}
@@ -58,7 +63,7 @@ func (s *Service) Items(ctx context.Context, menuID string) ([]menus.MenuItem, e
 
 // AddMenuItem validates and appends an item to a menu.
 func (s *Service) AddMenuItem(ctx context.Context, menuID, label, url, parentID string, position int) (menus.MenuItem, error) {
-	item, err := menus.NewMenuItem(menuID, label, url, parentID, position, s.clock())
+	item, err := menus.NewMenuItem(s.ids, menuID, label, url, parentID, position, s.clock())
 	if err != nil {
 		return menus.MenuItem{}, err
 	}

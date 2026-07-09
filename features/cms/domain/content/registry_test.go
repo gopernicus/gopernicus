@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
@@ -206,7 +207,7 @@ func TestFields_Accessors(t *testing.T) {
 
 func TestNewEntry(t *testing.T) {
 	now := time.Date(2026, 6, 22, 12, 0, 0, 0, time.UTC)
-	e, err := NewEntry("article", "  Hello World  ", "ex", "body", "me", StatusPublished, "", now)
+	e, err := NewEntry(cryptids.IDGenerator{}, "article", "  Hello World  ", "ex", "body", "me", StatusPublished, "", now)
 	if err != nil {
 		t.Fatalf("NewEntry: %v", err)
 	}
@@ -224,7 +225,7 @@ func TestNewEntry(t *testing.T) {
 	}
 
 	// Empty title rejected.
-	if _, err := NewEntry("article", "   ", "", "", "", StatusDraft, "", now); !errors.Is(err, errs.ErrInvalidInput) {
+	if _, err := NewEntry(cryptids.IDGenerator{}, "article", "   ", "", "", "", StatusDraft, "", now); !errors.Is(err, errs.ErrInvalidInput) {
 		t.Fatalf("empty title err = %v, want ErrInvalidInput", err)
 	}
 }

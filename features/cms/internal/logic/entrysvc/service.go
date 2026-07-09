@@ -15,6 +15,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/cms/domain/content"
 	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
 )
@@ -44,15 +45,19 @@ type Input struct {
 type Service struct {
 	entries  content.EntryRepository
 	registry *content.Registry
-	clock    Clock
-	events   sdkevents.Emitter
+	// ids is the app-chosen entity-ID strategy (cms.Config.IDs); zero value →
+	// default nanoids.
+	ids    cryptids.IDGenerator
+	clock  Clock
+	events sdkevents.Emitter
 }
 
-// NewService constructs a Service. A nil clock defaults to time.Now. The
-// optional trailing emitter is the best-effort content-event rail (Mount.Events):
-// omitted or nil, it defaults to sdkevents.Noop so emit call sites stay
-// unconditional and a nil host bus simply drops events.
-func NewService(entries content.EntryRepository, registry *content.Registry, clock Clock, emitter ...sdkevents.Emitter) *Service {
+// NewService constructs a Service. A nil clock defaults to time.Now. ids is the
+// app's entity-ID strategy (cms.Config.IDs). The optional trailing emitter is
+// the best-effort content-event rail (Mount.Events): omitted or nil, it defaults
+// to sdkevents.Noop so emit call sites stay unconditional and a nil host bus
+// simply drops events.
+func NewService(entries content.EntryRepository, registry *content.Registry, ids cryptids.IDGenerator, clock Clock, emitter ...sdkevents.Emitter) *Service {
 	if clock == nil {
 		clock = time.Now
 	}
@@ -60,7 +65,7 @@ func NewService(entries content.EntryRepository, registry *content.Registry, clo
 	if len(emitter) > 0 && emitter[0] != nil {
 		out = emitter[0]
 	}
-	return &Service{entries: entries, registry: registry, clock: clock, events: out}
+	return &Service{entries: entries, registry: registry, ids: ids, clock: clock, events: out}
 }
 
 // emit publishes a content event best-effort AFTER a domain write has already
@@ -78,7 +83,7 @@ func (s *Service) Create(ctx context.Context, typeSlug string, in Input) (conten
 		return content.Entry{}, fmt.Errorf("content type %q not registered: %w", typeSlug, errs.ErrNotFound)
 	}
 
-	e, err := content.NewEntry(typeSlug, in.Title, in.Excerpt, in.Body, in.Author, in.Status, in.Template, s.clock())
+	e, err := content.NewEntry(s.ids, typeSlug, in.Title, in.Excerpt, in.Body, in.Author, in.Status, in.Template, s.clock())
 	if err != nil {
 		return content.Entry{}, err
 	}

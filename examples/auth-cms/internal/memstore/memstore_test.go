@@ -41,7 +41,7 @@ func TestEntryRepo_CreateGetListDelete(t *testing.T) {
 	ctx := context.Background()
 	repos := New().Repositories()
 
-	e, err := content.NewEntry("article", "First Post", "excerpt", "body", "demo", content.StatusPublished, "", now)
+	e, err := content.NewEntry(ids, "article", "First Post", "excerpt", "body", "demo", content.StatusPublished, "", now)
 	if err != nil {
 		t.Fatalf("NewEntry() error = %v", err)
 	}
@@ -95,19 +95,19 @@ func TestEntryRepo_DuplicateTypeSlugCollision(t *testing.T) {
 	ctx := context.Background()
 	repos := New().Repositories()
 
-	e1, _ := content.NewEntry("article", "Same Title", "", "body", "", content.StatusDraft, "", now)
+	e1, _ := content.NewEntry(ids, "article", "Same Title", "", "body", "", content.StatusDraft, "", now)
 	if _, err := repos.Entries.Create(ctx, e1); err != nil {
 		t.Fatalf("first Create() error = %v", err)
 	}
 
-	e2, _ := content.NewEntry("article", "Same Title", "", "different body", "", content.StatusDraft, "", now)
+	e2, _ := content.NewEntry(ids, "article", "Same Title", "", "different body", "", content.StatusDraft, "", now)
 	if _, err := repos.Entries.Create(ctx, e2); !errors.Is(err, errs.ErrAlreadyExists) {
 		t.Errorf("second Create() with colliding (type,slug) error = %v, want errs.ErrAlreadyExists", err)
 	}
 
 	// A different Type with the same slug does not collide (uniqueness is
 	// scoped per (type, slug), not slug alone).
-	e3, _ := content.NewEntry("page", "Same Title", "", "body", "", content.StatusDraft, "", now)
+	e3, _ := content.NewEntry(ids, "page", "Same Title", "", "body", "", content.StatusDraft, "", now)
 	if _, err := repos.Entries.Create(ctx, e3); err != nil {
 		t.Errorf("Create() with same slug but different type error = %v, want nil", err)
 	}
@@ -119,7 +119,7 @@ func TestTermRepo_CreateGetListDelete(t *testing.T) {
 	ctx := context.Background()
 	repos := New().Repositories()
 
-	term, err := taxonomy.NewTerm(taxonomy.KindCategory, "News", "", now)
+	term, err := taxonomy.NewTerm(ids, taxonomy.KindCategory, "News", "", now)
 	if err != nil {
 		t.Fatalf("NewTerm() error = %v", err)
 	}
@@ -171,11 +171,11 @@ func TestTermRepo_KindSlugCollision(t *testing.T) {
 	ctx := context.Background()
 	repos := New().Repositories()
 
-	t1, _ := taxonomy.NewTerm(taxonomy.KindCategory, "Duplicate Name", "", now)
+	t1, _ := taxonomy.NewTerm(ids, taxonomy.KindCategory, "Duplicate Name", "", now)
 	if _, err := repos.Terms.Create(ctx, t1); err != nil {
 		t.Fatalf("first Create() error = %v", err)
 	}
-	t2, _ := taxonomy.NewTerm(taxonomy.KindCategory, "Duplicate Name", "", now)
+	t2, _ := taxonomy.NewTerm(ids, taxonomy.KindCategory, "Duplicate Name", "", now)
 	if _, err := repos.Terms.Create(ctx, t2); !errors.Is(err, errs.ErrAlreadyExists) {
 		t.Errorf("second Create() with colliding (kind,slug) error = %v, want errs.ErrAlreadyExists", err)
 	}
@@ -187,7 +187,7 @@ func TestMenuRepo_CreateGetListAndItems(t *testing.T) {
 	ctx := context.Background()
 	repos := New().Repositories()
 
-	menu, err := menus.NewMenu("Main", now)
+	menu, err := menus.NewMenu(ids, "Main", now)
 	if err != nil {
 		t.Fatalf("NewMenu() error = %v", err)
 	}
@@ -212,7 +212,7 @@ func TestMenuRepo_CreateGetListAndItems(t *testing.T) {
 		t.Errorf("ListMenus() = %v, want one item with id %q", list, createdMenu.ID)
 	}
 
-	item, err := menus.NewMenuItem(createdMenu.ID, "Home", "/", "", 0, now)
+	item, err := menus.NewMenuItem(ids, createdMenu.ID, "Home", "/", "", 0, now)
 	if err != nil {
 		t.Fatalf("NewMenuItem() error = %v", err)
 	}
@@ -252,7 +252,7 @@ func TestMenuRepo_GetUnknown(t *testing.T) {
 
 func TestMenuRepo_UpdateItemUnknown(t *testing.T) {
 	repos := New().Repositories()
-	item, _ := menus.NewMenuItem("menu-1", "Home", "/", "", 0, now)
+	item, _ := menus.NewMenuItem(ids, "menu-1", "Home", "/", "", 0, now)
 	if _, err := repos.Menus.UpdateItem(context.Background(), "does-not-exist", item); !errors.Is(err, errs.ErrNotFound) {
 		t.Errorf("UpdateItem(unknown) error = %v, want errs.ErrNotFound (documented in menus.MenuRepository)", err)
 	}
@@ -266,11 +266,11 @@ func TestMenuRepo_SlugCollision(t *testing.T) {
 	ctx := context.Background()
 	repos := New().Repositories()
 
-	m1, _ := menus.NewMenu("Footer", now)
+	m1, _ := menus.NewMenu(ids, "Footer", now)
 	if _, err := repos.Menus.CreateMenu(ctx, m1); err != nil {
 		t.Fatalf("first CreateMenu() error = %v", err)
 	}
-	m2, _ := menus.NewMenu("Footer", now)
+	m2, _ := menus.NewMenu(ids, "Footer", now)
 	if _, err := repos.Menus.CreateMenu(ctx, m2); !errors.Is(err, errs.ErrAlreadyExists) {
 		t.Errorf("second CreateMenu() with colliding slug error = %v, want errs.ErrAlreadyExists", err)
 	}
@@ -282,7 +282,7 @@ func TestAssetRepo_CreateGetListDelete(t *testing.T) {
 	ctx := context.Background()
 	repos := New().Repositories()
 
-	asset, err := media.NewAsset("photo.jpg", "image/jpeg", 1024, now)
+	asset, err := media.NewAsset(ids, "photo.jpg", "image/jpeg", 1024, now)
 	if err != nil {
 		t.Fatalf("NewAsset() error = %v", err)
 	}
@@ -332,7 +332,7 @@ func TestInquiryRepo_CreateAndList(t *testing.T) {
 	ctx := context.Background()
 	repos := New().Repositories()
 
-	in, err := messaging.NewInquiry("Jane Doe", "jane@example.com", "Hello", now)
+	in, err := messaging.NewInquiry(ids, "Jane Doe", "jane@example.com", "Hello", now)
 	if err != nil {
 		t.Fatalf("NewInquiry() error = %v", err)
 	}

@@ -20,7 +20,7 @@ package securityevent
 import (
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/id"
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 )
 
 // Event-type vocabulary (design §5.1, salvaged). The invitation terms A5
@@ -109,13 +109,14 @@ type SecurityEvent struct {
 	CreatedAt   time.Time
 }
 
-// New builds a SecurityEvent of eventType/eventStatus as of now, generating an
-// ID. The caller sets the optional UserID/Actor/Details/IPAddress/UserAgent
-// fields (the service's record helper does this from the request's client-info
+// New builds a SecurityEvent of eventType/eventStatus as of now, minting its ID
+// from ids (empty under cryptids.Database — the store then assigns the key).
+// The caller sets the optional UserID/Actor/Details/IPAddress/UserAgent fields
+// (the service's record helper does this from the request's client-info
 // carrier).
-func New(eventType, eventStatus string, now time.Time) SecurityEvent {
+func New(ids cryptids.IDGenerator, eventType, eventStatus string, now time.Time) SecurityEvent {
 	return SecurityEvent{
-		ID:          id.New(),
+		ID:          ids.MustGenerate(),
 		EventType:   eventType,
 		EventStatus: eventStatus,
 		CreatedAt:   now.UTC(),

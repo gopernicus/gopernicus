@@ -38,8 +38,17 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
 	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 )
+
+// ids is the suite's entity-ID generator: the default nanoid strategy, matching
+// the feature's zero-value Config.IDs.
+var ids = cryptids.IDGenerator{}
+
+// dbIDs is the cryptids.Database strategy: entities reach Create with an empty
+// ID and the store must assign the database-generated key (amended D10).
+var dbIDs = cryptids.NewGenerator(cryptids.Database)
 
 // suiteBase is a fixed reference instant. Expiry cases offset from time.Now so
 // the reference impl's real-clock expiry check observes the intended state.
@@ -56,6 +65,7 @@ func Run(t *testing.T, newRepos func(t *testing.T) auth.Repositories) {
 		t.Run("CRUDRoundTrip", func(t *testing.T) { testUsersCRUD(t, newRepos(t)) })
 		t.Run("AbsentNotFound", func(t *testing.T) { testUsersAbsent(t, newRepos(t)) })
 		t.Run("EmailUniqueness", func(t *testing.T) { testUsersEmailUniqueness(t, newRepos(t)) })
+		t.Run("DBGeneratedIDOnEmpty", func(t *testing.T) { testUsersDBGeneratedID(t, newRepos(t)) })
 	})
 
 	t.Run("Passwords", func(t *testing.T) {
@@ -114,6 +124,7 @@ func Run(t *testing.T, newRepos func(t *testing.T) auth.Repositories) {
 		}
 		t.Run("CRUDRoundTrip", func(t *testing.T) { testServiceAccountsCRUD(t, newRepos(t)) })
 		t.Run("AbsentNotFound", func(t *testing.T) { testServiceAccountsAbsent(t, newRepos(t)) })
+		t.Run("DBGeneratedIDOnEmpty", func(t *testing.T) { testServiceAccountsDBGeneratedID(t, newRepos(t)) })
 		t.Run("ListOrderingPagination", func(t *testing.T) { testServiceAccountsListPaged(t, newRepos(t)) })
 		t.Run("ListSameCreatedAtCollision", func(t *testing.T) { testServiceAccountsListCollision(t, newRepos(t)) })
 		runPagedFamily(t, newRepos,
@@ -138,6 +149,7 @@ func Run(t *testing.T, newRepos func(t *testing.T) auth.Repositories) {
 		t.Run("GetByHashRevokedReturnsRecord", func(t *testing.T) { testAPIKeysGetByHashRevoked(t, newRepos(t)) })
 		t.Run("GetByHashExpiredReturnsRecord", func(t *testing.T) { testAPIKeysGetByHashExpired(t, newRepos(t)) })
 		t.Run("MintUniqueness", func(t *testing.T) { testAPIKeysMintUniqueness(t, newRepos(t)) })
+		t.Run("DBGeneratedIDOnEmpty", func(t *testing.T) { testAPIKeysDBGeneratedID(t, newRepos(t)) })
 		t.Run("TouchLastUsed", func(t *testing.T) { testAPIKeysTouchLastUsed(t, newRepos(t)) })
 		t.Run("RevokeAbsentNotFound", func(t *testing.T) { testAPIKeysRevokeAbsent(t, newRepos(t)) })
 		t.Run("ListOrderingPagination", func(t *testing.T) { testAPIKeysListPaged(t, newRepos(t)) })
@@ -167,6 +179,7 @@ func Run(t *testing.T, newRepos func(t *testing.T) auth.Repositories) {
 		t.Run("ListPagination", func(t *testing.T) { testSecurityEventsListPaged(t, newRepos(t)) })
 		t.Run("ListSameCreatedAtCollision", func(t *testing.T) { testSecurityEventsListCollision(t, newRepos(t)) })
 		t.Run("DetailsRoundTrip", func(t *testing.T) { testSecurityEventsDetails(t, newRepos(t)) })
+		t.Run("DBGeneratedIDOnEmpty", func(t *testing.T) { testSecurityEventsDBGeneratedID(t, newRepos(t)) })
 		runPagedFamily(t, newRepos,
 			func(repos auth.Repositories, ctx context.Context, req crud.ListRequest) (crud.Page[securityevent.SecurityEvent], error) {
 				return repos.SecurityEvents.List(ctx, securityevent.ListFilter{UserID: "u-seed"}, req)
@@ -187,6 +200,7 @@ func Run(t *testing.T, newRepos func(t *testing.T) auth.Repositories) {
 			t.Skip("Invitations not wired — invitation conformance NOT verified for this Repositories")
 		}
 		t.Run("CreateGetRoundTrip", func(t *testing.T) { testInvitationsCRUD(t, newRepos(t)) })
+		t.Run("DBGeneratedIDOnEmpty", func(t *testing.T) { testInvitationsDBGeneratedID(t, newRepos(t)) })
 		t.Run("PartialPendingUniqueness", func(t *testing.T) { testInvitationsUniqueness(t, newRepos(t)) })
 		t.Run("GetByTokenHashUnknown", func(t *testing.T) { testInvitationsTokenUnknown(t, newRepos(t)) })
 		t.Run("GetByTokenHashExpired", func(t *testing.T) { testInvitationsTokenExpired(t, newRepos(t)) })
@@ -229,7 +243,7 @@ func testUsersCRUD(t *testing.T, repos auth.Repositories) {
 	ctx := context.Background()
 	repo := repos.Users
 
-	u, err := user.NewUser("Alice@Example.com", "Alice", suiteBase)
+	u, err := user.NewUser(ids, "Alice@Example.com", "Alice", suiteBase)
 	if err != nil {
 		t.Fatalf("NewUser: %v", err)
 	}
@@ -270,7 +284,7 @@ func testUsersAbsent(t *testing.T, repos auth.Repositories) {
 	if _, err := repo.GetByEmail(ctx, "ghost@example.com"); !errors.Is(err, errs.ErrNotFound) {
 		t.Errorf("GetByEmail(absent): err=%v, want ErrNotFound", err)
 	}
-	absent, _ := user.NewUser("ghost@example.com", "Ghost", suiteBase)
+	absent, _ := user.NewUser(ids, "ghost@example.com", "Ghost", suiteBase)
 	if _, err := repo.Update(ctx, "nope", absent); !errors.Is(err, errs.ErrNotFound) {
 		t.Errorf("Update(absent): err=%v, want ErrNotFound", err)
 	}
@@ -280,16 +294,16 @@ func testUsersEmailUniqueness(t *testing.T, repos auth.Repositories) {
 	ctx := context.Background()
 	repo := repos.Users
 
-	a, _ := user.NewUser("dup@example.com", "First", suiteBase)
+	a, _ := user.NewUser(ids, "dup@example.com", "First", suiteBase)
 	if _, err := repo.Create(ctx, a); err != nil {
 		t.Fatalf("first Create: %v", err)
 	}
 	// Same address in a different case normalizes to the same email → collision.
-	b, _ := user.NewUser("DUP@example.com", "Second", suiteBase)
+	b, _ := user.NewUser(ids, "DUP@example.com", "Second", suiteBase)
 	if _, err := repo.Create(ctx, b); !errors.Is(err, errs.ErrAlreadyExists) {
 		t.Errorf("Create colliding email: err=%v, want ErrAlreadyExists", err)
 	}
-	other, _ := user.NewUser("other@example.com", "Other", suiteBase)
+	other, _ := user.NewUser(ids, "other@example.com", "Other", suiteBase)
 	if _, err := repo.Create(ctx, other); err != nil {
 		t.Errorf("Create distinct email: err=%v, want nil", err)
 	}
@@ -673,7 +687,7 @@ func testServiceAccountsCRUD(t *testing.T, repos auth.Repositories) {
 	ctx := context.Background()
 	repo := repos.ServiceAccounts
 
-	sa, err := serviceaccount.New("deployer", "CI deploy bot", "admin-1", false, "", suiteBase)
+	sa, err := serviceaccount.New(ids, "deployer", "CI deploy bot", "admin-1", false, "", suiteBase)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -716,7 +730,7 @@ func testServiceAccountsAbsent(t *testing.T, repos auth.Repositories) {
 	if _, err := repo.Get(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
 		t.Errorf("Get(absent): err=%v, want ErrNotFound", err)
 	}
-	absent, _ := serviceaccount.New("ghost", "", "admin", false, "", suiteBase)
+	absent, _ := serviceaccount.New(ids, "ghost", "", "admin", false, "", suiteBase)
 	if _, err := repo.Update(ctx, "nope", absent); !errors.Is(err, errs.ErrNotFound) {
 		t.Errorf("Update(absent): err=%v, want ErrNotFound", err)
 	}
@@ -733,7 +747,7 @@ func testServiceAccountsListPaged(t *testing.T, repos auth.Repositories) {
 
 	created := make([]serviceaccount.ServiceAccount, 0, 5)
 	for i := 0; i < 5; i++ {
-		sa, err := serviceaccount.New(fmt.Sprintf("sa-%d", i), "", "admin", false, "", suiteBase.Add(time.Duration(i)*time.Minute))
+		sa, err := serviceaccount.New(ids, fmt.Sprintf("sa-%d", i), "", "admin", false, "", suiteBase.Add(time.Duration(i)*time.Minute))
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
@@ -759,7 +773,7 @@ func testServiceAccountsListCollision(t *testing.T, repos auth.Repositories) {
 
 	created := make([]serviceaccount.ServiceAccount, 0, 4)
 	for i := 0; i < 4; i++ {
-		sa, err := serviceaccount.New(fmt.Sprintf("col-%d", i), "", "admin", false, "", suiteBase)
+		sa, err := serviceaccount.New(ids, fmt.Sprintf("col-%d", i), "", "admin", false, "", suiteBase)
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
@@ -857,7 +871,7 @@ func testAPIKeysMintUniqueness(t *testing.T, repos auth.Repositories) {
 	}
 
 	// A colliding key_hash is rejected (the store's uniqueness invariant).
-	dup, _ := apikey.New("sa-1", "dup", "prefix", "hash-a", time.Time{}, suiteBase)
+	dup, _ := apikey.New(ids, "sa-1", "dup", "prefix", "hash-a", time.Time{}, suiteBase)
 	if _, err := repo.Create(ctx, dup); !errors.Is(err, errs.ErrAlreadyExists) {
 		t.Errorf("Create colliding key_hash: err=%v, want ErrAlreadyExists", err)
 	}
@@ -941,7 +955,7 @@ func mustCreateAPIKey(t *testing.T, repo apikey.APIKeyRepository, saID, name, ha
 	if len(prefix) > 8 {
 		prefix = prefix[:8]
 	}
-	k, err := apikey.New(saID, name, prefix, hash, expiresAt, createdAt)
+	k, err := apikey.New(ids, saID, name, prefix, hash, expiresAt, createdAt)
 	if err != nil {
 		t.Fatalf("apikey.New: %v", err)
 	}
@@ -1048,7 +1062,7 @@ func testSecurityEventsCreateList(t *testing.T, repos auth.Repositories) {
 
 	created := make([]securityevent.SecurityEvent, 0, 4)
 	for i := 0; i < 4; i++ {
-		evt := securityevent.New(securityevent.TypeLogin, securityevent.StatusSuccess, suiteBase.Add(time.Duration(i)*time.Minute))
+		evt := securityevent.New(ids, securityevent.TypeLogin, securityevent.StatusSuccess, suiteBase.Add(time.Duration(i)*time.Minute))
 		evt.UserID = "u1"
 		c, err := repo.Create(ctx, evt)
 		if err != nil {
@@ -1074,7 +1088,7 @@ func testSecurityEventsFilters(t *testing.T, repos auth.Repositories) {
 	repo := repos.SecurityEvents
 
 	mk := func(userID, typ, status string, at time.Time) securityevent.SecurityEvent {
-		evt := securityevent.New(typ, status, at)
+		evt := securityevent.New(ids, typ, status, at)
 		evt.UserID = userID
 		c, err := repo.Create(ctx, evt)
 		if err != nil {
@@ -1117,7 +1131,7 @@ func testSecurityEventsListPaged(t *testing.T, repos auth.Repositories) {
 
 	created := make([]securityevent.SecurityEvent, 0, 5)
 	for i := 0; i < 5; i++ {
-		evt := securityevent.New(securityevent.TypeLogin, securityevent.StatusSuccess, suiteBase.Add(time.Duration(i)*time.Minute))
+		evt := securityevent.New(ids, securityevent.TypeLogin, securityevent.StatusSuccess, suiteBase.Add(time.Duration(i)*time.Minute))
 		c, err := repo.Create(ctx, evt)
 		if err != nil {
 			t.Fatalf("Create: %v", err)
@@ -1141,7 +1155,7 @@ func testSecurityEventsListCollision(t *testing.T, repos auth.Repositories) {
 
 	created := make([]securityevent.SecurityEvent, 0, 4)
 	for i := 0; i < 4; i++ {
-		evt := securityevent.New(securityevent.TypeLogin, securityevent.StatusSuccess, suiteBase)
+		evt := securityevent.New(ids, securityevent.TypeLogin, securityevent.StatusSuccess, suiteBase)
 		c, err := repo.Create(ctx, evt)
 		if err != nil {
 			t.Fatalf("Create: %v", err)
@@ -1164,15 +1178,15 @@ func testSecurityEventsDetails(t *testing.T, repos auth.Repositories) {
 	ctx := context.Background()
 	repo := repos.SecurityEvents
 
-	nilEvt := securityevent.New(securityevent.TypeLogin, securityevent.StatusFailure, suiteBase)
+	nilEvt := securityevent.New(ids, securityevent.TypeLogin, securityevent.StatusFailure, suiteBase)
 	nilEvt.UserID = "u-nil"
 	nilEvt.Details = nil
 
-	emptyEvt := securityevent.New(securityevent.TypeLogin, securityevent.StatusFailure, suiteBase.Add(time.Minute))
+	emptyEvt := securityevent.New(ids, securityevent.TypeLogin, securityevent.StatusFailure, suiteBase.Add(time.Minute))
 	emptyEvt.UserID = "u-empty"
 	emptyEvt.Details = map[string]any{}
 
-	fullEvt := securityevent.New(securityevent.TypeAPIKeyAuth, securityevent.StatusSuccess, suiteBase.Add(2*time.Minute))
+	fullEvt := securityevent.New(ids, securityevent.TypeAPIKeyAuth, securityevent.StatusSuccess, suiteBase.Add(2*time.Minute))
 	fullEvt.UserID = "u-full"
 	fullEvt.Details = map[string]any{"key_prefix": "abc12345", "provider": "google"}
 
@@ -1254,7 +1268,7 @@ func testInvitationsCRUD(t *testing.T, repos auth.Repositories) {
 
 	// A live (future-expiry) invite, so the GetByTokenHash read below returns the
 	// record rather than the read-time ErrExpired.
-	inv, err := invitation.New("project", "p1", "member", "invitee@example.com", "inviter-1", "hash-crud", false, time.Hour, time.Now())
+	inv, err := invitation.New(ids, "project", "p1", "member", "invitee@example.com", "inviter-1", "hash-crud", false, time.Hour, time.Now())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1335,7 +1349,7 @@ func testInvitationsTokenExpired(t *testing.T, repos auth.Repositories) {
 	repo := repos.Invitations
 
 	// Created one hour ago with a one-minute lifetime → expired now.
-	inv, err := invitation.New("project", "p1", "member", "expired@example.com", "inviter-1", "hash-expired", false, time.Minute, time.Now().Add(-time.Hour))
+	inv, err := invitation.New(ids, "project", "p1", "member", "expired@example.com", "inviter-1", "hash-expired", false, time.Minute, time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1497,7 +1511,7 @@ func testInvitationsListBySubjectCollision(t *testing.T, repos auth.Repositories
 
 func mustNewInvitation(t *testing.T, resourceType, resourceID, relation, identifier, invitedBy, tokenHash string, createdAt time.Time) invitation.Invitation {
 	t.Helper()
-	inv, err := invitation.New(resourceType, resourceID, relation, identifier, invitedBy, tokenHash, false, time.Hour, createdAt)
+	inv, err := invitation.New(ids, resourceType, resourceID, relation, identifier, invitedBy, tokenHash, false, time.Hour, createdAt)
 	if err != nil {
 		t.Fatalf("invitation.New: %v", err)
 	}
@@ -1888,7 +1902,7 @@ func seedServiceAccounts(t *testing.T, repo serviceaccount.ServiceAccountReposit
 	ctx := context.Background()
 	created := make([]serviceaccount.ServiceAccount, 0, len(familyMinutes))
 	for i, m := range familyMinutes {
-		sa, err := serviceaccount.New(fmt.Sprintf("fam-sa-%d", i), "", "admin", false, "", suiteBase.Add(time.Duration(m)*time.Minute))
+		sa, err := serviceaccount.New(ids, fmt.Sprintf("fam-sa-%d", i), "", "admin", false, "", suiteBase.Add(time.Duration(m)*time.Minute))
 		if err != nil {
 			t.Fatalf("serviceaccount.New: %v", err)
 		}
@@ -1919,7 +1933,7 @@ func seedSecurityEvents(t *testing.T, repo securityevent.SecurityEventRepository
 	ctx := context.Background()
 	created := make([]securityevent.SecurityEvent, 0, len(familyMinutes))
 	for _, m := range familyMinutes {
-		evt := securityevent.New(securityevent.TypeLogin, securityevent.StatusSuccess, suiteBase.Add(time.Duration(m)*time.Minute))
+		evt := securityevent.New(ids, securityevent.TypeLogin, securityevent.StatusSuccess, suiteBase.Add(time.Duration(m)*time.Minute))
 		evt.UserID = "u-seed"
 		c, err := repo.Create(ctx, evt)
 		if err != nil {
@@ -1929,7 +1943,7 @@ func seedSecurityEvents(t *testing.T, repo securityevent.SecurityEventRepository
 	}
 	// Foreign rows under a different user must not be listed or counted.
 	for i := 0; i < 2; i++ {
-		evt := securityevent.New(securityevent.TypeLogin, securityevent.StatusSuccess, suiteBase.Add(time.Duration(i)*time.Minute))
+		evt := securityevent.New(ids, securityevent.TypeLogin, securityevent.StatusSuccess, suiteBase.Add(time.Duration(i)*time.Minute))
 		evt.UserID = "u-foreign"
 		if _, err := repo.Create(ctx, evt); err != nil {
 			t.Fatalf("Create(foreign): %v", err)
@@ -1982,4 +1996,116 @@ func seedInvitationsBySubject(t *testing.T, repo invitation.InvitationRepository
 		}
 	}
 	return created, len(created)
+}
+
+// --- amended D10: database-generated keys on empty ID ---
+
+// The five tests below prove the Create side of the cryptids.Database strategy:
+// an entity constructed with the Database generator reaches the store with an
+// empty ID, and Create must hand back a store-assigned, non-empty key under
+// which the row is readable. SQL adapters satisfy this by omitting the id
+// column and reading the schema default back with RETURNING (migration
+// 0012_id_defaults); memory implementations assign at insert.
+
+func testUsersDBGeneratedID(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	u, err := user.NewUser(dbIDs, "dbgen@example.com", "DB Gen", suiteBase)
+	if err != nil {
+		t.Fatalf("NewUser: %v", err)
+	}
+	if u.ID != "" {
+		t.Fatalf("Database strategy minted a non-empty ID: %q", u.ID)
+	}
+	created, err := repos.Users.Create(ctx, u)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if created.ID == "" {
+		t.Fatal("Create returned an empty ID — the store did not assign a database-generated key")
+	}
+	got, err := repos.Users.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("Get by generated id: %v", err)
+	}
+	if got.Email != "dbgen@example.com" {
+		t.Errorf("row under generated key has email %q", got.Email)
+	}
+}
+
+func testServiceAccountsDBGeneratedID(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	sa, err := serviceaccount.New(dbIDs, "db-gen", "", "admin-1", false, "", suiteBase)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	created, err := repos.ServiceAccounts.Create(ctx, sa)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if created.ID == "" {
+		t.Fatal("Create returned an empty ID — the store did not assign a database-generated key")
+	}
+	got, err := repos.ServiceAccounts.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("Get by generated id: %v", err)
+	}
+	if got.Name != "db-gen" {
+		t.Errorf("row under generated key has name %q", got.Name)
+	}
+}
+
+func testAPIKeysDBGeneratedID(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	k, err := apikey.New(dbIDs, "sa-1", "db-gen", "prefix12", "hash-dbgen", time.Time{}, suiteBase)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	created, err := repos.APIKeys.Create(ctx, k)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if created.ID == "" {
+		t.Fatal("Create returned an empty ID — the store did not assign a database-generated key")
+	}
+	got, err := repos.APIKeys.GetByHash(ctx, "hash-dbgen")
+	if err != nil {
+		t.Fatalf("GetByHash: %v", err)
+	}
+	if got.ID != created.ID {
+		t.Errorf("GetByHash id %q, want the generated key %q", got.ID, created.ID)
+	}
+}
+
+func testSecurityEventsDBGeneratedID(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	evt := securityevent.New(dbIDs, securityevent.TypeLogin, securityevent.StatusSuccess, suiteBase)
+	created, err := repos.SecurityEvents.Create(ctx, evt)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if created.ID == "" {
+		t.Fatal("Create returned an empty ID — the store did not assign a database-generated key")
+	}
+}
+
+func testInvitationsDBGeneratedID(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	inv, err := invitation.New(dbIDs, "project", "p-dbgen", "member", "dbgen@example.com", "inviter-1", "hash-dbgen-inv", false, time.Hour, time.Now())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	created, err := repos.Invitations.Create(ctx, inv)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if created.ID == "" {
+		t.Fatal("Create returned an empty ID — the store did not assign a database-generated key")
+	}
+	got, err := repos.Invitations.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("Get by generated id: %v", err)
+	}
+	if got.TokenHash != "hash-dbgen-inv" {
+		t.Errorf("row under generated key has token hash %q", got.TokenHash)
+	}
 }

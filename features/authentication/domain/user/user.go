@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/errs"
-	"github.com/gopernicus/gopernicus/sdk/id"
 )
 
 // User is the identity aggregate. Email is stored normalized (trimmed,
@@ -27,17 +27,17 @@ type User struct {
 	UpdatedAt     time.Time
 }
 
-// NewUser validates and normalizes the email, trims the display name, generates
-// an ID, and returns an unverified user. Validation failures wrap
-// errs.ErrInvalidInput.
-func NewUser(email, displayName string, now time.Time) (User, error) {
+// NewUser validates and normalizes the email, trims the display name, mints an
+// ID from ids (empty under cryptids.Database — the store then assigns the key),
+// and returns an unverified user. Validation failures wrap errs.ErrInvalidInput.
+func NewUser(ids cryptids.IDGenerator, email, displayName string, now time.Time) (User, error) {
 	normalized, err := NormalizeEmail(email)
 	if err != nil {
 		return User{}, err
 	}
 	now = now.UTC()
 	return User{
-		ID:          id.New(),
+		ID:          ids.MustGenerate(),
 		Email:       normalized,
 		DisplayName: strings.TrimSpace(displayName),
 		CreatedAt:   now,

@@ -4,6 +4,7 @@ use (
 	./sdk
 	./integrations/cryptids/bcrypt
 	./integrations/cryptids/golang-jwt
+	./integrations/cryptids/google-uuid
 	./integrations/datastores/pgxdb
 	./integrations/datastores/turso
 	./integrations/email/sendgrid

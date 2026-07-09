@@ -13,6 +13,7 @@ worked example `examples/cms`.
   integrations/
     cryptids/bcrypt/      module …/integrations/cryptids/bcrypt         — a connector (x/crypto bcrypt)
     cryptids/golang-jwt/  module …/integrations/cryptids/golang-jwt     — a connector (golang-jwt/jwt v5)
+    cryptids/google-uuid/ module …/integrations/cryptids/google-uuid    — a connector (google/uuid v4/v7)
     datastores/pgxdb/       module …/integrations/datastores/pgxdb          — a connector (jackc/pgx v5)
     datastores/turso/     module …/integrations/datastores/turso        — a connector (sdk + libsql)
     email/sendgrid/       module …/integrations/email/sendgrid          — a connector (sendgrid/sendgrid-go)
@@ -89,7 +90,7 @@ nil-safe port field, wired (or not) in the host's `main`.
 
 - **`sdk/` — the kernel.** Stdlib-only. It holds the facility **ports** (`Storer`,
   `Sender`, `cacher.Storer`, the generic `crud` CRUD shape), the **services**
-  (`web`, `logging`, `config`, `errs`, `id`, `slug`, `identity` — the
+  (`web`, `logging`, `config`, `errs`, `cryptids`, `slug`, `identity` — the
   request-identity vocabulary, A-I1), **and a zero-dependency
   default implementation of each facility port, shipped right next to it**
   (slog-style): `cacher.Memory`, `filestorage.Disk`, `email.SMTP` + `email.Console`.

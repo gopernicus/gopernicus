@@ -31,15 +31,20 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/email"
 	"github.com/gopernicus/gopernicus/sdk/errs"
-	"github.com/gopernicus/gopernicus/sdk/id"
 )
+
+// secrets generates the opaque invitation secrets this service mints with the
+// default nanoid shape. Deliberately NOT the app's entity-ID strategy
+// (Deps.IDs): secret entropy must never follow a wiring choice like
+// cryptids.Database.
+var secrets = cryptids.IDGenerator{}
 
 const (
 	// defaultInvitationTTL is the lifetime of a minted invitation secret when
 	// Deps.TTL is unset (salvaged 7-day default).
 	defaultInvitationTTL = 7 * 24 * time.Hour
 	// tokenSecretLen is the length of the generated invitation secret: 32 chars,
-	// dotless (sdk/id's base32 alphabet), plaintext only in the mail.
+	// dotless (sdk/cryptids' alphabet), plaintext only in the mail.
 	tokenSecretLen = 32
 	// subjectTypeUser is the ReBAC subject-type convention for a human user —
 	// the only subject class this service grants to (accept, direct-add, resolve).
@@ -141,6 +146,11 @@ type Deps struct {
 	Clock          func() time.Time
 	Logger         *slog.Logger
 	TTL            time.Duration
+	// IDs is the app-chosen entity-ID strategy (amended D9): it mints
+	// invitation and security-event record IDs. Zero value → default nanoids;
+	// cryptids.Database delegates to the store. It never mints the mailed
+	// invitation secret, which keeps its own unconditional random generator.
+	IDs cryptids.IDGenerator
 }
 
 // Service implements the invitation use cases over its ports.
@@ -157,6 +167,9 @@ type Service struct {
 	logger         *slog.Logger
 	ttl            time.Duration
 	tokenHasher    *cryptids.SHA256Hasher
+	// ids is the app-chosen entity-ID strategy (Deps.IDs); entity keys only,
+	// never the mailed secret.
+	ids cryptids.IDGenerator
 }
 
 // New builds a Service, applying a time.Now clock, slog default logger, and the
@@ -187,6 +200,7 @@ func New(d Deps) *Service {
 		logger:         logger,
 		ttl:            ttl,
 		tokenHasher:    cryptids.NewSHA256Hasher(),
+		ids:            d.IDs,
 	}
 }
 
@@ -250,7 +264,7 @@ func (s *Service) createPending(ctx context.Context, in CreateInput, subjectID s
 	if err != nil {
 		return CreateResult{}, err
 	}
-	inv, err := invitation.New(in.ResourceType, in.ResourceID, in.Relation, in.Identifier, in.InvitedBy, tokenHash, in.AutoAccept, s.ttl, s.now())
+	inv, err := invitation.New(s.ids, in.ResourceType, in.ResourceID, in.Relation, in.Identifier, in.InvitedBy, tokenHash, in.AutoAccept, s.ttl, s.now())
 	if err != nil {
 		return CreateResult{}, err
 	}
@@ -524,7 +538,7 @@ func (s *Service) record(ctx context.Context, userID, eventType, status string, 
 		return
 	}
 	ip, ua := authsvc.ClientInfoFromContext(ctx)
-	evt := securityevent.New(eventType, status, s.now())
+	evt := securityevent.New(s.ids, eventType, status, s.now())
 	evt.UserID = userID
 	evt.Details = details
 	evt.IPAddress = ip
@@ -583,11 +597,11 @@ func (s *Service) hashSecret(secret string) (string, error) {
 	return s.tokenHasher.Hash(secret)
 }
 
-// mintSecret builds a fresh 32-char dotless invitation secret from sdk/id's
-// base32 alphabet — no dots, so it never collides with the JWT-detection
+// mintSecret builds a fresh 32-char dotless invitation secret from
+// sdk/cryptids' alphabet — no dots, so it never collides with the JWT-detection
 // heuristic and is URL-safe in the mailed link.
 func mintSecret() string {
-	return (id.New() + id.New())[:tokenSecretLen]
+	return (secrets.MustGenerate() + secrets.MustGenerate())[:tokenSecretLen]
 }
 
 // normalizeIdentifier trims and lowercases the invitee identifier (email) so a

@@ -25,8 +25,13 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
 	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
 	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 )
+
+// ids assigns entity keys when a Create arrives with an empty ID (the
+// cryptids.Database strategy, amended D10) — mimicking a schema default.
+var ids = cryptids.IDGenerator{}
 
 // orderField is the keyset order column entries paginate by; it must match the
 // cursor's order field so a stale cursor from a different sort is ignored.
@@ -83,6 +88,10 @@ func (r entryRepo) Create(_ context.Context, e content.Entry) (content.Entry, er
 		if ex.Type == e.Type && ex.Slug == e.Slug {
 			return content.Entry{}, errs.ErrAlreadyExists
 		}
+	}
+	// Empty ID → mimic a schema default (amended D10): assign the key at insert.
+	if e.ID == "" {
+		e.ID = ids.MustGenerate()
 	}
 	r.entries[e.ID] = e
 	return e, nil
@@ -209,6 +218,10 @@ func (r termRepo) Create(_ context.Context, t taxonomy.Term) (taxonomy.Term, err
 			return taxonomy.Term{}, errs.ErrAlreadyExists
 		}
 	}
+	// Empty ID → mimic a schema default (amended D10): assign the key at insert.
+	if t.ID == "" {
+		t.ID = ids.MustGenerate()
+	}
 	r.terms[t.ID] = t
 	return t, nil
 }
@@ -241,6 +254,10 @@ func (r menuRepo) CreateMenu(_ context.Context, m menus.Menu) (menus.Menu, error
 		if ex.Slug == m.Slug {
 			return menus.Menu{}, errs.ErrAlreadyExists
 		}
+	}
+	// Empty ID → mimic a schema default (amended D10): assign the key at insert.
+	if m.ID == "" {
+		m.ID = ids.MustGenerate()
 	}
 	r.menus[m.ID] = m
 	return m, nil
@@ -294,6 +311,10 @@ func (r menuRepo) ItemsForMenu(_ context.Context, menuID string) ([]menus.MenuIt
 func (r menuRepo) AddItem(_ context.Context, item menus.MenuItem) (menus.MenuItem, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// Empty ID → mimic a schema default (amended D10): assign the key at insert.
+	if item.ID == "" {
+		item.ID = ids.MustGenerate()
+	}
 	r.items[item.ID] = item
 	return item, nil
 }
@@ -332,6 +353,10 @@ type assetRepo struct{ *data }
 func (r assetRepo) Create(_ context.Context, a media.Asset) (media.Asset, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// Empty ID → mimic a schema default (amended D10): assign the key at insert.
+	if a.ID == "" {
+		a.ID = ids.MustGenerate()
+	}
 	r.assets[a.ID] = a
 	return a, nil
 }
@@ -371,6 +396,10 @@ type inquiryRepo struct{ *data }
 func (r inquiryRepo) Create(_ context.Context, in messaging.Inquiry) (messaging.Inquiry, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// Empty ID → mimic a schema default (amended D10): assign the key at insert.
+	if in.ID == "" {
+		in.ID = ids.MustGenerate()
+	}
 	r.inquiries[in.ID] = in
 	return in, nil
 }

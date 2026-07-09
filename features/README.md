@@ -427,3 +427,17 @@ cite by item number:
     `OrderFields`/`DefaultOrder`, and its stores and handlers pass it to
     `req.NormalizedLimit` / `crud.ListParams.Limits`; the zero value keeps
     `crud`'s `DefaultLimit`/`MaxLimit`.
+14. Entity-ID strategy (segovia-lessons phase 04, amended D9/D10): the
+    feature `Config` carries `IDs cryptids.IDGenerator` (zero value → the
+    nanoid default) and threads it to every ENTITY-KEY constructor; opaque
+    secrets (session tokens, verification codes, minted key material)
+    never follow it — they keep a package-private unconditional random
+    generator with a doc saying why. Every entity-keyed store `Create`
+    honors the empty-ID convention: empty ID in → omit the id column, read
+    the schema default back with `RETURNING id` (the dialect's
+    `NNNN_id_defaults.sql` migration supplies the default); the storetest
+    suite carries a `DBGeneratedIDOnEmpty` case per entity family, and the
+    reference/mem implementations assign at insert. IDs are `string` end
+    to end — a resource that genuinely needs an int key models it as an
+    explicit int field (future, per-resource), never via casting or
+    generics.

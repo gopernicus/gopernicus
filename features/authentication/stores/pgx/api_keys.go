@@ -64,10 +64,7 @@ func (r apiKeyRow) toDomain() apikey.APIKey {
 
 // Create persists a new key; a colliding key_hash → errs.ErrAlreadyExists.
 func (s *APIKeyStore) Create(ctx context.Context, k apikey.APIKey) (apikey.APIKey, error) {
-	const q = `INSERT INTO api_keys (` + apiKeyColumns + `)
-		VALUES (@id, @service_account_id, @name, @key_prefix, @key_hash, @expires_at, @revoked_at, @last_used_at, @created_at)`
-	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
-		"id":                 k.ID,
+	args := pgx.NamedArgs{
 		"service_account_id": k.ServiceAccountID,
 		"name":               k.Name,
 		"key_prefix":         k.KeyPrefix,
@@ -76,8 +73,22 @@ func (s *APIKeyStore) Create(ctx context.Context, k apikey.APIKey) (apikey.APIKe
 		"revoked_at":         pgxdb.NullTime(k.RevokedAt),
 		"last_used_at":       pgxdb.NullTime(k.LastUsedAt),
 		"created_at":         k.CreatedAt.UTC(),
-	})
-	if err != nil {
+	}
+	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
+	// column so the schema default generates the key, read back with RETURNING.
+	if k.ID == "" {
+		const q = `INSERT INTO api_keys (service_account_id, name, key_prefix, key_hash, expires_at, revoked_at, last_used_at, created_at)
+			VALUES (@service_account_id, @name, @key_prefix, @key_hash, @expires_at, @revoked_at, @last_used_at, @created_at)
+			RETURNING id`
+		if err := s.db.QueryRow(ctx, q, args).Scan(&k.ID); err != nil {
+			return apikey.APIKey{}, pgxdb.MapError(err)
+		}
+		return k, nil
+	}
+	const q = `INSERT INTO api_keys (` + apiKeyColumns + `)
+		VALUES (@id, @service_account_id, @name, @key_prefix, @key_hash, @expires_at, @revoked_at, @last_used_at, @created_at)`
+	args["id"] = k.ID
+	if _, err := s.db.Exec(ctx, q, args); err != nil {
 		return apikey.APIKey{}, err
 	}
 	return k, nil

@@ -20,6 +20,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
 	cmstempl "github.com/gopernicus/gopernicus/features/cms/views/templ"
 	"github.com/gopernicus/gopernicus/sdk/cacher"
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/email"
 	"github.com/gopernicus/gopernicus/sdk/environment"
 	"github.com/gopernicus/gopernicus/sdk/feature"
@@ -75,10 +76,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 }
 
 // seed populates a little content so the public site renders something.
+// ids seeds demo content with the default entity-ID strategy, matching the
+// zero-value cms.Config.IDs the host wires.
+var ids = cryptids.IDGenerator{}
+
 func seed(ctx context.Context, repos cms.Repositories) error {
 	now := time.Now().UTC()
 
-	menu, err := menus.NewMenu("Main", now)
+	menu, err := menus.NewMenu(ids, "Main", now)
 	if err != nil {
 		return err
 	}
@@ -86,7 +91,7 @@ func seed(ctx context.Context, repos cms.Repositories) error {
 		return err
 	}
 	for i, link := range []struct{ label, url string }{{"Home", "/"}, {"About", "/about"}} {
-		item, err := menus.NewMenuItem(menu.ID, link.label, link.url, "", i, now)
+		item, err := menus.NewMenuItem(ids, menu.ID, link.label, link.url, "", i, now)
 		if err != nil {
 			return err
 		}
@@ -102,7 +107,7 @@ func seed(ctx context.Context, repos cms.Repositories) error {
 		{"Bring your own store", "Implement the repository ports, mount the feature.", "Swap the datastore without forking the feature — that is the whole point of the module split."},
 	}
 	for _, a := range articles {
-		e, err := content.NewEntry("article", a.title, a.excerpt, a.body, "demo", content.StatusPublished, "", now)
+		e, err := content.NewEntry(ids, "article", a.title, a.excerpt, a.body, "demo", content.StatusPublished, "", now)
 		if err != nil {
 			return err
 		}
@@ -111,7 +116,7 @@ func seed(ctx context.Context, repos cms.Repositories) error {
 		}
 	}
 
-	page, err := content.NewEntry("page", "About", "", "This page is served from memory — no SQL involved.", "", content.StatusPublished, "", now)
+	page, err := content.NewEntry(ids, "page", "About", "", "This page is served from memory — no SQL involved.", "", content.StatusPublished, "", now)
 	if err != nil {
 		return err
 	}
@@ -120,7 +125,7 @@ func seed(ctx context.Context, repos cms.Repositories) error {
 	}
 
 	// A product: the host's custom type, with EAV custom fields, on the same rail.
-	prod, err := content.NewEntry("product", "Widget 3000", "The flagship widget.", "Built to last; ships worldwide.", "", content.StatusPublished, "", now)
+	prod, err := content.NewEntry(ids, "product", "Widget 3000", "The flagship widget.", "Built to last; ships worldwide.", "", content.StatusPublished, "", now)
 	if err != nil {
 		return err
 	}

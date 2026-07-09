@@ -13,7 +13,6 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/sdk/email"
 	"github.com/gopernicus/gopernicus/sdk/errs"
-	"github.com/gopernicus/gopernicus/sdk/id"
 	"github.com/gopernicus/gopernicus/sdk/oauth"
 )
 
@@ -291,7 +290,7 @@ func (s *Service) linkAccount(ctx context.Context, userID, providerName string, 
 // the provider's email-verified claim marks the new user verified.
 func (s *Service) registerAndLink(ctx context.Context, p oauth.Provider, providerName string, ident providerIdentity, tok *oauth.TokenResponse, redirectTo string) (OAuthResult, error) {
 	now := s.now()
-	u, err := user.NewUser(ident.Email, "", now)
+	u, err := user.NewUser(s.ids, ident.Email, "", now)
 	if err != nil {
 		return OAuthResult{}, err
 	}
@@ -423,9 +422,9 @@ func (s *Service) sendPendingLinkEmail(ctx context.Context, u user.User, provide
 }
 
 // pkceVerifier returns a high-entropy PKCE code verifier from the unreserved
-// character set (sdk/id's base32 alphabet), long enough for RFC 7636.
+// character set (sdk/cryptids' dotless alphabet), long enough for RFC 7636.
 func pkceVerifier() string { return newSecret() + newSecret() }
 
-// newSecret returns an opaque high-entropy value (sdk/id) for a nonce or PKCE
-// segment.
-func newSecret() string { return id.New() }
+// newSecret returns an opaque high-entropy value (sdk/cryptids) for a nonce or
+// PKCE segment.
+func newSecret() string { return secrets.MustGenerate() }

@@ -1,6 +1,6 @@
 // Package verification is the domain for the two time-bound secrets auth issues:
 // a short-lived Code (email verification) and a longer-lived Token (password
-// reset). Both are opaque random values (sdk/id) tied to a user and an expiry;
+// reset). Both are opaque random values (sdk/cryptids) tied to a user and an expiry;
 // they are separate entities with separate ports because they have different
 // lifetimes and different store-level access needs.
 package verification
@@ -8,8 +8,14 @@ package verification
 import (
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/id"
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
 )
+
+// secrets mints verification codes and reset tokens with the default nanoid
+// shape. Deliberately NOT the app's entity-ID strategy (amended D9): these are
+// credentials, and their entropy must never follow a wiring choice like
+// cryptids.Database.
+var secrets = cryptids.IDGenerator{}
 
 // Code is a short-lived email-verification secret tied to a user.
 type Code struct {
@@ -20,11 +26,11 @@ type Code struct {
 }
 
 // NewCode mints an email-verification code for userID that expires ttl after
-// now. The code is an opaque random value (sdk/id).
+// now. The code is an opaque random value (sdk/cryptids).
 func NewCode(userID string, ttl time.Duration, now time.Time) Code {
 	now = now.UTC()
 	return Code{
-		Code:      id.New(),
+		Code:      secrets.MustGenerate(),
 		UserID:    userID,
 		CreatedAt: now,
 		ExpiresAt: now.Add(ttl),
@@ -45,11 +51,11 @@ type Token struct {
 }
 
 // NewToken mints a password-reset token for userID that expires ttl after now.
-// The token is an opaque random value (sdk/id).
+// The token is an opaque random value (sdk/cryptids).
 func NewToken(userID string, ttl time.Duration, now time.Time) Token {
 	now = now.UTC()
 	return Token{
-		Token:     id.New(),
+		Token:     secrets.MustGenerate(),
 		UserID:    userID,
 		CreatedAt: now,
 		ExpiresAt: now.Add(ttl),
