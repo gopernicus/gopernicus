@@ -326,3 +326,23 @@ DELEGATION.**
 ## Execution log
 
 (append dated entries here)
+
+### 2026-07-09 — W1 CLOSED (CLI module + dispatcher + G11)
+
+Module 35 (`workshop/gopernicus`, go.mod ZERO require lines — the Q1
+stdlib-only ruling holds structurally): thin main +
+`internal/commands` two-level dispatcher on stdlib flag (no init()
+registry — fold item 9; stderr + exit 1 conventions carried from the
+original, re-typed fresh), `version` working end to end
+(`gopernicus 0.0.0-dev` + module path), `init`/`new`/`db` as loud
+not-implemented stubs for W2–W4. Registered: go.work + MODULES + header
+34→35 (no STORE_MODULES/test-stores — neither feature nor store). **G11
+`guard-workshop-boundary`** landed: nothing outside workshop/ imports
+the CLI; workshop imports no feature cores/examples; proven-can-fail
+BOTH directions (probe imports in features/jobs and in commands/ each
+failed loudly, reverted, clean) — `make guard` runs ELEVEN. Premise-note:
+the task's relative reference path didn't resolve; the original lives at
+the ecosystem sibling (read-only reference only). Verify: module
+build/test/vet + GOWORK=off green; `make check` (35) + `make guard` (11)
+green; coordinator re-verified builds + version output + guard count
+independently. Committed CI-green. **Next: W2.**
