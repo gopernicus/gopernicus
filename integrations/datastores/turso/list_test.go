@@ -35,9 +35,11 @@ func TestAppendCursorPredicate_Combos(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf strings.Builder
 			var args []any
-			appendCursorPredicate(&buf, &args, "created_at", "id", ts, "pk-1", tc.direction, tc.forPrevious, false)
+			if err := appendCursorPredicate(&buf, &args, "created_at", "id", ts, "pk-1", tc.direction, tc.forPrevious, false); err != nil {
+				t.Fatalf("appendCursorPredicate: %v", err)
+			}
 
-			want := " WHERE (created_at, id) " + tc.wantOp + " (?, ?)"
+			want := ` WHERE ("created_at", "id") ` + tc.wantOp + " (?, ?)"
 			if got := buf.String(); got != want {
 				t.Fatalf("fragment =\n  %q\nwant\n  %q", got, want)
 			}
@@ -54,9 +56,11 @@ func TestAppendCursorPredicate_AndWhenWherePresent(t *testing.T) {
 	var buf strings.Builder
 	buf.WriteString("SELECT id FROM widgets WHERE kind = ?")
 	args := []any{"gadget"}
-	appendCursorPredicate(&buf, &args, "created_at", "id", int64(5), "pk-1", crud.ASC, false, false)
+	if err := appendCursorPredicate(&buf, &args, "created_at", "id", int64(5), "pk-1", crud.ASC, false, false); err != nil {
+		t.Fatalf("appendCursorPredicate: %v", err)
+	}
 
-	want := "SELECT id FROM widgets WHERE kind = ? AND (created_at, id) > (?, ?)"
+	want := `SELECT id FROM widgets WHERE kind = ? AND ("created_at", "id") > (?, ?)`
 	if got := buf.String(); got != want {
 		t.Fatalf("fragment =\n  %q\nwant\n  %q", got, want)
 	}
@@ -70,8 +74,10 @@ func TestAppendCursorPredicate_AndWhenWherePresent(t *testing.T) {
 func TestAppendCursorPredicate_CastLower(t *testing.T) {
 	var buf strings.Builder
 	var args []any
-	appendCursorPredicate(&buf, &args, "name", "id", "Widget", "pk-1", crud.ASC, false, true)
-	want := " WHERE (LOWER(name), id) > (LOWER(?), ?)"
+	if err := appendCursorPredicate(&buf, &args, "name", "id", "Widget", "pk-1", crud.ASC, false, true); err != nil {
+		t.Fatalf("appendCursorPredicate: %v", err)
+	}
+	want := ` WHERE (LOWER("name"), "id") > (LOWER(?), ?)`
 	if got := buf.String(); got != want {
 		t.Fatalf("fragment =\n  %q\nwant\n  %q", got, want)
 	}
@@ -94,8 +100,10 @@ func TestAppendOrderBy_Combos(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf strings.Builder
-			appendOrderBy(&buf, "created_at", "id", tc.direction, tc.forPrevious, false)
-			want := " ORDER BY created_at " + tc.wantDir + ", id " + tc.wantDir
+			if err := appendOrderBy(&buf, "created_at", "id", tc.direction, tc.forPrevious, false); err != nil {
+				t.Fatalf("appendOrderBy: %v", err)
+			}
+			want := ` ORDER BY "created_at" ` + tc.wantDir + `, "id" ` + tc.wantDir
 			if got := buf.String(); got != want {
 				t.Fatalf("clause =\n  %q\nwant\n  %q", got, want)
 			}
@@ -107,9 +115,59 @@ func TestAppendOrderBy_Combos(t *testing.T) {
 // tiebreaker term is emitted.
 func TestAppendOrderBy_PKIsOrder(t *testing.T) {
 	var buf strings.Builder
-	appendOrderBy(&buf, "id", "id", crud.ASC, false, false)
-	if got, want := buf.String(), " ORDER BY id ASC"; got != want {
+	if err := appendOrderBy(&buf, "id", "id", crud.ASC, false, false); err != nil {
+		t.Fatalf("appendOrderBy: %v", err)
+	}
+	if got, want := buf.String(), ` ORDER BY "id" ASC`; got != want {
 		t.Fatalf("clause = %q, want %q", got, want)
+	}
+}
+
+// TestAppendOrderBy_RejectsBadIdentifier: a raw-expression / injected order
+// column or pk fails loud with ErrInvalidInput — the pk is validated even when
+// it equals the order column (page-1 path where no cursor predicate is added).
+func TestAppendOrderBy_RejectsBadIdentifier(t *testing.T) {
+	bad := []struct {
+		name     string
+		orderCol string
+		pkCol    string
+	}{
+		{"order_expression", "a || char(0) || b", "id"},
+		{"order_whitespace", "created at", "id"},
+		{"order_quote", `name" OR "1"="1`, "id"},
+		{"pk_expression", "created_at", "a || char(0) || b"},
+		{"pk_semicolon", "created_at", "id; DROP TABLE t"},
+	}
+	for _, tc := range bad {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf strings.Builder
+			if err := appendOrderBy(&buf, tc.orderCol, tc.pkCol, crud.ASC, false, false); !errors.Is(err, errs.ErrInvalidInput) {
+				t.Fatalf("appendOrderBy err = %v, want ErrInvalidInput (buf=%q)", err, buf.String())
+			}
+		})
+	}
+}
+
+// TestAppendCursorPredicate_RejectsBadIdentifier: the keyset predicate rejects a
+// non-identifier order column or pk before writing any SQL.
+func TestAppendCursorPredicate_RejectsBadIdentifier(t *testing.T) {
+	bad := []struct {
+		name     string
+		orderCol string
+		pkCol    string
+	}{
+		{"order_expression", "a || char(0) || b", "id"},
+		{"pk_expression", "created_at", "a || char(0) || b"},
+		{"pk_quote", "created_at", `id" OR "1"="1`},
+	}
+	for _, tc := range bad {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf strings.Builder
+			var args []any
+			if err := appendCursorPredicate(&buf, &args, tc.orderCol, tc.pkCol, int64(1), "pk", crud.ASC, false, false); !errors.Is(err, errs.ErrInvalidInput) {
+				t.Fatalf("appendCursorPredicate err = %v, want ErrInvalidInput", err)
+			}
+		})
 	}
 }
 
@@ -366,5 +424,23 @@ func TestList_RejectsInvalid(t *testing.T) {
 	}
 	if _, err := List(ctx, db, q, crud.ListRequest{Limit: 2, Order: crud.NewOrder("password", crud.ASC)}); !errors.Is(err, errs.ErrInvalidInput) {
 		t.Fatalf("unknown order err = %v, want ErrInvalidInput", err)
+	}
+}
+
+// TestList_RejectsRawExpressionPKOnFirstPage: a ListQuery whose PK is a raw SQL
+// expression (not a plain column) is rejected with ErrInvalidInput on page 1 —
+// no cursor is present, so the guard must come from appendOrderBy's
+// unconditional pk validation, not the cursor predicate. This is the guard that
+// forced the roles store off its `subject_type || char(0) || …` tiebreak.
+func TestList_RejectsRawExpressionPKOnFirstPage(t *testing.T) {
+	db := newMemDB(t)
+	seedListItems(t, db)
+	ctx := context.Background()
+
+	q := listQueryFor("a")
+	q.PK = "id || char(0) || name"
+
+	if _, err := List(ctx, db, q, crud.ListRequest{Limit: 2}); !errors.Is(err, errs.ErrInvalidInput) {
+		t.Fatalf("raw-expression PK err = %v, want ErrInvalidInput", err)
 	}
 }

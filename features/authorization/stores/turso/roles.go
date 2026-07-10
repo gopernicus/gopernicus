@@ -2,7 +2,6 @@ package turso
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/authorization/domain/role"
@@ -11,14 +10,53 @@ import (
 )
 
 // roleColumns is the iam_roles projection in a fixed order shared by the listings
-// and scanAssignment.
+// and scanRoleRow.
 const roleColumns = "subject_type, subject_id, role, resource_type, resource_id, created_at"
 
-// roleTiebreak is the SQL keyset tiebreak: the 5-tuple joined by char(0) (a NUL
-// byte), byte-for-byte equal to roleAssignmentKey's strings.Join so a cursor's PK
-// compares against exactly this expression. iam_roles has no surrogate id — the
-// 5-tuple is the natural key.
-const roleTiebreak = "subject_type || char(0) || subject_id || char(0) || role || char(0) || resource_type || char(0) || resource_id"
+// roleKeyExpr is the SQL keyset tiebreak: the 5-tuple joined by char(1).
+// iam_roles has no surrogate id — the 5-tuple is the natural key. The value is
+// DB-computed and echoed back by PKOf (never recomputed in Go), so the cursor PK
+// always matches the derived role_key column byte-for-byte; the separator choice
+// is backend-local and need not match the pgx sibling (which uses chr(1)).
+const roleKeyExpr = "subject_type || char(1) || subject_id || char(1) || role || char(1) || resource_type || char(1) || resource_id"
+
+// rolesBaseSQL wraps the filtered iam_roles rows in a derived table exposing the
+// computed role_key column, so the connector's keyset builder can reference it in
+// the outer WHERE (a WHERE cannot see a same-level SELECT alias) and ORDER BY as
+// a plain identifier — the strict List helper rejects a raw-expression PK. The
+// trailing `WHERE 1 = 1` is load-bearing: turso's List picks WHERE-vs-AND by
+// substring, the inner subquery's WHERE trips it, and the appended keyset `AND
+// (…)` would be a syntax error without an outer WHERE to attach to.
+func rolesBaseSQL(innerWhere string) string {
+	return `SELECT ` + roleColumns + `, role_key FROM (
+	SELECT ` + roleColumns + `, ` + roleKeyExpr + ` AS role_key
+	FROM iam_roles` + innerWhere + `
+) AS r WHERE 1 = 1`
+}
+
+// roleRow is the iam_roles listing projection. RoleKey is the derived keyset
+// tiebreak (see rolesBaseSQL) — scanned so PKOf can echo it rather than
+// recompute it in Go.
+type roleRow struct {
+	SubjectType  string
+	SubjectID    string
+	Role         string
+	ResourceType string
+	ResourceID   string
+	CreatedAt    time.Time
+	RoleKey      string
+}
+
+func (r roleRow) toDomain() role.Assignment {
+	return role.Assignment{
+		SubjectType:  r.SubjectType,
+		SubjectID:    r.SubjectID,
+		Role:         r.Role,
+		ResourceType: r.ResourceType,
+		ResourceID:   r.ResourceID,
+		CreatedAt:    r.CreatedAt.UTC(),
+	}
+}
 
 // roleStore fills role.Storer over iam_roles.
 type roleStore struct {
@@ -63,56 +101,60 @@ func (s *roleStore) HasExactRole(ctx context.Context, subjectType, subjectID, ro
 	return existsQuery(ctx, s.db, q, subjectType, subjectID, roleName, resourceType, resourceID)
 }
 
-// ListBySubject pages a subject's assignments (created_at DESC, 5-tuple DESC).
+// ListBySubject pages a subject's assignments (created_at DESC, role_key DESC).
 func (s *roleStore) ListBySubject(ctx context.Context, subjectType, subjectID string, req crud.ListRequest) (crud.Page[role.Assignment], error) {
-	q := tursodb.ListQuery[role.Assignment]{
-		BaseSQL:      `SELECT ` + roleColumns + ` FROM iam_roles WHERE subject_type = ? AND subject_id = ?`,
+	q := tursodb.ListQuery[roleRow]{
+		BaseSQL:      rolesBaseSQL(" WHERE subject_type = ? AND subject_id = ?"),
 		Args:         []any{subjectType, subjectID},
 		OrderFields:  role.OrderFields,
 		DefaultOrder: role.DefaultOrder,
-		PK:           roleTiebreak,
-		Scan:         scanAssignment,
-		OrderValueOf: func(a role.Assignment, _ string) any { return a.CreatedAt },
-		PKOf:         roleAssignmentKey,
+		PK:           "role_key",
+		Scan:         scanRoleRow,
+		OrderValueOf: func(r roleRow, _ string) any { return r.CreatedAt },
+		PKOf:         func(r roleRow) string { return r.RoleKey },
 	}
-	return tursodb.List(ctx, s.db, q, req)
+	page, err := tursodb.List(ctx, s.db, q, req)
+	if err != nil {
+		return crud.Page[role.Assignment]{}, err
+	}
+	return crud.MapPage(page, roleRow.toDomain), nil
 }
 
 // ListByResource pages the assignments scoped to a resource — DIRECT-scope only
 // (it never surfaces globally-granted subjects the service would allow).
 func (s *roleStore) ListByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[role.Assignment], error) {
-	q := tursodb.ListQuery[role.Assignment]{
-		BaseSQL:      `SELECT ` + roleColumns + ` FROM iam_roles WHERE resource_type = ? AND resource_id = ?`,
+	q := tursodb.ListQuery[roleRow]{
+		BaseSQL:      rolesBaseSQL(" WHERE resource_type = ? AND resource_id = ?"),
 		Args:         []any{resourceType, resourceID},
 		OrderFields:  role.OrderFields,
 		DefaultOrder: role.DefaultOrder,
-		PK:           roleTiebreak,
-		Scan:         scanAssignment,
-		OrderValueOf: func(a role.Assignment, _ string) any { return a.CreatedAt },
-		PKOf:         roleAssignmentKey,
+		PK:           "role_key",
+		Scan:         scanRoleRow,
+		OrderValueOf: func(r roleRow, _ string) any { return r.CreatedAt },
+		PKOf:         func(r roleRow) string { return r.RoleKey },
 	}
-	return tursodb.List(ctx, s.db, q, req)
+	page, err := tursodb.List(ctx, s.db, q, req)
+	if err != nil {
+		return crud.Page[role.Assignment]{}, err
+	}
+	return crud.MapPage(page, roleRow.toDomain), nil
 }
 
-// roleAssignmentKey is the Go twin of roleTiebreak: the 5-tuple joined by a NUL
-// byte, the cursor PK the SQL keyset predicate compares against.
-func roleAssignmentKey(a role.Assignment) string {
-	return strings.Join([]string{a.SubjectType, a.SubjectID, a.Role, a.ResourceType, a.ResourceID}, "\x00")
-}
-
-// scanAssignment scans one iam_roles row into a role.Assignment.
-func scanAssignment(sc scanner) (role.Assignment, error) {
+// scanRoleRow scans one iam_roles listing row (including the derived role_key)
+// into a roleRow. It is a hand-scan callback; the struct-scan helper arrives in a
+// later phase.
+func scanRoleRow(sc scanner) (roleRow, error) {
 	var (
-		a         role.Assignment
+		r         roleRow
 		createdAt string
 	)
-	if err := sc.Scan(&a.SubjectType, &a.SubjectID, &a.Role, &a.ResourceType, &a.ResourceID, &createdAt); err != nil {
-		return role.Assignment{}, tursodb.MapError(err)
+	if err := sc.Scan(&r.SubjectType, &r.SubjectID, &r.Role, &r.ResourceType, &r.ResourceID, &createdAt, &r.RoleKey); err != nil {
+		return roleRow{}, tursodb.MapError(err)
 	}
 	t, err := tursodb.ParseTime(createdAt)
 	if err != nil {
-		return role.Assignment{}, err
+		return roleRow{}, err
 	}
-	a.CreatedAt = t
-	return a, nil
+	r.CreatedAt = t
+	return r, nil
 }

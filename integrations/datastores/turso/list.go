@@ -81,9 +81,13 @@ func (q ListQuery[T]) listCursor(ctx context.Context, db Querier, req crud.ListR
 	args := append([]any(nil), q.Args...)
 
 	if cursor != nil {
-		appendCursorPredicate(&buf, &args, orderCol, q.PK, cursor.OrderValue, cursor.PK, direction, false, castLower)
+		if err := appendCursorPredicate(&buf, &args, orderCol, q.PK, cursor.OrderValue, cursor.PK, direction, false, castLower); err != nil {
+			return crud.Page[T]{}, err
+		}
 	}
-	appendOrderBy(&buf, orderCol, q.PK, direction, false, castLower)
+	if err := appendOrderBy(&buf, orderCol, q.PK, direction, false, castLower); err != nil {
+		return crud.Page[T]{}, err
+	}
 	buf.WriteString(" LIMIT ?")
 	args = append(args, limit+1)
 
@@ -129,7 +133,9 @@ func (q ListQuery[T]) listOffset(ctx context.Context, db Querier, req crud.ListR
 	buf.WriteString(q.BaseSQL)
 	args := append([]any(nil), q.Args...)
 
-	appendOrderBy(&buf, orderCol, q.PK, direction, false, castLower)
+	if err := appendOrderBy(&buf, orderCol, q.PK, direction, false, castLower); err != nil {
+		return crud.Page[T]{}, err
+	}
 	buf.WriteString(" LIMIT ?")
 	args = append(args, limit+1)
 	buf.WriteString(" OFFSET ?")
@@ -187,8 +193,12 @@ func (q ListQuery[T]) markPrev(ctx context.Context, db Querier, page *crud.Page[
 	buf.WriteString(q.BaseSQL)
 	args := append([]any(nil), q.Args...)
 
-	appendCursorPredicate(&buf, &args, orderCol, q.PK, cursor.OrderValue, cursor.PK, direction, true, castLower)
-	appendOrderBy(&buf, orderCol, q.PK, direction, true, castLower)
+	if err := appendCursorPredicate(&buf, &args, orderCol, q.PK, cursor.OrderValue, cursor.PK, direction, true, castLower); err != nil {
+		return err
+	}
+	if err := appendOrderBy(&buf, orderCol, q.PK, direction, true, castLower); err != nil {
+		return err
+	}
 	buf.WriteString(" LIMIT ?")
 	args = append(args, limit)
 
@@ -242,8 +252,19 @@ func (q ListQuery[T]) query(ctx context.Context, db Querier, sql string, args []
 // placeholders to buf and its two positional args (order value, pk) to args. It
 // writes WHERE when buf holds no WHERE yet and AND otherwise. The operator comes
 // from direction × forPrevious (keysetOperator); castLower wraps both sides of
-// the order comparison in LOWER(). Time order values bind via FormatTime.
-func appendCursorPredicate(buf *strings.Builder, args *[]any, orderCol, pkCol string, orderValue any, pk, direction string, forPrevious, castLower bool) {
+// the order comparison in LOWER(). Time order values bind via FormatTime. Both
+// orderCol and pkCol pass through QuoteIdentifier, so a non-identifier column or
+// raw-expression pk fails loud with errs.ErrInvalidInput before any SQL runs.
+func appendCursorPredicate(buf *strings.Builder, args *[]any, orderCol, pkCol string, orderValue any, pk, direction string, forPrevious, castLower bool) error {
+	quotedOrder, err := QuoteIdentifier(orderCol)
+	if err != nil {
+		return fmt.Errorf("order field: %w", err)
+	}
+	quotedPK, err := QuoteIdentifier(pkCol)
+	if err != nil {
+		return fmt.Errorf("pk field: %w", err)
+	}
+
 	if strings.Contains(strings.ToUpper(buf.String()), "WHERE") {
 		buf.WriteString(" AND ")
 	} else {
@@ -252,30 +273,43 @@ func appendCursorPredicate(buf *strings.Builder, args *[]any, orderCol, pkCol st
 
 	operator := keysetOperator(direction, forPrevious)
 	if castLower {
-		fmt.Fprintf(buf, "(LOWER(%s), %s) %s (LOWER(?), ?)", orderCol, pkCol, operator)
+		fmt.Fprintf(buf, "(LOWER(%s), %s) %s (LOWER(?), ?)", quotedOrder, quotedPK, operator)
 	} else {
-		fmt.Fprintf(buf, "(%s, %s) %s (?, ?)", orderCol, pkCol, operator)
+		fmt.Fprintf(buf, "(%s, %s) %s (?, ?)", quotedOrder, quotedPK, operator)
 	}
 
 	*args = append(*args, bindOrderValue(orderValue), pk)
+	return nil
 }
 
 // appendOrderBy appends an ORDER BY on the order column plus the pk tiebreaker.
 // forPrevious flips the direction (the backward probe reverses the sort, then
 // the caller reverses the rows back). castLower wraps the order column in
-// LOWER(). The pk term is omitted when the order column already is the pk.
-func appendOrderBy(buf *strings.Builder, orderCol, pkCol, direction string, forPrevious, castLower bool) {
+// LOWER(). The pk term is omitted when the order column already is the pk — but
+// pkCol is validated through QuoteIdentifier UNCONDITIONALLY, so a bad pk fails
+// on page 1 (where no cursor predicate is appended) exactly as it would later.
+func appendOrderBy(buf *strings.Builder, orderCol, pkCol, direction string, forPrevious, castLower bool) error {
+	quotedOrder, err := QuoteIdentifier(orderCol)
+	if err != nil {
+		return fmt.Errorf("order field: %w", err)
+	}
+	quotedPK, err := QuoteIdentifier(pkCol)
+	if err != nil {
+		return fmt.Errorf("pk field: %w", err)
+	}
+
 	dir := resolvedDirection(direction, forPrevious)
 
-	orderExpr := orderCol
+	orderExpr := quotedOrder
 	if castLower {
-		orderExpr = "LOWER(" + orderCol + ")"
+		orderExpr = "LOWER(" + quotedOrder + ")"
 	}
 
 	fmt.Fprintf(buf, " ORDER BY %s %s", orderExpr, dir)
 	if orderCol != pkCol {
-		fmt.Fprintf(buf, ", %s %s", pkCol, dir)
+		fmt.Fprintf(buf, ", %s %s", quotedPK, dir)
 	}
+	return nil
 }
 
 // keysetOperator picks the comparison operator for a keyset predicate from the
