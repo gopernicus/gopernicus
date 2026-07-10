@@ -178,6 +178,84 @@ the moved middlewares. Close: boot `examples/auth-cms` and re-run one
 email + one phone invitation leg (the identity-resolution close drive's
 short form) — proving the whole re-pathed stack live.
 
+## Review-gate fold (2026-07-10) — GOVERNS where it conflicts with the phase text
+
+**architecture-steward: ALIGNED-WITH-EDITS (7). lead-backend-engineer:
+SHIP-WITH-EDITS (6).** Two design forks surfaced; the coordinator decided
+both AT the fold (flagged to the owner for override):
+
+**FORK 1 (lead 2 ≡ steward 2) — the id-context vocabulary is PROMOTED TO
+THE KERNEL** (a second root file, e.g. `sdk/context.go`):
+`WithRequestID`/`WithTraceID`/`WithSpanID` + their context keys + readers
+move from `sdk/logging` to root `package sdk`. Pure cross-cutting
+vocabulary every tier touches — the owner's "should there ever be any
+more" provision, exercised deliberately. Consequences: `web.RequestID`
+STAYS in web (its logging import dies), the evicted Tracing middleware
+carries NO logging import into `tracing`, and `logging` reads the ids
+from the root. `web.Logger` never imported sdk/logging (pure
+`*slog.Logger`) — the plan's "request-log" bullet was aimed at the wrong
+middleware, corrected here.
+
+**FORK 2 (lead 1) — the workers tracing glue is DELETED (YAGNI):**
+`WithTracer` + `TracingMiddleware` + the tracing import removed from
+workers entirely. Grounds: ZERO callers repo-wide (grep-verified); the
+local-interface alternative is unimplementable as claimed (interface
+satisfaction compares return types by identity — `tracing.SpanFinisher ≠
+workers.SpanFinisher`, so a `tracing.Tracer`/otel tracer could never
+satisfy it: not a caveat, a broken seam); built at sdk-parity for
+parity, never consumed. Reintroduction home NAMED: a workers-decorator
+in the `tracing` CAPABILITY (tracing→workers is legal
+capability→foundation); trigger: the first host wanting traced workers.
+
+**Mechanical folds (all adopted):**
+
+1. **G12 scans production code only** (`--exclude='*_test.go'`, the
+   G6/G9 precedent) — the two DELIBERATE env round-trip tests
+   (`logging/logging_env_test.go`, `web/server_env_test.go`) and the
+   web_test/workers_test cross-tier imports are exempt and CITED in the
+   guard comment; G12(b) gets the same non-self carve-out as (c).
+2. **The "compiler-enforced leaf" claim corrected** (steward 3): the
+   cycle only bites for subpackages importing the kernel (crud,
+   cryptids, email, web post-P1); G12(a) is the PRIMARY enforcement —
+   the law text and P1 doc header say so, no false compiler claim.
+3. **Taxonomy amendment tightened** (steward 4): "…or **implements one
+   sdk capability port by composing other sdk packages** — zero external
+   dependencies, never importing features/, examples/, or another
+   integration." AND a new guard leg lands IN THE SAME COMMIT:
+   `integrations/` never imports `features/`, `examples/`, or
+   `workshop/` (the previously-unguarded direction becomes load-bearing
+   once zero-dependency integrations are legitimate).
+4. **Foundation middleware return-type rule pinned** (lead 3): any
+   middleware living in a foundation package returns the bare
+   `func(http.Handler) http.Handler`, never `web.Middleware` (a
+   foundation→web edge is itself a violation). Moot for RequestID under
+   Fork 1, pinned for the future. The evicted cacher/tracing middlewares
+   (capabilities) MAY return `web.Middleware`; both need a small
+   EXPORTED status recorder from web (currently unexported
+   `statusWriter`) — export it (steward 2).
+5. **P3's doc sweep is GREP-DRIVEN, not a named-file list** (steward 5):
+   `rg 'gopernicus/sdk/|sdk/(errs|web|logging|…)'` over `*.md` +
+   Go doc comments repo-wide (excluding .claude/) — known hits include
+   five integration READMEs, features/events + examples/cms READMEs,
+   ARCHITECTURE lines 12/99–107/417, and
+   `features/authentication/authentication.go:335` (the stale
+   "MailerBridge ships in sdk/notify" comment — lead 6).
+6. **P4 ordering corrected** (lead 5): P4 depends on NOTHING in P2; its
+   only constraint is BEFORE P5 (G12(c) flags the live notify→email
+   edge until the bridge moves). Module-36 registration completeness
+   per the workshop precedent (steward 6): ARCHITECTURE tree row +
+   count line 35→36, the sdk-facility taxonomy row DROPS MailerBridge
+   from its examples, Makefile .PHONY + "runs all twelve".
+7. **Template-canary gap named** (lead Q3): the emitted host wires
+   RequestID/Logger/Panics but not Tracing/CachePages — the scaffold
+   legs catch a missed RequestID rename but not the other two; the
+   in-repo compile of examples/cms + features/cms (which wire both)
+   is the actual net for those. Recorded, no action.
+8. P1 blast radius pre-verified (lead): 132 files (125 .go + 7 .tmpl),
+   zero aliased errs imports, zero dot-imports, zero `sdk` identifier
+   shadows, no root-package collision. P4 pre-verified: zero
+   MailerBridge construction sites in-repo.
+
 ## Execution log
 
 (append dated entries here)
