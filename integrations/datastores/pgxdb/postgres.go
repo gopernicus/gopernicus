@@ -82,6 +82,18 @@ type Config struct {
 	// before the pool is created. If LogQueries is also true, both tracers are
 	// composed. See the asymmetry note above.
 	Tracer jackpgx.QueryTracer
+
+	// Retry, when its Attempts is > 1, makes Open verify boot connectivity with a
+	// retried real round-trip (StatusCheck: Ping + SELECT 1) under a full-jitter
+	// exponential backoff, targeting the orchestration race where the database is
+	// not yet accepting connections. The zero value disables all retry: Open
+	// pings exactly once (today's behavior). It is not populated by env parsers.
+	//
+	// This governs ONLY the boot connectivity check. No statement is ever
+	// auto-retried by the connector — statement retry is store-owned, explicit,
+	// and per-call, because a method verb does not encode idempotency
+	// (Query/QueryRow carry RETURNING writes).
+	Retry RetryPolicy
 }
 
 func (cfg Config) connectionString() (string, error) {
@@ -195,12 +207,27 @@ func Open(cfg Config) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating connection pool: %w", err)
 	}
+	db := &DB{pool: pool}
+
+	// Retry runs the boot connectivity check (StatusCheck: Ping + SELECT 1) under
+	// the policy's jittered backoff, targeting the orchestration race where the
+	// pool cannot yet acquire a connection. The zero value keeps the single pool
+	// ping exactly.
+	if cfg.Retry.Attempts > 1 {
+		if err := retry(ctx, cfg.Retry, func(ctx context.Context) error {
+			return StatusCheck(ctx, db)
+		}); err != nil {
+			pool.Close()
+			return nil, fmt.Errorf("verifying database: %w", err)
+		}
+		return db, nil
+	}
+
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("pinging database: %w", err)
 	}
-
-	return &DB{pool: pool}, nil
+	return db, nil
 }
 
 // MapError converts a pgx / PostgreSQL driver error into an sdk/errs sentinel.

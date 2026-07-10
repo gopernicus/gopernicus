@@ -514,3 +514,61 @@ pgx store each failed loudly, reverted, green). README guard counts
 eight → ten (both spots); features/README checklist item 5 gains the
 G9/Transactor pointer. sdk builds stdlib-only (G1 structural);
 `make check` green. Committed CI-green. **Next: P7.**
+
+### 2026-07-09 — P7 task-1: the retry design (ratified Q3 = pure opt-in; gate-fold pins applied)
+
+**The one safe wrapper seam.** After the convergent-major fold (no
+statement is ever auto-retried — `Query`/`QueryRow` carry RETURNING
+writes), the only point where the CONNECTOR can prove no statement ran
+is the OPEN-TIME connectivity round-trip. Per-operation
+acquire-vs-statement classification is deliberately NOT built:
+pgx offers `pgconn.SafeToRetry` (error before any data sent) — NAMED as
+the demand-gated extension for a future per-op policy; database/sql
+already performs its own internal bad-conn retry (fresh conn, bounded),
+so turso has no additional safe per-op seam at all.
+
+**The shape (both connectors, symmetric):** `Config.Retry RetryPolicy`
+with `Attempts int`, `MinBackoff`, `MaxBackoff time.Duration`.
+Zero value ⇒ NO retries anywhere — byte-for-byte today's behavior (Q3
+pure opt-in). When set, `Open`'s boot connectivity check runs a REAL
+round-trip (`StatusCheck`: Ping + SELECT 1) retried per the policy with
+full-jitter exponential backoff, context-aware (ctx cancellation aborts
+the loop). At boot, EVERY error class is retryable — nothing destructive
+can have executed. This is aimed at the actual transient everyone hits:
+the orchestration race (DB container not yet accepting connections).
+
+**Deliberate consequence for turso (resolves the P3 open flag):** turso's
+plain Open keeps its lazy ping (zero-value = today's boot-with-dead-DB
+behavior, feature-store table probes remain the boot validator) — but
+OPTING INTO Retry is opting into EAGER validation, because retrying a
+lazy ping that cannot fail would be vacuous. Documented on the Config
+field in both connectors.
+
+**Implementation note:** one small internal `retry(ctx, policy, fn)`
+helper per connector (≈25 lines, duplicated consciously like RedactDSN),
+unit-tested directly with a counting fake (attempt count, backoff bounds,
+ctx-cancel abort) — no network flakiness in tests; Open wires it around
+the connectivity check. Statement-level retry remains store-owned,
+explicit, per-call — a stance, not a feature.
+
+### 2026-07-09 — P7 task-2 DONE (Config.Retry, both connectors)
+
+`RetryPolicy{Attempts, MinBackoff, MaxBackoff}` + internal
+`retry(ctx, policy, fn)` per connector (consciously duplicated, the
+RedactDSN precedent): full-jitter uniform in [MinBackoff, cap], cap
+doubling to MaxBackoff, backoff only between attempts,
+ctx-checked before each attempt and cancellable mid-sleep;
+`math/rand/v2` (auto-seeded). Open wiring: `Attempts>1` ⇒ the boot check
+becomes a RETRIED REAL round-trip (`StatusCheck`); zero value ⇒
+byte-for-byte today's paths (turso lazy ping, pgx single Ping) — the
+struct-construction reorder in both Opens is behavior-neutral, logged.
+The ConnectTimeout context is the whole loop's budget (named: many
+attempts × long backoff needs a raised ConnectTimeout — not silently
+changed). Test matrix green ×2 connectors (exhaustion, mid-loop success,
+single-attempt coercion, backoff bounds, up-front + mid-sleep ctx
+cancel) + turso `TestOpen_RetryAgainstUnreachable` (closed loopback
+port, proves the second attempt ran; pgx has no equivalently cheap
+target — helper tests are its net, per plan allowance). READMEs updated
+with the opt-in stance. Both connectors + `make check`/`make guard`
+(ten) green. Committed CI-green. **Next: milestone close — the two live
+legs.**
