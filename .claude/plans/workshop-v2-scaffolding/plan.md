@@ -1,6 +1,10 @@
 # workshop-v2-scaffolding — the scaffolding CLI (init · new feature · db verbs)
 
-Status: **DRAFT 2026-07-09 — awaiting jrazmi ratification (Q1–Q5 below)**
+Status: **RATIFIED 2026-07-09 (jrazmi, in-session) — Q1–Q5 all at
+recommendations: workshop/gopernicus module 35 (stdlib-only, new
+"workshop" taxonomy kind) · both dialects always · new-domain DEFERRED ·
+hand-authored templates + scaffold-compile gate · review gate RUNS
+(findings folded on return). EXECUTING.**
 Origin: the workshop-v2 scope brief
 (`.claude/plans/restructure/workshop-v2-brief.md`, FINAL 2026-07-02) §1's
 three SCAFFOLD-ONCE targets, sliced by the 2026-07-09 owner ruling:
@@ -235,6 +239,89 @@ Standing check (a) per phase commit (`make check` green; examples/minimal
 :8081 → 200s + `/healthz`; kill; port free) — plus each phase's
 run-and-look above. The milestone close re-runs the full W2+W3 emit→
 build→boot→drive chain end to end in one recorded transcript.
+
+## Review-gate fold (2026-07-09) — GOVERNS where it conflicts with the phase text above
+
+**architecture-steward: ALIGNED-WITH-EDITS (8). lead-backend-engineer:
+SHIP-WITH-EDITS (7).** The convergent MAJOR (steward 1+2 ≡ lead R1):
+Q1's stdlib-only ruling and W4's in-process `RunMigrations` cannot both
+be true (the seam takes the connector's `*DB`; drivers would enter the
+CLI's go.mod). **Resolved — branch (b), both reviewers' recommendation:
+DELEGATION.**
+
+1. **W4 redesigned:** `db migrate` executes the HOST-OWNED runner
+   (`go run ./workshop/migrations`); `db status` invokes the runner's new
+   `-status` mode, with a FILE-ONLY fallback in the CLI (all-pending
+   listing when no DB is reachable — the original's UX, and the only
+   status a stdlib CLI can self-produce); `db create` stays pure-FS.
+   Numbering pinned: 4-digit zero-pad, parse leading digits before the
+   first `_`, skip `_`-prefixed files; max+1 collides under concurrent
+   authors where timestamps didn't — accepted for 0001..0021 consistency,
+   named. Ledger path is `workshop/migrations/<db>/` with `--db` default
+   `primary` (matches the charter + the cms example); "per source"
+   softened — host ledgers are single-source `"default"` (the connectors
+   hardcode it; named sources are a store-module doc convention).
+2. **W2 additionally emits the runner** `workshop/migrations/main.go`
+   (dialect-selected, the `examples/cms/workshop/migrations/main.go`
+   shape, WITH the new `-status` mode) — the Makefile `migrate` target
+   and W4's delegation both point at it.
+3. **The hermetic test-host mounts NOTHING (sdk-only).** sdk is
+   third-party-free (G1), so an sdk-only host builds fully OFFLINE with
+   an empty go.sum — the only configuration hermetic inside `make check`.
+   The emitted README carries the feature-wiring snippet instead.
+   (Steward 8 concurs from the template-mass angle: no cms/memstore
+   template surface.)
+4. **Scaffold-test mechanics pinned (lead R2):** the test REWRITES
+   emitted relative replaces to ABSOLUTE repo paths (`go mod edit
+   -replace`, repo root via runtime.Caller); the child build runs with
+   explicit `GOWORK=off` in cmd.Env; `go mod tidy` runs in the temp
+   module first. Hermetic = no DB, no env, no network. **The
+   driver-store compile leg** (W3's emitted stores): emitted go.mods PIN
+   the exact driver versions this repo's stores use, so GOMODCACHE is
+   already warm from `make check`'s own builds — the leg runs
+   `GOPROXY=off` offline against the warm cache; a cold cache fails
+   loudly (never skips silently).
+5. **W3 decisions:** (a) the skeleton emits the FULL charter surface
+   including `list` — order.go/DefaultOrder/ListLimits, the six-case
+   storetest pagination family, checklist-14 ID threading +
+   `DBGeneratedIDOnEmpty` + `NNNN_id_defaults.sql` — a non-conformant
+   skeleton would undermine "born conforming," the slice's whole point;
+   (b) size honestly **L** (the phase table row is superseded); (c) W3
+   HARD-depends on W2 (the compile harness is reused — "independent
+   after W1" is superseded); (d) v1 emits STANDALONE trees (own module
+   root); emitting INTO this monorepo is a named deferral, and the CLI
+   prints the manual registration checklist (go.work use, MODULES,
+   STORE_MODULES, test-stores block, G5's hardcoded list) whenever the
+   target looks monorepo-shaped (steward 4).
+6. **The template rail redrawn (lead R3):** templates take IDENTITY
+   params only — module-path ROOT, feature name, aggregate name
+   (placeholder-defaulted) — and ZERO structural/field input; a per-field
+   loop or `queries.sql` parsing is the v2b trigger firing. "A NAME and
+   nothing else" is superseded (it would force a hardcoded module root
+   and break standalone emission entirely).
+7. **New guard G11 `guard-workshop-boundary` lands at W1 (lead R7):**
+   nothing outside `workshop/` imports `workshop/…`; workshop imports no
+   feature cores and no examples. Prove-can-fail; `make guard` → ELEVEN
+   (W5 sweeps the counts).
+8. **Emitted-artifact guard shapes (steward 5 — the scaffold tests are
+   load-bearing guard infrastructure, stated as such):** the host test
+   runs the app-pattern ONE-RULE grep (internal/logic never imports
+   inbound/outbound/integrations) + G9/G10 hygiene shapes — NOT "G2's
+   shape" (G2 polices feature cores; a host has none); the feature test
+   runs FS1 + G2/G6/G10 shapes over emitted output. Templates ship as
+   `.tmpl` files, NEVER `.go` (G4/G9/G10 grep the whole tree — the
+   module is scanned-and-must-be-clean; "invisible to all ten guards" is
+   superseded by "zero hits under all guards").
+9. **W1 dispatcher note (lead):** re-type fresh on stdlib `flag` with NO
+   init()-registered command registry (the original's `cli`
+   mini-framework pattern conflicts with the repo's init() aversion);
+   carry only the two-level command/subcommand shape, the
+   stderr+`os.Exit(1)` convention, and `create`'s name-sanitize.
+10. Verified by the reviewers, recorded: both connectors' ledger is
+    `schema_migrations (source, version, checksum, raw_sql, applied_at)`
+    — a portable status SELECT works across dialects; G4's regex cannot
+    match the module path; G5's hardcoded list remains the one
+    manually-extended guard (W5 docs name it).
 
 ## Execution log
 
