@@ -15,7 +15,7 @@ STORE_MODULES = features/cms/stores/pgx features/cms/stores/turso features/authe
 	guard-sdk-stdlib guard-feature-isolation guard-sdk-no-outward guard-no-legacy-path \
 	guard-feature-core-sdk-only guard-feature-transport-sdk-web guard-feature-no-cross-feature \
 	guard-store-no-foreign-feature guard-no-underlying guard-no-lax-scan \
-	guard-workshop-boundary
+	guard-workshop-boundary guard-sdk-layering guard-integration-no-inward
 
 # Regenerate *_templ.go from .templ sources (they live in features/cms/views/templ).
 generate:
@@ -84,11 +84,11 @@ tidy:
 # Layering guards — each enforces one architectural boundary from the
 # constitution (00-overview.md) or the feature-standard charter (FS rules,
 # 2026-07-07); every target must print nothing and exit 0 on a clean tree.
-# `make guard` runs all eleven.
+# `make guard` runs all thirteen.
 guard: guard-sdk-stdlib guard-feature-isolation guard-sdk-no-outward guard-no-legacy-path \
 	guard-feature-core-sdk-only guard-feature-transport-sdk-web guard-feature-no-cross-feature \
 	guard-store-no-foreign-feature guard-no-underlying guard-no-lax-scan \
-	guard-workshop-boundary
+	guard-workshop-boundary guard-sdk-layering guard-integration-no-inward
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -198,6 +198,41 @@ guard-workshop-boundary:
 	@echo "== guard: workshop/ is isolated both directions (nothing imports it; it imports no feature/example) =="
 	@! grep -rn --include='*.go' --exclude-dir=workshop '"github.com/gopernicus/gopernicus/workshop' . || { echo "ERROR (W1): a non-workshop module imports the scaffolding CLI — workshop/ emits hosts, it is never a runtime dependency"; exit 1; }
 	@! grep -rn --include='*.go' -E '"github.com/gopernicus/gopernicus/(features|examples)' workshop/ || { echo "ERROR (W1): workshop/ imports a feature core or an example — the CLI templates them, it never links them"; exit 1; }
+
+# G12 (sdk-layering, 2026-07-10): the intra-sdk import law. Kernel = the root
+# package (cycle-enforced against every subpackage that imports it; the grep
+# below is the primary enforcement for the rest). foundation/* may import the
+# ROOT only — FLAT, no foundation->foundation edges. capabilities/* may import
+# root + foundation — NEVER another capability. sdk/feature is the ONE
+# sanctioned composer (unconstrained). Production code only: *_test.go is
+# exempt (the G6 precedent) — the deliberate env round-trip tests
+# (foundation/logging/logging_env_test.go, foundation/web/server_env_test.go)
+# are WHY the exemption exists.
+guard-sdk-layering:
+	@echo "== guard: sdk layering (kernel <- foundation <- capabilities <- feature) =="
+	@! grep -n --include='*.go' '"github.com/gopernicus/gopernicus/sdk/' sdk/*.go 2>/dev/null || { echo "ERROR (G12a): the kernel (root package sdk) imports a subpackage"; exit 1; }
+	@fail=0; for d in sdk/foundation/*/; do \
+		x=$$(basename $$d); \
+		hits=$$(grep -rn --include='*.go' --exclude='*_test.go' -E '"github.com/gopernicus/gopernicus/sdk/(foundation|capabilities|feature)' $$d \
+			| grep -vE '"github.com/gopernicus/gopernicus/sdk/foundation/'"$$x"'([\"/])' || true); \
+		if [ -n "$$hits" ]; then echo "ERROR (G12b): foundation/$$x imports a sibling tier or upward — foundation imports the root only:"; echo "$$hits"; fail=1; fi; \
+	done; exit $$fail
+	@fail=0; for d in sdk/capabilities/*/; do \
+		x=$$(basename $$d); \
+		hits=$$(grep -rn --include='*.go' --exclude='*_test.go' -E '"github.com/gopernicus/gopernicus/sdk/(capabilities|feature)' $$d \
+			| grep -vE '"github.com/gopernicus/gopernicus/sdk/capabilities/'"$$x"'([\"/])' || true); \
+		if [ -n "$$hits" ]; then echo "ERROR (G12c): capabilities/$$x imports another capability or sdk/feature — cross-capability composition leaves sdk (integrations)"; echo "$$hits"; fail=1; fi; \
+	done; exit $$fail
+
+# G13 (sdk-layering, 2026-07-10, folded steward finding): integrations never
+# import inward — no features/, examples/, or workshop/. Load-bearing now that
+# COMPOSING integrations (zero external deps, e.g. notify/mailer) are
+# legitimate: the import direction is what keeps "integration" meaning
+# something. A legitimate future hit gets a named per-line exception HERE —
+# never a regex weakening.
+guard-integration-no-inward:
+	@echo "== guard: integrations import no features/examples/workshop =="
+	@! grep -rn --include='*.go' -E '"github.com/gopernicus/gopernicus/(features|examples|workshop)' integrations/ || { echo "ERROR (G13): an integration imports inward"; exit 1; }
 
 # CI-style gate: templ generation must be a no-op (no drift), then per-module
 # vet/build/test across all MODULES, then the four layering guards. Drift

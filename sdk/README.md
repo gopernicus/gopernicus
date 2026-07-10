@@ -13,6 +13,32 @@ constructor. Adapters (concrete implementations) live in `integrations/`
 `sdk` is **not** an interfaces-only package. The value is the behavior and
 vocabulary the service structs own; the interfaces are how adapters plug in.
 
+## The layering law (sdk-layering, 2026-07-10)
+
+The module is LAYERED, and the layers are physical:
+
+- **The kernel** is the root `package sdk` itself (`errors.go` — the
+  error vocabulary; `context.go` — the request/trace/span-id context
+  vocabulary). Stdlib imports only. Leaf-ness is cycle-enforced against
+  every subpackage that imports it; guard G12(a) covers the rest.
+  Promoting something to the kernel means adding a root file — a
+  visible, deliberate act.
+- **`foundation/`** — pure mechanism and vocabulary with zero service
+  semantics (web, workers, identity, crud, cryptids, validation,
+  logging, conversion, slug, async, environment). Foundation packages
+  import the ROOT only — the tier is FLAT.
+- **`capabilities/`** — capability ports + first-party defaults (cacher,
+  tracing, email, notify, oauth, filestorage, ratelimiter, events).
+  Capabilities import root + foundation and NEVER each other;
+  capability×capability composition leaves sdk as a composing
+  integration (`integrations/notify/mailer` is the exemplar), and a
+  capability's web middleware lives in the CAPABILITY (cacher.Pages,
+  tracing.Middleware), never in web.
+- **`feature/`** — the one sanctioned composition package.
+
+Guard G12 enforces all of it over production code (tests exempt — two
+deliberate env round-trip tests are the reason the exemption exists).
+
 ## The import rule
 
 `sdk` is the adapter between the **standard library** and the application. It

@@ -1905,3 +1905,46 @@ its own plan; (2) **securityevent** straddles both features — candidate
 for its own audit facility, separate decision; (3) the invitation JSON
 response doesn't surface `identifier_kind` yet (request-side only, noted
 in the auth README).
+
+
+## 2026-07-10 — sdk-layering EXECUTED: kernel / foundation / capabilities (the intra-sdk import law)
+
+Owner-driven from the "sdk packages importing sdk packages is a huge code
+smell" conversation: the audit showed a 13-edge DAG with unnamed strata;
+the ratified answer NAMED and PHYSICALIZED them. Plan archived at
+`.claude/past/sdk-layering/`; gate: steward ×7 + lead ×6, two design
+forks decided at the fold (id-context → kernel; workers tracing glue
+DELETED — the "local interface" alternative was unimplementable, return
+types compare by identity).
+
+The law (ARCHITECTURE carries it): root `package sdk` = the KERNEL
+(errors.go + context.go; stdlib-only; cycle-enforced against importers,
+G12(a) for the rest) ← `foundation/` (11 packages, root-only, FLAT) ←
+`capabilities/` (8 packages, root+foundation, never each other) ←
+`feature` (the one sanctioned composer). Cross-capability composition
+leaves sdk: `integrations/notify/mailer` (module 36, the first COMPOSING
+integration — taxonomy amended, guarded).
+
+Shipped P1–P5, one CI-green commit each: errs → root (`sdk.ErrNotFound`;
+132 import files + 38 doc-comment files; the validation local-`errs`
+trap avoided) · the evictions (web.CachePages → **cacher.Pages**,
+web.Tracing → **tracing.Middleware**, StatusRecorder exported,
+web.RequestID kernel-backed; workers tracing glue deleted with the
+reintroduction home named) · the physical split (146 renames, 359 .go +
+11 .tmpl + 19 .md swept, zero old paths) · the mailer integration
+(`mailer.New/Bridge`, stutter-free rename, zero consumers) · guards
+**G12 sdk-layering** (three-direction prove-can-fail; tests exempt with
+the two env round-trip tests cited) + **G13 integration-no-inward**
+(load-bearing once composing integrations exist) — `make guard` runs
+THIRTEEN.
+
+End-state audit: web → root only; workers → nothing under sdk; every
+edge downward; the close drive re-ran the identity-resolution
+email+phone invitation legs live on the re-pathed stack — identical
+codes, token delivered, port free.
+
+Open flags: (1) `foundation/logging/context_test.go` pairs with
+`handler.go` now — trivial rename skipped as out-of-named-scope; (2) one
+P1-era `sdk/errs` prose comment in sendgrid.go swept at P5 — none
+remain; (3) traced-workers reintroduction trigger stands (first host
+wanting it → a decorator in capabilities/tracing).

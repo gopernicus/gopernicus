@@ -9,7 +9,7 @@ worked example `examples/cms`.
 ```
 <repo>/
   go.work                                # ties the modules together for local dev (dev-only)
-  sdk/                    module github.com/gopernicus/gopernicus/sdk                         — framework kernel (stdlib only; facilities incl. workers)
+  sdk/                    module github.com/gopernicus/gopernicus/sdk                         — stdlib-only, LAYERED (sdk-layering 2026-07-10): the root package is the KERNEL (errors.go, context.go); foundation/ = agnostic mechanism/vocabulary (imports the root only, flat); capabilities/ = capability ports + defaults (import root+foundation, never each other); feature/ = the one sanctioned composer
   integrations/
     cryptids/bcrypt/      module …/integrations/cryptids/bcrypt         — a connector (x/crypto bcrypt)
     cryptids/golang-jwt/  module …/integrations/cryptids/golang-jwt     — a connector (golang-jwt/jwt v5)
@@ -20,6 +20,7 @@ worked example `examples/cms`.
     filestorage/gcs/      module …/integrations/filestorage/gcs         — a connector (cloud.google.com/go/storage)
     filestorage/s3/       module …/integrations/filestorage/s3          — a connector (aws-sdk-go-v2 service/s3; S3-compatible endpoints)
     kvstores/goredis/     module …/integrations/kvstores/goredis        — a connector (redis/go-redis v9; multi-port: events bus + cacher + ratelimiter)
+    notify/mailer/        module …/integrations/notify/mailer           — a COMPOSING integration (zero external deps): the email-kind notify.Notifier over email.Sender
     oauth/github/         module …/integrations/oauth/github            — a connector (GitHub's OAuth API contract; zero external libs)
     oauth/google/         module …/integrations/oauth/google            — a connector (coreos/go-oidc v3)
     scheduling/robfig-cron/ module …/integrations/scheduling/robfig-cron — a connector (robfig/cron v3)
@@ -54,7 +55,7 @@ worked example `examples/cms`.
       cmd/
 ```
 
-**Thirty-five modules today.** `sdk` is the kernel; `integrations/*` are reusable
+**Thirty-six modules today.** `sdk` is the kernel; `integrations/*` are reusable
 third-party connectors (one external dependency each, each its own module);
 `features/<name>` is a datastore-free feature core with its store adapters as
 sibling modules — one per supported store implementation; `examples/*` are host apps that
@@ -71,6 +72,38 @@ app↔feature mapping table lives in `features/README.md` §2. See the
 modules locally for development; real consumers would pin tagged versions, not
 the workspace. Module paths are rooted at `github.com/gopernicus/gopernicus`.
 
+
+## The sdk layering law (sdk-layering, 2026-07-10)
+
+```
+sdk/                      ROOT package sdk — the KERNEL (errors.go,
+                          context.go). Imports stdlib only. Leaf-ness is
+                          cycle-enforced against every subpackage that
+                          imports the kernel; guard G12(a) enforces the
+                          rest. Promotion to kernel = adding a root file:
+                          a visible, deliberate act.
+  foundation/<pkg>        pure mechanism/vocabulary, zero service
+                          semantics (web, workers, identity, crud,
+                          cryptids, validation, logging, conversion,
+                          slug, async, environment). May import the ROOT
+                          only — FLAT, no foundation→foundation edges.
+  capabilities/<pkg>      capability ports + first-party defaults
+                          (cacher, tracing, email, notify, oauth,
+                          filestorage, ratelimiter, events). May import
+                          root + foundation — NEVER another capability.
+  feature/                the ONE sanctioned composition package (the
+                          mount contract composes by definition).
+```
+
+Cross-capability composition never lives in sdk: capability×foundation
+composition lives in the capability that owns the semantics (the cache
+middleware is `capabilities/cacher`'s, not web's); capability×capability
+composition leaves sdk entirely (a composing integration —
+`integrations/notify/mailer` is the exemplar). Guard G12 enforces the
+law over production code (tests exempt, the G6 precedent — two
+deliberate env round-trip tests are why); G13 keeps integrations
+pointing outward-only.
+
 ## Kinds of module — the taxonomy
 
 Six kinds of thing live in this ecosystem (ratified 2026-07-02, R6 —
@@ -81,7 +114,7 @@ workshop-v2-scaffolding W5, adding the workshop row):
 | kind | definition | examples | swap unit |
 |---|---|---|---|
 | **sdk facility** | a capability **port** + a first-party stdlib default + a conformance suite; its state is opaque to the host (no host-owned schema, no migrations, no routes) | `cacher`+`Memory`, `email`+`Console`/`SMTP`, `notify`+`Console`/`MailerBridge`, `ratelimiter`+`Memory`, `filestorage`+`Disk`, `workers` (pool + `Runner[T]`) | a config value — the swap is invisible outside the process |
-| **integration** | a third-party backend for a port; isolates exactly one external dependency — a third-party library or an external vendor's live API contract; one module | `datastores/turso`, `datastores/pgxdb`, `kvstores/goredis` | a module import in the host's `main` |
+| **integration** | a third-party backend for a port; isolates exactly one external dependency — a third-party library or an external vendor's live API contract — **or implements one sdk capability port by composing other sdk packages** (zero external deps, never importing features/, examples/, or another integration; guard G13; `notify/mailer`, 2026-07-10); one module | `datastores/turso`, `datastores/pgxdb`, `kvstores/goredis` | a module import in the host's `main` |
 | **feature** | a mountable domain module: own entities, **own durable schema + migrations**, and/or **own route surface**; its core module requires **sdk only** (FS1, 2026-07-07) | `cms`, `auth`, `jobs`; next: `events` | `NewService` + a `svc.Register` call |
 | **store module** | a feature's store implementation — SQL + migrations written against one driver package's API (`stores/<package>`) | `cms/stores/turso`, `cms/stores/pgx` | a module import + one `Open` call |
 | **views module** | a feature's bundled presentation default — the implementation of the core's `Views` port, written against one view package's API (`views/<package>`; FS3, 2026-07-07 — amends R6's four-kind table). Nil `Config.Views` → the feature's HTML surface is not registered, uniformly | `cms/views/templ` (landed at feature-standard B2, 2026-07-07) | a module import + one `Config` field |
@@ -98,9 +131,9 @@ nil-safe port field, wired (or not) in the host's `main`.
 
 - **`sdk/` — the kernel.** Stdlib-only. It holds the facility **ports** (`Storer`,
   `Sender`, `cacher.Storer`, the generic `crud` CRUD shape), the **services**
-  (`web`, `logging`, `config`, `errs`, `cryptids`, `slug`, `identity` — the
-  request-identity vocabulary + the Resolver port, A-I1 as grown at
-  identity-resolution 2026-07-10), **and a zero-dependency
+  (the KERNEL error/id-context vocabulary in the root package; `foundation/{web, logging,
+  environment, cryptids, slug, identity, …}`; `capabilities/{cacher, email, notify, …}` — the
+  layered shape, sdk-layering 2026-07-10), **and a zero-dependency
   default implementation of each facility port, shipped right next to it**
   (slog-style): `cacher.Memory`, `filestorage.Disk`, `email.SMTP` + `email.Console`.
   Its `go.mod` has **no `require` block** — "imports only the standard library" is
