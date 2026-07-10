@@ -1,0 +1,98 @@
+// Package {{.Feature}} is the public surface of the {{.Feature}} feature module —
+// the FS2 socket a host wires. It carries a single aggregate, {{.Agg}}, with a
+// create/get/list/delete use-case set.
+//
+// The feature is datastore-free and view-free (FS1): it depends on its
+// {{.Agg}}.Storer port and sdk facilities only. A host fills Repositories with a
+// store adapter (stores/turso, stores/pgx) or its own in-memory implementation,
+// builds the Service once via NewService, and reaches every use-case through it.
+// Register mounts NO routes — the shipped skeleton is transport-free; add an
+// internal/inbound/{{.Feature}} driving adapter when the host demands HTTP.
+package {{.Feature}}
+
+import (
+	"context"
+	"fmt"
+
+	"{{.ModulePath}}/domain/{{.Agg}}"
+	"{{.ModulePath}}/internal/logic/{{.AggSvc}}"
+	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk/feature"
+)
+
+// ErrNo{{.AggTitle}}Store is returned by NewService when the {{.Agg}} store is not
+// wired (Repositories.{{.ReposField}} is nil) — a feature that could do nothing.
+// Unsafe degradation errors loudly at construction (FS12).
+var ErrNo{{.AggTitle}}Store = fmt.Errorf("{{.Feature}}: Repositories.{{.ReposField}} is required: %w", errs.ErrInvalidInput)
+
+// Root aliases — the rim types a host passes to / receives from the Service,
+// re-exported so a host writes {{.Feature}}.{{.AggTitle}} without importing the
+// domain package.
+type (
+	{{.AggTitle}} = {{.Agg}}.{{.AggTitle}}
+	ListFilter    = {{.Agg}}.ListFilter
+)
+
+// Repositories is the set of outbound ports the feature needs. {{.ReposField}} is
+// required (nil-checked at construction); a host fills it with a store adapter or
+// its own implementation.
+type Repositories struct {
+	{{.ReposField}} {{.Agg}}.Storer
+}
+
+// Config carries the feature's construction-time settings.
+type Config struct {
+	// IDs mints each {{.Agg}} id at creation. The zero value is the nanoid
+	// default; a cryptids.Database generator defers to the store's DDL DEFAULT
+	// (the empty-id convention, checklist 14).
+	IDs cryptids.IDGenerator
+}
+
+// Service is the feature's host-facing driving surface: the use-cases, promoted
+// by thin delegation from the sealed interior.
+type Service struct {
+	{{.Feature}} *{{.AggSvc}}.Service
+}
+
+// NewService validates the wiring once and returns the feature's Service. A nil
+// {{.ReposField}} is ErrNo{{.AggTitle}}Store.
+func NewService(repos Repositories, cfg Config) (*Service, error) {
+	if repos.{{.ReposField}} == nil {
+		return nil, ErrNo{{.AggTitle}}Store
+	}
+	return &Service{
+		{{.Feature}}: {{.AggSvc}}.NewService(repos.{{.ReposField}}, cfg.IDs),
+	}, nil
+}
+
+// Register mounts the feature: it logs one line and registers NO routes (the
+// jobs precedent). It tolerates a zero-value Mount.
+func (s *Service) Register(m feature.Mount) error {
+	if m.Logger != nil {
+		m.Logger.Info("registered {{.Feature}} feature")
+	}
+	return nil
+}
+
+// Create persists a new {{.Agg}} with the given name, minting its id from
+// Config.IDs.
+func (s *Service) Create(ctx context.Context, name string) ({{.AggTitle}}, error) {
+	return s.{{.Feature}}.Create(ctx, name)
+}
+
+// Get returns the {{.Agg}} for id, or errs.ErrNotFound.
+func (s *Service) Get(ctx context.Context, id string) ({{.AggTitle}}, error) {
+	return s.{{.Feature}}.Get(ctx, id)
+}
+
+// Delete removes the {{.Agg}} for id. It is idempotent: an absent id is nil.
+func (s *Service) Delete(ctx context.Context, id string) error {
+	return s.{{.Feature}}.Delete(ctx, id)
+}
+
+// List returns a cursor-paginated page of {{.Agg}}s matching filter.
+func (s *Service) List(ctx context.Context, filter ListFilter, req crud.ListRequest) (crud.Page[{{.AggTitle}}], error) {
+	return s.{{.Feature}}.List(ctx, filter, req)
+}

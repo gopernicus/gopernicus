@@ -1,0 +1,44 @@
+// Package {{.Agg}} is the public rim of the {{.Feature}} feature's {{.Agg}}
+// aggregate: the entity plus the repository port (repository.go) and the order
+// allow-list (order.go). Hosts and store adapters import this package across
+// module boundaries — it is public by necessity.
+package {{.Agg}}
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/errs"
+)
+
+// {{.AggTitle}} is a stored {{.Agg}}. This is the placeholder shape a fresh
+// feature starts from — a surrogate id, one payload field, and a keyset order
+// column; replace and extend it for the real domain.
+type {{.AggTitle}} struct {
+	ID        string
+	Name      string
+	CreatedAt time.Time
+}
+
+// ListFilter narrows a List. The zero value matches everything; a non-empty Name
+// selects by exact match.
+type ListFilter struct {
+	Name string
+}
+
+// New builds a {{.AggTitle}}, minting its id from ids (empty under
+// cryptids.Database — the store then assigns the key from its DDL DEFAULT). A
+// blank name wraps errs.ErrInvalidInput.
+func New(ids cryptids.IDGenerator, name string, now time.Time) ({{.AggTitle}}, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return {{.AggTitle}}{}, fmt.Errorf("name is required: %w", errs.ErrInvalidInput)
+	}
+	return {{.AggTitle}}{
+		ID:        ids.MustGenerate(),
+		Name:      name,
+		CreatedAt: now.UTC(),
+	}, nil
+}

@@ -1,0 +1,50 @@
+// Package {{.AggSvc}} is the sealed service of the {{.Feature}} feature's {{.Agg}}
+// aggregate — the hexagon's interior: business rules over the {{.Agg}}.Storer
+// port, no HTTP and no SQL. It is unexported from the module's public API; the
+// socket promotes its use-cases by thin delegation.
+package {{.AggSvc}}
+
+import (
+	"context"
+	"time"
+
+	"{{.ModulePath}}/domain/{{.Agg}}"
+	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
+)
+
+// Service is the {{.Agg}} use-case set over its store.
+type Service struct {
+	store {{.Agg}}.Storer
+	ids   cryptids.IDGenerator
+}
+
+// NewService builds the service over its store and id generator.
+func NewService(store {{.Agg}}.Storer, ids cryptids.IDGenerator) *Service {
+	return &Service{store: store, ids: ids}
+}
+
+// Create validates and persists a new {{.Agg}}, minting its id from the
+// configured generator and stamping created_at at the current instant.
+func (s *Service) Create(ctx context.Context, name string) ({{.Agg}}.{{.AggTitle}}, error) {
+	entity, err := {{.Agg}}.New(s.ids, name, time.Now())
+	if err != nil {
+		return {{.Agg}}.{{.AggTitle}}{}, err
+	}
+	return s.store.Create(ctx, entity)
+}
+
+// Get returns the {{.Agg}} for id, or errs.ErrNotFound.
+func (s *Service) Get(ctx context.Context, id string) ({{.Agg}}.{{.AggTitle}}, error) {
+	return s.store.Get(ctx, id)
+}
+
+// Delete removes the {{.Agg}} for id (idempotent — absent is nil).
+func (s *Service) Delete(ctx context.Context, id string) error {
+	return s.store.Delete(ctx, id)
+}
+
+// List returns a cursor-paginated page of {{.Agg}}s matching filter.
+func (s *Service) List(ctx context.Context, filter {{.Agg}}.ListFilter, req crud.ListRequest) (crud.Page[{{.Agg}}.{{.AggTitle}}], error) {
+	return s.store.List(ctx, filter, req)
+}

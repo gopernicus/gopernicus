@@ -1,0 +1,17 @@
+module {{.ModulePath}}
+
+go {{.GoVersion}}
+
+// FS1: a feature core requires EXACTLY sdk — nothing else. Persistence lives in
+// the stores/{turso,pgx} sibling modules; views (if any) in a views/ sibling.
+require github.com/gopernicus/gopernicus/sdk v0.0.0
+
+// ── PRE-TAG WIRING ──────────────────────────────────────────────────────────
+// gopernicus publishes no version tags yet, so `go get` cannot resolve sdk.
+// Until v0.1.0 is cut, point sdk at a local checkout of the gopernicus repo:
+//
+//   go mod edit -replace github.com/gopernicus/gopernicus/sdk=/abs/path/to/gopernicus/sdk
+//   go mod tidy
+//
+// See README.md ("Pre-tag wiring"). The gopernicus repo's scaffold-compile test
+// injects the absolute replace automatically; a human adopter adds it by hand.

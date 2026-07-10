@@ -1,0 +1,22 @@
+module {{.ModulePath}}/stores/turso
+
+go {{.GoVersion}}
+
+require (
+	{{.ModulePath}} v0.0.0
+	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.0.0
+	github.com/gopernicus/gopernicus/sdk v0.0.0
+	github.com/tursodatabase/libsql-client-go {{.LibsqlVersion}} // indirect
+)
+
+// The feature core is a sibling in this standalone tree; go.work or this replace
+// resolves it.
+replace {{.ModulePath}} => ../..
+
+// ── PRE-TAG WIRING ──────────────────────────────────────────────────────────
+// gopernicus publishes no version tags yet. Until v0.1.0, point sdk and the turso
+// connector at a local checkout of the gopernicus repo:
+//
+//   go mod edit -replace github.com/gopernicus/gopernicus/sdk=/abs/path/to/gopernicus/sdk
+//   go mod edit -replace github.com/gopernicus/gopernicus/integrations/datastores/turso=/abs/path/to/gopernicus/integrations/datastores/turso
+//   go mod tidy

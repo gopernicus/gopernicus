@@ -1,0 +1,25 @@
+package pgx
+
+import (
+	"context"
+
+	"github.com/jackc/pgx/v5"
+
+	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+)
+
+// queryOne runs a single-row query with NamedArgs and scans it into a db-tagged
+// row struct via pgx.RowToStructByName (strict — the lax variant is a guard
+// failure). A no-rows result maps to errs.ErrNotFound through MapError.
+func queryOne[T any](ctx context.Context, db pgxdb.Querier, sql string, args pgx.NamedArgs) (T, error) {
+	var zero T
+	rows, err := db.Query(ctx, sql, args)
+	if err != nil {
+		return zero, pgxdb.MapError(err)
+	}
+	row, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[T])
+	if err != nil {
+		return zero, pgxdb.MapError(err)
+	}
+	return row, nil
+}

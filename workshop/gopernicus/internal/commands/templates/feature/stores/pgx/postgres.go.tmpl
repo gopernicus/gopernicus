@@ -1,0 +1,67 @@
+// Package pgx is the {{.Feature}} feature's PostgreSQL store adapter — its own
+// module so a host that brings a different datastore never pulls pgx into its
+// module graph. It is the dialect sibling of {{.Feature}}/stores/turso: same
+// exported surface, same migration version set (identical filenames), same port
+// semantics — a host switches dialect by one import + one Open call.
+//
+// It fills {{.Agg}}.Storer over the {{.Agg}} table. Repositories probes the table
+// at construction and errors — naming the missing table — before the host serves
+// traffic. Migrations follow the scaffold model (source "{{.Source}}"); the host
+// owns and applies them via ExportMigrations. The framework never applies
+// migrations behind the host's back.
+package pgx
+
+import (
+	"context"
+	"embed"
+	"fmt"
+
+	{{.Feature}} "{{.ModulePath}}"
+	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	"github.com/gopernicus/gopernicus/sdk/errs"
+)
+
+// MigrationsFS holds the embedded canonical schema (migration source
+// "{{.Source}}"). A host scaffolds it via ExportMigrations and applies it with
+// its own runner.
+//
+//go:embed migrations/*.sql
+var MigrationsFS embed.FS
+
+// MigrationsDir is the directory within MigrationsFS holding the .sql files.
+const MigrationsDir = "migrations"
+
+// Repositories returns the {{.Feature}} repository set backed by db, AFTER
+// verifying the {{.Agg}} table exists (the boot-time probe). It errors with
+// errs.ErrNotFound naming the missing table when the "{{.Source}}" migration
+// source was not applied before boot. It does NOT touch migrations. db is the
+// connector wrapper (error mapping + Tx), not a raw pool.
+func Repositories(db *pgxdb.DB) ({{.Feature}}.Repositories, error) {
+	if err := probeTable(context.Background(), db, "{{.Agg}}"); err != nil {
+		return {{.Feature}}.Repositories{}, err
+	}
+	return {{.Feature}}.Repositories{
+		{{.ReposField}}: newStore(db),
+	}, nil
+}
+
+// probeTable reports whether table exists, mapping its absence to a clear, stable
+// error. to_regclass resolves the relation name to its qualified text, or NULL
+// when no such table is visible on the search_path.
+func probeTable(ctx context.Context, db *pgxdb.DB, table string) error {
+	var reg *string
+	if err := db.QueryRow(ctx, `SELECT to_regclass($1)::text`, table).Scan(&reg); err != nil {
+		return pgxdb.MapError(err)
+	}
+	if reg == nil {
+		return fmt.Errorf("{{.Feature}} pgx store: %s table missing — apply the %q migration source before boot: %w", table, "{{.Source}}", errs.ErrNotFound)
+	}
+	return nil
+}
+
+// ExportMigrations copies this store's canonical migration files into dst,
+// creating dst if needed. After export the files are the HOST's, applied by the
+// host's own runner under one app-owned schema_migrations ledger.
+func ExportMigrations(dst string) error {
+	return pgxdb.ExportMigrations(MigrationsFS, MigrationsDir, dst)
+}

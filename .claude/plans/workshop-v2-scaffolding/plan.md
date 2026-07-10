@@ -376,3 +376,33 @@ ambient GOPROXY — pinned GOPROXY=off, stable ×3. Verify: module
 build/test/vet + make check (35) + make guard (11) green; coordinator
 re-ran both scaffold legs independently. Committed CI-green.
 **Next: W3.**
+
+### 2026-07-09 — W3 CLOSED (`gopernicus new feature` — the charter skeleton)
+
+`new feature <name> --module <root> [--aggregate]` (identity params only;
+leading-positional pulled before flag parsing — stdlib flag stops at the
+first positional, logged) over a 26-template manifest reusing the W2
+engine: sdk-only core (FS2 socket, domain rim with entity/order.go/
+port-doc-pinned Storer, <agg>svc with the checklist-14 `Config.IDs` mint,
+storetest with the FULL six-case family + `DBGeneratedIDOnEmpty` +
+`RejectsUnknownOrderField`, public in-core memstore + hermetic
+conformance) + BOTH store modules (Repositories(db) probe,
+ExportMigrations, `0001_<agg>.sql` with the INLINE id DEFAULT per the
+authorization fresh-source precedent, row-struct scanning per dialect,
+env-gated conformance, pinned driver versions = the warm-cache
+invariant, bump-together comment). Monorepo-shaped targets print the
+registration checklist (go.work ×3 / MODULES / STORE_MODULES /
+test-stores / G5). **Acceptance legs live in make check:** hermetic —
+emitted core tidies/builds/tests OFFLINE with all 11 storetest cases
+green vs its memstore + FS1/G2/G6/G10 shapes; warm-cache — both stores
+tidy/build/`vet -tags=integration` under GOPROXY=off. Run-and-look:
+emitted `notes` + a none-host, hand-wired per the emitted README,
+booted — healthz 200, boot-time create+list proof logged
+(`created_id`/`listed:1`), clean shutdown, port free. **Conscious
+simplifications (logged):** placeholder entity {ID, Name, CreatedAt} +
+one-field exact-match filter (enough for a real WHERE + foreign-row
+exclusion), no Update, singular table name (pluralization heuristics are
+codegen-adjacent — v2b), no inbound (Register logs only, jobs
+precedent). Verify: module + make check (35) + make guard (11) green;
+coordinator re-ran the full module test suite independently.
+Committed CI-green. **Next: W4.**

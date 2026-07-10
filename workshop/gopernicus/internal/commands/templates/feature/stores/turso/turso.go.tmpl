@@ -1,0 +1,72 @@
+// Package turso is the {{.Feature}} feature's Turso/libSQL store adapter — its own
+// module so a host that brings a different datastore never pulls libsql into its
+// module graph (the load-bearing opt-out property). It owns the SQL; the HOST
+// owns its database lifecycle.
+//
+// It fills {{.Agg}}.Storer over the {{.Agg}} table. Repositories probes the table
+// at construction and errors — naming the missing table — before the host serves
+// traffic, so an unapplied migration source surfaces at wiring time.
+//
+// Migrations follow the scaffold model: the canonical *.sql live here under
+// migration source "{{.Source}}", but the recommended path is to ExportMigrations
+// into the host's own migrations dir and let the host's runner apply them
+// pre-boot. The framework never applies migrations behind the host's back.
+package turso
+
+import (
+	"context"
+	"database/sql"
+	"embed"
+	"errors"
+	"fmt"
+
+	{{.Feature}} "{{.ModulePath}}"
+	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	"github.com/gopernicus/gopernicus/sdk/errs"
+)
+
+// MigrationsFS holds the embedded canonical schema (migration source
+// "{{.Source}}"). A host scaffolds it via ExportMigrations and applies it with
+// its own runner.
+//
+//go:embed migrations/*.sql
+var MigrationsFS embed.FS
+
+// MigrationsDir is the directory within MigrationsFS holding the .sql files.
+const MigrationsDir = "migrations"
+
+// Repositories returns the {{.Feature}} repository set backed by db, AFTER
+// verifying the {{.Agg}} table exists (the boot-time probe). It errors with
+// errs.ErrNotFound naming the missing table when the "{{.Source}}" migration
+// source was not applied before boot. It does NOT touch migrations. db is the
+// connector wrapper (error mapping + Tx), not a raw *sql.DB.
+func Repositories(db *tursodb.DB) ({{.Feature}}.Repositories, error) {
+	if err := probeTable(context.Background(), db, "{{.Agg}}"); err != nil {
+		return {{.Feature}}.Repositories{}, err
+	}
+	return {{.Feature}}.Repositories{
+		{{.ReposField}}: newStore(db),
+	}, nil
+}
+
+// probeTable reports whether table exists, mapping its absence to a clear, stable
+// error naming the table and the unapplied "{{.Source}}" migration source.
+func probeTable(ctx context.Context, db *tursodb.DB, table string) error {
+	var name string
+	err := db.QueryRow(ctx,
+		`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("{{.Feature}} turso store: %s table missing — apply the %q migration source before boot: %w", table, "{{.Source}}", errs.ErrNotFound)
+	}
+	if err != nil {
+		return tursodb.MapError(err)
+	}
+	return nil
+}
+
+// ExportMigrations copies this store's canonical migration files into dst,
+// creating dst if needed. After export the files are the HOST's, applied by the
+// host's own runner under one app-owned schema_migrations ledger.
+func ExportMigrations(dst string) error {
+	return tursodb.ExportMigrations(MigrationsFS, MigrationsDir, dst)
+}

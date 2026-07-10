@@ -1,0 +1,17 @@
+-- The {{.Feature}} feature's {{.Agg}} aggregate (migration source "{{.Source}}").
+-- PostgreSQL flavor of the turso 0001 — IDENTICAL filename so the version set
+-- matches across dialects; representation changes, structure and semantics do
+-- not. Timestamps are TIMESTAMPTZ (postgres orders them natively).
+--
+-- id carries an INLINE DEFAULT: under a cryptids.Database wiring the service mints
+-- no id, the store omits the id column, and this DEFAULT fills the key (read back
+-- with RETURNING). gen_random_uuid() is built into PostgreSQL 13+; the ::text cast
+-- keeps the key a TEXT column, matching the rim and the turso dialect.
+CREATE TABLE IF NOT EXISTS {{.Agg}} (
+    id         TEXT        NOT NULL PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    name       TEXT        NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL
+);
+
+-- Keyset spine: List pages by created_at (with the id tiebreak).
+CREATE INDEX IF NOT EXISTS idx_{{.Agg}}_created_at ON {{.Agg}} (created_at);

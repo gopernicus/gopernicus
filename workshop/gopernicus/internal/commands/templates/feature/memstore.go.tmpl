@@ -1,0 +1,239 @@
+// Package memstore is the public in-core reference implementation of
+// {{.Agg}}.Storer — a mutex-backed, honest {{.Agg}} store. It exists because the
+// feature's zero-infra consumer proof and the conformance suite (storetest) run
+// on it (the jobs/authorization memstore precedent). It is never a stores/memory
+// module (a memory store isolates no external dependency).
+package memstore
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"sync"
+	"time"
+
+	"{{.ModulePath}}/domain/{{.Agg}}"
+	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/errs"
+)
+
+// memIDs assigns an id when an incoming {{.Agg}} carries none — the honest mirror
+// of the schema DEFAULT (a fresh random key). A caller using the nanoid generator
+// supplies ids already; a cryptids.Database generator leaves them empty and this
+// fills them here.
+var memIDs = cryptids.IDGenerator{}
+
+// {{.ReposField}} is the in-core {{.Agg}}.Storer.
+type {{.ReposField}} struct {
+	mu   sync.Mutex
+	rows map[string]{{.Agg}}.{{.AggTitle}}
+}
+
+// New{{.ReposField}} builds an empty {{.Agg}} store.
+func New{{.ReposField}}() *{{.ReposField}} {
+	return &{{.ReposField}}{rows: map[string]{{.Agg}}.{{.AggTitle}}{}}
+}
+
+var _ {{.Agg}}.Storer = (*{{.ReposField}})(nil)
+
+// Create inserts a {{.Agg}}, assigning an id when the incoming one is empty (the
+// DEFAULT mirror). It returns the stored row.
+func (s *{{.ReposField}}) Create(ctx context.Context, in {{.Agg}}.{{.AggTitle}}) ({{.Agg}}.{{.AggTitle}}, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if in.ID == "" {
+		in.ID = memIDs.MustGenerate()
+	}
+	s.rows[in.ID] = in
+	return in, nil
+}
+
+// Get returns the {{.Agg}} for id, or errs.ErrNotFound.
+func (s *{{.ReposField}}) Get(ctx context.Context, id string) ({{.Agg}}.{{.AggTitle}}, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	row, ok := s.rows[id]
+	if !ok {
+		return {{.Agg}}.{{.AggTitle}}{}, errs.ErrNotFound
+	}
+	return row, nil
+}
+
+// Delete removes the {{.Agg}} for id (idempotent — absent is nil).
+func (s *{{.ReposField}}) Delete(ctx context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.rows, id)
+	return nil
+}
+
+// List pages the {{.Agg}}s matching filter (created_at DESC, id DESC).
+func (s *{{.ReposField}}) List(ctx context.Context, filter {{.Agg}}.ListFilter, req crud.ListRequest) (crud.Page[{{.Agg}}.{{.AggTitle}}], error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var items []{{.Agg}}.{{.AggTitle}}
+	for _, row := range s.rows {
+		if filter.Name != "" && filter.Name != row.Name {
+			continue
+		}
+		items = append(items, row)
+	}
+	return pageMem(items, req, {{.Agg}}.OrderFields, {{.Agg}}.ListLimits, func(r {{.Agg}}.{{.AggTitle}}) (time.Time, string) {
+		return r.CreatedAt, r.ID
+	})
+}
+
+// =============================================================================
+// Shared in-memory keyset paginator
+// =============================================================================
+
+// unknownOrderField is the error pageMem returns for an order field absent from
+// the aggregate's allow-list — the same errs.ErrInvalidInput-class error the SQL
+// stores' resolveOrder produces, so storetest asserts one rejection shape across
+// every backend.
+func unknownOrderField(field string) error {
+	return fmt.Errorf("unknown order field %q: %w", field, errs.ErrInvalidInput)
+}
+
+// orderAllowed reports whether field names a column in the aggregate's allow-list,
+// mirroring the connectors' resolveOrder membership check (match by column).
+func orderAllowed(field string, fields map[string]crud.OrderField) bool {
+	for _, of := range fields {
+		if of.Column == field {
+			return true
+		}
+	}
+	return false
+}
+
+// pageMem paginates items by the contractual order (created_at DESC, tiebreak
+// DESC) with cursor and offset strategies, mirroring the SQL stores' keyset
+// contract so storetest proves the same shape against every backend. keyOf
+// returns each item's (created_at, tiebreak-pk).
+func pageMem[T any](all []T, req crud.ListRequest, fields map[string]crud.OrderField, limits crud.Limits, keyOf func(T) (time.Time, string)) (crud.Page[T], error) {
+	if err := req.Validate(); err != nil {
+		return crud.Page[T]{}, err
+	}
+	if req.Order.Field != "" && !orderAllowed(req.Order.Field, fields) {
+		return crud.Page[T]{}, unknownOrderField(req.Order.Field)
+	}
+	asc := req.Order.Direction == crud.ASC
+
+	sort.SliceStable(all, func(i, j int) bool {
+		ti, idi := keyOf(all[i])
+		tj, idj := keyOf(all[j])
+		if !ti.Equal(tj) {
+			if asc {
+				return ti.Before(tj)
+			}
+			return ti.After(tj)
+		}
+		if asc {
+			return idi < idj
+		}
+		return idi > idj
+	})
+
+	total := int64(len(all))
+	limit := req.NormalizedLimit(limits)
+	encode := func(item T) (string, error) {
+		t, itemID := keyOf(item)
+		return crud.EncodeCursor("created_at", t, itemID)
+	}
+
+	if req.ResolvedStrategy() == crud.StrategyOffset {
+		window := all
+		if req.Offset < len(window) {
+			window = window[req.Offset:]
+		} else {
+			window = window[:0]
+		}
+		if len(window) > limit+1 {
+			window = window[:limit+1]
+		}
+		page, err := crud.TrimPage(window, limit, encode)
+		if err != nil {
+			return crud.Page[T]{}, err
+		}
+		page.NextCursor = ""
+		page.HasPrev = req.Offset > 0
+		if req.WithCount {
+			page.Total = &total
+		}
+		return page, nil
+	}
+
+	cur, err := crud.DecodeCursor(req.Cursor, "created_at")
+	if err != nil {
+		return crud.Page[T]{}, err
+	}
+
+	forward := all
+	if cur != nil {
+		curTime, _ := cur.OrderValue.(time.Time)
+		forward = forward[:0:0]
+		for _, item := range all {
+			t, itemID := keyOf(item)
+			if afterCursorMem(t, itemID, curTime, cur.PK, asc) {
+				forward = append(forward, item)
+			}
+		}
+	}
+	window := forward
+	if len(window) > limit+1 {
+		window = window[:limit+1]
+	}
+	page, err := crud.TrimPage(window, limit, encode)
+	if err != nil {
+		return crud.Page[T]{}, err
+	}
+
+	if cur != nil {
+		curTime, _ := cur.OrderValue.(time.Time)
+		var before []T
+		for _, item := range all {
+			t, itemID := keyOf(item)
+			if beforeCursorMem(t, itemID, curTime, cur.PK, asc) {
+				before = append(before, item)
+			}
+		}
+		if len(before) > limit {
+			before = before[len(before)-limit:]
+		}
+		if err := crud.MarkPrevPage(&page, before, limit, encode); err != nil {
+			return crud.Page[T]{}, err
+		}
+	}
+
+	if req.WithCount {
+		page.Total = &total
+	}
+	return page, nil
+}
+
+func afterCursorMem(itemTime time.Time, itemID string, curTime time.Time, curID string, asc bool) bool {
+	if !itemTime.Equal(curTime) {
+		if asc {
+			return itemTime.After(curTime)
+		}
+		return itemTime.Before(curTime)
+	}
+	if asc {
+		return itemID > curID
+	}
+	return itemID < curID
+}
+
+func beforeCursorMem(itemTime time.Time, itemID string, curTime time.Time, curID string, asc bool) bool {
+	if !itemTime.Equal(curTime) {
+		if asc {
+			return itemTime.Before(curTime)
+		}
+		return itemTime.After(curTime)
+	}
+	if asc {
+		return itemID < curID
+	}
+	return itemID > curID
+}

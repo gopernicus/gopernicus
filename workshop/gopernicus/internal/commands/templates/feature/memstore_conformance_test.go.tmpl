@@ -1,0 +1,21 @@
+package memstore_test
+
+import (
+	"testing"
+
+	{{.Feature}} "{{.ModulePath}}"
+	"{{.ModulePath}}/memstore"
+	"{{.ModulePath}}/storetest"
+)
+
+// TestConformance runs the shared {{.Feature}} conformance suite against the
+// in-core memstore reference — the hermetic leg of the feature's own tests (the
+// dialect stores prove the same suite live). Each newRepos call returns a fresh,
+// empty Repositories.
+func TestConformance(t *testing.T) {
+	storetest.Run(t, func(t *testing.T) {{.Feature}}.Repositories {
+		return {{.Feature}}.Repositories{
+			{{.ReposField}}: memstore.New{{.ReposField}}(),
+		}
+	})
+}
