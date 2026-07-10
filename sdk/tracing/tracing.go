@@ -13,8 +13,8 @@
 //
 // SpanIdentity is the optional linkage convention between a tracer's spans and
 // sdk/logging's trace_id/span_id fields: a finisher whose span has stable trace
-// and span IDs also implements SpanIdentity, so a caller (e.g. web.Tracing) can
-// stash those IDs via logging.WithTraceID/WithSpanID and have them appear on log
+// and span IDs also implements SpanIdentity, so a caller (e.g. tracing.Middleware)
+// can stash those IDs via sdk.WithTraceID/WithSpanID and have them appear on log
 // lines. An implementer that adds it must keep the method set in sync with this
 // interface; integrations/tracing/otel satisfies it, Noop does not.
 package tracing
@@ -46,7 +46,7 @@ type SpanFinisher interface {
 // the cross-module method-set contract that links a tracer's spans to
 // sdk/logging's trace_id/span_id fields: a caller type-asserts it on the
 // returned SpanFinisher and, when it is satisfied with non-empty IDs, stashes
-// them via logging.WithTraceID/WithSpanID so they land on log lines. Optional;
+// them via sdk.WithTraceID/WithSpanID so they land on log lines. Optional;
 // implementations without stable span identity simply omit it.
 type SpanIdentity interface {
 	TraceID() string

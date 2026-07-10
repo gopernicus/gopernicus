@@ -129,7 +129,7 @@ func TestSSEStream_SurvivesWriteTimeout(t *testing.T) {
 	}
 }
 
-// TestSSEStream_ThroughLoggerMiddleware proves statusWriter.Unwrap lets
+// TestSSEStream_ThroughLoggerMiddleware proves StatusRecorder.Unwrap lets
 // http.ResponseController reach the underlying Flusher through the Logger
 // middleware: without Unwrap, the first Flush fails and ServeHTTP returns a 500
 // instead of the event stream.

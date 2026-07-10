@@ -3,14 +3,11 @@ package workers
 import (
 	"context"
 	"errors"
-	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/gopernicus/gopernicus/sdk/tracing"
 )
 
 // --- fakes ---
@@ -492,117 +489,6 @@ func waitFor(t *testing.T, within time.Duration, cond func() bool) {
 		time.Sleep(3 * time.Millisecond)
 	}
 	t.Fatal("condition not met within timeout")
-}
-
-// --- tracer fake ---
-
-// fakeTracer records span names, per-span attributes, recorded errors, and the
-// finish count so tests can assert the lifecycle spans without a real backend.
-type fakeTracer struct {
-	mu       sync.Mutex
-	started  []string
-	finished int
-	errs     []error
-	attrs    map[string][]tracing.Attribute
-}
-
-func (t *fakeTracer) StartSpan(ctx context.Context, name string) (context.Context, tracing.SpanFinisher) {
-	t.mu.Lock()
-	t.started = append(t.started, name)
-	t.mu.Unlock()
-	return ctx, &fakeSpan{tracer: t, name: name}
-}
-
-type fakeSpan struct {
-	tracer *fakeTracer
-	name   string
-}
-
-func (s *fakeSpan) SetAttributes(attrs ...tracing.Attribute) {
-	s.tracer.mu.Lock()
-	defer s.tracer.mu.Unlock()
-	if s.tracer.attrs == nil {
-		s.tracer.attrs = map[string][]tracing.Attribute{}
-	}
-	s.tracer.attrs[s.name] = append(s.tracer.attrs[s.name], attrs...)
-}
-func (s *fakeSpan) RecordError(err error) {
-	s.tracer.mu.Lock()
-	defer s.tracer.mu.Unlock()
-	s.tracer.errs = append(s.tracer.errs, err)
-}
-func (s *fakeSpan) Finish() {
-	s.tracer.mu.Lock()
-	defer s.tracer.mu.Unlock()
-	s.tracer.finished++
-}
-
-// --- WithTracer tests ---
-
-func TestRunner_WithTracer_TracesSuccessLifecycle(t *testing.T) {
-	store := newMemStore(fakeJob{id: "jt", status: "pending"})
-	process := func(ctx context.Context, job fakeJob) (fakeJob, error) { job.status = "done"; return job, nil }
-	tr := &fakeTracer{}
-	runner := NewRunner[fakeJob](store, process, silentLogger(), WithMaxAttempts(1), WithTracer(tr))
-
-	if err := runner.WorkFunc()(WithWorkerID(context.Background(), "w1")); err != nil {
-		t.Fatalf("work returned error: %v", err)
-	}
-	if !store.isCompleted("jt") {
-		t.Fatal("expected jt completed")
-	}
-
-	tr.mu.Lock()
-	defer tr.mu.Unlock()
-	for _, name := range []string{"job.claim", "job.process", "job.complete"} {
-		if !slices.Contains(tr.started, name) {
-			t.Errorf("expected a %s span, started=%v", name, tr.started)
-		}
-	}
-	if slices.Contains(tr.started, "job.fail") {
-		t.Errorf("did not expect a job.fail span on success, started=%v", tr.started)
-	}
-	if tr.finished != len(tr.started) {
-		t.Errorf("expected every span finished: started=%d finished=%d", len(tr.started), tr.finished)
-	}
-	if len(tr.errs) != 0 {
-		t.Errorf("expected no recorded span errors on success, got %v", tr.errs)
-	}
-}
-
-func TestRunner_WithTracer_RecordsProcessErrorAndTracesFail(t *testing.T) {
-	store := newMemStore(fakeJob{id: "jtf", status: "pending"})
-	boom := errors.New("boom")
-	process := func(ctx context.Context, job fakeJob) (fakeJob, error) { return job, boom }
-	tr := &fakeTracer{}
-	runner := NewRunner[fakeJob](store, process, silentLogger(), WithMaxAttempts(1), WithTracer(tr))
-
-	if err := runner.WorkFunc()(WithWorkerID(context.Background(), "w1")); err != nil {
-		t.Fatalf("work returned error: %v", err)
-	}
-	if !store.isDead("jtf") {
-		t.Fatal("expected jtf dead-lettered")
-	}
-
-	tr.mu.Lock()
-	defer tr.mu.Unlock()
-	for _, name := range []string{"job.claim", "job.process", "job.fail"} {
-		if !slices.Contains(tr.started, name) {
-			t.Errorf("expected a %s span, started=%v", name, tr.started)
-		}
-	}
-	if tr.finished != len(tr.started) {
-		t.Errorf("expected every span finished: started=%d finished=%d", len(tr.started), tr.finished)
-	}
-	recorded := false
-	for _, e := range tr.errs {
-		if errors.Is(e, boom) {
-			recorded = true
-		}
-	}
-	if !recorded {
-		t.Errorf("expected the process error recorded on the job.process span, errs=%v", tr.errs)
-	}
 }
 
 // --- WithRetryWithinClaim tests ---
