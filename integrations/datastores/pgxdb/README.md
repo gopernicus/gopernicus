@@ -16,7 +16,7 @@ consume this package's `*DB`.
 
 | member | shape |
 |---|---|
-| `Config` | `DSN` or split `Host`/`Port`/`User`/`Password`/`Database`/`SSLMode`, plus pool settings, `LogQueries`, `Logger`, and `Tracer`; env tags are provided for host parsers, but `Open` never reads environment itself |
+| `Config` | `DSN` or split `Host`/`Port`/`User`/`Password`/`Database`/`SSLMode`, plus pool settings, `LogQueries`, `Logger`, `Tracer`, and `Retry`; env tags are provided for host parsers, but `Open` never reads environment itself |
 | `Open(cfg) (*DB, error)` | opens a `pgxpool` and pings |
 | `DB` | `Exec` / `Query` / `QueryRow` / `InTx` / `Begin` / `Close` / `Ping` / `Underlying() *pgxpool.Pool` |
 | `Querier` | interface intersection of `*DB` and `*Tx` (`Exec`/`Query`/`QueryRow`) — lets a store accept pool-or-tx |
@@ -78,6 +78,25 @@ is one `QueryRow` over a `COUNT(*)` wrap of the base SQL. Adding `SendBatch` (or
 `pgx.Batch` into the shared surface for a batching optimization no current
 caller needs — so it stays out. A store that genuinely needs pipelining can
 reach for the concrete `*DB`/`*Tx` directly; the shared list path does not.
+
+## Boot-connectivity retry is opt-in — and statements are never auto-retried
+
+`Config.Retry` (`RetryPolicy{Attempts, MinBackoff, MaxBackoff}`) governs one
+thing: the connectivity check `Open` runs at boot. The zero value is no retries
+— `Open` pings exactly once, today's behavior. Setting `Attempts > 1` makes
+`Open` verify boot connectivity with a real round-trip (`StatusCheck` — `Ping` +
+`SELECT 1`) retried under a full-jitter exponential backoff (each sleep uniform
+in `[MinBackoff, cap]`, the cap doubling from `MinBackoff` up to `MaxBackoff`),
+aborting on context cancellation. This targets the orchestration race — the pool
+cannot yet acquire a connection at startup. This is symmetric with the turso
+connector's `Config.Retry`.
+
+**Statement-level retry is store-owned, explicit, and per-call — the connector
+never auto-retries statements.** A method verb does not encode idempotency
+(`Query`/`QueryRow` carry `RETURNING` writes), so no automatic retry is applied
+to any `Exec`/`Query`/`QueryRow`. `Config.Retry` is boot connectivity only.
+(database/sql-style bad-conn retry inside the pool is pgx's own, bounded and
+independent of this policy.)
 
 ## Symmetry is convention, not a guarantee
 

@@ -55,6 +55,24 @@ expected to fold into a shared `sdk/tracing` package later.
 target without leaking the auth token; unparseable input returns the literal
 `"REDACTED"`.
 
+## Boot-connectivity retry is opt-in — and statements are never auto-retried
+
+`Config.Retry` (`RetryPolicy{Attempts, MinBackoff, MaxBackoff}`) governs one
+thing: the connectivity check `Open` runs at boot. The zero value is no retries
+— `Open` keeps its single lazy ping exactly, today's behavior. Setting
+`Attempts > 1` opts into **eager** boot validation: `Open` runs a real
+round-trip (`StatusCheck` — `Ping` + `SELECT 1`) retried under a full-jitter
+exponential backoff (each sleep uniform in `[MinBackoff, cap]`, the cap doubling
+from `MinBackoff` up to `MaxBackoff`), aborting on context cancellation. Eager is
+deliberate: the remote libSQL driver's `Ping` is lazy, so retrying a ping that
+cannot fail would be vacuous. This targets the orchestration race — the database
+not yet reachable at startup.
+
+**Statement-level retry is store-owned, explicit, and per-call — the connector
+never auto-retries statements.** A method verb does not encode idempotency
+(`Query`/`QueryRow` carry `RETURNING` writes), so no automatic retry is applied
+to any `Exec`/`Query`/`QueryRow`. `Config.Retry` is boot connectivity only.
+
 ## Testing
 
 Unit tests are hermetic and run with a plain `go test ./...` — the `List`

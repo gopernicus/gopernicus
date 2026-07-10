@@ -42,6 +42,20 @@ type Config struct {
 	// Logger is used only when LogQueries is true. If nil, slog.Default() is
 	// used.
 	Logger *slog.Logger
+
+	// Retry, when its Attempts is > 1, makes Open perform EAGER boot validation:
+	// it runs a real round-trip (StatusCheck: Ping + SELECT 1) retried under a
+	// full-jitter exponential backoff, targeting the orchestration race where the
+	// database is not yet reachable. Opting into Retry therefore opts into eager
+	// boot validation — the remote libSQL driver's Ping is lazy, so retrying a
+	// plain ping that cannot fail would be vacuous. The zero value keeps Open's
+	// lazy ping exactly (today's behavior): boot-time table probes in the feature
+	// stores remain the validator.
+	//
+	// This governs ONLY the boot connectivity check. No statement is ever
+	// auto-retried by the connector — statement retry is store-owned, explicit,
+	// and per-call.
+	Retry RetryPolicy
 }
 
 // dsn builds the libSQL connection string, appending the auth token as the
@@ -85,14 +99,28 @@ func Open(cfg Config) (*DB, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.ConnectTimeout)
 	defer cancel()
 
-	if err := db.PingContext(ctx); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("pinging libsql database: %w", err)
-	}
-
 	wrapped := &DB{db: db}
 	if cfg.LogQueries {
 		wrapped.tracer = newLoggingQueryTracer(cfg.Logger)
+	}
+
+	// Opting into Retry opts into eager boot validation: a real round-trip
+	// (StatusCheck: Ping + SELECT 1) retried per the policy, resolving the lazy
+	// ping's inability to detect a dead DB at boot. The zero value keeps the lazy
+	// ping exactly.
+	if cfg.Retry.Attempts > 1 {
+		if err := retry(ctx, cfg.Retry, func(ctx context.Context) error {
+			return StatusCheck(ctx, wrapped)
+		}); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("verifying libsql database: %w", err)
+		}
+		return wrapped, nil
+	}
+
+	if err := db.PingContext(ctx); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("pinging libsql database: %w", err)
 	}
 	return wrapped, nil
 }
