@@ -2,7 +2,6 @@ package turso
 
 import (
 	"context"
-	"database/sql"
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthaccount"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
@@ -29,6 +28,40 @@ func NewOAuthAccountStore(db *tursodb.DB) *OAuthAccountStore {
 
 const oauthAccountColumns = "provider, provider_user_id, user_id, provider_email, provider_email_verified, account_verified, linked_at, access_token, refresh_token, token_expires_at, token_type, scope"
 
+// oauthAccountRow is the store-local, db-tagged projection of an oauth_accounts
+// row. token_expires_at is nullable (turso.NullTime, zero-time when NULL).
+type oauthAccountRow struct {
+	Provider              string           `db:"provider"`
+	ProviderUserID        string           `db:"provider_user_id"`
+	UserID                string           `db:"user_id"`
+	ProviderEmail         string           `db:"provider_email"`
+	ProviderEmailVerified tursodb.Bool     `db:"provider_email_verified"`
+	AccountVerified       tursodb.Bool     `db:"account_verified"`
+	LinkedAt              tursodb.Time     `db:"linked_at"`
+	AccessToken           string           `db:"access_token"`
+	RefreshToken          string           `db:"refresh_token"`
+	TokenExpiresAt        tursodb.NullTime `db:"token_expires_at"`
+	TokenType             string           `db:"token_type"`
+	Scope                 string           `db:"scope"`
+}
+
+func (r oauthAccountRow) toDomain() oauthaccount.OAuthAccount {
+	return oauthaccount.OAuthAccount{
+		Provider:              r.Provider,
+		ProviderUserID:        r.ProviderUserID,
+		UserID:                r.UserID,
+		ProviderEmail:         r.ProviderEmail,
+		ProviderEmailVerified: bool(r.ProviderEmailVerified),
+		AccountVerified:       bool(r.AccountVerified),
+		LinkedAt:              r.LinkedAt.Time,
+		AccessToken:           r.AccessToken,
+		RefreshToken:          r.RefreshToken,
+		TokenExpiresAt:        r.TokenExpiresAt.Time,
+		TokenType:             r.TokenType,
+		Scope:                 r.Scope,
+	}
+}
+
 // Create persists a new link; a colliding (provider, provider_user_id) →
 // errs.ErrAlreadyExists (plain INSERT, no ON CONFLICT).
 func (s *OAuthAccountStore) Create(ctx context.Context, a oauthaccount.OAuthAccount) (oauthaccount.OAuthAccount, error) {
@@ -37,7 +70,7 @@ func (s *OAuthAccountStore) Create(ctx context.Context, a oauthaccount.OAuthAcco
 		a.Provider, a.ProviderUserID, a.UserID, a.ProviderEmail,
 		tursodb.BoolToInt(a.ProviderEmailVerified), tursodb.BoolToInt(a.AccountVerified),
 		tursodb.FormatTime(a.LinkedAt), a.AccessToken, a.RefreshToken,
-		tursodb.NullTime(a.TokenExpiresAt), a.TokenType, a.Scope,
+		tursodb.FormatNullTime(a.TokenExpiresAt), a.TokenType, a.Scope,
 	)
 	if err != nil {
 		return oauthaccount.OAuthAccount{}, err
@@ -48,7 +81,11 @@ func (s *OAuthAccountStore) Create(ctx context.Context, a oauthaccount.OAuthAcco
 // GetByProvider returns the link for a provider identity, or errs.ErrNotFound.
 func (s *OAuthAccountStore) GetByProvider(ctx context.Context, provider, providerUserID string) (oauthaccount.OAuthAccount, error) {
 	const q = `SELECT ` + oauthAccountColumns + ` FROM oauth_accounts WHERE provider = ? AND provider_user_id = ?`
-	return scanOAuthAccount(s.db.QueryRow(ctx, q, provider, providerUserID))
+	row, err := queryOne[oauthAccountRow](ctx, s.db, q, provider, providerUserID)
+	if err != nil {
+		return oauthaccount.OAuthAccount{}, err
+	}
+	return row.toDomain(), nil
 }
 
 // ListByUser returns every link owned by userID (empty slice, nil error when none).
@@ -61,11 +98,11 @@ func (s *OAuthAccountStore) ListByUser(ctx context.Context, userID string) ([]oa
 	defer rows.Close()
 	out := []oauthaccount.OAuthAccount{}
 	for rows.Next() {
-		a, err := scanOAuthAccount(rows)
+		row, err := tursodb.ScanStruct[oauthAccountRow](rows)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, a)
+		out = append(out, row.toDomain())
 	}
 	if err := rows.Err(); err != nil {
 		return nil, tursodb.MapError(err)
@@ -83,32 +120,4 @@ func (s *OAuthAccountStore) Delete(ctx context.Context, userID, provider string)
 		return errs.ErrNotFound
 	}
 	return nil
-}
-
-// scanOAuthAccount scans one oauth_accounts row, mapping sql.ErrNoRows to
-// errs.ErrNotFound via the connector's MapError.
-func scanOAuthAccount(sc scanner) (oauthaccount.OAuthAccount, error) {
-	var (
-		a                           oauthaccount.OAuthAccount
-		emailVerified, acctVerified int64
-		linkedAt                    string
-		tokenExpiresAt              sql.NullString
-	)
-	if err := sc.Scan(
-		&a.Provider, &a.ProviderUserID, &a.UserID, &a.ProviderEmail,
-		&emailVerified, &acctVerified, &linkedAt, &a.AccessToken, &a.RefreshToken,
-		&tokenExpiresAt, &a.TokenType, &a.Scope,
-	); err != nil {
-		return oauthaccount.OAuthAccount{}, tursodb.MapError(err)
-	}
-	a.ProviderEmailVerified = emailVerified != 0
-	a.AccountVerified = acctVerified != 0
-	var err error
-	if a.LinkedAt, err = tursodb.ParseTime(linkedAt); err != nil {
-		return oauthaccount.OAuthAccount{}, err
-	}
-	if a.TokenExpiresAt, err = tursodb.ParseNullTime(tokenExpiresAt); err != nil {
-		return oauthaccount.OAuthAccount{}, err
-	}
-	return a, nil
 }

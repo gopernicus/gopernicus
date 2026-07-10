@@ -2,6 +2,7 @@ package turso
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -11,16 +12,19 @@ import (
 )
 
 // ListQuery describes one paginated SELECT for List. It is the turso twin of the
-// pgxdb ListQuery: positional `?` placeholders and a hand-scan callback instead
-// of NamedArgs and struct-scan (struct scanning is a follow-up milestone).
+// pgxdb ListQuery, using positional `?` placeholders.
 // BaseSQL is the SELECT with its optional filter WHERE and NO ORDER BY / LIMIT /
 // OFFSET. Args holds BaseSQL's positional args in placeholder order. OrderFields
 // is the aggregate's allow-list: List resolves the request Order against it (by
 // column) so only vetted, store-authored columns reach SQL, and DefaultOrder
 // applies when the request Order is zero. PK is the tiebreaker/cursor column.
-// Scan reads one row into T; OrderValueOf and PKOf supply cursor encoding.
-// Limits is the resource's page-size vocabulary passed to req.NormalizedLimit;
-// the zero value preserves the crud-constant defaults.
+// Scan reads one row into T and is OPTIONAL: a nil Scan struct-scans each row via
+// ScanStruct[T], which requires T be a db-tagged row struct whose result columns
+// exactly match its `db:"..."` fields (stores then map to domain entities with
+// crud.MapPage(page, row.toDomain)); pass a callback only for a T that is not a
+// plain row struct. OrderValueOf and PKOf supply cursor encoding. Limits is the
+// resource's page-size vocabulary passed to req.NormalizedLimit; the zero value
+// preserves the crud-constant defaults.
 type ListQuery[T any] struct {
 	BaseSQL      string
 	Args         []any
@@ -226,7 +230,7 @@ func (q ListQuery[T]) count(ctx context.Context, db Querier) (int64, error) {
 	return total, nil
 }
 
-// query runs sql and scans every row through q.Scan.
+// query runs sql and scans every row through scanRow.
 func (q ListQuery[T]) query(ctx context.Context, db Querier, sql string, args []any) ([]T, error) {
 	rows, err := db.Query(ctx, sql, args...)
 	if err != nil {
@@ -236,7 +240,7 @@ func (q ListQuery[T]) query(ctx context.Context, db Querier, sql string, args []
 
 	var items []T
 	for rows.Next() {
-		it, err := q.Scan(rows)
+		it, err := q.scanRow(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -246,6 +250,16 @@ func (q ListQuery[T]) query(ctx context.Context, db Querier, sql string, args []
 		return nil, MapError(err)
 	}
 	return items, nil
+}
+
+// scanRow reads one row into T: through the Scan callback when set, otherwise via
+// the strict ScanStruct[T] struct-scan (nil-Scan requires T be a db-tagged row
+// struct).
+func (q ListQuery[T]) scanRow(rows *sql.Rows) (T, error) {
+	if q.Scan != nil {
+		return q.Scan(rows)
+	}
+	return ScanStruct[T](rows)
 }
 
 // appendCursorPredicate appends a keyset tuple-comparison predicate with `?`

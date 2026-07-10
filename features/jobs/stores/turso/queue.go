@@ -19,7 +19,7 @@ import (
 // reclaimable by a later Claim (design §6.3, default 15m).
 const DefaultLease = 15 * time.Minute
 
-// jobColumns is the job_queue projection, in scanJob's order.
+// jobColumns is the job_queue projection, in jobRow's field order.
 const jobColumns = "job_id, kind, payload, status, priority, retry_count, max_attempts, worker_name, failure_reason, scheduled_for, claimed_at, completed_at, created_at, updated_at"
 
 // Compile-time seam: the Queue fills the exact job.QueueRepository port.
@@ -49,6 +49,46 @@ func WithLease(d time.Duration) QueueOption {
 type Queue struct {
 	db    *tursodb.DB
 	lease time.Duration
+}
+
+// jobRow is the store-local, db-tagged projection of a job_queue row ScanStruct
+// scans into; toDomain maps it to the domain entity. The nullable worker_name /
+// failure_reason columns scan into sql.NullString (read back as "" when NULL) and
+// the two nullable timestamps into turso.NullTime.
+type jobRow struct {
+	JobID         string           `db:"job_id"`
+	Kind          string           `db:"kind"`
+	Payload       []byte           `db:"payload"`
+	Status        string           `db:"status"`
+	Priority      int              `db:"priority"`
+	Retries       int              `db:"retry_count"`
+	MaxAttempts   int              `db:"max_attempts"`
+	WorkerName    sql.NullString   `db:"worker_name"`
+	FailureReason sql.NullString   `db:"failure_reason"`
+	ScheduledFor  tursodb.Time     `db:"scheduled_for"`
+	ClaimedAt     tursodb.NullTime `db:"claimed_at"`
+	CompletedAt   tursodb.NullTime `db:"completed_at"`
+	CreatedAt     tursodb.Time     `db:"created_at"`
+	UpdatedAt     tursodb.Time     `db:"updated_at"`
+}
+
+func (r jobRow) toDomain() job.Job {
+	return job.Job{
+		JobID:         r.JobID,
+		Kind:          r.Kind,
+		Payload:       json.RawMessage(r.Payload),
+		JobStatus:     job.Status(r.Status),
+		Priority:      r.Priority,
+		Retries:       r.Retries,
+		MaxAttempts:   r.MaxAttempts,
+		WorkerName:    r.WorkerName.String,
+		FailureReason: r.FailureReason.String,
+		ScheduledFor:  r.ScheduledFor.Time,
+		ClaimedAt:     r.ClaimedAt.TimePtr(),
+		CompletedAt:   r.CompletedAt.TimePtr(),
+		CreatedAt:     r.CreatedAt.Time,
+		UpdatedAt:     r.UpdatedAt.Time,
+	}
 }
 
 // NewQueueStore returns a Queue backed by db, applying opts (WithLease). It sets
@@ -126,9 +166,12 @@ func (q *Queue) Claim(ctx context.Context, workerID string, now time.Time) (job.
 
 	var claimed job.Job
 	err := retryBusy(ctx, func() error {
-		var e error
-		claimed, e = scanJob(q.db.QueryRow(ctx, claim, workerID, nowTS, nowTS, nowTS, staleTS, nowTS, staleTS))
-		return e
+		row, e := queryOne[jobRow](ctx, q.db, claim, workerID, nowTS, nowTS, nowTS, staleTS, nowTS, staleTS)
+		if e != nil {
+			return e
+		}
+		claimed = row.toDomain()
+		return nil
 	})
 	if errors.Is(err, errs.ErrNotFound) {
 		return job.Job{}, workers.ErrNoWork
@@ -166,7 +209,11 @@ func (q *Queue) Fail(ctx context.Context, jobID string, now time.Time, reason st
 // Get returns the job with the given id, or errs.ErrNotFound.
 func (q *Queue) Get(ctx context.Context, id string) (job.Job, error) {
 	const get = `SELECT ` + jobColumns + ` FROM job_queue WHERE job_id = ?`
-	return scanJob(q.db.QueryRow(ctx, get, id))
+	row, err := queryOne[jobRow](ctx, q.db, get, id)
+	if err != nil {
+		return job.Job{}, err
+	}
+	return row.toDomain(), nil
 }
 
 // List returns a cursor- or offset-paginated page of jobs matching the filter,
@@ -184,17 +231,20 @@ func (q *Queue) List(ctx context.Context, f job.ListFilter, req crud.ListRequest
 		args = append(args, string(f.Status))
 	}
 
-	lq := tursodb.ListQuery[job.Job]{
+	lq := tursodb.ListQuery[jobRow]{
 		BaseSQL:      `SELECT ` + jobColumns + ` FROM job_queue ` + where,
 		Args:         args,
 		OrderFields:  job.OrderFields,
 		DefaultOrder: job.DefaultOrder,
 		PK:           "job_id",
-		Scan:         scanJob,
-		OrderValueOf: func(j job.Job, _ string) any { return j.CreatedAt },
-		PKOf:         func(j job.Job) string { return j.JobID },
+		OrderValueOf: func(r jobRow, _ string) any { return r.CreatedAt.Time },
+		PKOf:         func(r jobRow) string { return r.JobID },
 	}
-	return tursodb.List(ctx, q.db, lq, req)
+	page, err := tursodb.List(ctx, q.db, lq, req)
+	if err != nil {
+		return crud.Page[job.Job]{}, err
+	}
+	return crud.MapPage(page, jobRow.toDomain), nil
 }
 
 // execAffecting runs a write that must touch exactly one row, mapping zero rows
@@ -210,52 +260,4 @@ func (q *Queue) execAffecting(ctx context.Context, query string, args ...any) er
 		}
 		return nil
 	})
-}
-
-// scanJob scans one job_queue row, mapping sql.ErrNoRows to errs.ErrNotFound.
-func scanJob(sc scanner) (job.Job, error) {
-	var (
-		j                                  job.Job
-		status, payload                    string
-		scheduledFor, createdAt, updatedAt string
-		workerName, failureReason          sql.NullString
-		claimedAt, completedAt             sql.NullString
-	)
-	err := sc.Scan(
-		&j.JobID, &j.Kind, &payload, &status, &j.Priority, &j.Retries, &j.MaxAttempts,
-		&workerName, &failureReason, &scheduledFor, &claimedAt, &completedAt, &createdAt, &updatedAt,
-	)
-	if err != nil {
-		return job.Job{}, tursodb.MapError(err)
-	}
-
-	j.Payload = json.RawMessage(payload)
-	j.JobStatus = job.Status(status)
-	j.WorkerName = workerName.String
-	j.FailureReason = failureReason.String
-
-	if j.ScheduledFor, err = tursodb.ParseTime(scheduledFor); err != nil {
-		return job.Job{}, err
-	}
-	if j.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
-		return job.Job{}, err
-	}
-	if j.UpdatedAt, err = tursodb.ParseTime(updatedAt); err != nil {
-		return job.Job{}, err
-	}
-	if claimedAt.Valid && claimedAt.String != "" {
-		t, err := tursodb.ParseTime(claimedAt.String)
-		if err != nil {
-			return job.Job{}, err
-		}
-		j.ClaimedAt = &t
-	}
-	if completedAt.Valid && completedAt.String != "" {
-		t, err := tursodb.ParseTime(completedAt.String)
-		if err != nil {
-			return job.Job{}, err
-		}
-		j.CompletedAt = &t
-	}
-	return j, nil
 }

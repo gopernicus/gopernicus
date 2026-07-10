@@ -3,6 +3,7 @@ package turso
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
@@ -26,6 +27,63 @@ func NewSecurityEventStore(db *tursodb.DB) *SecurityEventStore {
 }
 
 const securityEventColumns = "id, user_id, actor_type, actor_id, event_type, event_status, details, ip_address, user_agent, created_at"
+
+// detailsJSON is a sql.Scanner that reads the stored TEXT JSON details bag into a
+// non-nil map through unmarshalDetails (the read twin of marshalDetails), so a
+// db-tagged row-struct field performs the decode inside rows.Scan — surfacing a
+// malformed-JSON error rather than swallowing it. A NULL or empty column reads
+// back as a non-nil empty map (the uniform round-trip contract).
+type detailsJSON map[string]any
+
+func (d *detailsJSON) Scan(src any) error {
+	var s string
+	switch v := src.(type) {
+	case nil:
+		s = ""
+	case string:
+		s = v
+	case []byte:
+		s = string(v)
+	default:
+		return fmt.Errorf("authentication turso: cannot scan %T into details JSON", src)
+	}
+	m, err := unmarshalDetails(s)
+	if err != nil {
+		return err
+	}
+	*d = m
+	return nil
+}
+
+// securityEventRow is the store-local, db-tagged projection of a security_events
+// row ScanStruct scans into; Details decodes via the detailsJSON Scanner and
+// toDomain maps the flat actor columns back to the Principal.
+type securityEventRow struct {
+	ID          string       `db:"id"`
+	UserID      string       `db:"user_id"`
+	ActorType   string       `db:"actor_type"`
+	ActorID     string       `db:"actor_id"`
+	EventType   string       `db:"event_type"`
+	EventStatus string       `db:"event_status"`
+	Details     detailsJSON  `db:"details"`
+	IPAddress   string       `db:"ip_address"`
+	UserAgent   string       `db:"user_agent"`
+	CreatedAt   tursodb.Time `db:"created_at"`
+}
+
+func (r securityEventRow) toDomain() securityevent.SecurityEvent {
+	return securityevent.SecurityEvent{
+		ID:          r.ID,
+		UserID:      r.UserID,
+		Actor:       securityevent.Principal{Type: r.ActorType, ID: r.ActorID},
+		EventType:   r.EventType,
+		EventStatus: r.EventStatus,
+		Details:     map[string]any(r.Details),
+		IPAddress:   r.IPAddress,
+		UserAgent:   r.UserAgent,
+		CreatedAt:   r.CreatedAt.Time,
+	}
+}
 
 // Create appends an audit row and returns the stored record.
 func (s *SecurityEventStore) Create(ctx context.Context, evt securityevent.SecurityEvent) (securityevent.SecurityEvent, error) {
@@ -88,41 +146,20 @@ func (s *SecurityEventStore) List(ctx context.Context, filter securityevent.List
 		where += " AND created_at < ?"
 		args = append(args, tursodb.FormatTime(filter.Until))
 	}
-	q := tursodb.ListQuery[securityevent.SecurityEvent]{
+	q := tursodb.ListQuery[securityEventRow]{
 		BaseSQL:      `SELECT ` + securityEventColumns + ` FROM security_events ` + where,
 		Args:         args,
 		OrderFields:  securityevent.OrderFields,
 		DefaultOrder: securityevent.DefaultOrder,
 		PK:           "id",
-		Scan:         scanSecurityEvent,
-		OrderValueOf: func(evt securityevent.SecurityEvent, _ string) any { return evt.CreatedAt },
-		PKOf:         func(evt securityevent.SecurityEvent) string { return evt.ID },
+		OrderValueOf: func(r securityEventRow, _ string) any { return r.CreatedAt.Time },
+		PKOf:         func(r securityEventRow) string { return r.ID },
 	}
-	return tursodb.List(ctx, s.db, q, req)
-}
-
-// scanSecurityEvent scans one security_events row, mapping sql.ErrNoRows to
-// errs.ErrNotFound via the connector's MapError.
-func scanSecurityEvent(sc scanner) (securityevent.SecurityEvent, error) {
-	var (
-		evt       securityevent.SecurityEvent
-		details   string
-		createdAt string
-	)
-	if err := sc.Scan(
-		&evt.ID, &evt.UserID, &evt.Actor.Type, &evt.Actor.ID, &evt.EventType, &evt.EventStatus,
-		&details, &evt.IPAddress, &evt.UserAgent, &createdAt,
-	); err != nil {
-		return securityevent.SecurityEvent{}, tursodb.MapError(err)
+	page, err := tursodb.List(ctx, s.db, q, req)
+	if err != nil {
+		return crud.Page[securityevent.SecurityEvent]{}, err
 	}
-	var err error
-	if evt.Details, err = unmarshalDetails(details); err != nil {
-		return securityevent.SecurityEvent{}, err
-	}
-	if evt.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
-		return securityevent.SecurityEvent{}, err
-	}
-	return evt, nil
+	return crud.MapPage(page, securityEventRow.toDomain), nil
 }
 
 // marshalDetails renders an open details bag as TEXT JSON. A nil or empty map

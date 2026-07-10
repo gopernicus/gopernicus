@@ -2,7 +2,6 @@ package turso
 
 import (
 	"context"
-	"database/sql"
 
 	"github.com/gopernicus/gopernicus/features/cms/domain/content"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
@@ -27,6 +26,53 @@ func NewEntryStore(db *tursodb.DB) *EntryStore {
 
 const entryColumns = "id, type, slug, title, status, body, excerpt, author, template, parent_id, menu_order, published_at, created_at, updated_at"
 
+// entryRow is the store-local, db-tagged projection of an entries spine row
+// ScanStruct scans into; toDomain maps it to the persistence-free domain entity
+// (fields + terms hydrate separately). published_at is nullable (turso.NullTime →
+// *time.Time via TimePtr).
+type entryRow struct {
+	ID          string           `db:"id"`
+	Type        string           `db:"type"`
+	Slug        string           `db:"slug"`
+	Title       string           `db:"title"`
+	Status      string           `db:"status"`
+	Body        string           `db:"body"`
+	Excerpt     string           `db:"excerpt"`
+	Author      string           `db:"author"`
+	Template    string           `db:"template"`
+	ParentID    string           `db:"parent_id"`
+	MenuOrder   int              `db:"menu_order"`
+	PublishedAt tursodb.NullTime `db:"published_at"`
+	CreatedAt   tursodb.Time     `db:"created_at"`
+	UpdatedAt   tursodb.Time     `db:"updated_at"`
+}
+
+func (r entryRow) toDomain() content.Entry {
+	return content.Entry{
+		ID:          r.ID,
+		Type:        r.Type,
+		Slug:        r.Slug,
+		Title:       r.Title,
+		Status:      content.Status(r.Status),
+		Body:        r.Body,
+		Excerpt:     r.Excerpt,
+		Author:      r.Author,
+		Template:    r.Template,
+		ParentID:    r.ParentID,
+		MenuOrder:   r.MenuOrder,
+		PublishedAt: r.PublishedAt.TimePtr(),
+		CreatedAt:   r.CreatedAt.Time,
+		UpdatedAt:   r.UpdatedAt.Time,
+	}
+}
+
+// fieldRow is the store-local, db-tagged projection of an entry_fields row.
+type fieldRow struct {
+	Key   string `db:"key"`
+	Kind  string `db:"kind"`
+	Value string `db:"value"`
+}
+
 // Create persists a new entry and its custom fields in one transaction.
 func (s *EntryStore) Create(ctx context.Context, e content.Entry) (content.Entry, error) {
 	err := s.db.InTx(ctx, func(tx *tursodb.Tx) error {
@@ -38,7 +84,7 @@ func (s *EntryStore) Create(ctx context.Context, e content.Entry) (content.Entry
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`
 			if err := tx.QueryRow(ctx, q,
 				e.Type, e.Slug, e.Title, string(e.Status), e.Body, e.Excerpt, e.Author,
-				e.Template, e.ParentID, e.MenuOrder, tursodb.NullTimePtr(e.PublishedAt),
+				e.Template, e.ParentID, e.MenuOrder, tursodb.FormatNullTimePtr(e.PublishedAt),
 				tursodb.FormatTime(e.CreatedAt), tursodb.FormatTime(e.UpdatedAt),
 			).Scan(&e.ID); err != nil {
 				return err
@@ -48,7 +94,7 @@ func (s *EntryStore) Create(ctx context.Context, e content.Entry) (content.Entry
 		const q = `INSERT INTO entries (` + entryColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		if _, err := tx.Exec(ctx, q,
 			e.ID, e.Type, e.Slug, e.Title, string(e.Status), e.Body, e.Excerpt, e.Author,
-			e.Template, e.ParentID, e.MenuOrder, tursodb.NullTimePtr(e.PublishedAt),
+			e.Template, e.ParentID, e.MenuOrder, tursodb.FormatNullTimePtr(e.PublishedAt),
 			tursodb.FormatTime(e.CreatedAt), tursodb.FormatTime(e.UpdatedAt),
 		); err != nil {
 			return err
@@ -68,7 +114,7 @@ func (s *EntryStore) Update(ctx context.Context, id string, e content.Entry) (co
 		const q = `UPDATE entries SET type=?, slug=?, title=?, status=?, body=?, excerpt=?, author=?, template=?, parent_id=?, menu_order=?, published_at=?, updated_at=? WHERE id=?`
 		n, err := tursodb.ExecAffecting(ctx, tx, q,
 			e.Type, e.Slug, e.Title, string(e.Status), e.Body, e.Excerpt, e.Author,
-			e.Template, e.ParentID, e.MenuOrder, tursodb.NullTimePtr(e.PublishedAt),
+			e.Template, e.ParentID, e.MenuOrder, tursodb.FormatNullTimePtr(e.PublishedAt),
 			tursodb.FormatTime(e.UpdatedAt), id,
 		)
 		if err != nil {
@@ -91,13 +137,21 @@ func (s *EntryStore) Update(ctx context.Context, id string, e content.Entry) (co
 // Get returns the entry with the given id — spine, fields, and term IDs.
 func (s *EntryStore) Get(ctx context.Context, id string) (content.Entry, error) {
 	const q = `SELECT ` + entryColumns + ` FROM entries WHERE id = ?`
-	return s.loadOne(ctx, s.db.QueryRow(ctx, q, id))
+	row, err := queryOne[entryRow](ctx, s.db, q, id)
+	if err != nil {
+		return content.Entry{}, err
+	}
+	return s.hydrate(ctx, row.toDomain())
 }
 
 // GetBySlug returns the entry of type typ with the given slug.
 func (s *EntryStore) GetBySlug(ctx context.Context, typ, slug string) (content.Entry, error) {
 	const q = `SELECT ` + entryColumns + ` FROM entries WHERE type = ? AND slug = ?`
-	return s.loadOne(ctx, s.db.QueryRow(ctx, q, typ, slug))
+	row, err := queryOne[entryRow](ctx, s.db, q, typ, slug)
+	if err != nil {
+		return content.Entry{}, err
+	}
+	return s.hydrate(ctx, row.toDomain())
 }
 
 // Delete removes the entry; its fields and terms cascade.
@@ -138,32 +192,32 @@ func (s *EntryStore) listWhere(ctx context.Context, where string, args []any, q 
 		args = append(args, string(q.Status))
 	}
 
-	lq := tursodb.ListQuery[content.Entry]{
+	lq := tursodb.ListQuery[entryRow]{
 		BaseSQL:      `SELECT ` + entryColumns + ` FROM entries ` + where,
 		Args:         args,
 		OrderFields:  content.OrderFields,
 		DefaultOrder: content.DefaultOrder,
 		PK:           "id",
-		Scan:         scanEntry,
-		OrderValueOf: func(e content.Entry, _ string) any { return e.CreatedAt },
-		PKOf:         func(e content.Entry) string { return e.ID },
+		OrderValueOf: func(r entryRow, _ string) any { return r.CreatedAt.Time },
+		PKOf:         func(r entryRow) string { return r.ID },
 	}
 	page, err := tursodb.List(ctx, s.db, lq, q.ListRequest)
 	if err != nil {
 		return crud.Page[content.Entry]{}, err
 	}
+	domainPage := crud.MapPage(page, entryRow.toDomain)
 
 	// Hydrate fields + terms for the rows on this page only.
-	for i := range page.Items {
-		if page.Items[i].Fields, err = s.loadFields(ctx, page.Items[i].ID); err != nil {
+	for i := range domainPage.Items {
+		if domainPage.Items[i].Fields, err = s.loadFields(ctx, domainPage.Items[i].ID); err != nil {
 			return crud.Page[content.Entry]{}, err
 		}
-		if page.Items[i].TermIDs, err = s.loadTermIDs(ctx, page.Items[i].ID); err != nil {
+		if domainPage.Items[i].TermIDs, err = s.loadTermIDs(ctx, domainPage.Items[i].ID); err != nil {
 			return crud.Page[content.Entry]{}, err
 		}
 	}
 
-	return page, nil
+	return domainPage, nil
 }
 
 // SetTerms replaces the entry's taxonomy associations in a single transaction.
@@ -181,12 +235,9 @@ func (s *EntryStore) SetTerms(ctx context.Context, entryID string, termIDs []str
 	})
 }
 
-// loadOne scans a spine row then hydrates its fields and term IDs.
-func (s *EntryStore) loadOne(ctx context.Context, row scanner) (content.Entry, error) {
-	e, err := scanEntry(row)
-	if err != nil {
-		return content.Entry{}, err
-	}
+// hydrate loads an entry's fields and term IDs onto e.
+func (s *EntryStore) hydrate(ctx context.Context, e content.Entry) (content.Entry, error) {
+	var err error
 	if e.Fields, err = s.loadFields(ctx, e.ID); err != nil {
 		return content.Entry{}, err
 	}
@@ -206,11 +257,11 @@ func (s *EntryStore) loadFields(ctx context.Context, entryID string) (content.Fi
 	defer rows.Close()
 	fields := content.Fields{}
 	for rows.Next() {
-		var key, kind, value string
-		if err := rows.Scan(&key, &kind, &value); err != nil {
-			return nil, tursodb.MapError(err)
+		row, err := tursodb.ScanStruct[fieldRow](rows)
+		if err != nil {
+			return nil, err
 		}
-		fields[key] = content.Value{Kind: content.FieldKind(kind), Raw: value}
+		fields[row.Key] = content.Value{Kind: content.FieldKind(row.Kind), Raw: row.Value}
 	}
 	return fields, rows.Err()
 }
@@ -245,34 +296,4 @@ func writeFields(ctx context.Context, tx *tursodb.Tx, entryID string, fields con
 		}
 	}
 	return nil
-}
-
-// scanEntry scans one spine row into an Entry (fields/terms loaded separately).
-func scanEntry(sc scanner) (content.Entry, error) {
-	var (
-		e                    content.Entry
-		status               string
-		publishedAt          sql.NullString
-		createdAt, updatedAt string
-	)
-	err := sc.Scan(&e.ID, &e.Type, &e.Slug, &e.Title, &status, &e.Body, &e.Excerpt, &e.Author,
-		&e.Template, &e.ParentID, &e.MenuOrder, &publishedAt, &createdAt, &updatedAt)
-	if err != nil {
-		return content.Entry{}, tursodb.MapError(err)
-	}
-	e.Status = content.Status(status)
-	if publishedAt.Valid && publishedAt.String != "" {
-		t, err := tursodb.ParseTime(publishedAt.String)
-		if err != nil {
-			return content.Entry{}, err
-		}
-		e.PublishedAt = &t
-	}
-	if e.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
-		return content.Entry{}, err
-	}
-	if e.UpdatedAt, err = tursodb.ParseTime(updatedAt); err != nil {
-		return content.Entry{}, err
-	}
-	return e, nil
 }

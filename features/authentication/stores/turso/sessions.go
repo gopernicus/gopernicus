@@ -28,6 +28,23 @@ func NewSessionStore(db *tursodb.DB) *SessionStore {
 
 const sessionColumns = "token, user_id, created_at, expires_at"
 
+// sessionRow is the store-local, db-tagged projection of a sessions row.
+type sessionRow struct {
+	Token     string       `db:"token"`
+	UserID    string       `db:"user_id"`
+	CreatedAt tursodb.Time `db:"created_at"`
+	ExpiresAt tursodb.Time `db:"expires_at"`
+}
+
+func (r sessionRow) toDomain() session.Session {
+	return session.Session{
+		Token:     r.Token,
+		UserID:    r.UserID,
+		CreatedAt: r.CreatedAt.Time,
+		ExpiresAt: r.ExpiresAt.Time,
+	}
+}
+
 // Create persists a new session.
 func (s *SessionStore) Create(ctx context.Context, sess session.Session) (session.Session, error) {
 	const q = `INSERT INTO sessions (` + sessionColumns + `) VALUES (?, ?, ?, ?)`
@@ -42,10 +59,11 @@ func (s *SessionStore) Create(ctx context.Context, sess session.Session) (sessio
 // present-but-expired → errs.ErrExpired (checked against the read clock).
 func (s *SessionStore) Get(ctx context.Context, token string) (session.Session, error) {
 	const q = `SELECT ` + sessionColumns + ` FROM sessions WHERE token = ?`
-	sess, err := scanSession(s.db.QueryRow(ctx, q, token))
+	row, err := queryOne[sessionRow](ctx, s.db, q, token)
 	if err != nil {
 		return session.Session{}, err
 	}
+	sess := row.toDomain()
 	if sess.Expired(time.Now()) {
 		return session.Session{}, errs.ErrExpired
 	}
@@ -70,23 +88,4 @@ func (s *SessionStore) Delete(ctx context.Context, token string) error {
 func (s *SessionStore) DeleteByUser(ctx context.Context, userID string) error {
 	_, err := s.db.Exec(ctx, "DELETE FROM sessions WHERE user_id = ?", userID)
 	return err
-}
-
-// scanSession scans one sessions row, mapping sql.ErrNoRows to errs.ErrNotFound.
-func scanSession(sc scanner) (session.Session, error) {
-	var (
-		sess                 session.Session
-		createdAt, expiresAt string
-	)
-	if err := sc.Scan(&sess.Token, &sess.UserID, &createdAt, &expiresAt); err != nil {
-		return session.Session{}, tursodb.MapError(err)
-	}
-	var err error
-	if sess.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
-		return session.Session{}, err
-	}
-	if sess.ExpiresAt, err = tursodb.ParseTime(expiresAt); err != nil {
-		return session.Session{}, err
-	}
-	return sess, nil
 }

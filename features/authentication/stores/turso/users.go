@@ -24,6 +24,28 @@ func NewUserStore(db *tursodb.DB) *UserStore {
 
 const userColumns = "id, email, display_name, email_verified, created_at, updated_at"
 
+// userRow is the store-local, db-tagged projection of a users row ScanStruct scans
+// into; toDomain maps it to the persistence-free domain entity.
+type userRow struct {
+	ID            string       `db:"id"`
+	Email         string       `db:"email"`
+	DisplayName   string       `db:"display_name"`
+	EmailVerified tursodb.Bool `db:"email_verified"`
+	CreatedAt     tursodb.Time `db:"created_at"`
+	UpdatedAt     tursodb.Time `db:"updated_at"`
+}
+
+func (r userRow) toDomain() user.User {
+	return user.User{
+		ID:            r.ID,
+		Email:         r.Email,
+		DisplayName:   r.DisplayName,
+		EmailVerified: bool(r.EmailVerified),
+		CreatedAt:     r.CreatedAt.Time,
+		UpdatedAt:     r.UpdatedAt.Time,
+	}
+}
+
 // Create persists a new user; a colliding normalized email → errs.ErrAlreadyExists.
 func (s *UserStore) Create(ctx context.Context, u user.User) (user.User, error) {
 	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
@@ -53,13 +75,21 @@ func (s *UserStore) Create(ctx context.Context, u user.User) (user.User, error) 
 // Get returns the user with the given id, or errs.ErrNotFound.
 func (s *UserStore) Get(ctx context.Context, id string) (user.User, error) {
 	const q = `SELECT ` + userColumns + ` FROM users WHERE id = ?`
-	return scanUser(s.db.QueryRow(ctx, q, id))
+	row, err := queryOne[userRow](ctx, s.db, q, id)
+	if err != nil {
+		return user.User{}, err
+	}
+	return row.toDomain(), nil
 }
 
 // GetByEmail returns the user with the given normalized email, or errs.ErrNotFound.
 func (s *UserStore) GetByEmail(ctx context.Context, email string) (user.User, error) {
 	const q = `SELECT ` + userColumns + ` FROM users WHERE email = ?`
-	return scanUser(s.db.QueryRow(ctx, q, email))
+	row, err := queryOne[userRow](ctx, s.db, q, email)
+	if err != nil {
+		return user.User{}, err
+	}
+	return row.toDomain(), nil
 }
 
 // Update persists changes to an existing user; missing id → errs.ErrNotFound. It
@@ -74,28 +104,6 @@ func (s *UserStore) Update(ctx context.Context, id string, u user.User) (user.Us
 	}
 	if n == 0 {
 		return user.User{}, errs.ErrNotFound
-	}
-	return u, nil
-}
-
-// scanUser scans one users row into a User, mapping sql.ErrNoRows to
-// errs.ErrNotFound via the connector's MapError.
-func scanUser(sc scanner) (user.User, error) {
-	var (
-		u                    user.User
-		verified             int64
-		createdAt, updatedAt string
-	)
-	if err := sc.Scan(&u.ID, &u.Email, &u.DisplayName, &verified, &createdAt, &updatedAt); err != nil {
-		return user.User{}, tursodb.MapError(err)
-	}
-	u.EmailVerified = verified != 0
-	var err error
-	if u.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
-		return user.User{}, err
-	}
-	if u.UpdatedAt, err = tursodb.ParseTime(updatedAt); err != nil {
-		return user.User{}, err
 	}
 	return u, nil
 }

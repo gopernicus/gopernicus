@@ -9,8 +9,8 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/crud"
 )
 
-// roleColumns is the iam_roles projection in a fixed order shared by the listings
-// and scanRoleRow.
+// roleColumns is the iam_roles projection in a fixed order shared by the Assign
+// insert and the rolesBaseSQL listing (matching roleRow's db tags).
 const roleColumns = "subject_type, subject_id, role, resource_type, resource_id, created_at"
 
 // roleKeyExpr is the SQL keyset tiebreak: the 5-tuple joined by char(1).
@@ -34,17 +34,17 @@ func rolesBaseSQL(innerWhere string) string {
 ) AS r WHERE 1 = 1`
 }
 
-// roleRow is the iam_roles listing projection. RoleKey is the derived keyset
-// tiebreak (see rolesBaseSQL) — scanned so PKOf can echo it rather than
-// recompute it in Go.
+// roleRow is the db-tagged iam_roles listing projection ScanStruct scans into.
+// RoleKey is the derived keyset tiebreak (see rolesBaseSQL) — scanned so PKOf can
+// echo it rather than recompute it in Go.
 type roleRow struct {
-	SubjectType  string
-	SubjectID    string
-	Role         string
-	ResourceType string
-	ResourceID   string
-	CreatedAt    time.Time
-	RoleKey      string
+	SubjectType  string       `db:"subject_type"`
+	SubjectID    string       `db:"subject_id"`
+	Role         string       `db:"role"`
+	ResourceType string       `db:"resource_type"`
+	ResourceID   string       `db:"resource_id"`
+	CreatedAt    tursodb.Time `db:"created_at"`
+	RoleKey      string       `db:"role_key"`
 }
 
 func (r roleRow) toDomain() role.Assignment {
@@ -54,7 +54,7 @@ func (r roleRow) toDomain() role.Assignment {
 		Role:         r.Role,
 		ResourceType: r.ResourceType,
 		ResourceID:   r.ResourceID,
-		CreatedAt:    r.CreatedAt.UTC(),
+		CreatedAt:    r.CreatedAt.Time,
 	}
 }
 
@@ -109,8 +109,7 @@ func (s *roleStore) ListBySubject(ctx context.Context, subjectType, subjectID st
 		OrderFields:  role.OrderFields,
 		DefaultOrder: role.DefaultOrder,
 		PK:           "role_key",
-		Scan:         scanRoleRow,
-		OrderValueOf: func(r roleRow, _ string) any { return r.CreatedAt },
+		OrderValueOf: func(r roleRow, _ string) any { return r.CreatedAt.Time },
 		PKOf:         func(r roleRow) string { return r.RoleKey },
 	}
 	page, err := tursodb.List(ctx, s.db, q, req)
@@ -129,8 +128,7 @@ func (s *roleStore) ListByResource(ctx context.Context, resourceType, resourceID
 		OrderFields:  role.OrderFields,
 		DefaultOrder: role.DefaultOrder,
 		PK:           "role_key",
-		Scan:         scanRoleRow,
-		OrderValueOf: func(r roleRow, _ string) any { return r.CreatedAt },
+		OrderValueOf: func(r roleRow, _ string) any { return r.CreatedAt.Time },
 		PKOf:         func(r roleRow) string { return r.RoleKey },
 	}
 	page, err := tursodb.List(ctx, s.db, q, req)
@@ -138,23 +136,4 @@ func (s *roleStore) ListByResource(ctx context.Context, resourceType, resourceID
 		return crud.Page[role.Assignment]{}, err
 	}
 	return crud.MapPage(page, roleRow.toDomain), nil
-}
-
-// scanRoleRow scans one iam_roles listing row (including the derived role_key)
-// into a roleRow. It is a hand-scan callback; the struct-scan helper arrives in a
-// later phase.
-func scanRoleRow(sc scanner) (roleRow, error) {
-	var (
-		r         roleRow
-		createdAt string
-	)
-	if err := sc.Scan(&r.SubjectType, &r.SubjectID, &r.Role, &r.ResourceType, &r.ResourceID, &createdAt, &r.RoleKey); err != nil {
-		return roleRow{}, tursodb.MapError(err)
-	}
-	t, err := tursodb.ParseTime(createdAt)
-	if err != nil {
-		return roleRow{}, err
-	}
-	r.CreatedAt = t
-	return r, nil
 }

@@ -21,6 +21,25 @@ func NewInquiryStore(db *tursodb.DB) *InquiryStore {
 
 const inquiryColumns = "id, name, email, message, created_at"
 
+// inquiryRow is the store-local, db-tagged projection of an inquiries row.
+type inquiryRow struct {
+	ID        string       `db:"id"`
+	Name      string       `db:"name"`
+	Email     string       `db:"email"`
+	Message   string       `db:"message"`
+	CreatedAt tursodb.Time `db:"created_at"`
+}
+
+func (r inquiryRow) toDomain() messaging.Inquiry {
+	return messaging.Inquiry{
+		ID:        r.ID,
+		Name:      r.Name,
+		Email:     r.Email,
+		Message:   r.Message,
+		CreatedAt: r.CreatedAt.Time,
+	}
+}
+
 // Create persists a new inquiry.
 func (s *InquiryStore) Create(ctx context.Context, in messaging.Inquiry) (messaging.Inquiry, error) {
 	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
@@ -50,17 +69,11 @@ func (s *InquiryStore) List(ctx context.Context) ([]messaging.Inquiry, error) {
 	defer rows.Close()
 	var out []messaging.Inquiry
 	for rows.Next() {
-		var (
-			in        messaging.Inquiry
-			createdAt string
-		)
-		if err := rows.Scan(&in.ID, &in.Name, &in.Email, &in.Message, &createdAt); err != nil {
-			return nil, tursodb.MapError(err)
-		}
-		if in.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
+		row, err := tursodb.ScanStruct[inquiryRow](rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, in)
+		out = append(out, row.toDomain())
 	}
 	return out, tursodb.MapError(rows.Err())
 }

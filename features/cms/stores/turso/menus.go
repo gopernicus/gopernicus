@@ -23,6 +23,50 @@ func NewMenuStore(db *tursodb.DB) *MenuStore {
 const menuColumns = "id, name, slug, created_at, updated_at"
 const itemColumns = "id, menu_id, label, url, parent_id, position, created_at, updated_at"
 
+// menuRow is the store-local, db-tagged projection of a menus row.
+type menuRow struct {
+	ID        string       `db:"id"`
+	Name      string       `db:"name"`
+	Slug      string       `db:"slug"`
+	CreatedAt tursodb.Time `db:"created_at"`
+	UpdatedAt tursodb.Time `db:"updated_at"`
+}
+
+func (r menuRow) toDomain() menus.Menu {
+	return menus.Menu{
+		ID:        r.ID,
+		Name:      r.Name,
+		Slug:      r.Slug,
+		CreatedAt: r.CreatedAt.Time,
+		UpdatedAt: r.UpdatedAt.Time,
+	}
+}
+
+// menuItemRow is the store-local, db-tagged projection of a menu_items row.
+type menuItemRow struct {
+	ID        string       `db:"id"`
+	MenuID    string       `db:"menu_id"`
+	Label     string       `db:"label"`
+	URL       string       `db:"url"`
+	ParentID  string       `db:"parent_id"`
+	Position  int          `db:"position"`
+	CreatedAt tursodb.Time `db:"created_at"`
+	UpdatedAt tursodb.Time `db:"updated_at"`
+}
+
+func (r menuItemRow) toDomain() menus.MenuItem {
+	return menus.MenuItem{
+		ID:        r.ID,
+		MenuID:    r.MenuID,
+		Label:     r.Label,
+		URL:       r.URL,
+		ParentID:  r.ParentID,
+		Position:  r.Position,
+		CreatedAt: r.CreatedAt.Time,
+		UpdatedAt: r.UpdatedAt.Time,
+	}
+}
+
 // CreateMenu persists a new menu.
 func (s *MenuStore) CreateMenu(ctx context.Context, m menus.Menu) (menus.Menu, error) {
 	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
@@ -47,13 +91,21 @@ func (s *MenuStore) CreateMenu(ctx context.Context, m menus.Menu) (menus.Menu, e
 // GetMenu returns the menu with the given id.
 func (s *MenuStore) GetMenu(ctx context.Context, id string) (menus.Menu, error) {
 	const q = `SELECT ` + menuColumns + ` FROM menus WHERE id = ?`
-	return scanMenu(s.db.QueryRow(ctx, q, id))
+	row, err := queryOne[menuRow](ctx, s.db, q, id)
+	if err != nil {
+		return menus.Menu{}, err
+	}
+	return row.toDomain(), nil
 }
 
 // GetMenuBySlug returns the menu with the given slug.
 func (s *MenuStore) GetMenuBySlug(ctx context.Context, slug string) (menus.Menu, error) {
 	const q = `SELECT ` + menuColumns + ` FROM menus WHERE slug = ?`
-	return scanMenu(s.db.QueryRow(ctx, q, slug))
+	row, err := queryOne[menuRow](ctx, s.db, q, slug)
+	if err != nil {
+		return menus.Menu{}, err
+	}
+	return row.toDomain(), nil
 }
 
 // ListMenus returns all menus ordered by name.
@@ -65,11 +117,11 @@ func (s *MenuStore) ListMenus(ctx context.Context) ([]menus.Menu, error) {
 	defer rows.Close()
 	var out []menus.Menu
 	for rows.Next() {
-		m, err := scanMenu(rows)
+		row, err := tursodb.ScanStruct[menuRow](rows)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, m)
+		out = append(out, row.toDomain())
 	}
 	return out, tursodb.MapError(rows.Err())
 }
@@ -84,11 +136,11 @@ func (s *MenuStore) ItemsForMenu(ctx context.Context, menuID string) ([]menus.Me
 	defer rows.Close()
 	var out []menus.MenuItem
 	for rows.Next() {
-		it, err := scanItem(rows)
+		row, err := tursodb.ScanStruct[menuItemRow](rows)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, it)
+		out = append(out, row.toDomain())
 	}
 	return out, tursodb.MapError(rows.Err())
 }
@@ -117,7 +169,11 @@ func (s *MenuStore) AddItem(ctx context.Context, it menus.MenuItem) (menus.MenuI
 // GetItem returns the item with the given id.
 func (s *MenuStore) GetItem(ctx context.Context, id string) (menus.MenuItem, error) {
 	const q = `SELECT ` + itemColumns + ` FROM menu_items WHERE id = ?`
-	return scanItem(s.db.QueryRow(ctx, q, id))
+	row, err := queryOne[menuItemRow](ctx, s.db, q, id)
+	if err != nil {
+		return menus.MenuItem{}, err
+	}
+	return row.toDomain(), nil
 }
 
 // UpdateItem persists changes to an item.
@@ -138,40 +194,4 @@ func (s *MenuStore) UpdateItem(ctx context.Context, id string, it menus.MenuItem
 func (s *MenuStore) DeleteItem(ctx context.Context, id string) error {
 	_, err := s.db.Exec(ctx, `DELETE FROM menu_items WHERE id = ?`, id)
 	return err
-}
-
-func scanMenu(sc scanner) (menus.Menu, error) {
-	var (
-		m                    menus.Menu
-		createdAt, updatedAt string
-	)
-	if err := sc.Scan(&m.ID, &m.Name, &m.Slug, &createdAt, &updatedAt); err != nil {
-		return menus.Menu{}, tursodb.MapError(err)
-	}
-	var err error
-	if m.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
-		return menus.Menu{}, err
-	}
-	if m.UpdatedAt, err = tursodb.ParseTime(updatedAt); err != nil {
-		return menus.Menu{}, err
-	}
-	return m, nil
-}
-
-func scanItem(sc scanner) (menus.MenuItem, error) {
-	var (
-		it                   menus.MenuItem
-		createdAt, updatedAt string
-	)
-	if err := sc.Scan(&it.ID, &it.MenuID, &it.Label, &it.URL, &it.ParentID, &it.Position, &createdAt, &updatedAt); err != nil {
-		return menus.MenuItem{}, tursodb.MapError(err)
-	}
-	var err error
-	if it.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
-		return menus.MenuItem{}, err
-	}
-	if it.UpdatedAt, err = tursodb.ParseTime(updatedAt); err != nil {
-		return menus.MenuItem{}, err
-	}
-	return it, nil
 }

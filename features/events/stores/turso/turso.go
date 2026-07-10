@@ -37,9 +37,6 @@ var MigrationsFS embed.FS
 // MigrationsDir is the directory within MigrationsFS holding the .sql files.
 const MigrationsDir = "migrations"
 
-// scanner abstracts *sql.Row and *sql.Rows for shared scan helpers.
-type scanner = tursodb.Scanner
-
 // New returns the outbox Store backed by db, AFTER verifying the event_outbox
 // table exists (design §5 mitigation b: the boot-time probe). It errors with
 // errs.ErrNotFound when the table is absent — the "events" migration source was
