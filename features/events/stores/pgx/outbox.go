@@ -19,7 +19,7 @@ var _ outbox.EntryRepository = (*Store)(nil)
 
 // Store implements outbox.EntryRepository over a PostgreSQL database. event_id is
 // the primary key and the at-least-once de-dupe key, so a duplicate append
-// surfaces as errs.ErrAlreadyExists (mapped from the UNIQUE constraint by the
+// surfaces as sdk.ErrAlreadyExists (mapped from the UNIQUE constraint by the
 // connector). Construct it via New, which runs the boot-time table probe
 // (design §5).
 type Store struct {
@@ -63,7 +63,7 @@ func (r outboxRow) toDomain() outbox.Entry {
 // Append persists records in their own transaction — the non-transactional
 // convenience path. The whole batch commits or none of it does, so a batch
 // carrying a duplicate event_id (or a collision with an existing row) leaves the
-// store untouched and returns errs.ErrAlreadyExists. Appending zero records is a
+// store untouched and returns sdk.ErrAlreadyExists. Appending zero records is a
 // no-op that returns nil.
 func (s *Store) Append(ctx context.Context, recs ...sdkevents.Record) error {
 	if len(recs) == 0 {
@@ -79,7 +79,7 @@ func (s *Store) Append(ctx context.Context, recs ...sdkevents.Record) error {
 // feature store's commit, so the domain rows and the outbox rows land atomically
 // (true outbox semantics). No feature core ever sees *pgxdb.Tx; a future emitting
 // store consumer-declares a matching port that Store satisfies structurally. A
-// duplicate event_id returns errs.ErrAlreadyExists and (because the caller's tx
+// duplicate event_id returns sdk.ErrAlreadyExists and (because the caller's tx
 // rolls back) commits nothing. Appending zero records is a no-op.
 func (s *Store) AppendTx(ctx context.Context, tx *pgxdb.Tx, recs ...sdkevents.Record) error {
 	if len(recs) == 0 {
@@ -150,7 +150,7 @@ func (s *Store) PurgePublished(ctx context.Context, before time.Time) (int, erro
 // Append and AppendTx share one statement. The rows all carry the same created_at
 // (event_id is the ListUnpublished tie-break), so array order is not load-bearing
 // for the oldest-first ordering guarantee. A UNIQUE constraint violation on
-// event_id is mapped to errs.ErrAlreadyExists by the connector's Exec.
+// event_id is mapped to sdk.ErrAlreadyExists by the connector's Exec.
 func insertRecords(ctx context.Context, q pgxdb.Querier, recs ...sdkevents.Record) error {
 	n := len(recs)
 	eventIDs := make([]string, n)

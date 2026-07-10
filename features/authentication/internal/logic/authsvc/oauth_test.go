@@ -11,8 +11,8 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthaccount"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthstate"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/oauth"
 	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
 )
@@ -94,7 +94,7 @@ func (f *fakeOAuthAccounts) Create(_ context.Context, a oauthaccount.OAuthAccoun
 	defer f.mu.Unlock()
 	for _, ex := range f.m {
 		if ex.Provider == a.Provider && ex.ProviderUserID == a.ProviderUserID {
-			return oauthaccount.OAuthAccount{}, errs.ErrAlreadyExists
+			return oauthaccount.OAuthAccount{}, sdk.ErrAlreadyExists
 		}
 	}
 	f.m = append(f.m, a)
@@ -109,7 +109,7 @@ func (f *fakeOAuthAccounts) GetByProvider(_ context.Context, provider, providerU
 			return a, nil
 		}
 	}
-	return oauthaccount.OAuthAccount{}, errs.ErrNotFound
+	return oauthaccount.OAuthAccount{}, sdk.ErrNotFound
 }
 
 func (f *fakeOAuthAccounts) ListByUser(_ context.Context, userID string) ([]oauthaccount.OAuthAccount, error) {
@@ -137,7 +137,7 @@ func (f *fakeOAuthAccounts) Delete(_ context.Context, userID, provider string) e
 		kept = append(kept, a)
 	}
 	if !deleted {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	f.m = kept
 	return nil
@@ -162,11 +162,11 @@ func (f *fakeOAuthStates) Consume(_ context.Context, token string) (oauthstate.S
 	defer f.mu.Unlock()
 	s, ok := f.m[token]
 	if !ok {
-		return oauthstate.State{}, errs.ErrNotFound
+		return oauthstate.State{}, sdk.ErrNotFound
 	}
 	delete(f.m, token)
 	if s.Expired(time.Now()) {
-		return oauthstate.State{}, errs.ErrExpired
+		return oauthstate.State{}, sdk.ErrExpired
 	}
 	return s, nil
 }
@@ -269,7 +269,7 @@ func TestOAuthEnabledGating(t *testing.T) {
 
 func TestStartOAuthUnknownProvider(t *testing.T) {
 	h := newOAuthHarness(t, &fakeProvider{name: "google"}, nil)
-	if _, err := h.svc.StartOAuth(context.Background(), "unknown", ""); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := h.svc.StartOAuth(context.Background(), "unknown", ""); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("StartOAuth(unknown): err=%v, want ErrNotFound", err)
 	}
 }
@@ -400,7 +400,7 @@ func TestOAuthCallbackPendingLinkThenVerify(t *testing.T) {
 		t.Errorf("link not created after VerifyLink: %v", err)
 	}
 	// Single-use: the pending token cannot be redeemed twice.
-	if _, err := h.svc.VerifyLink(context.Background(), token); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := h.svc.VerifyLink(context.Background(), token); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("second VerifyLink: err=%v, want ErrNotFound", err)
 	}
 }
@@ -444,7 +444,7 @@ func TestOAuthUnlinkLastMethodProtection(t *testing.T) {
 		u := h.mustOAuthUser(t, "solo@example.com")
 		acct, _ := oauthaccount.New(u.ID, "google", "g-solo", time.Now())
 		h.accounts.Create(ctx, acct)
-		if err := h.svc.Unlink(ctx, u.ID, "google"); !errors.Is(err, errs.ErrConflict) {
+		if err := h.svc.Unlink(ctx, u.ID, "google"); !errors.Is(err, sdk.ErrConflict) {
 			t.Errorf("Unlink last method: err=%v, want ErrConflict (ErrLastAuthMethod)", err)
 		}
 		if !errors.Is(h.svc.Unlink(ctx, u.ID, "google"), ErrLastAuthMethod) {
@@ -481,7 +481,7 @@ func TestOAuthUnlinkLastMethodProtection(t *testing.T) {
 	t.Run("AbsentLink", func(t *testing.T) {
 		h := newOAuthHarness(t, &fakeProvider{name: "google"}, nil)
 		u := h.mustOAuthUser(t, "none@example.com")
-		if err := h.svc.Unlink(ctx, u.ID, "google"); !errors.Is(err, errs.ErrNotFound) {
+		if err := h.svc.Unlink(ctx, u.ID, "google"); !errors.Is(err, sdk.ErrNotFound) {
 			t.Errorf("Unlink absent: err=%v, want ErrNotFound", err)
 		}
 	})
@@ -528,7 +528,7 @@ func TestOAuthCallbackStateSingleUse(t *testing.T) {
 	if _, err := h.svc.OAuthCallback(context.Background(), "google", "code", state); err != nil {
 		t.Fatalf("first OAuthCallback: %v", err)
 	}
-	if _, err := h.svc.OAuthCallback(context.Background(), "google", "code", state); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := h.svc.OAuthCallback(context.Background(), "google", "code", state); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("replayed state: err=%v, want ErrNotFound", err)
 	}
 }
@@ -543,7 +543,7 @@ func TestOAuthCallbackStateExpired(t *testing.T) {
 	expired := oauthstate.New("google", oauthstate.PurposeFlow, payload, time.Minute, time.Now().Add(-time.Hour))
 	h.states.Create(context.Background(), expired)
 
-	if _, err := h.svc.OAuthCallback(context.Background(), "google", "code", expired.Token); !errors.Is(err, errs.ErrExpired) {
+	if _, err := h.svc.OAuthCallback(context.Background(), "google", "code", expired.Token); !errors.Is(err, sdk.ErrExpired) {
 		t.Errorf("expired state callback: err=%v, want ErrExpired", err)
 	}
 }
@@ -557,7 +557,7 @@ func TestOAuthCallbackWrongProviderState(t *testing.T) {
 	mismatched := oauthstate.New("github", oauthstate.PurposeFlow, payload, time.Hour, time.Now())
 	h.states.Create(context.Background(), mismatched)
 
-	if _, err := h.svc.OAuthCallback(context.Background(), "google", "code", mismatched.Token); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := h.svc.OAuthCallback(context.Background(), "google", "code", mismatched.Token); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("provider-mismatched state: err=%v, want ErrNotFound", err)
 	}
 }

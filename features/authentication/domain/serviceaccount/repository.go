@@ -11,9 +11,9 @@ import (
 // implementation (see the storetest reference).
 //
 // Sentinel contract (the storetest conformance suite executes these):
-//   - Get for an unknown id → errs.ErrNotFound.
-//   - Update for an unknown id → errs.ErrNotFound.
-//   - Delete for an unknown id → errs.ErrNotFound.
+//   - Get for an unknown id → sdk.ErrNotFound.
+//   - Update for an unknown id → sdk.ErrNotFound.
+//   - Delete for an unknown id → sdk.ErrNotFound.
 //
 // List is crud-typed (design §9). Ordering is pinned (plan-cut amendment): a
 // zero-value ListRequest.Order means the store's default, which is
@@ -23,12 +23,12 @@ import (
 type ServiceAccountRepository interface {
 	// Create persists a new service account.
 	Create(ctx context.Context, sa ServiceAccount) (ServiceAccount, error)
-	// Get returns the account for id, or errs.ErrNotFound.
+	// Get returns the account for id, or sdk.ErrNotFound.
 	Get(ctx context.Context, id string) (ServiceAccount, error)
 	// List returns a cursor-paginated page ordered created_at DESC, id DESC.
 	List(ctx context.Context, req crud.ListRequest) (crud.Page[ServiceAccount], error)
-	// Update replaces the account for id; unknown → errs.ErrNotFound.
+	// Update replaces the account for id; unknown → sdk.ErrNotFound.
 	Update(ctx context.Context, id string, sa ServiceAccount) (ServiceAccount, error)
-	// Delete removes the account for id; unknown → errs.ErrNotFound.
+	// Delete removes the account for id; unknown → sdk.ErrNotFound.
 	Delete(ctx context.Context, id string) error
 }

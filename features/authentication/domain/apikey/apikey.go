@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // APIKey is a hashed machine credential. ExpiresAt zero means the key never
@@ -37,15 +37,15 @@ type APIKey struct {
 // keyHash (the mint lives in the auth service, which is the only holder of the
 // plaintext), minting its record ID from ids (empty under cryptids.Database —
 // the store then assigns the key). A zero expiresAt means the key never expires.
-// A blank serviceAccountID or keyHash wraps errs.ErrInvalidInput.
+// A blank serviceAccountID or keyHash wraps sdk.ErrInvalidInput.
 func New(ids cryptids.IDGenerator, serviceAccountID, name, keyPrefix, keyHash string, expiresAt, now time.Time) (APIKey, error) {
 	serviceAccountID = strings.TrimSpace(serviceAccountID)
 	keyHash = strings.TrimSpace(keyHash)
 	if serviceAccountID == "" {
-		return APIKey{}, fmt.Errorf("service account id is required: %w", errs.ErrInvalidInput)
+		return APIKey{}, fmt.Errorf("service account id is required: %w", sdk.ErrInvalidInput)
 	}
 	if keyHash == "" {
-		return APIKey{}, fmt.Errorf("key hash is required: %w", errs.ErrInvalidInput)
+		return APIKey{}, fmt.Errorf("key hash is required: %w", sdk.ErrInvalidInput)
 	}
 	if !expiresAt.IsZero() {
 		expiresAt = expiresAt.UTC()

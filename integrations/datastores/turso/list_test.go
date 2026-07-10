@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // TestAppendCursorPredicate_Combos tables the tuple predicate for every
@@ -141,7 +141,7 @@ func TestAppendOrderBy_RejectsBadIdentifier(t *testing.T) {
 	for _, tc := range bad {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf strings.Builder
-			if err := appendOrderBy(&buf, tc.orderCol, tc.pkCol, crud.ASC, false, false); !errors.Is(err, errs.ErrInvalidInput) {
+			if err := appendOrderBy(&buf, tc.orderCol, tc.pkCol, crud.ASC, false, false); !errors.Is(err, sdk.ErrInvalidInput) {
 				t.Fatalf("appendOrderBy err = %v, want ErrInvalidInput (buf=%q)", err, buf.String())
 			}
 		})
@@ -164,7 +164,7 @@ func TestAppendCursorPredicate_RejectsBadIdentifier(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf strings.Builder
 			var args []any
-			if err := appendCursorPredicate(&buf, &args, tc.orderCol, tc.pkCol, int64(1), "pk", crud.ASC, false, false); !errors.Is(err, errs.ErrInvalidInput) {
+			if err := appendCursorPredicate(&buf, &args, tc.orderCol, tc.pkCol, int64(1), "pk", crud.ASC, false, false); !errors.Is(err, sdk.ErrInvalidInput) {
 				t.Fatalf("appendCursorPredicate err = %v, want ErrInvalidInput", err)
 			}
 		})
@@ -419,10 +419,10 @@ func TestList_RejectsInvalid(t *testing.T) {
 	ctx := context.Background()
 	q := listQueryFor("a")
 
-	if _, err := List(ctx, db, q, crud.ListRequest{Limit: 2, Cursor: "x", Offset: 3}); !errors.Is(err, errs.ErrInvalidInput) {
+	if _, err := List(ctx, db, q, crud.ListRequest{Limit: 2, Cursor: "x", Offset: 3}); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("cursor+offset err = %v, want ErrInvalidInput", err)
 	}
-	if _, err := List(ctx, db, q, crud.ListRequest{Limit: 2, Order: crud.NewOrder("password", crud.ASC)}); !errors.Is(err, errs.ErrInvalidInput) {
+	if _, err := List(ctx, db, q, crud.ListRequest{Limit: 2, Order: crud.NewOrder("password", crud.ASC)}); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("unknown order err = %v, want ErrInvalidInput", err)
 	}
 }
@@ -440,7 +440,7 @@ func TestList_RejectsRawExpressionPKOnFirstPage(t *testing.T) {
 	q := listQueryFor("a")
 	q.PK = "id || char(0) || name"
 
-	if _, err := List(ctx, db, q, crud.ListRequest{Limit: 2}); !errors.Is(err, errs.ErrInvalidInput) {
+	if _, err := List(ctx, db, q, crud.ListRequest{Limit: 2}); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("raw-expression PK err = %v, want ErrInvalidInput", err)
 	}
 }

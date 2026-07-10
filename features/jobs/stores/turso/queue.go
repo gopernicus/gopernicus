@@ -9,8 +9,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/workers"
 )
 
@@ -104,7 +104,7 @@ func NewQueueStore(db *tursodb.DB, opts ...QueueOption) *Queue {
 }
 
 // Enqueue inserts one pending job. A caller-supplied ID that already exists
-// yields errs.ErrAlreadyExists (the idempotency key); an empty ID is generated.
+// yields sdk.ErrAlreadyExists (the idempotency key); an empty ID is generated.
 // The scheduled_for, priority, and max_attempts are stored verbatim — the store
 // invents no defaults (that is the service's job).
 func (q *Queue) Enqueue(ctx context.Context, in job.Enqueue) (job.Job, error) {
@@ -173,7 +173,7 @@ func (q *Queue) Claim(ctx context.Context, workerID string, now time.Time) (job.
 		claimed = row.toDomain()
 		return nil
 	})
-	if errors.Is(err, errs.ErrNotFound) {
+	if errors.Is(err, sdk.ErrNotFound) {
 		return job.Job{}, workers.ErrNoWork
 	}
 	if err != nil {
@@ -182,7 +182,7 @@ func (q *Queue) Claim(ctx context.Context, workerID string, now time.Time) (job.
 	return claimed, nil
 }
 
-// Complete marks the job done. A missing id yields errs.ErrNotFound.
+// Complete marks the job done. A missing id yields sdk.ErrNotFound.
 func (q *Queue) Complete(ctx context.Context, jobID string, now time.Time) error {
 	ts := tursodb.FormatTime(now.UTC())
 	const q1 = `UPDATE job_queue SET status = 'completed', completed_at = ?, updated_at = ? WHERE job_id = ?`
@@ -192,7 +192,7 @@ func (q *Queue) Complete(ctx context.Context, jobID string, now time.Time) error
 // Fail increments retry_count and, in one statement, either reschedules the job
 // to pending (clearing worker_name/claimed_at so it is immediately re-claimable)
 // or dead-letters it once retry_count + 1 reaches maxAttempts. reason is recorded
-// as the failure cause. A missing id yields errs.ErrNotFound.
+// as the failure cause. A missing id yields sdk.ErrNotFound.
 func (q *Queue) Fail(ctx context.Context, jobID string, now time.Time, reason string, maxAttempts int) error {
 	ts := tursodb.FormatTime(now.UTC())
 	const fail = `UPDATE job_queue
@@ -206,7 +206,7 @@ func (q *Queue) Fail(ctx context.Context, jobID string, now time.Time, reason st
 	return q.execAffecting(ctx, fail, reason, ts, maxAttempts, maxAttempts, maxAttempts, jobID)
 }
 
-// Get returns the job with the given id, or errs.ErrNotFound.
+// Get returns the job with the given id, or sdk.ErrNotFound.
 func (q *Queue) Get(ctx context.Context, id string) (job.Job, error) {
 	const get = `SELECT ` + jobColumns + ` FROM job_queue WHERE job_id = ?`
 	row, err := queryOne[jobRow](ctx, q.db, get, id)
@@ -248,7 +248,7 @@ func (q *Queue) List(ctx context.Context, f job.ListFilter, req crud.ListRequest
 }
 
 // execAffecting runs a write that must touch exactly one row, mapping zero rows
-// affected to errs.ErrNotFound and retrying transient busy errors.
+// affected to sdk.ErrNotFound and retrying transient busy errors.
 func (q *Queue) execAffecting(ctx context.Context, query string, args ...any) error {
 	return retryBusy(ctx, func() error {
 		n, err := tursodb.ExecAffecting(ctx, q.db, query, args...)
@@ -256,7 +256,7 @@ func (q *Queue) execAffecting(ctx context.Context, query string, args ...any) er
 			return err
 		}
 		if n == 0 {
-			return errs.ErrNotFound
+			return sdk.ErrNotFound
 		}
 		return nil
 	})

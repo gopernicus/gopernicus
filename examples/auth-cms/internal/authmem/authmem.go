@@ -11,8 +11,8 @@
 //
 // It mirrors the honesty the port doc comments promise (and the storetest
 // conformance suite proves), not just their shape: UserRepository.Create on a
-// colliding normalized email returns errs.ErrAlreadyExists; session/code/token
-// reads report expiry with errs.ErrExpired; the OAuth-account (Provider,
+// colliding normalized email returns sdk.ErrAlreadyExists; session/code/token
+// reads report expiry with sdk.ErrExpired; the OAuth-account (Provider,
 // ProviderUserID) pair and API-key KeyHash are unique; oauthstate.Consume is a
 // single-use get-and-delete that deletes regardless of expiry; APIKeys.GetByHash
 // returns revoked/expired rows verbatim (the pinned service-layer-branch
@@ -43,8 +43,8 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // ids assigns entity keys when a Create arrives with an empty ID (the
@@ -117,7 +117,7 @@ func (r userRepo) Create(_ context.Context, u user.User) (user.User, error) {
 	defer r.mu.Unlock()
 	for _, ex := range r.users {
 		if strings.EqualFold(ex.Email, u.Email) {
-			return user.User{}, errs.ErrAlreadyExists
+			return user.User{}, sdk.ErrAlreadyExists
 		}
 	}
 	// Empty ID → mimic a schema default (amended D10): assign the key at insert.
@@ -133,7 +133,7 @@ func (r userRepo) Get(_ context.Context, id string) (user.User, error) {
 	defer r.mu.RUnlock()
 	u, ok := r.users[id]
 	if !ok {
-		return user.User{}, errs.ErrNotFound
+		return user.User{}, sdk.ErrNotFound
 	}
 	return u, nil
 }
@@ -146,14 +146,14 @@ func (r userRepo) GetByEmail(_ context.Context, email string) (user.User, error)
 			return u, nil
 		}
 	}
-	return user.User{}, errs.ErrNotFound
+	return user.User{}, sdk.ErrNotFound
 }
 
 func (r userRepo) Update(_ context.Context, id string, u user.User) (user.User, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.users[id]; !ok {
-		return user.User{}, errs.ErrNotFound
+		return user.User{}, sdk.ErrNotFound
 	}
 	r.users[id] = u
 	return u, nil
@@ -175,7 +175,7 @@ func (r passwordRepo) Get(_ context.Context, userID string) (string, error) {
 	defer r.mu.RUnlock()
 	h, ok := r.passwords[userID]
 	if !ok {
-		return "", errs.ErrNotFound
+		return "", sdk.ErrNotFound
 	}
 	return h, nil
 }
@@ -196,10 +196,10 @@ func (r sessionRepo) Get(_ context.Context, token string) (session.Session, erro
 	defer r.mu.RUnlock()
 	s, ok := r.sessions[token]
 	if !ok {
-		return session.Session{}, errs.ErrNotFound
+		return session.Session{}, sdk.ErrNotFound
 	}
 	if s.Expired(time.Now()) {
-		return session.Session{}, errs.ErrExpired
+		return session.Session{}, sdk.ErrExpired
 	}
 	return s, nil
 }
@@ -208,7 +208,7 @@ func (r sessionRepo) Delete(_ context.Context, token string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.sessions[token]; !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	delete(r.sessions, token)
 	return nil
@@ -241,10 +241,10 @@ func (r codeRepo) Get(_ context.Context, code string) (verification.Code, error)
 	defer r.mu.RUnlock()
 	c, ok := r.codes[code]
 	if !ok {
-		return verification.Code{}, errs.ErrNotFound
+		return verification.Code{}, sdk.ErrNotFound
 	}
 	if c.Expired(time.Now()) {
-		return verification.Code{}, errs.ErrExpired
+		return verification.Code{}, sdk.ErrExpired
 	}
 	return c, nil
 }
@@ -253,7 +253,7 @@ func (r codeRepo) Delete(_ context.Context, code string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.codes[code]; !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	delete(r.codes, code)
 	return nil
@@ -275,10 +275,10 @@ func (r tokenRepo) Get(_ context.Context, token string) (verification.Token, err
 	defer r.mu.RUnlock()
 	t, ok := r.tokens[token]
 	if !ok {
-		return verification.Token{}, errs.ErrNotFound
+		return verification.Token{}, sdk.ErrNotFound
 	}
 	if t.Expired(time.Now()) {
-		return verification.Token{}, errs.ErrExpired
+		return verification.Token{}, sdk.ErrExpired
 	}
 	return t, nil
 }
@@ -287,7 +287,7 @@ func (r tokenRepo) Delete(_ context.Context, token string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.tokens[token]; !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	delete(r.tokens, token)
 	return nil

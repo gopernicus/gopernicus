@@ -7,8 +7,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // ListQuery describes one paginated SELECT for List. T is a store-local,
@@ -71,7 +71,7 @@ func (q ListQuery[T]) listCursor(ctx context.Context, db Querier, req crud.ListR
 		var err error
 		cursor, err = crud.DecodeCursor(req.Cursor, orderCol)
 		if err != nil {
-			return crud.Page[T]{}, fmt.Errorf("decode cursor: %w: %w", errs.ErrInvalidInput, err)
+			return crud.Page[T]{}, fmt.Errorf("decode cursor: %w: %w", sdk.ErrInvalidInput, err)
 		}
 	}
 
@@ -177,7 +177,7 @@ func (q ListQuery[T]) collect(ctx context.Context, db Querier, sql string, args 
 // resolveOrder maps the request Order (or DefaultOrder when zero) to a vetted
 // column, its CastLower flag, and a normalized direction by matching the order
 // field against the columns in q.OrderFields. An order field absent from the
-// allow-list returns an error wrapping errs.ErrInvalidInput.
+// allow-list returns an error wrapping sdk.ErrInvalidInput.
 func (q ListQuery[T]) resolveOrder(order crud.Order) (column string, castLower bool, direction string, err error) {
 	if order.Field == "" {
 		order = q.DefaultOrder
@@ -193,7 +193,7 @@ func (q ListQuery[T]) resolveOrder(order crud.Order) (column string, castLower b
 			return of.Column, of.CastLower, dir, nil
 		}
 	}
-	return "", false, "", fmt.Errorf("unknown order field %q: %w", order.Field, errs.ErrInvalidInput)
+	return "", false, "", fmt.Errorf("unknown order field %q: %w", order.Field, sdk.ErrInvalidInput)
 }
 
 // markPrev runs the reverse probe for cursor mode and applies crud.MarkPrevPage.

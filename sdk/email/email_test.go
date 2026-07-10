@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 func validMessage() Message {
@@ -47,8 +47,8 @@ func TestMessage_Validate(t *testing.T) {
 			if !tt.wantErr && err != nil {
 				t.Fatalf("expected no error, got %v", err)
 			}
-			if tt.wantErr && !errors.Is(err, errs.ErrInvalidInput) {
-				t.Errorf("error %v does not wrap errs.ErrInvalidInput", err)
+			if tt.wantErr && !errors.Is(err, sdk.ErrInvalidInput) {
+				t.Errorf("error %v does not wrap sdk.ErrInvalidInput", err)
 			}
 		})
 	}

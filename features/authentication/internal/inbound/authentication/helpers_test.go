@@ -14,8 +14,8 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/email"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
@@ -50,7 +50,7 @@ func (m *memUsers) Create(_ context.Context, u user.User) (user.User, error) {
 	defer m.mu.Unlock()
 	for _, ex := range m.byID {
 		if strings.EqualFold(ex.Email, u.Email) {
-			return user.User{}, errs.ErrAlreadyExists
+			return user.User{}, sdk.ErrAlreadyExists
 		}
 	}
 	m.byID[u.ID] = u
@@ -61,7 +61,7 @@ func (m *memUsers) Get(_ context.Context, id string) (user.User, error) {
 	defer m.mu.Unlock()
 	u, ok := m.byID[id]
 	if !ok {
-		return user.User{}, errs.ErrNotFound
+		return user.User{}, sdk.ErrNotFound
 	}
 	return u, nil
 }
@@ -73,13 +73,13 @@ func (m *memUsers) GetByEmail(_ context.Context, e string) (user.User, error) {
 			return u, nil
 		}
 	}
-	return user.User{}, errs.ErrNotFound
+	return user.User{}, sdk.ErrNotFound
 }
 func (m *memUsers) Update(_ context.Context, id string, u user.User) (user.User, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.byID[id]; !ok {
-		return user.User{}, errs.ErrNotFound
+		return user.User{}, sdk.ErrNotFound
 	}
 	m.byID[id] = u
 	return u, nil
@@ -101,7 +101,7 @@ func (p *memPasswords) Get(_ context.Context, id string) (string, error) {
 	defer p.mu.Unlock()
 	h, ok := p.m[id]
 	if !ok {
-		return "", errs.ErrNotFound
+		return "", sdk.ErrNotFound
 	}
 	return h, nil
 }
@@ -122,10 +122,10 @@ func (s *memSessions) Get(_ context.Context, token string) (session.Session, err
 	defer s.mu.Unlock()
 	sess, ok := s.m[token]
 	if !ok {
-		return session.Session{}, errs.ErrNotFound
+		return session.Session{}, sdk.ErrNotFound
 	}
 	if sess.Expired(time.Now()) {
-		return session.Session{}, errs.ErrExpired
+		return session.Session{}, sdk.ErrExpired
 	}
 	return sess, nil
 }
@@ -133,7 +133,7 @@ func (s *memSessions) Delete(_ context.Context, token string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.m[token]; !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	delete(s.m, token)
 	return nil
@@ -165,10 +165,10 @@ func (c *memCodes) Get(_ context.Context, code string) (verification.Code, error
 	defer c.mu.Unlock()
 	v, ok := c.m[code]
 	if !ok {
-		return verification.Code{}, errs.ErrNotFound
+		return verification.Code{}, sdk.ErrNotFound
 	}
 	if v.Expired(time.Now()) {
-		return verification.Code{}, errs.ErrExpired
+		return verification.Code{}, sdk.ErrExpired
 	}
 	return v, nil
 }
@@ -176,7 +176,7 @@ func (c *memCodes) Delete(_ context.Context, code string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, ok := c.m[code]; !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	delete(c.m, code)
 	return nil
@@ -198,10 +198,10 @@ func (tk *memTokens) Get(_ context.Context, token string) (verification.Token, e
 	defer tk.mu.Unlock()
 	v, ok := tk.m[token]
 	if !ok {
-		return verification.Token{}, errs.ErrNotFound
+		return verification.Token{}, sdk.ErrNotFound
 	}
 	if v.Expired(time.Now()) {
-		return verification.Token{}, errs.ErrExpired
+		return verification.Token{}, sdk.ErrExpired
 	}
 	return v, nil
 }
@@ -209,7 +209,7 @@ func (tk *memTokens) Delete(_ context.Context, token string) error {
 	tk.mu.Lock()
 	defer tk.mu.Unlock()
 	if _, ok := tk.m[token]; !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	delete(tk.m, token)
 	return nil

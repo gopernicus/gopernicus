@@ -15,7 +15,7 @@ import (
 	"{{.ModulePath}}/domain/{{.Agg}}"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // memIDs assigns an id when an incoming {{.Agg}} carries none — the honest mirror
@@ -49,13 +49,13 @@ func (s *{{.ReposField}}) Create(ctx context.Context, in {{.Agg}}.{{.AggTitle}})
 	return in, nil
 }
 
-// Get returns the {{.Agg}} for id, or errs.ErrNotFound.
+// Get returns the {{.Agg}} for id, or sdk.ErrNotFound.
 func (s *{{.ReposField}}) Get(ctx context.Context, id string) ({{.Agg}}.{{.AggTitle}}, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	row, ok := s.rows[id]
 	if !ok {
-		return {{.Agg}}.{{.AggTitle}}{}, errs.ErrNotFound
+		return {{.Agg}}.{{.AggTitle}}{}, sdk.ErrNotFound
 	}
 	return row, nil
 }
@@ -89,11 +89,11 @@ func (s *{{.ReposField}}) List(ctx context.Context, filter {{.Agg}}.ListFilter, 
 // =============================================================================
 
 // unknownOrderField is the error pageMem returns for an order field absent from
-// the aggregate's allow-list — the same errs.ErrInvalidInput-class error the SQL
+// the aggregate's allow-list — the same sdk.ErrInvalidInput-class error the SQL
 // stores' resolveOrder produces, so storetest asserts one rejection shape across
 // every backend.
 func unknownOrderField(field string) error {
-	return fmt.Errorf("unknown order field %q: %w", field, errs.ErrInvalidInput)
+	return fmt.Errorf("unknown order field %q: %w", field, sdk.ErrInvalidInput)
 }
 
 // orderAllowed reports whether field names a column in the aggregate's allow-list,

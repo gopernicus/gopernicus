@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 var (
@@ -24,18 +24,18 @@ var (
 // "name"; a dotted "schema.table" quotes each segment to "schema"."table".
 // Any disallowed character (quote, backslash, parenthesis, semicolon) or a
 // segment that is not letter-then-word-chars returns an error wrapping
-// errs.ErrInvalidInput. The alias/space forms of the original are dropped —
+// sdk.ErrInvalidInput. The alias/space forms of the original are dropped —
 // the list toolkit only quotes single column and pk identifiers.
 func QuoteIdentifier(name string) (string, error) {
 	if dangerousIdentifierChars.MatchString(name) {
-		return "", fmt.Errorf("identifier %q contains disallowed characters: %w", name, errs.ErrInvalidInput)
+		return "", fmt.Errorf("identifier %q contains disallowed characters: %w", name, sdk.ErrInvalidInput)
 	}
 
 	segments := strings.Split(name, ".")
 	quoted := make([]string, len(segments))
 	for i, segment := range segments {
 		if !identifierSegment.MatchString(segment) {
-			return "", fmt.Errorf("invalid identifier segment %q: %w", segment, errs.ErrInvalidInput)
+			return "", fmt.Errorf("invalid identifier segment %q: %w", segment, sdk.ErrInvalidInput)
 		}
 		quoted[i] = `"` + segment + `"`
 	}

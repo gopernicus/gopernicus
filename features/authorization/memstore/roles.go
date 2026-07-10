@@ -9,16 +9,16 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/authorization/domain/role"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // unknownOrderField is the error pageMem returns for an order field absent from
-// the kind's rim allow-list — the same errs.ErrInvalidInput-class error the SQL
+// the kind's rim allow-list — the same sdk.ErrInvalidInput-class error the SQL
 // stores' resolveOrder produces, so storetest asserts one rejection shape across
 // every backend.
 func unknownOrderField(field string) error {
-	return fmt.Errorf("unknown order field %q: %w", field, errs.ErrInvalidInput)
+	return fmt.Errorf("unknown order field %q: %w", field, sdk.ErrInvalidInput)
 }
 
 // orderAllowed reports whether field names a column in the kind's rim allow-list,
@@ -158,7 +158,7 @@ func assignmentKey(a role.Assignment) (time.Time, string) {
 // DESC) with cursor and offset strategies, mirroring the SQL stores' keyset
 // contract so storetest proves the same shape against every backend. It rejects
 // an order field absent from the kind's rim allow-list (fields) with
-// errs.ErrInvalidInput, exactly as the connectors' resolveOrder does. keyOf
+// sdk.ErrInvalidInput, exactly as the connectors' resolveOrder does. keyOf
 // returns each item's (created_at, tiebreak-pk).
 func pageMem[T any](all []T, req crud.ListRequest, fields map[string]crud.OrderField, keyOf func(T) (time.Time, string)) (crud.Page[T], error) {
 	if err := req.Validate(); err != nil {

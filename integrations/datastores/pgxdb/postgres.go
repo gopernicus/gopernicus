@@ -21,7 +21,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 
 	jackpgx "github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -239,18 +239,18 @@ func MapError(err error) error {
 		return nil
 	}
 	if errors.Is(err, jackpgx.ErrNoRows) {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		switch pgErr.Code {
 		case uniqueViolation:
-			return errs.ErrAlreadyExists
+			return sdk.ErrAlreadyExists
 		case foreignKeyViolation:
-			return errs.ErrInvalidReference
+			return sdk.ErrInvalidReference
 		case checkViolation, notNullViolation:
-			return errs.ErrInvalidInput
+			return sdk.ErrInvalidInput
 		}
 	}
 	return err

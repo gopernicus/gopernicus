@@ -16,7 +16,7 @@
 //
 // Fails-closed convention: FromContext reports (Principal, false) when the
 // request carried no identity, and a Resolver returns the errs not-found class
-// (errs.ErrNotFound) for a principal it cannot resolve. A reader that treats
+// (sdk.ErrNotFound) for a principal it cannot resolve. A reader that treats
 // absent identity as anonymous-allowed, or a Resolver that fabricates an Info,
 // is a bug — absence means deny (401), never permit.
 //
@@ -86,7 +86,7 @@ type Info struct {
 // here — identity data is feature-owned.
 //
 // Fail CLOSED: an unknown principal type, a missing record, or an unwired
-// backing subsystem returns an error satisfying errs.ErrNotFound (checked with
+// backing subsystem returns an error satisfying sdk.ErrNotFound (checked with
 // errors.Is). A Resolver never fabricates an Info for a principal it cannot
 // resolve.
 //

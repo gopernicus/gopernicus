@@ -8,12 +8,12 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // UserStore implements user.UserRepository over a PostgreSQL database. Uniqueness
 // is on the normalized email (the users.email UNIQUE constraint), surfaced as
-// errs.ErrAlreadyExists via the connector's MapError.
+// sdk.ErrAlreadyExists via the connector's MapError.
 type UserStore struct {
 	db *pgxdb.DB
 }
@@ -48,7 +48,7 @@ func (r userRow) toDomain() user.User {
 	}
 }
 
-// Create persists a new user; a colliding normalized email → errs.ErrAlreadyExists.
+// Create persists a new user; a colliding normalized email → sdk.ErrAlreadyExists.
 func (s *UserStore) Create(ctx context.Context, u user.User) (user.User, error) {
 	args := pgx.NamedArgs{
 		"email":          u.Email,
@@ -77,7 +77,7 @@ func (s *UserStore) Create(ctx context.Context, u user.User) (user.User, error) 
 	return u, nil
 }
 
-// Get returns the user with the given id, or errs.ErrNotFound.
+// Get returns the user with the given id, or sdk.ErrNotFound.
 func (s *UserStore) Get(ctx context.Context, id string) (user.User, error) {
 	const q = `SELECT ` + userColumns + ` FROM users WHERE id = @id`
 	row, err := queryOne[userRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
@@ -87,7 +87,7 @@ func (s *UserStore) Get(ctx context.Context, id string) (user.User, error) {
 	return row.toDomain(), nil
 }
 
-// GetByEmail returns the user with the given normalized email, or errs.ErrNotFound.
+// GetByEmail returns the user with the given normalized email, or sdk.ErrNotFound.
 func (s *UserStore) GetByEmail(ctx context.Context, email string) (user.User, error) {
 	const q = `SELECT ` + userColumns + ` FROM users WHERE email = @email`
 	row, err := queryOne[userRow](ctx, s.db, q, pgx.NamedArgs{"email": email})
@@ -97,7 +97,7 @@ func (s *UserStore) GetByEmail(ctx context.Context, email string) (user.User, er
 	return row.toDomain(), nil
 }
 
-// Update persists changes to an existing user; missing id → errs.ErrNotFound. It
+// Update persists changes to an existing user; missing id → sdk.ErrNotFound. It
 // leaves id and created_at unchanged.
 func (s *UserStore) Update(ctx context.Context, id string, u user.User) (user.User, error) {
 	const q = `UPDATE users
@@ -114,7 +114,7 @@ func (s *UserStore) Update(ctx context.Context, id string, u user.User) (user.Us
 		return user.User{}, err
 	}
 	if n == 0 {
-		return user.User{}, errs.ErrNotFound
+		return user.User{}, sdk.ErrNotFound
 	}
 	return u, nil
 }

@@ -6,7 +6,7 @@ import (
 	"net/http"
 
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
 
@@ -57,7 +57,7 @@ func (h *MenuHandlers) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	m, err := h.svc.CreateMenu(r.Context(), r.PostForm.Get("name"))
 	if err != nil {
-		if errors.Is(err, errs.ErrInvalidInput) || errors.Is(err, errs.ErrAlreadyExists) {
+		if errors.Is(err, sdk.ErrInvalidInput) || errors.Is(err, sdk.ErrAlreadyExists) {
 			web.Render(r.Context(), w, http.StatusBadRequest, h.views.MenuNew(err.Error()))
 			return
 		}
@@ -92,7 +92,7 @@ func (h *MenuHandlers) AddItem(w http.ResponseWriter, r *http.Request) {
 	_, err := h.svc.AddMenuItem(r.Context(), menuID,
 		r.PostForm.Get("label"), r.PostForm.Get("url"), r.PostForm.Get("parent_id"),
 		atoiOrZero(r.PostForm.Get("position")))
-	if err != nil && !errors.Is(err, errs.ErrInvalidInput) {
+	if err != nil && !errors.Is(err, sdk.ErrInvalidInput) {
 		h.renderError(w, r, err)
 		return
 	}

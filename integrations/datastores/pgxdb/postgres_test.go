@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 
 	jackpgx "github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -22,13 +22,13 @@ func TestMapError(t *testing.T) {
 		want error
 	}{
 		{"nil", nil, nil},
-		{"unique_violation", &pgconn.PgError{Code: "23505"}, errs.ErrAlreadyExists},
-		{"foreign_key_violation", &pgconn.PgError{Code: "23503"}, errs.ErrInvalidReference},
-		{"check_violation", &pgconn.PgError{Code: "23514"}, errs.ErrInvalidInput},
-		{"not_null_violation", &pgconn.PgError{Code: "23502"}, errs.ErrInvalidInput},
-		{"no_rows", jackpgx.ErrNoRows, errs.ErrNotFound},
-		{"wrapped_unique", fmt.Errorf("insert: %w", &pgconn.PgError{Code: "23505"}), errs.ErrAlreadyExists},
-		{"wrapped_no_rows", fmt.Errorf("scan: %w", jackpgx.ErrNoRows), errs.ErrNotFound},
+		{"unique_violation", &pgconn.PgError{Code: "23505"}, sdk.ErrAlreadyExists},
+		{"foreign_key_violation", &pgconn.PgError{Code: "23503"}, sdk.ErrInvalidReference},
+		{"check_violation", &pgconn.PgError{Code: "23514"}, sdk.ErrInvalidInput},
+		{"not_null_violation", &pgconn.PgError{Code: "23502"}, sdk.ErrInvalidInput},
+		{"no_rows", jackpgx.ErrNoRows, sdk.ErrNotFound},
+		{"wrapped_unique", fmt.Errorf("insert: %w", &pgconn.PgError{Code: "23505"}), sdk.ErrAlreadyExists},
+		{"wrapped_no_rows", fmt.Errorf("scan: %w", jackpgx.ErrNoRows), sdk.ErrNotFound},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -57,7 +57,7 @@ func TestMapError_Passthrough(t *testing.T) {
 	if got := MapError(other); !errors.Is(got, other) {
 		t.Fatalf("MapError(unknown code) = %v, want the original error", got)
 	}
-	if errs.IsExpected(MapError(other)) {
+	if sdk.IsExpected(MapError(other)) {
 		t.Fatal("unknown SQLSTATE should not map to a domain sentinel")
 	}
 }

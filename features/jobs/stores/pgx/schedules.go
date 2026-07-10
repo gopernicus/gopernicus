@@ -10,8 +10,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/jobs/domain/schedule"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // scheduleColumns is the job_schedules column list, in Ensure's INSERT order.
@@ -108,7 +108,7 @@ func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Ti
 			}
 			out = existing
 			return nil
-		case errors.Is(err, errs.ErrNotFound):
+		case errors.Is(err, sdk.ErrNotFound):
 			sch := schedule.Schedule{
 				ID:        newID("sched"),
 				Name:      in.Name,
@@ -198,13 +198,13 @@ func (s *Schedules) ClaimDue(ctx context.Context, id string, prevNextRunAt, newN
 }
 
 // SetLastJob records the id of the job fired for the most recent slot. A missing
-// id yields errs.ErrNotFound.
+// id yields sdk.ErrNotFound.
 func (s *Schedules) SetLastJob(ctx context.Context, id, jobID string, now time.Time) error {
 	const q = `UPDATE job_schedules SET last_job_id = @last_job_id, updated_at = @updated_at WHERE schedule_id = @id`
 	return s.execAffecting(ctx, q, pgx.NamedArgs{"last_job_id": jobID, "updated_at": now.UTC(), "id": id})
 }
 
-// Get returns the schedule with the given id, or errs.ErrNotFound.
+// Get returns the schedule with the given id, or sdk.ErrNotFound.
 func (s *Schedules) Get(ctx context.Context, id string) (schedule.Schedule, error) {
 	const q = `SELECT ` + scheduleRowColumns + ` FROM job_schedules WHERE schedule_id = @id`
 	row, err := queryOne[scheduleRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
@@ -233,27 +233,27 @@ func (s *Schedules) List(ctx context.Context, req crud.ListRequest) (crud.Page[s
 }
 
 // SetEnabled toggles a schedule's enabled flag. A missing id yields
-// errs.ErrNotFound.
+// sdk.ErrNotFound.
 func (s *Schedules) SetEnabled(ctx context.Context, id string, enabled bool, now time.Time) error {
 	const q = `UPDATE job_schedules SET enabled = @enabled, updated_at = @updated_at WHERE schedule_id = @id`
 	return s.execAffecting(ctx, q, pgx.NamedArgs{"enabled": enabled, "updated_at": now.UTC(), "id": id})
 }
 
-// Delete removes a schedule; a missing id yields errs.ErrNotFound.
+// Delete removes a schedule; a missing id yields sdk.ErrNotFound.
 func (s *Schedules) Delete(ctx context.Context, id string) error {
 	const q = `DELETE FROM job_schedules WHERE schedule_id = @id`
 	return s.execAffecting(ctx, q, pgx.NamedArgs{"id": id})
 }
 
 // execAffecting runs a write that must touch exactly one row, mapping zero rows
-// affected to errs.ErrNotFound. Driver errors are already mapped by the connector.
+// affected to sdk.ErrNotFound. Driver errors are already mapped by the connector.
 func (s *Schedules) execAffecting(ctx context.Context, query string, args pgx.NamedArgs) error {
 	n, err := pgxdb.ExecAffecting(ctx, s.db, query, args)
 	if err != nil {
 		return err
 	}
 	if n == 0 {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	return nil
 }

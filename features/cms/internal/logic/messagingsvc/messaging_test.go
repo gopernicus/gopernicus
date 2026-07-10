@@ -8,9 +8,9 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/email"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 type fakeInquiries struct{ items []messaging.Inquiry }
@@ -83,7 +83,7 @@ func TestSubmit_Validation(t *testing.T) {
 		{"A", "not-an-email", "m"},
 		{"A", "a@b.com", ""},
 	} {
-		if _, err := svc.Submit(ctx, tc.name, tc.email, tc.msg); !errors.Is(err, errs.ErrInvalidInput) {
+		if _, err := svc.Submit(ctx, tc.name, tc.email, tc.msg); !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Errorf("expected ErrInvalidInput for %+v, got %v", tc, err)
 		}
 	}

@@ -11,9 +11,9 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/apikey"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/serviceaccount"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/identity"
 )
 
@@ -53,7 +53,7 @@ func (s *Service) MachineEnabled() bool {
 }
 
 // CreateServiceAccount persists a new machine identity created by createdBy. An
-// act-as-user account requires a non-empty ownerUserID (errs.ErrInvalidInput
+// act-as-user account requires a non-empty ownerUserID (sdk.ErrInvalidInput
 // from construction).
 func (s *Service) CreateServiceAccount(ctx context.Context, createdBy, name, description string, actAsUser bool, ownerUserID string) (serviceaccount.ServiceAccount, error) {
 	sa, err := serviceaccount.New(s.ids, name, description, createdBy, actAsUser, ownerUserID, s.now())
@@ -72,7 +72,7 @@ func (s *Service) ListServiceAccounts(ctx context.Context, req crud.ListRequest)
 // MintAPIKey generates a fresh key for serviceAccountID, persists only its
 // SHA-256 hash, and returns the created record alongside the plaintext key —
 // which is shown exactly once and never recoverable afterward. A zero expiresAt
-// means the key never expires. An unknown service account → errs.ErrNotFound.
+// means the key never expires. An unknown service account → sdk.ErrNotFound.
 func (s *Service) MintAPIKey(ctx context.Context, serviceAccountID, name string, expiresAt time.Time) (apikey.APIKey, string, error) {
 	if _, err := s.serviceAccounts.Get(ctx, serviceAccountID); err != nil {
 		return apikey.APIKey{}, "", err
@@ -100,7 +100,7 @@ func (s *Service) ListAPIKeys(ctx context.Context, serviceAccountID string, req 
 }
 
 // RevokeAPIKey marks the key revoked as of now. An unknown key →
-// errs.ErrNotFound.
+// sdk.ErrNotFound.
 func (s *Service) RevokeAPIKey(ctx context.Context, keyID string) error {
 	return s.apiKeys.Revoke(ctx, keyID, s.now())
 }
@@ -118,7 +118,7 @@ func (s *Service) RevokeAPIKey(ctx context.Context, keyID string) error {
 //     the service account itself), record an apikey_auth `success` event, and
 //     best-effort touch LastUsedAt.
 //
-// Every deny returns the same generic errs.ErrUnauthorized so the response
+// Every deny returns the same generic sdk.ErrUnauthorized so the response
 // cannot distinguish unknown / revoked / expired. TouchLastUsed failures never
 // fail authentication. The audit rows carry the key PREFIX only, never the raw
 // key (design §5.1 WI3).
@@ -133,7 +133,7 @@ func (s *Service) AuthenticateAPIKey(ctx context.Context, rawKey string) (Princi
 	}
 	key, err := s.apiKeys.GetByHash(ctx, hashed)
 	if err != nil {
-		if errors.Is(err, errs.ErrNotFound) {
+		if errors.Is(err, sdk.ErrNotFound) {
 			return Principal{}, invalidAPIKey()
 		}
 		return Principal{}, err
@@ -297,7 +297,7 @@ func mintAPIKeySecret() (prefix, raw string) {
 // invalidAPIKey is the single generic error every API-key denial returns, so the
 // response cannot distinguish unknown / revoked / expired.
 func invalidAPIKey() error {
-	return fmt.Errorf("invalid api key: %w", errs.ErrUnauthorized)
+	return fmt.Errorf("invalid api key: %w", sdk.ErrUnauthorized)
 }
 
 // bearerToken extracts the token from an `Authorization: Bearer <token>` header.

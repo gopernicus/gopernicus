@@ -9,8 +9,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // fakeMenus is an in-memory MenuRepository.
@@ -26,7 +26,7 @@ func newFakeMenus() *fakeMenus {
 func (f *fakeMenus) CreateMenu(ctx context.Context, m menus.Menu) (menus.Menu, error) {
 	for _, ex := range f.menus {
 		if ex.Slug == m.Slug {
-			return menus.Menu{}, errs.ErrAlreadyExists
+			return menus.Menu{}, sdk.ErrAlreadyExists
 		}
 	}
 	f.menus[m.ID] = m
@@ -35,7 +35,7 @@ func (f *fakeMenus) CreateMenu(ctx context.Context, m menus.Menu) (menus.Menu, e
 func (f *fakeMenus) GetMenu(ctx context.Context, id string) (menus.Menu, error) {
 	m, ok := f.menus[id]
 	if !ok {
-		return menus.Menu{}, errs.ErrNotFound
+		return menus.Menu{}, sdk.ErrNotFound
 	}
 	return m, nil
 }
@@ -45,7 +45,7 @@ func (f *fakeMenus) GetMenuBySlug(ctx context.Context, slug string) (menus.Menu,
 			return m, nil
 		}
 	}
-	return menus.Menu{}, errs.ErrNotFound
+	return menus.Menu{}, sdk.ErrNotFound
 }
 func (f *fakeMenus) ListMenus(ctx context.Context) ([]menus.Menu, error) {
 	var out []menus.Menu
@@ -77,13 +77,13 @@ func (f *fakeMenus) AddItem(ctx context.Context, item menus.MenuItem) (menus.Men
 func (f *fakeMenus) GetItem(ctx context.Context, id string) (menus.MenuItem, error) {
 	it, ok := f.items[id]
 	if !ok {
-		return menus.MenuItem{}, errs.ErrNotFound
+		return menus.MenuItem{}, sdk.ErrNotFound
 	}
 	return it, nil
 }
 func (f *fakeMenus) UpdateItem(ctx context.Context, id string, item menus.MenuItem) (menus.MenuItem, error) {
 	if _, ok := f.items[id]; !ok {
-		return menus.MenuItem{}, errs.ErrNotFound
+		return menus.MenuItem{}, sdk.ErrNotFound
 	}
 	f.items[id] = item
 	return item, nil
@@ -151,17 +151,17 @@ func TestService_MenuErrors(t *testing.T) {
 	ctx := context.Background()
 	svc := NewService(newFakeMenus(), cryptids.IDGenerator{}, clock(time.Now()))
 
-	if _, err := svc.CreateMenu(ctx, "  "); !errors.Is(err, errs.ErrInvalidInput) {
+	if _, err := svc.CreateMenu(ctx, "  "); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("blank name: %v", err)
 	}
 	m, _ := svc.CreateMenu(ctx, "Footer")
-	if _, err := svc.CreateMenu(ctx, "Footer"); !errors.Is(err, errs.ErrAlreadyExists) {
+	if _, err := svc.CreateMenu(ctx, "Footer"); !errors.Is(err, sdk.ErrAlreadyExists) {
 		t.Errorf("dup slug: %v", err)
 	}
-	if _, err := svc.AddMenuItem(ctx, m.ID, "  ", "/x", "", 0); !errors.Is(err, errs.ErrInvalidInput) {
+	if _, err := svc.AddMenuItem(ctx, m.ID, "  ", "/x", "", 0); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("blank label: %v", err)
 	}
-	if _, err := svc.GetMenuItem(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := svc.GetMenuItem(ctx, "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("missing item: %v", err)
 	}
 }

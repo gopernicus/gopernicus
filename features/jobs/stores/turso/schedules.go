@@ -9,8 +9,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/jobs/domain/schedule"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // scheduleColumns is the job_schedules projection, in scheduleRow's field order.
@@ -96,7 +96,7 @@ func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Ti
 				}
 				out = existing
 				return nil
-			case errors.Is(err, errs.ErrNotFound):
+			case errors.Is(err, sdk.ErrNotFound):
 				sch := schedule.Schedule{
 					ID:        newID("sched"),
 					Name:      in.Name,
@@ -174,13 +174,13 @@ func (s *Schedules) ClaimDue(ctx context.Context, id string, prevNextRunAt, newN
 }
 
 // SetLastJob records the id of the job fired for the most recent slot. A missing
-// id yields errs.ErrNotFound.
+// id yields sdk.ErrNotFound.
 func (s *Schedules) SetLastJob(ctx context.Context, id, jobID string, now time.Time) error {
 	const q = `UPDATE job_schedules SET last_job_id = ?, updated_at = ? WHERE schedule_id = ?`
 	return s.execAffecting(ctx, q, jobID, tursodb.FormatTime(now.UTC()), id)
 }
 
-// Get returns the schedule with the given id, or errs.ErrNotFound.
+// Get returns the schedule with the given id, or sdk.ErrNotFound.
 func (s *Schedules) Get(ctx context.Context, id string) (schedule.Schedule, error) {
 	const q = `SELECT ` + scheduleColumns + ` FROM job_schedules WHERE schedule_id = ?`
 	row, err := queryOne[scheduleRow](ctx, s.db, q, id)
@@ -209,20 +209,20 @@ func (s *Schedules) List(ctx context.Context, req crud.ListRequest) (crud.Page[s
 }
 
 // SetEnabled toggles a schedule's enabled flag. A missing id yields
-// errs.ErrNotFound.
+// sdk.ErrNotFound.
 func (s *Schedules) SetEnabled(ctx context.Context, id string, enabled bool, now time.Time) error {
 	const q = `UPDATE job_schedules SET enabled = ?, updated_at = ? WHERE schedule_id = ?`
 	return s.execAffecting(ctx, q, tursodb.BoolToInt(enabled), tursodb.FormatTime(now.UTC()), id)
 }
 
-// Delete removes a schedule; a missing id yields errs.ErrNotFound.
+// Delete removes a schedule; a missing id yields sdk.ErrNotFound.
 func (s *Schedules) Delete(ctx context.Context, id string) error {
 	const q = `DELETE FROM job_schedules WHERE schedule_id = ?`
 	return s.execAffecting(ctx, q, id)
 }
 
 // execAffecting runs a write that must touch exactly one row, mapping zero rows
-// affected to errs.ErrNotFound and retrying transient busy errors.
+// affected to sdk.ErrNotFound and retrying transient busy errors.
 func (s *Schedules) execAffecting(ctx context.Context, query string, args ...any) error {
 	return retryBusy(ctx, func() error {
 		n, err := tursodb.ExecAffecting(ctx, s.db, query, args...)
@@ -230,7 +230,7 @@ func (s *Schedules) execAffecting(ctx context.Context, query string, args ...any
 			return err
 		}
 		if n == 0 {
-			return errs.ErrNotFound
+			return sdk.ErrNotFound
 		}
 		return nil
 	})

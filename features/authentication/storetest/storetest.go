@@ -37,9 +37,9 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/identity"
 )
 
@@ -281,14 +281,14 @@ func testUsersAbsent(t *testing.T, repos auth.Repositories) {
 	ctx := context.Background()
 	repo := repos.Users
 
-	if _, err := repo.Get(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.Get(ctx, "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Get(absent): err=%v, want ErrNotFound", err)
 	}
-	if _, err := repo.GetByEmail(ctx, "ghost@example.com"); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.GetByEmail(ctx, "ghost@example.com"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("GetByEmail(absent): err=%v, want ErrNotFound", err)
 	}
 	absent, _ := user.NewUser(ids, "ghost@example.com", "Ghost", suiteBase)
-	if _, err := repo.Update(ctx, "nope", absent); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.Update(ctx, "nope", absent); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Update(absent): err=%v, want ErrNotFound", err)
 	}
 }
@@ -303,7 +303,7 @@ func testUsersEmailUniqueness(t *testing.T, repos auth.Repositories) {
 	}
 	// Same address in a different case normalizes to the same email → collision.
 	b, _ := user.NewUser(ids, "DUP@example.com", "Second", suiteBase)
-	if _, err := repo.Create(ctx, b); !errors.Is(err, errs.ErrAlreadyExists) {
+	if _, err := repo.Create(ctx, b); !errors.Is(err, sdk.ErrAlreadyExists) {
 		t.Errorf("Create colliding email: err=%v, want ErrAlreadyExists", err)
 	}
 	other, _ := user.NewUser(ids, "other@example.com", "Other", suiteBase)
@@ -337,7 +337,7 @@ func testPasswords(t *testing.T, repos auth.Repositories) {
 
 func testPasswordsAbsent(t *testing.T, repos auth.Repositories) {
 	ctx := context.Background()
-	if _, err := repos.Passwords.Get(ctx, "nobody"); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repos.Passwords.Get(ctx, "nobody"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Get(absent): err=%v, want ErrNotFound", err)
 	}
 }
@@ -359,7 +359,7 @@ func testSessionsCRUD(t *testing.T, repos auth.Repositories) {
 	if err := repo.Delete(ctx, sess.Token); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err := repo.Get(ctx, sess.Token); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.Get(ctx, sess.Token); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Get after Delete: err=%v, want ErrNotFound", err)
 	}
 }
@@ -367,10 +367,10 @@ func testSessionsCRUD(t *testing.T, repos auth.Repositories) {
 func testSessionsAbsent(t *testing.T, repos auth.Repositories) {
 	ctx := context.Background()
 	repo := repos.Sessions
-	if _, err := repo.Get(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.Get(ctx, "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Get(absent): err=%v, want ErrNotFound", err)
 	}
-	if err := repo.Delete(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if err := repo.Delete(ctx, "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Delete(absent): err=%v, want ErrNotFound", err)
 	}
 }
@@ -384,7 +384,7 @@ func testSessionsExpired(t *testing.T, repos auth.Repositories) {
 	if _, err := repo.Create(ctx, sess); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := repo.Get(ctx, sess.Token); !errors.Is(err, errs.ErrExpired) {
+	if _, err := repo.Get(ctx, sess.Token); !errors.Is(err, sdk.ErrExpired) {
 		t.Errorf("Get(expired): err=%v, want ErrExpired", err)
 	}
 }
@@ -409,7 +409,7 @@ func testSessionsDeleteByUser(t *testing.T, repos auth.Repositories) {
 		t.Fatalf("DeleteByUser(userA): %v", err)
 	}
 	for _, tok := range []string{a1.Token, a2.Token} {
-		if _, err := repo.Get(ctx, tok); !errors.Is(err, errs.ErrNotFound) {
+		if _, err := repo.Get(ctx, tok); !errors.Is(err, sdk.ErrNotFound) {
 			t.Errorf("Get(userA session after DeleteByUser): err=%v, want ErrNotFound", err)
 		}
 	}
@@ -440,7 +440,7 @@ func testCodesCRUD(t *testing.T, repos auth.Repositories) {
 	if err := repo.Delete(ctx, code.Code); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err := repo.Get(ctx, code.Code); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.Get(ctx, code.Code); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Get after Delete: err=%v, want ErrNotFound", err)
 	}
 }
@@ -448,10 +448,10 @@ func testCodesCRUD(t *testing.T, repos auth.Repositories) {
 func testCodesAbsent(t *testing.T, repos auth.Repositories) {
 	ctx := context.Background()
 	repo := repos.VerificationCodes
-	if _, err := repo.Get(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.Get(ctx, "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Get(absent): err=%v, want ErrNotFound", err)
 	}
-	if err := repo.Delete(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if err := repo.Delete(ctx, "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Delete(absent): err=%v, want ErrNotFound", err)
 	}
 }
@@ -464,7 +464,7 @@ func testCodesExpired(t *testing.T, repos auth.Repositories) {
 	if _, err := repo.Create(ctx, code); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := repo.Get(ctx, code.Code); !errors.Is(err, errs.ErrExpired) {
+	if _, err := repo.Get(ctx, code.Code); !errors.Is(err, sdk.ErrExpired) {
 		t.Errorf("Get(expired): err=%v, want ErrExpired", err)
 	}
 }
@@ -486,7 +486,7 @@ func testTokensCRUD(t *testing.T, repos auth.Repositories) {
 	if err := repo.Delete(ctx, tok.Token); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err := repo.Get(ctx, tok.Token); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.Get(ctx, tok.Token); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Get after Delete: err=%v, want ErrNotFound", err)
 	}
 }
@@ -494,10 +494,10 @@ func testTokensCRUD(t *testing.T, repos auth.Repositories) {
 func testTokensAbsent(t *testing.T, repos auth.Repositories) {
 	ctx := context.Background()
 	repo := repos.VerificationTokens
-	if _, err := repo.Get(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.Get(ctx, "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Get(absent): err=%v, want ErrNotFound", err)
 	}
-	if err := repo.Delete(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if err := repo.Delete(ctx, "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Delete(absent): err=%v, want ErrNotFound", err)
 	}
 }
@@ -510,7 +510,7 @@ func testTokensExpired(t *testing.T, repos auth.Repositories) {
 	if _, err := repo.Create(ctx, tok); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := repo.Get(ctx, tok.Token); !errors.Is(err, errs.ErrExpired) {
+	if _, err := repo.Get(ctx, tok.Token); !errors.Is(err, sdk.ErrExpired) {
 		t.Errorf("Get(expired): err=%v, want ErrExpired", err)
 	}
 }
@@ -549,7 +549,7 @@ func testOAuthAccountsCRUD(t *testing.T, repos auth.Repositories) {
 	if err := repo.Delete(ctx, "user1", "google"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err := repo.GetByProvider(ctx, "google", "google-123"); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.GetByProvider(ctx, "google", "google-123"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("GetByProvider after Delete: err=%v, want ErrNotFound", err)
 	}
 }
@@ -564,7 +564,7 @@ func testOAuthAccountsUniqueness(t *testing.T, repos auth.Repositories) {
 	}
 	// The SAME provider identity claimed by a different user → collision.
 	b, _ := oauthaccount.New("user2", "google", "dup-123", suiteBase)
-	if _, err := repo.Create(ctx, b); !errors.Is(err, errs.ErrAlreadyExists) {
+	if _, err := repo.Create(ctx, b); !errors.Is(err, sdk.ErrAlreadyExists) {
 		t.Errorf("Create colliding (provider, provider_user_id): err=%v, want ErrAlreadyExists", err)
 	}
 	// A distinct provider identity is fine.
@@ -576,7 +576,7 @@ func testOAuthAccountsUniqueness(t *testing.T, repos auth.Repositories) {
 
 func testOAuthAccountsAbsent(t *testing.T, repos auth.Repositories) {
 	ctx := context.Background()
-	if _, err := repos.OAuthAccounts.GetByProvider(ctx, "google", "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repos.OAuthAccounts.GetByProvider(ctx, "google", "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("GetByProvider(absent): err=%v, want ErrNotFound", err)
 	}
 }
@@ -626,7 +626,7 @@ func testOAuthAccountsListByUser(t *testing.T, repos auth.Repositories) {
 
 func testOAuthAccountsDeleteAbsent(t *testing.T, repos auth.Repositories) {
 	ctx := context.Background()
-	if err := repos.OAuthAccounts.Delete(ctx, "nobody", "google"); !errors.Is(err, errs.ErrNotFound) {
+	if err := repos.OAuthAccounts.Delete(ctx, "nobody", "google"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Delete(absent): err=%v, want ErrNotFound", err)
 	}
 }
@@ -652,7 +652,7 @@ func testOAuthStatesConsume(t *testing.T, repos auth.Repositories) {
 	}
 
 	// Single-use: a second Consume of the same token → ErrNotFound (it is gone).
-	if _, err := repo.Consume(ctx, st.Token); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.Consume(ctx, st.Token); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("second Consume: err=%v, want ErrNotFound", err)
 	}
 }
@@ -668,18 +668,18 @@ func testOAuthStatesExpired(t *testing.T, repos auth.Repositories) {
 	}
 
 	// Expired Consume deletes the row AND returns ErrExpired.
-	if _, err := repo.Consume(ctx, st.Token); !errors.Is(err, errs.ErrExpired) {
+	if _, err := repo.Consume(ctx, st.Token); !errors.Is(err, sdk.ErrExpired) {
 		t.Errorf("Consume(expired): err=%v, want ErrExpired", err)
 	}
 	// Row is gone (deleted regardless of expiry): a follow-up Consume → ErrNotFound.
-	if _, err := repo.Consume(ctx, st.Token); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.Consume(ctx, st.Token); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Consume after expired-delete: err=%v, want ErrNotFound", err)
 	}
 }
 
 func testOAuthStatesUnknown(t *testing.T, repos auth.Repositories) {
 	ctx := context.Background()
-	if _, err := repos.OAuthStates.Consume(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repos.OAuthStates.Consume(ctx, "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Consume(unknown): err=%v, want ErrNotFound", err)
 	}
 }
@@ -721,7 +721,7 @@ func testServiceAccountsCRUD(t *testing.T, repos auth.Repositories) {
 	if err := repo.Delete(ctx, created.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err := repo.Get(ctx, created.ID); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.Get(ctx, created.ID); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Get after Delete: err=%v, want ErrNotFound", err)
 	}
 }
@@ -730,14 +730,14 @@ func testServiceAccountsAbsent(t *testing.T, repos auth.Repositories) {
 	ctx := context.Background()
 	repo := repos.ServiceAccounts
 
-	if _, err := repo.Get(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.Get(ctx, "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Get(absent): err=%v, want ErrNotFound", err)
 	}
 	absent, _ := serviceaccount.New(ids, "ghost", "", "admin", false, "", suiteBase)
-	if _, err := repo.Update(ctx, "nope", absent); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.Update(ctx, "nope", absent); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Update(absent): err=%v, want ErrNotFound", err)
 	}
-	if err := repo.Delete(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if err := repo.Delete(ctx, "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Delete(absent): err=%v, want ErrNotFound", err)
 	}
 }
@@ -798,7 +798,7 @@ func testServiceAccountsListCollision(t *testing.T, repos auth.Repositories) {
 
 func testAPIKeysGetByHashUnknown(t *testing.T, repos auth.Repositories) {
 	ctx := context.Background()
-	if _, err := repos.APIKeys.GetByHash(ctx, "no-such-hash"); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repos.APIKeys.GetByHash(ctx, "no-such-hash"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("GetByHash(unknown): err=%v, want ErrNotFound", err)
 	}
 }
@@ -875,7 +875,7 @@ func testAPIKeysMintUniqueness(t *testing.T, repos auth.Repositories) {
 
 	// A colliding key_hash is rejected (the store's uniqueness invariant).
 	dup, _ := apikey.New(ids, "sa-1", "dup", "prefix", "hash-a", time.Time{}, suiteBase)
-	if _, err := repo.Create(ctx, dup); !errors.Is(err, errs.ErrAlreadyExists) {
+	if _, err := repo.Create(ctx, dup); !errors.Is(err, sdk.ErrAlreadyExists) {
 		t.Errorf("Create colliding key_hash: err=%v, want ErrAlreadyExists", err)
 	}
 }
@@ -899,14 +899,14 @@ func testAPIKeysTouchLastUsed(t *testing.T, repos auth.Repositories) {
 	if got.LastUsedAt.IsZero() || !got.LastUsedAt.Equal(at) {
 		t.Errorf("LastUsedAt = %v, want %v", got.LastUsedAt, at)
 	}
-	if err := repo.TouchLastUsed(ctx, "nope", at); !errors.Is(err, errs.ErrNotFound) {
+	if err := repo.TouchLastUsed(ctx, "nope", at); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("TouchLastUsed(absent): err=%v, want ErrNotFound", err)
 	}
 }
 
 func testAPIKeysRevokeAbsent(t *testing.T, repos auth.Repositories) {
 	ctx := context.Background()
-	if err := repos.APIKeys.Revoke(ctx, "nope", suiteBase); !errors.Is(err, errs.ErrNotFound) {
+	if err := repos.APIKeys.Revoke(ctx, "nope", suiteBase); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Revoke(absent): err=%v, want ErrNotFound", err)
 	}
 }
@@ -1298,7 +1298,7 @@ func testInvitationsCRUD(t *testing.T, repos auth.Repositories) {
 		t.Fatalf("GetByTokenHash: id=%q err=%v", byHash.ID, err)
 	}
 
-	if _, err := repo.Get(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.Get(ctx, "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Get(absent): err=%v, want ErrNotFound", err)
 	}
 }
@@ -1318,7 +1318,7 @@ func testInvitationsUniqueness(t *testing.T, repos auth.Repositories) {
 	}
 	// Same pending tuple → collision.
 	b := mustNewInvitation(t, "project", "p1", "member", "dup@example.com", "inviter-1", "hash-b", suiteBase)
-	if _, err := repo.Create(ctx, b); !errors.Is(err, errs.ErrAlreadyExists) {
+	if _, err := repo.Create(ctx, b); !errors.Is(err, sdk.ErrAlreadyExists) {
 		t.Errorf("Create colliding pending tuple: err=%v, want ErrAlreadyExists", err)
 	}
 	// A different relation is a different tuple → fine.
@@ -1408,20 +1408,20 @@ func testInvitationsCrossKindCoexistence(t *testing.T, repos auth.Repositories) 
 	if err != nil {
 		t.Fatalf("New(dup): %v", err)
 	}
-	if _, err := repo.Create(ctx, dup); !errors.Is(err, errs.ErrAlreadyExists) {
+	if _, err := repo.Create(ctx, dup); !errors.Is(err, sdk.ErrAlreadyExists) {
 		t.Errorf("Create(dup email tuple): err=%v, want ErrAlreadyExists", err)
 	}
 }
 
 func testInvitationsTokenUnknown(t *testing.T, repos auth.Repositories) {
 	ctx := context.Background()
-	if _, err := repos.Invitations.GetByTokenHash(ctx, "no-such-hash"); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repos.Invitations.GetByTokenHash(ctx, "no-such-hash"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("GetByTokenHash(unknown): err=%v, want ErrNotFound", err)
 	}
 }
 
 // testInvitationsTokenExpired asserts a token-hash read past ExpiresAt surfaces
-// errs.ErrExpired (mirroring the session/verification/oauthstate precedent).
+// sdk.ErrExpired (mirroring the session/verification/oauthstate precedent).
 func testInvitationsTokenExpired(t *testing.T, repos auth.Repositories) {
 	ctx := context.Background()
 	repo := repos.Invitations
@@ -1434,7 +1434,7 @@ func testInvitationsTokenExpired(t *testing.T, repos auth.Repositories) {
 	if _, err := repo.Create(ctx, inv); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := repo.GetByTokenHash(ctx, "hash-expired"); !errors.Is(err, errs.ErrExpired) {
+	if _, err := repo.GetByTokenHash(ctx, "hash-expired"); !errors.Is(err, sdk.ErrExpired) {
 		t.Errorf("GetByTokenHash(expired): err=%v, want ErrExpired", err)
 	}
 }
@@ -1474,7 +1474,7 @@ func testInvitationsStatusTransitions(t *testing.T, repos auth.Repositories) {
 
 func testInvitationsUpdateAbsent(t *testing.T, repos auth.Repositories) {
 	ctx := context.Background()
-	if _, err := repos.Invitations.UpdateStatus(ctx, "nope", invitation.StatusUpdate{Status: invitation.StatusCancelled, UpdatedAt: suiteBase}); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repos.Invitations.UpdateStatus(ctx, "nope", invitation.StatusUpdate{Status: invitation.StatusCancelled, UpdatedAt: suiteBase}); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("UpdateStatus(absent): err=%v, want ErrNotFound", err)
 	}
 }
@@ -1901,10 +1901,10 @@ func runStaleCursorCase[T any](t *testing.T, pc pagedCase[T], created []T) {
 func runCursorOffsetExclusiveCase[T any](t *testing.T, pc pagedCase[T]) {
 	t.Helper()
 	ctx := context.Background()
-	if _, err := pc.list(ctx, crud.ListRequest{Strategy: crud.StrategyCursor, Limit: 2, Offset: 2}); !errors.Is(err, errs.ErrInvalidInput) {
+	if _, err := pc.list(ctx, crud.ListRequest{Strategy: crud.StrategyCursor, Limit: 2, Offset: 2}); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("cursor strategy + offset: err=%v, want ErrInvalidInput", err)
 	}
-	if _, err := pc.list(ctx, crud.ListRequest{Strategy: crud.StrategyOffset, Limit: 2, Cursor: "anything"}); !errors.Is(err, errs.ErrInvalidInput) {
+	if _, err := pc.list(ctx, crud.ListRequest{Strategy: crud.StrategyOffset, Limit: 2, Cursor: "anything"}); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("offset strategy + cursor: err=%v, want ErrInvalidInput", err)
 	}
 }

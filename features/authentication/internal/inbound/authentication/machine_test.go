@@ -8,14 +8,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/apikey"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/serviceaccount"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
+	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
@@ -38,7 +38,7 @@ func (s *memServiceAccounts) Get(_ context.Context, id string) (serviceaccount.S
 	defer s.mu.Unlock()
 	sa, ok := s.m[id]
 	if !ok {
-		return serviceaccount.ServiceAccount{}, errs.ErrNotFound
+		return serviceaccount.ServiceAccount{}, sdk.ErrNotFound
 	}
 	return sa, nil
 }
@@ -55,7 +55,7 @@ func (s *memServiceAccounts) Update(_ context.Context, id string, sa serviceacco
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.m[id]; !ok {
-		return serviceaccount.ServiceAccount{}, errs.ErrNotFound
+		return serviceaccount.ServiceAccount{}, sdk.ErrNotFound
 	}
 	s.m[id] = sa
 	return sa, nil
@@ -64,7 +64,7 @@ func (s *memServiceAccounts) Delete(_ context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.m[id]; !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	delete(s.m, id)
 	return nil
@@ -89,7 +89,7 @@ func (k *memAPIKeys) GetByHash(_ context.Context, hash string) (apikey.APIKey, e
 			return key, nil
 		}
 	}
-	return apikey.APIKey{}, errs.ErrNotFound
+	return apikey.APIKey{}, sdk.ErrNotFound
 }
 func (k *memAPIKeys) ListByServiceAccount(_ context.Context, saID string, _ crud.ListRequest) (crud.Page[apikey.APIKey], error) {
 	k.mu.Lock()
@@ -107,7 +107,7 @@ func (k *memAPIKeys) Revoke(_ context.Context, id string, at time.Time) error {
 	defer k.mu.Unlock()
 	key, ok := k.m[id]
 	if !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	key.RevokedAt = at
 	k.m[id] = key
@@ -118,7 +118,7 @@ func (k *memAPIKeys) TouchLastUsed(_ context.Context, id string, at time.Time) e
 	defer k.mu.Unlock()
 	key, ok := k.m[id]
 	if !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	key.LastUsedAt = at
 	k.m[id] = key

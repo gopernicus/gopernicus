@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/workers"
 )
 
@@ -36,7 +36,7 @@ func (f *fakeQueue) Enqueue(ctx context.Context, in job.Enqueue) (job.Job, error
 		f.seq++
 	}
 	if _, ok := f.jobs[id]; ok {
-		return job.Job{}, fmt.Errorf("duplicate %s: %w", id, errs.ErrAlreadyExists)
+		return job.Job{}, fmt.Errorf("duplicate %s: %w", id, sdk.ErrAlreadyExists)
 	}
 	j := job.Job{
 		JobID:        id,
@@ -58,7 +58,7 @@ func (f *fakeQueue) Fail(ctx context.Context, jobID string, now time.Time, reaso
 	return nil
 }
 func (f *fakeQueue) Get(ctx context.Context, id string) (job.Job, error) {
-	return job.Job{}, errs.ErrNotFound
+	return job.Job{}, sdk.ErrNotFound
 }
 func (f *fakeQueue) List(ctx context.Context, _ job.ListFilter, _ crud.ListRequest) (crud.Page[job.Job], error) {
 	return crud.Page[job.Job]{}, nil
@@ -90,7 +90,7 @@ func TestEnqueueJob_Idempotency(t *testing.T) {
 	}
 
 	_, err = svc.EnqueueJob(context.Background(), job.Enqueue{ID: "dup", Kind: "demo"})
-	if !errors.Is(err, errs.ErrAlreadyExists) {
+	if !errors.Is(err, sdk.ErrAlreadyExists) {
 		t.Fatalf("second enqueue err = %v, want ErrAlreadyExists", err)
 	}
 	// A rejected duplicate must NOT signal the wake (nothing new ran).
@@ -124,7 +124,7 @@ func TestEnqueueJob_KindRequired(t *testing.T) {
 	svc := NewService(q, 3, nil)
 
 	_, err := svc.EnqueueJob(context.Background(), job.Enqueue{Kind: ""})
-	if !errors.Is(err, errs.ErrInvalidInput) {
+	if !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("err = %v, want ErrInvalidInput", err)
 	}
 	if drained(svc.Wake()) {

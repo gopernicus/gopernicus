@@ -61,12 +61,12 @@ type Repository interface {
 	ClaimDue(ctx context.Context, id string, prevNextRunAt, newNextRunAt, now time.Time) (bool, error)
 	// SetLastJob records the id of the job fired for the most recent slot.
 	SetLastJob(ctx context.Context, id, jobID string, now time.Time) error
-	// Get returns the schedule with the given id, or errs.ErrNotFound.
+	// Get returns the schedule with the given id, or sdk.ErrNotFound.
 	Get(ctx context.Context, id string) (Schedule, error)
 	// List returns a cursor-paginated page of schedules.
 	List(ctx context.Context, req crud.ListRequest) (crud.Page[Schedule], error)
 	// SetEnabled toggles a schedule's enabled flag.
 	SetEnabled(ctx context.Context, id string, enabled bool, now time.Time) error
-	// Delete removes a schedule; missing id → errs.ErrNotFound.
+	// Delete removes a schedule; missing id → sdk.ErrNotFound.
 	Delete(ctx context.Context, id string) error
 }

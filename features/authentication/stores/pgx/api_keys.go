@@ -8,14 +8,14 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/apikey"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // APIKeyStore implements apikey.APIKeyRepository over a PostgreSQL database.
 // GetByHash honors the pinned contract (design §4.1): it selects by key_hash ALONE
 // and returns ANY present row — revoked and expired included; NULL expires_at means
-// never-expires; errs.ErrNotFound only for a genuinely-unknown hash. There is NO
+// never-expires; sdk.ErrNotFound only for a genuinely-unknown hash. There is NO
 // expiry filtering in SQL — revocation and expiry are SERVICE-layer branches, so
 // the service can attribute the blocked/failure audit event to the record's
 // service account. ListByServiceAccount is keyset-paginated created_at DESC,
@@ -62,7 +62,7 @@ func (r apiKeyRow) toDomain() apikey.APIKey {
 	}
 }
 
-// Create persists a new key; a colliding key_hash → errs.ErrAlreadyExists.
+// Create persists a new key; a colliding key_hash → sdk.ErrAlreadyExists.
 func (s *APIKeyStore) Create(ctx context.Context, k apikey.APIKey) (apikey.APIKey, error) {
 	args := pgx.NamedArgs{
 		"service_account_id": k.ServiceAccountID,
@@ -95,7 +95,7 @@ func (s *APIKeyStore) Create(ctx context.Context, k apikey.APIKey) (apikey.APIKe
 }
 
 // GetByHash returns the key for keyHash regardless of revocation/expiry; unknown
-// hash → errs.ErrNotFound. No expiry filter (the pinned contract).
+// hash → sdk.ErrNotFound. No expiry filter (the pinned contract).
 func (s *APIKeyStore) GetByHash(ctx context.Context, keyHash string) (apikey.APIKey, error) {
 	const q = `SELECT ` + apiKeyColumns + ` FROM api_keys WHERE key_hash = @key_hash`
 	row, err := queryOne[apiKeyRow](ctx, s.db, q, pgx.NamedArgs{"key_hash": keyHash})
@@ -124,7 +124,7 @@ func (s *APIKeyStore) ListByServiceAccount(ctx context.Context, serviceAccountID
 	return crud.MapPage(page, apiKeyRow.toDomain), nil
 }
 
-// Revoke marks the key revoked as of revokedAt; unknown id → errs.ErrNotFound.
+// Revoke marks the key revoked as of revokedAt; unknown id → sdk.ErrNotFound.
 func (s *APIKeyStore) Revoke(ctx context.Context, id string, revokedAt time.Time) error {
 	n, err := pgxdb.ExecAffecting(ctx, s.db, "UPDATE api_keys SET revoked_at = @revoked_at WHERE id = @id", pgx.NamedArgs{
 		"revoked_at": revokedAt.UTC(),
@@ -134,13 +134,13 @@ func (s *APIKeyStore) Revoke(ctx context.Context, id string, revokedAt time.Time
 		return err
 	}
 	if n == 0 {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	return nil
 }
 
 // TouchLastUsed records that the key authenticated at usedAt; unknown id →
-// errs.ErrNotFound. It is a plain UPDATE (callers treat it as best-effort).
+// sdk.ErrNotFound. It is a plain UPDATE (callers treat it as best-effort).
 func (s *APIKeyStore) TouchLastUsed(ctx context.Context, id string, usedAt time.Time) error {
 	n, err := pgxdb.ExecAffecting(ctx, s.db, "UPDATE api_keys SET last_used_at = @last_used_at WHERE id = @id", pgx.NamedArgs{
 		"last_used_at": usedAt.UTC(),
@@ -150,7 +150,7 @@ func (s *APIKeyStore) TouchLastUsed(ctx context.Context, id string, usedAt time.
 		return err
 	}
 	if n == 0 {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	return nil
 }

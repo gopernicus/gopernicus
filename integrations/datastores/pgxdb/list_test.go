@@ -9,8 +9,8 @@ import (
 	jackpgx "github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // errCapture short-circuits a capture Querier right after it hands the
@@ -166,7 +166,7 @@ func TestList_StaleCursorIsFirstPage(t *testing.T) {
 func TestList_ValidateRejectsBadRequest(t *testing.T) {
 	cq := &listCapture{}
 	_, err := List(context.Background(), cq, newListQuery(), crud.ListRequest{Limit: 2, Cursor: "x", Offset: 3})
-	if !errors.Is(err, errs.ErrInvalidInput) {
+	if !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("err = %v, want ErrInvalidInput", err)
 	}
 	if cq.query != "" {
@@ -180,7 +180,7 @@ func TestList_UnknownOrderRejected(t *testing.T) {
 	cq := &listCapture{}
 	req := crud.ListRequest{Limit: 2, Order: crud.NewOrder("password", crud.ASC)}
 	_, err := List(context.Background(), cq, newListQuery(), req)
-	if !errors.Is(err, errs.ErrInvalidInput) {
+	if !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("err = %v, want ErrInvalidInput", err)
 	}
 	if cq.query != "" {

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
 
@@ -54,7 +54,7 @@ func (r *Registry) Register(ct ContentType) error {
 		return err
 	}
 	if _, dup := r.types[ct.Slug]; dup {
-		return fmt.Errorf("content type %q already registered: %w", ct.Slug, errs.ErrAlreadyExists)
+		return fmt.Errorf("content type %q already registered: %w", ct.Slug, sdk.ErrAlreadyExists)
 	}
 	r.types[ct.Slug] = ct
 	r.order = append(r.order, ct.Slug)
@@ -67,16 +67,16 @@ func (r *Registry) Register(ct ContentType) error {
 func (r *Registry) RegisterTemplate(typeSlug, template string, fn TemplateFunc) error {
 	ct, ok := r.types[typeSlug]
 	if !ok {
-		return fmt.Errorf("content type %q not registered: %w", typeSlug, errs.ErrNotFound)
+		return fmt.Errorf("content type %q not registered: %w", typeSlug, sdk.ErrNotFound)
 	}
 	if fn == nil {
-		return fmt.Errorf("template func for %q/%q is nil: %w", typeSlug, template, errs.ErrInvalidInput)
+		return fmt.Errorf("template func for %q/%q is nil: %w", typeSlug, template, sdk.ErrInvalidInput)
 	}
 	if template == "" {
 		template = ct.DefaultTemplate()
 	}
 	if !ct.SupportsTemplate(template) {
-		return fmt.Errorf("content type %q does not declare template %q: %w", typeSlug, template, errs.ErrInvalidInput)
+		return fmt.Errorf("content type %q does not declare template %q: %w", typeSlug, template, sdk.ErrInvalidInput)
 	}
 	r.templates[typeSlug+templateSep+template] = fn
 	return nil
@@ -117,16 +117,16 @@ func (r *Registry) Render(e Entry) (web.Renderer, bool) {
 // coerced/trimmed to canonical form. It enforces required fields and per-kind
 // parseability (number, bool, date). Relation/image existence is NOT checked
 // here — that needs the store and is verified by the service. Unknown keys and
-// invalid values wrap errs.ErrInvalidInput.
+// invalid values wrap sdk.ErrInvalidInput.
 func (r *Registry) ValidateFields(typeSlug string, in Fields) (Fields, error) {
 	ct, ok := r.types[typeSlug]
 	if !ok {
-		return nil, fmt.Errorf("content type %q not registered: %w", typeSlug, errs.ErrNotFound)
+		return nil, fmt.Errorf("content type %q not registered: %w", typeSlug, sdk.ErrNotFound)
 	}
 
 	for key := range in {
 		if _, declared := ct.Field(key); !declared {
-			return nil, fmt.Errorf("content type %q has no field %q: %w", typeSlug, key, errs.ErrInvalidInput)
+			return nil, fmt.Errorf("content type %q has no field %q: %w", typeSlug, key, sdk.ErrInvalidInput)
 		}
 	}
 
@@ -135,7 +135,7 @@ func (r *Registry) ValidateFields(typeSlug string, in Fields) (Fields, error) {
 		raw := strings.TrimSpace(in[def.Key].Raw)
 		if raw == "" {
 			if def.Required {
-				return nil, fmt.Errorf("field %q is required: %w", def.Key, errs.ErrInvalidInput)
+				return nil, fmt.Errorf("field %q is required: %w", def.Key, sdk.ErrInvalidInput)
 			}
 			continue
 		}
@@ -153,24 +153,24 @@ func coerce(def FieldDef, raw string) (string, error) {
 	switch def.Kind {
 	case KindNumber:
 		if _, err := strconv.ParseFloat(raw, 64); err != nil {
-			return "", fmt.Errorf("field %q must be a number: %w", def.Key, errs.ErrInvalidInput)
+			return "", fmt.Errorf("field %q must be a number: %w", def.Key, sdk.ErrInvalidInput)
 		}
 	case KindBool:
 		switch raw {
 		case "true", "false":
 		default:
-			return "", fmt.Errorf("field %q must be true or false: %w", def.Key, errs.ErrInvalidInput)
+			return "", fmt.Errorf("field %q must be true or false: %w", def.Key, sdk.ErrInvalidInput)
 		}
 	case KindDate:
 		t, err := time.Parse(time.RFC3339, raw)
 		if err != nil {
-			return "", fmt.Errorf("field %q must be an RFC3339 date: %w", def.Key, errs.ErrInvalidInput)
+			return "", fmt.Errorf("field %q must be an RFC3339 date: %w", def.Key, sdk.ErrInvalidInput)
 		}
 		return t.UTC().Format(time.RFC3339), nil
 	case KindText, KindRichText, KindImage, KindRelation:
 		// stored as-is (asset ID / entry ID / text)
 	default:
-		return "", fmt.Errorf("field %q has invalid kind %q: %w", def.Key, def.Kind, errs.ErrInvalidInput)
+		return "", fmt.Errorf("field %q has invalid kind %q: %w", def.Key, def.Kind, sdk.ErrInvalidInput)
 	}
 	return raw, nil
 }

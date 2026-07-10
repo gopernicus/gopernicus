@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // fakeResolver is a tiny in-test Resolver: it returns the Info registered for a
@@ -19,7 +19,7 @@ type fakeResolver struct {
 func (f fakeResolver) Resolve(_ context.Context, p Principal) (Info, error) {
 	info, ok := f.infos[p]
 	if !ok {
-		return Info{}, fmt.Errorf("identity: resolve %s/%s: %w", p.Type, p.ID, errs.ErrNotFound)
+		return Info{}, fmt.Errorf("identity: resolve %s/%s: %w", p.Type, p.ID, sdk.ErrNotFound)
 	}
 	return info, nil
 }
@@ -111,8 +111,8 @@ func TestResolveAll_StrictAbortOnFirstError(t *testing.T) {
 	if err == nil {
 		t.Fatal("ResolveAll() err = nil, want the not-found class")
 	}
-	if !errors.Is(err, errs.ErrNotFound) {
-		t.Errorf("ResolveAll() err = %v, want errors.Is errs.ErrNotFound", err)
+	if !errors.Is(err, sdk.ErrNotFound) {
+		t.Errorf("ResolveAll() err = %v, want errors.Is sdk.ErrNotFound", err)
 	}
 	if got != nil {
 		t.Errorf("ResolveAll() = %+v, want nil on strict abort", got)

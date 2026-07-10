@@ -2,7 +2,7 @@
 // Delete happy path plus the sdk/errs sentinel contract each port's doc
 // comment promises, including the uniqueness rules the turso store enforces
 // in SQL (features/cms/stores/turso/migrations) — entry (type,slug), term
-// (kind,slug), and menu slug collisions all return errs.ErrAlreadyExists.
+// (kind,slug), and menu slug collisions all return sdk.ErrAlreadyExists.
 //
 // Copied verbatim from examples/minimal/internal/memstore alongside the store
 // it exercises (see memstore.go's copy note).
@@ -21,7 +21,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
 	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
 	"github.com/gopernicus/gopernicus/features/cms/storetest"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 var now = time.Date(2026, 6, 22, 0, 0, 0, 0, time.UTC)
@@ -69,22 +69,22 @@ func TestEntryRepo_CreateGetListDelete(t *testing.T) {
 	if err := repos.Entries.Delete(ctx, created.ID); err != nil {
 		t.Fatalf("Delete() error = %v", err)
 	}
-	if _, err := repos.Entries.Get(ctx, created.ID); !errors.Is(err, errs.ErrNotFound) {
-		t.Errorf("Get() after Delete() error = %v, want errs.ErrNotFound", err)
+	if _, err := repos.Entries.Get(ctx, created.ID); !errors.Is(err, sdk.ErrNotFound) {
+		t.Errorf("Get() after Delete() error = %v, want sdk.ErrNotFound", err)
 	}
 }
 
 func TestEntryRepo_GetUnknown(t *testing.T) {
 	repos := New().Repositories()
-	if _, err := repos.Entries.Get(context.Background(), "does-not-exist"); !errors.Is(err, errs.ErrNotFound) {
-		t.Errorf("Get(unknown) error = %v, want errs.ErrNotFound", err)
+	if _, err := repos.Entries.Get(context.Background(), "does-not-exist"); !errors.Is(err, sdk.ErrNotFound) {
+		t.Errorf("Get(unknown) error = %v, want sdk.ErrNotFound", err)
 	}
 }
 
 func TestEntryRepo_DeleteUnknown(t *testing.T) {
 	repos := New().Repositories()
-	if err := repos.Entries.Delete(context.Background(), "does-not-exist"); !errors.Is(err, errs.ErrNotFound) {
-		t.Errorf("Delete(unknown) error = %v, want errs.ErrNotFound (documented in content.EntryRepository)", err)
+	if err := repos.Entries.Delete(context.Background(), "does-not-exist"); !errors.Is(err, sdk.ErrNotFound) {
+		t.Errorf("Delete(unknown) error = %v, want sdk.ErrNotFound (documented in content.EntryRepository)", err)
 	}
 }
 
@@ -101,8 +101,8 @@ func TestEntryRepo_DuplicateTypeSlugCollision(t *testing.T) {
 	}
 
 	e2, _ := content.NewEntry(ids, "article", "Same Title", "", "different body", "", content.StatusDraft, "", now)
-	if _, err := repos.Entries.Create(ctx, e2); !errors.Is(err, errs.ErrAlreadyExists) {
-		t.Errorf("second Create() with colliding (type,slug) error = %v, want errs.ErrAlreadyExists", err)
+	if _, err := repos.Entries.Create(ctx, e2); !errors.Is(err, sdk.ErrAlreadyExists) {
+		t.Errorf("second Create() with colliding (type,slug) error = %v, want sdk.ErrAlreadyExists", err)
 	}
 
 	// A different Type with the same slug does not collide (uniqueness is
@@ -147,25 +147,25 @@ func TestTermRepo_CreateGetListDelete(t *testing.T) {
 	if err := repos.Terms.Delete(ctx, created.ID); err != nil {
 		t.Fatalf("Delete() error = %v", err)
 	}
-	if _, err := repos.Terms.Get(ctx, created.ID); !errors.Is(err, errs.ErrNotFound) {
-		t.Errorf("Get() after Delete() error = %v, want errs.ErrNotFound", err)
+	if _, err := repos.Terms.Get(ctx, created.ID); !errors.Is(err, sdk.ErrNotFound) {
+		t.Errorf("Get() after Delete() error = %v, want sdk.ErrNotFound", err)
 	}
 }
 
 func TestTermRepo_GetUnknown(t *testing.T) {
 	repos := New().Repositories()
-	if _, err := repos.Terms.Get(context.Background(), "does-not-exist"); !errors.Is(err, errs.ErrNotFound) {
-		t.Errorf("Get(unknown) error = %v, want errs.ErrNotFound", err)
+	if _, err := repos.Terms.Get(context.Background(), "does-not-exist"); !errors.Is(err, sdk.ErrNotFound) {
+		t.Errorf("Get(unknown) error = %v, want sdk.ErrNotFound", err)
 	}
-	if _, err := repos.Terms.GetBySlug(context.Background(), taxonomy.KindTag, "does-not-exist"); !errors.Is(err, errs.ErrNotFound) {
-		t.Errorf("GetBySlug(unknown) error = %v, want errs.ErrNotFound", err)
+	if _, err := repos.Terms.GetBySlug(context.Background(), taxonomy.KindTag, "does-not-exist"); !errors.Is(err, sdk.ErrNotFound) {
+		t.Errorf("GetBySlug(unknown) error = %v, want sdk.ErrNotFound", err)
 	}
 }
 
 // TestTermRepo_KindSlugCollision asserts the port contract turso enforces via
 // migrations/0010_terms_kind_slug_idx.sql ("CREATE UNIQUE INDEX ... ON terms
 // (kind, slug)"): a duplicate (kind,slug) is rejected with
-// errs.ErrAlreadyExists. (Historical note: memstore originally diverged here —
+// sdk.ErrAlreadyExists. (Historical note: memstore originally diverged here —
 // silently succeeding — fixed 2026-07-02.)
 func TestTermRepo_KindSlugCollision(t *testing.T) {
 	ctx := context.Background()
@@ -176,8 +176,8 @@ func TestTermRepo_KindSlugCollision(t *testing.T) {
 		t.Fatalf("first Create() error = %v", err)
 	}
 	t2, _ := taxonomy.NewTerm(ids, taxonomy.KindCategory, "Duplicate Name", "", now)
-	if _, err := repos.Terms.Create(ctx, t2); !errors.Is(err, errs.ErrAlreadyExists) {
-		t.Errorf("second Create() with colliding (kind,slug) error = %v, want errs.ErrAlreadyExists", err)
+	if _, err := repos.Terms.Create(ctx, t2); !errors.Is(err, sdk.ErrAlreadyExists) {
+		t.Errorf("second Create() with colliding (kind,slug) error = %v, want sdk.ErrAlreadyExists", err)
 	}
 }
 
@@ -232,35 +232,35 @@ func TestMenuRepo_CreateGetListAndItems(t *testing.T) {
 	if err := repos.Menus.DeleteItem(ctx, createdItem.ID); err != nil {
 		t.Fatalf("DeleteItem() error = %v", err)
 	}
-	if _, err := repos.Menus.GetItem(ctx, createdItem.ID); !errors.Is(err, errs.ErrNotFound) {
-		t.Errorf("GetItem() after DeleteItem() error = %v, want errs.ErrNotFound", err)
+	if _, err := repos.Menus.GetItem(ctx, createdItem.ID); !errors.Is(err, sdk.ErrNotFound) {
+		t.Errorf("GetItem() after DeleteItem() error = %v, want sdk.ErrNotFound", err)
 	}
 }
 
 func TestMenuRepo_GetUnknown(t *testing.T) {
 	repos := New().Repositories()
-	if _, err := repos.Menus.GetMenu(context.Background(), "does-not-exist"); !errors.Is(err, errs.ErrNotFound) {
-		t.Errorf("GetMenu(unknown) error = %v, want errs.ErrNotFound", err)
+	if _, err := repos.Menus.GetMenu(context.Background(), "does-not-exist"); !errors.Is(err, sdk.ErrNotFound) {
+		t.Errorf("GetMenu(unknown) error = %v, want sdk.ErrNotFound", err)
 	}
-	if _, err := repos.Menus.GetMenuBySlug(context.Background(), "does-not-exist"); !errors.Is(err, errs.ErrNotFound) {
-		t.Errorf("GetMenuBySlug(unknown) error = %v, want errs.ErrNotFound", err)
+	if _, err := repos.Menus.GetMenuBySlug(context.Background(), "does-not-exist"); !errors.Is(err, sdk.ErrNotFound) {
+		t.Errorf("GetMenuBySlug(unknown) error = %v, want sdk.ErrNotFound", err)
 	}
-	if _, err := repos.Menus.GetItem(context.Background(), "does-not-exist"); !errors.Is(err, errs.ErrNotFound) {
-		t.Errorf("GetItem(unknown) error = %v, want errs.ErrNotFound", err)
+	if _, err := repos.Menus.GetItem(context.Background(), "does-not-exist"); !errors.Is(err, sdk.ErrNotFound) {
+		t.Errorf("GetItem(unknown) error = %v, want sdk.ErrNotFound", err)
 	}
 }
 
 func TestMenuRepo_UpdateItemUnknown(t *testing.T) {
 	repos := New().Repositories()
 	item, _ := menus.NewMenuItem(ids, "menu-1", "Home", "/", "", 0, now)
-	if _, err := repos.Menus.UpdateItem(context.Background(), "does-not-exist", item); !errors.Is(err, errs.ErrNotFound) {
-		t.Errorf("UpdateItem(unknown) error = %v, want errs.ErrNotFound (documented in menus.MenuRepository)", err)
+	if _, err := repos.Menus.UpdateItem(context.Background(), "does-not-exist", item); !errors.Is(err, sdk.ErrNotFound) {
+		t.Errorf("UpdateItem(unknown) error = %v, want sdk.ErrNotFound (documented in menus.MenuRepository)", err)
 	}
 }
 
 // TestMenuRepo_SlugCollision asserts the port contract turso enforces via
 // migrations/0013_menus.sql ("slug TEXT NOT NULL UNIQUE") and MenuRepository's
-// doc comment ("slug collision → errs.ErrAlreadyExists"). (Historical note:
+// doc comment ("slug collision → sdk.ErrAlreadyExists"). (Historical note:
 // memstore originally diverged here — silently succeeding — fixed 2026-07-02.)
 func TestMenuRepo_SlugCollision(t *testing.T) {
 	ctx := context.Background()
@@ -271,8 +271,8 @@ func TestMenuRepo_SlugCollision(t *testing.T) {
 		t.Fatalf("first CreateMenu() error = %v", err)
 	}
 	m2, _ := menus.NewMenu(ids, "Footer", now)
-	if _, err := repos.Menus.CreateMenu(ctx, m2); !errors.Is(err, errs.ErrAlreadyExists) {
-		t.Errorf("second CreateMenu() with colliding slug error = %v, want errs.ErrAlreadyExists", err)
+	if _, err := repos.Menus.CreateMenu(ctx, m2); !errors.Is(err, sdk.ErrAlreadyExists) {
+		t.Errorf("second CreateMenu() with colliding slug error = %v, want sdk.ErrAlreadyExists", err)
 	}
 }
 
@@ -310,15 +310,15 @@ func TestAssetRepo_CreateGetListDelete(t *testing.T) {
 	if err := repos.Media.Delete(ctx, created.ID); err != nil {
 		t.Fatalf("Delete() error = %v", err)
 	}
-	if _, err := repos.Media.Get(ctx, created.ID); !errors.Is(err, errs.ErrNotFound) {
-		t.Errorf("Get() after Delete() error = %v, want errs.ErrNotFound", err)
+	if _, err := repos.Media.Get(ctx, created.ID); !errors.Is(err, sdk.ErrNotFound) {
+		t.Errorf("Get() after Delete() error = %v, want sdk.ErrNotFound", err)
 	}
 }
 
 func TestAssetRepo_GetUnknown(t *testing.T) {
 	repos := New().Repositories()
-	if _, err := repos.Media.Get(context.Background(), "does-not-exist"); !errors.Is(err, errs.ErrNotFound) {
-		t.Errorf("Get(unknown) error = %v, want errs.ErrNotFound", err)
+	if _, err := repos.Media.Get(context.Background(), "does-not-exist"); !errors.Is(err, sdk.ErrNotFound) {
+		t.Errorf("Get(unknown) error = %v, want sdk.ErrNotFound", err)
 	}
 }
 

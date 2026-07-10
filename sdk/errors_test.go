@@ -1,4 +1,4 @@
-package errs
+package sdk
 
 import (
 	"errors"

@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/jobs/domain/schedule"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // Compile-time seam: the Schedules store fills the exact schedule.Repository port.
@@ -109,14 +109,14 @@ func (s *Schedules) ClaimDue(_ context.Context, id string, prevNextRunAt, newNex
 }
 
 // SetLastJob records the id of the job fired for the most recent slot. A missing
-// id yields errs.ErrNotFound.
+// id yields sdk.ErrNotFound.
 func (s *Schedules) SetLastJob(_ context.Context, id, jobID string, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	sch, ok := s.byID[id]
 	if !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	sch.LastJobID = jobID
 	sch.UpdatedAt = now
@@ -124,14 +124,14 @@ func (s *Schedules) SetLastJob(_ context.Context, id, jobID string, now time.Tim
 	return nil
 }
 
-// Get returns the schedule with the given id, or errs.ErrNotFound.
+// Get returns the schedule with the given id, or sdk.ErrNotFound.
 func (s *Schedules) Get(_ context.Context, id string) (schedule.Schedule, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	sch, ok := s.byID[id]
 	if !ok {
-		return schedule.Schedule{}, errs.ErrNotFound
+		return schedule.Schedule{}, sdk.ErrNotFound
 	}
 	return sch, nil
 }
@@ -150,14 +150,14 @@ func (s *Schedules) List(_ context.Context, req crud.ListRequest) (crud.Page[sch
 }
 
 // SetEnabled toggles a schedule's enabled flag. A missing id yields
-// errs.ErrNotFound.
+// sdk.ErrNotFound.
 func (s *Schedules) SetEnabled(_ context.Context, id string, enabled bool, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	sch, ok := s.byID[id]
 	if !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	sch.Enabled = enabled
 	sch.UpdatedAt = now
@@ -165,13 +165,13 @@ func (s *Schedules) SetEnabled(_ context.Context, id string, enabled bool, now t
 	return nil
 }
 
-// Delete removes a schedule; a missing id yields errs.ErrNotFound.
+// Delete removes a schedule; a missing id yields sdk.ErrNotFound.
 func (s *Schedules) Delete(_ context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, ok := s.byID[id]; !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	delete(s.byID, id)
 	return nil

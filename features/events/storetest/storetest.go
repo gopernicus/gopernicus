@@ -21,8 +21,8 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/events/domain/outbox"
+	"github.com/gopernicus/gopernicus/sdk"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // suiteBase is the fixed OccurredAt every record carries. It is deliberately the
@@ -189,12 +189,12 @@ func testPurgePublishedRetention(t *testing.T, repo outbox.EntryRepository) {
 
 // testEventIDUniqueness proves the EventID is the primary key and the
 // at-least-once de-dupe key: appending a record whose EventID already exists
-// returns errs.ErrAlreadyExists and leaves the original row untouched.
+// returns sdk.ErrAlreadyExists and leaves the original row untouched.
 func testEventIDUniqueness(t *testing.T, repo outbox.EntryRepository) {
 	ctx := context.Background()
 	mustAppend(t, repo, rec("dup"))
 
-	if err := repo.Append(ctx, rec("dup")); !errors.Is(err, errs.ErrAlreadyExists) {
+	if err := repo.Append(ctx, rec("dup")); !errors.Is(err, sdk.ErrAlreadyExists) {
 		t.Errorf("duplicate Append: err=%v, want ErrAlreadyExists", err)
 	}
 	// Exactly one row remains — the rejected duplicate changed nothing.

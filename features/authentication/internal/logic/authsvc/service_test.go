@@ -13,8 +13,8 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/email"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
 )
 
@@ -95,7 +95,7 @@ func (f *fakeUsers) Create(_ context.Context, u user.User) (user.User, error) {
 	defer f.mu.Unlock()
 	for _, ex := range f.byID {
 		if strings.EqualFold(ex.Email, u.Email) {
-			return user.User{}, errs.ErrAlreadyExists
+			return user.User{}, sdk.ErrAlreadyExists
 		}
 	}
 	f.byID[u.ID] = u
@@ -107,7 +107,7 @@ func (f *fakeUsers) Get(_ context.Context, id string) (user.User, error) {
 	defer f.mu.Unlock()
 	u, ok := f.byID[id]
 	if !ok {
-		return user.User{}, errs.ErrNotFound
+		return user.User{}, sdk.ErrNotFound
 	}
 	return u, nil
 }
@@ -121,14 +121,14 @@ func (f *fakeUsers) GetByEmail(_ context.Context, emailAddr string) (user.User, 
 			return u, nil
 		}
 	}
-	return user.User{}, errs.ErrNotFound
+	return user.User{}, sdk.ErrNotFound
 }
 
 func (f *fakeUsers) Update(_ context.Context, id string, u user.User) (user.User, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, ok := f.byID[id]; !ok {
-		return user.User{}, errs.ErrNotFound
+		return user.User{}, sdk.ErrNotFound
 	}
 	f.byID[id] = u
 	return u, nil
@@ -153,7 +153,7 @@ func (f *fakePasswords) Get(_ context.Context, userID string) (string, error) {
 	defer f.mu.Unlock()
 	h, ok := f.m[userID]
 	if !ok {
-		return "", errs.ErrNotFound
+		return "", sdk.ErrNotFound
 	}
 	return h, nil
 }
@@ -177,10 +177,10 @@ func (f *fakeSessions) Get(_ context.Context, token string) (session.Session, er
 	defer f.mu.Unlock()
 	s, ok := f.m[token]
 	if !ok {
-		return session.Session{}, errs.ErrNotFound
+		return session.Session{}, sdk.ErrNotFound
 	}
 	if s.Expired(time.Now()) {
-		return session.Session{}, errs.ErrExpired
+		return session.Session{}, sdk.ErrExpired
 	}
 	return s, nil
 }
@@ -189,7 +189,7 @@ func (f *fakeSessions) Delete(_ context.Context, token string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, ok := f.m[token]; !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	delete(f.m, token)
 	return nil
@@ -225,10 +225,10 @@ func (f *fakeCodes) Get(_ context.Context, code string) (verification.Code, erro
 	defer f.mu.Unlock()
 	c, ok := f.m[code]
 	if !ok {
-		return verification.Code{}, errs.ErrNotFound
+		return verification.Code{}, sdk.ErrNotFound
 	}
 	if c.Expired(time.Now()) {
-		return verification.Code{}, errs.ErrExpired
+		return verification.Code{}, sdk.ErrExpired
 	}
 	return c, nil
 }
@@ -237,7 +237,7 @@ func (f *fakeCodes) Delete(_ context.Context, code string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, ok := f.m[code]; !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	delete(f.m, code)
 	return nil
@@ -262,10 +262,10 @@ func (f *fakeTokens) Get(_ context.Context, token string) (verification.Token, e
 	defer f.mu.Unlock()
 	t, ok := f.m[token]
 	if !ok {
-		return verification.Token{}, errs.ErrNotFound
+		return verification.Token{}, sdk.ErrNotFound
 	}
 	if t.Expired(time.Now()) {
-		return verification.Token{}, errs.ErrExpired
+		return verification.Token{}, sdk.ErrExpired
 	}
 	return t, nil
 }
@@ -274,7 +274,7 @@ func (f *fakeTokens) Delete(_ context.Context, token string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, ok := f.m[token]; !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	delete(f.m, token)
 	return nil
@@ -379,7 +379,7 @@ func TestRegisterDuplicateEmail(t *testing.T) {
 	h := newHarness(t, nil)
 	h.mustRegister(t, "dup@example.com", "password123")
 	_, err := h.svc.Register(context.Background(), "DUP@example.com", "password456", "Other")
-	if !errors.Is(err, errs.ErrAlreadyExists) {
+	if !errors.Is(err, sdk.ErrAlreadyExists) {
 		t.Errorf("duplicate register: err=%v, want ErrAlreadyExists", err)
 	}
 }
@@ -387,7 +387,7 @@ func TestRegisterDuplicateEmail(t *testing.T) {
 func TestRegisterShortPassword(t *testing.T) {
 	h := newHarness(t, nil)
 	_, err := h.svc.Register(context.Background(), "short@example.com", "short", "X")
-	if !errors.Is(err, errs.ErrInvalidInput) {
+	if !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("short password: err=%v, want ErrInvalidInput", err)
 	}
 	if h.mailer.count() != 0 {
@@ -416,7 +416,7 @@ func TestVerify(t *testing.T) {
 
 func TestVerifyUnknownCode(t *testing.T) {
 	h := newHarness(t, nil)
-	if err := h.svc.Verify(context.Background(), "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if err := h.svc.Verify(context.Background(), "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Verify(unknown): err=%v, want ErrNotFound", err)
 	}
 }
@@ -470,7 +470,7 @@ func TestSessionTokenHashRoundTrip(t *testing.T) {
 	if err := h.svc.Logout(context.Background(), token); err != nil {
 		t.Fatalf("Logout: %v", err)
 	}
-	if _, err := h.svc.ValidateSession(context.Background(), token); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := h.svc.ValidateSession(context.Background(), token); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("session survived logout: err=%v, want ErrNotFound", err)
 	}
 }
@@ -482,7 +482,7 @@ func TestLoginRequireVerifiedEmailBlocksUnverified(t *testing.T) {
 	if !errors.Is(err, ErrEmailNotVerified) {
 		t.Errorf("unverified login: err=%v, want ErrEmailNotVerified", err)
 	}
-	if !errors.Is(err, errs.ErrForbidden) {
+	if !errors.Is(err, sdk.ErrForbidden) {
 		t.Errorf("ErrEmailNotVerified must wrap ErrForbidden (403 mapping): %v", err)
 	}
 }
@@ -514,7 +514,7 @@ func TestLoginWrongPassword(t *testing.T) {
 	h := newHarness(t, nil)
 	h.mustRegister(t, "wp@example.com", "password123")
 	_, _, err := h.svc.Login(context.Background(), "wp@example.com", "wrongpassword")
-	if !errors.Is(err, errs.ErrUnauthorized) {
+	if !errors.Is(err, sdk.ErrUnauthorized) {
 		t.Errorf("wrong password: err=%v, want ErrUnauthorized", err)
 	}
 }
@@ -522,7 +522,7 @@ func TestLoginWrongPassword(t *testing.T) {
 func TestLoginUnknownEmail(t *testing.T) {
 	h := newHarness(t, nil)
 	_, _, err := h.svc.Login(context.Background(), "ghost@example.com", "password123")
-	if !errors.Is(err, errs.ErrUnauthorized) {
+	if !errors.Is(err, sdk.ErrUnauthorized) {
 		t.Errorf("unknown email: err=%v, want ErrUnauthorized", err)
 	}
 }
@@ -547,7 +547,7 @@ func TestLogout(t *testing.T) {
 	if err := h.svc.Logout(context.Background(), token); err != nil {
 		t.Fatalf("Logout: %v", err)
 	}
-	if _, err := h.svc.ValidateSession(context.Background(), token); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := h.svc.ValidateSession(context.Background(), token); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("session not deleted: err=%v, want ErrNotFound", err)
 	}
 	// Idempotent: logging out an already-gone token is not an error.
@@ -578,7 +578,7 @@ func TestChangePassword(t *testing.T) {
 
 	// Every pre-existing session is revoked.
 	for name, tok := range map[string]string{"A": tokenA, "B": tokenB} {
-		if _, err := h.svc.ValidateSession(context.Background(), tok); !errors.Is(err, errs.ErrNotFound) {
+		if _, err := h.svc.ValidateSession(context.Background(), tok); !errors.Is(err, sdk.ErrNotFound) {
 			t.Errorf("session %s survived password change: err=%v, want ErrNotFound", name, err)
 		}
 	}
@@ -593,7 +593,7 @@ func TestChangePassword(t *testing.T) {
 	if _, _, err := h.svc.Login(context.Background(), "cp@example.com", "newpassword456"); err != nil {
 		t.Errorf("login with new password: %v", err)
 	}
-	if _, _, err := h.svc.Login(context.Background(), "cp@example.com", "password123"); !errors.Is(err, errs.ErrUnauthorized) {
+	if _, _, err := h.svc.Login(context.Background(), "cp@example.com", "password123"); !errors.Is(err, sdk.ErrUnauthorized) {
 		t.Errorf("login with old password: err=%v, want ErrUnauthorized", err)
 	}
 }
@@ -602,7 +602,7 @@ func TestChangePasswordWrongCurrent(t *testing.T) {
 	h := newHarness(t, nil)
 	u := h.mustRegister(t, "cpw@example.com", "password123")
 	_, err := h.svc.ChangePassword(context.Background(), u.ID, "wrongcurrent", "newpassword456")
-	if !errors.Is(err, errs.ErrUnauthorized) {
+	if !errors.Is(err, sdk.ErrUnauthorized) {
 		t.Errorf("wrong current: err=%v, want ErrUnauthorized", err)
 	}
 }
@@ -652,7 +652,7 @@ func TestResetPasswordExpiredToken(t *testing.T) {
 	expired := verification.NewToken(u.ID, time.Minute, time.Now().Add(-time.Hour))
 	h.tokens.Create(context.Background(), expired)
 	err := h.svc.ResetPassword(context.Background(), expired.Token, "brandnewpass")
-	if !errors.Is(err, errs.ErrExpired) {
+	if !errors.Is(err, sdk.ErrExpired) {
 		t.Errorf("expired token: err=%v, want ErrExpired", err)
 	}
 }

@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/events/domain/outbox"
+	"github.com/gopernicus/gopernicus/sdk"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // TestReference runs the outbox conformance suite against the in-package
@@ -43,7 +43,7 @@ func newReference() *reference {
 }
 
 // Append persists records, rejecting any EventID that already exists (or repeats
-// within the batch) with errs.ErrAlreadyExists. The check runs over the whole
+// within the batch) with sdk.ErrAlreadyExists. The check runs over the whole
 // batch before any row is written, so a batch carrying a collision commits
 // nothing — the atomicity a SQL store's transaction gives for free.
 func (r *reference) Append(ctx context.Context, recs ...sdkevents.Record) error {
@@ -56,7 +56,7 @@ func (r *reference) Append(ctx context.Context, recs ...sdkevents.Record) error 
 	seen := make(map[string]bool, len(recs))
 	for _, rc := range recs {
 		if _, exists := r.entries[rc.EventID]; exists || seen[rc.EventID] {
-			return fmt.Errorf("outbox append %q: %w", rc.EventID, errs.ErrAlreadyExists)
+			return fmt.Errorf("outbox append %q: %w", rc.EventID, sdk.ErrAlreadyExists)
 		}
 		seen[rc.EventID] = true
 	}

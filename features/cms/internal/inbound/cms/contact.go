@@ -6,7 +6,7 @@ import (
 	"net/http"
 
 	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
 
@@ -45,7 +45,7 @@ func (h *ContactHandlers) Submit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := h.svc.Submit(r.Context(), model.Name, model.Email, model.Message); err != nil {
-		if errors.Is(err, errs.ErrInvalidInput) {
+		if errors.Is(err, sdk.ErrInvalidInput) {
 			model.FormError = err.Error()
 			web.Render(r.Context(), w, http.StatusBadRequest, h.views.ContactForm(model))
 			return

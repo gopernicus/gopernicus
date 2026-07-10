@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/slug"
 )
 
@@ -36,17 +36,17 @@ var storageKeys = cryptids.IDGenerator{}
 // (empty under cryptids.Database — the store then assigns the key), and returns a
 // new Asset. The storage key carries its own random component, independent of
 // the entity ID, so it exists under every ID strategy. Validation failures wrap
-// errs.ErrInvalidInput.
+// sdk.ErrInvalidInput.
 func NewAsset(ids cryptids.IDGenerator, filename, contentType string, size int64, now time.Time) (Asset, error) {
 	filename = strings.TrimSpace(filename)
 	if filename == "" {
-		return Asset{}, fmt.Errorf("filename is required: %w", errs.ErrInvalidInput)
+		return Asset{}, fmt.Errorf("filename is required: %w", sdk.ErrInvalidInput)
 	}
 	if contentType == "" {
-		return Asset{}, fmt.Errorf("content type is required: %w", errs.ErrInvalidInput)
+		return Asset{}, fmt.Errorf("content type is required: %w", sdk.ErrInvalidInput)
 	}
 	if size <= 0 {
-		return Asset{}, fmt.Errorf("file is empty: %w", errs.ErrInvalidInput)
+		return Asset{}, fmt.Errorf("file is empty: %w", sdk.ErrInvalidInput)
 	}
 
 	return Asset{

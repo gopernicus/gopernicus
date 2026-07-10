@@ -10,11 +10,11 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/gopernicus/gopernicus/features/cms/internal/logic/entrysvc"
 	"github.com/gopernicus/gopernicus/features/cms/domain/content"
 	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
+	"github.com/gopernicus/gopernicus/features/cms/internal/logic/entrysvc"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
 
@@ -142,7 +142,7 @@ func (h *EntryHandlers) Update(w http.ResponseWriter, r *http.Request, ct conten
 	in := h.formInput(r, ct)
 	e, err := h.svc.Edit(r.Context(), id, in)
 	if err != nil {
-		if errors.Is(err, errs.ErrNotFound) {
+		if errors.Is(err, sdk.ErrNotFound) {
 			h.renderError(w, r, err)
 			return
 		}
@@ -330,10 +330,10 @@ func (h *EntryHandlers) renderFormError(w http.ResponseWriter, r *http.Request, 
 	status := http.StatusBadRequest
 	model := h.formModel(r.Context(), ct, heading, action, entryFromInput(ct, in), r.PostForm["term_id"])
 	switch {
-	case errors.Is(err, errs.ErrAlreadyExists):
+	case errors.Is(err, sdk.ErrAlreadyExists):
 		status = http.StatusConflict
 		model.FormError = "A " + ct.Singular + " with that title (slug) already exists."
-	case errors.Is(err, errs.ErrInvalidInput):
+	case errors.Is(err, sdk.ErrInvalidInput):
 		model.FormError = err.Error()
 	default:
 		h.renderError(w, r, err)

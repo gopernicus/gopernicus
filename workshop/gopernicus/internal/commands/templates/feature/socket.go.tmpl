@@ -18,14 +18,14 @@ import (
 	"{{.ModulePath}}/internal/logic/{{.AggSvc}}"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 )
 
 // ErrNo{{.AggTitle}}Store is returned by NewService when the {{.Agg}} store is not
 // wired (Repositories.{{.ReposField}} is nil) — a feature that could do nothing.
 // Unsafe degradation errors loudly at construction (FS12).
-var ErrNo{{.AggTitle}}Store = fmt.Errorf("{{.Feature}}: Repositories.{{.ReposField}} is required: %w", errs.ErrInvalidInput)
+var ErrNo{{.AggTitle}}Store = fmt.Errorf("{{.Feature}}: Repositories.{{.ReposField}} is required: %w", sdk.ErrInvalidInput)
 
 // Root aliases — the rim types a host passes to / receives from the Service,
 // re-exported so a host writes {{.Feature}}.{{.AggTitle}} without importing the
@@ -82,7 +82,7 @@ func (s *Service) Create(ctx context.Context, name string) ({{.AggTitle}}, error
 	return s.{{.Feature}}.Create(ctx, name)
 }
 
-// Get returns the {{.Agg}} for id, or errs.ErrNotFound.
+// Get returns the {{.Agg}} for id, or sdk.ErrNotFound.
 func (s *Service) Get(ctx context.Context, id string) ({{.AggTitle}}, error) {
 	return s.{{.Feature}}.Get(ctx, id)
 }

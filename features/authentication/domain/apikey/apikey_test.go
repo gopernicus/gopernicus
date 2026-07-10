@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 var base = time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
@@ -28,10 +28,10 @@ func TestNewValid(t *testing.T) {
 }
 
 func TestNewRequiredFields(t *testing.T) {
-	if _, err := New(cryptids.IDGenerator{}, "", "n", "p", "hash", time.Time{}, base); !errors.Is(err, errs.ErrInvalidInput) {
+	if _, err := New(cryptids.IDGenerator{}, "", "n", "p", "hash", time.Time{}, base); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("blank service account id: err=%v, want ErrInvalidInput", err)
 	}
-	if _, err := New(cryptids.IDGenerator{}, "sa-1", "n", "p", "", time.Time{}, base); !errors.Is(err, errs.ErrInvalidInput) {
+	if _, err := New(cryptids.IDGenerator{}, "sa-1", "n", "p", "", time.Time{}, base); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("blank key hash: err=%v, want ErrInvalidInput", err)
 	}
 }

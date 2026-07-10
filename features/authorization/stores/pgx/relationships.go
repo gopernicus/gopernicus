@@ -9,8 +9,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authorization/domain/relationship"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // reachableCTE is the group-expansion recursive CTE shared by the check and
@@ -208,7 +208,7 @@ func (s *relationshipStore) CreateRelationships(ctx context.Context, in []relati
 		}
 	}
 	if empty > 0 && populated > 0 {
-		return fmt.Errorf("authorization pgx store: mixed relationship_id batch (%d empty, %d populated) — the engine mints all-or-none: %w", empty, populated, errs.ErrInvalidInput)
+		return fmt.Errorf("authorization pgx store: mixed relationship_id batch (%d empty, %d populated) — the engine mints all-or-none: %w", empty, populated, sdk.ErrInvalidInput)
 	}
 	withID := populated > 0
 

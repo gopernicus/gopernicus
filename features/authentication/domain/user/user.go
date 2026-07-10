@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // User is the identity aggregate. Email is stored normalized (trimmed,
@@ -29,7 +29,7 @@ type User struct {
 
 // NewUser validates and normalizes the email, trims the display name, mints an
 // ID from ids (empty under cryptids.Database — the store then assigns the key),
-// and returns an unverified user. Validation failures wrap errs.ErrInvalidInput.
+// and returns an unverified user. Validation failures wrap sdk.ErrInvalidInput.
 func NewUser(ids cryptids.IDGenerator, email, displayName string, now time.Time) (User, error) {
 	normalized, err := NormalizeEmail(email)
 	if err != nil {
@@ -46,16 +46,16 @@ func NewUser(ids cryptids.IDGenerator, email, displayName string, now time.Time)
 }
 
 // NormalizeEmail trims, validates (RFC 5322 addr-spec via net/mail), and
-// lowercases an email address. Failures wrap errs.ErrInvalidInput. Callers key
+// lowercases an email address. Failures wrap sdk.ErrInvalidInput. Callers key
 // uniqueness and lookups on the normalized form.
 func NormalizeEmail(email string) (string, error) {
 	email = strings.TrimSpace(email)
 	if email == "" {
-		return "", fmt.Errorf("email is required: %w", errs.ErrInvalidInput)
+		return "", fmt.Errorf("email is required: %w", sdk.ErrInvalidInput)
 	}
 	addr, err := mail.ParseAddress(email)
 	if err != nil {
-		return "", fmt.Errorf("invalid email address: %w", errs.ErrInvalidInput)
+		return "", fmt.Errorf("invalid email address: %w", sdk.ErrInvalidInput)
 	}
 	return strings.ToLower(addr.Address), nil
 }

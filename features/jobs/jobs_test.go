@@ -12,8 +12,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
 	"github.com/gopernicus/gopernicus/features/jobs/domain/schedule"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/web"
 	"github.com/gopernicus/gopernicus/sdk/workers"
@@ -38,7 +38,7 @@ func (q *memQueue) Enqueue(ctx context.Context, in job.Enqueue) (job.Job, error)
 		id = "job-" + time.Now().Format("150405.000000000")
 	}
 	if _, ok := q.jobs[id]; ok {
-		return job.Job{}, errs.ErrAlreadyExists
+		return job.Job{}, sdk.ErrAlreadyExists
 	}
 	j := job.Job{JobID: id, Kind: in.Kind, Payload: in.Payload, JobStatus: job.StatusPending, MaxAttempts: in.MaxAttempts, ScheduledFor: in.ScheduledFor}
 	q.jobs[id] = &j
@@ -72,7 +72,7 @@ func (q *memQueue) Fail(ctx context.Context, jobID string, now time.Time, reason
 	return nil
 }
 func (q *memQueue) Get(ctx context.Context, id string) (job.Job, error) {
-	return job.Job{}, errs.ErrNotFound
+	return job.Job{}, sdk.ErrNotFound
 }
 func (q *memQueue) List(ctx context.Context, _ job.ListFilter, _ crud.ListRequest) (crud.Page[job.Job], error) {
 	return crud.Page[job.Job]{}, nil
@@ -97,7 +97,7 @@ func (s *noopSchedules) SetLastJob(ctx context.Context, id, jobID string, now ti
 	return nil
 }
 func (s *noopSchedules) Get(ctx context.Context, id string) (schedule.Schedule, error) {
-	return schedule.Schedule{}, errs.ErrNotFound
+	return schedule.Schedule{}, sdk.ErrNotFound
 }
 func (s *noopSchedules) List(ctx context.Context, _ crud.ListRequest) (crud.Page[schedule.Schedule], error) {
 	return crud.Page[schedule.Schedule]{}, nil

@@ -34,7 +34,7 @@ func (s *Service) Create(ctx context.Context, name string) ({{.Agg}}.{{.AggTitle
 	return s.store.Create(ctx, entity)
 }
 
-// Get returns the {{.Agg}} for id, or errs.ErrNotFound.
+// Get returns the {{.Agg}} for id, or sdk.ErrNotFound.
 func (s *Service) Get(ctx context.Context, id string) ({{.Agg}}.{{.AggTitle}}, error) {
 	return s.store.Get(ctx, id)
 }

@@ -13,8 +13,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/email"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // sendPayload mirrors the subset of SendGrid's v3 Mail Send JSON body this
@@ -151,7 +151,7 @@ func TestSend_InvalidMessageNeverCallsAPI(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected validation error for empty message, got nil")
 	}
-	if !errors.Is(err, errs.ErrInvalidInput) {
+	if !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("error = %v, want wraps ErrInvalidInput", err)
 	}
 	if captured.called {
@@ -165,10 +165,10 @@ func TestSend_StatusErrorsMapToKinds(t *testing.T) {
 		status int
 		want   error // nil means "non-nil error, no specific sentinel"
 	}{
-		{"bad request", http.StatusBadRequest, errs.ErrInvalidInput},
-		{"unauthorized", http.StatusUnauthorized, errs.ErrUnauthorized},
-		{"forbidden", http.StatusForbidden, errs.ErrForbidden},
-		{"not found", http.StatusNotFound, errs.ErrNotFound},
+		{"bad request", http.StatusBadRequest, sdk.ErrInvalidInput},
+		{"unauthorized", http.StatusUnauthorized, sdk.ErrUnauthorized},
+		{"forbidden", http.StatusForbidden, sdk.ErrForbidden},
+		{"not found", http.StatusNotFound, sdk.ErrNotFound},
 		{"server error", http.StatusInternalServerError, nil},
 	}
 

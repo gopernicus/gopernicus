@@ -19,7 +19,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/authentication/internal/redirect"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/apikey"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthaccount"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthstate"
@@ -28,9 +27,10 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
+	"github.com/gopernicus/gopernicus/features/authentication/internal/redirect"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/email"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/identity"
 	"github.com/gopernicus/gopernicus/sdk/oauth"
 	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
@@ -56,15 +56,15 @@ const (
 
 // ErrRateLimited is returned by Login when the per-(email, IP) attempt budget is
 // exhausted. It is deliberately distinct from the invalid-credentials error
-// (errs.ErrUnauthorized) so the transport can map it to 429 and clients can back
+// (sdk.ErrUnauthorized) so the transport can map it to 429 and clients can back
 // off. Checked with errors.Is.
 var ErrRateLimited = errors.New("too many login attempts")
 
 // ErrEmailNotVerified is returned by Login when Config.RequireVerifiedEmail is
-// set and the caller's email is unverified. It wraps errs.ErrForbidden so the
+// set and the caller's email is unverified. It wraps sdk.ErrForbidden so the
 // transport maps it to 403 (design §7.1). The public auth package re-exports it
 // as auth.ErrEmailNotVerified. Checked with errors.Is.
-var ErrEmailNotVerified = fmt.Errorf("email not verified: %w", errs.ErrForbidden)
+var ErrEmailNotVerified = fmt.Errorf("email not verified: %w", sdk.ErrForbidden)
 
 // Hasher hashes and verifies passwords. auth.PasswordHasher satisfies it
 // structurally; it is declared here rather than imported from the auth package
@@ -270,7 +270,7 @@ func NewService(d Deps) *Service {
 // email-verification code, and mails it. The user is persisted before the code
 // and email, so a mail failure still leaves an account the user can later
 // verify (the error is returned so the caller knows delivery failed). A
-// duplicate email surfaces as errs.ErrAlreadyExists from the user store.
+// duplicate email surfaces as sdk.ErrAlreadyExists from the user store.
 func (s *Service) Register(ctx context.Context, emailAddr, password, displayName string) (user.User, error) {
 	if err := validatePassword(password); err != nil {
 		return user.User{}, err
@@ -310,8 +310,8 @@ func (s *Service) Register(ctx context.Context, emailAddr, password, displayName
 }
 
 // Verify consumes an email-verification code: it marks the code's user verified
-// and deletes the code. Unknown/expired codes surface errs.ErrNotFound /
-// errs.ErrExpired from the store.
+// and deletes the code. Unknown/expired codes surface sdk.ErrNotFound /
+// sdk.ErrExpired from the store.
 func (s *Service) Verify(ctx context.Context, code string) error {
 	rec, err := s.codes.Get(ctx, code)
 	if err != nil {
@@ -325,7 +325,7 @@ func (s *Service) Verify(ctx context.Context, code string) error {
 	if _, err := s.users.Update(ctx, u.ID, u); err != nil {
 		return err
 	}
-	if err := s.codes.Delete(ctx, code); err != nil && !errors.Is(err, errs.ErrNotFound) {
+	if err := s.codes.Delete(ctx, code); err != nil && !errors.Is(err, sdk.ErrNotFound) {
 		return err
 	}
 	s.recordSecurityEvent(ctx, securityEventInput{
@@ -356,7 +356,7 @@ func (s *Service) resolvePendingInvitations(ctx context.Context, email, userID s
 // EmailForUser returns the normalized email for userID. The invitation HTTP
 // handlers key "mine" and the accept identifier check on the caller's own
 // address through it, so invitationsvc stays decoupled from the user store (the
-// auth feature owns user identity). Unknown id → the store's errs.ErrNotFound.
+// auth feature owns user identity). Unknown id → the store's sdk.ErrNotFound.
 func (s *Service) EmailForUser(ctx context.Context, userID string) (string, error) {
 	u, err := s.users.Get(ctx, userID)
 	if err != nil {
@@ -369,7 +369,7 @@ func (s *Service) EmailForUser(ctx context.Context, userID string) (string, erro
 // mints a session, returning the plaintext cookie token (the stored session
 // value is that token's hash — see mintSession). Rate-limit exhaustion returns
 // ErrRateLimited; any credential mismatch (unknown email, missing password,
-// wrong password) returns the same generic errs.ErrUnauthorized so the response
+// wrong password) returns the same generic sdk.ErrUnauthorized so the response
 // cannot distinguish them.
 //
 // When Config.RequireVerifiedEmail is set, a caller with correct credentials but
@@ -449,7 +449,7 @@ func (s *Service) Logout(ctx context.Context, token string) error {
 	if err != nil {
 		return err
 	}
-	if err := s.sessions.Delete(ctx, hashed); err != nil && !errors.Is(err, errs.ErrNotFound) {
+	if err := s.sessions.Delete(ctx, hashed); err != nil && !errors.Is(err, sdk.ErrNotFound) {
 		return err
 	}
 	// The user id is best-effort: RequireUser stashes it on the handler's ctx, so
@@ -466,8 +466,8 @@ func (s *Service) Logout(ctx context.Context, token string) error {
 // ChangePassword verifies the current password, stores the new hash, then
 // revokes ALL of the user's sessions and mints a fresh one for the caller,
 // returning the new plaintext cookie token (design §7.2, amended 2026-07-07). A
-// wrong current password returns errs.ErrUnauthorized; a too-short new password
-// returns errs.ErrInvalidInput.
+// wrong current password returns sdk.ErrUnauthorized; a too-short new password
+// returns sdk.ErrInvalidInput.
 //
 // Atomicity pin (design §7.2): once the new hash is stored, a DeleteByUser
 // failure is RETURNED, never best-effort-logged — the password changed but stale
@@ -478,7 +478,7 @@ func (s *Service) ChangePassword(ctx context.Context, userID, currentPassword, n
 		return "", err
 	}
 	if err := s.hasher.VerifyPassword(hash, currentPassword); err != nil {
-		return "", fmt.Errorf("current password is incorrect: %w", errs.ErrUnauthorized)
+		return "", fmt.Errorf("current password is incorrect: %w", sdk.ErrUnauthorized)
 	}
 	if err := validatePassword(newPassword); err != nil {
 		return "", err
@@ -515,7 +515,7 @@ func (s *Service) ForgotPassword(ctx context.Context, emailAddr string) error {
 	}
 	u, err := s.users.GetByEmail(ctx, normalized)
 	if err != nil {
-		if errors.Is(err, errs.ErrNotFound) {
+		if errors.Is(err, sdk.ErrNotFound) {
 			return nil // never reveal whether the email exists
 		}
 		return err
@@ -529,8 +529,8 @@ func (s *Service) ForgotPassword(ctx context.Context, emailAddr string) error {
 
 // ResetPassword redeems a reset token: it stores the new password hash for the
 // token's user and deletes the token. Unknown/expired tokens surface
-// errs.ErrNotFound / errs.ErrExpired; a too-short password returns
-// errs.ErrInvalidInput.
+// sdk.ErrNotFound / sdk.ErrExpired; a too-short password returns
+// sdk.ErrInvalidInput.
 func (s *Service) ResetPassword(ctx context.Context, token, newPassword string) error {
 	if err := validatePassword(newPassword); err != nil {
 		return err
@@ -546,7 +546,7 @@ func (s *Service) ResetPassword(ctx context.Context, token, newPassword string) 
 	if err := s.passwords.Set(ctx, rec.UserID, newHash); err != nil {
 		return err
 	}
-	if err := s.tokens.Delete(ctx, token); err != nil && !errors.Is(err, errs.ErrNotFound) {
+	if err := s.tokens.Delete(ctx, token); err != nil && !errors.Is(err, sdk.ErrNotFound) {
 		return err
 	}
 	s.recordSecurityEvent(ctx, securityEventInput{
@@ -558,12 +558,12 @@ func (s *Service) ResetPassword(ctx context.Context, token, newPassword string) 
 }
 
 // ValidateSession returns the live session for the cookie token. A blank token
-// returns errs.ErrUnauthorized; unknown/expired tokens surface errs.ErrNotFound
-// / errs.ErrExpired from the store. The token is hashed before the lookup so it
+// returns sdk.ErrUnauthorized; unknown/expired tokens surface sdk.ErrNotFound
+// / sdk.ErrExpired from the store. The token is hashed before the lookup so it
 // matches the stored value (design §7.3).
 func (s *Service) ValidateSession(ctx context.Context, token string) (session.Session, error) {
 	if token == "" {
-		return session.Session{}, fmt.Errorf("no session: %w", errs.ErrUnauthorized)
+		return session.Session{}, fmt.Errorf("no session: %w", sdk.ErrUnauthorized)
 	}
 	hashed, err := s.hashSessionToken(token)
 	if err != nil {
@@ -731,13 +731,13 @@ func loginKey(normalizedEmail, clientIP string) string {
 // mismatch so the response cannot distinguish "no such user" from "wrong
 // password".
 func invalidCredentials() error {
-	return fmt.Errorf("invalid email or password: %w", errs.ErrUnauthorized)
+	return fmt.Errorf("invalid email or password: %w", sdk.ErrUnauthorized)
 }
 
 // validatePassword enforces the minimum password length.
 func validatePassword(pw string) error {
 	if len(pw) < minPasswordLength {
-		return fmt.Errorf("password must be at least %d characters: %w", minPasswordLength, errs.ErrInvalidInput)
+		return fmt.Errorf("password must be at least %d characters: %w", minPasswordLength, sdk.ErrInvalidInput)
 	}
 	return nil
 }

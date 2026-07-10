@@ -30,8 +30,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
 	"github.com/gopernicus/gopernicus/features/jobs/domain/schedule"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/workers"
 )
 
@@ -132,7 +132,7 @@ func testEnqueueAndGet(t *testing.T, repo job.QueueRepository) {
 		t.Errorf("Get payload = %s, want the enqueued json", got.Payload)
 	}
 
-	if _, err := repo.Get(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.Get(ctx, "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Get(absent): err=%v, want ErrNotFound", err)
 	}
 }
@@ -143,7 +143,7 @@ func testEnqueueIdempotency(t *testing.T, repo job.QueueRepository) {
 	if _, err := repo.Enqueue(ctx, job.Enqueue{ID: "dup", Kind: "demo"}); err != nil {
 		t.Fatalf("first Enqueue: %v", err)
 	}
-	if _, err := repo.Enqueue(ctx, job.Enqueue{ID: "dup", Kind: "demo"}); !errors.Is(err, errs.ErrAlreadyExists) {
+	if _, err := repo.Enqueue(ctx, job.Enqueue{ID: "dup", Kind: "demo"}); !errors.Is(err, sdk.ErrAlreadyExists) {
 		t.Errorf("duplicate id Enqueue: err=%v, want ErrAlreadyExists", err)
 	}
 
@@ -453,10 +453,10 @@ func testEnsureUpsert(t *testing.T, repo schedule.Repository) {
 
 func testSchedulesAbsent(t *testing.T, repo schedule.Repository) {
 	ctx := context.Background()
-	if _, err := repo.Get(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.Get(ctx, "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Get(absent): err=%v, want ErrNotFound", err)
 	}
-	if err := repo.Delete(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if err := repo.Delete(ctx, "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Delete(absent): err=%v, want ErrNotFound", err)
 	}
 }
@@ -578,7 +578,7 @@ func testSchedulesDelete(t *testing.T, repo schedule.Repository) {
 	if err := repo.Delete(ctx, s.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err := repo.Get(ctx, s.ID); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.Get(ctx, s.ID); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Get after Delete: err=%v, want ErrNotFound", err)
 	}
 }
@@ -940,10 +940,10 @@ func runStaleCursorCase[T any](t *testing.T, pc pagedCase[T], created []T) {
 func runCursorOffsetExclusiveCase[T any](t *testing.T, pc pagedCase[T]) {
 	t.Helper()
 	ctx := context.Background()
-	if _, err := pc.list(ctx, crud.ListRequest{Strategy: crud.StrategyCursor, Limit: 2, Offset: 2}); !errors.Is(err, errs.ErrInvalidInput) {
+	if _, err := pc.list(ctx, crud.ListRequest{Strategy: crud.StrategyCursor, Limit: 2, Offset: 2}); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("cursor strategy + offset: err=%v, want ErrInvalidInput", err)
 	}
-	if _, err := pc.list(ctx, crud.ListRequest{Strategy: crud.StrategyOffset, Limit: 2, Cursor: "anything"}); !errors.Is(err, errs.ErrInvalidInput) {
+	if _, err := pc.list(ctx, crud.ListRequest{Strategy: crud.StrategyOffset, Limit: 2, Cursor: "anything"}); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("offset strategy + cursor: err=%v, want ErrInvalidInput", err)
 	}
 }

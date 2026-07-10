@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/cms/domain/content"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
 )
 
@@ -26,7 +26,7 @@ func newFakeRepo() *fakeRepo {
 func (r *fakeRepo) Create(_ context.Context, e content.Entry) (content.Entry, error) {
 	for _, ex := range r.entries {
 		if ex.Type == e.Type && ex.Slug == e.Slug {
-			return content.Entry{}, errs.ErrAlreadyExists
+			return content.Entry{}, sdk.ErrAlreadyExists
 		}
 	}
 	r.entries[e.ID] = e
@@ -35,7 +35,7 @@ func (r *fakeRepo) Create(_ context.Context, e content.Entry) (content.Entry, er
 
 func (r *fakeRepo) Update(_ context.Context, id string, e content.Entry) (content.Entry, error) {
 	if _, ok := r.entries[id]; !ok {
-		return content.Entry{}, errs.ErrNotFound
+		return content.Entry{}, sdk.ErrNotFound
 	}
 	r.entries[id] = e
 	return e, nil
@@ -44,7 +44,7 @@ func (r *fakeRepo) Update(_ context.Context, id string, e content.Entry) (conten
 func (r *fakeRepo) Get(_ context.Context, id string) (content.Entry, error) {
 	e, ok := r.entries[id]
 	if !ok {
-		return content.Entry{}, errs.ErrNotFound
+		return content.Entry{}, sdk.ErrNotFound
 	}
 	return e, nil
 }
@@ -55,12 +55,12 @@ func (r *fakeRepo) GetBySlug(_ context.Context, typ, slug string) (content.Entry
 			return e, nil
 		}
 	}
-	return content.Entry{}, errs.ErrNotFound
+	return content.Entry{}, sdk.ErrNotFound
 }
 
 func (r *fakeRepo) Delete(_ context.Context, id string) error {
 	if _, ok := r.entries[id]; !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	delete(r.entries, id)
 	return nil
@@ -136,7 +136,7 @@ func TestService_CreateAndGet(t *testing.T) {
 
 func TestService_Create_UnknownType(t *testing.T) {
 	svc := NewService(newFakeRepo(), testRegistry(t), cryptids.IDGenerator{}, fixedClock())
-	if _, err := svc.Create(context.Background(), "ghost", Input{Title: "x"}); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := svc.Create(context.Background(), "ghost", Input{Title: "x"}); !errors.Is(err, sdk.ErrNotFound) {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 }
@@ -144,7 +144,7 @@ func TestService_Create_UnknownType(t *testing.T) {
 func TestService_Create_MissingRequiredField(t *testing.T) {
 	svc := NewService(newFakeRepo(), testRegistry(t), cryptids.IDGenerator{}, fixedClock())
 	_, err := svc.Create(context.Background(), "article", Input{Title: "x", Fields: content.Fields{"subtitle": {Raw: "y"}}})
-	if !errors.Is(err, errs.ErrInvalidInput) {
+	if !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("err = %v, want ErrInvalidInput", err)
 	}
 }
@@ -155,7 +155,7 @@ func TestService_Create_RelationMustExist(t *testing.T) {
 		Title:  "x",
 		Fields: content.Fields{"rating": {Raw: "1"}, "related": {Raw: "no-such-entry"}},
 	})
-	if !errors.Is(err, errs.ErrInvalidInput) {
+	if !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("err = %v, want ErrInvalidInput", err)
 	}
 }

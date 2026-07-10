@@ -1,18 +1,34 @@
-// Package errs provides common sentinel errors for the domain and data layers.
+// Package sdk is the framework kernel: the root of the gopernicus sdk module.
 //
-// These errors are transport-agnostic and designed to be wrapped with domain
+// The kernel holds the cross-cutting vocabulary every tier may depend on —
+// today, the transport-agnostic sentinel errors below. Its contract is
+// deliberately narrow:
+//
+//   - It imports the standard library only. The module's go.mod has no require
+//     block, so "stdlib only" is a structural fact, not a convention.
+//   - It is a leaf within the sdk module. The Go compiler enforces this against
+//     every subpackage that imports the kernel (crud, cryptids, email, web, …):
+//     the root package cannot import one of its own subpackages without forming
+//     an import cycle. Subpackages that do not import the kernel are not caught
+//     by the cycle, so guard G12(a) (landing at P5) is the primary enforcement
+//     of the no-subpackage-imports rule; the cycle is the belt to its
+//     suspenders.
+//   - Promotion to the kernel is a deliberate, visible act: adding a file to the
+//     root package. Nothing is admitted implicitly.
+//
+// The sentinels are transport-agnostic and designed to be wrapped with domain
 // context, then checked at boundaries using errors.Is().
 //
 // Example — defining a domain error:
 //
-//	var ErrArticleNotFound = fmt.Errorf("article: %w", errs.ErrNotFound)
+//	var ErrArticleNotFound = fmt.Errorf("article: %w", sdk.ErrNotFound)
 //
 // Example — checking at the delivery layer:
 //
-//	if errors.Is(err, errs.ErrNotFound) {
+//	if errors.Is(err, sdk.ErrNotFound) {
 //	    return web.ErrNotFound("article not found")
 //	}
-package errs
+package sdk
 
 import "errors"
 

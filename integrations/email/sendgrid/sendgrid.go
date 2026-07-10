@@ -16,8 +16,8 @@ import (
 	"github.com/sendgrid/sendgrid-go"
 	"github.com/sendgrid/sendgrid-go/helpers/mail"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/email"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // sendPath is SendGrid's v3 Mail Send endpoint path, appended to the host to
@@ -99,13 +99,13 @@ func (s *Sender) Send(ctx context.Context, msg email.Message) error {
 func statusError(status int, body string) error {
 	switch status {
 	case http.StatusBadRequest:
-		return fmt.Errorf("sendgrid: status %d: %s: %w", status, body, errs.ErrInvalidInput)
+		return fmt.Errorf("sendgrid: status %d: %s: %w", status, body, sdk.ErrInvalidInput)
 	case http.StatusUnauthorized:
-		return fmt.Errorf("sendgrid: status %d: %s: %w", status, body, errs.ErrUnauthorized)
+		return fmt.Errorf("sendgrid: status %d: %s: %w", status, body, sdk.ErrUnauthorized)
 	case http.StatusForbidden:
-		return fmt.Errorf("sendgrid: status %d: %s: %w", status, body, errs.ErrForbidden)
+		return fmt.Errorf("sendgrid: status %d: %s: %w", status, body, sdk.ErrForbidden)
 	case http.StatusNotFound:
-		return fmt.Errorf("sendgrid: status %d: %s: %w", status, body, errs.ErrNotFound)
+		return fmt.Errorf("sendgrid: status %d: %s: %w", status, body, sdk.ErrNotFound)
 	default:
 		return fmt.Errorf("sendgrid: status %d: %s", status, body)
 	}

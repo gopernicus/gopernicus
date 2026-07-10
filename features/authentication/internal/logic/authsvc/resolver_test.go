@@ -7,7 +7,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/serviceaccount"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/identity"
 )
 
@@ -69,7 +69,7 @@ func TestResolveServiceAccount(t *testing.T) {
 }
 
 // TestResolveFailClosed proves every unresolvable case fails CLOSED with the
-// errs.ErrNotFound class and never panics: an unknown type, a missing user row,
+// sdk.ErrNotFound class and never panics: an unknown type, a missing user row,
 // a missing service-account row, and — the machine subsystem off — a
 // service-account principal against a nil ServiceAccounts repository.
 func TestResolveFailClosed(t *testing.T) {
@@ -89,7 +89,7 @@ func TestResolveFailClosed(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			info, err := tc.svc.Resolve(context.Background(), tc.p)
-			if !errors.Is(err, errs.ErrNotFound) {
+			if !errors.Is(err, sdk.ErrNotFound) {
 				t.Errorf("Resolve(%s): err=%v, want ErrNotFound", tc.name, err)
 			}
 			if info.DisplayName != "" || len(info.Addresses) != 0 {

@@ -28,17 +28,17 @@ type StatusUpdate struct {
 //
 // THE PINNED UNIQUENESS CONTRACT (design §6, plan-cut amendment): at most ONE
 // PENDING invitation may exist per (resource_type, resource_id, identifier,
-// relation) — a colliding Create → errs.ErrAlreadyExists. This is a PARTIAL
+// relation) — a colliding Create → sdk.ErrAlreadyExists. This is a PARTIAL
 // uniqueness (pending rows only): once UpdateStatus moves a row off pending
 // (accepted/declined/cancelled), a NEW pending invite for the same tuple
 // SUCCEEDS. Stores express it as a partial/filtered unique index; the reference
 // scans for a pending collision.
 //
 // Sentinel contract (the storetest conformance suite executes these):
-//   - Create colliding on the pending-tuple → errs.ErrAlreadyExists.
-//   - Get / UpdateStatus for an unknown id → errs.ErrNotFound.
-//   - GetByTokenHash for an unknown hash → errs.ErrNotFound; a present row past
-//     ExpiresAt → errs.ErrExpired (a read-time expiry, mirroring the session /
+//   - Create colliding on the pending-tuple → sdk.ErrAlreadyExists.
+//   - Get / UpdateStatus for an unknown id → sdk.ErrNotFound.
+//   - GetByTokenHash for an unknown hash → sdk.ErrNotFound; a present row past
+//     ExpiresAt → sdk.ErrExpired (a read-time expiry, mirroring the session /
 //     verification / oauthstate precedent); else the record.
 //
 // ListByResource and ListBySubject are crud-typed (design §9). Ordering is
@@ -51,12 +51,12 @@ type StatusUpdate struct {
 // column, never a tuple.
 type InvitationRepository interface {
 	// Create persists a new pending invitation; a pending-tuple collision →
-	// errs.ErrAlreadyExists.
+	// sdk.ErrAlreadyExists.
 	Create(ctx context.Context, inv Invitation) (Invitation, error)
-	// Get returns the invitation for id, or errs.ErrNotFound.
+	// Get returns the invitation for id, or sdk.ErrNotFound.
 	Get(ctx context.Context, id string) (Invitation, error)
 	// GetByTokenHash returns the invitation for tokenHash; unknown → ErrNotFound,
-	// present-but-past-ExpiresAt → errs.ErrExpired, else the record.
+	// present-but-past-ExpiresAt → sdk.ErrExpired, else the record.
 	GetByTokenHash(ctx context.Context, tokenHash string) (Invitation, error)
 	// ListByResource returns a cursor-paginated page of a resource's invitations,
 	// ordered created_at DESC, id DESC.
@@ -64,6 +64,6 @@ type InvitationRepository interface {
 	// ListBySubject returns a cursor-paginated page of invitations addressed to
 	// identifier (the invitee email), ordered created_at DESC, id DESC.
 	ListBySubject(ctx context.Context, identifier string, req crud.ListRequest) (crud.Page[Invitation], error)
-	// UpdateStatus applies a lifecycle transition; unknown id → errs.ErrNotFound.
+	// UpdateStatus applies a lifecycle transition; unknown id → sdk.ErrNotFound.
 	UpdateStatus(ctx context.Context, id string, upd StatusUpdate) (Invitation, error)
 }

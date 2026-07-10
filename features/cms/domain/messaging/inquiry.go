@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // Inquiry is a submitted contact-form message.
@@ -22,20 +22,20 @@ type Inquiry struct {
 
 // NewInquiry validates the inputs and returns a new Inquiry, minting its ID from
 // ids (empty under cryptids.Database — the store then assigns the key).
-// Validation failures wrap errs.ErrInvalidInput.
+// Validation failures wrap sdk.ErrInvalidInput.
 func NewInquiry(ids cryptids.IDGenerator, name, email, message string, now time.Time) (Inquiry, error) {
 	name = strings.TrimSpace(name)
 	email = strings.TrimSpace(email)
 	message = strings.TrimSpace(message)
 
 	if name == "" {
-		return Inquiry{}, fmt.Errorf("name is required: %w", errs.ErrInvalidInput)
+		return Inquiry{}, fmt.Errorf("name is required: %w", sdk.ErrInvalidInput)
 	}
 	if !looksLikeEmail(email) {
-		return Inquiry{}, fmt.Errorf("a valid email is required: %w", errs.ErrInvalidInput)
+		return Inquiry{}, fmt.Errorf("a valid email is required: %w", sdk.ErrInvalidInput)
 	}
 	if message == "" {
-		return Inquiry{}, fmt.Errorf("message is required: %w", errs.ErrInvalidInput)
+		return Inquiry{}, fmt.Errorf("message is required: %w", sdk.ErrInvalidInput)
 	}
 
 	return Inquiry{

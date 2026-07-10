@@ -23,8 +23,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authorization"
 	"github.com/gopernicus/gopernicus/features/authorization/domain/relationship"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // Run executes the full conformance suite. newRepos returns a FRESH, empty
@@ -215,7 +215,7 @@ func runRelationshipContracts(t *testing.T, newRepos func(t *testing.T) authoriz
 		mustCreate(t, s, ct("doc", "d1", "viewer", "user", "u1"))
 		// An order field outside relationship.OrderFields (created_at only) is
 		// rejected with ErrInvalidInput identically across every backend.
-		if _, err := s.ListRelationshipsBySubject(ctx, "user", "u1", relationship.SubjectRelationshipFilter{}, crud.ListRequest{Order: crud.NewOrder("subject_id", crud.ASC)}); !errors.Is(err, errs.ErrInvalidInput) {
+		if _, err := s.ListRelationshipsBySubject(ctx, "user", "u1", relationship.SubjectRelationshipFilter{}, crud.ListRequest{Order: crud.NewOrder("subject_id", crud.ASC)}); !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatalf("unknown order field must reject with ErrInvalidInput, got %v", err)
 		}
 	})

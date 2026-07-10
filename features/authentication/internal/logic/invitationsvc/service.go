@@ -23,14 +23,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
-	"github.com/gopernicus/gopernicus/features/authentication/internal/redirect"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/invitation"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
+	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
+	"github.com/gopernicus/gopernicus/features/authentication/internal/redirect"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/email"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/identity"
 	"github.com/gopernicus/gopernicus/sdk/notify"
 )
@@ -60,25 +60,25 @@ const (
 var (
 	// ErrAlreadyMember is returned by Create when MemberCheck reports the invitee
 	// already holds the relation on the resource (a duplicate invite is pointless).
-	ErrAlreadyMember = fmt.Errorf("subject is already a member: %w", errs.ErrConflict)
+	ErrAlreadyMember = fmt.Errorf("subject is already a member: %w", sdk.ErrConflict)
 	// ErrPendingInvitationExists is returned by Create when a pending invitation
 	// already exists for the (resource, identifier, relation) tuple.
-	ErrPendingInvitationExists = fmt.Errorf("a pending invitation already exists: %w", errs.ErrAlreadyExists)
+	ErrPendingInvitationExists = fmt.Errorf("a pending invitation already exists: %w", sdk.ErrAlreadyExists)
 	// ErrNotPending is returned when a transition (accept/decline/cancel/resend)
 	// targets an invitation that is not in an eligible status.
-	ErrNotPending = fmt.Errorf("invitation is not pending: %w", errs.ErrConflict)
+	ErrNotPending = fmt.Errorf("invitation is not pending: %w", sdk.ErrConflict)
 	// ErrIdentifierMismatch is returned by Accept when the accepting user's email
 	// does not match the invitation identifier.
-	ErrIdentifierMismatch = fmt.Errorf("invitation identifier does not match: %w", errs.ErrForbidden)
+	ErrIdentifierMismatch = fmt.Errorf("invitation identifier does not match: %w", sdk.ErrForbidden)
 	// ErrNotOwner is returned by Cancel/Resend when the caller is not the
 	// invitation's InvitedBy owner.
-	ErrNotOwner = fmt.Errorf("not the invitation owner: %w", errs.ErrForbidden)
+	ErrNotOwner = fmt.Errorf("not the invitation owner: %w", sdk.ErrForbidden)
 	// ErrKindNotSupported is returned by Create for an identifier kind the host
 	// is not set up to deliver to (deny-by-absence, ruling 6): a kind is supported
 	// iff it is identity.KindEmail with the Mailer wired, OR a notifier of that
-	// kind is wired. It wraps errs.ErrInvalidInput so the transport maps it to 400,
+	// kind is wired. It wraps sdk.ErrInvalidInput so the transport maps it to 400,
 	// and the invitation is NOT created. Package auth re-exports it.
-	ErrKindNotSupported = fmt.Errorf("invitation identifier kind is not supported by this host: %w", errs.ErrInvalidInput)
+	ErrKindNotSupported = fmt.Errorf("invitation identifier kind is not supported by this host: %w", sdk.ErrInvalidInput)
 )
 
 // Granter grants a subject a relation on a resource — the ONE ReBAC-decoupled
@@ -323,7 +323,7 @@ func (s *Service) createPending(ctx context.Context, in CreateInput, subjectID s
 	}
 	created, err := s.invitations.Create(ctx, inv)
 	if err != nil {
-		if errors.Is(err, errs.ErrAlreadyExists) {
+		if errors.Is(err, sdk.ErrAlreadyExists) {
 			return CreateResult{}, ErrPendingInvitationExists
 		}
 		return CreateResult{}, err
@@ -337,7 +337,7 @@ func (s *Service) createPending(ctx context.Context, in CreateInput, subjectID s
 
 // Accept redeems a token: it grants the accepting subject the invitation's
 // relation, then marks the invitation accepted with the resolved subject id. An
-// unknown/expired token surfaces errs.ErrNotFound/ErrExpired; a non-pending
+// unknown/expired token surfaces sdk.ErrNotFound/ErrExpired; a non-pending
 // invitation → ErrNotPending; an identifier mismatch → ErrIdentifierMismatch. A
 // Granter failure is audited and returned (the invitation stays pending).
 func (s *Service) Accept(ctx context.Context, in AcceptInput) (AcceptResult, error) {
@@ -391,7 +391,7 @@ func (s *Service) Accept(ctx context.Context, in AcceptInput) (AcceptResult, err
 
 // Decline marks a pending invitation declined. It is a PUBLIC route, so the
 // caller proves they are the invitee by presenting the token; a wrong token
-// leaks nothing (errs.ErrNotFound). No grant happens.
+// leaks nothing (sdk.ErrNotFound). No grant happens.
 func (s *Service) Decline(ctx context.Context, id, token string) error {
 	inv, err := s.invitations.Get(ctx, id)
 	if err != nil {
@@ -693,7 +693,7 @@ func normalizeIdentifier(identifier, kind string) (string, error) {
 		normalized = strings.ToLower(normalized)
 	}
 	if normalized == "" {
-		return "", fmt.Errorf("identifier is required: %w", errs.ErrInvalidInput)
+		return "", fmt.Errorf("identifier is required: %w", sdk.ErrInvalidInput)
 	}
 	return normalized, nil
 }
@@ -701,7 +701,7 @@ func normalizeIdentifier(identifier, kind string) (string, error) {
 // invitationNotFound is the generic not-found returned when a token does not
 // resolve, so a public caller cannot probe invitation existence.
 func invitationNotFound() error {
-	return fmt.Errorf("invitation not found: %w", errs.ErrNotFound)
+	return fmt.Errorf("invitation not found: %w", sdk.ErrNotFound)
 }
 
 // errKind reduces err to a coarse, secret-free label for a WARN line (design
@@ -710,13 +710,13 @@ func errKind(err error) string {
 	switch {
 	case err == nil:
 		return "none"
-	case errors.Is(err, errs.ErrAlreadyExists):
+	case errors.Is(err, sdk.ErrAlreadyExists):
 		return "already_exists"
-	case errors.Is(err, errs.ErrInvalidInput):
+	case errors.Is(err, sdk.ErrInvalidInput):
 		return "invalid_input"
-	case errors.Is(err, errs.ErrNotFound):
+	case errors.Is(err, sdk.ErrNotFound):
 		return "not_found"
-	case errors.Is(err, errs.ErrConflict):
+	case errors.Is(err, sdk.ErrConflict):
 		return "conflict"
 	default:
 		return "unknown"

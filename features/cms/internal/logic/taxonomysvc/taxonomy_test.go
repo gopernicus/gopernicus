@@ -9,8 +9,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // fakeTerms is an in-memory TermRepository for driving the service.
@@ -23,7 +23,7 @@ func newFakeTerms() *fakeTerms { return &fakeTerms{byID: map[string]taxonomy.Ter
 func (f *fakeTerms) Get(ctx context.Context, id string) (taxonomy.Term, error) {
 	t, ok := f.byID[id]
 	if !ok {
-		return taxonomy.Term{}, errs.ErrNotFound
+		return taxonomy.Term{}, sdk.ErrNotFound
 	}
 	return t, nil
 }
@@ -33,7 +33,7 @@ func (f *fakeTerms) GetBySlug(ctx context.Context, kind taxonomy.Kind, slug stri
 			return t, nil
 		}
 	}
-	return taxonomy.Term{}, errs.ErrNotFound
+	return taxonomy.Term{}, sdk.ErrNotFound
 }
 func (f *fakeTerms) ListByKind(ctx context.Context, kind taxonomy.Kind) ([]taxonomy.Term, error) {
 	var out []taxonomy.Term
@@ -48,7 +48,7 @@ func (f *fakeTerms) ListByKind(ctx context.Context, kind taxonomy.Kind) ([]taxon
 func (f *fakeTerms) Create(ctx context.Context, t taxonomy.Term) (taxonomy.Term, error) {
 	for _, ex := range f.byID {
 		if ex.Kind == t.Kind && ex.Slug == t.Slug {
-			return taxonomy.Term{}, errs.ErrAlreadyExists
+			return taxonomy.Term{}, sdk.ErrAlreadyExists
 		}
 	}
 	f.byID[t.ID] = t
@@ -56,7 +56,7 @@ func (f *fakeTerms) Create(ctx context.Context, t taxonomy.Term) (taxonomy.Term,
 }
 func (f *fakeTerms) Update(ctx context.Context, id string, t taxonomy.Term) (taxonomy.Term, error) {
 	if _, ok := f.byID[id]; !ok {
-		return taxonomy.Term{}, errs.ErrNotFound
+		return taxonomy.Term{}, sdk.ErrNotFound
 	}
 	f.byID[id] = t
 	return t, nil
@@ -117,7 +117,7 @@ func TestService_Terms(t *testing.T) {
 	if err := svc.DeleteTerm(ctx, cat.ID); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	if _, err := svc.GetTerm(ctx, cat.ID); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := svc.GetTerm(ctx, cat.ID); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("deleted term should be gone")
 	}
 }
@@ -126,16 +126,16 @@ func TestService_TermErrors(t *testing.T) {
 	ctx := context.Background()
 	svc := NewService(newFakeTerms(), cryptids.IDGenerator{}, clock(time.Now()))
 
-	if _, err := svc.CreateTerm(ctx, taxonomy.Kind("bogus"), "x", ""); !errors.Is(err, errs.ErrInvalidInput) {
+	if _, err := svc.CreateTerm(ctx, taxonomy.Kind("bogus"), "x", ""); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("bad kind: %v", err)
 	}
-	if _, err := svc.CreateTerm(ctx, taxonomy.KindTag, "  ", ""); !errors.Is(err, errs.ErrInvalidInput) {
+	if _, err := svc.CreateTerm(ctx, taxonomy.KindTag, "  ", ""); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("blank name: %v", err)
 	}
 	if _, err := svc.CreateTerm(ctx, taxonomy.KindTag, "Go", ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.CreateTerm(ctx, taxonomy.KindTag, "Go", ""); !errors.Is(err, errs.ErrAlreadyExists) {
+	if _, err := svc.CreateTerm(ctx, taxonomy.KindTag, "Go", ""); !errors.Is(err, sdk.ErrAlreadyExists) {
 		t.Errorf("dup slug per kind: %v", err)
 	}
 }

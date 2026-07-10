@@ -17,8 +17,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/identity"
 )
 
@@ -68,7 +68,7 @@ type Invitation struct {
 // service mints and hashes the secret; only it ever holds the plaintext),
 // minting its record ID from ids (empty under cryptids.Database — the store
 // then assigns the key). ttl sets ExpiresAt from now. A blank resourceType/
-// resourceID/relation/identifier/invitedBy/tokenHash wraps errs.ErrInvalidInput.
+// resourceID/relation/identifier/invitedBy/tokenHash wraps sdk.ErrInvalidInput.
 // A blank identifierKind defaults to identity.KindEmail. The identifier is
 // stored verbatim — the service normalizes it (kind-aware) before calling New so
 // it matches the value resolve-on-registration and "mine" look it up by.
@@ -85,17 +85,17 @@ func New(ids cryptids.IDGenerator, resourceType, resourceID, relation, identifie
 	}
 	switch {
 	case resourceType == "":
-		return Invitation{}, fmt.Errorf("resource type is required: %w", errs.ErrInvalidInput)
+		return Invitation{}, fmt.Errorf("resource type is required: %w", sdk.ErrInvalidInput)
 	case resourceID == "":
-		return Invitation{}, fmt.Errorf("resource id is required: %w", errs.ErrInvalidInput)
+		return Invitation{}, fmt.Errorf("resource id is required: %w", sdk.ErrInvalidInput)
 	case relation == "":
-		return Invitation{}, fmt.Errorf("relation is required: %w", errs.ErrInvalidInput)
+		return Invitation{}, fmt.Errorf("relation is required: %w", sdk.ErrInvalidInput)
 	case identifier == "":
-		return Invitation{}, fmt.Errorf("identifier is required: %w", errs.ErrInvalidInput)
+		return Invitation{}, fmt.Errorf("identifier is required: %w", sdk.ErrInvalidInput)
 	case invitedBy == "":
-		return Invitation{}, fmt.Errorf("invited-by is required: %w", errs.ErrInvalidInput)
+		return Invitation{}, fmt.Errorf("invited-by is required: %w", sdk.ErrInvalidInput)
 	case tokenHash == "":
-		return Invitation{}, fmt.Errorf("token hash is required: %w", errs.ErrInvalidInput)
+		return Invitation{}, fmt.Errorf("token hash is required: %w", sdk.ErrInvalidInput)
 	}
 	now = now.UTC()
 	return Invitation{

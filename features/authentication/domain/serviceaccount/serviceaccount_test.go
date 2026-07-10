@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 var base = time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
@@ -29,7 +29,7 @@ func TestNewValid(t *testing.T) {
 
 func TestNewActAsUserRequiresOwner(t *testing.T) {
 	// The pinned invariant: ActAsUser → OwnerUserID != "".
-	if _, err := New(cryptids.IDGenerator{}, "personal", "", "admin", true, "", base); !errors.Is(err, errs.ErrInvalidInput) {
+	if _, err := New(cryptids.IDGenerator{}, "personal", "", "admin", true, "", base); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("act-as-user with no owner: err=%v, want ErrInvalidInput", err)
 	}
 	sa, err := New(cryptids.IDGenerator{}, "personal", "", "admin", true, "owner-9", base)
@@ -42,10 +42,10 @@ func TestNewActAsUserRequiresOwner(t *testing.T) {
 }
 
 func TestNewRequiredFields(t *testing.T) {
-	if _, err := New(cryptids.IDGenerator{}, "", "d", "admin", false, "", base); !errors.Is(err, errs.ErrInvalidInput) {
+	if _, err := New(cryptids.IDGenerator{}, "", "d", "admin", false, "", base); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("blank name: err=%v, want ErrInvalidInput", err)
 	}
-	if _, err := New(cryptids.IDGenerator{}, "name", "d", "", false, "", base); !errors.Is(err, errs.ErrInvalidInput) {
+	if _, err := New(cryptids.IDGenerator{}, "name", "d", "", false, "", base); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("blank created-by: err=%v, want ErrInvalidInput", err)
 	}
 }

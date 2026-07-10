@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // ListQuery describes one paginated SELECT for List. It is the turso twin of the
@@ -76,7 +76,7 @@ func (q ListQuery[T]) listCursor(ctx context.Context, db Querier, req crud.ListR
 		var err error
 		cursor, err = crud.DecodeCursor(req.Cursor, orderCol)
 		if err != nil {
-			return crud.Page[T]{}, fmt.Errorf("decode cursor: %w: %w", errs.ErrInvalidInput, err)
+			return crud.Page[T]{}, fmt.Errorf("decode cursor: %w: %w", sdk.ErrInvalidInput, err)
 		}
 	}
 
@@ -172,7 +172,7 @@ func (q ListQuery[T]) listOffset(ctx context.Context, db Querier, req crud.ListR
 // its CastLower flag, and a normalized direction by matching the order field
 // against the columns in q.OrderFields. Membership in the allow-list is the
 // injection guard (columns are store-authored constants, not quoted). An order
-// field absent from the allow-list returns an error wrapping errs.ErrInvalidInput.
+// field absent from the allow-list returns an error wrapping sdk.ErrInvalidInput.
 func (q ListQuery[T]) resolveOrder(order crud.Order) (column string, castLower bool, direction string, err error) {
 	if order.Field == "" {
 		order = q.DefaultOrder
@@ -188,7 +188,7 @@ func (q ListQuery[T]) resolveOrder(order crud.Order) (column string, castLower b
 			return of.Column, of.CastLower, dir, nil
 		}
 	}
-	return "", false, "", fmt.Errorf("unknown order field %q: %w", order.Field, errs.ErrInvalidInput)
+	return "", false, "", fmt.Errorf("unknown order field %q: %w", order.Field, sdk.ErrInvalidInput)
 }
 
 // markPrev runs the reverse probe for cursor mode and applies crud.MarkPrevPage.
@@ -268,7 +268,7 @@ func (q ListQuery[T]) scanRow(rows *sql.Rows) (T, error) {
 // from direction × forPrevious (keysetOperator); castLower wraps both sides of
 // the order comparison in LOWER(). Time order values bind via FormatTime. Both
 // orderCol and pkCol pass through QuoteIdentifier, so a non-identifier column or
-// raw-expression pk fails loud with errs.ErrInvalidInput before any SQL runs.
+// raw-expression pk fails loud with sdk.ErrInvalidInput before any SQL runs.
 func appendCursorPredicate(buf *strings.Builder, args *[]any, orderCol, pkCol string, orderValue any, pk, direction string, forPrevious, castLower bool) error {
 	quotedOrder, err := QuoteIdentifier(orderCol)
 	if err != nil {

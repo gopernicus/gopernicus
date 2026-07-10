@@ -19,7 +19,7 @@ import (
 	"{{.ModulePath}}/domain/{{.Agg}}"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 var (
@@ -77,14 +77,14 @@ func testCRUD(t *testing.T, repos {{.Feature}}.Repositories) {
 	if err := store.Delete(ctx, created.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err := store.Get(ctx, created.ID); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := store.Get(ctx, created.ID); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Get after Delete: err=%v, want ErrNotFound", err)
 	}
 }
 
 func testAbsent(t *testing.T, repos {{.Feature}}.Repositories) {
 	ctx := context.Background()
-	if _, err := repos.{{.ReposField}}.Get(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repos.{{.ReposField}}.Get(ctx, "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Get(absent): err=%v, want ErrNotFound", err)
 	}
 }
@@ -136,7 +136,7 @@ func testRejectsUnknownOrder(t *testing.T, repos {{.Feature}}.Repositories) {
 	mustCreate(t, store, "one", suiteBase)
 	// An order field outside {{.Agg}}.OrderFields (created_at only) is rejected
 	// with ErrInvalidInput identically across every backend.
-	if _, err := store.List(ctx, {{.Feature}}.ListFilter{}, crud.ListRequest{Order: crud.NewOrder("name", crud.ASC)}); !errors.Is(err, errs.ErrInvalidInput) {
+	if _, err := store.List(ctx, {{.Feature}}.ListFilter{}, crud.ListRequest{Order: crud.NewOrder("name", crud.ASC)}); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("unknown order field must reject with ErrInvalidInput, got %v", err)
 	}
 }
@@ -377,10 +377,10 @@ func runStaleCursorCase(t *testing.T, list listFunc, created []{{.Agg}}.{{.AggTi
 func runCursorOffsetExclusiveCase(t *testing.T, list listFunc) {
 	t.Helper()
 	ctx := context.Background()
-	if _, err := list(ctx, crud.ListRequest{Strategy: crud.StrategyCursor, Limit: 2, Offset: 2}); !errors.Is(err, errs.ErrInvalidInput) {
+	if _, err := list(ctx, crud.ListRequest{Strategy: crud.StrategyCursor, Limit: 2, Offset: 2}); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("cursor strategy + offset: err=%v, want ErrInvalidInput", err)
 	}
-	if _, err := list(ctx, crud.ListRequest{Strategy: crud.StrategyOffset, Limit: 2, Cursor: "anything"}); !errors.Is(err, errs.ErrInvalidInput) {
+	if _, err := list(ctx, crud.ListRequest{Strategy: crud.StrategyOffset, Limit: 2, Cursor: "anything"}); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("offset strategy + cursor: err=%v, want ErrInvalidInput", err)
 	}
 }

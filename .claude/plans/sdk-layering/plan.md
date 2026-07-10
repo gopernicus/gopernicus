@@ -259,3 +259,20 @@ capability→foundation); trigger: the first host wanting traced workers.
 ## Execution log
 
 (append dated entries here)
+
+### 2026-07-10 — P1 CLOSED (the kernel: errs → root package sdk)
+
+`sdk/errors.go` + `errors_test.go` (8 sentinels + IsExpected, the
+kernel-contract doc header per fold item 2 — no false compiler claim);
+`sdk/errs/` DELETED same change. Rename landed on EXACTLY the
+pre-verified 132 files (125 .go + 7 .tmpl) — plus a logged widening: 38
+MORE files (33 .go + 5 .tmpl) carried `errs.X` in DOC COMMENTS only
+(port definitions, store headers) and were updated to `sdk.X`; and the
+naive-replace trap avoided (sdk/validation's LOCAL `errs` variable +
+authorization's `var errs []string` — replacements scoped to files that
+import the package). `errors.Is(err, sdk.ErrNotFound)` is the vocabulary
+now. Verify: sdk green; `make check` (35 — the workshop scaffold legs
+proved the .tmpl renames build); `make guard` (11, G1 clean — root .go
+files don't change the empty-go.mod claim); gofmt clean; coordinator
+re-verified sdk tests + a feature build + errs deletion independently.
+Committed CI-green. **Next: P2 (the evictions + Fork 1 + Fork 2).**

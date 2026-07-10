@@ -5,8 +5,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/serviceaccount"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // ServiceAccountStore implements serviceaccount.ServiceAccountRepository over a
@@ -78,7 +78,7 @@ func (s *ServiceAccountStore) Create(ctx context.Context, sa serviceaccount.Serv
 	return sa, nil
 }
 
-// Get returns the account for id, or errs.ErrNotFound.
+// Get returns the account for id, or sdk.ErrNotFound.
 func (s *ServiceAccountStore) Get(ctx context.Context, id string) (serviceaccount.ServiceAccount, error) {
 	const q = `SELECT ` + serviceAccountColumns + ` FROM service_accounts WHERE id = ?`
 	row, err := queryOne[serviceAccountRow](ctx, s.db, q, id)
@@ -105,7 +105,7 @@ func (s *ServiceAccountStore) List(ctx context.Context, req crud.ListRequest) (c
 	return crud.MapPage(page, serviceAccountRow.toDomain), nil
 }
 
-// Update replaces the account for id; unknown → errs.ErrNotFound. It leaves id and
+// Update replaces the account for id; unknown → sdk.ErrNotFound. It leaves id and
 // created_at unchanged.
 func (s *ServiceAccountStore) Update(ctx context.Context, id string, sa serviceaccount.ServiceAccount) (serviceaccount.ServiceAccount, error) {
 	const q = `UPDATE service_accounts SET name=?, description=?, created_by=?, act_as_user=?, owner_user_id=?, updated_at=? WHERE id=?`
@@ -116,19 +116,19 @@ func (s *ServiceAccountStore) Update(ctx context.Context, id string, sa servicea
 		return serviceaccount.ServiceAccount{}, err
 	}
 	if n == 0 {
-		return serviceaccount.ServiceAccount{}, errs.ErrNotFound
+		return serviceaccount.ServiceAccount{}, sdk.ErrNotFound
 	}
 	return sa, nil
 }
 
-// Delete removes the account for id; unknown → errs.ErrNotFound.
+// Delete removes the account for id; unknown → sdk.ErrNotFound.
 func (s *ServiceAccountStore) Delete(ctx context.Context, id string) error {
 	n, err := tursodb.ExecAffecting(ctx, s.db, "DELETE FROM service_accounts WHERE id = ?", id)
 	if err != nil {
 		return err
 	}
 	if n == 0 {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	return nil
 }
