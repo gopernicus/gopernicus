@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/logging"
 )
 
@@ -89,11 +89,11 @@ func TestErrFromDomain_StatusMapping(t *testing.T) {
 		err  error
 		want int
 	}{
-		{errs.ErrNotFound, http.StatusNotFound},
-		{errs.ErrAlreadyExists, http.StatusConflict},
-		{errs.ErrInvalidInput, http.StatusBadRequest},
-		{errs.ErrForbidden, http.StatusForbidden},
-		{fmt.Errorf("wrap: %w", errs.ErrNotFound), http.StatusNotFound},
+		{sdk.ErrNotFound, http.StatusNotFound},
+		{sdk.ErrAlreadyExists, http.StatusConflict},
+		{sdk.ErrInvalidInput, http.StatusBadRequest},
+		{sdk.ErrForbidden, http.StatusForbidden},
+		{fmt.Errorf("wrap: %w", sdk.ErrNotFound), http.StatusNotFound},
 		{fmt.Errorf("boom"), http.StatusInternalServerError},
 	}
 	for _, tt := range tests {

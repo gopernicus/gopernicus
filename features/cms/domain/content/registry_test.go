@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
 
@@ -46,7 +46,7 @@ func TestRegistry_RegisterAndType(t *testing.T) {
 	}
 
 	// Duplicate slug rejected.
-	if err := r.Register(productType()); !errors.Is(err, errs.ErrAlreadyExists) {
+	if err := r.Register(productType()); !errors.Is(err, sdk.ErrAlreadyExists) {
 		t.Fatalf("duplicate Register err = %v, want ErrAlreadyExists", err)
 	}
 }
@@ -65,7 +65,7 @@ func TestRegistry_RegisterValidation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := r.Register(tt.ct); !errors.Is(err, errs.ErrInvalidInput) {
+			if err := r.Register(tt.ct); !errors.Is(err, sdk.ErrInvalidInput) {
 				t.Fatalf("Register err = %v, want ErrInvalidInput", err)
 			}
 		})
@@ -89,15 +89,15 @@ func TestRegistry_Templates(t *testing.T) {
 	}
 
 	// Unknown type.
-	if err := r.RegisterTemplate("nope", "default", func(Entry) web.Renderer { return stubRenderer("") }); !errors.Is(err, errs.ErrNotFound) {
+	if err := r.RegisterTemplate("nope", "default", func(Entry) web.Renderer { return stubRenderer("") }); !errors.Is(err, sdk.ErrNotFound) {
 		t.Fatalf("RegisterTemplate unknown type err = %v, want ErrNotFound", err)
 	}
 	// Undeclared template.
-	if err := r.RegisterTemplate("product", "ghost", func(Entry) web.Renderer { return stubRenderer("") }); !errors.Is(err, errs.ErrInvalidInput) {
+	if err := r.RegisterTemplate("product", "ghost", func(Entry) web.Renderer { return stubRenderer("") }); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("RegisterTemplate undeclared err = %v, want ErrInvalidInput", err)
 	}
 	// Nil func.
-	if err := r.RegisterTemplate("product", "default", nil); !errors.Is(err, errs.ErrInvalidInput) {
+	if err := r.RegisterTemplate("product", "default", nil); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("RegisterTemplate nil err = %v, want ErrInvalidInput", err)
 	}
 }
@@ -143,25 +143,25 @@ func TestRegistry_ValidateFields(t *testing.T) {
 	})
 
 	t.Run("missing required", func(t *testing.T) {
-		if _, err := r.ValidateFields("product", Fields{"subtitle": {Raw: "x"}}); !errors.Is(err, errs.ErrInvalidInput) {
+		if _, err := r.ValidateFields("product", Fields{"subtitle": {Raw: "x"}}); !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatalf("err = %v, want ErrInvalidInput", err)
 		}
 	})
 
 	t.Run("unknown key", func(t *testing.T) {
-		if _, err := r.ValidateFields("product", Fields{"price": {Raw: "1"}, "ghost": {Raw: "x"}}); !errors.Is(err, errs.ErrInvalidInput) {
+		if _, err := r.ValidateFields("product", Fields{"price": {Raw: "1"}, "ghost": {Raw: "x"}}); !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatalf("err = %v, want ErrInvalidInput", err)
 		}
 	})
 
 	t.Run("bad number", func(t *testing.T) {
-		if _, err := r.ValidateFields("product", Fields{"price": {Raw: "notanum"}}); !errors.Is(err, errs.ErrInvalidInput) {
+		if _, err := r.ValidateFields("product", Fields{"price": {Raw: "notanum"}}); !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatalf("err = %v, want ErrInvalidInput", err)
 		}
 	})
 
 	t.Run("unknown type", func(t *testing.T) {
-		if _, err := r.ValidateFields("ghost", Fields{}); !errors.Is(err, errs.ErrNotFound) {
+		if _, err := r.ValidateFields("ghost", Fields{}); !errors.Is(err, sdk.ErrNotFound) {
 			t.Fatalf("err = %v, want ErrNotFound", err)
 		}
 	})
@@ -225,7 +225,7 @@ func TestNewEntry(t *testing.T) {
 	}
 
 	// Empty title rejected.
-	if _, err := NewEntry(cryptids.IDGenerator{}, "article", "   ", "", "", "", StatusDraft, "", now); !errors.Is(err, errs.ErrInvalidInput) {
+	if _, err := NewEntry(cryptids.IDGenerator{}, "article", "   ", "", "", "", StatusDraft, "", now); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("empty title err = %v, want ErrInvalidInput", err)
 	}
 }

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // TestQuoteIdentifier_Valid: allowed identifiers quote to double-quoted form,
@@ -46,7 +46,7 @@ func TestQuoteIdentifier_Rejects(t *testing.T) {
 			t.Errorf("QuoteIdentifier(%q) = %q, want error", in, got)
 			continue
 		}
-		if !errors.Is(err, errs.ErrInvalidInput) {
+		if !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Errorf("QuoteIdentifier(%q) err = %v, want ErrInvalidInput", in, err)
 		}
 	}

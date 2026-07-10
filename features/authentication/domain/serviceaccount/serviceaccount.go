@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // ServiceAccount is a machine identity. CreatedBy is the human user that minted
@@ -34,7 +34,7 @@ type ServiceAccount struct {
 // New builds a ServiceAccount created by createdBy as of now, minting its ID
 // from ids (empty under cryptids.Database — the store then assigns the key).
 // A blank name, a blank createdBy, or an act-as-user account with no OwnerUserID
-// wraps errs.ErrInvalidInput (the design §4.1 invariant: ActAsUser →
+// wraps sdk.ErrInvalidInput (the design §4.1 invariant: ActAsUser →
 // OwnerUserID != "").
 func New(ids cryptids.IDGenerator, name, description, createdBy string, actAsUser bool, ownerUserID string, now time.Time) (ServiceAccount, error) {
 	name = strings.TrimSpace(name)
@@ -42,13 +42,13 @@ func New(ids cryptids.IDGenerator, name, description, createdBy string, actAsUse
 	createdBy = strings.TrimSpace(createdBy)
 	ownerUserID = strings.TrimSpace(ownerUserID)
 	if name == "" {
-		return ServiceAccount{}, fmt.Errorf("name is required: %w", errs.ErrInvalidInput)
+		return ServiceAccount{}, fmt.Errorf("name is required: %w", sdk.ErrInvalidInput)
 	}
 	if createdBy == "" {
-		return ServiceAccount{}, fmt.Errorf("created-by is required: %w", errs.ErrInvalidInput)
+		return ServiceAccount{}, fmt.Errorf("created-by is required: %w", sdk.ErrInvalidInput)
 	}
 	if actAsUser && ownerUserID == "" {
-		return ServiceAccount{}, fmt.Errorf("act-as-user requires an owner user id: %w", errs.ErrInvalidInput)
+		return ServiceAccount{}, fmt.Errorf("act-as-user requires an owner user id: %w", sdk.ErrInvalidInput)
 	}
 	now = now.UTC()
 	return ServiceAccount{

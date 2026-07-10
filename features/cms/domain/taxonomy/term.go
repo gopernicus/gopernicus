@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/slug"
 )
 
@@ -37,7 +37,7 @@ type Term struct {
 
 // NewTerm validates inputs, generates a slug, mints its ID from ids (empty under
 // cryptids.Database — the store then assigns the key), and returns a new Term.
-// ParentID is ignored for tags. Validation failures wrap errs.ErrInvalidInput.
+// ParentID is ignored for tags. Validation failures wrap sdk.ErrInvalidInput.
 func NewTerm(ids cryptids.IDGenerator, kind Kind, name, parentID string, now time.Time) (Term, error) {
 	name = strings.TrimSpace(name)
 	if err := validate(kind, name); err != nil {
@@ -83,13 +83,13 @@ func (t *Term) ApplyEdit(name, parentID string, now time.Time) error {
 
 func validate(kind Kind, name string) error {
 	if !kind.Valid() {
-		return fmt.Errorf("invalid kind %q: %w", kind, errs.ErrInvalidInput)
+		return fmt.Errorf("invalid kind %q: %w", kind, sdk.ErrInvalidInput)
 	}
 	if name == "" {
-		return fmt.Errorf("name is required: %w", errs.ErrInvalidInput)
+		return fmt.Errorf("name is required: %w", sdk.ErrInvalidInput)
 	}
 	if slug.Make(name) == "" {
-		return fmt.Errorf("name must contain an alphanumeric character: %w", errs.ErrInvalidInput)
+		return fmt.Errorf("name must contain an alphanumeric character: %w", sdk.ErrInvalidInput)
 	}
 	return nil
 }

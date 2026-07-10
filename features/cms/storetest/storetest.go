@@ -26,9 +26,9 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
 	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
 	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // ids is the suite's entity-ID generator: the default nanoid strategy, matching
@@ -262,7 +262,7 @@ func testEntriesCRUD(t *testing.T, repos cms.Repositories) {
 	if err := repo.Delete(ctx, "e-crud"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err := repo.Get(ctx, "e-crud"); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.Get(ctx, "e-crud"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Get after Delete: err=%v, want ErrNotFound", err)
 	}
 }
@@ -271,16 +271,16 @@ func testEntriesAbsent(t *testing.T, repos cms.Repositories) {
 	ctx := context.Background()
 	repo := repos.Entries
 
-	if _, err := repo.Get(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.Get(ctx, "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Get(absent): err=%v, want ErrNotFound", err)
 	}
-	if _, err := repo.GetBySlug(ctx, "article", "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.GetBySlug(ctx, "article", "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("GetBySlug(absent): err=%v, want ErrNotFound", err)
 	}
-	if _, err := repo.Update(ctx, "nope", newEntry("nope", "article", "nope", "Nope", content.StatusDraft, suiteBase)); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.Update(ctx, "nope", newEntry("nope", "article", "nope", "Nope", content.StatusDraft, suiteBase)); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Update(absent): err=%v, want ErrNotFound", err)
 	}
-	if err := repo.Delete(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if err := repo.Delete(ctx, "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Delete(absent): err=%v, want ErrNotFound", err)
 	}
 }
@@ -294,7 +294,7 @@ func testEntriesUniqueness(t *testing.T, repos cms.Repositories) {
 		t.Fatalf("first Create: %v", err)
 	}
 	dup := newEntry("e-uniq-2", "article", "same-slug", "Same Slug", content.StatusDraft, suiteBase)
-	if _, err := repo.Create(ctx, dup); !errors.Is(err, errs.ErrAlreadyExists) {
+	if _, err := repo.Create(ctx, dup); !errors.Is(err, sdk.ErrAlreadyExists) {
 		t.Errorf("Create colliding (type,slug): err=%v, want ErrAlreadyExists", err)
 	}
 	// Same slug under a different type does not collide — uniqueness is (type,slug).
@@ -507,7 +507,7 @@ func testTermsCRUD(t *testing.T, repos cms.Repositories) {
 	if err := repo.Delete(ctx, created.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err := repo.Get(ctx, created.ID); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.Get(ctx, created.ID); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Get after Delete: err=%v, want ErrNotFound", err)
 	}
 }
@@ -516,14 +516,14 @@ func testTermsAbsent(t *testing.T, repos cms.Repositories) {
 	ctx := context.Background()
 	repo := repos.Terms
 
-	if _, err := repo.Get(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.Get(ctx, "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Get(absent): err=%v, want ErrNotFound", err)
 	}
-	if _, err := repo.GetBySlug(ctx, taxonomy.KindTag, "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.GetBySlug(ctx, taxonomy.KindTag, "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("GetBySlug(absent): err=%v, want ErrNotFound", err)
 	}
 	absent, _ := taxonomy.NewTerm(ids, taxonomy.KindTag, "Ghost", "", suiteBase)
-	if _, err := repo.Update(ctx, "nope", absent); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.Update(ctx, "nope", absent); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Update(absent): err=%v, want ErrNotFound", err)
 	}
 }
@@ -537,7 +537,7 @@ func testTermsUniqueness(t *testing.T, repos cms.Repositories) {
 		t.Fatalf("first Create: %v", err)
 	}
 	t2, _ := taxonomy.NewTerm(ids, taxonomy.KindCategory, "Duplicate", "", suiteBase)
-	if _, err := repo.Create(ctx, t2); !errors.Is(err, errs.ErrAlreadyExists) {
+	if _, err := repo.Create(ctx, t2); !errors.Is(err, sdk.ErrAlreadyExists) {
 		t.Errorf("Create colliding (kind,slug): err=%v, want ErrAlreadyExists", err)
 	}
 	// Same slug under a different kind does not collide — uniqueness is (kind,slug).
@@ -612,17 +612,17 @@ func testMenusAbsent(t *testing.T, repos cms.Repositories) {
 	ctx := context.Background()
 	repo := repos.Menus
 
-	if _, err := repo.GetMenu(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.GetMenu(ctx, "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("GetMenu(absent): err=%v, want ErrNotFound", err)
 	}
-	if _, err := repo.GetMenuBySlug(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.GetMenuBySlug(ctx, "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("GetMenuBySlug(absent): err=%v, want ErrNotFound", err)
 	}
-	if _, err := repo.GetItem(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.GetItem(ctx, "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("GetItem(absent): err=%v, want ErrNotFound", err)
 	}
 	item, _ := menus.NewMenuItem(ids, "m", "Home", "/", "", 0, suiteBase)
-	if _, err := repo.UpdateItem(ctx, "nope", item); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.UpdateItem(ctx, "nope", item); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("UpdateItem(absent): err=%v, want ErrNotFound", err)
 	}
 }
@@ -636,7 +636,7 @@ func testMenusUniqueness(t *testing.T, repos cms.Repositories) {
 		t.Fatalf("first CreateMenu: %v", err)
 	}
 	m2, _ := menus.NewMenu(ids, "Footer", suiteBase)
-	if _, err := repo.CreateMenu(ctx, m2); !errors.Is(err, errs.ErrAlreadyExists) {
+	if _, err := repo.CreateMenu(ctx, m2); !errors.Is(err, sdk.ErrAlreadyExists) {
 		t.Errorf("CreateMenu colliding slug: err=%v, want ErrAlreadyExists", err)
 	}
 }
@@ -688,7 +688,7 @@ func testMenuItems(t *testing.T, repos cms.Repositories) {
 	if err := repo.DeleteItem(ctx, first.ID); err != nil {
 		t.Fatalf("DeleteItem: %v", err)
 	}
-	if _, err := repo.GetItem(ctx, first.ID); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.GetItem(ctx, first.ID); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("GetItem after Delete: err=%v, want ErrNotFound", err)
 	}
 }
@@ -721,14 +721,14 @@ func testMediaCRUD(t *testing.T, repos cms.Repositories) {
 	if err := repo.Delete(ctx, created.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err := repo.Get(ctx, created.ID); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repo.Get(ctx, created.ID); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Get after Delete: err=%v, want ErrNotFound", err)
 	}
 }
 
 func testMediaAbsent(t *testing.T, repos cms.Repositories) {
 	ctx := context.Background()
-	if _, err := repos.Media.Get(ctx, "nope"); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := repos.Media.Get(ctx, "nope"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Get(absent): err=%v, want ErrNotFound", err)
 	}
 }
@@ -1207,10 +1207,10 @@ func runEntriesStaleCursorCase(t *testing.T, list entryList, created []content.E
 func runEntriesCursorOffsetExclusiveCase(t *testing.T, list entryList) {
 	t.Helper()
 	ctx := context.Background()
-	if _, err := list(ctx, crud.ListRequest{Strategy: crud.StrategyCursor, Limit: 2, Offset: 2}); !errors.Is(err, errs.ErrInvalidInput) {
+	if _, err := list(ctx, crud.ListRequest{Strategy: crud.StrategyCursor, Limit: 2, Offset: 2}); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("cursor strategy + offset: err=%v, want ErrInvalidInput", err)
 	}
-	if _, err := list(ctx, crud.ListRequest{Strategy: crud.StrategyOffset, Limit: 2, Cursor: "anything"}); !errors.Is(err, errs.ErrInvalidInput) {
+	if _, err := list(ctx, crud.ListRequest{Strategy: crud.StrategyOffset, Limit: 2, Cursor: "anything"}); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("offset strategy + cursor: err=%v, want ErrInvalidInput", err)
 	}
 }

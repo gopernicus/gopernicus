@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // mockSender records the last Message it was asked to send and can be
@@ -106,8 +106,8 @@ func TestRenderAndSend_MissingToFailsValidation(t *testing.T) {
 	if err == nil {
 		t.Fatal("RenderAndSend() should fail validation for missing To")
 	}
-	if !errors.Is(err, errs.ErrInvalidInput) {
-		t.Errorf("error %v does not wrap errs.ErrInvalidInput", err)
+	if !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Errorf("error %v does not wrap sdk.ErrInvalidInput", err)
 	}
 	if sender.called {
 		t.Error("sender must not be called for an invalid message")

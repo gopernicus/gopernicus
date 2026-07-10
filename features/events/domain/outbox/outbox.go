@@ -34,7 +34,7 @@ type EntryRepository interface {
 	// Append persists records in their own transaction — the non-transactional
 	// convenience path (the transactional appender that shares the emitting
 	// feature's commit is a store-level concern, not this port). Appending a
-	// record whose EventID already exists returns errs.ErrAlreadyExists; the
+	// record whose EventID already exists returns sdk.ErrAlreadyExists; the
 	// EventID is the row's primary key and the de-dupe key. Appending zero
 	// records is a no-op that returns nil.
 	Append(ctx context.Context, recs ...sdkevents.Record) error

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 func newTestAESGCM(t *testing.T) *AESGCM {
@@ -84,13 +84,13 @@ func TestAESGCMEmptyInputsFail(t *testing.T) {
 
 	if _, err := enc.Encrypt(""); err == nil {
 		t.Fatal("Encrypt: empty plaintext should fail")
-	} else if !errors.Is(err, errs.ErrInvalidInput) {
+	} else if !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("Encrypt empty: got %v, want ErrInvalidInput", err)
 	}
 
 	if _, err := enc.Decrypt(""); err == nil {
 		t.Fatal("Decrypt: empty ciphertext should fail")
-	} else if !errors.Is(err, errs.ErrInvalidInput) {
+	} else if !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("Decrypt empty: got %v, want ErrInvalidInput", err)
 	}
 }
@@ -114,7 +114,7 @@ func TestNewAESGCMKeyValidation(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("NewAESGCM(%d bytes): err=%v, wantErr=%v", tt.keyLen, err, tt.wantErr)
 			}
-			if tt.wantErr && !errors.Is(err, errs.ErrInvalidInput) {
+			if tt.wantErr && !errors.Is(err, sdk.ErrInvalidInput) {
 				t.Fatalf("NewAESGCM(%d bytes): got %v, want ErrInvalidInput", tt.keyLen, err)
 			}
 		})

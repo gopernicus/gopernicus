@@ -6,7 +6,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthstate"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // OAuthStateStore implements oauthstate.StateRepository over a libSQL database.
@@ -57,8 +57,8 @@ func (s *OAuthStateStore) Create(ctx context.Context, st oauthstate.State) (oaut
 }
 
 // Consume atomically deletes and returns the state for token. The row is deleted
-// regardless of expiry, so: unknown or already-consumed → errs.ErrNotFound;
-// expired → errs.ErrExpired (row already gone); live → the State.
+// regardless of expiry, so: unknown or already-consumed → sdk.ErrNotFound;
+// expired → sdk.ErrExpired (row already gone); live → the State.
 func (s *OAuthStateStore) Consume(ctx context.Context, token string) (oauthstate.State, error) {
 	const q = `DELETE FROM oauth_states WHERE token = ? RETURNING ` + oauthStateColumns
 	row, err := queryOne[oauthStateRow](ctx, s.db, q, token)
@@ -67,7 +67,7 @@ func (s *OAuthStateStore) Consume(ctx context.Context, token string) (oauthstate
 	}
 	st := row.toDomain()
 	if st.Expired(time.Now()) {
-		return oauthstate.State{}, errs.ErrExpired
+		return oauthstate.State{}, sdk.ErrExpired
 	}
 	return st, nil
 }

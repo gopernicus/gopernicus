@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/workers"
 )
 
@@ -33,7 +33,7 @@ func newOneShotQueue(jobs ...job.Job) *oneShotQueue {
 }
 
 func (q *oneShotQueue) Enqueue(ctx context.Context, in job.Enqueue) (job.Job, error) {
-	return job.Job{}, errs.ErrInvalidInput
+	return job.Job{}, sdk.ErrInvalidInput
 }
 func (q *oneShotQueue) Claim(ctx context.Context, workerID string, now time.Time) (job.Job, error) {
 	q.mu.Lock()
@@ -60,7 +60,7 @@ func (q *oneShotQueue) Fail(ctx context.Context, jobID string, now time.Time, re
 	return nil
 }
 func (q *oneShotQueue) Get(ctx context.Context, id string) (job.Job, error) {
-	return job.Job{}, errs.ErrNotFound
+	return job.Job{}, sdk.ErrNotFound
 }
 func (q *oneShotQueue) List(ctx context.Context, _ job.ListFilter, _ crud.ListRequest) (crud.Page[job.Job], error) {
 	return crud.Page[job.Job]{}, nil

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 func TestSHA256Hasher(t *testing.T) {
@@ -46,7 +46,7 @@ func TestSHA256Hasher(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for empty key")
 		}
-		if !errors.Is(err, errs.ErrInvalidInput) {
+		if !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatalf("got %v, want ErrInvalidInput", err)
 		}
 	})

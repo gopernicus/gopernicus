@@ -46,7 +46,7 @@
 //     NormalizedLimit's clamp: it rejects a request whose Offset/Cursor
 //     contradict its Strategy (a cursor strategy carrying a non-zero Offset, an
 //     offset strategy carrying a Cursor, a negative Offset, or an unknown
-//     Strategy value) with an error wrapping errs.ErrInvalidInput. Stores call
+//     Strategy value) with an error wrapping sdk.ErrInvalidInput. Stores call
 //     it before touching their backend so a programmatically mis-set request is
 //     caught without a transport parse.
 //
@@ -95,7 +95,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // DefaultLimit is the fallback page size applied when neither a ListRequest nor
@@ -108,7 +108,7 @@ const MaxLimit = 100
 
 // ErrNotFound is the shared sentinel returned when an entity is absent.
 // Aliased from sdk/errs so crud consumers can check one symbol.
-var ErrNotFound = errs.ErrNotFound
+var ErrNotFound = sdk.ErrNotFound
 
 // Reader is the read side of a repository for entity T, filtered by domain
 // filter F. Page params are uniform across aggregates, but the filter — the
@@ -183,22 +183,22 @@ func (r ListRequest) ResolvedStrategy() Strategy {
 // backend. It rejects an Offset/Cursor that contradicts the request's Strategy
 // (a cursor strategy with a non-zero Offset, an offset strategy with a Cursor,
 // a negative Offset) and an unknown Strategy value, each with an error wrapping
-// errs.ErrInvalidInput.
+// sdk.ErrInvalidInput.
 func (r ListRequest) Validate() error {
 	switch r.Strategy {
 	case "", StrategyCursor:
 		if r.Offset != 0 {
-			return fmt.Errorf("cursor strategy does not accept an offset: %w", errs.ErrInvalidInput)
+			return fmt.Errorf("cursor strategy does not accept an offset: %w", sdk.ErrInvalidInput)
 		}
 	case StrategyOffset:
 		if r.Cursor != "" {
-			return fmt.Errorf("offset strategy does not accept a cursor: %w", errs.ErrInvalidInput)
+			return fmt.Errorf("offset strategy does not accept a cursor: %w", sdk.ErrInvalidInput)
 		}
 		if r.Offset < 0 {
-			return fmt.Errorf("offset must not be negative: %w", errs.ErrInvalidInput)
+			return fmt.Errorf("offset must not be negative: %w", sdk.ErrInvalidInput)
 		}
 	default:
-		return fmt.Errorf("unknown pagination strategy %q: %w", r.Strategy, errs.ErrInvalidInput)
+		return fmt.Errorf("unknown pagination strategy %q: %w", r.Strategy, sdk.ErrInvalidInput)
 	}
 	return nil
 }

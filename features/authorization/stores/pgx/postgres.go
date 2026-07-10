@@ -44,7 +44,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authorization"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // MigrationsFS holds the embedded canonical schema (migration source
@@ -59,7 +59,7 @@ const MigrationsDir = "migrations"
 
 // Repositories returns the authorization repository set backed by db — BOTH
 // kinds wired — AFTER verifying the iam_relationships AND iam_roles tables exist
-// (the boot-time probe). It errors with errs.ErrNotFound naming the specific
+// (the boot-time probe). It errors with sdk.ErrNotFound naming the specific
 // missing table when the "authorization" migration source was not applied before
 // boot, so the failure surfaces at wiring time rather than on the first query. It
 // does NOT touch migrations: the host owns and applies the schema (see
@@ -88,7 +88,7 @@ func probeTable(ctx context.Context, db *pgxdb.DB, table string) error {
 		return pgxdb.MapError(err)
 	}
 	if reg == nil {
-		return fmt.Errorf("authorization pgx store: %s table missing — apply the %q migration source before boot: %w", table, "authorization", errs.ErrNotFound)
+		return fmt.Errorf("authorization pgx store: %s table missing — apply the %q migration source before boot: %w", table, "authorization", sdk.ErrNotFound)
 	}
 	return nil
 }

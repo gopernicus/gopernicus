@@ -6,7 +6,7 @@
 //
 //	ListDue -> for each: compute next (from now) -> ClaimDue value-CAS ->
 //	deterministic job ID sched_<scheduleID>_<slotUnix> -> EnqueueJob
-//	(errs.ErrAlreadyExists swallowed) -> SetLastJob
+//	(sdk.ErrAlreadyExists swallowed) -> SetLastJob
 //
 // Computing next from now (not from the missed slot) makes a missed window fire
 // exactly once. The CAS + deterministic idempotency key let N runtime instances
@@ -22,7 +22,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
 	"github.com/gopernicus/gopernicus/features/jobs/domain/schedule"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/workers"
 )
 
@@ -32,7 +32,7 @@ import (
 var ErrCronRequired = errors.New("jobs: a cron schedule needs a CronParser (Config.Cron)")
 
 // ErrInvalidSpec is returned when a Spec does not set exactly one of Cron/Every.
-var ErrInvalidSpec = fmt.Errorf("jobs: schedule Spec must set exactly one of Cron/Every: %w", errs.ErrInvalidInput)
+var ErrInvalidSpec = fmt.Errorf("jobs: schedule Spec must set exactly one of Cron/Every: %w", sdk.ErrInvalidInput)
 
 // CronNextFunc computes the next fire time at or after after for a cron
 // expression, returning an error for an invalid expression. jobs.go adapts its
@@ -150,7 +150,7 @@ func (s *Service) fire(ctx context.Context, sch schedule.Schedule, now time.Time
 		ID:      jobID,
 		Kind:    sch.Kind,
 		Payload: sch.Payload,
-	}); err != nil && !errors.Is(err, errs.ErrAlreadyExists) {
+	}); err != nil && !errors.Is(err, sdk.ErrAlreadyExists) {
 		s.log.ErrorContext(ctx, "schedule: enqueue job failed", "schedule_id", sch.ID, "job_id", jobID, "error", err)
 		return
 	}

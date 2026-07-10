@@ -5,7 +5,7 @@ import (
 	"errors"
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // securityEventInput is the content a sensitive op hands recordSecurityEvent.
@@ -60,15 +60,15 @@ func errKind(err error) string {
 	switch {
 	case err == nil:
 		return "none"
-	case errors.Is(err, errs.ErrAlreadyExists):
+	case errors.Is(err, sdk.ErrAlreadyExists):
 		return "already_exists"
-	case errors.Is(err, errs.ErrInvalidInput):
+	case errors.Is(err, sdk.ErrInvalidInput):
 		return "invalid_input"
-	case errors.Is(err, errs.ErrInvalidReference):
+	case errors.Is(err, sdk.ErrInvalidReference):
 		return "invalid_reference"
-	case errors.Is(err, errs.ErrNotFound):
+	case errors.Is(err, sdk.ErrNotFound):
 		return "not_found"
-	case errors.Is(err, errs.ErrConflict):
+	case errors.Is(err, sdk.ErrConflict):
 		return "conflict"
 	default:
 		return "unknown"

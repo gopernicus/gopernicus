@@ -6,7 +6,7 @@ import (
 	"net/http"
 
 	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
 
@@ -105,7 +105,7 @@ func (h *TermHandlers) Update(w http.ResponseWriter, r *http.Request) {
 	parentID := r.PostForm.Get("parent_id")
 
 	if _, err := h.svc.EditTerm(r.Context(), id, name, parentID); err != nil {
-		if errors.Is(err, errs.ErrNotFound) {
+		if errors.Is(err, sdk.ErrNotFound) {
 			h.renderError(w, r, err)
 			return
 		}
@@ -137,10 +137,10 @@ func (h *TermHandlers) renderError(w http.ResponseWriter, r *http.Request, err e
 func (h *TermHandlers) renderTermFormError(w http.ResponseWriter, r *http.Request, err error, model TermFormModel) {
 	status := http.StatusBadRequest
 	switch {
-	case errors.Is(err, errs.ErrAlreadyExists):
+	case errors.Is(err, sdk.ErrAlreadyExists):
 		status = http.StatusConflict
 		model.FormError = "A term of that kind with the same slug already exists."
-	case errors.Is(err, errs.ErrInvalidInput):
+	case errors.Is(err, sdk.ErrInvalidInput):
 		model.FormError = err.Error()
 	default:
 		h.renderError(w, r, err)

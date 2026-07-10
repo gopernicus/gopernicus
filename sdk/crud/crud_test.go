@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 func TestListRequest_NormalizedLimit(t *testing.T) {
@@ -95,8 +95,8 @@ func TestListRequest_Validate(t *testing.T) {
 				if err == nil {
 					t.Fatal("err = nil, want error")
 				}
-				if !errors.Is(err, errs.ErrInvalidInput) {
-					t.Errorf("err = %v, want wrapping errs.ErrInvalidInput", err)
+				if !errors.Is(err, sdk.ErrInvalidInput) {
+					t.Errorf("err = %v, want wrapping sdk.ErrInvalidInput", err)
 				}
 				return
 			}
@@ -171,8 +171,8 @@ func TestMapPage(t *testing.T) {
 }
 
 func TestErrNotFound_AliasesErrs(t *testing.T) {
-	if !errors.Is(ErrNotFound, errs.ErrNotFound) {
-		t.Error("crud.ErrNotFound must alias errs.ErrNotFound")
+	if !errors.Is(ErrNotFound, sdk.ErrNotFound) {
+		t.Error("crud.ErrNotFound must alias sdk.ErrNotFound")
 	}
 }
 

@@ -41,12 +41,12 @@ func (s *Service) CreateTerm(ctx context.Context, kind taxonomy.Kind, name, pare
 	return s.terms.Create(ctx, t)
 }
 
-// GetTerm returns the term with the given id, or errs.ErrNotFound.
+// GetTerm returns the term with the given id, or sdk.ErrNotFound.
 func (s *Service) GetTerm(ctx context.Context, id string) (taxonomy.Term, error) {
 	return s.terms.Get(ctx, id)
 }
 
-// GetTermBySlug returns the term with the given kind+slug, or errs.ErrNotFound.
+// GetTermBySlug returns the term with the given kind+slug, or sdk.ErrNotFound.
 func (s *Service) GetTermBySlug(ctx context.Context, kind taxonomy.Kind, slug string) (taxonomy.Term, error) {
 	return s.terms.GetBySlug(ctx, kind, slug)
 }

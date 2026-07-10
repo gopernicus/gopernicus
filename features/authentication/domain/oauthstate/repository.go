@@ -10,9 +10,9 @@ import "context"
 // executes these): Consume is a single-use get-and-delete. The row is deleted
 // REGARDLESS of expiry, so:
 //   - Consume of a live token returns the State and deletes the row.
-//   - Consume of an expired token DELETES the row and returns errs.ErrExpired.
-//   - A second Consume of any token → errs.ErrNotFound (it is gone).
-//   - Consume of an unknown token → errs.ErrNotFound.
+//   - Consume of an expired token DELETES the row and returns sdk.ErrExpired.
+//   - A second Consume of any token → sdk.ErrNotFound (it is gone).
+//   - Consume of an unknown token → sdk.ErrNotFound.
 //
 // Stores implement it as DELETE … RETURNING (the jobs queue.go precedent), so
 // the delete and the expiry decision are one atomic step.
@@ -20,7 +20,7 @@ type StateRepository interface {
 	// Create persists a new flow state.
 	Create(ctx context.Context, s State) (State, error)
 	// Consume atomically deletes and returns the state for token. Expired →
-	// errs.ErrExpired (row deleted); unknown or already-consumed →
-	// errs.ErrNotFound.
+	// sdk.ErrExpired (row deleted); unknown or already-consumed →
+	// sdk.ErrNotFound.
 	Consume(ctx context.Context, token string) (State, error)
 }

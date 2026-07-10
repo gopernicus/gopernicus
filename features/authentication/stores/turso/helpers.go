@@ -5,7 +5,7 @@ import (
 	"embed"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // MigrationsFS holds the embedded schema (app-owned). cmd wires it into the
@@ -21,7 +21,7 @@ const MigrationsDir = "migrations"
 // tursodb.ScanStruct — the pgx-store queryOne discipline over turso. It routes the
 // read through Query (not QueryRow) so the row carries Columns for the strict
 // struct scan, then steps exactly one row. A no-rows result maps to
-// errs.ErrNotFound and every driver error to its sentinel through MapError, so
+// sdk.ErrNotFound and every driver error to its sentinel through MapError, so
 // single-row reads keep the port's error semantics.
 func queryOne[T any](ctx context.Context, db tursodb.Querier, query string, args ...any) (T, error) {
 	var zero T
@@ -34,7 +34,7 @@ func queryOne[T any](ctx context.Context, db tursodb.Querier, query string, args
 		if err := rows.Err(); err != nil {
 			return zero, tursodb.MapError(err)
 		}
-		return zero, errs.ErrNotFound
+		return zero, sdk.ErrNotFound
 	}
 	return tursodb.ScanStruct[T](rows)
 }

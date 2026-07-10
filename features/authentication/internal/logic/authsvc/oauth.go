@@ -11,8 +11,8 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthstate"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/email"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/oauth"
 )
 
@@ -43,14 +43,14 @@ const (
 
 // ErrLastAuthMethod is returned by Unlink when the target link is the user's
 // only authentication method and no password is set — removing it would lock the
-// account out. It wraps errs.ErrConflict (→ 409). Checked with errors.Is.
-var ErrLastAuthMethod = fmt.Errorf("cannot unlink the only authentication method: %w", errs.ErrConflict)
+// account out. It wraps sdk.ErrConflict (→ 409). Checked with errors.Is.
+var ErrLastAuthMethod = fmt.Errorf("cannot unlink the only authentication method: %w", sdk.ErrConflict)
 
 // ErrInvalidOAuthState is returned when a consumed state does not match the
 // provider/purpose it is being redeemed for (a tampered or misrouted callback).
-// It wraps errs.ErrNotFound so it maps to 404 and leaks nothing. Checked with
+// It wraps sdk.ErrNotFound so it maps to 404 and leaks nothing. Checked with
 // errors.Is.
-var ErrInvalidOAuthState = fmt.Errorf("invalid oauth state: %w", errs.ErrNotFound)
+var ErrInvalidOAuthState = fmt.Errorf("invalid oauth state: %w", sdk.ErrNotFound)
 
 // OAuthResult is the outcome of a processed OAuth callback or verify-link.
 type OAuthResult struct {
@@ -85,7 +85,7 @@ func (s *Service) OAuthEnabled() bool { return len(s.providers) > 0 }
 // StartOAuth begins a login/register authorization round-trip for providerName,
 // returning the provider authorization URL to redirect the browser to. It
 // persists server-side flow state (PKCE verifier, OIDC nonce, validated redirect
-// target). An unknown provider → errs.ErrNotFound.
+// target). An unknown provider → sdk.ErrNotFound.
 func (s *Service) StartOAuth(ctx context.Context, providerName, redirectTo string) (string, error) {
 	return s.start(ctx, providerName, redirectTo, "")
 }
@@ -128,7 +128,7 @@ func (s *Service) start(ctx context.Context, providerName, redirectTo, linkUserI
 // three-way anti-takeover branch (existing link → login; matching email, no link
 // → pending link; no user → register + link) — or, for a session-gated link
 // start, attaches the identity to the linking user. A consumed/expired/unknown
-// state surfaces errs.ErrNotFound / errs.ErrExpired.
+// state surfaces sdk.ErrNotFound / sdk.ErrExpired.
 func (s *Service) OAuthCallback(ctx context.Context, providerName, code, stateToken string) (OAuthResult, error) {
 	p, err := s.provider(providerName)
 	if err != nil {
@@ -182,7 +182,7 @@ func (s *Service) OAuthCallback(ctx context.Context, providerName, code, stateTo
 		}
 		s.recordOAuth(ctx, existing.UserID, providerName, securityevent.TypeOAuthLogin)
 		return OAuthResult{Action: ActionLogin, Token: token, User: u, RedirectTo: fs.RedirectTo}, nil
-	case !errors.Is(err, errs.ErrNotFound):
+	case !errors.Is(err, sdk.ErrNotFound):
 		return OAuthResult{}, err
 	}
 
@@ -196,7 +196,7 @@ func (s *Service) OAuthCallback(ctx context.Context, providerName, code, stateTo
 				return OAuthResult{}, err
 			}
 			return OAuthResult{Action: ActionPendingLink, User: u, RedirectTo: fs.RedirectTo}, nil
-		case !errors.Is(err, errs.ErrNotFound):
+		case !errors.Is(err, sdk.ErrNotFound):
 			return OAuthResult{}, err
 		}
 	}
@@ -208,7 +208,7 @@ func (s *Service) OAuthCallback(ctx context.Context, providerName, code, stateTo
 // VerifyLink completes a pending link: it consumes the pending-link secret
 // (single use), creates the link stored in its payload, and mints a session for
 // the now-linked user. An expired/unknown/already-used token surfaces
-// errs.ErrExpired / errs.ErrNotFound.
+// sdk.ErrExpired / sdk.ErrNotFound.
 func (s *Service) VerifyLink(ctx context.Context, token string) (OAuthResult, error) {
 	st, err := s.oauthStates.Consume(ctx, token)
 	if err != nil {
@@ -244,7 +244,7 @@ func (s *Service) ListLinked(ctx context.Context, userID string) ([]oauthaccount
 
 // Unlink removes userID's link to providerName, enforcing last-authentication-
 // method protection: it refuses (ErrLastAuthMethod) when the link is the only
-// credential and no password is set. An absent link → errs.ErrNotFound.
+// credential and no password is set. An absent link → sdk.ErrNotFound.
 func (s *Service) Unlink(ctx context.Context, userID, providerName string) error {
 	linked, err := s.oauthAccounts.ListByUser(ctx, userID)
 	if err != nil {
@@ -258,11 +258,11 @@ func (s *Service) Unlink(ctx context.Context, userID, providerName string) error
 		}
 	}
 	if !found {
-		return fmt.Errorf("no %s link for user: %w", providerName, errs.ErrNotFound)
+		return fmt.Errorf("no %s link for user: %w", providerName, sdk.ErrNotFound)
 	}
 	if len(linked) == 1 {
 		if _, err := s.passwords.Get(ctx, userID); err != nil {
-			if errors.Is(err, errs.ErrNotFound) {
+			if errors.Is(err, sdk.ErrNotFound) {
 				return ErrLastAuthMethod
 			}
 			return err
@@ -276,7 +276,7 @@ func (s *Service) Unlink(ctx context.Context, userID, providerName string) error
 }
 
 // linkAccount builds and persists a link, propagating a duplicate-identity
-// collision (errs.ErrAlreadyExists) from the store.
+// collision (sdk.ErrAlreadyExists) from the store.
 func (s *Service) linkAccount(ctx context.Context, userID, providerName string, ident providerIdentity, tok *oauth.TokenResponse) (oauthaccount.OAuthAccount, error) {
 	acct, err := s.newAccount(userID, providerName, ident, tok)
 	if err != nil {
@@ -393,11 +393,11 @@ func (s *Service) readIdentity(ctx context.Context, p oauth.Provider, tok *oauth
 	return providerIdentity{ProviderUserID: info.ProviderUserID, Email: info.Email, EmailVerified: info.EmailVerified}, nil
 }
 
-// provider returns the wired provider by name, or errs.ErrNotFound.
+// provider returns the wired provider by name, or sdk.ErrNotFound.
 func (s *Service) provider(name string) (oauth.Provider, error) {
 	p, ok := s.providers[name]
 	if !ok {
-		return nil, fmt.Errorf("unknown oauth provider %q: %w", name, errs.ErrNotFound)
+		return nil, fmt.Errorf("unknown oauth provider %q: %w", name, sdk.ErrNotFound)
 	}
 	return p, nil
 }

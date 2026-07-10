@@ -5,13 +5,13 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthaccount"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // OAuthAccountStore implements oauthaccount.OAuthAccountRepository over a libSQL
 // database. Uniqueness is on the (provider, provider_user_id) primary key — a
 // provider identity belongs to at most one local user — surfaced as
-// errs.ErrAlreadyExists via MapError. There is NO upsert: a colliding Create is an
+// sdk.ErrAlreadyExists via MapError. There is NO upsert: a colliding Create is an
 // error, never a silent overwrite (design §3 — upsert is outside the port and
 // dialect-divergent). The token columns are persisted verbatim (ciphertext when an
 // encrypter is wired, else empty).
@@ -63,7 +63,7 @@ func (r oauthAccountRow) toDomain() oauthaccount.OAuthAccount {
 }
 
 // Create persists a new link; a colliding (provider, provider_user_id) →
-// errs.ErrAlreadyExists (plain INSERT, no ON CONFLICT).
+// sdk.ErrAlreadyExists (plain INSERT, no ON CONFLICT).
 func (s *OAuthAccountStore) Create(ctx context.Context, a oauthaccount.OAuthAccount) (oauthaccount.OAuthAccount, error) {
 	const q = `INSERT INTO oauth_accounts (` + oauthAccountColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err := s.db.Exec(ctx, q,
@@ -78,7 +78,7 @@ func (s *OAuthAccountStore) Create(ctx context.Context, a oauthaccount.OAuthAcco
 	return a, nil
 }
 
-// GetByProvider returns the link for a provider identity, or errs.ErrNotFound.
+// GetByProvider returns the link for a provider identity, or sdk.ErrNotFound.
 func (s *OAuthAccountStore) GetByProvider(ctx context.Context, provider, providerUserID string) (oauthaccount.OAuthAccount, error) {
 	const q = `SELECT ` + oauthAccountColumns + ` FROM oauth_accounts WHERE provider = ? AND provider_user_id = ?`
 	row, err := queryOne[oauthAccountRow](ctx, s.db, q, provider, providerUserID)
@@ -110,14 +110,14 @@ func (s *OAuthAccountStore) ListByUser(ctx context.Context, userID string) ([]oa
 	return out, nil
 }
 
-// Delete removes userID's link to provider; no such link → errs.ErrNotFound.
+// Delete removes userID's link to provider; no such link → sdk.ErrNotFound.
 func (s *OAuthAccountStore) Delete(ctx context.Context, userID, provider string) error {
 	n, err := tursodb.ExecAffecting(ctx, s.db, "DELETE FROM oauth_accounts WHERE user_id = ? AND provider = ?", userID, provider)
 	if err != nil {
 		return err
 	}
 	if n == 0 {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	return nil
 }

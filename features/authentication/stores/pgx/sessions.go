@@ -8,7 +8,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // SessionStore implements session.SessionRepository over a PostgreSQL database.
@@ -16,7 +16,7 @@ import (
 // supplies as the primary key — the service hashes the cookie token before every
 // call (design §7.3), so the store persists and looks up by that opaque value
 // and does no hashing itself. Get enforces expired-at-read: a row past its
-// expires_at surfaces errs.ErrExpired rather than a dead session.
+// expires_at surfaces sdk.ErrExpired rather than a dead session.
 type SessionStore struct {
 	db *pgxdb.DB
 }
@@ -63,8 +63,8 @@ func (s *SessionStore) Create(ctx context.Context, sess session.Session) (sessio
 	return sess, nil
 }
 
-// Get returns the live session for token: unknown → errs.ErrNotFound,
-// present-but-expired → errs.ErrExpired (checked against the read clock).
+// Get returns the live session for token: unknown → sdk.ErrNotFound,
+// present-but-expired → sdk.ErrExpired (checked against the read clock).
 func (s *SessionStore) Get(ctx context.Context, token string) (session.Session, error) {
 	const q = `SELECT ` + sessionColumns + ` FROM sessions WHERE token = @token`
 	row, err := queryOne[sessionRow](ctx, s.db, q, pgx.NamedArgs{"token": token})
@@ -73,25 +73,25 @@ func (s *SessionStore) Get(ctx context.Context, token string) (session.Session, 
 	}
 	sess := row.toDomain()
 	if sess.Expired(time.Now()) {
-		return session.Session{}, errs.ErrExpired
+		return session.Session{}, sdk.ErrExpired
 	}
 	return sess, nil
 }
 
-// Delete removes the session for token; unknown → errs.ErrNotFound.
+// Delete removes the session for token; unknown → sdk.ErrNotFound.
 func (s *SessionStore) Delete(ctx context.Context, token string) error {
 	n, err := pgxdb.ExecAffecting(ctx, s.db, "DELETE FROM sessions WHERE token = @token", pgx.NamedArgs{"token": token})
 	if err != nil {
 		return err
 	}
 	if n == 0 {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	return nil
 }
 
 // DeleteByUser removes every session for userID. It is bulk and idempotent: zero
-// matching rows returns nil (never errs.ErrNotFound), so it doubles as the
+// matching rows returns nil (never sdk.ErrNotFound), so it doubles as the
 // logout-everywhere primitive a password change uses.
 func (s *SessionStore) DeleteByUser(ctx context.Context, userID string) error {
 	_, err := s.db.Exec(ctx, "DELETE FROM sessions WHERE user_id = @user_id", pgx.NamedArgs{"user_id": userID})

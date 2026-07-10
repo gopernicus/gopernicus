@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 var _ Encrypter = (*AESGCM)(nil)
@@ -29,7 +29,7 @@ type AESGCM struct {
 // KMS) — never hardcoded.
 func NewAESGCM(key []byte) (*AESGCM, error) {
 	if len(key) != 32 {
-		return nil, fmt.Errorf("aesgcm: key must be exactly 32 bytes, got %d: %w", len(key), errs.ErrInvalidInput)
+		return nil, fmt.Errorf("aesgcm: key must be exactly 32 bytes, got %d: %w", len(key), sdk.ErrInvalidInput)
 	}
 
 	block, err := aes.NewCipher(key)
@@ -50,7 +50,7 @@ func NewAESGCM(key []byte) (*AESGCM, error) {
 // produces different output.
 func (e *AESGCM) Encrypt(plaintext string) (string, error) {
 	if plaintext == "" {
-		return "", fmt.Errorf("aesgcm: plaintext cannot be empty: %w", errs.ErrInvalidInput)
+		return "", fmt.Errorf("aesgcm: plaintext cannot be empty: %w", sdk.ErrInvalidInput)
 	}
 
 	nonce := make([]byte, e.gcm.NonceSize())
@@ -67,7 +67,7 @@ func (e *AESGCM) Encrypt(plaintext string) (string, error) {
 // truncated ciphertext fails authentication and returns an error.
 func (e *AESGCM) Decrypt(ciphertext string) (string, error) {
 	if ciphertext == "" {
-		return "", fmt.Errorf("aesgcm: ciphertext cannot be empty: %w", errs.ErrInvalidInput)
+		return "", fmt.Errorf("aesgcm: ciphertext cannot be empty: %w", sdk.ErrInvalidInput)
 	}
 
 	data, err := base64.RawURLEncoding.DecodeString(ciphertext)
@@ -77,7 +77,7 @@ func (e *AESGCM) Decrypt(ciphertext string) (string, error) {
 
 	nonceSize := e.gcm.NonceSize()
 	if len(data) < nonceSize {
-		return "", fmt.Errorf("aesgcm: ciphertext too short: %w", errs.ErrInvalidInput)
+		return "", fmt.Errorf("aesgcm: ciphertext too short: %w", sdk.ErrInvalidInput)
 	}
 
 	nonce, sealed := data[:nonceSize], data[nonceSize:]

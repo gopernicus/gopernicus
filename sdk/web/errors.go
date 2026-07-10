@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // Error represents an HTTP error with status code, message, and optional code.
@@ -173,21 +173,21 @@ func ErrInternal(msg string) *Error {
 // For user-facing messages, handle specific errors before calling this.
 func ErrFromDomain(err error) *Error {
 	switch {
-	case errors.Is(err, errs.ErrNotFound):
+	case errors.Is(err, sdk.ErrNotFound):
 		return ErrNotFound("not found")
-	case errors.Is(err, errs.ErrAlreadyExists):
+	case errors.Is(err, sdk.ErrAlreadyExists):
 		return ErrConflict("already exists")
-	case errors.Is(err, errs.ErrUnauthorized):
+	case errors.Is(err, sdk.ErrUnauthorized):
 		return ErrUnauthorized("unauthorized")
-	case errors.Is(err, errs.ErrForbidden):
+	case errors.Is(err, sdk.ErrForbidden):
 		return ErrForbidden("forbidden")
-	case errors.Is(err, errs.ErrInvalidInput):
+	case errors.Is(err, sdk.ErrInvalidInput):
 		return ErrBadRequest("invalid input")
-	case errors.Is(err, errs.ErrInvalidReference):
+	case errors.Is(err, sdk.ErrInvalidReference):
 		return ErrBadRequest("invalid reference")
-	case errors.Is(err, errs.ErrConflict):
+	case errors.Is(err, sdk.ErrConflict):
 		return &Error{Status: http.StatusConflict, Message: "conflict", Code: "conflict"}
-	case errors.Is(err, errs.ErrExpired):
+	case errors.Is(err, sdk.ErrExpired):
 		return ErrGone("expired")
 	default:
 		return ErrInternal("internal error")

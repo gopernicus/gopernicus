@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // SHA256Hasher is a fast, deterministic hasher producing a hex-encoded SHA-256
@@ -26,7 +26,7 @@ func NewSHA256Hasher() *SHA256Hasher {
 // string. An empty key is rejected.
 func (h *SHA256Hasher) Hash(key string) (string, error) {
 	if key == "" {
-		return "", fmt.Errorf("cryptids: key cannot be empty: %w", errs.ErrInvalidInput)
+		return "", fmt.Errorf("cryptids: key cannot be empty: %w", sdk.ErrInvalidInput)
 	}
 	sum := sha256.Sum256([]byte(key))
 	return hex.EncodeToString(sum[:]), nil

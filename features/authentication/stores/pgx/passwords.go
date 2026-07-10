@@ -32,7 +32,7 @@ func (s *PasswordStore) Set(ctx context.Context, userID, hash string) error {
 	return err
 }
 
-// Get returns the stored password hash for userID, or errs.ErrNotFound.
+// Get returns the stored password hash for userID, or sdk.ErrNotFound.
 func (s *PasswordStore) Get(ctx context.Context, userID string) (string, error) {
 	const q = `SELECT hash FROM user_passwords WHERE user_id = @user_id`
 	var hash string

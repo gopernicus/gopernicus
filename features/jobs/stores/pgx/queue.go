@@ -10,8 +10,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/workers"
 )
 
@@ -110,7 +110,7 @@ func NewQueueStore(db *pgxdb.DB, opts ...QueueOption) *Queue {
 }
 
 // Enqueue inserts one pending job. A caller-supplied ID that already exists
-// yields errs.ErrAlreadyExists (the idempotency key, via the primary-key unique
+// yields sdk.ErrAlreadyExists (the idempotency key, via the primary-key unique
 // violation); an empty ID is generated. The scheduled_for, priority, and
 // max_attempts are stored verbatim — the store invents no defaults (that is the
 // service's job).
@@ -178,7 +178,7 @@ func (q *Queue) Claim(ctx context.Context, workerID string, now time.Time) (job.
 		RETURNING ` + jobSelect
 
 	claimed, err := scanJob(q.db.QueryRow(ctx, claim, workerID, nowUTC, stale))
-	if errors.Is(err, errs.ErrNotFound) {
+	if errors.Is(err, sdk.ErrNotFound) {
 		return job.Job{}, workers.ErrNoWork
 	}
 	if err != nil {
@@ -187,7 +187,7 @@ func (q *Queue) Claim(ctx context.Context, workerID string, now time.Time) (job.
 	return claimed, nil
 }
 
-// Complete marks the job done. A missing id yields errs.ErrNotFound.
+// Complete marks the job done. A missing id yields sdk.ErrNotFound.
 func (q *Queue) Complete(ctx context.Context, jobID string, now time.Time) error {
 	const q1 = `UPDATE job_queue SET status = 'completed', completed_at = @now, updated_at = @now WHERE job_id = @job_id`
 	return q.execAffecting(ctx, q1, pgx.NamedArgs{"now": now.UTC(), "job_id": jobID})
@@ -196,7 +196,7 @@ func (q *Queue) Complete(ctx context.Context, jobID string, now time.Time) error
 // Fail increments retry_count and, in one statement, either reschedules the job
 // to pending (clearing worker_name/claimed_at so it is immediately re-claimable)
 // or dead-letters it once retry_count + 1 reaches maxAttempts. reason is recorded
-// as the failure cause. A missing id yields errs.ErrNotFound.
+// as the failure cause. A missing id yields sdk.ErrNotFound.
 func (q *Queue) Fail(ctx context.Context, jobID string, now time.Time, reason string, maxAttempts int) error {
 	const fail = `UPDATE job_queue
 		SET retry_count = retry_count + 1,
@@ -209,7 +209,7 @@ func (q *Queue) Fail(ctx context.Context, jobID string, now time.Time, reason st
 	return q.execAffecting(ctx, fail, pgx.NamedArgs{"reason": reason, "now": now.UTC(), "max": maxAttempts, "job_id": jobID})
 }
 
-// Get returns the job with the given id, or errs.ErrNotFound.
+// Get returns the job with the given id, or sdk.ErrNotFound.
 func (q *Queue) Get(ctx context.Context, id string) (job.Job, error) {
 	const get = `SELECT ` + jobRowColumns + ` FROM job_queue WHERE job_id = @job_id`
 	row, err := queryOne[jobRow](ctx, q.db, get, pgx.NamedArgs{"job_id": id})
@@ -259,20 +259,20 @@ func jobFilter(f job.ListFilter) (string, pgx.NamedArgs) {
 }
 
 // execAffecting runs a write that must touch exactly one row, mapping zero rows
-// affected to errs.ErrNotFound. Driver errors are already mapped by the connector.
+// affected to sdk.ErrNotFound. Driver errors are already mapped by the connector.
 func (q *Queue) execAffecting(ctx context.Context, query string, args pgx.NamedArgs) error {
 	n, err := pgxdb.ExecAffecting(ctx, q.db, query, args)
 	if err != nil {
 		return err
 	}
 	if n == 0 {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	return nil
 }
 
 // scanJob scans one job_queue row (jobSelect projection) positionally, mapping
-// pgx.ErrNoRows to errs.ErrNotFound via the connector's MapError. It backs Claim's
+// pgx.ErrNoRows to sdk.ErrNotFound via the connector's MapError. It backs Claim's
 // preserved RETURNING statement.
 func scanJob(sc scanner) (job.Job, error) {
 	var (

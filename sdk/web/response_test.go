@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 func TestRespondJSON(t *testing.T) {
@@ -107,7 +107,7 @@ func TestRespondJSONDomainError_RecordsOn5xx(t *testing.T) {
 func TestRespondJSONDomainError_NoRecordBelow5xx(t *testing.T) {
 	rw := &recordingWriter{ResponseRecorder: httptest.NewRecorder()}
 
-	RespondJSONDomainError(rw, errs.ErrNotFound)
+	RespondJSONDomainError(rw, sdk.ErrNotFound)
 
 	if rw.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", rw.Code)

@@ -10,19 +10,19 @@ import (
 	"fmt"
 
 	"github.com/gopernicus/gopernicus/features/authorization/domain/role"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 var (
 	// ErrInvalidRoleAssignment is returned when subject type, subject ID, or role
 	// is empty.
-	ErrInvalidRoleAssignment = fmt.Errorf("authorization role assignment: %w", errs.ErrInvalidInput)
+	ErrInvalidRoleAssignment = fmt.Errorf("authorization role assignment: %w", sdk.ErrInvalidInput)
 
 	// ErrHalfScopedAssignment is returned when exactly one of the resource-scope
 	// fields is set: a scoped assignment requires BOTH resource fields or NEITHER
 	// (the empty pair is a global grant).
-	ErrHalfScopedAssignment = fmt.Errorf("authorization role scope: %w", errs.ErrInvalidInput)
+	ErrHalfScopedAssignment = fmt.Errorf("authorization role scope: %w", sdk.ErrInvalidInput)
 )
 
 // Service is the roles kind's capability over role.Storer.

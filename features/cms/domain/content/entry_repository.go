@@ -22,23 +22,23 @@ type EntryQuery struct {
 // stores/turso (entries + entry_fields) and the in-memory example store.
 type EntryRepository interface {
 	// Create persists a new entry and its custom fields. A (type, slug)
-	// collision returns errs.ErrAlreadyExists.
+	// collision returns sdk.ErrAlreadyExists.
 	Create(ctx context.Context, e Entry) (Entry, error)
 
 	// Update persists changes to the entry with the given id, replacing its
-	// custom fields. A missing id returns errs.ErrNotFound.
+	// custom fields. A missing id returns sdk.ErrNotFound.
 	Update(ctx context.Context, id string, e Entry) (Entry, error)
 
 	// Get returns the entry with the given id — spine, custom fields, and term
-	// IDs — or errs.ErrNotFound.
+	// IDs — or sdk.ErrNotFound.
 	Get(ctx context.Context, id string) (Entry, error)
 
 	// GetBySlug returns the entry of type typ with the given slug, or
-	// errs.ErrNotFound.
+	// sdk.ErrNotFound.
 	GetBySlug(ctx context.Context, typ, slug string) (Entry, error)
 
 	// Delete removes the entry (and its fields/terms via cascade), or returns
-	// errs.ErrNotFound.
+	// sdk.ErrNotFound.
 	Delete(ctx context.Context, id string) error
 
 	// List returns a cursor-paginated page of entries matching q.

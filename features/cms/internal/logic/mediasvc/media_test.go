@@ -12,8 +12,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/cms/domain/media"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // fakeAssets is an in-memory AssetRepository.
@@ -28,7 +28,7 @@ func (f *fakeAssets) Create(ctx context.Context, a media.Asset) (media.Asset, er
 func (f *fakeAssets) Get(ctx context.Context, id string) (media.Asset, error) {
 	a, ok := f.byID[id]
 	if !ok {
-		return media.Asset{}, errs.ErrNotFound
+		return media.Asset{}, sdk.ErrNotFound
 	}
 	return a, nil
 }
@@ -61,7 +61,7 @@ func (m *memBlobs) Upload(ctx context.Context, path string, r io.Reader) error {
 func (m *memBlobs) Download(ctx context.Context, path string) (io.ReadCloser, error) {
 	b, ok := m.data[path]
 	if !ok {
-		return nil, errs.ErrNotFound
+		return nil, sdk.ErrNotFound
 	}
 	return io.NopCloser(bytes.NewReader(b)), nil
 }
@@ -111,7 +111,7 @@ func TestMedia_UploadOpenDelete(t *testing.T) {
 	if _, ok := blobs.data[a.StorageKey]; ok {
 		t.Errorf("bytes not deleted")
 	}
-	if _, err := svc.GetAsset(ctx, a.ID); !errors.Is(err, errs.ErrNotFound) {
+	if _, err := svc.GetAsset(ctx, a.ID); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("metadata not deleted")
 	}
 }
@@ -120,13 +120,13 @@ func TestMedia_UploadValidation(t *testing.T) {
 	ctx := context.Background()
 	svc := NewService(newFakeAssets(), newMemBlobs(), cryptids.IDGenerator{}, nil)
 
-	if _, err := svc.Upload(ctx, "", "image/png", 1, strings.NewReader("x")); !errors.Is(err, errs.ErrInvalidInput) {
+	if _, err := svc.Upload(ctx, "", "image/png", 1, strings.NewReader("x")); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("blank filename: %v", err)
 	}
-	if _, err := svc.Upload(ctx, "f.png", "", 1, strings.NewReader("x")); !errors.Is(err, errs.ErrInvalidInput) {
+	if _, err := svc.Upload(ctx, "f.png", "", 1, strings.NewReader("x")); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("blank content type: %v", err)
 	}
-	if _, err := svc.Upload(ctx, "f.png", "image/png", 0, strings.NewReader("")); !errors.Is(err, errs.ErrInvalidInput) {
+	if _, err := svc.Upload(ctx, "f.png", "image/png", 0, strings.NewReader("")); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("empty file: %v", err)
 	}
 }

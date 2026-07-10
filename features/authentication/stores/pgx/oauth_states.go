@@ -8,7 +8,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthstate"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // OAuthStateStore implements oauthstate.StateRepository over a PostgreSQL
@@ -67,8 +67,8 @@ func (s *OAuthStateStore) Create(ctx context.Context, st oauthstate.State) (oaut
 }
 
 // Consume atomically deletes and returns the state for token. The row is deleted
-// regardless of expiry, so: unknown or already-consumed → errs.ErrNotFound;
-// expired → errs.ErrExpired (row already gone); live → the State. The delete is
+// regardless of expiry, so: unknown or already-consumed → sdk.ErrNotFound;
+// expired → sdk.ErrExpired (row already gone); live → the State. The delete is
 // the single atomic step (DELETE … RETURNING); the expiry decision is computed in
 // Go from the returned row.
 func (s *OAuthStateStore) Consume(ctx context.Context, token string) (oauthstate.State, error) {
@@ -79,7 +79,7 @@ func (s *OAuthStateStore) Consume(ctx context.Context, token string) (oauthstate
 	}
 	st := row.toDomain()
 	if st.Expired(time.Now()) {
-		return oauthstate.State{}, errs.ErrExpired
+		return oauthstate.State{}, sdk.ErrExpired
 	}
 	return st, nil
 }

@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/authentication/internal/redirect"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/invitation"
+	"github.com/gopernicus/gopernicus/features/authentication/internal/redirect"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/email"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/identity"
 	"github.com/gopernicus/gopernicus/sdk/notify"
 )
@@ -81,7 +81,7 @@ func (r *fakeInvRepo) Create(_ context.Context, inv invitation.Invitation) (invi
 		if ex.Status == invitation.StatusPending &&
 			ex.ResourceType == inv.ResourceType && ex.ResourceID == inv.ResourceID &&
 			ex.Identifier == inv.Identifier && ex.Relation == inv.Relation {
-			return invitation.Invitation{}, errs.ErrAlreadyExists
+			return invitation.Invitation{}, sdk.ErrAlreadyExists
 		}
 	}
 	r.byID[inv.ID] = inv
@@ -91,7 +91,7 @@ func (r *fakeInvRepo) Create(_ context.Context, inv invitation.Invitation) (invi
 func (r *fakeInvRepo) Get(_ context.Context, id string) (invitation.Invitation, error) {
 	inv, ok := r.byID[id]
 	if !ok {
-		return invitation.Invitation{}, errs.ErrNotFound
+		return invitation.Invitation{}, sdk.ErrNotFound
 	}
 	return inv, nil
 }
@@ -100,12 +100,12 @@ func (r *fakeInvRepo) GetByTokenHash(_ context.Context, tokenHash string) (invit
 	for _, inv := range r.byID {
 		if inv.TokenHash == tokenHash {
 			if inv.Expired(time.Now()) {
-				return invitation.Invitation{}, errs.ErrExpired
+				return invitation.Invitation{}, sdk.ErrExpired
 			}
 			return inv, nil
 		}
 	}
-	return invitation.Invitation{}, errs.ErrNotFound
+	return invitation.Invitation{}, sdk.ErrNotFound
 }
 
 func (r *fakeInvRepo) ListByResource(_ context.Context, resourceType, resourceID string, _ crud.ListRequest) (crud.Page[invitation.Invitation], error) {
@@ -131,7 +131,7 @@ func (r *fakeInvRepo) ListBySubject(_ context.Context, identifier string, _ crud
 func (r *fakeInvRepo) UpdateStatus(_ context.Context, id string, upd invitation.StatusUpdate) (invitation.Invitation, error) {
 	inv, ok := r.byID[id]
 	if !ok {
-		return invitation.Invitation{}, errs.ErrNotFound
+		return invitation.Invitation{}, sdk.ErrNotFound
 	}
 	inv.Status = upd.Status
 	inv.TokenHash = upd.TokenHash
@@ -221,7 +221,7 @@ func TestAcceptIdentifierMismatch(t *testing.T) {
 	seedInvite(t, repo, "project", "p1", "member", "invitee@x.com", "inviter", "secret-a", false, time.Now().Add(time.Hour))
 
 	_, err := svc.Accept(context.Background(), AcceptInput{Token: "secret-a", SubjectType: "user", SubjectID: "user-9", Identifier: "someone-else@x.com"})
-	if !errors.Is(err, errs.ErrForbidden) {
+	if !errors.Is(err, sdk.ErrForbidden) {
 		t.Errorf("Accept(mismatch): err=%v, want ErrForbidden", err)
 	}
 	if len(granter.calls) != 0 {
@@ -236,7 +236,7 @@ func TestAcceptExpiredToken(t *testing.T) {
 	seedInvite(t, repo, "project", "p1", "member", "invitee@x.com", "inviter", "secret-a", false, time.Now().Add(-time.Hour))
 
 	_, err := svc.Accept(context.Background(), AcceptInput{Token: "secret-a", SubjectType: "user", SubjectID: "user-9", Identifier: "invitee@x.com"})
-	if !errors.Is(err, errs.ErrExpired) {
+	if !errors.Is(err, sdk.ErrExpired) {
 		t.Errorf("Accept(expired): err=%v, want ErrExpired", err)
 	}
 	if len(granter.calls) != 0 {
@@ -286,7 +286,7 @@ func TestCreateMemberCheckDupPath(t *testing.T) {
 		ResourceType: "project", ResourceID: "p1", Relation: "member",
 		Identifier: "known@x.com", InvitedBy: "inviter", AutoAccept: true,
 	})
-	if !errors.Is(err, errs.ErrConflict) {
+	if !errors.Is(err, sdk.ErrConflict) {
 		t.Errorf("Create(already member): err=%v, want ErrConflict (ErrAlreadyMember)", err)
 	}
 	if len(granter.calls) != 0 {
@@ -327,7 +327,7 @@ func TestCreatePendingUnknownUser(t *testing.T) {
 		ResourceType: "project", ResourceID: "p1", Relation: "member",
 		Identifier: "new@x.com", InvitedBy: "inviter", AutoAccept: true,
 	})
-	if !errors.Is(err, errs.ErrAlreadyExists) {
+	if !errors.Is(err, sdk.ErrAlreadyExists) {
 		t.Errorf("second Create same tuple: err=%v, want ErrAlreadyExists", err)
 	}
 }
@@ -381,7 +381,7 @@ func TestCancelOwnership(t *testing.T) {
 	svc := newSvc(t, repo, granter, Deps{})
 	inv := seedInvite(t, repo, "project", "p1", "member", "invitee@x.com", "owner", "s-a", false, time.Now().Add(time.Hour))
 
-	if err := svc.Cancel(context.Background(), inv.ID, "not-owner"); !errors.Is(err, errs.ErrForbidden) {
+	if err := svc.Cancel(context.Background(), inv.ID, "not-owner"); !errors.Is(err, sdk.ErrForbidden) {
 		t.Errorf("Cancel(non-owner): err=%v, want ErrForbidden", err)
 	}
 	if err := svc.Cancel(context.Background(), inv.ID, "owner"); err != nil {
@@ -401,7 +401,7 @@ func TestResendOwnership(t *testing.T) {
 	inv := seedInvite(t, repo, "project", "p1", "member", "invitee@x.com", "owner", "s-a", false, time.Now().Add(time.Hour))
 	originalHash := inv.TokenHash
 
-	if _, err := svc.Resend(context.Background(), inv.ID, "not-owner", ""); !errors.Is(err, errs.ErrForbidden) {
+	if _, err := svc.Resend(context.Background(), inv.ID, "not-owner", ""); !errors.Is(err, sdk.ErrForbidden) {
 		t.Errorf("Resend(non-owner): err=%v, want ErrForbidden", err)
 	}
 	updated, err := svc.Resend(context.Background(), inv.ID, "owner", "")
@@ -426,7 +426,7 @@ func TestDeclineTokenAuthorized(t *testing.T) {
 	inv := seedInvite(t, repo, "project", "p1", "member", "invitee@x.com", "owner", "s-a", false, time.Now().Add(time.Hour))
 
 	// A wrong token leaks nothing.
-	if err := svc.Decline(context.Background(), inv.ID, "wrong-token"); !errors.Is(err, errs.ErrNotFound) {
+	if err := svc.Decline(context.Background(), inv.ID, "wrong-token"); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("Decline(wrong token): err=%v, want ErrNotFound", err)
 	}
 	// The invitee's token declines it.
@@ -460,7 +460,7 @@ func TestCreateUnsupportedKind(t *testing.T) {
 	if !errors.Is(err, ErrKindNotSupported) {
 		t.Errorf("Create(unsupported kind): err=%v, want ErrKindNotSupported", err)
 	}
-	if !errors.Is(err, errs.ErrInvalidInput) {
+	if !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("ErrKindNotSupported must wrap ErrInvalidInput (400); err=%v", err)
 	}
 	if len(repo.byID) != 0 {

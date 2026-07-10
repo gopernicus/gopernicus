@@ -26,7 +26,7 @@ func (s *Service) TokenEnabled() bool {
 // JWT carrying {user_id} (design §4.4, AV6 — stateless user tokens, no refresh).
 // It mirrors Login's discipline exactly: it rate-limits FIRST on the same
 // (email, client-IP) key BEFORE any credential work, returns the same generic
-// errs.ErrUnauthorized for every credential mismatch, and honors
+// sdk.ErrUnauthorized for every credential mismatch, and honors
 // RequireVerifiedEmail (ErrEmailNotVerified, 403) AFTER password verification so
 // it never leaks a verified/unverified signal. It returns the signed token and
 // its absolute expiry.

@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // Message is an outbound email. Text is required; HTML is optional.
@@ -23,19 +23,19 @@ type Message struct {
 }
 
 // Validate checks the message has the minimum required fields. Failures wrap
-// errs.ErrInvalidInput.
+// sdk.ErrInvalidInput.
 func (m Message) Validate() error {
 	if strings.TrimSpace(m.From) == "" {
-		return fmt.Errorf("from is required: %w", errs.ErrInvalidInput)
+		return fmt.Errorf("from is required: %w", sdk.ErrInvalidInput)
 	}
 	if len(m.To) == 0 {
-		return fmt.Errorf("at least one recipient is required: %w", errs.ErrInvalidInput)
+		return fmt.Errorf("at least one recipient is required: %w", sdk.ErrInvalidInput)
 	}
 	if strings.TrimSpace(m.Subject) == "" {
-		return fmt.Errorf("subject is required: %w", errs.ErrInvalidInput)
+		return fmt.Errorf("subject is required: %w", sdk.ErrInvalidInput)
 	}
 	if strings.TrimSpace(m.Text) == "" {
-		return fmt.Errorf("body is required: %w", errs.ErrInvalidInput)
+		return fmt.Errorf("body is required: %w", sdk.ErrInvalidInput)
 	}
 	return nil
 }

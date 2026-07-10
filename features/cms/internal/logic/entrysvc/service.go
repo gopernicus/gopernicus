@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/cms/domain/content"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
 )
 
@@ -80,7 +80,7 @@ func (s *Service) emit(ctx context.Context, evt sdkevents.Event) {
 func (s *Service) Create(ctx context.Context, typeSlug string, in Input) (content.Entry, error) {
 	ct, ok := s.registry.Type(typeSlug)
 	if !ok {
-		return content.Entry{}, fmt.Errorf("content type %q not registered: %w", typeSlug, errs.ErrNotFound)
+		return content.Entry{}, fmt.Errorf("content type %q not registered: %w", typeSlug, sdk.ErrNotFound)
 	}
 
 	e, err := content.NewEntry(s.ids, typeSlug, in.Title, in.Excerpt, in.Body, in.Author, in.Status, in.Template, s.clock())
@@ -88,7 +88,7 @@ func (s *Service) Create(ctx context.Context, typeSlug string, in Input) (conten
 		return content.Entry{}, err
 	}
 	if !ct.SupportsTemplate(e.Template) {
-		return content.Entry{}, fmt.Errorf("content type %q does not support template %q: %w", typeSlug, e.Template, errs.ErrInvalidInput)
+		return content.Entry{}, fmt.Errorf("content type %q does not support template %q: %w", typeSlug, e.Template, sdk.ErrInvalidInput)
 	}
 	if ct.Hierarchical {
 		e.SetHierarchy(in.ParentID, in.MenuOrder)
@@ -113,13 +113,13 @@ func (s *Service) Edit(ctx context.Context, id string, in Input) (content.Entry,
 	}
 	ct, ok := s.registry.Type(e.Type)
 	if !ok {
-		return content.Entry{}, fmt.Errorf("content type %q not registered: %w", e.Type, errs.ErrNotFound)
+		return content.Entry{}, fmt.Errorf("content type %q not registered: %w", e.Type, sdk.ErrNotFound)
 	}
 	if err := e.ApplyEdit(in.Title, in.Excerpt, in.Body, in.Author, in.Status, in.Template, s.clock()); err != nil {
 		return content.Entry{}, err
 	}
 	if !ct.SupportsTemplate(e.Template) {
-		return content.Entry{}, fmt.Errorf("content type %q does not support template %q: %w", e.Type, e.Template, errs.ErrInvalidInput)
+		return content.Entry{}, fmt.Errorf("content type %q does not support template %q: %w", e.Type, e.Template, sdk.ErrInvalidInput)
 	}
 	if ct.Hierarchical {
 		e.SetHierarchy(in.ParentID, in.MenuOrder)
@@ -135,13 +135,13 @@ func (s *Service) Edit(ctx context.Context, id string, in Input) (content.Entry,
 	return updated, nil
 }
 
-// Get returns the entry with the given id, or errs.ErrNotFound.
+// Get returns the entry with the given id, or sdk.ErrNotFound.
 func (s *Service) Get(ctx context.Context, id string) (content.Entry, error) {
 	return s.entries.Get(ctx, id)
 }
 
 // GetBySlug returns the entry of type typ with the given slug, or
-// errs.ErrNotFound.
+// sdk.ErrNotFound.
 func (s *Service) GetBySlug(ctx context.Context, typ, slug string) (content.Entry, error) {
 	return s.entries.GetBySlug(ctx, typ, slug)
 }
@@ -225,13 +225,13 @@ func (s *Service) validateFields(ctx context.Context, typeSlug string, in conten
 		}
 		target, err := s.entries.Get(ctx, targetID)
 		if err != nil {
-			if errors.Is(err, errs.ErrNotFound) {
-				return nil, fmt.Errorf("relation field %q points to missing entry %q: %w", def.Key, targetID, errs.ErrInvalidInput)
+			if errors.Is(err, sdk.ErrNotFound) {
+				return nil, fmt.Errorf("relation field %q points to missing entry %q: %w", def.Key, targetID, sdk.ErrInvalidInput)
 			}
 			return nil, err
 		}
 		if target.Type != def.RelTo {
-			return nil, fmt.Errorf("relation field %q must point to a %q, got %q: %w", def.Key, def.RelTo, target.Type, errs.ErrInvalidInput)
+			return nil, fmt.Errorf("relation field %q must point to a %q, got %q: %w", def.Key, def.RelTo, target.Type, sdk.ErrInvalidInput)
 		}
 	}
 	return out, nil

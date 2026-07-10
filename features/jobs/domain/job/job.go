@@ -79,7 +79,7 @@ func (j Job) RetryCount() int { return j.Retries }
 // Enqueue is the input for inserting one job.
 type Enqueue struct {
 	// ID is optional; when set it is the idempotency key (a duplicate ID yields
-	// errs.ErrAlreadyExists). The scheduler's deterministic refire relies on it.
+	// sdk.ErrAlreadyExists). The scheduler's deterministic refire relies on it.
 	ID           string
 	Kind         string
 	Payload      json.RawMessage
@@ -101,7 +101,7 @@ type ListFilter struct {
 // sdk/workers.JobStore[Job]: Claim/Complete/Fail share the kernel's exact
 // signatures so a QueueRepository is the store a workers.Runner drives directly.
 type QueueRepository interface {
-	// Enqueue inserts one job; a duplicate ID yields errs.ErrAlreadyExists.
+	// Enqueue inserts one job; a duplicate ID yields sdk.ErrAlreadyExists.
 	Enqueue(ctx context.Context, in Enqueue) (Job, error)
 	// Claim atomically transitions exactly one due job to running for workerID
 	// and returns it, or returns workers.ErrNoWork when none is due. "Due" means
@@ -114,7 +114,7 @@ type QueueRepository interface {
 	// Fail increments retry_count and either reschedules the job to pending or
 	// dead-letters it once the attempts are exhausted. reason is the cause.
 	Fail(ctx context.Context, jobID string, now time.Time, reason string, maxAttempts int) error
-	// Get returns the job with the given id, or errs.ErrNotFound.
+	// Get returns the job with the given id, or sdk.ErrNotFound.
 	Get(ctx context.Context, id string) (Job, error)
 	// List returns a cursor-paginated page of jobs matching the filter.
 	List(ctx context.Context, f ListFilter, req crud.ListRequest) (crud.Page[Job], error)

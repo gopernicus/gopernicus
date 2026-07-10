@@ -19,8 +19,8 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // TestReference runs the conformance suite against the in-package reference
@@ -93,7 +93,7 @@ func (r refUsers) Create(_ context.Context, u user.User) (user.User, error) {
 	defer r.mu.Unlock()
 	for _, ex := range r.users {
 		if strings.EqualFold(ex.Email, u.Email) {
-			return user.User{}, errs.ErrAlreadyExists
+			return user.User{}, sdk.ErrAlreadyExists
 		}
 	}
 	// Empty ID → mimic a schema default (amended D10): assign the key at insert.
@@ -109,7 +109,7 @@ func (r refUsers) Get(_ context.Context, id string) (user.User, error) {
 	defer r.mu.RUnlock()
 	u, ok := r.users[id]
 	if !ok {
-		return user.User{}, errs.ErrNotFound
+		return user.User{}, sdk.ErrNotFound
 	}
 	return u, nil
 }
@@ -122,14 +122,14 @@ func (r refUsers) GetByEmail(_ context.Context, email string) (user.User, error)
 			return u, nil
 		}
 	}
-	return user.User{}, errs.ErrNotFound
+	return user.User{}, sdk.ErrNotFound
 }
 
 func (r refUsers) Update(_ context.Context, id string, u user.User) (user.User, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.users[id]; !ok {
-		return user.User{}, errs.ErrNotFound
+		return user.User{}, sdk.ErrNotFound
 	}
 	r.users[id] = u
 	return u, nil
@@ -151,7 +151,7 @@ func (r refPasswords) Get(_ context.Context, userID string) (string, error) {
 	defer r.mu.RUnlock()
 	h, ok := r.passwords[userID]
 	if !ok {
-		return "", errs.ErrNotFound
+		return "", sdk.ErrNotFound
 	}
 	return h, nil
 }
@@ -172,10 +172,10 @@ func (r refSessions) Get(_ context.Context, token string) (session.Session, erro
 	defer r.mu.RUnlock()
 	s, ok := r.sessions[token]
 	if !ok {
-		return session.Session{}, errs.ErrNotFound
+		return session.Session{}, sdk.ErrNotFound
 	}
 	if s.Expired(time.Now()) {
-		return session.Session{}, errs.ErrExpired
+		return session.Session{}, sdk.ErrExpired
 	}
 	return s, nil
 }
@@ -184,7 +184,7 @@ func (r refSessions) Delete(_ context.Context, token string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.sessions[token]; !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	delete(r.sessions, token)
 	return nil
@@ -217,10 +217,10 @@ func (r refCodes) Get(_ context.Context, code string) (verification.Code, error)
 	defer r.mu.RUnlock()
 	c, ok := r.codes[code]
 	if !ok {
-		return verification.Code{}, errs.ErrNotFound
+		return verification.Code{}, sdk.ErrNotFound
 	}
 	if c.Expired(time.Now()) {
-		return verification.Code{}, errs.ErrExpired
+		return verification.Code{}, sdk.ErrExpired
 	}
 	return c, nil
 }
@@ -229,7 +229,7 @@ func (r refCodes) Delete(_ context.Context, code string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.codes[code]; !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	delete(r.codes, code)
 	return nil
@@ -251,10 +251,10 @@ func (r refTokens) Get(_ context.Context, token string) (verification.Token, err
 	defer r.mu.RUnlock()
 	t, ok := r.tokens[token]
 	if !ok {
-		return verification.Token{}, errs.ErrNotFound
+		return verification.Token{}, sdk.ErrNotFound
 	}
 	if t.Expired(time.Now()) {
-		return verification.Token{}, errs.ErrExpired
+		return verification.Token{}, sdk.ErrExpired
 	}
 	return t, nil
 }
@@ -263,7 +263,7 @@ func (r refTokens) Delete(_ context.Context, token string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.tokens[token]; !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	delete(r.tokens, token)
 	return nil
@@ -278,7 +278,7 @@ func (r refOAuthAccounts) Create(_ context.Context, a oauthaccount.OAuthAccount)
 	defer r.mu.Unlock()
 	for _, ex := range r.oauthAccounts {
 		if ex.Provider == a.Provider && ex.ProviderUserID == a.ProviderUserID {
-			return oauthaccount.OAuthAccount{}, errs.ErrAlreadyExists
+			return oauthaccount.OAuthAccount{}, sdk.ErrAlreadyExists
 		}
 	}
 	r.oauthAccounts = append(r.oauthAccounts, a)
@@ -293,7 +293,7 @@ func (r refOAuthAccounts) GetByProvider(_ context.Context, provider, providerUse
 			return a, nil
 		}
 	}
-	return oauthaccount.OAuthAccount{}, errs.ErrNotFound
+	return oauthaccount.OAuthAccount{}, sdk.ErrNotFound
 }
 
 func (r refOAuthAccounts) ListByUser(_ context.Context, userID string) ([]oauthaccount.OAuthAccount, error) {
@@ -321,7 +321,7 @@ func (r refOAuthAccounts) Delete(_ context.Context, userID, provider string) err
 		kept = append(kept, a)
 	}
 	if !deleted {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	r.oauthAccounts = kept
 	return nil
@@ -346,11 +346,11 @@ func (r refOAuthStates) Consume(_ context.Context, token string) (oauthstate.Sta
 	defer r.mu.Unlock()
 	s, ok := r.oauthStates[token]
 	if !ok {
-		return oauthstate.State{}, errs.ErrNotFound
+		return oauthstate.State{}, sdk.ErrNotFound
 	}
 	delete(r.oauthStates, token)
 	if s.Expired(time.Now()) {
-		return oauthstate.State{}, errs.ErrExpired
+		return oauthstate.State{}, sdk.ErrExpired
 	}
 	return s, nil
 }
@@ -367,7 +367,7 @@ func (r refServiceAccounts) Create(_ context.Context, sa serviceaccount.ServiceA
 		sa.ID = ids.MustGenerate()
 	}
 	if _, ok := r.serviceAccounts[sa.ID]; ok {
-		return serviceaccount.ServiceAccount{}, errs.ErrAlreadyExists
+		return serviceaccount.ServiceAccount{}, sdk.ErrAlreadyExists
 	}
 	r.serviceAccounts[sa.ID] = sa
 	return sa, nil
@@ -378,7 +378,7 @@ func (r refServiceAccounts) Get(_ context.Context, id string) (serviceaccount.Se
 	defer r.mu.RUnlock()
 	sa, ok := r.serviceAccounts[id]
 	if !ok {
-		return serviceaccount.ServiceAccount{}, errs.ErrNotFound
+		return serviceaccount.ServiceAccount{}, sdk.ErrNotFound
 	}
 	return sa, nil
 }
@@ -401,7 +401,7 @@ func (r refServiceAccounts) Update(_ context.Context, id string, sa serviceaccou
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.serviceAccounts[id]; !ok {
-		return serviceaccount.ServiceAccount{}, errs.ErrNotFound
+		return serviceaccount.ServiceAccount{}, sdk.ErrNotFound
 	}
 	r.serviceAccounts[id] = sa
 	return sa, nil
@@ -411,7 +411,7 @@ func (r refServiceAccounts) Delete(_ context.Context, id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.serviceAccounts[id]; !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	delete(r.serviceAccounts, id)
 	return nil
@@ -426,7 +426,7 @@ func (r refAPIKeys) Create(_ context.Context, k apikey.APIKey) (apikey.APIKey, e
 	defer r.mu.Unlock()
 	for _, ex := range r.apiKeys {
 		if ex.KeyHash == k.KeyHash {
-			return apikey.APIKey{}, errs.ErrAlreadyExists
+			return apikey.APIKey{}, sdk.ErrAlreadyExists
 		}
 	}
 	// Empty ID → mimic a schema default (amended D10): assign the key at insert.
@@ -448,7 +448,7 @@ func (r refAPIKeys) GetByHash(_ context.Context, keyHash string) (apikey.APIKey,
 			return k, nil
 		}
 	}
-	return apikey.APIKey{}, errs.ErrNotFound
+	return apikey.APIKey{}, sdk.ErrNotFound
 }
 
 func (r refAPIKeys) ListByServiceAccount(_ context.Context, serviceAccountID string, req crud.ListRequest) (crud.Page[apikey.APIKey], error) {
@@ -470,7 +470,7 @@ func (r refAPIKeys) Revoke(_ context.Context, id string, revokedAt time.Time) er
 	defer r.mu.Unlock()
 	k, ok := r.apiKeys[id]
 	if !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	k.RevokedAt = revokedAt.UTC()
 	r.apiKeys[id] = k
@@ -482,7 +482,7 @@ func (r refAPIKeys) TouchLastUsed(_ context.Context, id string, usedAt time.Time
 	defer r.mu.Unlock()
 	k, ok := r.apiKeys[id]
 	if !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	k.LastUsedAt = usedAt.UTC()
 	r.apiKeys[id] = k
@@ -549,7 +549,7 @@ func (r refInvitations) Create(_ context.Context, inv invitation.Invitation) (in
 			ex.IdentifierKind == inv.IdentifierKind &&
 			ex.Identifier == inv.Identifier &&
 			ex.Relation == inv.Relation {
-			return invitation.Invitation{}, errs.ErrAlreadyExists
+			return invitation.Invitation{}, sdk.ErrAlreadyExists
 		}
 	}
 	// Empty ID → mimic a schema default (amended D10): assign the key at insert.
@@ -565,7 +565,7 @@ func (r refInvitations) Get(_ context.Context, id string) (invitation.Invitation
 	defer r.mu.RUnlock()
 	inv, ok := r.invitations[id]
 	if !ok {
-		return invitation.Invitation{}, errs.ErrNotFound
+		return invitation.Invitation{}, sdk.ErrNotFound
 	}
 	return inv, nil
 }
@@ -580,12 +580,12 @@ func (r refInvitations) GetByTokenHash(_ context.Context, tokenHash string) (inv
 	for _, inv := range r.invitations {
 		if inv.TokenHash == tokenHash {
 			if inv.Expired(time.Now()) {
-				return invitation.Invitation{}, errs.ErrExpired
+				return invitation.Invitation{}, sdk.ErrExpired
 			}
 			return inv, nil
 		}
 	}
-	return invitation.Invitation{}, errs.ErrNotFound
+	return invitation.Invitation{}, sdk.ErrNotFound
 }
 
 func (r refInvitations) ListByResource(_ context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
@@ -621,7 +621,7 @@ func (r refInvitations) UpdateStatus(_ context.Context, id string, upd invitatio
 	defer r.mu.Unlock()
 	inv, ok := r.invitations[id]
 	if !ok {
-		return invitation.Invitation{}, errs.ErrNotFound
+		return invitation.Invitation{}, sdk.ErrNotFound
 	}
 	inv.Status = upd.Status
 	inv.TokenHash = upd.TokenHash
@@ -643,7 +643,7 @@ func pageMem[T any](all []T, req crud.ListRequest, keyOf func(T) (time.Time, str
 		return crud.Page[T]{}, err
 	}
 	if req.Order.Field != "" && req.Order.Field != "created_at" {
-		return crud.Page[T]{}, fmt.Errorf("unknown order field %q: %w", req.Order.Field, errs.ErrInvalidInput)
+		return crud.Page[T]{}, fmt.Errorf("unknown order field %q: %w", req.Order.Field, sdk.ErrInvalidInput)
 	}
 	asc := req.Order.Direction == crud.ASC
 

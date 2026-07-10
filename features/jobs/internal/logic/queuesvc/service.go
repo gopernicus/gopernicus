@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // Service implements the enqueue use cases over the queue repository port.
@@ -61,10 +61,10 @@ func (s *Service) Enqueue(ctx context.Context, kind string, payload json.RawMess
 // EnqueueJob is the full-fidelity enqueue: it validates the kind, applies the
 // MaxAttempts and ScheduledFor defaults, inserts the job, and — only on a
 // successful insert — signals the wake channel. A duplicate ID surfaces
-// errs.ErrAlreadyExists from the store and does not signal (nothing new ran).
+// sdk.ErrAlreadyExists from the store and does not signal (nothing new ran).
 func (s *Service) EnqueueJob(ctx context.Context, in job.Enqueue) (job.Job, error) {
 	if in.Kind == "" {
-		return job.Job{}, fmt.Errorf("jobs: kind is required: %w", errs.ErrInvalidInput)
+		return job.Job{}, fmt.Errorf("jobs: kind is required: %w", sdk.ErrInvalidInput)
 	}
 	if in.MaxAttempts <= 0 {
 		in.MaxAttempts = s.maxAttempts

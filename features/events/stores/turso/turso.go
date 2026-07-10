@@ -25,7 +25,7 @@ import (
 	"fmt"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // MigrationsFS holds the embedded canonical schema (migration source "events").
@@ -39,7 +39,7 @@ const MigrationsDir = "migrations"
 
 // New returns the outbox Store backed by db, AFTER verifying the event_outbox
 // table exists (design §5 mitigation b: the boot-time probe). It errors with
-// errs.ErrNotFound when the table is absent — the "events" migration source was
+// sdk.ErrNotFound when the table is absent — the "events" migration source was
 // not applied before boot — so the failure surfaces at wiring time, before the
 // host serves traffic, rather than on the poller's first read. It does NOT touch
 // migrations: the host owns and applies the schema (see ExportMigrations).
@@ -57,7 +57,7 @@ func probeOutboxTable(ctx context.Context, db *tursodb.DB) error {
 	err := db.QueryRow(ctx,
 		`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'event_outbox'`).Scan(&name)
 	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("events outbox store: event_outbox table missing — apply the %q migration source before boot: %w", "events", errs.ErrNotFound)
+		return fmt.Errorf("events outbox store: event_outbox table missing — apply the %q migration source before boot: %w", "events", sdk.ErrNotFound)
 	}
 	if err != nil {
 		return tursodb.MapError(err)

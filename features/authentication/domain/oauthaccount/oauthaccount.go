@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // OAuthAccount links a local user to one external provider identity. The token
@@ -38,19 +38,19 @@ type OAuthAccount struct {
 // providerUserID) as of now. Token and provider-email fields are set by the
 // caller after construction (they depend on the exchanged token and whether an
 // encrypter is wired). A blank userID, provider, or providerUserID wraps
-// errs.ErrInvalidInput.
+// sdk.ErrInvalidInput.
 func New(userID, provider, providerUserID string, now time.Time) (OAuthAccount, error) {
 	userID = strings.TrimSpace(userID)
 	provider = strings.TrimSpace(provider)
 	providerUserID = strings.TrimSpace(providerUserID)
 	if userID == "" {
-		return OAuthAccount{}, fmt.Errorf("user id is required: %w", errs.ErrInvalidInput)
+		return OAuthAccount{}, fmt.Errorf("user id is required: %w", sdk.ErrInvalidInput)
 	}
 	if provider == "" {
-		return OAuthAccount{}, fmt.Errorf("provider is required: %w", errs.ErrInvalidInput)
+		return OAuthAccount{}, fmt.Errorf("provider is required: %w", sdk.ErrInvalidInput)
 	}
 	if providerUserID == "" {
-		return OAuthAccount{}, fmt.Errorf("provider user id is required: %w", errs.ErrInvalidInput)
+		return OAuthAccount{}, fmt.Errorf("provider user id is required: %w", sdk.ErrInvalidInput)
 	}
 	return OAuthAccount{
 		UserID:          userID,

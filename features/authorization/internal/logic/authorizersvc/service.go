@@ -5,9 +5,9 @@ import (
 	"fmt"
 
 	"github.com/gopernicus/gopernicus/features/authorization/domain/relationship"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // defaultMaxTraversalDepth bounds the engine's Go through-traversal recursion
@@ -18,15 +18,15 @@ const defaultMaxTraversalDepth = 10
 
 var (
 	// ErrInvalidRelation indicates a relationship is not allowed by the schema.
-	ErrInvalidRelation = fmt.Errorf("authorization relation: %w", errs.ErrInvalidInput)
+	ErrInvalidRelation = fmt.Errorf("authorization relation: %w", sdk.ErrInvalidInput)
 
 	// ErrInvalidSchema indicates the schema has structural errors (undefined
 	// references, circular through-relations, etc.).
-	ErrInvalidSchema = fmt.Errorf("authorization schema: %w", errs.ErrInvalidInput)
+	ErrInvalidSchema = fmt.Errorf("authorization schema: %w", sdk.ErrInvalidInput)
 
 	// ErrCannotRemoveLastOwner indicates the operation would orphan a resource by
 	// removing its only owner.
-	ErrCannotRemoveLastOwner = fmt.Errorf("authorization last owner: %w", errs.ErrConflict)
+	ErrCannotRemoveLastOwner = fmt.Errorf("authorization last owner: %w", sdk.ErrConflict)
 )
 
 // Config holds the relationship engine's policy settings. Both fields are

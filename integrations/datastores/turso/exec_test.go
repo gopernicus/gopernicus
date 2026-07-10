@@ -8,7 +8,7 @@ import (
 // TestExecAffecting exercises the (int64, error) normalization against the same
 // in-proc SQLite dialect a live Turso database speaks: a matching write reports
 // its row count, a non-matching write reports zero (the adapter, not the
-// connector, maps zero to errs.ErrNotFound), a broad write reports many, and a
+// connector, maps zero to sdk.ErrNotFound), a broad write reports many, and a
 // driver error propagates unchanged rather than being normalized to a count.
 func TestExecAffecting(t *testing.T) {
 	db := newMemDB(t)

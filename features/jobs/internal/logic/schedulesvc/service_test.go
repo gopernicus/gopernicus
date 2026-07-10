@@ -9,8 +9,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
 	"github.com/gopernicus/gopernicus/features/jobs/domain/schedule"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/workers"
 )
 
@@ -57,7 +57,7 @@ func (f *fakeSchedules) SetLastJob(ctx context.Context, id, jobID string, now ti
 	return nil
 }
 func (f *fakeSchedules) Get(ctx context.Context, id string) (schedule.Schedule, error) {
-	return schedule.Schedule{}, errs.ErrNotFound
+	return schedule.Schedule{}, sdk.ErrNotFound
 }
 func (f *fakeSchedules) List(ctx context.Context, _ crud.ListRequest) (crud.Page[schedule.Schedule], error) {
 	return crud.Page[schedule.Schedule]{}, nil
@@ -76,7 +76,7 @@ type fakeEnqueuer struct {
 func (f *fakeEnqueuer) EnqueueJob(ctx context.Context, in job.Enqueue) (job.Job, error) {
 	f.calls = append(f.calls, in)
 	if f.existsFor[in.ID] {
-		return job.Job{}, fmt.Errorf("%s: %w", in.ID, errs.ErrAlreadyExists)
+		return job.Job{}, fmt.Errorf("%s: %w", in.ID, sdk.ErrAlreadyExists)
 	}
 	if f.err != nil {
 		return job.Job{}, f.err
@@ -244,7 +244,7 @@ func TestEnsureSchedule_InvalidSpec(t *testing.T) {
 	for name, spec := range cases {
 		t.Run(name, func(t *testing.T) {
 			_, err := svc.EnsureSchedule(context.Background(), schedule.Ensure{Name: "x", Kind: "k", Spec: spec})
-			if !errors.Is(err, errs.ErrInvalidInput) {
+			if !errors.Is(err, sdk.ErrInvalidInput) {
 				t.Fatalf("err = %v, want ErrInvalidInput", err)
 			}
 		})

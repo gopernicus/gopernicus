@@ -7,8 +7,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authorization"
 	"github.com/gopernicus/gopernicus/features/authorization/domain/role"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 func assign(t *testing.T, s role.Storer, subjectType, subjectID, roleName, resourceType, resourceID string) {
@@ -138,7 +138,7 @@ func runRoles(t *testing.T, newRepos func(t *testing.T) authorization.Repositori
 		assign(t, s, "user", "u1", "editor", "doc", "d1")
 		// An order field outside role.OrderFields (created_at only) is rejected
 		// with ErrInvalidInput identically across every backend.
-		if _, err := s.ListBySubject(ctx, "user", "u1", crud.ListRequest{Order: crud.NewOrder("role", crud.ASC)}); !errors.Is(err, errs.ErrInvalidInput) {
+		if _, err := s.ListBySubject(ctx, "user", "u1", crud.ListRequest{Order: crud.NewOrder("role", crud.ASC)}); !errors.Is(err, sdk.ErrInvalidInput) {
 			t.Fatalf("unknown order field must reject with ErrInvalidInput, got %v", err)
 		}
 	})

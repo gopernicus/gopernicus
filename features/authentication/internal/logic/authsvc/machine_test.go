@@ -11,8 +11,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/apikey"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/serviceaccount"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
 )
 
@@ -38,7 +38,7 @@ func (f *fakeServiceAccounts) Create(_ context.Context, sa serviceaccount.Servic
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, ok := f.m[sa.ID]; ok {
-		return serviceaccount.ServiceAccount{}, errs.ErrAlreadyExists
+		return serviceaccount.ServiceAccount{}, sdk.ErrAlreadyExists
 	}
 	f.m[sa.ID] = sa
 	return sa, nil
@@ -49,7 +49,7 @@ func (f *fakeServiceAccounts) Get(_ context.Context, id string) (serviceaccount.
 	defer f.mu.Unlock()
 	sa, ok := f.m[id]
 	if !ok {
-		return serviceaccount.ServiceAccount{}, errs.ErrNotFound
+		return serviceaccount.ServiceAccount{}, sdk.ErrNotFound
 	}
 	return sa, nil
 }
@@ -68,7 +68,7 @@ func (f *fakeServiceAccounts) Update(_ context.Context, id string, sa serviceacc
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, ok := f.m[id]; !ok {
-		return serviceaccount.ServiceAccount{}, errs.ErrNotFound
+		return serviceaccount.ServiceAccount{}, sdk.ErrNotFound
 	}
 	f.m[id] = sa
 	return sa, nil
@@ -78,7 +78,7 @@ func (f *fakeServiceAccounts) Delete(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if _, ok := f.m[id]; !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	delete(f.m, id)
 	return nil
@@ -98,7 +98,7 @@ func (f *fakeAPIKeys) Create(_ context.Context, k apikey.APIKey) (apikey.APIKey,
 	defer f.mu.Unlock()
 	for _, ex := range f.m {
 		if ex.KeyHash == k.KeyHash {
-			return apikey.APIKey{}, errs.ErrAlreadyExists
+			return apikey.APIKey{}, sdk.ErrAlreadyExists
 		}
 	}
 	f.m[k.ID] = k
@@ -113,7 +113,7 @@ func (f *fakeAPIKeys) GetByHash(_ context.Context, keyHash string) (apikey.APIKe
 			return k, nil
 		}
 	}
-	return apikey.APIKey{}, errs.ErrNotFound
+	return apikey.APIKey{}, sdk.ErrNotFound
 }
 
 func (f *fakeAPIKeys) ListByServiceAccount(_ context.Context, serviceAccountID string, _ crud.ListRequest) (crud.Page[apikey.APIKey], error) {
@@ -133,7 +133,7 @@ func (f *fakeAPIKeys) Revoke(_ context.Context, id string, revokedAt time.Time) 
 	defer f.mu.Unlock()
 	k, ok := f.m[id]
 	if !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	k.RevokedAt = revokedAt
 	f.m[id] = k
@@ -148,7 +148,7 @@ func (f *fakeAPIKeys) TouchLastUsed(_ context.Context, id string, usedAt time.Ti
 	}
 	k, ok := f.m[id]
 	if !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	k.LastUsedAt = usedAt
 	f.m[id] = k
@@ -237,7 +237,7 @@ func TestMintAPIKeyPlaintextIsDotless(t *testing.T) {
 
 func TestMintAPIKeyUnknownServiceAccount(t *testing.T) {
 	h := newMachineHarness(t)
-	if _, _, err := h.svc.MintAPIKey(context.Background(), "nope", "k", time.Time{}); !errors.Is(err, errs.ErrNotFound) {
+	if _, _, err := h.svc.MintAPIKey(context.Background(), "nope", "k", time.Time{}); !errors.Is(err, sdk.ErrNotFound) {
 		t.Errorf("MintAPIKey(unknown sa): err=%v, want ErrNotFound", err)
 	}
 }
@@ -270,7 +270,7 @@ func TestAuthenticateAPIKeyRevokedDenies(t *testing.T) {
 	if err := h.svc.RevokeAPIKey(ctx, key.ID); err != nil {
 		t.Fatalf("RevokeAPIKey: %v", err)
 	}
-	if _, err := h.svc.AuthenticateAPIKey(ctx, raw); !errors.Is(err, errs.ErrUnauthorized) {
+	if _, err := h.svc.AuthenticateAPIKey(ctx, raw); !errors.Is(err, sdk.ErrUnauthorized) {
 		t.Errorf("revoked key: err=%v, want ErrUnauthorized", err)
 	}
 }
@@ -280,7 +280,7 @@ func TestAuthenticateAPIKeyExpiredDenies(t *testing.T) {
 	ctx := context.Background()
 	sa, _ := h.svc.CreateServiceAccount(ctx, "admin", "bot", "", false, "")
 	_, raw, _ := h.svc.MintAPIKey(ctx, sa.ID, "k", time.Now().Add(-time.Hour))
-	if _, err := h.svc.AuthenticateAPIKey(ctx, raw); !errors.Is(err, errs.ErrUnauthorized) {
+	if _, err := h.svc.AuthenticateAPIKey(ctx, raw); !errors.Is(err, sdk.ErrUnauthorized) {
 		t.Errorf("expired key: err=%v, want ErrUnauthorized", err)
 	}
 }
@@ -298,7 +298,7 @@ func TestAuthenticateAPIKeyValidNeverExpires(t *testing.T) {
 
 func TestAuthenticateAPIKeyUnknownDenies(t *testing.T) {
 	h := newMachineHarness(t)
-	if _, err := h.svc.AuthenticateAPIKey(context.Background(), "prefix_deadbeef"); !errors.Is(err, errs.ErrUnauthorized) {
+	if _, err := h.svc.AuthenticateAPIKey(context.Background(), "prefix_deadbeef"); !errors.Is(err, sdk.ErrUnauthorized) {
 		t.Errorf("unknown key: err=%v, want ErrUnauthorized", err)
 	}
 }
@@ -330,7 +330,7 @@ func TestAuthenticateAPIKeySubsystemOff(t *testing.T) {
 	if svc.MachineEnabled() {
 		t.Fatal("MachineEnabled reported true with no machine repos")
 	}
-	if _, err := svc.AuthenticateAPIKey(context.Background(), "prefix_x"); !errors.Is(err, errs.ErrUnauthorized) {
+	if _, err := svc.AuthenticateAPIKey(context.Background(), "prefix_x"); !errors.Is(err, sdk.ErrUnauthorized) {
 		t.Errorf("auth with subsystem off: err=%v, want ErrUnauthorized", err)
 	}
 }

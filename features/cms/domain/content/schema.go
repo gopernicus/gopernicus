@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/slug"
 )
 
@@ -104,24 +104,24 @@ func (c ContentType) Field(key string) (FieldDef, bool) {
 // validateType enforces ContentType invariants at registration time.
 func validateType(c ContentType) error {
 	if strings.TrimSpace(c.Slug) == "" {
-		return fmt.Errorf("content type slug is required: %w", errs.ErrInvalidInput)
+		return fmt.Errorf("content type slug is required: %w", sdk.ErrInvalidInput)
 	}
 	if strings.TrimSpace(c.Singular) == "" || strings.TrimSpace(c.Plural) == "" {
-		return fmt.Errorf("content type %q needs Singular and Plural names: %w", c.Slug, errs.ErrInvalidInput)
+		return fmt.Errorf("content type %q needs Singular and Plural names: %w", c.Slug, sdk.ErrInvalidInput)
 	}
 	seen := make(map[string]struct{}, len(c.Fields))
 	for _, f := range c.Fields {
 		if strings.TrimSpace(f.Key) == "" {
-			return fmt.Errorf("content type %q has a field with no Key: %w", c.Slug, errs.ErrInvalidInput)
+			return fmt.Errorf("content type %q has a field with no Key: %w", c.Slug, sdk.ErrInvalidInput)
 		}
 		if !f.Kind.Valid() {
-			return fmt.Errorf("content type %q field %q has invalid kind %q: %w", c.Slug, f.Key, f.Kind, errs.ErrInvalidInput)
+			return fmt.Errorf("content type %q field %q has invalid kind %q: %w", c.Slug, f.Key, f.Kind, sdk.ErrInvalidInput)
 		}
 		if f.Kind == KindRelation && strings.TrimSpace(f.RelTo) == "" {
-			return fmt.Errorf("content type %q relation field %q needs RelTo: %w", c.Slug, f.Key, errs.ErrInvalidInput)
+			return fmt.Errorf("content type %q relation field %q needs RelTo: %w", c.Slug, f.Key, sdk.ErrInvalidInput)
 		}
 		if _, dup := seen[f.Key]; dup {
-			return fmt.Errorf("content type %q has duplicate field key %q: %w", c.Slug, f.Key, errs.ErrInvalidInput)
+			return fmt.Errorf("content type %q has duplicate field key %q: %w", c.Slug, f.Key, sdk.ErrInvalidInput)
 		}
 		seen[f.Key] = struct{}{}
 	}

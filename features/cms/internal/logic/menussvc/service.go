@@ -41,12 +41,12 @@ func (s *Service) CreateMenu(ctx context.Context, name string) (menus.Menu, erro
 	return s.repo.CreateMenu(ctx, m)
 }
 
-// GetMenu returns the menu with the given id, or errs.ErrNotFound.
+// GetMenu returns the menu with the given id, or sdk.ErrNotFound.
 func (s *Service) GetMenu(ctx context.Context, id string) (menus.Menu, error) {
 	return s.repo.GetMenu(ctx, id)
 }
 
-// GetMenuBySlug returns the menu with the given slug, or errs.ErrNotFound.
+// GetMenuBySlug returns the menu with the given slug, or sdk.ErrNotFound.
 func (s *Service) GetMenuBySlug(ctx context.Context, slug string) (menus.Menu, error) {
 	return s.repo.GetMenuBySlug(ctx, slug)
 }
@@ -70,7 +70,7 @@ func (s *Service) AddMenuItem(ctx context.Context, menuID, label, url, parentID 
 	return s.repo.AddItem(ctx, item)
 }
 
-// GetMenuItem returns the item with the given id, or errs.ErrNotFound.
+// GetMenuItem returns the item with the given id, or sdk.ErrNotFound.
 func (s *Service) GetMenuItem(ctx context.Context, id string) (menus.MenuItem, error) {
 	return s.repo.GetItem(ctx, id)
 }

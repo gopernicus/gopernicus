@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
 )
 
@@ -202,14 +202,14 @@ func TestIssueTokenCustomTTL(t *testing.T) {
 func TestIssueTokenWrongPassword(t *testing.T) {
 	h := newTokenHarness(t, newFakeSigner(), false, nil)
 	h.mustRegister(t, "wp@example.com", "password123")
-	if _, _, err := h.svc.IssueToken(context.Background(), "wp@example.com", "nope"); !errors.Is(err, errs.ErrUnauthorized) {
+	if _, _, err := h.svc.IssueToken(context.Background(), "wp@example.com", "nope"); !errors.Is(err, sdk.ErrUnauthorized) {
 		t.Errorf("wrong password: err=%v, want ErrUnauthorized", err)
 	}
 }
 
 func TestIssueTokenUnknownEmail(t *testing.T) {
 	h := newTokenHarness(t, newFakeSigner(), false, nil)
-	if _, _, err := h.svc.IssueToken(context.Background(), "ghost@example.com", "password123"); !errors.Is(err, errs.ErrUnauthorized) {
+	if _, _, err := h.svc.IssueToken(context.Background(), "ghost@example.com", "password123"); !errors.Is(err, sdk.ErrUnauthorized) {
 		t.Errorf("unknown email: err=%v, want ErrUnauthorized", err)
 	}
 }

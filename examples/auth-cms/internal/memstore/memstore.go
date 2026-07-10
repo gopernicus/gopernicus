@@ -29,9 +29,9 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
 	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
 	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // ids assigns entity keys when a Create arrives with an empty ID (the
@@ -91,7 +91,7 @@ func (r entryRepo) Create(_ context.Context, e content.Entry) (content.Entry, er
 	defer r.mu.Unlock()
 	for _, ex := range r.entries {
 		if ex.Type == e.Type && ex.Slug == e.Slug {
-			return content.Entry{}, errs.ErrAlreadyExists
+			return content.Entry{}, sdk.ErrAlreadyExists
 		}
 	}
 	// Empty ID → mimic a schema default (amended D10): assign the key at insert.
@@ -106,7 +106,7 @@ func (r entryRepo) Update(_ context.Context, id string, e content.Entry) (conten
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.entries[id]; !ok {
-		return content.Entry{}, errs.ErrNotFound
+		return content.Entry{}, sdk.ErrNotFound
 	}
 	r.entries[id] = e
 	return e, nil
@@ -117,7 +117,7 @@ func (r entryRepo) Get(_ context.Context, id string) (content.Entry, error) {
 	defer r.mu.RUnlock()
 	e, ok := r.entries[id]
 	if !ok {
-		return content.Entry{}, errs.ErrNotFound
+		return content.Entry{}, sdk.ErrNotFound
 	}
 	e.TermIDs = append([]string(nil), r.entryTerms[id]...)
 	return e, nil
@@ -132,14 +132,14 @@ func (r entryRepo) GetBySlug(_ context.Context, typ, slug string) (content.Entry
 			return e, nil
 		}
 	}
-	return content.Entry{}, errs.ErrNotFound
+	return content.Entry{}, sdk.ErrNotFound
 }
 
 func (r entryRepo) Delete(_ context.Context, id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.entries[id]; !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	delete(r.entries, id)
 	delete(r.entryTerms, id)
@@ -186,7 +186,7 @@ func (r termRepo) Get(_ context.Context, id string) (taxonomy.Term, error) {
 	defer r.mu.RUnlock()
 	t, ok := r.terms[id]
 	if !ok {
-		return taxonomy.Term{}, errs.ErrNotFound
+		return taxonomy.Term{}, sdk.ErrNotFound
 	}
 	return t, nil
 }
@@ -199,7 +199,7 @@ func (r termRepo) GetBySlug(_ context.Context, kind taxonomy.Kind, slug string) 
 			return t, nil
 		}
 	}
-	return taxonomy.Term{}, errs.ErrNotFound
+	return taxonomy.Term{}, sdk.ErrNotFound
 }
 
 func (r termRepo) ListByKind(_ context.Context, kind taxonomy.Kind) ([]taxonomy.Term, error) {
@@ -220,7 +220,7 @@ func (r termRepo) Create(_ context.Context, t taxonomy.Term) (taxonomy.Term, err
 	defer r.mu.Unlock()
 	for _, ex := range r.terms {
 		if ex.Kind == t.Kind && ex.Slug == t.Slug {
-			return taxonomy.Term{}, errs.ErrAlreadyExists
+			return taxonomy.Term{}, sdk.ErrAlreadyExists
 		}
 	}
 	// Empty ID → mimic a schema default (amended D10): assign the key at insert.
@@ -235,7 +235,7 @@ func (r termRepo) Update(_ context.Context, id string, t taxonomy.Term) (taxonom
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.terms[id]; !ok {
-		return taxonomy.Term{}, errs.ErrNotFound
+		return taxonomy.Term{}, sdk.ErrNotFound
 	}
 	r.terms[id] = t
 	return t, nil
@@ -257,7 +257,7 @@ func (r menuRepo) CreateMenu(_ context.Context, m menus.Menu) (menus.Menu, error
 	defer r.mu.Unlock()
 	for _, ex := range r.menus {
 		if ex.Slug == m.Slug {
-			return menus.Menu{}, errs.ErrAlreadyExists
+			return menus.Menu{}, sdk.ErrAlreadyExists
 		}
 	}
 	// Empty ID → mimic a schema default (amended D10): assign the key at insert.
@@ -273,7 +273,7 @@ func (r menuRepo) GetMenu(_ context.Context, id string) (menus.Menu, error) {
 	defer r.mu.RUnlock()
 	m, ok := r.menus[id]
 	if !ok {
-		return menus.Menu{}, errs.ErrNotFound
+		return menus.Menu{}, sdk.ErrNotFound
 	}
 	return m, nil
 }
@@ -286,7 +286,7 @@ func (r menuRepo) GetMenuBySlug(_ context.Context, slug string) (menus.Menu, err
 			return m, nil
 		}
 	}
-	return menus.Menu{}, errs.ErrNotFound
+	return menus.Menu{}, sdk.ErrNotFound
 }
 
 func (r menuRepo) ListMenus(_ context.Context) ([]menus.Menu, error) {
@@ -329,7 +329,7 @@ func (r menuRepo) GetItem(_ context.Context, id string) (menus.MenuItem, error) 
 	defer r.mu.RUnlock()
 	it, ok := r.items[id]
 	if !ok {
-		return menus.MenuItem{}, errs.ErrNotFound
+		return menus.MenuItem{}, sdk.ErrNotFound
 	}
 	return it, nil
 }
@@ -338,7 +338,7 @@ func (r menuRepo) UpdateItem(_ context.Context, id string, item menus.MenuItem) 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.items[id]; !ok {
-		return menus.MenuItem{}, errs.ErrNotFound
+		return menus.MenuItem{}, sdk.ErrNotFound
 	}
 	r.items[id] = item
 	return item, nil
@@ -371,7 +371,7 @@ func (r assetRepo) Get(_ context.Context, id string) (media.Asset, error) {
 	defer r.mu.RUnlock()
 	a, ok := r.assets[id]
 	if !ok {
-		return media.Asset{}, errs.ErrNotFound
+		return media.Asset{}, sdk.ErrNotFound
 	}
 	return a, nil
 }
@@ -431,7 +431,7 @@ func entryPageOf(items []content.Entry, req crud.ListRequest) (crud.Page[content
 	}
 	if req.Order.Field != "" {
 		if _, ok := content.OrderFields[req.Order.Field]; !ok {
-			return crud.Page[content.Entry]{}, fmt.Errorf("unknown order field %q: %w", req.Order.Field, errs.ErrInvalidInput)
+			return crud.Page[content.Entry]{}, fmt.Errorf("unknown order field %q: %w", req.Order.Field, sdk.ErrInvalidInput)
 		}
 	}
 	asc := req.Order.Direction == crud.ASC

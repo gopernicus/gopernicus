@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // {{.AggTitle}} is a stored {{.Agg}}. This is the placeholder shape a fresh
@@ -30,11 +30,11 @@ type ListFilter struct {
 
 // New builds a {{.AggTitle}}, minting its id from ids (empty under
 // cryptids.Database — the store then assigns the key from its DDL DEFAULT). A
-// blank name wraps errs.ErrInvalidInput.
+// blank name wraps sdk.ErrInvalidInput.
 func New(ids cryptids.IDGenerator, name string, now time.Time) ({{.AggTitle}}, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return {{.AggTitle}}{}, fmt.Errorf("name is required: %w", errs.ErrInvalidInput)
+		return {{.AggTitle}}{}, fmt.Errorf("name is required: %w", sdk.ErrInvalidInput)
 	}
 	return {{.AggTitle}}{
 		ID:        ids.MustGenerate(),

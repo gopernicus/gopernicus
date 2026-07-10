@@ -8,7 +8,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // CodeStore implements verification.CodeRepository over a PostgreSQL database.
@@ -59,7 +59,7 @@ func (s *CodeStore) Create(ctx context.Context, c verification.Code) (verificati
 	return c, nil
 }
 
-// Get returns the live code: unknown → errs.ErrNotFound, expired → errs.ErrExpired.
+// Get returns the live code: unknown → sdk.ErrNotFound, expired → sdk.ErrExpired.
 func (s *CodeStore) Get(ctx context.Context, code string) (verification.Code, error) {
 	const q = `SELECT ` + codeColumns + ` FROM verification_codes WHERE code = @code`
 	row, err := queryOne[codeRow](ctx, s.db, q, pgx.NamedArgs{"code": code})
@@ -68,19 +68,19 @@ func (s *CodeStore) Get(ctx context.Context, code string) (verification.Code, er
 	}
 	c := row.toDomain()
 	if c.Expired(time.Now()) {
-		return verification.Code{}, errs.ErrExpired
+		return verification.Code{}, sdk.ErrExpired
 	}
 	return c, nil
 }
 
-// Delete removes the code; unknown → errs.ErrNotFound.
+// Delete removes the code; unknown → sdk.ErrNotFound.
 func (s *CodeStore) Delete(ctx context.Context, code string) error {
 	n, err := pgxdb.ExecAffecting(ctx, s.db, "DELETE FROM verification_codes WHERE code = @code", pgx.NamedArgs{"code": code})
 	if err != nil {
 		return err
 	}
 	if n == 0 {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	return nil
 }
@@ -133,7 +133,7 @@ func (s *TokenStore) Create(ctx context.Context, t verification.Token) (verifica
 	return t, nil
 }
 
-// Get returns the live token: unknown → errs.ErrNotFound, expired → errs.ErrExpired.
+// Get returns the live token: unknown → sdk.ErrNotFound, expired → sdk.ErrExpired.
 func (s *TokenStore) Get(ctx context.Context, token string) (verification.Token, error) {
 	const q = `SELECT ` + tokenColumns + ` FROM verification_tokens WHERE token = @token`
 	row, err := queryOne[tokenRow](ctx, s.db, q, pgx.NamedArgs{"token": token})
@@ -142,19 +142,19 @@ func (s *TokenStore) Get(ctx context.Context, token string) (verification.Token,
 	}
 	t := row.toDomain()
 	if t.Expired(time.Now()) {
-		return verification.Token{}, errs.ErrExpired
+		return verification.Token{}, sdk.ErrExpired
 	}
 	return t, nil
 }
 
-// Delete removes the token; unknown → errs.ErrNotFound.
+// Delete removes the token; unknown → sdk.ErrNotFound.
 func (s *TokenStore) Delete(ctx context.Context, token string) error {
 	n, err := pgxdb.ExecAffecting(ctx, s.db, "DELETE FROM verification_tokens WHERE token = @token", pgx.NamedArgs{"token": token})
 	if err != nil {
 		return err
 	}
 	if n == 0 {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	return nil
 }

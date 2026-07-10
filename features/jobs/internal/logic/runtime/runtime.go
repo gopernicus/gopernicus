@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/workers"
 )
 
@@ -52,7 +52,7 @@ func New(d Deps) *Runtime {
 	process := func(ctx context.Context, j job.Job) (job.Job, error) {
 		h, ok := d.Handlers[j.Kind]
 		if !ok {
-			return j, fmt.Errorf("jobs: no handler registered for kind %q: %w", j.Kind, errs.ErrInvalidInput)
+			return j, fmt.Errorf("jobs: no handler registered for kind %q: %w", j.Kind, sdk.ErrInvalidInput)
 		}
 		return j, h(ctx, j)
 	}

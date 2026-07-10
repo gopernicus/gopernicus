@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 
 	_ "github.com/tursodatabase/libsql-client-go/libsql" // registers the "libsql" driver
 )
@@ -134,19 +134,19 @@ func MapError(err error) error {
 		return nil
 	}
 	if errors.Is(err, sql.ErrNoRows) {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 
 	msg := err.Error()
 	switch {
 	case strings.Contains(msg, "UNIQUE constraint failed"):
-		return errs.ErrAlreadyExists
+		return sdk.ErrAlreadyExists
 	case strings.Contains(msg, "FOREIGN KEY constraint failed"):
-		return errs.ErrInvalidReference
+		return sdk.ErrInvalidReference
 	case strings.Contains(msg, "CHECK constraint failed"):
-		return errs.ErrInvalidInput
+		return sdk.ErrInvalidInput
 	case strings.Contains(msg, "NOT NULL constraint failed"):
-		return errs.ErrInvalidInput
+		return sdk.ErrInvalidInput
 	}
 	return err
 }

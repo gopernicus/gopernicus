@@ -9,7 +9,7 @@ import "context"
 type AssetRepository interface {
 	// Create persists asset metadata.
 	Create(ctx context.Context, a Asset) (Asset, error)
-	// Get returns the asset with the given id, or errs.ErrNotFound.
+	// Get returns the asset with the given id, or sdk.ErrNotFound.
 	Get(ctx context.Context, id string) (Asset, error)
 	// List returns all assets, newest first.
 	List(ctx context.Context) ([]Asset, error)

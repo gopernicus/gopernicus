@@ -20,7 +20,7 @@ const MigrationsDir = "migrations"
 
 // queryOne runs a single-row query with NamedArgs and scans it into a db-tagged
 // row struct via pgx.RowToStructByName. A no-rows result maps to
-// errs.ErrNotFound (and every other driver error to its sentinel) through
+// sdk.ErrNotFound (and every other driver error to its sentinel) through
 // MapError, so single-row reads keep the port's error semantics.
 func queryOne[T any](ctx context.Context, db pgxdb.Querier, sql string, args pgx.NamedArgs) (T, error) {
 	var zero T

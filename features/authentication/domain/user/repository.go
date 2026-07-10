@@ -8,18 +8,18 @@ import "context"
 //
 // Sentinel contract (the storetest conformance suite executes these):
 //   - Create whose normalized email collides with an existing user →
-//     errs.ErrAlreadyExists. Uniqueness is on the normalized (lowercased) email.
-//   - Get / GetByEmail for an unknown id / email → errs.ErrNotFound.
-//   - Update for an unknown id → errs.ErrNotFound.
+//     sdk.ErrAlreadyExists. Uniqueness is on the normalized (lowercased) email.
+//   - Get / GetByEmail for an unknown id / email → sdk.ErrNotFound.
+//   - Update for an unknown id → sdk.ErrNotFound.
 type UserRepository interface {
-	// Create persists a new user; colliding email → errs.ErrAlreadyExists.
+	// Create persists a new user; colliding email → sdk.ErrAlreadyExists.
 	Create(ctx context.Context, u User) (User, error)
-	// Get returns the user with the given id, or errs.ErrNotFound.
+	// Get returns the user with the given id, or sdk.ErrNotFound.
 	Get(ctx context.Context, id string) (User, error)
 	// GetByEmail returns the user with the given normalized email, or
-	// errs.ErrNotFound. Callers pass an already-normalized address.
+	// sdk.ErrNotFound. Callers pass an already-normalized address.
 	GetByEmail(ctx context.Context, email string) (User, error)
-	// Update persists changes to an existing user; missing id → errs.ErrNotFound.
+	// Update persists changes to an existing user; missing id → sdk.ErrNotFound.
 	Update(ctx context.Context, id string, u User) (User, error)
 }
 
@@ -30,12 +30,12 @@ type UserRepository interface {
 // users table.
 //
 // Sentinel contract (the storetest conformance suite executes these):
-//   - Get for a user id with no stored password → errs.ErrNotFound.
+//   - Get for a user id with no stored password → sdk.ErrNotFound.
 //   - Set is an upsert: it creates the hash when absent and replaces it when
 //     present, so a password change never collides.
 type PasswordRepository interface {
 	// Set upserts the password hash for userID.
 	Set(ctx context.Context, userID, hash string) error
-	// Get returns the stored password hash for userID, or errs.ErrNotFound.
+	// Get returns the stored password hash for userID, or sdk.ErrNotFound.
 	Get(ctx context.Context, userID string) (string, error)
 }

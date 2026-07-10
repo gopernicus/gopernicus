@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/identity"
 )
 
@@ -16,7 +16,7 @@ var _ identity.Resolver = (*Service)(nil)
 // Resolve turns a Principal into its display and contact Info (the sdk/identity
 // Resolver port). It fails CLOSED per the port contract: an unknown principal
 // type, a missing record, or an unwired backing subsystem returns an error
-// satisfying errs.ErrNotFound (checked with errors.Is), and it never fabricates
+// satisfying sdk.ErrNotFound (checked with errors.Is), and it never fabricates
 // an Info or panics.
 //
 //   - user → the User's DisplayName, or the email local part when the display
@@ -60,9 +60,9 @@ func (s *Service) Resolve(ctx context.Context, p identity.Principal) (identity.I
 }
 
 // resolveNotFound is the fail-closed error for a principal the Resolver cannot
-// resolve — an unknown type or an off subsystem. It wraps errs.ErrNotFound.
+// resolve — an unknown type or an off subsystem. It wraps sdk.ErrNotFound.
 func resolveNotFound(p identity.Principal) error {
-	return fmt.Errorf("cannot resolve principal (type=%q): %w", p.Type, errs.ErrNotFound)
+	return fmt.Errorf("cannot resolve principal (type=%q): %w", p.Type, sdk.ErrNotFound)
 }
 
 // emailLocalPart returns the part of email before the first '@', or the whole

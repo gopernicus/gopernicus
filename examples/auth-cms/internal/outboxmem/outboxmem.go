@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/events/domain/outbox"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
 )
 
@@ -41,7 +41,7 @@ func New() *Store {
 }
 
 // Append persists records in their own "transaction", rejecting any EventID that
-// already exists (or repeats within the batch) with errs.ErrAlreadyExists. The
+// already exists (or repeats within the batch) with sdk.ErrAlreadyExists. The
 // check runs over the whole batch before any row is written, so a batch carrying
 // a collision commits nothing — the atomicity a SQL store's transaction gives
 // for free. Appending zero records is a nil no-op.
@@ -55,7 +55,7 @@ func (s *Store) Append(ctx context.Context, recs ...sdkevents.Record) error {
 	seen := make(map[string]bool, len(recs))
 	for _, rc := range recs {
 		if _, exists := s.entries[rc.EventID]; exists || seen[rc.EventID] {
-			return fmt.Errorf("outboxmem append %q: %w", rc.EventID, errs.ErrAlreadyExists)
+			return fmt.Errorf("outboxmem append %q: %w", rc.EventID, sdk.ErrAlreadyExists)
 		}
 		seen[rc.EventID] = true
 	}

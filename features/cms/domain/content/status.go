@@ -3,7 +3,7 @@ package content
 import (
 	"fmt"
 
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/slug"
 )
 
@@ -24,13 +24,13 @@ func (s Status) Valid() bool {
 // persistence: a non-empty, sluggable title and a valid status.
 func validate(title string, status Status) error {
 	if title == "" {
-		return fmt.Errorf("title is required: %w", errs.ErrInvalidInput)
+		return fmt.Errorf("title is required: %w", sdk.ErrInvalidInput)
 	}
 	if slug.Make(title) == "" {
-		return fmt.Errorf("title must contain at least one alphanumeric character: %w", errs.ErrInvalidInput)
+		return fmt.Errorf("title must contain at least one alphanumeric character: %w", sdk.ErrInvalidInput)
 	}
 	if !status.Valid() {
-		return fmt.Errorf("invalid status %q: %w", status, errs.ErrInvalidInput)
+		return fmt.Errorf("invalid status %q: %w", status, sdk.ErrInvalidInput)
 	}
 	return nil
 }

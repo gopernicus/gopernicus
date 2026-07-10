@@ -67,7 +67,7 @@ func (d *DB) Query(ctx context.Context, query string, args ...any) (jackpgx.Rows
 }
 
 // QueryRow executes a query that returns at most one row. Map the Scan error
-// with MapError to translate jackpgx.ErrNoRows into errs.ErrNotFound.
+// with MapError to translate jackpgx.ErrNoRows into sdk.ErrNotFound.
 func (d *DB) QueryRow(ctx context.Context, query string, args ...any) jackpgx.Row {
 	return d.pool.QueryRow(ctx, query, args...)
 }

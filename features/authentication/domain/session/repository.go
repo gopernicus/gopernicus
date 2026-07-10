@@ -10,23 +10,23 @@ import "context"
 // store does no hashing itself.
 //
 // Sentinel contract (the storetest conformance suite executes these):
-//   - Get for an unknown token → errs.ErrNotFound.
+//   - Get for an unknown token → sdk.ErrNotFound.
 //   - Get for a token whose ExpiresAt is at or before the read time →
-//     errs.ErrExpired (expired-at-read: the store reports expiry rather than
+//     sdk.ErrExpired (expired-at-read: the store reports expiry rather than
 //     returning a dead session; it MAY also delete the row).
-//   - Delete for an unknown token → errs.ErrNotFound.
+//   - Delete for an unknown token → sdk.ErrNotFound.
 //   - DeleteByUser is bulk and idempotent: it removes every session for the
-//     user and returns nil even when none exist (never errs.ErrNotFound).
+//     user and returns nil even when none exist (never sdk.ErrNotFound).
 type SessionRepository interface {
 	// Create persists a new session.
 	Create(ctx context.Context, s Session) (Session, error)
-	// Get returns the live session for token: unknown → errs.ErrNotFound,
-	// present-but-expired → errs.ErrExpired.
+	// Get returns the live session for token: unknown → sdk.ErrNotFound,
+	// present-but-expired → sdk.ErrExpired.
 	Get(ctx context.Context, token string) (Session, error)
-	// Delete removes the session for token; unknown → errs.ErrNotFound.
+	// Delete removes the session for token; unknown → sdk.ErrNotFound.
 	Delete(ctx context.Context, token string) error
 	// DeleteByUser removes every session belonging to userID. It is bulk and
-	// idempotent: zero matching rows returns nil, never errs.ErrNotFound. It is
+	// idempotent: zero matching rows returns nil, never sdk.ErrNotFound. It is
 	// the logout-everywhere primitive (a password change revokes all sessions).
 	DeleteByUser(ctx context.Context, userID string) error
 }

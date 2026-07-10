@@ -22,7 +22,7 @@ import (
 
 	{{.Feature}} "{{.ModulePath}}"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // MigrationsFS holds the embedded canonical schema (migration source
@@ -37,7 +37,7 @@ const MigrationsDir = "migrations"
 
 // Repositories returns the {{.Feature}} repository set backed by db, AFTER
 // verifying the {{.Agg}} table exists (the boot-time probe). It errors with
-// errs.ErrNotFound naming the missing table when the "{{.Source}}" migration
+// sdk.ErrNotFound naming the missing table when the "{{.Source}}" migration
 // source was not applied before boot. It does NOT touch migrations. db is the
 // connector wrapper (error mapping + Tx), not a raw *sql.DB.
 func Repositories(db *tursodb.DB) ({{.Feature}}.Repositories, error) {
@@ -56,7 +56,7 @@ func probeTable(ctx context.Context, db *tursodb.DB, table string) error {
 	err := db.QueryRow(ctx,
 		`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name)
 	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("{{.Feature}} turso store: %s table missing — apply the %q migration source before boot: %w", table, "{{.Source}}", errs.ErrNotFound)
+		return fmt.Errorf("{{.Feature}} turso store: %s table missing — apply the %q migration source before boot: %w", table, "{{.Source}}", sdk.ErrNotFound)
 	}
 	if err != nil {
 		return tursodb.MapError(err)

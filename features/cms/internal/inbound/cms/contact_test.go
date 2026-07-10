@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 func TestContact_FormSubmitThanks(t *testing.T) {
@@ -45,7 +45,7 @@ func TestContact_FormSubmitThanks(t *testing.T) {
 func TestContact_ValidationRerenders(t *testing.T) {
 	svc := &fakeContactSvc{
 		submitFn: func(ctx context.Context, name, email, message string) (messaging.Inquiry, error) {
-			return messaging.Inquiry{}, errs.ErrInvalidInput
+			return messaging.Inquiry{}, sdk.ErrInvalidInput
 		},
 	}
 	form := url.Values{"name": {""}, "email": {"bad"}, "message": {""}}

@@ -12,8 +12,8 @@ import (
 // suite is the executable form of the contract below.
 //
 // Sentinel contract (storetest executes these):
-//   - Get for an unknown id → errs.ErrNotFound.
-//   - Delete is idempotent: an absent id → nil (never errs.ErrNotFound).
+//   - Get for an unknown id → sdk.ErrNotFound.
+//   - Delete is idempotent: an absent id → nil (never sdk.ErrNotFound).
 //   - Create with an empty ID → the store assigns the DDL-default key and returns
 //     it (the empty-id convention, checklist 14).
 //
@@ -23,7 +23,7 @@ type Storer interface {
 	// Create persists a new {{.Agg}} and returns the stored row (its id filled by
 	// the DDL default when the incoming ID was empty).
 	Create(ctx context.Context, {{.Agg}} {{.AggTitle}}) ({{.AggTitle}}, error)
-	// Get returns the {{.Agg}} for id, or errs.ErrNotFound.
+	// Get returns the {{.Agg}} for id, or sdk.ErrNotFound.
 	Get(ctx context.Context, id string) ({{.AggTitle}}, error)
 	// Delete removes the {{.Agg}} for id; it is idempotent (absent → nil).
 	Delete(ctx context.Context, id string) error

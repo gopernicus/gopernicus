@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/slug"
 )
 
@@ -70,7 +70,7 @@ func (m *Menu) Rename(name string, now time.Time) error {
 func NewMenuItem(ids cryptids.IDGenerator, menuID, label, url, parentID string, position int, now time.Time) (MenuItem, error) {
 	label = strings.TrimSpace(label)
 	if label == "" {
-		return MenuItem{}, fmt.Errorf("label is required: %w", errs.ErrInvalidInput)
+		return MenuItem{}, fmt.Errorf("label is required: %w", sdk.ErrInvalidInput)
 	}
 	now = now.UTC()
 	return MenuItem{
@@ -89,7 +89,7 @@ func NewMenuItem(ids cryptids.IDGenerator, menuID, label, url, parentID string, 
 func (i *MenuItem) ApplyEdit(label, url, parentID string, position int, now time.Time) error {
 	label = strings.TrimSpace(label)
 	if label == "" {
-		return fmt.Errorf("label is required: %w", errs.ErrInvalidInput)
+		return fmt.Errorf("label is required: %w", sdk.ErrInvalidInput)
 	}
 	parentID = strings.TrimSpace(parentID)
 	if parentID == i.ID {
@@ -105,10 +105,10 @@ func (i *MenuItem) ApplyEdit(label, url, parentID string, position int, now time
 
 func requireName(name string) error {
 	if name == "" {
-		return fmt.Errorf("name is required: %w", errs.ErrInvalidInput)
+		return fmt.Errorf("name is required: %w", sdk.ErrInvalidInput)
 	}
 	if slug.Make(name) == "" {
-		return fmt.Errorf("name must contain an alphanumeric character: %w", errs.ErrInvalidInput)
+		return fmt.Errorf("name must contain an alphanumeric character: %w", sdk.ErrInvalidInput)
 	}
 	return nil
 }

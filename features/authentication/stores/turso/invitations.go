@@ -6,15 +6,15 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/invitation"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
 // InvitationStore implements invitation.InvitationRepository over a libSQL
 // database. The PARTIAL pending-tuple uniqueness (at most one PENDING invitation
 // per (resource_type, resource_id, identifier, relation)) is a filtered unique
 // index — once UpdateStatus moves a row off pending, a new pending invite for the
-// same tuple succeeds. GetByTokenHash surfaces a read-time errs.ErrExpired for a
+// same tuple succeeds. GetByTokenHash surfaces a read-time sdk.ErrExpired for a
 // present row past ExpiresAt. Both listings page in the pinned created_at DESC,
 // id DESC order.
 type InvitationStore struct {
@@ -71,7 +71,7 @@ func (r invitationRow) toDomain() invitation.Invitation {
 }
 
 // Create persists a new pending invitation; a pending-tuple collision →
-// errs.ErrAlreadyExists (the partial unique index).
+// sdk.ErrAlreadyExists (the partial unique index).
 func (s *InvitationStore) Create(ctx context.Context, inv invitation.Invitation) (invitation.Invitation, error) {
 	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
@@ -102,7 +102,7 @@ func (s *InvitationStore) Create(ctx context.Context, inv invitation.Invitation)
 	return inv, nil
 }
 
-// Get returns the invitation for id, or errs.ErrNotFound.
+// Get returns the invitation for id, or sdk.ErrNotFound.
 func (s *InvitationStore) Get(ctx context.Context, id string) (invitation.Invitation, error) {
 	const q = `SELECT ` + invitationColumns + ` FROM invitations WHERE id = ?`
 	row, err := queryOne[invitationRow](ctx, s.db, q, id)
@@ -112,8 +112,8 @@ func (s *InvitationStore) Get(ctx context.Context, id string) (invitation.Invita
 	return row.toDomain(), nil
 }
 
-// GetByTokenHash returns the invitation for tokenHash; unknown → errs.ErrNotFound,
-// present-but-past-ExpiresAt → errs.ErrExpired, else the record.
+// GetByTokenHash returns the invitation for tokenHash; unknown → sdk.ErrNotFound,
+// present-but-past-ExpiresAt → sdk.ErrExpired, else the record.
 func (s *InvitationStore) GetByTokenHash(ctx context.Context, tokenHash string) (invitation.Invitation, error) {
 	const q = `SELECT ` + invitationColumns + ` FROM invitations WHERE token_hash = ?`
 	row, err := queryOne[invitationRow](ctx, s.db, q, tokenHash)
@@ -122,7 +122,7 @@ func (s *InvitationStore) GetByTokenHash(ctx context.Context, tokenHash string) 
 	}
 	inv := row.toDomain()
 	if inv.Expired(time.Now()) {
-		return invitation.Invitation{}, errs.ErrExpired
+		return invitation.Invitation{}, sdk.ErrExpired
 	}
 	return inv, nil
 }
@@ -166,7 +166,7 @@ func (s *InvitationStore) ListBySubject(ctx context.Context, identifier string, 
 }
 
 // UpdateStatus applies a lifecycle transition and returns the full row via
-// UPDATE … RETURNING; unknown id → errs.ErrNotFound.
+// UPDATE … RETURNING; unknown id → sdk.ErrNotFound.
 func (s *InvitationStore) UpdateStatus(ctx context.Context, id string, upd invitation.StatusUpdate) (invitation.Invitation, error) {
 	const q = `UPDATE invitations
 		SET status = ?, token_hash = ?, expires_at = ?, accepted_at = ?, resolved_subject_id = ?, updated_at = ?

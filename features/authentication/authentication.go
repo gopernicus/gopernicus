@@ -45,10 +45,10 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/invitationsvc"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/redirect"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/email"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/identity"
 	"github.com/gopernicus/gopernicus/sdk/notify"
@@ -98,8 +98,8 @@ var ErrInvalidListStrategy = errors.New(`auth: Config.ListStrategy must be "curs
 // ErrInvitationsDisabled is returned by the invitation use-cases (Create, Accept,
 // …) on a Service built with no Config.Granter: the invitation subsystem is off,
 // so — mirroring the transport, which registers no invitation routes and 404s
-// the whole surface (design §6) — the driving surface wraps errs.ErrNotFound.
-var ErrInvitationsDisabled = fmt.Errorf("auth: invitations are disabled (no Config.Granter): %w", errs.ErrNotFound)
+// the whole surface (design §6) — the driving surface wraps sdk.ErrNotFound.
+var ErrInvitationsDisabled = fmt.Errorf("auth: invitations are disabled (no Config.Granter): %w", sdk.ErrNotFound)
 
 // ErrDuplicateNotifierKind is returned by NewService/Register when Config.Notifiers
 // contains more than one notifier declaring the same kind. Unlike auth's OAuth
@@ -112,7 +112,7 @@ var ErrDuplicateNotifierKind = errors.New("auth: Config.Notifiers has more than 
 // invitation identifier kind the host is not set up to deliver to
 // (deny-by-absence, ruling 6): a kind is supported iff it is identity.KindEmail
 // with the Mailer wired, OR a notifier of that kind is wired in Config.Notifiers.
-// It wraps errs.ErrInvalidInput, so the transport maps it to 400, and the
+// It wraps sdk.ErrInvalidInput, so the transport maps it to 400, and the
 // invitation is NOT created. Hosts detect it with errors.Is(err,
 // auth.ErrKindNotSupported).
 var ErrKindNotSupported = invitationsvc.ErrKindNotSupported
@@ -148,14 +148,14 @@ type AcceptResult = invitationsvc.AcceptResult
 
 // ErrOAuthLastMethod is returned (as the wrapped cause) by Service.Unlink when the
 // target link is the user's only authentication method and no password is set —
-// unlinking it would lock the account out. It wraps errs.ErrConflict, so the
+// unlinking it would lock the account out. It wraps sdk.ErrConflict, so the
 // transport maps it to 409. Hosts detect it with errors.Is(err,
 // auth.ErrOAuthLastMethod).
 var ErrOAuthLastMethod = authsvc.ErrLastAuthMethod
 
 // ErrEmailNotVerified is returned (as the wrapped cause) by login when
 // Config.RequireVerifiedEmail is set and the caller's email is unverified. It
-// wraps errs.ErrForbidden, so the transport maps it to 403. Hosts detect it with
+// wraps sdk.ErrForbidden, so the transport maps it to 403. Hosts detect it with
 // errors.Is(err, auth.ErrEmailNotVerified).
 var ErrEmailNotVerified = authsvc.ErrEmailNotVerified
 
@@ -485,7 +485,7 @@ func userLookup(users user.UserRepository) invitationsvc.UserLookup {
 		}
 		u, err := users.GetByEmail(ctx, normalized)
 		if err != nil {
-			if errors.Is(err, errs.ErrNotFound) {
+			if errors.Is(err, sdk.ErrNotFound) {
 				return "", false, nil
 			}
 			return "", false, err
@@ -526,7 +526,7 @@ func (s *Service) RequirePrincipal(next http.Handler) http.Handler {
 // AuthenticateAPIKey resolves the effective Principal for a raw API key (design
 // §4.1): a personal act-as-user key yields Principal{Type: "user"}, otherwise
 // Principal{Type: "service_account"}. Revoked, expired, or unknown keys return a
-// generic errs.ErrUnauthorized.
+// generic sdk.ErrUnauthorized.
 func (s *Service) AuthenticateAPIKey(ctx context.Context, rawKey string) (Principal, error) {
 	return s.svc.AuthenticateAPIKey(ctx, rawKey)
 }
@@ -548,7 +548,7 @@ var _ identity.Resolver = (*Service)(nil)
 // local part) with the email carried as an identity.KindEmail address; a
 // service-account principal resolves to its Name. An unknown principal type, a
 // missing record, or an off machine subsystem (nil ServiceAccounts) returns an
-// error satisfying errs.ErrNotFound — fail-closed, nil-guarded, never a panic.
+// error satisfying sdk.ErrNotFound — fail-closed, nil-guarded, never a panic.
 func (s *Service) Resolve(ctx context.Context, p identity.Principal) (identity.Info, error) {
 	return s.svc.Resolve(ctx, p)
 }

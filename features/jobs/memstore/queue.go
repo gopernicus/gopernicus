@@ -6,7 +6,7 @@
 // concurrent queue is too substantial to duplicate example-locally.
 //
 // It is honest: it enforces exactly what the port doc comments promise —
-// enqueue ID-uniqueness (errs.ErrAlreadyExists), claim ordering (priority DESC,
+// enqueue ID-uniqueness (sdk.ErrAlreadyExists), claim ordering (priority DESC,
 // then created_at), scheduled_for gating, lease reclaim of stale running jobs,
 // the workers.ErrNoWork empty-queue signal, retry-then-dead-letter transitions,
 // and the schedule value-CAS — so a naive implementation's drift is caught here
@@ -23,8 +23,8 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/workers"
 )
 
@@ -78,7 +78,7 @@ func NewQueue(opts ...Option) *Queue {
 }
 
 // Enqueue inserts one job. A caller-supplied ID that already exists yields
-// errs.ErrAlreadyExists (the idempotency key); an empty ID is generated. The job
+// sdk.ErrAlreadyExists (the idempotency key); an empty ID is generated. The job
 // is stored pending with the input's scheduled_for, priority, and max_attempts
 // verbatim — the store invents no defaults (that is the service's job).
 func (q *Queue) Enqueue(_ context.Context, in job.Enqueue) (job.Job, error) {
@@ -90,7 +90,7 @@ func (q *Queue) Enqueue(_ context.Context, in job.Enqueue) (job.Job, error) {
 		id = newID("job")
 	}
 	if _, ok := q.jobs[id]; ok {
-		return job.Job{}, errs.ErrAlreadyExists
+		return job.Job{}, sdk.ErrAlreadyExists
 	}
 
 	now := time.Now().UTC()
@@ -168,14 +168,14 @@ func claimBefore(a, b job.Job) bool {
 	return a.JobID < b.JobID
 }
 
-// Complete marks the job done. A missing id yields errs.ErrNotFound.
+// Complete marks the job done. A missing id yields sdk.ErrNotFound.
 func (q *Queue) Complete(_ context.Context, jobID string, now time.Time) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	j, ok := q.jobs[jobID]
 	if !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	completed := now
 	j.JobStatus = job.StatusCompleted
@@ -188,14 +188,14 @@ func (q *Queue) Complete(_ context.Context, jobID string, now time.Time) error {
 // Fail increments retry_count and either reschedules the job to pending (below
 // maxAttempts) or dead-letters it once the attempts are exhausted. A rescheduled
 // job clears its claim so it is immediately claimable again; reason is recorded
-// as the failure cause. A missing id yields errs.ErrNotFound.
+// as the failure cause. A missing id yields sdk.ErrNotFound.
 func (q *Queue) Fail(_ context.Context, jobID string, now time.Time, reason string, maxAttempts int) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	j, ok := q.jobs[jobID]
 	if !ok {
-		return errs.ErrNotFound
+		return sdk.ErrNotFound
 	}
 	j.Retries++
 	j.FailureReason = reason
@@ -211,14 +211,14 @@ func (q *Queue) Fail(_ context.Context, jobID string, now time.Time, reason stri
 	return nil
 }
 
-// Get returns the job with the given id, or errs.ErrNotFound.
+// Get returns the job with the given id, or sdk.ErrNotFound.
 func (q *Queue) Get(_ context.Context, id string) (job.Job, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	j, ok := q.jobs[id]
 	if !ok {
-		return job.Job{}, errs.ErrNotFound
+		return job.Job{}, sdk.ErrNotFound
 	}
 	return j, nil
 }
@@ -247,7 +247,7 @@ func (q *Queue) List(_ context.Context, f job.ListFilter, req crud.ListRequest) 
 // and the optional count — the same keyset shape the dialect stores implement in
 // SQL, hand-rolled here so the reference paginates identically. orderFields is the
 // domain's allow-list (created_at only); an order field outside it is rejected
-// with errs.ErrInvalidInput. The cursor is keyed on the constant orderField, so a
+// with sdk.ErrInvalidInput. The cursor is keyed on the constant orderField, so a
 // token minted for a different sort decodes to the first page.
 func page[T any](items []T, req crud.ListRequest, orderFields map[string]crud.OrderField, key func(T) (time.Time, string)) (crud.Page[T], error) {
 	if err := req.Validate(); err != nil {
@@ -255,7 +255,7 @@ func page[T any](items []T, req crud.ListRequest, orderFields map[string]crud.Or
 	}
 	if req.Order.Field != "" {
 		if _, ok := orderFields[req.Order.Field]; !ok {
-			return crud.Page[T]{}, fmt.Errorf("unknown order field %q: %w", req.Order.Field, errs.ErrInvalidInput)
+			return crud.Page[T]{}, fmt.Errorf("unknown order field %q: %w", req.Order.Field, sdk.ErrInvalidInput)
 		}
 	}
 	asc := req.Order.Direction == crud.ASC

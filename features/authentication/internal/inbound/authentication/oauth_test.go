@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthaccount"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthstate"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/oauth"
 	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/web"
@@ -62,7 +62,7 @@ func (r *memOAuthAccounts) GetByProvider(_ context.Context, provider, providerUs
 			return a, nil
 		}
 	}
-	return oauthaccount.OAuthAccount{}, errs.ErrNotFound
+	return oauthaccount.OAuthAccount{}, sdk.ErrNotFound
 }
 func (r *memOAuthAccounts) ListByUser(_ context.Context, userID string) ([]oauthaccount.OAuthAccount, error) {
 	r.mu.Lock()
@@ -93,11 +93,11 @@ func (r *memOAuthStates) Consume(_ context.Context, token string) (oauthstate.St
 	defer r.mu.Unlock()
 	s, ok := r.m[token]
 	if !ok {
-		return oauthstate.State{}, errs.ErrNotFound
+		return oauthstate.State{}, sdk.ErrNotFound
 	}
 	delete(r.m, token)
 	if s.Expired(time.Now()) {
-		return oauthstate.State{}, errs.ErrExpired
+		return oauthstate.State{}, sdk.ErrExpired
 	}
 	return s, nil
 }

@@ -38,7 +38,7 @@ type Entry struct {
 // draft; creating directly as published stamps PublishedAt. An empty template
 // defaults to "default". Fields and hierarchy are applied by the caller (the
 // service) after Registry field validation. Validation failures wrap
-// errs.ErrInvalidInput.
+// sdk.ErrInvalidInput.
 func NewEntry(ids cryptids.IDGenerator, typeSlug, title, excerpt, body, author string, status Status, template string, now time.Time) (Entry, error) {
 	title = strings.TrimSpace(title)
 	if status == "" {

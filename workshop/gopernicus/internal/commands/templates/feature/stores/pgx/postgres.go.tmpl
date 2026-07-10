@@ -18,7 +18,7 @@ import (
 
 	{{.Feature}} "{{.ModulePath}}"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // MigrationsFS holds the embedded canonical schema (migration source
@@ -33,7 +33,7 @@ const MigrationsDir = "migrations"
 
 // Repositories returns the {{.Feature}} repository set backed by db, AFTER
 // verifying the {{.Agg}} table exists (the boot-time probe). It errors with
-// errs.ErrNotFound naming the missing table when the "{{.Source}}" migration
+// sdk.ErrNotFound naming the missing table when the "{{.Source}}" migration
 // source was not applied before boot. It does NOT touch migrations. db is the
 // connector wrapper (error mapping + Tx), not a raw pool.
 func Repositories(db *pgxdb.DB) ({{.Feature}}.Repositories, error) {
@@ -54,7 +54,7 @@ func probeTable(ctx context.Context, db *pgxdb.DB, table string) error {
 		return pgxdb.MapError(err)
 	}
 	if reg == nil {
-		return fmt.Errorf("{{.Feature}} pgx store: %s table missing — apply the %q migration source before boot: %w", table, "{{.Source}}", errs.ErrNotFound)
+		return fmt.Errorf("{{.Feature}} pgx store: %s table missing — apply the %q migration source before boot: %w", table, "{{.Source}}", sdk.ErrNotFound)
 	}
 	return nil
 }
