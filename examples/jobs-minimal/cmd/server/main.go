@@ -115,6 +115,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 	router := web.NewWebHandler(web.WithLogging(log))
 	router.Use(web.RequestID(), web.Logger(log), web.Panics(log))
 	router.Handle(http.MethodPost, "/enqueue", enqueueHandler(svc, log))
+	// Host-local liveness probe (host route, not feature surface). Mounted on
+	// the root router with no middleware — unauthenticated by design, since a
+	// readiness probe can't log in.
+	router.Handle(http.MethodGet, "/healthz", healthzHandler())
 
 	// Register mounts the built Service and logs; it starts nothing — the host
 	// owns the run loop.
@@ -245,6 +249,14 @@ func enqueueHandler(svc *jobs.Service, log *slog.Logger) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]string{"job_id": jobID})
+	}
+}
+
+// healthzHandler is this host's liveness probe. This host is memory-backed, so
+// there is no DB to probe — reaching the handler is itself the liveness signal.
+func healthzHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
 	}
 }
 

@@ -406,3 +406,6 @@ curl -s -b cjar http://localhost:8082/demo/audit    # 200 (global satisfies the 
   (RequireUser-gated, admin-driven), and `GET /debug/security-events`
   (`AUTH_DEBUG=1` + `RequireUser`). See "Authorization postures" for the flagship
   demo flow.
+- **host-local health** (host code, not feature surface): `GET /healthz` —
+  unauthenticated liveness probe. Both stores are memory-backed, so there is no
+  DB to probe: reaching the handler returns `200`.

@@ -39,7 +39,13 @@ func StatusCheck(ctx context.Context, db *DB) error {
 		ctx, cancel = context.WithTimeout(ctx, time.Second)
 		defer cancel()
 	}
-	return db.Ping(ctx)
+	if err := db.Ping(ctx); err != nil {
+		return err
+	}
+	// A readiness check runs a real statement, not just a pool ping — kept
+	// symmetric with the turso twin, whose lazy remote driver requires it.
+	var one int
+	return db.QueryRow(ctx, "SELECT 1").Scan(&one)
 }
 
 // Exec executes a query that doesn't return rows.

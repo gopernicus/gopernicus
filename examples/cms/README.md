@@ -32,6 +32,12 @@ Dependencies point inward: `cmd` wires concrete adapters, the feature module
 never imports this app or `integrations/`, and everything ultimately stands on
 `sdk`. See the root [README.md](../../README.md) for the full 6-module map.
 
+## Health check
+
+| route | probes |
+|---|---|
+| `GET /healthz` | pings Turso via the connector's `StatusCheck`: reachable ⇒ `200 {"status":"ok"}`, unreachable ⇒ `503 {"status":"unavailable"}`. Host-local, unauthenticated (mounted outside any gated group — a readiness probe can't log in). |
+
 ## Requirements
 
 - Go 1.26+

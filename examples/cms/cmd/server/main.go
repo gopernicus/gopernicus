@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -132,7 +133,26 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return err
 	}
 
+	// Host-local liveness+readiness probe (host route, not feature surface).
+	// Mounted on the root router with no middleware, outside any gated group —
+	// unauthenticated by design, since a readiness probe can't log in.
+	router.Handle(http.MethodGet, "/healthz", healthzHandler(db))
+
 	return web.Run(ctx, router, serverConfig(), log)
+}
+
+// healthzHandler is this DB-backed host's readiness probe: it pings Turso via
+// the connector's StatusCheck, so 200 {"status":"ok"} means the process is up
+// AND the database is reachable; a probe failure returns 503
+// {"status":"unavailable"}.
+func healthzHandler(db *tursodb.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := tursodb.StatusCheck(r.Context(), db); err != nil {
+			_ = web.RespondJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
+			return
+		}
+		_ = web.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	}
 }
 
 // buildTracer gates the TRACER CHOICE on TRACING_ENABLED (the Tracing middleware

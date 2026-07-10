@@ -34,7 +34,13 @@ func StatusCheck(ctx context.Context, db *DB) error {
 		ctx, cancel = context.WithTimeout(ctx, time.Second)
 		defer cancel()
 	}
-	return db.Ping(ctx)
+	if err := db.Ping(ctx); err != nil {
+		return err
+	}
+	// The remote (HTTP) libSQL driver's Ping is lazy — nil without a network
+	// round-trip — so a readiness check must run a real statement.
+	var one int
+	return db.QueryRow(ctx, "SELECT 1").Scan(&one)
 }
 
 // Exec executes a query that doesn't return rows.
