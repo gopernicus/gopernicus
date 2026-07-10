@@ -1,0 +1,22 @@
+# {{.Feature}}/stores/pgx
+
+The {{.Feature}} feature's PostgreSQL store adapter — its own module, so a host
+that brings a different datastore never pulls pgx into its graph. The dialect
+sibling of `{{.Feature}}/stores/turso`: same surface, same migration version set.
+
+- `Repositories(db)` returns a `{{.Feature}}.Repositories` after probing the
+  `{{.Agg}}` table (boot-time; errors if the `{{.Source}}` migration source was
+  not applied).
+- `ExportMigrations(dst)` copies the canonical SQL into a host's migration dir
+  (scaffold-and-own — the host applies it pre-boot).
+- `MigrationsFS` / `MigrationsDir` expose the embedded schema for a host runner.
+
+Conformance (`storetest.Run`) is env-gated (plain, no build tag):
+
+```
+docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17
+POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' go test ./...
+```
+
+Without `POSTGRES_TEST_DSN` it skips loudly. `TestExportMigrations` runs
+hermetically on plain `go test ./...`.

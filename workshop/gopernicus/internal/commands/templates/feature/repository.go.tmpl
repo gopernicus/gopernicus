@@ -1,0 +1,33 @@
+package {{.Agg}}
+
+import (
+	"context"
+
+	"github.com/gopernicus/gopernicus/sdk/crud"
+)
+
+// Storer persists {{.AggTitle}}s. It is implemented by the feature store adapters
+// ({{.Feature}}/stores/turso, {{.Feature}}/stores/pgx), the in-core memstore
+// reference, or any host-provided implementation. The storetest conformance
+// suite is the executable form of the contract below.
+//
+// Sentinel contract (storetest executes these):
+//   - Get for an unknown id → errs.ErrNotFound.
+//   - Delete is idempotent: an absent id → nil (never errs.ErrNotFound).
+//   - Create with an empty ID → the store assigns the DDL-default key and returns
+//     it (the empty-id convention, checklist 14).
+//
+// List is crud-typed; ordering is pinned to created_at DESC, id DESC (the id
+// tiebreak is contractual and keeps pages stable across a shared created_at).
+type Storer interface {
+	// Create persists a new {{.Agg}} and returns the stored row (its id filled by
+	// the DDL default when the incoming ID was empty).
+	Create(ctx context.Context, {{.Agg}} {{.AggTitle}}) ({{.AggTitle}}, error)
+	// Get returns the {{.Agg}} for id, or errs.ErrNotFound.
+	Get(ctx context.Context, id string) ({{.AggTitle}}, error)
+	// Delete removes the {{.Agg}} for id; it is idempotent (absent → nil).
+	Delete(ctx context.Context, id string) error
+	// List returns a cursor-paginated page of {{.Agg}}s matching filter, ordered
+	// created_at DESC, id DESC.
+	List(ctx context.Context, filter ListFilter, req crud.ListRequest) (crud.Page[{{.AggTitle}}], error)
+}

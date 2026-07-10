@@ -1,0 +1,106 @@
+package pgx
+
+import (
+	"context"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+
+	"{{.ModulePath}}/domain/{{.Agg}}"
+	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	"github.com/gopernicus/gopernicus/sdk/crud"
+)
+
+// columns is the {{.Agg}} projection in a fixed order shared by the insert and the
+// listing (matching row's db tags).
+const columns = "id, name, created_at"
+
+// store fills {{.Agg}}.Storer over a PostgreSQL database. List is keyset-paginated
+// in the pinned created_at DESC, id DESC order.
+type store struct {
+	db *pgxdb.DB
+}
+
+func newStore(db *pgxdb.DB) *store { return &store{db: db} }
+
+var _ {{.Agg}}.Storer = (*store)(nil)
+
+// row is the store-local, db-tagged projection pgx.RowToStructByName scans into;
+// toDomain maps it to the persistence-free domain entity.
+type row struct {
+	ID        string    `db:"id"`
+	Name      string    `db:"name"`
+	CreatedAt time.Time `db:"created_at"`
+}
+
+func (r row) toDomain() {{.Agg}}.{{.AggTitle}} {
+	return {{.Agg}}.{{.AggTitle}}{
+		ID:        r.ID,
+		Name:      r.Name,
+		CreatedAt: r.CreatedAt.UTC(),
+	}
+}
+
+// Create persists a new {{.Agg}}.
+func (s *store) Create(ctx context.Context, in {{.Agg}}.{{.AggTitle}}) ({{.Agg}}.{{.AggTitle}}, error) {
+	args := pgx.NamedArgs{
+		"name":       in.Name,
+		"created_at": in.CreatedAt.UTC(),
+	}
+	// Empty ID → the cryptids.Database strategy: omit the id column so the schema
+	// DEFAULT generates the key, read back with RETURNING.
+	if in.ID == "" {
+		const q = `INSERT INTO {{.Agg}} (name, created_at) VALUES (@name, @created_at) RETURNING id`
+		if err := s.db.QueryRow(ctx, q, args).Scan(&in.ID); err != nil {
+			return {{.Agg}}.{{.AggTitle}}{}, pgxdb.MapError(err)
+		}
+		return in, nil
+	}
+	const q = `INSERT INTO {{.Agg}} (` + columns + `) VALUES (@id, @name, @created_at)`
+	args["id"] = in.ID
+	if _, err := s.db.Exec(ctx, q, args); err != nil {
+		return {{.Agg}}.{{.AggTitle}}{}, err
+	}
+	return in, nil
+}
+
+// Get returns the {{.Agg}} for id, or errs.ErrNotFound.
+func (s *store) Get(ctx context.Context, id string) ({{.Agg}}.{{.AggTitle}}, error) {
+	const q = `SELECT ` + columns + ` FROM {{.Agg}} WHERE id = @id`
+	r, err := queryOne[row](ctx, s.db, q, pgx.NamedArgs{"id": id})
+	if err != nil {
+		return {{.Agg}}.{{.AggTitle}}{}, err
+	}
+	return r.toDomain(), nil
+}
+
+// Delete removes the {{.Agg}} for id (idempotent — absent is nil).
+func (s *store) Delete(ctx context.Context, id string) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM {{.Agg}} WHERE id = @id`, pgx.NamedArgs{"id": id})
+	return err
+}
+
+// List returns a cursor-paginated page ordered created_at DESC, id DESC.
+func (s *store) List(ctx context.Context, filter {{.Agg}}.ListFilter, req crud.ListRequest) (crud.Page[{{.Agg}}.{{.AggTitle}}], error) {
+	base := `SELECT ` + columns + ` FROM {{.Agg}}`
+	var args pgx.NamedArgs
+	if filter.Name != "" {
+		base += ` WHERE name = @name`
+		args = pgx.NamedArgs{"name": filter.Name}
+	}
+	q := pgxdb.ListQuery[row]{
+		BaseSQL:      base,
+		Args:         args,
+		OrderFields:  {{.Agg}}.OrderFields,
+		DefaultOrder: {{.Agg}}.DefaultOrder,
+		Limits:       {{.Agg}}.ListLimits,
+		PK:           "id",
+		OrderValueOf: func(r row, _ string) any { return r.CreatedAt },
+		PKOf:         func(r row) string { return r.ID },
+	}
+	page, err := pgxdb.List(ctx, s.db, q, req)
+	if err != nil {
+		return crud.Page[{{.Agg}}.{{.AggTitle}}]{}, err
+	}
+	return crud.MapPage(page, row.toDomain), nil
+}

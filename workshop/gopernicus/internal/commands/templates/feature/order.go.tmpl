@@ -1,0 +1,21 @@
+package {{.Agg}}
+
+import "github.com/gopernicus/gopernicus/sdk/crud"
+
+// OrderFields is the allow-list of sortable columns for List: only these vetted
+// column names may reach a store's ORDER BY (the pgx-crud-v1 standard,
+// checklist 13). The map key is the API-facing field name (it coincides with the
+// column). created_at is the indexed spine column List pages by; the id tiebreak
+// is applied by the store, not listed here.
+var OrderFields = map[string]crud.OrderField{
+	"created_at": {Column: "created_at"},
+}
+
+// DefaultOrder is the sort applied when a ListRequest carries a zero-value Order:
+// created_at DESC (with the store's id DESC tiebreak).
+var DefaultOrder = crud.NewOrder("created_at", crud.DESC)
+
+// ListLimits is this aggregate's page-size vocabulary. The zero value keeps
+// crud's DefaultLimit/MaxLimit; tighten it here if {{.Agg}} rows are expensive to
+// page. Stores and handlers pass it to crud's NormalizedLimit / ListQuery.Limits.
+var ListLimits = crud.Limits{}

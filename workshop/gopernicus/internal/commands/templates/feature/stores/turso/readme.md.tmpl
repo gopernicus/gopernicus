@@ -1,0 +1,20 @@
+# {{.Feature}}/stores/turso
+
+The {{.Feature}} feature's Turso/libSQL store adapter — its own module, so a host
+that brings a different datastore never pulls libsql into its graph.
+
+- `Repositories(db)` returns a `{{.Feature}}.Repositories` after probing the
+  `{{.Agg}}` table (boot-time; errors if the `{{.Source}}` migration source was
+  not applied).
+- `ExportMigrations(dst)` copies the canonical SQL into a host's migration dir
+  (scaffold-and-own — the host applies it pre-boot).
+- `MigrationsFS` / `MigrationsDir` expose the embedded schema for a host runner.
+
+Conformance (`storetest.Run`) is env-gated behind `-tags=integration`:
+
+```
+TURSO_DATABASE_URL=... TURSO_AUTH_TOKEN=... go test -tags=integration ./...
+```
+
+Without the env it skips loudly. `TestExportMigrations` runs hermetically on
+plain `go test ./...`.

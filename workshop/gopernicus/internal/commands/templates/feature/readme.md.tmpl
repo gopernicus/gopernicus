@@ -1,0 +1,105 @@
+# {{.Feature}} — a gopernicus feature
+
+Scaffolded by `gopernicus new feature`. A datastore-free, view-free feature
+module carrying one aggregate, **{{.Agg}}**, with a create/get/list/delete
+use-case set. Born conforming to the feature charter (`features/README.md`) — a
+placeholder you rename and grow.
+
+## Layout
+
+```
+{{.Feature}}.go                     the FS2 socket: Repositories, Config, NewService, Service, Register
+domain/{{.Agg}}/                    the public rim: entity, Storer port, order allow-list
+internal/logic/{{.AggSvc}}/         the sealed service (create/get/list/delete)
+storetest/                          the exported conformance suite (Run)
+memstore/                           the in-core reference Storer (hermetic proof + storetest target)
+stores/turso/                       the Turso/libSQL store adapter (its own module)
+stores/pgx/                         the PostgreSQL store adapter (its own module)
+```
+
+## Charter checklist trace (features/README.md §8)
+
+| # | item | where |
+|---|---|---|
+| 1 | compiles standalone with its own go.mod | `go build ./...` |
+| 2 | go.mod requires sdk only (FS1) | `go.mod` |
+| 4 | FS2 trio: NewService / Service / Register | `{{.Feature}}.go` |
+| 5 | each store: Repositories(db) + ExportMigrations | `stores/{turso,pgx}` |
+| 6 | zero-infra proof (in-memory Repositories) | `memstore/` |
+| 10 | storetest suite + reference passes it | `storetest/`, `memstore/conformance_test.go` |
+| 11 | both {turso, pgx} stores exist and pass storetest | `stores/{turso,pgx}` |
+| 13 | order allow-list + DefaultOrder + ListLimits; six-case family | `domain/{{.Agg}}/order.go`, `storetest/` |
+| 14 | Config.IDs threaded to the entity constructor; DBGeneratedIDOnEmpty | `{{.Feature}}.go`, `storetest/` |
+
+Items 3, 7, 8, 9, 12 hold by construction (no cross-feature imports, no init(),
+documented nil semantics). Fill route-surface docs (item 7) when you add an
+inbound adapter.
+
+## Pre-tag wiring
+
+gopernicus publishes no version tags yet, so `go get` cannot resolve the
+`github.com/gopernicus/gopernicus/*` modules. Until `v0.1.0` is cut, point each
+at a local checkout of the gopernicus repo:
+
+```
+# core module
+go mod edit -replace github.com/gopernicus/gopernicus/sdk=/abs/path/to/gopernicus/sdk
+go mod tidy
+
+# each store module (from stores/turso and stores/pgx)
+go mod edit -replace github.com/gopernicus/gopernicus/sdk=/abs/path/to/gopernicus/sdk
+go mod edit -replace {{.ModuleRoot}}/... # (the core resolves via the emitted ../.. replace)
+go mod tidy
+```
+
+## Wiring this feature into a host
+
+The feature reaches a host through the narrow `feature.Mount` + `Register`
+surface — no init() registration, no service locator. In your host's
+composition root:
+
+```go
+import (
+	{{.Feature}} "{{.ModulePath}}"
+	"{{.ModulePath}}/memstore"          // or a store adapter's Repositories(db)
+	"github.com/gopernicus/gopernicus/sdk/feature"
+)
+
+repos := {{.Feature}}.Repositories{ {{.ReposField}}: memstore.New{{.ReposField}}() }
+svc, err := {{.Feature}}.NewService(repos, {{.Feature}}.Config{})
+if err != nil {
+	return err
+}
+svc.Register(feature.Mount{Router: router, Logger: log})
+
+// Register mounts no routes (skeleton). Reach use-cases directly:
+created, err := svc.Create(ctx, "first {{.Agg}}")
+page, err := svc.List(ctx, {{.Feature}}.ListFilter{}, crud.ListRequest{})
+```
+
+For a persistent host, swap the memstore for a store adapter:
+
+```go
+repos, err := turso.Repositories(db)   // or pgx.Repositories(db)
+```
+
+## Migrations (scaffold-and-own)
+
+Store adapters expose canonical SQL and `ExportMigrations`, but the **host** owns
+its migration tree. Scaffold this feature's SQL into your host's ledger and apply
+it pre-boot — the framework never migrates at startup:
+
+```go
+turso.ExportMigrations("workshop/migrations/primary")   // or pgx.ExportMigrations(...)
+```
+
+Both dialect trees carry an identical migration version set (`0001_{{.Agg}}.sql`);
+the host resolves any filename conflicts in its own directory.
+
+## Rename it
+
+The `{{.Agg}}` aggregate and its single `Name` field are placeholders. To model a
+real aggregate: edit `domain/{{.Agg}}/{{.Agg}}.go` (entity + fields), extend the
+`Storer` port and the service, mirror the columns in both stores' row structs and
+`migrations/0001_{{.Agg}}.sql`, and add cases to `storetest`. The SQL table is
+named `{{.Agg}}` — rename it if it collides with a reserved word.

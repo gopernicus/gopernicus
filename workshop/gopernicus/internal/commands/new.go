@@ -7,7 +7,7 @@ import (
 )
 
 // runNew is the second level of the command tree; it routes to a `new`
-// subcommand. The subcommands are stubs until W3 emits the feature scaffold.
+// subcommand.
 func runNew(args []string) int {
 	if len(args) == 0 {
 		fmt.Fprint(os.Stderr, "gopernicus new: subcommand required\n\n")
@@ -27,10 +27,6 @@ func runNew(args []string) int {
 		newUsage(os.Stderr)
 		return 1
 	}
-}
-
-func runNewFeature(_ []string) int {
-	return notImplemented("new feature")
 }
 
 func newUsage(w io.Writer) {

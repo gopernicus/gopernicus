@@ -1,0 +1,74 @@
+//go:build integration
+
+// Integration tests hit a live Turso / libSQL database. Run with:
+//
+//	go test -tags=integration ./...
+//
+// They require TURSO_DATABASE_URL and TURSO_AUTH_TOKEN in the environment (or a
+// .env loaded by the caller). Absent those, the tests skip loudly — a silent
+// green here would claim dialect conformance nothing verified.
+package turso
+
+import (
+	"context"
+	"os"
+	"testing"
+
+	{{.Feature}} "{{.ModulePath}}"
+	"{{.ModulePath}}/storetest"
+	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+)
+
+// TestConformance runs the shared {{.Feature}} conformance suite against a live
+// Turso/libSQL database. Each newRepos call opens a connection, applies the
+// canonical migrations, truncates the table, and constructs the repositories via
+// Repositories (exercising the boot-time table probe on every run).
+func TestConformance(t *testing.T) {
+	url, token := requireTursoEnv(t)
+
+	storetest.Run(t, func(t *testing.T) {{.Feature}}.Repositories {
+		db := openAndMigrate(t, url, token)
+		repos, err := Repositories(db)
+		if err != nil {
+			t.Fatalf("Repositories: %v", err)
+		}
+		return repos
+	})
+}
+
+// requireTursoEnv returns the live connection env or skips loudly.
+func requireTursoEnv(t *testing.T) (url, token string) {
+	t.Helper()
+	url = os.Getenv("TURSO_DATABASE_URL")
+	token = os.Getenv("TURSO_AUTH_TOKEN")
+	if url == "" || token == "" {
+		t.Skip("TURSO_DATABASE_URL/TURSO_AUTH_TOKEN not set — turso conformance NOT verified")
+	}
+	return url, token
+}
+
+// openAndMigrate opens a live connection, applies the canonical migrations, and
+// truncates the table so the returned repositories start empty and isolated.
+func openAndMigrate(t *testing.T, url, token string) *tursodb.DB {
+	t.Helper()
+	db, err := tursodb.Open(tursodb.Config{URL: url, AuthToken: token})
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	if err := tursodb.RunMigrations(context.Background(), db, MigrationsFS, MigrationsDir); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	truncate(t, db)
+	t.Cleanup(func() { truncate(t, db) })
+	return db
+}
+
+// truncate clears the {{.Agg}} table so a store starts empty.
+func truncate(t *testing.T, db *tursodb.DB) {
+	t.Helper()
+	if _, err := db.Exec(context.Background(), "DELETE FROM {{.Agg}}"); err != nil {
+		t.Fatalf("truncate {{.Agg}}: %v", err)
+	}
+}

@@ -1,0 +1,15 @@
+-- The {{.Feature}} feature's {{.Agg}} aggregate (migration source "{{.Source}}").
+-- Turso dialect: timestamps are fixed-width ISO-8601 TEXT (lexicographic order ==
+-- chronological order, which the keyset listing's created_at ordering relies on).
+--
+-- id carries an INLINE DEFAULT: under a cryptids.Database wiring the service mints
+-- no id, the store omits the id column, and this DEFAULT fills the key (read back
+-- with RETURNING). lower(hex(randomblob(16))) is a random 128-bit hex string.
+CREATE TABLE IF NOT EXISTS {{.Agg}} (
+    id         TEXT NOT NULL PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+    name       TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+-- Keyset spine: List pages by created_at (with the id tiebreak).
+CREATE INDEX IF NOT EXISTS idx_{{.Agg}}_created_at ON {{.Agg}} (created_at);
