@@ -203,3 +203,20 @@ nor redeem a non-email invitation.
 ## Execution log
 
 (append dated entries here)
+
+### 2026-07-10 — P1 CLOSED (sdk/identity vocabulary + Resolver port)
+
+`Address{Kind,Value}` + `KindEmail`/`KindPhone` (open-string kinds),
+`Info{Principal, DisplayName, Addresses}` (projection-never-record pin),
+`Resolver` (one method, fail-closed on the `errs.ErrNotFound` sentinel —
+cited in prose/tests; identity.go still imports `context` only, G1
+clean), strict positional `ResolveAll` (first-error abort; lenient batch
+doc-named as the future upgrade seam), and the fold-9 header rewrite
+(the "vocabulary only / nothing to implement" pins were false the moment
+the port landed — rewritten in the same commit; no default Resolver,
+deliberately: identity data is feature-owned, the sdk/oauth precedent).
+Tests: positional alignment, strict abort (`errors.Is` on ErrNotFound),
+empty/nil slice, compile-time interface assertion. `make check` (35) +
+`make guard` (11, G1 clean) green. Committed CI-green. **P2 HOLDS for
+the owner's ruling on the token-bearer accept semantics (raised
+in-session at the fold; three options presented).**
