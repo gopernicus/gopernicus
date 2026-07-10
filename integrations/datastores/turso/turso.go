@@ -13,6 +13,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -32,6 +33,35 @@ type Config struct {
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
 	ConnectTimeout  time.Duration
+
+	// LogQueries installs a query logger that logs every Exec/Query/QueryRow —
+	// on both the DB connection and its transactions — via Logger. It logs SQL
+	// args verbatim, so this is dev-only tooling: leave it false in production.
+	LogQueries bool
+
+	// Logger is used only when LogQueries is true. If nil, slog.Default() is
+	// used.
+	Logger *slog.Logger
+}
+
+// dsn builds the libSQL connection string, appending the auth token as the
+// authToken query parameter when Config.AuthToken is set.
+func (cfg Config) dsn() string {
+	dsn := cfg.URL
+	if cfg.AuthToken != "" {
+		sep := "?"
+		if strings.Contains(dsn, "?") {
+			sep = "&"
+		}
+		dsn += sep + authTokenParam + "=" + cfg.AuthToken
+	}
+	return dsn
+}
+
+// Redacted returns the connection target with the userinfo password and the
+// authToken query parameter masked, safe to place in logs and error messages.
+func (cfg Config) Redacted() string {
+	return RedactDSN(cfg.dsn())
 }
 
 // Open connects to a remote Turso / libSQL database and verifies it with a ping.
@@ -43,16 +73,7 @@ func Open(cfg Config) (*DB, error) {
 		cfg.ConnectTimeout = 10 * time.Second
 	}
 
-	dsn := cfg.URL
-	if cfg.AuthToken != "" {
-		sep := "?"
-		if strings.Contains(dsn, "?") {
-			sep = "&"
-		}
-		dsn += sep + "authToken=" + cfg.AuthToken
-	}
-
-	db, err := sql.Open(Driver, dsn)
+	db, err := sql.Open(Driver, cfg.dsn())
 	if err != nil {
 		return nil, fmt.Errorf("opening libsql database: %w", err)
 	}
@@ -69,7 +90,11 @@ func Open(cfg Config) (*DB, error) {
 		return nil, fmt.Errorf("pinging libsql database: %w", err)
 	}
 
-	return &DB{db: db}, nil
+	wrapped := &DB{db: db}
+	if cfg.LogQueries {
+		wrapped.tracer = newLoggingQueryTracer(cfg.Logger)
+	}
+	return wrapped, nil
 }
 
 // MapError converts a libSQL / SQLite driver error into an sdk/errs sentinel.

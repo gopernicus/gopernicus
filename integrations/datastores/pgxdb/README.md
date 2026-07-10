@@ -86,12 +86,15 @@ No `make guard` row proves the two surfaces or their sentinel coverage stay
 aligned; a feature's `storetest` conformance suite is the only parity net, and
 it sees only port-reachable behavior. Do not over-trust the symmetry.
 
-`Config.LogQueries`, `Config.Logger`, and `Config.Tracer` (and the tracers
-above) are deliberate exceptions to that symmetry: pgx exposes a native
-`ConnConfig.Tracer` observability seam that SQLite's driver has no equivalent
-for, so turso carries no matching fields. This is interim plumbing, expected
-to fold into a shared `sdk/tracing` package later — until then, hosts opt in
-by setting `Config.LogQueries` or `Config.Tracer`.
+Query logging is symmetric across both connectors: each carries an opt-in
+`Config.LogQueries` / `Config.Logger` with the same dev-only, args-verbatim
+posture — pgx installs it as a native `ConnConfig.Tracer`, turso threads it
+through its `DB`/`Tx` wrapper because database/sql exposes no tracer hook.
+`Config.Tracer` (and `MultiQueryTracer` above) is the one exception that remains
+pgx-only: it composes an external `pgx.QueryTracer` (e.g. OpenTelemetry) into
+that native seam, which SQLite's driver does not expose. This is interim
+plumbing, expected to fold into a shared `sdk/tracing` package later — until
+then, hosts opt in by setting `Config.LogQueries` or `Config.Tracer`.
 
 ## Testing
 

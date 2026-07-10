@@ -3,8 +3,9 @@
 The datastore connector for Turso/libSQL (SQLite dialect). It wraps the libsql
 driver behind the same connector shape as
 `integrations/datastores/pgxdb`: `Config` / `Open` / `DB` / `MapError` /
-`StatusCheck` / `RunMigrations`, plus the shared store-facing surface
-(`Querier`, `Scanner`, `ExecAffecting`, the timestamp helpers, and `List`).
+`StatusCheck` / `RunMigrations` / `RedactDSN`, plus the shared store-facing
+surface (`Querier`, `Scanner`, `ExecAffecting`, the timestamp helpers, and
+`List`).
 
 It owns "how to talk to libSQL," never any feature's SQL. App/feature
 repositories consume this package's `*DB`.
@@ -34,6 +35,25 @@ store-authored constants, and raw request input never reaches SQL.
 parameters, struct scanning, and builder ergonomics to match the pgx toolkit's
 authoring experience. Until it lands, this connector carries exactly the
 semantics the conformance suites demand, nothing more.
+
+## Query logging is opt-in and dev-only
+
+Set `Config.LogQueries` (with an optional `Config.Logger`; nil falls back to
+`slog.Default()`) to log every query this connector runs — on both the `DB`
+connection and its transactions. This is symmetric with the pgxdb connector's
+`Config.LogQueries` / `Config.Logger`, and carries the identical posture:
+**it logs SQL arguments verbatim**, and those can carry secrets or PII, so it is
+dev-only tooling — leave it false in production. database/sql exposes no
+driver-level tracer hook (pgx's `ConnConfig.Tracer`), so the `DB`/`Tx` wrapper
+threads the logging through its own `Exec`/`Query`/`QueryRow`; the transaction
+path logs too, so opting in never silently drops tx statements. At defaults
+(`LogQueries` unset) the connector emits nothing. This is interim plumbing,
+expected to fold into a shared `sdk/tracing` package later.
+
+`RedactDSN` (and `Config.Redacted()`) masks the userinfo password and the
+`authToken` query parameter in a libSQL URL, so a host can log the connection
+target without leaking the auth token; unparseable input returns the literal
+`"REDACTED"`.
 
 ## Testing
 

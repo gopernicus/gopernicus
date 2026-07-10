@@ -10,6 +10,8 @@ import (
 // Exec/Query are mapped to sdk/errs sentinels via MapError.
 type DB struct {
 	db *sql.DB
+	// tracer, when non-nil (Config.LogQueries), logs every Exec/Query/QueryRow.
+	tracer *loggingQueryTracer
 }
 
 // Close closes the database connection.
@@ -45,6 +47,9 @@ func StatusCheck(ctx context.Context, db *DB) error {
 
 // Exec executes a query that doesn't return rows.
 func (d *DB) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	if d.tracer != nil {
+		d.tracer.traceQuery(query, args)
+	}
 	result, err := d.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return nil, MapError(err)
@@ -54,6 +59,9 @@ func (d *DB) Exec(ctx context.Context, query string, args ...any) (sql.Result, e
 
 // Query executes a query that returns rows.
 func (d *DB) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	if d.tracer != nil {
+		d.tracer.traceQuery(query, args)
+	}
 	rows, err := d.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, MapError(err)
@@ -64,5 +72,8 @@ func (d *DB) Query(ctx context.Context, query string, args ...any) (*sql.Rows, e
 // QueryRow executes a query that returns at most one row. Map the Scan error
 // with MapError to translate sql.ErrNoRows into errs.ErrNotFound.
 func (d *DB) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
+	if d.tracer != nil {
+		d.tracer.traceQuery(query, args)
+	}
 	return d.db.QueryRowContext(ctx, query, args...)
 }

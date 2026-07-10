@@ -446,3 +446,22 @@ README at all is a jrazmi call (open flag, not invented here).
 Verify: all four hosts + both connectors build/test/vet green;
 `make check` + `make guard` green; gofmt clean. Committed CI-green.
 **Next: P4.**
+
+### 2026-07-09 — P4 CLOSED (turso query-observability parity)
+
+turso gains `RedactDSN` (userinfo password + the `authToken` query param
+masked narrowly — DSN redaction, not the arg redaction the gate fold
+forbids; innocuous params survive), `Config.LogQueries`/`Config.Logger`
+with the pgxdb dev-only/args-VERBATIM/WARNING posture exactly, threaded
+through DB.Exec/Query/QueryRow AND Tx (inherited via Begin — the tx path
+logs). Zero-at-defaults + opted-in DB/Tx-path + redaction unit tests
+green. pgxdb's now-false "no turso analogue" records rewritten
+(postgres.go Config doc + README) to the symmetric reality — only
+`Config.Tracer` external composition remains pgx-only, because
+database/sql exposes no injection seam; turso's tracer is deliberately
+UNEXPORTED (exporting it would be dead surface) — the honest asymmetry,
+documented in both READMEs. Note carried forward: like pgxdb, a raw DSN
+inside a wrapped DRIVER error is not scrubbed (hosts use
+`Config.Redacted()`); a shared concern for future tracing work, named
+not fixed. Both connectors + `make check`/`make guard` green; standing
+check 200/port freed. Committed CI-green. **Next: P5.**

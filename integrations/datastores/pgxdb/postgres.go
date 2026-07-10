@@ -45,9 +45,12 @@ const (
 // "no per-connector observability field": pgx exposes exactly one tracing
 // seam (pgxpool.ConnConfig.Tracer), so Config forwards it directly rather
 // than inventing an options wrapper for a single value. They hold until
-// sdk/tracing lands, and they have no turso analogue — SQLite's driver exposes
-// no equivalent hook — so this is an asymmetry the module README's "symmetry
-// is convention" note calls out explicitly.
+// sdk/tracing lands. Query logging is symmetric with the turso connector: both
+// carry an opt-in LogQueries/Logger with the same dev-only, args-verbatim
+// posture — pgx installs it as a native ConnConfig.Tracer, turso threads it
+// through its DB/Tx wrapper because database/sql exposes no tracer hook. Tracer
+// has no turso analogue: it composes an external pgx.QueryTracer (e.g.
+// OpenTelemetry) into that native seam, which SQLite's driver does not expose.
 type Config struct {
 	DSN      string `env:"DB_URL"`
 	Host     string `env:"DB_HOST"`
