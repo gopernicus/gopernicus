@@ -493,3 +493,24 @@ all five stores build/test/vet green (incl. -tags=integration vet),
 `make check` + `make guard` green, gofmt clean — coordinator re-verified
 all builds independently (editor diagnostics were stale mid-sweep
 state). Committed CI-green. **Next: P6.**
+
+### 2026-07-09 — P6 CLOSED (crud.Transactor scaffold + guards G9/G10)
+
+Executor note: P6 ran INLINE by the coordinator (fable) including the
+Makefile guard mechanics (specced opus) — same cost-directive deviation
+as Z5's, logged. `sdk/crud/tx.go` landed: `Transactor` with
+**`Transact(ctx, fn func(ctx) error) error`** (the gate-fold rename — no
+InTx collision), doc pinning SCAFFOLDED-UNCONSUMED + the
+third-durable-emitter trigger + commit-on-nil / rollback-on-error /
+rollback-and-repanic + tx-in-context with PER-CONNECTOR typed helpers
+(NO sdk ctx stash — named as the service-locator hole) + nesting
+EXPLICITLY UNPINNED + the additive-Transact migration path for the 18
+InTx sites. **G9 `guard-no-underlying`** (no `.Underlying()` outside
+integrations; named-exception discipline in the comment) and **G10
+`guard-no-lax-scan`** (no RowToStructByNameLax anywhere) wired into the
+aggregate — `make guard` runs ALL TEN; both proven-can-fail (a
+`pool.Underlying()` probe in examples/minimal and a Lax string in the
+pgx store each failed loudly, reverted, green). README guard counts
+eight → ten (both spots); features/README checklist item 5 gains the
+G9/Transactor pointer. sdk builds stdlib-only (G1 structural);
+`make check` green. Committed CI-green. **Next: P7.**
