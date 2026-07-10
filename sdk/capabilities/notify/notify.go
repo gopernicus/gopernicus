@@ -1,6 +1,6 @@
 // Package notify is the facility port for delivering a message to one address of
 // a declared kind. It sits next to sdk/capabilities/email: email remains the mail facility,
-// and this package's MailerBridge adapts an email.Sender so the email kind can
+// and the integrations/notify/mailer module bridges an email.Sender so the email kind can
 // route through the same delivery seam as every other kind — bridging, not
 // replacing.
 //

@@ -321,3 +321,17 @@ Flags: `logging/context_test.go` not renamed (out of named scope — a
 trivial coherence follow-up); one P1-era `sdk/errs` comment in
 sendgrid.go noticed, left (P5 sweep). Committed CI-green.
 **Next: P4 (module 36).**
+
+### 2026-07-10 — P4 CLOSED (integrations/notify/mailer, module 36)
+
+Coordinator-inline (S, logged deviation as before). The bridge left sdk:
+`integrations/notify/mailer` — package `mailer`, type **`Bridge`**, ctor
+**`New(sender, from)`** (the `mailer.NewMailerBridge` stutter renamed;
+ZERO consumers existed, pre-verified, so the rename is free and logged);
+the module doc carries the composing-integration rationale verbatim.
+`sdk/capabilities/notify` keeps port + Console; its doc + auth's
+authentication.go comment swept of the MailerBridge claim (repo-wide
+grep → zero mentions). Registered: go.work + MODULES + header 35→36.
+Verify: module standalone (GOWORK=off) + tests green; `make check` (36)
++ `make guard` (11) green. Committed CI-green. **Next: P5 (G12 + docs +
+close).**

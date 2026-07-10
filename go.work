@@ -11,6 +11,7 @@ use (
 	./integrations/filestorage/gcs
 	./integrations/filestorage/s3
 	./integrations/kvstores/goredis
+	./integrations/notify/mailer
 	./integrations/oauth/github
 	./integrations/oauth/google
 	./integrations/scheduling/robfig-cron

@@ -332,7 +332,7 @@ type Config struct {
 	// invitation mail through notify instead of the Mailer directly
 	// (verification/reset mail stays on the Mailer). Duplicate kinds →
 	// ErrDuplicateNotifierKind at construction. Meaningful only when Granter is
-	// wired; sdk/capabilities/notify ships Console (any kind) and MailerBridge (email).
+	// wired; sdk/capabilities/notify ships Console (any kind); the email-kind bridge is integrations/notify/mailer.
 	Notifiers []notify.Notifier
 
 	// Logger receives the best-effort WARN line when a security-event audit write
