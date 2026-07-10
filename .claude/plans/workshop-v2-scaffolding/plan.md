@@ -1,0 +1,241 @@
+# workshop-v2-scaffolding — the scaffolding CLI (init · new feature · db verbs)
+
+Status: **DRAFT 2026-07-09 — awaiting jrazmi ratification (Q1–Q5 below)**
+Origin: the workshop-v2 scope brief
+(`.claude/plans/restructure/workshop-v2-brief.md`, FINAL 2026-07-02) §1's
+three SCAFFOLD-ONCE targets, sliced by the 2026-07-09 owner ruling:
+**scaffolding CLI first** — `gopernicus init`, `gopernicus new feature`,
+`gopernicus db migrate|status|create`. The regenerate-forever surfaces
+(store-adapter emission, TS clients) and the integration-test harness are
+**workshop-v2b**, deferred with triggers named in "Deferred" below.
+Executor model policy (standing): implementation `model: opus`;
+design/doc-judgment `model: fable`. Never sonnet.
+Modules: **+1 → 35** (the CLI module; placement = Q1).
+
+## Owner rulings (2026-07-09, in-session)
+
+- **The v1 slice is the scaffolding CLI** (ratified over store-emission-first
+  and the full-brief milestone): scaffold-once surfaces only — no codegen
+  engine, no `queries.sql` parsing, no drift-regeneration machinery, no
+  `// gopernicus:start|end` markers (D2: scaffold-once surfaces are owned by
+  the human after emission; markers exist only for mid-file regeneration,
+  which this slice deliberately has none of).
+
+## Brief reconciliation (the brief is 2026-07-02; the world moved — these supersede its citations)
+
+1. **The feature anatomy is now the FS1–FS10 charter + trio layout**
+   (`features/README.md` §2/§8, checklist items 1–14): `<name>.go` FS2
+   socket (`NewService(repos, cfg) (*Service, error)` + `Register(mount)`),
+   `domain/<agg>/` public rim (entities + ports + `order.go` allow-lists —
+   the Q1-standard), `internal/logic/<agg>svc/`, `internal/inbound/<name>/`
+   ONLY when routes exist, `storetest/` + an honest in-memory reference,
+   `stores/{turso,pgx}` sibling modules with `Repositories(db)` +
+   `ExportMigrations(dst)` + boot probes + migrations under a named source.
+   The brief's `internal/<domain>svc/` + `internal/http/` citations are
+   superseded.
+2. **Both dialects out of the box** (DP1, R-KV2/R-KV3: supported set
+   {turso, pgx}) — the brief's single `stores/<dialect>` reads accordingly
+   (Q2 decides the default emission set).
+3. **The app-local anatomy is ratified** (segovia-lessons phase 01:
+   `internal/inbound/domains/<domain>/` etc.) — but `gopernicus new domain`
+   is OUT of this slice (Q3, recommend defer: no second app has demanded it;
+   Segovia hand-rolled and ratified the anatomy without a generator).
+4. **The migrations seam is uniform and shipped**: both connectors carry
+   `RunMigrations(ctx, db, fs, dir)` + `ExportMigrations(fs, dir, dst)` and
+   every store module wraps `ExportMigrations`; the ledger conventions
+   (named sources, hosts never renumber) are documented per feature. The
+   `db` verbs WRAP this seam — no new migration engine.
+5. **`gopernicus-original` is reachable again** at the sibling path
+   (`../gopernicus-original`; it was absent during the authorization-v1
+   legs — noted for the record). Carry-over for THIS slice is limited to
+   the CLI dispatcher shape (`workshop/gopernicus/{main.go,commands/}`) —
+   read as reference, re-typed fresh; the codegen engine paths in the
+   brief's §2 stay untouched until v2b.
+6. **Hosts have no Makefiles today** (the root Makefile serves the
+   monorepo) — the emitted standalone host's Makefile is a NEW artifact:
+   run/build/test/migrate targets + a host-appropriate guard subset
+   (hexagon-layering greps adapted from G2's shape; the ten repo guards are
+   monorepo-scoped and do not transplant wholesale).
+
+## Phases
+
+| Phase | What | Size | Depends | Model |
+|---|---|---|---|---|
+| W1 | CLI module skeleton + dispatcher + module 35 registration | S | — | opus |
+| W2 | `gopernicus init` — the host scaffold | M | W1 | opus |
+| W3 | `gopernicus new feature` — the FS-charter skeleton | M–L | W1 | opus |
+| W4 | `gopernicus db migrate/status/create` | S–M | W1 | opus |
+| W5 | docs + records + milestone close | S | all | fable |
+
+Sequencing: W1 first; W2/W3/W4 independent after it (default order as
+numbered — init's templates establish the embed/render conventions the
+others reuse); W5 last. One CI-green commit per phase; the
+scaffold-compile tests (below) run inside `make check` from W2 on.
+
+### W1 — the CLI module + dispatcher
+
+- **files:** `workshop/gopernicus/go.mod` (module 35 — pending Q1),
+  `workshop/gopernicus/main.go`, `workshop/gopernicus/internal/commands/`
+  (dispatcher: `init`, `new`, `db`, `version`; stdlib `flag` — no cobra,
+  the zero-dependency posture pending Q1's taxonomy answer), go.work +
+  Makefile MODULES + header 34→35.
+- **verify:** module builds/vets/tests standalone (`GOWORK=off` too);
+  `make check` (35) + `make guard` (the new module must be invisible to
+  all ten guards — it is neither sdk, feature, integration, nor example;
+  Q1 pins the taxonomy row and any guard adjustments).
+- `gopernicus version` prints a placeholder version + the module path —
+  the smallest end-to-end proof the dispatcher works.
+
+### W2 — `gopernicus init` (the host scaffold)
+
+- **What it emits** (into a target dir; `go:embed` templates): a
+  `cmd/server/main.go` composition root modeled on `examples/minimal`'s
+  current shape (explicit wiring, rule 5 — no init(), no locator; mounts
+  ONE example feature the user deletes, or none — decided at execution
+  against what keeps the scaffold legible), `go.mod` (module path from a
+  flag), the host Makefile (run/build/test/vet + `migrate` + the adapted
+  guard subset + `healthz`-aware run docs), `.env.example`,
+  `workshop/migrations/` ledger dir with a README stating the
+  scaffold-and-own + never-renumber rules, a root README stub.
+- **The acceptance mechanism (this slice's drift answer):** a
+  `scaffold_test.go` in the CLI module that emits a host into `t.TempDir()`,
+  runs `go build ./...` against it (module-mode, workspace-off, with a
+  local `replace` pinned to this repo's modules for the pre-tag world),
+  and runs the emitted Makefile's guard targets. The scaffold cannot rot
+  silently: `make check` executes this test on every run. This is the
+  brief's §4 drift question ANSWERED for scaffold-once surfaces —
+  drift-as-CI lives HERE (the generator's own tests), not in emitted repos.
+- **verify:** the scaffold-compile test green hermetically; run-and-look —
+  emit a host to the scratchpad, build it, boot it, `GET /` + `/healthz`
+  → 200s, kill, port free.
+
+### W3 — `gopernicus new feature <name>` (the charter skeleton)
+
+- **What it emits** (into a monorepo-shaped tree or standalone —
+  execution decides from the charter's own wording): the FS anatomy of
+  reconciliation item 1, compilable with ONE example aggregate:
+  the socket + sentinels, `domain/<agg>/` (entity, `Storer` port with doc
+  pins, `order.go`), `internal/logic/<agg>svc/` (a create/get/list service
+  skeleton), `storetest/Run` + an honest in-memory reference wired into
+  `make check`-shaped tests, `stores/turso` + `stores/pgx` per Q2
+  (Repositories(db) + probe + ExportMigrations + `0001_<agg>.sql` under
+  source `"<name>"` + conformance harnesses env-gated exactly like the
+  living stores), README with the three-question checklist trace stub.
+  NO routes/views by default (the jobs precedent: `Register` logs only;
+  inbound is added by the human when routes are demanded).
+- **Acceptance mechanism:** same scaffold-compile pattern — emit into
+  `t.TempDir()`, build all emitted modules, run the emitted storetest
+  against the emitted memstore (hermetic), assert the FS1 guard shape
+  holds (`go.mod` requires sdk only).
+- **verify:** scaffold-compile + storetest-hermetic green; run-and-look —
+  emit a feature, wire it into the W2-scaffolded host by hand following
+  the emitted README's wiring section, boot, drive one use-case live.
+
+### W4 — `gopernicus db migrate|status|create`
+
+- **What it does:** `migrate` applies a host's `workshop/migrations/`
+  ledger via the connector `RunMigrations` (dialect from the DSN/env);
+  `status` lists applied-vs-pending per source (reads the connector's
+  ledger table); `create` scaffolds `NNNN_<slug>.sql` into the host ledger
+  honoring never-renumber (next number = max+1 across the ledger).
+  Works identically in an emitted host and in this repo's examples
+  (replaces nothing — the root `make migrate` stays; the verb is for
+  emitted hosts that have no monorepo Makefile).
+- **verify:** unit tests over a temp ledger + in-memory turso for
+  migrate/status; run-and-look — `db create` then `db migrate` then
+  `db status` against a scratch DB file/container, exact output recorded.
+
+### W5 — docs + records + close
+
+- workshop README (what the CLI does, what it deliberately does NOT do
+  yet — the v2b deferrals with triggers); ARCHITECTURE.md taxonomy row +
+  tree + count 35; root README module list + count; RELEASING enumeration
+  (the CLI module's tagging posture); NOTES.md milestone entry;
+  brief cross-reference note appended to
+  `.claude/plans/restructure/workshop-v2-brief.md` (dated: which §1
+  targets this milestone discharged, which moved to v2b); archive to
+  `.claude/past/` at close.
+
+## Deferred to workshop-v2b (named, with triggers)
+
+- **Store-adapter emission** (runtime-generic vs emitted, spec placement,
+  `queries.sql` carry-over, markers, drift-regeneration gates) — trigger:
+  the third hand-written store PAIR after this milestone whose SQL is
+  mechanical enough that emission would have been cheaper (the honest
+  demand test), or an explicit owner call.
+- **TS/OpenAPI client generation** — trigger: the first real frontend
+  consuming a gopernicus host's OpenAPI doc (Segovia or the Stitch flow).
+- **`gopernicus new domain` (app-local)** — trigger: the second app
+  needing the segovia-ratified anatomy (Q3).
+- **`doctor` / sqlguard** — trigger: first CI need; folds into this CLI's
+  dispatcher when it comes.
+- **Integration-test harness generation** (capability-map YOUR CALL #9) —
+  unblocked-but-unscoped; rides v2b.
+
+## Open questions — FOR RATIFICATION (jrazmi)
+
+1. **Q1 — the CLI's home + taxonomy.** Recommend **`workshop/gopernicus`
+   as module 35**, taxonomy row "workshop — the scaffolding CLI"
+   (a NEW top-level kind: not sdk/feature/integration/example; it emits
+   the others), stdlib-only (`flag` + `embed` + `text/template`), so the
+   zero-dependency story extends to the tool. Alternative: `cmd/gopernicus`
+   inside the sdk module — rejected-by-default (sdk is the stdlib runtime
+   kernel; a CLI in it pollutes the import graph story even if unimported).
+2. **Q2 — `new feature` store emission set.** Recommend **BOTH dialects
+   always** (DP1's word: features ship turso+pgx out of the box; deleting
+   one is the adopter's one-line choice). Alternative: `--stores=` flag
+   with both as default.
+3. **Q3 — `new domain` in this slice.** Recommend **DEFER to v2b**
+   (trigger above). Alternative: include it (adds ~W3-shaped scope for the
+   app-local anatomy).
+4. **Q4 — template source of truth.** Recommend **hand-authored embedded
+   templates + the scaffold-compile tests as the fidelity gate** (emitted
+   output must build AND pass the guard shapes — rot is caught by
+   `make check`, not by eyeballs). Alternative: derive templates
+   mechanically from `examples/minimal`/a living feature (rejected-by-
+   default: examples carry demo noise the scaffold shouldn't emit).
+5. **Q5 — review gate.** Recommend **RUN** architecture-steward +
+   lead-backend-engineer on this DRAFT before execution (a NEW top-level
+   module kind + emitted-artifact contracts are exactly their classes),
+   findings folded per the datastore-hardening precedent.
+
+## Risks
+
+1. **Scaffold-vs-charter drift** — the charter is prose + living code; the
+   templates are a third copy. Mitigation: the scaffold-compile tests run
+   in `make check` (every phase, forever), and W5 adds the charter
+   checklist trace to the emitted README so a human audit has rails.
+2. **Pre-tag dependency wiring in emitted hosts** — no tags exist
+   (RELEASING), so emitted go.mod needs `replace` directives or a
+   vendored path until repo-hardening phase 5 cuts v0.1.0. The
+   scaffold-compile test pins `replace` to this repo; the emitted README
+   states the pre-tag caveat. (This is also a nudge: LICENSE + first tags
+   unblock clean `go get` adoption.)
+3. **Scope creep toward codegen** — the moment a template wants a loop
+   over entity fields, it is spec-driven emission (v2b). The rails: this
+   slice's templates take a NAME and nothing else; any richer input is a
+   v2b trigger firing.
+
+## Acceptance (milestone)
+
+```sh
+make check    # 35 modules; scaffold-compile tests inside
+make guard    # ten guards, CLI module invisible to all
+```
+
+Plus: `gopernicus init` → emitted host builds, boots, 200s (recorded);
+`gopernicus new feature` → emitted skeleton builds standalone, its
+storetest passes hermetically, FS1 shape holds; `db create/migrate/status`
+driven against a scratch DB (recorded); docs/counts synced; NOTES entry;
+archive at close.
+
+## Real-interaction check
+
+Standing check (a) per phase commit (`make check` green; examples/minimal
+:8081 → 200s + `/healthz`; kill; port free) — plus each phase's
+run-and-look above. The milestone close re-runs the full W2+W3 emit→
+build→boot→drive chain end to end in one recorded transcript.
+
+## Execution log
+
+(append dated entries here)
