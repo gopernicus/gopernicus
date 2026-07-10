@@ -1,0 +1,59 @@
+# {{.ModulePath}} — host Makefile scaffolded by `gopernicus init`.
+#
+# The framework never migrates at startup: `migrate` is a separate, explicit
+# pre-boot step, and `run` applies it first. `GET /healthz` is the liveness probe.
+
+.PHONY: build vet test run migrate guard guard-one-rule guard-no-underlying guard-no-lax-scan
+
+build:
+	go build ./...
+
+vet:
+	go vet ./...
+
+test:
+	go test ./...
+
+run:{{if .HasDB}} migrate{{end}}
+	go run ./cmd/server
+
+{{if .HasDB -}}
+# migrate applies the host-owned ledger (workshop/migrations/{{.LedgerDir}}) via the
+# host's own runner — never the framework. Set the datastore env first (see
+# .env.example). Inspect with `go run ./workshop/migrations -status`.
+migrate:
+	go run ./workshop/migrations
+{{- else -}}
+# This host was scaffolded with --db=none: it has no datastore and nothing to
+# migrate. Re-run `gopernicus init --db=turso|pgx` for a host that wires a
+# connector and a workshop/migrations runner.
+migrate:
+	@echo "no datastore configured (--db=none); nothing to migrate"
+{{- end}}
+
+# guard runs this host's architectural boundary checks. Each must print nothing
+# and exit 0 on a clean tree. These mirror the gopernicus repo's own guards,
+# scoped to a single host module.
+guard: guard-one-rule guard-no-underlying guard-no-lax-scan
+
+# The one rule: internal/logic (the hexagon) never imports inbound, outbound, or
+# integrations — adapters implement ports; the center never reaches outward. The
+# check is inert until this host grows an app-local domain under internal/logic.
+guard-one-rule:
+	@echo "== guard: internal/logic never imports inbound/outbound/integrations =="
+	@if [ -d internal/logic ]; then \
+		! grep -rn --include='*.go' -E '/internal/(inbound|outbound)|"github.com/gopernicus/gopernicus/integrations' internal/logic || { echo "ERROR: internal/logic reached outward — the hexagon imports only sdk"; exit 1; }; \
+	fi
+
+# Hygiene (mirrors the gopernicus repo's G9/G10): the crud.Transactor seam is the
+# only way to the raw pool — never the raw-pool escape hatch; strict struct
+# scanning only — never the lax row-scan variant. The grep tokens are split with
+# adjacent shell quotes ('a''b' → 'ab') so the scaffold's own template source
+# never carries the forbidden literals verbatim.
+guard-no-underlying:
+	@echo "== guard: no Underlying() outside a datastore connector =="
+	@! grep -rn --include='*.go' '\.Underlying''()' . || { echo "ERROR: raw-pool escape hatch called — use the ports or the crud.Transactor seam"; exit 1; }
+
+guard-no-lax-scan:
+	@echo "== guard: strict struct scanning only (no lax row-scan) =="
+	@! grep -rn --include='*.go' 'RowToStructByName''Lax' . || { echo "ERROR: lax struct scanning found — strict RowToStructByName only"; exit 1; }

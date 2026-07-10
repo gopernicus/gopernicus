@@ -346,3 +346,33 @@ the ecosystem sibling (read-only reference only). Verify: module
 build/test/vet + GOWORK=off green; `make check` (35) + `make guard` (11)
 green; coordinator re-verified builds + version output + guard count
 independently. Committed CI-green. **Next: W2.**
+
+### 2026-07-09 — W2 CLOSED (`gopernicus init` + the scaffold-compile harness)
+
+The real `init` (identity params: `--module` required, `--db=turso|pgx|none`
+default none, `--dir`), the shared `emit`/`render` engine
+(`missingkey=error`, go/format on Go outputs, no-clobber pre-flight — the
+convention W3/W4 reuse), and 7 `.tmpl` templates: go.mod (pre-tag replace
+block commented), the sdk-only composition root (mounts NOTHING, FS2
+wiring comment, /healthz plain-200 or DB-probed per --db), host Makefile
+(build/vet/test/run/migrate + the ONE-RULE grep + G9/G10 hygiene shapes),
+.env.example, README, ledger README, and — when --db != none — the
+migrations runner WITH the W4-ready `-status` mode (portable ledger
+SELECT + file-only fallback). **The scaffold-compile gate is live inside
+`make check`:** hermetic `--db=none` leg (GOWORK=off + GOPROXY=off,
+absolute sdk replace, tidy+build, guard shapes over emitted output,
+empty go.sum proves the offline claim) + warm-cache `--db=turso` leg
+(pinned driver version rides the make-check-warmed GOMODCACHE; cold
+cache fails loud). Run-and-look recorded: emitted none-host built and
+BOOTED (GET / 404-as-expected, /healthz 200, clean SIGTERM order, port
+freed); emitted `make guard` exit 0 AND proven-can-fail (planted
+Underlying() → exit 2). **Judgment calls (logged):** (1) the emitted
+Makefile's G9/G10 greps vs the forbidden-literal constraint — resolved
+by shell-quote token-splitting in the template, guard stays functional;
+(2) the cms embed glob fails on an empty fresh ledger — emitted runner
+embeds the whole dir and filters `*.sql`/`_`-prefixed in code, matching
+the connectors' own filtering; (3) a hermetic-leg flake traced to
+ambient GOPROXY — pinned GOPROXY=off, stable ×3. Verify: module
+build/test/vet + make check (35) + make guard (11) green; coordinator
+re-ran both scaffold legs independently. Committed CI-green.
+**Next: W3.**

@@ -1,0 +1,85 @@
+# {{.ModulePath}}
+
+A gopernicus host application, scaffolded by `gopernicus init`. It is an
+sdk-only composition root: a logger, an HTTP router with the standard
+middleware, a `GET /healthz` liveness probe, and graceful shutdown. It mounts no
+features yet — that is your first edit.
+
+## What was scaffolded
+
+```
+cmd/server/main.go              composition root — wiring; the only place that names concrete adapters
+Makefile                        build/vet/test/run/migrate + the host guard subset
+.env.example                    environment template (copy to .env)
+workshop/migrations/{{.LedgerDir}}/         host-owned migration ledger (scaffold-and-own, never-renumber){{if .HasDB}}
+workshop/migrations/main.go     host-owned pre-boot migration runner (apply + -status){{end}}
+```
+{{if .HasDB}}
+This host wires the **{{.DB}}** datastore connector. `main.go` opens it from the
+environment and probes it in `/healthz`; the migration runner applies the
+host-owned ledger before boot.
+{{else}}
+This host wires **no datastore** (`--db=none`): the store you supply — a real
+connector or an in-memory implementation — is your choice when you mount a
+feature.
+{{end}}
+## Pre-tag wiring
+
+gopernicus publishes no version tags yet, so `go get` cannot resolve the
+`github.com/gopernicus/gopernicus/*` modules this host requires. Until `v0.1.0`
+is cut, point each one at a local checkout of the gopernicus repo with a replace
+directive:
+
+```
+go mod edit -replace github.com/gopernicus/gopernicus/sdk=/abs/path/to/gopernicus/sdk
+{{- if .HasDB}}
+go mod edit -replace {{.ConnectorPath}}=/abs/path/to/gopernicus/{{.ConnectorRel}}
+{{- end}}
+go mod tidy
+```
+
+Then `make run` (or `go run ./cmd/server`) and hit `http://localhost:{{.Port}}/healthz`.
+
+## Wiring a feature
+
+A gopernicus feature reaches this host only through the narrow `feature.Mount` +
+`Register` surface — no init() registration, no service locator. Add the feature
+module (and its store adapter, if it persists data) to `go.mod`, add the replace
+directives above for it too, then wire it in the "mount your features here"
+block in `cmd/server/main.go`:
+
+```go
+mount := feature.Mount{Router: router, Logger: log}
+repos := <store>.Repositories(db)        // or your own in-memory store
+svc, err := <feature>.NewService(repos, <feature>.Config{ /* ... */ })
+if err != nil {
+	return err
+}
+svc.Register(mount)
+```
+
+## Migrations
+
+Migrations are host-owned and applied pre-boot — the framework never migrates at
+startup.
+{{if .HasDB}}
+```
+gopernicus db create <slug>              # scaffold NNNN_<slug>.sql into the ledger
+make migrate                             # apply pending migrations
+go run ./workshop/migrations -status     # applied vs pending (file-only when the
+                                         # database is unreachable)
+```
+{{else}}
+This host has no datastore, so no runner was scaffolded. Re-run `gopernicus init
+--db=turso|pgx` for a host with a migration runner.
+{{end}}
+## Make targets
+
+| target | does |
+|---|---|
+| `make build` | `go build ./...` |
+| `make vet` | `go vet ./...` |
+| `make test` | `go test ./...` |
+| `make run` | {{if .HasDB}}migrate, then {{end}}`go run ./cmd/server` |
+| `make migrate` | {{if .HasDB}}apply the host-owned ledger pre-boot{{else}}no-op (this host has no datastore){{end}} |
+| `make guard` | the host's architectural boundary checks (the one rule + hygiene) |

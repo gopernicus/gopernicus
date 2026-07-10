@@ -1,0 +1,137 @@
+// Command server is the composition root for {{.ModulePath}} — a host scaffolded
+// by `gopernicus init`. It builds a logger, a host-owned HTTP router with the
+// standard middleware, a liveness probe, and graceful shutdown. It mounts no
+// features yet; wire your own in the "mount your features here" block below.
+//
+// cmd is the only place that names concrete adapters (constitution rule 5): no
+// init() registration, no service locator.
+package main
+
+import (
+	"context"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/gopernicus/gopernicus/sdk/environment"
+	"github.com/gopernicus/gopernicus/sdk/logging"
+	"github.com/gopernicus/gopernicus/sdk/web"
+{{- if .HasDB}}
+
+	{{.ConnectorAlias}} "{{.ConnectorPath}}"
+{{- end}}
+)
+
+func main() {
+	// Load .env (a missing file is not an error) before reading any config.
+	_ = environment.LoadEnv()
+
+	log := logging.New(logging.Options{
+		Level:  environment.GetEnvOrDefault("LOG_LEVEL", "INFO"),
+		Format: environment.GetEnvOrDefault("LOG_FORMAT", "json"),
+		Output: environment.GetEnvOrDefault("LOG_OUTPUT", "STDERR"),
+	})
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := run(ctx, log); err != nil {
+		log.ErrorContext(ctx, "server exited with error", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context, log *slog.Logger) error {
+{{- if .HasDB}}
+	// Database. The connector owns the driver, DSN, and dialect error mapping;
+	// the host owns the schema — migrations live under workshop/migrations and
+	// are applied pre-boot by `make migrate`, never by the framework at startup.
+{{- if eq .DB "turso"}}
+	db, err := {{.ConnectorAlias}}.Open({{.ConnectorAlias}}.Config{
+		URL:       os.Getenv("TURSO_DATABASE_URL"),
+		AuthToken: os.Getenv("TURSO_AUTH_TOKEN"),
+	})
+	if err != nil {
+		return err
+	}
+{{- else}}
+	var dbCfg {{.ConnectorAlias}}.Config
+	if err := environment.ParseEnvTags("", &dbCfg); err != nil {
+		return err
+	}
+	db, err := {{.ConnectorAlias}}.Open(dbCfg)
+	if err != nil {
+		return err
+	}
+{{- end}}
+	defer db.Close()
+{{- end}}
+
+	// Host-owned HTTP router + middleware stack. Features mount their routes onto
+	// this via the narrow RouteRegistrar; the host never sees a concrete handler.
+	router := web.NewWebHandler(web.WithLogging(log))
+	router.Use(web.RequestID(), web.Logger(log), web.Panics(log))
+
+	// ── Mount your features here ────────────────────────────────────────────
+	// A gopernicus feature reaches this host only through the narrow feature.Mount
+	// + Register surface (constitution rule 5 — no init(), no service locator).
+	// Add the feature (and, if it persists data, a store adapter) to go.mod, then
+	// wire it in this block following the FS2 shape:
+	//
+	//   mount := feature.Mount{Router: router, Logger: log}
+	//   repos := <store>.Repositories(db)        // or your own in-memory store
+	//   svc, err := <feature>.NewService(repos, <feature>.Config{ /* ... */ })
+	//   if err != nil {
+	//       return err
+	//   }
+	//   svc.Register(mount)
+	//
+	// See README.md ("Wiring a feature") for the full walkthrough. Nothing is
+	// mounted by default — an sdk-only host is the hermetic baseline.
+	// ─────────────────────────────────────────────────────────────────────────
+
+	// Host-local liveness probe (host route, not feature surface). Mounted on the
+	// root router with no middleware, unauthenticated by design — a readiness
+	// probe can't log in.
+	router.Handle(http.MethodGet, "/healthz", healthzHandler({{if .HasDB}}db{{end}}))
+
+	return web.Run(ctx, router, serverConfig(), log)
+}
+
+{{if .HasDB -}}
+// healthzHandler is this host's readiness probe: it pings the database via the
+// connector's StatusCheck, so 200 {"status":"ok"} means the process is up AND
+// the database is reachable; a probe failure returns 503 {"status":"unavailable"}.
+func healthzHandler(db *{{.ConnectorAlias}}.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := {{.ConnectorAlias}}.StatusCheck(r.Context(), db); err != nil {
+			_ = web.RespondJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unavailable"})
+			return
+		}
+		_ = web.RespondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	}
+}
+{{- else -}}
+// healthzHandler is this host's liveness probe. This host has no datastore, so
+// reaching the handler is itself the liveness signal.
+func healthzHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}
+}
+{{- end}}
+
+// serverConfig reads HTTP server settings from the environment with defaults.
+func serverConfig() web.ServerConfig {
+	return web.ServerConfig{
+		Host:            environment.GetEnvOrDefault("HOST", "localhost"),
+		Port:            environment.GetEnvOrDefault("PORT", "{{.Port}}"),
+		ReadTimeout:     15 * time.Second,
+		WriteTimeout:    15 * time.Second,
+		IdleTimeout:     120 * time.Second,
+		ShutdownTimeout: 10 * time.Second,
+	}
+}

@@ -1,0 +1,31 @@
+# workshop/migrations/{{.LedgerDir}} — the host-owned migration ledger
+
+This directory is the host's own ordered migration stream. Gopernicus scaffolds
+feature SQL into it (a store adapter's `ExportMigrations`), and from that moment
+the files are **yours**: the framework never migrates at startup — the host
+runner (`workshop/migrations`, `make migrate`) applies them pre-boot.
+
+## Rules
+
+- **Scaffold-and-own.** Once a migration lands here it is host-owned; edit and
+  extend it as the host requires. Re-scaffolding a feature appends new files; it
+  never rewrites files you already applied.
+- **Never renumber.** Files apply in filename order under a 4-digit zero-padded
+  prefix (`0001_...`, `0002_...`). The next migration is `max + 1`. Renumbering
+  an already-applied file breaks the checksum ledger (`schema_migrations`).
+- **`_`-prefixed files are skipped** by the runner — use them for scratch or
+  manual SQL that must not enter the ledger.
+
+## Usage
+{{if .HasDB}}
+```
+gopernicus db create <slug>              # scaffold NNNN_<slug>.sql here (max+1)
+make migrate                             # apply pending migrations pre-boot
+go run ./workshop/migrations -status     # applied vs pending (file-only if the
+                                         # database is unreachable)
+```
+{{- else}}
+This host was scaffolded with `--db=none`, so no migration runner was emitted.
+Re-run `gopernicus init --db=turso|pgx` (or add a connector plus a
+`workshop/migrations` runner) to apply migrations from this ledger.
+{{- end}}
