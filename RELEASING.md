@@ -99,6 +99,15 @@ host upgrading `features/authentication` across this change must know:
 
 The same note lives in `features/authentication/README.md` (the upgrade note section).
 
+### features/authentication stores — next tag: migration 0013 (invitation identifier kinds)
+
+identity-resolution (2026-07-10) added `0013_invitation_identifier_kind.sql`
+to BOTH dialect stores: `ADD COLUMN identifier_kind TEXT NOT NULL DEFAULT
+'email'` plus a drop/recreate of the pending-tuple unique index to include
+the kind. Hosts re-export (`ExportMigrations`) and apply before deploying
+the new feature core; existing rows backfill as `email`, and hosts that
+only ever create email invitations see zero behavior change.
+
 ## What this repo is not doing (yet)
 
 - No CI-driven automated tagging — tags are cut by hand until a release

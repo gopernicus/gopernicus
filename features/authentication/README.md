@@ -179,6 +179,7 @@ partial-wiring states fail LOUDLY at `NewService`/`Register` —
 | `Hasher` (PasswordHasher) | **hard error** (`ErrHasherRequired`) — a password feature with no hasher is a security foot-gun, not a convenience |
 | `Mailer` (email.Sender) | **hard error** (`ErrMailerRequired`) — silently dropping verification/reset/invitation mail is unsafe degradation |
 | `MailFrom` | From address on verification/reset/invitation mail |
+| `Notifiers` (`[]notify.Notifier`) | **nil-safe, deny-by-absence per kind** (identity-resolution, 2026-07-10): the wired set DEFINES which invitation identifier kinds this host supports beyond email. Email is ALWAYS supported via the required Mailer; a non-email kind (phone, slack, …) needs a wired Notifier of that kind or create fails loudly (`ErrKindNotSupported`, 400). Duplicate kinds → `ErrDuplicateNotifierKind` at NewService. Scope: INVITATION delivery only — verification/reset mail stays on `Mailer` directly (a documented asymmetry; unifying all outbound onto notify is deferred) |
 | `RateLimiter` | `ratelimiter.NewMemory()` — an in-process limiter, not "unlimited" |
 | `SessionCookie` (CookieConfig) | zero value usable: name `session`, path `/`, browser-session cookie backed by a 7-day server session |
 | `RequireVerifiedEmail` | **false** (ratified AV8). `true` → `/auth/login` AND `/auth/token` refuse unverified users with 403 (`auth.ErrEmailNotVerified`). **WARNING: `true` requires a WORKING Mailer.** Verification codes only reach users through it — with the console sender they appear ONLY in server logs, and a misconfigured mailer means nobody can verify, so nobody can log in: total login lockout. |
@@ -197,6 +198,33 @@ partial-wiring states fail LOUDLY at `NewService`/`Register` —
 `cryptids.JWTSigner`; `integrations/oauth/{google,github}` satisfy
 `sdk/oauth.Provider`. None of them imports this module, and this module
 imports none of them — `features/authentication/go.mod` requires exactly `sdk`.
+
+## Invitation identifier kinds (identity-resolution, 2026-07-10)
+
+`Invitation.IdentifierKind` (default `email` — `identity.KindEmail`) makes
+the invitee address polymorphic: email, phone, or any open kind the host
+wires a `notify.Notifier` for. The rules:
+
+- **Supported kinds** = email (always, via the required Mailer) + every
+  wired Notifier kind. An unsupported kind fails create loudly
+  (`ErrKindNotSupported` → 400); the invitation is not created.
+- **Delivery**: the token is DELIVERED for every kind (never returned in a
+  response) — email rides `Mailer` exactly as before (or a wired
+  email-kind Notifier, which takes precedence); other kinds ride their
+  Notifier. Both the invite and the member-added notice follow the fork.
+- **Normalization** is kind-aware and service-owned: email →
+  trim+lowercase; every other kind → trim only (opaque).
+- **The trust model**: email acceptance keeps the acceptor-email match
+  (accounts have emails). Non-email acceptance is authenticated session +
+  valid token — the binding is ADDRESS-POSSESSION via delivery, i.e. the
+  email trust model minus the account-match, which cannot exist until
+  address verification lands (a named deferred item). `AutoAccept` and
+  the email-keyed listings (`Mine`, login-time resolution) apply to
+  email-kind invitations ONLY — a non-email invitation is claimed by
+  token, never auto-attached.
+- The create API accepts an optional `identifier_kind` (default email);
+  the invitation JSON response does not surface the kind yet (a known
+  v1 gap, noted).
 
 ## Session tokens are hashed service-side (v2)
 
@@ -248,6 +276,14 @@ session rows never match a hashed lookup again. Deploying past it:
 The same note lives in `RELEASING.md` keyed to this module's next tag.
 
 ## Wiring the identity capability
+
+`auth.Service` also implements `identity.Resolver` (identity-resolution,
+2026-07-10): `Resolve(ctx, Principal) (identity.Info, error)` — a user
+resolves to display_name (else the email local part) + a KindEmail
+address; a service account to its Name; anything unknown, missing, or on
+a host with the machine subsystem off fails closed with the errs
+not-found class. Hosts hand `authSvc` to any consumer wanting
+display/contact projection without ever sharing the User record.
 
 One host `main.go` wires everything; it is the only place concrete adapters
 are named. **`examples/auth-cms/cmd/server` is this page's executable twin** —

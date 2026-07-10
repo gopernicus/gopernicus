@@ -327,7 +327,12 @@ e.g. an identity-in-context convention, or an error sentinel — never a
 feature's domain-specific port. **CASHED for identity-in-context, 2026-07-08
 (events-v1 A-I1): `sdk/identity` — authentication stashes the Principal, the
 events gateway reads it; vocabulary only, fails closed.** The `CurrentUser`
-port above stays as the general C2 pattern for domain-shaped needs. `cms`'s `CurrentUser` port above stays in
+port above stays as the general C2 pattern for domain-shaped needs.
+**Grown 2026-07-10 (identity-resolution):** the display/contact
+projection of a principal is now `sdk/identity.Resolver` (host-wired;
+authentication implements it) and delivery is `sdk/notify` — but
+domain-shaped needs (e.g. `CurrentUser`) STAY consumer-declared C2
+ports; the graduation bar is unchanged. `cms`'s `CurrentUser` port above stays in
 `cms` unless a second, unrelated feature needs the *identical* shape and the
 admission policy's three tests (plurality, narrow + stable, real shared
 policy) all hold.

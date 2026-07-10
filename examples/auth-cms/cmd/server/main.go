@@ -66,6 +66,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/identity"
 	"github.com/gopernicus/gopernicus/sdk/logging"
+	"github.com/gopernicus/gopernicus/sdk/notify"
 	"github.com/gopernicus/gopernicus/sdk/oauth"
 	"github.com/gopernicus/gopernicus/sdk/web"
 	"github.com/gopernicus/gopernicus/sdk/workers"
@@ -180,7 +181,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 		TokenSigner:          signer,
 		TokenTTL:             tokenTTL(),
 		Granter:              relationshipGranter{authorizer: authorizer},
-		Logger:               log,
+		// The phone-kind console notifier makes phone invitations a supported
+		// kind on this host (deny-by-absence: unwire it and phone-kind create
+		// fails 400 ErrKindNotSupported; email is always-on via Mailer). The
+		// token is DELIVERED to the server log — the dev stand-in for SMS.
+		Notifiers: []notify.Notifier{notify.NewConsole(identity.KindPhone, log)},
+		Logger:    log,
 	}
 
 	// authSvc is the auth feature's driving surface (FS2): its RequireUser method

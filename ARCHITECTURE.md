@@ -80,7 +80,7 @@ workshop-v2-scaffolding W5, adding the workshop row):
 
 | kind | definition | examples | swap unit |
 |---|---|---|---|
-| **sdk facility** | a capability **port** + a first-party stdlib default + a conformance suite; its state is opaque to the host (no host-owned schema, no migrations, no routes) | `cacher`+`Memory`, `email`+`Console`/`SMTP`, `ratelimiter`+`Memory`, `filestorage`+`Disk`, `workers` (pool + `Runner[T]`) | a config value — the swap is invisible outside the process |
+| **sdk facility** | a capability **port** + a first-party stdlib default + a conformance suite; its state is opaque to the host (no host-owned schema, no migrations, no routes) | `cacher`+`Memory`, `email`+`Console`/`SMTP`, `notify`+`Console`/`MailerBridge`, `ratelimiter`+`Memory`, `filestorage`+`Disk`, `workers` (pool + `Runner[T]`) | a config value — the swap is invisible outside the process |
 | **integration** | a third-party backend for a port; isolates exactly one external dependency — a third-party library or an external vendor's live API contract; one module | `datastores/turso`, `datastores/pgxdb`, `kvstores/goredis` | a module import in the host's `main` |
 | **feature** | a mountable domain module: own entities, **own durable schema + migrations**, and/or **own route surface**; its core module requires **sdk only** (FS1, 2026-07-07) | `cms`, `auth`, `jobs`; next: `events` | `NewService` + a `svc.Register` call |
 | **store module** | a feature's store implementation — SQL + migrations written against one driver package's API (`stores/<package>`) | `cms/stores/turso`, `cms/stores/pgx` | a module import + one `Open` call |
@@ -99,7 +99,8 @@ nil-safe port field, wired (or not) in the host's `main`.
 - **`sdk/` — the kernel.** Stdlib-only. It holds the facility **ports** (`Storer`,
   `Sender`, `cacher.Storer`, the generic `crud` CRUD shape), the **services**
   (`web`, `logging`, `config`, `errs`, `cryptids`, `slug`, `identity` — the
-  request-identity vocabulary, A-I1), **and a zero-dependency
+  request-identity vocabulary + the Resolver port, A-I1 as grown at
+  identity-resolution 2026-07-10), **and a zero-dependency
   default implementation of each facility port, shipped right next to it**
   (slog-style): `cacher.Memory`, `filestorage.Disk`, `email.SMTP` + `email.Console`.
   Its `go.mod` has **no `require` block** — "imports only the standard library" is

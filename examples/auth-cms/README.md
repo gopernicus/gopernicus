@@ -379,6 +379,15 @@ curl -sX POST -c jar -b jar http://localhost:8082/demo/roles/assign \
 curl -s -b cjar http://localhost:8082/demo/audit    # 200 (global satisfies the scoped gate) BUT "scoped_auditors":[] — C is NOT listed
 ```
 
+## Invitation kinds demo (identity-resolution, 2026-07-10)
+
+The host wires a phone-kind `notify.Console` notifier, so phone
+invitations are a supported kind here: `POST /auth/invitations/project/demo
+{"identifier":"+1 555 0134","identifier_kind":"phone","relation":"member"}`
+→ 201, the token DELIVERED to the server log (the dev stand-in for SMS),
+accepted by token (no email-match — address-possession binding). An
+unwired kind (e.g. `slack`) fails 400; email is always-on via the Mailer.
+
 ## Route surface
 
 - **events** (SSE, `features/events`): `GET /events` — the authenticated

@@ -8,7 +8,7 @@ only."), now joined by ruling 6 below. The 2026-07-10 gate fold's
 token-bearer semantics are SUPERSEDED (see the marked fold section); its
 mechanical findings STAND and are inherited by P3. The amended P2 (sdk/
 notify) is gated pre-execution. P1 executed before the rewrite and stands
-untouched. EXECUTING.**
+untouched. **CLOSED 2026-07-10** — P1–P4 executed; both dialect live legs green (0013 applied live); the close drive recorded (phone token delivered, accepted by token, unwired kind 400, email unchanged).**
 Executor model policy (standing): implementation `model: opus`;
 design/doc `model: fable`. Modules: no count change (35 stands — provider
 integrations are demand-gated later modules).
@@ -355,3 +355,23 @@ deny-by-absence kinds and NO plaintext hand-back; fold items 1–2
 superseded, 3–12 inherited. P1 unaffected (Address was built for
 exactly this). The amended P2 design goes through the review gate
 before execution.
+
+### 2026-07-10 — P4 EXECUTED — **MILESTONE CLOSED**
+
+Coordinator-inline (fable). Live legs: pgx conformance 4.8s (C-locale
+docker :55434 — :55432 held by an unrelated gps360 container, avoided) +
+turso 460.9s (playground, URL asserted) — migration 0013 applied live on
+both. Doc sweep: sdk/README identity row rewritten + notify row;
+ARCHITECTURE facility examples + identity parenthetical; features/README
+§5 corollary growth note; RELEASING 0013 upgrade note; auth README
+(Notifiers Config row, the Invitation-identifier-kinds section incl. the
+trust model + the invitations-only asymmetry + the response-gap note,
+Resolver wiring note); auth-cms README kinds-demo section. **Close drive
+(recorded verbatim in the session):** phone invite 201 → the console
+notifier line shows kind=phone, the address, and the token DELIVERED →
+B accepts by token 200 → members-only 200 (the member-added notice rode
+the same fork — 2 notifier lines) → slack kind (unwired) 400 → email
+invite 201 with mailer-only lines. `make check` (35) + `make guard` (11)
+green at close. Archived. Open flags to NOTES: invitation ownership
+(keep — the executor's endorsed read), securityevent's home, the
+response-side identifier_kind gap.
