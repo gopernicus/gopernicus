@@ -1853,3 +1853,55 @@ feature list remains the one manually-extended guard (the CLI prints the
 checklist; making G5 glob-driven is a small standalone item); (3) emitted
 hosts need the pre-tag `replace` block until repo-hardening phase 5 cuts
 first tags — LICENSE remains that gate.
+
+
+## 2026-07-10 — identity-resolution EXECUTED: sdk/identity Resolver + sdk/notify + kind-aware invitations
+
+The first milestone under the ratification contract (recorded the same
+session): owner-ratified direction ("generic identity resolver without
+the User struct; drop the email-only identifier constraint"), REWRITTEN
+mid-flight by owner direction to NOTIFIER-FIRST after the token-bearer
+trust-model walkthrough — the wired notifier set now DEFINES a host's
+supported identity kinds (deny-by-absence per kind), and invitation
+tokens are DELIVERED for every kind; no plaintext hand-back exists
+anywhere. Plan archived at `.claude/past/identity-resolution/`; three
+gates ran (the initial pair + a delta gate on the rewrite), every one
+caught at least one would-have-shipped major (accept is email-match; the
+token is hashed at rest; the drafted deny-by-absence predicate would
+have denied EMAIL invitations on every existing host; MailerBridge had
+no From; sendMemberAdded was a second unforked send path).
+
+Shipped: **sdk/identity** grows `Address{Kind,Value}`, `Info` (a
+projection — NO User struct in sdk, ever), fail-closed `Resolver`,
+strict `ResolveAll` (P1, `feb68fb`) · **sdk/notify** (new):
+`Notifier{Kind,Notify}` + `Console` + From-carrying `MailerBridge`; no
+Set helper (one consumer) (P2, `e57114b`) · **authentication**:
+`auth.Service` implements `identity.Resolver` (nil-guarded, machine-off
+safe); `Config.Notifiers` with loud duplicate-kind rejection; kind-aware
+invitations — supported-kind predicate (email always-on via the required
+Mailer), service-owned kind-aware normalization, the delivery fork over
+BOTH send paths, kind-conditional accept (address-possession binding for
+non-email kinds), email-keyed auto-paths filtered to email; migration
+**0013** both dialects (column + pending-index rebuild) (P3, `c8e4a7f`).
+
+Live proofs: both dialect conformance suites green with 0013 applying
+live (pgx 4.8s C-locale docker; turso 460.9s playground, URL asserted);
+the A9 email leg code-exact on an UNCHANGED host; the close drive on
+auth-cms — phone invite 201 → token VISIBLY DELIVERED by the console
+notifier → accepted by token 200 → grant live 200; slack kind (unwired)
+400; email 201 throughout.
+
+Deferred ledger: provider integrations (`integrations/notify/<tech>` —
+trigger: the first host wiring real SMS/Slack; Segovia likely) · address
+verification (enables non-email account-match binding) · authorization
+grant-notifications over this port · unifying verification/reset mail
+onto notify (the documented invitations-only asymmetry) · tenancy.
+
+Open flags for jrazmi: (1) **invitation ownership** — raised directly
+with the P3 executor; its read (endorsed): keep invitations in
+authentication (AV4 + the Granter seam already invert the coupling;
+relocation would drag Mailer/Notifiers/identity into IAM) — a move needs
+its own plan; (2) **securityevent** straddles both features — candidate
+for its own audit facility, separate decision; (3) the invitation JSON
+response doesn't surface `identifier_kind` yet (request-side only, noted
+in the auth README).
