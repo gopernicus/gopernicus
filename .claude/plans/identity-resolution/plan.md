@@ -122,6 +122,84 @@ drive one email invitation end to end (unchanged behavior), and one
 non-email-kind invitation via curl (created → listed → accepted per the
 verified accept semantics), exact codes recorded.
 
+## Review-gate fold (2026-07-10) — GOVERNS where it conflicts with the phase text above
+
+**lead-backend-engineer: SHIP-WITH-EDITS (6). architecture-steward:
+ALIGNED-WITH-EDITS (7).** The interlocking MAJORs (lead 1 + steward 1+2):
+accept is EMAIL-MATCH (the handler hard-wires the acceptor's email via
+`EmailForUser`; `invitationsvc.Accept` compares normalized identifiers —
+pre-verified, not executor homework anymore), AND the token is hashed at
+rest with `CreateResult` carrying no plaintext — so the drafted
+"created-undelivered, host delivers out-of-band" could neither deliver
+nor redeem a non-email invitation.
+
+**RESOLVED — the v1 non-email semantic is TOKEN-BEARER acceptance
+(flagged to the owner in-session at fold time):**
+
+1. For a NON-EMAIL kind, create hands the plaintext token back EXACTLY
+   ONCE — in `CreateResult` and the create API response, to the
+   authorized creator, for out-of-band delivery. The EMAIL kind keeps
+   today's mail-only path byte-for-byte (token never in a response).
+2. `Accept` becomes kind-aware: for non-email kinds the identifier-match
+   check is SKIPPED — a valid token alone claims the invitation
+   (invite-link semantics); acceptance still requires an authenticated
+   session and grants to the ACCEPTOR. For email kinds the email-match
+   binding is unchanged. The threat-surface change is documented next to
+   the kind section in the README: token possession = claim for
+   non-email kinds; the identifier is routing/bookkeeping, not an
+   enforced binding. Full address VERIFICATION remains the notifiers
+   later-plan's scope.
+3. **Email-keyed auto-paths filter to kind=email** (lead 3 / steward
+   2ii): `ResolveInvitations`, `Mine`, `userLookup`/
+   `resolvePendingInvitations` never match non-email rows — closes the
+   wrong-grant hazard where a phone/opaque value string-equals an email
+   and gets auto-accepted at login; `AutoAccept` never direct-adds for
+   non-email kinds (stated in the README).
+
+**Mechanical folds:**
+
+4. The migration is NOT merely additive (lead 2 / steward 2iii):
+   **0013** in BOTH dialects (verified next free number) = `ADD COLUMN
+   identifier_kind TEXT NOT NULL DEFAULT 'email'` PLUS drop/recreate the
+   pending-tuple partial unique index over `(resource_type, resource_id,
+   identifier_kind, identifier, relation) WHERE status='pending'`
+   (mandatory — the cross-kind-coexistence storetest case cannot pass
+   otherwise; safe: all backfilled rows are kind=email). Update the
+   storetest reference collision scan + both stores'
+   create/columns/scan + `mustNewInvitation`.
+5. Normalization stays IN THE SERVICE (`normalizeIdentifier` grows a
+   kind parameter; the entity keeps its store-verbatim pin — steward 7):
+   email → trim+lowercase (unchanged); every other kind → trim only.
+6. Kind vocabulary unified (steward 5): `IdentifierKind` values ARE the
+   `sdk/identity` Address-kind vocabulary; the entity default and the
+   migration's `DEFAULT 'email'` literal are `identity.KindEmail`'s
+   value.
+7. Resolver hardening (lead 4): `Resolve` on a host with the machine
+   subsystem OFF (nil `ServiceAccounts` repo) returns the errs
+   not-found class — nil-guarded, never a panic.
+8. `ResolveAll` pinned (lead 5 / steward 6): `([]Info, error)`,
+   positionally aligned, STRICT — first error aborts (consistent with
+   fail-closed); a lenient/partial batch is doc-named as part of the
+   future batch-upgrade seam.
+9. P1 also REWRITES sdk/identity's now-false doc pins ("vocabulary
+   only", "nothing to implement" — steward 4a) in the same commit as
+   the new code.
+10. P2's file list gains `examples/auth-cms/internal/authmem` (its
+    conformance leg runs the shared storetest — the new cases fail
+    there until authmem's invitation store goes kind-aware); the
+    feature's own Resolver tests use IN-PACKAGE fakes, never authmem
+    (module boundary — steward 3).
+11. P3's sweep gains `features/README.md` §5's corollary framing
+    (display/contact projection = `identity.Resolver`, host-wired;
+    domain-shaped needs stay C2 ports) and ARCHITECTURE.md's
+    "request-identity vocabulary" parenthetical (steward 4b/4c).
+12. P2 resized **M–L** (the accept branch + handler pass-through +
+    authmem land on top of the drafted scope). Real-interaction close
+    updated: the non-email drive is created (token in the response,
+    ONCE) → listed via `ListByResource` (NOT `Mine` — email-keyed) →
+    ACCEPTED BY TOKEN → grant verified live; the email leg unchanged
+    (A9 verbatim).
+
 ## Execution log
 
 (append dated entries here)
