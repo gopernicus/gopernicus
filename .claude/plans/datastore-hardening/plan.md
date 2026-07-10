@@ -465,3 +465,31 @@ inside a wrapped DRIVER error is not scrubbed (hosts use
 `Config.Redacted()`); a shared concern for future tracing work, named
 not fixed. Both connectors + `make check`/`make guard` green; standing
 check 200/port freed. Committed CI-green. **Next: P5.**
+
+### 2026-07-09 — P5 CLOSED (turso struct-scan + the full Q1 sweep)
+
+Connector: `types.go` (`turso.Time`/`turso.NullTime`/`turso.Bool` —
+scan-side Scanner wrappers byte-identical to the ParseTime/ParseNullTime
+semantics), `scan.go` (`ScanStruct[T]`, STRICT-only: unmatched
+column/field, untagged exported, NULL-into-plain all loud; `db:"-"` +
+unexported skipped), `ListQuery.Scan` optional (nil ⇒ struct-scan).
+Strict matrix + wrapper round-trips + nil-Scan List + the
+composite-store-row shape all proven against in-memory SQLite at the
+connector. **The full sweep:** ~23 row structs authored across the five
+turso stores; ALL hand-scan callbacks/helpers deleted (per-store table in
+the executor report); every ListQuery.Scan → nil-Scan + `crud.MapPage`;
+single-row reads through a per-store `queryOne[T]` (pgx-mirror; routes
+QueryRow-shaped reads through Query so Columns() feeds the strict scan —
+same SQL/semantics, each RETURNING site matches ≤1 row, job Claim's
+SQLITE_BUSY retry preserved). Scalar scans + pgx-mirrored inline sites
+deliberately left (logged). **Findings:** (1) `turso.NullTime` name
+collision with the write-side helper — write helpers renamed
+`FormatNullTime`/`FormatNullTimePtr` (pairs with FormatTime; pre-tag, no
+version obligation); (2) no store-level hermetic scan path exists
+(structural — stores carry no sqlite driver), so the in-memory proof
+lives at the connector and the live conformance suites at milestone
+close are the store-level net, as the plan states. Verify: connector +
+all five stores build/test/vet green (incl. -tags=integration vet),
+`make check` + `make guard` green, gofmt clean — coordinator re-verified
+all builds independently (editor diagnostics were stale mid-sweep
+state). Committed CI-green. **Next: P6.**

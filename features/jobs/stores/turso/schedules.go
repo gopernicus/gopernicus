@@ -13,7 +13,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/errs"
 )
 
-// scheduleColumns is the job_schedules projection, in scanSchedule's order.
+// scheduleColumns is the job_schedules projection, in scheduleRow's field order.
 const scheduleColumns = "schedule_id, name, kind, cron_expr, every_secs, payload, enabled, next_run_at, last_run_at, last_job_id, created_at, updated_at"
 
 // Compile-time seam: the Schedules store fills the exact schedule.Repository port.
@@ -25,6 +25,41 @@ var _ schedule.Repository = (*Schedules)(nil)
 // slot) pair exactly once with no leader election.
 type Schedules struct {
 	db *tursodb.DB
+}
+
+// scheduleRow is the store-local, db-tagged projection of a job_schedules row
+// ScanStruct scans into; toDomain maps it to the domain entity. The nullable
+// cron_expr / every_secs / last_job_id columns scan into sql.Null* and last_run_at
+// into turso.NullTime; enabled is the 0/1 flag read via turso.Bool.
+type scheduleRow struct {
+	ID        string           `db:"schedule_id"`
+	Name      string           `db:"name"`
+	Kind      string           `db:"kind"`
+	CronExpr  sql.NullString   `db:"cron_expr"`
+	EverySecs sql.NullInt64    `db:"every_secs"`
+	Payload   []byte           `db:"payload"`
+	Enabled   tursodb.Bool     `db:"enabled"`
+	NextRunAt tursodb.Time     `db:"next_run_at"`
+	LastRunAt tursodb.NullTime `db:"last_run_at"`
+	LastJobID sql.NullString   `db:"last_job_id"`
+	CreatedAt tursodb.Time     `db:"created_at"`
+	UpdatedAt tursodb.Time     `db:"updated_at"`
+}
+
+func (r scheduleRow) toDomain() schedule.Schedule {
+	return schedule.Schedule{
+		ID:        r.ID,
+		Name:      r.Name,
+		Kind:      r.Kind,
+		Spec:      schedule.Spec{Cron: r.CronExpr.String, Every: time.Duration(r.EverySecs.Int64) * time.Second},
+		Payload:   json.RawMessage(r.Payload),
+		Enabled:   bool(r.Enabled),
+		NextRunAt: r.NextRunAt.Time,
+		LastRunAt: r.LastRunAt.TimePtr(),
+		LastJobID: r.LastJobID.String,
+		CreatedAt: r.CreatedAt.Time,
+		UpdatedAt: r.UpdatedAt.Time,
+	}
 }
 
 // NewScheduleStore returns a Schedules store backed by db.
@@ -42,9 +77,10 @@ func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Ti
 	err := retryBusy(ctx, func() error {
 		return s.db.InTx(ctx, func(tx *tursodb.Tx) error {
 			const sel = `SELECT ` + scheduleColumns + ` FROM job_schedules WHERE name = ?`
-			existing, err := scanSchedule(tx.QueryRow(ctx, sel, in.Name))
+			row, err := queryOne[scheduleRow](ctx, tx, sel, in.Name)
 			switch {
 			case err == nil:
+				existing := row.toDomain()
 				specChanged := existing.Spec != in.Spec
 				existing.Kind = in.Kind
 				existing.Spec = in.Spec
@@ -109,11 +145,11 @@ func (s *Schedules) ListDue(ctx context.Context, now time.Time, limit int) ([]sc
 
 	var due []schedule.Schedule
 	for rows.Next() {
-		sch, err := scanSchedule(rows)
+		row, err := tursodb.ScanStruct[scheduleRow](rows)
 		if err != nil {
 			return nil, err
 		}
-		due = append(due, sch)
+		due = append(due, row.toDomain())
 	}
 	return due, tursodb.MapError(rows.Err())
 }
@@ -147,22 +183,29 @@ func (s *Schedules) SetLastJob(ctx context.Context, id, jobID string, now time.T
 // Get returns the schedule with the given id, or errs.ErrNotFound.
 func (s *Schedules) Get(ctx context.Context, id string) (schedule.Schedule, error) {
 	const q = `SELECT ` + scheduleColumns + ` FROM job_schedules WHERE schedule_id = ?`
-	return scanSchedule(s.db.QueryRow(ctx, q, id))
+	row, err := queryOne[scheduleRow](ctx, s.db, q, id)
+	if err != nil {
+		return schedule.Schedule{}, err
+	}
+	return row.toDomain(), nil
 }
 
 // List returns a cursor- or offset-paginated page of schedules, in the resolved
 // order (default created_at DESC, schedule_id DESC).
 func (s *Schedules) List(ctx context.Context, req crud.ListRequest) (crud.Page[schedule.Schedule], error) {
-	lq := tursodb.ListQuery[schedule.Schedule]{
+	lq := tursodb.ListQuery[scheduleRow]{
 		BaseSQL:      `SELECT ` + scheduleColumns + ` FROM job_schedules`,
 		OrderFields:  schedule.OrderFields,
 		DefaultOrder: schedule.DefaultOrder,
 		PK:           "schedule_id",
-		Scan:         scanSchedule,
-		OrderValueOf: func(sch schedule.Schedule, _ string) any { return sch.CreatedAt },
-		PKOf:         func(sch schedule.Schedule) string { return sch.ID },
+		OrderValueOf: func(r scheduleRow, _ string) any { return r.CreatedAt.Time },
+		PKOf:         func(r scheduleRow) string { return r.ID },
 	}
-	return tursodb.List(ctx, s.db, lq, req)
+	page, err := tursodb.List(ctx, s.db, lq, req)
+	if err != nil {
+		return crud.Page[schedule.Schedule]{}, err
+	}
+	return crud.MapPage(page, scheduleRow.toDomain), nil
 }
 
 // SetEnabled toggles a schedule's enabled flag. A missing id yields
@@ -203,48 +246,4 @@ func specColumns(spec schedule.Spec) (cron any, every any) {
 		return nil, int64(spec.Every / time.Second)
 	}
 	return nil, nil
-}
-
-// scanSchedule scans one job_schedules row, mapping sql.ErrNoRows to
-// errs.ErrNotFound.
-func scanSchedule(sc scanner) (schedule.Schedule, error) {
-	var (
-		sch                             schedule.Schedule
-		cronExpr                        sql.NullString
-		everySecs                       sql.NullInt64
-		payload                         string
-		enabled                         int
-		nextRunAt, createdAt, updatedAt string
-		lastRunAt, lastJobID            sql.NullString
-	)
-	err := sc.Scan(
-		&sch.ID, &sch.Name, &sch.Kind, &cronExpr, &everySecs, &payload, &enabled,
-		&nextRunAt, &lastRunAt, &lastJobID, &createdAt, &updatedAt,
-	)
-	if err != nil {
-		return schedule.Schedule{}, tursodb.MapError(err)
-	}
-
-	sch.Spec = schedule.Spec{Cron: cronExpr.String, Every: time.Duration(everySecs.Int64) * time.Second}
-	sch.Payload = json.RawMessage(payload)
-	sch.Enabled = enabled != 0
-	sch.LastJobID = lastJobID.String
-
-	if sch.NextRunAt, err = tursodb.ParseTime(nextRunAt); err != nil {
-		return schedule.Schedule{}, err
-	}
-	if sch.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
-		return schedule.Schedule{}, err
-	}
-	if sch.UpdatedAt, err = tursodb.ParseTime(updatedAt); err != nil {
-		return schedule.Schedule{}, err
-	}
-	if lastRunAt.Valid && lastRunAt.String != "" {
-		t, err := tursodb.ParseTime(lastRunAt.String)
-		if err != nil {
-			return schedule.Schedule{}, err
-		}
-		sch.LastRunAt = &t
-	}
-	return sch, nil
 }

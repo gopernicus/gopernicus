@@ -88,12 +88,12 @@ func TestParseTimeInvalid(t *testing.T) {
 // TestNullTime is the value-typed absent-model (auth's contract): a zero time
 // encodes as NULL, any other as the fixed-width string.
 func TestNullTime(t *testing.T) {
-	if v := NullTime(time.Time{}); v != nil {
-		t.Errorf("NullTime(zero) = %#v, want nil (NULL)", v)
+	if v := FormatNullTime(time.Time{}); v != nil {
+		t.Errorf("FormatNullTime(zero) = %#v, want nil (NULL)", v)
 	}
 	set := time.Date(2026, 7, 7, 12, 34, 56, 100000000, time.UTC)
-	if v := NullTime(set); v != "2026-07-07T12:34:56.100000000Z" {
-		t.Errorf("NullTime(set) = %#v, want fixed-width string", v)
+	if v := FormatNullTime(set); v != "2026-07-07T12:34:56.100000000Z" {
+		t.Errorf("FormatNullTime(set) = %#v, want fixed-width string", v)
 	}
 }
 
@@ -101,12 +101,12 @@ func TestNullTime(t *testing.T) {
 // pointer encodes as NULL, any set value as the fixed-width string. This is the
 // divergence the D1 audit flagged — NullTime and NullTimePtr must NOT collapse.
 func TestNullTimePtr(t *testing.T) {
-	if v := NullTimePtr(nil); v != nil {
-		t.Errorf("NullTimePtr(nil) = %#v, want nil (NULL)", v)
+	if v := FormatNullTimePtr(nil); v != nil {
+		t.Errorf("FormatNullTimePtr(nil) = %#v, want nil (NULL)", v)
 	}
 	set := time.Date(2026, 7, 7, 12, 34, 56, 100000000, time.UTC)
-	if v := NullTimePtr(&set); v != "2026-07-07T12:34:56.100000000Z" {
-		t.Errorf("NullTimePtr(set) = %#v, want fixed-width string", v)
+	if v := FormatNullTimePtr(&set); v != "2026-07-07T12:34:56.100000000Z" {
+		t.Errorf("FormatNullTimePtr(set) = %#v, want fixed-width string", v)
 	}
 }
 
@@ -115,13 +115,13 @@ func TestNullTimePtr(t *testing.T) {
 // yield NULL, and a non-absent value formats identically through both — proving
 // they share one wire encoding while keeping distinct absent-models.
 func TestNullTimeVsNullTimePtrParity(t *testing.T) {
-	if NullTime(time.Time{}) != nil || NullTimePtr(nil) != nil {
+	if FormatNullTime(time.Time{}) != nil || FormatNullTimePtr(nil) != nil {
 		t.Fatal("both absent-models must encode absence as NULL")
 	}
 	set := time.Date(2026, 7, 7, 12, 34, 56, 100000000, time.UTC)
-	if NullTime(set) != NullTimePtr(&set) {
-		t.Errorf("NullTime(set) = %#v, NullTimePtr(&set) = %#v, want identical wire value",
-			NullTime(set), NullTimePtr(&set))
+	if FormatNullTime(set) != FormatNullTimePtr(&set) {
+		t.Errorf("FormatNullTime(set) = %#v, FormatNullTimePtr(&set) = %#v, want identical wire value",
+			FormatNullTime(set), FormatNullTimePtr(&set))
 	}
 }
 
@@ -161,9 +161,9 @@ func TestParseNullTime(t *testing.T) {
 func TestParseNullTimeRoundTripFromNullTime(t *testing.T) {
 	set := time.Date(2026, 7, 7, 12, 34, 56, 123456789, time.UTC)
 
-	enc, ok := NullTime(set).(string)
+	enc, ok := FormatNullTime(set).(string)
 	if !ok {
-		t.Fatalf("NullTime(set) did not encode to string: %#v", NullTime(set))
+		t.Fatalf("FormatNullTime(set) did not encode to string: %#v", FormatNullTime(set))
 	}
 	got, err := ParseNullTime(sql.NullString{Valid: true, String: enc})
 	if err != nil {
@@ -173,9 +173,9 @@ func TestParseNullTimeRoundTripFromNullTime(t *testing.T) {
 		t.Errorf("round-trip = %v, want %v", got, set)
 	}
 
-	// NullTime(zero) → NULL → ParseNullTime → zero.
-	if NullTime(time.Time{}) != nil {
-		t.Fatal("NullTime(zero) must be NULL")
+	// FormatNullTime(zero) → NULL → ParseNullTime → zero.
+	if FormatNullTime(time.Time{}) != nil {
+		t.Fatal("FormatNullTime(zero) must be NULL")
 	}
 	back, err := ParseNullTime(sql.NullString{Valid: false})
 	if err != nil {

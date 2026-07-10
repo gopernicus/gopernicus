@@ -22,6 +22,29 @@ func NewTermStore(db *tursodb.DB) *TermStore {
 
 const termColumns = "id, kind, slug, name, parent_id, created_at, updated_at"
 
+// termRow is the store-local, db-tagged projection of a terms row.
+type termRow struct {
+	ID        string       `db:"id"`
+	Kind      string       `db:"kind"`
+	Slug      string       `db:"slug"`
+	Name      string       `db:"name"`
+	ParentID  string       `db:"parent_id"`
+	CreatedAt tursodb.Time `db:"created_at"`
+	UpdatedAt tursodb.Time `db:"updated_at"`
+}
+
+func (r termRow) toDomain() taxonomy.Term {
+	return taxonomy.Term{
+		ID:        r.ID,
+		Kind:      taxonomy.Kind(r.Kind),
+		Slug:      r.Slug,
+		Name:      r.Name,
+		ParentID:  r.ParentID,
+		CreatedAt: r.CreatedAt.Time,
+		UpdatedAt: r.UpdatedAt.Time,
+	}
+}
+
 // Create persists a new term.
 func (s *TermStore) Create(ctx context.Context, t taxonomy.Term) (taxonomy.Term, error) {
 	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
@@ -65,13 +88,21 @@ func (s *TermStore) Update(ctx context.Context, id string, t taxonomy.Term) (tax
 // Get returns the term with the given id, or crud.ErrNotFound.
 func (s *TermStore) Get(ctx context.Context, id string) (taxonomy.Term, error) {
 	const q = `SELECT ` + termColumns + ` FROM terms WHERE id = ?`
-	return scanTerm(s.db.QueryRow(ctx, q, id))
+	row, err := queryOne[termRow](ctx, s.db, q, id)
+	if err != nil {
+		return taxonomy.Term{}, err
+	}
+	return row.toDomain(), nil
 }
 
 // GetBySlug returns the term with the given kind+slug, or crud.ErrNotFound.
 func (s *TermStore) GetBySlug(ctx context.Context, kind taxonomy.Kind, slug string) (taxonomy.Term, error) {
 	const q = `SELECT ` + termColumns + ` FROM terms WHERE kind = ? AND slug = ?`
-	return scanTerm(s.db.QueryRow(ctx, q, string(kind), slug))
+	row, err := queryOne[termRow](ctx, s.db, q, string(kind), slug)
+	if err != nil {
+		return taxonomy.Term{}, err
+	}
+	return row.toDomain(), nil
 }
 
 // ListByKind returns all terms of a kind, ordered by name.
@@ -85,11 +116,11 @@ func (s *TermStore) ListByKind(ctx context.Context, kind taxonomy.Kind) ([]taxon
 
 	var terms []taxonomy.Term
 	for rows.Next() {
-		t, err := scanTerm(rows)
+		row, err := tursodb.ScanStruct[termRow](rows)
 		if err != nil {
 			return nil, err
 		}
-		terms = append(terms, t)
+		terms = append(terms, row.toDomain())
 	}
 	if err := rows.Err(); err != nil {
 		return nil, tursodb.MapError(err)
@@ -106,24 +137,4 @@ func (s *TermStore) Delete(ctx context.Context, id string) error {
 		_, err := tx.Exec(ctx, "DELETE FROM terms WHERE id = ?", id)
 		return err
 	})
-}
-
-func scanTerm(sc scanner) (taxonomy.Term, error) {
-	var (
-		t                    taxonomy.Term
-		kind                 string
-		createdAt, updatedAt string
-	)
-	err := sc.Scan(&t.ID, &kind, &t.Slug, &t.Name, &t.ParentID, &createdAt, &updatedAt)
-	if err != nil {
-		return taxonomy.Term{}, tursodb.MapError(err)
-	}
-	t.Kind = taxonomy.Kind(kind)
-	if t.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
-		return taxonomy.Term{}, err
-	}
-	if t.UpdatedAt, err = tursodb.ParseTime(updatedAt); err != nil {
-		return taxonomy.Term{}, err
-	}
-	return t, nil
 }

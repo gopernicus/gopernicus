@@ -24,6 +24,23 @@ func NewCodeStore(db *tursodb.DB) *CodeStore {
 
 const codeColumns = "code, user_id, created_at, expires_at"
 
+// codeRow is the store-local, db-tagged projection of a verification_codes row.
+type codeRow struct {
+	Code      string       `db:"code"`
+	UserID    string       `db:"user_id"`
+	CreatedAt tursodb.Time `db:"created_at"`
+	ExpiresAt tursodb.Time `db:"expires_at"`
+}
+
+func (r codeRow) toDomain() verification.Code {
+	return verification.Code{
+		Code:      r.Code,
+		UserID:    r.UserID,
+		CreatedAt: r.CreatedAt.Time,
+		ExpiresAt: r.ExpiresAt.Time,
+	}
+}
+
 // Create persists a new verification code.
 func (s *CodeStore) Create(ctx context.Context, c verification.Code) (verification.Code, error) {
 	const q = `INSERT INTO verification_codes (` + codeColumns + `) VALUES (?, ?, ?, ?)`
@@ -37,20 +54,11 @@ func (s *CodeStore) Create(ctx context.Context, c verification.Code) (verificati
 // Get returns the live code: unknown → errs.ErrNotFound, expired → errs.ErrExpired.
 func (s *CodeStore) Get(ctx context.Context, code string) (verification.Code, error) {
 	const q = `SELECT ` + codeColumns + ` FROM verification_codes WHERE code = ?`
-	var (
-		c                    verification.Code
-		createdAt, expiresAt string
-	)
-	if err := s.db.QueryRow(ctx, q, code).Scan(&c.Code, &c.UserID, &createdAt, &expiresAt); err != nil {
-		return verification.Code{}, tursodb.MapError(err)
-	}
-	var err error
-	if c.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
+	row, err := queryOne[codeRow](ctx, s.db, q, code)
+	if err != nil {
 		return verification.Code{}, err
 	}
-	if c.ExpiresAt, err = tursodb.ParseTime(expiresAt); err != nil {
-		return verification.Code{}, err
-	}
+	c := row.toDomain()
 	if c.Expired(time.Now()) {
 		return verification.Code{}, errs.ErrExpired
 	}
@@ -84,6 +92,23 @@ func NewTokenStore(db *tursodb.DB) *TokenStore {
 
 const tokenColumns = "token, user_id, created_at, expires_at"
 
+// tokenRow is the store-local, db-tagged projection of a verification_tokens row.
+type tokenRow struct {
+	Token     string       `db:"token"`
+	UserID    string       `db:"user_id"`
+	CreatedAt tursodb.Time `db:"created_at"`
+	ExpiresAt tursodb.Time `db:"expires_at"`
+}
+
+func (r tokenRow) toDomain() verification.Token {
+	return verification.Token{
+		Token:     r.Token,
+		UserID:    r.UserID,
+		CreatedAt: r.CreatedAt.Time,
+		ExpiresAt: r.ExpiresAt.Time,
+	}
+}
+
 // Create persists a new reset token.
 func (s *TokenStore) Create(ctx context.Context, t verification.Token) (verification.Token, error) {
 	const q = `INSERT INTO verification_tokens (` + tokenColumns + `) VALUES (?, ?, ?, ?)`
@@ -97,20 +122,11 @@ func (s *TokenStore) Create(ctx context.Context, t verification.Token) (verifica
 // Get returns the live token: unknown → errs.ErrNotFound, expired → errs.ErrExpired.
 func (s *TokenStore) Get(ctx context.Context, token string) (verification.Token, error) {
 	const q = `SELECT ` + tokenColumns + ` FROM verification_tokens WHERE token = ?`
-	var (
-		t                    verification.Token
-		createdAt, expiresAt string
-	)
-	if err := s.db.QueryRow(ctx, q, token).Scan(&t.Token, &t.UserID, &createdAt, &expiresAt); err != nil {
-		return verification.Token{}, tursodb.MapError(err)
-	}
-	var err error
-	if t.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
+	row, err := queryOne[tokenRow](ctx, s.db, q, token)
+	if err != nil {
 		return verification.Token{}, err
 	}
-	if t.ExpiresAt, err = tursodb.ParseTime(expiresAt); err != nil {
-		return verification.Token{}, err
-	}
+	t := row.toDomain()
 	if t.Expired(time.Now()) {
 		return verification.Token{}, errs.ErrExpired
 	}

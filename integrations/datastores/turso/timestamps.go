@@ -39,23 +39,23 @@ func ParseNullTime(ns sql.NullString) (time.Time, error) {
 	return ParseTime(ns.String)
 }
 
-// NullTime renders a possibly-zero timestamp for storage: a zero time stores as
-// NULL (never expires / not set), any other value as a fixed-width TEXT
+// FormatNullTime renders a possibly-zero timestamp for storage: a zero time stores
+// as NULL (never expires / not set), any other value as a fixed-width TEXT
 // timestamp. It is the value-typed absent-model — the caller's zero time.Time is
-// the "not set" sentinel. Use NullTimePtr when absence is modeled as a nil
-// pointer instead.
-func NullTime(t time.Time) any {
+// the "not set" sentinel. Use FormatNullTimePtr when absence is modeled as a nil
+// pointer instead. (The read twin is the NullTime Scanner type.)
+func FormatNullTime(t time.Time) any {
 	if t.IsZero() {
 		return nil
 	}
 	return FormatTime(t)
 }
 
-// NullTimePtr renders a possibly-nil timestamp for storage: nil stores as NULL,
-// any set value as a fixed-width TEXT timestamp. It is the pointer-typed
-// absent-model — a nil *time.Time is the "not set" sentinel. Use NullTime when
-// absence is modeled as a zero value.Time instead.
-func NullTimePtr(t *time.Time) any {
+// FormatNullTimePtr renders a possibly-nil timestamp for storage: nil stores as
+// NULL, any set value as a fixed-width TEXT timestamp. It is the pointer-typed
+// absent-model — a nil *time.Time is the "not set" sentinel. Use FormatNullTime
+// when absence is modeled as a zero value.Time instead.
+func FormatNullTimePtr(t *time.Time) any {
 	if t == nil {
 		return nil
 	}

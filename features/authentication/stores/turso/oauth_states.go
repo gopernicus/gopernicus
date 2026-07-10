@@ -26,6 +26,26 @@ func NewOAuthStateStore(db *tursodb.DB) *OAuthStateStore {
 
 const oauthStateColumns = "token, provider, purpose, payload, expires_at"
 
+// oauthStateRow is the store-local, db-tagged projection of an oauth_states row.
+// payload is TEXT read back byte-for-byte.
+type oauthStateRow struct {
+	Token     string       `db:"token"`
+	Provider  string       `db:"provider"`
+	Purpose   string       `db:"purpose"`
+	Payload   []byte       `db:"payload"`
+	ExpiresAt tursodb.Time `db:"expires_at"`
+}
+
+func (r oauthStateRow) toDomain() oauthstate.State {
+	return oauthstate.State{
+		Token:     r.Token,
+		Provider:  r.Provider,
+		Purpose:   r.Purpose,
+		Payload:   r.Payload,
+		ExpiresAt: r.ExpiresAt.Time,
+	}
+}
+
 // Create persists a new flow state.
 func (s *OAuthStateStore) Create(ctx context.Context, st oauthstate.State) (oauthstate.State, error) {
 	const q = `INSERT INTO oauth_states (` + oauthStateColumns + `) VALUES (?, ?, ?, ?, ?)`
@@ -41,31 +61,13 @@ func (s *OAuthStateStore) Create(ctx context.Context, st oauthstate.State) (oaut
 // expired → errs.ErrExpired (row already gone); live → the State.
 func (s *OAuthStateStore) Consume(ctx context.Context, token string) (oauthstate.State, error) {
 	const q = `DELETE FROM oauth_states WHERE token = ? RETURNING ` + oauthStateColumns
-	st, err := scanOAuthState(s.db.QueryRow(ctx, q, token))
+	row, err := queryOne[oauthStateRow](ctx, s.db, q, token)
 	if err != nil {
 		return oauthstate.State{}, err
 	}
+	st := row.toDomain()
 	if st.Expired(time.Now()) {
 		return oauthstate.State{}, errs.ErrExpired
-	}
-	return st, nil
-}
-
-// scanOAuthState scans one oauth_states row, mapping sql.ErrNoRows to
-// errs.ErrNotFound via the connector's MapError.
-func scanOAuthState(sc scanner) (oauthstate.State, error) {
-	var (
-		st        oauthstate.State
-		payload   string
-		expiresAt string
-	)
-	if err := sc.Scan(&st.Token, &st.Provider, &st.Purpose, &payload, &expiresAt); err != nil {
-		return oauthstate.State{}, tursodb.MapError(err)
-	}
-	st.Payload = []byte(payload)
-	var err error
-	if st.ExpiresAt, err = tursodb.ParseTime(expiresAt); err != nil {
-		return oauthstate.State{}, err
 	}
 	return st, nil
 }

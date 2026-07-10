@@ -39,6 +39,44 @@ func newRelationshipStore(db *tursodb.DB) *relationshipStore {
 
 var _ relationship.Storer = (*relationshipStore)(nil)
 
+// subjectRelationshipRow is the db-tagged projection of a ListRelationshipsBySubject row.
+type subjectRelationshipRow struct {
+	ID           string       `db:"relationship_id"`
+	ResourceType string       `db:"resource_type"`
+	ResourceID   string       `db:"resource_id"`
+	Relation     string       `db:"relation"`
+	CreatedAt    tursodb.Time `db:"created_at"`
+}
+
+func (r subjectRelationshipRow) toDomain() relationship.SubjectRelationship {
+	return relationship.SubjectRelationship{
+		ID:           r.ID,
+		ResourceType: r.ResourceType,
+		ResourceID:   r.ResourceID,
+		Relation:     r.Relation,
+		CreatedAt:    r.CreatedAt.Time,
+	}
+}
+
+// resourceRelationshipRow is the db-tagged projection of a ListRelationshipsByResource row.
+type resourceRelationshipRow struct {
+	ID          string       `db:"relationship_id"`
+	SubjectType string       `db:"subject_type"`
+	SubjectID   string       `db:"subject_id"`
+	Relation    string       `db:"relation"`
+	CreatedAt   tursodb.Time `db:"created_at"`
+}
+
+func (r resourceRelationshipRow) toDomain() relationship.ResourceRelationship {
+	return relationship.ResourceRelationship{
+		ID:          r.ID,
+		SubjectType: r.SubjectType,
+		SubjectID:   r.SubjectID,
+		Relation:    r.Relation,
+		CreatedAt:   r.CreatedAt.Time,
+	}
+}
+
 // CheckRelationWithGroupExpansion reports whether the subject — or any group it
 // transitively belongs to — holds the relation on the resource (unbounded,
 // cycle-safe via the reachable CTE).
@@ -224,17 +262,20 @@ func (s *relationshipStore) ListRelationshipsBySubject(ctx context.Context, subj
 		where += " AND relation = ?"
 		args = append(args, *filter.Relation)
 	}
-	q := tursodb.ListQuery[relationship.SubjectRelationship]{
+	q := tursodb.ListQuery[subjectRelationshipRow]{
 		BaseSQL:      `SELECT relationship_id, resource_type, resource_id, relation, created_at FROM iam_relationships ` + where,
 		Args:         args,
 		OrderFields:  relationship.OrderFields,
 		DefaultOrder: relationship.DefaultOrder,
 		PK:           "relationship_id",
-		Scan:         scanSubjectRelationship,
-		OrderValueOf: func(r relationship.SubjectRelationship, _ string) any { return r.CreatedAt },
-		PKOf:         func(r relationship.SubjectRelationship) string { return r.ID },
+		OrderValueOf: func(r subjectRelationshipRow, _ string) any { return r.CreatedAt.Time },
+		PKOf:         func(r subjectRelationshipRow) string { return r.ID },
 	}
-	return tursodb.List(ctx, s.db, q, req)
+	page, err := tursodb.List(ctx, s.db, q, req)
+	if err != nil {
+		return crud.Page[relationship.SubjectRelationship]{}, err
+	}
+	return crud.MapPage(page, subjectRelationshipRow.toDomain), nil
 }
 
 // ListRelationshipsByResource pages the subjects related to a resource (created_at
@@ -250,17 +291,20 @@ func (s *relationshipStore) ListRelationshipsByResource(ctx context.Context, res
 		where += " AND relation = ?"
 		args = append(args, *filter.Relation)
 	}
-	q := tursodb.ListQuery[relationship.ResourceRelationship]{
+	q := tursodb.ListQuery[resourceRelationshipRow]{
 		BaseSQL:      `SELECT relationship_id, subject_type, subject_id, relation, created_at FROM iam_relationships ` + where,
 		Args:         args,
 		OrderFields:  relationship.OrderFields,
 		DefaultOrder: relationship.DefaultOrder,
 		PK:           "relationship_id",
-		Scan:         scanResourceRelationship,
-		OrderValueOf: func(r relationship.ResourceRelationship, _ string) any { return r.CreatedAt },
-		PKOf:         func(r relationship.ResourceRelationship) string { return r.ID },
+		OrderValueOf: func(r resourceRelationshipRow, _ string) any { return r.CreatedAt.Time },
+		PKOf:         func(r resourceRelationshipRow) string { return r.ID },
 	}
-	return tursodb.List(ctx, s.db, q, req)
+	page, err := tursodb.List(ctx, s.db, q, req)
+	if err != nil {
+		return crud.Page[relationship.ResourceRelationship]{}, err
+	}
+	return crud.MapPage(page, resourceRelationshipRow.toDomain), nil
 }
 
 // LookupResourceIDs returns the distinct resource IDs (sorted) where the subject
@@ -323,40 +367,6 @@ func (s *relationshipStore) LookupDescendantResourceIDs(ctx context.Context, res
 )
 SELECT DISTINCT rid FROM descendants ORDER BY rid`
 	return queryStrings(ctx, s.db, query, args...)
-}
-
-// scanSubjectRelationship scans one ListRelationshipsBySubject projection row.
-func scanSubjectRelationship(sc scanner) (relationship.SubjectRelationship, error) {
-	var (
-		r         relationship.SubjectRelationship
-		createdAt string
-	)
-	if err := sc.Scan(&r.ID, &r.ResourceType, &r.ResourceID, &r.Relation, &createdAt); err != nil {
-		return relationship.SubjectRelationship{}, tursodb.MapError(err)
-	}
-	t, err := tursodb.ParseTime(createdAt)
-	if err != nil {
-		return relationship.SubjectRelationship{}, err
-	}
-	r.CreatedAt = t
-	return r, nil
-}
-
-// scanResourceRelationship scans one ListRelationshipsByResource projection row.
-func scanResourceRelationship(sc scanner) (relationship.ResourceRelationship, error) {
-	var (
-		r         relationship.ResourceRelationship
-		createdAt string
-	)
-	if err := sc.Scan(&r.ID, &r.SubjectType, &r.SubjectID, &r.Relation, &createdAt); err != nil {
-		return relationship.ResourceRelationship{}, tursodb.MapError(err)
-	}
-	t, err := tursodb.ParseTime(createdAt)
-	if err != nil {
-		return relationship.ResourceRelationship{}, err
-	}
-	r.CreatedAt = t
-	return r, nil
 }
 
 // subjectRelationValue renders an optional userset relation for storage: nil

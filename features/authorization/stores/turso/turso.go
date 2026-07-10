@@ -57,9 +57,6 @@ var MigrationsFS embed.FS
 // MigrationsDir is the directory within MigrationsFS holding the .sql files.
 const MigrationsDir = "migrations"
 
-// scanner abstracts *sql.Row and *sql.Rows for shared scan helpers.
-type scanner = tursodb.Scanner
-
 // Repositories returns the authorization repository set backed by db — BOTH
 // kinds wired — AFTER verifying the iam_relationships AND iam_roles tables exist
 // (the boot-time probe). It errors with errs.ErrNotFound naming the specific

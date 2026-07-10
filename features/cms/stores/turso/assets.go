@@ -21,6 +21,29 @@ func NewAssetStore(db *tursodb.DB) *AssetStore {
 
 const assetColumns = "id, filename, content_type, size, storage_key, alt, created_at"
 
+// assetRow is the store-local, db-tagged projection of an assets row.
+type assetRow struct {
+	ID          string       `db:"id"`
+	Filename    string       `db:"filename"`
+	ContentType string       `db:"content_type"`
+	Size        int64        `db:"size"`
+	StorageKey  string       `db:"storage_key"`
+	Alt         string       `db:"alt"`
+	CreatedAt   tursodb.Time `db:"created_at"`
+}
+
+func (r assetRow) toDomain() media.Asset {
+	return media.Asset{
+		ID:          r.ID,
+		Filename:    r.Filename,
+		ContentType: r.ContentType,
+		Size:        r.Size,
+		StorageKey:  r.StorageKey,
+		Alt:         r.Alt,
+		CreatedAt:   r.CreatedAt.Time,
+	}
+}
+
 // Create persists asset metadata.
 func (s *AssetStore) Create(ctx context.Context, a media.Asset) (media.Asset, error) {
 	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
@@ -50,7 +73,11 @@ func (s *AssetStore) Create(ctx context.Context, a media.Asset) (media.Asset, er
 // Get returns the asset with the given id, or crud.ErrNotFound.
 func (s *AssetStore) Get(ctx context.Context, id string) (media.Asset, error) {
 	const q = `SELECT ` + assetColumns + ` FROM assets WHERE id = ?`
-	return scanAsset(s.db.QueryRow(ctx, q, id))
+	row, err := queryOne[assetRow](ctx, s.db, q, id)
+	if err != nil {
+		return media.Asset{}, err
+	}
+	return row.toDomain(), nil
 }
 
 // List returns all assets, newest first.
@@ -63,11 +90,11 @@ func (s *AssetStore) List(ctx context.Context) ([]media.Asset, error) {
 	defer rows.Close()
 	var out []media.Asset
 	for rows.Next() {
-		a, err := scanAsset(rows)
+		row, err := tursodb.ScanStruct[assetRow](rows)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, a)
+		out = append(out, row.toDomain())
 	}
 	return out, tursodb.MapError(rows.Err())
 }
@@ -76,19 +103,4 @@ func (s *AssetStore) List(ctx context.Context) ([]media.Asset, error) {
 func (s *AssetStore) Delete(ctx context.Context, id string) error {
 	_, err := s.db.Exec(ctx, `DELETE FROM assets WHERE id = ?`, id)
 	return err
-}
-
-func scanAsset(sc scanner) (media.Asset, error) {
-	var (
-		a         media.Asset
-		createdAt string
-	)
-	err := sc.Scan(&a.ID, &a.Filename, &a.ContentType, &a.Size, &a.StorageKey, &a.Alt, &createdAt)
-	if err != nil {
-		return media.Asset{}, tursodb.MapError(err)
-	}
-	if a.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
-		return media.Asset{}, err
-	}
-	return a, nil
 }

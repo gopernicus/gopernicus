@@ -2,7 +2,6 @@ package turso
 
 import (
 	"context"
-	"database/sql"
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/invitation"
@@ -31,6 +30,44 @@ func NewInvitationStore(db *tursodb.DB) *InvitationStore {
 
 const invitationColumns = "id, resource_type, resource_id, relation, identifier, resolved_subject_id, invited_by, token_hash, auto_accept, status, expires_at, accepted_at, created_at, updated_at"
 
+// invitationRow is the store-local, db-tagged projection of an invitations row.
+// accepted_at is nullable (turso.NullTime, zero-time when NULL); toDomain maps it.
+type invitationRow struct {
+	ID                string           `db:"id"`
+	ResourceType      string           `db:"resource_type"`
+	ResourceID        string           `db:"resource_id"`
+	Relation          string           `db:"relation"`
+	Identifier        string           `db:"identifier"`
+	ResolvedSubjectID string           `db:"resolved_subject_id"`
+	InvitedBy         string           `db:"invited_by"`
+	TokenHash         string           `db:"token_hash"`
+	AutoAccept        tursodb.Bool     `db:"auto_accept"`
+	Status            string           `db:"status"`
+	ExpiresAt         tursodb.Time     `db:"expires_at"`
+	AcceptedAt        tursodb.NullTime `db:"accepted_at"`
+	CreatedAt         tursodb.Time     `db:"created_at"`
+	UpdatedAt         tursodb.Time     `db:"updated_at"`
+}
+
+func (r invitationRow) toDomain() invitation.Invitation {
+	return invitation.Invitation{
+		ID:                r.ID,
+		ResourceType:      r.ResourceType,
+		ResourceID:        r.ResourceID,
+		Relation:          r.Relation,
+		Identifier:        r.Identifier,
+		ResolvedSubjectID: r.ResolvedSubjectID,
+		InvitedBy:         r.InvitedBy,
+		TokenHash:         r.TokenHash,
+		AutoAccept:        bool(r.AutoAccept),
+		Status:            r.Status,
+		ExpiresAt:         r.ExpiresAt.Time,
+		AcceptedAt:        r.AcceptedAt.Time,
+		CreatedAt:         r.CreatedAt.Time,
+		UpdatedAt:         r.UpdatedAt.Time,
+	}
+}
+
 // Create persists a new pending invitation; a pending-tuple collision →
 // errs.ErrAlreadyExists (the partial unique index).
 func (s *InvitationStore) Create(ctx context.Context, inv invitation.Invitation) (invitation.Invitation, error) {
@@ -43,7 +80,7 @@ func (s *InvitationStore) Create(ctx context.Context, inv invitation.Invitation)
 		if err := s.db.QueryRow(ctx, q,
 			inv.ResourceType, inv.ResourceID, inv.Relation, inv.Identifier,
 			inv.ResolvedSubjectID, inv.InvitedBy, inv.TokenHash, tursodb.BoolToInt(inv.AutoAccept),
-			inv.Status, tursodb.FormatTime(inv.ExpiresAt), tursodb.NullTime(inv.AcceptedAt),
+			inv.Status, tursodb.FormatTime(inv.ExpiresAt), tursodb.FormatNullTime(inv.AcceptedAt),
 			tursodb.FormatTime(inv.CreatedAt), tursodb.FormatTime(inv.UpdatedAt),
 		).Scan(&inv.ID); err != nil {
 			return invitation.Invitation{}, tursodb.MapError(err)
@@ -54,7 +91,7 @@ func (s *InvitationStore) Create(ctx context.Context, inv invitation.Invitation)
 	_, err := s.db.Exec(ctx, q,
 		inv.ID, inv.ResourceType, inv.ResourceID, inv.Relation, inv.Identifier,
 		inv.ResolvedSubjectID, inv.InvitedBy, inv.TokenHash, tursodb.BoolToInt(inv.AutoAccept),
-		inv.Status, tursodb.FormatTime(inv.ExpiresAt), tursodb.NullTime(inv.AcceptedAt),
+		inv.Status, tursodb.FormatTime(inv.ExpiresAt), tursodb.FormatNullTime(inv.AcceptedAt),
 		tursodb.FormatTime(inv.CreatedAt), tursodb.FormatTime(inv.UpdatedAt),
 	)
 	if err != nil {
@@ -66,17 +103,22 @@ func (s *InvitationStore) Create(ctx context.Context, inv invitation.Invitation)
 // Get returns the invitation for id, or errs.ErrNotFound.
 func (s *InvitationStore) Get(ctx context.Context, id string) (invitation.Invitation, error) {
 	const q = `SELECT ` + invitationColumns + ` FROM invitations WHERE id = ?`
-	return scanInvitation(s.db.QueryRow(ctx, q, id))
+	row, err := queryOne[invitationRow](ctx, s.db, q, id)
+	if err != nil {
+		return invitation.Invitation{}, err
+	}
+	return row.toDomain(), nil
 }
 
 // GetByTokenHash returns the invitation for tokenHash; unknown → errs.ErrNotFound,
 // present-but-past-ExpiresAt → errs.ErrExpired, else the record.
 func (s *InvitationStore) GetByTokenHash(ctx context.Context, tokenHash string) (invitation.Invitation, error) {
 	const q = `SELECT ` + invitationColumns + ` FROM invitations WHERE token_hash = ?`
-	inv, err := scanInvitation(s.db.QueryRow(ctx, q, tokenHash))
+	row, err := queryOne[invitationRow](ctx, s.db, q, tokenHash)
 	if err != nil {
 		return invitation.Invitation{}, err
 	}
+	inv := row.toDomain()
 	if inv.Expired(time.Now()) {
 		return invitation.Invitation{}, errs.ErrExpired
 	}
@@ -86,33 +128,39 @@ func (s *InvitationStore) GetByTokenHash(ctx context.Context, tokenHash string) 
 // ListByResource returns a cursor-paginated page of a resource's invitations,
 // ordered created_at DESC, id DESC.
 func (s *InvitationStore) ListByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
-	q := tursodb.ListQuery[invitation.Invitation]{
+	q := tursodb.ListQuery[invitationRow]{
 		BaseSQL:      `SELECT ` + invitationColumns + ` FROM invitations WHERE resource_type = ? AND resource_id = ?`,
 		Args:         []any{resourceType, resourceID},
 		OrderFields:  invitation.OrderFields,
 		DefaultOrder: invitation.DefaultOrder,
 		PK:           "id",
-		Scan:         scanInvitation,
-		OrderValueOf: func(inv invitation.Invitation, _ string) any { return inv.CreatedAt },
-		PKOf:         func(inv invitation.Invitation) string { return inv.ID },
+		OrderValueOf: func(r invitationRow, _ string) any { return r.CreatedAt.Time },
+		PKOf:         func(r invitationRow) string { return r.ID },
 	}
-	return tursodb.List(ctx, s.db, q, req)
+	page, err := tursodb.List(ctx, s.db, q, req)
+	if err != nil {
+		return crud.Page[invitation.Invitation]{}, err
+	}
+	return crud.MapPage(page, invitationRow.toDomain), nil
 }
 
 // ListBySubject returns a cursor-paginated page of invitations addressed to
 // identifier (the invitee email), ordered created_at DESC, id DESC.
 func (s *InvitationStore) ListBySubject(ctx context.Context, identifier string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
-	q := tursodb.ListQuery[invitation.Invitation]{
+	q := tursodb.ListQuery[invitationRow]{
 		BaseSQL:      `SELECT ` + invitationColumns + ` FROM invitations WHERE identifier = ?`,
 		Args:         []any{identifier},
 		OrderFields:  invitation.OrderFields,
 		DefaultOrder: invitation.DefaultOrder,
 		PK:           "id",
-		Scan:         scanInvitation,
-		OrderValueOf: func(inv invitation.Invitation, _ string) any { return inv.CreatedAt },
-		PKOf:         func(inv invitation.Invitation) string { return inv.ID },
+		OrderValueOf: func(r invitationRow, _ string) any { return r.CreatedAt.Time },
+		PKOf:         func(r invitationRow) string { return r.ID },
 	}
-	return tursodb.List(ctx, s.db, q, req)
+	page, err := tursodb.List(ctx, s.db, q, req)
+	if err != nil {
+		return crud.Page[invitation.Invitation]{}, err
+	}
+	return crud.MapPage(page, invitationRow.toDomain), nil
 }
 
 // UpdateStatus applies a lifecycle transition and returns the full row via
@@ -122,41 +170,12 @@ func (s *InvitationStore) UpdateStatus(ctx context.Context, id string, upd invit
 		SET status = ?, token_hash = ?, expires_at = ?, accepted_at = ?, resolved_subject_id = ?, updated_at = ?
 		WHERE id = ?
 		RETURNING ` + invitationColumns
-	return scanInvitation(s.db.QueryRow(ctx, q,
-		upd.Status, upd.TokenHash, tursodb.FormatTime(upd.ExpiresAt), tursodb.NullTime(upd.AcceptedAt),
+	row, err := queryOne[invitationRow](ctx, s.db, q,
+		upd.Status, upd.TokenHash, tursodb.FormatTime(upd.ExpiresAt), tursodb.FormatNullTime(upd.AcceptedAt),
 		upd.ResolvedSubjectID, tursodb.FormatTime(upd.UpdatedAt), id,
-	))
-}
-
-// scanInvitation scans one invitations row, mapping sql.ErrNoRows to
-// errs.ErrNotFound via the connector's MapError.
-func scanInvitation(sc scanner) (invitation.Invitation, error) {
-	var (
-		inv                             invitation.Invitation
-		autoAccept                      int64
-		expiresAt, createdAt, updatedAt string
-		acceptedAt                      sql.NullString
 	)
-	if err := sc.Scan(
-		&inv.ID, &inv.ResourceType, &inv.ResourceID, &inv.Relation, &inv.Identifier,
-		&inv.ResolvedSubjectID, &inv.InvitedBy, &inv.TokenHash, &autoAccept, &inv.Status,
-		&expiresAt, &acceptedAt, &createdAt, &updatedAt,
-	); err != nil {
-		return invitation.Invitation{}, tursodb.MapError(err)
-	}
-	inv.AutoAccept = autoAccept != 0
-	var err error
-	if inv.ExpiresAt, err = tursodb.ParseTime(expiresAt); err != nil {
+	if err != nil {
 		return invitation.Invitation{}, err
 	}
-	if inv.AcceptedAt, err = tursodb.ParseNullTime(acceptedAt); err != nil {
-		return invitation.Invitation{}, err
-	}
-	if inv.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
-		return invitation.Invitation{}, err
-	}
-	if inv.UpdatedAt, err = tursodb.ParseTime(updatedAt); err != nil {
-		return invitation.Invitation{}, err
-	}
-	return inv, nil
+	return row.toDomain(), nil
 }

@@ -25,6 +25,33 @@ func NewServiceAccountStore(db *tursodb.DB) *ServiceAccountStore {
 
 const serviceAccountColumns = "id, name, description, created_by, act_as_user, owner_user_id, created_at, updated_at"
 
+// serviceAccountRow is the store-local, db-tagged projection of a service_accounts
+// row ScanStruct scans into; toDomain maps it to the persistence-free domain
+// entity.
+type serviceAccountRow struct {
+	ID          string       `db:"id"`
+	Name        string       `db:"name"`
+	Description string       `db:"description"`
+	CreatedBy   string       `db:"created_by"`
+	ActAsUser   tursodb.Bool `db:"act_as_user"`
+	OwnerUserID string       `db:"owner_user_id"`
+	CreatedAt   tursodb.Time `db:"created_at"`
+	UpdatedAt   tursodb.Time `db:"updated_at"`
+}
+
+func (r serviceAccountRow) toDomain() serviceaccount.ServiceAccount {
+	return serviceaccount.ServiceAccount{
+		ID:          r.ID,
+		Name:        r.Name,
+		Description: r.Description,
+		CreatedBy:   r.CreatedBy,
+		ActAsUser:   bool(r.ActAsUser),
+		OwnerUserID: r.OwnerUserID,
+		CreatedAt:   r.CreatedAt.Time,
+		UpdatedAt:   r.UpdatedAt.Time,
+	}
+}
+
 // Create persists a new service account.
 func (s *ServiceAccountStore) Create(ctx context.Context, sa serviceaccount.ServiceAccount) (serviceaccount.ServiceAccount, error) {
 	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
@@ -54,21 +81,28 @@ func (s *ServiceAccountStore) Create(ctx context.Context, sa serviceaccount.Serv
 // Get returns the account for id, or errs.ErrNotFound.
 func (s *ServiceAccountStore) Get(ctx context.Context, id string) (serviceaccount.ServiceAccount, error) {
 	const q = `SELECT ` + serviceAccountColumns + ` FROM service_accounts WHERE id = ?`
-	return scanServiceAccount(s.db.QueryRow(ctx, q, id))
+	row, err := queryOne[serviceAccountRow](ctx, s.db, q, id)
+	if err != nil {
+		return serviceaccount.ServiceAccount{}, err
+	}
+	return row.toDomain(), nil
 }
 
 // List returns a cursor-paginated page ordered created_at DESC, id DESC.
 func (s *ServiceAccountStore) List(ctx context.Context, req crud.ListRequest) (crud.Page[serviceaccount.ServiceAccount], error) {
-	q := tursodb.ListQuery[serviceaccount.ServiceAccount]{
+	q := tursodb.ListQuery[serviceAccountRow]{
 		BaseSQL:      `SELECT ` + serviceAccountColumns + ` FROM service_accounts`,
 		OrderFields:  serviceaccount.OrderFields,
 		DefaultOrder: serviceaccount.DefaultOrder,
 		PK:           "id",
-		Scan:         scanServiceAccount,
-		OrderValueOf: func(sa serviceaccount.ServiceAccount, _ string) any { return sa.CreatedAt },
-		PKOf:         func(sa serviceaccount.ServiceAccount) string { return sa.ID },
+		OrderValueOf: func(r serviceAccountRow, _ string) any { return r.CreatedAt.Time },
+		PKOf:         func(r serviceAccountRow) string { return r.ID },
 	}
-	return tursodb.List(ctx, s.db, q, req)
+	page, err := tursodb.List(ctx, s.db, q, req)
+	if err != nil {
+		return crud.Page[serviceaccount.ServiceAccount]{}, err
+	}
+	return crud.MapPage(page, serviceAccountRow.toDomain), nil
 }
 
 // Update replaces the account for id; unknown → errs.ErrNotFound. It leaves id and
@@ -97,26 +131,4 @@ func (s *ServiceAccountStore) Delete(ctx context.Context, id string) error {
 		return errs.ErrNotFound
 	}
 	return nil
-}
-
-// scanServiceAccount scans one service_accounts row, mapping sql.ErrNoRows to
-// errs.ErrNotFound via the connector's MapError.
-func scanServiceAccount(sc scanner) (serviceaccount.ServiceAccount, error) {
-	var (
-		sa                   serviceaccount.ServiceAccount
-		actAsUser            int64
-		createdAt, updatedAt string
-	)
-	if err := sc.Scan(&sa.ID, &sa.Name, &sa.Description, &sa.CreatedBy, &actAsUser, &sa.OwnerUserID, &createdAt, &updatedAt); err != nil {
-		return serviceaccount.ServiceAccount{}, tursodb.MapError(err)
-	}
-	sa.ActAsUser = actAsUser != 0
-	var err error
-	if sa.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
-		return serviceaccount.ServiceAccount{}, err
-	}
-	if sa.UpdatedAt, err = tursodb.ParseTime(updatedAt); err != nil {
-		return serviceaccount.ServiceAccount{}, err
-	}
-	return sa, nil
 }

@@ -2,7 +2,6 @@ package turso
 
 import (
 	"context"
-	"database/sql"
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/events/domain/outbox"
@@ -10,7 +9,7 @@ import (
 	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
 )
 
-// outboxColumns is the event_outbox projection, in scanEntry's order.
+// outboxColumns is the event_outbox projection, matching outboxRow's db tags.
 const outboxColumns = "event_id, event_type, occurred_at, correlation_id, payload, aggregate_type, aggregate_id, tenant_id, created_at, published_at"
 
 // Compile-time seam: Store fills the exact outbox.EntryRepository port.
@@ -22,6 +21,40 @@ var _ outbox.EntryRepository = (*Store)(nil)
 // Construct it via New, which runs the boot-time table probe (design §5).
 type Store struct {
 	db *tursodb.DB
+}
+
+// outboxRow is the store-local, db-tagged projection of an event_outbox row that
+// ScanStruct scans into; toDomain maps it to the persistence-free domain entity.
+// Nullable metadata columns scan into *string (NULL → nil) and published_at into
+// turso.NullTime (NULL → not-valid = unpublished).
+type outboxRow struct {
+	EventID       string           `db:"event_id"`
+	Type          string           `db:"event_type"`
+	OccurredAt    tursodb.Time     `db:"occurred_at"`
+	CorrelationID string           `db:"correlation_id"`
+	Payload       []byte           `db:"payload"`
+	AggregateType *string          `db:"aggregate_type"`
+	AggregateID   *string          `db:"aggregate_id"`
+	TenantID      *string          `db:"tenant_id"`
+	CreatedAt     tursodb.Time     `db:"created_at"`
+	PublishedAt   tursodb.NullTime `db:"published_at"`
+}
+
+func (r outboxRow) toDomain() outbox.Entry {
+	return outbox.Entry{
+		Record: sdkevents.Record{
+			EventID:       r.EventID,
+			Type:          r.Type,
+			OccurredAt:    r.OccurredAt.Time,
+			CorrelationID: r.CorrelationID,
+			Payload:       r.Payload,
+			AggregateType: r.AggregateType,
+			AggregateID:   r.AggregateID,
+			TenantID:      r.TenantID,
+		},
+		CreatedAt:   r.CreatedAt.Time,
+		PublishedAt: r.PublishedAt.TimePtr(),
+	}
 }
 
 // Append persists records in their own transaction — the non-transactional
@@ -72,11 +105,11 @@ func (s *Store) ListUnpublished(ctx context.Context, limit int) ([]outbox.Entry,
 
 	var out []outbox.Entry
 	for rows.Next() {
-		e, err := scanEntry(rows)
+		row, err := tursodb.ScanStruct[outboxRow](rows)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, e)
+		out = append(out, row.toDomain())
 	}
 	return out, tursodb.MapError(rows.Err())
 }
@@ -123,46 +156,6 @@ func insertRecords(ctx context.Context, q tursodb.Querier, recs ...sdkevents.Rec
 	return nil
 }
 
-// scanEntry scans one event_outbox row into an outbox.Entry, mapping
-// sql.ErrNoRows to errs.ErrNotFound.
-func scanEntry(sc scanner) (outbox.Entry, error) {
-	var (
-		e                        outbox.Entry
-		occurredAt, createdAt    string
-		correlationID, payload   string
-		aggType, aggID, tenantID sql.NullString
-		publishedAt              sql.NullString
-	)
-	err := sc.Scan(
-		&e.EventID, &e.Type, &occurredAt, &correlationID, &payload,
-		&aggType, &aggID, &tenantID, &createdAt, &publishedAt,
-	)
-	if err != nil {
-		return outbox.Entry{}, tursodb.MapError(err)
-	}
-
-	e.CorrelationID = correlationID
-	e.Payload = []byte(payload)
-	e.AggregateType = nullStrPtr(aggType)
-	e.AggregateID = nullStrPtr(aggID)
-	e.TenantID = nullStrPtr(tenantID)
-
-	if e.OccurredAt, err = tursodb.ParseTime(occurredAt); err != nil {
-		return outbox.Entry{}, err
-	}
-	if e.CreatedAt, err = tursodb.ParseTime(createdAt); err != nil {
-		return outbox.Entry{}, err
-	}
-	if publishedAt.Valid && publishedAt.String != "" {
-		t, err := tursodb.ParseTime(publishedAt.String)
-		if err != nil {
-			return outbox.Entry{}, err
-		}
-		e.PublishedAt = &t
-	}
-	return e, nil
-}
-
 // payloadValue returns a non-empty JSON text for storage: the raw payload, or
 // "{}" when it is empty (the column is NOT NULL).
 func payloadValue(p []byte) string {
@@ -179,14 +172,4 @@ func nullStr(p *string) any {
 		return nil
 	}
 	return *p
-}
-
-// nullStrPtr converts a scanned nullable column back to the *string the Record
-// carries: an absent (NULL) column reads back as nil.
-func nullStrPtr(ns sql.NullString) *string {
-	if !ns.Valid {
-		return nil
-	}
-	v := ns.String
-	return &v
 }
