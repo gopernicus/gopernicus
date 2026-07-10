@@ -1,10 +1,10 @@
 # gopernicus — framework monorepo (sdk + integrations + features + examples)
 #
-# Multi-module workspace (go.work), 34 modules. templ is pinned via the `tool`
+# Multi-module workspace (go.work), 35 modules. templ is pinned via the `tool`
 # directive in features/cms/views/templ/go.mod (where the .templ sources live),
 # so `go tool templ` is reproducible.
 
-MODULES = sdk integrations/cryptids/bcrypt integrations/cryptids/golang-jwt integrations/cryptids/google-uuid integrations/datastores/pgxdb integrations/datastores/turso integrations/email/sendgrid integrations/filestorage/gcs integrations/filestorage/s3 integrations/kvstores/goredis integrations/oauth/github integrations/oauth/google integrations/scheduling/robfig-cron integrations/tracing/otel features/authentication features/authentication/stores/pgx features/authentication/stores/turso features/authorization features/authorization/stores/pgx features/authorization/stores/turso features/cms features/cms/stores/pgx features/cms/stores/turso features/cms/views/templ features/events features/events/stores/pgx features/events/stores/turso features/jobs features/jobs/stores/pgx features/jobs/stores/turso examples/auth-cms examples/cms examples/jobs-minimal examples/minimal
+MODULES = sdk integrations/cryptids/bcrypt integrations/cryptids/golang-jwt integrations/cryptids/google-uuid integrations/datastores/pgxdb integrations/datastores/turso integrations/email/sendgrid integrations/filestorage/gcs integrations/filestorage/s3 integrations/kvstores/goredis integrations/oauth/github integrations/oauth/google integrations/scheduling/robfig-cron integrations/tracing/otel features/authentication features/authentication/stores/pgx features/authentication/stores/turso features/authorization features/authorization/stores/pgx features/authorization/stores/turso features/cms features/cms/stores/pgx features/cms/stores/turso features/cms/views/templ features/events features/events/stores/pgx features/events/stores/turso features/jobs features/jobs/stores/pgx features/jobs/stores/turso examples/auth-cms examples/cms examples/jobs-minimal examples/minimal workshop/gopernicus
 
 # STORE_MODULES carry env-gated live conformance suites (storetest against a real
 # database). `make check`/`make test` run them hermetically (loud skips); `make
@@ -14,7 +14,8 @@ STORE_MODULES = features/cms/stores/pgx features/cms/stores/turso features/authe
 .PHONY: generate build vet test test-stores run migrate check tidy guard \
 	guard-sdk-stdlib guard-feature-isolation guard-sdk-no-outward guard-no-legacy-path \
 	guard-feature-core-sdk-only guard-feature-transport-sdk-web guard-feature-no-cross-feature \
-	guard-store-no-foreign-feature guard-no-underlying guard-no-lax-scan
+	guard-store-no-foreign-feature guard-no-underlying guard-no-lax-scan \
+	guard-workshop-boundary
 
 # Regenerate *_templ.go from .templ sources (they live in features/cms/views/templ).
 generate:
@@ -83,10 +84,11 @@ tidy:
 # Layering guards — each enforces one architectural boundary from the
 # constitution (00-overview.md) or the feature-standard charter (FS rules,
 # 2026-07-07); every target must print nothing and exit 0 on a clean tree.
-# `make guard` runs all ten.
+# `make guard` runs all eleven.
 guard: guard-sdk-stdlib guard-feature-isolation guard-sdk-no-outward guard-no-legacy-path \
 	guard-feature-core-sdk-only guard-feature-transport-sdk-web guard-feature-no-cross-feature \
-	guard-store-no-foreign-feature guard-no-underlying guard-no-lax-scan
+	guard-store-no-foreign-feature guard-no-underlying guard-no-lax-scan \
+	guard-workshop-boundary
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -186,6 +188,16 @@ guard-no-underlying:
 guard-no-lax-scan:
 	@echo "== guard: no RowToStructByNameLax anywhere (strict scanning only) =="
 	@! grep -rn --include='*.go' 'RowToStructByNameLax' . || { echo "ERROR (P6/ruling 8): RowToStructByNameLax found — strict RowToStructByName only"; exit 1; }
+
+# G11 (workshop-v2-scaffolding W1, review-gate fold item 7): the scaffolding CLI
+# is isolated in BOTH directions. (a) Nothing outside workshop/ imports it — the
+# CLI EMITS hosts and is never their runtime dependency. (b) workshop/ imports no
+# feature cores (features/) and no examples/ — it templates them, it never links
+# them (a per-field/queries.sql pull is the v2b trigger, not a runtime import).
+guard-workshop-boundary:
+	@echo "== guard: workshop/ is isolated both directions (nothing imports it; it imports no feature/example) =="
+	@! grep -rn --include='*.go' --exclude-dir=workshop '"github.com/gopernicus/gopernicus/workshop' . || { echo "ERROR (W1): a non-workshop module imports the scaffolding CLI — workshop/ emits hosts, it is never a runtime dependency"; exit 1; }
+	@! grep -rn --include='*.go' -E '"github.com/gopernicus/gopernicus/(features|examples)' workshop/ || { echo "ERROR (W1): workshop/ imports a feature core or an example — the CLI templates them, it never links them"; exit 1; }
 
 # CI-style gate: templ generation must be a no-op (no drift), then per-module
 # vet/build/test across all MODULES, then the four layering guards. Drift

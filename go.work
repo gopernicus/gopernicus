@@ -35,4 +35,5 @@ use (
 	./examples/cms
 	./examples/jobs-minimal
 	./examples/minimal
+	./workshop/gopernicus
 )
