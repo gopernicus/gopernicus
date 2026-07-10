@@ -300,6 +300,20 @@ Tests: positional alignment, strict abort (`errors.Is` on ErrNotFound),
 empty/nil slice, compile-time interface assertion. `make check` (35) +
 `make guard` (11, G1 clean) green. Committed CI-green.
 
+### 2026-07-10 — P2 CLOSED (sdk/notify)
+
+`Message{Subject,Body}` + `Notifier{Kind,Notify}` (deny-by-absence +
+no-silent-drop pins), `Console` (any kind; nil logger → slog.Default —
+a DELIBERATE divergence from email.Console's io.Discard fallback,
+logged: a discarding notifier would violate the port's own pin),
+`MailerBridge` (From at construction per delta-fold 2; Validate+Send
+propagate; email.Sender signature matched the fold exactly). NO Set
+helper (delta-fold 9). Source-level interface assertions (the sibling
+convention). Tests: log shape, field mapping + From injection, both
+error propagations, default-logger fallback. sdk green; `make check`
+(35) + `make guard` (11, G1 clean) green. Committed CI-green.
+**Next: P3 (L).**
+
 ### 2026-07-10 — REWRITE (owner-directed): notifier-first
 
 The token-bearer P2 semantics never executed — the owner redirected at
