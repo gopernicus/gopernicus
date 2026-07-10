@@ -217,6 +217,70 @@ is restored by DELIVERY to the invited address.)
 12. The auth phase is **M–L**; the non-email drive uses
     `ListByResource`, never `Mine`.
 
+## Delta-gate fold (2026-07-10, on the rewrite) — GOVERNS P2/P3 where it conflicts
+
+**lead-backend-engineer: SHIP-WITH-EDITS (6 findings + 3 author
+questions, all resolved here):**
+
+1. **The supported-kind predicate, verbatim (lead 1 — the drafted rule
+   would have DENIED email invitations on every existing host):** a kind
+   is supported iff `kind == identity.KindEmail && Config.Mailer != nil`
+   OR a notifier of that kind is wired. `ErrKindNotSupported` fires for
+   NON-EMAIL kinds only; email is always-on via the already-required
+   Mailer — existing hosts create email invitations with zero Config
+   edits, and the A9 leg passes verbatim by construction.
+2. **MailerBridge carries From (lead 2):**
+   `NewMailerBridge(sender email.Sender, from string)` —
+   `email.Message.Validate` requires From and neither `notify.Message`
+   nor `identity.Address` carries one. Maps `to.Value → To[0]`,
+   `msg.Body → Text`, `from → From`. (And the plan's "Mailer" is
+   precisely `email.Sender` — auth's `Config.Mailer` field type.)
+3. **Duplicate-kind rejection is a NEW check (lead 3):** auth's provider
+   map silently last-wins (`authsvc/service.go:230`) — do NOT copy it;
+   follow the loud-construction posture (`ErrOAuthReposRequired` class).
+   Duplicate kind in `Config.Notifiers` → loud NewService error.
+4. **The fork covers BOTH send paths (lead 4):** `sendInviteSent` AND
+   `sendMemberAdded` (Accept sends member-added to the IDENTIFIER —
+   unpatched, a phone number would route through the email Mailer).
+   Build the body once, dispatch by `inv.IdentifierKind`: email-with-
+   no-notifier → `Config.Mailer`; otherwise the wired notifier. The
+   fork lives in `invitationsvc` only — `Deps` grows `Notifiers`;
+   `authsvc.Deps` does NOT (verification/reset mail untouched).
+5. **Test homes split (lead 5):** the identifier_kind column +
+   collision-scan cases → storetest (Storer suite); the delivery-seam
+   cases (no-notifier loud error / fake-notifier receives the token
+   message) → `invitationsvc` service tests with in-package fakes; the
+   duplicate-kind NewService rejection → package-auth tests; Console/
+   MailerBridge/lookup → sdk/notify tests.
+6. **Accept's edit is SERVICE-ONLY (lead 6):** the kind-conditional
+   identifier-match lives in `invitationsvc.Accept` (compare only when
+   `inv.IdentifierKind == identity.KindEmail`); the inbound handler
+   keeps passing the acceptor's email (doc-comment only — do not invent
+   an acceptor-address-of-kind resolution path; no data source exists
+   until address verification).
+
+**Author-question rulings (coordinator, within the ratified direction):**
+
+7. **Email-notifier scope = INVITATIONS-ONLY this milestone.** A wired
+   email-kind notifier routes invitation mail; verification/reset mail
+   stays on `authsvc`'s `Config.Mailer` directly. The asymmetry is
+   documented in the auth README; unifying ALL outbound onto notify is
+   a deferred-ledger item (it would move authsvc's mail seam — real
+   scope, not this milestone's).
+8. **`ErrKindNotSupported` wraps `errs.ErrInvalidInput`** (→ 400 at the
+   transport) — a new package-authentication sentinel; the live-drive
+   records that exact code.
+9. **NO `notify.Set` in sdk v1** (one consumer today — the five-point
+   test says wait): auth holds its own kind-lookup map internally,
+   validated loud at NewService. sdk/notify ships the port + Console +
+   MailerBridge only; a Set helper graduates with the second consumer.
+
+**P3 resized L** (lead sizing: migration ×2 dialects + stores + the
+two-seam fork + kind-aware accept + Resolver + split test homes + live
+conformance). The real-interaction check's step 3 also asserts email
+invitations still succeed with the phone notifier unwired (regression
+guard on fold item 1).
+
 ## Execution log
 
 (append dated entries here)
