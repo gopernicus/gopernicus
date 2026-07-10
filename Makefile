@@ -14,7 +14,7 @@ STORE_MODULES = features/cms/stores/pgx features/cms/stores/turso features/authe
 .PHONY: generate build vet test test-stores run migrate check tidy guard \
 	guard-sdk-stdlib guard-feature-isolation guard-sdk-no-outward guard-no-legacy-path \
 	guard-feature-core-sdk-only guard-feature-transport-sdk-web guard-feature-no-cross-feature \
-	guard-store-no-foreign-feature
+	guard-store-no-foreign-feature guard-no-underlying guard-no-lax-scan
 
 # Regenerate *_templ.go from .templ sources (they live in features/cms/views/templ).
 generate:
@@ -83,10 +83,10 @@ tidy:
 # Layering guards — each enforces one architectural boundary from the
 # constitution (00-overview.md) or the feature-standard charter (FS rules,
 # 2026-07-07); every target must print nothing and exit 0 on a clean tree.
-# `make guard` runs all eight.
+# `make guard` runs all ten.
 guard: guard-sdk-stdlib guard-feature-isolation guard-sdk-no-outward guard-no-legacy-path \
 	guard-feature-core-sdk-only guard-feature-transport-sdk-web guard-feature-no-cross-feature \
-	guard-store-no-foreign-feature
+	guard-store-no-foreign-feature guard-no-underlying guard-no-lax-scan
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -170,6 +170,22 @@ guard-store-no-foreign-feature:
 			| grep -vE '"github.com/gopernicus/gopernicus/features/'"$$x"'([\"/])' || true); \
 		if [ -n "$$hits" ]; then echo "ERROR (rule 6, stores): a $$x store module reaches into a foreign feature or an example host:"; echo "$$hits"; fail=1; fi; \
 	done; exit $$fail
+
+# G9 (datastore-hardening P6, audit ruling 6): nothing outside the datastore
+# connectors calls Underlying() — the escape hatch to the raw pool/DB is the
+# service-locator workaround the scaffolded crud.Transactor seam exists to
+# prevent. A legitimate future host/cmd hit gets a named per-line exception
+# HERE citing audit ruling 6 — never a regex weakening (the G6 discipline).
+guard-no-underlying:
+	@echo "== guard: no Underlying() outside the datastore connectors (crud.Transactor seam) =="
+	@! grep -rn --include='*.go' '\.Underlying()' --exclude-dir=integrations . || { echo "ERROR (P6/ruling 6): Underlying() called outside integrations/datastores — use the ports, or consume the crud.Transactor seam"; exit 1; }
+
+# G10 (datastore-hardening P6, audit ruling 8): RowToStructByNameLax silently
+# tolerates missing fields — the quiet-data-loss variant of pgx struct
+# scanning. Strict RowToStructByName only, everywhere, no exceptions.
+guard-no-lax-scan:
+	@echo "== guard: no RowToStructByNameLax anywhere (strict scanning only) =="
+	@! grep -rn --include='*.go' 'RowToStructByNameLax' . || { echo "ERROR (P6/ruling 8): RowToStructByNameLax found — strict RowToStructByName only"; exit 1; }
 
 # CI-style gate: templ generation must be a no-op (no drift), then per-module
 # vet/build/test across all MODULES, then the four layering guards. Drift

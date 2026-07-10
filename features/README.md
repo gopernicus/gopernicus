@@ -401,6 +401,9 @@ cite by item number:
    `Repositories(db) (<feature>.Repositories, error)` — the bundle name WITH
    an error return (authorization-v1 refinement 11; a deliberate hybrid of
    jobs' error-less bundle and events' probing single-Store `New(db)`).
+   A store never calls a connector's `Underlying()` (guard G10's sibling G9
+   enforces it); a future cross-repository transaction consumes the
+   scaffolded `crud.Transactor` seam (`sdk/crud/tx.go`) instead.
 6. A minimal-host proof exists: a `go run`-able host with an in-memory (or
    otherwise zero-external-infra) `Repositories` implementation, mirroring
    `examples/minimal`.

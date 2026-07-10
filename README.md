@@ -71,7 +71,7 @@ tagged versions, not the workspace.
   still takes the earlier `Register(mount, repos, cfg)` form until its
   public Service lands).
 - **Dependencies point inward.** `examples` → `features`/`integrations` →
-  `sdk`, never the reverse. `make check`'s eight layering guards enforce this.
+  `sdk`, never the reverse. `make check`'s ten layering guards enforce this.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full detail, including the
 feature contract (`sdk/feature`), the app-hexagon pattern (`internal/logic`),
@@ -94,6 +94,6 @@ make run                # or: cd examples/cms && go run ./cmd/server
 ```
 
 From the repo root, `make check` builds, vets, and tests all thirty-four modules
-and runs the eight layering guards; `make test-stores` runs the live dialect
+and runs the ten layering guards; `make test-stores` runs the live dialect
 conformance suites (expects `POSTGRES_TEST_DSN` / `TURSO_*`). See [examples/cms/README.md](examples/cms/README.md)
 for that host's full env/make-target reference.
