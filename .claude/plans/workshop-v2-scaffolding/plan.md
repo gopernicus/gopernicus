@@ -406,3 +406,25 @@ codegen-adjacent — v2b), no inbound (Register logs only, jobs
 precedent). Verify: module + make check (35) + make guard (11) green;
 coordinator re-ran the full module test suite independently.
 Committed CI-green. **Next: W4.**
+
+### 2026-07-09 — W4 CLOSED (`db create|migrate|status`, the delegation design)
+
+`db create` pure-FS (leading-digits-before-`_` parse, `_`-prefix skip,
+4-digit max+1, slug sanitize, no-clobber, `--db` default primary);
+`db migrate` verifies the runner exists (loud error naming
+`gopernicus init --db=...`) then execs `go run ./workshop/migrations`
+streaming, exit code propagated; `db status` delegates to the runner's
+`-status` with the CLI file-only fallback (runner absent → all-pending
+note; runner nonzero → stderr surfaced + "DB unreachable — file view").
+**The module's go.mod still has ZERO require lines — the fold's
+delegation resolution holding structurally.** Unit matrix green
+(sanitize/numbering/clobber/fallback) + the offline emit-then-exec leg
+(emitted turso host, create → status file-fallback lists the new file
+pending). Premise HELD: the W2-emitted runner needed no template change.
+**Live run-and-look recorded:** pgx host + throwaway postgres:17
+(:55433) — create 0001 → migrate applies (checksum logged) → status
+1 applied/0 pending → create 0002 → status 1/1 → container stopped →
+status DB-down file-view 2 pending; port freed. Coordinator cleanup at
+close: the now-orphaned `notImplemented` stub helper removed (W4's own
+change orphaned it), module re-verified. `make check` (35) +
+`make guard` (11) green. Committed CI-green. **Next: W5 (close).**

@@ -62,10 +62,3 @@ Commands:
 Run 'gopernicus <command> -h' for command-specific help.
 `)
 }
-
-// notImplemented reports a stubbed command to stderr and returns exit code 1.
-// The scaffolding surfaces land in later workshop-v2 phases.
-func notImplemented(name string) int {
-	fmt.Fprintf(os.Stderr, "gopernicus %s: not yet implemented\n", name)
-	return 1
-}
