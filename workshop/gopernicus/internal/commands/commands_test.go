@@ -23,9 +23,9 @@ func TestRunExitCodes(t *testing.T) {
 		{"new feature stub", []string{"new", "feature"}, 1},
 		{"db requires subcommand", []string{"db"}, 1},
 		{"db unknown subcommand", []string{"db", "bogus"}, 1},
-		{"db migrate stub", []string{"db", "migrate"}, 1},
-		{"db status stub", []string{"db", "status"}, 1},
-		{"db create stub", []string{"db", "create"}, 1},
+		{"db migrate no runner errors", []string{"db", "migrate"}, 1},
+		{"db status no runner falls back", []string{"db", "status"}, 0},
+		{"db create needs slug", []string{"db", "create"}, 1},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
