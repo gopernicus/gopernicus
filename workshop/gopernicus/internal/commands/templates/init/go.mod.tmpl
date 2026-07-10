@@ -1,0 +1,26 @@
+module {{.ModulePath}}
+
+go 1.26.1
+
+require github.com/gopernicus/gopernicus/sdk v0.0.0
+{{- if .HasDB}}
+
+require {{.ConnectorPath}} v0.0.0
+{{- if eq .DB "turso"}}
+
+require github.com/tursodatabase/libsql-client-go v0.0.0-20260528064733-9d5d30a29a60 // indirect
+{{- end}}
+{{- end}}
+
+// ── PRE-TAG WIRING ──────────────────────────────────────────────────────────
+// gopernicus publishes no version tags yet, so `go get` cannot resolve the
+// modules required above. Until v0.1.0 is cut, point each gopernicus module at a
+// local checkout of the gopernicus repo with a replace directive, e.g.:
+//
+//   replace github.com/gopernicus/gopernicus/sdk => /abs/path/to/gopernicus/sdk
+{{- if .HasDB}}
+//   replace {{.ConnectorPath}} => /abs/path/to/gopernicus/{{.ConnectorRel}}
+{{- end}}
+//
+// See README.md ("Pre-tag wiring"). The gopernicus repo's scaffold-compile test
+// injects absolute replaces automatically; a human adopter adds them by hand.

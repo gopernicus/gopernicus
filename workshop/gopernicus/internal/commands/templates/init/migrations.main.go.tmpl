@@ -1,0 +1,169 @@
+// Command migrations is the host-owned, pre-boot migration runner for
+// {{.ModulePath}}. The framework never migrates at startup; this runner applies
+// the host-owned ledger (workshop/migrations/{{.LedgerDir}}) before the server
+// boots. Its schema is host-owned from the moment a feature scaffolds SQL here.
+//
+// Usage:
+//
+//	go run ./workshop/migrations           apply pending migrations
+//	go run ./workshop/migrations -status   report applied vs pending (file-only
+//	                                       when the database is unreachable)
+package main
+
+import (
+	"context"
+	"embed"
+	"flag"
+	"fmt"
+	"io/fs"
+	"log/slog"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/gopernicus/gopernicus/sdk/environment"
+
+	{{.ConnectorAlias}} "{{.ConnectorPath}}"
+)
+
+// migrationsFS embeds the host's own copy of the migrations. The runner applies
+// *.sql files in filename order and skips names prefixed with "_"; the ledger
+// README and any non-SQL files are ignored.
+//
+//go:embed {{.LedgerDir}}
+var migrationsFS embed.FS
+
+const migrationsDir = "{{.LedgerDir}}"
+
+func main() {
+	status := flag.Bool("status", false, "report applied vs pending migrations and exit")
+	flag.Parse()
+
+	_ = environment.LoadEnv()
+
+	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	if err := run(ctx, log, *status); err != nil {
+		log.Error("migrations", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context, log *slog.Logger, status bool) error {
+	db, err := open()
+	if status {
+		return reportStatus(ctx, db, err)
+	}
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	log.Info("running migrations", "dir", migrationsDir)
+	if err := {{.ConnectorAlias}}.RunMigrations(ctx, db, migrationsFS, migrationsDir); err != nil {
+		return err
+	}
+	log.Info("migrations complete")
+	return nil
+}
+
+func open() (*{{.ConnectorAlias}}.DB, error) {
+{{- if eq .DB "turso"}}
+	return {{.ConnectorAlias}}.Open({{.ConnectorAlias}}.Config{
+		URL:       os.Getenv("TURSO_DATABASE_URL"),
+		AuthToken: os.Getenv("TURSO_AUTH_TOKEN"),
+	})
+{{- else}}
+	var cfg {{.ConnectorAlias}}.Config
+	if err := environment.ParseEnvTags("", &cfg); err != nil {
+		return nil, err
+	}
+	return {{.ConnectorAlias}}.Open(cfg)
+{{- end}}
+}
+
+// reportStatus prints applied vs pending migrations. When the database is
+// unreachable (open failed, or the readiness check fails) it falls back to a
+// file-only listing: every embedded migration is reported pending. This is the
+// only status a runner can self-produce without a live database.
+func reportStatus(ctx context.Context, db *{{.ConnectorAlias}}.DB, openErr error) error {
+	files, err := migrationFiles()
+	if err != nil {
+		return err
+	}
+
+	if openErr != nil || {{.ConnectorAlias}}.StatusCheck(ctx, db) != nil {
+		if db != nil {
+			db.Close()
+		}
+		fmt.Println("database unreachable — reporting from migration files only")
+		printList("pending", files)
+		return nil
+	}
+	defer db.Close()
+
+	applied, err := appliedVersions(ctx, db)
+	if err != nil {
+		return err
+	}
+
+	var appliedList, pending []string
+	for _, f := range files {
+		if _, ok := applied[f]; ok {
+			appliedList = append(appliedList, f)
+		} else {
+			pending = append(pending, f)
+		}
+	}
+	printList("applied", appliedList)
+	printList("pending", pending)
+	return nil
+}
+
+// appliedVersions reads the connector's portable ledger. The (source, version,
+// checksum) shape is identical across the supported dialects, so this SELECT is
+// dialect-agnostic; version is the migration filename.
+func appliedVersions(ctx context.Context, db *{{.ConnectorAlias}}.DB) (map[string]string, error) {
+	rows, err := db.Query(ctx, "SELECT source, version, checksum FROM schema_migrations ORDER BY source, version")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	applied := make(map[string]string)
+	for rows.Next() {
+		var source, version, checksum string
+		if err := rows.Scan(&source, &version, &checksum); err != nil {
+			return nil, err
+		}
+		applied[version] = source
+	}
+	return applied, rows.Err()
+}
+
+// migrationFiles lists the embedded *.sql migrations in filename order, skipping
+// "_"-prefixed files (fs.ReadDir returns entries already sorted by name).
+func migrationFiles() ([]string, error) {
+	entries, err := fs.ReadDir(migrationsFS, migrationsDir)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || strings.HasPrefix(name, "_") || !strings.HasSuffix(name, ".sql") {
+			continue
+		}
+		files = append(files, name)
+	}
+	return files, nil
+}
+
+func printList(label string, files []string) {
+	fmt.Printf("%s (%d):\n", label, len(files))
+	for _, f := range files {
+		fmt.Printf("  %s\n", f)
+	}
+}
