@@ -534,10 +534,11 @@ func (r refSecurityEvents) List(_ context.Context, filter securityevent.ListFilt
 
 type refInvitations struct{ *reference }
 
-// Create enforces the PARTIAL pending-tuple uniqueness (design §6): a second
-// PENDING invitation for the same (resource_type, resource_id, identifier,
-// relation) → ErrAlreadyExists; once a prior one moves off pending, a new one
-// succeeds. Non-pending rows never block a Create.
+// Create enforces the PARTIAL pending-tuple uniqueness (design §6, migration
+// 0013): a second PENDING invitation for the same (resource_type, resource_id,
+// identifier_kind, identifier, relation) → ErrAlreadyExists; once a prior one
+// moves off pending, a new one succeeds. Non-pending rows never block a Create.
+// identifier_kind is part of the key, so the same value across two kinds coexists.
 func (r refInvitations) Create(_ context.Context, inv invitation.Invitation) (invitation.Invitation, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -545,6 +546,7 @@ func (r refInvitations) Create(_ context.Context, inv invitation.Invitation) (in
 		if ex.Status == invitation.StatusPending &&
 			ex.ResourceType == inv.ResourceType &&
 			ex.ResourceID == inv.ResourceID &&
+			ex.IdentifierKind == inv.IdentifierKind &&
 			ex.Identifier == inv.Identifier &&
 			ex.Relation == inv.Relation {
 			return invitation.Invitation{}, errs.ErrAlreadyExists

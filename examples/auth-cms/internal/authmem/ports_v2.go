@@ -280,14 +280,17 @@ func normalizeDetails(d map[string]any) map[string]any {
 type invitationRepo struct{ *data }
 
 // Create enforces PARTIAL pending-tuple uniqueness: at most one PENDING
-// invitation per (resource_type, resource_id, identifier, relation). Once a row
-// moves off pending, a new pending invite for the same tuple succeeds.
+// invitation per (resource_type, resource_id, identifier_kind, identifier,
+// relation) — kind-aware (migration 0013), so the same value coexists across
+// kinds. Once a row moves off pending, a new pending invite for the same tuple
+// succeeds.
 func (r invitationRepo) Create(_ context.Context, inv invitation.Invitation) (invitation.Invitation, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, ex := range r.invitations {
 		if ex.Status == invitation.StatusPending &&
 			ex.ResourceType == inv.ResourceType && ex.ResourceID == inv.ResourceID &&
+			ex.IdentifierKind == inv.IdentifierKind &&
 			ex.Identifier == inv.Identifier && ex.Relation == inv.Relation {
 			return invitation.Invitation{}, errs.ErrAlreadyExists
 		}

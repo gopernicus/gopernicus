@@ -40,6 +40,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk/identity"
 )
 
 // ids is the suite's entity-ID generator: the default nanoid strategy, matching
@@ -202,6 +203,8 @@ func Run(t *testing.T, newRepos func(t *testing.T) auth.Repositories) {
 		t.Run("CreateGetRoundTrip", func(t *testing.T) { testInvitationsCRUD(t, newRepos(t)) })
 		t.Run("DBGeneratedIDOnEmpty", func(t *testing.T) { testInvitationsDBGeneratedID(t, newRepos(t)) })
 		t.Run("PartialPendingUniqueness", func(t *testing.T) { testInvitationsUniqueness(t, newRepos(t)) })
+		t.Run("KindRoundTripVerbatim", func(t *testing.T) { testInvitationsKindRoundTrip(t, newRepos(t)) })
+		t.Run("CrossKindCoexistence", func(t *testing.T) { testInvitationsCrossKindCoexistence(t, newRepos(t)) })
 		t.Run("GetByTokenHashUnknown", func(t *testing.T) { testInvitationsTokenUnknown(t, newRepos(t)) })
 		t.Run("GetByTokenHashExpired", func(t *testing.T) { testInvitationsTokenExpired(t, newRepos(t)) })
 		t.Run("StatusTransitions", func(t *testing.T) { testInvitationsStatusTransitions(t, newRepos(t)) })
@@ -1267,8 +1270,9 @@ func testInvitationsCRUD(t *testing.T, repos auth.Repositories) {
 	repo := repos.Invitations
 
 	// A live (future-expiry) invite, so the GetByTokenHash read below returns the
-	// record rather than the read-time ErrExpired.
-	inv, err := invitation.New(ids, "project", "p1", "member", "invitee@example.com", "inviter-1", "hash-crud", false, time.Hour, time.Now())
+	// record rather than the read-time ErrExpired. An empty identifier kind
+	// defaults to email (New's default) — the default-email back-compat case.
+	inv, err := invitation.New(ids, "project", "p1", "member", "invitee@example.com", "", "inviter-1", "hash-crud", false, time.Hour, time.Now())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1283,6 +1287,10 @@ func testInvitationsCRUD(t *testing.T, repos auth.Repositories) {
 	got, err := repo.Get(ctx, created.ID)
 	if err != nil || got.Identifier != "invitee@example.com" || got.Relation != "member" {
 		t.Fatalf("Get: %+v err=%v", got, err)
+	}
+	// Default-email back-compat: an omitted kind persists and reads back as email.
+	if got.IdentifierKind != identity.KindEmail {
+		t.Errorf("IdentifierKind = %q, want %q (default)", got.IdentifierKind, identity.KindEmail)
 	}
 
 	byHash, err := repo.GetByTokenHash(ctx, "hash-crud")
@@ -1335,6 +1343,76 @@ func testInvitationsUniqueness(t *testing.T, repos auth.Repositories) {
 	}
 }
 
+// testInvitationsKindRoundTrip proves the identifier_kind column round-trips and
+// is store-verbatim: a non-email kind persists and reads back unchanged, and the
+// identifier is stored EXACTLY as written (no store-side normalization — that is
+// the service's job). A phone-kind identifier keeps its casing/spacing verbatim.
+func testInvitationsKindRoundTrip(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	repo := repos.Invitations
+
+	inv, err := invitation.New(ids, "project", "p1", "member", "+1 (555) 010-2345", identity.KindPhone, "inviter-1", "hash-phone", false, time.Hour, time.Now())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	created, err := repo.Create(ctx, inv)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if created.IdentifierKind != identity.KindPhone {
+		t.Errorf("Create IdentifierKind = %q, want %q", created.IdentifierKind, identity.KindPhone)
+	}
+
+	got, err := repo.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.IdentifierKind != identity.KindPhone || got.Identifier != "+1 (555) 010-2345" {
+		t.Errorf("round-trip lost kind/identifier verbatim: kind=%q identifier=%q", got.IdentifierKind, got.Identifier)
+	}
+	byHash, err := repo.GetByTokenHash(ctx, "hash-phone")
+	if err != nil || byHash.IdentifierKind != identity.KindPhone {
+		t.Errorf("GetByTokenHash: kind=%q err=%v", byHash.IdentifierKind, err)
+	}
+}
+
+// testInvitationsCrossKindCoexistence proves identifier_kind is part of the
+// partial pending-tuple uniqueness key: the SAME (resource, identifier, relation)
+// value may have a pending invitation under two DIFFERENT kinds simultaneously —
+// the collision is per (resource, kind, identifier, relation). This is the case
+// that forces identifier_kind into the pending unique index.
+func testInvitationsCrossKindCoexistence(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	repo := repos.Invitations
+
+	// Same identifier string, two kinds. (Contrived but exact: the value space is
+	// what the index must disambiguate by kind.)
+	emailInv, err := invitation.New(ids, "project", "p1", "member", "coexist@example.com", identity.KindEmail, "inviter-1", "hash-ck-email", false, time.Hour, suiteBase)
+	if err != nil {
+		t.Fatalf("New(email): %v", err)
+	}
+	if _, err := repo.Create(ctx, emailInv); err != nil {
+		t.Fatalf("Create(email): %v", err)
+	}
+	phoneInv, err := invitation.New(ids, "project", "p1", "member", "coexist@example.com", identity.KindPhone, "inviter-1", "hash-ck-phone", false, time.Hour, suiteBase)
+	if err != nil {
+		t.Fatalf("New(phone): %v", err)
+	}
+	if _, err := repo.Create(ctx, phoneInv); err != nil {
+		t.Errorf("Create(phone) same value different kind: err=%v, want nil (kind is part of the key)", err)
+	}
+
+	// A THIRD pending invite matching the email tuple exactly (same kind) still
+	// collides — the kind widens the key, it does not remove the per-kind guard.
+	dup, err := invitation.New(ids, "project", "p1", "member", "coexist@example.com", identity.KindEmail, "inviter-1", "hash-ck-dup", false, time.Hour, suiteBase)
+	if err != nil {
+		t.Fatalf("New(dup): %v", err)
+	}
+	if _, err := repo.Create(ctx, dup); !errors.Is(err, errs.ErrAlreadyExists) {
+		t.Errorf("Create(dup email tuple): err=%v, want ErrAlreadyExists", err)
+	}
+}
+
 func testInvitationsTokenUnknown(t *testing.T, repos auth.Repositories) {
 	ctx := context.Background()
 	if _, err := repos.Invitations.GetByTokenHash(ctx, "no-such-hash"); !errors.Is(err, errs.ErrNotFound) {
@@ -1349,7 +1427,7 @@ func testInvitationsTokenExpired(t *testing.T, repos auth.Repositories) {
 	repo := repos.Invitations
 
 	// Created one hour ago with a one-minute lifetime → expired now.
-	inv, err := invitation.New(ids, "project", "p1", "member", "expired@example.com", "inviter-1", "hash-expired", false, time.Minute, time.Now().Add(-time.Hour))
+	inv, err := invitation.New(ids, "project", "p1", "member", "expired@example.com", "", "inviter-1", "hash-expired", false, time.Minute, time.Now().Add(-time.Hour))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1509,9 +1587,12 @@ func testInvitationsListBySubjectCollision(t *testing.T, repos auth.Repositories
 	}
 }
 
+// mustNewInvitation builds an email-kind pending invitation (the empty kind
+// defaults to email in New) — the common shape the list/collision cases seed.
+// Kind-specific cases build their invitations inline with an explicit kind.
 func mustNewInvitation(t *testing.T, resourceType, resourceID, relation, identifier, invitedBy, tokenHash string, createdAt time.Time) invitation.Invitation {
 	t.Helper()
-	inv, err := invitation.New(ids, resourceType, resourceID, relation, identifier, invitedBy, tokenHash, false, time.Hour, createdAt)
+	inv, err := invitation.New(ids, resourceType, resourceID, relation, identifier, "", invitedBy, tokenHash, false, time.Hour, createdAt)
 	if err != nil {
 		t.Fatalf("invitation.New: %v", err)
 	}
@@ -2090,7 +2171,7 @@ func testSecurityEventsDBGeneratedID(t *testing.T, repos auth.Repositories) {
 
 func testInvitationsDBGeneratedID(t *testing.T, repos auth.Repositories) {
 	ctx := context.Background()
-	inv, err := invitation.New(dbIDs, "project", "p-dbgen", "member", "dbgen@example.com", "inviter-1", "hash-dbgen-inv", false, time.Hour, time.Now())
+	inv, err := invitation.New(dbIDs, "project", "p-dbgen", "member", "dbgen@example.com", "", "inviter-1", "hash-dbgen-inv", false, time.Hour, time.Now())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

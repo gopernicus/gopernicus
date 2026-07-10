@@ -28,7 +28,7 @@ func NewInvitationStore(db *tursodb.DB) *InvitationStore {
 	return &InvitationStore{db: db}
 }
 
-const invitationColumns = "id, resource_type, resource_id, relation, identifier, resolved_subject_id, invited_by, token_hash, auto_accept, status, expires_at, accepted_at, created_at, updated_at"
+const invitationColumns = "id, resource_type, resource_id, relation, identifier, identifier_kind, resolved_subject_id, invited_by, token_hash, auto_accept, status, expires_at, accepted_at, created_at, updated_at"
 
 // invitationRow is the store-local, db-tagged projection of an invitations row.
 // accepted_at is nullable (turso.NullTime, zero-time when NULL); toDomain maps it.
@@ -38,6 +38,7 @@ type invitationRow struct {
 	ResourceID        string           `db:"resource_id"`
 	Relation          string           `db:"relation"`
 	Identifier        string           `db:"identifier"`
+	IdentifierKind    string           `db:"identifier_kind"`
 	ResolvedSubjectID string           `db:"resolved_subject_id"`
 	InvitedBy         string           `db:"invited_by"`
 	TokenHash         string           `db:"token_hash"`
@@ -56,6 +57,7 @@ func (r invitationRow) toDomain() invitation.Invitation {
 		ResourceID:        r.ResourceID,
 		Relation:          r.Relation,
 		Identifier:        r.Identifier,
+		IdentifierKind:    r.IdentifierKind,
 		ResolvedSubjectID: r.ResolvedSubjectID,
 		InvitedBy:         r.InvitedBy,
 		TokenHash:         r.TokenHash,
@@ -74,11 +76,11 @@ func (s *InvitationStore) Create(ctx context.Context, inv invitation.Invitation)
 	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if inv.ID == "" {
-		const q = `INSERT INTO invitations (resource_type, resource_id, relation, identifier, resolved_subject_id,
+		const q = `INSERT INTO invitations (resource_type, resource_id, relation, identifier, identifier_kind, resolved_subject_id,
 			invited_by, token_hash, auto_accept, status, expires_at, accepted_at, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`
 		if err := s.db.QueryRow(ctx, q,
-			inv.ResourceType, inv.ResourceID, inv.Relation, inv.Identifier,
+			inv.ResourceType, inv.ResourceID, inv.Relation, inv.Identifier, inv.IdentifierKind,
 			inv.ResolvedSubjectID, inv.InvitedBy, inv.TokenHash, tursodb.BoolToInt(inv.AutoAccept),
 			inv.Status, tursodb.FormatTime(inv.ExpiresAt), tursodb.FormatNullTime(inv.AcceptedAt),
 			tursodb.FormatTime(inv.CreatedAt), tursodb.FormatTime(inv.UpdatedAt),
@@ -87,9 +89,9 @@ func (s *InvitationStore) Create(ctx context.Context, inv invitation.Invitation)
 		}
 		return inv, nil
 	}
-	const q = `INSERT INTO invitations (` + invitationColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	const q = `INSERT INTO invitations (` + invitationColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err := s.db.Exec(ctx, q,
-		inv.ID, inv.ResourceType, inv.ResourceID, inv.Relation, inv.Identifier,
+		inv.ID, inv.ResourceType, inv.ResourceID, inv.Relation, inv.Identifier, inv.IdentifierKind,
 		inv.ResolvedSubjectID, inv.InvitedBy, inv.TokenHash, tursodb.BoolToInt(inv.AutoAccept),
 		inv.Status, tursodb.FormatTime(inv.ExpiresAt), tursodb.FormatNullTime(inv.AcceptedAt),
 		tursodb.FormatTime(inv.CreatedAt), tursodb.FormatTime(inv.UpdatedAt),

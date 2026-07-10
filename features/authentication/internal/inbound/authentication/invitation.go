@@ -39,9 +39,13 @@ type InvitationService interface {
 
 type createInvitationRequest struct {
 	Identifier string `json:"identifier"`
-	Relation   string `json:"relation"`
-	AutoAccept bool   `json:"auto_accept"`
-	Redirect   string `json:"redirect"`
+	// IdentifierKind is the address kind of Identifier (identity.KindEmail,
+	// identity.KindPhone, …). Optional: an omitted/empty value defaults to email,
+	// so existing requests are unchanged.
+	IdentifierKind string `json:"identifier_kind"`
+	Relation       string `json:"relation"`
+	AutoAccept     bool   `json:"auto_accept"`
+	Redirect       string `json:"redirect"`
 }
 
 type acceptInvitationRequest struct {
@@ -110,13 +114,14 @@ func (h *handlers) createInvitation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := h.inv.Create(r.Context(), invitationsvc.CreateInput{
-		ResourceType: web.Param(r, "resource_type"),
-		ResourceID:   web.Param(r, "resource_id"),
-		Relation:     req.Relation,
-		Identifier:   req.Identifier,
-		InvitedBy:    invitedBy,
-		AutoAccept:   req.AutoAccept,
-		Redirect:     req.Redirect,
+		ResourceType:   web.Param(r, "resource_type"),
+		ResourceID:     web.Param(r, "resource_id"),
+		Relation:       req.Relation,
+		Identifier:     req.Identifier,
+		IdentifierKind: req.IdentifierKind,
+		InvitedBy:      invitedBy,
+		AutoAccept:     req.AutoAccept,
+		Redirect:       req.Redirect,
 	})
 	if err != nil {
 		web.RespondJSONDomainError(w, err)

@@ -31,6 +31,8 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/email"
 	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk/identity"
+	"github.com/gopernicus/gopernicus/sdk/notify"
 )
 
 // secrets generates the opaque invitation secrets this service mints with the
@@ -71,6 +73,12 @@ var (
 	// ErrNotOwner is returned by Cancel/Resend when the caller is not the
 	// invitation's InvitedBy owner.
 	ErrNotOwner = fmt.Errorf("not the invitation owner: %w", errs.ErrForbidden)
+	// ErrKindNotSupported is returned by Create for an identifier kind the host
+	// is not set up to deliver to (deny-by-absence, ruling 6): a kind is supported
+	// iff it is identity.KindEmail with the Mailer wired, OR a notifier of that
+	// kind is wired. It wraps errs.ErrInvalidInput so the transport maps it to 400,
+	// and the invitation is NOT created. Package auth re-exports it.
+	ErrKindNotSupported = fmt.Errorf("invitation identifier kind is not supported by this host: %w", errs.ErrInvalidInput)
 )
 
 // Granter grants a subject a relation on a resource — the ONE ReBAC-decoupled
@@ -92,17 +100,19 @@ type MemberCheck func(ctx context.Context, resourceType, resourceID, subjectType
 // the Users repository — not a host Config seam.
 type UserLookup func(ctx context.Context, email string) (subjectID string, found bool, err error)
 
-// CreateInput is the input to Create. Identifier is the invitee email (the
-// service normalizes it). Redirect is the requested post-accept destination,
-// guarded by the feature's redirect allowlist before it reaches the mail.
+// CreateInput is the input to Create. Identifier is the invitee address (the
+// service normalizes it kind-aware). IdentifierKind is the address kind; empty
+// defaults to identity.KindEmail. Redirect is the requested post-accept
+// destination, guarded by the feature's redirect allowlist before delivery.
 type CreateInput struct {
-	ResourceType string
-	ResourceID   string
-	Relation     string
-	Identifier   string
-	InvitedBy    string
-	AutoAccept   bool
-	Redirect     string
+	ResourceType   string
+	ResourceID     string
+	Relation       string
+	Identifier     string
+	IdentifierKind string
+	InvitedBy      string
+	AutoAccept     bool
+	Redirect       string
 }
 
 // CreateResult reports the outcome of Create. DirectlyAdded is true when a known
@@ -146,6 +156,11 @@ type Deps struct {
 	Clock          func() time.Time
 	Logger         *slog.Logger
 	TTL            time.Duration
+	// Notifiers is the host's wired delivery set keyed by kind, built by package
+	// auth from Config.Notifiers (duplicate kinds are rejected loudly there). It
+	// defines the supported non-email kinds (deny-by-absence, ruling 6) and routes
+	// non-email delivery; a wired email-kind notifier also routes invitation mail.
+	Notifiers map[string]notify.Notifier
 	// IDs is the app-chosen entity-ID strategy (amended D9): it mints
 	// invitation and security-event record IDs. Zero value → default nanoids;
 	// cryptids.Database delegates to the store. It never mints the mailed
@@ -167,6 +182,10 @@ type Service struct {
 	logger         *slog.Logger
 	ttl            time.Duration
 	tokenHasher    *cryptids.SHA256Hasher
+	// notifiers is the host's wired delivery set keyed by kind (Deps.Notifiers).
+	// A wired kind is a supported kind (deny-by-absence); the delivery fork routes
+	// through it, falling back to the Mailer only for the email kind.
+	notifiers map[string]notify.Notifier
 	// ids is the app-chosen entity-ID strategy (Deps.IDs); entity keys only,
 	// never the mailed secret.
 	ids cryptids.IDGenerator
@@ -200,23 +219,42 @@ func New(d Deps) *Service {
 		logger:         logger,
 		ttl:            ttl,
 		tokenHasher:    cryptids.NewSHA256Hasher(),
+		notifiers:      d.Notifiers,
 		ids:            d.IDs,
 	}
 }
 
-// Create invites Identifier to a resource. When AutoAccept is set and the
-// invitee is a known user, it is a direct add — an immediate grant with no
-// pending record (MemberCheck may veto a duplicate). Otherwise a pending
-// invitation is minted and its secret mailed.
+// Create invites Identifier to a resource. The identifier kind (default
+// identity.KindEmail) must be a supported kind (kindSupported) or Create fails
+// loudly with ErrKindNotSupported before touching the store. When AutoAccept is
+// set and the invitee is a known user (email kind only), it is a direct add — an
+// immediate grant with no pending record (MemberCheck may veto a duplicate).
+// Otherwise a pending invitation is minted and its secret delivered.
 func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, error) {
-	identifier, err := normalizeIdentifier(in.Identifier)
+	kind := strings.TrimSpace(in.IdentifierKind)
+	if kind == "" {
+		kind = identity.KindEmail
+	}
+	in.IdentifierKind = kind
+
+	identifier, err := normalizeIdentifier(in.Identifier, kind)
 	if err != nil {
 		return CreateResult{}, err
 	}
 	in.Identifier = identifier
 
+	// Deny-by-absence (delta-fold 1): email is always-on via the required Mailer;
+	// every other kind requires a wired notifier of that kind. Unsupported kinds
+	// never reach the store.
+	if !s.kindSupported(kind) {
+		return CreateResult{}, ErrKindNotSupported
+	}
+
 	subjectID := ""
-	if s.userLookup != nil {
+	// The direct-add resolution is email-keyed (fold 3): only an email identifier
+	// can resolve to an account (accounts are email-keyed), so AutoAccept never
+	// direct-adds for a non-email kind — it always mints a pending record instead.
+	if s.userLookup != nil && kind == identity.KindEmail {
 		id, found, err := s.userLookup(ctx, identifier)
 		if err != nil {
 			return CreateResult{}, fmt.Errorf("lookup invitee: %w", err)
@@ -230,6 +268,18 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, err
 		return s.directAdd(ctx, in, subjectID)
 	}
 	return s.createPending(ctx, in, subjectID)
+}
+
+// kindSupported reports whether the host can deliver an invitation of kind
+// (deny-by-absence, ruling 6 / delta-fold 1): the email kind is always supported
+// while the required Mailer is wired, and every other kind is supported iff a
+// notifier of that kind is wired.
+func (s *Service) kindSupported(kind string) bool {
+	if kind == identity.KindEmail && s.mailer != nil {
+		return true
+	}
+	_, ok := s.notifiers[kind]
+	return ok
 }
 
 // directAdd grants a known invitee immediately (AutoAccept). A MemberCheck veto
@@ -250,7 +300,7 @@ func (s *Service) directAdd(ctx context.Context, in CreateInput, subjectID strin
 		return CreateResult{}, fmt.Errorf("grant: %w", err)
 	}
 	s.recordGrant(ctx, subjectID, in.ResourceType, in.ResourceID, in.Relation, in.Identifier, securityevent.StatusSuccess)
-	s.sendMemberAdded(ctx, in.Identifier, in.ResourceType, in.ResourceID, in.Relation, in.Redirect)
+	s.sendMemberAdded(ctx, in.IdentifierKind, in.Identifier, in.ResourceType, in.ResourceID, in.Relation, in.Redirect)
 	return CreateResult{DirectlyAdded: true}, nil
 }
 
@@ -264,7 +314,7 @@ func (s *Service) createPending(ctx context.Context, in CreateInput, subjectID s
 	if err != nil {
 		return CreateResult{}, err
 	}
-	inv, err := invitation.New(s.ids, in.ResourceType, in.ResourceID, in.Relation, in.Identifier, in.InvitedBy, tokenHash, in.AutoAccept, s.ttl, s.now())
+	inv, err := invitation.New(s.ids, in.ResourceType, in.ResourceID, in.Relation, in.Identifier, in.IdentifierKind, in.InvitedBy, tokenHash, in.AutoAccept, s.ttl, s.now())
 	if err != nil {
 		return CreateResult{}, err
 	}
@@ -302,9 +352,16 @@ func (s *Service) Accept(ctx context.Context, in AcceptInput) (AcceptResult, err
 	if inv.Status != invitation.StatusPending {
 		return AcceptResult{}, ErrNotPending
 	}
-	identifier, err := normalizeIdentifier(in.Identifier)
-	if err != nil || identifier != inv.Identifier {
-		return AcceptResult{}, ErrIdentifierMismatch
+	// The identifier-match binding applies to the EMAIL kind only (delta-fold 6):
+	// accounts are email-keyed, so the acceptor's email is the trusted claim the
+	// inbound handler passes. Non-email kinds bind by address-possession — the
+	// token was delivered to the invited address — so the match is skipped (no
+	// acceptor-address-of-kind data source exists until address verification).
+	if inv.IdentifierKind == identity.KindEmail {
+		identifier, err := normalizeIdentifier(in.Identifier, inv.IdentifierKind)
+		if err != nil || identifier != inv.Identifier {
+			return AcceptResult{}, ErrIdentifierMismatch
+		}
 	}
 
 	subjectType := in.SubjectType
@@ -328,7 +385,7 @@ func (s *Service) Accept(ctx context.Context, in AcceptInput) (AcceptResult, err
 	}); err != nil {
 		return AcceptResult{}, err
 	}
-	s.sendMemberAdded(ctx, inv.Identifier, inv.ResourceType, inv.ResourceID, inv.Relation, "")
+	s.sendMemberAdded(ctx, inv.IdentifierKind, inv.Identifier, inv.ResourceType, inv.ResourceID, inv.Relation, "")
 	return AcceptResult{ResourceType: inv.ResourceType, ResourceID: inv.ResourceID, Relation: inv.Relation}, nil
 }
 
@@ -434,9 +491,13 @@ func (s *Service) ListByResource(ctx context.Context, resourceType, resourceID s
 
 // Mine returns a cursor-paginated page of the invitations addressed to an
 // invitee identifier (email) — the caller's own invitations (design §6: rides
-// the Identifier table column, never a tuple).
+// the Identifier table column, never a tuple). It is email-keyed (fold 3): the
+// identifier is normalized as an email (the caller's own address, resolved from
+// their account), so the lookup structurally hits email-kind rows only — a
+// non-email identifier lives in a different string space (a phone number, a Slack
+// id), never the lowercased-email keyspace this pages over.
 func (s *Service) Mine(ctx context.Context, identifier string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
-	normalized, err := normalizeIdentifier(identifier)
+	normalized, err := normalizeIdentifier(identifier, identity.KindEmail)
 	if err != nil {
 		return crud.Page[invitation.Invitation]{}, err
 	}
@@ -449,7 +510,7 @@ func (s *Service) Mine(ctx context.Context, identifier string, req crud.ListRequ
 // audited. It returns the number resolved. This is the sole port authsvc holds
 // on this service (design §6 pin).
 func (s *Service) ResolveInvitations(ctx context.Context, email, subjectType, subjectID string) (int, error) {
-	identifier, err := normalizeIdentifier(email)
+	identifier, err := normalizeIdentifier(email, identity.KindEmail)
 	if err != nil {
 		return 0, nil // an unparseable email resolves nothing; never abort registration
 	}
@@ -465,6 +526,13 @@ func (s *Service) ResolveInvitations(ctx context.Context, email, subjectType, su
 			return resolved, err
 		}
 		for _, inv := range page.Items {
+			// Resolve-on-registration is email-keyed (fold 3): a just-verified email
+			// only ever auto-accepts email-kind rows. A non-email row sharing this
+			// identifier string is never granted here (its binding is
+			// address-possession at accept, not account-email match).
+			if inv.IdentifierKind != identity.KindEmail {
+				continue
+			}
 			if inv.Status != invitation.StatusPending || !inv.AutoAccept || inv.Expired(s.now()) {
 				continue
 			}
@@ -552,39 +620,49 @@ func (s *Service) record(ctx context.Context, userID, eventType, status string, 
 	}
 }
 
-// --- mail ---
+// --- delivery ---
 
-// sendInviteSent mails the invitation secret to the invitee. The requested
-// redirect destination is passed through the feature's allowlist first (design
-// §3's open-redirect guard), so a non-allowlisted target falls back to "/".
+// deliver routes an invitation message to the invited address by kind (the
+// delivery fork, delta-fold 4): a wired notifier of that kind delivers it via
+// notify; the email kind with NO wired email-notifier rides Config.Mailer
+// byte-for-byte as before (existing hosts unchanged). Non-email kinds always have
+// a wired notifier here — Create's supported-kind predicate guarantees it — so
+// the Mailer fallback only ever fires for the email kind.
+func (s *Service) deliver(ctx context.Context, kind, identifier, subject, body string) error {
+	if n, ok := s.notifiers[kind]; ok {
+		return n.Notify(ctx, identity.Address{Kind: kind, Value: identifier}, notify.Message{Subject: subject, Body: body})
+	}
+	return s.mailer.Send(ctx, email.Message{
+		From:    s.mailFrom,
+		To:      []string{identifier},
+		Subject: subject,
+		Text:    body,
+	})
+}
+
+// sendInviteSent delivers the invitation secret to the invitee via the delivery
+// fork. The requested redirect destination is passed through the feature's
+// allowlist first (design §3's open-redirect guard), so a non-allowlisted target
+// falls back to "/".
 func (s *Service) sendInviteSent(ctx context.Context, inv invitation.Invitation, secret, redirectTo string) error {
 	dest := s.redirects.Resolve(redirectTo)
-	msg := email.Message{
-		From:    s.mailFrom,
-		To:      []string{inv.Identifier},
-		Subject: "You have an invitation",
-		Text: fmt.Sprintf("You were invited to %s %s as %s.\nAccept: %s (token: %s)",
-			inv.ResourceType, inv.ResourceID, inv.Relation, dest, secret),
-	}
-	if err := s.mailer.Send(ctx, msg); err != nil {
-		return fmt.Errorf("send invitation email: %w", err)
+	body := fmt.Sprintf("You were invited to %s %s as %s.\nAccept: %s (token: %s)",
+		inv.ResourceType, inv.ResourceID, inv.Relation, dest, secret)
+	if err := s.deliver(ctx, inv.IdentifierKind, inv.Identifier, "You have an invitation", body); err != nil {
+		return fmt.Errorf("send invitation notification: %w", err)
 	}
 	return nil
 }
 
-// sendMemberAdded notifies an added member. It is best-effort — the grant has
-// already happened, so a mail failure is logged, never surfaced.
-func (s *Service) sendMemberAdded(ctx context.Context, identifier, resourceType, resourceID, relation, redirectTo string) {
+// sendMemberAdded notifies an added member via the delivery fork. It is
+// best-effort — the grant has already happened, so a delivery failure is logged,
+// never surfaced.
+func (s *Service) sendMemberAdded(ctx context.Context, kind, identifier, resourceType, resourceID, relation, redirectTo string) {
 	dest := s.redirects.Resolve(redirectTo)
-	msg := email.Message{
-		From:    s.mailFrom,
-		To:      []string{identifier},
-		Subject: "You were added",
-		Text: fmt.Sprintf("You were added to %s %s as %s.\n%s",
-			resourceType, resourceID, relation, dest),
-	}
-	if err := s.mailer.Send(ctx, msg); err != nil {
-		s.logger.Warn("member-added email failed", "error_kind", errKind(err))
+	body := fmt.Sprintf("You were added to %s %s as %s.\n%s",
+		resourceType, resourceID, relation, dest)
+	if err := s.deliver(ctx, kind, identifier, "You were added", body); err != nil {
+		s.logger.Warn("member-added notification failed", "error_kind", errKind(err))
 	}
 }
 
@@ -604,11 +682,16 @@ func mintSecret() string {
 	return (secrets.MustGenerate() + secrets.MustGenerate())[:tokenSecretLen]
 }
 
-// normalizeIdentifier trims and lowercases the invitee identifier (email) so a
-// stored invitation matches what resolve-on-registration and "mine" look it up
-// by. A blank identifier is invalid input.
-func normalizeIdentifier(identifier string) (string, error) {
-	normalized := strings.ToLower(strings.TrimSpace(identifier))
+// normalizeIdentifier trims the invitee identifier and, for the email kind only,
+// lowercases it, so a stored invitation matches what resolve-on-registration and
+// "mine" look it up by (fold 5: email → trim+lowercase; every other kind → trim
+// only). A blank identifier is invalid input. Normalization lives in the service;
+// the entity stores the identifier verbatim.
+func normalizeIdentifier(identifier, kind string) (string, error) {
+	normalized := strings.TrimSpace(identifier)
+	if kind == identity.KindEmail {
+		normalized = strings.ToLower(normalized)
+	}
 	if normalized == "" {
 		return "", fmt.Errorf("identifier is required: %w", errs.ErrInvalidInput)
 	}

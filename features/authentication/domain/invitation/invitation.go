@@ -19,6 +19,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk/identity"
 )
 
 // Status values for an invitation's lifecycle. An invitation is created
@@ -34,19 +35,24 @@ const (
 	StatusExpired   = "expired"
 )
 
-// Invitation is one invite record. Identifier is the invitee email (stored
-// normalized by the service). ResolvedSubjectID is the subject the invite
-// resolved to on acceptance (empty while pending for an unknown invitee).
-// InvitedBy is the user that created it — the ONLY authorization anchor for
-// cancel/resend (a plain ownership column, never a tuple). AutoAccept marks an
-// invite that grants automatically when its invitee registers/verifies a
-// matching email (resolve-on-registration). AcceptedAt is zero until accepted.
+// Invitation is one invite record. Identifier is the invitee address (stored
+// normalized by the service — email lowercased, every other kind trimmed only).
+// IdentifierKind is the address kind the identifier is (identity.KindEmail,
+// identity.KindPhone, or any open string a wired notifier declares); it is part
+// of the pending-tuple uniqueness key so the same value can be invited across
+// kinds. ResolvedSubjectID is the subject the invite resolved to on acceptance
+// (empty while pending for an unknown invitee). InvitedBy is the user that
+// created it — the ONLY authorization anchor for cancel/resend (a plain ownership
+// column, never a tuple). AutoAccept marks an invite that grants automatically
+// when its invitee registers/verifies a matching email (resolve-on-registration;
+// email-kind only). AcceptedAt is zero until accepted.
 type Invitation struct {
 	ID                string
 	ResourceType      string
 	ResourceID        string
 	Relation          string
-	Identifier        string // invitee email (normalized)
+	Identifier        string // invitee address (normalized by the service)
+	IdentifierKind    string // identity.KindEmail (default), identity.KindPhone, …
 	ResolvedSubjectID string // set on acceptance; empty while pending-unresolved
 	InvitedBy         string
 	TokenHash         string
@@ -63,16 +69,20 @@ type Invitation struct {
 // minting its record ID from ids (empty under cryptids.Database — the store
 // then assigns the key). ttl sets ExpiresAt from now. A blank resourceType/
 // resourceID/relation/identifier/invitedBy/tokenHash wraps errs.ErrInvalidInput.
-// The identifier is stored verbatim — the service normalizes it (email) before
-// calling New so it matches the value resolve-on-registration and "mine" look
-// it up by.
-func New(ids cryptids.IDGenerator, resourceType, resourceID, relation, identifier, invitedBy, tokenHash string, autoAccept bool, ttl time.Duration, now time.Time) (Invitation, error) {
+// A blank identifierKind defaults to identity.KindEmail. The identifier is
+// stored verbatim — the service normalizes it (kind-aware) before calling New so
+// it matches the value resolve-on-registration and "mine" look it up by.
+func New(ids cryptids.IDGenerator, resourceType, resourceID, relation, identifier, identifierKind, invitedBy, tokenHash string, autoAccept bool, ttl time.Duration, now time.Time) (Invitation, error) {
 	resourceType = strings.TrimSpace(resourceType)
 	resourceID = strings.TrimSpace(resourceID)
 	relation = strings.TrimSpace(relation)
 	identifier = strings.TrimSpace(identifier)
+	identifierKind = strings.TrimSpace(identifierKind)
 	invitedBy = strings.TrimSpace(invitedBy)
 	tokenHash = strings.TrimSpace(tokenHash)
+	if identifierKind == "" {
+		identifierKind = identity.KindEmail
+	}
 	switch {
 	case resourceType == "":
 		return Invitation{}, fmt.Errorf("resource type is required: %w", errs.ErrInvalidInput)
@@ -89,18 +99,19 @@ func New(ids cryptids.IDGenerator, resourceType, resourceID, relation, identifie
 	}
 	now = now.UTC()
 	return Invitation{
-		ID:           ids.MustGenerate(),
-		ResourceType: resourceType,
-		ResourceID:   resourceID,
-		Relation:     relation,
-		Identifier:   identifier,
-		InvitedBy:    invitedBy,
-		TokenHash:    tokenHash,
-		AutoAccept:   autoAccept,
-		Status:       StatusPending,
-		ExpiresAt:    now.Add(ttl),
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:             ids.MustGenerate(),
+		ResourceType:   resourceType,
+		ResourceID:     resourceID,
+		Relation:       relation,
+		Identifier:     identifier,
+		IdentifierKind: identifierKind,
+		InvitedBy:      invitedBy,
+		TokenHash:      tokenHash,
+		AutoAccept:     autoAccept,
+		Status:         StatusPending,
+		ExpiresAt:      now.Add(ttl),
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}, nil
 }
 

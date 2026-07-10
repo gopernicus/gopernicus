@@ -50,6 +50,8 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/email"
 	"github.com/gopernicus/gopernicus/sdk/errs"
 	"github.com/gopernicus/gopernicus/sdk/feature"
+	"github.com/gopernicus/gopernicus/sdk/identity"
+	"github.com/gopernicus/gopernicus/sdk/notify"
 	"github.com/gopernicus/gopernicus/sdk/oauth"
 	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/web"
@@ -98,6 +100,22 @@ var ErrInvalidListStrategy = errors.New(`auth: Config.ListStrategy must be "curs
 // so — mirroring the transport, which registers no invitation routes and 404s
 // the whole surface (design §6) — the driving surface wraps errs.ErrNotFound.
 var ErrInvitationsDisabled = fmt.Errorf("auth: invitations are disabled (no Config.Granter): %w", errs.ErrNotFound)
+
+// ErrDuplicateNotifierKind is returned by NewService/Register when Config.Notifiers
+// contains more than one notifier declaring the same kind. Unlike auth's OAuth
+// provider map, which silently last-wins, the notifier set degrades LOUDLY at
+// construction (the ErrOAuthReposRequired posture): a duplicate kind is an
+// ambiguous delivery route, never a silent pick.
+var ErrDuplicateNotifierKind = errors.New("auth: Config.Notifiers has more than one notifier for the same kind")
+
+// ErrKindNotSupported is returned (as the wrapped cause) by Service.Create for an
+// invitation identifier kind the host is not set up to deliver to
+// (deny-by-absence, ruling 6): a kind is supported iff it is identity.KindEmail
+// with the Mailer wired, OR a notifier of that kind is wired in Config.Notifiers.
+// It wraps errs.ErrInvalidInput, so the transport maps it to 400, and the
+// invitation is NOT created. Hosts detect it with errors.Is(err,
+// auth.ErrKindNotSupported).
+var ErrKindNotSupported = invitationsvc.ErrKindNotSupported
 
 // Granter is the ReBAC-decoupled grant-on-accept seam for invitations (design
 // §2.2/§6, ratified AV4): Grant(ctx, resourceType, resourceID, relation,
@@ -306,6 +324,16 @@ type Config struct {
 	// path (known invitee + AutoAccept). Nil → no dup check (idempotent grants
 	// absorb duplicates). Meaningful only when Granter is wired.
 	MemberCheck MemberCheck
+	// Notifiers is the host's wired delivery set for invitation delivery (ruling
+	// 6). The email kind is always deliverable via the required Mailer with zero
+	// entries here; each additional wired kind (identity.KindPhone, "slack", …)
+	// enables invitations of that kind (deny-by-absence — an unwired kind is
+	// ErrKindNotSupported at Create). A wired email-kind notifier also routes
+	// invitation mail through notify instead of the Mailer directly
+	// (verification/reset mail stays on the Mailer). Duplicate kinds →
+	// ErrDuplicateNotifierKind at construction. Meaningful only when Granter is
+	// wired; sdk/notify ships Console (any kind) and MailerBridge (email).
+	Notifiers []notify.Notifier
 
 	// Logger receives the best-effort WARN line when a security-event audit write
 	// fails (design §5.1 — audit-write failures never fail the auth flow). Nil →
@@ -370,6 +398,17 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Build the notifier lookup keyed by kind, rejecting duplicate kinds LOUDLY
+	// (the ErrOAuthReposRequired posture — NOT the OAuth provider map's silent
+	// last-wins). A duplicate delivery route is a wiring bug, never a silent pick.
+	notifiers := make(map[string]notify.Notifier, len(cfg.Notifiers))
+	for _, n := range cfg.Notifiers {
+		kind := n.Kind()
+		if _, dup := notifiers[kind]; dup {
+			return nil, ErrDuplicateNotifierKind
+		}
+		notifiers[kind] = n
+	}
 	limiter := cfg.RateLimiter
 	if limiter == nil {
 		limiter = ratelimiter.NewMemory()
@@ -390,6 +429,7 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 			SecurityEvents: repos.SecurityEvents,
 			Logger:         cfg.Logger,
 			IDs:            cfg.IDs,
+			Notifiers:      notifiers,
 		})
 	}
 
@@ -496,6 +536,21 @@ func (s *Service) AuthenticateAPIKey(ctx context.Context, rawKey string) (Princi
 // identity port a consuming feature reads alongside CurrentUser.
 func (s *Service) CurrentPrincipal(ctx context.Context) (Principal, bool) {
 	return s.svc.CurrentPrincipal(ctx)
+}
+
+// resolverAssertion is the compile-time proof that the auth feature satisfies the
+// generic sdk/identity Resolver port: a host wires this Service anywhere a
+// Resolver is expected, unadapted.
+var _ identity.Resolver = (*Service)(nil)
+
+// Resolve implements identity.Resolver: it turns a Principal into its display and
+// contact Info. A user principal resolves to its DisplayName (else the email
+// local part) with the email carried as an identity.KindEmail address; a
+// service-account principal resolves to its Name. An unknown principal type, a
+// missing record, or an off machine subsystem (nil ServiceAccounts) returns an
+// error satisfying errs.ErrNotFound — fail-closed, nil-guarded, never a panic.
+func (s *Service) Resolve(ctx context.Context, p identity.Principal) (identity.Info, error) {
+	return s.svc.Resolve(ctx, p)
 }
 
 // RegisterUser creates an account and dispatches the email-verification code.
