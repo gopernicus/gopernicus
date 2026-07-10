@@ -1,9 +1,9 @@
 # datastore-hardening — connector parity, strictness, and the scaffolded seams
 
-Status: **RATIFIED 2026-07-09 (jrazmi, in-session) — Q1 FULL SWEEP · Q2
-crud.Transactor (tx-in-context) · Q3 PURE OPT-IN · Q4 gate APPROVED (runs
-before execution; findings folded on return). EXECUTING under the
-2026-07-09 owner loop directive (autonomous while away).**
+Status: **CLOSED 2026-07-09 — all seven phases executed + both live legs
+green (ten suites). Ratified same day (jrazmi, in-session): Q1 FULL SWEEP ·
+Q2 crud.Transactor (tx-in-context) · Q3 PURE OPT-IN · Q4 gate run,
+16 findings folded. Executed autonomously under the owner loop directive.**
 Origin: the 2026-07-09 post-authorization-v1 connector audit (in-session;
 findings 1–9 with owner answers taken same session — recorded verbatim in
 "Owner rulings" below). No design doc — the audit + this plan are the record.
@@ -572,3 +572,33 @@ target — helper tests are its net, per plan allowance). READMEs updated
 with the opt-in stance. Both connectors + `make check`/`make guard`
 (ten) green. Committed CI-green. **Next: milestone close — the two live
 legs.**
+
+### 2026-07-09 — MILESTONE CLOSED: both live legs green (all ten suites)
+
+Playground URL asserted pre-run (the one authorized DB); pgx leg on a
+DEDICATED docker postgres:17 at :55432 (a running segovia container made
+:5432-adjacent reuse unsafe — conformance truncates whatever the DSN
+hits). **`make test-stores` → all TEN suites ok**: cms/auth/jobs/events/
+authorization × pgx + turso — the five swept turso stores proved LIVE
+over the P5 row structs (authentication's 420s network suite included);
+authorization turso re-proved `Roles/ListPagination` on the P2 role_key
+rework.
+
+**Live-leg finding (pre-existing, out of scope, OPEN FLAG for jrazmi):**
+`features/authentication/stores/pgx` collision/PrevPage cases FAILED
+deterministically on a default-locale postgres:17 container and PASSED on
+`POSTGRES_INITDB_ARGS="--locale=C"` — the suite's exact id-tiebreak
+expectations assume BYTE (C) collation, but TEXT ORDER BY follows the
+database collation (dictionary order flips 'Z'/'d'). Zero commits in this
+milestone touch those paths; the exposure is environmental. Proper fix
+(owner call): pin `COLLATE "C"` on the tiebreak ORDER BY in the pgx
+stores, or pin the C-locale container in the docs/test-stores hint.
+Recorded, not fixed (features/authentication is outside this milestone's
+scope).
+
+**Real-interaction close:** `examples/minimal` 200 + NEW `/healthz` 200;
+`examples/cms` booted against the live playground — root 200 (real
+renders THROUGH the swept row structs) + `/healthz`
+`{"status":"ok"}` (the P3-fixed StatusCheck round-trip); ports freed;
+container removed. Plans archived to `.claude/past/datastore-hardening/`
+at close per standing practice.

@@ -1763,3 +1763,46 @@ the ALL-non-empty and MIXED CreateRelationships branches hermetically
 untested (every conformance case mints via the default engine path);
 (4) the `.claude/plans/authorization-v1/` → `.claude/past/` archive move
 lands with this close.
+
+## 2026-07-09 — datastore-hardening EXECUTED: connector parity, strictness, scaffolded seams
+
+Same-day cut → gate → execute, autonomously under the owner loop directive
+(plan: `.claude/past/datastore-hardening/plan.md`; the post-authorization-v1
+connector audit is the origin; owner rulings 1–9 + Q1–Q4 ratified at
+recommendations; review gate ran post-ratification — steward
+ALIGNED-WITH-EDITS ×9 + lead SHIP-WITH-EDITS ×7 folded, incl. the
+convergent retry major and the Transact-not-InTx collision catch).
+
+What shipped (P1–P7, one CI-green commit each): authorization order
+allow-lists moved to the domain rims + memstore order validation + the
+cross-backend RejectsUnknownOrderField storetest cases · turso List
+identifier STRICTNESS (QuoteIdentifier; error-returning append helpers;
+raw-expression PK fails page 1) with the roles store reworked to the pgx
+derived-`role_key` pattern · `/healthz` on all four hosts (cms DB-probed)
+**plus the run-and-look catch: both connectors' StatusCheck was Ping-only
+and remote libSQL Ping is LAZY — now Ping + SELECT 1, the 503 path driven
+live** · turso query-logging/RedactDSN parity (opt-in, args-verbatim,
+tx-path threaded; pgxdb's stale asymmetry records rewritten) · the FULL
+turso struct-scan sweep (strict `ScanStruct[T]`, `turso.Time/NullTime/
+Bool` Scanner types, ~23 row structs + toDomain across five stores, zero
+hand-scan callbacks left; write-side helpers renamed FormatNullTime/Ptr)
+· `crud.Transactor` scaffolded UNCONSUMED (`Transact`, pinned semantics,
+no sdk ctx stash, nesting unpinned) + guards **G9 no-Underlying** and
+**G10 no-Lax** (prove-can-fail recorded; `make guard` runs TEN) · opt-in
+`Config.Retry` (connection-acquisition-only, full-jitter, ctx-budgeted;
+zero value = today's behavior byte-for-byte).
+
+Live close: all TEN store suites green (`make test-stores` — asserted
+playground + dedicated C-locale postgres:17); examples/cms rendered live
+through the swept row structs; healthz 200s.
+
+Open flags for jrazmi: (1) **auth-pgx storetest id-tiebreaks are
+collation-sensitive** — deterministic FAIL on default-locale postgres,
+PASS on `--locale=C`; pre-existing, out of milestone scope; fix = pin
+`COLLATE "C"` on tiebreak ORDER BYs or pin the container locale in docs.
+(2) examples/minimal still has no README (P3 premise-false). (3)
+`tursodb.Open`'s zero-value lazy ping stands (opt-in Retry = eager boot
+validation; feature-store probes remain the boot validator). (4) The
+retry loop's budget is ConnectTimeout — many attempts × long backoff
+needs it raised. (5) A raw DSN inside a wrapped DRIVER error is not
+scrubbed (parity with pgxdb; hosts use Config.Redacted()).
