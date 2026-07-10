@@ -1,4 +1,4 @@
-package notify
+package mailer
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
 	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 )
 
@@ -23,19 +24,19 @@ func (f *fakeSender) Send(ctx context.Context, msg email.Message) error {
 	return f.err
 }
 
-func TestMailerBridge_Kind(t *testing.T) {
-	b := NewMailerBridge(&fakeSender{}, "noreply@example.com")
+func TestBridge_Kind(t *testing.T) {
+	b := New(&fakeSender{}, "noreply@example.com")
 	if got := b.Kind(); got != identity.KindEmail {
 		t.Errorf("Kind() = %q, want %q", got, identity.KindEmail)
 	}
 }
 
-func TestMailerBridge_Notify_MapsFieldsAndInjectsFrom(t *testing.T) {
+func TestBridge_Notify_MapsFieldsAndInjectsFrom(t *testing.T) {
 	fake := &fakeSender{}
-	b := NewMailerBridge(fake, "noreply@example.com")
+	b := New(fake, "noreply@example.com")
 
 	to := identity.Address{Kind: identity.KindEmail, Value: "invitee@example.com"}
-	msg := Message{Subject: "You're invited", Body: "click here"}
+	msg := notify.Message{Subject: "You're invited", Body: "click here"}
 	if err := b.Notify(context.Background(), to, msg); err != nil {
 		t.Fatalf("Notify() error = %v", err)
 	}
@@ -57,24 +58,24 @@ func TestMailerBridge_Notify_MapsFieldsAndInjectsFrom(t *testing.T) {
 	}
 }
 
-func TestMailerBridge_Notify_SendErrorPropagates(t *testing.T) {
+func TestBridge_Notify_SendErrorPropagates(t *testing.T) {
 	sendErr := errors.New("smtp unavailable")
 	fake := &fakeSender{err: sendErr}
-	b := NewMailerBridge(fake, "noreply@example.com")
+	b := New(fake, "noreply@example.com")
 
 	to := identity.Address{Kind: identity.KindEmail, Value: "invitee@example.com"}
-	err := b.Notify(context.Background(), to, Message{Subject: "s", Body: "b"})
+	err := b.Notify(context.Background(), to, notify.Message{Subject: "s", Body: "b"})
 	if !errors.Is(err, sendErr) {
 		t.Fatalf("Notify() error = %v, want %v", err, sendErr)
 	}
 }
 
-func TestMailerBridge_Notify_ValidateErrorPropagates(t *testing.T) {
+func TestBridge_Notify_ValidateErrorPropagates(t *testing.T) {
 	fake := &fakeSender{}
-	b := NewMailerBridge(fake, "") // empty From fails email.Message.Validate
+	b := New(fake, "") // empty From fails email.Message.Validate
 
 	to := identity.Address{Kind: identity.KindEmail, Value: "invitee@example.com"}
-	err := b.Notify(context.Background(), to, Message{Subject: "s", Body: "b"})
+	err := b.Notify(context.Background(), to, notify.Message{Subject: "s", Body: "b"})
 	if err == nil {
 		t.Fatal("expected a validation error for empty From, got nil")
 	}
