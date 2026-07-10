@@ -314,6 +314,36 @@ error propagations, default-logger fallback. sdk green; `make check`
 (35) + `make guard` (11, G1 clean) green. Committed CI-green.
 **Next: P3 (L).**
 
+### 2026-07-10 — P3 CLOSED (auth: Resolver + kind-aware delivered invitations)
+
+All delta-fold specs landed: `authsvc/resolver.go` (user → DisplayName
+else email local part + KindEmail address; service_account → Name;
+unknown/missing/nil-machine-repo → ErrNotFound, nil-guarded) promoted on
+`auth.Service` with the `identity.Resolver` assertion; the supported-kind
+predicate verbatim (email always-on via required Mailer; non-email needs
+a wired notifier → `ErrKindNotSupported` wrapping ErrInvalidInput —
+defined in invitationsvc and ALIASED at the root per the
+ErrOAuthLastMethod precedent, a cycle the plan's "package-authentication
+sentinel" wording missed, logged); `deliver` forks BOTH send paths
+(sendInviteSent + sendMemberAdded) by kind — email-no-notifier rides
+Mailer byte-for-byte; Accept's identifier-match is kind-conditional,
+service-only; Mine/ResolveInvitations/userLookup filter kind=email;
+`Config.Notifiers` + loud `ErrDuplicateNotifierKind` (a NEW check — the
+silently-last-wins provider map explicitly not copied); inbound create
+accepts optional identifier_kind. Migration **0013** both dialects
+(column + pending-index rebuild); both stores' row structs/creates/scans
+kind-aware; storetest KindRoundTripVerbatim + CrossKindCoexistence +
+default-email asserts; reference scan + authmem pending-tuple gain the
+kind. Test homes per delta-fold 5. **Live A9 email leg driven on an
+UNCHANGED host — all six codes match the record exactly** (mailer log
+shows both sends riding Config.Mailer). Premise-drift logged
+(CreateInput lives in invitationsvc; line-number drift; mustNewInvitation
+kept its signature — ~25 call sites). `make check` (35) + `make guard`
+(11) green; coordinator re-verified builds. Committed CI-green.
+**Next: P4 (close).** Known P4 items from the executor: invitation JSON
+response doesn't yet surface identifier_kind (scoped: request-only);
+migration 0013's on-DB apply is the close's live-leg job.
+
 ### 2026-07-10 — REWRITE (owner-directed): notifier-first
 
 The token-bearer P2 semantics never executed — the owner redirected at

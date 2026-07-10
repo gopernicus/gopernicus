@@ -15,6 +15,8 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/email"
 	"github.com/gopernicus/gopernicus/sdk/feature"
+	"github.com/gopernicus/gopernicus/sdk/identity"
+	"github.com/gopernicus/gopernicus/sdk/notify"
 	"github.com/gopernicus/gopernicus/sdk/oauth"
 	"github.com/gopernicus/gopernicus/sdk/web"
 )
@@ -112,6 +114,13 @@ func (stubAPIKeys) ListByServiceAccount(context.Context, string, crud.ListReques
 func (stubAPIKeys) Revoke(context.Context, string, time.Time) error        { return nil }
 func (stubAPIKeys) TouchLastUsed(context.Context, string, time.Time) error { return nil }
 
+// stubNotifier is a notify.Notifier declaring a fixed kind — the duplicate-kind
+// NewService rejection test drives construction only, never delivery.
+type stubNotifier struct{ kind string }
+
+func (s stubNotifier) Kind() string                                                 { return s.kind }
+func (stubNotifier) Notify(context.Context, identity.Address, notify.Message) error { return nil }
+
 func TestNewServiceRequiresHasher(t *testing.T) {
 	_, err := NewService(Repositories{}, Config{Mailer: stubMailer{}})
 	if !errors.Is(err, ErrHasherRequired) {
@@ -123,6 +132,26 @@ func TestNewServiceRequiresMailer(t *testing.T) {
 	_, err := NewService(Repositories{}, Config{Hasher: stubHasher{}})
 	if !errors.Is(err, ErrMailerRequired) {
 		t.Errorf("nil Mailer: err=%v, want ErrMailerRequired", err)
+	}
+}
+
+// TestNewServiceDuplicateNotifierKind proves the LOUD duplicate-kind rejection
+// (the ErrOAuthReposRequired posture — NOT the OAuth provider map's silent
+// last-wins): two notifiers of the same kind → ErrDuplicateNotifierKind; distinct
+// kinds construct fine.
+func TestNewServiceDuplicateNotifierKind(t *testing.T) {
+	base := Config{Hasher: stubHasher{}, Mailer: stubMailer{}}
+
+	dup := base
+	dup.Notifiers = []notify.Notifier{stubNotifier{"sms"}, stubNotifier{"sms"}}
+	if _, err := NewService(Repositories{}, dup); !errors.Is(err, ErrDuplicateNotifierKind) {
+		t.Errorf("duplicate notifier kind: err=%v, want ErrDuplicateNotifierKind", err)
+	}
+
+	ok := base
+	ok.Notifiers = []notify.Notifier{stubNotifier{"sms"}, stubNotifier{"slack"}}
+	if _, err := NewService(Repositories{}, ok); err != nil {
+		t.Errorf("distinct notifier kinds: err=%v, want nil", err)
 	}
 }
 

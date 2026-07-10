@@ -3,6 +3,7 @@ package invitationsvc
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,8 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/email"
 	"github.com/gopernicus/gopernicus/sdk/errs"
+	"github.com/gopernicus/gopernicus/sdk/identity"
+	"github.com/gopernicus/gopernicus/sdk/notify"
 )
 
 // --- fakes ---
@@ -41,6 +44,26 @@ type recordingMailer struct{ sent []email.Message }
 
 func (m *recordingMailer) Send(_ context.Context, msg email.Message) error {
 	m.sent = append(m.sent, msg)
+	return nil
+}
+
+// delivered records one notify.Notifier delivery for the delivery-seam tests.
+type delivered struct {
+	to  identity.Address
+	msg notify.Message
+}
+
+// fakeNotifier is an in-package notify.Notifier for the delivery-fork tests: it
+// declares one kind and records every delivery.
+type fakeNotifier struct {
+	kind string
+	got  []delivered
+}
+
+func (n *fakeNotifier) Kind() string { return n.kind }
+
+func (n *fakeNotifier) Notify(_ context.Context, to identity.Address, msg notify.Message) error {
+	n.got = append(n.got, delivered{to: to, msg: msg})
 	return nil
 }
 
@@ -131,11 +154,18 @@ func hashOf(t *testing.T, secret string) string {
 	return h
 }
 
-// seedInvite builds a pending invitation with a known token hash and expiry and
-// puts it straight into the repo (bypassing Create's minting).
+// seedInvite builds a pending EMAIL-kind invitation with a known token hash and
+// expiry and puts it straight into the repo (bypassing Create's minting).
+// Kind-specific cases seed with seedInviteKind.
 func seedInvite(t *testing.T, repo *fakeInvRepo, rt, rid, rel, ident, invitedBy, secret string, autoAccept bool, expiresAt time.Time) invitation.Invitation {
 	t.Helper()
-	inv, err := invitation.New(cryptids.IDGenerator{}, rt, rid, rel, ident, invitedBy, hashOf(t, secret), autoAccept, time.Hour, time.Now())
+	return seedInviteKind(t, repo, rt, rid, rel, ident, identity.KindEmail, invitedBy, secret, autoAccept, expiresAt)
+}
+
+// seedInviteKind is seedInvite with an explicit identifier kind.
+func seedInviteKind(t *testing.T, repo *fakeInvRepo, rt, rid, rel, ident, kind, invitedBy, secret string, autoAccept bool, expiresAt time.Time) invitation.Invitation {
+	t.Helper()
+	inv, err := invitation.New(cryptids.IDGenerator{}, rt, rid, rel, ident, kind, invitedBy, hashOf(t, secret), autoAccept, time.Hour, time.Now())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -409,5 +439,133 @@ func TestDeclineTokenAuthorized(t *testing.T) {
 	}
 	if len(granter.calls) != 0 {
 		t.Errorf("Decline granted something: %+v", granter.calls)
+	}
+}
+
+// --- delivery-seam (kind-aware, delta-fold 1/4/6) ---
+
+// TestCreateUnsupportedKind: a non-email kind with no wired notifier of that kind
+// → the loud ErrKindNotSupported (wrapping ErrInvalidInput → 400), and NO record
+// is created (deny-by-absence, ruling 6). The email Mailer being wired does not
+// make phone supported.
+func TestCreateUnsupportedKind(t *testing.T) {
+	repo := newFakeInvRepo()
+	granter := &fakeGranter{}
+	svc := newSvc(t, repo, granter, Deps{}) // Mailer defaulted; no notifiers
+
+	_, err := svc.Create(context.Background(), CreateInput{
+		ResourceType: "project", ResourceID: "p1", Relation: "member",
+		Identifier: "+15550100", IdentifierKind: identity.KindPhone, InvitedBy: "inviter",
+	})
+	if !errors.Is(err, ErrKindNotSupported) {
+		t.Errorf("Create(unsupported kind): err=%v, want ErrKindNotSupported", err)
+	}
+	if !errors.Is(err, errs.ErrInvalidInput) {
+		t.Errorf("ErrKindNotSupported must wrap ErrInvalidInput (400); err=%v", err)
+	}
+	if len(repo.byID) != 0 {
+		t.Errorf("unsupported kind created a record: %d rows", len(repo.byID))
+	}
+}
+
+// TestCreateKindDeliveredViaNotifier: a supported non-email kind is minted pending
+// and the TOKEN is DELIVERED to the invited address via the wired notifier — the
+// only channel (no plaintext hand-back; CreateResult carries no token). The email
+// Mailer is not touched.
+func TestCreateKindDeliveredViaNotifier(t *testing.T) {
+	repo := newFakeInvRepo()
+	granter := &fakeGranter{}
+	mailer := &recordingMailer{}
+	notifier := &fakeNotifier{kind: identity.KindPhone}
+	svc := newSvc(t, repo, granter, Deps{
+		Mailer:    mailer,
+		Notifiers: map[string]notify.Notifier{identity.KindPhone: notifier},
+	})
+
+	res, err := svc.Create(context.Background(), CreateInput{
+		ResourceType: "project", ResourceID: "p1", Relation: "member",
+		Identifier: "+15550100", IdentifierKind: identity.KindPhone, InvitedBy: "inviter",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if res.DirectlyAdded || res.Invitation.Status != invitation.StatusPending || res.Invitation.IdentifierKind != identity.KindPhone {
+		t.Errorf("expected a pending phone invitation, got %+v", res)
+	}
+	if len(notifier.got) != 1 {
+		t.Fatalf("notifier deliveries = %d, want 1", len(notifier.got))
+	}
+	d := notifier.got[0]
+	if d.to.Kind != identity.KindPhone || d.to.Value != "+15550100" {
+		t.Errorf("delivered to = %+v, want {phone, +15550100}", d.to)
+	}
+	if !strings.Contains(d.msg.Body, "token: ") {
+		t.Errorf("notifier body missing the delivered token: %q", d.msg.Body)
+	}
+	if len(mailer.sent) != 0 {
+		t.Errorf("a non-email invite rode the email Mailer: %+v", mailer.sent)
+	}
+}
+
+// TestCreateEmailNoNotifierRidesMailer: an email invite with NO email-kind
+// notifier keeps riding Config.Mailer byte-for-byte, even when other-kind
+// notifiers are wired (the regression guard on delta-fold 1).
+func TestCreateEmailNoNotifierRidesMailer(t *testing.T) {
+	repo := newFakeInvRepo()
+	granter := &fakeGranter{}
+	mailer := &recordingMailer{}
+	phone := &fakeNotifier{kind: identity.KindPhone}
+	svc := newSvc(t, repo, granter, Deps{
+		Mailer:     mailer,
+		Notifiers:  map[string]notify.Notifier{identity.KindPhone: phone},
+		UserLookup: func(_ context.Context, _ string) (string, bool, error) { return "", false, nil },
+	})
+
+	_, err := svc.Create(context.Background(), CreateInput{
+		ResourceType: "project", ResourceID: "p1", Relation: "member",
+		Identifier: "new@x.com", InvitedBy: "inviter", // empty kind → email
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(mailer.sent) != 1 || len(mailer.sent[0].To) != 1 || mailer.sent[0].To[0] != "new@x.com" {
+		t.Errorf("email invite did not ride the Mailer: %+v", mailer.sent)
+	}
+	if len(phone.got) != 0 {
+		t.Errorf("phone notifier received an email invite: %+v", phone.got)
+	}
+}
+
+// TestAcceptNonEmailKindFork covers delta-fold 6 (accept skips the identifier
+// match for a non-email kind — address-possession binds) AND delta-fold 4 (the
+// member-added notice follows the same fork, routing through the wired notifier).
+func TestAcceptNonEmailKindFork(t *testing.T) {
+	repo := newFakeInvRepo()
+	granter := &fakeGranter{}
+	notifier := &fakeNotifier{kind: identity.KindPhone}
+	svc := newSvc(t, repo, granter, Deps{
+		Notifiers: map[string]notify.Notifier{identity.KindPhone: notifier},
+	})
+	inv := seedInviteKind(t, repo, "project", "p1", "member", "+15550100", identity.KindPhone, "inviter", "secret-p", false, time.Now().Add(time.Hour))
+
+	// The acceptor's email does NOT match the phone identifier — for a non-email
+	// kind that is fine (the binding is possession of the delivered token).
+	res, err := svc.Accept(context.Background(), AcceptInput{Token: "secret-p", SubjectType: "user", SubjectID: "user-9", Identifier: "acceptor@x.com"})
+	if err != nil {
+		t.Fatalf("Accept(non-email kind): %v", err)
+	}
+	if res.Relation != "member" {
+		t.Errorf("AcceptResult = %+v", res)
+	}
+	if len(granter.calls) != 1 {
+		t.Errorf("Grant calls = %+v, want 1", granter.calls)
+	}
+	got, _ := repo.Get(context.Background(), inv.ID)
+	if got.Status != invitation.StatusAccepted {
+		t.Errorf("status = %q, want accepted", got.Status)
+	}
+	// member-added rode the phone notifier (delta-fold 4), not the email Mailer.
+	if len(notifier.got) != 1 || notifier.got[0].to.Value != "+15550100" {
+		t.Errorf("member-added did not ride the phone notifier: %+v", notifier.got)
 	}
 }

@@ -30,7 +30,7 @@ func NewInvitationStore(db *pgxdb.DB) *InvitationStore {
 	return &InvitationStore{db: db}
 }
 
-const invitationColumns = "id, resource_type, resource_id, relation, identifier, resolved_subject_id, invited_by, token_hash, auto_accept, status, expires_at, accepted_at, created_at, updated_at"
+const invitationColumns = "id, resource_type, resource_id, relation, identifier, identifier_kind, resolved_subject_id, invited_by, token_hash, auto_accept, status, expires_at, accepted_at, created_at, updated_at"
 
 // invitationRow is the store-local, db-tagged projection of an invitations row.
 // accepted_at is nullable (a pointer, zero-time when NULL); toDomain maps it.
@@ -40,6 +40,7 @@ type invitationRow struct {
 	ResourceID        string     `db:"resource_id"`
 	Relation          string     `db:"relation"`
 	Identifier        string     `db:"identifier"`
+	IdentifierKind    string     `db:"identifier_kind"`
 	ResolvedSubjectID string     `db:"resolved_subject_id"`
 	InvitedBy         string     `db:"invited_by"`
 	TokenHash         string     `db:"token_hash"`
@@ -58,6 +59,7 @@ func (r invitationRow) toDomain() invitation.Invitation {
 		ResourceID:        r.ResourceID,
 		Relation:          r.Relation,
 		Identifier:        r.Identifier,
+		IdentifierKind:    r.IdentifierKind,
 		ResolvedSubjectID: r.ResolvedSubjectID,
 		InvitedBy:         r.InvitedBy,
 		TokenHash:         r.TokenHash,
@@ -78,6 +80,7 @@ func (s *InvitationStore) Create(ctx context.Context, inv invitation.Invitation)
 		"resource_id":         inv.ResourceID,
 		"relation":            inv.Relation,
 		"identifier":          inv.Identifier,
+		"identifier_kind":     inv.IdentifierKind,
 		"resolved_subject_id": inv.ResolvedSubjectID,
 		"invited_by":          inv.InvitedBy,
 		"token_hash":          inv.TokenHash,
@@ -91,9 +94,9 @@ func (s *InvitationStore) Create(ctx context.Context, inv invitation.Invitation)
 	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if inv.ID == "" {
-		const q = `INSERT INTO invitations (resource_type, resource_id, relation, identifier, resolved_subject_id,
+		const q = `INSERT INTO invitations (resource_type, resource_id, relation, identifier, identifier_kind, resolved_subject_id,
 			invited_by, token_hash, auto_accept, status, expires_at, accepted_at, created_at, updated_at)
-			VALUES (@resource_type, @resource_id, @relation, @identifier, @resolved_subject_id,
+			VALUES (@resource_type, @resource_id, @relation, @identifier, @identifier_kind, @resolved_subject_id,
 				@invited_by, @token_hash, @auto_accept, @status, @expires_at, @accepted_at, @created_at, @updated_at)
 			RETURNING id`
 		if err := s.db.QueryRow(ctx, q, args).Scan(&inv.ID); err != nil {
@@ -102,7 +105,7 @@ func (s *InvitationStore) Create(ctx context.Context, inv invitation.Invitation)
 		return inv, nil
 	}
 	const q = `INSERT INTO invitations (` + invitationColumns + `)
-		VALUES (@id, @resource_type, @resource_id, @relation, @identifier, @resolved_subject_id,
+		VALUES (@id, @resource_type, @resource_id, @relation, @identifier, @identifier_kind, @resolved_subject_id,
 			@invited_by, @token_hash, @auto_accept, @status, @expires_at, @accepted_at, @created_at, @updated_at)`
 	args["id"] = inv.ID
 	if _, err := s.db.Exec(ctx, q, args); err != nil {
