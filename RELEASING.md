@@ -1,10 +1,10 @@
 # Releasing gopernicus modules
 
-This repo is a multi-module workspace (`go.work`, dev-only) with thirty-five
+This repo is a multi-module workspace (`go.work`, dev-only) with thirty-six
 modules today: `sdk`; `integrations/{cryptids/bcrypt, cryptids/golang-jwt, cryptids/google-uuid,
 datastores/pgxdb, datastores/turso, email/sendgrid, filestorage/gcs,
 filestorage/s3, kvstores/goredis, oauth/github, oauth/google,
-scheduling/robfig-cron, tracing/otel}`; `features/authentication`,
+notify/mailer, scheduling/robfig-cron, tracing/otel}`; `features/authentication`,
 `features/authorization` (authorization-v1, 2026-07-09), `features/cms`
 (+ `views/templ`, its bundled default views module — feature-standard B2,
 2026-07-07), `features/events` (events-v1, 2026-07-08), `features/jobs`
@@ -107,6 +107,15 @@ to BOTH dialect stores: `ADD COLUMN identifier_kind TEXT NOT NULL DEFAULT
 the kind. Hosts re-export (`ExportMigrations`) and apply before deploying
 the new feature core; existing rows backfill as `email`, and hosts that
 only ever create email invitations see zero behavior change.
+
+### sdk — next tag: the layering split moved every sdk subpackage import path
+
+sdk-layering (2026-07-10) re-homed `sdk/errs` into the root package
+(`sdk.ErrNotFound`) and moved every other sdk package under
+`sdk/foundation/` or `sdk/capabilities/` (package names unchanged, paths
+only). Pre-tag there is no version obligation, but any consumer pinned
+to a git SHA must re-path its imports wholesale; the workshop CLI's
+emitted scaffolds already use the new paths.
 
 ## What this repo is not doing (yet)
 

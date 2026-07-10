@@ -9,8 +9,7 @@ kernel = the ROOT `package sdk` (`sdk/errors.go` — compiler-enforced
 leaf); tier name = `capabilities` (not "services"); MailerBridge → an
 INTEGRATION (taxonomy amended: composes sdk capabilities); `feature` =
 the ONE sanctioned composition package. Physical split ratified
-("churn fine, correctness wanted"). Gate runs pre-execution. EXECUTING
-after the fold.**
+("churn fine, correctness wanted"). Gate run, folded. **CLOSED 2026-07-10 — P1–P5 executed; thirteen guards; the close drive re-proved the invitation legs live on the re-pathed stack.**
 Executor model policy (standing): implementation `model: opus`;
 design/doc `model: fable`. Modules: **+1 → 36**
 (`integrations/notify/mailer`).
@@ -335,3 +334,20 @@ grep → zero mentions). Registered: go.work + MODULES + header 35→36.
 Verify: module standalone (GOWORK=off) + tests green; `make check` (36)
 + `make guard` (11) green. Committed CI-green. **Next: P5 (G12 + docs +
 close).**
+
+
+### 2026-07-10 — P5 EXECUTED — **MILESTONE CLOSED**
+
+Coordinator-inline (fable). **G12** landed per the folded spec —
+prove-can-fail recorded in FOUR directions (foundation→capability
+upward, foundation→foundation lateral, capability→capability lateral,
+integration→feature inward via G13) — plus **G13
+integration-no-inward** in the same commit (named its own guard; the
+plan's "TWELVE" arithmetic superseded to THIRTEEN, logged).
+ARCHITECTURE gained the law verbatim (corrected compiler claim), the
+amended integration taxonomy row, the layered sdk tree line, the
+notify/mailer row, thirty-six; sdk/README gained the layering-law
+section; root README + RELEASING → 36/thirteen + the sdk re-path
+upgrade note. Close drive: the identity-resolution email+phone legs
+re-run live on the re-pathed stack — 201/delivered/200/200, slack-kind
+400, email untouched, port free. `make check` (36) green. Archived.
