@@ -9,7 +9,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/serviceaccount"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // ServiceAccountStore implements serviceaccount.ServiceAccountRepository over a

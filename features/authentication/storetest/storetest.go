@@ -38,9 +38,9 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/identity"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 )
 
 // ids is the suite's entity-ID generator: the default nanoid strategy, matching

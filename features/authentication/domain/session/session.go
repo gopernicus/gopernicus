@@ -6,7 +6,7 @@ package session
 import (
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 // secrets mints session tokens with the default nanoid shape. Deliberately NOT
@@ -26,7 +26,7 @@ type Session struct {
 }
 
 // NewSession mints a session for userID that expires ttl after now. The token
-// is an opaque random value (sdk/cryptids), never derived from the user's identity;
+// is an opaque random value (sdk/foundation/cryptids), never derived from the user's identity;
 // the auth service replaces it with the token's hash before persisting (design
 // §7.3), keeping the plaintext for the cookie only.
 func NewSession(userID string, ttl time.Duration, now time.Time) Session {

@@ -6,8 +6,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authorization/domain/relationship"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 // defaultMaxTraversalDepth bounds the engine's Go through-traversal recursion

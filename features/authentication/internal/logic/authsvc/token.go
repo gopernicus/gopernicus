@@ -7,7 +7,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
-	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 )
 
 // tokenClaimUserID is the JWT claim carrying the authenticated user's id — the

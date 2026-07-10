@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 // ServiceAccount is a machine identity. CreatedBy is the human user that minted

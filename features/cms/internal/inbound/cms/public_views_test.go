@@ -11,9 +11,9 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms/domain/content"
 	"github.com/gopernicus/gopernicus/features/cms/domain/media"
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
-	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/logging"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // overrideViews embeds the Views port (the decorator pattern) and replaces only

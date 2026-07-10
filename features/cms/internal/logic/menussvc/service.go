@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 // Clock returns the current time. Injected so tests can pin timestamps.

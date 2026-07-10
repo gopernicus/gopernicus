@@ -44,7 +44,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 // ids assigns entity keys when a Create arrives with an empty ID (the

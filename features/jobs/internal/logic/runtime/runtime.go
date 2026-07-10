@@ -14,7 +14,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/workers"
+	"github.com/gopernicus/gopernicus/sdk/foundation/workers"
 )
 
 // HandlerFunc executes one job of a registered kind.

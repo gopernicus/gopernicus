@@ -24,11 +24,11 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms/internal/logic/menussvc"
 	"github.com/gopernicus/gopernicus/features/cms/internal/logic/messagingsvc"
 	"github.com/gopernicus/gopernicus/features/cms/internal/logic/taxonomysvc"
-	"github.com/gopernicus/gopernicus/sdk/cacher"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/email"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
 	"github.com/gopernicus/gopernicus/sdk/feature"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // Repositories is the set of outbound ports the feature needs. A store adapter

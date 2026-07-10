@@ -21,7 +21,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 // minSecretBytes is the shortest HMAC secret Signer accepts: 256 bits, the NIST

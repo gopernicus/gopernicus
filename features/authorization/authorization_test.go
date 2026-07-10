@@ -9,8 +9,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authorization/domain/relationship"
 	"github.com/gopernicus/gopernicus/features/authorization/domain/role"
-	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/feature"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // relFake is a trivial relationship.Storer for socket wiring/delegation tests.

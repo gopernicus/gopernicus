@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 // APIKey is a hashed machine credential. ExpiresAt zero means the key never

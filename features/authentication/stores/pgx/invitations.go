@@ -9,7 +9,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/invitation"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // InvitationStore implements invitation.InvitationRepository over a PostgreSQL

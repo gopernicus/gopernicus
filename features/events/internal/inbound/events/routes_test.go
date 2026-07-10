@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/events/internal/logic/hub"
-	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
-	"github.com/gopernicus/gopernicus/sdk/identity"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
+	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 func discardLogger() *slog.Logger {

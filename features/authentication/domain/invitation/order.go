@@ -1,6 +1,6 @@
 package invitation
 
-import "github.com/gopernicus/gopernicus/sdk/crud"
+import "github.com/gopernicus/gopernicus/sdk/foundation/crud"
 
 // OrderFields is the allow-list of sortable columns for ListByResource and
 // ListBySubject: only these vetted column names may reach a store's ORDER BY.

@@ -8,7 +8,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/serviceaccount"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/identity"
+	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 )
 
 // TestResolveUserWithDisplayName: a user principal resolves to its DisplayName,

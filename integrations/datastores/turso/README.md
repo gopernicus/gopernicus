@@ -12,7 +12,7 @@ repositories consume this package's `*DB`.
 
 ## The list helper — `List[T]`, the pgxdb semantic twin
 
-`List[T]`/`ListQuery[T]` implement the `sdk/crud` list standards — ordering
+`List[T]`/`ListQuery[T]` implement the `sdk/foundation/crud` list standards — ordering
 against a per-aggregate allow-list, bidirectional keyset cursors (reverse-probe
 prev pages), and opt-in `COUNT(*)` totals — with observable semantics identical
 to `pgxdb.List`. Like the pgxdb twin it switches on the request's **resolved
@@ -48,7 +48,7 @@ driver-level tracer hook (pgx's `ConnConfig.Tracer`), so the `DB`/`Tx` wrapper
 threads the logging through its own `Exec`/`Query`/`QueryRow`; the transaction
 path logs too, so opting in never silently drops tx statements. At defaults
 (`LogQueries` unset) the connector emits nothing. This is interim plumbing,
-expected to fold into a shared `sdk/tracing` package later.
+expected to fold into a shared `sdk/capabilities/tracing` package later.
 
 `RedactDSN` (and `Config.Redacted()`) masks the userinfo password and the
 `authToken` query parameter in a libSQL URL, so a host can log the connection

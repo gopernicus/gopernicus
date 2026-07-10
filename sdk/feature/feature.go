@@ -1,6 +1,6 @@
 // Package feature defines the registration contract between a host application
 // and a feature module (Django-app / Rails-engine shaped). It carries only
-// stdlib types plus sdk/web and sdk/events (both stdlib-only): a feature depends
+// stdlib types plus sdk/foundation/web and sdk/capabilities/events (both stdlib-only): a feature depends
 // on these narrow ports, never on a service-locator god-object. The host owns
 // the concrete Router implementation and wires it into a Mount. Database
 // migrations are host-owned and applied outside feature registration.
@@ -10,8 +10,8 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/gopernicus/gopernicus/sdk/events"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/events"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // RouteRegistrar is the inbound mount point a feature uses to register its HTTP

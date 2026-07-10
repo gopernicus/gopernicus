@@ -11,7 +11,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authorization/domain/role"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 var (

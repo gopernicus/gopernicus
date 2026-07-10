@@ -5,15 +5,15 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/gopernicus/gopernicus/features/cms/internal/logic/entrysvc"
 	"github.com/gopernicus/gopernicus/features/cms/domain/content"
 	"github.com/gopernicus/gopernicus/features/cms/domain/media"
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
 	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
 	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
-	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/logging"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/features/cms/internal/logic/entrysvc"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // stringRenderer is a minimal web.Renderer that writes a fixed body, standing in

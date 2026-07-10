@@ -18,8 +18,8 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/authorization/domain/relationship"
-	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 // memIDs assigns a relationship_id when an incoming tuple carries none — the

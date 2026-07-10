@@ -6,14 +6,14 @@ import (
 	"strings"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/identity"
+	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 )
 
 // resolverAssertion is the compile-time proof that the auth service satisfies the
-// generic sdk/identity Resolver port. The public auth.Service promotes it.
+// generic sdk/foundation/identity Resolver port. The public auth.Service promotes it.
 var _ identity.Resolver = (*Service)(nil)
 
-// Resolve turns a Principal into its display and contact Info (the sdk/identity
+// Resolve turns a Principal into its display and contact Info (the sdk/foundation/identity
 // Resolver port). It fails CLOSED per the port contract: an unknown principal
 // type, a missing record, or an unwired backing subsystem returns an error
 // satisfying sdk.ErrNotFound (checked with errors.Is), and it never fabricates

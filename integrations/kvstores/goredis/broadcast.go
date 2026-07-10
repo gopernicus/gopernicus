@@ -8,7 +8,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/gopernicus/gopernicus/sdk/events"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/events"
 )
 
 // Broadcast is the Redis pub/sub fan-out rail alongside the durable streams.

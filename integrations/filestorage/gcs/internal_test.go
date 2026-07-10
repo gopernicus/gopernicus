@@ -7,7 +7,7 @@ import (
 
 	gcsstorage "cloud.google.com/go/storage"
 
-	"github.com/gopernicus/gopernicus/sdk/filestorage"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/filestorage"
 )
 
 func TestMapErr(t *testing.T) {

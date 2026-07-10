@@ -2,14 +2,14 @@
 
 A pluggable, datastore-free events feature: a transactional-outbox domain
 (append in the same commit as your domain rows, publish later), a host-driven
-poller that drains it onto the shared `sdk/events` bus, and an SSE gateway
+poller that drains it onto the shared `sdk/capabilities/events` bus, and an SSE gateway
 that fans bus events out to authenticated browser streams. Built on
-`sdk/events` (the bus vocabulary), `sdk/identity` (connect-time identity),
-`sdk/web` (SSE primitives + responders), and `sdk/workers` (the poller's
+`sdk/capabilities/events` (the bus vocabulary), `sdk/foundation/identity` (connect-time identity),
+`sdk/foundation/web` (SSE primitives + responders), and `sdk/foundation/workers` (the poller's
 pool). Design of record: `.claude/plans/roadmap/events-feature-design.md`,
 executed via `.claude/plans/events-v1/plan.md`.
 
-Package-name note (O5): this package is `events` and so is `sdk/events` —
+Package-name note (O5): this package is `events` and so is `sdk/capabilities/events` —
 this module and its hosts alias the sdk one as `sdkevents`.
 
 ## Layout (the trio — see `features/README.md` §2 for the contract)
@@ -25,7 +25,7 @@ domain/                  the hexagon's public rim — entities + ports
 internal/
   logic/hub/             the SSE fan-out hub (per-connection buffers,
                          subject caps, metadata projection)
-  inbound/http/          the stream routes (sdk/web SSE + responders)
+  inbound/http/          the stream routes (sdk/foundation/web SSE + responders)
 storetest/               executable spec for the outbox port (Run) + the
                          honest in-memory reference that runs it hermetically
 stores/turso/            the outbound tier: per-dialect SQL + migrations
@@ -60,7 +60,7 @@ anything the payloads carry.
 | `Repositories.Outbox` | direct-emit mode: no durable rail, no poller | the gateway still fans best-effort emits out over SSE |
 
 **StreamMiddleware is load-bearing (A-I1 E5).** The gateway reads
-connect-time identity from `sdk/identity` and **fails closed**: a request
+connect-time identity from `sdk/foundation/identity` and **fails closed**: a request
 whose context carries no `identity.Principal` gets a 401, uniformly, on every
 stream. The feature ships no identity resolution of its own — a host MUST
 pass its identity-stashing middleware (the authentication feature's
@@ -90,7 +90,7 @@ Per-rail delivery, as it reaches an SSE client (gate edit 1):
   There is **no de-dupe guarantee** on this rail — a CorrelationID is shared
   by every event in a request chain, and the rail itself is at-most-once.
 - **Durable frames** carry the outbox `EventID` as the SSE `id:` — the
-  poller's rehydrated event type surfaces it (`sdk/events.RemoteEvent`
+  poller's rehydrated event type surfaces it (`sdk/capabilities/events.RemoteEvent`
   carries no EventID; the wrapper adds it). At-least-once means duplicates
   are possible; **consumers that act on durable events de-dupe on
   `EventID()`**. Re-fetch triggers (the v1 posture) need no de-dupe —
@@ -108,7 +108,7 @@ read a batch of unpublished entries (CreatedAt ascending), `Emit` each with
 error leaves the entry unpublished for the next poll (redelivery), and a
 mark error means a duplicate emit next poll (de-dupe on `EventID()`).
 `Poll` matches `workers.WorkFunc` and returns `workers.ErrNoWork` when idle,
-so it drops onto an `sdk/workers` pool unadapted.
+so it drops onto an `sdk/foundation/workers` pool unadapted.
 
 **Single-poller assumption (v1):** run ONE poller per outbox. `Poll` takes
 no lease/claim on entries, so N concurrent pollers would emit every batch N

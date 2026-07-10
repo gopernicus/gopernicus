@@ -1,5 +1,5 @@
 // Package gcs is the file-storage connector for Google Cloud Storage: it
-// implements the sdk/filestorage core Storer port over exactly one third-party
+// implements the sdk/capabilities/filestorage core Storer port over exactly one third-party
 // library-family, cloud.google.com/go/storage (with google.golang.org/api's
 // client options and iterator, the storage client's own required surface).
 //
@@ -30,7 +30,7 @@ import (
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 
-	"github.com/gopernicus/gopernicus/sdk/filestorage"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/filestorage"
 )
 
 // resumableInitTimeout bounds the single HTTP POST that starts a resumable
@@ -45,7 +45,7 @@ var (
 	_ filestorage.SignedURLer       = (*Store)(nil)
 )
 
-// Config holds the settings Open needs. Hosts populate it from sdk/environment; the
+// Config holds the settings Open needs. Hosts populate it from sdk/foundation/environment; the
 // connector carries no env tags and no functional-options layer beyond Option.
 type Config struct {
 	// Bucket is the target GCS bucket. Required.
@@ -298,7 +298,7 @@ func (s *Store) SignedURL(_ context.Context, path string, expiry time.Duration) 
 	return url, nil
 }
 
-// mapErr converts a GCS driver error into the sdk/filestorage sentinel a caller
+// mapErr converts a GCS driver error into the sdk/capabilities/filestorage sentinel a caller
 // can errors.Is against; a not-found becomes filestorage.ErrObjectNotFound.
 // Unrecognized errors pass through unchanged.
 func mapErr(err error) error {

@@ -15,7 +15,7 @@ package googleuuid
 import (
 	"github.com/google/uuid"
 
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 // Compile-time proof the constructors satisfy the sdk-owned port.

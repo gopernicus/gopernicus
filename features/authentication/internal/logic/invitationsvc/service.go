@@ -28,11 +28,11 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/redirect"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/email"
-	"github.com/gopernicus/gopernicus/sdk/identity"
-	"github.com/gopernicus/gopernicus/sdk/notify"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 )
 
 // secrets generates the opaque invitation secrets this service mints with the
@@ -46,7 +46,7 @@ const (
 	// Deps.TTL is unset (salvaged 7-day default).
 	defaultInvitationTTL = 7 * 24 * time.Hour
 	// tokenSecretLen is the length of the generated invitation secret: 32 chars,
-	// dotless (sdk/cryptids' alphabet), plaintext only in the mail.
+	// dotless (sdk/foundation/cryptids' alphabet), plaintext only in the mail.
 	tokenSecretLen = 32
 	// subjectTypeUser is the ReBAC subject-type convention for a human user —
 	// the only subject class this service grants to (accept, direct-add, resolve).
@@ -55,7 +55,7 @@ const (
 	resolvePageLimit = 100
 )
 
-// Errors surfaced to the transport (each wraps a stable errs kind so sdk/web
+// Errors surfaced to the transport (each wraps a stable errs kind so sdk/foundation/web
 // maps it to a status; checked with errors.Is).
 var (
 	// ErrAlreadyMember is returned by Create when MemberCheck reports the invitee
@@ -676,7 +676,7 @@ func (s *Service) hashSecret(secret string) (string, error) {
 }
 
 // mintSecret builds a fresh 32-char dotless invitation secret from
-// sdk/cryptids' alphabet — no dots, so it never collides with the JWT-detection
+// sdk/foundation/cryptids' alphabet — no dots, so it never collides with the JWT-detection
 // heuristic and is URL-safe in the mailed link.
 func mintSecret() string {
 	return (secrets.MustGenerate() + secrets.MustGenerate())[:tokenSecretLen]

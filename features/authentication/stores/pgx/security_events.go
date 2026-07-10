@@ -9,7 +9,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // SecurityEventStore implements securityevent.SecurityEventRepository over a

@@ -12,8 +12,8 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/apikey"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/serviceaccount"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // --- compile-time seam assertions ---

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/gopernicus/gopernicus/features/authorization/domain/relationship"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 func TestLookupResourcesDirect(t *testing.T) {

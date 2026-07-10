@@ -11,7 +11,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/gopernicus/gopernicus/sdk/events"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/events"
 )
 
 const (
@@ -39,7 +39,7 @@ var (
 )
 
 // Options holds Redis Streams bus configuration. Populate it directly or with
-// sdk/environment.ParseEnvTags; New fills any zero field with its default.
+// sdk/foundation/environment.ParseEnvTags; New fills any zero field with its default.
 type Options struct {
 	// StreamPrefix is prepended to an event type to form its stream name and
 	// also names the pub/sub broadcast channel (StreamPrefix+"broadcast").

@@ -1,10 +1,10 @@
-// Package sendgrid implements the sdk/email.Sender port over Twilio SendGrid's
+// Package sendgrid implements the sdk/capabilities/email.Sender port over Twilio SendGrid's
 // v3 Mail Send API, wrapping exactly one third-party library —
 // github.com/sendgrid/sendgrid-go (with its transport dependency
 // github.com/sendgrid/rest). It is an integration rather than an sdk default
 // because it speaks one vendor's live API contract, which churns on SendGrid's
 // schedule, not sdk's; sdk defaults (Console, SMTP) must stay vendor-neutral.
-// It imports sdk/email for the Sender vocabulary and sdk/errs for stable error
+// It imports sdk/capabilities/email for the Sender vocabulary and sdk/errs for stable error
 // kinds — no feature and no other integration.
 package sendgrid
 
@@ -17,7 +17,7 @@ import (
 	"github.com/sendgrid/sendgrid-go/helpers/mail"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/email"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
 )
 
 // sendPath is SendGrid's v3 Mail Send endpoint path, appended to the host to

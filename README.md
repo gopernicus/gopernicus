@@ -54,7 +54,7 @@ tagged versions, not the workspace.
 
 - **`sdk` imports only the standard library.** Third-party types cross into
   `sdk` only via structural typing seams (e.g. `templ.Component` satisfying
-  `sdk/web.Renderer`).
+  `sdk/foundation/web.Renderer`).
 - **One external dependency ⇒ its own module.** A stdlib-only implementation
   of an `sdk` port ships *inside* `sdk` as a default (`cacher.Memory`,
   `filestorage.Disk`, `email.SMTP`/`Console`); anything needing a third-party

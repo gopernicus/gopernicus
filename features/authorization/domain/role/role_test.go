@@ -3,7 +3,7 @@ package role
 import (
 	"context"
 
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // stubStorer pins the 5-method role.Storer surface at compile time. Behavioral

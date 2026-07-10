@@ -363,7 +363,7 @@ decision. Always propagate the error and fail closed.
 ## Non-goals (cut lines)
 
 - **No `sdk/authorization` port** and no `Config.Identity`-style
-  consumer pairing (identity rides `sdk/identity`). Graduation trigger
+  consumer pairing (identity rides `sdk/foundation/identity`). Graduation trigger
   recorded above.
 - **No PostfilterLoop** (§2.6 demand gate) — and the recorded
   constraint: a future enumeration-shaped consumer seam must ship paired

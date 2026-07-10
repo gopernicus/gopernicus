@@ -50,6 +50,6 @@
 // # Options from the environment
 //
 // Options carries `env:` struct tags so a host can populate it with
-// sdk/environment.ParseEnvTags; that is a convenience, not an import edge — the zero
+// sdk/foundation/environment.ParseEnvTags; that is a convenience, not an import edge — the zero
 // value is filled with the defaults documented on Options by New.
 package goredis

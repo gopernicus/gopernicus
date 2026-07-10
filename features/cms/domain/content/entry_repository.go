@@ -3,7 +3,7 @@ package content
 import (
 	"context"
 
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // EntryQuery is a type-scoped, optionally status-filtered list query over

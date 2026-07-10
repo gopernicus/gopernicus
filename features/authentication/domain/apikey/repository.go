@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // APIKeyRepository persists hashed machine credentials. Implemented by feature

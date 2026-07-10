@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
-	"github.com/gopernicus/gopernicus/sdk/workers"
+	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
+	"github.com/gopernicus/gopernicus/sdk/foundation/workers"
 
 	"github.com/gopernicus/gopernicus/features/events/domain/outbox"
 )

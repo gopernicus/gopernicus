@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/slug"
+	"github.com/gopernicus/gopernicus/sdk/foundation/slug"
 )
 
 // FieldDef declares one custom field of a content type: its storage key, its

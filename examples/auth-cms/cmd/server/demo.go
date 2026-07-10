@@ -13,10 +13,10 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
 	authorization "github.com/gopernicus/gopernicus/features/authorization"
 	golangjwt "github.com/gopernicus/gopernicus/integrations/cryptids/golang-jwt"
-	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/environment"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // registerDemoRoutes mounts the host-local demo routes (host code, NOT feature

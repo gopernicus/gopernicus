@@ -14,7 +14,7 @@ import (
 	"testing"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/email"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
 )
 
 // sendPayload mirrors the subset of SendGrid's v3 Mail Send JSON body this

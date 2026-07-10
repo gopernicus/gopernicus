@@ -30,8 +30,8 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
 	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 // ids assigns entity keys when a Create arrives with an empty ID (the
@@ -421,7 +421,7 @@ func (r inquiryRepo) List(_ context.Context) ([]messaging.Inquiry, error) {
 }
 
 // entryPageOf sorts items by (created_at, id) in the resolved direction, then
-// applies the sdk/crud list matrix — cursor or offset mode, the reverse-probe
+// applies the sdk/foundation/crud list matrix — cursor or offset mode, the reverse-probe
 // prev page, and the optional count — the same keyset shape the dialect stores
 // implement in SQL, hand-rolled here so this demo store paginates identically.
 // created_at is the only sortable field (content.OrderFields).

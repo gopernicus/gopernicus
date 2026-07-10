@@ -12,9 +12,9 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/serviceaccount"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/identity"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 )
 
 // secrets generates the opaque random values this service mints (API-key
@@ -25,7 +25,7 @@ var secrets = cryptids.IDGenerator{}
 
 // Principal subject-type conventions (AV5 — actor references are
 // (subject_type, subject_id) string pairs, never a registry table). They alias
-// the sdk/identity constants (amendment A-I1), which match the ReBAC Subject
+// the sdk/foundation/identity constants (amendment A-I1), which match the ReBAC Subject
 // vocabulary so a host's authorizer reads them unadapted.
 const (
 	// PrincipalUser is the subject type for a human user, and for a personal
@@ -285,7 +285,7 @@ func effectivePrincipal(sa serviceaccount.ServiceAccount) Principal {
 }
 
 // mintAPIKeySecret builds a fresh key: a displayable prefix (stored plain) and
-// the full raw key `prefix_secret`. Both halves use sdk/cryptids' dotless
+// the full raw key `prefix_secret`. Both halves use sdk/foundation/cryptids' dotless
 // alphabet and are joined with `_`, so a key can NEVER contain two dots and
 // collide with the §4.3 JWT-detection heuristic.
 func mintAPIKeySecret() (prefix, raw string) {

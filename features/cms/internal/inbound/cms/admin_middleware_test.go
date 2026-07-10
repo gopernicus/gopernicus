@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/sdk/logging"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // routeRecorder is a counting middleware: it records, per request, the method+

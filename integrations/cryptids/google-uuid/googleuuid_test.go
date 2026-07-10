@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 // canonical asserts the 8-4-4-4-12 lowercase text form and returns the version

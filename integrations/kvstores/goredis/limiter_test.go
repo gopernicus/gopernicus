@@ -7,7 +7,7 @@ package goredis
 import (
 	"testing"
 
-	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 )
 
 func TestLimiterAppliesDefaultKeyPrefix(t *testing.T) {

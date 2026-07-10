@@ -6,7 +6,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authorization/domain/role"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // roleColumns is the iam_roles projection in a fixed order shared by the Assign

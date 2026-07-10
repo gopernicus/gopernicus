@@ -26,7 +26,7 @@ import (
 	smithy "github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 
-	"github.com/gopernicus/gopernicus/sdk/filestorage"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/filestorage"
 )
 
 // Store honors the S3 filestorage contract. It is constructed from a Config via
@@ -42,7 +42,7 @@ var (
 )
 
 // Config holds the S3-compatible connection settings for Open. Its `env:` tags
-// let a host populate it with sdk/environment.ParseEnvTags; a zero Endpoint targets
+// let a host populate it with sdk/foundation/environment.ParseEnvTags; a zero Endpoint targets
 // AWS S3 with its standard endpoints. Populating from the environment is a
 // convenience, not an import edge — struct-literal construction stays
 // first-class.

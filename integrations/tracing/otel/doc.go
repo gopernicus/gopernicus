@@ -1,9 +1,9 @@
-// Package otel implements the sdk/tracing.Tracer facility port over the
+// Package otel implements the sdk/capabilities/tracing.Tracer facility port over the
 // OpenTelemetry Go family (go.opentelemetry.io/otel and its trace SDK +
-// exporters). It is the exporter-bearing counterpart to sdk/tracing, which
+// exporters). It is the exporter-bearing counterpart to sdk/capabilities/tracing, which
 // stays stdlib-only and ships only the Noop default: here the OpenTelemetry
 // dependency is isolated so a host wires real span export by importing this
-// module and passing the resulting *Tracer wherever an sdk/tracing.Tracer is
+// module and passing the resulting *Tracer wherever an sdk/capabilities/tracing.Tracer is
 // accepted.
 //
 // One module carries the whole OpenTelemetry family as a single coherent

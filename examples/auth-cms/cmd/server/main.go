@@ -4,12 +4,12 @@
 // (verify: `GOWORK=off go list -m all | grep -i libsql` is empty). The host is
 // the only party that imports the features — no feature imports another
 // (constitution rule 6); the cross-feature flow rides sdk vocabulary
-// (sdk/web.Middleware, sdk/identity, sdk/events) the host wires between them.
+// (sdk/foundation/web.Middleware, sdk/foundation/identity, sdk/capabilities/events) the host wires between them.
 //
 // The cross-feature wiring is the point: cms's admin surface (the CRUD routes)
 // is gated by auth's identity middleware via cms.Config.AdminMiddleware ←
 // authSvc.RequireUser. Neither feature imports the other; structural typing on
-// sdk/web.Middleware and the auth Service is what lets the host connect them.
+// sdk/foundation/web.Middleware and the auth Service is what lets the host connect them.
 // Public cms routes (the home page, published singles) stay ungated.
 //
 // On top of v1, this host exercises the whole auth-v2 surface for the A9 proof
@@ -31,7 +31,7 @@
 // DEFAULT variant is direct-emit/best-effort — cms emits straight onto the bus
 // (SSE id: = CorrelationID). The DURABLE variant (EVENTS_OUTBOX=memory) routes a
 // host-owned POST /outbox-demo append through an example-local in-memory outbox
-// (internal/outboxmem) and a host-driven events.Poller on an sdk/workers pool:
+// (internal/outboxmem) and a host-driven events.Poller on an sdk/foundation/workers pool:
 // outbox -> poll -> emit -> SSE, id: = the durable outbox EventID. The shutdown
 // order is HTTP server -> poller pool -> bus.Close (see run's tail comment).
 package main
@@ -58,18 +58,18 @@ import (
 	cmstempl "github.com/gopernicus/gopernicus/features/cms/views/templ"
 	eventsfeature "github.com/gopernicus/gopernicus/features/events"
 	"github.com/gopernicus/gopernicus/integrations/cryptids/bcrypt"
-	"github.com/gopernicus/gopernicus/sdk/cacher"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/email"
-	"github.com/gopernicus/gopernicus/sdk/environment"
-	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
+	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
 	"github.com/gopernicus/gopernicus/sdk/feature"
-	"github.com/gopernicus/gopernicus/sdk/identity"
-	"github.com/gopernicus/gopernicus/sdk/logging"
-	"github.com/gopernicus/gopernicus/sdk/notify"
-	"github.com/gopernicus/gopernicus/sdk/oauth"
-	"github.com/gopernicus/gopernicus/sdk/web"
-	"github.com/gopernicus/gopernicus/sdk/workers"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
+	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
+	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/workers"
 )
 
 func main() {
@@ -236,7 +236,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// note): the SAME bus instance flows to both Mount.Events (cms is the emitter)
 	// and events.Config.Bus (the gateway is the consumer) — one fan-out, no second
 	// bus. A content.* frame fans out to any open stream the moment cms emits. The
-	// gateway reads connect-time identity from sdk/identity, stashed by
+	// gateway reads connect-time identity from sdk/foundation/identity, stashed by
 	// authSvc.RequireUser on StreamMiddleware (A-I1 E2: no Identity field — absent
 	// principal fails closed with 401). Repositories.Outbox nil ⇒ direct-emit mode
 	// (no durable rail, no poller). Authorize is wired below through the
@@ -284,7 +284,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 
 	// Durable-outbox variant plumbing (EVENTS_OUTBOX=memory): the host owns the
 	// poller lifecycle (the feature owns no goroutines — D4). The poller runs on
-	// an sdk/workers pool woken by the canonical append-then-signal pattern
+	// an sdk/foundation/workers pool woken by the canonical append-then-signal pattern
 	// (gate edit 2): a dedicated cap-1 wake channel the POST /outbox-demo handler
 	// signals right after Append, so a fresh record drains sub-second instead of
 	// waiting out the pool's idle interval. The pool runs on its OWN

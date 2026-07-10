@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 var base = time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)

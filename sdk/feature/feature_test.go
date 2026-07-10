@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/sdk/events"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/events"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // Compile-time interface satisfaction assertion: web.WebHandler is the

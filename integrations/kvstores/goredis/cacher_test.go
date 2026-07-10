@@ -6,7 +6,7 @@ package goredis
 import (
 	"testing"
 
-	"github.com/gopernicus/gopernicus/sdk/cacher"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
 )
 
 func TestCacherAppliesDefaultKeyPrefix(t *testing.T) {

@@ -1,9 +1,9 @@
-// Package google implements the sdk/oauth.Provider port for Google's OAuth 2.0
+// Package google implements the sdk/capabilities/oauth.Provider port for Google's OAuth 2.0
 // + OpenID Connect endpoints. It wraps exactly one third-party library —
 // github.com/coreos/go-oidc/v3 — used solely for cryptographic ID token
 // verification (OIDC discovery, JWKS fetch/cache, RS256 signature validation).
 // The authorization-code, token-exchange, refresh, and userinfo flows are
-// hand-rolled on net/http; there is no x/oauth2 dependency. It imports sdk/oauth
+// hand-rolled on net/http; there is no x/oauth2 dependency. It imports sdk/capabilities/oauth
 // for the port vocabulary and no feature or other integration.
 package google
 
@@ -19,7 +19,7 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 
-	"github.com/gopernicus/gopernicus/sdk/oauth"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
 )
 
 // maxResponseBody caps HTTP response bodies read from Google's token and

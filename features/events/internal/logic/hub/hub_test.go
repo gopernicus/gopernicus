@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
+	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 )
 
 // discardLogger keeps the single-instance and drop warnings out of test output.

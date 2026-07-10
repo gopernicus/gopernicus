@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // StatusUpdate is the mutable subset UpdateStatus persists for a lifecycle

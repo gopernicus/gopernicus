@@ -6,7 +6,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authorization/domain/relationship"
 	"github.com/gopernicus/gopernicus/features/authorization/domain/role"
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 func mustCreate(t *testing.T, r *Relationships, tuples ...relationship.CreateRelationship) {

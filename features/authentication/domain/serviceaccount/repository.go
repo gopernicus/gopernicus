@@ -3,7 +3,7 @@ package serviceaccount
 import (
 	"context"
 
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // ServiceAccountRepository persists machine identities. Implemented by feature

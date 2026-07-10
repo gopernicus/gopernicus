@@ -12,7 +12,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // Spec is a schedule's recurrence. Exactly one of Cron/Every is set (validated

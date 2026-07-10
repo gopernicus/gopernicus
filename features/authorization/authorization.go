@@ -35,9 +35,9 @@ import (
 	"github.com/gopernicus/gopernicus/features/authorization/domain/role"
 	"github.com/gopernicus/gopernicus/features/authorization/internal/logic/authorizersvc"
 	"github.com/gopernicus/gopernicus/features/authorization/internal/logic/rolesvc"
-	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/feature"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 // Construction and per-kind sentinel errors. A misconfigured host fails at

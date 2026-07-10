@@ -20,14 +20,14 @@ import (
 	cmsturso "github.com/gopernicus/gopernicus/features/cms/stores/turso"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/integrations/tracing/otel"
-	"github.com/gopernicus/gopernicus/sdk/cacher"
-	"github.com/gopernicus/gopernicus/sdk/email"
-	"github.com/gopernicus/gopernicus/sdk/environment"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/filestorage"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/tracing"
 	"github.com/gopernicus/gopernicus/sdk/feature"
-	"github.com/gopernicus/gopernicus/sdk/filestorage"
-	"github.com/gopernicus/gopernicus/sdk/logging"
-	"github.com/gopernicus/gopernicus/sdk/tracing"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
+	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 func main() {

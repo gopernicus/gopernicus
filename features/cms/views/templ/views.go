@@ -12,7 +12,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
 	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
 	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // _ pins Views to the cms.Views port at compile time.

@@ -24,7 +24,7 @@ consume this package's `*DB`.
 | `RedactDSN(dsn) string` | masks a URL-form DSN's userinfo password for safe logging; unparseable input returns the literal `"REDACTED"` |
 | `StatusCheck(ctx, db)` | 1s-deadline ping |
 | `RunMigrations(ctx, db, fs, dir)` | host-driven migration runner for one database directory; one transaction, filename order, checksum guard, forward-only |
-| `List[T]` / `ListQuery[T]` | the shared paginated-SELECT helper implementing the `sdk/crud` list standards (see below) |
+| `List[T]` / `ListQuery[T]` | the shared paginated-SELECT helper implementing the `sdk/foundation/crud` list standards (see below) |
 | `QuoteIdentifier(ident) (string, error)` | regex allow-list + per-segment double-quoting for dynamic identifiers (order columns); rejection wraps `ErrInvalidInput` |
 | `ApplyCursorPagination` / `AddOrderByClause` / `AddLimitClause` | NamedArgs SQL builders under `List`: tuple-comparison keyset predicate (direction × forPrevious operator table), ORDER BY with PK tiebreaker + optional `LOWER()`, `LIMIT @limit` |
 | `LoggingQueryTracer` / `NewLoggingQueryTracer` | `pgx.QueryTracer` over `*slog.Logger`; **logs SQL args verbatim — dev-only** |
@@ -33,7 +33,7 @@ consume this package's `*DB`.
 
 ## The list toolkit — `List[T]` over `ListQuery[T]`
 
-`List[T]` runs a paginated SELECT to the `sdk/crud` standards; the crud
+`List[T]` runs a paginated SELECT to the `sdk/foundation/crud` standards; the crud
 package doc's mode/count matrix is normative, and this helper is its pgx
 implementation. A store describes its list with a `ListQuery[T]`:
 `BaseSQL` (a `SELECT … FROM … [WHERE …]` with **no** ORDER BY/LIMIT/OFFSET),
@@ -112,7 +112,7 @@ through its `DB`/`Tx` wrapper because database/sql exposes no tracer hook.
 `Config.Tracer` (and `MultiQueryTracer` above) is the one exception that remains
 pgx-only: it composes an external `pgx.QueryTracer` (e.g. OpenTelemetry) into
 that native seam, which SQLite's driver does not expose. This is interim
-plumbing, expected to fold into a shared `sdk/tracing` package later — until
+plumbing, expected to fold into a shared `sdk/capabilities/tracing` package later — until
 then, hosts opt in by setting `Config.LogQueries` or `Config.Tracer`.
 
 ## Testing

@@ -8,7 +8,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // MenuStore implements menus.MenuRepository over a PostgreSQL database.

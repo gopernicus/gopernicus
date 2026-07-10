@@ -22,13 +22,13 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/gopernicus/gopernicus/integrations/kvstores/goredis"
-	"github.com/gopernicus/gopernicus/sdk/cacher"
-	"github.com/gopernicus/gopernicus/sdk/cacher/cachertest"
-	"github.com/gopernicus/gopernicus/sdk/events"
-	"github.com/gopernicus/gopernicus/sdk/events/eventstest"
-	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
-	"github.com/gopernicus/gopernicus/sdk/ratelimiter/ratelimitertest"
-	"github.com/gopernicus/gopernicus/sdk/tracing"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher/cachertest"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/events"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/events/eventstest"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter/ratelimitertest"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/tracing"
 )
 
 // requireAddr returns the live Redis address or skips loudly.

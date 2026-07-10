@@ -5,15 +5,15 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
-	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/invitationsvc"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/invitation"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
-	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
+	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/invitationsvc"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // stubInvitationService satisfies InvitationService with inert methods — enough

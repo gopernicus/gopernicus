@@ -3,8 +3,8 @@ package events
 import (
 	"context"
 
-	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
-	"github.com/gopernicus/gopernicus/sdk/workers"
+	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
+	"github.com/gopernicus/gopernicus/sdk/foundation/workers"
 
 	"github.com/gopernicus/gopernicus/features/events/domain/outbox"
 )
@@ -29,7 +29,7 @@ func WithBatchSize(n int) PollerOption {
 // Poller drains the transactional outbox onto the bus: each Poll reads a batch
 // of unpublished entries (oldest first), emits each onto the bus, then marks it
 // published — the at-least-once durable rail (design §5). It owns NO goroutines
-// and no lifecycle: the host drives it on an sdk/workers pool (Poll is a
+// and no lifecycle: the host drives it on an sdk/foundation/workers pool (Poll is a
 // workers.WorkFunc), mirroring the host-drives-execution philosophy. Single
 // poller per outbox is the documented v1 assumption; ListUnpublished does no row
 // claiming.
@@ -53,7 +53,7 @@ func NewPoller(repo outbox.EntryRepository, bus sdkevents.Bus, opts ...PollerOpt
 }
 
 // Poll runs one drain iteration and satisfies workers.WorkFunc, so a host feeds
-// it directly to an sdk/workers pool. It reads a batch of unpublished entries
+// it directly to an sdk/foundation/workers pool. It reads a batch of unpublished entries
 // (CreatedAt ascending), emits each as a rehydrated event, then marks it
 // published. Poll returns workers.ErrNoWork when the batch is empty so the pool
 // backs the worker off to its idle interval.
@@ -110,7 +110,7 @@ func (p *Poller) Poll(ctx context.Context) error {
 
 // outboxEvent is the feature-local rehydrated event the poller emits for a
 // persisted Record (gate edit 1: sdkevents.RemoteEvent carries no EventID and
-// its CorrelationID is not unique per event, and sdk/events stays frozen). It
+// its CorrelationID is not unique per event, and sdk/capabilities/events stays frozen). It
 // embeds a RemoteEvent so it satisfies sdkevents.Event, sdkevents.Metadata, and
 // sdkevents.Unmarshaler (the TypedHandler slow path decodes the payload into the
 // subscriber's concrete type), and adds EventID() — the durable rail's de-dupe
@@ -130,7 +130,7 @@ var (
 )
 
 // newOutboxEvent rehydrates a Record into an outboxEvent. The embedded
-// RemoteEvent reuses sdk/events' frozen envelope decoding (Unmarshal, Metadata);
+// RemoteEvent reuses sdk/capabilities/events' frozen envelope decoding (Unmarshal, Metadata);
 // eventID carries the Record primary key the RemoteEvent envelope cannot.
 func newOutboxEvent(rec sdkevents.Record) outboxEvent {
 	return outboxEvent{

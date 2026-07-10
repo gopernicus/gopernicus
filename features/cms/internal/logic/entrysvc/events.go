@@ -1,7 +1,7 @@
 package entrysvc
 
 import (
-	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
+	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 )
 
 // Content event type names — the three ratified names emitted from entrysvc.

@@ -310,7 +310,7 @@ internal/inbound/
 connection/client to an external system (the turso connector). `internal/outbound`
 is the *app-specific* code that implements a domain port using one (the post
 repository's SQL + schema). A connector that fully implements an `sdk` facility
-port (e.g. a gcs filestore → `sdk/filestorage`) needs **no** `internal/outbound`
+port (e.g. a gcs filestore → `sdk/capabilities/filestorage`) needs **no** `internal/outbound`
 code — the app just wires it in `cmd`.
 
 **Repositories: app-specific vs feature store adapter.** A repository is either
@@ -414,7 +414,7 @@ build it as a real app domain. Taxonomy/menus/media/messaging stay typed.
 ### Where a "doesn't fit one domain" thing goes
 
 1. **No domain knowledge** (pure algorithm: diff, slug codec, cursor encode) →
-   `sdk` if framework-generic (e.g. `sdk/slug`), else a small `internal/` util.
+   `sdk` if framework-generic (e.g. `sdk/foundation/slug`), else a small `internal/` util.
    Not in a domain.
 2. **Domain knowledge, one domain** → that domain (a domain service is fine).
 3. **Spans domains** → `compositions/`.

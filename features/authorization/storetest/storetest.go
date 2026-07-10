@@ -24,7 +24,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/authorization"
 	"github.com/gopernicus/gopernicus/features/authorization/domain/relationship"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // Run executes the full conformance suite. newRepos returns a FRESH, empty

@@ -12,8 +12,8 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/serviceaccount"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
-	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // authService is the narrow surface the handlers consume. *authsvc.Service

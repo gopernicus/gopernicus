@@ -7,7 +7,7 @@ import "context"
 //
 // The identity-in-context value (user id / Principal) no longer lives here: the
 // prior "It lives here (not sdk) by design" note is superseded by amendment A-I1,
-// which graduated that vocabulary to sdk/identity. RequireUser / RequirePrincipal
+// which graduated that vocabulary to sdk/foundation/identity. RequireUser / RequirePrincipal
 // now stash identity.Principal via identity.WithPrincipal, and CurrentUser /
 // CurrentPrincipal read it via identity.FromContext. Only clientInfo — client
 // attribution for audit rows, behavior not identity — remains feature-private.

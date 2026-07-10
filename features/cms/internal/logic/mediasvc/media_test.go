@@ -13,7 +13,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms/domain/media"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 // fakeAssets is an in-memory AssetRepository.

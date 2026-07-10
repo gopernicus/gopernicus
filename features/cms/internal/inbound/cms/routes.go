@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/cms/domain/content"
-	"github.com/gopernicus/gopernicus/sdk/cacher"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
 	"github.com/gopernicus/gopernicus/sdk/feature"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // publicPageTTL is how long rendered public pages stay cached.

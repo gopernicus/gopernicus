@@ -1,7 +1,7 @@
 // Package events is the events feature's SSE transport: the /events route surface
-// over the internal hub. It reads the effective caller from sdk/identity (absent
+// over the internal hub. It reads the effective caller from sdk/foundation/identity (absent
 // → 401, fails closed — A-I1 E1), enforces MaxConnAge and heartbeats via the
-// sdk/web SSE primitives, and registers the resource-scoped route only when a
+// sdk/foundation/web SSE primitives, and registers the resource-scoped route only when a
 // host Authorize check is wired (deny-by-absence). Mounted only through
 // feature.RouteRegistrar (see events.Service.Register).
 package events
@@ -14,8 +14,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/events/internal/logic/hub"
 	"github.com/gopernicus/gopernicus/sdk/feature"
-	"github.com/gopernicus/gopernicus/sdk/identity"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // Config carries the already-resolved collaborators the route handlers need. The

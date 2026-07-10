@@ -9,7 +9,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/authorization/domain/relationship"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // reachableCTE is the group-expansion recursive CTE shared by the check and

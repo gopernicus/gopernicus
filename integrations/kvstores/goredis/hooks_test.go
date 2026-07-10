@@ -14,7 +14,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/gopernicus/gopernicus/sdk/tracing"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/tracing"
 )
 
 // bufLogger returns a logger writing text records to buf at debug level so the

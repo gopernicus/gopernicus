@@ -8,9 +8,9 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/invitation"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/invitationsvc"
-	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/feature"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // declineAttemptsPerMinute caps invitation-decline attempts per client IP: the

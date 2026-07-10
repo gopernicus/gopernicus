@@ -2,7 +2,7 @@
 
 An email connector wrapping exactly one third-party library —
 `github.com/sendgrid/sendgrid-go` (with its transport dependency
-`github.com/sendgrid/rest`). Its `Sender` implements the `sdk/email.Sender`
+`github.com/sendgrid/rest`). Its `Sender` implements the `sdk/capabilities/email.Sender`
 port over Twilio SendGrid's v3 Mail Send API.
 
 It is an integration rather than an `sdk` default because it speaks one

@@ -12,7 +12,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/gopernicus/gopernicus/sdk/events"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/events"
 )
 
 // testEvent is a concrete event whose BaseEvent json tags let it round-trip

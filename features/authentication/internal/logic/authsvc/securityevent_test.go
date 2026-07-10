@@ -13,8 +13,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthaccount"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
-	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // spySecurityEvents is the shared in-package audit spy the WI6 tests assert

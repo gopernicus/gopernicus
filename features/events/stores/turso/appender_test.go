@@ -9,7 +9,7 @@ import (
 	"time"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
+	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 )
 
 // TestAppendTx proves the dialect-typed transactional appender (design §5): a

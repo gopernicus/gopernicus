@@ -6,7 +6,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/events/domain/outbox"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
+	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 )
 
 // outboxColumns is the event_outbox projection, matching outboxRow's db tags.

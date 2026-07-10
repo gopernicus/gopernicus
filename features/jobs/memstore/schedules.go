@@ -8,7 +8,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/jobs/domain/schedule"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // Compile-time seam: the Schedules store fills the exact schedule.Repository port.

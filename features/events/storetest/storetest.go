@@ -22,7 +22,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/events/domain/outbox"
 	"github.com/gopernicus/gopernicus/sdk"
-	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
+	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 )
 
 // suiteBase is the fixed OccurredAt every record carries. It is deliberately the

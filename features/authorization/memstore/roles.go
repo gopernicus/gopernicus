@@ -10,7 +10,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authorization/domain/role"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // unknownOrderField is the error pageMem returns for an order field absent from

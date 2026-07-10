@@ -1,6 +1,6 @@
 package role
 
-import "github.com/gopernicus/gopernicus/sdk/crud"
+import "github.com/gopernicus/gopernicus/sdk/foundation/crud"
 
 // OrderFields is the allow-list of sortable columns for the role listings
 // (ListBySubject, ListByResource): only these vetted column names may reach a

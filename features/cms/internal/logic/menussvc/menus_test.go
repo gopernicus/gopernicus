@@ -10,7 +10,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 // fakeMenus is an in-memory MenuRepository.

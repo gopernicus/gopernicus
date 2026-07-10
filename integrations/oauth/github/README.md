@@ -1,7 +1,7 @@
 # integrations/oauth/github
 
-An `sdk/oauth.Provider` implementation for **GitHub** OAuth 2.0. This module has
-**zero external requires** — it is built on `sdk/oauth` and the standard
+An `sdk/capabilities/oauth.Provider` implementation for **GitHub** OAuth 2.0. This module has
+**zero external requires** — it is built on `sdk/capabilities/oauth` and the standard
 library's `net/http` alone — yet it lives under `integrations/`, not in the sdk
 kernel. Under the taxonomy amendment, an integration isolates exactly one
 external dependency: a third-party library **or an external vendor's live API

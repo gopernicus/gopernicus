@@ -15,7 +15,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/environment"
+	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
 
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 )

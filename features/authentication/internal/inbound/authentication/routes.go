@@ -11,9 +11,9 @@ import (
 	"strings"
 
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
-	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/feature"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // handlers holds the services the route handlers delegate to. inv is nil when no

@@ -9,7 +9,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms"
 	"github.com/gopernicus/gopernicus/features/cms/domain/content"
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // render drains a web.Renderer to a string for markup assertions.
