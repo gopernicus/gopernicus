@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"testing"
+
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 func newTestLogger(buf *bytes.Buffer) *slog.Logger {
@@ -26,7 +28,7 @@ func TestTracingHandler_RequestID(t *testing.T) {
 	var buf bytes.Buffer
 	log := newTestLogger(&buf)
 
-	ctx := WithRequestID(context.Background(), "req-789")
+	ctx := sdk.WithRequestID(context.Background(), "req-789")
 	log.InfoContext(ctx, "test message")
 
 	entry := parseJSON(t, buf.Bytes())
@@ -39,7 +41,7 @@ func TestTracingHandler_TraceID(t *testing.T) {
 	var buf bytes.Buffer
 	log := newTestLogger(&buf)
 
-	ctx := WithTraceID(context.Background(), "trace-123")
+	ctx := sdk.WithTraceID(context.Background(), "trace-123")
 	log.InfoContext(ctx, "test message")
 
 	entry := parseJSON(t, buf.Bytes())
@@ -52,7 +54,7 @@ func TestTracingHandler_SpanID(t *testing.T) {
 	var buf bytes.Buffer
 	log := newTestLogger(&buf)
 
-	ctx := WithSpanID(context.Background(), "span-456")
+	ctx := sdk.WithSpanID(context.Background(), "span-456")
 	log.InfoContext(ctx, "test message")
 
 	entry := parseJSON(t, buf.Bytes())
@@ -65,9 +67,9 @@ func TestTracingHandler_AllIDs(t *testing.T) {
 	var buf bytes.Buffer
 	log := newTestLogger(&buf)
 
-	ctx := WithTraceID(context.Background(), "trace-1")
-	ctx = WithSpanID(ctx, "span-2")
-	ctx = WithRequestID(ctx, "req-3")
+	ctx := sdk.WithTraceID(context.Background(), "trace-1")
+	ctx = sdk.WithSpanID(ctx, "span-2")
+	ctx = sdk.WithRequestID(ctx, "req-3")
 	log.InfoContext(ctx, "test message")
 
 	entry := parseJSON(t, buf.Bytes())
@@ -86,8 +88,8 @@ func TestTracingHandler_TraceSpanEmptyStringSkipped(t *testing.T) {
 	var buf bytes.Buffer
 	log := newTestLogger(&buf)
 
-	ctx := WithTraceID(context.Background(), "")
-	ctx = WithSpanID(ctx, "")
+	ctx := sdk.WithTraceID(context.Background(), "")
+	ctx = sdk.WithSpanID(ctx, "")
 	log.InfoContext(ctx, "empty")
 
 	entry := parseJSON(t, buf.Bytes())
@@ -115,7 +117,7 @@ func TestTracingHandler_EmptyStringSkipped(t *testing.T) {
 	var buf bytes.Buffer
 	log := newTestLogger(&buf)
 
-	ctx := WithRequestID(context.Background(), "")
+	ctx := sdk.WithRequestID(context.Background(), "")
 	log.InfoContext(ctx, "empty")
 
 	entry := parseJSON(t, buf.Bytes())
@@ -130,7 +132,7 @@ func TestTracingHandler_WithGroup(t *testing.T) {
 	tracing := NewTracingHandler(handler)
 	log := slog.New(tracing.WithGroup("app"))
 
-	ctx := WithRequestID(context.Background(), "req-group")
+	ctx := sdk.WithRequestID(context.Background(), "req-group")
 	log.InfoContext(ctx, "grouped", "key", "value")
 
 	entry := parseJSON(t, buf.Bytes())
@@ -155,15 +157,5 @@ func TestTracingHandler_Enabled(t *testing.T) {
 	}
 	if !tracing.Enabled(context.Background(), slog.LevelError) {
 		t.Error("ERROR should be enabled at WARN level")
-	}
-}
-
-func TestRequestIDFromContext(t *testing.T) {
-	if _, ok := RequestIDFromContext(context.Background()); ok {
-		t.Error("empty context should report no request id")
-	}
-	ctx := WithRequestID(context.Background(), "r1")
-	if v, ok := RequestIDFromContext(ctx); !ok || v != "r1" {
-		t.Errorf("RequestIDFromContext = %q,%v, want r1,true", v, ok)
 	}
 }

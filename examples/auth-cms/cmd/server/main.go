@@ -218,7 +218,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// Host cache-invalidation subscriber (S5/O6): subscribe to every event ("*")
 	// and filter content.* in the handler — the bus stays a plain fan-out with no
 	// prefix routing. On a cms content event, drop the whole public-page cache
-	// (web.CachePages keys pages "page:"+RequestURI, so "page:*" clears them all);
+	// (cacher.Pages keys pages "page:"+RequestURI, so "page:*" clears them all);
 	// the next request re-renders fresh. Before this wiring the page was purely
 	// TTL-bound: an edit within the 60s TTL kept serving stale bytes. Because cms
 	// emits are async (O3), this runs shortly AFTER the admin write returns rather

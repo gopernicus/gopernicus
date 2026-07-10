@@ -74,7 +74,7 @@ func Mount(r feature.RouteRegistrar, d Deps, views Views, cache cacher.Storer, a
 	// Public pages are cacheable (TTL); admin pages never are.
 	var pubMW []web.Middleware
 	if cache != nil {
-		pubMW = append(pubMW, web.CachePages(cache, publicPageTTL))
+		pubMW = append(pubMW, cacher.Pages(cache, publicPageTTL))
 	}
 
 	// Public home.

@@ -67,7 +67,7 @@ func (s *SSEStream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// ResponseController reaches Flush through middleware wrappers that
 	// implement Unwrap — a bare type assertion fails under any wrapping
-	// middleware (the request logger's statusWriter, etc.).
+	// middleware (the request logger's StatusRecorder, etc.).
 	rc := http.NewResponseController(w)
 
 	// Long-lived streams outlive the server's WriteTimeout: the deadline arms

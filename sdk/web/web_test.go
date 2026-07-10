@@ -43,7 +43,7 @@ func TestRender_WritesHTML(t *testing.T) {
 func TestRequestID_GeneratesAndEchoes(t *testing.T) {
 	var seen string
 	h := RequestID()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seen, _ = logging.RequestIDFromContext(r.Context())
+		seen, _ = sdk.RequestIDFromContext(r.Context())
 	}))
 
 	rec := httptest.NewRecorder()

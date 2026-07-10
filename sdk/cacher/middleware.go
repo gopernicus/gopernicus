@@ -1,4 +1,4 @@
-package web
+package cacher
 
 import (
 	"bytes"
@@ -6,15 +6,20 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/cacher"
+	"github.com/gopernicus/gopernicus/sdk/web"
 )
 
-// CachePages returns middleware that caches GET HTML responses by request URI
-// for ttl, using the given cacher.Storer. A cache hit serves the stored bytes
-// with X-Cache: HIT; a miss renders, streams, and stores the result (X-Cache:
-// MISS). Only 200 text/html responses are cached. Apply it to public,
-// cacheable routes only — never to per-operator admin pages.
-func CachePages(store cacher.Storer, ttl time.Duration) Middleware {
+// Pages returns middleware that caches GET HTML responses by request URI for
+// ttl, using the given Storer. A cache hit serves the stored bytes with
+// X-Cache: HIT; a miss renders, streams, and stores the result (X-Cache: MISS).
+// Only 200 text/html responses are cached. Apply it to public, cacheable routes
+// only — never to per-operator admin pages.
+//
+// This is a capability×foundation composition (a cacher capability producing a
+// web.Middleware), so it lives with the cacher semantics rather than in web:
+// web stays agnostic of caching, cacher legally depends on web (capability →
+// foundation).
+func Pages(store Storer, ttl time.Duration) web.Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != http.MethodGet {

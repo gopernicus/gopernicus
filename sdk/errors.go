@@ -1,7 +1,8 @@
 // Package sdk is the framework kernel: the root of the gopernicus sdk module.
 //
-// The kernel holds the cross-cutting vocabulary every tier may depend on —
-// today, the transport-agnostic sentinel errors below. Its contract is
+// The kernel holds the cross-cutting vocabulary every tier may depend on — the
+// transport-agnostic sentinel errors below, and the request-identity context
+// vocabulary in context.go (the second promotion, 2026-07-10). Its contract is
 // deliberately narrow:
 //
 //   - It imports the standard library only. The module's go.mod has no require

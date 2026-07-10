@@ -2,13 +2,10 @@ package workers
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"runtime/debug"
 	"time"
-
-	"github.com/gopernicus/gopernicus/sdk/tracing"
 )
 
 const defaultMaxAttempts = 3
@@ -75,7 +72,6 @@ type Runner[T Job] struct {
 	maxAttempts      int
 	clock            func() time.Time
 	log              *slog.Logger
-	tracer           tracing.Tracer
 	retryWithinClaim bool
 	retryAttempts    int
 	retryInitial     time.Duration
@@ -90,7 +86,6 @@ type Runner[T Job] struct {
 type runnerConfig struct {
 	maxAttempts      int
 	clock            func() time.Time
-	tracer           tracing.Tracer
 	retryWithinClaim bool
 	retryAttempts    int
 	retryInitial     time.Duration
@@ -112,15 +107,6 @@ func WithMaxAttempts(n int) RunnerOption {
 // reading is passed to Claim/Complete/Fail.
 func WithClock(fn func() time.Time) RunnerOption {
 	return func(c *runnerConfig) { c.clock = fn }
-}
-
-// WithTracer wraps the claim -> process -> complete/fail lifecycle in spans on
-// the given Tracer: a job.claim span, a job.process span per attempt (with
-// RecordError on a failed attempt), and job.complete / job.fail spans. It is
-// opt-in; the default is tracing.Noop, so an unconfigured runner behaves exactly
-// as before with no span overhead. A nil tracer is treated as tracing.Noop.
-func WithTracer(tracer tracing.Tracer) RunnerOption {
-	return func(c *runnerConfig) { c.tracer = tracer }
 }
 
 // WithRetryWithinClaim enables in-memory retry of a failing ProcessFunc inside a
@@ -172,16 +158,12 @@ func NewRunner[T Job](
 	cfg := &runnerConfig{
 		maxAttempts: defaultMaxAttempts,
 		clock:       func() time.Time { return time.Now().UTC() },
-		tracer:      tracing.Noop{},
 	}
 	for _, opt := range opts {
 		opt(cfg)
 	}
 	if cfg.maxAttempts < 1 {
 		cfg.maxAttempts = 1
-	}
-	if cfg.tracer == nil {
-		cfg.tracer = tracing.Noop{}
 	}
 	if log == nil {
 		log = slog.Default()
@@ -193,7 +175,6 @@ func NewRunner[T Job](
 		maxAttempts:      cfg.maxAttempts,
 		clock:            cfg.clock,
 		log:              log,
-		tracer:           cfg.tracer,
 		retryWithinClaim: cfg.retryWithinClaim,
 		retryAttempts:    cfg.retryAttempts,
 		retryInitial:     cfg.retryInitial,
@@ -264,22 +245,15 @@ func (r *Runner[T]) work(ctx context.Context) error {
 	return nil
 }
 
-// claim leases the next job from the store inside a job.claim span. ErrNoWork is
-// not recorded as a span error; a real store error is.
+// claim leases the next job from the store. ErrNoWork rides through so the pool
+// backs off; a real store error rides through so the pool counts it.
 func (r *Runner[T]) claim(ctx context.Context, workerID string) (T, error) {
 	var zero T
 
-	ctx, span := r.tracer.StartSpan(ctx, "job.claim")
-	defer span.Finish()
-
 	job, err := r.store.Claim(ctx, workerID, r.clock())
 	if err != nil {
-		if !errors.Is(err, ErrNoWork) {
-			span.RecordError(err)
-		}
 		return zero, err
 	}
-	span.SetAttributes(tracing.StringAttribute("job.id", job.ID()))
 	return job, nil
 }
 
@@ -294,26 +268,15 @@ func (r *Runner[T]) process(ctx context.Context, job T) (T, error) {
 	return r.processWithRetry(ctx, job)
 }
 
-// processOnce runs a single ProcessFunc attempt inside a job.process span,
-// converting a panic into a processing error so the job is failed instead of
-// crashing the worker. A failed attempt (including a recovered panic) is
-// recorded on the span.
+// processOnce runs a single ProcessFunc attempt, converting a panic into a
+// processing error so the job is failed instead of crashing the worker.
 func (r *Runner[T]) processOnce(ctx context.Context, job T) (out T, err error) {
-	ctx, span := r.tracer.StartSpan(ctx, "job.process")
-	span.SetAttributes(
-		tracing.StringAttribute("job.id", job.ID()),
-		tracing.StringAttribute("job.status", job.Status()),
-	)
-	defer span.Finish()
 	defer func() {
 		if rec := recover(); rec != nil {
 			r.log.ErrorContext(ctx, "panic recovered in job",
 				"job_id", job.ID(), "panic", rec, "stack", string(debug.Stack()))
 			out = job
 			err = fmt.Errorf("workers: panic in process: %v", rec)
-		}
-		if err != nil {
-			span.RecordError(err)
 		}
 	}()
 	return r.processFunc(ctx, job)
@@ -364,12 +327,7 @@ func (r *Runner[T]) processWithRetry(ctx context.Context, job T) (T, error) {
 }
 
 func (r *Runner[T]) complete(ctx context.Context, job T) {
-	ctx, span := r.tracer.StartSpan(ctx, "job.complete")
-	defer span.Finish()
-	span.SetAttributes(tracing.StringAttribute("job.id", job.ID()))
-
 	if err := r.store.Complete(ctx, job.ID(), r.clock()); err != nil {
-		span.RecordError(err)
 		r.log.ErrorContext(ctx, "failed to mark job complete", "job_id", job.ID(), "error", err)
 	}
 }
@@ -380,15 +338,7 @@ func (r *Runner[T]) fail(ctx context.Context, job T, procErr error) {
 		reason = procErr.Error()
 	}
 
-	ctx, span := r.tracer.StartSpan(ctx, "job.fail")
-	defer span.Finish()
-	span.SetAttributes(
-		tracing.StringAttribute("job.id", job.ID()),
-		tracing.StringAttribute("job.status", job.Status()),
-	)
-
 	if err := r.store.Fail(ctx, job.ID(), r.clock(), reason, r.maxAttempts); err != nil {
-		span.RecordError(err)
 		r.log.ErrorContext(ctx, "failed to mark job failed", "job_id", job.ID(), "error", err)
 	}
 }

@@ -1,3 +1,15 @@
+// Package workers is the sdk facility for background job processing: a Pool of
+// worker goroutines, a generic Runner[T] that drives a durable JobStore through
+// the claim -> process -> complete/fail lifecycle, and composable Middleware.
+//
+// Deliberately no tracing. An earlier Runner WithTracer option and a pool-level
+// TracingMiddleware were removed at sdk-layering P2 (2026-07-10) as YAGNI: they
+// had zero callers repo-wide, and the local-interface alternative is
+// unimplementable because interface satisfaction compares SpanFinisher return
+// types by identity, so an otel tracer could never satisfy a workers-local
+// tracer port. Traced workers reintroduce as a workers-decorator in the tracing
+// CAPABILITY (tracing importing workers is a legal capability -> foundation
+// edge); the trigger is the first host that actually wants them.
 package workers
 
 import "context"

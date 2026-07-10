@@ -3,42 +3,15 @@ package logging
 import (
 	"context"
 	"log/slog"
+
+	"github.com/gopernicus/gopernicus/sdk"
 )
-
-// contextKey is an unexported type for context keys in this package.
-type contextKey string
-
-const (
-	traceIDKey   contextKey = "trace_id"
-	spanIDKey    contextKey = "span_id"
-	requestIDKey contextKey = "request_id"
-)
-
-// WithTraceID returns a context with the given trace ID attached.
-func WithTraceID(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, traceIDKey, id)
-}
-
-// WithSpanID returns a context with the given span ID attached.
-func WithSpanID(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, spanIDKey, id)
-}
-
-// WithRequestID returns a context with the given request ID attached.
-func WithRequestID(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, requestIDKey, id)
-}
-
-// RequestIDFromContext returns the request ID attached to ctx, if any.
-func RequestIDFromContext(ctx context.Context) (string, bool) {
-	id, ok := ctx.Value(requestIDKey).(string)
-	return id, ok && id != ""
-}
 
 // TracingHandler is a slog.Handler that injects trace_id, span_id, and
-// request_id from the context into every log record. It wraps another handler
-// and delegates all actual output to it. Each value is only added if present in
-// the context; missing values are skipped.
+// request_id into every log record, reading them from the kernel's
+// request-identity vocabulary (sdk.TraceIDFromContext and friends). It wraps
+// another handler and delegates all actual output to it. Each value is only
+// added when present in the context; missing or empty values are skipped.
 type TracingHandler struct {
 	inner slog.Handler
 }
@@ -56,13 +29,13 @@ func (h *TracingHandler) Enabled(ctx context.Context, level slog.Level) bool {
 // Handle injects trace, span, and request IDs from context, then delegates to
 // the inner handler.
 func (h *TracingHandler) Handle(ctx context.Context, r slog.Record) error {
-	if id, ok := ctx.Value(traceIDKey).(string); ok && id != "" {
+	if id, ok := sdk.TraceIDFromContext(ctx); ok {
 		r.AddAttrs(slog.String("trace_id", id))
 	}
-	if id, ok := ctx.Value(spanIDKey).(string); ok && id != "" {
+	if id, ok := sdk.SpanIDFromContext(ctx); ok {
 		r.AddAttrs(slog.String("span_id", id))
 	}
-	if id, ok := ctx.Value(requestIDKey).(string); ok && id != "" {
+	if id, ok := sdk.RequestIDFromContext(ctx); ok {
 		r.AddAttrs(slog.String("request_id", id))
 	}
 	return h.inner.Handle(ctx, r)

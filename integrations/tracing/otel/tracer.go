@@ -89,8 +89,8 @@ func (f *spanFinisher) Finish() {
 }
 
 // TraceID returns the span's trace ID as a hex string, satisfying
-// tracing.SpanIdentity so a caller (e.g. web.Tracing) can stash it via
-// logging.WithTraceID. It returns "" when the span context has no valid trace ID.
+// tracing.SpanIdentity so a caller (e.g. tracing.Middleware) can stash it via
+// sdk.WithTraceID. It returns "" when the span context has no valid trace ID.
 func (f *spanFinisher) TraceID() string {
 	sc := f.span.SpanContext()
 	if !sc.HasTraceID() {

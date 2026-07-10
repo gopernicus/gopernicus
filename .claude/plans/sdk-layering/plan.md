@@ -276,3 +276,29 @@ proved the .tmpl renames build); `make guard` (11, G1 clean — root .go
 files don't change the empty-go.mod claim); gofmt clean; coordinator
 re-verified sdk tests + a feature build + errs deletion independently.
 Committed CI-green. **Next: P2 (the evictions + Fork 1 + Fork 2).**
+
+### 2026-07-10 — P2 CLOSED (evictions + both forks — web is truly agnostic)
+
+Fork 1 landed: `sdk/context.go` (the kernel's SECOND deliberate
+promotion, dated) — With/From for request/trace/span ids; the load-
+bearing refinement: logging previously read trace/span via private keys,
+so the kernel gained ALL THREE readers (`TraceIDFromContext` etc.) for
+the TracingHandler to consume. Evictions: `web.CachePages` →
+**`cacher.Pages`** (own body-buffering captureWriter — the fold's
+three-consumer StatusRecorder premise narrowed to two, logged);
+`web.Tracing` → **`tracing.Middleware`** (ids via sdk.*, NO logging
+import); `web.statusWriter` exported as the minimal `web.StatusRecorder`
+(Logger + tracing.Middleware). `web.RequestID` stays, kernel-backed.
+Fork 2 landed: workers' tracer field, WithTracer, TracingMiddleware,
+lifecycle spans, fakes + tests all DELETED (test-only callers existed —
+"zero callers" was production-only, logged); the package doc names the
+reintroduction home + trigger. **End-state audit (go list): web → root
+ONLY; workers → NOTHING under sdk; logging → root only; tracing → root +
+web; cacher → web.** Call sites: features/cms routes (cacher.Pages),
+examples/cms main (tracing.Middleware), stale comments swept.
+Run-and-look: examples/cms live — 200, X-Request-Id present, cache
+MISS→HIT (~500ms→20µs), request_id in logs via the kernel vocabulary,
+clean SIGTERM, port free. `make check` (35) + `make guard` (11) green.
+Committed CI-green. P3 note from the executor: logging/context.go now
+holds only TracingHandler — rename to handler.go rides P3.
+**Next: P3 (the physical split).**

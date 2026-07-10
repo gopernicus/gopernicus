@@ -5,14 +5,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"runtime/debug"
-	"strconv"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/logging"
-	"github.com/gopernicus/gopernicus/sdk/tracing"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // RequestIDHeader is the canonical header used to carry the request ID in and out.
@@ -47,7 +44,7 @@ func Logger(log *slog.Logger) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
-			sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+			sw := NewStatusRecorder(w)
 
 			next.ServeHTTP(sw, r)
 
@@ -76,76 +73,6 @@ func Logger(log *slog.Logger) Middleware {
 	}
 }
 
-// Tracing returns middleware that wraps each request in a span on t. A nil
-// tracer is treated as tracing.Noop, so the middleware can be wired
-// unconditionally (the workers.WithTracer precedent).
-//
-// Place this middleware OUTER of web.Logger. Two consequences hang on that
-// order:
-//   - The span's context — and, when t returns a SpanFinisher implementing
-//     tracing.SpanIdentity, the trace_id/span_id stashed on it — is already on
-//     the request when Logger emits its access line, so those IDs appear on the
-//     request log via logging.TracingHandler.
-//   - web.RecordError type-asserts the response writer directly with no Unwrap
-//     walk. Tracing records a 5xx onto the span with a synthesized error and
-//     never touches the writer's recorded error, so a handler's RecordError
-//     keeps landing on Logger's inner statusWriter — the access line's error
-//     field does not silently regress.
-//
-// The span name is r.Pattern alone (it already embeds the method, e.g.
-// "GET /posts/{id}", because Handle wraps middleware inside the mux match, so
-// the pattern is populated when this runs). An empty pattern falls back to the
-// static "http.request", never r.URL.Path, to keep span-name cardinality bounded.
-//
-// Cost: the middleware builds a per-request attribute slice and parses
-// RemoteAddr even when wired with tracing.Noop (parity with Logger's
-// per-request attribute build); there is no Noop fast path, so a host that
-// cares about that cost simply omits the middleware.
-func Tracing(t tracing.Tracer) Middleware {
-	if t == nil {
-		t = tracing.Noop{}
-	}
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			name := r.Pattern
-			if name == "" {
-				name = "http.request"
-			}
-
-			ctx, span := t.StartSpan(r.Context(), name)
-			defer span.Finish()
-
-			attrs := []tracing.Attribute{
-				tracing.StringAttribute("http.method", r.Method),
-				tracing.StringAttribute("http.host", r.Host),
-				tracing.StringAttribute("user_agent", r.UserAgent()),
-				tracing.StringAttribute("net.peer.ip", peerHost(r.RemoteAddr)),
-			}
-			if r.Pattern != "" {
-				attrs = append(attrs, tracing.StringAttribute("http.route", r.Pattern))
-			}
-			span.SetAttributes(attrs...)
-
-			if id, ok := span.(tracing.SpanIdentity); ok {
-				if traceID := id.TraceID(); traceID != "" {
-					ctx = logging.WithTraceID(ctx, traceID)
-				}
-				if spanID := id.SpanID(); spanID != "" {
-					ctx = logging.WithSpanID(ctx, spanID)
-				}
-			}
-
-			sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
-			next.ServeHTTP(sw, r.WithContext(ctx))
-
-			span.SetAttributes(tracing.StringAttribute("http.status_code", strconv.Itoa(sw.status)))
-			if sw.status >= 500 {
-				span.RecordError(fmt.Errorf("server error: %d", sw.status))
-			}
-		})
-	}
-}
-
 // RequestID returns middleware that ensures every request carries a request ID.
 // It reuses an inbound X-Request-ID when present, otherwise generates one,
 // stashes it on the request context for the logger, and echoes it back in the
@@ -158,7 +85,7 @@ func RequestID() Middleware {
 				id = newRequestID()
 			}
 			w.Header().Set(RequestIDHeader, id)
-			ctx := logging.WithRequestID(r.Context(), id)
+			ctx := sdk.WithRequestID(r.Context(), id)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -230,16 +157,6 @@ func DefaultHeadersMiddleware(headers map[string]string) Middleware {
 	}
 }
 
-// peerHost returns the host portion of a RemoteAddr ("host:port"), falling back
-// to the raw value when it carries no port.
-func peerHost(addr string) string {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return addr
-	}
-	return host
-}
-
 // newRequestID returns a 128-bit random hex string.
 func newRequestID() string {
 	var b [16]byte
@@ -250,16 +167,29 @@ func newRequestID() string {
 	return hex.EncodeToString(b[:])
 }
 
-// statusWriter wraps http.ResponseWriter to capture the status code and an
-// optional underlying error recorded by render/respond helpers.
-type statusWriter struct {
+// StatusRecorder wraps http.ResponseWriter to capture the final status code and
+// an optional underlying error recorded by render/respond helpers. It is the
+// minimal status-capture writer shared by web.Logger and the capability
+// middlewares evicted from web (sdk/tracing, sdk/cacher), which need the status
+// the handler produced. The captured status is read via Status; RecordError and
+// the underlying error feed web.Logger's access line.
+type StatusRecorder struct {
 	http.ResponseWriter
 	status      int
 	wroteHeader bool
 	err         error
 }
 
-func (w *statusWriter) WriteHeader(code int) {
+// NewStatusRecorder wraps w, defaulting the captured status to 200 OK until the
+// handler writes a header.
+func NewStatusRecorder(w http.ResponseWriter) *StatusRecorder {
+	return &StatusRecorder{ResponseWriter: w, status: http.StatusOK}
+}
+
+// Status returns the captured status code (200 until the handler sets one).
+func (w *StatusRecorder) Status() int { return w.status }
+
+func (w *StatusRecorder) WriteHeader(code int) {
 	if !w.wroteHeader {
 		w.status = code
 		w.wroteHeader = true
@@ -268,11 +198,11 @@ func (w *statusWriter) WriteHeader(code int) {
 }
 
 // Unwrap exposes the wrapped writer for http.ResponseController.
-func (w *statusWriter) Unwrap() http.ResponseWriter {
+func (w *StatusRecorder) Unwrap() http.ResponseWriter {
 	return w.ResponseWriter
 }
 
-func (w *statusWriter) Write(b []byte) (int, error) {
+func (w *StatusRecorder) Write(b []byte) (int, error) {
 	if !w.wroteHeader {
 		w.wroteHeader = true
 	}
@@ -280,7 +210,7 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 }
 
 // RecordError stores the underlying error so the request logger can include it.
-func (w *statusWriter) RecordError(err error) {
+func (w *StatusRecorder) RecordError(err error) {
 	w.err = err
 }
 

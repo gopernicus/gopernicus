@@ -69,7 +69,7 @@ func TestProviderExporter(t *testing.T) {
 
 // TestSpanFinisherExposesIDs drives the SpanIdentity path through the tracetest
 // SpanRecorder: the finisher's TraceID/SpanID must be valid hex and match the
-// recorded span's own SpanContext, so web.Tracing can link them onto log lines.
+// recorded span's own SpanContext, so tracing.Middleware can link them onto log lines.
 func TestSpanFinisherExposesIDs(t *testing.T) {
 	rec := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))

@@ -90,7 +90,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// is on the request when Logger emits its access line, and so web.RecordError's
 	// direct writer type-assert keeps landing on Logger's writer.
 	router := web.NewWebHandler(web.WithLogging(log))
-	router.Use(web.RequestID(), web.Tracing(tracer), web.Logger(log), web.Panics(log))
+	router.Use(web.RequestID(), tracing.Middleware(tracer), web.Logger(log), web.Panics(log))
 
 	// The host owns its database lifecycle: migrations are scaffolded into
 	// ./workshop/migrations and applied PRE-BOOT by that runner (go run
