@@ -394,3 +394,24 @@ behavior unchanged. Verify: authorization module + both stores
 build/test/vet green (incl. `-tags=integration` vet), `make check` +
 `make guard` green, gofmt clean; standing check `examples/minimal` 200,
 port freed. Committed CI-green. **Next: P2.**
+
+### 2026-07-09 — P2 CLOSED (turso List identifier strictness + roles rework)
+
+Connector: new `identifier.go` (`QuoteIdentifier`, pgxdb-mirror semantics
+in SQLite quoting); `appendOrderBy`/`appendCursorPredicate` gain error
+returns, both columns routed through validation, `pkCol` checked
+UNCONDITIONALLY (a raw-expression PK now fails on page 1, no cursor
+needed); ripple contained entirely in list.go. Roles store reworked to
+the pgx derived-column pattern: `role_key` (char(1) separator) via the
+wrapping subquery WITH the load-bearing `WHERE 1 = 1` sentinel,
+`roleRow{RoleKey}` + `crud.MapPage`, `PKOf` echoes the DB-scanned key;
+dead `roleTiebreak`/`roleAssignmentKey`/`scanAssignment` deleted.
+Rejection matrix green at three layers (QuoteIdentifier / appendOrderBy /
+appendCursorPredicate / List-integration — incl. the exact
+`a || char(0) || b` shape). Sweep confirmed the gate's pre-verification:
+roles was the ONLY raw-expression PK; other four turso stores took ZERO
+source changes. Extra hermetic confidence: the reworked SQL shape
+reproduced against in-memory SQLite through strict List (page 1, keyset
+page 2, COUNT wrap) — the milestone-close live leg re-proves it on the
+playground. `make check` + `make guard` green; standing check 200/port
+freed. Committed CI-green. **Next: P3.**
