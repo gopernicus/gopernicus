@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -72,7 +73,20 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return err
 	}
 
+	// Host-local liveness probe (host route, not feature surface). Mounted on
+	// the root router with no middleware, outside any gated group —
+	// unauthenticated by design, since a readiness probe can't log in.
+	router.Handle(http.MethodGet, "/healthz", healthzHandler())
+
 	return web.Run(ctx, router, serverConfig(), log)
+}
+
+// healthzHandler is this host's liveness probe. This host is memory-backed, so
+// there is no DB to probe — reaching the handler is itself the liveness signal.
+func healthzHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}
 }
 
 // seed populates a little content so the public site renders something.

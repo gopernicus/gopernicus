@@ -415,3 +415,34 @@ reproduced against in-memory SQLite through strict List (page 1, keyset
 page 2, COUNT wrap) — the milestone-close live leg re-proves it on the
 playground. `make check` + `make guard` green; standing check 200/port
 freed. Committed CI-green. **Next: P3.**
+
+### 2026-07-09 — P3 CLOSED (health routes) + StatusCheck round-trip amendment
+
+`GET /healthz` on all four hosts (root router, no middleware, outside
+every gated group — each host's Use stack verified auth-free):
+examples/cms DB-backed via `turso.StatusCheck` (200 `{"status":"ok"}` /
+503 `{"status":"unavailable"}`); the three memory-backed hosts plain-200
+liveness with the no-DB-to-probe comment. READMEs updated (cms/auth-cms/
+jobs-minimal). Run-and-look: all four hosts booted, /healthz 200 recorded,
+ports freed; the cms happy path pinged the authorized playground live.
+
+**Run-and-look catch → connector amendment (in-milestone-spirit, applied
+by the coordinator):** the 503 path was UNREACHABLE — `StatusCheck` was
+Ping-only and the remote libSQL driver's Ping is LAZY (nil without a
+network round-trip), so a dead DB could never fail readiness. Both
+connectors' `StatusCheck` now Ping + `SELECT 1` round-trip (the canonical
+pattern; pgxdb kept symmetric deliberately); hermetic
+`turso.TestStatusCheck` added (live memDB nil / closed DB error). The
+503 path then DRIVEN LIVE: examples/cms booted against a nonexistent
+turso URL → `/healthz` → **503 `{"status":"unavailable"}`**, clean
+shutdown, port freed. Note carried to open flags: `tursodb.Open`'s eager
+boot ping is equally lazy — boot-time DB validation still rests on the
+feature stores' table probes, not the connector open.
+
+**Premise-false (logged):** `examples/minimal` has NO README — the
+route-table line landed in the other three only; whether minimal gets a
+README at all is a jrazmi call (open flag, not invented here).
+
+Verify: all four hosts + both connectors build/test/vet green;
+`make check` + `make guard` green; gofmt clean. Committed CI-green.
+**Next: P4.**

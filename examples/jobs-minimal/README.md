@@ -38,6 +38,9 @@ Port 8083 (8081/8082 are taken by the other examples).
 ```sh
 cd examples/jobs-minimal && go run ./cmd/server        # boots, logs pool + scheduler start
 
+# 0. liveness probe -> 200 (host-local GET /healthz; unauthenticated, memory-backed so no DB to probe)
+curl -fsS -o /dev/null -w '%{http_code}\n' localhost:8083/healthz
+
 # 1. prompt enqueue -> the handler log line appears sub-second (proves the wake wiring)
 curl -fsS -X POST localhost:8083/enqueue -d '{"kind":"demo.print","payload":{"msg":"hi"}}'
 

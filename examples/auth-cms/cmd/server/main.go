@@ -313,6 +313,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 	registerDemoRoutes(router, authSvc, authorizer)
 	registerDebugRoutes(router, authSvc, authRepos, log)
 
+	// Host-local liveness probe (host route, not feature surface). Mounted on
+	// the root router with no middleware, outside every gated group and
+	// unwrapped by RequireUser — unauthenticated by design, since a readiness
+	// probe can't log in.
+	router.Handle(http.MethodGet, "/healthz", healthzHandler())
+
 	// Shutdown order (design §7, phase 5 — with the poller, corrected context idiom
 	// P3):
 	//  1. web.Run blocks until ctx is canceled, then drains in-flight HTTP on its
@@ -383,6 +389,15 @@ func outboxDemoHandler(store *outboxmem.Store, wake chan<- struct{}, log *slog.L
 		}
 		log.InfoContext(r.Context(), "outbox demo appended", "event_id", rec.EventID)
 		writeHostJSON(w, http.StatusAccepted, map[string]string{"event_id": rec.EventID})
+	}
+}
+
+// healthzHandler is this host's liveness probe. Both feature stores are
+// memory-backed, so there is no DB to probe — reaching the handler is itself
+// the liveness signal.
+func healthzHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
 	}
 }
 
