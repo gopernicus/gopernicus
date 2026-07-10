@@ -1,10 +1,10 @@
 # workshop-v2-scaffolding — the scaffolding CLI (init · new feature · db verbs)
 
-Status: **RATIFIED 2026-07-09 (jrazmi, in-session) — Q1–Q5 all at
-recommendations: workshop/gopernicus module 35 (stdlib-only, new
-"workshop" taxonomy kind) · both dialects always · new-domain DEFERRED ·
-hand-authored templates + scaffold-compile gate · review gate RUNS
-(findings folded on return). EXECUTING.**
+Status: **CLOSED 2026-07-09 — W1–W5 executed same day; ratified Q1–Q5 at
+recommendations (module 35 stdlib-only · both dialects · new-domain
+deferred · hand-authored templates + scaffold-compile gate · gate run:
+steward ×8 + lead ×7 folded, delegation resolved the stdlib-vs-drivers
+contradiction). Eleven guards; all scaffold legs green in make check.**
 Origin: the workshop-v2 scope brief
 (`.claude/plans/restructure/workshop-v2-brief.md`, FINAL 2026-07-02) §1's
 three SCAFFOLD-ONCE targets, sliced by the 2026-07-09 owner ruling:
@@ -428,3 +428,25 @@ status DB-down file-view 2 pending; port freed. Coordinator cleanup at
 close: the now-orphaned `notImplemented` stub helper removed (W4's own
 change orphaned it), module re-verified. `make check` (35) +
 `make guard` (11) green. Committed CI-green. **Next: W5 (close).**
+
+### 2026-07-09 — W5 EXECUTED — **MILESTONE CLOSED**
+
+Coordinator-inline (fable, per the plan's model line). Docs swept: root
+README + RELEASING + ARCHITECTURE → thirty-five/eleven with the workshop
+rows; the taxonomy table gains the SIXTH kind (**workshop tool** — emits
+anatomies, never links them; G11 + the scaffold-compile tests as its
+enforcement; "Five kinds" → "Six kinds", dated amendment);
+`workshop/gopernicus/README.md` authored (commands, the identity-params
+rail, how-templates-stay-honest naming the scaffold tests as guard
+infrastructure, the v2b deferrals with triggers, the G5 seam); the brief
+gained the dated cross-reference (scaffold-once targets DISCHARGED;
+regenerate-forever → v2b; the drift question ANSWERED for scaffold-once
+surfaces); NOTES.md milestone entry with open flags (driver-version
+bump-together, G5's hardcoded list, the pre-tag replace block gated on
+repo-hardening phase 5's LICENSE/tags). **Close verify:** `make check`
+green (35 modules, scaffold legs inside); `make guard` ELEVEN clean;
+stale-count grep clean. **Close run-and-look (recorded):** a FRESH
+`gopernicus init --db=none` emit → absolute sdk replace → GOWORK=off
+tidy+build → boot → `/healthz` **200** → clean kill, port freed — the
+emit→build→boot chain end to end. Archived here; archive README row
+added.

@@ -1806,3 +1806,50 @@ validation; feature-store probes remain the boot validator). (4) The
 retry loop's budget is ConnectTimeout — many attempts × long backoff
 needs it raised. (5) A raw DSN inside a wrapped DRIVER error is not
 scrubbed (parity with pgxdb; hosts use Config.Redacted()).
+
+## 2026-07-09 — workshop-v2-scaffolding EXECUTED: the scaffolding CLI (module 35)
+
+The scaffold-once slice of the workshop-v2 brief, same-day cut → gate →
+execute (plan archived at `.claude/past/workshop-v2-scaffolding/`;
+ratified Q1–Q5 at recommendations; gate: steward ALIGNED-WITH-EDITS ×8 +
+lead SHIP-WITH-EDITS ×7, 15 findings folded — headline: the convergent
+stdlib-vs-drivers contradiction resolved by DELEGATION, `db
+migrate/status` exec the host-emitted runner and the CLI's go.mod keeps
+ZERO require lines, structurally).
+
+Shipped (W1–W5, one CI-green commit each): `workshop/gopernicus` (module
+35, a NEW sixth taxonomy kind: the workshop tool — emits anatomies,
+never links them; guard **G11 workshop-boundary**, proven-can-fail both
+directions — `make guard` runs ELEVEN) · `gopernicus init` (host
+scaffold over 7 .tmpl templates: sdk-only composition root, host
+Makefile with the one-rule + G9/G10 shapes, pre-tag replace block,
+migrations runner with `-status`) · `gopernicus new feature` (26
+templates: the FULL charter skeleton — FS2 socket, order.go, the
+checklist-14 IDs seam, six-case storetest family + DBGeneratedIDOnEmpty,
+public memstore, BOTH dialect stores with inline id DEFAULTs and pinned
+driver versions) · `db create/migrate/status` (pure-FS create; delegated
+migrate/status with the file-only fallback) · docs/taxonomy/counts (35
+modules everywhere).
+
+**The drift answer (load-bearing):** scaffold-compile tests inside
+`make check` — every run emits a host + feature into temp dirs, absolute-
+replaces, builds (`GOWORK=off`; hermetic legs offline, driver legs
+`GOPROXY=off` warm-cache), runs the emitted feature's storetest against
+its emitted memstore (11 cases), and greps the guard shapes over emitted
+output. Templates are `.tmpl` (invisible to repo guards) — these tests
+are the only gate on emitted content, named as guard infrastructure.
+
+Live proofs recorded in the plan's execution log: emitted none-host
+BOOTED (healthz 200, clean shutdown); emitted `notes` feature hand-wired
+into an emitted host, boot-time create+list proof logged; the full db
+verb chain against a throwaway postgres:17 (create → migrate → status →
+DB-down file-view). Deferred to workshop-v2b with named triggers: store
+emission, TS clients, new-domain, doctor/sqlguard, the test harness.
+
+Open flags: (1) the pinned driver versions in `feature.go`'s const block
+must bump together with the repo stores' (comment says so — a
+consistency-check test is a cheap future add); (2) G5's hardcoded
+feature list remains the one manually-extended guard (the CLI prints the
+checklist; making G5 glob-driven is a small standalone item); (3) emitted
+hosts need the pre-tag `replace` block until repo-hardening phase 5 cuts
+first tags — LICENSE remains that gate.

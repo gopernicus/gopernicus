@@ -41,6 +41,8 @@ worked example `examples/cms`.
     jobs/                 module github.com/gopernicus/gopernicus/features/jobs               — durable queue + schedules hexagon (datastore-free; public memstore/)
       stores/pgx/         module …/features/jobs/stores/pgx             — jobs' pgx store adapter
       stores/turso/       module …/features/jobs/stores/turso           — jobs' Turso store adapter
+  workshop/
+    gopernicus/           module github.com/gopernicus/gopernicus/workshop/gopernicus       — the scaffolding CLI (init / new feature / db verbs; stdlib-only; emits the anatomies below, never links them — guard G11)
   examples/
     cms/                  module github.com/gopernicus/gopernicus/examples/cms                — a host app: features/cms on Turso
       cmd/  internal/theme  workshop/migrations
@@ -52,7 +54,7 @@ worked example `examples/cms`.
       cmd/
 ```
 
-**Thirty-four modules today.** `sdk` is the kernel; `integrations/*` are reusable
+**Thirty-five modules today.** `sdk` is the kernel; `integrations/*` are reusable
 third-party connectors (one external dependency each, each its own module);
 `features/<name>` is a datastore-free feature core with its store adapters as
 sibling modules — one per supported store implementation; `examples/*` are host apps that
@@ -71,9 +73,10 @@ the workspace. Module paths are rooted at `github.com/gopernicus/gopernicus`.
 
 ## Kinds of module — the taxonomy
 
-Five kinds of thing live in this ecosystem (ratified 2026-07-02, R6 —
+Six kinds of thing live in this ecosystem (ratified 2026-07-02, R6 —
 `.claude/plans/roadmap/00-intersections.md` §1; amended 2026-07-07,
-feature-standard FS3, adding the views-module row):
+feature-standard FS3, adding the views-module row; amended 2026-07-09,
+workshop-v2-scaffolding W5, adding the workshop row):
 
 | kind | definition | examples | swap unit |
 |---|---|---|---|
@@ -82,6 +85,7 @@ feature-standard FS3, adding the views-module row):
 | **feature** | a mountable domain module: own entities, **own durable schema + migrations**, and/or **own route surface**; its core module requires **sdk only** (FS1, 2026-07-07) | `cms`, `auth`, `jobs`; next: `events` | `NewService` + a `svc.Register` call |
 | **store module** | a feature's store implementation — SQL + migrations written against one driver package's API (`stores/<package>`) | `cms/stores/turso`, `cms/stores/pgx` | a module import + one `Open` call |
 | **views module** | a feature's bundled presentation default — the implementation of the core's `Views` port, written against one view package's API (`views/<package>`; FS3, 2026-07-07 — amends R6's four-kind table). Nil `Config.Views` → the feature's HTML surface is not registered, uniformly | `cms/views/templ` (landed at feature-standard B2, 2026-07-07) | a module import + one `Config` field |
+| **workshop tool** | a developer-time tool that EMITS the other kinds' anatomies and never links them (guard G11: nothing imports `workshop/`, workshop imports no feature/example); its output is verified by scaffold-compile tests inside `make check`, not by runtime coupling | `workshop/gopernicus` (the scaffolding CLI: `init` / `new feature` / `db` verbs; workshop-v2-scaffolding, 2026-07-09) | a `go install` — never a runtime dependency |
 
 The two litmus tests: **if swapping the adapter changes what the host must
 migrate, it's a store module per implementation; if the swap is invisible outside

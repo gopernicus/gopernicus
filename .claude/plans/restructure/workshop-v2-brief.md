@@ -254,3 +254,20 @@ cites a verified original-repo path; every dead item in §3 names its
 replacement; no generator design and no code anywhere in this document. The
 phase's acceptance run, real-interaction check, and execution log live in
 the phase file (`05-workshop-v2-brief.md`), not here.
+
+---
+
+**Cross-reference (2026-07-09, workshop-v2-scaffolding W5):** the
+scaffold-once targets of §1 are DISCHARGED by the `workshop-v2-scaffolding`
+milestone (archived at `.claude/past/workshop-v2-scaffolding/`): the host
+scaffold (`gopernicus init`), the feature skeleton (`gopernicus new
+feature` — emitting the FS1–FS10 charter anatomy, which supersedes this
+brief's §1 placement citations), and the migrations tooling (`db
+create/migrate/status` — delegation to the host-owned runner; the CLI
+carries no driver). The app-local domain scaffold and ALL
+regenerate-forever surfaces (store-adapter emission, TS clients, §4's
+open questions on specs/markers/drift-regeneration) moved to
+**workshop-v2b** with demand triggers named in
+`workshop/gopernicus/README.md`. The drift question is ANSWERED for
+scaffold-once surfaces: drift-as-CI lives in the generator's own
+scaffold-compile tests inside this repo's `make check`.

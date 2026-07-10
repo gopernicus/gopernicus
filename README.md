@@ -7,7 +7,7 @@ prove the design end to end — one on Turso, one with zero external
 infrastructure. See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layering
 rules and [NOTES.md](NOTES.md) for the decision log.
 
-## The thirty-four modules
+## The thirty-five modules
 
 ```
 sdk/                                stdlib-only framework kernel (empty go.mod = structural enforcement)
@@ -44,6 +44,7 @@ examples/cms/                       a host app: features/cms on Turso, with a cu
 examples/minimal/                   a host app: features/cms on an in-memory store — zero libsql in its module graph
 examples/auth-cms/                  a host app: auth + cms + events + the authorization flagship composed in-memory (rule 6, live)
 examples/jobs-minimal/              a host app: features/jobs on its memstore — zero drivers, the §8 protocol host
+workshop/gopernicus/                the scaffolding CLI (init / new feature / db verbs) — stdlib-only, its own module
 ```
 
 `go.work` resolves these locally for development; real consumers would pin
@@ -71,7 +72,7 @@ tagged versions, not the workspace.
   still takes the earlier `Register(mount, repos, cfg)` form until its
   public Service lands).
 - **Dependencies point inward.** `examples` → `features`/`integrations` →
-  `sdk`, never the reverse. `make check`'s ten layering guards enforce this.
+  `sdk`, never the reverse. `make check`'s eleven layering guards enforce this.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full detail, including the
 feature contract (`sdk/feature`), the app-hexagon pattern (`internal/logic`),
@@ -93,7 +94,7 @@ make migrate           # applies examples/cms/workshop/migrations pre-boot
 make run                # or: cd examples/cms && go run ./cmd/server
 ```
 
-From the repo root, `make check` builds, vets, and tests all thirty-four modules
-and runs the ten layering guards; `make test-stores` runs the live dialect
+From the repo root, `make check` builds, vets, and tests all thirty-five modules
+and runs the eleven layering guards; `make test-stores` runs the live dialect
 conformance suites (expects `POSTGRES_TEST_DSN` / `TURSO_*`). See [examples/cms/README.md](examples/cms/README.md)
 for that host's full env/make-target reference.
