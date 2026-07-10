@@ -31,8 +31,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	smithy "github.com/aws/smithy-go"
 
-	"github.com/gopernicus/gopernicus/sdk/filestorage"
-	"github.com/gopernicus/gopernicus/sdk/filestorage/filestoragetest"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/filestorage"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/filestorage/filestoragetest"
 )
 
 // hermeticStore builds a Store with static credentials and a fake endpoint. No

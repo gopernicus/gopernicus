@@ -1,6 +1,6 @@
 package relationship
 
-import "github.com/gopernicus/gopernicus/sdk/crud"
+import "github.com/gopernicus/gopernicus/sdk/foundation/crud"
 
 // OrderFields is the allow-list of sortable columns for the relationship listings
 // (ListRelationshipsBySubject, ListRelationshipsByResource): only these vetted

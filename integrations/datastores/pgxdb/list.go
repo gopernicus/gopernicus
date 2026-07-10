@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // ListQuery describes one paginated SELECT for List. T is a store-local,
@@ -33,7 +33,7 @@ type ListQuery[T any] struct {
 	PKOf         func(row T) string
 }
 
-// List runs a paginated SELECT implementing the sdk/crud list matrix over
+// List runs a paginated SELECT implementing the sdk/foundation/crud list matrix over
 // pgx.CollectRows + RowToStructByName. It validates the request, resolves the
 // order against q.OrderFields, then switches on req.ResolvedStrategy() into one
 // of two linear flows: listCursor appends the keyset tuple predicate (and, when

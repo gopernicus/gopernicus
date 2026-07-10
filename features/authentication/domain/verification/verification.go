@@ -1,6 +1,6 @@
 // Package verification is the domain for the two time-bound secrets auth issues:
 // a short-lived Code (email verification) and a longer-lived Token (password
-// reset). Both are opaque random values (sdk/cryptids) tied to a user and an expiry;
+// reset). Both are opaque random values (sdk/foundation/cryptids) tied to a user and an expiry;
 // they are separate entities with separate ports because they have different
 // lifetimes and different store-level access needs.
 package verification
@@ -8,7 +8,7 @@ package verification
 import (
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 // secrets mints verification codes and reset tokens with the default nanoid
@@ -26,7 +26,7 @@ type Code struct {
 }
 
 // NewCode mints an email-verification code for userID that expires ttl after
-// now. The code is an opaque random value (sdk/cryptids).
+// now. The code is an opaque random value (sdk/foundation/cryptids).
 func NewCode(userID string, ttl time.Duration, now time.Time) Code {
 	now = now.UTC()
 	return Code{
@@ -51,7 +51,7 @@ type Token struct {
 }
 
 // NewToken mints a password-reset token for userID that expires ttl after now.
-// The token is an opaque random value (sdk/cryptids).
+// The token is an opaque random value (sdk/foundation/cryptids).
 func NewToken(userID string, ttl time.Duration, now time.Time) Token {
 	now = now.UTC()
 	return Token{

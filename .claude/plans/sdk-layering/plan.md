@@ -302,3 +302,22 @@ clean SIGTERM, port free. `make check` (35) + `make guard` (11) green.
 Committed CI-green. P3 note from the executor: logging/context.go now
 holds only TracingHandler — rename to handler.go rides P3.
 **Next: P3 (the physical split).**
+
+### 2026-07-10 — P3 CLOSED (the physical split)
+
+11 packages → `sdk/foundation/`, 8 → `sdk/capabilities/`; `sdk/feature`
++ the root kernel files stayed. 146 git renames; content sweep: 359 .go
++ 11 .tmpl (the 12th template correctly untouched — it references only
+sdk/feature) + 19 .md + the Makefile G6 comment; goimports repo-wide;
+ZERO leftover old import paths (grep-clean, coordinator re-verified);
+`logging/context.go` → `handler.go` rode along. Doc sweep grep-driven:
+the fold's "five integration READMEs" was NINE (logged — the grep
+mandate governed); ~75 sibling doc-comment shorthands re-pathed;
+.claude/ + NOTES historical text untouched. G1 prefix-regexes unaffected
+(verified). Verify: sdk 21 packages green; `make check` (35 — scaffold
+canary proved the template renames); `make guard` (11); GOWORK=off
+standalone builds ×3; examples/minimal booted 200/200, port freed.
+Flags: `logging/context_test.go` not renamed (out of named scope — a
+trivial coherence follow-up); one P1-era `sdk/errs` comment in
+sendgrid.go noticed, left (P5 sweep). Committed CI-green.
+**Next: P4 (module 36).**

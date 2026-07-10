@@ -8,7 +8,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/cms"
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 func renderToString(t *testing.T, r web.Renderer) string {

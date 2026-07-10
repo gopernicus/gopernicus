@@ -1,12 +1,12 @@
 # integrations/oauth/google
 
-An `sdk/oauth.Provider` implementation for **Google** OAuth 2.0 + OpenID
+An `sdk/capabilities/oauth.Provider` implementation for **Google** OAuth 2.0 + OpenID
 Connect. It wraps exactly one third-party library —
 `github.com/coreos/go-oidc/v3` — used solely for cryptographic ID token
 verification (OIDC discovery, JWKS fetch/cache, RS256 signature validation).
 The authorization-code, token-exchange, refresh, and userinfo flows are
 hand-rolled on `net/http`; there is **no `golang.org/x/oauth2` dependency**. It
-imports `sdk/oauth` for the port vocabulary and no feature or other integration.
+imports `sdk/capabilities/oauth` for the port vocabulary and no feature or other integration.
 
 ## Construction fetches the network (fail-fast)
 

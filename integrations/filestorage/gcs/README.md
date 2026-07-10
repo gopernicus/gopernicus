@@ -3,7 +3,7 @@
 A file-storage connector wrapping exactly one third-party library-family —
 `cloud.google.com/go/storage` (plus `google.golang.org/api`'s client options and
 iterator, the storage client's own required surface). Its `Store` implements the
-`sdk/filestorage` core `Storer` port and, because Google Cloud Storage supports
+`sdk/capabilities/filestorage` core `Storer` port and, because Google Cloud Storage supports
 them, the two optional capability interfaces `ResumableUploader` and
 `SignedURLer`.
 

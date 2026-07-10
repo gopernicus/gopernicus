@@ -20,13 +20,13 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms/domain/content"
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
 	cmstempl "github.com/gopernicus/gopernicus/features/cms/views/templ"
-	"github.com/gopernicus/gopernicus/sdk/cacher"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/email"
-	"github.com/gopernicus/gopernicus/sdk/environment"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
 	"github.com/gopernicus/gopernicus/sdk/feature"
-	"github.com/gopernicus/gopernicus/sdk/logging"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
+	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 func main() {

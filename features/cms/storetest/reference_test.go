@@ -15,7 +15,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
 	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // TestReference runs the conformance suite against the in-package reference
@@ -169,7 +169,7 @@ func (r refEntries) SetTerms(_ context.Context, entryID string, termIDs []string
 }
 
 // refPage sorts by (created_at, id) in the resolved direction, then applies the
-// full sdk/crud list matrix — cursor or offset mode, the reverse-probe prev
+// full sdk/foundation/crud list matrix — cursor or offset mode, the reverse-probe prev
 // page, and the optional count — the same keyset shape the dialect stores
 // implement, hand-rolled here so the reference impl paginates identically. It
 // encodes the cursor from the record's stored created_at (this store keeps

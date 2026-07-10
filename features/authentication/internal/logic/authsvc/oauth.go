@@ -12,8 +12,8 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/email"
-	"github.com/gopernicus/gopernicus/sdk/oauth"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
 )
 
 const (
@@ -422,9 +422,9 @@ func (s *Service) sendPendingLinkEmail(ctx context.Context, u user.User, provide
 }
 
 // pkceVerifier returns a high-entropy PKCE code verifier from the unreserved
-// character set (sdk/cryptids' dotless alphabet), long enough for RFC 7636.
+// character set (sdk/foundation/cryptids' dotless alphabet), long enough for RFC 7636.
 func pkceVerifier() string { return newSecret() + newSecret() }
 
-// newSecret returns an opaque high-entropy value (sdk/cryptids) for a nonce or
+// newSecret returns an opaque high-entropy value (sdk/foundation/cryptids) for a nonce or
 // PKCE segment.
 func newSecret() string { return secrets.MustGenerate() }

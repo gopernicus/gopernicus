@@ -37,7 +37,7 @@ from compatible services) → `filestorage.ErrObjectNotFound`; other read failur
 
 ### Config (S3-compatible seam)
 
-`Config` carries `env:` tags for `sdk/environment.ParseEnvTags`; struct-literal
+`Config` carries `env:` tags for `sdk/foundation/environment.ParseEnvTags`; struct-literal
 construction stays first-class.
 
 | field | env | purpose |

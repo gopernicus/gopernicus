@@ -36,7 +36,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // Assignment is a stored role grant. The empty (ResourceType, ResourceID) pair

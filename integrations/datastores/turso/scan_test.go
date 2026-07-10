@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // scanRowStruct is a well-formed db-tagged row struct exercising every wrapper

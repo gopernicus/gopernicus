@@ -49,7 +49,7 @@ ratified 2026-07-02 — `.claude/plans/roadmap/feature-trio-relayout.md`):
 | `<name>.go` | the feature's host-facing exported surface: `Repositories`, `Config`, `NewService(repos, cfg) (*Service, error)`, and the `Service` driving surface with its `Register(mount) error` mount method (FS2) — plus whatever additional exported types host-facing needs require (e.g. auth's `PasswordHasher` port, its `Principal` alias) | public — the socket |
 | `domain/<domain>/` (e.g. `domain/content/`, `domain/user/`) | the hexagon's public rim: entities + repository ports (interfaces store adapters and host stores implement) | public **by necessity** — hosts and store modules import these across module boundaries, and Go forbids importing another module's `internal/` |
 | `internal/logic/<domain>svc/` | domain services: business rules over the ports, no HTTP/SQL — the hexagon's sealed interior | internal |
-| `internal/inbound/<feature>/` (e.g. `internal/inbound/cms/` — D1, segovia-lessons phase 01, 2026-07-08) | driving adapter wearing the ratified file anatomy: `routes.go` is the ONE readable route table (a `Mount` dispatcher; per-resource deny-by-absence `mountX` helpers live in their resource files — the authentication shape); per-resource files at resource #2 (`entries.go`, `media.go`, …); transport-named `api.go`/`html.go` only as the single-resource degenerate form; the maximal flatten (single resource, small handler set → handlers stay in `routes.go`; `features/events/internal/inbound/events/routes.go` is the blessed example); **never** `/api`/`/html`/`/htmx` subdirectories. Handlers are thin delegations to the Service, writing responses through `sdk/web` responders only (FS9); views are consumed through the feature's `Views` port, never hardcoded (FS3; cms converged at feature-standard B2, 2026-07-07). `internal/inbound/http/` means transport plumbing only (middleware), mirroring the app pattern — a feature has none until real plumbing appears | internal |
+| `internal/inbound/<feature>/` (e.g. `internal/inbound/cms/` — D1, segovia-lessons phase 01, 2026-07-08) | driving adapter wearing the ratified file anatomy: `routes.go` is the ONE readable route table (a `Mount` dispatcher; per-resource deny-by-absence `mountX` helpers live in their resource files — the authentication shape); per-resource files at resource #2 (`entries.go`, `media.go`, …); transport-named `api.go`/`html.go` only as the single-resource degenerate form; the maximal flatten (single resource, small handler set → handlers stay in `routes.go`; `features/events/internal/inbound/events/routes.go` is the blessed example); **never** `/api`/`/html`/`/htmx` subdirectories. Handlers are thin delegations to the Service, writing responses through `sdk/foundation/web` responders only (FS9); views are consumed through the feature's `Views` port, never hardcoded (FS3; cms converged at feature-standard B2, 2026-07-07). `internal/inbound/http/` means transport plumbing only (middleware), mirroring the app pattern — a feature has none until real plumbing appears | internal |
 | `stores/<package>/` | a **separate module** — the store implementation written against one driver package's API (`stores/pgx`, `stores/turso`; R-KV3), owning its SQL, canonical migrations, and `ExportMigrations` | public API, but never imported by the feature core |
 | `storetest/` | the exported conformance suite (`Run(t, newRepos)`) + the test-scoped reference in-memory implementation; every store implementation runs it | public test-support package inside the feature core (stdlib + sdk only — G2 keeps drivers out) |
 | `views/<pkg>` (per-concern, only if the feature has HTML) | a **separate module** — the bundled default implementation of the feature core's `Views` port, named for the package it's built on (`views/templ`; R-KV2). The core defines the port (domain-typed params, `web.Renderer` returns) and registers its HTML surface only when `Config.Views` is non-nil — uniform nil → HTML off (FS3). A host wires the default with one import + one Config field, implements the port itself (`html/template` via `web.Template` works in three lines), or wires nothing and runs API-only with zero view tech in its graph. cms's in-core `theme/` (`PublicViews` + `Default()`) was the reference implementation that proved the shape; it migrated to `views/templ` at feature-standard B2 (2026-07-07; the in-core `theme/` is now deleted) | public API, never imported by the feature core |
@@ -143,7 +143,7 @@ store isolates neither, so this refusal stands.
   `examples/`, or its own `stores/` (or `views/`). Guard G2
   (`make guard-feature-isolation`) enforces this by grep; violating it is a
   build-time architecture bug, not a style note.
-- **Transport uses sdk/web** (FS9). Handlers respond through `web.Respond*`
+- **Transport uses sdk/foundation/web** (FS9). Handlers respond through `web.Respond*`
   / `web.Render` / `web.Err*`; a feature-local write helper is a red flag
   in review and a guard failure. When the sdk is missing a capability a
   feature needs, the fix lands in the sdk if it passes `sdk/README.md`'s
@@ -325,12 +325,12 @@ policy, the *only* thing allowed to move from a feature-declared port into
 `sdk` is genuinely shared **vocabulary** multiple features need identically —
 e.g. an identity-in-context convention, or an error sentinel — never a
 feature's domain-specific port. **CASHED for identity-in-context, 2026-07-08
-(events-v1 A-I1): `sdk/identity` — authentication stashes the Principal, the
+(events-v1 A-I1): `sdk/foundation/identity` — authentication stashes the Principal, the
 events gateway reads it; vocabulary only, fails closed.** The `CurrentUser`
 port above stays as the general C2 pattern for domain-shaped needs.
 **Grown 2026-07-10 (identity-resolution):** the display/contact
-projection of a principal is now `sdk/identity.Resolver` (host-wired;
-authentication implements it) and delivery is `sdk/notify` — but
+projection of a principal is now `sdk/foundation/identity.Resolver` (host-wired;
+authentication implements it) and delivery is `sdk/capabilities/notify` — but
 domain-shaped needs (e.g. `CurrentUser`) STAY consumer-declared C2
 ports; the graduation bar is unchanged. `cms`'s `CurrentUser` port above stays in
 `cms` unless a second, unrelated feature needs the *identical* shape and the
@@ -408,7 +408,7 @@ cite by item number:
    jobs' error-less bundle and events' probing single-Store `New(db)`).
    A store never calls a connector's `Underlying()` (guard G10's sibling G9
    enforces it); a future cross-repository transaction consumes the
-   scaffolded `crud.Transactor` seam (`sdk/crud/tx.go`) instead.
+   scaffolded `crud.Transactor` seam (`sdk/foundation/crud/tx.go`) instead.
 6. A minimal-host proof exists: a `go run`-able host with an in-memory (or
    otherwise zero-external-infra) `Repositories` implementation, mirroring
    `examples/minimal`.
@@ -433,7 +433,7 @@ cite by item number:
     optional capability is always a nil-safe port, decided in the host's
     `main`.
 13. Every crud-paginated list port follows the pgx-crud-v1 standards
-    (`sdk/crud`'s package doc is normative): the aggregate declares its
+    (`sdk/foundation/crud`'s package doc is normative): the aggregate declares its
     order allow-list (`map[string]crud.OrderField`) + default `crud.Order`
     in its feature-core domain package (indexed spine columns only — EAV
     fields are never sortable); the storetest suite carries the standard

@@ -24,8 +24,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/workers"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/workers"
 )
 
 // DefaultLease is the stale-claim recovery window applied when no WithLease
@@ -243,7 +243,7 @@ func (q *Queue) List(_ context.Context, f job.ListFilter, req crud.ListRequest) 
 }
 
 // page sorts items by (created_at, id) in the resolved direction, then applies
-// the sdk/crud list matrix — cursor or offset mode, the reverse-probe prev page,
+// the sdk/foundation/crud list matrix — cursor or offset mode, the reverse-probe prev page,
 // and the optional count — the same keyset shape the dialect stores implement in
 // SQL, hand-rolled here so the reference paginates identically. orderFields is the
 // domain's allow-list (created_at only); an order field outside it is rejected

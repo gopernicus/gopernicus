@@ -130,12 +130,12 @@ guard-feature-core-sdk-only:
 	done; exit $$fail
 
 # G6 (FS9, feature-standard 2026-07-07): feature transports respond via
-# sdk/web — no hand-rolled JSON/error response writing anywhere in a feature's
+# sdk/foundation/web — no hand-rolled JSON/error response writing anywhere in a feature's
 # sealed interior (production code; tests exempt). A legitimate future hit
 # (e.g. json.NewEncoder into a buffer or an SSE stream) gets a named per-line
 # exception HERE citing FS9 — never a regex weakening.
 guard-feature-transport-sdk-web:
-	@echo "== guard: feature transports use sdk/web responders (FS9) =="
+	@echo "== guard: feature transports use sdk/foundation/web responders (FS9) =="
 	@! grep -rn --include='*.go' --exclude='*_test.go' -E 'json\.NewEncoder\(|http\.Error\(' features/*/internal/ || { echo "ERROR (FS9): hand-rolled HTTP response writing in a feature core — use web.Respond* (features/README.md, FS9)"; exit 1; }
 
 # G7 (constitution rule 6, events-v1 task-13; the plan called it "G5" but that

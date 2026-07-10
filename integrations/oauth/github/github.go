@@ -1,10 +1,10 @@
-// Package github implements the sdk/oauth.Provider port for GitHub's OAuth 2.0
+// Package github implements the sdk/capabilities/oauth.Provider port for GitHub's OAuth 2.0
 // endpoints. It is deliberately an integration despite requiring no third-party
 // library: the isolated external dependency is GitHub's live API contract — the
 // shape of its token, user, and email endpoints — which churns on GitHub's
 // release schedule, not sdk's. sdk defaults must be vendor-neutral, so a GitHub
 // connector is never an sdk default even though it is stdlib-implementable. It
-// imports sdk/oauth for the port vocabulary and no feature or other integration.
+// imports sdk/capabilities/oauth for the port vocabulary and no feature or other integration.
 //
 // GitHub does not support OpenID Connect for user login (no ID tokens), so
 // SupportsOIDC reports false and ValidateIDToken always returns an error;
@@ -23,7 +23,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/oauth"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
 )
 
 // maxResponseBody caps HTTP response bodies read from GitHub's token, user, and

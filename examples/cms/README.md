@@ -103,6 +103,6 @@ imports **only** the standard library (and other `sdk` packages). Concrete
 third-party drivers live in **`integrations/`** (reusable connectors, one
 external lib each). The `features/cms` hexagon is datastore-free — its store
 SQL lives in the separate `features/cms/stores/turso` module, which this host
-depends on. The `templ` render seam in `sdk/web` takes a local `Renderer`
+depends on. The `templ` render seam in `sdk/foundation/web` takes a local `Renderer`
 interface that `templ.Component` satisfies implicitly, so `sdk` never imports
 `templ`.

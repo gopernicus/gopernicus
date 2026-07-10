@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
+	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 
 	"github.com/gopernicus/gopernicus/features/events/domain/outbox"
 )

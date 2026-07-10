@@ -8,7 +8,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authorization/domain/role"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // roleKeyExpr is the SQL keyset tiebreak: the 5-tuple joined by chr(1). iam_roles

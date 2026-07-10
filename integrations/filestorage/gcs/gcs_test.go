@@ -34,8 +34,8 @@ import (
 	"google.golang.org/api/option"
 
 	"github.com/gopernicus/gopernicus/integrations/filestorage/gcs"
-	"github.com/gopernicus/gopernicus/sdk/filestorage"
-	"github.com/gopernicus/gopernicus/sdk/filestorage/filestoragetest"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/filestorage"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/filestorage/filestoragetest"
 )
 
 // Store honors the core port plus both optional capabilities GCS can back.

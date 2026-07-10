@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/slug"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/slug"
 )
 
 // Menu is a named navigation menu (the aggregate root for its items).

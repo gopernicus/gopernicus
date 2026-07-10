@@ -15,9 +15,9 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/email"
-	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // var _ pins the seam: *authsvc.Service is the concrete authService the router

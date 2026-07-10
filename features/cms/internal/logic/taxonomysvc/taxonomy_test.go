@@ -10,7 +10,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 // fakeTerms is an in-memory TermRepository for driving the service.

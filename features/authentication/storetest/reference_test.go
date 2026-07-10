@@ -20,7 +20,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // TestReference runs the conformance suite against the in-package reference
@@ -634,7 +634,7 @@ func (r refInvitations) UpdateStatus(_ context.Context, id string, upd invitatio
 }
 
 // pageMem sorts the full population by (created_at, id) in the resolved
-// direction, then applies the sdk/crud list matrix — cursor or offset mode, the
+// direction, then applies the sdk/foundation/crud list matrix — cursor or offset mode, the
 // reverse-probe prev page, and the optional count — the reference semantics the
 // SQL stores and the host memstores must reproduce. keyOf returns each record's
 // (created_at, id); created_at is the only sortable field.

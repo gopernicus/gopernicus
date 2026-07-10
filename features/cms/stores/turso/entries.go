@@ -5,7 +5,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/cms/domain/content"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // EntryStore implements content.EntryRepository over a libSQL database. It is

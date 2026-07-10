@@ -11,8 +11,8 @@ import (
 	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/workers"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/workers"
 )
 
 // DefaultLease is the stale-claim recovery window applied when no WithLease

@@ -20,7 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
+	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 )
 
 const (

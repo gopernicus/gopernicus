@@ -31,8 +31,8 @@ import (
 	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
 	"github.com/gopernicus/gopernicus/features/jobs/domain/schedule"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/workers"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/workers"
 )
 
 // Lease is the stale-claim recovery window a queue passed to RunQueue MUST be

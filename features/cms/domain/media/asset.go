@@ -1,6 +1,6 @@
 // Package media is the bounded context for uploaded assets (images, docs). It
 // stores asset metadata via an AssetRepository and binary content via a
-// BlobStore (sdk/filestorage), owning the CMS rules — storage-key generation
+// BlobStore (sdk/capabilities/filestorage), owning the CMS rules — storage-key generation
 // and basic validation.
 package media
 
@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/slug"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/slug"
 )
 
 // Asset is the media aggregate: metadata for one stored file.

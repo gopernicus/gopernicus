@@ -10,8 +10,8 @@ import (
 	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/workers"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/workers"
 )
 
 // DefaultLease is the stale-claim recovery window applied when no WithLease

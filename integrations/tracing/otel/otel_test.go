@@ -14,10 +14,10 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/gopernicus/gopernicus/integrations/tracing/otel"
-	"github.com/gopernicus/gopernicus/sdk/tracing"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/tracing"
 )
 
-// TestProviderExporter drives the whole sdk/tracing.Tracer surface against a
+// TestProviderExporter drives the whole sdk/capabilities/tracing.Tracer surface against a
 // caller-supplied TracerProvider whose SpanRecorder captures ended spans, so the
 // assertions read span name, attributes, and status directly off the recorded
 // spans without any exporter or network.

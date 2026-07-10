@@ -41,7 +41,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // CreateRelationship is one tuple to create, the input to

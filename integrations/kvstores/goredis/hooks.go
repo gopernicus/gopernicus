@@ -9,7 +9,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/gopernicus/gopernicus/sdk/tracing"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/tracing"
 )
 
 var (
@@ -95,7 +95,7 @@ func (h *loggingHook) observe(ctx context.Context, command string, start time.Ti
 	}
 }
 
-// tracingHook spans each command against the sdk/tracing port. It records only
+// tracingHook spans each command against the sdk/capabilities/tracing port. It records only
 // the command name — never argument values — so span metadata never leaks the
 // keys or values a command carries.
 type tracingHook struct {
@@ -103,7 +103,7 @@ type tracingHook struct {
 }
 
 // TracingHook returns a redis.Hook that runs each command (and pipeline) inside
-// a span started from tracer, the sdk/tracing port (stdlib-only; an OpenTelemetry
+// a span started from tracer, the sdk/capabilities/tracing port (stdlib-only; an OpenTelemetry
 // exporter is the deferred tracing integration). A nil tracer yields a hook
 // backed by tracing.Noop, so installation is always safe. It returns the
 // redis.Hook interface go-redis's AddHook consumes.

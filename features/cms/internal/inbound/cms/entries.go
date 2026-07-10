@@ -14,8 +14,8 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
 	"github.com/gopernicus/gopernicus/features/cms/internal/logic/entrysvc"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // entryService is the narrow surface the entry handlers consume. *entrysvc.Service

@@ -9,7 +9,7 @@ import (
 
 	jackpgx "github.com/jackc/pgx/v5"
 
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // TestLive_OpenAndMigrate is the one env-gated live test: it opens a real

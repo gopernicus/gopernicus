@@ -4,8 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/integrations/cryptids/bcrypt"
 	xbcrypt "golang.org/x/crypto/bcrypt"
+
+	"github.com/gopernicus/gopernicus/integrations/cryptids/bcrypt"
 )
 
 // testCost keeps hashing fast; production cost is higher.

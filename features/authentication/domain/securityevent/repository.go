@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // ListFilter narrows a List query. Every field is optional: a zero value means

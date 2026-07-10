@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // stubRenderer is a trivial web.Renderer used to prove template resolution.

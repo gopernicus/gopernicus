@@ -13,7 +13,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/serviceaccount"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // orderField is the keyset order column every paginated auth port pages by; it
@@ -375,7 +375,7 @@ func (r invitationRepo) UpdateStatus(_ context.Context, id string, upd invitatio
 // --- shared pagination ---
 
 // page sorts items by (created_at, id) in the resolved direction, then applies
-// the sdk/crud list matrix — cursor or offset mode, the reverse-probe prev page,
+// the sdk/foundation/crud list matrix — cursor or offset mode, the reverse-probe prev page,
 // and the optional count — the keyset shape a dialect store implements in SQL,
 // hand-rolled here so this memstore paginates identically (the jobs memstore
 // precedent). created_at is the only sortable field.

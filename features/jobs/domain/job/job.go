@@ -2,8 +2,8 @@
 // entity, the Enqueue input, and the QueueRepository outbound port a store
 // adapter (features/jobs/stores/turso, the in-core memstore) or a host fills.
 //
-// The Job entity satisfies sdk/workers.Job and QueueRepository is a strict
-// superset of sdk/workers.JobStore[Job] — both asserted at compile time below,
+// The Job entity satisfies sdk/foundation/workers.Job and QueueRepository is a strict
+// superset of sdk/foundation/workers.JobStore[Job] — both asserted at compile time below,
 // so the feature's runtime drives the store through the exact kernel contract
 // with no adapter layer.
 package job
@@ -13,8 +13,8 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/workers"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/workers"
 )
 
 // Status is the lifecycle state of a queued job.
@@ -46,7 +46,7 @@ var (
 // Job is one durable unit of work.
 //
 // The id, status, and retry-count are exposed as the ID/Status/RetryCount
-// methods (the sdk/workers.Job contract, whose method names collide with the
+// methods (the sdk/foundation/workers.Job contract, whose method names collide with the
 // obvious field names); the backing fields are JobID, JobStatus, and Retries so
 // store adapters in sibling modules can still construct and populate a Job
 // directly.
@@ -67,13 +67,13 @@ type Job struct {
 	UpdatedAt     time.Time
 }
 
-// ID returns the job's identifier (sdk/workers.Job).
+// ID returns the job's identifier (sdk/foundation/workers.Job).
 func (j Job) ID() string { return j.JobID }
 
-// Status returns the job's lifecycle state as a string (sdk/workers.Job).
+// Status returns the job's lifecycle state as a string (sdk/foundation/workers.Job).
 func (j Job) Status() string { return string(j.JobStatus) }
 
-// RetryCount returns how many times the job has been retried (sdk/workers.Job).
+// RetryCount returns how many times the job has been retried (sdk/foundation/workers.Job).
 func (j Job) RetryCount() int { return j.Retries }
 
 // Enqueue is the input for inserting one job.
@@ -98,7 +98,7 @@ type ListFilter struct {
 // QueueRepository is the durable queue outbound port. A store adapter
 // (features/jobs/stores/turso, the in-core memstore) or a host fills it; the
 // feature core stays dialect-blind. It is a strict superset of
-// sdk/workers.JobStore[Job]: Claim/Complete/Fail share the kernel's exact
+// sdk/foundation/workers.JobStore[Job]: Claim/Complete/Fail share the kernel's exact
 // signatures so a QueueRepository is the store a workers.Runner drives directly.
 type QueueRepository interface {
 	// Enqueue inserts one job; a duplicate ID yields sdk.ErrAlreadyExists.

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/slug"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/slug"
 )
 
 // Entry is the single dynamic content record on the frozen spine (plan §2/§3).

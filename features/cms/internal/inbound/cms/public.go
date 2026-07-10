@@ -8,8 +8,8 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms/domain/content"
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
 	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
-	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // homeEntryLimit caps how many recent entries the home page shows.

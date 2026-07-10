@@ -10,7 +10,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 )
 
 // defaultLimiterKeyPrefix namespaces rate-limit keys in a shared Redis instance.

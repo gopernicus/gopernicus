@@ -8,7 +8,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
-	"github.com/gopernicus/gopernicus/sdk/tracing"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/tracing"
 )
 
 var (
@@ -17,8 +17,8 @@ var (
 	_ tracing.SpanIdentity = (*spanFinisher)(nil)
 )
 
-// Tracer implements sdk/tracing.Tracer over an OpenTelemetry tracer. Build one
-// with Open; pass it wherever an sdk/tracing.Tracer is accepted. It is safe for
+// Tracer implements sdk/capabilities/tracing.Tracer over an OpenTelemetry tracer. Build one
+// with Open; pass it wherever an sdk/capabilities/tracing.Tracer is accepted. It is safe for
 // concurrent use.
 type Tracer struct {
 	tracer   oteltrace.Tracer
@@ -57,7 +57,7 @@ func (t *Tracer) ForceFlush(ctx context.Context) error {
 	return t.provider.ForceFlush(ctx)
 }
 
-// spanFinisher adapts an OpenTelemetry span to sdk/tracing.SpanFinisher.
+// spanFinisher adapts an OpenTelemetry span to sdk/capabilities/tracing.SpanFinisher.
 type spanFinisher struct {
 	span oteltrace.Span
 }

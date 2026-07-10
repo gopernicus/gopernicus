@@ -8,7 +8,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/cms/domain/content"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // EntryStore implements content.EntryRepository over a PostgreSQL database. It is

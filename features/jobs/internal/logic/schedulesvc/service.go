@@ -23,7 +23,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
 	"github.com/gopernicus/gopernicus/features/jobs/domain/schedule"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/workers"
+	"github.com/gopernicus/gopernicus/sdk/foundation/workers"
 )
 
 // ErrCronRequired is returned by EnsureSchedule when a Spec sets Cron but no

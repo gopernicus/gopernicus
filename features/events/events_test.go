@@ -12,10 +12,10 @@ import (
 	"time"
 
 	events "github.com/gopernicus/gopernicus/features/events"
-	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
+	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 	"github.com/gopernicus/gopernicus/sdk/feature"
-	"github.com/gopernicus/gopernicus/sdk/identity"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // recordingRouter records the (method, path) of every registered route so a test

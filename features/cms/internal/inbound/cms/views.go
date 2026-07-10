@@ -6,7 +6,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
 	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
 	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // Views is the CMS feature's HTML rendering port (FS3): the whole HTML surface —
@@ -18,7 +18,7 @@ import (
 // The bundled default lives in the sibling module features/cms/views/templ. The
 // blessed way to customize is partial override: embed that concrete default and
 // override individual methods (e.g. only the four chrome methods). Implementing
-// all methods from scratch (e.g. over sdk/web.Template) is possible but not the
+// all methods from scratch (e.g. over sdk/foundation/web.Template) is possible but not the
 // sold path.
 //
 // A nil Config.Views means the HTML surface is not registered — only the media

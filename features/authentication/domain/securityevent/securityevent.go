@@ -14,13 +14,13 @@
 // The rail is optional (ratified AV9): a host that wires no SecurityEvents
 // repository simply keeps no audit trail; the recording site is then a no-op.
 // The durable outbox emission rail (design §5.2) is DEFERRED (ratified AV10) —
-// nothing here imports sdk/events or features/events.
+// nothing here imports sdk/capabilities/events or features/events.
 package securityevent
 
 import (
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 // Event-type vocabulary (design §5.1, salvaged). The invitation terms A5

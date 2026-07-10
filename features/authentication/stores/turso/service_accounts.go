@@ -6,7 +6,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/serviceaccount"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // ServiceAccountStore implements serviceaccount.ServiceAccountRepository over a

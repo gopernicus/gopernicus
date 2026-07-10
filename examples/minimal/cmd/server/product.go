@@ -7,7 +7,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/cms"
 	"github.com/gopernicus/gopernicus/features/cms/domain/content"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // productType is a host-registered custom content type — the whole point of the

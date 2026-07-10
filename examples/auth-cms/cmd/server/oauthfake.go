@@ -6,10 +6,10 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/gopernicus/gopernicus/sdk/oauth"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
 )
 
-// fakeOAuthProvider is a host-local, self-contained sdk/oauth.Provider — NO
+// fakeOAuthProvider is a host-local, self-contained sdk/capabilities/oauth.Provider — NO
 // external vendor and no network. It exists so the A9 OAuth leg runs end to end
 // with zero infra: it derives a STABLE provider identity from the authorization
 // `code`, so re-running the flow with the same code lands on the login path (no

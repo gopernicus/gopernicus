@@ -106,7 +106,7 @@ Roles are **opaque strings** the host interprets. Demo routes:
 - **hasher**: `bcrypt.New()`. **mailer**: `email.NewConsole(log)` (logs mail —
   this is how you read verification codes and invitation tokens below).
 - **OAuth provider**: `fakeOAuthProvider` (`cmd/server/oauthfake.go`) — a
-  self-contained `sdk/oauth.Provider`, no vendor, no network; identity derived
+  self-contained `sdk/capabilities/oauth.Provider`, no vendor, no network; identity derived
   from the authorization `code`.
 - **TokenSigner**: `golang-jwt` from `AUTH_JWT_SECRET`; absent → an **ephemeral**
   per-boot key (tokens don't survive a restart); `AUTH_JWT_DISABLED=1` → nil.
@@ -322,7 +322,7 @@ curl -N -b jar http://localhost:8082/events
 Reboot with `EVENTS_OUTBOX=memory` to swap the emit path in front of the bus from
 direct-emit to the **durable at-least-once rail**. The host wires an example-local
 in-memory outbox (`internal/outboxmem`, an honest `outbox.EntryRepository`) into
-`Repositories.Outbox` and drives an `events.Poller` on an `sdk/workers` pool. A
+`Repositories.Outbox` and drives an `events.Poller` on an `sdk/foundation/workers` pool. A
 host-owned `POST /outbox-demo` route appends a record, then signals a cap-1 wake
 channel (the canonical append-then-signal pattern) so the poller drains it
 sub-second rather than waiting out the idle interval: **outbox → poll → emit →

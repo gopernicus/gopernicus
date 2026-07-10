@@ -1,12 +1,12 @@
 # integrations/tracing/otel
 
-An OpenTelemetry connector that implements the `sdk/tracing.Tracer` facility
+An OpenTelemetry connector that implements the `sdk/capabilities/tracing.Tracer` facility
 port — it wraps exactly one external dependency, the OpenTelemetry Go family
 (`go.opentelemetry.io/otel`, its trace SDK `go.opentelemetry.io/otel/sdk`, and
-the bundled `stdout` and `OTLP/gRPC` exporters). `sdk/tracing` stays stdlib-only
+the bundled `stdout` and `OTLP/gRPC` exporters). `sdk/capabilities/tracing` stays stdlib-only
 and ships just the `Noop` default; this module isolates the OpenTelemetry
 dependency so a host wires real span export by importing it and passing the
-resulting `*otel.Tracer` wherever an `sdk/tracing.Tracer` is accepted.
+resulting `*otel.Tracer` wherever an `sdk/capabilities/tracing.Tracer` is accepted.
 
 It imports only `sdk` and the OpenTelemetry family — **no feature, no other
 integration**.
@@ -46,13 +46,13 @@ if err != nil {
 }
 defer tracer.Shutdown(context.Background())
 
-// tracer is an sdk/tracing.Tracer:
+// tracer is an sdk/capabilities/tracing.Tracer:
 ctx, span := tracer.StartSpan(ctx, "content.publish")
 defer span.Finish()
 span.SetAttributes(tracing.StringAttribute("entry.id", id))
 ```
 
-The scalar `Config` fields carry `env:` tags for `sdk/environment.ParseEnvTags`
+The scalar `Config` fields carry `env:` tags for `sdk/foundation/environment.ParseEnvTags`
 (`TRACING_EXPORTER`, `TRACING_SERVICE_NAME`, `TRACING_OTLP_ENDPOINT`, …); the
 `Stdout` and `Provider` fields are programmatic-only.
 
@@ -68,6 +68,6 @@ without stopping. Both are no-ops in `ExporterProvider` mode and on a nil
 
 Hermetic, no network. The provider mode is exercised against otel's
 `tracetest.SpanRecorder`, asserting span name, attributes, and error status
-through the `sdk/tracing.Tracer` surface; the stdout mode redirects output to a
+through the `sdk/capabilities/tracing.Tracer` surface; the stdout mode redirects output to a
 buffer and asserts the emitted JSON; the OTLP/gRPC mode is verified to construct
 and shut down offline. Run with `go test ./...`.

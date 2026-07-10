@@ -38,7 +38,7 @@ const (
 )
 
 // Config selects and configures the OpenTelemetry exporter Open builds. Its
-// `env:` tags let a host populate the scalar fields with sdk/environment.ParseEnvTags;
+// `env:` tags let a host populate the scalar fields with sdk/foundation/environment.ParseEnvTags;
 // the Stdout and Provider fields are programmatic-only. A zero Config is filled
 // with the documented defaults by Open (stdout exporter, service name
 // "gopernicus", full sampling), so struct-literal construction stays

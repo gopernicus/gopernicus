@@ -7,7 +7,7 @@ import (
 	"time"
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
+	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 )
 
 // TestAppendTx proves the dialect-typed transactional appender (design §5): a

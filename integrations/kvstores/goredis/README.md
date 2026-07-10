@@ -51,7 +51,7 @@ limiter := goredis.NewLimiter(rdb, goredis.WithLimiterKeyPrefix("ratelimit:"))
 ```
 
 `Bus` takes a logger and an `Options` struct (with `env:` struct tags for
-`sdk/environment.ParseEnvTags`; a nil logger falls back to `slog.Default()`, and the
+`sdk/foundation/environment.ParseEnvTags`; a nil logger falls back to `slog.Default()`, and the
 zero `Options` takes the defaults `StreamPrefix: "events:"`,
 `ConsumerGroup: "default"`, `Workers: 4`, `BlockTimeout: 5s`, `BatchSize: 10`,
 `MaxLen: 0` = unbounded). `Cacher` and `Limiter` take functional options; each
@@ -75,7 +75,7 @@ defer cancel()
 
 rdb, err := goredis.Open(ctx, goredis.Config{Addr: "localhost:6379"},
     goredis.WithLogging(logger, goredis.WithSlowThreshold(50*time.Millisecond)),
-    goredis.WithTracing(tracer), // sdk/tracing.Tracer
+    goredis.WithTracing(tracer), // sdk/capabilities/tracing.Tracer
 )
 if err != nil {
     return err // ping failed: server unreachable
@@ -88,7 +88,7 @@ limiter := goredis.NewLimiter(rdb)
 ```
 
 `Config` fills zero fields with the documented defaults and carries `env:` struct
-tags for `sdk/environment.ParseEnvTags` (keys are namespaced by component — the host
+tags for `sdk/foundation/environment.ParseEnvTags` (keys are namespaced by component — the host
 passes its own app namespace):
 
 | field | env key | default |
@@ -114,7 +114,7 @@ client:
   command **errors always** (the `redis.Nil` cache-miss sentinel is not an
   error) and, with `WithSlowThreshold(d)`, commands slower than `d` at Warn.
 - `WithTracing(tracer)` / `goredis.TracingHook(tracer)` — runs each command
-  inside a span from the `sdk/tracing` port (stdlib only — an OpenTelemetry
+  inside a span from the `sdk/capabilities/tracing` port (stdlib only — an OpenTelemetry
   exporter is the deferred `integrations/tracing/otel`). A nil tracer falls back
   to `tracing.Noop`. Spans carry the command **name only**, never argument
   values, so no key or value data leaks into traces.
@@ -175,8 +175,8 @@ with an EVAL/reload fallback on NOSCRIPT). `Limit.Burst` is added to
   coercion, `Config` defaulting via the env tags, `Open`'s fail-fast against an
   unreachable address, `ClientOption` wiring, and the logging/tracing hooks
   driven directly with a fake `next` — **no Redis required**.
-- **Live** (`conformance_test.go`): the shared `sdk/events/eventstest`,
-  `sdk/cacher/cachertest`, and `sdk/ratelimiter/ratelimitertest` suites plus a
+- **Live** (`conformance_test.go`): the shared `sdk/capabilities/events/eventstest`,
+  `sdk/capabilities/cacher/cachertest`, and `sdk/capabilities/ratelimiter/ratelimitertest` suites plus a
   cross-instance broadcast fan-out test and an end-to-end `Open` round trip with
   hooks installed, **env-gated on `REDIS_TEST_ADDR`** with a loud skip so
   `make check` stays hermetic. Every live client is built through `Open`, so the

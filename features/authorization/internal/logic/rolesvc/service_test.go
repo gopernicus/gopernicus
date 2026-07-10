@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/gopernicus/gopernicus/features/authorization/domain/role"
-	"github.com/gopernicus/gopernicus/sdk/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // fakeRoleStore is an in-package role.Storer: a set of exact assignments plus an

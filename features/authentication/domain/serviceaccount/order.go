@@ -1,6 +1,6 @@
 package serviceaccount
 
-import "github.com/gopernicus/gopernicus/sdk/crud"
+import "github.com/gopernicus/gopernicus/sdk/foundation/crud"
 
 // OrderFields is the allow-list of sortable columns for List: only these vetted
 // column names may reach a store's ORDER BY. The map key is the API-facing field

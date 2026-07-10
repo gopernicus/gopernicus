@@ -12,13 +12,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // var _ pins the seam: the fake signer satisfies the sdk-owned JWTSigner port.

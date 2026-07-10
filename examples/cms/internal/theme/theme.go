@@ -22,7 +22,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms"
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
 	cmstempl "github.com/gopernicus/gopernicus/features/cms/views/templ"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // pages is the parsed template set: a shared header/footer plus one template per

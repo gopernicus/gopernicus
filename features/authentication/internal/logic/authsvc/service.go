@@ -29,12 +29,12 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/redirect"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/email"
-	"github.com/gopernicus/gopernicus/sdk/identity"
-	"github.com/gopernicus/gopernicus/sdk/oauth"
-	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 const (

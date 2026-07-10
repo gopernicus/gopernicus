@@ -23,7 +23,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/events/domain/outbox"
 	"github.com/gopernicus/gopernicus/sdk"
-	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
+	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 )
 
 // Store is a mutex-backed in-memory outbox.EntryRepository keyed by EventID (the

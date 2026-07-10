@@ -13,10 +13,10 @@ import (
 	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
 	"github.com/gopernicus/gopernicus/features/jobs/domain/schedule"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
 	"github.com/gopernicus/gopernicus/sdk/feature"
-	"github.com/gopernicus/gopernicus/sdk/web"
-	"github.com/gopernicus/gopernicus/sdk/workers"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/workers"
 )
 
 // memQueue is a minimal in-memory QueueRepository: enqueue with idempotency and

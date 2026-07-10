@@ -7,11 +7,11 @@
 //
 // The feature is datastore-free and view-free: it depends on its outbox port and
 // sdk facilities only, never on a concrete store, an integration, or another
-// feature. The gateway's connect-time identity is read from sdk/identity (a host
+// feature. The gateway's connect-time identity is read from sdk/foundation/identity (a host
 // stashes it via authentication.RequireUser on Config.StreamMiddleware); the
 // feature imports no other feature.
 //
-// Package-name collision (O5): this package is events and so is sdk/events; this
+// Package-name collision (O5): this package is events and so is sdk/capabilities/events; this
 // file and hosts alias the sdk one as sdkevents.
 //
 // Host-facing surface, all in this file:
@@ -31,13 +31,13 @@ import (
 	"errors"
 	"time"
 
+	"github.com/gopernicus/gopernicus/features/events/domain/outbox"
 	inbound "github.com/gopernicus/gopernicus/features/events/internal/inbound/events"
 	"github.com/gopernicus/gopernicus/features/events/internal/logic/hub"
-	"github.com/gopernicus/gopernicus/features/events/domain/outbox"
-	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
+	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 	"github.com/gopernicus/gopernicus/sdk/feature"
-	"github.com/gopernicus/gopernicus/sdk/identity"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 const (
@@ -77,7 +77,7 @@ type Projector func(sdkevents.Event) any
 // durable rail's port; a nil Outbox is direct-emit mode — the gateway still fans
 // best-effort emits out over SSE, but there is no durable outbox and the host
 // runs no poller. When Outbox is wired, the host constructs and drives a Poller
-// (NewPoller) on an sdk/workers pool; the gateway itself never owns the poller.
+// (NewPoller) on an sdk/foundation/workers pool; the gateway itself never owns the poller.
 type Repositories struct {
 	Outbox outbox.EntryRepository
 }

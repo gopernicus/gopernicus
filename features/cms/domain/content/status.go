@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/slug"
+	"github.com/gopernicus/gopernicus/sdk/foundation/slug"
 )
 
 // Status is an entry's publication state.

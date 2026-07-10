@@ -4,7 +4,7 @@ A pluggable, datastore-free jobs feature: a durable queue (enqueue with
 idempotency, atomic lease-based claim, retry, dead-letter) and recurring
 schedules (cron or fixed interval) fired exactly once per slot across any
 number of runtime instances — no leader election, just a value-CAS and a
-deterministic idempotency key. Built on `sdk/workers` (the pool/runner
+deterministic idempotency key. Built on `sdk/foundation/workers` (the pool/runner
 facility). Design of record: `.claude/plans/roadmap/jobs-feature-design.md`.
 
 ## Layout (the trio — see `features/README.md` §2 for the contract)
@@ -15,13 +15,13 @@ jobs.go                  the socket: Repositories, Config, CronParser/
                          NewRuntime, Register
 domain/                  the hexagon's public rim — entities + ports
   job/                   Job, Enqueue, QueueRepository (structurally
-                         satisfies sdk/workers.JobStore[job.Job])
+                         satisfies sdk/foundation/workers.JobStore[job.Job])
   schedule/              Schedule, Spec, Ensure, Repository
 internal/
   logic/queuesvc/        enqueue validation, idempotency, wake signaling
   logic/schedulesvc/     the fire engine (ListDue → ClaimDue CAS →
                          deterministic ID → enqueue → SetLastJob)
-  logic/runtime/         pool assembly over sdk/workers
+  logic/runtime/         pool assembly over sdk/foundation/workers
 memstore/                PUBLIC in-core reference stores (mutex-backed) —
                          backs the conformance suite AND zero-infra hosts
 storetest/               executable spec for the two ports (RunQueue +

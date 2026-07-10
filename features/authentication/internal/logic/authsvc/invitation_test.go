@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 )
 
 // fakeResolver records the resolve-on-registration calls authsvc makes and can

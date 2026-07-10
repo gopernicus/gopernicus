@@ -23,7 +23,7 @@ and the *concrete dependency* in `integrations/`:
 
 - the libSQL driver + `database/sql` plumbing live in
   `integrations/datastores/turso`, never in `sdk`.
-- `sdk/web.Render` takes a local `Renderer` interface; `templ.Component`
+- `sdk/foundation/web.Render` takes a local `Renderer` interface; `templ.Component`
   satisfies it implicitly, so `templ` stays out of `sdk`.
 
 Enforced by `make check`.
@@ -81,7 +81,7 @@ interface).
 | `cryptids` | identifier generation: the zero-arg `GenerateFunc` port + `IDGenerator` (zero value = nanoid-shaped default: 21 chars, confusion-free alphabet; `NanoID(alphabet, size)` for custom shapes; `Database` delegates key generation to the store via the empty-ID convention; google/uuid backend in `integrations/cryptids/google-uuid`) — plus `Encrypter` port + `AESGCM` default, `SHA256Hasher` (API keys — never passwords), `JWTSigner` port — golang-jwt backend in `integrations/cryptids/golang-jwt` |
 | `oauth` | OAuth 2.0/OIDC `Provider` port + PKCE S256 helper — providers live in `integrations/oauth/*` (no vendor-neutral default exists) |
 | `events` | in-process event bus port (`Bus`/`Broadcaster`/`Emitter`/`TypedHandler[T]`) + `Memory` default, `Noop`, `WakeChannel` — with `eventstest` conformance suite; the durable-outbox + SSE-gateway consumer is `features/events` |
-| `identity` | request-identity **vocabulary + the Resolver port** (A-I1, 2026-07-07; grown at identity-resolution, 2026-07-10): `Principal{Type, ID}`, `Address{Kind, Value}` (`KindEmail`/`KindPhone`, kinds open), `Info{Principal, DisplayName, Addresses}` (a display/contact PROJECTION — **no User struct enters sdk, ever**: the record stays feature-owned), `Resolver` (one method, fail-closed on the errs not-found class; no default — identity data is feature-owned, the sdk/oauth posture; `features/authentication` is the first implementation), strict positional `ResolveAll`, `WithPrincipal`/`FromContext`. No middleware, no authorization vocabulary |
+| `identity` | request-identity **vocabulary + the Resolver port** (A-I1, 2026-07-07; grown at identity-resolution, 2026-07-10): `Principal{Type, ID}`, `Address{Kind, Value}` (`KindEmail`/`KindPhone`, kinds open), `Info{Principal, DisplayName, Addresses}` (a display/contact PROJECTION — **no User struct enters sdk, ever**: the record stays feature-owned), `Resolver` (one method, fail-closed on the errs not-found class; no default — identity data is feature-owned, the sdk/capabilities/oauth posture; `features/authentication` is the first implementation), strict positional `ResolveAll`, `WithPrincipal`/`FromContext`. No middleware, no authorization vocabulary |
 | `notify` | delivery **port** (identity-resolution, 2026-07-10): `Notifier{Kind() string; Notify(ctx, identity.Address, Message)}` — a host wires one Notifier per address kind it supports; the wired set DEFINES the host's supported kinds (deny-by-absence per kind). Ships `Console` (any kind, dev default) + `MailerBridge` (email kind over an `email.Sender`, From at construction). A Notifier fails loudly, never silently drops. Provider integrations (`integrations/notify/<tech>`) are demand-gated |
 | `cacher`, `filestorage` | facility ports — wired defaults `cacher.Memory` (used by every example) and `filestorage.Disk` (used by `examples/cms`; `examples/minimal` leaves blob storage unset); GCS/S3 backends in `integrations/filestorage/{gcs,s3}` |
 | `ratelimiter` | facility port — wired default `ratelimiter.Memory` (D6/phase-2); first real consumer is `features/authentication`'s login-attempt limiting; `Acquire` is the blocking counterpart for workers (waits on `RetryAfter` instead of rejecting — no separate throttler port) |
@@ -91,7 +91,7 @@ interface).
 ## Not responsible for
 
 - **CMS-specific** HTTP transport: the route table, concrete handlers, and the
-  `templ` views live in `features/cms/internal/http`. `sdk/web` owns only the
+  `templ` views live in `features/cms/internal/http`. `sdk/foundation/web` owns only the
   reusable transport primitives above (middleware, response/error helpers,
   server config types, the render seam) — it never knows an app's routes or
   pages.

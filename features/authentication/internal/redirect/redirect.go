@@ -2,7 +2,7 @@
 // post-flow destinations (design §3). It is an exact-match allowlist — a
 // requested target is honored only when it appears verbatim in the host-supplied
 // list — kept feature-internal per the capability map's allowlist row (promoted
-// to sdk/web only on a second consumer). The same-origin root ("/") is always
+// to sdk/foundation/web only on a second consumer). The same-origin root ("/") is always
 // safe and needs no allowlisting.
 package redirect
 

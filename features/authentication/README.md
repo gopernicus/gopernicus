@@ -196,7 +196,7 @@ partial-wiring states fail LOUDLY at `NewService`/`Register` —
 `integrations/cryptids/bcrypt` satisfies `PasswordHasher` structurally
 (`bcrypt.New()`); `integrations/cryptids/golang-jwt` satisfies
 `cryptids.JWTSigner`; `integrations/oauth/{google,github}` satisfy
-`sdk/oauth.Provider`. None of them imports this module, and this module
+`sdk/capabilities/oauth.Provider`. None of them imports this module, and this module
 imports none of them — `features/authentication/go.mod` requires exactly `sdk`.
 
 ## Invitation identifier kinds (identity-resolution, 2026-07-10)
@@ -297,10 +297,10 @@ protocol).
                  ▼                                              ▼
         auth.Repositories                                  auth.Config
    (eleven ports; which optional              Hasher ← integrations/cryptids/bcrypt
-    ones are wired decides which              Mailer ← sdk/email (SMTP/Console) or sendgrid
+    ones are wired decides which              Mailer ← sdk/capabilities/email (SMTP/Console) or sendgrid
     subsystems exist at all)               Providers ← integrations/oauth/google|github
                  │                       TokenSigner ← integrations/cryptids/golang-jwt
-                 │                    TokenEncrypter ← sdk/cryptids.AESGCM
+                 │                    TokenEncrypter ← sdk/foundation/cryptids.AESGCM
                  │                           Granter ← a host authorizer adapter
                  │                                              │
                  └──────────────────┬───────────────────────────┘
@@ -332,11 +332,11 @@ import (
 	golangjwt "github.com/gopernicus/gopernicus/integrations/cryptids/golang-jwt"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	googleoauth "github.com/gopernicus/gopernicus/integrations/oauth/google"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/email"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
 	"github.com/gopernicus/gopernicus/sdk/feature"
-	"github.com/gopernicus/gopernicus/sdk/oauth"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // roleGranter adapts the ONE invitation seam (auth.Granter) to whatever

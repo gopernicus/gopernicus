@@ -12,13 +12,13 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthaccount"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthstate"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/serviceaccount"
-	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/email"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
 	"github.com/gopernicus/gopernicus/sdk/feature"
-	"github.com/gopernicus/gopernicus/sdk/identity"
-	"github.com/gopernicus/gopernicus/sdk/notify"
-	"github.com/gopernicus/gopernicus/sdk/oauth"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // --- compile-time seam assertions ---

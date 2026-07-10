@@ -27,10 +27,10 @@ import (
 	"github.com/gopernicus/gopernicus/features/jobs/domain/schedule"
 	"github.com/gopernicus/gopernicus/features/jobs/memstore"
 	robfigcron "github.com/gopernicus/gopernicus/integrations/scheduling/robfig-cron"
-	"github.com/gopernicus/gopernicus/sdk/environment"
 	"github.com/gopernicus/gopernicus/sdk/feature"
-	"github.com/gopernicus/gopernicus/sdk/logging"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
+	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 func main() {

@@ -15,9 +15,9 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // --- minimal machine mem repos (route tests only need a working store) ---

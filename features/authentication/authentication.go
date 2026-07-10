@@ -46,15 +46,15 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/invitationsvc"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/redirect"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/email"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/feature"
-	"github.com/gopernicus/gopernicus/sdk/identity"
-	"github.com/gopernicus/gopernicus/sdk/notify"
-	"github.com/gopernicus/gopernicus/sdk/oauth"
-	"github.com/gopernicus/gopernicus/sdk/ratelimiter"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // ErrHasherRequired and ErrMailerRequired are returned by NewService/Register
@@ -267,7 +267,7 @@ type Config struct {
 
 	// ListStrategy is the DEFAULT pagination strategy the feature's JSON list
 	// endpoints (service accounts, API keys, invitations) apply when a request
-	// names neither a cursor nor an offset param (sdk/crud ParseListRequest).
+	// names neither a cursor nor an offset param (sdk/foundation/crud ParseListRequest).
 	// "cursor" (the default) or "offset"; empty is treated as "cursor". A host
 	// populates it from an env-tagged config field
 	// (`env:"AUTH_LIST_STRATEGY" default:"cursor"` via sdk/config ParseEnvTags),
@@ -332,7 +332,7 @@ type Config struct {
 	// invitation mail through notify instead of the Mailer directly
 	// (verification/reset mail stays on the Mailer). Duplicate kinds →
 	// ErrDuplicateNotifierKind at construction. Meaningful only when Granter is
-	// wired; sdk/notify ships Console (any kind) and MailerBridge (email).
+	// wired; sdk/capabilities/notify ships Console (any kind) and MailerBridge (email).
 	Notifiers []notify.Notifier
 
 	// Logger receives the best-effort WARN line when a security-event audit write
@@ -495,7 +495,7 @@ func userLookup(users user.UserRepository) invitationsvc.UserLookup {
 }
 
 // RequireUser is HTTP middleware gating a route on a valid session. It satisfies
-// sdk/web.Middleware via the method value authSvc.RequireUser, so a host passes
+// sdk/foundation/web.Middleware via the method value authSvc.RequireUser, so a host passes
 // it to another feature (e.g. cms.Config.AdminMiddleware) without either feature
 // importing the other.
 func (s *Service) RequireUser(next http.Handler) http.Handler {
@@ -539,7 +539,7 @@ func (s *Service) CurrentPrincipal(ctx context.Context) (Principal, bool) {
 }
 
 // resolverAssertion is the compile-time proof that the auth feature satisfies the
-// generic sdk/identity Resolver port: a host wires this Service anywhere a
+// generic sdk/foundation/identity Resolver port: a host wires this Service anywhere a
 // Resolver is expected, unadapted.
 var _ identity.Resolver = (*Service)(nil)
 

@@ -7,7 +7,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/gopernicus/gopernicus/sdk/cacher"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
 )
 
 // defaultCacheKeyPrefix namespaces cache keys in a shared Redis instance.

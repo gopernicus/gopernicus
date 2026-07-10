@@ -9,7 +9,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/gopernicus/gopernicus/sdk/tracing"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/tracing"
 )
 
 // Connection defaults applied to zero-value Config fields by Open. They mirror
@@ -25,7 +25,7 @@ const (
 )
 
 // Config holds the go-redis connection settings for Open. Its `env:` tags let a
-// host populate it with sdk/environment.ParseEnvTags (keys are already namespaced by
+// host populate it with sdk/foundation/environment.ParseEnvTags (keys are already namespaced by
 // component: REDIS_ADDR, REDIS_PASSWORD, ...; the host passes its own app
 // namespace, exactly as bus.go's Options carries EVENT_BUS_* keys). Populating
 // from the environment is a convenience, not an import edge — a zero Config is
@@ -63,7 +63,7 @@ func WithLogging(log *slog.Logger, opts ...LoggingOption) ClientOption {
 }
 
 // WithTracing installs a TracingHook so each command runs inside a span from
-// tracer, the sdk/tracing port. A nil tracer yields a Noop-backed hook.
+// tracer, the sdk/capabilities/tracing port. A nil tracer yields a Noop-backed hook.
 func WithTracing(tracer tracing.Tracer) ClientOption {
 	return func(o *clientOptions) {
 		o.hooks = append(o.hooks, TracingHook(tracer))

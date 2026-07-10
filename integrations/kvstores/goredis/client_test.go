@@ -10,12 +10,12 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/gopernicus/gopernicus/sdk/environment"
-	"github.com/gopernicus/gopernicus/sdk/tracing"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/tracing"
+	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
 )
 
 // TestConfigDefaultsFromTags proves the `default:` struct tags populate a zero
-// Config through sdk/environment.ParseEnvTags — the host-facing convenience path.
+// Config through sdk/foundation/environment.ParseEnvTags — the host-facing convenience path.
 func TestConfigDefaultsFromTags(t *testing.T) {
 	var cfg Config
 	if err := environment.ParseEnvTags("", &cfg); err != nil {

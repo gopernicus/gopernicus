@@ -9,8 +9,8 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
-	"github.com/gopernicus/gopernicus/sdk/email"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 type fakeInquiries struct{ items []messaging.Inquiry }

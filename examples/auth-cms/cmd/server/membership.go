@@ -6,7 +6,7 @@ import (
 
 	auth "github.com/gopernicus/gopernicus/features/authentication"
 	authorization "github.com/gopernicus/gopernicus/features/authorization"
-	"github.com/gopernicus/gopernicus/sdk/web"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // The demo resource the flagship checks against. An invitation created at

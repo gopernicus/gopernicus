@@ -2,7 +2,7 @@
 // ports: every store that fills a cms.Repositories — the in-package reference
 // implementation, a host memstore (examples/minimal), and each dialect adapter
 // (features/cms/stores/turso, .../postgres) — should pass Run against a freshly
-// wired, isolated Repositories. Modeled on sdk/cacher/cachertest's
+// wired, isolated Repositories. Modeled on sdk/capabilities/cacher/cachertest's
 // Run(t, newImpl) pattern, scaled to a repository set so cross-table behavior
 // (entry↔term association, cascade on entry delete) is exercised, not ports in
 // isolation.
@@ -27,8 +27,8 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
 	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/crud"
-	"github.com/gopernicus/gopernicus/sdk/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
 // ids is the suite's entity-ID generator: the default nanoid strategy, matching

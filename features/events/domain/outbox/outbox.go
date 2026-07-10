@@ -11,7 +11,7 @@ import (
 	"context"
 	"time"
 
-	sdkevents "github.com/gopernicus/gopernicus/sdk/events"
+	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 )
 
 // Entry is one persisted outbox row: the durable event envelope plus delivery
