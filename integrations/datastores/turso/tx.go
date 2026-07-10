@@ -9,6 +9,9 @@ import (
 // Tx represents a database transaction.
 type Tx struct {
 	tx *sql.Tx
+	// tracer is inherited from the DB that began the transaction so opted-in
+	// query logging covers transaction-path statements too.
+	tracer *loggingQueryTracer
 }
 
 // Begin starts a new transaction.
@@ -17,7 +20,7 @@ func (d *DB) Begin(ctx context.Context) (*Tx, error) {
 	if err != nil {
 		return nil, fmt.Errorf("beginning transaction: %w", err)
 	}
-	return &Tx{tx: tx}, nil
+	return &Tx{tx: tx, tracer: d.tracer}, nil
 }
 
 // Commit commits the transaction.
@@ -28,6 +31,9 @@ func (t *Tx) Rollback() error { return t.tx.Rollback() }
 
 // Exec executes a query within the transaction.
 func (t *Tx) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	if t.tracer != nil {
+		t.tracer.traceQuery(query, args)
+	}
 	result, err := t.tx.ExecContext(ctx, query, args...)
 	if err != nil {
 		return nil, MapError(err)
@@ -37,6 +43,9 @@ func (t *Tx) Exec(ctx context.Context, query string, args ...any) (sql.Result, e
 
 // Query executes a query within the transaction.
 func (t *Tx) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	if t.tracer != nil {
+		t.tracer.traceQuery(query, args)
+	}
 	rows, err := t.tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, MapError(err)
@@ -46,6 +55,9 @@ func (t *Tx) Query(ctx context.Context, query string, args ...any) (*sql.Rows, e
 
 // QueryRow executes a query that returns at most one row within the transaction.
 func (t *Tx) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
+	if t.tracer != nil {
+		t.tracer.traceQuery(query, args)
+	}
 	return t.tx.QueryRowContext(ctx, query, args...)
 }
 
