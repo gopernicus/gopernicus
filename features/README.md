@@ -180,7 +180,12 @@ store isolates neither, so this refusal stands.
   store implements — they must be importable from outside the module.
   Services (`internal/logic/<domain>svc`) and HTTP
   (`internal/inbound/<feature>`) are implementation and stay unexported
-  from the module's public API.
+  from the module's public API. A feature MAY additionally export HTTP
+  middleware gates as **root-package re-exports of internal implementations**
+  (`authentication.RequireUser`, `authorization.RequirePermission`) — the root
+  package writes no HTTP itself; the handler body lives in `internal/logic`, so
+  this reinforces rather than amends the internal-HTTP rule
+  (middleware-consolidation, 2026-07-11).
 - **No feature → feature imports** (constitution rule 6). Cross-feature needs
   are ports the *consuming* feature declares in its own public package; the
   host wires an implementation, which may be backed by another feature's

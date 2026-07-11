@@ -63,42 +63,27 @@ func isPlatformAdmin(ctx context.Context, authorizer *authorization.Service, sub
 
 // requireMembership gates a route on the caller — already resolved by
 // RequirePrincipal into ctx — holding the demo `view` permission on the demo
-// resource, checked THROUGH the authorization engine (authorizer.Check, the
-// flagship posture; the A9 toy-map read is retired). A platform admin passes via
-// the host-composed isPlatformAdmin recipe run FIRST. A resolved principal
-// WITHOUT access → 403; no resolved principal (RequirePrincipal should have
-// blocked that already) → 401. It reads the principal through the exported
-// auth.Service.CurrentPrincipal port, with zero import into the feature internals.
+// resource. The Check/401/403/500 leg is now the FEATURE's exported builder
+// (authorizer.RequirePermission, whose responses carry the FS9 web.Error shape);
+// platform-admin stays HOST composition, run FIRST in this closure via the
+// isPlatformAdmin recipe (the engine grants no bypass). The gate is built once
+// at registration — a roles-only wiring would panic here at boot, not per
+// request. Per request it reads the principal ONCE through the exported
+// auth.Service.CurrentPrincipal port (zero import into feature internals): a
+// present admin passes straight to next; every other case — non-admin principal
+// or none at all — falls through to the builder-gated handler (its 403/500 or
+// 401 legs respectively).
 func requireMembership(authSvc *auth.Service, authorizer *authorization.Service) web.Middleware {
+	gate := authorizer.RequirePermission(demoPermission, authorization.FixedResource(demoResourceType, demoResourceID))
 	return func(next http.Handler) http.Handler {
+		gated := gate(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			p, ok := authSvc.CurrentPrincipal(r.Context())
-			if !ok {
-				writeHostJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
-				return
-			}
 			// Platform-admin recipe: host runs it first (engine grants no bypass).
-			if isPlatformAdmin(r.Context(), authorizer, p.Type, p.ID) {
+			if p, ok := authSvc.CurrentPrincipal(r.Context()); ok && isPlatformAdmin(r.Context(), authorizer, p.Type, p.ID) {
 				next.ServeHTTP(w, r)
 				return
 			}
-			res, err := authorizer.Check(r.Context(), authorization.CheckRequest{
-				Subject:    authorization.Subject{Type: p.Type, ID: p.ID},
-				Permission: demoPermission,
-				Resource:   authorization.Resource{Type: demoResourceType, ID: demoResourceID},
-			})
-			if err != nil {
-				writeHostJSON(w, http.StatusInternalServerError, map[string]string{"error": "authorization check failed"})
-				return
-			}
-			if !res.Allowed {
-				writeHostJSON(w, http.StatusForbidden, map[string]string{
-					"error":      "not authorized on " + demoResourceType + "/" + demoResourceID,
-					"permission": demoPermission,
-				})
-				return
-			}
-			next.ServeHTTP(w, r)
+			gated.ServeHTTP(w, r)
 		})
 	}
 }
