@@ -7,9 +7,9 @@ import (
 
 // columnScanner is the row surface ScanStruct needs: the result column names plus
 // Scan. Only *sql.Rows satisfies it — *sql.Row exposes no Columns — so ScanStruct
-// reads the current row of an iterator, never a single-row handle. Store single-row
-// reads route a QueryRow through Query and step once (the pgx-store queryOne
-// discipline) to reach a column-bearing row.
+// reads the current row of an iterator, never a single-row handle. Single-row
+// reads route a QueryRow through Query and step once (see QueryOne) to reach a
+// column-bearing row.
 type columnScanner interface {
 	Columns() ([]string, error)
 	Scan(dest ...any) error

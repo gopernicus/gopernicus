@@ -91,7 +91,7 @@ func (s *MenuStore) CreateMenu(ctx context.Context, m menus.Menu) (menus.Menu, e
 // GetMenu returns the menu with the given id.
 func (s *MenuStore) GetMenu(ctx context.Context, id string) (menus.Menu, error) {
 	const q = `SELECT ` + menuColumns + ` FROM menus WHERE id = ?`
-	row, err := queryOne[menuRow](ctx, s.db, q, id)
+	row, err := tursodb.QueryOne[menuRow](ctx, s.db, q, id)
 	if err != nil {
 		return menus.Menu{}, err
 	}
@@ -101,7 +101,7 @@ func (s *MenuStore) GetMenu(ctx context.Context, id string) (menus.Menu, error) 
 // GetMenuBySlug returns the menu with the given slug.
 func (s *MenuStore) GetMenuBySlug(ctx context.Context, slug string) (menus.Menu, error) {
 	const q = `SELECT ` + menuColumns + ` FROM menus WHERE slug = ?`
-	row, err := queryOne[menuRow](ctx, s.db, q, slug)
+	row, err := tursodb.QueryOne[menuRow](ctx, s.db, q, slug)
 	if err != nil {
 		return menus.Menu{}, err
 	}
@@ -169,7 +169,7 @@ func (s *MenuStore) AddItem(ctx context.Context, it menus.MenuItem) (menus.MenuI
 // GetItem returns the item with the given id.
 func (s *MenuStore) GetItem(ctx context.Context, id string) (menus.MenuItem, error) {
 	const q = `SELECT ` + itemColumns + ` FROM menu_items WHERE id = ?`
-	row, err := queryOne[menuItemRow](ctx, s.db, q, id)
+	row, err := tursodb.QueryOne[menuItemRow](ctx, s.db, q, id)
 	if err != nil {
 		return menus.MenuItem{}, err
 	}

@@ -62,7 +62,7 @@ func (s *CodeStore) Create(ctx context.Context, c verification.Code) (verificati
 // Get returns the live code: unknown → sdk.ErrNotFound, expired → sdk.ErrExpired.
 func (s *CodeStore) Get(ctx context.Context, code string) (verification.Code, error) {
 	const q = `SELECT ` + codeColumns + ` FROM verification_codes WHERE code = @code`
-	row, err := queryOne[codeRow](ctx, s.db, q, pgx.NamedArgs{"code": code})
+	row, err := pgxdb.QueryOne[codeRow](ctx, s.db, q, pgx.NamedArgs{"code": code})
 	if err != nil {
 		return verification.Code{}, err
 	}
@@ -136,7 +136,7 @@ func (s *TokenStore) Create(ctx context.Context, t verification.Token) (verifica
 // Get returns the live token: unknown → sdk.ErrNotFound, expired → sdk.ErrExpired.
 func (s *TokenStore) Get(ctx context.Context, token string) (verification.Token, error) {
 	const q = `SELECT ` + tokenColumns + ` FROM verification_tokens WHERE token = @token`
-	row, err := queryOne[tokenRow](ctx, s.db, q, pgx.NamedArgs{"token": token})
+	row, err := pgxdb.QueryOne[tokenRow](ctx, s.db, q, pgx.NamedArgs{"token": token})
 	if err != nil {
 		return verification.Token{}, err
 	}

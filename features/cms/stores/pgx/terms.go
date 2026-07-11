@@ -101,7 +101,7 @@ func (s *TermStore) Update(ctx context.Context, id string, t taxonomy.Term) (tax
 // Get returns the term with the given id, or crud.ErrNotFound.
 func (s *TermStore) Get(ctx context.Context, id string) (taxonomy.Term, error) {
 	const q = `SELECT ` + termColumns + ` FROM terms WHERE id = @id`
-	row, err := queryOne[termRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
+	row, err := pgxdb.QueryOne[termRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
 	if err != nil {
 		return taxonomy.Term{}, err
 	}
@@ -111,7 +111,7 @@ func (s *TermStore) Get(ctx context.Context, id string) (taxonomy.Term, error) {
 // GetBySlug returns the term with the given kind+slug, or crud.ErrNotFound.
 func (s *TermStore) GetBySlug(ctx context.Context, kind taxonomy.Kind, slug string) (taxonomy.Term, error) {
 	const q = `SELECT ` + termColumns + ` FROM terms WHERE kind = @kind AND slug = @slug`
-	row, err := queryOne[termRow](ctx, s.db, q, pgx.NamedArgs{"kind": string(kind), "slug": slug})
+	row, err := pgxdb.QueryOne[termRow](ctx, s.db, q, pgx.NamedArgs{"kind": string(kind), "slug": slug})
 	if err != nil {
 		return taxonomy.Term{}, err
 	}

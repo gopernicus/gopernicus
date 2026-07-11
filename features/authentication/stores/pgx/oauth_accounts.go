@@ -94,7 +94,7 @@ func (s *OAuthAccountStore) Create(ctx context.Context, a oauthaccount.OAuthAcco
 // GetByProvider returns the link for a provider identity, or sdk.ErrNotFound.
 func (s *OAuthAccountStore) GetByProvider(ctx context.Context, provider, providerUserID string) (oauthaccount.OAuthAccount, error) {
 	const q = `SELECT ` + oauthAccountColumns + ` FROM oauth_accounts WHERE provider = @provider AND provider_user_id = @provider_user_id`
-	row, err := queryOne[oauthAccountRow](ctx, s.db, q, pgx.NamedArgs{"provider": provider, "provider_user_id": providerUserID})
+	row, err := pgxdb.QueryOne[oauthAccountRow](ctx, s.db, q, pgx.NamedArgs{"provider": provider, "provider_user_id": providerUserID})
 	if err != nil {
 		return oauthaccount.OAuthAccount{}, err
 	}

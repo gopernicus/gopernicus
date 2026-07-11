@@ -81,7 +81,7 @@ func (s *ServiceAccountStore) Create(ctx context.Context, sa serviceaccount.Serv
 // Get returns the account for id, or sdk.ErrNotFound.
 func (s *ServiceAccountStore) Get(ctx context.Context, id string) (serviceaccount.ServiceAccount, error) {
 	const q = `SELECT ` + serviceAccountColumns + ` FROM service_accounts WHERE id = ?`
-	row, err := queryOne[serviceAccountRow](ctx, s.db, q, id)
+	row, err := tursodb.QueryOne[serviceAccountRow](ctx, s.db, q, id)
 	if err != nil {
 		return serviceaccount.ServiceAccount{}, err
 	}

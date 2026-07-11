@@ -212,7 +212,7 @@ func (q *Queue) Fail(ctx context.Context, jobID string, now time.Time, reason st
 // Get returns the job with the given id, or sdk.ErrNotFound.
 func (q *Queue) Get(ctx context.Context, id string) (job.Job, error) {
 	const get = `SELECT ` + jobRowColumns + ` FROM job_queue WHERE job_id = @job_id`
-	row, err := queryOne[jobRow](ctx, q.db, get, pgx.NamedArgs{"job_id": id})
+	row, err := pgxdb.QueryOne[jobRow](ctx, q.db, get, pgx.NamedArgs{"job_id": id})
 	if err != nil {
 		return job.Job{}, err
 	}

@@ -73,6 +73,41 @@ missed rename or a Segovia-side assumption (either way: a lessons flag).
   the full charter skeleton; `db create/migrate/status` for host
   ledgers. Segovia's next domain is its first real-use test.
 
+## Flags raised during the sync (Leg 0) — 2026-07-10
+
+Sweep ran 2026-07-10 against gopernicus @ 5f500a5, Segovia v2 (module
+`github.com/gpsimpact/segovia/v2`, replaces → this repo's `sdk` +
+`integrations/datastores/pgxdb`). Import inventory: `sdk/errs` (18 files),
+`sdk/web` (15), `pgxdb` (8), `sdk/identity` (5), `sdk/cryptids` (5),
+`sdk/filestorage` (2), `sdk/environment` (2), `sdk/logging` (1).
+Items applied: 1 (already in-tree from the 2026-07-09 note), 2, 3.
+Items n/a: 4 (no evicted-middleware or workers usage), 5 (no turso),
+6 (no direct crud imports; pgxdb symbols used — Config/DB/Open/Tx/
+MapError/RunMigrations/StatusCheck — all stable). Item 7 verified live
+(`/health` reports a real DB round-trip).
+
+Outcome: **zero code-level flags.** The checklist was accurate and
+complete for Segovia's surface — both seds landed, `go build ./...` was
+green on the first post-re-path build, no compile errors at any point.
+Neither named trap fired (no local `errs` variables; no turso usage).
+`make check` (build+vet+test+layer-guards+templ-drift) green; DB-backed
+pgx store tests green against the dev DB; app live-driven over HTTP
+(spaces/secrets/datasources/grants flow-down resolve/static + ad-report
+dashboards incl. manifest CAS + publish) with a clean server log.
+
+1. **Docs nit — "byte-identical output" overclaims in the flag-#2
+   resolution note.** The upstream note dropped into Segovia's
+   `.planning/gopernicus-v2/04-gopernicus-flags.md` (2026-07-09) calls
+   step 1 "mechanical, byte-identical output", but the same file's flag
+   #2 row describes `sdk/id` as 26-char lowercase base32 while
+   `cryptids.IDGenerator{}` zero-value emits 21-char mixed-case nanoid
+   (observed live: `hlC46vc88KlbbF1P4TfTN`). Call sites are mechanical;
+   the *output shape* is not identical. Harmless for Segovia v2 (dev DB
+   is disposable pre-cutover) but the wording could mislead a host with
+   stored IDs into skipping a shape audit. Expected: "mechanical swap;
+   ID shape changes from 26-char base32 to 21-char nanoid — audit stored
+   IDs if any." No code change wanted.
+
 ## The loop protocol reminder
 
 Friction → a numbered flag in `00-overview.md`'s ledger here → ratify →

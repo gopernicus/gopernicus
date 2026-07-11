@@ -137,7 +137,7 @@ func (s *EntryStore) Update(ctx context.Context, id string, e content.Entry) (co
 // Get returns the entry with the given id — spine, fields, and term IDs.
 func (s *EntryStore) Get(ctx context.Context, id string) (content.Entry, error) {
 	const q = `SELECT ` + entryColumns + ` FROM entries WHERE id = ?`
-	row, err := queryOne[entryRow](ctx, s.db, q, id)
+	row, err := tursodb.QueryOne[entryRow](ctx, s.db, q, id)
 	if err != nil {
 		return content.Entry{}, err
 	}
@@ -147,7 +147,7 @@ func (s *EntryStore) Get(ctx context.Context, id string) (content.Entry, error) 
 // GetBySlug returns the entry of type typ with the given slug.
 func (s *EntryStore) GetBySlug(ctx context.Context, typ, slug string) (content.Entry, error) {
 	const q = `SELECT ` + entryColumns + ` FROM entries WHERE type = ? AND slug = ?`
-	row, err := queryOne[entryRow](ctx, s.db, q, typ, slug)
+	row, err := tursodb.QueryOne[entryRow](ctx, s.db, q, typ, slug)
 	if err != nil {
 		return content.Entry{}, err
 	}
