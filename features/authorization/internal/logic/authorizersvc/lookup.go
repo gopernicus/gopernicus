@@ -10,6 +10,12 @@ import "context"
 // empty slice means no access. A host that wants admin-sees-everything semantics
 // checks for that in its own closure BEFORE calling here (and then skips ID
 // filtering entirely) — the engine grants no bypass.
+//
+// Completeness boundary (D1(b), 2026-07-11): self-referential Through enumerates
+// descendants of DIRECTLY-granted roots only; roots granted via a non-self
+// Through are not expanded, though Check honors them. Closing this is the named
+// follow-up (D1(c)) — seeding lookupThrough's descendant walk from
+// Through-derived roots — deferred as engine work.
 func (s *Service) LookupResources(ctx context.Context, subject Subject, permission, resourceType string) (LookupResult, error) {
 	return s.lookupResourcesWithVisited(ctx, subject, permission, resourceType, make(map[string]bool))
 }
@@ -66,6 +72,12 @@ func (s *Service) lookupResourcesWithVisited(ctx context.Context, subject Subjec
 // Through (target type == resource type, e.g. space→parent→space) is resolved via
 // the store's recursive descendant walk instead of Go recursion, to walk
 // arbitrarily deep trees safely in one query.
+//
+// D1(b) boundary: the self-referential branch seeds descendants from
+// lookupDirectOnly roots — self-referential Through enumerates descendants of
+// DIRECTLY-granted roots only; roots granted via a non-self Through are not
+// expanded, though Check honors them. Flipping this is the deferred D1(c) engine
+// task.
 func (s *Service) lookupThrough(ctx context.Context, subject Subject, check PermissionCheck, resourceType string, visited map[string]bool) (LookupResult, error) {
 	rtDef, ok := s.schema.ResourceTypes[resourceType]
 	if !ok {

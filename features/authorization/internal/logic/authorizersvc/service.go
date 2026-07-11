@@ -34,6 +34,13 @@ var (
 type Config struct {
 	// MaxTraversalDepth bounds the engine's through-traversal recursion; <= 0
 	// resolves to defaultMaxTraversalDepth. Engine-only — never passed to a store.
+	//
+	// D3 sizing: a host collapsing a hand-walked hierarchy into schema must size
+	// this deliberately. checkThrough silently DENIES past the bound with reason
+	// "max depth exceeded", and each Check hop costs one GetRelationTargets
+	// round-trip. The bound governs ONLY this Go recursion — never the store's
+	// descendant walk, which is unbounded-but-cycle-safe (2026-07-08 ruling, see
+	// defaultMaxTraversalDepth above).
 	MaxTraversalDepth int
 	// IDs mints each tuple's relationship_id at CreateRelationships (Q6). The
 	// zero value is the nanoid default; a cryptids.Database generator yields ""

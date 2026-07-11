@@ -20,7 +20,12 @@ func (e *SchemaValidationError) Error() string {
 //   - Through references point to defined relations on the resource type;
 //   - the permission named by a through-check exists on the target type;
 //   - direct relation references exist on the resource type;
-//   - no circular through-relation would cause infinite recursion.
+//   - no circular through-relation would cause infinite recursion, except a
+//     direct self-loop on the same permission (a self-referential hierarchy
+//     like space.view = Through("parent","view")), which terminates at runtime
+//     and is permitted;
+//   - no permission rule is unsatisfiable — composed only of self-loops that
+//     never bottom out on a concrete grant.
 func ValidateSchema(schema Schema) error {
 	var errs []string
 
@@ -41,6 +46,7 @@ func ValidateSchema(schema Schema) error {
 	}
 
 	errs = append(errs, detectCircularThrough(schema)...)
+	errs = append(errs, detectUnsatisfiable(schema)...)
 
 	if len(errs) > 0 {
 		return &SchemaValidationError{Errors: errs}
@@ -106,7 +112,7 @@ func detectCircularThrough(schema Schema) []string {
 					visited := make(map[string]bool)
 					path := []string{fmt.Sprintf("%s.%s", resourceType, permName)}
 
-					if cycle := findCycle(schema, resourceType, check, visited, path); cycle != "" {
+					if cycle := findCycle(schema, resourceType, check, visited, path, permName); cycle != "" {
 						errs = append(errs, cycle)
 					}
 				}
@@ -117,7 +123,10 @@ func detectCircularThrough(schema Schema) []string {
 	return errs
 }
 
-func findCycle(schema Schema, resourceType string, check PermissionCheck, visited map[string]bool, path []string) string {
+// findCycle walks through-relations depth-first. sourcePerm carries the
+// permission of the outer frame so the self-loop sanction below can tell an
+// intentional self-referential hierarchy apart from a cross-permission cycle.
+func findCycle(schema Schema, resourceType string, check PermissionCheck, visited map[string]bool, path []string, sourcePerm string) string {
 	if check.Through == "" {
 		return ""
 	}
@@ -133,6 +142,17 @@ func findCycle(schema Schema, resourceType string, check PermissionCheck, visite
 	}
 
 	for _, targetType := range getTargetResourceTypes(rel, schema) {
+		// A direct self-loop on the same permission (the canonical
+		// space.view = Through("parent","view") hierarchy) terminates at
+		// runtime: Check bounds it by MaxTraversalDepth, Lookup expands
+		// descendants with a cycle-safe store walk. Sanction it without
+		// marking the key visited or recursing so the validator itself
+		// terminates. A rule composed ONLY of such self-loops never bottoms
+		// out and is caught by detectUnsatisfiable instead.
+		if targetType == resourceType && check.Permission == sourcePerm {
+			continue
+		}
+
 		key := fmt.Sprintf("%s.%s", targetType, check.Permission)
 
 		if visited[key] {
@@ -155,7 +175,7 @@ func findCycle(schema Schema, resourceType string, check PermissionCheck, visite
 
 		for _, targetCheck := range targetPerm.AnyOf {
 			if targetCheck.Through != "" {
-				if cycle := findCycle(schema, targetType, targetCheck, visited, newPath); cycle != "" {
+				if cycle := findCycle(schema, targetType, targetCheck, visited, newPath, check.Permission); cycle != "" {
 					return cycle
 				}
 			}
@@ -165,4 +185,65 @@ func findCycle(schema Schema, resourceType string, check PermissionCheck, visite
 	}
 
 	return ""
+}
+
+// detectUnsatisfiable flags permission rules that terminate but can never
+// evaluate true: every check is a through-relation that loops back to the same
+// permission on the same resource type, so no grant ever bottoms out on a
+// concrete relation. findCycle deliberately sanctions this self-loop shape (it
+// terminates), so this pass rejects the always-false rule findCycle would
+// otherwise admit.
+func detectUnsatisfiable(schema Schema) []string {
+	var errs []string
+
+	for resourceType, rtDef := range schema.ResourceTypes {
+		for permName, permRule := range rtDef.Permissions {
+			if len(permRule.AnyOf) == 0 {
+				continue
+			}
+
+			allSelfLoops := true
+			for _, check := range permRule.AnyOf {
+				if !isSelfLoop(schema, resourceType, permName, rtDef, check) {
+					allSelfLoops = false
+					break
+				}
+			}
+
+			if allSelfLoops {
+				errs = append(errs, fmt.Sprintf(
+					"unsatisfiable through-relation detected: %s.%s only traverses back to itself and can never grant access",
+					resourceType, permName))
+			}
+		}
+	}
+
+	return errs
+}
+
+// isSelfLoop reports whether check is a through-relation whose every target type
+// is the resource type itself and whose checked permission is permName — the
+// exact shape findCycle sanctions. A through with any non-self target, or that
+// checks a different permission, can bottom out elsewhere and is not a self-loop.
+func isSelfLoop(schema Schema, resourceType, permName string, rtDef ResourceTypeDef, check PermissionCheck) bool {
+	if check.Through == "" || check.Permission != permName {
+		return false
+	}
+
+	rel, ok := rtDef.Relations[check.Through]
+	if !ok {
+		return false
+	}
+
+	targetTypes := getTargetResourceTypes(rel, schema)
+	if len(targetTypes) == 0 {
+		return false
+	}
+
+	for _, targetType := range targetTypes {
+		if targetType != resourceType {
+			return false
+		}
+	}
+	return true
 }

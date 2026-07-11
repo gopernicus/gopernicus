@@ -66,6 +66,27 @@ Rules of the kinds:
   feature module — never a module, and unrelated to ARCHITECTURE.md's
   R6 "Kinds of module" taxonomy vocabulary.
 
+### Self-referential hierarchies (relationships)
+
+A self-referential `Through` expresses a parent tree in schema:
+`space.view = AnyOf(Direct("viewer"), Through("parent","view"))` (relation
+`parent` targeting `space` itself) flows `view` access down every descendant
+of a granted node. `NewService` accepts this shape (validator relaxation,
+2026-07-11); genuinely non-terminating shapes — mutual cross-type cycles
+(`a.x -> b.x -> a.x`), cross-permission self-type chains
+(`space.view -> space.admin -> space.view`), and unsatisfiable self-only rules
+(a permission whose every `AnyOf` check is a self-`Through`) — stay rejected
+loudly at construction.
+
+**D1(b) Lookup boundary.** `Check` walks the parent chain hop-by-hop (bounded
+by `Config.MaxTraversalDepth`), so it honors a node reachable through ANY
+grant. `LookupResources` is narrower: its self-referential branch enumerates
+descendants of DIRECTLY-granted roots only — roots granted via a non-self
+`Through` (e.g. `Through("org","view")`) are not expanded, so `Check` can allow
+a grandchild that `LookupResources` misses. Closing the divergence is the named
+follow-up D1(c) (seeding the descendant walk from Through-derived roots),
+deferred as engine work.
+
 ## The cms boundary (documented, not a gap)
 
 cms admin gating stays **coarse**: `AdminMiddleware` is session-level
@@ -121,7 +142,7 @@ model: roles are **opaque strings** the host interprets.
 | an unwired kind's methods | fail closed with that kind's sentinel (`ErrRelationshipsNotConfigured` / `ErrRolesNotConfigured`) — never a silent false/allow. |
 | a userset `Subject` (non-empty `Relation`) on a roles-kind method | rejected loudly (`ErrUsersetSubjectOnRole`) — usersets are a relationship-kind concept; dropping the field silently would treat `group#member` as the group itself. |
 | `Config.Model` | REQUIRED with `Relationships`, forbidden without it; schema-validated at `NewService` (unknown relations/targets, permission cycles = loud errors). |
-| `Config.MaxTraversalDepth` | optional; `<= 0` ⇒ default 10, never an error. Relationship-kind-scoped; ignored-with-note under roles-only wiring. **ENGINE-ONLY:** it bounds the engine's Go through-traversal recursion and is NEVER threaded into the memstore or the store CTEs — those are unbounded-but-cycle-safe (UNION dedup / visited-set). |
+| `Config.MaxTraversalDepth` | optional; `<= 0` ⇒ default 10, never an error. Relationship-kind-scoped; ignored-with-note under roles-only wiring. **ENGINE-ONLY:** it bounds the engine's Go through-traversal recursion and is NEVER threaded into the memstore or the store CTEs — those are unbounded-but-cycle-safe (UNION dedup / visited-set). **D3 sizing:** a host collapsing a hand-walked hierarchy into schema must size this deliberately — `Check` silently DENIES past the bound (reason `"max depth exceeded"`), and each hop costs one `GetRelationTargets` round-trip. |
 | `Config.IDs` | optional (`cryptids.IDGenerator`); zero value ⇒ the nanoid default. Mints `relationship_id` at `Service.CreateRelationships`; `cryptids.Database` delegates to the store's DDL DEFAULT (the store omits the id column for an all-empty batch). Relationship-kind-scoped; ignored-with-note under roles-only wiring. The roles kind has NO id strategy — `iam_roles` is keyed by its 5-tuple. |
 
 The asymmetry is deliberate: an orphaned `Model` errors loudly because
