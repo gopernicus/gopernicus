@@ -11,7 +11,7 @@ MODULES = sdk integrations/cryptids/bcrypt integrations/cryptids/golang-jwt inte
 # test-stores` runs them EXPECTING the datastore env vars set.
 STORE_MODULES = features/cms/stores/pgx features/cms/stores/turso features/authentication/stores/pgx features/authentication/stores/turso features/jobs/stores/pgx features/jobs/stores/turso features/events/stores/pgx features/events/stores/turso features/authorization/stores/pgx features/authorization/stores/turso
 
-.PHONY: generate build vet test test-stores run migrate check tidy guard \
+.PHONY: generate build vet test test-stores run migrate check tidy guard warm-scaffold-cache \
 	guard-sdk-stdlib guard-feature-isolation guard-sdk-no-outward guard-no-legacy-path \
 	guard-feature-core-sdk-only guard-feature-transport-sdk-web guard-feature-no-cross-feature \
 	guard-store-no-foreign-feature guard-no-underlying guard-no-lax-scan \
@@ -245,6 +245,20 @@ guard-integration-no-inward:
 # is checked via `git diff` when this tree is a git repo; this repo IS a git
 # repo (as of phase 2), so that branch runs. The before/after checksum branch
 # remains as a fallback for gitless checkouts of *_templ.go.
+# The workshop scaffold-compile tests tidy emitted modules with GOPROXY=off —
+# deliberate hermetic design ("a cold cache fails loud"). But an emitted
+# module's ISOLATED MVS can select transitive versions LOWER than any repo
+# module ever downloads (golang.org/x/sys, ncruces/go-strftime via the libsql
+# graph), so a minimal GOMODCACHE — CI's — fails them even though every repo
+# module builds. This target makes their warm-cache assumption true by
+# construction: TestWarmScaffoldModuleCache (build tag warmcache, excluded from
+# plain `go test`) re-runs the same template emissions with the proxy ON and
+# tidies them, downloading exactly the module set the hermetic tidies resolve.
+# Warm cache ⇒ near-instant no-op; `check` runs it before the module loop.
+warm-scaffold-cache:
+	@echo "== warm scaffold module cache =="
+	@cd workshop/gopernicus && go test -tags warmcache -count=1 -run '^TestWarmScaffoldModuleCache$$' ./internal/commands
+
 check:
 	@if [ -d .git ]; then \
 		$(MAKE) generate; \
@@ -255,6 +269,7 @@ check:
 		after=$$(find . -name '*_templ.go' -not -path './.git/*' -exec shasum {} \; | sort); \
 		if [ "$$before" != "$$after" ]; then echo "ERROR: templ generation drift"; exit 1; fi; \
 	fi
+	@$(MAKE) warm-scaffold-cache
 	@for m in $(MODULES); do echo "== $$m =="; (cd $$m && go vet ./... && go build ./... && go test ./...) || exit 1; done
 	@echo "== integration-tag vet (compile-only, no DB) =="
 	@for m in $(filter %/turso,$(STORE_MODULES)); do echo "== vet -tags=integration $$m =="; (cd $$m && go vet -tags=integration ./...) || exit 1; done
