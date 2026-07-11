@@ -42,6 +42,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -105,7 +106,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// Host-owned router + middleware. Both features and the host demo routes mount
 	// onto this.
 	router := web.NewWebHandler(web.WithLogging(log))
-	router.Use(web.RequestID(), web.Logger(log), web.Panics(log))
+	// TrustProxies runs OUTER of every feature mount so auth's inbound reads the
+	// host-resolved client IP (web.ClientIP) instead of the spoofable leftmost
+	// X-Forwarded-For hop. TRUSTED_PROXY_COUNT=0 (default) trusts only RemoteAddr,
+	// so a forged X-Forwarded-For can no longer rotate rate-limit keys or poison
+	// security-event audit rows; a proxied deployment sets it to its trusted-proxy
+	// hop count.
+	router.Use(web.TrustProxies(trustedProxyCount()), web.RequestID(), web.Logger(log), web.Panics(log))
 
 	// Shared in-process event bus (sdk default Memory). cms is the emitter (it
 	// publishes content.* post-write through mount.Events); the host subscribes
@@ -371,6 +378,21 @@ func run(ctx context.Context, log *slog.Logger) error {
 // (EVENTS_OUTBOX=memory). Default (unset/other) keeps the direct-emit rail.
 func durableOutbox() bool {
 	return environment.GetEnvOrDefault("EVENTS_OUTBOX", "") == "memory"
+}
+
+// trustedProxyCount is the number of trusted reverse proxies in front of the
+// server, from TRUSTED_PROXY_COUNT. Default 0 (unset/invalid) trusts only
+// RemoteAddr — the safe default for a directly-exposed host.
+func trustedProxyCount() int {
+	v := environment.GetEnvOrDefault("TRUSTED_PROXY_COUNT", "")
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 // outboxDemoHandler is the host-owned demo trigger for the EVENTS_OUTBOX=memory

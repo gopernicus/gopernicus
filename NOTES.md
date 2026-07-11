@@ -1990,3 +1990,63 @@ CLOSED as documented host closure recipes.
 Downstream: segovia v2 adds the platform-admin closure atop its
 `access.Checker.Check` + the `admin` permission rule to `BuildSchema()` (flags
 #4–#7); it never used checkSelf.
+
+## 2026-07-11 — middleware-consolidation EXECUTED: where HTTP middleware lives
+
+The middleware review's three ratified decisions (jrazmi, 2026-07-11) encoded,
+plus an owner-added track C — no relitigation, no module churn (still 36
+modules, no go.mod changes). Plan: `.claude/plans/middleware-consolidation.md`.
+
+- **Decision 1 — generic HTTP middleware STAYS in `sdk/foundation/web`.** The
+  layering law already assigns pure mechanism there; the "scattered" feeling is
+  answered by documentation, not relocation. `CORSMiddleware`/
+  `DefaultHeadersMiddleware` (zero non-test call sites) are KEPT surface, not
+  prune candidates — expected wiring for any API/browser-facing host (owner
+  call). Documented in ARCHITECTURE.md's new "Where middleware lives" table.
+- **Decision 2 — authorization gets an exported gate.**
+  `authorization.RequirePermission` + `ResourceResolver` + `FixedResource`, the
+  `authentication.RequireUser`-shaped sibling: implementation in
+  `internal/logic/authorizersvc/middleware.go`, root
+  `features/authorization/middleware.go` a thin no-HTTP delegation that panics at
+  registration/boot when `Repositories.Relationships` is nil (a roles-only host
+  must not mount it — never probes `Check`). Pure Check, no bypass hook: hosts
+  compose platform-admin/self-access as their own closures. Fails CLOSED.
+- **Decision 3 — ratelimiter×web composition relocated.** The middleware inside
+  auth's `RateLimitByIP` moved to `sdk/capabilities/ratelimiter/middleware.go` as
+  `Middleware` over a narrow one-method `Allower` port (the `cacher.Pages` /
+  `tracing.Middleware` capability×foundation precedent). auth's `RateLimitByIP`
+  keeps its exact signature and now delegates — a RELOCATION, its proof auth's
+  unchanged existing tests, not an example-mounted new capability. Fail-open
+  parity is exact (`err == nil && !res.Allowed`).
+- **Track C (owner-added, D-E) — `web.TrustProxies` + `web.ClientIP`.** Ported
+  the original gopernicus `httpmid/trust_proxies.go` (rightmost-minus-N over
+  X-Forwarded-For, X-Real-IP single-proxy fallback, RemoteAddr base case) into
+  `sdk/foundation/web/trustproxies.go`. The spoofing fix: auth's inbound
+  `clientIP()` took the LEFTMOST XFF hop — client-spoofable to rotate
+  `RateLimitByIP` keys and poison security-event audit rows. It now prefers
+  `web.ClientIP(r.Context())` when present; the legacy leftmost fallback stays
+  for hosts that don't wire `TrustProxies` (back-compat, documented as
+  spoofable-by-design with "wire TrustProxies" as the fix). auth-cms wires
+  `TrustProxies` from `TRUSTED_PROXY_COUNT` (default 0 = RemoteAddr wins).
+
+- **D-D deliberately opposite fail postures** (stated in both doc comments and
+  ARCHITECTURE.md so nobody harmonizes them): `ratelimiter.Middleware` fails OPEN
+  (public-route availability beats a limiter outage) and SILENTLY by design — no
+  logger, no emitted signal; the compensations are an `Allower` logging/metrics
+  decorator at the host (the observability seam) and/or limiter-side alerting.
+  `RequirePermission` fails CLOSED (engine/resolver error → 500).
+- **auth-cms flagship** (`membership.go`): `requireMembership` builds the gate
+  once at registration, reads the principal once per request through the exported
+  `auth.Service.CurrentPrincipal` port, runs the host `isPlatformAdmin` recipe
+  first when a principal is present (admin → next), else falls through to the
+  builder-gated handler — no empty-subject engine `Check` on unauthenticated
+  hits, mounted under `RequirePrincipal` (the 401 leg depends on that order).
+- **G6 widened** (`guard-feature-transport-sdk-web`): flipped from the
+  `features/*/internal/` prefix to the exclusion-style grep over all of
+  `features/`, closing the feature-root FS9 blind spot the authentication root
+  package sat in. Dry-run clean.
+- **API impact:** additive minor-floor symbols in sdk
+  (`ratelimiter.Middleware`/`Allower`, `web.TrustProxies`/`ClientIP`) and
+  `features/authorization` (`RequirePermission`/`ResourceResolver`/
+  `FixedResource`); `features/authentication` stays patch-only (internal
+  delegation). RELEASING.md breadcrumbs recorded.

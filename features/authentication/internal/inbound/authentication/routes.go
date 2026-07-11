@@ -95,9 +95,16 @@ func clientInfoMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// clientIP derives the client IP, preferring the first X-Forwarded-For hop and
-// falling back to the request's remote address.
+// clientIP derives the client IP. The TrustProxies-resolved IP wins when the
+// host wired web.TrustProxies (web.ClientIP present) — the correct, spoof-safe
+// source. The fallback below (first X-Forwarded-For hop, then RemoteAddr) is
+// kept for back-compat with hosts that have not wired it, but it is spoofable:
+// a client can forge X-Forwarded-For to rotate rate-limit keys and poison
+// audit rows. Wire web.TrustProxies to fix.
 func clientIP(r *http.Request) string {
+	if ip, ok := web.ClientIP(r.Context()); ok {
+		return ip
+	}
 	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
 		if i := strings.IndexByte(fwd, ','); i >= 0 {
 			return strings.TrimSpace(fwd[:i])

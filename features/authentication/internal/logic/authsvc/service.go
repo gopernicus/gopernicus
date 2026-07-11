@@ -750,17 +750,13 @@ func validatePassword(pw string) error {
 // (the request proceeds) — the in-memory default never errors, and a public
 // decline must not be blocked by a limiter outage.
 func (s *Service) RateLimitByIP(keyPrefix string, perMinute int) web.Middleware {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := clientInfoFromContext(r.Context()).ip
-			res, err := s.limiter.Allow(r.Context(), keyPrefix+":"+ip, ratelimiter.PerMinute(perMinute))
-			if err == nil && !res.Allowed {
-				writeTooManyRequests(w)
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
+	keyFunc := func(r *http.Request) string {
+		return keyPrefix + ":" + clientInfoFromContext(r.Context()).ip
 	}
+	rejectFunc := func(w http.ResponseWriter, _ *http.Request, _ ratelimiter.Result) {
+		writeTooManyRequests(w)
+	}
+	return ratelimiter.Middleware(s.limiter, ratelimiter.PerMinute(perMinute), keyFunc, rejectFunc)
 }
 
 // writeUnauthorized writes a 401 JSON error via the shared sdk responder, so

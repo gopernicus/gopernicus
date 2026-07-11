@@ -117,6 +117,38 @@ only). Pre-tag there is no version obligation, but any consumer pinned
 to a git SHA must re-path its imports wholesale; the workshop CLI's
 emitted scaffolds already use the new paths.
 
+### sdk — next tag: additive middleware symbols (minor floor)
+
+middleware-consolidation (2026-07-11) added exported symbols to two sdk
+packages, all backward-compatible — they floor sdk's next tag at a **minor**
+bump, never a major:
+
+- `sdk/capabilities/ratelimiter`: `Middleware` + the `Allower` port (the generic
+  IP/key rate-limit middleware, relocated out of `features/authentication`'s
+  internals).
+- `sdk/foundation/web`: `TrustProxies` + `ClientIP` (the rightmost-minus-N
+  client-IP resolver ported from the original gopernicus `httpmid`).
+
+No existing symbol changed; a consumer that ignores the new surface is
+unaffected.
+
+### features/authorization — next tag: additive gate symbols (minor floor)
+
+middleware-consolidation (2026-07-11) added `RequirePermission`,
+`ResourceResolver`, and `FixedResource` to the root package (the exported HTTP
+middleware gate; implementation in `internal/logic/authorizersvc`). Additive —
+floors the next tag at a **minor** bump. Adopter note: replacing a hand-rolled
+gate closure with `RequirePermission` changes the 401/403 response *body* to the
+FS9 `web.Error` shape (status codes unchanged) — a client contract detail, not a
+Go-API break.
+
+### features/authentication — next tag: patch-only (internal delegation)
+
+middleware-consolidation (2026-07-11) rewrote `Service.RateLimitByIP`'s body to
+delegate to `ratelimiter.Middleware` with its exact prior signature and
+semantics; no exported surface changed. This is a **patch**, not a minor — the
+proof is auth's existing rate-limit tests passing unmodified.
+
 ## What this repo is not doing (yet)
 
 - No CI-driven automated tagging — tags are cut by hand until a release

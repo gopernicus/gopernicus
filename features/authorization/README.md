@@ -181,6 +181,51 @@ bypass; it can never accidentally open access):
   the permissions it wants self-scoped). A host that doesn't model users this
   way simply never carries the rule.
 
+### The `RequirePermission` middleware gate (middleware-consolidation, 2026-07-11)
+
+The feature exports an HTTP middleware builder that gates a route on the context
+`Principal` holding a permission on a resolved resource — the
+`RequireUser`-shaped sibling of the recipes above, mirroring
+`authentication.RequireUser`.
+
+**Requires the relationship kind wired; a roles-only host must not mount it.**
+`RequirePermission` panics if `Repositories.Relationships` is nil. The panic
+fires at REGISTRATION/BOOT time — when the host builds the gate at route
+registration, before serving traffic — naming the missing kind, so a roles-only
+misconfiguration is loud instead of a per-request 500. **Mount at registration,
+not lazily** (build the gate once when wiring routes, never inside the
+per-request path) so the panic surfaces at boot rather than on the first gated
+request. It does NOT probe `Check`; direct `Check` callers keep the
+`ErrRelationshipsNotConfigured` runtime sentinel.
+
+The shape (root re-export of the internal engine implementation — the root
+package writes NO HTTP; the 401/403/500 responses live in `authorizersvc`):
+
+```go
+// ResourceResolver extracts the resource a gate authorizes against.
+type ResourceResolver func(r *http.Request) (Resource, error)
+
+// FixedResource always resolves the same resource (the auth-cms demo case).
+func FixedResource(resourceType, resourceID string) ResourceResolver
+
+func (s *Service) RequirePermission(permission string, resource ResourceResolver) web.Middleware
+```
+
+**PURE Check, no bypass hook** — the same posture as `Check` itself: the gate
+evaluates the schema and nothing else. A host wanting platform-admin or
+self-access composes those recipes as its OWN closure AROUND this middleware,
+run first (auth-cms's `requireMembership` composes `isPlatformAdmin` before the
+builder-gated handler — the flagship demonstration). D-D: it fails CLOSED
+(`Check` error, resolver error → 500; no principal → 401; `!Allowed` → 403), the
+deliberate opposite of `ratelimiter.Middleware`'s fail-open.
+
+**FS9 `web.Error` body shape is a host contract.** The 401/403/500 responses use
+`web.RespondJSONError` (the FS9 `web.Error` shape, parity with
+`authentication`'s `writeUnauthorized`). An adopter that replaces a hand-rolled
+gate closure with this builder changes its response *body* contract to the FS9
+shape — status codes are unchanged, but any client asserting the old body must
+be updated.
+
 **The roles scope rule (Q5, the one documented rule):** the store-level
 lookup (`HasExactRole`) is exact-scope match; the service-level
 `HasRole` treats a GLOBAL assignment (empty resource pair) as satisfying

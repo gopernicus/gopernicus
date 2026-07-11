@@ -104,6 +104,27 @@ law over production code (tests exempt, the G6 precedent — two
 deliberate env round-trip tests are why); G13 keeps integrations
 pointing outward-only.
 
+## Where middleware lives (middleware-consolidation, 2026-07-11)
+
+HTTP middleware sorts onto the same three tiers, ratified so nobody
+"consolidates" a gate into the wrong layer later:
+
+| middleware | lives in | why |
+|---|---|---|
+| **foundation — pure HTTP mechanism** | `sdk/foundation/web` | `Panics`, `Logger`, `RequestID`, `TrustProxies`, `CORSMiddleware`, `DefaultHeadersMiddleware` — no capability port behind them, stdlib only, FLAT. `CORSMiddleware`/`DefaultHeadersMiddleware` are AVAILABLE host middleware, kept deliberately (owner call, 2026-07-11): expected wiring for any API-serving or browser-facing host, NOT prune candidates even though no example wires them yet. |
+| **capability×foundation composition** | the capability that owns the semantics | `cacher.Pages`, `tracing.Middleware`, `ratelimiter.Middleware` — a capability producing a `web.Middleware`; web stays agnostic of the capability, the capability legally depends on web (capability → foundation). |
+| **identity/authorization gate** | the owning feature, as a root-package re-export of an `internal/` implementation | `authentication.RequireUser`, `authorization.RequirePermission` — the root package writes NO HTTP (the handler bodies live in `internal/logic/…svc`), so this REINFORCES the "services and HTTP are `internal/`" anatomy rather than amending it. Hosts inject them through `[]web.Middleware` config seams (`cms.Config.AdminMiddleware`, `events.Config.StreamMiddleware`) or at route registration. |
+| **host recipe** | a host closure | platform-admin/self-access short-circuits (auth-cms's `isPlatformAdmin`) — the authorization engine is a pure schema evaluator; bypasses are host composition, run first in the host's own closure, and fail closed. |
+
+**Deliberately opposite fail postures (D-D).** `ratelimiter.Middleware` fails
+OPEN — availability of a public route beats a limiter outage — and does so
+SILENTLY by design: it takes no logger and emits nothing on the limiter-error
+branch. A host wanting visibility wraps its `Allower` with a logging/metrics
+decorator (the `Allower` seam is the observability point) and/or relies on
+limiter-side alerting; silent fail-open must never be mistaken for a monitored
+state. `authorization.RequirePermission` fails CLOSED (engine or resolver error
+→ 500). The opposition is intentional — do not harmonize them.
+
 ## Kinds of module — the taxonomy
 
 Six kinds of thing live in this ecosystem (ratified 2026-07-02, R6 —

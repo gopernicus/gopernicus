@@ -134,9 +134,15 @@ guard-feature-core-sdk-only:
 # sealed interior (production code; tests exempt). A legitimate future hit
 # (e.g. json.NewEncoder into a buffer or an SSE stream) gets a named per-line
 # exception HERE citing FS9 — never a regex weakening.
+#
+# Exclusion-style over ALL of features/ (the G2 idiom): one expression covering
+# root, domain/, memstore/, storetest/, and internal/ — closing the root-file
+# blind spot a feature's root package (e.g. authentication.go, authorization's
+# exported RequirePermission builder) sat outside. stores/ and views/ are
+# separate adapter modules, excluded to match G2.
 guard-feature-transport-sdk-web:
 	@echo "== guard: feature transports use sdk/foundation/web responders (FS9) =="
-	@! grep -rn --include='*.go' --exclude='*_test.go' -E 'json\.NewEncoder\(|http\.Error\(' features/*/internal/ || { echo "ERROR (FS9): hand-rolled HTTP response writing in a feature core — use web.Respond* (features/README.md, FS9)"; exit 1; }
+	@! grep -rn --include='*.go' --exclude='*_test.go' --exclude-dir=stores --exclude-dir=views -E 'json\.NewEncoder\(|http\.Error\(' features/ || { echo "ERROR (FS9): hand-rolled HTTP response writing in a feature core — use web.Respond* (features/README.md, FS9)"; exit 1; }
 
 # G7 (constitution rule 6, events-v1 task-13; the plan called it "G5" but that
 # slot was already taken by FS1): no feature imports a DIFFERENT feature — a

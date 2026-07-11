@@ -24,7 +24,10 @@
 // The feature is datastore-free and view-free (FS1): it depends on its
 // relationship.Storer / role.Storer ports and sdk facilities only. Register
 // mounts NO routes — the /authorization/* namespace is reserved for a future
-// admin surface.
+// admin surface. It does export one HTTP middleware builder, RequirePermission
+// (a root re-export of the internal engine implementation in middleware.go),
+// so hosts can gate routes on a Check; that builder writes its responses only
+// through sdk/foundation/web, never at this root package.
 package authorization
 
 import (
