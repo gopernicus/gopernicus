@@ -129,6 +129,12 @@ type Config struct {
 	Model Schema
 	// MaxTraversalDepth bounds the engine's through-traversal recursion; <= 0
 	// resolves to the engine default (10). Engine-only — never passed to a store.
+	//
+	// D3 sizing: a host collapsing a hand-walked hierarchy into schema must size
+	// this deliberately — Check silently DENIES past the bound (reason "max depth
+	// exceeded"), and each hop costs one GetRelationTargets round-trip. The bound
+	// governs the engine's Go recursion ONLY, never the store's descendant walk
+	// (unbounded-but-cycle-safe, 2026-07-08 ruling).
 	MaxTraversalDepth int
 	// IDs mints each relationship_id at CreateRelationships. The zero value is the
 	// nanoid default; a cryptids.Database generator defers to the DDL DEFAULT.
@@ -218,6 +224,11 @@ func (s *Service) FilterAuthorized(ctx context.Context, subject Subject, permiss
 }
 
 // LookupResources returns the resource IDs of a type the subject can access.
+//
+// D1(b) boundary: self-referential Through enumerates descendants of
+// DIRECTLY-granted roots only; roots granted via a non-self Through are not
+// expanded, though Check honors them. Closing the divergence is the named D1(c)
+// engine follow-up.
 func (s *Service) LookupResources(ctx context.Context, subject Subject, permission, resourceType string) (LookupResult, error) {
 	if s.relationships == nil {
 		return LookupResult{}, ErrRelationshipsNotConfigured
