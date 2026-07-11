@@ -10,13 +10,11 @@ import (
 
 // fixtureSchema is the layer-(b) schema: doc.view = Direct(viewer); group and org
 // carry a `member` relation for group expansion; platform carries `admin` for the
-// data-tuple bypass. No Through rules — the adversarial cases exercise store-side
-// group expansion, which the engine drives via CheckRelationWithGroupExpansion.
-//
-// checkSelf discipline (lead refinement 9): no subject type equals a resource
-// type with a read/update/delete permission, so a self-grant can never silently
-// pass a relation-expansion case. Subjects are user/service_account/group;
-// resources are doc/group/org/platform; the only permission is "view".
+// platform-admin DATA tuple (now a host recipe, not an engine bypass — see
+// PlatformAdminIsNotMagic). No Through rules — the adversarial cases exercise
+// store-side group expansion, which the engine drives via
+// CheckRelationWithGroupExpansion. The only permission is "view"; subjects are
+// user/service_account/group; resources are doc/group/org/platform.
 func fixtureSchema() authorization.Schema {
 	return authorization.NewSchema([]authorization.ResourceSchema{
 		{Name: "group", Def: authorization.ResourceTypeDef{
@@ -146,7 +144,7 @@ func runAdversarial(t *testing.T, newRepos func(t *testing.T) authorization.Repo
 		mustView(t, svc, "user", "u2", "d1", false) // not a member
 	})
 
-	t.Run("Unrestricted", func(t *testing.T) {
+	t.Run("PlatformAdminIsNotMagic", func(t *testing.T) {
 		for _, subjType := range []string{"user", "service_account"} {
 			repos := newRepos(t)
 			mustCreate(t, repos.Relationships,
@@ -155,27 +153,28 @@ func runAdversarial(t *testing.T, newRepos func(t *testing.T) authorization.Repo
 			)
 			svc := newServiceFor(t, repos)
 
-			// Admin subject ⇒ Unrestricted (caller skips ID filtering).
+			// A platform-admin tuple is NOT an engine bypass: the admin is
+			// enumerated only for docs it holds real grants on (none here).
 			res, err := svc.LookupResources(ctx, authorization.Subject{Type: subjType, ID: "admin1"}, "view", "doc")
 			if err != nil {
 				t.Fatalf("%s admin LookupResources: %v", subjType, err)
 			}
-			if !res.Unrestricted {
-				t.Fatalf("%s platform admin must be Unrestricted", subjType)
+			if res.IDs == nil {
+				t.Fatalf("%s admin IDs must be non-nil", subjType)
 			}
-			// Non-admin ⇒ not unrestricted, non-nil IDs.
+			if len(res.IDs) != 0 {
+				t.Fatalf("%s admin has no doc grant → want empty ids, got %v", subjType, res.IDs)
+			}
+			// The non-admin owner of d1 is enumerated for exactly that doc.
 			nonAdmin, err := svc.LookupResources(ctx, authorization.Subject{Type: "user", ID: "u9"}, "view", "doc")
 			if err != nil {
 				t.Fatalf("non-admin LookupResources: %v", err)
 			}
-			if nonAdmin.Unrestricted {
-				t.Fatalf("non-admin must not be Unrestricted")
+			if len(nonAdmin.IDs) != 1 || nonAdmin.IDs[0] != "d1" {
+				t.Fatalf("u9 must see exactly [d1], got %v", nonAdmin.IDs)
 			}
-			if nonAdmin.IDs == nil {
-				t.Fatalf("non-admin IDs must be non-nil when restricted")
-			}
-			// Admin also bypasses Check.
-			mustView(t, svc, subjType, "admin1", "d1", true)
+			// And the admin tuple does NOT satisfy a schema Check on d1.
+			mustView(t, svc, subjType, "admin1", "d1", false)
 		}
 	})
 }

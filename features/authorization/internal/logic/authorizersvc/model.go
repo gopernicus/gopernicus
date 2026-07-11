@@ -36,7 +36,8 @@ type CheckRequest struct {
 }
 
 // CheckResult is the outcome of a permission check. Reason aids debugging
-// ("direct:owner", "through:org->direct:admin", "self", "platform_admin").
+// ("direct:owner", "through:org->direct:admin", "no matching rule"). It is
+// informational only — its vocabulary is not a contract.
 type CheckResult struct {
 	Allowed bool
 	Reason  string
@@ -46,19 +47,15 @@ type CheckResult struct {
 // LookupResult
 // =============================================================================
 
-// LookupResult is returned by the engine's LookupResources.
+// LookupResult is returned by the engine's LookupResources — pure schema/tuple
+// enumeration.
 //
-// Using an explicit Unrestricted bool (not a nil sentinel) makes the admin
-// bypass visible at every call site and fail-closed: the zero value of bool is
-// false, so any accidental early return restricts rather than opens.
-//
-// Contract: when Unrestricted is false, IDs is always a non-nil slice. An empty
-// non-nil slice means the subject has access to no resource. When Unrestricted
-// is true the caller must SKIP ID filtering entirely — do not pass IDs to the
-// store.
+// Contract: IDs is ALWAYS a non-nil slice. An empty slice means the subject has
+// access to no resource of that type. There is no admin/unrestricted bypass in
+// the engine: a host that wants admin-sees-everything checks for it in its own
+// closure BEFORE calling LookupResources and then skips ID filtering.
 type LookupResult struct {
-	Unrestricted bool
-	IDs          []string
+	IDs []string
 }
 
 // =============================================================================

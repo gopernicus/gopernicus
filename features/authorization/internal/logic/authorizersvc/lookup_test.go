@@ -19,9 +19,6 @@ func TestLookupResourcesDirect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LookupResources: %v", err)
 	}
-	if res.Unrestricted {
-		t.Fatalf("non-admin must not be unrestricted")
-	}
 	if len(res.IDs) != 2 {
 		t.Fatalf("want 2 ids, got %v", res.IDs)
 	}
@@ -33,18 +30,19 @@ func TestLookupResourcesEmptyIsNonNil(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LookupResources: %v", err)
 	}
-	if res.Unrestricted {
-		t.Fatalf("no access must not be unrestricted")
-	}
 	if res.IDs == nil {
-		t.Fatalf("IDs must be non-nil when Unrestricted is false")
+		t.Fatalf("IDs must be non-nil even with no access")
 	}
 	if len(res.IDs) != 0 {
 		t.Fatalf("want empty ids, got %v", res.IDs)
 	}
 }
 
-func TestLookupResourcesPlatformAdminUnrestricted(t *testing.T) {
+// TestLookupResourcesPlatformAdminIsNotMagic proves the engine grants a
+// platform-admin tuple holder NO unrestricted enumeration: it is enumerated
+// only for resources it holds real grants on (none here). Admin-sees-everything
+// is host composition, not engine behavior.
+func TestLookupResourcesPlatformAdminIsNotMagic(t *testing.T) {
 	store := &fakeStore{}
 	svc := newTestService(t, store, cryptids.IDGenerator{})
 	store.tuples = append(store.tuples, relationship.CreateRelationship{
@@ -54,11 +52,11 @@ func TestLookupResourcesPlatformAdminUnrestricted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LookupResources: %v", err)
 	}
-	if !res.Unrestricted {
-		t.Fatalf("platform admin must be Unrestricted")
+	if res.IDs == nil {
+		t.Fatalf("IDs must be non-nil")
 	}
-	if res.IDs != nil {
-		t.Fatalf("Unrestricted result carries no IDs, got %v", res.IDs)
+	if len(res.IDs) != 0 {
+		t.Fatalf("platform admin has no post grants → want empty ids, got %v", res.IDs)
 	}
 }
 

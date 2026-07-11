@@ -30,7 +30,8 @@ import (
 //     through the authorization engine. B (granted on invitation accept) → 200; an
 //     ungranted user → 403.
 //   - GET /demo/my-projects — RequirePrincipal-gated: the relationship kind's
-//     LookupResources enumeration (demonstration (b)); {unrestricted, ids}.
+//     LookupResources enumeration (demonstration (b)); {admin, ids} (admin flag
+//     is the host-composed platform-admin recipe, not an engine bypass).
 //   - GET /demo/audit — RequirePrincipal + roles-kind HasRole gated: 200 with a
 //     driven ListRoleAssignmentsByResource read-back, 403 without the role.
 //   - POST /demo/roles/{assign,unassign} — RequireUser-gated (the admin drives
@@ -87,9 +88,12 @@ const demoRole = "auditor"
 // demoMyProjects (authorization-v1 Z4, demonstration (b)) exercises the
 // relationship kind's ENUMERATION API — flagship-specific, NEVER a consumer seam.
 // It maps the resolved principal onto an authorization.Subject and asks the engine
-// which `project` resources the subject may `view`, surfacing the
-// LookupResult.Unrestricted contract in real JSON: a platform admin is
-// Unrestricted (no ids), a member gets the ids, a stranger gets an empty list.
+// which `project` resources the subject may `view`. LookupResources is now pure
+// enumeration (the engine grants no admin bypass), so the host composes
+// admin-sees-everything itself: it runs the isPlatformAdmin recipe FIRST and
+// surfaces it as an explicit `admin` flag. In a real app an admin skips ID
+// filtering entirely; here the JSON is {"admin": bool, "ids": [...]} — a member
+// gets the ids, a stranger gets an empty list, an admin gets admin=true.
 func demoMyProjects(authSvc *auth.Service, authorizer *authorization.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p, ok := authSvc.CurrentPrincipal(r.Context())
@@ -97,6 +101,7 @@ func demoMyProjects(authSvc *auth.Service, authorizer *authorization.Service) ht
 			writeHostJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
 			return
 		}
+		admin := isPlatformAdmin(r.Context(), authorizer, p.Type, p.ID)
 		res, err := authorizer.LookupResources(r.Context(), authorization.Subject{Type: p.Type, ID: p.ID}, demoPermission, demoResourceType)
 		if err != nil {
 			writeHostJSON(w, http.StatusInternalServerError, map[string]string{"error": "lookup failed"})
@@ -106,7 +111,7 @@ func demoMyProjects(authSvc *auth.Service, authorizer *authorization.Service) ht
 		if ids == nil {
 			ids = []string{}
 		}
-		writeHostJSON(w, http.StatusOK, map[string]any{"unrestricted": res.Unrestricted, "ids": ids})
+		writeHostJSON(w, http.StatusOK, map[string]any{"admin": admin, "ids": ids})
 	}
 }
 

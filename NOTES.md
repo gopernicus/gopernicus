@@ -1948,3 +1948,45 @@ Open flags: (1) `foundation/logging/context_test.go` pairs with
 P1-era `sdk/errs` prose comment in sendgrid.go swept at P5 — none
 remain; (3) traced-workers reintroduction trigger stands (first host
 wanting it → a decorator in capabilities/tracing).
+
+## 2026-07-11 — authorizer `Check` is pure schema evaluation (segovia-lessons 05)
+
+Downstream feedback from segovia v2 (first real consumer of
+`features/authorization`): the two policy short-circuits that ran before any
+schema rule — `checkPlatformAdmin` (probed `platform:main#admin@<subj>` on
+EVERY check) and `checkSelf` (hardcoded `user`/`service_account` self-access on
+`read`/`update`/`delete`) — are REMOVED from the engine. **The engine evaluates
+the schema; policy short-circuits are host composition.** Both bypasses now fail
+CLOSED as documented host closure recipes.
+
+- **D1 full removal** (not opt-in Config): `Check`, the `checkBatchOptimized`
+  fast path, and `LookupResources` no longer bypass. `Reason` vocabulary shrank
+  — `"platform:admin"` and `"self"` are gone (informational only, never a
+  contract).
+- **D2 CORRECTION** — the feedback proposed dropping `CheckRelationExists` from
+  the `relationship.Storer` port "if the engine is its only caller." It is NOT:
+  `RemoveMember`'s last-owner probe (§2.5 pin), the public
+  `Service.CheckRelationExists` dedup primitive, and 7 storetest conformance
+  cases all call it. **The port method stays**; only the engine's internal
+  `checkPlatformAdmin` call site went away.
+- **D3 `LookupResult.Unrestricted` removed** — its only producer was
+  `checkPlatformAdmin`, so it became a permanently-false dead field.
+  `LookupResources` is now pure enumeration (IDs always non-nil, empty = no
+  access). Ripple: auth-cms `/demo/my-projects` JSON contract changed from
+  `{"unrestricted",...}` → `{"admin",...}` (host-composed flag).
+- **Host recipes** (canonical, in the feature README): platform-admin = declare
+  a `platform` type with an `admin` PERMISSION + run its `Check` first in the
+  host closure (`isPlatformAdmin` in auth-cms `membership.go`, used by
+  `requireMembership` + `demoMyProjects`); self-access = ~8-line ID-equality
+  check in the host closure (auth-cms/segovia carry none). The
+  `platform:main#admin` DATA tuple and "admin is DATA, never Config" are
+  unchanged.
+- Engine tests flipped: `TestCheckPlatformAdminIsNotMagic` /
+  `TestCheckNoImplicitSelfAccess` / `TestLookupResourcesPlatformAdminIsNotMagic`
+  + storetest `Adversarial/PlatformAdminIsNotMagic` prove a tuple holder is
+  DENIED on an unrelated resource and gets no implicit self-access. Green on
+  memstore + pgx + turso conformance.
+
+Downstream: segovia v2 adds the platform-admin closure atop its
+`access.Checker.Check` + the `admin` permission rule to `BuildSchema()` (flags
+#4–#7); it never used checkSelf.

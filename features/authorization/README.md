@@ -3,7 +3,7 @@
 A pluggable, datastore-free authorization feature: an IAM domain offering
 multiple KINDS of authorization — v1 ships **relationships** (a ReBAC
 engine: schema-driven permission checks, group expansion,
-through-traversal, platform-admin data tuples) and **roles** (minimal
+through-traversal) and **roles** (minimal
 opaque-string role assignments, scoped or global) — plus a named,
 deferred **policy** seam. ReBAC is one kind, not the feature's identity.
 Design of record: `.claude/plans/roadmap/auth-v2-feature-design.md` (as
@@ -42,7 +42,7 @@ module) — posture 2; the `examples/auth-cms` HEAD host (Z4 commit 2,
 
 | kind | expresses | `Repositories` field | table | Service method family | nil semantics |
 |---|---|---|---|---|---|
-| **relationships** | ReBAC tuples + a schema: who relates to what, and which permissions those relations grant (group expansion, `Through` traversal, platform-admin data tuples) | `.Relationships` | `iam_relationships` | `Check`, `CheckBatch`, `FilterAuthorized`, `LookupResources`, `CreateRelationships`, `DeleteRelationship`, `DeleteResourceRelationships`, `DeleteByResourceAndSubject`, `RemoveMember`, `ValidateRelation(s)`, `GetSchema`, `GetPermissionsForRelation`, `GetRelationTargets`, `ListRelationshipsBySubject/ByResource` | nil ⇒ kind OFF structurally; every method returns `ErrRelationshipsNotConfigured` |
+| **relationships** | ReBAC tuples + a schema: who relates to what, and which permissions those relations grant (group expansion, `Through` traversal; `Check` is pure schema evaluation — platform-admin/self-access are host recipes) | `.Relationships` | `iam_relationships` | `Check`, `CheckBatch`, `FilterAuthorized`, `LookupResources`, `CreateRelationships`, `DeleteRelationship`, `DeleteResourceRelationships`, `DeleteByResourceAndSubject`, `RemoveMember`, `ValidateRelation(s)`, `GetSchema`, `GetPermissionsForRelation`, `GetRelationTargets`, `ListRelationshipsBySubject/ByResource` | nil ⇒ kind OFF structurally; every method returns `ErrRelationshipsNotConfigured` |
 | **roles** | opaque-string role grants — `(subject, role)` pairs, resource-scoped or global | `.Roles` | `iam_roles` | `AssignRole`, `UnassignRole`, `HasRole`, `ListRoleAssignmentsBySubject/ByResource` | nil ⇒ kind OFF; every method returns `ErrRolesNotConfigured` |
 | **policy** (deferred) | attribute/condition-shaped rules | (future) `.Policies` | (future) `iam_policies` | — | a designed, named seam — see "The policy seam" below |
 
@@ -129,12 +129,36 @@ it is capability-defining (a model with no engine is a misconfiguration
 trap), while an orphaned `MaxTraversalDepth`/`IDs` is ignored-with-note
 because each is a tuning knob (the auth `MailFrom` precedent).
 
-**Platform admin is DATA, never Config.** The bypass convention is the
-tuple `platform:main#admin@<type>:<id>` over a host-declared `platform`
-resource type. No bypass exists unless the host declares the type in its
-schema AND creates the tuple. A platform admin's `LookupResources`
-returns `LookupResult.Unrestricted = true` with no id enumeration —
-callers must branch on `Unrestricted` before reading `IDs`.
+**`Check` evaluates the schema; policy short-circuits are host composition.**
+The engine is a pure schema evaluator — it grants no platform-admin or
+self-access bypass. Both are HOST recipes a host runs first in its own Check
+closure, and both fail **closed** (a host that omits a recipe simply gets no
+bypass; it can never accidentally open access):
+
+- **Platform admin (host recipe).** Declare a `platform` resource type with an
+  `admin` *permission* (not just a relation), and check it first:
+
+  ```go
+  {Name: "platform", Def: authorization.ResourceTypeDef{
+      Relations:   map[string]authorization.RelationDef{"admin": {AllowedSubjects: ...}},
+      Permissions: map[string]authorization.PermissionRule{"admin": authorization.AnyOf(authorization.Direct("admin"))},
+  }}
+  // ...then in the host's Check closure, BEFORE the resource-specific check:
+  if res, _ := authorizer.Check(ctx, authorization.CheckRequest{
+      Subject: subj, Permission: "admin",
+      Resource: authorization.Resource{Type: "platform", ID: "main"},
+  }); res.Allowed { /* allow */ }
+  ```
+
+  Platform-admin is still DATA (the tuple `platform:main#admin@<type>:<id>`),
+  never Config — the bypass is just no longer engine magic. For
+  `LookupResources` (pure enumeration, no `Unrestricted` bypass), the host runs
+  the same admin check first and, if it holds, skips ID filtering entirely.
+
+- **Self-access (host recipe).** A host that models users as ReBAC resources
+  adds an ID-equality check in its own closure (`subject.ID == resource.ID` for
+  the permissions it wants self-scoped). A host that doesn't model users this
+  way simply never carries the rule.
 
 **The roles scope rule (Q5, the one documented rule):** the store-level
 lookup (`HasExactRole`) is exact-scope match; the service-level
@@ -195,8 +219,10 @@ adversarial sub-runners are acceptance criteria, not nice-to-haves:
   removed.
 - `Adversarial/NestedUserset` — tuple-side userset subjects
   (`…@group:eng#member`) expand correctly.
-- `Adversarial/Unrestricted` — the platform-admin data tuple yields
-  `Unrestricted` for user AND service_account admins.
+- `Adversarial/PlatformAdminIsNotMagic` — a platform-admin data tuple is NOT
+  an engine bypass: the holder is enumerated only for resources it holds real
+  grants on, and is denied a schema `Check` it has no rule for (user AND
+  service_account).
 - The `Roles/*` family — assign/unassign idempotence, exact-scope
   isolation, distinct-assignments coexistence, keyset listings, the Q5
   global fallback.
@@ -252,11 +278,16 @@ model := authorization.NewSchema([]authorization.ResourceSchema{
             "view": authorization.AnyOf(authorization.Direct("owner"), authorization.Direct("member")),
         },
     }},
-    // Declaring a `platform` type + creating a platform:main#admin@user:<id>
-    // tuple is the (data, not Config) platform-admin convention.
+    // Declaring a `platform` type with an `admin` permission + creating a
+    // platform:main#admin@user:<id> tuple is the (data, not Config)
+    // platform-admin recipe. The host runs the `admin` Check first in its own
+    // closure — the engine grants no bypass.
     {Name: "platform", Def: authorization.ResourceTypeDef{
         Relations: map[string]authorization.RelationDef{
             "admin": {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}}},
+        },
+        Permissions: map[string]authorization.PermissionRule{
+            "admin": authorization.AnyOf(authorization.Direct("admin")),
         },
     }},
 })
@@ -303,7 +334,8 @@ eventsCfg.Authorize = func(ctx context.Context, p identity.Principal, resourceTy
 
 // Stop 3 — enumeration (flagship-only API, never a seam):
 result, err := authorizer.LookupResources(ctx, subject, "view", "project")
-// result.Unrestricted == true → platform admin; don't read result.IDs.
+// pure enumeration: result.IDs is always non-nil (empty = no access). For
+// admin-sees-everything, run the platform-admin Check first and skip filtering.
 
 // Stop 4 — a role-gated host route (the roles kind; opaque role string):
 ok, err := authorizer.HasRole(ctx, subject, "auditor", "project", "demo")

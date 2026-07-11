@@ -6,9 +6,10 @@ import "context"
 // a permission (the prefilter pattern: look up authorized IDs, then pass them to
 // the repository as WHERE id = ANY(@ids)).
 //
-// A platform admin yields LookupResult{Unrestricted: true} — the caller must
-// skip ID filtering entirely. Otherwise IDs is always a non-nil slice; an empty
-// slice means no access.
+// This is pure schema/tuple enumeration: IDs is ALWAYS a non-nil slice, and an
+// empty slice means no access. A host that wants admin-sees-everything semantics
+// checks for that in its own closure BEFORE calling here (and then skips ID
+// filtering entirely) — the engine grants no bypass.
 func (s *Service) LookupResources(ctx context.Context, subject Subject, permission, resourceType string) (LookupResult, error) {
 	return s.lookupResourcesWithVisited(ctx, subject, permission, resourceType, make(map[string]bool))
 }
@@ -20,12 +21,6 @@ func (s *Service) lookupResourcesWithVisited(ctx context.Context, subject Subjec
 		return LookupResult{IDs: []string{}}, nil
 	}
 	visited[key] = true
-
-	if allowed, err := s.checkPlatformAdmin(ctx, subject); err != nil {
-		return LookupResult{}, err
-	} else if allowed {
-		return LookupResult{Unrestricted: true}, nil
-	}
 
 	rules := s.getPermissionRules(resourceType, permission)
 	if len(rules.AnyOf) == 0 {
@@ -40,9 +35,6 @@ func (s *Service) lookupResourcesWithVisited(ctx context.Context, subject Subjec
 			throughResult, err := s.lookupThrough(ctx, subject, check, resourceType, visited)
 			if err != nil {
 				return LookupResult{}, err
-			}
-			if throughResult.Unrestricted {
-				return LookupResult{Unrestricted: true}, nil
 			}
 			for _, id := range throughResult.IDs {
 				if !seen[id] {
@@ -65,7 +57,7 @@ func (s *Service) lookupResourcesWithVisited(ctx context.Context, subject Subjec
 	}
 
 	if ids == nil {
-		ids = []string{} // guarantee non-nil when Unrestricted=false
+		ids = []string{} // guarantee a non-nil slice — empty means no access
 	}
 	return LookupResult{IDs: ids}, nil
 }
@@ -115,9 +107,6 @@ func (s *Service) lookupThrough(ctx context.Context, subject Subject, check Perm
 		targetResult, err := s.lookupResourcesWithVisited(ctx, subject, check.Permission, ref.Type, visited)
 		if err != nil {
 			return LookupResult{}, err
-		}
-		if targetResult.Unrestricted {
-			return LookupResult{Unrestricted: true}, nil
 		}
 		if len(targetResult.IDs) == 0 {
 			continue
