@@ -46,12 +46,28 @@ func (g relationshipGranter) Grant(ctx context.Context, resourceType, resourceID
 	}})
 }
 
+// isPlatformAdmin is the HOST-side platform-admin recipe (host composition —
+// the engine no longer bypasses on the platform:main#admin tuple). It runs an
+// ordinary schema-declared `admin` permission Check on platform/main, which the
+// host declares in its model (see main.go). It fails CLOSED: any error or a
+// missing tuple yields false. A host that wants admin-sees-everything runs this
+// FIRST in its own closure, before the resource-specific check.
+func isPlatformAdmin(ctx context.Context, authorizer *authorization.Service, subjectType, subjectID string) bool {
+	res, err := authorizer.Check(ctx, authorization.CheckRequest{
+		Subject:    authorization.Subject{Type: subjectType, ID: subjectID},
+		Permission: "admin",
+		Resource:   authorization.Resource{Type: "platform", ID: "main"},
+	})
+	return err == nil && res.Allowed
+}
+
 // requireMembership gates a route on the caller — already resolved by
 // RequirePrincipal into ctx — holding the demo `view` permission on the demo
 // resource, checked THROUGH the authorization engine (authorizer.Check, the
-// flagship posture; the A9 toy-map read is retired). A resolved principal WITHOUT
-// access → 403; no resolved principal (RequirePrincipal should have blocked that
-// already) → 401. It reads the principal through the exported
+// flagship posture; the A9 toy-map read is retired). A platform admin passes via
+// the host-composed isPlatformAdmin recipe run FIRST. A resolved principal
+// WITHOUT access → 403; no resolved principal (RequirePrincipal should have
+// blocked that already) → 401. It reads the principal through the exported
 // auth.Service.CurrentPrincipal port, with zero import into the feature internals.
 func requireMembership(authSvc *auth.Service, authorizer *authorization.Service) web.Middleware {
 	return func(next http.Handler) http.Handler {
@@ -59,6 +75,11 @@ func requireMembership(authSvc *auth.Service, authorizer *authorization.Service)
 			p, ok := authSvc.CurrentPrincipal(r.Context())
 			if !ok {
 				writeHostJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+				return
+			}
+			// Platform-admin recipe: host runs it first (engine grants no bypass).
+			if isPlatformAdmin(r.Context(), authorizer, p.Type, p.ID) {
+				next.ServeHTTP(w, r)
 				return
 			}
 			res, err := authorizer.Check(r.Context(), authorization.CheckRequest{

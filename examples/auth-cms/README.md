@@ -63,21 +63,27 @@ history:
 
 **The relationship kind.** `main` declares a schema (`authorization.NewSchema`) with
 a `project` resource type (`owner`/`member` relations, `view` = `AnyOf(owner,
-member)`) and a `platform` resource type (`admin`). The boot seed registers a demo
-admin (`admin@example.com`), then writes `project:demo#owner@user:<admin>` and the
-**platform-admin data tuple** `platform:main#admin@user:<admin>` via
-`CreateRelationships` — platform-admin is DATA (a tuple over a `platform` resource
-type), never a Config field. A member gets `view` on `project/demo` the moment the
-invitation is accepted (the Granter writes the tuple). Demo routes:
+member)`) and a `platform` resource type (`admin` relation + `admin` permission).
+The boot seed registers a demo admin (`admin@example.com`), then writes
+`project:demo#owner@user:<admin>` and the **platform-admin data tuple**
+`platform:main#admin@user:<admin>` via `CreateRelationships` — platform-admin is
+DATA (a tuple over a `platform` resource type), never a Config field. **`Check` is
+pure schema evaluation**: the engine grants no bypass, so the host runs the
+platform-admin recipe itself — an `admin` permission `Check` on `platform/main`,
+first, in its own closure (`isPlatformAdmin` in `membership.go`). A member gets
+`view` on `project/demo` the moment the invitation is accepted (the Granter writes
+the tuple). Demo routes:
 
-- `GET /demo/members-only` — gated through `authorizer.Check` (`view` on
-  `project/demo`): member/owner → 200, non-member → 403.
+- `GET /demo/members-only` — gated through the host closure: platform admin (via
+  `isPlatformAdmin`) OR `authorizer.Check` (`view` on `project/demo`) → 200,
+  otherwise 403.
 - `GET /demo/my-projects` — the relationship kind's **enumeration** via
-  `authorizer.LookupResources(..., "view", "project")`, returned as
-  `{"unrestricted", "ids"}`: a member → `{"unrestricted":false,"ids":["demo"]}`, a
-  stranger → empty ids, the platform admin → `{"unrestricted":true}`. This is a
-  **demo-only host surface** exercising a **flagship-specific API** — enumeration is
-  NEVER a consumer seam (§2.4); consumer seams are Check-only.
+  `authorizer.LookupResources(..., "view", "project")` (pure, no bypass), returned
+  as `{"admin", "ids"}` where `admin` is the host-composed platform-admin flag: a
+  member → `{"admin":false,"ids":["demo"]}`, a stranger → `{"admin":false,"ids":[]}`,
+  the platform admin → `{"admin":true,"ids":[]}` (a real app skips ID filtering when
+  `admin`). This is a **demo-only host surface** exercising a **flagship-specific
+  API** — enumeration is NEVER a consumer seam (§2.4); consumer seams are Check-only.
 
 **The roles kind** is **independently wireable** — a roles-only host would wire
 `authorization.Repositories{Roles: …}` alone and never construct a model. Here it
@@ -358,9 +364,9 @@ admin, then drives both kinds. `<BID>`/`<CID>` are B/C's principal ids from
 curl -sX POST -c jar -b jar http://localhost:8082/demo/admin/bootstrap            # 200 {"status":"bootstrapped",...}
 
 # relationship kind — B is a member (Leg 4 accept); enumeration (demonstration b):
-curl -s -b bjar http://localhost:8082/demo/my-projects                            # {"ids":["demo"],"unrestricted":false}
-curl -s -b cjar http://localhost:8082/demo/my-projects                            # {"ids":[],"unrestricted":false}
-curl -s -b jar  http://localhost:8082/demo/my-projects                            # {"ids":[],"unrestricted":true}  (platform admin)
+curl -s -b bjar http://localhost:8082/demo/my-projects                            # {"admin":false,"ids":["demo"]}
+curl -s -b cjar http://localhost:8082/demo/my-projects                            # {"admin":false,"ids":[]}
+curl -s -b jar  http://localhost:8082/demo/my-projects                            # {"admin":true,"ids":[]}  (platform admin)
 # resource-scoped stream gated through authorizer.Check:
 curl -N --max-time 2 -b bjar http://localhost:8082/events/project/demo            # 200 (member)
 curl -N --max-time 2 -b cjar http://localhost:8082/events/project/demo            # 403 (non-member)
@@ -409,7 +415,7 @@ unwired kind (e.g. `slack`) fails 400; email is always-on via the Mailer.
   `GET /demo/whoami` (RequirePrincipal-gated: any credential class → 200),
   `GET /demo/members-only` (RequirePrincipal + engine-Check gated: member/owner →
   200, resolved non-member → 403), `GET /demo/my-projects` (the relationship
-  kind's `LookupResources` enumeration → `{unrestricted, ids}`), `GET /demo/audit`
+  kind's `LookupResources` enumeration → `{admin, ids}`), `GET /demo/audit`
   (the roles kind's `HasRole` gate + a direct-scope `ListRoleAssignmentsByResource`
   read-back), `POST /demo/roles/{assign,unassign}` and `POST /demo/admin/bootstrap`
   (RequireUser-gated, admin-driven), and `GET /debug/security-events`

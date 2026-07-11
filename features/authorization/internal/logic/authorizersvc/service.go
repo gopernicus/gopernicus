@@ -73,19 +73,13 @@ func NewService(store relationship.Storer, schema Schema, cfg Config) (*Service,
 // Permission checks
 // =============================================================================
 
-// Check evaluates a permission check. Order: platform-admin bypass → self-access
-// → schema rules (direct relations + through-traversal with cycle detection).
+// Check evaluates a permission check against the schema rules ONLY (direct
+// relations + through-traversal with cycle detection). Policy short-circuits
+// (platform-admin, self-access) are HOST composition, not engine behavior: a
+// host runs them in its own Check closure before delegating here. This keeps
+// the engine a pure schema evaluator and fails closed — a host that omits a
+// bypass recipe simply gets no bypass.
 func (s *Service) Check(ctx context.Context, req CheckRequest) (CheckResult, error) {
-	if allowed, err := s.checkPlatformAdmin(ctx, req.Subject); err != nil {
-		return CheckResult{}, err
-	} else if allowed {
-		return CheckResult{Allowed: true, Reason: "platform:admin"}, nil
-	}
-
-	if allowed, reason := s.checkSelf(req); allowed {
-		return CheckResult{Allowed: true, Reason: reason}, nil
-	}
-
 	rules := s.getPermissionRules(req.Resource.Type, req.Permission)
 	if rules.AnyOf == nil {
 		return CheckResult{Allowed: false, Reason: "no rules defined"}, nil
@@ -234,31 +228,6 @@ func (s *Service) checkThrough(ctx context.Context, req CheckRequest, check Perm
 	return CheckResult{Allowed: false}, nil
 }
 
-// checkPlatformAdmin implements the platform-admin bypass as a DATA TUPLE
-// (platform:main#admin@<subject>), never a Config field: a host provisions it
-// by declaring a `platform` resource type and creating the tuple.
-func (s *Service) checkPlatformAdmin(ctx context.Context, subj Subject) (bool, error) {
-	return s.store.CheckRelationExists(ctx, "platform", "main", "admin", subj.Type, subj.ID)
-}
-
-func (s *Service) checkSelf(req CheckRequest) (bool, string) {
-	if req.Resource.Type != req.Subject.Type {
-		return false, ""
-	}
-	if req.Resource.Type != "user" && req.Resource.Type != "service_account" {
-		return false, ""
-	}
-	if req.Subject.ID != req.Resource.ID {
-		return false, ""
-	}
-	switch req.Permission {
-	case "read", "update", "delete":
-		return true, "self"
-	default:
-		return false, ""
-	}
-}
-
 func (s *Service) getPermissionRules(resourceType, permission string) PermissionRule {
 	if rtDef, ok := s.schema.ResourceTypes[resourceType]; ok {
 		if rule, ok := rtDef.Permissions[permission]; ok {
@@ -292,38 +261,17 @@ func (s *Service) checkBatchOptimized(ctx context.Context, reqs []CheckRequest) 
 	results := make([]CheckResult, len(reqs))
 	first := reqs[0]
 
-	if allowed, err := s.checkPlatformAdmin(ctx, first.Subject); err != nil {
-		return nil, err
-	} else if allowed {
-		for i := range results {
-			results[i] = CheckResult{Allowed: true, Reason: "platform:admin"}
-		}
-		return results, nil
-	}
-
-	var needsDBCheck []int
-	for i, req := range reqs {
-		if allowed, reason := s.checkSelf(req); allowed {
-			results[i] = CheckResult{Allowed: true, Reason: reason}
-		} else {
-			needsDBCheck = append(needsDBCheck, i)
-		}
-	}
-	if len(needsDBCheck) == 0 {
-		return results, nil
-	}
-
 	rules := s.getPermissionRules(first.Resource.Type, first.Permission)
 	if len(rules.AnyOf) == 0 {
-		for _, i := range needsDBCheck {
+		for i := range results {
 			results[i] = CheckResult{Allowed: false, Reason: "no rules defined"}
 		}
 		return results, nil
 	}
 
-	resourceIDs := make([]string, 0, len(needsDBCheck))
-	for _, i := range needsDBCheck {
-		resourceIDs = append(resourceIDs, reqs[i].Resource.ID)
+	resourceIDs := make([]string, 0, len(reqs))
+	for _, req := range reqs {
+		resourceIDs = append(resourceIDs, req.Resource.ID)
 	}
 
 	allowedMap := make(map[string]bool)
@@ -344,8 +292,8 @@ func (s *Service) checkBatchOptimized(ctx context.Context, reqs []CheckRequest) 
 		}
 	}
 
-	for _, i := range needsDBCheck {
-		resourceID := reqs[i].Resource.ID
+	for i, req := range reqs {
+		resourceID := req.Resource.ID
 		if allowedMap[resourceID] {
 			for _, check := range rules.AnyOf {
 				if check.Relation != "" {

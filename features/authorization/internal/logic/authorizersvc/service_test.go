@@ -211,25 +211,27 @@ func TestCheckDirectRelation(t *testing.T) {
 	}
 }
 
-func TestCheckSelfAccess(t *testing.T) {
+// TestCheckNoImplicitSelfAccess proves the engine grants NO self-access: a
+// subject reading its own record with no tuple and no schema rule is DENIED.
+// Self-access is host composition, not engine behavior.
+func TestCheckNoImplicitSelfAccess(t *testing.T) {
 	svc := newTestService(t, &fakeStore{}, cryptids.IDGenerator{})
-	// No tuples: a user reading their own record is allowed by checkSelf.
 	res, err := svc.Check(context.Background(), CheckRequest{
 		Subject: Subject{Type: "user", ID: "u1"}, Permission: "read", Resource: Resource{Type: "user", ID: "u1"},
 	})
-	if err != nil || !res.Allowed || res.Reason != "self" {
-		t.Fatalf("self read should be allowed with reason self: %+v err=%v", res, err)
+	if err != nil {
+		t.Fatalf("Check: %v", err)
 	}
-	// A different user's record is not self.
-	other, _ := svc.Check(context.Background(), CheckRequest{
-		Subject: Subject{Type: "user", ID: "u1"}, Permission: "read", Resource: Resource{Type: "user", ID: "u2"},
-	})
-	if other.Allowed {
-		t.Fatalf("reading another user's record is not self-access")
+	if res.Allowed {
+		t.Fatalf("engine must not grant implicit self-access: %+v", res)
 	}
 }
 
-func TestCheckPlatformAdminBypass(t *testing.T) {
+// TestCheckPlatformAdminIsNotMagic proves a platform-admin tuple holder is
+// DENIED on an unrelated resource type: the tuple no longer bypasses the
+// schema. Platform-admin is host composition — the host runs an `admin`
+// permission Check in its own closure before delegating here.
+func TestCheckPlatformAdminIsNotMagic(t *testing.T) {
 	for _, subjType := range []string{"user", "service_account"} {
 		store := &fakeStore{}
 		svc := newTestService(t, store, cryptids.IDGenerator{})
@@ -239,8 +241,11 @@ func TestCheckPlatformAdminBypass(t *testing.T) {
 		res, err := svc.Check(context.Background(), CheckRequest{
 			Subject: Subject{Type: subjType, ID: "admin1"}, Permission: "delete", Resource: Resource{Type: "post", ID: "pX"},
 		})
-		if err != nil || !res.Allowed || res.Reason != "platform:admin" {
-			t.Fatalf("%s platform admin bypass failed: %+v err=%v", subjType, res, err)
+		if err != nil {
+			t.Fatalf("%s Check: %v", subjType, err)
+		}
+		if res.Allowed {
+			t.Fatalf("%s platform admin must NOT bypass the schema: %+v", subjType, res)
 		}
 	}
 }

@@ -140,6 +140,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 			Relations: map[string]authorization.RelationDef{
 				"admin": {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}}},
 			},
+			// The `admin` permission makes platform-admin an ordinary
+			// schema-declared check the host runs first in its own Check
+			// closure (see requireMembership / demoMyProjects). The engine no
+			// longer bypasses on this tuple — the host composes it.
+			Permissions: map[string]authorization.PermissionRule{
+				"admin": authorization.AnyOf(authorization.Direct("admin")),
+			},
 		}},
 	})
 	authorizer, err := authorization.NewService(authorization.Repositories{
