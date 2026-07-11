@@ -166,7 +166,7 @@ func (q *Queue) Claim(ctx context.Context, workerID string, now time.Time) (job.
 
 	var claimed job.Job
 	err := retryBusy(ctx, func() error {
-		row, e := queryOne[jobRow](ctx, q.db, claim, workerID, nowTS, nowTS, nowTS, staleTS, nowTS, staleTS)
+		row, e := tursodb.QueryOne[jobRow](ctx, q.db, claim, workerID, nowTS, nowTS, nowTS, staleTS, nowTS, staleTS)
 		if e != nil {
 			return e
 		}
@@ -209,7 +209,7 @@ func (q *Queue) Fail(ctx context.Context, jobID string, now time.Time, reason st
 // Get returns the job with the given id, or sdk.ErrNotFound.
 func (q *Queue) Get(ctx context.Context, id string) (job.Job, error) {
 	const get = `SELECT ` + jobColumns + ` FROM job_queue WHERE job_id = ?`
-	row, err := queryOne[jobRow](ctx, q.db, get, id)
+	row, err := tursodb.QueryOne[jobRow](ctx, q.db, get, id)
 	if err != nil {
 		return job.Job{}, err
 	}

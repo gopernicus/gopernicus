@@ -67,7 +67,7 @@ func (s *SessionStore) Create(ctx context.Context, sess session.Session) (sessio
 // present-but-expired → sdk.ErrExpired (checked against the read clock).
 func (s *SessionStore) Get(ctx context.Context, token string) (session.Session, error) {
 	const q = `SELECT ` + sessionColumns + ` FROM sessions WHERE token = @token`
-	row, err := queryOne[sessionRow](ctx, s.db, q, pgx.NamedArgs{"token": token})
+	row, err := pgxdb.QueryOne[sessionRow](ctx, s.db, q, pgx.NamedArgs{"token": token})
 	if err != nil {
 		return session.Session{}, err
 	}

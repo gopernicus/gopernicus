@@ -163,7 +163,7 @@ func (s *EntryStore) Update(ctx context.Context, id string, e content.Entry) (co
 // Get returns the entry with the given id — spine, fields, and term IDs.
 func (s *EntryStore) Get(ctx context.Context, id string) (content.Entry, error) {
 	const q = `SELECT ` + entryColumns + ` FROM entries WHERE id = @id`
-	row, err := queryOne[entryRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
+	row, err := pgxdb.QueryOne[entryRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
 	if err != nil {
 		return content.Entry{}, err
 	}
@@ -173,7 +173,7 @@ func (s *EntryStore) Get(ctx context.Context, id string) (content.Entry, error) 
 // GetBySlug returns the entry of type typ with the given slug.
 func (s *EntryStore) GetBySlug(ctx context.Context, typ, slug string) (content.Entry, error) {
 	const q = `SELECT ` + entryColumns + ` FROM entries WHERE type = @type AND slug = @slug`
-	row, err := queryOne[entryRow](ctx, s.db, q, pgx.NamedArgs{"type": typ, "slug": slug})
+	row, err := pgxdb.QueryOne[entryRow](ctx, s.db, q, pgx.NamedArgs{"type": typ, "slug": slug})
 	if err != nil {
 		return content.Entry{}, err
 	}

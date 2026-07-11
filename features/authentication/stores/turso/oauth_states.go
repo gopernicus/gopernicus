@@ -61,7 +61,7 @@ func (s *OAuthStateStore) Create(ctx context.Context, st oauthstate.State) (oaut
 // expired → sdk.ErrExpired (row already gone); live → the State.
 func (s *OAuthStateStore) Consume(ctx context.Context, token string) (oauthstate.State, error) {
 	const q = `DELETE FROM oauth_states WHERE token = ? RETURNING ` + oauthStateColumns
-	row, err := queryOne[oauthStateRow](ctx, s.db, q, token)
+	row, err := tursodb.QueryOne[oauthStateRow](ctx, s.db, q, token)
 	if err != nil {
 		return oauthstate.State{}, err
 	}

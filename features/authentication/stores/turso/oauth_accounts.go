@@ -81,7 +81,7 @@ func (s *OAuthAccountStore) Create(ctx context.Context, a oauthaccount.OAuthAcco
 // GetByProvider returns the link for a provider identity, or sdk.ErrNotFound.
 func (s *OAuthAccountStore) GetByProvider(ctx context.Context, provider, providerUserID string) (oauthaccount.OAuthAccount, error) {
 	const q = `SELECT ` + oauthAccountColumns + ` FROM oauth_accounts WHERE provider = ? AND provider_user_id = ?`
-	row, err := queryOne[oauthAccountRow](ctx, s.db, q, provider, providerUserID)
+	row, err := tursodb.QueryOne[oauthAccountRow](ctx, s.db, q, provider, providerUserID)
 	if err != nil {
 		return oauthaccount.OAuthAccount{}, err
 	}

@@ -77,7 +77,7 @@ func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Ti
 	err := retryBusy(ctx, func() error {
 		return s.db.InTx(ctx, func(tx *tursodb.Tx) error {
 			const sel = `SELECT ` + scheduleColumns + ` FROM job_schedules WHERE name = ?`
-			row, err := queryOne[scheduleRow](ctx, tx, sel, in.Name)
+			row, err := tursodb.QueryOne[scheduleRow](ctx, tx, sel, in.Name)
 			switch {
 			case err == nil:
 				existing := row.toDomain()
@@ -183,7 +183,7 @@ func (s *Schedules) SetLastJob(ctx context.Context, id, jobID string, now time.T
 // Get returns the schedule with the given id, or sdk.ErrNotFound.
 func (s *Schedules) Get(ctx context.Context, id string) (schedule.Schedule, error) {
 	const q = `SELECT ` + scheduleColumns + ` FROM job_schedules WHERE schedule_id = ?`
-	row, err := queryOne[scheduleRow](ctx, s.db, q, id)
+	row, err := tursodb.QueryOne[scheduleRow](ctx, s.db, q, id)
 	if err != nil {
 		return schedule.Schedule{}, err
 	}

@@ -81,7 +81,7 @@ func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Ti
 
 	err := s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
 		const sel = `SELECT ` + scheduleRowColumns + ` FROM job_schedules WHERE name = @name`
-		row, err := queryOne[scheduleRow](ctx, tx, sel, pgx.NamedArgs{"name": in.Name})
+		row, err := pgxdb.QueryOne[scheduleRow](ctx, tx, sel, pgx.NamedArgs{"name": in.Name})
 		switch {
 		case err == nil:
 			existing := row.toDomain()
@@ -207,7 +207,7 @@ func (s *Schedules) SetLastJob(ctx context.Context, id, jobID string, now time.T
 // Get returns the schedule with the given id, or sdk.ErrNotFound.
 func (s *Schedules) Get(ctx context.Context, id string) (schedule.Schedule, error) {
 	const q = `SELECT ` + scheduleRowColumns + ` FROM job_schedules WHERE schedule_id = @id`
-	row, err := queryOne[scheduleRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
+	row, err := pgxdb.QueryOne[scheduleRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
 	if err != nil {
 		return schedule.Schedule{}, err
 	}

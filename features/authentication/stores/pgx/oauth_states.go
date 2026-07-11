@@ -73,7 +73,7 @@ func (s *OAuthStateStore) Create(ctx context.Context, st oauthstate.State) (oaut
 // Go from the returned row.
 func (s *OAuthStateStore) Consume(ctx context.Context, token string) (oauthstate.State, error) {
 	const q = `DELETE FROM oauth_states WHERE token = @token RETURNING ` + oauthStateColumns
-	row, err := queryOne[oauthStateRow](ctx, s.db, q, pgx.NamedArgs{"token": token})
+	row, err := pgxdb.QueryOne[oauthStateRow](ctx, s.db, q, pgx.NamedArgs{"token": token})
 	if err != nil {
 		return oauthstate.State{}, err
 	}

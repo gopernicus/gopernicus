@@ -105,7 +105,7 @@ func (s *InvitationStore) Create(ctx context.Context, inv invitation.Invitation)
 // Get returns the invitation for id, or sdk.ErrNotFound.
 func (s *InvitationStore) Get(ctx context.Context, id string) (invitation.Invitation, error) {
 	const q = `SELECT ` + invitationColumns + ` FROM invitations WHERE id = ?`
-	row, err := queryOne[invitationRow](ctx, s.db, q, id)
+	row, err := tursodb.QueryOne[invitationRow](ctx, s.db, q, id)
 	if err != nil {
 		return invitation.Invitation{}, err
 	}
@@ -116,7 +116,7 @@ func (s *InvitationStore) Get(ctx context.Context, id string) (invitation.Invita
 // present-but-past-ExpiresAt → sdk.ErrExpired, else the record.
 func (s *InvitationStore) GetByTokenHash(ctx context.Context, tokenHash string) (invitation.Invitation, error) {
 	const q = `SELECT ` + invitationColumns + ` FROM invitations WHERE token_hash = ?`
-	row, err := queryOne[invitationRow](ctx, s.db, q, tokenHash)
+	row, err := tursodb.QueryOne[invitationRow](ctx, s.db, q, tokenHash)
 	if err != nil {
 		return invitation.Invitation{}, err
 	}
@@ -172,7 +172,7 @@ func (s *InvitationStore) UpdateStatus(ctx context.Context, id string, upd invit
 		SET status = ?, token_hash = ?, expires_at = ?, accepted_at = ?, resolved_subject_id = ?, updated_at = ?
 		WHERE id = ?
 		RETURNING ` + invitationColumns
-	row, err := queryOne[invitationRow](ctx, s.db, q,
+	row, err := tursodb.QueryOne[invitationRow](ctx, s.db, q,
 		upd.Status, upd.TokenHash, tursodb.FormatTime(upd.ExpiresAt), tursodb.FormatNullTime(upd.AcceptedAt),
 		upd.ResolvedSubjectID, tursodb.FormatTime(upd.UpdatedAt), id,
 	)

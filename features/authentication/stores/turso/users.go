@@ -75,7 +75,7 @@ func (s *UserStore) Create(ctx context.Context, u user.User) (user.User, error) 
 // Get returns the user with the given id, or sdk.ErrNotFound.
 func (s *UserStore) Get(ctx context.Context, id string) (user.User, error) {
 	const q = `SELECT ` + userColumns + ` FROM users WHERE id = ?`
-	row, err := queryOne[userRow](ctx, s.db, q, id)
+	row, err := tursodb.QueryOne[userRow](ctx, s.db, q, id)
 	if err != nil {
 		return user.User{}, err
 	}
@@ -85,7 +85,7 @@ func (s *UserStore) Get(ctx context.Context, id string) (user.User, error) {
 // GetByEmail returns the user with the given normalized email, or sdk.ErrNotFound.
 func (s *UserStore) GetByEmail(ctx context.Context, email string) (user.User, error) {
 	const q = `SELECT ` + userColumns + ` FROM users WHERE email = ?`
-	row, err := queryOne[userRow](ctx, s.db, q, email)
+	row, err := tursodb.QueryOne[userRow](ctx, s.db, q, email)
 	if err != nil {
 		return user.User{}, err
 	}

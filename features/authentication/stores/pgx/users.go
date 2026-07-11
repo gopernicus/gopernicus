@@ -80,7 +80,7 @@ func (s *UserStore) Create(ctx context.Context, u user.User) (user.User, error) 
 // Get returns the user with the given id, or sdk.ErrNotFound.
 func (s *UserStore) Get(ctx context.Context, id string) (user.User, error) {
 	const q = `SELECT ` + userColumns + ` FROM users WHERE id = @id`
-	row, err := queryOne[userRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
+	row, err := pgxdb.QueryOne[userRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
 	if err != nil {
 		return user.User{}, err
 	}
@@ -90,7 +90,7 @@ func (s *UserStore) Get(ctx context.Context, id string) (user.User, error) {
 // GetByEmail returns the user with the given normalized email, or sdk.ErrNotFound.
 func (s *UserStore) GetByEmail(ctx context.Context, email string) (user.User, error) {
 	const q = `SELECT ` + userColumns + ` FROM users WHERE email = @email`
-	row, err := queryOne[userRow](ctx, s.db, q, pgx.NamedArgs{"email": email})
+	row, err := pgxdb.QueryOne[userRow](ctx, s.db, q, pgx.NamedArgs{"email": email})
 	if err != nil {
 		return user.User{}, err
 	}

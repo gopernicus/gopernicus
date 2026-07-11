@@ -67,7 +67,7 @@ func (s *store) Create(ctx context.Context, in {{.Agg}}.{{.AggTitle}}) ({{.Agg}}
 // Get returns the {{.Agg}} for id, or sdk.ErrNotFound.
 func (s *store) Get(ctx context.Context, id string) ({{.Agg}}.{{.AggTitle}}, error) {
 	const q = `SELECT ` + columns + ` FROM {{.Agg}} WHERE id = @id`
-	r, err := queryOne[row](ctx, s.db, q, pgx.NamedArgs{"id": id})
+	r, err := pgxdb.QueryOne[row](ctx, s.db, q, pgx.NamedArgs{"id": id})
 	if err != nil {
 		return {{.Agg}}.{{.AggTitle}}{}, err
 	}

@@ -88,7 +88,7 @@ func (s *TermStore) Update(ctx context.Context, id string, t taxonomy.Term) (tax
 // Get returns the term with the given id, or crud.ErrNotFound.
 func (s *TermStore) Get(ctx context.Context, id string) (taxonomy.Term, error) {
 	const q = `SELECT ` + termColumns + ` FROM terms WHERE id = ?`
-	row, err := queryOne[termRow](ctx, s.db, q, id)
+	row, err := tursodb.QueryOne[termRow](ctx, s.db, q, id)
 	if err != nil {
 		return taxonomy.Term{}, err
 	}
@@ -98,7 +98,7 @@ func (s *TermStore) Get(ctx context.Context, id string) (taxonomy.Term, error) {
 // GetBySlug returns the term with the given kind+slug, or crud.ErrNotFound.
 func (s *TermStore) GetBySlug(ctx context.Context, kind taxonomy.Kind, slug string) (taxonomy.Term, error) {
 	const q = `SELECT ` + termColumns + ` FROM terms WHERE kind = ? AND slug = ?`
-	row, err := queryOne[termRow](ctx, s.db, q, string(kind), slug)
+	row, err := tursodb.QueryOne[termRow](ctx, s.db, q, string(kind), slug)
 	if err != nil {
 		return taxonomy.Term{}, err
 	}

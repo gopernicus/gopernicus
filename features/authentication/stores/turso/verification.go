@@ -54,7 +54,7 @@ func (s *CodeStore) Create(ctx context.Context, c verification.Code) (verificati
 // Get returns the live code: unknown → sdk.ErrNotFound, expired → sdk.ErrExpired.
 func (s *CodeStore) Get(ctx context.Context, code string) (verification.Code, error) {
 	const q = `SELECT ` + codeColumns + ` FROM verification_codes WHERE code = ?`
-	row, err := queryOne[codeRow](ctx, s.db, q, code)
+	row, err := tursodb.QueryOne[codeRow](ctx, s.db, q, code)
 	if err != nil {
 		return verification.Code{}, err
 	}
@@ -122,7 +122,7 @@ func (s *TokenStore) Create(ctx context.Context, t verification.Token) (verifica
 // Get returns the live token: unknown → sdk.ErrNotFound, expired → sdk.ErrExpired.
 func (s *TokenStore) Get(ctx context.Context, token string) (verification.Token, error) {
 	const q = `SELECT ` + tokenColumns + ` FROM verification_tokens WHERE token = ?`
-	row, err := queryOne[tokenRow](ctx, s.db, q, token)
+	row, err := tursodb.QueryOne[tokenRow](ctx, s.db, q, token)
 	if err != nil {
 		return verification.Token{}, err
 	}

@@ -73,7 +73,7 @@ func (s *AssetStore) Create(ctx context.Context, a media.Asset) (media.Asset, er
 // Get returns the asset with the given id, or crud.ErrNotFound.
 func (s *AssetStore) Get(ctx context.Context, id string) (media.Asset, error) {
 	const q = `SELECT ` + assetColumns + ` FROM assets WHERE id = ?`
-	row, err := queryOne[assetRow](ctx, s.db, q, id)
+	row, err := tursodb.QueryOne[assetRow](ctx, s.db, q, id)
 	if err != nil {
 		return media.Asset{}, err
 	}

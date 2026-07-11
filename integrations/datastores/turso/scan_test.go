@@ -344,7 +344,7 @@ func TestScanStruct_CompositeStoreRowShape(t *testing.T) {
 
 func TestScanStruct_MapsNoRowsThroughDriver(t *testing.T) {
 	// Guards that a scan error still routes through MapError (sql.ErrNoRows path is
-	// exercised by the store queryOne helpers; here we assert MapError is wired).
+	// exercised by QueryOne; here we assert MapError is wired).
 	if got := MapError(sql.ErrNoRows); !errors.Is(got, crud.ErrNotFound) {
 		t.Fatalf("MapError(ErrNoRows) = %v", got)
 	}

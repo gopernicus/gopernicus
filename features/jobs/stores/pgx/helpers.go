@@ -1,12 +1,9 @@
 package pgx
 
 import (
-	"context"
 	"crypto/rand"
 	"embed"
 	"encoding/hex"
-
-	"github.com/jackc/pgx/v5"
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 )
@@ -22,23 +19,6 @@ const MigrationsDir = "migrations"
 
 // scanner abstracts pgx.Row and pgx.Rows for the shared Claim scan.
 type scanner = pgxdb.Scanner
-
-// queryOne runs a single-row query with NamedArgs and scans it into a db-tagged
-// row struct via pgx.RowToStructByName. A no-rows result maps to sdk.ErrNotFound
-// (and every other driver error to its sentinel) through MapError, so single-row
-// reads keep the port's error semantics.
-func queryOne[T any](ctx context.Context, db pgxdb.Querier, sql string, args pgx.NamedArgs) (T, error) {
-	var zero T
-	rows, err := db.Query(ctx, sql, args)
-	if err != nil {
-		return zero, pgxdb.MapError(err)
-	}
-	row, err := pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[T])
-	if err != nil {
-		return zero, pgxdb.MapError(err)
-	}
-	return row, nil
-}
 
 // payloadValue returns a non-empty JSON text for storage: the raw payload, or
 // "{}" when it is empty (the column is NOT NULL). It is stored into a JSON (not

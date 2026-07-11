@@ -98,7 +98,7 @@ func (s *APIKeyStore) Create(ctx context.Context, k apikey.APIKey) (apikey.APIKe
 // hash → sdk.ErrNotFound. No expiry filter (the pinned contract).
 func (s *APIKeyStore) GetByHash(ctx context.Context, keyHash string) (apikey.APIKey, error) {
 	const q = `SELECT ` + apiKeyColumns + ` FROM api_keys WHERE key_hash = @key_hash`
-	row, err := queryOne[apiKeyRow](ctx, s.db, q, pgx.NamedArgs{"key_hash": keyHash})
+	row, err := pgxdb.QueryOne[apiKeyRow](ctx, s.db, q, pgx.NamedArgs{"key_hash": keyHash})
 	if err != nil {
 		return apikey.APIKey{}, err
 	}

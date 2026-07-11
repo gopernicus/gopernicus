@@ -101,7 +101,7 @@ func (s *MenuStore) CreateMenu(ctx context.Context, m menus.Menu) (menus.Menu, e
 // GetMenu returns the menu with the given id.
 func (s *MenuStore) GetMenu(ctx context.Context, id string) (menus.Menu, error) {
 	const q = `SELECT ` + menuColumns + ` FROM menus WHERE id = @id`
-	row, err := queryOne[menuRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
+	row, err := pgxdb.QueryOne[menuRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
 	if err != nil {
 		return menus.Menu{}, err
 	}
@@ -111,7 +111,7 @@ func (s *MenuStore) GetMenu(ctx context.Context, id string) (menus.Menu, error) 
 // GetMenuBySlug returns the menu with the given slug.
 func (s *MenuStore) GetMenuBySlug(ctx context.Context, slug string) (menus.Menu, error) {
 	const q = `SELECT ` + menuColumns + ` FROM menus WHERE slug = @slug`
-	row, err := queryOne[menuRow](ctx, s.db, q, pgx.NamedArgs{"slug": slug})
+	row, err := pgxdb.QueryOne[menuRow](ctx, s.db, q, pgx.NamedArgs{"slug": slug})
 	if err != nil {
 		return menus.Menu{}, err
 	}
@@ -187,7 +187,7 @@ func (s *MenuStore) AddItem(ctx context.Context, it menus.MenuItem) (menus.MenuI
 // GetItem returns the item with the given id.
 func (s *MenuStore) GetItem(ctx context.Context, id string) (menus.MenuItem, error) {
 	const q = `SELECT ` + itemColumns + ` FROM menu_items WHERE id = @id`
-	row, err := queryOne[menuItemRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
+	row, err := pgxdb.QueryOne[menuItemRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
 	if err != nil {
 		return menus.MenuItem{}, err
 	}
