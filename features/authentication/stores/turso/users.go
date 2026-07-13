@@ -3,13 +3,15 @@ package turso
 import (
 	"context"
 
+	"github.com/gopernicus/gopernicus/features/authentication/domain/identifier"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-// UserStore implements user.UserRepository over a libSQL database. Uniqueness is
-// on the normalized email (the users.email UNIQUE constraint), surfaced as
+// UserStore implements user.UserRepository over a libSQL database. Identity (the
+// addresses) lives in user_identifiers; a lost authentication claim on the
+// primary identifier rolls a CreateWithPrimaryIdentifier back as
 // sdk.ErrAlreadyExists via the connector's MapError.
 type UserStore struct {
 	db *tursodb.DB
@@ -22,54 +24,66 @@ func NewUserStore(db *tursodb.DB) *UserStore {
 	return &UserStore{db: db}
 }
 
-const userColumns = "id, email, display_name, email_verified, created_at, updated_at"
+const userColumns = "id, display_name, auth_revision, created_at, updated_at"
 
 // userRow is the store-local, db-tagged projection of a users row ScanStruct scans
 // into; toDomain maps it to the persistence-free domain entity.
 type userRow struct {
-	ID            string       `db:"id"`
-	Email         string       `db:"email"`
-	DisplayName   string       `db:"display_name"`
-	EmailVerified tursodb.Bool `db:"email_verified"`
-	CreatedAt     tursodb.Time `db:"created_at"`
-	UpdatedAt     tursodb.Time `db:"updated_at"`
+	ID           string       `db:"id"`
+	DisplayName  string       `db:"display_name"`
+	AuthRevision int64        `db:"auth_revision"`
+	CreatedAt    tursodb.Time `db:"created_at"`
+	UpdatedAt    tursodb.Time `db:"updated_at"`
 }
 
 func (r userRow) toDomain() user.User {
 	return user.User{
-		ID:            r.ID,
-		Email:         r.Email,
-		DisplayName:   r.DisplayName,
-		EmailVerified: bool(r.EmailVerified),
-		CreatedAt:     r.CreatedAt.Time,
-		UpdatedAt:     r.UpdatedAt.Time,
+		ID:           r.ID,
+		DisplayName:  r.DisplayName,
+		AuthRevision: r.AuthRevision,
+		CreatedAt:    r.CreatedAt.Time,
+		UpdatedAt:    r.UpdatedAt.Time,
 	}
 }
 
-// Create persists a new user; a colliding normalized email → sdk.ErrAlreadyExists.
-func (s *UserStore) Create(ctx context.Context, u user.User) (user.User, error) {
-	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
-	// column so the schema default generates the key, read back with RETURNING.
-	if u.ID == "" {
-		const q = `INSERT INTO users (email, display_name, email_verified, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?) RETURNING id`
-		if err := s.db.QueryRow(ctx, q,
-			u.Email, u.DisplayName, tursodb.BoolToInt(u.EmailVerified),
-			tursodb.FormatTime(u.CreatedAt), tursodb.FormatTime(u.UpdatedAt),
-		).Scan(&u.ID); err != nil {
-			return user.User{}, tursodb.MapError(err)
+// CreateWithPrimaryIdentifier inserts the user and its first identifier in one
+// transaction (design §2.2): the identifier's partial unique authentication claim
+// rolls the whole aggregate back as sdk.ErrAlreadyExists. It targets the
+// users.auth_revision column and the user_identifiers table. Empty IDs use the
+// DB-generated convention (RETURNING id).
+func (s *UserStore) CreateWithPrimaryIdentifier(ctx context.Context, u user.User, ident identifier.Identifier) (user.User, identifier.Identifier, error) {
+	err := s.db.InTx(ctx, func(tx *tursodb.Tx) error {
+		if u.ID == "" {
+			const q = `INSERT INTO users (display_name, auth_revision, created_at, updated_at)
+				VALUES (?, ?, ?, ?) RETURNING id`
+			if err := tx.QueryRow(ctx, q,
+				u.DisplayName, u.AuthRevision,
+				tursodb.FormatTime(u.CreatedAt), tursodb.FormatTime(u.UpdatedAt),
+			).Scan(&u.ID); err != nil {
+				return tursodb.MapError(err)
+			}
+		} else {
+			const q = `INSERT INTO users (id, display_name, auth_revision, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?)`
+			if _, err := tx.Exec(ctx, q,
+				u.ID, u.DisplayName, u.AuthRevision,
+				tursodb.FormatTime(u.CreatedAt), tursodb.FormatTime(u.UpdatedAt),
+			); err != nil {
+				return tursodb.MapError(err)
+			}
 		}
-		return u, nil
-	}
-	const q = `INSERT INTO users (` + userColumns + `) VALUES (?, ?, ?, ?, ?, ?)`
-	_, err := s.db.Exec(ctx, q,
-		u.ID, u.Email, u.DisplayName, tursodb.BoolToInt(u.EmailVerified),
-		tursodb.FormatTime(u.CreatedAt), tursodb.FormatTime(u.UpdatedAt),
-	)
+		ident.UserID = u.ID
+		created, err := insertIdentifier(ctx, tx, ident)
+		if err != nil {
+			return err
+		}
+		ident = created
+		return nil
+	})
 	if err != nil {
-		return user.User{}, err
+		return user.User{}, identifier.Identifier{}, err
 	}
-	return u, nil
+	return u, ident, nil
 }
 
 // Get returns the user with the given id, or sdk.ErrNotFound.
@@ -82,22 +96,13 @@ func (s *UserStore) Get(ctx context.Context, id string) (user.User, error) {
 	return row.toDomain(), nil
 }
 
-// GetByEmail returns the user with the given normalized email, or sdk.ErrNotFound.
-func (s *UserStore) GetByEmail(ctx context.Context, email string) (user.User, error) {
-	const q = `SELECT ` + userColumns + ` FROM users WHERE email = ?`
-	row, err := tursodb.QueryOne[userRow](ctx, s.db, q, email)
-	if err != nil {
-		return user.User{}, err
-	}
-	return row.toDomain(), nil
-}
-
 // Update persists changes to an existing user; missing id → sdk.ErrNotFound. It
-// leaves id and created_at unchanged.
+// leaves id, created_at, and auth_revision unchanged (the revision-CAS paths own
+// auth_revision).
 func (s *UserStore) Update(ctx context.Context, id string, u user.User) (user.User, error) {
-	const q = `UPDATE users SET email=?, display_name=?, email_verified=?, updated_at=? WHERE id=?`
+	const q = `UPDATE users SET display_name=?, updated_at=? WHERE id=?`
 	n, err := tursodb.ExecAffecting(ctx, s.db, q,
-		u.Email, u.DisplayName, tursodb.BoolToInt(u.EmailVerified), tursodb.FormatTime(u.UpdatedAt), id,
+		u.DisplayName, tursodb.FormatTime(u.UpdatedAt), id,
 	)
 	if err != nil {
 		return user.User{}, err

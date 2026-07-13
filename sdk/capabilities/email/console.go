@@ -12,7 +12,17 @@ type Console struct {
 	log *slog.Logger
 }
 
-var _ Sender = (*Console)(nil)
+var (
+	_ Sender             = (*Console)(nil)
+	_ CapabilityReporter = (*Console)(nil)
+)
+
+// Capabilities marks the console sender development-only: it logs message bodies
+// (verification codes, magic links) rather than delivering them, so a production
+// host must reject it.
+func (s *Console) Capabilities() Capabilities {
+	return Capabilities{TransportSecurity: TransportSecurityNone, DevelopmentOnly: true}
+}
 
 // NewConsole returns a console Sender. A nil logger discards output.
 func NewConsole(log *slog.Logger) *Console {

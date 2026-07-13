@@ -5,10 +5,10 @@ import "time"
 // JWTSigner defines signing and verifying stateless tokens carrying a claims
 // map.
 //
-// This is a PORT ONLY. No default implementation ships in the kernel: signing
-// requires a third-party library (golang-jwt), so the implementation lives in
-// its own integrations/cryptids/golang-jwt module, which structurally satisfies
-// this interface — sdk stays dependency-free.
+// The in-package default is HS256, a stdlib-only HMAC-SHA256 signer — the
+// zero-integration default. Asymmetric schemes (RS256/ES256) need a third-party
+// library and live in integrations/cryptids/golang-jwt, which structurally
+// satisfies this interface, keeping sdk dependency-free.
 //
 //	type AuthenticationService struct {
 //	    signer cryptids.JWTSigner

@@ -1,0 +1,28 @@
+package templ
+
+import "github.com/gopernicus/gopernicus/features/authentication"
+
+// Status renders a generic informational page (delivery status, a completed
+// action). Title/Detail are generic, enumeration-resistant copy.
+templ Status(m authentication.StatusPage) {
+	@Layout(statusTitle(m.Title)) {
+		@message(m.PageContext)
+		if m.Detail != "" {
+			<p>{ m.Detail }</p>
+		}
+		<p><a href="/auth/login">Back to sign in</a></p>
+	}
+}
+
+// Error renders a generic error page. The status is shown; the message is generic
+// copy that never distinguishes an unknown/unverified account.
+templ Error(m authentication.ErrorPage) {
+	@Layout(statusText(m.Status)) {
+		if m.Message != "" {
+			<p>{ m.Message }</p>
+		} else {
+			<p>Something went wrong. Please try again.</p>
+		}
+		<p><a href="/auth/login">Back to sign in</a></p>
+	}
+}

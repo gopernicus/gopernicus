@@ -11,8 +11,6 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/apikey"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/serviceaccount"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
@@ -129,12 +127,12 @@ func (k *memAPIKeys) TouchLastUsed(_ context.Context, id string, at time.Time) e
 // mounts the full route table, and returns the handler.
 func newMachineHandler(t *testing.T) http.Handler {
 	t.Helper()
+	users := newMemUsers()
 	svc := authsvc.NewService(authsvc.Deps{
-		Users:           &memUsers{byID: map[string]user.User{}},
+		Users:           users,
+		Identifiers:     newMemIdentifiers(users),
 		Passwords:       &memPasswords{m: map[string]string{}},
 		Sessions:        &memSessions{m: map[string]session.Session{}},
-		Codes:           &memCodes{m: map[string]verification.Code{}},
-		Tokens:          &memTokens{m: map[string]verification.Token{}},
 		Hasher:          fakeHasher{},
 		Mailer:          nopMailer{},
 		MailFrom:        "noreply@example.com",
@@ -142,17 +140,18 @@ func newMachineHandler(t *testing.T) http.Handler {
 		Cookie:          authsvc.CookieConfig{},
 		ServiceAccounts: &memServiceAccounts{m: map[string]serviceaccount.ServiceAccount{}},
 		APIKeys:         &memAPIKeys{m: map[string]apikey.APIKey{}},
+		TokenSigner:     newFakeSigner(),
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, nil, crud.StrategyCursor)
+	Mount(h, svc, nil, crud.StrategyCursor, MutationSecurity{}, nil)
 	return h
 }
 
 // sessionFor registers and logs in a user, returning its session cookie.
 func sessionFor(t *testing.T, h http.Handler, email string) *http.Cookie {
 	t.Helper()
-	do(t, h, "POST", "/auth/register", `{"email":"`+email+`","password":"password123","display_name":"M"}`)
-	login := do(t, h, "POST", "/auth/login", `{"email":"`+email+`","password":"password123"}`)
+	do(t, h, "POST", "/auth/register", `{"email":"`+email+`","password":"password123456789","display_name":"M"}`)
+	login := do(t, h, "POST", "/auth/login", `{"email":"`+email+`","password":"password123456789"}`)
 	c := sessionCookie(login)
 	if c == nil {
 		t.Fatal("no session cookie from login")

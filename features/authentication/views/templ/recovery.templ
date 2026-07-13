@@ -1,0 +1,41 @@
+package templ
+
+import "github.com/gopernicus/gopernicus/features/authentication"
+
+// ResetPassword renders the reset form reached from a reset link. The reset token
+// is NOT a server-rendered value (design §6.4): a CSP-nonced script reads it from
+// the URL fragment, scrubs it from history, and stashes it in a hidden field the
+// form posts alongside the new password. The token never appears in a query
+// string, in the page markup at render time, or in the referrer. The password
+// field is never repopulated.
+templ ResetPassword(m authentication.ResetPage) {
+	@Layout("Choose a new password") {
+		@message(m.PageContext)
+		@errorSummary(m.PageContext)
+		<form id="reset-form" method="post" action={ templ.SafeURL(m.RedeemPath) } autocomplete="off">
+			@csrfField(m.PageContext)
+			<input type="hidden" name="token" id="reset-token"/>
+			<p>
+				<label for="password">New password</label><br/>
+				<input id="password" name="password" type="password" autocomplete="new-password" required aria-describedby="password-error"/>
+				@fieldError(m.PageContext, "password")
+			</p>
+			<button type="submit">Set new password</button>
+		</form>
+		<noscript>
+			<p>JavaScript is required to complete a password reset from an email link.</p>
+		</noscript>
+		if m.CSPNonce != "" {
+			<script nonce={ m.CSPNonce }>
+				(function () {
+					var frag = window.location.hash ? window.location.hash.slice(1) : "";
+					if (window.history && window.history.replaceState) {
+						window.history.replaceState(null, document.title, window.location.pathname + window.location.search);
+					}
+					var field = document.getElementById("reset-token");
+					if (frag && field) { field.value = frag; }
+				})();
+			</script>
+		}
+	}
+}

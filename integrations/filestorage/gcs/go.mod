@@ -4,8 +4,8 @@ go 1.26.1
 
 require (
 	cloud.google.com/go/storage v1.61.3
-	google.golang.org/api v0.271.0
 	github.com/gopernicus/gopernicus/sdk v0.0.0
+	google.golang.org/api v0.271.0
 )
 
 require (

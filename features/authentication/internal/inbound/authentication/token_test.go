@@ -13,8 +13,6 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
@@ -89,12 +87,12 @@ func newTokenHandler(t *testing.T, signer cryptids.JWTSigner, requireVerified bo
 	if limiter == nil {
 		limiter = ratelimiter.NewMemory()
 	}
+	users := newMemUsers()
 	svc := authsvc.NewService(authsvc.Deps{
-		Users:                &memUsers{byID: map[string]user.User{}},
+		Users:                users,
+		Identifiers:          newMemIdentifiers(users),
 		Passwords:            &memPasswords{m: map[string]string{}},
 		Sessions:             &memSessions{m: map[string]session.Session{}},
-		Codes:                &memCodes{m: map[string]verification.Code{}},
-		Tokens:               &memTokens{m: map[string]verification.Token{}},
 		Hasher:               fakeHasher{},
 		Mailer:               nopMailer{},
 		MailFrom:             "noreply@example.com",
@@ -104,7 +102,7 @@ func newTokenHandler(t *testing.T, signer cryptids.JWTSigner, requireVerified bo
 		TokenSigner:          signer,
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, nil, "")
+	Mount(h, svc, nil, "", MutationSecurity{}, nil)
 	return h
 }
 
@@ -115,45 +113,35 @@ func bearerReq(method, path, token string) *http.Request {
 	return r
 }
 
-// --- deny-by-absence: /auth/token absent when the signer is unwired ---
+// --- issuance round-trip + bearer-backed access ---
 
-func TestTokenRouteDenyByAbsence(t *testing.T) {
-	h := newTestHandler(t, nil) // no TokenSigner wired
-	rec := do(t, h, "POST", "/auth/token", `{"email":"a@example.com","password":"password123"}`)
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("POST /auth/token (signer off) status = %d, want 404", rec.Code)
-	}
-}
-
-// --- issuance round-trip + bearer-gated access ---
-
-func TestTokenRouteIssuesAndAuthorizes(t *testing.T) {
+func TestTokenRouteIssuesSessionBackedPair(t *testing.T) {
 	h := newTokenHandler(t, newFakeSigner(), false, nil)
-	do(t, h, "POST", "/auth/register", `{"email":"tok@example.com","password":"password123","display_name":"T"}`)
+	do(t, h, "POST", "/auth/register", `{"email":"tok@example.com","password":"password123456789","display_name":"T"}`)
 
-	rec := do(t, h, "POST", "/auth/token", `{"email":"tok@example.com","password":"password123"}`)
+	rec := do(t, h, "POST", "/auth/token", `{"email":"tok@example.com","password":"password123456789"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("token status = %d, want 200; body=%s", rec.Code, rec.Body)
 	}
 	var resp struct {
-		Token     string `json:"token"`
-		ExpiresAt string `json:"expires_at"`
+		AccessToken  string `json:"access_token"`
+		ExpiresAt    string `json:"expires_at"`
+		RefreshToken string `json:"refresh_token"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Token == "" {
-		t.Fatal("token response carried no token")
+	if resp.AccessToken == "" || resp.RefreshToken == "" {
+		t.Fatalf("token response missing the session-backed pair: %+v", resp)
 	}
 	if _, err := time.Parse(time.RFC3339, resp.ExpiresAt); err != nil {
 		t.Errorf("expires_at %q not RFC3339: %v", resp.ExpiresAt, err)
 	}
 
-	// The bearer JWT authorizes a RequireUser-gated route (logout → 200).
-	gated := httptest.NewRecorder()
-	h.ServeHTTP(gated, bearerReq("POST", "/auth/logout", resp.Token))
-	if gated.Code != http.StatusOK {
-		t.Errorf("bearer JWT on gated route status = %d, want 200; body=%s", gated.Code, gated.Body)
+	// The refresh token rotates at /auth/refresh (a new pair is issued).
+	rr := do(t, h, "POST", "/auth/refresh", `{"refresh_token":"`+resp.RefreshToken+`"}`)
+	if rr.Code != http.StatusOK {
+		t.Errorf("refresh status = %d, want 200; body=%s", rr.Code, rr.Body)
 	}
 }
 
@@ -162,9 +150,10 @@ func TestTokenRouteIssuesAndAuthorizes(t *testing.T) {
 func TestTokenRouteBearerExpired(t *testing.T) {
 	signer := newFakeSigner()
 	h := newTokenHandler(t, signer, false, nil)
-	expired, _ := signer.Sign(map[string]any{"user_id": "u1"}, time.Now().Add(-time.Minute))
+	// /auth/password/change is RequireLiveSession-gated; an expired bearer denies.
+	expired, _ := signer.Sign(map[string]any{"user_id": "u1", "session_id": "s1"}, time.Now().Add(-time.Minute))
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, bearerReq("POST", "/auth/logout", expired))
+	h.ServeHTTP(rec, bearerReq("POST", "/auth/password/change", expired))
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("expired bearer on gated route status = %d, want 401", rec.Code)
 	}
@@ -173,7 +162,7 @@ func TestTokenRouteBearerExpired(t *testing.T) {
 func TestTokenRouteBearerGarbage(t *testing.T) {
 	h := newTokenHandler(t, newFakeSigner(), false, nil)
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, bearerReq("POST", "/auth/logout", "aaa.bbb.ccc"))
+	h.ServeHTTP(rec, bearerReq("POST", "/auth/password/change", "aaa.bbb.ccc"))
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("garbage bearer on gated route status = %d, want 401", rec.Code)
 	}
@@ -183,7 +172,7 @@ func TestTokenRouteBearerGarbage(t *testing.T) {
 
 func TestTokenRouteStrictDecode(t *testing.T) {
 	h := newTokenHandler(t, newFakeSigner(), false, nil)
-	rec := do(t, h, "POST", "/auth/token", `{"email":"a@example.com","password":"password123","extra":1}`)
+	rec := do(t, h, "POST", "/auth/token", `{"email":"a@example.com","password":"password123456789","extra":1}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("unknown-field body status = %d, want 400", rec.Code)
 	}
@@ -191,7 +180,7 @@ func TestTokenRouteStrictDecode(t *testing.T) {
 
 func TestTokenRouteWrongPassword(t *testing.T) {
 	h := newTokenHandler(t, newFakeSigner(), false, nil)
-	do(t, h, "POST", "/auth/register", `{"email":"wp@example.com","password":"password123","display_name":"W"}`)
+	do(t, h, "POST", "/auth/register", `{"email":"wp@example.com","password":"password123456789","display_name":"W"}`)
 	rec := do(t, h, "POST", "/auth/token", `{"email":"wp@example.com","password":"wrongpass"}`)
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("wrong password status = %d, want 401", rec.Code)
@@ -200,7 +189,7 @@ func TestTokenRouteWrongPassword(t *testing.T) {
 
 func TestTokenRouteRateLimited(t *testing.T) {
 	h := newTokenHandler(t, newFakeSigner(), false, denyLimiter{})
-	rec := do(t, h, "POST", "/auth/token", `{"email":"e@example.com","password":"password123"}`)
+	rec := do(t, h, "POST", "/auth/token", `{"email":"e@example.com","password":"password123456789"}`)
 	if rec.Code != http.StatusTooManyRequests {
 		t.Errorf("rate-limited status = %d, want 429", rec.Code)
 	}
@@ -208,21 +197,9 @@ func TestTokenRouteRateLimited(t *testing.T) {
 
 func TestTokenRouteVerifiedEmailGate(t *testing.T) {
 	h := newTokenHandler(t, newFakeSigner(), true, nil) // RequireVerifiedEmail on
-	do(t, h, "POST", "/auth/register", `{"email":"unv@example.com","password":"password123","display_name":"U"}`)
-	rec := do(t, h, "POST", "/auth/token", `{"email":"unv@example.com","password":"password123"}`)
+	do(t, h, "POST", "/auth/register", `{"email":"unv@example.com","password":"password123456789","display_name":"U"}`)
+	rec := do(t, h, "POST", "/auth/token", `{"email":"unv@example.com","password":"password123456789"}`)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("unverified /auth/token status = %d, want 403", rec.Code)
-	}
-}
-
-// --- deny-by-absence at the middleware: a JWT bearer is inert with no signer ---
-
-func TestBearerJWTInertWithoutSigner(t *testing.T) {
-	h := newTestHandler(t, nil) // no signer
-	valid, _ := newFakeSigner().Sign(map[string]any{"user_id": "u1"}, time.Now().Add(time.Hour))
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, bearerReq("POST", "/auth/logout", valid))
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("bearer JWT with no signer status = %d, want 401 (unparsed)", rec.Code)
 	}
 }

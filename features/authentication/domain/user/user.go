@@ -6,62 +6,40 @@
 package user
 
 import (
-	"fmt"
-	"net/mail"
 	"strings"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
 
-// User is the identity aggregate. Email is stored normalized (trimmed,
-// lowercased); EmailVerified tracks whether the address has been confirmed via
-// a verification code.
+// User is the identity aggregate — the stable human subject (design §2.1). The
+// addresses by which the subject is found or contacted live in the identifier
+// domain (user_identifiers); User keeps only the stable subject and profile
+// fields plus AuthRevision.
+//
+// AuthRevision is the optimistic serialization anchor (design §2.1/§5.6,
+// users.auth_revision): the identifier ApplyVerifiedChange and the credential
+// mutation rail both compare-and-swap on it so a stale, safe-looking method set
+// can never win a concurrent mutation. It starts at 0 and increments once per
+// applied mutation.
 type User struct {
-	ID            string
-	Email         string // normalized: trimmed + lowercased
-	DisplayName   string
-	EmailVerified bool
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID           string
+	DisplayName  string
+	AuthRevision int64
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
-// NewUser validates and normalizes the email, trims the display name, mints an
-// ID from ids (empty under cryptids.Database — the store then assigns the key),
-// and returns an unverified user. Validation failures wrap sdk.ErrInvalidInput.
-func NewUser(ids cryptids.IDGenerator, email, displayName string, now time.Time) (User, error) {
-	normalized, err := NormalizeEmail(email)
-	if err != nil {
-		return User{}, err
-	}
+// NewUser trims the display name, mints an ID from ids (empty under
+// cryptids.Database — the store then assigns the key), and returns a new user.
+// Identity (the addresses) is carried by the primary identifier the atomic
+// CreateWithPrimaryIdentifier persists alongside the user (design §2.2).
+func NewUser(ids cryptids.IDGenerator, displayName string, now time.Time) User {
 	now = now.UTC()
 	return User{
 		ID:          ids.MustGenerate(),
-		Email:       normalized,
 		DisplayName: strings.TrimSpace(displayName),
 		CreatedAt:   now,
 		UpdatedAt:   now,
-	}, nil
-}
-
-// NormalizeEmail trims, validates (RFC 5322 addr-spec via net/mail), and
-// lowercases an email address. Failures wrap sdk.ErrInvalidInput. Callers key
-// uniqueness and lookups on the normalized form.
-func NormalizeEmail(email string) (string, error) {
-	email = strings.TrimSpace(email)
-	if email == "" {
-		return "", fmt.Errorf("email is required: %w", sdk.ErrInvalidInput)
 	}
-	addr, err := mail.ParseAddress(email)
-	if err != nil {
-		return "", fmt.Errorf("invalid email address: %w", sdk.ErrInvalidInput)
-	}
-	return strings.ToLower(addr.Address), nil
-}
-
-// MarkVerified flips EmailVerified and bumps UpdatedAt.
-func (u *User) MarkVerified(now time.Time) {
-	u.EmailVerified = true
-	u.UpdatedAt = now.UTC()
 }

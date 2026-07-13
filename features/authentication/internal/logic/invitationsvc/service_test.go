@@ -118,10 +118,10 @@ func (r *fakeInvRepo) ListByResource(_ context.Context, resourceType, resourceID
 	return crud.Page[invitation.Invitation]{Items: items}, nil
 }
 
-func (r *fakeInvRepo) ListBySubject(_ context.Context, identifier string, _ crud.ListRequest) (crud.Page[invitation.Invitation], error) {
+func (r *fakeInvRepo) ListBySubject(_ context.Context, kind, identifier string, _ crud.ListRequest) (crud.Page[invitation.Invitation], error) {
 	var items []invitation.Invitation
 	for _, inv := range r.byID {
-		if inv.Identifier == identifier {
+		if inv.IdentifierKind == kind && inv.Identifier == identifier {
 			items = append(items, inv)
 		}
 	}
@@ -182,7 +182,12 @@ func newSvc(t *testing.T, repo *fakeInvRepo, granter Granter, d Deps) *Service {
 		d.Mailer = &recordingMailer{}
 	}
 	d.Redirects = redirect.New(nil)
-	return New(d)
+	svc := New(d)
+	// Wire the durable outbox with a synchronous drain so the invitation/member-added
+	// send sites enqueue and the worker delivers to the wired transports within the
+	// call, keeping the delivery assertions direct.
+	wireSyncDelivery(t, svc, d.Mailer, d.Notifiers)
+	return svc
 }
 
 // --- tests ---
@@ -499,8 +504,8 @@ func TestCreateKindDeliveredViaNotifier(t *testing.T) {
 	if d.to.Kind != identity.KindPhone || d.to.Value != "+15550100" {
 		t.Errorf("delivered to = %+v, want {phone, +15550100}", d.to)
 	}
-	if !strings.Contains(d.msg.Body, "token: ") {
-		t.Errorf("notifier body missing the delivered token: %q", d.msg.Body)
+	if !strings.Contains(d.msg.Body, "token=") {
+		t.Errorf("notifier body missing the delivered token link: %q", d.msg.Body)
 	}
 	if len(mailer.sent) != 0 {
 		t.Errorf("a non-email invite rode the email Mailer: %+v", mailer.sent)
@@ -536,23 +541,30 @@ func TestCreateEmailNoNotifierRidesMailer(t *testing.T) {
 	}
 }
 
-// TestAcceptNonEmailKindFork covers delta-fold 6 (accept skips the identifier
-// match for a non-email kind — address-possession binds) AND delta-fold 4 (the
-// member-added notice follows the same fork, routing through the wired notifier).
-func TestAcceptNonEmailKindFork(t *testing.T) {
+// TestAcceptPhoneKindMatchesVerifiedPhone covers V11 (a phone invitation is
+// accepted only by the subject whose active VERIFIED phone equals the invited
+// address — resolved through the injected accessor) AND delta-fold 4 (the member-
+// added notice follows the kind fork, routing through the wired phone notifier).
+func TestAcceptPhoneKindMatchesVerifiedPhone(t *testing.T) {
 	repo := newFakeInvRepo()
 	granter := &fakeGranter{}
 	notifier := &fakeNotifier{kind: identity.KindPhone}
 	svc := newSvc(t, repo, granter, Deps{
 		Notifiers: map[string]notify.Notifier{identity.KindPhone: notifier},
+		CallerIdentifiers: func(_ context.Context, userID, kind string) (string, error) {
+			if userID == "user-9" && kind == identity.KindPhone {
+				return "+15550100", nil
+			}
+			return "", sdk.ErrNotFound
+		},
 	})
 	inv := seedInviteKind(t, repo, "project", "p1", "member", "+15550100", identity.KindPhone, "inviter", "secret-p", false, time.Now().Add(time.Hour))
 
-	// The acceptor's email does NOT match the phone identifier — for a non-email
-	// kind that is fine (the binding is possession of the delivered token).
+	// The acceptor's own verified phone matches the invited address, so the accept
+	// succeeds even though in.Identifier (the email claim) is unrelated.
 	res, err := svc.Accept(context.Background(), AcceptInput{Token: "secret-p", SubjectType: "user", SubjectID: "user-9", Identifier: "acceptor@x.com"})
 	if err != nil {
-		t.Fatalf("Accept(non-email kind): %v", err)
+		t.Fatalf("Accept(phone kind): %v", err)
 	}
 	if res.Relation != "member" {
 		t.Errorf("AcceptResult = %+v", res)
@@ -567,5 +579,76 @@ func TestAcceptNonEmailKindFork(t *testing.T) {
 	// member-added rode the phone notifier (delta-fold 4), not the email Mailer.
 	if len(notifier.got) != 1 || notifier.got[0].to.Value != "+15550100" {
 		t.Errorf("member-added did not ride the phone notifier: %+v", notifier.got)
+	}
+}
+
+// TestAcceptPhoneKindMismatch proves a phone invitation is refused when the
+// caller's active verified phone is a DIFFERENT number — possession of the
+// delivered token alone no longer accepts (V11). No grant happens.
+func TestAcceptPhoneKindMismatch(t *testing.T) {
+	repo := newFakeInvRepo()
+	granter := &fakeGranter{}
+	svc := newSvc(t, repo, granter, Deps{
+		Notifiers: map[string]notify.Notifier{identity.KindPhone: &fakeNotifier{kind: identity.KindPhone}},
+		CallerIdentifiers: func(_ context.Context, _ string, _ string) (string, error) {
+			return "+15559999", nil // the caller owns a different verified phone
+		},
+	})
+	seedInviteKind(t, repo, "project", "p1", "member", "+15550100", identity.KindPhone, "inviter", "secret-p", false, time.Now().Add(time.Hour))
+
+	_, err := svc.Accept(context.Background(), AcceptInput{Token: "secret-p", SubjectType: "user", SubjectID: "user-9", Identifier: "acceptor@x.com"})
+	if !errors.Is(err, ErrIdentifierMismatch) {
+		t.Errorf("Accept(phone mismatch): err=%v, want ErrIdentifierMismatch", err)
+	}
+	if len(granter.calls) != 0 {
+		t.Errorf("mismatch granted anyway: %+v", granter.calls)
+	}
+}
+
+// TestAcceptPhoneKindNoVerifiedPhone proves the phone accept fails CLOSED when the
+// caller has no active verified phone (the accessor returns sdk.ErrNotFound) —
+// including the replaced/unverified case, which the identifier rail reports as
+// no-such-verified-identifier.
+func TestAcceptPhoneKindNoVerifiedPhone(t *testing.T) {
+	repo := newFakeInvRepo()
+	granter := &fakeGranter{}
+	svc := newSvc(t, repo, granter, Deps{
+		Notifiers: map[string]notify.Notifier{identity.KindPhone: &fakeNotifier{kind: identity.KindPhone}},
+		CallerIdentifiers: func(_ context.Context, _ string, _ string) (string, error) {
+			return "", sdk.ErrNotFound
+		},
+	})
+	seedInviteKind(t, repo, "project", "p1", "member", "+15550100", identity.KindPhone, "inviter", "secret-p", false, time.Now().Add(time.Hour))
+
+	_, err := svc.Accept(context.Background(), AcceptInput{Token: "secret-p", SubjectType: "user", SubjectID: "user-9", Identifier: "acceptor@x.com"})
+	if !errors.Is(err, ErrIdentifierMismatch) {
+		t.Errorf("Accept(no verified phone): err=%v, want ErrIdentifierMismatch", err)
+	}
+	if len(granter.calls) != 0 {
+		t.Errorf("unverified caller granted anyway: %+v", granter.calls)
+	}
+}
+
+// TestCreatePhoneNormalizesE164 proves a phone invitation is normalized strict
+// E.164 AT CREATE through the injected normalizer (design §2.2/§7): the stored
+// identifier is the separator-stripped canonical form, which is the value the V11
+// accept-time match compares against.
+func TestCreatePhoneNormalizesE164(t *testing.T) {
+	repo := newFakeInvRepo()
+	granter := &fakeGranter{}
+	notifier := &fakeNotifier{kind: identity.KindPhone}
+	svc := newSvc(t, repo, granter, Deps{
+		Notifiers: map[string]notify.Notifier{identity.KindPhone: notifier},
+	})
+
+	res, err := svc.Create(context.Background(), CreateInput{
+		ResourceType: "project", ResourceID: "p1", Relation: "member",
+		Identifier: "+1 (555) 010-2345", IdentifierKind: identity.KindPhone, InvitedBy: "inviter",
+	})
+	if err != nil {
+		t.Fatalf("Create(phone): %v", err)
+	}
+	if res.Invitation.Identifier != "+15550102345" {
+		t.Errorf("stored phone = %q, want strict E.164 %q", res.Invitation.Identifier, "+15550102345")
 	}
 }

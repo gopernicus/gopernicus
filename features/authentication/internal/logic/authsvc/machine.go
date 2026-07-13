@@ -233,13 +233,9 @@ func (s *Service) RequirePrincipal(next http.Handler) http.Handler {
 func (s *Service) resolvePrincipal(r *http.Request) (Principal, bool) {
 	if raw, ok := bearerToken(r); ok {
 		if isJWTToken(raw) {
-			// JWT bearer classing is active only when a TokenSigner is wired
-			// (design §4.4). Nil → inert: a JWT bearer is never parsed
-			// (deny-by-absence, A3 behavior unchanged), and it never falls
-			// through to the session path. A wired-but-invalid JWT also denies.
-			if s.tokenSigner == nil {
-				return Principal{}, false
-			}
+			// The signer is always wired (D3), so a JWT bearer is always parsed;
+			// a wired-but-invalid JWT denies rather than falling through to the
+			// session path.
 			userID, ok := s.verifyBearer(raw)
 			if !ok {
 				return Principal{}, false
@@ -255,16 +251,17 @@ func (s *Service) resolvePrincipal(r *http.Request) (Principal, bool) {
 		}
 		return p, true
 	}
-	// No bearer credential: fall back to the session cookie → user principal.
+	// No bearer credential: fall back to the access-JWT session cookie, verified
+	// statelessly → user principal (§1.2).
 	c, err := r.Cookie(s.cookie.Name)
 	if err != nil {
 		return Principal{}, false
 	}
-	sess, err := s.ValidateSession(r.Context(), c.Value)
-	if err != nil {
+	userID, ok := s.verifyBearer(c.Value)
+	if !ok {
 		return Principal{}, false
 	}
-	return Principal{Type: PrincipalUser, ID: sess.UserID}, true
+	return Principal{Type: PrincipalUser, ID: userID}, true
 }
 
 // hashAPIKey returns the stored form of a raw API key — its SHA-256 hex digest

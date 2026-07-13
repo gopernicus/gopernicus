@@ -159,11 +159,13 @@ func (s *InvitationStore) ListByResource(ctx context.Context, resourceType, reso
 }
 
 // ListBySubject returns a cursor-paginated page of invitations addressed to
-// identifier (the invitee email), ordered created_at DESC, id DESC.
-func (s *InvitationStore) ListBySubject(ctx context.Context, identifier string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
+// (kind, identifier) — the invitee address and its kind — ordered created_at
+// DESC, id DESC. Both columns filter so a value shared across kinds never
+// cross-resolves (design §7 re-key).
+func (s *InvitationStore) ListBySubject(ctx context.Context, kind, identifier string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
 	q := pgxdb.ListQuery[invitationRow]{
-		BaseSQL:      `SELECT ` + invitationColumns + ` FROM invitations WHERE identifier = @identifier`,
-		Args:         pgx.NamedArgs{"identifier": identifier},
+		BaseSQL:      `SELECT ` + invitationColumns + ` FROM invitations WHERE identifier_kind = @kind AND identifier = @identifier`,
+		Args:         pgx.NamedArgs{"kind": kind, "identifier": identifier},
 		OrderFields:  invitation.OrderFields,
 		DefaultOrder: invitation.DefaultOrder,
 		PK:           "id",

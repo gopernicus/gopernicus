@@ -1,11 +1,25 @@
-# examples/auth-cms — the two-feature proof host (auth-v2 A9)
+# examples/auth-cms — the multi-feature proof host (auth-v2 A9 + auth-v3)
 
-This host mounts **two real feature modules** — `features/cms` and
-`features/authentication` — onto one host router, with in-memory stores and no datastore
-driver, and wires auth's identity middleware into cms's admin surface. It is the
-auth-v2 milestone's **A9 proof host**: on top of the v1 cross-feature seam it
-exercises the whole auth-v2 surface end to end (OAuth, machine identity, JWT
-bearer, security-event audit, and ReBAC-decoupled invitations) with zero infra.
+This host mounts **real feature modules** — `features/cms`,
+`features/authentication`, `features/authorization`, and `features/events` — onto
+one host router, with in-memory stores and no datastore driver, and wires auth's
+identity middleware into cms's admin surface. It is both the auth-v2 milestone's
+**A9 proof host** (OAuth, machine identity, JWT bearer, security-event audit, and
+ReBAC-decoupled invitations) and the **auth-v3 identity proof host**: it wires the
+full v3 surface with zero infra — the `user_identifiers` model, the atomic
+challenge rail, the durable delivery worker, passwordless email/phone login, the
+step-up-gated credential/identifier management suite, the bundled default HTML/
+templ pages (`authtempl`) **with a real host page override** (`internal/authpages`),
+and a `RuntimeMode=development` posture whose production-negative twin is proven
+hermetically.
+
+> The v3 surface has BOTH a JSON API and (because `Config.Views` is wired) normal
+> HTML pages/forms. The legs below drive the JSON API with curl; the HTML/browser
+> journeys are described alongside. **curl `-d` sends
+> `Content-Type: application/x-www-form-urlencoded`, which the content-type
+> dispatcher routes to the FORM arm** — a JSON leg must pass
+> `-H 'Content-Type: application/json'` (an absent header still decodes as JSON, the
+> lenient path). Where a leg shows a JSON body, assume the JSON header is set.
 
 ## What it proves
 
@@ -28,12 +42,14 @@ bearer, security-event audit, and ReBAC-decoupled invitations) with zero infra.
   (The repo-root `go.work` unions every workspace module, so a workspace-active
   `go list -m all` reports the store adapters' libsql; the module's own graph —
   `GOWORK=off`, i.e. what actually builds this host — has none, exactly like
-  `examples/minimal`.) `bcrypt` and `golang-jwt` are CPU-bound libraries with no
-  external service, so the host stays zero-infra.
+  `examples/minimal`.) `bcrypt` is a CPU-bound library with no external service,
+  and the JWT signer is the sdk stdlib HS256 default (no integration), so the host
+  stays zero-infra.
 
 - **The whole auth-v2 surface, live:** the verified-email login gate, a
-  host-local fake OAuth provider, API-key machine calls, stateless bearer JWTs
-  (host-signed by `integrations/cryptids/golang-jwt`), security-event audit rows,
+  host-local fake OAuth provider, API-key machine calls, JWT access tokens +
+  rotating store-backed refresh tokens (host-signed by the sdk stdlib HS256
+  default, `sdk/foundation/cryptids`), security-event audit rows,
   and invitations that grant through the **`features/authorization` engine's
   `relationshipGranter`** — invitation-accept writes a real ReBAC tuple via
   `authorizer.CreateRelationships` (the flagship posture; the memstore-backed
@@ -103,19 +119,28 @@ Roles are **opaque strings** the host interprets. Demo routes:
 ## Wiring
 
 - **cms store**: `internal/memstore` (in-memory cms ports).
-- **auth store**: `internal/authmem` — an in-memory implementation of **all
-  twelve** auth ports (v1 user/password/session/verification, plus the v2
-  oauth-account, oauth-state, service-account, api-key, security-event, and
-  invitation ports). It honors the contracts the shared `features/authentication/storetest`
+- **auth store**: `internal/authmem` — an in-memory implementation of **every**
+  auth port: v1 user/password/session, the v2 oauth-account/oauth-state/
+  service-account/api-key/security-event/invitation ports, and the v3 identity +
+  atomic-security + delivery rails (identifier, challenge, password-reset,
+  contact-change, authentication-grant, credential-mutation, delivery-job — see
+  `ports_v3.go`). It honors the contracts the shared `features/authentication/storetest`
   suite proves (uniqueness, sentinels, expired-at-read, the pinned GetByHash and
-  partial-pending-uniqueness contracts, and the created_at DESC, id DESC paging).
+  partial-pending-uniqueness contracts, atomic single-use consume + revision-CAS,
+  and the created_at DESC, id DESC paging), and projects the masked credential
+  inventory from the real identifier rows exactly as pgx/turso do.
 - **hasher**: `bcrypt.New()`. **mailer**: `email.NewConsole(log)` (logs mail —
   this is how you read verification codes and invitation tokens below).
 - **OAuth provider**: `fakeOAuthProvider` (`cmd/server/oauthfake.go`) — a
   self-contained `sdk/capabilities/oauth.Provider`, no vendor, no network; identity derived
   from the authorization `code`.
-- **TokenSigner**: `golang-jwt` from `AUTH_JWT_SECRET`; absent → an **ephemeral**
-  per-boot key (tokens don't survive a restart); `AUTH_JWT_DISABLED=1` → nil.
+- **TokenSigner** (REQUIRED — the core no longer tolerates a nil signer):
+  `cryptids.NewHS256` (the sdk stdlib HS256 default) over `AUTH_JWT_SECRET`;
+  absent → an **ephemeral** per-boot key. The ephemeral key is a **DEV /
+  single-instance convenience only**: access JWTs don't survive a restart, and a
+  **multi-instance** deployment MUST share `AUTH_JWT_SECRET` across every instance
+  (per-instance keys can't cross-verify). API clients recover a dead access JWT via
+  `POST /auth/refresh` (refresh tokens are store-backed).
 - **Granter**: `relationshipGranter` (`cmd/server/membership.go`) — a host-local
   adapter whose `Grant` calls `authorizer.CreateRelationships`, so invitation-accept
   writes a real ReBAC tuple (the flagship posture; the A9 toy map is retired).
@@ -139,24 +164,79 @@ Roles are **opaque strings** the host interprets. Demo routes:
   bus is closed on a fresh bounded context (HTTP drains first inside `web.Run`,
   which returns only after the parent ctx is already canceled).
 
+### auth-v3 wiring (identity, challenge rail, delivery, HTML)
+
+- **RuntimeMode**: `development` (explicit — production has no default). A memory
+  host cannot boot production by design; the production-negative matrix is
+  hermetic (`cmd/server/production_test.go`).
+- **Five distinct dev secrets** (`.env.example`): `AUTH_JWT_SECRET` (JWT/session),
+  `AUTH_CHALLENGE_PEPPER` (OTP HMAC key ring), `AUTH_IDENTIFIER_KEY` (PII-free
+  rate-limit/idempotency digests), `AUTH_DELIVERY_ENCRYPTER_KEY` (outbox
+  envelope), `AUTH_TOKEN_ENCRYPTER_KEY` (provider tokens). Each unset key falls
+  back to an **ephemeral per-boot** key (dev/single-instance only, WARN-logged; key
+  material is never printed).
+- **Challenge rail**: `ChallengeProtector` (`buildChallengeProtector`, HMAC key
+  ring with active key ID `dev`) + the `Challenges`/`PasswordResets`/`Challenges`
+  ports from `authmem` back verify/reset/step-up/passwordless.
+- **Delivery worker**: `DeliveryEncrypter` (AES-GCM) + `DeliveryWorkerAcknowledged:
+  true`; the host runs `authSvc.RunDeliveryWorker(ctx)` in a goroutine with graceful
+  shutdown. The outbox is the ONLY send path — the console mailer/notifier log the
+  delivered secret; drive codes/tokens/links from the server log.
+- **Passwordless**: `Passwordless: [email, phone]` (`AUTH_PASSWORDLESS`) — email
+  via the console Mailer, phone via the console Notifier;
+  `POST /auth/passwordless/{start,verify,redeem}` and the bundled magic-link
+  landing GET mount.
+- **PublicAuthBaseURL**: defaults to `http://localhost:8082/auth/magic` so a
+  zero-config magic link lands on the bundled fragment-reading page
+  (`AUTH_PUBLIC_BASE_URL` overrides). Request Host/forwarded headers never
+  participate.
+- **AllowedOrigins**: defaults to this host's own origin (`AUTH_ALLOWED_ORIGINS`)
+  so same-origin browser forms pass the browser-safe gate and cross-site
+  credentialed POSTs are refused.
+- **Views (HTML) + page override**: `Config.Views = authpages.New()` —
+  `internal/authpages` **embeds the bundled `authtempl.Views`** and overrides ONLY
+  `Login` with a Gopernicus-CMS-branded page rendered through stdlib
+  `html/template` (no templ import in the host). Every other page is the promoted
+  bundled default; the override changes presentation ONLY (same endpoints, CSRF/
+  origin gate, PRG, status mapping, JSON contract).
+- **EmailContentTemplates (distinct override system)**: `authpages.EmailOverride()`
+  — a branded verification email BODY at `email.LayerApp`, the SECOND, DISTINCT
+  override facility from `Views` (different field, different subsystem).
+- **ContactChanges**: wired in `authmem.Repositories()`, so identifier add/change/
+  remove flows work; `authmem`'s credential-mutation `Snapshot` projects the
+  masked inventory from the real identifier rows (matching pgx/turso).
+
 ### Config / port nil-semantics (host view)
 
 | collaborator | this host wires | nil/absent means |
 |---|---|---|
 | `Config.Providers` | the fake provider | OAuth routes not registered (deny-by-absence) |
-| `Config.TokenSigner` | golang-jwt (or ephemeral / nil) | `POST /auth/token` 404; bearer JWTs never parsed |
+| `Config.TokenSigner` | sdk HS256 over `AUTH_JWT_SECRET` (or ephemeral dev key) | REQUIRED — nil is `ErrTokenSignerRequired` at construction (no nil variant) |
 | `Config.TokenEncrypter` | AES-GCM iff `AUTH_TOKEN_ENCRYPTER_KEY` | provider tokens not persisted (login/link still work) |
 | `Config.Granter` | engine `relationshipGranter` (`authorizer.CreateRelationships`) | invitation routes not registered (deny-by-absence) |
+| `Config.RuntimeMode` | `development` (explicit) | REQUIRED, no default — nil is `ErrRuntimeModeRequired` |
+| `Config.ChallengeProtector` | HMAC key ring (`AUTH_CHALLENGE_PEPPER` or ephemeral) | REQUIRED once `Challenges` wired — `ErrChallengeProtectorRequired` |
+| `Config.DeliveryEncrypter` | AES-GCM (`AUTH_DELIVERY_ENCRYPTER_KEY` or ephemeral) | REQUIRED once `DeliveryJobs` wired — `ErrDeliveryEncrypterRequired` |
+| `Config.IdentifierKeyer` | HMAC (`AUTH_IDENTIFIER_KEY` or ephemeral) | production-required; dev falls back to per-instance SHA-256 |
+| `Config.Passwordless` | `[email, phone]` (`AUTH_PASSWORDLESS`) | empty → passwordless routes not registered |
+| `Config.PublicAuthBaseURL` | `…/auth/magic` (`AUTH_PUBLIC_BASE_URL`) | REQUIRED once a link flow is enabled; production requires HTTPS |
+| `Config.Views` | `authpages.New()` (branded-Login override of `authtempl.Views`) | nil → API-only (no HTML pages, no templ in the graph) |
+| `Config.EmailContentTemplates` | `authpages.EmailOverride()` | empty → bundled LayerCore email bodies |
 | `Repositories.SecurityEvents` | authmem | no audit trail (recording site is a no-op) |
 | `AUTH_DEBUG` | off by default | `/debug/security-events` not registered (404) |
 
 ## Environment
 
 See [`.env.example`](.env.example) for every knob (all secret-free placeholders):
-`AUTH_JWT_SECRET`, `AUTH_JWT_DISABLED`, `AUTH_TOKEN_TTL`,
-`AUTH_TOKEN_ENCRYPTER_KEY`, `AUTH_DEBUG`, `OAUTH_CLIENT_ID/SECRET`. The host boots
-with **none** of them set (JWT mode uses an ephemeral key; the debug route is
-off).
+the JWT/session knobs (`AUTH_JWT_SECRET`, `AUTH_ACCESS_TOKEN_TTL` default 15m,
+`AUTH_REFRESH_TTL` default 7d, `AUTH_TOKEN_ENCRYPTER_KEY`), the four other distinct
+v3 secrets (`AUTH_CHALLENGE_PEPPER`, `AUTH_IDENTIFIER_KEY`,
+`AUTH_DELIVERY_ENCRYPTER_KEY`), the v3 HTML/passwordless/magic-link knobs
+(`AUTH_PUBLIC_BASE_URL`, `AUTH_ALLOWED_ORIGINS`, `AUTH_PASSWORDLESS`), and
+`AUTH_DEBUG` + `OAUTH_CLIENT_ID/SECRET`. The host boots with **none** of them set:
+every secret gets a required-but-ephemeral single-instance key at boot
+(WARN-logged, never printed), passwordless defaults to `email,phone`, the magic
+link lands on the bundled `/auth/magic` page, and the debug route is off.
 
 ## The A9 proof protocol (copy-pasteable curls)
 
@@ -185,13 +265,17 @@ curl -sX POST http://localhost:8082/auth/register -H 'Content-Type: application/
 curl -sX POST http://localhost:8082/auth/login -H 'Content-Type: application/json' \
   -d '{"email":"admin@example.com","password":"correct horse battery staple"}'
 # 4. verify with the code from the mailer log -> 200
+#    v3 break: the body now carries {email, code} (the challenge rail keys the
+#    code by identifier); a {code}-only body is a 400.
 curl -sX POST http://localhost:8082/auth/verify -H 'Content-Type: application/json' \
-  -d '{"code":"<CODE_FROM_LOG>"}'
-# 5. login -> 200 + Set-Cookie; gated GET -> 200; logout -> 200; gated GET -> 401
+  -d '{"email":"admin@example.com","code":"<CODE_FROM_LOG>"}'
+# 5. login -> 200 + TWO Set-Cookies; gated GET -> 200; logout -> 200; gated GET -> 401
 curl -i -c jar -b jar -X POST http://localhost:8082/auth/login -H 'Content-Type: application/json' \
   -d '{"email":"admin@example.com","password":"correct horse battery staple"}'
+#   Set-Cookie: session=<access JWT>; Path=/; HttpOnly; SameSite=Lax
+#   Set-Cookie: session_refresh=<opaque>; Path=/auth; Max-Age=604800; HttpOnly; SameSite=Lax
 curl -i -c jar -b jar http://localhost:8082/articles
-curl -i -c jar -b jar -X POST http://localhost:8082/auth/logout
+curl -i -c jar -b jar -X POST http://localhost:8082/auth/logout   # clears BOTH cookies
 curl -i -c jar -b jar http://localhost:8082/articles
 ```
 
@@ -224,31 +308,94 @@ curl -sX POST -c jar -b jar http://localhost:8082/auth/api-keys/<KEYID>/revoke
 curl -i -H "Authorization: Bearer <KEY>" http://localhost:8082/demo/whoami  # 401
 ```
 
-### Leg 3 — JWT bearer
+### Leg 3 — JWT bearer (the session-backed token pair)
+
+`POST /auth/token` is the API-flow twin of login: it mints the **same
+session-backed pair** login sets as cookies, returned in the JSON body
+(**breaking change from AV6's stateless-only token** — the body is now
+`{access_token, expires_at, refresh_token}`, no longer `{token, expires_at}`).
 
 ```sh
-# issue a short-TTL user token
+# issue a pair (access JWT + opaque refresh token)
 curl -sX POST http://localhost:8082/auth/token -H 'Content-Type: application/json' \
-  -d '{"email":"admin@example.com","password":"correct horse battery staple"}'  # -> {"token":"<JWT>","expires_at":...}
+  -d '{"email":"admin@example.com","password":"correct horse battery staple"}'
+#  -> {"access_token":"<JWT>","expires_at":"2026-…","refresh_token":"<opaque>"}
 curl -i -H "Authorization: Bearer <JWT>" http://localhost:8082/demo/whoami       # 200 (user principal)
 ```
 
-Expired-token path — reboot with a 1-second TTL, mint, wait, retry → **401**:
+Expired-access-JWT path — reboot with a 1-second access TTL, mint, wait, retry
+→ **401** (then recover with the refresh token, below):
 
 ```sh
-AUTH_JWT_SECRET=$AUTH_JWT_SECRET AUTH_TOKEN_TTL=1s go run ./cmd/server
-# ... mint a token, then after >1s:
+AUTH_JWT_SECRET=$AUTH_JWT_SECRET AUTH_ACCESS_TOKEN_TTL=1s go run ./cmd/server
+# ... mint a pair, then after >1s:
 curl -i -H "Authorization: Bearer <JWT>" http://localhost:8082/demo/whoami       # 401 (expired)
 ```
 
-Absent-signer path — reboot with the signer disabled; the same valid-looking JWT
-is never parsed and the token route is gone:
+### Leg 3b — refresh rotation, grace, and reuse detection (auth-jwt plan §7)
+
+The refresh token is presented via the `session_refresh` cookie (browser) or the
+JSON body (API). Rotation is compare-and-swap; the single previous token gets one
+**grace** use; a second use of a rotated-away token is **reuse** and burns the
+session. `POST /auth/refresh` returns the same `{access_token, expires_at,
+refresh_token}` shape (the `refresh_token` field is **omitted on the grace lane**).
 
 ```sh
-AUTH_JWT_DISABLED=1 go run ./cmd/server
-curl -i -H "Authorization: Bearer <JWT>" http://localhost:8082/demo/whoami       # 401 (never parsed)
-curl -i -X POST http://localhost:8082/auth/token                                 # 404 (route absent)
+# happy path: present the current refresh token -> a NEW pair; the old token is now
+# the grace/previous slot. (Cookie clients send no body; the cookie carries it.)
+curl -sX POST http://localhost:8082/auth/refresh -H 'Content-Type: application/json' \
+  -d '{"refresh_token":"<R0>"}'
+#  -> 200 {"access_token":"<JWT>","expires_at":"…","refresh_token":"<R1>"}
+
+# grace lane: replay the OLD token <R0> ONCE -> a new access JWT only, NO
+# refresh_token field (cookie clients keep the winning token, self-healing a race)
+curl -sX POST http://localhost:8082/auth/refresh -H 'Content-Type: application/json' \
+  -d '{"refresh_token":"<R0>"}'
+#  -> 200 {"access_token":"<JWT>","expires_at":"…"}     # note: no refresh_token
+
+# reuse detection: replay <R0> a SECOND time -> 401, and the session is REVOKED,
+# so even the current token <R1> now 401s. A "refresh token reuse detected" WARN
+# lands in the server log (session_id, user_id, rotation_count, ip, ua).
+curl -i -X POST http://localhost:8082/auth/refresh -H 'Content-Type: application/json' \
+  -d '{"refresh_token":"<R0>"}'                          # 401
+curl -i -X POST http://localhost:8082/auth/refresh -H 'Content-Type: application/json' \
+  -d '{"refresh_token":"<R1>"}'                          # 401 (session revoked)
 ```
+
+### Leg 3c — logout window vs live-session gate, and ephemeral-restart recovery
+
+Stateless `RequireUser`/`RequirePrincipal` routes honor an outstanding access JWT
+for up to `AUTH_ACCESS_TOKEN_TTL` (default 15m) after logout; a
+**`RequireLiveSession`** route denies immediately. On this host the most
+privileged action — `POST /demo/admin/bootstrap` (it grants the caller
+platform-admin) — is gated on `RequireLiveSession` as the host-side demonstration.
+
+```sh
+# log in (cookie jar), then copy the access JWT out of the `session` cookie.
+# pre-logout: the live-session-gated route accepts it
+curl -i -H "Authorization: Bearer <ACCESS_JWT>" -X POST http://localhost:8082/demo/admin/bootstrap  # 200
+curl -sX POST -c jar -b jar http://localhost:8082/auth/logout        # clears both cookies, deletes session
+# post-logout, within the 15m access window:
+curl -i -H "Authorization: Bearer <ACCESS_JWT>" http://localhost:8082/demo/whoami                   # 200 (stateless)
+curl -i -H "Authorization: Bearer <ACCESS_JWT>" -X POST http://localhost:8082/demo/admin/bootstrap  # 401 (live gate)
+```
+
+Ephemeral-restart recovery (API lane) — with `AUTH_JWT_SECRET` **unset**, a restart
+mints a fresh signing key, so old access JWTs stop verifying:
+
+```sh
+# capture a pre-restart access JWT + refresh token, then restart the server.
+curl -i -H "Authorization: Bearer <OLD_ACCESS_JWT>" http://localhost:8082/demo/whoami   # 401 (new key)
+curl -i -X POST http://localhost:8082/auth/refresh -H 'Content-Type: application/json' \
+  -d '{"refresh_token":"<OLD_REFRESH>"}'
+```
+
+> **authmem caveat (honest):** refresh tokens are store-backed and *would* survive
+> a restart against a durable store — but this host's `internal/authmem` is
+> **in-memory**, so a restart wipes every session. The `/auth/refresh` call above
+> therefore returns **401** here: the surviving-refresh recovery half of this leg
+> is only observable against a persistent store (e.g. `stores/turso` / `stores/pgx`
+> in a real host). The access-JWT-dies-on-restart half is real and shown above.
 
 ### Leg 4 — invitations (the authorization engine `Granter`)
 
@@ -385,6 +532,103 @@ curl -sX POST -c jar -b jar http://localhost:8082/demo/roles/assign \
 curl -s -b cjar http://localhost:8082/demo/audit    # 200 (global satisfies the scoped gate) BUT "scoped_auditors":[] — C is NOT listed
 ```
 
+### Leg 8 — auth-v3: normal HTML pages (twice-through)
+
+Because `Config.Views` is wired, every core auth journey has a normal HTML page in
+addition to the JSON API. The dispatcher keeps ONE route per endpoint; a form POST
+303-redirects (PRG), a JSON POST keeps its JSON status/body. Drive them in a
+browser at `http://localhost:8082/auth/...`:
+
+```sh
+# the public pages render (200) under the full HTML security header set
+curl -i http://localhost:8082/auth/login        # 200: branded (authpages override) Login
+curl -i http://localhost:8082/auth/register      # 200: bundled default (promoted) Register
+# every HTML response carries: Cache-Control: no-store, Referrer-Policy: no-referrer,
+# X-Frame-Options: DENY, X-Content-Type-Options: nosniff, and a nonced CSP.
+# a form login (curl -d = urlencoded) 303-redirects on success; JSON login stays JSON:
+curl -i -c jar -b jar -d 'email=admin@example.com&password=correct horse battery staple&csrf_token=<TOK>&return_to=/' \
+  http://localhost:8082/auth/login              # 303 -> / on success (form arm, PRG)
+```
+
+The register→verify→login and reset chains PRG through `/auth/verify?email=…` →
+`/auth/login?email=…` → `/`. `GET /auth/login` renders the host's **branded**
+`authpages.Views.Login` (`data-brand="gopernicus-cms"`) — the page override — while
+`GET /auth/register` renders the promoted bundled default: proof the override
+changes presentation only. A failed form login re-renders the same branded page at
+401 with NO session cookie (never a secret repopulated); a cross-site `Origin` form
+login is 403; a cookie form mutation missing `csrf_token` is 403.
+
+### Leg 9 — auth-v3: passwordless + magic link
+
+Passwordless is enabled for `email` and `phone`. Start is enumeration-safe (known
+and unknown return the same generic 202; the start never resolves the account or
+calls a provider — the worker does, off-path):
+
+```sh
+# email OTP: start -> 202 accepted; the code is delivered to the server log
+curl -sX POST http://localhost:8082/auth/passwordless/start -H 'Content-Type: application/json' \
+  -d '{"identifier_kind":"email","identifier":"admin@example.com","method":"code"}'   # 202
+curl -i -c jar -b jar -X POST http://localhost:8082/auth/passwordless/verify -H 'Content-Type: application/json' \
+  -d '{"identifier_kind":"email","identifier":"admin@example.com","code":"<CODE_FROM_LOG>"}'  # 200 + cookies
+# email magic link: start method=link -> the link is logged as
+#   http://localhost:8082/auth/magic#token=<token>  (config base, token on the fragment)
+curl -sX POST http://localhost:8082/auth/passwordless/start -H 'Content-Type: application/json' \
+  -d '{"identifier_kind":"email","identifier":"admin@example.com","method":"link"}'   # 202
+# opening the link in a browser: the /auth/magic page reads the fragment client-side,
+# scrubs history, and POSTs /auth/passwordless/redeem -> 200 + session. The token never
+# enters a request URL/log/referrer. Replaying the same token -> 401 (single-use atomic).
+```
+
+An unknown identifier returns the identical 202 at the same wall time and produces
+no delivery job (a blocked/slow provider cannot change the start response or leak
+existence).
+
+### Leg 10 — auth-v3: account security, identifiers, step-up (bearer)
+
+The masked inventory and the credential/identifier suite. All are
+`RequireLiveSession` + browser-safe + `Cache-Control: no-store`. With the admin
+session:
+
+```sh
+# masked method inventory (identifier values masked; never a full value)
+curl -s -b jar http://localhost:8082/auth/methods
+#  -> {"has_password":true,"oauth":[...],"identifiers":[{"kind":"email","value":"a***@example.com",
+#      "uses":["login","recovery","notification"],"primary":true,"removable":false}]}
+# add an identifier: start delivers a proof code to the NEW address (server log)
+curl -sX POST -b jar http://localhost:8082/auth/identifiers/email -H 'Content-Type: application/json' \
+  -d '{"email":"admin2@example.com","uses":{"notification":true},"make_primary":false}'  # 200 {"status":"sent","receipt":...}
+curl -sX POST -b jar http://localhost:8082/auth/identifiers/email/confirm -H 'Content-Type: application/json' \
+  -d '{"code":"<PROOF_CODE_FROM_LOG>"}'                                                   # 200 {"status":"confirmed"}
+# remove the last login identifier -> 409 cannot_remove_last_method (policy-refused)
+# step-up before a sensitive mutation (a freshly-logged-in session already satisfies it):
+curl -sX POST -b jar http://localhost:8082/auth/step-up/password -H 'Content-Type: application/json' \
+  -d '{"purpose":"remove_password","context":"","password":"correct horse battery staple"}'  # 200 verified
+# set/remove password + provider-bound OAuth unlink (a fake-provider code cannot unlink another provider)
+```
+
+The same journeys are reachable in the browser from the account hub
+(`GET /auth/account`): masked inventory, add→confirm→edit/remove identifiers,
+password set/change/remove, and OAuth unlink — the HTML forms call the SAME service
+methods (the HTML layer recalculates no policy). A stale/revoked session on an
+account page redirects to login (after validating a safe relative return-to).
+
+### Leg 11 — auth-v3: override systems + delivery worker
+
+The host demonstrates the **two distinct override facilities**: `Config.Views`
+(the branded Login page, Leg 8) and `Config.EmailContentTemplates` (a branded
+verification email BODY at `email.LayerApp`). Register any user and the delivered
+verification body reads "Your Gopernicus CMS verification code is: …" (the
+LayerApp override), not the bundled default — proof the two systems are distinct.
+The startup log shows the development console-transport WARNs (email sender + phone
+notifier) and the per-job delivery lifecycle (`delivery job … outcome=delivered
+attempt=1`). The outbox is the ONLY send path: worker retry/replacement/terminal/
+purge are proven hermetically (`internal/logic/delivery`), and a memory host cannot
+boot production, so the production-negative gates
+(`cmd/server/production_test.go`) are hermetic: console→`ErrInsecureDeliveryTransport`,
+http-base→`ErrPublicAuthBaseURLInsecure`, memory-limiter→`ErrNonDurableRateLimiter`,
+nil-keyer→`ErrIdentifierKeyerRequired`, non-durable outbox→`ErrNonDurableDeliveryRepository`,
+unacknowledged worker→`ErrDeliveryWorkerUnacknowledged`.
+
 ## Invitation kinds demo (identity-resolution, 2026-07-10)
 
 The host wires a phone-kind `notify.Console` notifier, so phone
@@ -403,11 +647,21 @@ unwired kind (e.g. `slack`) fails 400; email is always-on via the Mailer.
   the authorization engine (`authorizer.Check`, the flagship posture): member →
   stream, resolved non-member → 403. Under `EVENTS_OUTBOX=memory` the host also
   mounts `POST /outbox-demo` (host-owned durable-rail trigger, not feature surface).
-- **auth** (JSON, `features/authentication`): `POST /auth/{register,login,logout,verify,
-  password/forgot,password/reset,password/change,token}`; OAuth
-  `/auth/oauth/{provider}/{start,callback,link/start,link}`,
-  `/auth/oauth/{verify-link,linked}`; machine `/auth/service-accounts…`,
-  `/auth/api-keys/{id}/revoke`; invitations `/auth/invitations/…`.
+- **auth** (JSON + HTML, `features/authentication`): core
+  `POST /auth/{register,login,logout,verify,refresh,password/forgot,password/reset,
+  password/change,token}`; the v3 credential/identifier suite
+  `GET /auth/methods`, `POST /auth/step-up/{begin,password,code}`,
+  `POST /auth/password/{set,remove/start,remove}`,
+  `POST /auth/identifiers/{email,phone}{,/confirm}`,
+  `PATCH|DELETE /auth/identifiers/{id}`; passwordless
+  `POST /auth/passwordless/{start,verify,redeem}`;
+  `GET /auth/delivery/status`; OAuth
+  `/auth/oauth/{provider}/{start,callback,link/start,unlink/start,unlink}` +
+  `/auth/oauth/verify-link`; machine `/auth/service-accounts…`,
+  `/auth/api-keys/{id}/revoke`; invitations `/auth/invitations/…`. Because
+  `Config.Views` is wired, the HTML GET pages (`/auth/{login,register,verify,
+  password/forgot,password/reset,account,step-up,magic,…}`) mount alongside the
+  JSON API — a form POST 303-redirects, a JSON POST keeps its JSON body.
 - **cms**: public site (`GET /`, published singles, contact) ungated; admin CRUD
   (`/articles`, `/pages`, `/terms`, `/menus`, `/media`, …) gated by
   `AdminMiddleware` (auth's `RequireUser`).

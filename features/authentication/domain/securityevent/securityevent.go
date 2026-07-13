@@ -37,6 +37,15 @@ const (
 	TypePasswordChange = "password_change"
 	// TypePasswordReset is a completed password reset via a reset token.
 	TypePasswordReset = "password_reset"
+	// TypePasswordSet is a set-initial-password on an account that had none,
+	// authorized by a consumed set_password recent-auth grant (design §5.2).
+	TypePasswordSet = "password_set"
+	// TypePasswordRemoveCodeSent is a remove_password code issued and enqueued for
+	// delivery to a verified recovery identifier (design §5.3). Details carries no
+	// destination.
+	TypePasswordRemoveCodeSent = "password_remove_code_sent"
+	// TypePasswordRemoved is a completed code-gated password removal (design §5.3).
+	TypePasswordRemoved = "password_removed"
 	// TypeEmailVerified is a completed email verification.
 	TypeEmailVerified = "email_verified"
 	// TypeOAuthLogin is an OAuth login into an already-linked identity.
@@ -47,12 +56,33 @@ const (
 	TypeOAuthLinkVerified = "oauth_link_verified"
 	// TypeOAuthLinked is a session-gated provider link.
 	TypeOAuthLinked = "oauth_linked"
-	// TypeOAuthUnlinked is a provider unlink.
+	// TypeOAuthUnlinkCodeSent is a provider-bound unlink_oauth code issued and
+	// enqueued for delivery to a verified recovery identifier (design §5.4). Details
+	// carries the provider only, never a destination or secret.
+	TypeOAuthUnlinkCodeSent = "oauth_unlink_code_sent"
+	// TypeOAuthUnlinked is a completed code-gated provider unlink (design §5.4).
 	TypeOAuthUnlinked = "oauth_unlinked"
 	// TypeAPIKeyAuth is an API-key authentication attempt.
 	TypeAPIKeyAuth = "apikey_auth"
 	// TypeTokenIssued is a bearer-JWT issuance (POST /auth/token).
 	TypeTokenIssued = "token_issued"
+	// TypeRefresh is a refresh-token rotation (POST /auth/refresh). Recorded
+	// success on a rotation or a single-use grace refresh (the grace lane carries
+	// a "grace" detail).
+	TypeRefresh = "refresh"
+	// TypeRefreshReuse is a blocked refresh-token reuse: a second arrival on the
+	// already-consumed previous slot. It revokes the session and, unlike other
+	// events, ALSO emits an unconditional WARN via Config.Logger even when the
+	// audit rail is unwired (a nil-audit host must not be blind to token theft).
+	TypeRefreshReuse = "refresh_reuse"
+
+	// TypeChallengeLockout is a code challenge locked out after the wrong-attempt
+	// budget was spent (design §3.2): the atomic consume deleted the row and the
+	// flow is blocked. It is the challenge rail's own security-control event —
+	// the business flow behind the challenge records its own domain event
+	// separately. Details carries the non-secret purpose label only; the secret
+	// code is never recorded.
+	TypeChallengeLockout = "challenge_lockout"
 
 	// Invitation vocabulary (design §6, wired by A6's invitationsvc). Grants are
 	// the security-relevant events: TypeInvitationGranted is recorded success (the
@@ -68,6 +98,52 @@ const (
 	TypeInvitationDeclined = "invitation_declined"
 	// TypeInvitationCancelled is an owner cancelling a pending invitation.
 	TypeInvitationCancelled = "invitation_cancelled"
+
+	// TypeStepUpChallengeSent is a recent-authentication step-up code issued and
+	// enqueued for delivery to a verified identifier (design §5.0). Details carries
+	// the grant purpose (an operation identifier, never a secret or destination).
+	TypeStepUpChallengeSent = "step_up_challenge_sent"
+	// TypeStepUp is a step-up completion attempt earning a recent-authentication
+	// grant (design §5.0): StatusSuccess when a grant was minted, StatusFailure when
+	// the presented proof was rejected, StatusBlocked when a protective control
+	// (lockout) refused it. Details carries the grant purpose only.
+	TypeStepUp = "step_up"
+
+	// TypeEmailChangeCodeSent is an email add/change ownership-proof code issued and
+	// enqueued for delivery to the proposed NEW address (design §5.5). Details never
+	// carries the address or code.
+	TypeEmailChangeCodeSent = "email_change_code_sent"
+	// TypeEmailChanged is a confirmed email add/change (design §5.5): the proposed
+	// address was proven and claimed through the atomic revision-CAS apply.
+	TypeEmailChanged = "email_changed"
+	// TypeEmailRemoved is a confirmed email identifier removal (design §5.5).
+	TypeEmailRemoved = "email_removed"
+	// TypePhoneChangeCodeSent is a phone add/change ownership-proof code issued and
+	// enqueued for delivery to the proposed NEW number (design §5.5).
+	TypePhoneChangeCodeSent = "phone_change_code_sent"
+	// TypePhoneChanged is a confirmed phone add/change (design §5.5).
+	TypePhoneChanged = "phone_changed"
+	// TypePhoneRemoved is a confirmed phone identifier removal (design §5.5).
+	TypePhoneRemoved = "phone_removed"
+	// TypeIdentifierUsesChanged is a confirmed identifier use-flag / primary change
+	// through the revision-serialized credential rail (design §5.5).
+	TypeIdentifierUsesChanged = "identifier_uses_changed"
+
+	// TypePasswordlessStart is a passwordless login start (design §4.3):
+	// StatusSuccess when the opaque delivery job was accepted (enqueued),
+	// StatusBlocked when a start budget refused it. Details carries the identifier
+	// kind and the challenge purpose (login_magic_link / login_otp) ONLY — never the
+	// identifier value, code, or token. The start never resolves the account on the
+	// request path, so the event carries no UserID (enumeration safety, §4.1).
+	TypePasswordlessStart = "passwordless_start"
+	// TypePasswordlessLogin is a passwordless login completion (design §4.3):
+	// StatusSuccess on a minted session, StatusFailure on the single generic 401
+	// (unknown/expired/replayed/stale/wrong secret, disabled kind, malformed
+	// identifier), and StatusBlocked when a verify/redeem budget refused it —
+	// mirroring the password `login` event's three statuses. Details carries the
+	// identifier kind and the challenge purpose ONLY — never the identifier value,
+	// code, or token.
+	TypePasswordlessLogin = "passwordless_login"
 )
 
 // Status vocabulary (design §5.1).

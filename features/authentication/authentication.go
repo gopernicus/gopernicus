@@ -33,16 +33,23 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/apikey"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/authgrant"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/challenge"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/contactchange"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/credential"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/deliveryjob"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/identifier"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/invitation"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthaccount"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthstate"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/passwordreset"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/serviceaccount"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
 	inbound "github.com/gopernicus/gopernicus/features/authentication/internal/inbound/authentication"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
+	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/delivery"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/invitationsvc"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/redirect"
 	"github.com/gopernicus/gopernicus/sdk"
@@ -65,6 +72,12 @@ import (
 var (
 	ErrHasherRequired = errors.New("auth: Config.Hasher is required")
 	ErrMailerRequired = errors.New("auth: Config.Mailer is required")
+	// ErrTokenSignerRequired is returned by NewService/Register when
+	// Config.TokenSigner is nil. The access credential is a signed JWT (D3), so a
+	// signer is REQUIRED — the core never synthesizes an ephemeral key (that
+	// convenience lives in example hosts only). It degrades loudly at construction,
+	// mirroring ErrHasherRequired.
+	ErrTokenSignerRequired = errors.New("auth: Config.TokenSigner is required")
 )
 
 // ErrOAuthReposRequired is returned by NewService/Register when Config.Providers
@@ -146,13 +159,6 @@ type AcceptInput = invitationsvc.AcceptInput
 // AcceptResult reports the granted tuple's resource/relation. Aliased from invitationsvc.
 type AcceptResult = invitationsvc.AcceptResult
 
-// ErrOAuthLastMethod is returned (as the wrapped cause) by Service.Unlink when the
-// target link is the user's only authentication method and no password is set —
-// unlinking it would lock the account out. It wraps sdk.ErrConflict, so the
-// transport maps it to 409. Hosts detect it with errors.Is(err,
-// auth.ErrOAuthLastMethod).
-var ErrOAuthLastMethod = authsvc.ErrLastAuthMethod
-
 // ErrEmailNotVerified is returned (as the wrapped cause) by login when
 // Config.RequireVerifiedEmail is set and the caller's email is unverified. It
 // wraps sdk.ErrForbidden, so the transport maps it to 403. Hosts detect it with
@@ -169,9 +175,16 @@ var ErrEmailNotVerified = authsvc.ErrEmailNotVerified
 type Principal = authsvc.Principal
 
 // OAuthResult is the outcome of Service.OAuthCallback / Service.VerifyLink: the
-// Action taken, the session Token (empty for a pending link), the resolved User,
-// and the validated RedirectTo. Aliased from authsvc per the Principal precedent.
+// Action taken, the access Token and RefreshToken (both empty for a pending
+// link), the resolved User, and the validated RedirectTo. Aliased from authsvc
+// per the Principal precedent.
 type OAuthResult = authsvc.OAuthResult
+
+// TokenPair is the access/refresh credential pair a session mint produces (§1.1):
+// the access JWT and its expiry, plus the opaque refresh token (empty on the
+// grace refresh lane). Login, ChangePassword, IssueToken, and Refresh return it.
+// Aliased from authsvc per the Principal precedent.
+type TokenPair = authsvc.TokenPair
 
 // PasswordHasher hashes and verifies passwords. It is feature-owned (not an sdk
 // facility) because it has one consumer today and none genuinely foreseen
@@ -185,16 +198,35 @@ type PasswordHasher interface {
 	VerifyPassword(hash, password string) error
 }
 
+// CompromisedPasswordChecker reports whether a candidate password is known to be
+// compromised — present in a breach corpus or a host blocklist (design §5.9). It
+// is OPTIONAL and host-injected (Config.CompromisedPasswordChecker); the feature
+// core ships none and adds NO network dependency, so a local blocklist and a
+// future remote breach-check integration both satisfy it. When wired, every
+// password entry point (register, set, change, reset) consults it identically.
+type CompromisedPasswordChecker interface {
+	// IsCompromised reports whether password is known-compromised. A non-nil error
+	// means the check could not complete (e.g. an unreachable remote corpus); the
+	// Config.CompromisedPasswordFailOpen policy then decides the outcome.
+	IsCompromised(ctx context.Context, password string) (bool, error)
+}
+
 // Repositories is the set of outbound ports the feature needs. A store adapter
 // (e.g. features/authentication/stores/turso) or a host fills it; the feature stays
 // dialect-blind. Passwords is split from Users on purpose — credential material
 // is stored and access-controlled independently of general user reads.
 type Repositories struct {
-	Users              user.UserRepository
-	Passwords          user.PasswordRepository
-	Sessions           session.SessionRepository
-	VerificationCodes  verification.CodeRepository
-	VerificationTokens verification.TokenRepository
+	Users user.UserRepository
+	// Identifiers backs the v3 identity-discovery rail (design §2.2): active
+	// login/recovery lookup, per-user listing, and the revision-CAS
+	// ApplyVerifiedChange. The atomic CreateWithPrimaryIdentifier lives on Users
+	// because it commits a user and its first identifier together; Users and
+	// Identifiers must therefore be backed by one transaction-capable adapter. The
+	// slot is frozen here (AV3-1.2); it becomes REQUIRED when registration re-keys
+	// onto identifiers (phase 5). Nil is tolerated until then.
+	Identifiers identifier.IdentifierRepository
+	Passwords   user.PasswordRepository
+	Sessions    session.SessionRepository
 	// OAuthAccounts and OAuthStates back the OAuth flow (design §3). They may be
 	// nil when Config.Providers is empty (OAuth off); wiring providers without
 	// them is ErrOAuthReposRequired at construction.
@@ -217,6 +249,44 @@ type Repositories struct {
 	// when Config.Granter is nil (invitations off); wiring a Granter without it is
 	// ErrInvitationRepoRequired at construction.
 	Invitations invitation.InvitationRepository
+	// Challenges backs the atomic secret rail (design §3.2): HMAC-protected OTP
+	// codes and SHA-256 magic-link tokens with atomic replace/consume. The slot is
+	// frozen here (AV3-0.3); it becomes REQUIRED when the challenge subsystem is
+	// enabled (phase 3). Nil is tolerated until then.
+	Challenges challenge.Repository
+	// PasswordResets backs the atomic password-reset composition (design §5.9):
+	// one transaction that consumes the password_reset challenge, sets the typed
+	// password row, and revokes all sessions plus outstanding password/reset
+	// grants and challenges. It must be backed by the same transaction-capable
+	// adapter as Passwords/Sessions/Challenges/AuthenticationGrants. Wired whenever
+	// the challenge-backed forgot/reset flow is active; ResetPassword refuses while
+	// it is nil (fail closed).
+	PasswordResets passwordreset.Repository
+	// ContactChanges backs the pending-value flow state of an identifier add/change
+	// (design §2.4): the PendingChange row holding the new normalized value and
+	// requested uses between a change flow's start and its confirm, as an atomic
+	// replace-per-(user, kind) with single-use Consume. It carries no secret — the
+	// code/token and its lockout ride Challenges. The slot is frozen here (AV3-1.3);
+	// it becomes REQUIRED when the identifier-management flows are wired (phase 6).
+	// Nil is tolerated until then.
+	ContactChanges contactchange.Repository
+	// AuthenticationGrants backs recent-authentication / step-up grants (design
+	// §5.0): the single-use, session-bound proof a sensitive mutation requires.
+	// The slot is frozen here (AV3-0.3); it becomes REQUIRED when the credential
+	// suite is enabled (phase 6). Nil is tolerated until then.
+	AuthenticationGrants authgrant.Repository
+	// CredentialMutations backs the revision-serialized credential/identifier
+	// mutation rail (design §5.6): Snapshot reads the typed MethodSet +
+	// auth_revision and Apply performs one revision-CAS typed mutation atomically.
+	// The slot is frozen here (AV3-0.4); it becomes REQUIRED when the credential
+	// suite is enabled (phase 6). Nil is tolerated until then.
+	CredentialMutations credential.MutationRepository
+	// DeliveryJobs backs the durable, enumeration-safe outbound outbox (design
+	// §6.1.1): atomic enqueue-idempotency, due-job claim with lease expiry,
+	// at-least-once completion, resend replacement, and bounded terminal purge. The
+	// slot is frozen here (AV3-0.6); it becomes REQUIRED when the delivery worker is
+	// wired (phase 4). Nil is tolerated until then.
+	DeliveryJobs deliveryjob.Repository
 }
 
 // CookieConfig is the session-cookie policy. Zero values are safe: an empty Name
@@ -239,6 +309,20 @@ type CookieConfig struct {
 type Config struct {
 	// Hasher is REQUIRED; nil → ErrHasherRequired.
 	Hasher PasswordHasher
+	// CompromisedPasswordChecker is the OPTIONAL breach/blocklist checker consulted
+	// by the shared password policy (design §5.9). Nil → no breach check (the
+	// length policy still applies). When wired, register/set/change/reset all
+	// consult it identically; the feature core ships none, so wiring it never adds
+	// a network dependency to the core.
+	CompromisedPasswordChecker CompromisedPasswordChecker
+	// CompromisedPasswordFailOpen selects the policy when a wired
+	// CompromisedPasswordChecker cannot complete a check (returns an error).
+	// Default false = FAIL CLOSED: an unavailable breach service rejects the
+	// password rather than becoming a silent bypass — the documented production
+	// posture (design §5.9, V15 fail-closed profile). Set true only to trade breach
+	// coverage for availability (a development/self-hosted convenience); the WARN is
+	// logged on Config.Logger.
+	CompromisedPasswordFailOpen bool
 	// Mailer is REQUIRED; nil → ErrMailerRequired. Delivers verification and
 	// password-reset messages.
 	Mailer email.Sender
@@ -249,10 +333,83 @@ type Config struct {
 	RateLimiter ratelimiter.Limiter
 	// SessionCookie configures the session cookie; the zero value is usable.
 	SessionCookie CookieConfig
+	// AllowedOrigins is the exact-match Origin allowlist that the browser-safe
+	// mutation gate on cookie-authenticated sensitive routes (step-up, credential and
+	// identifier management) validates against (design §9.1). A "*" entry never
+	// authorizes a credentialed cross-origin mutation. Empty leaves the gate to
+	// reject every cross-site cookie mutation and any request carrying a
+	// disallowed Origin; bearer-only (API) callers skip the gate entirely.
+	AllowedOrigins []string
 	// RequireVerifiedEmail, when true, makes login refuse an unverified user
 	// with a 403 (ErrEmailNotVerified). Default false (design §7.1, AV8):
 	// flipping it on requires a working Mailer so users can verify.
 	RequireVerifiedEmail bool
+
+	// RuntimeMode is the REQUIRED fail-closed posture (auth v3 §8). It has no
+	// default: empty → ErrRuntimeModeRequired, unknown → ErrRuntimeModeInvalid,
+	// so a host cannot accidentally inherit the development posture. "production"
+	// rejects development-only delivery transports (email/notify console senders,
+	// design §6.3); "development" warns instead.
+	RuntimeMode RuntimeMode `env:"AUTH_RUNTIME_MODE"`
+
+	// ChallengeProtector protects short codes (HMAC pepper) and digests tokens
+	// (auth v3 §3.3). The slot is frozen here; it becomes REQUIRED when the
+	// challenge subsystem is enabled (phase 3, ErrChallengeProtectorRequired).
+	// AV3-0.2 ships the bundled HMACChallengeProtector.
+	ChallengeProtector ChallengeProtector
+	// IdentifierNormalizer canonicalizes identifier values everywhere (auth v3
+	// §2.2). Nil selects the bundled strict default (AV3-1.1).
+	IdentifierNormalizer IdentifierNormalizer
+	// IdentifierKeyer derives PII-free rate-limit/idempotency keys under a key
+	// distinct from the challenge pepper, JWT, and encryption keys (auth v3 §4.4).
+	// Production-required once privacy-keyed limits are wired (phase 5,
+	// ErrIdentifierKeyerRequired).
+	IdentifierKeyer IdentifierKeyer
+	// CredentialPolicy evaluates a proposed credential/identifier mutation against
+	// the current and proposed MethodSet (auth v3 §5.6). Nil selects the bundled
+	// safe default (credential.NewDefaultPolicy: one direct login method + one
+	// verified recovery method, PSTN restricted) when the credential suite is
+	// enabled (phase 6); a host may supply stronger rules. The slot is frozen here
+	// (AV3-0.4); ErrCredentialPolicyRequired covers the strict-production posture
+	// that disables the default without a replacement.
+	CredentialPolicy CredentialPolicy
+	// DeliveryEncrypter encrypts the delivery-outbox payload envelope (auth v3
+	// §6.1.1). REQUIRED once the outbox is enabled (phase 4,
+	// ErrDeliveryEncrypterRequired); bundled cryptids.AESGCM satisfies it with a
+	// distinct key.
+	DeliveryEncrypter cryptids.Encrypter
+	// DeliveryWorkerAcknowledged affirms that the host runs RunDeliveryWorker in its
+	// process lifecycle (auth v3 §8). The outbox is the ONLY send path (AV3-4.3), so
+	// a wired outbox whose worker never runs silently swallows every verification,
+	// reset, and magic-link message. The feature cannot observe the host lifecycle,
+	// so production REQUIRES this explicit acknowledgment once DeliveryJobs is wired
+	// (ErrDeliveryWorkerUnacknowledged) rather than failing open on a stalled outbox.
+	// Development tolerates the zero value (a test or manual drain may run the
+	// worker). It is a wiring assertion set in the composition root, not an env knob.
+	DeliveryWorkerAcknowledged bool
+	// PublicAuthBaseURL is the absolute base URL magic links and redemption pages
+	// are built from (auth v3 §6.4). REQUIRED when a link flow is enabled
+	// (phase 7, ErrPublicAuthBaseURLRequired); production requires HTTPS. Request
+	// Host/forwarded headers never participate.
+	PublicAuthBaseURL string `env:"AUTH_PUBLIC_BASE_URL"`
+
+	// Passwordless enables login-only passwordless authentication for the listed
+	// identifier kinds (auth v3 §4.2). Empty (default) → the passwordless routes are
+	// NOT registered (deny-by-absence — there is no natural nil collaborator, so the
+	// knob is explicit). Allowed v3 kinds are "email" and "phone" (identity.KindEmail
+	// / KindPhone); any other value is ErrPasswordlessKindInvalid at construction.
+	// Each listed kind must have a wired delivery channel — email via the required
+	// Mailer (or an email-kind Notifier), phone via a wired phone-kind Notifier — else
+	// ErrPasswordlessKindUnsupported; in production the wired transport must also be
+	// production-capable. Enabling passwordless requires the atomic challenge rail
+	// (Repositories.Challenges + ChallengeProtector) and the durable delivery outbox
+	// (Repositories.DeliveryJobs — starts issue challenges and enqueue asynchronously,
+	// V14), plus a valid Config.PublicAuthBaseURL for magic links (HTTPS in
+	// production). Listing a kind permits its active verified login-enabled
+	// identifiers as direct methods under the §5.6 credential policy. It NEVER
+	// auto-provisions and NEVER enables phone+password login (phone stays
+	// passwordless-only, V10).
+	Passwordless []string
 
 	// IDs is the app's entity-ID strategy, decided once at wiring (amended D9):
 	// it mints the keys of users, service accounts, API-key records, security
@@ -296,23 +453,29 @@ type Config struct {
 	// back to "/".
 	RedirectAllowlist []string
 
-	// TokenSigner enables stateless bearer-JWT mode (design §4.4, AV6). Nil → the
-	// mode is OFF: bearer JWTs are NEVER parsed and POST /auth/token is not
-	// registered (deny-by-absence). When wired (integrations/cryptids/golang-jwt
-	// satisfies it structurally), POST /auth/token issues short-TTL user tokens
-	// and RequireUser/RequirePrincipal accept an Authorization: Bearer <jwt>,
-	// resolving it to the same user identity the session path produces.
+	// TokenSigner signs and verifies the access JWT — the primary access
+	// credential (§1.1, D3). It is REQUIRED; nil → ErrTokenSignerRequired at
+	// construction. sdk/foundation/cryptids ships a stdlib HS256 default;
+	// integrations/cryptids/golang-jwt satisfies it for RS256/ES256.
 	//
-	// The revocation asymmetry (a JWT outlives a password change until expiry) is
-	// documented on the Config field — short TTL is the mitigation, mirroring the
-	// events design's MaxConnAge posture. There are NO refresh tokens (AV6):
-	// sessions remain the revocable long-lived identity; JWTs are short-lived API
-	// conveniences, and machine clients authenticate via API keys, not JWTs.
+	// Operational truth (§1.6): a MULTI-INSTANCE host MUST share the signing key
+	// (AUTH_JWT_SECRET) across every instance — per-instance ephemeral keys cannot
+	// cross-verify, and behind a load balancer that is a continuous auth-flap on
+	// every request, with /auth/refresh round-robining into the same wall. An
+	// ephemeral key is a SINGLE-INSTANCE DEV convenience only (example hosts),
+	// where restart kills access JWTs and clients recover via /auth/refresh.
+	// Verification applies a small clock-skew leeway (30–60s). Revocation is
+	// asymmetric and now BOUNDED per route: stateless RequireUser routes honor an
+	// outstanding access JWT for ≤ AccessTokenTTL after a session is revoked;
+	// RequireLiveSession routes revoke immediately.
 	TokenSigner cryptids.JWTSigner
-	// TokenTTL is the lifetime of a bearer JWT minted by POST /auth/token. Zero →
-	// 1h (design §4.4). Keep it short: it bounds the revocation-asymmetry window
-	// documented on TokenSigner above. Meaningful only when TokenSigner is wired.
-	TokenTTL time.Duration
+	// AccessTokenTTL is the access-JWT lifetime (§1.1, D8). Zero → 15m. Keep it
+	// short: it bounds the revocation-asymmetry window on stateless routes.
+	AccessTokenTTL time.Duration `env:"AUTH_ACCESS_TOKEN_TTL" default:"15m"`
+	// RefreshTTL is the fixed refresh-token / session horizon (§1.1, D2/D8). Zero →
+	// 7d. It is set at mint and NEVER extended by rotation (fixed horizon); a
+	// stolen refresh token therefore cannot outlive it.
+	RefreshTTL time.Duration `env:"AUTH_REFRESH_TTL" default:"168h"`
 
 	// Granter is the ReBAC-decoupled grant-on-accept seam for invitations (design
 	// §6, ratified AV4). Nil → the invitation subsystem is OFF and its routes are
@@ -335,6 +498,28 @@ type Config struct {
 	// wired; sdk/capabilities/notify ships Console (any kind); the email-kind bridge is integrations/notify/mailer.
 	Notifiers []notify.Notifier
 
+	// Views is the OPTIONAL HTML rendering port (design §9.2, R12/V16). Nil (default)
+	// → the HTML surface is absent: the HTML GET pages and form decoding are NOT
+	// registered and the shared POST routes accept JSON only, so the feature is
+	// API-only with no view technology in the host's module graph. Non-nil → the
+	// bundled/overridden HTML GET pages mount alongside the UNCHANGED JSON API (the
+	// JSON DTO/status/body/cookie contracts are byte-compatible either way). The
+	// feature core never imports templ: this is a technology-neutral web.Renderer
+	// port. The bundled default lives in the sibling module
+	// features/authentication/views/templ (authtempl.New()); the blessed override
+	// path is embedding that default and overriding individual methods. A host may
+	// instead satisfy the port with html/template via sdk/foundation/web.Template.
+	Views Views
+
+	// EmailContentTemplates registers host overrides of the feature's default email
+	// content at email.LayerApp (design §6.2) — the DISTINCT second override system
+	// alongside Views (which overrides HTML pages). Empty (default) → the bundled
+	// LayerCore templates render unchanged. Each entry's Namespace must be
+	// EmailContentNamespace to override a bundled template; its embed.FS is walked
+	// from "templates/", each "<name>.html" replacing the core "<name>". This changes
+	// email BODIES only — never a page, route, service policy, or the JSON API.
+	EmailContentTemplates []EmailContentTemplate
+
 	// Logger receives the best-effort WARN line when a security-event audit write
 	// fails (design §5.1 — audit-write failures never fail the auth flow). Nil →
 	// slog.Default(); Register defaults it to the Mount's logger when unset.
@@ -355,10 +540,42 @@ type Service struct {
 	// mounts its routes and NewService injects it into authsvc as the
 	// resolve-on-registration collaborator; both use this single instance.
 	inv *invitationsvc.Service
+	// worker drains the durable delivery outbox (design §6.1.1). Nil when the
+	// DeliveryJobs outbox is not wired; the host runs it via RunDeliveryWorker.
+	worker *delivery.Worker
 	// listStrategy is the resolved Config.ListStrategy the shipped HTTP adapter
 	// passes as the transport-edge DefaultStrategy (Register → Mount → handlers).
 	listStrategy crud.Strategy
+	// mutationSecurity is the browser-safe-mutation policy the shipped HTTP adapter
+	// applies to cookie-authenticated sensitive routes (design §9.1): the Origin
+	// allowlist and the session cookie name that marks a request browser-driven.
+	mutationSecurity inbound.MutationSecurity
+	// views is the optional HTML rendering port (design §9.2). Nil → the shipped
+	// adapter mounts the JSON API only; non-nil → it also mounts the HTML GET pages.
+	views inbound.Views
 }
+
+// DeliveryStatus is the read-only delivery-status projection a session-gated caller
+// polls with the Receipt key it received (design §6.1.1). It exposes only lifecycle
+// (State/Attempt/Pending/Failed), never the destination or secret. Aliased from the
+// internal delivery package per the Principal precedent.
+type DeliveryStatus = delivery.Status
+
+// EmailContentTemplate is a host override of the feature's default email CONTENT,
+// registered at email.LayerApp (design §6.2). It is the second, DISTINCT
+// customization system alongside Config.Views: Views overrides HTML pages rendered
+// to the browser, while EmailContentTemplate overrides the transactional email
+// bodies rendered by the delivery router — different facilities, different Config
+// fields, no shared type. Namespace must be EmailContentNamespace to override a
+// bundled template; FS is walked from its "templates" subdirectory, each
+// "<name>.html" replacing the core "<name>" template. Aliased from the internal
+// delivery package per the DeliveryStatus precedent.
+type EmailContentTemplate = delivery.TemplateOverride
+
+// EmailContentNamespace is the namespace the feature registers its default email
+// content templates under; a host LayerApp override targets a core template as
+// EmailContentNamespace + ":" + name (e.g. "authentication:verification").
+const EmailContentNamespace = delivery.Namespace
 
 // resolveListStrategy validates Config.ListStrategy and maps it to a
 // crud.Strategy. Empty (the zero value of a literally-built Config) resolves to
@@ -385,6 +602,15 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 	if cfg.Mailer == nil {
 		return nil, ErrMailerRequired
 	}
+	if cfg.TokenSigner == nil {
+		return nil, ErrTokenSignerRequired
+	}
+	// RuntimeMode is a required enum with no default, so a host can never
+	// accidentally inherit the development posture (design §8). Validated after
+	// the required-collaborator checks above so their errors are not masked.
+	if err := validateRuntimeMode(cfg.RuntimeMode); err != nil {
+		return nil, err
+	}
 	if len(cfg.Providers) > 0 && (repos.OAuthAccounts == nil || repos.OAuthStates == nil) {
 		return nil, ErrOAuthReposRequired
 	}
@@ -393,6 +619,36 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 	}
 	if cfg.Granter != nil && repos.Invitations == nil {
 		return nil, ErrInvitationRepoRequired
+	}
+	// Enable-time validation for the challenge subsystem (design §3.3): wiring the
+	// Challenges repository enables the atomic secret rail, which REQUIRES a
+	// ChallengeProtector to protect its codes/tokens. Nil is tolerated only while
+	// the subsystem is off (repos.Challenges == nil).
+	if repos.Challenges != nil && cfg.ChallengeProtector == nil {
+		return nil, ErrChallengeProtectorRequired
+	}
+	// Enable-time validation for the durable delivery outbox (design §6.1.1): wiring
+	// the DeliveryJobs repository enables the at-least-once worker, whose retryable
+	// jobs temporarily carry a rendered secret/destination — so the payload envelope
+	// is ALWAYS sealed and a DeliveryEncrypter is REQUIRED. Nil is tolerated only
+	// while the outbox is off (repos.DeliveryJobs == nil).
+	if repos.DeliveryJobs != nil {
+		if cfg.DeliveryEncrypter == nil {
+			return nil, ErrDeliveryEncrypterRequired
+		}
+		// Fail closed on a non-durable outbox in production (design §8): a repository
+		// that identifies itself as in-process-only would drop delivery on restart.
+		// A store that declares no durability metadata is tolerated.
+		if err := validateDeliveryDurability(cfg.RuntimeMode, repos.DeliveryJobs); err != nil {
+			return nil, err
+		}
+		// Production must not silently run without a worker (design §8): the outbox is
+		// the only send path, so an enqueue-without-worker configuration would swallow
+		// every message. The host affirms it runs RunDeliveryWorker via
+		// Config.DeliveryWorkerAcknowledged; development tolerates its absence.
+		if cfg.RuntimeMode == RuntimeModeProduction && !cfg.DeliveryWorkerAcknowledged {
+			return nil, ErrDeliveryWorkerUnacknowledged
+		}
 	}
 	listStrategy, err := resolveListStrategy(cfg.ListStrategy)
 	if err != nil {
@@ -409,40 +665,159 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 		}
 		notifiers[kind] = n
 	}
+	// Fail closed on delivery transport security (design §6.3): in production a
+	// development-only or metadata-less Mailer/Notifier is rejected; in
+	// development a development-only transport warns. The Mailer is validated non-
+	// nil above.
+	transportLog := cfg.Logger
+	if transportLog == nil {
+		transportLog = slog.Default()
+	}
+	if err := validateDeliveryTransports(cfg.RuntimeMode, cfg.Mailer, cfg.Notifiers, transportLog); err != nil {
+		return nil, err
+	}
 	limiter := cfg.RateLimiter
 	if limiter == nil {
 		limiter = ratelimiter.NewMemory()
 	}
+	// Fail closed on a per-process rate limiter in production (design §4.4/§8):
+	// login rate limiting is always active, so a multi-instance deployment needs a
+	// shared/durable limiter — an in-process one (the ratelimiter.Memory default)
+	// enforces only a per-process budget. Development warns instead. cfg.RateLimiter
+	// (not the defaulted limiter) is passed so a nil is read as the in-process
+	// default.
+	if err := validateRateLimiter(cfg.RuntimeMode, cfg.RateLimiter, transportLog); err != nil {
+		return nil, err
+	}
+	// PII-free rate-limit/idempotency keys are always active, so production requires
+	// the shared HMAC IdentifierKeyer (design §4.4/§8): without it the digest falls
+	// back to a per-instance SHA-256 — still PII-free, but not the shared keyed
+	// digest a multi-instance deployment needs to key one identifier to one bucket.
+	// Development tolerates the fallback.
+	if cfg.RuntimeMode == RuntimeModeProduction && cfg.IdentifierKeyer == nil {
+		return nil, ErrIdentifierKeyerRequired
+	}
+
+	// The shared delivery renderer/router (design §6.1): one kind-aware policy
+	// consumed by BOTH authsvc and invitationsvc so the outbound email/SMS content
+	// and the email/notify kind fork have a single definition instead of two
+	// drifting copies. It renders an encrypted-job-ready Envelope; the durable
+	// worker (phase 4) sends it. The Mailer is validated non-nil above, so the
+	// router is always buildable here.
+	deliveryRouter, err := delivery.NewRouter(delivery.Deps{
+		Mailer:       cfg.Mailer,
+		MailFrom:     cfg.MailFrom,
+		Notifiers:    notifiers,
+		AppTemplates: cfg.EmailContentTemplates,
+		Logger:       cfg.Logger,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// The durable delivery queue (design §6.1.1): every auth outbound message now
+	// enqueues here instead of a request-time provider send, so account resolution
+	// and provider latency happen in the host-owned worker off the request path. It
+	// is built only when the DeliveryJobs outbox is wired (the encrypter is required
+	// alongside it, validated above); nil leaves the send sites fail-closed
+	// (ErrDeliveryDisabled) rather than silently synchronous.
+	var deliveryQueue *delivery.Service
+	if repos.DeliveryJobs != nil {
+		deliveryQueue, err = delivery.NewService(delivery.ServiceDeps{
+			Repo:      repos.DeliveryJobs,
+			Encrypter: cfg.DeliveryEncrypter,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Passwordless enablement matrix (design §4.1/§4.2/§6.4/§8). Empty → the
+	// passwordless routes are absent (deny-by-absence); when a host opts in, every
+	// listed kind must be a valid v3 kind with a wired delivery channel (the router's
+	// deny-by-absence Supports seam), the atomic challenge rail and durable outbox
+	// must be wired (async starts issue challenges and enqueue — V14), and a
+	// link-capable PublicAuthBaseURL is required (HTTPS in production). The always-on
+	// production durable-limiter / identifier-keyer / worker-acknowledgment gates are
+	// validated above, so a passwordless-enabled production host inherits them. A
+	// half-wired passwordless config would strand the users it is enabled for.
+	if err := validatePasswordless(cfg.RuntimeMode, cfg.Passwordless, deliveryRouter, repos.Challenges != nil, repos.DeliveryJobs != nil, cfg.PublicAuthBaseURL); err != nil {
+		return nil, err
+	}
+
+	// authService is declared here and assigned below (authsvc.NewService), so the
+	// invitation service's accept-time identifier accessor can bind to it: the two
+	// services reference each other (authsvc holds invitationsvc for resolve-on-
+	// registration; invitationsvc holds authsvc's ActiveVerifiedIdentifier for the
+	// V11 phone accept-time match), a construction cycle broken by this late-bound
+	// closure — it is only invoked at request time, long after both are wired.
+	var authService *authsvc.Service
 
 	// The invitation service is built only when a Granter is wired (deny-by-
 	// absence). Its Granter is injected HERE, never into authsvc (design §6 pin).
+	// The single injected identifier normalizer (design §2.2), nil-defaulted to the
+	// bundled strict policy, shared by the direct-add userLookup below and both
+	// service Deps so registration, login, recovery, and invitations canonicalize
+	// identically.
+	idNormalizer := identifier.Normalizer(identifier.DefaultNormalizer{})
+	if cfg.IdentifierNormalizer != nil {
+		idNormalizer = cfg.IdentifierNormalizer
+	}
+
 	var invSvc *invitationsvc.Service
 	if cfg.Granter != nil {
-		invSvc = invitationsvc.New(invitationsvc.Deps{
-			Invitations:    repos.Invitations,
-			Granter:        cfg.Granter,
-			MemberCheck:    cfg.MemberCheck,
-			UserLookup:     userLookup(repos.Users),
+		invDeps := invitationsvc.Deps{
+			Invitations: repos.Invitations,
+			Granter:     cfg.Granter,
+			MemberCheck: cfg.MemberCheck,
+			UserLookup:  userLookup(repos.Identifiers, idNormalizer),
+			// CallerIdentifiers resolves the accepting caller's active verified
+			// identifier of a kind for the V11 phone accept-time match, through the same
+			// kind-aware accessor the invitation HTTP handlers use (design §7).
+			CallerIdentifiers: func(ctx context.Context, userID, kind string) (string, error) {
+				return authService.ActiveVerifiedIdentifier(ctx, userID, kind)
+			},
 			Mailer:         cfg.Mailer,
 			MailFrom:       cfg.MailFrom,
+			Deliver:        deliveryRouter,
 			Redirects:      redirect.New(cfg.RedirectAllowlist),
 			SecurityEvents: repos.SecurityEvents,
 			Logger:         cfg.Logger,
 			IDs:            cfg.IDs,
 			Notifiers:      notifiers,
-		})
+		}
+		// Wire the injected identifier normalizer only when the host supplies one, so
+		// invitationsvc nil-defaults to the same bundled strict identifier.Default
+		// Normalizer authsvc uses: one policy canonicalizes invitation identifiers,
+		// including the strict E.164 the V11 phone match depends on.
+		if cfg.IdentifierNormalizer != nil {
+			invDeps.Normalizer = cfg.IdentifierNormalizer
+		}
+		// Set the outbox only when built, so the invitationsvc field stays a genuine
+		// nil interface (not a typed-nil) when the outbox is off.
+		if deliveryQueue != nil {
+			invDeps.Queue = deliveryQueue
+		}
+		invSvc = invitationsvc.New(invDeps)
 	}
 
 	deps := authsvc.Deps{
-		Users:     repos.Users,
-		Passwords: repos.Passwords,
-		Sessions:  repos.Sessions,
-		Codes:     repos.VerificationCodes,
-		Tokens:    repos.VerificationTokens,
-		Hasher:    cfg.Hasher,
-		Mailer:    cfg.Mailer,
-		MailFrom:  cfg.MailFrom,
-		Limiter:   limiter,
+		Users:                repos.Users,
+		Identifiers:          repos.Identifiers,
+		Passwords:            repos.Passwords,
+		Sessions:             repos.Sessions,
+		Challenges:           repos.Challenges,
+		PasswordResets:       repos.PasswordResets,
+		ContactChanges:       repos.ContactChanges,
+		CredentialMutations:  repos.CredentialMutations,
+		AuthenticationGrants: repos.AuthenticationGrants,
+		CredentialPolicy:     cfg.CredentialPolicy,
+		Hasher:               cfg.Hasher,
+		CompromisedFailOpen:  cfg.CompromisedPasswordFailOpen,
+		Mailer:               cfg.Mailer,
+		MailFrom:             cfg.MailFrom,
+		Deliver:              deliveryRouter,
+		Limiter:              limiter,
 		Cookie: authsvc.CookieConfig{
 			Name:   cfg.SessionCookie.Name,
 			Path:   cfg.SessionCookie.Path,
@@ -461,7 +836,10 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 		APIKeys:              repos.APIKeys,
 		SecurityEvents:       repos.SecurityEvents,
 		TokenSigner:          cfg.TokenSigner,
-		TokenTTL:             cfg.TokenTTL,
+		AccessTokenTTL:       cfg.AccessTokenTTL,
+		RefreshTTL:           cfg.RefreshTTL,
+		Passwordless:         cfg.Passwordless,
+		PublicAuthBaseURL:    cfg.PublicAuthBaseURL,
 		Logger:               cfg.Logger,
 		IDs:                  cfg.IDs,
 	}
@@ -470,27 +848,95 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 	if invSvc != nil {
 		deps.Invitations = invSvc
 	}
-	return &Service{svc: authsvc.NewService(deps), inv: invSvc, listStrategy: listStrategy}, nil
+	// Wire the injected identifier normalizer only when the host supplies one, so
+	// authsvc nil-defaults to the bundled strict identifier.DefaultNormalizer; one
+	// policy canonicalizes registration, login, verify, and recovery values.
+	if cfg.IdentifierNormalizer != nil {
+		deps.Normalizer = cfg.IdentifierNormalizer
+	}
+	// Wire the challenge protector only when one is supplied, so the authsvc field
+	// stays a genuine nil interface when the challenge subsystem is off (validated
+	// required alongside repos.Challenges above).
+	if cfg.ChallengeProtector != nil {
+		deps.Protector = cfg.ChallengeProtector
+	}
+	// Wire the compromised-password checker only when one is supplied, so the
+	// authsvc field stays a genuine nil interface (no breach check) when unset.
+	if cfg.CompromisedPasswordChecker != nil {
+		deps.Compromised = cfg.CompromisedPasswordChecker
+	}
+	// Wire the durable outbox and its PII-free keyer only when built/supplied, so the
+	// authsvc fields stay genuine nil interfaces (send sites fail closed) when off.
+	if deliveryQueue != nil {
+		deps.Queue = deliveryQueue
+	}
+	if cfg.IdentifierKeyer != nil {
+		deps.IdentifierKeyer = cfg.IdentifierKeyer
+	}
+
+	authService = authsvc.NewService(deps)
+
+	// The at-least-once delivery worker (design §6.1.1) drains the outbox off the
+	// request path. It is built only when the outbox is wired; its Initializer is the
+	// auth service itself (it resolves accounts and issues challenges for opaque start
+	// jobs). The host runs it through RunDeliveryWorker — the feature never starts a
+	// goroutine at construction.
+	var worker *delivery.Worker
+	if deliveryQueue != nil {
+		worker, err = delivery.NewWorker(delivery.WorkerDeps{
+			Repo:        repos.DeliveryJobs,
+			Encrypter:   cfg.DeliveryEncrypter,
+			Router:      deliveryRouter,
+			Initializer: authService,
+			Logger:      cfg.Logger,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &Service{
+		svc:          authService,
+		inv:          invSvc,
+		worker:       worker,
+		listStrategy: listStrategy,
+		mutationSecurity: inbound.MutationSecurity{
+			AllowedOrigins:    cfg.AllowedOrigins,
+			SessionCookieName: authService.SessionCookieName(),
+		},
+		views: cfg.Views,
+	}, nil
 }
 
 // userLookup builds the internal email→subject resolver invitationsvc uses for
-// the direct-add path, backed by the Users repository. It is wired here (package
-// auth has the repos) so invitationsvc stays decoupled from the user store; an
-// invalid or unknown email resolves to no user (found=false), never an error.
-func userLookup(users user.UserRepository) invitationsvc.UserLookup {
+// the direct-add path, backed by the identifier discovery rail (design §2.2/§7).
+// It normalizes through the single injected policy and resolves the owning
+// subject through an active login- then recovery-enabled email identifier. It is
+// wired here (package auth has the repos) so invitationsvc stays decoupled from
+// the identifier store; an invalid or unknown email resolves to no user
+// (found=false), never an error.
+func userLookup(idents identifier.IdentifierRepository, norm identifier.Normalizer) invitationsvc.UserLookup {
+	kind := string(identifier.KindEmail)
 	return func(ctx context.Context, emailAddr string) (string, bool, error) {
-		normalized, err := user.NormalizeEmail(emailAddr)
+		normalized, err := norm.Normalize(kind, emailAddr)
 		if err != nil {
 			return "", false, nil
 		}
-		u, err := users.GetByEmail(ctx, normalized)
+		ident, err := idents.GetLogin(ctx, kind, normalized)
+		if err == nil {
+			return ident.UserID, true, nil
+		}
+		if !errors.Is(err, sdk.ErrNotFound) {
+			return "", false, err
+		}
+		ident, err = idents.GetRecovery(ctx, kind, normalized)
 		if err != nil {
 			if errors.Is(err, sdk.ErrNotFound) {
 				return "", false, nil
 			}
 			return "", false, err
 		}
-		return u.ID, true, nil
+		return ident.UserID, true, nil
 	}
 }
 
@@ -523,6 +969,16 @@ func (s *Service) RequirePrincipal(next http.Handler) http.Handler {
 	return s.svc.RequirePrincipal(next)
 }
 
+// RequireLiveSession is HTTP middleware for sensitive routes that gates on a LIVE
+// session — one PK lookup per request (§1.4, D1), the immediate-revocation tier
+// above RequireUser's stateless JWT check. A user JWT's session_id is looked up
+// (deleted/expired → deny); an API key passes (already DB-checked, no session
+// row); a repository error DENIES (fails CLOSED). A host wires it like RequireUser
+// on password-change, key-minting, invitation, or secret-read routes.
+func (s *Service) RequireLiveSession(next http.Handler) http.Handler {
+	return s.svc.RequireLiveSession(next)
+}
+
 // AuthenticateAPIKey resolves the effective Principal for a raw API key (design
 // §4.1): a personal act-as-user key yields Principal{Type: "user"}, otherwise
 // Principal{Type: "service_account"}. Revoked, expired, or unknown keys return a
@@ -544,11 +1000,12 @@ func (s *Service) CurrentPrincipal(ctx context.Context) (Principal, bool) {
 var _ identity.Resolver = (*Service)(nil)
 
 // Resolve implements identity.Resolver: it turns a Principal into its display and
-// contact Info. A user principal resolves to its DisplayName (else the email
-// local part) with the email carried as an identity.KindEmail address; a
-// service-account principal resolves to its Name. An unknown principal type, a
-// missing record, or an off machine subsystem (nil ServiceAccounts) returns an
-// error satisfying sdk.ErrNotFound — fail-closed, nil-guarded, never a panic.
+// contact Info. A user principal resolves to its DisplayName (else the primary
+// email local part) carrying every active verified identifier as an Address,
+// primary-first (design §7); a service-account principal resolves to its Name. An
+// unknown principal type, a missing record, or an off machine subsystem (nil
+// ServiceAccounts) returns an error satisfying sdk.ErrNotFound — fail-closed,
+// nil-guarded, never a panic.
 func (s *Service) Resolve(ctx context.Context, p identity.Principal) (identity.Info, error) {
 	return s.svc.Resolve(ctx, p)
 }
@@ -558,29 +1015,61 @@ func (s *Service) RegisterUser(ctx context.Context, email, password, displayName
 	return s.svc.Register(ctx, email, password, displayName)
 }
 
-// Login verifies credentials and returns the plaintext session cookie token to set.
-func (s *Service) Login(ctx context.Context, email, password string) (token string, u user.User, err error) {
+// Login verifies credentials and returns the access/refresh TokenPair to set.
+func (s *Service) Login(ctx context.Context, email, password string) (pair TokenPair, u user.User, err error) {
 	return s.svc.Login(ctx, email, password)
 }
 
-// Logout revokes the session backing the cookie token (idempotent).
-func (s *Service) Logout(ctx context.Context, token string) error {
-	return s.svc.Logout(ctx, token)
+// Logout revokes the session behind the caller's credentials (idempotent). It
+// resolves the session id from the refresh token (primary) or the access JWT's
+// session_id read ignoring expiry (fallback) — see §1.5.
+func (s *Service) Logout(ctx context.Context, refreshToken, accessToken string) error {
+	return s.svc.Logout(ctx, refreshToken, accessToken)
 }
 
-// Verify redeems an email-verification code, marking the user verified.
-func (s *Service) Verify(ctx context.Context, code string) error {
-	return s.svc.Verify(ctx, code)
+// Refresh rotates the presented refresh token per the §1.3 contract, returning a
+// fresh TokenPair (RefreshToken empty on the grace lane).
+func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, error) {
+	return s.svc.Refresh(ctx, refreshToken)
 }
 
-// ChangePassword verifies the current password, sets the new one, revokes all sessions, and returns a fresh cookie token.
-func (s *Service) ChangePassword(ctx context.Context, userID, currentPassword, newPassword string) (token string, err error) {
+// Verify redeems a registration verification code for the account behind email,
+// claiming and verifying its primary email identifier (design §2.3, §3.2).
+func (s *Service) Verify(ctx context.Context, email, code string) error {
+	return s.svc.Verify(ctx, email, code)
+}
+
+// ChangePassword verifies the current password, sets the new one, revokes all sessions, and returns a fresh TokenPair.
+func (s *Service) ChangePassword(ctx context.Context, userID, currentPassword, newPassword string) (pair TokenPair, err error) {
 	return s.svc.ChangePassword(ctx, userID, currentPassword, newPassword)
 }
 
-// ForgotPassword mails a reset token; an unknown email is a silent no-op.
+// ForgotPassword enqueues an enumeration-safe password-reset start: it normalizes
+// the address and enqueues an opaque delivery command without resolving the account
+// or calling a provider (design §4.1/§6.1.1). Known and unknown addresses share one
+// bounded request path; the worker resolves the recovery identifier and delivers.
 func (s *Service) ForgotPassword(ctx context.Context, email string) error {
 	return s.svc.ForgotPassword(ctx, email)
+}
+
+// RunDeliveryWorker runs the durable delivery worker until ctx is canceled (design
+// §6.1.1). The host owns the lifecycle: call it in a goroutine and cancel ctx to
+// stop. When the outbox is not wired it is a no-op (returns nil immediately), so a
+// host may call it unconditionally.
+func (s *Service) RunDeliveryWorker(ctx context.Context) error {
+	if s.worker == nil {
+		return nil
+	}
+	return s.worker.Run(ctx)
+}
+
+// DeliveryStatus returns the current delivery status for a receipt key (design
+// §6.1.1). A session-gated caller polls it to learn that delivery failed without
+// holding the start request open; the caller's handler must enforce the live
+// session. An unknown key is sdk.ErrNotFound; the outbox being off is a wrapped
+// sdk.ErrForbidden.
+func (s *Service) DeliveryStatus(ctx context.Context, receiptKey string) (DeliveryStatus, error) {
+	return s.svc.DeliveryStatus(ctx, receiptKey)
 }
 
 // ResetPassword redeems a reset token and sets the new password.
@@ -613,10 +1102,10 @@ func (s *Service) ListLinked(ctx context.Context, userID string) ([]oauthaccount
 	return s.svc.ListLinked(ctx, userID)
 }
 
-// Unlink removes a provider link, refusing if it is the account's last auth method.
-func (s *Service) Unlink(ctx context.Context, userID, provider string) error {
-	return s.svc.Unlink(ctx, userID, provider)
-}
+// The code-gated OAuth unlink (design §5.4) is exposed through the mounted HTTP
+// routes only (POST /auth/oauth/{provider}/unlink/start and .../unlink), matching
+// the route-only credential-suite mutations (set/remove password); it is not a
+// method on the host-facing Service.
 
 // CreateServiceAccount creates a machine identity, optionally acting as ownerUserID.
 func (s *Service) CreateServiceAccount(ctx context.Context, createdBy, name, description string, actAsUser bool, ownerUserID string) (serviceaccount.ServiceAccount, error) {
@@ -643,8 +1132,9 @@ func (s *Service) RevokeAPIKey(ctx context.Context, keyID string) error {
 	return s.svc.RevokeAPIKey(ctx, keyID)
 }
 
-// IssueToken mints a short-TTL bearer JWT for login-shaped credentials, returning the token and its expiry.
-func (s *Service) IssueToken(ctx context.Context, email, password string) (token string, expiresAt time.Time, err error) {
+// IssueToken authenticates login-shaped credentials and mints a session-backed
+// TokenPair (the API-flow twin of Login).
+func (s *Service) IssueToken(ctx context.Context, email, password string) (pair TokenPair, err error) {
 	return s.svc.IssueToken(ctx, email, password)
 }
 
@@ -704,19 +1194,26 @@ func (s *Service) Resend(ctx context.Context, id, currentUserID, redirectTo stri
 	return s.inv.Resend(ctx, id, currentUserID, redirectTo)
 }
 
-// SetSessionCookie writes the session cookie carrying token, per the configured policy.
-func (s *Service) SetSessionCookie(w http.ResponseWriter, token string) {
-	s.svc.SetSessionCookie(w, token)
+// SetSessionCookies writes BOTH browser credential cookies for a mint (§1.1, D4):
+// the access-JWT cookie always, and the refresh cookie (Path=/auth, HttpOnly,
+// SameSite=Lax) only when pair.RefreshToken is non-empty.
+func (s *Service) SetSessionCookies(w http.ResponseWriter, pair TokenPair) {
+	s.svc.SetSessionCookies(w, pair)
 }
 
-// ClearSessionCookie expires the session cookie.
-func (s *Service) ClearSessionCookie(w http.ResponseWriter) {
-	s.svc.ClearSessionCookie(w)
+// ClearSessionCookies expires BOTH the access and refresh cookies.
+func (s *Service) ClearSessionCookies(w http.ResponseWriter) {
+	s.svc.ClearSessionCookies(w)
 }
 
-// SessionCookieName returns the configured session cookie name.
+// SessionCookieName returns the configured access (session) cookie name.
 func (s *Service) SessionCookieName() string {
 	return s.svc.SessionCookieName()
+}
+
+// RefreshCookieName returns the refresh cookie name.
+func (s *Service) RefreshCookieName() string {
+	return s.svc.RefreshCookieName()
 }
 
 // RateLimitByIP returns middleware throttling a public route on the client IP.
@@ -741,6 +1238,6 @@ func (s *Service) Register(m feature.Mount) error {
 	if s.inv != nil {
 		inv = s.inv
 	}
-	inbound.Mount(m.Router, s.svc, inv, s.listStrategy)
+	inbound.Mount(m.Router, s.svc, inv, s.listStrategy, s.mutationSecurity, s.views)
 	return nil
 }

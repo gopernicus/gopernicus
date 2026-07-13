@@ -1,0 +1,66 @@
+package templ
+
+import "github.com/gopernicus/gopernicus/features/authentication"
+
+// StepUp renders the recent-authentication confirmation page for a sensitive
+// operation. The template offers only the completion methods the service reported
+// viable; the safety decision remains the service's. No password/code is echoed.
+templ StepUp(m authentication.StepUpPage) {
+	@Layout("Confirm it's you") {
+		@message(m.PageContext)
+		@errorSummary(m.PageContext)
+		if m.Operation != "" {
+			<p>Confirm your identity to continue: { m.Operation }.</p>
+		}
+		if m.PasswordAvailable {
+			<form method="post" action="/auth/step-up/password" autocomplete="off">
+				@csrfField(m.PageContext)
+				@returnToField(m.PageContext)
+				@stepUpBinding(m)
+				<p>
+					<label for="password">Current password</label><br/>
+					<input id="password" name="password" type="password" autocomplete="current-password" required aria-describedby="password-error"/>
+					@fieldError(m.PageContext, "password")
+				</p>
+				<button type="submit">Confirm with password</button>
+			</form>
+		}
+		if m.CodeAvailable {
+			<form method="post" action="/auth/step-up/begin" autocomplete="off">
+				@csrfField(m.PageContext)
+				@stepUpBinding(m)
+				<button type="submit">
+					if m.MaskedIdentifier != "" {
+						Send a code to { m.MaskedIdentifier }
+					} else {
+						Send me a code
+					}
+				</button>
+			</form>
+			<form method="post" action="/auth/step-up/code" autocomplete="off">
+				@csrfField(m.PageContext)
+				@returnToField(m.PageContext)
+				@stepUpBinding(m)
+				<p>
+					<label for="code">One-time code</label><br/>
+					<input id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" required aria-describedby="code-error"/>
+					@fieldError(m.PageContext, "code")
+				</p>
+				<button type="submit">Confirm with code</button>
+			</form>
+		}
+	}
+}
+
+// stepUpBinding renders the non-secret purpose/context hidden fields that bind the
+// earned recent-authentication grant to the exact operation the caller is stepping
+// up for (design §5.0). They are operation identifiers, never a credential; the
+// service is authoritative on what the grant authorizes.
+templ stepUpBinding(m authentication.StepUpPage) {
+	if m.Purpose != "" {
+		<input type="hidden" name="purpose" value={ m.Purpose }/>
+	}
+	if m.Context != "" {
+		<input type="hidden" name="context" value={ m.Context }/>
+	}
+}

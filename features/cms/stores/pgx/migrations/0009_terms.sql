@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS terms (
-    id         TEXT PRIMARY KEY,
+    id         TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     kind       TEXT NOT NULL,
     slug       TEXT NOT NULL,
     name       TEXT NOT NULL,

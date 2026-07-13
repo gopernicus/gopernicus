@@ -22,30 +22,34 @@ func (f *fakeResolver) ResolveInvitations(_ context.Context, email, subjectType,
 	return len(f.calls), f.err
 }
 
-func serviceWithResolver(resolver invitationResolver) (*Service, *fakeCodes) {
-	codes := newFakeCodes()
+func serviceWithResolver(t *testing.T, resolver invitationResolver) (*Service, *recordingMailer) {
+	t.Helper()
+	users := newFakeUsers()
+	mailer := &recordingMailer{}
 	svc := NewService(Deps{
-		Users:       newFakeUsers(),
+		Users:       users,
+		Identifiers: newFakeIdentifiers(users),
 		Passwords:   newFakePasswords(),
 		Sessions:    newFakeSessions(),
-		Codes:       codes,
-		Tokens:      newFakeTokens(),
+		Challenges:  newFakeChallenges(),
+		Protector:   newFakeProtector("k1", "k1"),
 		Hasher:      &fakeHasher{},
-		Mailer:      &recordingMailer{},
+		Mailer:      mailer,
 		Limiter:     ratelimiter.NewMemory(),
 		Cookie:      CookieConfig{},
 		Invitations: resolver,
 	})
-	return svc, codes
+	wireSyncDelivery(t, svc, mailer, nil)
+	return svc, mailer
 }
 
 // TestRegisterResolvesInvitations proves Register calls the resolver with the
 // normalized email, the "user" subject type, and the new user id.
 func TestRegisterResolvesInvitations(t *testing.T) {
 	resolver := &fakeResolver{}
-	svc, _ := serviceWithResolver(resolver)
+	svc, _ := serviceWithResolver(t, resolver)
 
-	u, err := svc.Register(context.Background(), "New@Example.com", "password123", "N")
+	u, err := svc.Register(context.Background(), "New@Example.com", "password123456789", "N")
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -62,9 +66,9 @@ func TestRegisterResolvesInvitations(t *testing.T) {
 // contract: a resolver error never aborts registration.
 func TestRegisterResolveErrorDoesNotFailRegistration(t *testing.T) {
 	resolver := &fakeResolver{err: errors.New("grant boom")}
-	svc, _ := serviceWithResolver(resolver)
+	svc, _ := serviceWithResolver(t, resolver)
 
-	if _, err := svc.Register(context.Background(), "user@example.com", "password123", "U"); err != nil {
+	if _, err := svc.Register(context.Background(), "user@example.com", "password123456789", "U"); err != nil {
 		t.Errorf("Register with a failing resolver: err=%v, want nil (best-effort)", err)
 	}
 }
@@ -73,17 +77,14 @@ func TestRegisterResolveErrorDoesNotFailRegistration(t *testing.T) {
 // resolves at register; a verifying host resolves again — idempotent).
 func TestVerifyResolvesInvitations(t *testing.T) {
 	resolver := &fakeResolver{}
-	svc, codes := serviceWithResolver(resolver)
+	svc, mailer := serviceWithResolver(t, resolver)
 
-	u, err := svc.Register(context.Background(), "verify@example.com", "password123", "V")
+	u, err := svc.Register(context.Background(), "verify@example.com", "password123456789", "V")
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	var code string
-	for c := range codes.m {
-		code = c
-	}
-	if err := svc.Verify(context.Background(), code); err != nil {
+	code := verificationCodeFromMail(t, mailer.last())
+	if err := svc.Verify(context.Background(), "verify@example.com", code); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
 	if len(resolver.calls) != 2 {
@@ -98,8 +99,8 @@ func TestVerifyResolvesInvitations(t *testing.T) {
 // TestRegisterNilResolverIsNoop proves a nil resolver (invitations off) never
 // panics and never affects registration.
 func TestRegisterNilResolverIsNoop(t *testing.T) {
-	svc, _ := serviceWithResolver(nil)
-	if _, err := svc.Register(context.Background(), "noresolver@example.com", "password123", "N"); err != nil {
+	svc, _ := serviceWithResolver(t, nil)
+	if _, err := svc.Register(context.Background(), "noresolver@example.com", "password123456789", "N"); err != nil {
 		t.Errorf("Register with nil resolver: %v", err)
 	}
 }

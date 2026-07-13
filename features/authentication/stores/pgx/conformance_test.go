@@ -26,14 +26,17 @@ import (
 var authTables = []string{
 	"user_passwords",
 	"sessions",
-	"verification_codes",
-	"verification_tokens",
 	"api_keys",
 	"service_accounts",
 	"oauth_accounts",
 	"oauth_states",
 	"security_events",
 	"invitations",
+	"user_identifiers",
+	"challenges",
+	"contact_changes",
+	"authentication_grants",
+	"delivery_jobs",
 	"users",
 }
 

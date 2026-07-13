@@ -10,6 +10,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/invitationsvc"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
@@ -149,8 +150,8 @@ func (h *handlers) listResourceInvitations(w http.ResponseWriter, r *http.Reques
 }
 
 // listMyInvitations pages the caller's own invitations, keyed on their email
-// (session-gated). The email is resolved from the caller's user record so
-// invitationsvc stays decoupled from the user store.
+// (session-gated). The email is resolved from the caller's active verified email
+// identifier so invitationsvc stays decoupled from the identifier store.
 func (h *handlers) listMyInvitations(w http.ResponseWriter, r *http.Request) {
 	req, ok := h.parseListRequest(w, r, invitation.OrderFields, invitation.DefaultOrder)
 	if !ok {
@@ -161,7 +162,7 @@ func (h *handlers) listMyInvitations(w http.ResponseWriter, r *http.Request) {
 		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return
 	}
-	email, err := h.svc.EmailForUser(r.Context(), userID)
+	email, err := h.svc.ActiveVerifiedIdentifier(r.Context(), userID, identity.KindEmail)
 	if err != nil {
 		web.RespondJSONDomainError(w, err)
 		return
@@ -175,7 +176,9 @@ func (h *handlers) listMyInvitations(w http.ResponseWriter, r *http.Request) {
 }
 
 // acceptInvitation redeems a token for the calling user (session-gated). The
-// caller's email is checked against the invitation identifier in the service.
+// caller's email is checked against an email-kind invitation identifier in the
+// service; a phone-kind invitation is matched against the caller's active
+// verified phone identifier inside the service (design §7/V11).
 func (h *handlers) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 	var req acceptInvitationRequest
 	if !decode(w, r, &req) {
@@ -186,7 +189,7 @@ func (h *handlers) acceptInvitation(w http.ResponseWriter, r *http.Request) {
 		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return
 	}
-	email, err := h.svc.EmailForUser(r.Context(), userID)
+	email, err := h.svc.ActiveVerifiedIdentifier(r.Context(), userID, identity.KindEmail)
 	if err != nil {
 		web.RespondJSONDomainError(w, err)
 		return

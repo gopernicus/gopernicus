@@ -170,12 +170,14 @@ func newMachineHarness(t *testing.T) *machineHarness {
 	sas := newFakeServiceAccounts()
 	keys := newFakeAPIKeys()
 	events := newSpySecurityEvents()
+	users := newFakeUsers()
 	svc := NewService(Deps{
-		Users:           newFakeUsers(),
+		Users:           users,
+		Identifiers:     newFakeIdentifiers(users),
 		Passwords:       newFakePasswords(),
 		Sessions:        newFakeSessions(),
-		Codes:           newFakeCodes(),
-		Tokens:          newFakeTokens(),
+		Challenges:      newFakeChallenges(),
+		Protector:       newFakeProtector("k1", "k1"),
 		Hasher:          &fakeHasher{},
 		Mailer:          &recordingMailer{},
 		MailFrom:        "noreply@example.com",
@@ -184,7 +186,9 @@ func newMachineHarness(t *testing.T) *machineHarness {
 		ServiceAccounts: sas,
 		APIKeys:         keys,
 		SecurityEvents:  events,
+		TokenSigner:     newFakeSigner(),
 	})
+	wireSyncDelivery(t, svc, &recordingMailer{}, nil)
 	return &machineHarness{svc: svc, sas: sas, keys: keys, events: events}
 }
 
@@ -321,8 +325,6 @@ func TestAuthenticateAPIKeySubsystemOff(t *testing.T) {
 		Users:     newFakeUsers(),
 		Passwords: newFakePasswords(),
 		Sessions:  newFakeSessions(),
-		Codes:     newFakeCodes(),
-		Tokens:    newFakeTokens(),
 		Hasher:    &fakeHasher{},
 		Mailer:    &recordingMailer{},
 		Limiter:   ratelimiter.NewMemory(),
@@ -397,7 +399,7 @@ func TestRequireServiceAccountJWTShapedDenied(t *testing.T) {
 func TestRequireServiceAccountSubsystemOff(t *testing.T) {
 	svc := NewService(Deps{
 		Users: newFakeUsers(), Passwords: newFakePasswords(), Sessions: newFakeSessions(),
-		Codes: newFakeCodes(), Tokens: newFakeTokens(), Hasher: &fakeHasher{},
+		Hasher: &fakeHasher{},
 		Mailer: &recordingMailer{}, Limiter: ratelimiter.NewMemory(),
 	})
 	rec := httptest.NewRecorder()
@@ -429,11 +431,11 @@ func TestRequirePrincipalAPIKey(t *testing.T) {
 func TestRequirePrincipalSession(t *testing.T) {
 	h := newMachineHarness(t)
 	ctx := context.Background()
-	u, err := h.svc.Register(ctx, "sess@example.com", "password123", "Sess")
+	u, err := h.svc.Register(ctx, "sess@example.com", "password123456789", "Sess")
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	token, _, err := h.svc.Login(ctx, "sess@example.com", "password123")
+	pair, _, err := h.svc.Login(ctx, "sess@example.com", "password123456789")
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
@@ -444,7 +446,7 @@ func TestRequirePrincipalSession(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	req := httptest.NewRequest("GET", "/x", nil)
-	req.AddCookie(&http.Cookie{Name: h.svc.SessionCookieName(), Value: token})
+	req.AddCookie(&http.Cookie{Name: h.svc.SessionCookieName(), Value: pair.AccessToken})
 	rec := httptest.NewRecorder()
 	h.svc.RequirePrincipal(next).ServeHTTP(rec, req)
 
@@ -453,8 +455,8 @@ func TestRequirePrincipalSession(t *testing.T) {
 	}
 }
 
-func TestRequirePrincipalJWTShapedInert(t *testing.T) {
-	// A two-dot bearer is the JWT path, inert in A3 (no TokenSigner) → 401, and it
+func TestRequirePrincipalJWTShapedGarbageDenied(t *testing.T) {
+	// A two-dot bearer is the JWT path; garbage fails verification → 401, and it
 	// must NOT fall through to the session path.
 	h := newMachineHarness(t)
 	rec := httptest.NewRecorder()

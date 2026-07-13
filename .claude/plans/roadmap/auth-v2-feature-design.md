@@ -438,6 +438,19 @@ never looked up.
 
 ### 4.4 JWT bearer mode (ratified AV6 — the honest salvage)
 
+> **[SUPERSEDED 2026-07-11 by `.claude/plans/roadmap/auth-jwt-session-refresh.md`
+> (ratified same day, decisions D1–D8).]** The refresh change reverses AV6's "no
+> refresh" arm and re-frames the JWT: the access JWT becomes the **primary**
+> access credential (not a side convenience) and the session row becomes the
+> revocation + refresh anchor. Concretely, past this date: `Config.TokenSigner`
+> is **required** (no signer-off mode); `/auth/token` returns
+> `{access_token, expires_at, refresh_token}` (not `{token, expires_at}`);
+> `TokenTTL` is removed in favour of `AccessTokenTTL` (15m) + `RefreshTTL` (7d);
+> `POST /auth/refresh` rotates an opaque refresh token with single-generation
+> reuse detection; and a new `RequireLiveSession` tier gives immediate revocation
+> where the stateless-JWT revocation asymmetry below is unacceptable. The
+> original AV6 framing is retained verbatim below for decision history only.
+
 **Finding (corrects this design's own task framing):** the original had
 no machine-client JWT mode — machine clients used API keys; JWTs were
 *user* tokens (claims `{user_id, exp, iat}`) as a stateless alternative to
@@ -712,7 +725,10 @@ auth store modules contain no `features/events` import.
 ## 11. Non-goals (both milestones)
 
 - No `sdk/authorization` port (§2.2's graduation trigger recorded).
-- No tenancy (§8). No per-key API scopes (§4.1). No refresh tokens (§4.4).
+- No tenancy (§8). No per-key API scopes (§4.1). ~~No refresh tokens (§4.4).~~
+  **[SUPERSEDED 2026-07-11 by `auth-jwt-session-refresh.md`: refresh tokens with
+  rotation + single-generation reuse detection are now in scope; see the §4.4
+  banner.]**
 - No OAuth mobile flow, no code-gated sensitive-op unlink (AV7).
 - No security-event HTTP read surface, alerting, or webhook reactions
   (the outbox rail is the extension point; consumers are host-side).
@@ -745,7 +761,7 @@ original's schema.
 | # | decision | ratified outcome | notes |
 |---|---|---|---|
 | AV3 | **(c) milestone split**: authorization inside auth-v2 vs follow-on milestone | **two milestones: auth-v2 (identity) then authorization-v1** | keeps each close-gate (store parity, live runs) tractable; auth-v2 pays debts first; the ruling's "never required" is proven by auth-v2 shipping with zero authorization imports |
-| AV6 | JWT bearer mode shape | **stateless *user* tokens (short TTL, no refresh); machine clients authenticate via API keys** (§4.4) | faithful to the original (which had no machine-JWT mode, correcting this design's own task framing); service-account JWTs would be new design |
+| AV6 | JWT bearer mode shape | **stateless *user* tokens (short TTL, no refresh); machine clients authenticate via API keys** (§4.4) | faithful to the original (which had no machine-JWT mode, correcting this design's own task framing); service-account JWTs would be new design. **[AMENDED 2026-07-11 by `auth-jwt-session-refresh.md` (D1–D8): the "no refresh" arm is reversed — the access JWT becomes the primary credential with an opaque rotating refresh token + `RequireLiveSession`; see the §4.4 supersession banner.]** |
 | AV7 | OAuth scope trims | **mobile flow + code-gated unlink OUT; browser login/register/pending-link/linking/unlink IN** (§3) | no mobile host exists; the anti-takeover pending-link gate — the part with real security content — is kept intact |
 | AV8 | `RequireVerifiedEmail` default | **ship the knob defaulting to false; revisit the default at first tag** (§7.1) | flipping now silently breaks the standing acid-test flow and existing hosts; the knob's existence closes the product debt |
 | AV9 | `Repositories.SecurityEvents` optionality | **optional (nil → no audit trail, loud README row)** (§5.1) | requiring it would force six ports on zero-infra hosts; but if jrazmi wants audit-by-default posture, "required like Hasher" is defensible — genuine product call |

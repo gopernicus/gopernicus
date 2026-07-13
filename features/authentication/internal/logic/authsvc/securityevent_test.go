@@ -88,7 +88,7 @@ func requireEvent(t *testing.T, spy *spySecurityEvents, eventType, status string
 
 func TestSecurityEventRegister(t *testing.T) {
 	h := newHarness(t, nil)
-	u := h.mustRegister(t, "reg@example.com", "password123")
+	u := h.mustRegister(t, "reg@example.com", "password123456789")
 	e := requireEvent(t, h.events, securityevent.TypeRegister, securityevent.StatusSuccess)
 	if e.UserID != u.ID {
 		t.Errorf("register event UserID = %q, want %q", e.UserID, u.ID)
@@ -97,8 +97,8 @@ func TestSecurityEventRegister(t *testing.T) {
 
 func TestSecurityEventLoginSuccess(t *testing.T) {
 	h := newHarness(t, nil)
-	u := h.mustRegister(t, "ls@example.com", "password123")
-	if _, _, err := h.svc.Login(context.Background(), "ls@example.com", "password123"); err != nil {
+	u := h.mustRegister(t, "ls@example.com", "password123456789")
+	if _, _, err := h.svc.Login(context.Background(), "ls@example.com", "password123456789"); err != nil {
 		t.Fatalf("Login: %v", err)
 	}
 	e := requireEvent(t, h.events, securityevent.TypeLogin, securityevent.StatusSuccess)
@@ -109,7 +109,7 @@ func TestSecurityEventLoginSuccess(t *testing.T) {
 
 func TestSecurityEventLoginFailure(t *testing.T) {
 	h := newHarness(t, nil)
-	h.mustRegister(t, "lf@example.com", "password123")
+	h.mustRegister(t, "lf@example.com", "password123456789")
 	if _, _, err := h.svc.Login(context.Background(), "lf@example.com", "wrongpass"); err == nil {
 		t.Fatal("expected a login error")
 	}
@@ -118,8 +118,8 @@ func TestSecurityEventLoginFailure(t *testing.T) {
 
 func TestSecurityEventLoginBlocked(t *testing.T) {
 	h := newHarness(t, denyLimiter{})
-	h.mustRegister(t, "lb@example.com", "password123")
-	if _, _, err := h.svc.Login(context.Background(), "lb@example.com", "password123"); !errors.Is(err, ErrRateLimited) {
+	h.mustRegister(t, "lb@example.com", "password123456789")
+	if _, _, err := h.svc.Login(context.Background(), "lb@example.com", "password123456789"); !errors.Is(err, ErrRateLimited) {
 		t.Fatalf("Login: err=%v, want ErrRateLimited", err)
 	}
 	requireEvent(t, h.events, securityevent.TypeLogin, securityevent.StatusBlocked)
@@ -127,9 +127,9 @@ func TestSecurityEventLoginBlocked(t *testing.T) {
 
 func TestSecurityEventLogout(t *testing.T) {
 	h := newHarness(t, nil)
-	h.mustRegister(t, "lo@example.com", "password123")
-	token, _, _ := h.svc.Login(context.Background(), "lo@example.com", "password123")
-	if err := h.svc.Logout(context.Background(), token); err != nil {
+	h.mustRegister(t, "lo@example.com", "password123456789")
+	pair, _, _ := h.svc.Login(context.Background(), "lo@example.com", "password123456789")
+	if err := h.svc.Logout(context.Background(), pair.RefreshToken, pair.AccessToken); err != nil {
 		t.Fatalf("Logout: %v", err)
 	}
 	requireEvent(t, h.events, securityevent.TypeLogout, securityevent.StatusSuccess)
@@ -137,12 +137,9 @@ func TestSecurityEventLogout(t *testing.T) {
 
 func TestSecurityEventEmailVerified(t *testing.T) {
 	h := newHarness(t, nil)
-	h.mustRegister(t, "ev@example.com", "password123")
-	var code string
-	for c := range h.codes.m {
-		code = c
-	}
-	if err := h.svc.Verify(context.Background(), code); err != nil {
+	h.mustRegister(t, "ev@example.com", "password123456789")
+	code := verificationCodeFromMail(t, h.mailer.last())
+	if err := h.svc.Verify(context.Background(), "ev@example.com", code); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
 	requireEvent(t, h.events, securityevent.TypeEmailVerified, securityevent.StatusSuccess)
@@ -150,8 +147,8 @@ func TestSecurityEventEmailVerified(t *testing.T) {
 
 func TestSecurityEventPasswordChange(t *testing.T) {
 	h := newHarness(t, nil)
-	u := h.mustRegister(t, "pc@example.com", "password123")
-	if _, err := h.svc.ChangePassword(context.Background(), u.ID, "password123", "newpassword456"); err != nil {
+	u := h.mustRegister(t, "pc@example.com", "password123456789")
+	if _, err := h.svc.ChangePassword(context.Background(), u.ID, "password123456789", "newpassword456789"); err != nil {
 		t.Fatalf("ChangePassword: %v", err)
 	}
 	e := requireEvent(t, h.events, securityevent.TypePasswordChange, securityevent.StatusSuccess)
@@ -162,18 +159,20 @@ func TestSecurityEventPasswordChange(t *testing.T) {
 
 func TestSecurityEventPasswordReset(t *testing.T) {
 	h := newHarness(t, nil)
-	h.mustRegister(t, "pr@example.com", "password123")
+	u := h.mustRegister(t, "pr@example.com", "password123456789")
+	h.mustVerify(t, "pr@example.com") // claims the verified recovery identifier
+	h.mailer.sent = nil
 	if err := h.svc.ForgotPassword(context.Background(), "pr@example.com"); err != nil {
 		t.Fatalf("ForgotPassword: %v", err)
 	}
-	var token string
-	for tk := range h.tokens.m {
-		token = tk
-	}
-	if err := h.svc.ResetPassword(context.Background(), token, "brandnewpass"); err != nil {
+	token := resetTokenFromMail(t, h.mailer.last())
+	if err := h.svc.ResetPassword(context.Background(), token, "brandnewpass1234"); err != nil {
 		t.Fatalf("ResetPassword: %v", err)
 	}
-	requireEvent(t, h.events, securityevent.TypePasswordReset, securityevent.StatusSuccess)
+	e := requireEvent(t, h.events, securityevent.TypePasswordReset, securityevent.StatusSuccess)
+	if e.UserID != u.ID {
+		t.Errorf("password_reset UserID = %q, want %q", e.UserID, u.ID)
+	}
 }
 
 // --- OAuth ops ---
@@ -237,12 +236,16 @@ func TestSecurityEventOAuthLinkVerified(t *testing.T) {
 
 func TestSecurityEventOAuthUnlinked(t *testing.T) {
 	ctx := context.Background()
-	h := newOAuthHarness(t, &fakeProvider{name: "google"}, nil)
-	u := h.mustOAuthUser(t, "ounl@example.com")
-	h.pw.Set(ctx, u.ID, "hash:secret") // a password keeps the unlink from tripping last-method protection
-	seedOAuthLink(t, h, u.ID, "google", "g-unl")
-	if err := h.svc.Unlink(ctx, u.ID, "google"); err != nil {
-		t.Fatalf("Unlink: %v", err)
+	h := newHarness(t, nil)
+	const userID = "u-evt-unlink"
+	email := h.seedUnlinkUser(t, userID, "ounl@example.com", true, true, "google") // a password + login email keep the policy satisfied
+	if _, err := h.svc.StartUnlinkOAuth(ctx, userID, "google"); err != nil {
+		t.Fatalf("StartUnlinkOAuth: %v", err)
+	}
+	requireEvent(t, h.events, securityevent.TypeOAuthUnlinkCodeSent, securityevent.StatusSuccess)
+	code := h.mailer.codeFor(t, email)
+	if err := h.svc.UnlinkOAuth(ctx, userID, "google", code); err != nil {
+		t.Fatalf("UnlinkOAuth: %v", err)
 	}
 	requireEvent(t, h.events, securityevent.TypeOAuthUnlinked, securityevent.StatusSuccess)
 }
@@ -307,8 +310,8 @@ func TestSecurityEventAPIKeyAuthFailureExpired(t *testing.T) {
 
 func TestSecurityEventTokenIssued(t *testing.T) {
 	h := newTokenHarness(t, newFakeSigner(), false, nil)
-	u := h.mustRegister(t, "tok@example.com", "password123")
-	if _, _, err := h.svc.IssueToken(context.Background(), "tok@example.com", "password123"); err != nil {
+	u := h.mustRegister(t, "tok@example.com", "password123456789")
+	if _, err := h.svc.IssueToken(context.Background(), "tok@example.com", "password123456789"); err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}
 	e := requireEvent(t, h.events, securityevent.TypeTokenIssued, securityevent.StatusSuccess)
@@ -325,10 +328,10 @@ func TestSecurityEventNeverFailsFlow(t *testing.T) {
 	h := newHarness(t, nil)
 	h.events.createErr = errors.New("audit store unavailable")
 
-	if _, err := h.svc.Register(context.Background(), "nf@example.com", "password123", "NF"); err != nil {
+	if _, err := h.svc.Register(context.Background(), "nf@example.com", "password123456789", "NF"); err != nil {
 		t.Fatalf("Register failed on an audit-write error: %v", err)
 	}
-	if _, _, err := h.svc.Login(context.Background(), "nf@example.com", "password123"); err != nil {
+	if _, _, err := h.svc.Login(context.Background(), "nf@example.com", "password123456789"); err != nil {
 		t.Fatalf("Login failed on an audit-write error: %v", err)
 	}
 	if h.events.count() != 0 {
@@ -339,21 +342,25 @@ func TestSecurityEventNeverFailsFlow(t *testing.T) {
 // TestSecurityEventNilRepoNoOp asserts a nil SecurityEvents repository is a
 // documented no-op (ratified AV9): the ops run and record nothing, never panic.
 func TestSecurityEventNilRepoNoOp(t *testing.T) {
+	users := newFakeUsers()
 	svc := NewService(Deps{
-		Users:     newFakeUsers(),
-		Passwords: newFakePasswords(),
-		Sessions:  newFakeSessions(),
-		Codes:     newFakeCodes(),
-		Tokens:    newFakeTokens(),
-		Hasher:    &fakeHasher{},
-		Mailer:    &recordingMailer{},
-		Limiter:   ratelimiter.NewMemory(),
+		Users:       users,
+		Identifiers: newFakeIdentifiers(users),
+		Passwords:   newFakePasswords(),
+		Sessions:    newFakeSessions(),
+		Challenges:  newFakeChallenges(),
+		Protector:   newFakeProtector("k1", "k1"),
+		Hasher:      &fakeHasher{},
+		Mailer:      &recordingMailer{},
+		Limiter:     ratelimiter.NewMemory(),
+		TokenSigner: newFakeSigner(),
 		// SecurityEvents deliberately nil.
 	})
-	if _, err := svc.Register(context.Background(), "noop@example.com", "password123", "N"); err != nil {
+	wireSyncDelivery(t, svc, &recordingMailer{}, nil)
+	if _, err := svc.Register(context.Background(), "noop@example.com", "password123456789", "N"); err != nil {
 		t.Fatalf("Register with nil audit repo: %v", err)
 	}
-	if _, _, err := svc.Login(context.Background(), "noop@example.com", "password123"); err != nil {
+	if _, _, err := svc.Login(context.Background(), "noop@example.com", "password123456789"); err != nil {
 		t.Fatalf("Login with nil audit repo: %v", err)
 	}
 }
@@ -379,10 +386,10 @@ func (l *keyCapturingLimiter) Close() error                        { return nil 
 func TestLoginReadsIPFromCarrier(t *testing.T) {
 	lim := &keyCapturingLimiter{}
 	h := newHarness(t, lim)
-	h.mustRegister(t, "ip@example.com", "password123")
+	h.mustRegister(t, "ip@example.com", "password123456789")
 
 	ctx := WithClientInfo(context.Background(), "9.9.9.9", "probe-agent")
-	if _, _, err := h.svc.Login(ctx, "ip@example.com", "password123"); err != nil {
+	if _, _, err := h.svc.Login(ctx, "ip@example.com", "password123456789"); err != nil {
 		t.Fatalf("Login: %v", err)
 	}
 	lim.mu.Lock()
@@ -390,6 +397,85 @@ func TestLoginReadsIPFromCarrier(t *testing.T) {
 	lim.mu.Unlock()
 	if !strings.Contains(key, "9.9.9.9") {
 		t.Errorf("rate-limit key = %q, want it to carry the carrier IP 9.9.9.9", key)
+	}
+}
+
+// loginKeyFor drives one Login through a keyCapturingLimiter and returns the
+// captured rate-limit key. The limiter always allows, so the key is captured before
+// account resolution — an unknown email still yields a key (Login then fails on
+// credentials, which is expected and ignored here).
+func loginKeyFor(t *testing.T, h *harness, email, ip string) string {
+	t.Helper()
+	lim := &keyCapturingLimiter{}
+	h.svc.limiter = lim
+	ctx := WithClientInfo(context.Background(), ip, "agent")
+	_, _, _ = h.svc.Login(ctx, email, "password123456789")
+	lim.mu.Lock()
+	defer lim.mu.Unlock()
+	return lim.key
+}
+
+// TestLoginKeyIsPIIFree proves the login rate-limit key carries a non-reversible
+// identifier digest, never the raw email (design §4.4): a database/log reader of a
+// limiter key cannot recover the address. The trusted IP still rides the key.
+func TestLoginKeyIsPIIFree(t *testing.T) {
+	h := newHarness(t, ratelimiter.NewMemory())
+	h.mustRegister(t, "secret.person@example.com", "password123456789")
+
+	key := loginKeyFor(t, h, "secret.person@example.com", "9.9.9.9")
+	if key == "" {
+		t.Fatal("no rate-limit key captured")
+	}
+	for _, pii := range []string{"secret.person", "example.com", "secret.person@example.com"} {
+		if strings.Contains(key, pii) {
+			t.Errorf("rate-limit key %q contains raw PII %q — the identifier must be digested", key, pii)
+		}
+	}
+	if !strings.HasPrefix(key, "login:") {
+		t.Errorf("rate-limit key %q, want a login: prefix", key)
+	}
+	if !strings.Contains(key, "9.9.9.9") {
+		t.Errorf("rate-limit key %q, want it to carry the trusted IP", key)
+	}
+}
+
+// TestLoginKeyEquivalentValuesShareBucket proves two normalized-equivalent forms of
+// one address (domain/local case variants) digest to the SAME limiter key, so an
+// attacker cannot escape a victim's bucket by varying case (design §4.4). Both
+// digest before resolution, so neither address needs to exist.
+func TestLoginKeyEquivalentValuesShareBucket(t *testing.T) {
+	h := newHarness(t, ratelimiter.NewMemory())
+
+	a := loginKeyFor(t, h, "Case.User@Example.COM", "9.9.9.9")
+	b := loginKeyFor(t, h, "case.user@example.com", "9.9.9.9")
+	if a == "" || b == "" {
+		t.Fatal("no rate-limit key captured")
+	}
+	if a != b {
+		t.Errorf("equivalent normalized values produced different limiter keys:\n a=%q\n b=%q", a, b)
+	}
+}
+
+// TestLoginKeyUnknownAndKnownConsumeSameArm proves an unknown identifier keys the
+// SAME shape (login: prefix + digest + trusted IP) as a known one, so the limiter
+// runs identically before resolution and reveals no existence signal (design §4.4).
+func TestLoginKeyUnknownAndKnownConsumeSameArm(t *testing.T) {
+	h := newHarness(t, ratelimiter.NewMemory())
+	h.mustRegister(t, "known@example.com", "password123456789")
+
+	known := loginKeyFor(t, h, "known@example.com", "9.9.9.9")
+	unknown := loginKeyFor(t, h, "nobody@example.com", "9.9.9.9")
+
+	for label, key := range map[string]string{"known": known, "unknown": unknown} {
+		if !strings.HasPrefix(key, "login:") || !strings.Contains(key, "9.9.9.9") {
+			t.Errorf("%s login key %q does not match the shared arm shape (login:<digest>|<ip>)", label, key)
+		}
+		if strings.Contains(key, "example.com") {
+			t.Errorf("%s login key %q leaks raw PII", label, key)
+		}
+	}
+	if known == unknown {
+		t.Error("known and unknown identifiers should occupy distinct buckets (different digests), but keys matched")
 	}
 }
 
@@ -403,23 +489,27 @@ func TestSecurityEventWarnOnFailingRepo(t *testing.T) {
 	spy := newSpySecurityEvents()
 	spy.createErr = errors.New("boom: audit db unavailable")
 
+	users := newFakeUsers()
 	svc := NewService(Deps{
-		Users:          newFakeUsers(),
+		Users:          users,
+		Identifiers:    newFakeIdentifiers(users),
 		Passwords:      newFakePasswords(),
 		Sessions:       newFakeSessions(),
-		Codes:          newFakeCodes(),
-		Tokens:         newFakeTokens(),
+		Challenges:     newFakeChallenges(),
+		Protector:      newFakeProtector("k1", "k1"),
 		Hasher:         &fakeHasher{},
 		Mailer:         &recordingMailer{},
 		Limiter:        ratelimiter.NewMemory(),
 		SecurityEvents: spy,
 		Logger:         logger,
+		TokenSigner:    newFakeSigner(),
 	})
-	if _, err := svc.Register(context.Background(), "warn@example.com", "password123", "W"); err != nil {
+	wireSyncDelivery(t, svc, &recordingMailer{}, nil)
+	if _, err := svc.Register(context.Background(), "warn@example.com", "password123456789", "W"); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
 	buf.Reset() // isolate the login WARN from the register WARN
-	if _, _, err := svc.Login(context.Background(), "warn@example.com", "password123"); err != nil {
+	if _, _, err := svc.Login(context.Background(), "warn@example.com", "password123456789"); err != nil {
 		t.Fatalf("Login: %v", err)
 	}
 

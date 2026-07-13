@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gopernicus/gopernicus/features/authentication/domain/identifier"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
@@ -87,12 +88,14 @@ func (f *fakeSigner) mac(b string) string {
 // newTokenHarness builds a harness with the JWT bearer mode wired.
 func newTokenHarness(t *testing.T, signer cryptids.JWTSigner, requireVerified bool, limiter ratelimiter.Limiter) *harness {
 	t.Helper()
+	users := newFakeUsers()
 	h := &harness{
-		users:  newFakeUsers(),
+		users:  users,
+		idents: newFakeIdentifiers(users),
 		pw:     newFakePasswords(),
 		sess:   newFakeSessions(),
-		codes:  newFakeCodes(),
-		tokens: newFakeTokens(),
+		ch:     newFakeChallenges(),
+		prot:   newFakeProtector("k1", "k1"),
 		hasher: &fakeHasher{},
 		mailer: &recordingMailer{},
 		events: newSpySecurityEvents(),
@@ -102,10 +105,11 @@ func newTokenHarness(t *testing.T, signer cryptids.JWTSigner, requireVerified bo
 	}
 	h.svc = NewService(Deps{
 		Users:                h.users,
+		Identifiers:          h.idents,
 		Passwords:            h.pw,
 		Sessions:             h.sess,
-		Codes:                h.codes,
-		Tokens:               h.tokens,
+		Challenges:           h.ch,
+		Protector:            h.prot,
 		Hasher:               h.hasher,
 		Mailer:               h.mailer,
 		MailFrom:             "noreply@example.com",
@@ -115,23 +119,19 @@ func newTokenHarness(t *testing.T, signer cryptids.JWTSigner, requireVerified bo
 		TokenSigner:          signer,
 		SecurityEvents:       h.events,
 	})
+	wireSyncDelivery(t, h.svc, h.mailer, nil)
 	return h
 }
 
-// mustVerify marks a just-registered user's email verified via its code.
+// mustVerify marks a just-registered user's email verified via the code mailed to
+// that address (matched by recipient so interleaved registrations do not collide).
 func (h *harness) mustVerify(t *testing.T, email string) {
 	t.Helper()
-	var code string
-	for c, rec := range h.codes.m {
-		u, _ := h.users.GetByEmail(context.Background(), email)
-		if rec.UserID == u.ID {
-			code = c
-		}
+	normalized, err := (identifier.DefaultNormalizer{}).Normalize(string(identifier.KindEmail), email)
+	if err != nil {
+		t.Fatalf("normalize %q: %v", email, err)
 	}
-	if code == "" {
-		t.Fatalf("no verification code for %s", email)
-	}
-	if err := h.svc.Verify(context.Background(), code); err != nil {
+	if err := h.svc.Verify(context.Background(), email, h.mailer.codeFor(t, normalized)); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
 }
@@ -139,13 +139,11 @@ func (h *harness) mustVerify(t *testing.T, email string) {
 // --- TokenEnabled / deny-by-absence ---
 
 func TestTokenEnabled(t *testing.T) {
+	// The signer is now required (D3), so TokenEnabled is always true on a built
+	// Service; the transport still gates POST /auth/token on it for symmetry.
 	on := newTokenHarness(t, newFakeSigner(), false, nil)
 	if !on.svc.TokenEnabled() {
 		t.Error("TokenEnabled false with a signer wired")
-	}
-	off := newHarness(t, nil)
-	if off.svc.TokenEnabled() {
-		t.Error("TokenEnabled true with no signer")
 	}
 }
 
@@ -153,84 +151,88 @@ func TestTokenEnabled(t *testing.T) {
 
 func TestIssueTokenRoundTrip(t *testing.T) {
 	h := newTokenHarness(t, newFakeSigner(), false, nil)
-	u := h.mustRegister(t, "iss@example.com", "password123")
+	u := h.mustRegister(t, "iss@example.com", "password123456789")
 
-	tok, expiresAt, err := h.svc.IssueToken(context.Background(), "Iss@example.com", "password123")
+	pair, err := h.svc.IssueToken(context.Background(), "Iss@example.com", "password123456789")
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}
-	if tok == "" {
-		t.Fatal("IssueToken returned an empty token")
+	if pair.AccessToken == "" || pair.RefreshToken == "" {
+		t.Fatalf("IssueToken returned an incomplete pair: %+v", pair)
 	}
-	if !isJWTToken(tok) {
-		t.Errorf("issued token is not JWT-shaped: %q", tok)
+	if !isJWTToken(pair.AccessToken) {
+		t.Errorf("issued access token is not JWT-shaped: %q", pair.AccessToken)
 	}
-	// Expiry is now + the default 1h TTL (within a small slack).
-	want := time.Now().Add(defaultTokenTTL)
-	if d := expiresAt.Sub(want); d < -2*time.Second || d > 2*time.Second {
-		t.Errorf("expiresAt = %v, want ~%v", expiresAt, want)
+	// Expiry is now + the default 15m access TTL (within a small slack).
+	want := time.Now().Add(defaultAccessTokenTTL)
+	if d := pair.AccessExpiresAt.Sub(want); d < -2*time.Second || d > 2*time.Second {
+		t.Errorf("AccessExpiresAt = %v, want ~%v", pair.AccessExpiresAt, want)
 	}
-	// The token resolves back to the same user identity.
-	gotID, ok := h.svc.verifyBearer(tok)
+	// The access token resolves back to the same user identity.
+	gotID, ok := h.svc.verifyBearer(pair.AccessToken)
 	if !ok || gotID != u.ID {
 		t.Errorf("verifyBearer = (%q, %v), want (%q, true)", gotID, ok, u.ID)
 	}
 }
 
 func TestIssueTokenCustomTTL(t *testing.T) {
+	users := newFakeUsers()
 	h := &harness{
-		users: newFakeUsers(), pw: newFakePasswords(), sess: newFakeSessions(),
-		codes: newFakeCodes(), tokens: newFakeTokens(), hasher: &fakeHasher{}, mailer: &recordingMailer{},
+		users: users, idents: newFakeIdentifiers(users), pw: newFakePasswords(), sess: newFakeSessions(),
+		ch: newFakeChallenges(), prot: newFakeProtector("k1", "k1"),
+		hasher: &fakeHasher{}, mailer: &recordingMailer{},
 	}
 	h.svc = NewService(Deps{
-		Users: h.users, Passwords: h.pw, Sessions: h.sess, Codes: h.codes, Tokens: h.tokens,
+		Users: h.users, Identifiers: h.idents, Passwords: h.pw, Sessions: h.sess,
+		Challenges: h.ch, Protector: h.prot,
 		Hasher: h.hasher, Mailer: h.mailer, MailFrom: "noreply@example.com",
 		Limiter: ratelimiter.NewMemory(), Cookie: CookieConfig{},
-		TokenSigner: newFakeSigner(), TokenTTL: 5 * time.Minute,
+		TokenSigner: newFakeSigner(), AccessTokenTTL: 5 * time.Minute,
 	})
-	h.mustRegister(t, "ttl@example.com", "password123")
-	_, expiresAt, err := h.svc.IssueToken(context.Background(), "ttl@example.com", "password123")
+	wireSyncDelivery(t, h.svc, h.mailer, nil)
+	h.mustRegister(t, "ttl@example.com", "password123456789")
+	pair, err := h.svc.IssueToken(context.Background(), "ttl@example.com", "password123456789")
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}
 	want := time.Now().Add(5 * time.Minute)
-	if d := expiresAt.Sub(want); d < -2*time.Second || d > 2*time.Second {
-		t.Errorf("expiresAt = %v, want ~%v (custom 5m TTL)", expiresAt, want)
+	if d := pair.AccessExpiresAt.Sub(want); d < -2*time.Second || d > 2*time.Second {
+		t.Errorf("AccessExpiresAt = %v, want ~%v (custom 5m TTL)", pair.AccessExpiresAt, want)
 	}
 }
 
 func TestIssueTokenWrongPassword(t *testing.T) {
 	h := newTokenHarness(t, newFakeSigner(), false, nil)
-	h.mustRegister(t, "wp@example.com", "password123")
-	if _, _, err := h.svc.IssueToken(context.Background(), "wp@example.com", "nope"); !errors.Is(err, sdk.ErrUnauthorized) {
+	h.mustRegister(t, "wp@example.com", "password123456789")
+	if _, err := h.svc.IssueToken(context.Background(), "wp@example.com", "nope"); !errors.Is(err, sdk.ErrUnauthorized) {
 		t.Errorf("wrong password: err=%v, want ErrUnauthorized", err)
 	}
 }
 
 func TestIssueTokenUnknownEmail(t *testing.T) {
 	h := newTokenHarness(t, newFakeSigner(), false, nil)
-	if _, _, err := h.svc.IssueToken(context.Background(), "ghost@example.com", "password123"); !errors.Is(err, sdk.ErrUnauthorized) {
+	if _, err := h.svc.IssueToken(context.Background(), "ghost@example.com", "password123456789"); !errors.Is(err, sdk.ErrUnauthorized) {
 		t.Errorf("unknown email: err=%v, want ErrUnauthorized", err)
 	}
 }
 
 func TestIssueTokenRateLimitedFirst(t *testing.T) {
 	h := newTokenHarness(t, newFakeSigner(), false, denyLimiter{})
-	h.mustRegister(t, "rl@example.com", "password123")
-	before := h.users.calls
-	_, _, err := h.svc.IssueToken(context.Background(), "rl@example.com", "password123")
+	h.mustRegister(t, "rl@example.com", "password123456789")
+	before := h.idents.loginCalls
+	_, err := h.svc.IssueToken(context.Background(), "rl@example.com", "password123456789")
 	if !errors.Is(err, ErrRateLimited) {
 		t.Errorf("rate limited: err=%v, want ErrRateLimited", err)
 	}
-	if h.users.calls != before {
-		t.Error("rate limit did not short-circuit before touching the user store")
+	if h.idents.loginCalls != before {
+		t.Error("rate limit did not short-circuit before resolving the login identifier")
 	}
 }
 
 func TestIssueTokenRequireVerifiedEmailBlocksUnverified(t *testing.T) {
 	h := newTokenHarness(t, newFakeSigner(), true, nil)
-	h.mustRegister(t, "unv@example.com", "password123") // unverified
-	_, _, err := h.svc.IssueToken(context.Background(), "unv@example.com", "password123")
+	h.mustRegister(t, "unv@example.com", "password123456789") // unverified
+	_, err := h.svc.IssueToken(context.Background(), "unv@example.com", "password123456789")
 	if !errors.Is(err, ErrEmailNotVerified) {
 		t.Errorf("unverified issue: err=%v, want ErrEmailNotVerified", err)
 	}
@@ -238,9 +240,9 @@ func TestIssueTokenRequireVerifiedEmailBlocksUnverified(t *testing.T) {
 
 func TestIssueTokenRequireVerifiedEmailAllowsVerified(t *testing.T) {
 	h := newTokenHarness(t, newFakeSigner(), true, nil)
-	h.mustRegister(t, "ver@example.com", "password123")
+	h.mustRegister(t, "ver@example.com", "password123456789")
 	h.mustVerify(t, "ver@example.com")
-	if _, _, err := h.svc.IssueToken(context.Background(), "ver@example.com", "password123"); err != nil {
+	if _, err := h.svc.IssueToken(context.Background(), "ver@example.com", "password123456789"); err != nil {
 		t.Errorf("verified issue: %v", err)
 	}
 }
@@ -249,11 +251,12 @@ func TestIssueTokenRequireVerifiedEmailAllowsVerified(t *testing.T) {
 
 func TestRequireUserBearerJWT(t *testing.T) {
 	h := newTokenHarness(t, newFakeSigner(), false, nil)
-	u := h.mustRegister(t, "bru@example.com", "password123")
-	tok, _, err := h.svc.IssueToken(context.Background(), "bru@example.com", "password123")
+	u := h.mustRegister(t, "bru@example.com", "password123456789")
+	pair, err := h.svc.IssueToken(context.Background(), "bru@example.com", "password123456789")
 	if err != nil {
 		t.Fatalf("IssueToken: %v", err)
 	}
+	tok := pair.AccessToken
 
 	var gotID string
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -273,8 +276,9 @@ func TestRequireUserBearerJWT(t *testing.T) {
 
 func TestRequirePrincipalBearerJWT(t *testing.T) {
 	h := newTokenHarness(t, newFakeSigner(), false, nil)
-	u := h.mustRegister(t, "brp@example.com", "password123")
-	tok, _, _ := h.svc.IssueToken(context.Background(), "brp@example.com", "password123")
+	u := h.mustRegister(t, "brp@example.com", "password123456789")
+	pair, _ := h.svc.IssueToken(context.Background(), "brp@example.com", "password123456789")
+	tok := pair.AccessToken
 
 	var got Principal
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -322,17 +326,6 @@ func TestBearerWrongSecretDenied(t *testing.T) {
 	forged, _ := other.Sign(map[string]any{tokenClaimUserID: "u1"}, time.Now().Add(time.Hour))
 	h := newTokenHarness(t, newFakeSigner(), false, nil)
 	assertBearerDenied(t, h, forged, "wrong-secret")
-}
-
-func TestBearerSignerNilInert(t *testing.T) {
-	// No signer wired: a JWT-shaped bearer is never parsed; RequireUser and
-	// RequirePrincipal both deny (deny-by-absence, A3 behavior unchanged).
-	h := newHarness(t, nil)
-	if h.svc.TokenEnabled() {
-		t.Fatal("TokenEnabled true with no signer")
-	}
-	valid, _ := newFakeSigner().Sign(map[string]any{tokenClaimUserID: "u1"}, time.Now().Add(time.Hour))
-	assertBearerDenied(t, h, valid, "signer-nil")
 }
 
 // assertBearerDenied asserts that both RequireUser and RequirePrincipal reject a

@@ -1,0 +1,83 @@
+package templ
+
+import "github.com/gopernicus/gopernicus/features/authentication"
+
+// IdentifierForm renders the add/confirm/edit identifier form. On add the entered
+// address is echoed (a contact address, not a secret) and the form starts the
+// ownership-proof flow; on confirm a one-time code proves ownership of the new
+// address (never echoed); on edit the existing address is shown masked and only the
+// role selection is editable (with a remove control). No ownership code is echoed.
+templ IdentifierForm(m authentication.IdentifierFormPage) {
+	if m.Mode == "edit" {
+		@Layout("Manage identifier") {
+			@message(m.PageContext)
+			@errorSummary(m.PageContext)
+			if m.MaskedValue != "" {
+				<p>{ m.Kind }: { m.MaskedValue }</p>
+			}
+			<form method="post" action={ templ.SafeURL(identifierEditAction(m.ID)) } autocomplete="off">
+				@csrfField(m.PageContext)
+				<input type="hidden" name="id" value={ m.ID }/>
+				@usesFieldset(m)
+				<button type="submit">Save changes</button>
+			</form>
+			<form method="post" action={ templ.SafeURL(identifierEditAction(m.ID)) } autocomplete="off">
+				@csrfField(m.PageContext)
+				<input type="hidden" name="id" value={ m.ID }/>
+				<input type="hidden" name="action" value="remove"/>
+				<button type="submit">Remove this identifier</button>
+			</form>
+			<p><a href="/auth/account">Back to account security</a></p>
+		}
+	} else if m.Mode == "confirm" {
+		@Layout("Confirm your new identifier") {
+			@message(m.PageContext)
+			@errorSummary(m.PageContext)
+			<p>Enter the code we sent to your new { identifierLabel(m.Kind) } to confirm it.</p>
+			<form method="post" action={ templ.SafeURL(confirmIdentifierAction(m.Kind)) } autocomplete="off">
+				@csrfField(m.PageContext)
+				if m.Kind != "" {
+					<input type="hidden" name="kind" value={ m.Kind }/>
+				}
+				<p>
+					<label for="code">One-time code</label><br/>
+					<input id="code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" required aria-describedby="code-error"/>
+					@fieldError(m.PageContext, "code")
+				</p>
+				<button type="submit">Confirm</button>
+			</form>
+			<p><a href="/auth/account">Back to account security</a></p>
+		}
+	} else {
+		@Layout("Add an identifier") {
+			@message(m.PageContext)
+			@errorSummary(m.PageContext)
+			<form method="post" action={ templ.SafeURL(identifierAddAction(m.Kind)) } autocomplete="on">
+				@csrfField(m.PageContext)
+				if m.Kind != "" {
+					<input type="hidden" name="kind" value={ m.Kind }/>
+				}
+				<p>
+					<label for="value">{ identifierLabel(m.Kind) }</label><br/>
+					<input id="value" name="value" type={ identifierInputType(m.Kind) } inputmode={ identifierInputMode(m.Kind) } autocomplete={ identifierAutocomplete(m.Kind) } value={ m.Value } required aria-describedby="value-error"/>
+					@fieldError(m.PageContext, "value")
+				</p>
+				@usesFieldset(m)
+				<button type="submit">Send verification</button>
+			</form>
+			<p><a href="/auth/account">Back to account security</a></p>
+		}
+	}
+}
+
+// usesFieldset renders the login/recovery/notification role checkboxes and the
+// make-primary control shared by the add and edit forms.
+templ usesFieldset(m authentication.IdentifierFormPage) {
+	<fieldset>
+		<legend>Uses</legend>
+		<label><input type="checkbox" name="login" value="true" checked?={ m.LoginEnabled }/> Sign in</label><br/>
+		<label><input type="checkbox" name="recovery" value="true" checked?={ m.RecoveryEnabled }/> Account recovery</label><br/>
+		<label><input type="checkbox" name="notification" value="true" checked?={ m.NotificationEnabled }/> Notifications</label><br/>
+		<label><input type="checkbox" name="primary" value="true" checked?={ m.MakePrimary }/> Make primary</label>
+	</fieldset>
+}
