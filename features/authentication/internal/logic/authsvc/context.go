@@ -13,7 +13,31 @@ import "context"
 // attribution for audit rows, behavior not identity — remains feature-private.
 type contextKey int
 
-const clientInfoKey contextKey = iota
+const (
+	clientInfoKey contextKey = iota
+	// sessionIDKey carries the live session's app-minted id stashed by
+	// RequireLiveSession so a sensitive-mutation handler can bind a step-up grant or
+	// its consume to that exact session (design §5.0). Feature-private, like
+	// clientInfo: session id is request-scoped behavior, not cross-feature identity.
+	sessionIDKey
+)
+
+// withSessionID returns a copy of ctx carrying the live session's id. It is set by
+// RequireLiveSession once it resolves and validates the session, so a handler
+// downstream reads the session the caller actually authenticated with rather than
+// trusting a body field.
+func withSessionID(ctx context.Context, sessionID string) context.Context {
+	return context.WithValue(ctx, sessionIDKey, sessionID)
+}
+
+// CurrentSessionID returns the live session id stashed by RequireLiveSession, or
+// ("", false) when the request was not gated by it (or was authenticated by a
+// session-less machine credential). Sensitive step-up flows read it so a grant is
+// always bound to the caller's proven live session.
+func (s *Service) CurrentSessionID(ctx context.Context) (string, bool) {
+	id, ok := ctx.Value(sessionIDKey).(string)
+	return id, ok && id != ""
+}
 
 // clientInfo is the request's client attribution — the remote IP and User-Agent.
 // It is the single source of truth for both login's rate-limit IP key and the

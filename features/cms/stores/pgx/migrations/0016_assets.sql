@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS assets (
-    id           TEXT PRIMARY KEY,
+    id           TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     filename     TEXT NOT NULL,
     content_type TEXT NOT NULL,
     size         BIGINT NOT NULL DEFAULT 0,

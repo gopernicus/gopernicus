@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS menu_items (
-    id         TEXT PRIMARY KEY,
+    id         TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
     menu_id    TEXT NOT NULL,
     label      TEXT NOT NULL,
     url        TEXT NOT NULL DEFAULT '',

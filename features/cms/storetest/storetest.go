@@ -791,8 +791,8 @@ func testInquiries(t *testing.T, repos cms.Repositories) {
 // entity constructed with the Database generator reaches the store with an
 // empty ID, and Create must hand back a store-assigned, non-empty key under
 // which the row is readable. SQL adapters satisfy this by omitting the id
-// column and reading the schema default back with RETURNING (migration
-// 0022_id_defaults); memory implementations assign at insert.
+// column and reading the schema default back with RETURNING (the id DEFAULT
+// each entity table's CREATE carries); memory implementations assign at insert.
 
 func testEntriesDBGeneratedID(t *testing.T, repos cms.Repositories) {
 	ctx := context.Background()

@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS menu_items (
-    id         TEXT PRIMARY KEY,
+    id         TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     menu_id    TEXT NOT NULL,
     label      TEXT NOT NULL,
     url        TEXT NOT NULL DEFAULT '',

@@ -15,8 +15,9 @@
 // On top of v1, this host exercises the whole auth-v2 surface for the A9 proof
 // protocol (see README): the verified-email login gate (RequireVerifiedEmail),
 // a host-local fake OAuth provider (oauthfake.go), machine identity (API keys +
-// service accounts), stateless bearer JWTs signed host-side by
-// integrations/cryptids/golang-jwt, security-event audit rows surfaced through a
+// service accounts), access JWTs + rotating refresh tokens signed host-side by
+// the sdk stdlib HS256 default (sdk/foundation/cryptids), security-event audit
+// rows surfaced through a
 // DEFAULT-OFF debug route, and invitations that grant through the authorization
 // engine's relationshipGranter (membership.go) — authorization-v1's FLAGSHIP
 // posture (Z4 commit 2): invitation-accept writes a real ReBAC tuple via
@@ -48,6 +49,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authpages"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/memstore"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/outboxmem"
 	auth "github.com/gopernicus/gopernicus/features/authentication"
@@ -167,40 +169,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return err
 	}
 
-	// Host-side collaborators built from the environment (see demo.go): the JWT
-	// signer (golang-jwt, or nil when AUTH_JWT_DISABLED=1, or an ephemeral key
-	// when AUTH_JWT_SECRET is unset) and the optional provider-token encrypter.
-	signer, err := buildTokenSigner(log)
+	// Auth config, assembled in the testable composition seam buildAuthConfig
+	// (AV3-8.6): development posture, bundled templ Views, browser-safe Origin
+	// allowlist, passwordless enablement, magic-link base URL, and every development
+	// secret from a distinct env var. The invitation grant-on-accept seam is the
+	// host-local relationshipGranter over the authorization engine.
+	authCfg, err := buildAuthConfig(log, relationshipGranter{authorizer: authorizer})
 	if err != nil {
 		return err
-	}
-	encrypter, err := buildTokenEncrypter()
-	if err != nil {
-		return err
-	}
-
-	// Auth config. Hasher + Mailer are REQUIRED; a nil RateLimiter defaults to
-	// in-memory. RequireVerifiedEmail is ON (A9): login/token refuse an unverified
-	// user with 403. Providers/TokenSigner/Granter are the v2 subsystems, each
-	// deny-by-absence when its collaborator is nil.
-	authCfg := auth.Config{
-		Hasher:               bcrypt.New(),
-		Mailer:               email.NewConsole(log),
-		MailFrom:             "auth@localhost",
-		RequireVerifiedEmail: true,
-		Providers:            []oauth.Provider{fakeOAuthProvider{}},
-		OAuthCallbackBase:    callbackBase(),
-		RedirectAllowlist:    []string{"/"},
-		TokenEncrypter:       encrypter,
-		TokenSigner:          signer,
-		TokenTTL:             tokenTTL(),
-		Granter:              relationshipGranter{authorizer: authorizer},
-		// The phone-kind console notifier makes phone invitations a supported
-		// kind on this host (deny-by-absence: unwire it and phone-kind create
-		// fails 400 ErrKindNotSupported; email is always-on via Mailer). The
-		// token is DELIVERED to the server log — the dev stand-in for SMS.
-		Notifiers: []notify.Notifier{notify.NewConsole(identity.KindPhone, log)},
-		Logger:    log,
 	}
 
 	// authSvc is the auth feature's driving surface (FS2): its RequireUser method
@@ -339,6 +315,19 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// probe can't log in.
 	router.Handle(http.MethodGet, "/healthz", healthzHandler())
 
+	// The durable delivery worker (design §6.1.1) drains the auth outbox off the
+	// request path — the host owns its lifecycle (the feature starts no goroutine).
+	// It runs on its OWN Background-derived context (never the parent ctx) so
+	// shutdown stops it AFTER HTTP has drained, mirroring the poller order below.
+	deliveryCtx, cancelDelivery := context.WithCancel(context.Background())
+	deliveryDone := make(chan struct{})
+	go func() {
+		defer close(deliveryDone)
+		if err := authSvc.RunDeliveryWorker(deliveryCtx); err != nil {
+			log.ErrorContext(deliveryCtx, "delivery worker stopped with error", "error", err)
+		}
+	}()
+
 	// Shutdown order (design §7, phase 5 — with the poller, corrected context idiom
 	// P3):
 	//  1. web.Run blocks until ctx is canceled, then drains in-flight HTTP on its
@@ -354,6 +343,16 @@ func run(ctx context.Context, log *slog.Logger) error {
 	//     why the poller's closed-bus edge (Poll emitting into a closed bus) never
 	//     happens.
 	runErr := web.Run(ctx, router, serverConfig(), log)
+
+	// Stop the delivery worker after HTTP drains (its own context, like the poller).
+	log.InfoContext(context.Background(), "stopping delivery worker")
+	cancelDelivery()
+	select {
+	case <-deliveryDone:
+	case <-time.After(5 * time.Second):
+		log.WarnContext(context.Background(), "delivery worker did not stop within 5s")
+	}
+	log.InfoContext(context.Background(), "delivery worker stopped")
 
 	if cancelPool != nil {
 		log.InfoContext(context.Background(), "stopping outbox poller pool")
@@ -499,6 +498,107 @@ func seed(ctx context.Context, repos cms.Repositories) error {
 		return err
 	}
 	return nil
+}
+
+// buildAuthConfig assembles the authentication feature's Config for this proof host
+// (the AV3-8.6 composition seam, factored out so startup/production-negative tests
+// share the exact wiring run() uses). It wires:
+//
+//   - the DEVELOPMENT runtime posture: the console email Sender and phone Notifier
+//     are development-only transports (they log bodies), which production RuntimeMode
+//     rejects (design §6.3) — the startup WARN is expected, and the production
+//     negative test proves construction fails when this same wiring flips to
+//     production;
+//   - the bundled default HTML surface (authtempl.New()) into Config.Views (design
+//     §9.2/R12/V16): normal HTML GET pages + form handling mount alongside the
+//     UNCHANGED JSON API. Nil would keep this host API-only; the sibling templ module
+//     is the zero-value default, overridable per method (AV3-8.9);
+//   - the browser-safe mutation Origin allowlist (design §9.1) so same-origin browser
+//     forms pass the cookie-mutation gate while cross-site credentialed POSTs are
+//     refused;
+//   - passwordless login for both v3 kinds (design §4.2): email magic link + OTP and
+//     phone OTP through the console notifier, on the atomic challenge rail + durable
+//     outbox + link-capable PublicAuthBaseURL wired here;
+//   - the magic-link base URL (design §6.4), built ONLY from configuration — request
+//     Host/forwarded headers never participate;
+//   - DeliveryWorkerAcknowledged: the outbox is the only send path (AV3-4.3), so the
+//     feature is told run() actually runs RunDeliveryWorker (it does, below); and
+//   - every development secret (JWT signer, challenge pepper, delivery + identifier +
+//     token-encryption keys) from a DISTINCT env var, never a committed constant, and
+//     never printing key material (see demo.go builders).
+//
+// The granter is the invitation grant-on-accept seam (nil → invitations off). It
+// builds no goroutines and reads no host lifecycle; run() owns the worker + shutdown.
+func buildAuthConfig(log *slog.Logger, granter auth.Granter) (auth.Config, error) {
+	// The REQUIRED access-JWT signer, optional provider-token encrypter, REQUIRED
+	// challenge protector (authmem wires Challenges), REQUIRED delivery-outbox
+	// encrypter (authmem wires DeliveryJobs), and identifier keyer — each from its
+	// own distinct env var (demo.go).
+	signer, err := buildTokenSigner(log)
+	if err != nil {
+		return auth.Config{}, err
+	}
+	encrypter, err := buildTokenEncrypter()
+	if err != nil {
+		return auth.Config{}, err
+	}
+	challengeProtector, err := buildChallengeProtector(log)
+	if err != nil {
+		return auth.Config{}, err
+	}
+	deliveryEncrypter, err := buildDeliveryEncrypter(log)
+	if err != nil {
+		return auth.Config{}, err
+	}
+	identifierKeyer, err := buildIdentifierKeyer(log)
+	if err != nil {
+		return auth.Config{}, err
+	}
+
+	return auth.Config{
+		Hasher:               bcrypt.New(),
+		Mailer:               email.NewConsole(log),
+		MailFrom:             "auth@localhost",
+		RequireVerifiedEmail: true,
+		RuntimeMode:          auth.RuntimeModeDevelopment,
+		ChallengeProtector:   challengeProtector,
+		DeliveryEncrypter:    deliveryEncrypter,
+		IdentifierKeyer:      identifierKeyer,
+		// The optional HTML surface (design §9.2): this host's REAL partial override
+		// (authpages.New) embeds the bundled templ Views and overrides only the Login
+		// page with Gopernicus-CMS branding — presentation changes only, the JSON API
+		// and every route/service/redirect policy are unchanged (AV3-8.9, proven
+		// isolation-safe in AV3-8.5). Every non-overridden page is the promoted default.
+		Views: authpages.New(),
+		// The DISTINCT second override system (design §6.2): a host email LayerApp
+		// content override that rebrands the verification email body. It swaps an EMAIL,
+		// not a page — a different facility from Views, wired through a different Config
+		// field into the delivery router. The code ({{.Secret}}) still renders, so the
+		// verification flow is unbroken; only the copy is host-branded.
+		EmailContentTemplates: []auth.EmailContentTemplate{authpages.EmailOverride()},
+		// The exact-match Origin allowlist the browser-safe mutation gate validates
+		// cookie-authenticated sensitive mutations and HTML form posts against; defaults
+		// to this host's own origin (design §9.1).
+		AllowedOrigins: allowedOrigins(),
+		// Passwordless login for email + phone (design §4.2): magic link + OTP.
+		Passwordless: passwordlessKinds(),
+		// The magic-link / redemption-page base URL (design §6.4), config-only.
+		PublicAuthBaseURL: publicAuthBaseURL(),
+		// The outbox is the only send path; affirm run() runs the worker (design §8).
+		DeliveryWorkerAcknowledged: true,
+		Providers:                  []oauth.Provider{fakeOAuthProvider{}},
+		OAuthCallbackBase:          callbackBase(),
+		RedirectAllowlist:          []string{"/"},
+		TokenEncrypter:             encrypter,
+		TokenSigner:                signer,
+		AccessTokenTTL:             accessTokenTTL(),
+		RefreshTTL:                 refreshTTL(),
+		Granter:                    granter,
+		// The phone-kind console notifier makes phone a supported delivery kind
+		// (deny-by-absence; the dev stand-in for SMS — the token lands in the log).
+		Notifiers: []notify.Notifier{notify.NewConsole(identity.KindPhone, log)},
+		Logger:    log,
+	}, nil
 }
 
 func serverConfig() web.ServerConfig {

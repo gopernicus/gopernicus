@@ -26,7 +26,18 @@ type SMTP struct {
 	auth smtp.Auth
 }
 
-var _ Sender = (*SMTP)(nil)
+var (
+	_ Sender             = (*SMTP)(nil)
+	_ CapabilityReporter = (*SMTP)(nil)
+)
+
+// Capabilities declares SMTP a production-capable transport: it is not
+// development-only, and net/smtp negotiates STARTTLS when the server advertises
+// it. Declaring metadata lets a production host accept it (an undeclared Sender
+// is rejected fail-closed).
+func (s *SMTP) Capabilities() Capabilities {
+	return Capabilities{TransportSecurity: TransportSecurityStartTLS, DevelopmentOnly: false}
+}
 
 // NewSMTP returns an SMTP Sender. When Username is set, PLAIN auth is used.
 func NewSMTP(cfg SMTPConfig) *SMTP {

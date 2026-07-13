@@ -2050,3 +2050,178 @@ modules, no go.mod changes). Plan: `.claude/plans/middleware-consolidation.md`.
   `features/authorization` (`RequirePermission`/`ResourceResolver`/
   `FixedResource`); `features/authentication` stays patch-only (internal
   delegation). RELEASING.md breadcrumbs recorded.
+
+## 2026-07-11 — auth-jwt-session-refresh RATIFIED + EXECUTED (amends AV6): JWT access + refresh rotation as the default
+
+Plan `.claude/plans/roadmap/auth-jwt-session-refresh.md`, ratified by a
+five-reviewer gate (lead-backend, architecture-steward, data-integration,
+platform-sre, product-manager — three re-plan verdicts, zero boundary
+violations, all findings folded in) and **executed the same day**, decisions
+**D1–D8**. This reverses ratified AV6's "no refresh" arm and supersedes §4.4's
+framing of JWTs as a side convenience: the **access JWT becomes the primary
+access credential**, the **session row becomes the revocation + refresh anchor**.
+Upstream only — the segovia host carry (§8) remains OPEN.
+
+- **The model.** One mint path issues an access JWT (`{user_id, session_id, exp,
+  iat}`, 15m) + an opaque rotating refresh token (SHA-256 at rest, fixed 7d
+  horizon — rotation never extends it, D2). Two verification tiers:
+  `RequireUser`/`RequirePrincipal` (JWT signature + expiry, zero DB, revocation
+  honored ≤ `AccessTokenTTL`) and the new **`RequireLiveSession`** (one PK
+  lookup, immediate revocation, per-principal matrix, **fails CLOSED** on repo
+  error, D1). `POST /auth/refresh` is compare-and-swap (never blind) with
+  single-generation reuse detection (D5): a consumed grace slot burns the
+  session and forces re-login, collapsing theft.
+- **Breaking surface.** `Config.TokenSigner` **required** (D3, no signer-off
+  mode); `TokenTTL` removed → `AccessTokenTTL`/`RefreshTTL` (D8);
+  `Login`/`ChangePassword`/`IssueToken`/`Refresh` return `TokenPair`;
+  `/auth/token` returns `{access_token, expires_at, refresh_token}`; session port
+  re-keyed to id + CAS rotation (`ErrRotationConflict`). Breaking bump for the
+  feature AND both nested store tags; single destructive migration
+  `0014_sessions_refresh.sql` (D6, no rolling deploy — old binaries error).
+- **sdk (D7):** `cryptids.NewHS256` stdlib HS256 default signer ships in
+  `sdk/foundation/cryptids` (alg-hardened, 60s leeway, constant-time compare),
+  cross-tested against golang-jwt; restores zero-integration boot now the signer
+  is required. `guard-sdk-stdlib` stays green (no new dependency).
+- **Live-proof:** all nine session storetest conformance cases green on live
+  Postgres 17 + libsql-server containers; auth-cms legs a–f transcripts in its
+  README.
+- **Recorded deviations** (full detail in the plan's EXECUTION LOG): (a)
+  `/auth/logout` ungated so both resolution lanes stay reachable; (b) the logout
+  fallback parses the access JWT WITHOUT signature verification to read
+  `session_id` for the delete — no verify-ignoring-expiry on the `JWTSigner`
+  port; risk LOW (session IDs unguessable, value only targets a `Delete`,
+  possession of the JWT already implies logout ability); a signature-verified
+  variant needs an sdk port addition, DEFERRED; (c) leg-f store-backed restart
+  recovery is unobservable against the in-memory `authmem` (documented in the
+  auth-cms README); (d) a pre-existing pgx pagination-collision conformance
+  flakiness, unrelated to this change, flagged for a separate follow-up.
+- **Design-doc trail:** `auth-v2-feature-design.md` §4.4 carries a dated
+  supersession banner, its §12 AV6 row an amended-by marker, and the §11
+  "No refresh tokens" non-goal is struck.
+
+## 2026-07-12 — greenfield-migrations RULING (jrazmi): canonical sets carry no evolution files; 0012/0013/0014 + cms 0022 folded
+
+Owner ruling, issued on sighting `0014_sessions_refresh.sql`'s
+`DROP TABLE IF EXISTS sessions`: **feature canonical migration sets are
+GREENFIELD** — they define the final schema for a new host and are copied
+once into the host's tree; they never carry upgrade/evolution/destructive
+files. Schema evolution for an existing host is host-owned (the host writes
+its own migration in its own tree — segovia's `0018_sessions_refresh.sql`
+is the exemplar). Applied same day, pre-commit of the jwt-refresh work:
+
+- **auth stores (both dialects):** `0003_sessions.sql` now ships the id-keyed
+  refresh-rotation schema directly; the id DB-defaults folded into
+  `0001_users`/`0008_service_accounts`/`0009_api_keys`/`0010_security_events`;
+  `identifier_kind` + the widened pending-tuple index folded into
+  `0011_invitations`. `0012_id_defaults`, `0013_invitation_identifier_kind`,
+  and `0014_sessions_refresh` DELETED — the set is `0001…0011`, one CREATE
+  per table.
+- **cms stores (both dialects):** `0022_id_defaults` folded into the six
+  entity CREATEs and deleted.
+- README (migration count + upgrade notes reworked to host-owned-upgrade
+  posture with reference SQL), RELEASING (stores entries reworked, cms entry
+  added), storetest/session.go comment references updated.
+- Operational caveat: canonical-file edits change checksums — the remote
+  turso playground's `schema_migrations` ledger predates the fold, so live
+  runs there need a fresh/reset database.
+- The auth-v3 design (`auth-v3-identity-design.md`) carries the ruling
+  forward: no 0015 upgrade migration; `0001_users.sql` edited in place,
+  new tables as pure CREATEs, host upgrade reference in docs.
+
+## 2026-07-13 — auth-v3 release/change inventory (AV3-9.4)
+
+The auth-v3 identity milestone's release/version/tag inventory. Plan
+`.claude/plans/authv3/10-docs-and-closeout.md` (AV3-9.4); phases 0–8 closed,
+AV3-9.1–9.3 complete. Docs-only; the milestone diff is the uncommitted worktree
+(no tags cut — tagging is release execution, owner-authorized separately). The
+breaking surface itself is anchored in `RELEASING.md` (the keyed `auth v3
+identity (BREAKING)` note + the published v2→v3 host upgrade runbook) and mirrored
+in `features/authentication/README.md`; this entry records the tag/version
+requirements, the production checklist, the live artifacts, and the deferrals over
+that same break list rather than re-deriving it.
+
+- **Breaking changes (summary; full list in RELEASING.md + feature README).**
+  `Repositories` grows identifier / challenge / contact-change / authentication-grant /
+  credential-mutation / delivery-job ports; `user.User` loses its email field
+  (identity moves to the `user_identifiers` table with explicit
+  login/recovery/notification/primary uses); `Config` gains RuntimeMode + the
+  production fail-closed gates + `Views`; routes change (`{email, code}` verify
+  break, `oauth/link`+`oauth/linked` removed, step-up / `/auth/methods` /
+  password set-remove / `/auth/identifiers/*` / passwordless added); the greenfield
+  migration set is `0001…0014` (id-keyed `users` with `auth_revision`, session
+  auth-metadata, `user_identifiers` / `challenges` / `contact_changes` /
+  `authentication_grants` / `delivery_jobs`; the legacy `verification_codes` /
+  `verification_tokens` rail retired).
+- **Per-module tag requirements (semver floors; no tag cut this milestone).**
+  `features/authentication` = **major/breaking**; both nested store modules
+  (`stores/pgx`, `stores/turso`) = **major/breaking**; the NEW
+  `features/authentication/views/templ` bundled default-views module (the 37th
+  workspace module, AV3-8.2) = **new module, first tag**;
+  `integrations/datastores/turso` = **patch (behavior fix)** for the
+  `BEGIN IMMEDIATE` write-intent transaction change (a turso host adopting v3 MUST
+  run this or the concurrent step-up CAS surfaces raw `SQLITE_BUSY` instead of
+  `sdk.ErrConflict`); `sdk/capabilities/{email,notify}` = **minor** for the additive
+  production-safety `CapabilityReporter`/`Capabilities`/`TransportSecurity` metadata.
+  `examples/auth-cms` is the proof host — a demonstration, never tagged.
+  `sdk/foundation/web` (`TrustProxies`/`ClientIP`) and `sdk/foundation/cryptids`
+  (HS256) were **NOT** changed by auth-v3 (verified via git — `web` untouched, the
+  HS256 default belongs to the JWT-refresh cut); both are keyed under their own
+  RELEASING.md notes.
+- **Host upgrade order + production checklist.** Upgrade order = the seven-step,
+  backfill-first, host-owned runbook (single cutover, destructive Step 6 only after
+  the v3 binary is confirmed stable), validated fresh both dialects (AV3-9.2), never
+  applied to a real host. Production checklist (fail-closed): five distinct rotatable
+  secrets (session/JWT signer, OTP HMAC pepper key-ring, delivery payload-encryption
+  key, magic-link/reset material, CSRF material — never one value for two roles);
+  production rejects development transports (`console` senders), memory rate limiter,
+  and missing CSRF/origin/trusted-proxy/`PublicAuthBaseURL`/`AllowedOrigins` wiring;
+  the delivery worker is host-lifecycle-owned (`RunDeliveryWorker` start-on-boot /
+  stop-on-shutdown, at-least-once, encrypted payloads, host-scheduled terminal
+  purge); migrations host-owned pre-boot. Full table in RELEASING.md's "Auth v3 tag
+  requirements + production checklist".
+- **Live test artifacts (endpoints redacted).** Dual-dialect store conformance +
+  race evidence (AV3-2.4) and the atomic-recovery / re-key / worker / passwordless /
+  proof-host live legs across phases 3–8 ran on the authorized playground containers
+  (Postgres 17 `C`-collation DB + libsql-server), fresh/reset databases, credentials
+  redacted. The AV3-9.2 upgrade execution (RELEASING.md "AV3-9.2 execution record")
+  proved all four fixture paths green both dialects (pgx clean + collision-abort,
+  libSQL clean + collision-abort), every fixture torn down after the run. The
+  proof-host JSON + HTML transcripts live in `examples/auth-cms/README.md`. The
+  implementation-complete hermetic + dual-store live + proof-host gates are AV3-9.6's
+  to run and record as the milestone's final proof (`make check` skipping live stores
+  is never the final proof).
+- **Deliberate deferrals (recorded, not defects).**
+  - **auth-v4 MFA** — typed authenticators for passkeys/WebAuthn, TOTP, and recovery
+    codes; AAL2; factor replacement/reset. v3 ships the method/assurance seams only;
+    **no MFA implementation exists in v3** (no TOTP, passkey, or recovery-code
+    authenticator).
+  - **Real SMS transport** — phone-OTP delivery is console/notifier only; no live SMS
+    provider ships.
+  - **`CompleteStepUpWithOAuth`** (AV3-6.1) — the OAuth-roundtrip step-up completion
+    path is deferred; an honest version needs a fresh provider authorization
+    roundtrip (a "has a linked account" check would be present-control-free and
+    violate §5.0). Password and identifier-code completions are fully implemented and
+    satisfy every mutation gate; the design's "where supported" hedge covers this.
+  - **Recovery-UX `#token=` reset-link builder** (AV3-8.7/8.10) — the framework builds
+    magic-link URLs as `PublicAuthBaseURL + "#token=<token>"` but ships no
+    server-built reset-link builder; the proof host carries the reset token as a bare
+    fragment. Open recovery-UX follow-up.
+  - **PII-in-audit retention/redaction lifecycle** (AV3-5.4 adaptation) — audit
+    details deliberately carry the plaintext identifier (an identifier, never a
+    secret) per design §5.1 WI3; the raw-PII invariant forbids PII from limiter
+    keys/logs/bucket, not the audit identifier. A retention/redaction lifecycle policy
+    is future work. (AV3-9.5's audit greps for exposure; it does not implement this
+    policy.)
+  - **pgx pagination-collation parity** (AV3-2.4 Finding-2) — a parked shared
+    `pgxdb` helper finding, not a v3 defect; cross-dialect byte-order pagination
+    parity requires Postgres run with `LC_COLLATE 'C'` (documented in the runbook's
+    runtime caveats).
+- **Implementation adaptations from the cut plan** (logged in the per-phase execution
+  logs; carried here for the release record): the v2→v3 upgrade runbook is published
+  in `RELEASING.md` with a mirrored pointer note in the feature README (no standalone
+  feature upgrade-doc convention exists); the runbook's libSQL leg was validated on
+  the live libsql server in an isolated table namespace (not local `sqlite3`); the
+  `verified_at` backfill uses `updated_at` as a proxy (v2 stored only a boolean
+  `email_verified`); sdk capability docs extended the `sdk/README.md` package table
+  rows rather than adding a new doc file; and the feature README was fully rewritten
+  to v3 (the three prior upgrade notes preserved verbatim).

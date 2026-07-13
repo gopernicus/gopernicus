@@ -11,8 +11,6 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthaccount"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthstate"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
@@ -106,12 +104,12 @@ func (r *memOAuthStates) Consume(_ context.Context, token string) (oauthstate.St
 // fakes and mounts the routes.
 func newOAuthTestHandler(t *testing.T) http.Handler {
 	t.Helper()
+	users := newMemUsers()
 	svc := authsvc.NewService(authsvc.Deps{
-		Users:             &memUsers{byID: map[string]user.User{}},
+		Users:             users,
+		Identifiers:       newMemIdentifiers(users),
 		Passwords:         &memPasswords{m: map[string]string{}},
 		Sessions:          &memSessions{m: map[string]session.Session{}},
-		Codes:             &memCodes{m: map[string]verification.Code{}},
-		Tokens:            &memTokens{m: map[string]verification.Token{}},
 		Hasher:            fakeHasher{},
 		Mailer:            nopMailer{},
 		MailFrom:          "noreply@example.com",
@@ -121,9 +119,10 @@ func newOAuthTestHandler(t *testing.T) http.Handler {
 		OAuthStates:       &memOAuthStates{m: map[string]oauthstate.State{}},
 		Providers:         []oauth.Provider{stubProvider{}},
 		OAuthCallbackBase: "https://app.example.com",
+		TokenSigner:       newFakeSigner(),
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, nil, "")
+	Mount(h, svc, nil, "", MutationSecurity{}, nil)
 	return h
 }
 
@@ -137,9 +136,9 @@ func TestOAuthRoutesDenyByAbsence(t *testing.T) {
 		{"GET", "/auth/oauth/github/start"},
 		{"GET", "/auth/oauth/github/callback?code=x&state=y"},
 		{"POST", "/auth/oauth/verify-link"},
-		{"GET", "/auth/oauth/linked"},
 		{"GET", "/auth/oauth/github/link/start"},
-		{"DELETE", "/auth/oauth/github/link"},
+		{"POST", "/auth/oauth/github/unlink/start"},
+		{"POST", "/auth/oauth/github/unlink"},
 	}
 	for _, c := range cases {
 		rec := do(t, h, c.method, c.path, "")
@@ -172,22 +171,35 @@ func TestOAuthStartUnknownProvider404(t *testing.T) {
 	}
 }
 
-// TestOAuthSessionGatedRoutesRequireSession proves the linked/link-start/unlink
-// routes are session-gated (401 without a session) when wired.
+// TestOAuthSessionGatedRoutesRequireSession proves the link-start route (RequireUser)
+// and the code-gated unlink pair (RequireLiveSession, design §5.4) are session-gated:
+// 401 without a session. The old plain DELETE /auth/oauth/{provider}/link is gone
+// (pre-tag route break) — its method/path no longer routes.
 func TestOAuthSessionGatedRoutesRequireSession(t *testing.T) {
 	h := newOAuthTestHandler(t)
 	cases := []struct {
 		method, path string
 	}{
-		{"GET", "/auth/oauth/linked"},
 		{"GET", "/auth/oauth/google/link/start"},
-		{"DELETE", "/auth/oauth/google/link"},
+		{"POST", "/auth/oauth/google/unlink/start"},
+		{"POST", "/auth/oauth/google/unlink"},
 	}
 	for _, c := range cases {
 		rec := do(t, h, c.method, c.path, "")
 		if rec.Code != http.StatusUnauthorized {
 			t.Errorf("%s %s without session status = %d, want 401", c.method, c.path, rec.Code)
 		}
+	}
+}
+
+// TestOAuthUnlinkDeleteRouteRemoved proves the plain DELETE /auth/oauth/{provider}/link
+// no longer routes on a wired host (replaced by the code-gated start/complete pair,
+// design §5.4 pre-tag route break): it is not a 401, it simply does not exist.
+func TestOAuthUnlinkDeleteRouteRemoved(t *testing.T) {
+	h := newOAuthTestHandler(t)
+	rec := do(t, h, "DELETE", "/auth/oauth/google/link", "")
+	if rec.Code == http.StatusUnauthorized || rec.Code == http.StatusOK {
+		t.Errorf("DELETE /auth/oauth/google/link status = %d, want the removed route (404/405)", rec.Code)
 	}
 }
 

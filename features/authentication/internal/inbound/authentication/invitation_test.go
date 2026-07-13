@@ -7,8 +7,6 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/invitation"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/verification"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/invitationsvc"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
@@ -42,20 +40,21 @@ func (stubInvitationService) Resend(context.Context, string, string, string) (in
 // the invitation surface IS registered.
 func newInvitationTestHandler(t *testing.T, inv InvitationService) http.Handler {
 	t.Helper()
+	users := newMemUsers()
 	svc := authsvc.NewService(authsvc.Deps{
-		Users:     &memUsers{byID: map[string]user.User{}},
-		Passwords: &memPasswords{m: map[string]string{}},
-		Sessions:  &memSessions{m: map[string]session.Session{}},
-		Codes:     &memCodes{m: map[string]verification.Code{}},
-		Tokens:    &memTokens{m: map[string]verification.Token{}},
-		Hasher:    fakeHasher{},
-		Mailer:    nopMailer{},
-		MailFrom:  "noreply@example.com",
-		Limiter:   ratelimiter.NewMemory(),
-		Cookie:    authsvc.CookieConfig{},
+		Users:       users,
+		Identifiers: newMemIdentifiers(users),
+		Passwords:   &memPasswords{m: map[string]string{}},
+		Sessions:    &memSessions{m: map[string]session.Session{}},
+		Hasher:      fakeHasher{},
+		Mailer:      nopMailer{},
+		MailFrom:    "noreply@example.com",
+		Limiter:     ratelimiter.NewMemory(),
+		Cookie:      authsvc.CookieConfig{},
+		TokenSigner: newFakeSigner(),
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, inv, crud.StrategyCursor)
+	Mount(h, svc, inv, crud.StrategyCursor, MutationSecurity{}, nil)
 	return h
 }
 

@@ -341,12 +341,12 @@ func (r invitationRepo) ListByResource(_ context.Context, resourceType, resource
 	return page(all, req, func(inv invitation.Invitation) (time.Time, string) { return inv.CreatedAt, inv.ID })
 }
 
-func (r invitationRepo) ListBySubject(_ context.Context, identifier string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
+func (r invitationRepo) ListBySubject(_ context.Context, kind, identifier string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	all := make([]invitation.Invitation, 0)
 	for _, inv := range r.invitations {
-		if inv.Identifier == identifier {
+		if inv.IdentifierKind == kind && inv.Identifier == identifier {
 			all = append(all, inv)
 		}
 	}

@@ -45,10 +45,12 @@ type StatusUpdate struct {
 // CONTRACTUAL: ORDER BY created_at DESC, id DESC — the id tiebreak keeps pages
 // stable when several invitations share a created_at (the storetest collision
 // case asserts identical order AND NextCursor across implementations).
-// ListBySubject keys on the invitee Identifier (the invited subject is
-// identified by their email): it serves "my invitations" and the pending-invite
-// finder resolve-on-registration pages over — visibility rides this table
-// column, never a tuple.
+// ListBySubject keys on the invitee (identifier_kind, Identifier) TUPLE (design
+// §7 re-key): it serves "my invitations" and the pending-invite finder resolve-
+// on-registration pages over — visibility rides these table columns, never a
+// tuple. The kind filter is load-bearing: the same normalized string may address
+// two subjects under different kinds (an email and a phone), so a kind-blind
+// lookup would leak/cross-grant across kinds.
 type InvitationRepository interface {
 	// Create persists a new pending invitation; a pending-tuple collision →
 	// sdk.ErrAlreadyExists.
@@ -62,8 +64,10 @@ type InvitationRepository interface {
 	// ordered created_at DESC, id DESC.
 	ListByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[Invitation], error)
 	// ListBySubject returns a cursor-paginated page of invitations addressed to
-	// identifier (the invitee email), ordered created_at DESC, id DESC.
-	ListBySubject(ctx context.Context, identifier string, req crud.ListRequest) (crud.Page[Invitation], error)
+	// (kind, identifier) — the invitee address and its kind — ordered created_at
+	// DESC, id DESC. Both columns filter so a value shared across kinds never
+	// cross-resolves.
+	ListBySubject(ctx context.Context, kind, identifier string, req crud.ListRequest) (crud.Page[Invitation], error)
 	// UpdateStatus applies a lifecycle transition; unknown id → sdk.ErrNotFound.
 	UpdateStatus(ctx context.Context, id string, upd StatusUpdate) (Invitation, error)
 }

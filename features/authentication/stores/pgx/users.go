@@ -6,13 +6,15 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/gopernicus/gopernicus/features/authentication/domain/identifier"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-// UserStore implements user.UserRepository over a PostgreSQL database. Uniqueness
-// is on the normalized email (the users.email UNIQUE constraint), surfaced as
+// UserStore implements user.UserRepository over a PostgreSQL database. Identity
+// (the addresses) lives in user_identifiers; a lost authentication claim on the
+// primary identifier rolls a CreateWithPrimaryIdentifier back as
 // sdk.ErrAlreadyExists via the connector's MapError.
 type UserStore struct {
 	db *pgxdb.DB
@@ -25,56 +27,67 @@ func NewUserStore(db *pgxdb.DB) *UserStore {
 	return &UserStore{db: db}
 }
 
-const userColumns = "id, email, display_name, email_verified, created_at, updated_at"
+const userColumns = "id, display_name, auth_revision, created_at, updated_at"
 
 // userRow is the store-local, db-tagged projection of a users row.
 type userRow struct {
-	ID            string    `db:"id"`
-	Email         string    `db:"email"`
-	DisplayName   string    `db:"display_name"`
-	EmailVerified bool      `db:"email_verified"`
-	CreatedAt     time.Time `db:"created_at"`
-	UpdatedAt     time.Time `db:"updated_at"`
+	ID           string    `db:"id"`
+	DisplayName  string    `db:"display_name"`
+	AuthRevision int64     `db:"auth_revision"`
+	CreatedAt    time.Time `db:"created_at"`
+	UpdatedAt    time.Time `db:"updated_at"`
 }
 
 func (r userRow) toDomain() user.User {
 	return user.User{
-		ID:            r.ID,
-		Email:         r.Email,
-		DisplayName:   r.DisplayName,
-		EmailVerified: r.EmailVerified,
-		CreatedAt:     r.CreatedAt.UTC(),
-		UpdatedAt:     r.UpdatedAt.UTC(),
+		ID:           r.ID,
+		DisplayName:  r.DisplayName,
+		AuthRevision: r.AuthRevision,
+		CreatedAt:    r.CreatedAt.UTC(),
+		UpdatedAt:    r.UpdatedAt.UTC(),
 	}
 }
 
-// Create persists a new user; a colliding normalized email → sdk.ErrAlreadyExists.
-func (s *UserStore) Create(ctx context.Context, u user.User) (user.User, error) {
-	args := pgx.NamedArgs{
-		"email":          u.Email,
-		"display_name":   u.DisplayName,
-		"email_verified": u.EmailVerified,
-		"created_at":     u.CreatedAt.UTC(),
-		"updated_at":     u.UpdatedAt.UTC(),
-	}
-	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
-	// column so the schema default generates the key, read back with RETURNING.
-	if u.ID == "" {
-		const q = `INSERT INTO users (email, display_name, email_verified, created_at, updated_at)
-			VALUES (@email, @display_name, @email_verified, @created_at, @updated_at)
-			RETURNING id`
-		if err := s.db.QueryRow(ctx, q, args).Scan(&u.ID); err != nil {
-			return user.User{}, pgxdb.MapError(err)
+// CreateWithPrimaryIdentifier inserts the user and its first identifier in one
+// transaction (design §2.2): the identifier's partial unique authentication claim
+// rolls the whole aggregate back as sdk.ErrAlreadyExists. It targets the
+// users.auth_revision column and the user_identifiers table. Empty IDs use the
+// DB-generated convention (RETURNING id).
+func (s *UserStore) CreateWithPrimaryIdentifier(ctx context.Context, u user.User, ident identifier.Identifier) (user.User, identifier.Identifier, error) {
+	err := s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
+		userArgs := pgx.NamedArgs{
+			"display_name":  u.DisplayName,
+			"auth_revision": u.AuthRevision,
+			"created_at":    u.CreatedAt.UTC(),
+			"updated_at":    u.UpdatedAt.UTC(),
 		}
-		return u, nil
+		if u.ID == "" {
+			const q = `INSERT INTO users (display_name, auth_revision, created_at, updated_at)
+				VALUES (@display_name, @auth_revision, @created_at, @updated_at)
+				RETURNING id`
+			if err := tx.QueryRow(ctx, q, userArgs).Scan(&u.ID); err != nil {
+				return pgxdb.MapError(err)
+			}
+		} else {
+			userArgs["id"] = u.ID
+			const q = `INSERT INTO users (id, display_name, auth_revision, created_at, updated_at)
+				VALUES (@id, @display_name, @auth_revision, @created_at, @updated_at)`
+			if _, err := tx.Exec(ctx, q, userArgs); err != nil {
+				return pgxdb.MapError(err)
+			}
+		}
+		ident.UserID = u.ID
+		created, err := insertIdentifier(ctx, tx, ident)
+		if err != nil {
+			return err
+		}
+		ident = created
+		return nil
+	})
+	if err != nil {
+		return user.User{}, identifier.Identifier{}, err
 	}
-	const q = `INSERT INTO users (` + userColumns + `)
-		VALUES (@id, @email, @display_name, @email_verified, @created_at, @updated_at)`
-	args["id"] = u.ID
-	if _, err := s.db.Exec(ctx, q, args); err != nil {
-		return user.User{}, err
-	}
-	return u, nil
+	return u, ident, nil
 }
 
 // Get returns the user with the given id, or sdk.ErrNotFound.
@@ -87,28 +100,17 @@ func (s *UserStore) Get(ctx context.Context, id string) (user.User, error) {
 	return row.toDomain(), nil
 }
 
-// GetByEmail returns the user with the given normalized email, or sdk.ErrNotFound.
-func (s *UserStore) GetByEmail(ctx context.Context, email string) (user.User, error) {
-	const q = `SELECT ` + userColumns + ` FROM users WHERE email = @email`
-	row, err := pgxdb.QueryOne[userRow](ctx, s.db, q, pgx.NamedArgs{"email": email})
-	if err != nil {
-		return user.User{}, err
-	}
-	return row.toDomain(), nil
-}
-
 // Update persists changes to an existing user; missing id → sdk.ErrNotFound. It
-// leaves id and created_at unchanged.
+// leaves id, created_at, and auth_revision unchanged (the revision-CAS paths own
+// auth_revision).
 func (s *UserStore) Update(ctx context.Context, id string, u user.User) (user.User, error) {
 	const q = `UPDATE users
-		SET email = @email, display_name = @display_name, email_verified = @email_verified, updated_at = @updated_at
+		SET display_name = @display_name, updated_at = @updated_at
 		WHERE id = @id`
 	n, err := pgxdb.ExecAffecting(ctx, s.db, q, pgx.NamedArgs{
-		"email":          u.Email,
-		"display_name":   u.DisplayName,
-		"email_verified": u.EmailVerified,
-		"updated_at":     u.UpdatedAt.UTC(),
-		"id":             id,
+		"display_name": u.DisplayName,
+		"updated_at":   u.UpdatedAt.UTC(),
+		"id":           id,
 	})
 	if err != nil {
 		return user.User{}, err

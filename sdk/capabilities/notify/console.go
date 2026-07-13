@@ -15,7 +15,17 @@ type Console struct {
 	log  *slog.Logger
 }
 
-var _ Notifier = (*Console)(nil)
+var (
+	_ Notifier           = (*Console)(nil)
+	_ CapabilityReporter = (*Console)(nil)
+)
+
+// Capabilities marks the console notifier development-only: it logs message
+// bodies (OTPs, magic links) rather than delivering them, so a production host
+// must reject it.
+func (c *Console) Capabilities() Capabilities {
+	return Capabilities{TransportSecurity: TransportSecurityNone, DevelopmentOnly: true}
+}
 
 // NewConsole returns a console Notifier for the given kind. A nil logger falls
 // back to slog.Default().

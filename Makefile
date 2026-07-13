@@ -4,7 +4,7 @@
 # directive in features/cms/views/templ/go.mod (where the .templ sources live),
 # so `go tool templ` is reproducible.
 
-MODULES = sdk integrations/cryptids/bcrypt integrations/cryptids/golang-jwt integrations/cryptids/google-uuid integrations/datastores/pgxdb integrations/datastores/turso integrations/email/sendgrid integrations/filestorage/gcs integrations/filestorage/s3 integrations/kvstores/goredis integrations/notify/mailer integrations/oauth/github integrations/oauth/google integrations/scheduling/robfig-cron integrations/tracing/otel features/authentication features/authentication/stores/pgx features/authentication/stores/turso features/authorization features/authorization/stores/pgx features/authorization/stores/turso features/cms features/cms/stores/pgx features/cms/stores/turso features/cms/views/templ features/events features/events/stores/pgx features/events/stores/turso features/jobs features/jobs/stores/pgx features/jobs/stores/turso examples/auth-cms examples/cms examples/jobs-minimal examples/minimal workshop/gopernicus
+MODULES = sdk integrations/cryptids/bcrypt integrations/cryptids/golang-jwt integrations/cryptids/google-uuid integrations/datastores/pgxdb integrations/datastores/turso integrations/email/sendgrid integrations/filestorage/gcs integrations/filestorage/s3 integrations/kvstores/goredis integrations/notify/mailer integrations/oauth/github integrations/oauth/google integrations/scheduling/robfig-cron integrations/tracing/otel features/authentication features/authentication/stores/pgx features/authentication/stores/turso features/authentication/views/templ features/authorization features/authorization/stores/pgx features/authorization/stores/turso features/cms features/cms/stores/pgx features/cms/stores/turso features/cms/views/templ features/events features/events/stores/pgx features/events/stores/turso features/jobs features/jobs/stores/pgx features/jobs/stores/turso examples/auth-cms examples/cms examples/jobs-minimal examples/minimal workshop/gopernicus
 
 # STORE_MODULES carry env-gated live conformance suites (storetest against a real
 # database). `make check`/`make test` run them hermetically (loud skips); `make
@@ -17,9 +17,12 @@ STORE_MODULES = features/cms/stores/pgx features/cms/stores/turso features/authe
 	guard-store-no-foreign-feature guard-no-underlying guard-no-lax-scan \
 	guard-workshop-boundary guard-sdk-layering guard-integration-no-inward
 
-# Regenerate *_templ.go from .templ sources (they live in features/cms/views/templ).
+# Regenerate *_templ.go from .templ sources. Each bundled views/templ module pins
+# its own templ tool; generation runs inside each so the tool version is
+# reproducible per module.
 generate:
 	cd features/cms/views/templ && go tool templ generate
+	cd features/authentication/views/templ && go tool templ generate
 
 build: generate
 	@for m in $(MODULES); do echo "build $$m"; (cd $$m && go build ./...) || exit 1; done

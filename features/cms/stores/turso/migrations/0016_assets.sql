@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS assets (
-    id           TEXT PRIMARY KEY,
+    id           TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
     filename     TEXT NOT NULL,
     content_type TEXT NOT NULL,
     size         INTEGER NOT NULL DEFAULT 0,

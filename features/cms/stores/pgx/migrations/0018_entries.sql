@@ -2,7 +2,7 @@
 -- analog). This table never changes shape when an author adds a type or a field
 -- (plan §2); it changes only on a framework upgrade.
 CREATE TABLE IF NOT EXISTS entries (
-    id           TEXT PRIMARY KEY,
+    id           TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     type         TEXT NOT NULL,            -- content type slug: 'article','page','product'
     slug         TEXT NOT NULL,
     title        TEXT NOT NULL,

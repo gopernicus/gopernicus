@@ -22,17 +22,22 @@ import (
 // db is the connector wrapper (error mapping + Tx), not a raw *pgxpool.Pool.
 func Repositories(db *pgxdb.DB) auth.Repositories {
 	return auth.Repositories{
-		Users:              NewUserStore(db),
-		Passwords:          NewPasswordStore(db),
-		Sessions:           NewSessionStore(db),
-		VerificationCodes:  NewCodeStore(db),
-		VerificationTokens: NewTokenStore(db),
-		OAuthAccounts:      NewOAuthAccountStore(db),
-		OAuthStates:        NewOAuthStateStore(db),
-		ServiceAccounts:    NewServiceAccountStore(db),
-		APIKeys:            NewAPIKeyStore(db),
-		SecurityEvents:     NewSecurityEventStore(db),
-		Invitations:        NewInvitationStore(db),
+		Users:                NewUserStore(db),
+		Identifiers:          NewIdentifierStore(db),
+		Passwords:            NewPasswordStore(db),
+		Sessions:             NewSessionStore(db),
+		OAuthAccounts:        NewOAuthAccountStore(db),
+		OAuthStates:          NewOAuthStateStore(db),
+		ServiceAccounts:      NewServiceAccountStore(db),
+		APIKeys:              NewAPIKeyStore(db),
+		SecurityEvents:       NewSecurityEventStore(db),
+		Invitations:          NewInvitationStore(db),
+		Challenges:           NewChallengeStore(db),
+		PasswordResets:       NewPasswordResetStore(db),
+		ContactChanges:       NewContactChangeStore(db),
+		AuthenticationGrants: NewAuthGrantStore(db),
+		CredentialMutations:  NewCredentialMutationStore(db),
+		DeliveryJobs:         NewDeliveryJobStore(db),
 	}
 }
 
