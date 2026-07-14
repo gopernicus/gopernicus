@@ -78,8 +78,6 @@ func newHTMLTestHandler(t *testing.T, views Views) http.Handler {
 		Challenges:        &memChallenges{byID: map[string]challenge.Challenge{}},
 		Protector:         memProtector{},
 		Hasher:            fakeHasher{},
-		Mailer:            nopMailer{},
-		MailFrom:          "noreply@example.com",
 		Deliver:           router,
 		Queue:             stubQueue{},
 		Limiter:           ratelimiter.NewMemory(),

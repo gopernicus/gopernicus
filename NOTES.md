@@ -2225,3 +2225,175 @@ that same break list rather than re-deriving it.
   `email_verified`); sdk capability docs extended the `sdk/README.md` package table
   rows rather than adding a new doc file; and the feature README was fully rewritten
   to v3 (the three prior upgrade notes preserved verbatim).
+
+### 2026-07-13 — AV3D delivery-runtime refactor: release/change delta (AV3D-5.4)
+
+Amends the AV3-9.4 inventory above with the delivery-refactor deltas (plan
+`.claude/plans/authv3-delivery-refactor/`, AV3D-5.4). The refactor folds into the
+**same untagged** auth-v3 milestone cut — no separate tag — so the deltas revise
+the auth-v3 tag record rather than adding a new tagged surface. Docs-only task; the
+milestone diff remains the uncommitted worktree (no tags cut).
+
+- **Supersedes** the AV3-9.4 bullet "the delivery worker is host-lifecycle-owned
+  (`RunDeliveryWorker` …)" and the greenfield-migration `0001…0014` /
+  `delivery_jobs` mentions above: those describe the pre-AV3D v3 cut and are
+  historical. The tagged auth-v3 surface reflects the post-AV3D shape below.
+- **Public removals (breaking, over the auth-v3 base):** `Repositories.DeliveryJobs`,
+  `domain/deliveryjob`, `Service.RunDeliveryWorker`, `ErrNonDurableDeliveryRepository`,
+  `ErrDeliveryWorkerUnacknowledged`, `ErrInProcessDurableDeliveryRepository` + the
+  delivery-durability construction funcs, and the auth `0014_delivery_jobs.sql`
+  migration (both dialect trees). Canonical auth set is now `0001…0013`, no delivery
+  table.
+- **Renames:** `Config.DeliveryWorkerAcknowledged` → `DeliveryJobsAcknowledged`.
+- **Additions:** `Config.DeliveryMode` (required, no default: jobs/in_process/off),
+  `DeliveryDispatcher`, `InProcessDelivery`, `DeliveryEventsEmitter`,
+  `DeliveryEphemeralAcknowledged`; `Service.RunDelivery`, `DeliveryJobRuntime`,
+  `InProcessQueueDepth`. Generic **jobs** gained an additive fenced surface
+  (**minor** floor for `features/jobs` + both store modules): `Repositories.FencedQueue`,
+  the frozen stdlib primitives (`KeyedEnqueuer`/`KeyStatusReader`/`Checkpointer`),
+  `jobs.FencedRuntime`, `Permanent`, `Service.PurgeTerminal`, migration
+  `0003_fenced_job_queue`. Existing jobs consumers are unaffected.
+- **Behavior change:** `DeliveryStatus.Attempt` now always reads **0** — the status
+  seam is lifecycle-only (the attempt counter is executor-internal); field retained
+  for compatibility.
+- **Guarantees (docs never overstate):** `jobs` mode is durable + cross-instance +
+  at-least-once (never exactly-once); `in_process` is ephemeral (crash-loss, no
+  cross-instance coordination, per-process de-duplication only) and never claims
+  durability. Events observe delivery, never queue it — an observer failure changes
+  no recorded job state. Delivery-key rotation is single-key (no envelope
+  re-encryption / dual-key overlap) — drain in-flight work before retiring a key.
+- **Adopter upgrade** is the host-owned **Auth delivery-runtime upgrade runbook** in
+  `RELEASING.md` (AV3D-5.2), cross-linked from the feature README's new delivery
+  UPGRADE NOTE. Tooling never decrypts: every drain/re-enqueue/count/drop treats the
+  sealed `command.Envelope` as opaque bytes.
+- **RELEASING.md historical-DDL resolution (scope gap inherited from AV3D-5.2):** the
+  v2→v3 host upgrade runbook's `delivery_jobs` CREATE DDL (both dialects) is a
+  validated AV3-9.2 record and is **preserved, not deleted** — annotated in place
+  (the Step-5 callout marks it obsolete-at/after-the-refactor with a pointer to the
+  new delivery runbook, and Step 6's verify text now names the runtime-specific
+  drain). The actively-wrong forward-looking prose (production checklist
+  `RunDeliveryWorker`, the tag table's `0001…0014`/delivery-port, the delivery-key
+  rotation posture) was corrected to the two-mode model. The exact `delivery_jobs`
+  snake_case token lives only in `RELEASING.md`, outside guard G14's
+  `features/authentication` scope.
+- **Compatibility inventory (grep, 2026-07-13):** every removed symbol/table returns
+  ZERO hits in shipping code/docs outside intentional history — `.claude/plans/**`
+  (deliberate plan record) and `RELEASING.md`'s historical runbook (per the
+  resolution above). Residual stale CODE COMMENTS referencing the old `DeliveryJobs`
+  field (`authsvc/service.go`, `invitationsvc/service.go`) and `deliveryjob.Repository`
+  (`features/jobs/domain/job/fenced.go`) are flagged as a non-doc follow-up, not
+  fixed here (docs-task scope; they trip no guard).
+
+## 2026-07-13 — AV3-9.8 Batch 1 (release/runbook correctness + inventory corrections)
+
+Bounded remediation Batch 1 of the AV3-9.8 reviewer disposition (owner-gated per the
+IX-01..IX-23 table in `.claude/plans/authv3/10-docs-and-closeout.md`). Docs + fixtures
+only; no code behavior changed (Go edits were comments only). This entry is a dated
+CORRECTION appended beside the AV3-9.4 / AV3D-5.4 inventory above (the historical
+entries are left intact).
+
+- **Option B deleted — drain-only is normative (IX-01, owner Gate 1).** The delivery-
+  runtime runbook's opaque export/re-enqueue option and every reference to it were
+  removed from `RELEASING.md`; the drain (old worker runs to a zero non-terminal count,
+  then upgrade) is the single supported path. Rationale: the legacy ciphertext encodes
+  the removed bespoke envelope (not the versioned command), the legacy rail kinds
+  (`email`/`phone`) are not the registered `authentication.delivery` job kind, the copy
+  never terminalized its source rows, and the turso variant's `datetime('now')` is
+  unparseable by the connector's fixed-width `Time.Scan` (DATA-1). Drain-path Step-4
+  verification and source-row accounting were proven on disposable fixtures BOTH dialects
+  (pgx disposable `C`-collation DB; libSQL isolated `dr_` table prefix): 5 mixed-state
+  rows → Step-4 count 2 → terminalize 2 → recount 0, total 5 preserved (no loss/dup);
+  fixtures dropped, containers left running. Evidence recorded in the runbook's
+  "AV3-9.8 drain-path fixture verification" subsection.
+- **SWP inventory added (IX-09 / DOC-1+DOC-2).** The sdk-work-protocol promotion was
+  absent from the release inventory; added a `sdk/capabilities/work` keyed note (NEW
+  module, first tag) and a `features/jobs` SWP keyed note to `RELEASING.md`, a
+  `sdk/capabilities/work` row + updated `features/jobs` row in the tag-floor table, and
+  downstream before/after `work.Enqueuer`/`Replacer`/`StatusReader` upgrade examples.
+  Premise adaptation: `features/jobs` is **additive/minor, source-compatible** — no
+  existing exported signature was removed or changed incompatibly; `job.Status` became a
+  source-compatible alias `= work.Status`, and the fenced surface (`Repositories.FencedQueue`,
+  keyed-work primitives over opaque `[]byte`, `FencedRuntime`, `PurgeTerminal`, migration
+  `0003_fenced_job_queue`) is opt-in. The IX-23 central `bytes.Clone` snapshot-ownership
+  wording was added to the jobs README + the new sdk/work keyed note.
+- **Secret-inventory truth fix (IX-06, owner Gate 3).** `RELEASING.md`'s "five distinct
+  secrets, each rotatable" list invented magic-link/reset and CSRF key material and omitted
+  the identifier-HMAC and provider-token AES keys. Corrected to the REAL five host keys
+  (verified against `authentication.go` Config + the composition root): access-JWT signer
+  (`AUTH_JWT_SECRET`), challenge HMAC pepper (`AUTH_CHALLENGE_PEPPER`), delivery AES key
+  (`AUTH_DELIVERY_ENCRYPTER_KEY`), provider-token AES key (`AUTH_TOKEN_ENCRYPTER_KEY`),
+  identifier HMAC key (`AUTH_IDENTIFIER_KEY`) — each with its actual rotation story (only
+  the challenge pepper's `HMACKeyRing` supports continuity; the other four are single-key/
+  disruptive: JWT rotation forces re-auth, delivery drain-first, provider-token loss, and
+  identifier limiter-bucket reset). Magic-link/reset tokens ride the challenge pepper; CSRF
+  is a per-render random double-submit token with no managed key. Mirrored in the feature
+  README secrets section.
+- **Construction-claim reframe (IX-14, owner accepted).** `RELEASING.md` falsely claimed
+  missing `AllowedOrigins` and trusted-proxy wiring fail construction. Verified against
+  `auth.NewService`: it does NOT gate empty `AllowedOrigins` (an empty allowlist rejects
+  cross-origin browser POSTs at request time), and trusted-proxy/`ClientIP` is router-level
+  (`sdk/foundation/web.TrustProxies`) and unobservable by `NewService`. Reframed to the real
+  construction gates vs host-deployment-checklist items; no false construction guarantee
+  retained and no new construction gate added (not authorized). The feature README security
+  posture was already truthful — unchanged.
+- **Non-durable proof-host wording (IX-03, owner Gate 2).** The auth-cms proof host backs
+  jobs mode with `jobsmem.NewFencedQueue` (in-memory), so it is non-durable — restart loses
+  queued work, no cross-instance coordination. Corrected the README + `cmd/server/main.go`
+  comments (and the in_process WARN tail) that called jobs mode "recommended/DURABLE";
+  wording only, no wiring/readiness change (that is Batch 3). Durability is documented as a
+  pgx/turso `FencedQueue` store swap a real host makes.
+- **Markup-only override promise + asset-hook deferral (IX-18, owner Gate 5).** The feature
+  README Views/override section now narrows the v3 override promise to markup-only
+  (presentation templates): the hard-coded CSP (`default-src 'none'`, no `style-src`/asset
+  origins) means no host styling/asset policy yet. The constrained host asset/layout policy
+  hook is a **post-v3 deferral** (recorded here); v3 does not weaken the secure default. No
+  CSP change.
+- **Attempt-field doc note (IX-22, rejected-with-evidence).** Added an SRE note to the
+  feature README delivery section: `DeliveryStatus.Attempt == 0` at the consumer seam is
+  intentional executor/consumer separation; operational attempt counts come from the
+  lifecycle/health `retried` counter (`Config.DeliveryEventsEmitter` stream), not this field.
+
+Verification: `make guard` green; both runbook drain fixtures re-run green on live pgx +
+libSQL and torn down; docs + comment-only edits leave build/test unaffected (auth-cms module
+builds/tests re-run since Go comments were touched). No PR/tag/push; no pre-existing
+uncommitted change reset. Remaining AV3-9.8 batches (2–5) and the LICENSE release gate are
+unchanged.
+
+## 2026-07-14 — auth-v3 MILESTONE CLOSE (AV3-9.8 complete)
+
+The auth-v3 identity milestone is closed. AV3-9.7's 41-finding reviewer wave was
+dispositioned via the canonical IX-01..IX-23 integrated table (owner-adopted;
+the unmerged Claude medium/low rows are represented by the per-dimension
+summaries). Owner gates resolved 2026-07-13: Option B DELETED (drain-only
+normative), proof host documented honestly non-durable, truthful five-key
+secret inventory with disruptive-rotation runbooks, §5.8 named machine codes
+SHIPPED (auth-local mapper; challenge_expired 410 / challenge_invalid 400 /
+too_many_attempts 403), markup-only view-override promise (asset hook deferred
+post-v3), `sdk.ErrUnavailable` ADDED (non-default owner choice — delivery
+capacity/closed reclassified from ErrConflict, HTTP stays 503), live fenced
+DSNs authorized.
+
+Remediation ran as five bounded batches (per-batch logs in
+.claude/plans/authv3/10-docs-and-closeout.md): B1 release/runbook + inventory
+(drain fixtures green both dialects); B2 browser/transport security (same-site
+Origin-allowlist fix, logout origin gate, §5.8 mapper, reset-token retention);
+B3 runtime containment (per-job recover boundary, host supervision of the
+delivery runtime, purge scheduler with env knobs, honest `outstanding` health
+accounting); B4 module/API cleanup (self-contained example go.mod,
+sdk.ErrUnavailable, dead mailer plumbing removed); B5 reverification — hermetic
+36/36 + guards 15/15 + fresh dual-store 10/10 + fenced live conformance 41/41
+`-race` BOTH dialects (the fence's first real-DB concurrency run, closing the
+AV3-9.7 top residual risk) + eight-proof livedelivery green ×4 + IX-11 browser
+drive 9/9. Two gate-discovered defects were test/harness bugs, root-caused and
+fixed with no product change and no assertion weakened: the HS256 tamper test
+flipped only base64url padding bits (~6% false failure; verifier correct), and
+the livedelivery flakes were setup-drain lease races + a poll-ordering race
+(the fence honored its at-least-once contract in every trace).
+
+Deliberate deferrals stand (auth-v4 MFA, real SMS, CompleteStepUpWithOAuth,
+#token= reset-link builder, PII-audit retention lifecycle, pgx C-collation
+parity — now joined by the view asset-policy hook). Release gates remaining,
+all owner-owned: LICENSE (blocks first public tags), turso CI secrets,
+committing the tree (clears the expected recovery_templ.go drift flag), PR,
+and tags per the RELEASING.md floors. No PR, tag, push, or commit was made
+during the milestone.

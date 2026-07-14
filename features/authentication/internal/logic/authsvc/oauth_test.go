@@ -268,8 +268,6 @@ func newOAuthHarness(t *testing.T, provider *fakeProvider, enc cryptids.Encrypte
 		Passwords:           h.pw,
 		Sessions:            h.sess,
 		Hasher:              &fakeHasher{},
-		Mailer:              h.mailer,
-		MailFrom:            "noreply@example.com",
 		Limiter:             ratelimiter.NewMemory(),
 		Cookie:              CookieConfig{},
 		OAuthAccounts:       h.accounts,

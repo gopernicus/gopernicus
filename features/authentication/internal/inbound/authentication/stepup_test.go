@@ -69,8 +69,6 @@ func newStepUpHandler(t *testing.T) (http.Handler, *memAuthGrants) {
 		Sessions:             &memSessions{m: map[string]session.Session{}},
 		AuthenticationGrants: grants,
 		Hasher:               fakeHasher{},
-		Mailer:               nopMailer{},
-		MailFrom:             "noreply@example.com",
 		Limiter:              ratelimiter.NewMemory(),
 		Cookie:               authsvc.CookieConfig{},
 		TokenSigner:          newFakeSigner(),

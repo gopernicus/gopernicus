@@ -36,7 +36,6 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/delivery"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/redirect"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
@@ -244,18 +243,16 @@ type Deps struct {
 	// profile). Set true only to trade breach coverage for availability (a
 	// development/self-hosted convenience).
 	CompromisedFailOpen bool
-	Mailer              email.Sender
-	MailFrom            string
 	// Deliver is the shared kind-aware delivery renderer/router (design §6.1),
-	// constructor-injected by package auth and shared with invitationsvc. It renders
-	// an encrypted-job-ready Envelope and routes a send through the email/notify kind
-	// fork; the durable worker (phase 4) consumes it. Wired whenever the Mailer is
-	// (the router requires an email Sender). The request-time send sites enqueue
-	// rendered/opaque commands through Queue (AV3-4.3).
+	// constructor-injected by package auth (which builds it from Config.Mailer) and
+	// shared with invitationsvc. It renders an encrypted-job-ready Envelope and routes
+	// a send through the email/notify kind fork; the durable worker consumes it. The
+	// request-time send sites enqueue rendered/opaque commands through Queue (AV3-4.3).
 	Deliver *delivery.Router
-	// Queue is the durable delivery outbox (design §6.1.1) every send site enqueues
-	// through instead of a request-time provider call. Wired whenever DeliveryJobs is
-	// (package auth builds it); nil → outbound disabled (the send sites fail loudly).
+	// Queue is the delivery dispatch seam every send site enqueues through instead of
+	// a request-time provider call. Wired whenever a delivery dispatcher is (package
+	// auth builds it from the jobs-mode Config.DeliveryDispatcher or the in_process
+	// queue); nil → outbound disabled (the send sites fail loudly).
 	Queue deliveryQueue
 	// IdentifierKeyer derives PII-free outbox idempotency keys (design §4.4). Nil → a
 	// SHA-256 fallback keeps keys PII-free without the host keyer.
@@ -367,8 +364,6 @@ type Service struct {
 	// no breach check. compromisedFailOpen selects the outcome when it errors.
 	compromised         compromisedChecker
 	compromisedFailOpen bool
-	mailer              email.Sender
-	mailFrom            string
 	// deliver is the shared kind-aware delivery renderer/router (Deps.Deliver): send
 	// sites render an envelope through it and enqueue it on queue. Nil until wired.
 	deliver *delivery.Router
@@ -485,8 +480,6 @@ func NewService(d Deps) *Service {
 		hasher:               d.Hasher,
 		compromised:          d.Compromised,
 		compromisedFailOpen:  d.CompromisedFailOpen,
-		mailer:               d.Mailer,
-		mailFrom:             d.MailFrom,
 		deliver:              d.Deliver,
 		queue:                d.Queue,
 		identifierKeyer:      d.IdentifierKeyer,

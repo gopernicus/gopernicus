@@ -13,9 +13,16 @@ facility). Design of record: `.claude/plans/roadmap/jobs-feature-design.md`.
 jobs.go                  the socket: Repositories, Config, CronParser/
                          CronSchedule ports, Service, NewService, Runtime,
                          NewRuntime, Register
+fenced.go                the sdk/capabilities/work protocol implementation
+                         (Service.EnqueueOnce/Replace/LatestStatusByKey), the
+                         executor-side Service.Checkpoint, DeadLetterFunc + its
+                         compile seam, FencedRuntime, FencedRuntimeConfig,
+                         FencedClaim, Permanent(), Service.PurgeTerminal
 domain/                  the hexagon's public rim — entities + ports
   job/                   Job, Enqueue, QueueRepository (structurally
-                         satisfies sdk/foundation/workers.JobStore[job.Job])
+                         satisfies sdk/foundation/workers.JobStore[job.Job]);
+                         FencedQueueRepository (the lease-fenced, logical-key,
+                         checkpointed queue AV3D added)
   schedule/              Schedule, Spec, Ensure, Repository
 internal/
   logic/queuesvc/        enqueue validation, idempotency, wake signaling
@@ -55,6 +62,8 @@ admin surface, per ratified decision J5.)
 
 | field | nil/zero means | notes |
 |---|---|---|
+| `Repositories.Queue` | see `FencedQueue` — at least one of the two is required (`ErrQueueRequired`) | the basic durable queue + scheduler substrate |
+| `Repositories.FencedQueue` | the hardened fenced delivery surface is off; the fenced primitives + `NewFencedRuntime` return `ErrFencedQueueRequired` | the lease-fenced, logical-key, checkpointed queue (AV3D) — see below |
 | `Repositories.Schedules` | queue-only host; Runtime skips the scheduler | — |
 | `Config.Handlers` | Runtime construction errors (a runtime with nothing to run is misconfiguration) | required for `NewRuntime` |
 | `Config.Cron` | fine until a `Spec.Cron` schedule appears — then a loud error | `Spec.Every` is the parser-free stdlib path |
@@ -82,12 +91,58 @@ is deliberately **stdlib-typed** — a compatibility contract so another
 feature's own narrow enqueuer port matches it structurally with zero
 imports of this module (constitution rule 6).
 
+## The fenced delivery surface — the hardened queue (AV3D)
+
+A second, opt-in queue substrate (`Repositories.FencedQueue`) hardens the basic
+queue for a consuming feature that needs durable, at-least-once, replaceable work
+with a claim-fenced payload checkpoint — authentication's durable delivery is the
+first consumer. It adds what the basic queue could not safely provide:
+
+1. **Lease fencing.** `Complete`/`Fail`/`Checkpoint` are fenced by the lease that
+   owns the claim — a stale or superseded worker fails with `sdk.ErrConflict`
+   rather than clobbering the execution another worker has reclaimed.
+2. **Logical-key admission + supersession.** A PII-free logical key (distinct from
+   the unique execution ID) drives atomic **enqueue-once** and **replace** — a
+   repeated start coalesces onto one active execution; an explicit resend supersedes
+   older active work under the same key.
+3. **Claimed-payload checkpoint.** A worker persists its rendered payload
+   atomically before the side effect, so every retry replays the byte-identical
+   payload (this is what lets auth resend the same rendered secret).
+4. **Bounded retry + terminal callback + purge.** Capped exponential backoff, a
+   `Permanent(reason)` disposition that dead-letters on the first attempt, a
+   per-kind `DeadLetterFunc` fired **only after** the dead-letter transition is
+   durably recorded, and a bounded `Service.PurgeTerminal(ctx, before, limit)`.
+
+The consumer-facing seam is the **canonical keyed-work protocol**
+(`sdk/capabilities/work`): the jobs `Service` is its **implementation of record**,
+satisfying `work.Enqueuer` (`EnqueueOnce`), `work.Replacer` (`Replace`), and
+`work.StatusReader` (`LatestStatusByKey` — lifecycle status only, never
+payload/secret) by compile-time assertion. A consuming feature depends on the sdk
+`work` ports, never on this module, so features never import features. Payload is
+opaque `[]byte`, and the Service deep-copies it with a central `bytes.Clone` at the
+protocol boundary — so an admitted unit's bytes are a store-independent snapshot
+(a later caller mutation cannot alter admitted work, for every backing store, by
+construction; `worktest` pins it under `-race`). The executor-side
+`Service.Checkpoint` is out of the protocol (D3):
+a consuming processor redeclares it structurally. The domain-rich
+`job.FencedQueueRepository` and the host-registered `DeadLetterFunc`/`FencedRuntime`
+handlers carry `job.Job` because they are host-side wiring, not the cross-feature
+seam.
+
+`jobs.NewFencedRuntime(svc, FencedRuntimeConfig{...})` builds the lease-fenced pool
+that claims due jobs, hands each handler a checkpoint-capable `FencedClaim`, and
+applies the retry/dead-letter policy. Like `Runtime`, it starts nothing —
+`Register` starts no goroutine; the host runs `go rt.Run(ctx)` and cancels to drain.
+`ProcessTimeout` must sit inside `LeaseFor` (`ErrProcessTimeoutExceedsLease`).
+
 ## Datastores — {turso, postgres} out of the box, or none at all
 
 Both dialect stores ship and pass one `storetest` suite (live runs
 recorded in NOTES.md: turso against the playground incl. the
 concurrent-claim case; postgres on docker where `FOR UPDATE SKIP LOCKED`
-makes contention trivial). A host may instead use `features/jobs/memstore`
+makes contention trivial). The canonical migration set is three files per
+dialect with identical filename sets: `0001_job_queue`, `0002_job_schedules`,
+and `0003_fenced_job_queue` (the fenced delivery surface above). A host may instead use `features/jobs/memstore`
 (public, in-core — `examples/jobs-minimal` is the zero-infra proof) or
 implement the two ports itself. Postgres conformance:
 `docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17`

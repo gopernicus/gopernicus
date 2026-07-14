@@ -10,7 +10,6 @@ import (
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
 	auth "github.com/gopernicus/gopernicus/features/authentication"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/deliveryjob"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
@@ -52,17 +51,10 @@ func (durableLimiter) RateLimiterDurability() auth.LimiterDurability {
 	return auth.LimiterDurability{InProcessOnly: false}
 }
 
-// durableJobs wraps the host's in-process DeliveryJobs repository so it does NOT
-// promote the concrete Durability() method — a stand-in for a real durable outbox
-// (pgx/turso) in the production-valid baseline. authmem's own repository declares
-// InProcessOnly (the "metadata" negative below); wrapping it in the bare interface
-// drops that declaration, so the durability gate tolerates it.
-type durableJobs struct{ deliveryjob.Repository }
-
 // productionBaseline returns a production-VALID config + repositories: every v3
 // safeguard the memory host would otherwise fail is satisfied (production transports,
-// a durable limiter, an HTTPS magic-link base, a durable-by-omission outbox, an
-// acknowledged worker, and the identifier keyer buildAuthConfig already wires). It
+// a durable limiter, an HTTPS magic-link base, the generic-jobs delivery dispatcher, an
+// acknowledged runtime, and the identifier keyer buildAuthConfig already wires). It
 // constructs cleanly in production (proven by TestProductionBaselineConstructs), so
 // each negative below isolates exactly one broken safeguard.
 func productionBaseline(t *testing.T) (auth.Config, auth.Repositories) {
@@ -76,9 +68,11 @@ func productionBaseline(t *testing.T) (auth.Config, auth.Repositories) {
 	cfg.Notifiers = []notify.Notifier{prodNotifier{kind: identity.KindPhone}}
 	cfg.RateLimiter = durableLimiter{}
 	cfg.PublicAuthBaseURL = "https://auth.example.com/auth/magic"
+	// run() wires the generic-jobs dispatcher; reproduce it so jobs mode has its queue
+	// capability in the baseline.
+	cfg.DeliveryDispatcher = jobsDispatcher(t)
 
 	repos := authmem.New().Repositories()
-	repos.DeliveryJobs = durableJobs{repos.DeliveryJobs}
 	return cfg, repos
 }
 
@@ -144,23 +138,13 @@ func TestProductionNegatives(t *testing.T) {
 			want: auth.ErrIdentifierKeyerRequired,
 		},
 		{
-			// metadata: authmem's outbox positively declares InProcessOnly, so its jobs
-			// would not survive a restart — production rejects it via the durability
-			// metadata gate.
-			name: "non_durable_delivery_outbox_metadata",
-			mutate: func(_ *auth.Config, repos *auth.Repositories) {
-				repos.DeliveryJobs = authmem.New().Repositories().DeliveryJobs
-			},
-			want: auth.ErrNonDurableDeliveryRepository,
-		},
-		{
-			// worker: the outbox is the only send path, so production requires the host
-			// to affirm it runs RunDeliveryWorker.
-			name: "unacknowledged_delivery_worker",
+			// runtime: the queue is the only send path, so production requires the host
+			// to affirm it runs the generic-jobs delivery runtime (jobs.FencedRuntime).
+			name: "unacknowledged_delivery_runtime",
 			mutate: func(cfg *auth.Config, _ *auth.Repositories) {
-				cfg.DeliveryWorkerAcknowledged = false
+				cfg.DeliveryJobsAcknowledged = false
 			},
-			want: auth.ErrDeliveryWorkerUnacknowledged,
+			want: auth.ErrDeliveryJobsUnacknowledged,
 		},
 	}
 
@@ -190,6 +174,8 @@ func TestDevelopmentConsoleTransportWarns(t *testing.T) {
 	if cfg.RuntimeMode != auth.RuntimeModeDevelopment {
 		t.Fatalf("host default RuntimeMode = %q, want development", cfg.RuntimeMode)
 	}
+	// run() wires the generic-jobs dispatcher; reproduce it so jobs-mode construction succeeds.
+	cfg.DeliveryDispatcher = jobsDispatcher(t)
 	if _, err := auth.NewService(authmem.New().Repositories(), cfg); err != nil {
 		t.Fatalf("development construction should succeed, got: %v", err)
 	}

@@ -6,37 +6,36 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/features/authentication/domain/deliveryjob"
 	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/capabilities/work"
 	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 )
 
-// The queue requires its store and encrypter; both are structural.
+// The queue requires its dispatcher and encrypter; both are structural.
 func TestNewServiceRequiresCollaborators(t *testing.T) {
-	if _, err := NewService(ServiceDeps{Encrypter: fakeEncrypter{}}); !errors.Is(err, ErrRepositoryRequired) {
-		t.Fatalf("missing repo err=%v, want ErrRepositoryRequired", err)
+	if _, err := NewService(ServiceDeps{Encrypter: fakeEncrypter{}}); !errors.Is(err, ErrDispatcherRequired) {
+		t.Fatalf("missing dispatcher err=%v, want ErrDispatcherRequired", err)
 	}
-	if _, err := NewService(ServiceDeps{Repo: newMemRepo()}); !errors.Is(err, ErrEncrypterRequired) {
+	if _, err := NewService(ServiceDeps{Dispatcher: newMemDispatcher()}); !errors.Is(err, ErrEncrypterRequired) {
 		t.Fatalf("missing encrypter err=%v, want ErrEncrypterRequired", err)
 	}
-	if !errors.Is(ErrRepositoryRequired, sdk.ErrInvalidInput) || !errors.Is(ErrEncrypterRequired, sdk.ErrInvalidInput) {
+	if !errors.Is(ErrDispatcherRequired, sdk.ErrInvalidInput) || !errors.Is(ErrEncrypterRequired, sdk.ErrInvalidInput) {
 		t.Fatal("queue construction errors must wrap sdk.ErrInvalidInput")
 	}
 }
 
-// Enqueue seals the envelope into the job's opaque Payload: neither the
-// destination nor the secret appears in the clear on the persisted row.
+// Enqueue seals the envelope into the submitted opaque payload: neither the
+// destination nor the secret appears in the clear in what the dispatcher receives.
 func TestServiceEnqueueSealsPayload(t *testing.T) {
-	repo := newMemRepo()
-	clk := newClock()
-	// A real AEAD encrypter proves the persisted Payload is opaque ciphertext (the
+	fd := &fakeDispatcher{state: string(work.StatusPending)}
+	// A real AEAD encrypter proves the submitted payload is opaque ciphertext (the
 	// passthrough test encrypter would not).
 	enc, err := cryptids.NewAESGCM(bytes.Repeat([]byte("k"), 32))
 	if err != nil {
 		t.Fatalf("NewAESGCM: %v", err)
 	}
-	svc, _ := NewService(ServiceDeps{Repo: repo, Encrypter: enc, Now: clk.now})
+	svc, _ := NewService(ServiceDeps{Dispatcher: fd, Encrypter: enc, Now: newClock().now})
 	rcpt, err := svc.Enqueue(context.Background(), Command{
 		Kind:           identity.KindEmail,
 		Purpose:        PurposeRegistrationVerification,
@@ -46,31 +45,22 @@ func TestServiceEnqueueSealsPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
-	if rcpt.Key != "digest-1" || rcpt.JobID == "" || rcpt.State != deliveryjob.StatePending {
+	if rcpt.Key != "digest-1" || rcpt.JobID == "" || rcpt.State != StatusPending {
 		t.Fatalf("receipt = %+v", rcpt)
 	}
-	job, ok := repo.get(rcpt.JobID)
-	if !ok {
-		t.Fatalf("job not stored")
+	if len(fd.submits) != 1 {
+		t.Fatalf("expected 1 submit, got %d", len(fd.submits))
 	}
-	if bytes.Contains(job.Payload, []byte("user@example.test")) || bytes.Contains(job.Payload, []byte("424242")) {
-		t.Fatalf("payload leaked a plaintext destination/secret: %q", job.Payload)
-	}
-	// The sealed payload round-trips to the original envelope.
-	env, err := Open(enc, job.Payload)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	if env.Destination != "user@example.test" || env.Secret != "424242" {
-		t.Fatalf("round-trip mismatch: %+v", env)
+	payload := fd.submits[0].payload
+	if bytes.Contains(payload, []byte("user@example.test")) || bytes.Contains(payload, []byte("424242")) {
+		t.Fatalf("payload leaked a plaintext destination/secret: %q", payload)
 	}
 }
 
-// Enqueue is idempotent by key: a double-submitted start makes no second job.
+// Enqueue is idempotent by key: a double-submitted start makes no second execution.
 func TestServiceEnqueueIdempotent(t *testing.T) {
-	repo := newMemRepo()
-	clk := newClock()
-	svc, _ := NewService(ServiceDeps{Repo: repo, Encrypter: fakeEncrypter{}, Now: clk.now})
+	disp := newMemDispatcher()
+	svc, _ := NewService(ServiceDeps{Dispatcher: disp, Encrypter: fakeEncrypter{}, Now: newClock().now})
 	cmd := Command{Kind: identity.KindEmail, Purpose: PurposeRegistrationVerification, IdempotencyKey: "same", Envelope: Envelope{Destination: "u@x", Body: "b"}}
 	a, err := svc.Enqueue(context.Background(), cmd)
 	if err != nil {
@@ -81,16 +71,16 @@ func TestServiceEnqueueIdempotent(t *testing.T) {
 		t.Fatalf("Enqueue#2: %v", err)
 	}
 	if a.JobID != b.JobID {
-		t.Fatalf("second enqueue made a new job: %s vs %s", a.JobID, b.JobID)
+		t.Fatalf("second enqueue made a new execution: %s vs %s", a.JobID, b.JobID)
 	}
-	if repo.countState(deliveryjob.StatePending) != 1 {
-		t.Fatalf("idempotent enqueue created more than one pending job")
+	if got := len(disp.state); got != 1 {
+		t.Fatalf("idempotent enqueue created %d executions, want 1", got)
 	}
 }
 
-// A Command missing any structural field is rejected before touching the store.
+// A Command missing any structural field is rejected before touching the transport.
 func TestServiceEnqueueCommandIncomplete(t *testing.T) {
-	svc, _ := NewService(ServiceDeps{Repo: newMemRepo(), Encrypter: fakeEncrypter{}})
+	svc, _ := NewService(ServiceDeps{Dispatcher: newMemDispatcher(), Encrypter: fakeEncrypter{}})
 	for _, cmd := range []Command{
 		{Purpose: PurposeMagicLink, IdempotencyKey: "k"},
 		{Kind: identity.KindEmail, IdempotencyKey: "k"},
@@ -102,36 +92,42 @@ func TestServiceEnqueueCommandIncomplete(t *testing.T) {
 	}
 }
 
-// A seal (encryption) failure surfaces from Enqueue; no job is persisted.
+// A seal (encryption) failure surfaces from Enqueue; nothing is submitted. The
+// versioned command codec maps the underlying encrypt error to a static, secret-free
+// sentinel (never echoing the plaintext), so the guarantee is: a non-nil error wrapping
+// sdk.ErrInvalidInput and no work handed to the dispatcher.
 func TestServiceEnqueueEncryptionFailure(t *testing.T) {
-	repo := newMemRepo()
-	svc, _ := NewService(ServiceDeps{Repo: repo, Encrypter: fakeEncrypter{encErr: errBoom}})
+	fd := &fakeDispatcher{state: string(work.StatusPending)}
+	svc, _ := NewService(ServiceDeps{Dispatcher: fd, Encrypter: fakeEncrypter{encErr: errBoom}})
 	_, err := svc.Enqueue(context.Background(), Command{Kind: identity.KindEmail, Purpose: PurposeMagicLink, IdempotencyKey: "k", Envelope: Envelope{Destination: "u@x", Body: "b"}})
-	if !errors.Is(err, errBoom) {
-		t.Fatalf("Enqueue err=%v, want errBoom", err)
+	if err == nil || !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("Enqueue err=%v, want a seal failure wrapping sdk.ErrInvalidInput", err)
 	}
-	if len(repo.jobs) != 0 {
-		t.Fatalf("a job was persisted despite the seal failure")
+	if len(fd.submits) != 0 {
+		t.Fatalf("work was submitted despite the seal failure")
 	}
 }
 
-// Replace supersedes any prior pending job holding the key.
+// Replace supersedes any prior pending execution holding the key.
 func TestServiceReplaceSupersedes(t *testing.T) {
-	repo := newMemRepo()
-	clk := newClock()
-	svc, _ := NewService(ServiceDeps{Repo: repo, Encrypter: fakeEncrypter{}, Now: clk.now})
+	disp := newMemDispatcher()
+	svc, _ := NewService(ServiceDeps{Dispatcher: disp, Encrypter: fakeEncrypter{}, Now: newClock().now})
 	first, _ := svc.Enqueue(context.Background(), Command{Kind: identity.KindEmail, Purpose: PurposeMagicLink, IdempotencyKey: "k", Envelope: Envelope{Destination: "u@x", Body: "old"}})
 	second, err := svc.Replace(context.Background(), Command{Kind: identity.KindEmail, Purpose: PurposeMagicLink, IdempotencyKey: "k", Envelope: Envelope{Destination: "u@x", Body: "new"}})
 	if err != nil {
 		t.Fatalf("Replace: %v", err)
 	}
 	if first.JobID == second.JobID {
-		t.Fatalf("Replace reused the prior job ID")
+		t.Fatalf("Replace reused the prior execution ID")
 	}
-	if j, _ := repo.get(first.JobID); j.State != deliveryjob.StateCanceled {
-		t.Fatalf("prior job = %q, want canceled", j.State)
+	if disp.state[first.JobID] != string(work.StatusSuperseded) {
+		t.Fatalf("prior execution = %q, want superseded", disp.state[first.JobID])
 	}
-	if repo.countState(deliveryjob.StatePending) != 1 {
-		t.Fatalf("more than one pending job after replace")
+	st, err := svc.Status(context.Background(), "k")
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if st.State != StatusPending {
+		t.Fatalf("latest status after replace = %q, want pending (the fresh generation)", st.State)
 	}
 }

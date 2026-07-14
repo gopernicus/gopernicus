@@ -10,12 +10,15 @@ import templruntime "github.com/a-h/templ/runtime"
 
 import "github.com/gopernicus/gopernicus/features/authentication"
 
-// ResetPassword renders the reset form reached from a reset link. The reset token
-// is NOT a server-rendered value (design §6.4): a CSP-nonced script reads it from
-// the URL fragment, scrubs it from history, and stashes it in a hidden field the
-// form posts alongside the new password. The token never appears in a query
-// string, in the page markup at render time, or in the referrer. The password
-// field is never repopulated.
+// ResetPassword renders the reset form reached from a reset link. On the initial
+// render the token is NOT a server-rendered value (design §6.4): a CSP-nonced script
+// reads it from the URL fragment, scrubs it from history, and stashes it in the hidden
+// field the form posts alongside the new password, so it never appears in a query
+// string, the initial markup, or the referrer. On a validation-error RE-render the
+// fragment is gone, so m.Token carries the SUBMITTED token back into the hidden field
+// (the same value the failed POST already sent) so a corrected retry survives (IX-11);
+// the nonced script only overwrites it when a fragment IS present, so it never clobbers
+// the retained value. The password field is never repopulated.
 func ResetPassword(m authentication.ResetPage) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
@@ -68,7 +71,7 @@ func ResetPassword(m authentication.ResetPage) templ.Component {
 			var templ_7745c5c3_Var3 templ.SafeURL
 			templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(m.RedeemPath))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `recovery.templ`, Line: 15, Col: 74}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `recovery.templ`, Line: 18, Col: 74}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 			if templ_7745c5c3_Err != nil {
@@ -82,7 +85,20 @@ func ResetPassword(m authentication.ResetPage) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "<input type=\"hidden\" name=\"token\" id=\"reset-token\"><p><label for=\"password\">New password</label><br><input id=\"password\" name=\"password\" type=\"password\" autocomplete=\"new-password\" required aria-describedby=\"password-error\">")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 4, "<input type=\"hidden\" name=\"token\" id=\"reset-token\" value=\"")
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			var templ_7745c5c3_Var4 string
+			templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.ResolveAttributeValue(m.Token)
+			if templ_7745c5c3_Err != nil {
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `recovery.templ`, Line: 20, Col: 69}
+			}
+			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var4)
+			if templ_7745c5c3_Err != nil {
+				return templ_7745c5c3_Err
+			}
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "\"><p><label for=\"password\">New password</label><br><input id=\"password\" name=\"password\" type=\"password\" autocomplete=\"new-password\" required aria-describedby=\"password-error\">")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -90,25 +106,25 @@ func ResetPassword(m authentication.ResetPage) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 5, "</p><button type=\"submit\">Set new password</button></form><noscript><p>JavaScript is required to complete a password reset from an email link.</p></noscript>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "</p><button type=\"submit\">Set new password</button></form><noscript><p>JavaScript is required to complete a password reset from an email link.</p></noscript>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 			if m.CSPNonce != "" {
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 6, "<script nonce=\"")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "<script nonce=\"")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				var templ_7745c5c3_Var4 string
-				templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.ResolveAttributeValue(m.CSPNonce)
+				var templ_7745c5c3_Var5 string
+				templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.ResolveAttributeValue(m.CSPNonce)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `recovery.templ`, Line: 29, Col: 29}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `recovery.templ`, Line: 32, Col: 29}
 				}
-				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var4)
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var5)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 7, "\">\n\t\t\t\t(function () {\n\t\t\t\t\tvar frag = window.location.hash ? window.location.hash.slice(1) : \"\";\n\t\t\t\t\tif (window.history && window.history.replaceState) {\n\t\t\t\t\t\twindow.history.replaceState(null, document.title, window.location.pathname + window.location.search);\n\t\t\t\t\t}\n\t\t\t\t\tvar field = document.getElementById(\"reset-token\");\n\t\t\t\t\tif (frag && field) { field.value = frag; }\n\t\t\t\t})();\n\t\t\t</script>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "\">\n\t\t\t\t(function () {\n\t\t\t\t\tvar frag = window.location.hash ? window.location.hash.slice(1) : \"\";\n\t\t\t\t\tif (window.history && window.history.replaceState) {\n\t\t\t\t\t\twindow.history.replaceState(null, document.title, window.location.pathname + window.location.search);\n\t\t\t\t\t}\n\t\t\t\t\tvar field = document.getElementById(\"reset-token\");\n\t\t\t\t\tif (frag && field) { field.value = frag; }\n\t\t\t\t})();\n\t\t\t</script>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}

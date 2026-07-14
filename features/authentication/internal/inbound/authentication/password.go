@@ -131,6 +131,8 @@ func writePasswordError(w http.ResponseWriter, err error) {
 	case errors.Is(err, credential.ErrNoLoginMethod):
 		web.RespondJSONError(w, web.NewError(http.StatusConflict, "cannot remove last authentication method").WithCode("cannot_remove_last_method"))
 	default:
-		web.RespondJSONDomainError(w, err)
+		// A wrong/expired/locked-out remove-password code surfaces a challenge-rail
+		// sentinel; respondDomainError emits the named §5.8 challenge codes.
+		respondDomainError(w, err)
 	}
 }

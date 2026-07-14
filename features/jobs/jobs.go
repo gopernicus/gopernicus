@@ -54,14 +54,26 @@ const (
 // Validation errors from NewService/NewRuntime/Register. A misconfigured host
 // fails at construction/registration, not at first enqueue.
 var (
-	// ErrQueueRequired is returned when Repositories.Queue is nil.
-	ErrQueueRequired = errors.New("jobs: Repositories.Queue is required")
+	// ErrQueueRequired is returned when neither Repositories.Queue nor
+	// Repositories.FencedQueue is wired: a jobs Service needs at least one queue
+	// surface. It is also returned by the unfenced Enqueue/EnqueueJob/NewRuntime
+	// path when only the fenced queue is wired.
+	ErrQueueRequired = errors.New("jobs: at least one of Repositories.Queue or Repositories.FencedQueue is required")
+	// ErrFencedQueueRequired is returned by the fenced primitive methods
+	// (EnqueueOnce/Replace/LatestStatusByKey/Checkpoint) and NewFencedRuntime when
+	// Repositories.FencedQueue is nil.
+	ErrFencedQueueRequired = errors.New("jobs: Repositories.FencedQueue is required for the fenced delivery surface")
 	// ErrHandlersRequired is returned when a Runtime is built (or the feature is
 	// registered) with no handlers — a jobs runtime with nothing to run.
 	ErrHandlersRequired = errors.New("jobs: Config.Handlers must be non-empty")
 	// ErrInvalidHandler is returned when Config.Handlers has an empty kind key or
 	// a nil handler value.
 	ErrInvalidHandler = errors.New("jobs: Config.Handlers has an empty kind or a nil handler")
+	// ErrProcessTimeoutExceedsLease is returned by NewFencedRuntime when the
+	// per-attempt ProcessTimeout is not safely shorter than the claim LeaseFor: a
+	// provider call bounded by a timeout at or beyond the lease could still be running
+	// after the lease lapses and a second worker reclaims the job (AV3D-3.4).
+	ErrProcessTimeoutExceedsLease = errors.New("jobs: FencedRuntimeConfig.ProcessTimeout must be shorter than LeaseFor")
 	// ErrSchedulesNotConfigured is returned by EnsureSchedule when the host wired
 	// no Schedules repository (a queue-only host).
 	ErrSchedulesNotConfigured = errors.New("jobs: Repositories.Schedules is nil; scheduling is disabled")
@@ -100,11 +112,20 @@ type HandlerFunc func(ctx context.Context, j job.Job) error
 // Repositories is the set of outbound ports the feature needs. A store adapter
 // (features/jobs/stores/turso, the in-core memstore) or a host fills it.
 type Repositories struct {
-	// Queue is required.
+	// Queue is the unfenced durable queue backing Enqueue/EnqueueJob and the cron
+	// Runtime. Required unless FencedQueue is wired (at least one of the two must be
+	// set).
 	Queue job.QueueRepository
 	// Schedules is optional; nil = a queue-only host, and the Runtime skips the
-	// scheduler pool.
+	// scheduler pool. Meaningful only when Queue is wired.
 	Schedules schedule.Repository
+	// FencedQueue is the OPTIONAL lease-fenced, logical-key queue (AV3D-1.x) backing
+	// the fenced primitive surface (EnqueueOnce/Replace/LatestStatusByKey/Checkpoint)
+	// and the checkpointed FencedRuntime a consuming feature's durable delivery runs
+	// on (AV3D-3.1). Nil = the fenced surface is off. A host may wire FencedQueue
+	// alone (a delivery-only host with no cron/unfenced queue), Queue alone (the
+	// existing cron/queue host), or both.
+	FencedQueue job.FencedQueueRepository
 }
 
 // Config carries host-provided collaborators and tuning. Handlers is required
@@ -151,17 +172,20 @@ type resolvedConfig struct {
 // shares that channel with the queue pool by construction.
 type Service struct {
 	repos     Repositories
-	queue     *queuesvc.Service
-	scheduler *schedulesvc.Service // nil when Repositories.Schedules is nil
+	queue     *queuesvc.Service // nil when Repositories.Queue is nil (fenced-only host)
+	scheduler *schedulesvc.Service // nil when Repositories.Schedules or Queue is nil
 	handlers  map[string]HandlerFunc
 	cfg       resolvedConfig
+	// fencedQueue is the lease-fenced queue backing the fenced primitive surface and
+	// the FencedRuntime; nil when Repositories.FencedQueue is nil.
+	fencedQueue job.FencedQueueRepository
 }
 
 // NewService validates the (repos, cfg) pair, applies defaults, and builds the
 // enqueue and (when Schedules is set) scheduling services. It does not build or
 // start the runtime (see NewRuntime).
 func NewService(repos Repositories, cfg Config) (*Service, error) {
-	if repos.Queue == nil {
+	if repos.Queue == nil && repos.FencedQueue == nil {
 		return nil, ErrQueueRequired
 	}
 	for kind, h := range cfg.Handlers {
@@ -185,20 +209,26 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 	}
 
 	svc := &Service{
-		repos:    repos,
-		queue:    queuesvc.NewService(repos.Queue, rc.maxAttempts, nil),
-		handlers: cfg.Handlers,
-		cfg:      rc,
+		repos:       repos,
+		handlers:    cfg.Handlers,
+		cfg:         rc,
+		fencedQueue: repos.FencedQueue,
 	}
 
-	if repos.Schedules != nil {
-		svc.scheduler = schedulesvc.NewService(schedulesvc.Deps{
-			Schedules: repos.Schedules,
-			Enqueuer:  svc.queue,
-			CronNext:  cronNextFunc(cfg.Cron),
-			Batch:     cfg.ScheduleBatch,
-			Logger:    cfg.Logger,
-		})
+	// The unfenced queue service and the cron scheduler exist only when the unfenced
+	// Queue is wired; a fenced-only host (delivery on the FencedQueue, no cron) skips
+	// them entirely.
+	if repos.Queue != nil {
+		svc.queue = queuesvc.NewService(repos.Queue, rc.maxAttempts, nil)
+		if repos.Schedules != nil {
+			svc.scheduler = schedulesvc.NewService(schedulesvc.Deps{
+				Schedules: repos.Schedules,
+				Enqueuer:  svc.queue,
+				CronNext:  cronNextFunc(cfg.Cron),
+				Batch:     cfg.ScheduleBatch,
+				Logger:    cfg.Logger,
+			})
+		}
 	}
 
 	return svc, nil
@@ -209,12 +239,18 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 // consuming feature's own narrow enqueuer port matches it structurally with zero
 // import of features/jobs (constitution rule 6). Do not widen it.
 func (s *Service) Enqueue(ctx context.Context, kind string, payload json.RawMessage) (string, error) {
+	if s.queue == nil {
+		return "", ErrQueueRequired
+	}
 	return s.queue.Enqueue(ctx, kind, payload)
 }
 
 // EnqueueJob is the full-fidelity variant (idempotency ID, ScheduledFor,
 // Priority) for hosts and internal use.
 func (s *Service) EnqueueJob(ctx context.Context, in job.Enqueue) (job.Job, error) {
+	if s.queue == nil {
+		return job.Job{}, ErrQueueRequired
+	}
 	return s.queue.EnqueueJob(ctx, in)
 }
 
@@ -242,6 +278,9 @@ type Runtime struct {
 // wake channel and dependencies are shared by construction. It requires the
 // Service to carry at least one handler.
 func NewRuntime(svc *Service) (*Runtime, error) {
+	if svc.queue == nil {
+		return nil, ErrQueueRequired
+	}
 	if len(svc.handlers) == 0 {
 		return nil, ErrHandlersRequired
 	}

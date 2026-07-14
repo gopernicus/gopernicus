@@ -189,6 +189,8 @@ func ErrFromDomain(err error) *Error {
 		return &Error{Status: http.StatusConflict, Message: "conflict", Code: "conflict"}
 	case errors.Is(err, sdk.ErrExpired):
 		return ErrGone("expired")
+	case errors.Is(err, sdk.ErrUnavailable):
+		return ErrUnavailable("unavailable")
 	default:
 		return ErrInternal("internal error")
 	}

@@ -24,7 +24,6 @@ var canonicalMigrations = []string{
 	"0011_challenges.sql",
 	"0012_contact_changes.sql",
 	"0013_authentication_grants.sql",
-	"0014_delivery_jobs.sql",
 }
 
 // expectedTables are every CREATE TABLE the canonical set must define.
@@ -42,13 +41,12 @@ var expectedTables = []string{
 	"challenges",
 	"contact_changes",
 	"authentication_grants",
-	"delivery_jobs",
 }
 
 // expectedIndexes are the auth-v3 indexes AV3-2.1 lands: the identifier claim /
 // primary / active partial indexes, the challenge (user,purpose) and
-// (purpose,secret_digest) uniques, the one-active contact-change unique, the grant
-// consume index, and the delivery idempotency/due/terminal indexes.
+// (purpose,secret_digest) uniques, the one-active contact-change unique, and the
+// grant consume index.
 var expectedIndexes = []string{
 	"idx_invitations_kind_identifier",
 	"idx_user_identifiers_auth_claim",
@@ -58,9 +56,6 @@ var expectedIndexes = []string{
 	"idx_challenges_purpose_secret_digest",
 	"idx_contact_changes_user_kind",
 	"idx_authentication_grants_session_purpose_context",
-	"idx_delivery_jobs_idempotency",
-	"idx_delivery_jobs_due",
-	"idx_delivery_jobs_terminal",
 }
 
 // expectedColumns are the schema additions to existing tables this task lands.

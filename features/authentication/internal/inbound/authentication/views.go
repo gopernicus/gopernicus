@@ -135,15 +135,24 @@ type ForgotPage struct {
 	Email string
 }
 
-// ResetPage models the password-reset form reached from a reset link. The reset
-// token is NOT a field: the page reads it from the URL fragment client-side and
-// posts it, so it never appears as a server-rendered value (design §6.4). Passwords
-// are never echoed.
+// ResetPage models the password-reset form reached from a reset link. On the INITIAL
+// render Token is empty: the page reads the token from the URL fragment client-side
+// and posts it, so it never appears as a server-rendered value or in the referrer
+// (design §6.4). On a validation-error RE-render (e.g. a too-short new password), the
+// fragment has already been scrubbed, so the handler echoes the SUBMITTED token back
+// into Token — the same value the failed POST already carried — so the user can
+// correct the password and retry a still-valid reset (IX-11). Echoing the submitted
+// token into the hidden field adds no new exposure class: it was already in the POST
+// body, the response HTML is not logged, and no fragment/query/referrer copy is
+// created. Passwords are never echoed.
 type ResetPage struct {
 	PageContext
-	// RedeemPath is the POST endpoint the form submits the (fragment-read) token and
-	// new password to.
+	// RedeemPath is the POST endpoint the form submits the token and new password to.
 	RedeemPath string
+	// Token is the reset token echoed back ONLY on a validation-error re-render so a
+	// corrected retry survives the scrubbed fragment (IX-11). Empty on the initial
+	// render, where the client-side fragment reader supplies it instead.
+	Token string
 }
 
 // PasswordlessStartPage models the passwordless-login start form. Kind selects

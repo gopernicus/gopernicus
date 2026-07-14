@@ -60,13 +60,21 @@ var (
 	// ErrExpired indicates a time-bound resource has expired (tokens, invites, etc.).
 	ErrExpired = errors.New("expired")
 
+	// ErrUnavailable indicates the operation cannot be accepted right now:
+	// transient saturation/backpressure, a shutting-down runtime, or a degraded
+	// dependency. The caller should retry later WITHOUT changing the request. This
+	// is distinct from ErrConflict, which is state contention (an optimistic-lock
+	// failure or invalid transition) where a retry typically needs a DIFFERENT
+	// request. Transports map this to 503 Service Unavailable.
+	ErrUnavailable = errors.New("unavailable")
+
 	// expectedErrors lists all known domain sentinels. Used by IsExpected to
 	// distinguish errors that map to a specific HTTP status from unexpected
 	// errors that fall through to 500.
 	expectedErrors = []error{
 		ErrNotFound, ErrAlreadyExists, ErrInvalidReference,
 		ErrInvalidInput, ErrUnauthorized, ErrForbidden,
-		ErrConflict, ErrExpired,
+		ErrConflict, ErrExpired, ErrUnavailable,
 	}
 )
 

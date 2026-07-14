@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/challenge"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/deliveryjob"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/identifier"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk"
@@ -134,21 +133,21 @@ func (s *Service) DeliveryStatus(ctx context.Context, receiptKey string) (delive
 
 // Initialize implements delivery.Initializer for opaque start jobs (design
 // §6.1.1). The unauthenticated request path enqueued only the normalized identifier
-// (ResolutionInput) with an empty body; here — off the request path, in the worker —
-// the account is resolved, the challenge issued, and the message rendered exactly
-// once. deliver=false means "nothing to deliver" (unknown/ineligible identifier):
-// the worker terminates the job successfully with no send, so known and unknown
-// identifiers are indistinguishable.
-func (s *Service) Initialize(ctx context.Context, job deliveryjob.Job, cmd delivery.Envelope) (delivery.Envelope, bool, error) {
-	switch job.Purpose {
+// (ResolutionInput) with an empty body; here — off the request path, in the delivery
+// processor — the account is resolved, the challenge issued, and the message rendered
+// exactly once. deliver=false means "nothing to deliver" (unknown/ineligible
+// identifier): the processor terminates the command successfully with no send, so
+// known and unknown identifiers are indistinguishable.
+func (s *Service) Initialize(ctx context.Context, kind, purpose string, cmd delivery.Envelope) (delivery.Envelope, bool, error) {
+	switch purpose {
 	case delivery.PurposePasswordReset:
 		return s.initPasswordReset(ctx, cmd)
 	case delivery.PurposeMagicLink:
-		return s.initPasswordlessLink(ctx, job.Kind, cmd)
+		return s.initPasswordlessLink(ctx, kind, cmd)
 	case delivery.PurposeLoginCode:
-		return s.initPasswordlessCode(ctx, job.Kind, cmd)
+		return s.initPasswordlessCode(ctx, kind, cmd)
 	default:
-		return delivery.Envelope{}, false, fmt.Errorf("delivery: no initializer for purpose %q: %w", job.Purpose, sdk.ErrInvalidInput)
+		return delivery.Envelope{}, false, fmt.Errorf("delivery: no initializer for purpose %q: %w", purpose, sdk.ErrInvalidInput)
 	}
 }
 
@@ -189,11 +188,11 @@ func (s *Service) initPasswordReset(ctx context.Context, cmd delivery.Envelope) 
 // that challenge) so a never-delivered secret cannot linger. It is best-effort and
 // idempotent — the token was never delivered, so voiding it costs nothing and a
 // missing challenge is a no-op.
-func (s *Service) Discard(ctx context.Context, job deliveryjob.Job, env delivery.Envelope) error {
+func (s *Service) Discard(ctx context.Context, kind, purpose string, env delivery.Envelope) error {
 	if env.Secret == "" {
 		return nil
 	}
-	switch job.Purpose {
+	switch purpose {
 	case delivery.PurposePasswordReset:
 		// RedeemToken atomically deletes the (purpose, token) challenge row; the
 		// consumed value is discarded. Errors are ignored (best-effort void).

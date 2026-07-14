@@ -132,10 +132,10 @@ func TestVerify_OneTimeCodeHiddenEmail(t *testing.T) {
 	)
 }
 
-// TestReset_FragmentTokenNeverRendered proves the reset token is never a
-// server-rendered value: the model carries no token, the form has an empty hidden
-// token field the nonced script fills client-side, and no token appears in a query
-// string.
+// TestReset_FragmentTokenNeverRendered proves the INITIAL reset render carries no
+// server-rendered token: the model carries no token, the hidden token field ships
+// EMPTY (the nonced script fills it client-side from the fragment), and no token
+// appears in a query string.
 func TestReset_FragmentTokenNeverRendered(t *testing.T) {
 	body := render(t, New().ResetPassword(authentication.ResetPage{
 		PageContext: ctx(),
@@ -144,17 +144,35 @@ func TestReset_FragmentTokenNeverRendered(t *testing.T) {
 	mustContain(t, "Reset", body,
 		`action="/auth/password/reset"`,
 		`autocomplete="new-password"`,
-		`name="token" id="reset-token"`,
+		`name="token" id="reset-token" value=""`,
 		`nonce="nonce-xyz789"`,
 		"replaceState",
 		"<noscript>",
 	)
-	// The hidden token field ships empty (no value attribute) and no token rides a
-	// query string.
+	// The hidden token field ships empty and no token rides a query string.
 	mustNotContain(t, "Reset", body,
-		`id="reset-token" value=`,
 		"?token=",
 		"&token=",
+	)
+}
+
+// TestReset_ErrorRerenderRetainsToken proves the IX-11 fix: on a validation-error
+// re-render the handler echoes the SUBMITTED token into the hidden field (m.Token) so
+// a corrected retry survives the already-scrubbed fragment. The token rides the hidden
+// field value only — never a query string or referrer surface.
+func TestReset_ErrorRerenderRetainsToken(t *testing.T) {
+	const tok = "reset-token-abc123"
+	body := render(t, New().ResetPassword(authentication.ResetPage{
+		PageContext: ctx(),
+		RedeemPath:  "/auth/password/reset",
+		Token:       tok,
+	}))
+	mustContain(t, "Reset", body,
+		`name="token" id="reset-token" value="`+tok+`"`,
+	)
+	mustNotContain(t, "Reset", body,
+		"?token="+tok,
+		"&token="+tok,
 	)
 }
 

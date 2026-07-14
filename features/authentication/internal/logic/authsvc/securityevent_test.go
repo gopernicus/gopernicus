@@ -351,7 +351,6 @@ func TestSecurityEventNilRepoNoOp(t *testing.T) {
 		Challenges:  newFakeChallenges(),
 		Protector:   newFakeProtector("k1", "k1"),
 		Hasher:      &fakeHasher{},
-		Mailer:      &recordingMailer{},
 		Limiter:     ratelimiter.NewMemory(),
 		TokenSigner: newFakeSigner(),
 		// SecurityEvents deliberately nil.
@@ -498,7 +497,6 @@ func TestSecurityEventWarnOnFailingRepo(t *testing.T) {
 		Challenges:     newFakeChallenges(),
 		Protector:      newFakeProtector("k1", "k1"),
 		Hasher:         &fakeHasher{},
-		Mailer:         &recordingMailer{},
 		Limiter:        ratelimiter.NewMemory(),
 		SecurityEvents: spy,
 		Logger:         logger,

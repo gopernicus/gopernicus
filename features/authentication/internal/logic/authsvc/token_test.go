@@ -111,8 +111,6 @@ func newTokenHarness(t *testing.T, signer cryptids.JWTSigner, requireVerified bo
 		Challenges:           h.ch,
 		Protector:            h.prot,
 		Hasher:               h.hasher,
-		Mailer:               h.mailer,
-		MailFrom:             "noreply@example.com",
 		Limiter:              limiter,
 		Cookie:               CookieConfig{},
 		RequireVerifiedEmail: requireVerified,
@@ -185,7 +183,7 @@ func TestIssueTokenCustomTTL(t *testing.T) {
 	h.svc = NewService(Deps{
 		Users: h.users, Identifiers: h.idents, Passwords: h.pw, Sessions: h.sess,
 		Challenges: h.ch, Protector: h.prot,
-		Hasher: h.hasher, Mailer: h.mailer, MailFrom: "noreply@example.com",
+		Hasher:  h.hasher,
 		Limiter: ratelimiter.NewMemory(), Cookie: CookieConfig{},
 		TokenSigner: newFakeSigner(), AccessTokenTTL: 5 * time.Minute,
 	})

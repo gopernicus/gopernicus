@@ -179,8 +179,6 @@ func newMachineHarness(t *testing.T) *machineHarness {
 		Challenges:      newFakeChallenges(),
 		Protector:       newFakeProtector("k1", "k1"),
 		Hasher:          &fakeHasher{},
-		Mailer:          &recordingMailer{},
-		MailFrom:        "noreply@example.com",
 		Limiter:         ratelimiter.NewMemory(),
 		Cookie:          CookieConfig{},
 		ServiceAccounts: sas,
@@ -326,7 +324,6 @@ func TestAuthenticateAPIKeySubsystemOff(t *testing.T) {
 		Passwords: newFakePasswords(),
 		Sessions:  newFakeSessions(),
 		Hasher:    &fakeHasher{},
-		Mailer:    &recordingMailer{},
 		Limiter:   ratelimiter.NewMemory(),
 	})
 	if svc.MachineEnabled() {
@@ -399,8 +396,8 @@ func TestRequireServiceAccountJWTShapedDenied(t *testing.T) {
 func TestRequireServiceAccountSubsystemOff(t *testing.T) {
 	svc := NewService(Deps{
 		Users: newFakeUsers(), Passwords: newFakePasswords(), Sessions: newFakeSessions(),
-		Hasher: &fakeHasher{},
-		Mailer: &recordingMailer{}, Limiter: ratelimiter.NewMemory(),
+		Hasher:  &fakeHasher{},
+		Limiter: ratelimiter.NewMemory(),
 	})
 	rec := httptest.NewRecorder()
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })

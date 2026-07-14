@@ -104,8 +104,6 @@ func newAccountFormFixture(t *testing.T) accountFormFixture {
 		CredentialMutations:  &memCredentialMutations{users: users, idents: idents, passwords: passwords},
 		AuthenticationGrants: grants,
 		Hasher:               fakeHasher{},
-		Mailer:               nopMailer{},
-		MailFrom:             "noreply@example.com",
 		Deliver:              router,
 		Queue:                stubQueue{},
 		Limiter:              ratelimiter.NewMemory(),

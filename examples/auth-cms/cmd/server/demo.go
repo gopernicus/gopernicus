@@ -405,9 +405,9 @@ func buildTokenEncrypter() (cryptids.Encrypter, error) {
 // 32 bytes), or an EPHEMERAL random key — DEV / SINGLE-INSTANCE ONLY: pending
 // outbox jobs seal their destination/rendered-secret under it, so a restart with an
 // ephemeral key strands any in-flight job (its payload can no longer be opened), and
-// a MULTI-INSTANCE deployment MUST share the key. The outbox requires it whenever
-// DeliveryJobs is wired (auth.ErrDeliveryEncrypterRequired). Its key is distinct from
-// the challenge pepper, JWT, and token-encryption keys.
+// a MULTI-INSTANCE deployment MUST share the key. Delivery requires it whenever a
+// delivery runtime is wired (auth.ErrDeliveryEncrypterRequired). Its key is distinct
+// from the challenge pepper, JWT, and token-encryption keys.
 func buildDeliveryEncrypter(log *slog.Logger) (cryptids.Encrypter, error) {
 	key := environment.GetEnvOrDefault("AUTH_DELIVERY_ENCRYPTER_KEY", "")
 	var raw []byte

@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 func TestErrValidation_MaxBytesError(t *testing.T) {
@@ -61,6 +63,35 @@ func TestErrValidation_PlainError(t *testing.T) {
 	}
 	if got.Message != "json decode: unexpected token" {
 		t.Errorf("message = %q, want the raw error text", got.Message)
+	}
+}
+
+// TestErrFromDomain_Kinds pins the domain-error-to-status mapping, including the
+// backpressure kind (sdk.ErrUnavailable → 503) distinct from state contention
+// (sdk.ErrConflict → 409). A domain error wrapping the kind must map by kind.
+func TestErrFromDomain_Kinds(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    error
+		status int
+		code   string
+	}{
+		{"NotFound", fmt.Errorf("x: %w", sdk.ErrNotFound), http.StatusNotFound, "not_found"},
+		{"Conflict", fmt.Errorf("x: %w", sdk.ErrConflict), http.StatusConflict, "conflict"},
+		{"Expired", fmt.Errorf("x: %w", sdk.ErrExpired), http.StatusGone, "expired"},
+		{"Unavailable", fmt.Errorf("queue full: %w", sdk.ErrUnavailable), http.StatusServiceUnavailable, "unavailable"},
+		{"Unknown", fmt.Errorf("boom"), http.StatusInternalServerError, "internal"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ErrFromDomain(tt.err)
+			if got.Status != tt.status {
+				t.Errorf("status = %d, want %d", got.Status, tt.status)
+			}
+			if got.Code != tt.code {
+				t.Errorf("code = %q, want %q", got.Code, tt.code)
+			}
+		})
 	}
 }
 

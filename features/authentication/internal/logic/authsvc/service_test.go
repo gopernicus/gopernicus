@@ -209,12 +209,13 @@ func (f *fakeUsers) CreateWithPrimaryIdentifier(_ context.Context, u user.User, 
 // be exercised without the store module. applyErr injects the post-consume
 // apply-conflict path.
 type fakeIdentifiers struct {
-	users      *fakeUsers
-	mu         sync.Mutex
-	byID       map[string]identifier.Identifier
-	seq        int
-	applyErr   error
-	loginCalls int // GetLogin calls, for rate-limit short-circuit ordering assertions
+	users         *fakeUsers
+	mu            sync.Mutex
+	byID          map[string]identifier.Identifier
+	seq           int
+	applyErr      error
+	loginCalls    int // GetLogin calls, for rate-limit short-circuit ordering assertions
+	recoveryCalls int // GetRecovery calls, for the no-lookup-before-admission proof
 }
 
 func newFakeIdentifiers(users *fakeUsers) *fakeIdentifiers {
@@ -306,6 +307,7 @@ func (f *fakeIdentifiers) GetLogin(_ context.Context, kind, normalizedValue stri
 func (f *fakeIdentifiers) GetRecovery(_ context.Context, kind, normalizedValue string) (identifier.Identifier, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.recoveryCalls++
 	for _, it := range f.byID {
 		if it.Active() && it.RecoveryEnabled && string(it.Kind) == kind && it.NormalizedValue == normalizedValue {
 			return it, nil
@@ -567,7 +569,7 @@ type harness struct {
 	mailer       *recordingMailer
 	events       *spySecurityEvents
 	signer       *fakeSigner
-	deliveryRepo *memDeliveryRepo
+	deliveryRepo *memDispatcher
 	grants       *fakeAuthGrants
 	creds        *fakeCredentials
 	accounts     *fakeOAuthAccounts
@@ -586,15 +588,15 @@ func newHarnessDeps(t *testing.T, limiter ratelimiter.Limiter, requireVerifiedEm
 	t.Helper()
 	users := newFakeUsers()
 	h := &harness{
-		users:  users,
-		idents: newFakeIdentifiers(users),
-		pw:     newFakePasswords(),
-		sess:   newFakeSessions(),
-		ch:     newFakeChallenges(),
-		prot:   newFakeProtector("k1", "k1"),
-		hasher: &fakeHasher{},
-		mailer: &recordingMailer{},
-		events: newSpySecurityEvents(),
+		users:    users,
+		idents:   newFakeIdentifiers(users),
+		pw:       newFakePasswords(),
+		sess:     newFakeSessions(),
+		ch:       newFakeChallenges(),
+		prot:     newFakeProtector("k1", "k1"),
+		hasher:   &fakeHasher{},
+		mailer:   &recordingMailer{},
+		events:   newSpySecurityEvents(),
 		signer:   newFakeSigner(),
 		grants:   newFakeAuthGrants(),
 		accounts: newFakeOAuthAccounts(),
@@ -618,8 +620,6 @@ func newHarnessDeps(t *testing.T, limiter ratelimiter.Limiter, requireVerifiedEm
 		CredentialMutations:  h.creds,
 		OAuthAccounts:        h.accounts,
 		Hasher:               h.hasher,
-		Mailer:               h.mailer,
-		MailFrom:             "noreply@example.com",
 		Limiter:              limiter,
 		Cookie:               CookieConfig{},
 		RequireVerifiedEmail: requireVerifiedEmail,

@@ -142,23 +142,24 @@ func TestStartPasswordlessEnqueuesOpaqueSamePath(t *testing.T) {
 	if len(jobs) != 3 {
 		t.Fatalf("enqueued %d jobs, want 3 (one per identifier, same path)", len(jobs))
 	}
-	enc := fakeEncrypter{}
 	for _, j := range jobs {
-		if j.Purpose != delivery.PurposeMagicLink {
-			t.Errorf("job purpose = %q, want %q (email default → link)", j.Purpose, delivery.PurposeMagicLink)
+		if j.purpose != delivery.PurposeMagicLink {
+			t.Errorf("job purpose = %q, want %q (email default → link)", j.purpose, delivery.PurposeMagicLink)
 		}
-		if j.AttemptCount != 0 {
-			t.Errorf("job claimed on the request path (attempt=%d); resolution must be off-path", j.AttemptCount)
+		if j.attempt != 0 {
+			t.Errorf("job claimed on the request path (attempt=%d); resolution must be off-path", j.attempt)
 		}
-		env, err := delivery.Open(enc, j.Payload)
-		if err != nil {
-			t.Fatalf("open payload: %v", err)
+		// With the identity fakeEncrypter the sealed payload is the plaintext versioned
+		// command envelope JSON: opaque stage, resolution input present, no rendered secret.
+		payload := string(j.payload)
+		if !strings.Contains(payload, `"stage":"opaque"`) {
+			t.Errorf("request-path job is not opaque: %s", payload)
 		}
-		if env.Body != "" || env.HTML != "" || env.Secret != "" {
-			t.Errorf("request-path job is not opaque: body=%q html=%q secret=%q", env.Body, env.HTML, env.Secret)
+		if strings.Contains(payload, `"secret"`) {
+			t.Errorf("opaque job leaked a secret field: %s", payload)
 		}
-		if env.ResolutionInput == "" {
-			t.Errorf("opaque job missing resolution input")
+		if !strings.Contains(payload, `"resolution_input"`) {
+			t.Errorf("opaque job missing resolution input: %s", payload)
 		}
 	}
 }
@@ -330,40 +331,23 @@ func TestStartPasswordlessUnverifiedNoSend(t *testing.T) {
 }
 
 // swapAsyncQueue replaces the harness's synchronous draining queue with a plain
-// async delivery.Service over a fresh in-mem repo, so a start only ENQUEUES (the
-// worker never runs on the request path) and the test can inspect the raw jobs.
-func swapAsyncQueue(t *testing.T, h *harness) *memDeliveryRepo {
+// async delivery.Service over a fresh in-mem dispatcher, so a start only SUBMITS (the
+// processor never runs on the request path) and the test can inspect the raw
+// commands.
+func swapAsyncQueue(t *testing.T, h *harness) *memDispatcher {
 	t.Helper()
-	repo := newMemDeliveryRepo()
-	dsvc, err := delivery.NewService(delivery.ServiceDeps{Repo: repo, Encrypter: fakeEncrypter{}})
+	disp := newMemDispatcher()
+	dsvc, err := delivery.NewService(delivery.ServiceDeps{Dispatcher: disp, Encrypter: fakeEncrypter{}})
 	if err != nil {
 		t.Fatalf("delivery.NewService: %v", err)
 	}
 	h.svc.queue = dsvc
-	return repo
+	return disp
 }
 
-// jobCount returns the number of stored jobs.
-func (r *memDeliveryRepo) jobCount() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return len(r.jobs)
-}
-
-// snapshot returns a copy of the stored jobs.
-func (r *memDeliveryRepo) snapshot() []jobRow {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make([]jobRow, 0, len(r.jobs))
-	for _, j := range r.jobs {
-		out = append(out, jobRow{Purpose: j.Purpose, AttemptCount: j.AttemptCount, Payload: j.Payload})
-	}
-	return out
-}
-
-// jobRow is the subset of a delivery job the enqueue-shape assertions read.
-type jobRow struct {
-	Purpose      string
-	AttemptCount int
-	Payload      []byte
+// jobCount returns the number of submitted commands.
+func (m *memDispatcher) jobCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.items)
 }

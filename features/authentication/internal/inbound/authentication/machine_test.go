@@ -134,8 +134,6 @@ func newMachineHandler(t *testing.T) http.Handler {
 		Passwords:       &memPasswords{m: map[string]string{}},
 		Sessions:        &memSessions{m: map[string]session.Session{}},
 		Hasher:          fakeHasher{},
-		Mailer:          nopMailer{},
-		MailFrom:        "noreply@example.com",
 		Limiter:         ratelimiter.NewMemory(),
 		Cookie:          authsvc.CookieConfig{},
 		ServiceAccounts: &memServiceAccounts{m: map[string]serviceaccount.ServiceAccount{}},

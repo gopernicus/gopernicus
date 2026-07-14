@@ -69,8 +69,14 @@ func Mount(r feature.RouteRegistrar, svc authService, inv InvitationService, lis
 	r.Handle("POST", "/auth/refresh", h.refresh, svc.RateLimitByIP("refresh", refreshAttemptsPerMinute))
 	// /auth/logout is NOT session-gated (§1.5): an expired access JWT must still be
 	// able to log out, so gating it on a live credential would make logout a no-op
-	// exactly when the shared-computer hazard matters most.
-	r.Handle("POST", "/auth/logout", h.logout)
+	// exactly when the shared-computer hazard matters most. It IS cookie-driven,
+	// though, so it carries the ORIGIN-ONLY browser gate (requireBrowserSafeOrigin,
+	// design §9.1): a same-origin browser passes and a same-site sibling is rejected,
+	// while a native/bearer client sending neither Origin nor Sec-Fetch-Site passes.
+	// The double-submit CSRF token is deliberately NOT required here — an
+	// expired-session logout has no live auth_csrf cookie to double-submit, so a hard
+	// double-submit gate would break exactly the shared-computer logout §1.5 protects.
+	r.Handle("POST", "/auth/logout", h.logout, requireBrowserSafeOrigin(h.mutation.csrf()))
 	// /auth/password/change is a sensitive route: RequireLiveSession revokes
 	// immediately (§1.4), not RequireUser's ≤AccessTokenTTL stale window. Like every
 	// other cookie-authenticated credential mutation it also carries the browser-safe

@@ -52,8 +52,6 @@ func serviceWithChecker(t *testing.T, checker compromisedChecker, failOpen bool)
 		Hasher:              h.hasher,
 		Compromised:         checker,
 		CompromisedFailOpen: failOpen,
-		Mailer:              h.mailer,
-		MailFrom:            "noreply@example.com",
 		Limiter:             ratelimiter.NewMemory(),
 		SecurityEvents:      h.events,
 		TokenSigner:         h.signer,

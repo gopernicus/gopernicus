@@ -100,6 +100,21 @@ Per-rail delivery, as it reaches an SSE client (gate edit 1):
 **The durable path never touches `Mount.Events`** — it rides `Repositories`.
 `Mount.Events` carries only the weaker path, and its doc comment says so.
 
+### Events observe work; they never queue it (the auth-delivery decision)
+
+A corollary a feature author must internalize: **never put an event in front of
+durable work.** The bus is not a queue — asynchronous mode may drop events and
+synchronous mode is only as durable as its handlers, so emitting an event to
+*trigger* a side effect adds a failure boundary without adding durability. The
+authentication delivery refactor (2026-07-13) settled this: authentication submits
+delivery work directly to the generic **jobs** feature (durable) and treats events
+as **optional observation only** — a secret-free lifecycle observer whose failure
+changes nothing about the already-recorded job state, and which is never required
+for delivery to happen. Durable side effects ride a feature's own `Repositories`
+(this feature's outbox, or the jobs queue); the event bus reports what happened.
+A future auth-domain transactional outbox for state-plus-event commits stays valid
+and separate — it must never be simulated with best-effort emit-after-commit.
+
 ## The poller — single instance, host-driven
 
 `NewPoller(repo, bus, ...opts)` + `Poll(ctx)` is the durable rail's drain:

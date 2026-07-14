@@ -8,7 +8,6 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/challenge"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/credential"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/deliveryjob"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
@@ -33,6 +32,47 @@ const (
 	RuntimeModeProduction RuntimeMode = "production"
 )
 
+// DeliveryMode is the host's EXPLICIT selection of the outbound-delivery execution
+// model (authv3-delivery-refactor §"No automatic production fallback"). It is a
+// REQUIRED enum with no default — construction never infers a mode from a non-nil
+// collaborator, so a host cannot accidentally ship an ephemeral posture or a jobs
+// posture whose runtime is never started. An empty value is ErrDeliveryModeRequired
+// and an unknown value is ErrDeliveryModeInvalid.
+//
+//   - DeliveryModeJobs: durable delivery. The generic jobs runtime executes the
+//     delivery command, with retry/status/fencing surviving restart. Requires the
+//     narrow queue capability (Config.DeliveryDispatcher) and Config.DeliveryEncrypter;
+//     production additionally requires Config.DeliveryJobsAcknowledged (the host runs
+//     the jobs delivery runtime).
+//   - DeliveryModeInProcess: bounded ephemeral delivery. The same delivery processor
+//     runs behind a process-local bounded queue and fixed worker pool; accepted work
+//     does NOT survive a restart. Production requires the explicit crash-loss
+//     acknowledgment Config.DeliveryEphemeralAcknowledged.
+//   - DeliveryModeOff: no delivery runtime. Allowed only when no configured auth
+//     capability can send — a wired delivery dispatcher makes off contradictory
+//     (ErrDeliveryOffButDeliverable), and enabling passwordless under off is
+//     ErrPasswordlessDeliveryRequired.
+//
+// The host owns the runtime lifecycle in every mode: Register starts no worker.
+type DeliveryMode string
+
+const (
+	// DeliveryModeOff selects no outbound-delivery runtime. It is valid only when no
+	// configured capability can send (no wired delivery queue, no passwordless).
+	DeliveryModeOff DeliveryMode = "off"
+	// DeliveryModeInProcess selects the bounded, process-local, EPHEMERAL delivery
+	// pool: accepted work is lost on a crash. Production requires the explicit
+	// crash-loss acknowledgment. It is PER PROCESS with NO cross-instance coordination —
+	// each instance keeps its own queue, submit-once de-duplication, and status, so two
+	// instances can each render and each send the same logical delivery (a user may get
+	// two messages). Use DeliveryModeJobs for a multi-instance deployment.
+	DeliveryModeInProcess DeliveryMode = "in_process"
+	// DeliveryModeJobs selects durable delivery on the generic jobs runtime: accepted
+	// work survives a restart and retry/status are durable. The recommended production
+	// posture.
+	DeliveryModeJobs DeliveryMode = "jobs"
+)
+
 // Runtime-mode and delivery-transport construction errors. These fire NOW, at
 // NewService/Register, because RuntimeMode and the delivery transports are core
 // collaborators the feature already carries.
@@ -48,21 +88,37 @@ var (
 	// metadata (design §6.3): a console transport leaks OTPs and magic links to
 	// logs, and an undeclared transport cannot be proven safe.
 	ErrInsecureDeliveryTransport = errors.New("auth: production RuntimeMode rejects a development-only or metadata-less delivery transport")
-	// ErrNonDurableDeliveryRepository is returned in production RuntimeMode when the
-	// wired DeliveryJobs repository identifies itself as in-process-only via
-	// deliveryjob.DurabilityReporter (design §8). Unlike the transport check, a
-	// repository that declares NO metadata is tolerated ("where metadata can
-	// identify it"): a durable store need not prove a negative. Only a positively
-	// non-durable outbox is rejected — it silently drops delivery on restart.
-	ErrNonDurableDeliveryRepository = errors.New("auth: production RuntimeMode rejects an in-process-only (non-durable) delivery repository")
-	// ErrDeliveryWorkerUnacknowledged is returned in production RuntimeMode when the
-	// DeliveryJobs outbox is wired but Config.DeliveryWorkerAcknowledged is false
-	// (design §8). The outbox is the only send path (AV3-4.3), so a production host
-	// that enqueues without running RunDeliveryWorker would silently never deliver.
-	// The feature cannot observe the host's process lifecycle, so it requires an
-	// explicit affirmation that the worker is run rather than failing open on a
-	// stalled outbox.
-	ErrDeliveryWorkerUnacknowledged = errors.New("auth: production RuntimeMode requires Config.DeliveryWorkerAcknowledged when the delivery outbox is wired (the host must run RunDeliveryWorker)")
+	// ErrDeliveryModeRequired is returned when Config.DeliveryMode is empty. The mode
+	// has no default (the RuntimeMode precedent) so a host explicitly selects the
+	// outbound-delivery execution model and never inherits one from a non-nil
+	// collaborator (authv3-delivery-refactor AV3D-0.1).
+	ErrDeliveryModeRequired = errors.New(`auth: Config.DeliveryMode is required ("off", "in_process", or "jobs")`)
+	// ErrDeliveryModeInvalid is returned when Config.DeliveryMode is a value other
+	// than "off", "in_process", or "jobs".
+	ErrDeliveryModeInvalid = errors.New(`auth: Config.DeliveryMode must be "off", "in_process", or "jobs"`)
+	// ErrDeliveryOffButDeliverable is returned when Config.DeliveryMode is "off" yet a
+	// delivery capability is wired (Config.DeliveryDispatcher). off declares that no
+	// configured capability can send, so a wired delivery dispatcher is a contradiction —
+	// the host must select "jobs" or "in_process", or remove the dispatcher.
+	ErrDeliveryOffButDeliverable = errors.New(`auth: DeliveryMode "off" selected but a delivery dispatcher is wired (Config.DeliveryDispatcher) — a configured flow could deliver`)
+	// ErrDeliveryQueueRequired is returned when Config.DeliveryMode is "jobs" but no
+	// delivery queue capability is wired (Config.DeliveryDispatcher is nil). Durable
+	// jobs delivery cannot run without the generic-jobs dispatcher.
+	ErrDeliveryQueueRequired = errors.New(`auth: DeliveryMode "jobs" requires a wired delivery dispatcher (Config.DeliveryDispatcher)`)
+	// ErrDeliveryJobsUnacknowledged is returned in production RuntimeMode when
+	// Config.DeliveryMode is "jobs" but Config.DeliveryJobsAcknowledged is false. The
+	// outbox is the only send path, so a production host that enqueues without running
+	// the durable jobs delivery runtime would silently never deliver. The feature
+	// cannot observe the host's process lifecycle, so it requires an explicit
+	// affirmation that the runtime is run rather than failing open on a stalled queue.
+	ErrDeliveryJobsUnacknowledged = errors.New(`auth: production RuntimeMode with DeliveryMode "jobs" requires Config.DeliveryJobsAcknowledged (the host must run the durable jobs delivery runtime)`)
+	// ErrDeliveryEphemeralUnacknowledged is returned in production RuntimeMode when
+	// Config.DeliveryMode is "in_process" but Config.DeliveryEphemeralAcknowledged is
+	// false. in_process delivery is process-local and loses accepted, in-flight work on
+	// a crash; production must not run an ephemeral send path without the host
+	// explicitly accepting that crash-loss (the recommended production posture is
+	// "jobs").
+	ErrDeliveryEphemeralUnacknowledged = errors.New(`auth: production RuntimeMode with DeliveryMode "in_process" requires Config.DeliveryEphemeralAcknowledged (ephemeral in-process delivery loses in-flight work on crash)`)
 	// ErrNonDurableRateLimiter is returned in production RuntimeMode when the wired
 	// (or defaulted) rate limiter is in-process-only (design §4.4/§8): the bundled
 	// ratelimiter.Memory default, or a limiter that declares InProcessOnly through
@@ -90,9 +146,8 @@ type LimiterDurability struct {
 // §8). The bundled in-process ratelimiter.Memory is detected structurally — it is
 // sdk-only and cannot import this feature to declare metadata — while a host's
 // custom in-process limiter implements this to be rejected in production, and a
-// durable host limiter may implement it to positively declare safety. It mirrors
-// deliveryjob.DurabilityReporter, defined feature-side because the Limiter port
-// lives in sdk.
+// durable host limiter may implement it to positively declare safety. It is defined
+// feature-side because the Limiter port lives in sdk.
 type RateLimiterDurabilityReporter interface {
 	RateLimiterDurability() LimiterDurability
 }
@@ -152,11 +207,11 @@ var (
 	// passwordless start issues a login_magic_link / login_otp challenge, so the rail
 	// is required (design §4.3).
 	ErrPasswordlessChallengeRequired = errors.New("auth: Config.Passwordless requires Repositories.Challenges (the atomic challenge rail)")
-	// ErrPasswordlessDeliveryRequired is returned when passwordless is enabled
-	// without the durable delivery outbox wired (Repositories.DeliveryJobs):
-	// passwordless starts enqueue an opaque delivery command and resolve the account
-	// off the request path (design §4.1/§6.1.1, V14), so the outbox is required.
-	ErrPasswordlessDeliveryRequired = errors.New("auth: Config.Passwordless requires Repositories.DeliveryJobs (the durable delivery outbox)")
+	// ErrPasswordlessDeliveryRequired is returned when passwordless is enabled without
+	// a delivery runtime (DeliveryMode "off"): passwordless starts enqueue an opaque
+	// delivery command and resolve the account off the request path (design
+	// §4.1/§6.1.1, V14), so a delivery runtime ("jobs" or "in_process") is required.
+	ErrPasswordlessDeliveryRequired = errors.New(`auth: Config.Passwordless requires a delivery runtime (DeliveryMode "jobs" or "in_process")`)
 )
 
 // DigestCandidate pairs a challenge-protector key ID with the code digest
@@ -226,6 +281,22 @@ func validateRuntimeMode(m RuntimeMode) error {
 	}
 }
 
+// validateDeliveryMode enforces the required-enum rule for DeliveryMode
+// (authv3-delivery-refactor AV3D-0.1): empty → ErrDeliveryModeRequired, unknown →
+// ErrDeliveryModeInvalid, else nil. The mode-specific capability/acknowledgment
+// matrix is enforced in NewService's delivery block; this is only the loud
+// empty/unknown gate, mirroring validateRuntimeMode.
+func validateDeliveryMode(m DeliveryMode) error {
+	switch m {
+	case "":
+		return ErrDeliveryModeRequired
+	case DeliveryModeOff, DeliveryModeInProcess, DeliveryModeJobs:
+		return nil
+	default:
+		return fmt.Errorf("%w: %q", ErrDeliveryModeInvalid, m)
+	}
+}
+
 // validateDeliveryTransports enforces the transport-security posture (design
 // §6.3): in production a development-only or metadata-less email Sender or
 // Notifier is ErrInsecureDeliveryTransport; in development a development-only
@@ -260,26 +331,6 @@ func enforceTransport(mode RuntimeMode, declared, developmentOnly bool, label st
 		if declared && developmentOnly {
 			log.Warn("auth: development-only delivery transport wired; never use in production (leaks message bodies to logs)", "transport", label)
 		}
-	}
-	return nil
-}
-
-// validateDeliveryDurability enforces the durable-outbox posture (design §8): in
-// production a DeliveryJobs repository that declares itself in-process-only via
-// deliveryjob.DurabilityReporter is ErrNonDurableDeliveryRepository. A repository
-// that declares no durability metadata is tolerated (the "where metadata can
-// identify it" rule — a durable store is not asked to prove a negative), and
-// development permits either. repo is non-nil at the call site.
-func validateDeliveryDurability(mode RuntimeMode, repo deliveryjob.Repository) error {
-	if mode != RuntimeModeProduction {
-		return nil
-	}
-	r, ok := repo.(deliveryjob.DurabilityReporter)
-	if !ok {
-		return nil
-	}
-	if r.Durability().InProcessOnly {
-		return ErrNonDurableDeliveryRepository
 	}
 	return nil
 }

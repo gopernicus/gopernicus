@@ -127,16 +127,20 @@ func requireBrowserSafeOrigin(cfg csrfConfig) web.Middleware {
 
 // browserOriginAllowed reports whether a request passes the allowlisted-Origin /
 // Sec-Fetch-Site policy (design §9.1). Sec-Fetch-Site is the strongest signal when
-// the browser sets it; absent it, the Origin allowlist is the fallback. A request
-// that carries NEITHER header is a non-browser client and passes (the bearer/body
-// path). It is the shared origin gate behind both the browser-safe-mutation gate
-// (which adds the double-submit CSRF token on top) and the credential-establishment
-// origin gate (which does not).
+// the browser sets it, but ONLY same-origin is auto-allowed: same-site is a sibling
+// origin under the same registrable domain (evil.example.com vs app.example.com), so
+// an attacker-controlled sibling must still clear the exact Origin allowlist — a
+// same-site request whose Origin is absent or not allowlisted is rejected. cross-site
+// / cross-origin likewise require an allowlisted Origin. A request that carries
+// NEITHER header is a non-browser client and passes (the bearer/body path). It is the
+// shared origin gate behind both the browser-safe-mutation gate (which adds the
+// double-submit CSRF token on top) and the credential-establishment origin gate
+// (which does not).
 func browserOriginAllowed(r *http.Request, allowedOrigins []string) bool {
 	switch r.Header.Get("Sec-Fetch-Site") {
-	case "same-origin", "same-site":
+	case "same-origin":
 		return true
-	case "cross-site", "cross-origin":
+	case "same-site", "cross-site", "cross-origin":
 		return originAllowed(r.Header.Get("Origin"), allowedOrigins)
 	default:
 		if origin := r.Header.Get("Origin"); origin != "" {

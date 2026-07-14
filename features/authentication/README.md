@@ -15,9 +15,11 @@ user no longer *is* an email: identity moves off the `users.email`/
 `email_verified` pair onto a **`user_identifiers`** table — multiple email/phone
 identifiers with explicit **login / recovery / notification / primary** uses.
 On top of that base v3 adds an atomic **challenge rail** (HMAC-protected OTP
-codes + SHA-256 magic-link tokens), a durable **delivery outbox + worker** (the
-only outbound send path), a step-up-gated **credential/identifier management
-suite** (revision-serialized mutations), **passwordless** email/phone login, a
+codes + SHA-256 magic-link tokens), a host-owned **delivery runtime** in one of
+two explicit modes — durable generic **jobs** or a bounded ephemeral
+**in_process** pool — as the only outbound send path, a step-up-gated
+**credential/identifier management suite** (revision-serialized mutations),
+**passwordless** email/phone login, a
 fail-closed **production runtime posture**, and an **optional HTML/templ surface**
 mounted over the unchanged JSON API. `Config.Views == nil` keeps the feature
 JSON-only with no view technology in the host graph; a non-nil `Views` adds HTML
@@ -43,15 +45,18 @@ domain/                  the hexagon's public rim — entities + repository port
   user/ session/         Public BY NECESSITY: hosts and store modules implement/
   identifier/            import these across module boundaries.
   challenge/ authgrant/  identifier is the v3 identity rail; challenge/authgrant/
-  contactchange/         contactchange/credential/deliveryjob are the v3 atomic
-  credential/ deliveryjob/  security + delivery rails.
+  contactchange/         contactchange/credential are the v3 atomic security
+  credential/            rails. Delivery owns NO domain here — durable delivery is
+                         the generic jobs feature (see "Delivery execution modes").
   oauthaccount/ oauthstate/
   serviceaccount/ apikey/
   passwordreset/
   securityevent/ invitation/
 internal/
   logic/authsvc/         the identity service — the sealed interior
-  logic/delivery/        the shared delivery renderer/router + durable worker
+  logic/delivery/        the shared delivery processor (renderer/router, encrypted
+                         command envelope, initializer) + the bounded in_process
+                         runtime; jobs mode drives the same processor off-module
   logic/invitationsvc/   the invitation service (built only when a Granter is wired)
   inbound/authentication/ driving adapter: JSON handlers, the content-type
                          dispatcher, the HTML GET/form handlers, the Views port,
@@ -60,7 +65,8 @@ internal/
 storetest/               executable spec for domain/'s ports + the reference
                          in-memory implementation
 stores/turso/            the outbound tier: per-dialect SQL + canonical
-stores/pgx/              migrations (0001–0014), each its own module
+stores/pgx/              migrations (0001–0013; auth owns no delivery table),
+                         each its own module
 views/templ/             the bundled default HTML surface — a SIBLING module
                          (authtempl.New()); the feature core never imports templ
 ```
@@ -118,15 +124,15 @@ API callers skip it), and sets `Cache-Control: no-store`.
 - `POST /auth/logout` — NOT gated (§1.5) → 200 + both cookies cleared.
 - `POST /auth/password/forgot` — `{email}` → 200 (never reveals existence).
   **Enumeration-safe and async:** it normalizes and enqueues an opaque delivery
-  command WITHOUT resolving the account or calling a provider; the worker
-  resolves the recovery identifier and delivers.
+  command WITHOUT resolving the account or calling a provider; the off-request
+  delivery runtime resolves the recovery identifier and delivers.
 - `POST /auth/password/reset` — `{token, password}` → 200. Atomic: consumes the
   reset challenge, sets the password, and **revokes all sessions** in one
   transaction.
 - `POST /auth/password/change` — live + browser-safe, `{current_password,
   new_password}` → 200 + a fresh cookie pair; revokes all the user's sessions.
-- `GET /auth/delivery/status` — live-session-gated; poll the durable outbox with
-  a `receipt` to learn a send failed without holding the start request open.
+- `GET /auth/delivery/status` — live-session-gated; poll the delivery dispatcher
+  with a `receipt` to learn a send failed without holding the start request open.
 - `GET /auth/methods` — live-session-gated **masked** method inventory (below);
   `Cache-Control: no-store`.
 
@@ -275,6 +281,15 @@ presentation **cannot bypass** middleware, decoding, service, redirect, or statu
 policy — all of that lives in the inbound handler, never a `Views` method (proven
 byte-identical across three presentations in `isolation_test.go`).
 
+**The v3 override promise is markup-only (presentation templates).** A `Views`
+override controls the rendered HTML markup; it does NOT get a styling / asset
+policy. The security CSP above is **hard-coded** (`default-src 'none'`, no
+`style-src`/`img-src`/external asset origins), so a branded override cannot
+introduce external stylesheets, images, fonts, or scripts beyond the nonce'd inline
+policy — the templates are deliberately asset-free. A constrained host asset/layout
+policy hook (a supported styling seam for branded overrides) is a **post-v3
+deferral**; v3 does not weaken the secure default to accommodate it.
+
 `Views` (HTML pages) and `EmailContentTemplates` (email bodies, below) are two
 **distinct** override facilities — different Config fields, different types,
 different subsystems, no shared type.
@@ -294,13 +309,16 @@ different subsystems, no shared type.
   resolved `auth.Principal{Type, ID}`.
 - `Service.CurrentUser(ctx)` / `Service.CurrentPrincipal(ctx)` — read the resolved
   identity; `Service.AuthenticateAPIKey(ctx, rawKey)` for non-HTTP callers.
-- `Service.RunDeliveryWorker(ctx)` — the host-owned delivery worker loop (below).
+- `Service.RunDelivery(ctx)` — the host-owned `in_process` delivery runtime loop
+  (below); in `jobs` mode the host runs the generic jobs runtime instead.
 
 ## Repositories (the ports a host or store adapter satisfies)
 
 The bundled store adapters fill the whole bundle from one handle
 (`authstore.Repositories(db)`). The v1/v2 core ports are unchanged; v3 adds the
-identity + atomic-security + delivery rails.
+identity + atomic-security rails. Delivery owns **no** repository here — durable
+delivery runs on the generic **jobs** feature and `in_process` delivery is
+process-local (see "Delivery execution modes").
 
 ```go
 type Repositories struct {
@@ -308,14 +326,14 @@ type Repositories struct {
     Users     user.UserRepository       // + CreateWithPrimaryIdentifier (atomic)
     Passwords user.PasswordRepository
     Sessions  session.SessionRepository
-    // v3 identity + atomic-security + delivery rails.
+    // v3 identity + atomic-security rails (delivery owns no repository — it runs on
+    // the generic jobs feature or the bounded in_process pool).
     Identifiers          identifier.IdentifierRepository   // the discovery + revision-CAS rail
     Challenges           challenge.Repository              // atomic OTP-code / magic-link-token rail
     PasswordResets       passwordreset.Repository          // atomic reset composition
     ContactChanges       contactchange.Repository          // pending add/change flow state
     AuthenticationGrants authgrant.Repository              // single-use recent-auth / step-up grants
     CredentialMutations  credential.MutationRepository     // revision-serialized typed mutations
-    DeliveryJobs         deliveryjob.Repository            // the durable enumeration-safe outbox
     // v2 optional subsystems (nil semantics below).
     OAuthAccounts   oauthaccount.OAuthAccountRepository
     OAuthStates     oauthstate.StateRepository
@@ -333,7 +351,6 @@ Nil semantics:
 | `Users`, `Passwords`, `Sessions`, `Identifiers` | the v3 baseline; required for any working feature (registration re-keyed onto identifiers) | absence surfaces as a nil-deref-safe closed error at the relevant use-case |
 | `Challenges` | the atomic secret rail is off (verify/reset/step-up/passwordless fail closed) | wired → `ChallengeProtector` REQUIRED (`ErrChallengeProtectorRequired`) |
 | `PasswordResets`, `ContactChanges`, `AuthenticationGrants`, `CredentialMutations` | the reset composition / identifier management / step-up / credential mutations fail closed | none at construction; each use-case fails closed while its rail is nil |
-| `DeliveryJobs` | the outbox is off — every send site fails closed (`ErrDeliveryDisabled`); there is no synchronous fallback | wired → `DeliveryEncrypter` REQUIRED; production also requires a durable store + acknowledged worker |
 | `OAuthAccounts`, `OAuthStates` | allowed only while `Providers` is empty | Providers set + either nil → `ErrOAuthReposRequired` |
 | `ServiceAccounts`, `APIKeys` | both nil → machine subsystem OFF | **both-or-neither** → `ErrMachineReposRequired` |
 | `SecurityEvents` | **no audit trail** — the recording site is a no-op (AV9); degrades silently by design | none — never a construction error |
@@ -371,8 +388,10 @@ default, so a host can never inherit the development posture; unknown →
 | `IdentifierNormalizer` | nil → the bundled strict default (email trim+lowercase, phone strict E.164). One policy canonicalizes registration, login, recovery, and invitations identically. |
 | `IdentifierKeyer` | derives PII-free rate-limit/idempotency keys under a key **distinct** from the pepper, JWT, and encryption keys. **Production-required** (`ErrIdentifierKeyerRequired`); development falls back to a per-instance SHA-256. |
 | `CredentialPolicy` | nil → the bundled safe default (`credential.NewDefaultPolicy`: one direct login method + one verified recovery method, PSTN restricted). A host may supply stronger rules; `ErrCredentialPolicyRequired` covers a strict-production posture that disables the default without a replacement. |
-| `DeliveryEncrypter` (cryptids.Encrypter) | REQUIRED once `DeliveryJobs` is wired (`ErrDeliveryEncrypterRequired`) — pending jobs briefly carry the rendered secret + destination, so the payload envelope is always sealed. Bundled `cryptids.NewAESGCM` with a distinct 32-byte key. |
-| `DeliveryWorkerAcknowledged` | a wiring assertion that the host runs `RunDeliveryWorker`. The outbox is the ONLY send path, so production REQUIRES it once `DeliveryJobs` is wired (`ErrDeliveryWorkerUnacknowledged`) rather than silently swallowing every message; development tolerates the zero value. |
+| `DeliveryEncrypter` (cryptids.Encrypter) | REQUIRED once delivery can send — a wired `DeliveryDispatcher` (`jobs` mode) or `DeliveryMode: "in_process"` (`ErrDeliveryEncrypterRequired`) — the command envelope briefly carries the rendered secret + destination, so it is always sealed. Bundled `cryptids.NewAESGCM` with a distinct 32-byte key. |
+| `DeliveryMode` | **REQUIRED**, no default (`AUTH_DELIVERY_MODE`): `"jobs"` (durable delivery on the generic jobs runtime), `"in_process"` (bounded, EPHEMERAL in-process pool), or `"off"` (no delivery runtime). Empty → `ErrDeliveryModeRequired`, unknown → `ErrDeliveryModeInvalid`, never inferred from a non-nil collaborator. `"jobs"` requires `Config.DeliveryDispatcher` (`ErrDeliveryQueueRequired`); `"off"` rejects a wired dispatcher (`ErrDeliveryOffButDeliverable`); `"in_process"` needs no dispatcher (it owns its bounded pool). `Register` starts no runtime in any mode. |
+| `DeliveryJobsAcknowledged` | a wiring assertion that the host runs the durable generic jobs delivery runtime. Meaningful for `DeliveryMode: "jobs"`; the queue is the ONLY send path, so production REQUIRES it (`ErrDeliveryJobsUnacknowledged`) rather than silently swallowing every message; development tolerates the zero value. |
+| `DeliveryEphemeralAcknowledged` | a wiring assertion that the host accepts the crash-loss guarantee of `DeliveryMode: "in_process"` (in-flight work is lost on a restart). Production REQUIRES it (`ErrDeliveryEphemeralUnacknowledged`); the recommended production posture is `"jobs"`. |
 | `PublicAuthBaseURL` | the absolute base magic links + landing pages build from (`AUTH_PUBLIC_BASE_URL`). REQUIRED once a link flow is enabled (`ErrPublicAuthBaseURLRequired`); production requires **HTTPS** (`ErrPublicAuthBaseURLInsecure`). Request Host/forwarded headers NEVER participate. |
 | `Passwordless []string` | empty → passwordless OFF (routes not registered). Allowed v3 kinds are `"email"`/`"phone"` (`ErrPasswordlessKindInvalid`); each needs a wired delivery channel (`ErrPasswordlessKindUnsupported`), the challenge rail + durable outbox, and a valid `PublicAuthBaseURL`. NEVER auto-provisions; NEVER enables phone+password (phone stays passwordless-only). |
 | `AllowedOrigins []string` | the exact-match `Origin` allowlist for cookie-authenticated sensitive mutations and HTML form posts (design §9.1). `"*"` never authorizes a credentialed cross-origin mutation; empty rejects every cross-site cookie mutation. Bearer-only callers skip the gate. |
@@ -400,7 +419,16 @@ compromise the others: `AUTH_JWT_SECRET` (session/JWT signing),
 (delivery-outbox envelope AES-GCM), and `AUTH_TOKEN_ENCRYPTER_KEY` (provider
 tokens). Key material is never printed; an unset key falls back to an **ephemeral
 per-boot** key (dev/single-instance only, WARN-logged). Multi-instance production
-MUST set and SHARE every key.
+MUST set and SHARE every key. There is deliberately **no separate CSRF or
+magic-link/reset secret**: CSRF is a per-render random double-submit token (no
+managed key), and magic-link / reset tokens are digested by the challenge pepper
+above. **Rotation consequence per key:** only the challenge pepper supports
+continuity (the `HMACKeyRing` retains older keys, so a rotation keeps pending
+codes/links valid until the old key is dropped). The other four are single-key and
+disruptive — rotating the JWT signer forces re-authentication, the delivery key
+must be drained-first (in-flight sealed payloads dead-letter), the provider-token
+key loses stored OAuth tokens (users re-link), and the identifier key resets
+rate-limit/idempotency buckets once (transient).
 
 ## Challenges and recovery (design §3.2, §5.9)
 
@@ -431,36 +459,125 @@ outstanding password/reset grants and challenges — so a completed reset
 password. The shared password policy (length + optional breach check) applies
 identically at register/set/change/reset.
 
-## The delivery worker (design §6.1.1)
+## Delivery execution modes (design §6.1.1)
 
 Every auth outbound message — verification, reset, step-up/removal codes,
-identifier-change proof + notices, invitations, magic links/OTP — enqueues into
-the durable **`delivery_jobs`** outbox instead of a request-time send. **The
-outbox is the only send path**; account resolution and provider latency happen in
-the host-owned worker off the request path, which is what makes the
-unauthenticated `forgot`/`passwordless start` endpoints enumeration-safe (they
-enqueue an opaque job and return one uniform response without resolving the
-account or calling a provider).
+identifier-change proof + notices, invitations, magic links/OTP — is **submitted
+to a delivery dispatcher** instead of a request-time send. **The dispatcher is the
+only send path**; account resolution, rendering, and provider latency happen off
+the request path, which is what makes the unauthenticated `forgot`/`passwordless
+start` endpoints enumeration-safe (they submit an opaque, encrypted command
+envelope and return one uniform response without resolving the account or calling
+a provider). The same versioned, encrypted `command.Envelope` and the same
+processor run behind both real modes; `Config.DeliveryMode` selects which:
 
-- **Lifecycle.** The host runs `Service.RunDeliveryWorker(ctx)` in a goroutine and
-  cancels ctx to stop (a no-op when the outbox is unwired, so it is safe to call
-  unconditionally). The feature never starts a goroutine at construction.
-- **At-least-once + duplicates.** A due job is claimed under a lease; a crash after
-  send but before completion replays the SAME secret (the payload is stable) — so
-  consumers must tolerate at-least-once duplicates. `enqueue`-idempotency
-  deduplicates a repeated start.
-- **Encryption.** Pending jobs briefly carry the rendered secret + destination, so
-  the payload envelope is ALWAYS sealed with `DeliveryEncrypter` (AES-GCM, a
-  distinct key) — plaintext secrets never land in a `delivery_jobs` column.
-- **Retries / terminal / purge.** A failed send retries with a lease-expiry claim;
-  a terminal failure cancels the bound challenge; completed/terminal jobs are
-  purged under a bounded retention.
+- **`jobs` (recommended production posture).** The host wires a
+  `Config.DeliveryDispatcher` backed by the generic **jobs** feature and runs the
+  generic jobs runtime. Auth owns no delivery table: durability, fencing, keyed
+  idempotency/replacement, retry, status, and terminal purge are the generic jobs
+  store's responsibility. Auth exposes the registered job kind/handler seam via
+  `Service.DeliveryJobRuntime()`; a composition adapter (never a feature core)
+  bridges the two features.
+- **`in_process`.** The same processor runs behind a bounded ephemeral queue and
+  a fixed worker pool that the host drives with `Service.RunDelivery(ctx)` (cancel
+  ctx to stop). Retry/status retention is process-local and bounded; accepted work
+  does **not** survive a crash or restart — in-flight work is lost. There is **no
+  cross-instance coordination**: each process keeps its own queue, its own
+  de-duplication, and its own status, so running multiple instances de-duplicates
+  on **neither** and a user may receive duplicate messages. `in_process` is for
+  development / single-instance hosts; production requires the explicit crash-loss
+  acknowledgment. Tuning knobs (workers, capacity, admission deadline, shutdown
+  drain, status retention max/TTL) live on `Config.InProcessDelivery`, validated
+  fail-closed at construction.
+- **`off`.** Allowed only when no configured auth capability can send.
+
+Cross-cutting guarantees (both real modes):
+
+- **At-least-once + duplicates (never exactly-once).** A crash after provider
+  acceptance but before completion replays the SAME secret (the checkpointed
+  rendered envelope is stable) — so consumers must tolerate at-least-once
+  duplicates. Submit idempotency deduplicates a repeated start; an explicit resend
+  (`Replace`) supersedes older active work under the same PII-free logical key and
+  fences a stale worker's checkpoint/completion. **The resend / in-flight
+  replacement race is real:** a resend cannot retract a provider call already in
+  flight, so the recipient may receive both the superseded and the fresh message.
+  The freshly issued challenge invalidates/replaces the old proof where the flow
+  supports replacement; single-use redemption still guarantees exactly one winner.
+- **Encryption + key rotation.** The command envelope ALWAYS seals its rendered
+  secret + destination with `DeliveryEncrypter` (AES-GCM, a distinct key) —
+  plaintext secrets never land in a durable payload column, log, event, or status
+  response. **Rotation honesty:** rotating `AUTH_DELIVERY_ENCRYPTER_KEY` only
+  affects payloads sealed AFTER the change. An in-flight durable payload sealed
+  under the OLD key is decrypted by the processor that opens it; if the old key is
+  removed from the host before that work drains, the sealed payload becomes
+  undecryptable and the job dead-letters (its bound challenge is discarded, so the
+  user simply restarts the flow). There is no envelope re-encryption or dual-key
+  overlap for delivery today — drain in-flight delivery work before retiring a
+  delivery key.
+- **Terminal / discard + status retention.** A terminally undeliverable message
+  discards the bound challenge best-effort. In `jobs` mode retry, latest-by-key
+  status, and terminal purge are the generic jobs store's responsibility (the host
+  runs a bounded `PurgeTerminal`); in `in_process` mode retry and status are
+  process-local and bounded (max entries + TTL, evicted to unknown). The
+  session-gated `DeliveryStatus` projection is lifecycle-only —
+  `DeliveryStatus.Attempt` reads **0** (the attempt counter is executor-internal
+  retry bookkeeping, not a stable lifecycle signal; the field is retained for
+  compatibility). **SRE note (intentional, IX-22):** `Attempt == 0` at the consumer
+  seam is deliberate executor/consumer separation — carrying the executor's retry
+  counter through the sdk keyed-work status seam would push executor mechanics into
+  the protocol. Operational attempt counts come from **lifecycle/health events**, not
+  this field: read the `retried` counter emitted by `Config.DeliveryEventsEmitter`
+  (the delivered/skipped/**retried**/dead-lettered/superseded/purged stream). Tooling
+  that read `attempt` for retry visibility must repoint to that health counter.
 - **Health.** `GET /auth/delivery/status` (live-session-gated) lets a caller poll
-  the outbox with its `receipt` to learn a send failed without holding the start
-  request open.
-- **Production metadata.** A store that declares itself in-process-only is rejected
-  in production (`ErrNonDurableDeliveryRepository`); a worker the host never
-  acknowledges running is rejected (`ErrDeliveryWorkerUnacknowledged`).
+  the dispatcher with its `receipt` to learn a send failed without holding the
+  start request open.
+- **Events observe, never queue.** An optional `Config.DeliveryEventsEmitter`
+  publishes secret-free lifecycle events (delivered / skipped / retried /
+  dead-lettered / superseded / purged). Those events are operational observation
+  only: the dispatcher — not an event — is the record that accepted delivery work,
+  an observer failure changes nothing about the already-recorded job state, and no
+  event is ever required to make delivery happen. Wire the emitter for
+  metrics/dashboards; leave it nil and delivery is unchanged.
+- **Production fail-closed.** Under `DeliveryMode: "jobs"`, a missing
+  `Config.DeliveryDispatcher` is rejected (`ErrDeliveryQueueRequired`), and a jobs
+  delivery runtime the host never acknowledges running is rejected
+  (`ErrDeliveryJobsUnacknowledged`). Under `DeliveryMode: "in_process"`, production
+  requires the explicit crash-loss acknowledgment (`ErrDeliveryEphemeralUnacknowledged`).
+
+### Composition and lifecycle ownership (host wiring)
+
+`Register` starts **no** runtime in any mode — the host owns the delivery
+lifecycle, exactly like the jobs and events pollers.
+
+- **`jobs` mode.** The host builds a durable generic-jobs `Repositories.FencedQueue`,
+  wires a **composition adapter** (the ONLY code allowed to import both features —
+  neither feature core imports the other) that maps `auth.DeliveryDispatcher`
+  (`Submit`/`Replace`/`LatestStatus`) onto the jobs fenced primitives
+  (`EnqueueOnce`/`Replace`/`LatestStatusByKey`) and registers
+  `authSvc.DeliveryJobRuntime().Handle` (+ its `Discard` terminal hook) under one
+  job kind. The host then runs the generic `jobs.FencedRuntime` in its own
+  goroutine (stop it after HTTP drains) and periodically calls the jobs
+  `PurgeTerminal`. `examples/auth-cms/internal/authjobs` is the exemplary adapter,
+  and `examples/auth-cms/cmd/server` is the executable wiring twin.
+
+  ```go
+  // composition root (main) — jobs mode
+  dispatcher := authjobs.NewDispatcher(jobsSvc)     // auth.DeliveryDispatcher over the fenced primitives
+  cfg.DeliveryMode = auth.DeliveryModeJobs
+  cfg.DeliveryDispatcher = dispatcher
+  cfg.DeliveryEncrypter = deliveryKey               // envelope always sealed
+  cfg.DeliveryJobsAcknowledged = true               // asserts the host runs the jobs runtime
+  authSvc, _ := auth.NewService(repos, cfg)
+  rt, _ := jobs.NewFencedRuntime(jobsSvc, authjobs.FencedRuntimeConfig(authSvc.DeliveryJobRuntime()))
+  go rt.Run(runtimeCtx)                              // host owns the loop; stop after HTTP drains
+  ```
+
+- **`in_process` mode.** No dispatcher, no jobs runtime; the host runs the bounded
+  pool itself with `go authSvc.RunDelivery(ctx)` for the process lifetime and
+  cancels the context to drain on shutdown (see the Quickstart). Set
+  `DeliveryEphemeralAcknowledged: true` for production, and expect the ephemeral
+  posture above.
 
 ## Masked method inventory (design §5.1)
 
@@ -482,9 +599,10 @@ credential rail is unwired.
   (`ErrInsecureDeliveryTransport`), a per-process rate limiter
   (`ErrNonDurableRateLimiter`), a missing identifier keyer
   (`ErrIdentifierKeyerRequired`), an HTTP magic-link base
-  (`ErrPublicAuthBaseURLInsecure`), a non-durable outbox
-  (`ErrNonDurableDeliveryRepository`), and an unacknowledged worker
-  (`ErrDeliveryWorkerUnacknowledged`). Development WARNs on each instead.
+  (`ErrPublicAuthBaseURLInsecure`), a `jobs`-mode config with no wired delivery
+  dispatcher (`ErrDeliveryQueueRequired`), an unacknowledged `jobs` delivery runtime
+  (`ErrDeliveryJobsUnacknowledged`), and an unacknowledged `in_process` crash-loss
+  posture (`ErrDeliveryEphemeralUnacknowledged`). Development WARNs on each instead.
 - **Rate-limit / trusted proxy.** Login/refresh/start limits are always active and
   keyed on the PII-free identifier digest + client IP. The client IP is the
   `web.TrustProxies`-resolved value when the host wires it; **a raw
@@ -510,12 +628,21 @@ credential rail is unwired.
 Two families. **Explicit stable codes** (set via `WithCode`): `password_already_set`
 (409), `password_not_set` (404), `cannot_remove_last_method` (409),
 `kind_not_supported` (400), `rate_limited` (429), `verification_required` (409),
-`identifier_exists` (409), `unsupported_media_type` (415). **Generic sdk-kind
-codes** (via `web.RespondJSONDomainError`): `expired` (410), `bad_request` (400),
-`permission_denied` (403), `not_found` (404), `conflict` (409),
-`unauthenticated` (401). **Login-like verification stays a single generic outcome**
-— a wrong/expired/wrong-context/unknown/disabled code is one generic 401 that
-never distinguishes the reason (enumeration protection) and never names a secret.
+`identifier_exists` (409), `unsupported_media_type` (415). **Named challenge-rail
+codes** (design §5.8, emitted by the shared transport mapper for the
+challenge-redeeming endpoints — registration verify, step-up code, identifier
+confirm, remove-password / OAuth-unlink code): `challenge_expired` (410),
+`challenge_invalid` (400), `too_many_attempts` (403). The three collapse every
+non-success disposition (no-such-challenge, wrong code, wrong context, malformed)
+so they never distinguish the underlying cause (enumeration protection) and never
+name a secret; the JSON body code and the form-arm re-render status derive from the
+same mapping (transport parity — the form copy stays generic and never leaks the
+code). **Generic sdk-kind codes** (via `web.RespondJSONDomainError`): `expired`
+(410), `bad_request` (400), `permission_denied` (403), `not_found` (404),
+`conflict` (409), `unauthenticated` (401). **Passwordless login stays a single
+generic outcome** — a wrong/expired/wrong-context/unknown/disabled passwordless code
+or magic link is one generic 401 that never distinguishes the reason and never names
+a secret.
 
 ## The security-event audit rail (v3 events)
 
@@ -563,18 +690,26 @@ the consumed slot burns the session. Two HttpOnly `SameSite=Lax` cookies: the
 access-JWT cookie (`Path=/`) and the refresh cookie (`<name>_refresh`,
 `Path=/auth`).
 
-## Migrations are host-owned (0001–0014)
+## Migrations are host-owned (0001–0013)
 
-Auth ships **fourteen** canonical migrations per dialect, byte-identical filename
+Auth ships **thirteen** canonical migrations per dialect, byte-identical filename
 sets across pgx and turso:
 
 ```
 0001_users              0006_service_accounts     0011_challenges
 0002_user_passwords     0007_api_keys             0012_contact_changes
 0003_sessions           0008_security_events      0013_authentication_grants
-0004_oauth_accounts     0009_invitations          0014_delivery_jobs
+0004_oauth_accounts     0009_invitations
 0005_oauth_states       0010_user_identifiers
 ```
+
+Auth owns **no** delivery table: durable delivery is the generic **jobs**
+feature's schema (host-owned in its own tree), and `in_process` delivery is
+ephemeral. A host upgrading off an earlier v3 cut that scaffolded the bespoke
+delivery-outbox table drains-then-drops it via the **Auth delivery-runtime
+upgrade runbook** in `RELEASING.md` (stop old workers, drain or re-enqueue the
+opaque encrypted commands WITHOUT decrypting, apply the generic jobs schema +
+wiring, verify no active rows, drop the bespoke table, start the chosen runtime).
 
 Per the greenfield-migrations rule (2026-07-12) the canonical set defines the
 **FINAL** schema for a new host and carries NO upgrade/evolution file: the final
@@ -590,8 +725,9 @@ UPGRADE NOTE below).
 
 ## Quickstart — the v3 minimum (dev, all defaults)
 
-The required fields are `Hasher`, `Mailer`, `TokenSigner`, and `RuntimeMode`; the
-challenge and delivery rails need their protector/encrypter and the worker. A
+The required fields are `Hasher`, `Mailer`, `TokenSigner`, `RuntimeMode`, and
+`DeliveryMode`; the challenge and delivery rails need their protector/encrypter,
+and `in_process` mode needs the host to run the delivery runtime. A
 single-instance dev host:
 
 ```go
@@ -603,18 +739,21 @@ cfg := auth.Config{
     RuntimeMode: auth.RuntimeModeDevelopment, // production has NO default
 
     ChallengeProtector: protector,            // HMAC pepper key ring (Challenges wired)
-    DeliveryEncrypter:  deliveryKey,          // AES-GCM (DeliveryJobs wired)
+    DeliveryEncrypter:  deliveryKey,          // AES-GCM (command envelope always sealed)
+    DeliveryMode:       auth.DeliveryModeInProcess, // bounded ephemeral pool; no dispatcher needed
+    // For durable delivery set DeliveryMode "jobs" and wire Config.DeliveryDispatcher
+    // over the generic jobs feature instead (recommended production posture).
     // AccessTokenTTL / RefreshTTL omitted → 15m / 7d.
     // Views: authtempl.New()                 // add HTML pages; omit for API-only
 }
 authSvc, err := auth.NewService(repos, cfg)   // repos = authstore.Repositories(db)
-// run the worker for the whole process lifetime:
-go authSvc.RunDeliveryWorker(ctx)
+// run the in-process delivery runtime for the whole process lifetime:
+go authSvc.RunDelivery(ctx)
 authSvc.Register(feature.Mount{Router: router, Logger: log})
 ```
 
 **`examples/auth-cms/cmd/server` is this page's executable twin** — the full v3
-surface (identifiers, challenge rail, delivery worker, passwordless, HTML pages, a
+surface (identifiers, challenge rail, delivery runtime, passwordless, HTML pages, a
 branded page override) on in-memory stores with zero infra; its README carries the
 JSON + HTML run-and-look protocol. Production hosts set `RuntimeMode=production`
 (which fail-closes every incomplete wiring above), a stable shared secret per key,
@@ -676,9 +815,11 @@ is removed (replaced by `AccessTokenTTL`/`RefreshTTL`); `POST /auth/token` retur
 
 auth-v3 (2026-07-13) reshapes `users` off `email`/`email_verified` onto
 `user_identifiers`, adds `users.auth_revision` and session authentication-metadata
-columns, adds the challenge / contact-change / authentication-grant / delivery-job
-flow tables, and retires the legacy `verification_codes`/`verification_tokens`
-rail. Per the greenfield rule the canonical set ships only the FINAL schema — a
+columns, adds the challenge / contact-change / authentication-grant flow tables
+(the bespoke delivery-outbox table an earlier v3 cut shipped was removed by the
+AV3D delivery refactor — see the delivery UPGRADE NOTE below), and retires the
+legacy `verification_codes`/`verification_tokens` rail. Per the greenfield rule
+the canonical set ships only the FINAL schema — a
 live v2 host owns its own evolution and MUST NOT blind-copy the canonical
 migrations (the final `0001_users.sql` no longer carries `email`, so copying it
 onto a populated v2 `users` drops email before any backfill).
@@ -686,7 +827,11 @@ onto a populated v2 `users` drops email before any backfill).
 The full validated, step-by-step host-owned migration — exact pgx and
 SQLite/libSQL SQL, collision dry-run, backfill, validation, additive metadata, and
 the LATER destructive cutover — is the **Auth v3 host upgrade runbook** in
-`RELEASING.md`. The load-bearing operational contract:
+`RELEASING.md`. A host also crossing the AV3D delivery refactor (which removed the
+bespoke delivery-outbox table) additionally follows the sibling **Auth
+delivery-runtime upgrade runbook** in `RELEASING.md` — skip that table's CREATE
+and wire generic-jobs / `in_process` delivery instead. The load-bearing
+operational contract:
 
 - **Backfill-first, single cutover — do NOT roll.** Steps 1–5 are additive (the
   v2 binary can still read the schema); deploy v3 and confirm health; only THEN
@@ -705,3 +850,63 @@ the LATER destructive cutover — is the **Auth v3 host upgrade runbook** in
 This is a **breaking** version bump for `features/authentication` and both nested
 store modules. Validated on fresh/reset databases both dialects (see the AV3-9.2
 execution record in `RELEASING.md`); not yet applied to a real host.
+
+## UPGRADE NOTE — the AV3D delivery-runtime refactor (delivery modes)
+
+The delivery-refactor (2026-07-13) removed authentication's private durable
+delivery queue. Durable delivery is now the generic **jobs** feature reached
+through a host-wired `Config.DeliveryDispatcher`; the bounded ephemeral path is
+`in_process`. Auth owns no delivery table (canonical set is `0001–0013`). See
+"Delivery execution modes" above for the full model; this note is the compatibility
+delta.
+
+**Public removals (breaking):**
+
+- `Repositories.DeliveryJobs` — removed. Durable delivery no longer has an auth
+  repository port; wire `Config.DeliveryDispatcher` over the generic jobs feature.
+- `domain/deliveryjob` — the bespoke delivery-job domain package is removed.
+- `Service.RunDeliveryWorker` — removed. Run the generic `jobs.FencedRuntime` in
+  `jobs` mode, or `Service.RunDelivery(ctx)` in `in_process` mode.
+- Obsolete errors removed: `ErrNonDurableDeliveryRepository`,
+  `ErrDeliveryWorkerUnacknowledged`, `ErrInProcessDurableDeliveryRepository`, and
+  the delivery-durability construction funcs.
+- The auth `0014` delivery-outbox migration is removed from both dialect trees
+  (canonical set is now `0001–0013`).
+
+**Renames:**
+
+- `Config.DeliveryWorkerAcknowledged` → `Config.DeliveryJobsAcknowledged` (the
+  wiring assertion that the host runs the generic jobs delivery runtime; production
+  requires it under `jobs` mode).
+
+**Additions:**
+
+- `Config.DeliveryMode` (`"jobs"` | `"in_process"` | `"off"`, required, no default),
+  `Config.DeliveryDispatcher` (the transport-neutral outbound seam),
+  `Config.InProcessDelivery` (bounded-pool tuning), `Config.DeliveryEventsEmitter`
+  (optional secret-free observer), `Config.DeliveryEphemeralAcknowledged`.
+- `Service.RunDelivery(ctx)` (host-owned `in_process` runtime),
+  `Service.DeliveryJobRuntime()` (the registered `jobs` kind/handler seam), and
+  `Service.InProcessQueueDepth()` (secret-free depth for host health).
+- Generic jobs gained the fenced surface: `Repositories.FencedQueue`, the fenced
+  primitives, `jobs.FencedRuntime`, and migration `0003_fenced_job_queue` — see
+  `features/jobs/README.md`.
+
+**Behavior change:** `DeliveryStatus.Attempt` now always reads **0** — the status
+seam is lifecycle-only; the attempt counter is executor-internal retry bookkeeping
+and is no longer projected. The field is retained for compatibility.
+
+**Adopter steps:**
+
+1. Set `Config.DeliveryMode` explicitly (`jobs` recommended for production).
+2. `jobs` mode: build a durable `jobs.Repositories.FencedQueue`, wire a composition
+   adapter mapping `DeliveryDispatcher` onto the fenced primitives + registering
+   `DeliveryJobRuntime().Handle`, run `jobs.FencedRuntime`, and set
+   `DeliveryJobsAcknowledged: true` (see "Composition and lifecycle ownership").
+3. `in_process` mode: run `go Service.RunDelivery(ctx)` and set
+   `DeliveryEphemeralAcknowledged: true` (accept crash-loss).
+4. A host that scaffolded the bespoke delivery-outbox table under an earlier v3 cut
+   drains-then-drops it via the **Auth delivery-runtime upgrade runbook** in
+   `RELEASING.md` (stop old workers, drain or re-enqueue the opaque encrypted
+   commands WITHOUT decrypting, apply the generic jobs schema + wiring, verify no
+   active rows, drop the bespoke table, start the chosen runtime).

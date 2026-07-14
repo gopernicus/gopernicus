@@ -219,26 +219,47 @@ func TestStartPasswordlessDoesNotBlockOnProvider(t *testing.T) {
 	enablePasswordless(h, string(identifier.KindEmail))
 
 	enc := fakeEncrypter{}
-	repo := newMemDeliveryRepo()
+	disp := newMemDispatcher()
 	blocking := &blockingSender{release: make(chan struct{})}
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 	router, err := delivery.NewRouter(delivery.Deps{Mailer: blocking, MailFrom: "noreply@example.com", Logger: quiet})
 	if err != nil {
 		t.Fatalf("delivery.NewRouter: %v", err)
 	}
-	dsvc, err := delivery.NewService(delivery.ServiceDeps{Repo: repo, Encrypter: enc})
+	dsvc, err := delivery.NewService(delivery.ServiceDeps{Dispatcher: disp, Encrypter: enc})
 	if err != nil {
 		t.Fatalf("delivery.NewService: %v", err)
 	}
-	worker, err := delivery.NewWorker(delivery.WorkerDeps{Repo: repo, Encrypter: enc, Router: router, Initializer: h.svc, Logger: quiet})
+	proc, err := delivery.NewJobsProcessor(delivery.JobsProcessorDeps{Encrypter: enc, Router: router, Initializer: h.svc})
 	if err != nil {
-		t.Fatalf("delivery.NewWorker: %v", err)
+		t.Fatalf("delivery.NewJobsProcessor: %v", err)
 	}
 	h.svc.queue = dsvc
 
+	// A background drainer parks in the blocking provider send; the request-path
+	// submit must never wait on it.
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { _ = worker.Run(ctx); close(done) }()
+	go func() {
+		defer close(done)
+		for ctx.Err() == nil {
+			it, ok := disp.claimPending()
+			if !ok {
+				time.Sleep(time.Millisecond)
+				continue
+			}
+			_ = proc.Handle(ctx, it.id, it.payload, it.attempt, func(_ context.Context, sealed []byte) error {
+				disp.mu.Lock()
+				it.payload = sealed
+				disp.mu.Unlock()
+				return nil
+			})
+			disp.mu.Lock()
+			it.active = false
+			it.state = genCompleted
+			disp.mu.Unlock()
+		}
+	}()
 	t.Cleanup(func() {
 		cancel()
 		close(blocking.release)

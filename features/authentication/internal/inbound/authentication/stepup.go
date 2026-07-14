@@ -146,7 +146,10 @@ func (h *handlers) completeStepUpCodeJSON(w http.ResponseWriter, r *http.Request
 		Context:   req.Context,
 	}, req.Code)
 	if err != nil {
-		web.RespondJSONDomainError(w, err)
+		// The step-up code path propagates the challenge-rail sentinels unchanged, so
+		// respondDomainError emits the named §5.8 codes (challenge_expired/invalid/
+		// too_many_attempts).
+		respondDomainError(w, err)
 		return
 	}
 	web.RespondJSONOK(w, stepUpCompleteResponse{Status: "verified", ExpiresAt: grant.ExpiresAt.Format(time.RFC3339)})

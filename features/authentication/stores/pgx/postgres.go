@@ -37,7 +37,6 @@ func Repositories(db *pgxdb.DB) auth.Repositories {
 		ContactChanges:       NewContactChangeStore(db),
 		AuthenticationGrants: NewAuthGrantStore(db),
 		CredentialMutations:  NewCredentialMutationStore(db),
-		DeliveryJobs:         NewDeliveryJobStore(db),
 	}
 }
 

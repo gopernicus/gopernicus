@@ -156,7 +156,7 @@ func TestNewServiceRequiresTokenSigner(t *testing.T) {
 // last-wins): two notifiers of the same kind → ErrDuplicateNotifierKind; distinct
 // kinds construct fine.
 func TestNewServiceDuplicateNotifierKind(t *testing.T) {
-	base := Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment}
+	base := Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment, DeliveryMode: DeliveryModeOff}
 
 	dup := base
 	dup.Notifiers = []notify.Notifier{stubNotifier{"sms"}, stubNotifier{"sms"}}
@@ -173,7 +173,7 @@ func TestNewServiceDuplicateNotifierKind(t *testing.T) {
 
 func TestNewServiceDefaultsRateLimiter(t *testing.T) {
 	// A nil RateLimiter must not error — it defaults to an in-memory limiter.
-	svc, err := NewService(Repositories{}, Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment})
+	svc, err := NewService(Repositories{}, Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment, DeliveryMode: DeliveryModeOff})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestNewServiceDefaultsRateLimiter(t *testing.T) {
 // TestNewServiceOAuthPartialWiring proves the loud partial-wiring error: providers
 // set but either oauth repository nil → ErrOAuthReposRequired; both wired → ok.
 func TestNewServiceOAuthPartialWiring(t *testing.T) {
-	base := Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment, Providers: []oauth.Provider{stubProvider{}}}
+	base := Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment, DeliveryMode: DeliveryModeOff, Providers: []oauth.Provider{stubProvider{}}}
 
 	if _, err := NewService(Repositories{}, base); !errors.Is(err, ErrOAuthReposRequired) {
 		t.Errorf("providers set, both repos nil: err=%v, want ErrOAuthReposRequired", err)
@@ -204,7 +204,7 @@ func TestNewServiceOAuthPartialWiring(t *testing.T) {
 // TestNewServiceOAuthOffAllowsNilRepos proves that with no providers (OAuth off)
 // the oauth repositories may be nil — deny-by-absence, not a wiring error.
 func TestNewServiceOAuthOffAllowsNilRepos(t *testing.T) {
-	if _, err := NewService(Repositories{}, Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment}); err != nil {
+	if _, err := NewService(Repositories{}, Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment, DeliveryMode: DeliveryModeOff}); err != nil {
 		t.Errorf("oauth off with nil oauth repos: err=%v, want nil", err)
 	}
 }
@@ -213,7 +213,7 @@ func TestNewServiceOAuthOffAllowsNilRepos(t *testing.T) {
 // provider is wired, at the public Register surface.
 func TestRegisterOAuthDenyByAbsence(t *testing.T) {
 	h := web.NewWebHandler()
-	svc, err := NewService(Repositories{}, Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment})
+	svc, err := NewService(Repositories{}, Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment, DeliveryMode: DeliveryModeOff})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestRegisterOAuthDenyByAbsence(t *testing.T) {
 // refinement 5): one machine repo without the other → ErrMachineReposRequired;
 // both wired → ok; neither → ok (subsystem off).
 func TestNewServiceMachinePartialWiring(t *testing.T) {
-	base := Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment}
+	base := Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment, DeliveryMode: DeliveryModeOff}
 
 	if _, err := NewService(Repositories{ServiceAccounts: stubServiceAccounts{}}, base); !errors.Is(err, ErrMachineReposRequired) {
 		t.Errorf("service accounts only: err=%v, want ErrMachineReposRequired", err)
@@ -252,7 +252,7 @@ func TestNewServiceMachinePartialWiring(t *testing.T) {
 // (404) when no machine repos are wired, at the public Register surface.
 func TestRegisterMachineDenyByAbsence(t *testing.T) {
 	h := web.NewWebHandler()
-	svc, err := NewService(Repositories{}, Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment})
+	svc, err := NewService(Repositories{}, Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment, DeliveryMode: DeliveryModeOff})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -272,7 +272,7 @@ func TestRegisterMachineDenyByAbsence(t *testing.T) {
 func TestRegisterMachineMountsRoutes(t *testing.T) {
 	h := web.NewWebHandler()
 	repos := Repositories{ServiceAccounts: stubServiceAccounts{}, APIKeys: stubAPIKeys{}}
-	svc, err := NewService(repos, Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment})
+	svc, err := NewService(repos, Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment, DeliveryMode: DeliveryModeOff})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -289,7 +289,7 @@ func TestRegisterMachineMountsRoutes(t *testing.T) {
 
 func TestRegisterMountsRoutes(t *testing.T) {
 	h := web.NewWebHandler()
-	svc, err := NewService(Repositories{}, Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment})
+	svc, err := NewService(Repositories{}, Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment, DeliveryMode: DeliveryModeOff})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

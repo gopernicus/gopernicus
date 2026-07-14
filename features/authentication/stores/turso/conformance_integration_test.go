@@ -35,7 +35,6 @@ var authTables = []string{
 	"challenges",
 	"contact_changes",
 	"authentication_grants",
-	"delivery_jobs",
 	"users",
 }
 

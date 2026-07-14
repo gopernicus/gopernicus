@@ -8,14 +8,29 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authjobs"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
 	auth "github.com/gopernicus/gopernicus/features/authentication"
+	"github.com/gopernicus/gopernicus/features/jobs"
+	jobsmem "github.com/gopernicus/gopernicus/features/jobs/memstore"
 )
 
 // quietLog is a discarding logger so the console transports' dev WARN and the
 // ephemeral-key WARNs do not spam the test output (and no key material is printed).
 func quietLog() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// jobsDispatcher builds the generic-jobs delivery dispatcher over an in-memory fenced
+// queue — the jobs-mode delivery transport run() wires, reproduced here so a construction
+// test can satisfy the jobs-mode queue capability.
+func jobsDispatcher(t *testing.T) auth.DeliveryDispatcher {
+	t.Helper()
+	deliveryJobs, err := jobs.NewService(jobs.Repositories{FencedQueue: jobsmem.NewFencedQueue()}, jobs.Config{Logger: quietLog()})
+	if err != nil {
+		t.Fatalf("jobs.NewService: %v", err)
+	}
+	return authjobs.NewDispatcher(deliveryJobs)
 }
 
 // TestBuildAuthConfigConstructs proves the AV3-8.6 development wiring — bundled templ
@@ -40,23 +55,33 @@ func TestBuildAuthConfigConstructs(t *testing.T) {
 	if cfg.PublicAuthBaseURL == "" {
 		t.Fatal("Config.PublicAuthBaseURL empty: magic-link base URL not wired")
 	}
-	if !cfg.DeliveryWorkerAcknowledged {
-		t.Fatal("Config.DeliveryWorkerAcknowledged false: worker lifecycle not affirmed")
+	if cfg.DeliveryMode != auth.DeliveryModeJobs {
+		t.Fatalf("Config.DeliveryMode = %q, want %q", cfg.DeliveryMode, auth.DeliveryModeJobs)
 	}
+	if !cfg.DeliveryJobsAcknowledged {
+		t.Fatal("Config.DeliveryJobsAcknowledged false: jobs delivery runtime lifecycle not affirmed")
+	}
+	// run() wires the generic-jobs dispatcher; reproduce it so the jobs-mode construction
+	// succeeds here.
+	cfg.DeliveryDispatcher = jobsDispatcher(t)
 	if _, err := auth.NewService(authmem.New().Repositories(), cfg); err != nil {
 		t.Fatalf("auth.NewService over development wiring: %v", err)
 	}
 }
 
-// TestDeliveryWorkerStartStop proves the delivery worker lifecycle the host owns
-// (design §6.1.1): RunDeliveryWorker runs until ctx is canceled and then returns
-// promptly, leaving no lingering goroutine. The outbox is the only send path, so a
-// worker that never stops (or leaks) on shutdown would be a real defect.
-func TestDeliveryWorkerStartStop(t *testing.T) {
+// TestDeliveryRuntimeStartStop proves the host-owned in-process delivery-runtime
+// lifecycle (authv3-delivery-refactor AV3D-4.1): RunDelivery runs until ctx is canceled
+// and then returns promptly, leaving no lingering goroutine. In jobs mode the host runs
+// jobs.FencedRuntime (proven in the jobs_delivery tests); this exercises the analogous
+// in_process runtime the same host offers as the small-deployment mode.
+func TestDeliveryRuntimeStartStop(t *testing.T) {
 	cfg, err := buildAuthConfig(quietLog(), nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)
 	}
+	// Flip to the self-contained bounded in-process runtime so RunDelivery owns the pool
+	// lifecycle without a generic-jobs composition.
+	cfg.DeliveryMode = auth.DeliveryModeInProcess
 	svc, err := auth.NewService(authmem.New().Repositories(), cfg)
 	if err != nil {
 		t.Fatalf("auth.NewService: %v", err)
@@ -65,22 +90,22 @@ func TestDeliveryWorkerStartStop(t *testing.T) {
 	base := runtime.NumGoroutine()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- svc.RunDeliveryWorker(ctx) }()
+	go func() { done <- svc.RunDelivery(ctx) }()
 
-	// Give the worker a moment to enter its claim/idle loop, then stop it.
+	// Give the pool a moment to start its workers, then stop it.
 	time.Sleep(50 * time.Millisecond)
 	cancel()
 
 	select {
 	case werr := <-done:
 		if werr != nil {
-			t.Fatalf("RunDeliveryWorker returned error on cancel: %v", werr)
+			t.Fatalf("RunDelivery returned error on cancel: %v", werr)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("delivery worker did not stop within 5s of context cancel")
+		t.Fatal("delivery runtime did not stop within 5s of context cancel")
 	}
 
-	// The worker goroutine has returned; allow the scheduler to settle and assert the
+	// The pool goroutines have returned; allow the scheduler to settle and assert the
 	// count is back near baseline (no leaked worker/internal goroutine).
 	for i := 0; i < 20; i++ {
 		if runtime.NumGoroutine() <= base {
@@ -89,6 +114,6 @@ func TestDeliveryWorkerStartStop(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if n := runtime.NumGoroutine(); n > base {
-		t.Fatalf("goroutine leak after worker stop: baseline %d, now %d", base, n)
+		t.Fatalf("goroutine leak after runtime stop: baseline %d, now %d", base, n)
 	}
 }
