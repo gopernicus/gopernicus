@@ -18,11 +18,14 @@ Implement:
   cleanly; with tags, stop and design append-only migrations.
 - Preserve exact userset relation as NOT NULL empty/non-empty text and update
   indexes for the ratified one-relation rule without conflating relation state.
-- Add `iam_authorization_scopes` revision anchors keyed by scope kind/type/ID.
+- Add `iam_scopes` revision anchors keyed by scope kind/type/ID.
   Resource scopes serialize relationships and scoped roles; subject scopes
   serialize global roles.
-- Add `iam_authorization_mutations` receipts keyed by MutationID, storing scope,
-  operation, payload digest, resulting revision, disposition, and created time.
+- Add `iam_mutations` receipts keyed by MutationID, storing scope,
+  operation, versioned payload digest, resulting revision, domain outcome, and
+  applied schema digest, and created/expiry time under the ratified retention
+  policy. Replay is computed by receipt lookup and returned as `Replayed=true`;
+  it is not stored as an outcome.
   Store no display data, secrets, request headers, or unbounded payload.
 - Add constraints for non-empty structural columns, valid scope kind, nonnegative
   revision, and consistent global/scoped role pairs.
@@ -50,11 +53,16 @@ Touch: memstore mutation/revision implementation and storetest reference.
 Implement:
 
 - Implement Apply under one mutex covering receipt lookup, current state,
-  transaction-bound guard evaluation, invariant evaluation, row changes,
-  revision bump, and receipt persistence. The view passed to the guard reads the
-  held snapshot without recursively locking.
+  dependency-tracking guard evaluation, dependency revision validation,
+  invariant evaluation, row changes, revision bump, and receipt persistence.
+  The view passed to the guard reads the held snapshot without recursively
+  locking and records the same logical scope dependencies as SQL stores.
 - Exact replay returns the original receipt; same MutationID with a different
-  payload digest returns conflict and changes nothing.
+  payload digest returns the stable MutationID-mismatch command error and
+  changes nothing.
+- Prove exact replay still returns the original receipt after constructing the
+  service with a newer schema that rejects the original relation; a new command
+  with that relation is rejected.
 - Implement grant, revoke, replace, purge, role assign/unassign, expected
   revision, and no-op semantics.
 - Make last-owner/guardian protection part of Apply, not a helper calling count.
@@ -74,21 +82,31 @@ service orchestration.
 ## Task AZ3-2.3 — pgx atomic relationship and role mutation repositories
 
 Depends on: AZ3-2.1, AZ3-2.2.
-Touch: pgx repositories, tests, optional events appender seam compile slot.
+Touch: pgx repositories and tests.
 
 Implement:
 
-- Apply inside one transaction. Lock/create the scope anchor, verify expected
-- Run the supplied guard against a transaction-bound decision reader. Lock each
-  authorization scope it reads (or use an equivalently proven serializable
-  strategy) so concurrent revocation of the actor's grant cannot commit between
-  guard allow and mutation.
+- Apply inside one transaction. Create missing scope anchors safely, then read
+  the command state and expected revision.
+- Run the supplied guard against a dependency-tracking decision reader. Record
+  every authorization scope and revision read by the guard. Before mutation,
+  sort the mutation scope and all dependency keys lexically, insert any missing
+  revision-0 anchors in that order, lock every anchor in that order, re-read
+  revisions, and return stale with no domain write if any observed revision
+  changed. A scope observed without an anchor records revision 0; a concurrent
+  first writer therefore becomes a detectable 0→1 change, not a phantom.
+- All v3 mutation paths, including trusted paths, must advance the same scope
+  anchors; raw legacy writes are unavailable to ordinary host code. Prove that
+  an absent scope anchor cannot create a phantom bypass.
+- Bound the guard callback by context; document that it may use only the supplied
+  view. Recovering a guard panic, if supported, rolls back and returns a coarse
+  infrastructure error. Do not keep a transaction open across network or
+  unrelated-store I/O.
 - Use row/scope locking so two last-owner revokes cannot both commit.
-- Make exact replay return its stored receipt without another event or revision.
+- Make exact replay return its stored receipt without another row change or
+  revision bump.
 - Return explicit semantic conflict for a second relation where replacement was
   not requested; implement replacement without a delete/create visibility gap.
-- Provide the dialect-typed optional `AppendTx` seam used in events mode, but do
-  not import the events feature into the core.
 - Map unique/serialization errors into stable sdk/authorization errors.
 
 Verify:
@@ -110,13 +128,15 @@ Implement the pgx contract in libSQL/SQLite without weakening it:
 
 - use the connector's immediate/write-serialized transaction behavior proven by
   auth v3 rather than a deferred read-then-write transaction;
-- run the guard through a transaction-bound reader under that same write
+- run the guard through a dependency-tracking reader under that same write
   transaction, with no callback escape to the outer Service;
+- record the same logical dependency scopes as pgx, validate their revisions in
+  canonical order, and prove parity even though `BEGIN IMMEDIATE` already
+  serializes writers;
 - condition writes on current revision and receipt absence;
 - make loser outcomes deterministic (`stale`, replay, or invariant blocked), not
   raw `SQLITE_BUSY` where the contract promises an application outcome;
-- append an optional event row inside the same transaction; and
-- prove rollback leaves relationship/role, revision, receipt, and event unchanged.
+- prove rollback leaves relationship/role, revision, and receipt unchanged.
 
 Verify:
 
@@ -144,12 +164,13 @@ Implement named sub-runners for:
 - atomic replace with no absent/intermediate state;
 - scoped role revoke with global effective fallback;
 - batch rollback;
-- receipt/revision/event agreement; and
+- rejection of a cross-scope batch before any row/revision/receipt change;
+- receipt/revision agreement, replay metadata, retention-boundary behavior; and
 - context cancellation and infrastructure error mapping.
 
 Run live concurrency cases at least ten times per dialect under `-race`. Inspect
-stored rows for invalid usersets, revision gaps, duplicate receipts, and orphaned
-events.
+stored rows for invalid usersets, revision gaps, duplicate receipts, and scope
+anchors that disagree with row state.
 
 Live environment recipe (the auth v3 AV3-9.8 lessons; do not relearn them):
 
@@ -157,10 +178,10 @@ Live environment recipe (the auth v3 AV3-9.8 lessons; do not relearn them):
   C-collation) and `authv3-libsql` containers with fresh/reset databases per leg;
 - always pass an explicit `-count` on live legs so the test cache cannot replay
   results across database resets; and
-- harness phases must drive every mutation/job to a durable terminal state
-  before stopping runtimes or pools, and wait margins must respect lease/lock
-  TTLs against `-race` slowdown — the auth v3 livedelivery flakes were harness
-  margins, and a repeat here would mask (or fake) a real race defect.
+- harness phases must drive every mutation attempt to a terminal result before
+  teardown, and wait margins must respect lock/retry timing under `-race`
+  slowdown — the auth v3 live flakes were often harness margins, and a repeat
+  here would mask (or fake) a real race defect.
 
 Verify:
 
@@ -186,8 +207,8 @@ Document:
 - queries that find concrete subjects stored where usersets are required,
   non-`member` usersets previously evaluated as member, empty IDs, and relation
   conflicts;
-- migration-source ordering with optional events mode (`authorization` and
-  `events` tables must both exist before the composed store constructs);
+- migration-source ordering for authorization; a future effects packet owns
+  composed authorization/events ordering;
 - no mixed old/new serving while semantics differ; and
 - destructive reset path for example/dev hosts versus data-preserving adopter
   path.
@@ -207,7 +228,7 @@ retain access before deploying v3.
 
 - A store cannot provide atomic Apply/last-owner semantics.
 - A migration guesses an ambiguous userset relation.
-- Mutation replay can bump revision or duplicate an event.
+- Mutation replay can bump revision or change the original domain outcome.
 - Live race evidence is replaced by a hermetic fake.
 
 ## Execution log

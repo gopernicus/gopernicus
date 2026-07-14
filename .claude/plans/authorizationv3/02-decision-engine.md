@@ -17,14 +17,19 @@ Implement:
 
 - Replace the hard-coded `member` expansion with relation-aware traversal driven
   by the exact userset relation declared on the grant and schema.
-- Carry subject relation through direct Check, batch Check, lookup, relation
-  existence, Through targets, descendant lookup, and all projections where it
-  affects identity.
+- Carry stored subject relation through group/userset expansion, direct and
+  batch readers, lookup, relation existence, and every projection where it
+  affects exact tuple identity. Decision callers remain concrete principals.
 - Validate a created tuple against the full allowed `(subject type, relation)`
   pair. Concrete `group` is not accepted where only `group#member` is allowed;
   `group#admin` never matches `group#member`.
-- Decide whether mixed relation paths may recurse across different userset
-  relations; compile the permitted relation graph and make cycles relation-aware.
+- Compile the permitted userset-relation expansion graph and make cycles
+  relation-aware. A userset may itself contain another exact userset where the
+  schema allows it: this is nested userset membership traversal, and it is in
+  scope; v3 defines no userset rewrite operators (union/intersection/exclusion,
+  computed/tuple-to-userset) and no userset-valued decision request. Relations
+  used as navigational `Through` edges reject
+  userset targets and operate only on concrete resource references.
 - Update both SQL CTEs to include relation state in the recursive key so UNION
   de-duplication is cycle-safe without conflating usersets.
 - Add adversarial cases for member/admin separation, missing relation rejection,
@@ -39,8 +44,9 @@ cd features/authorization/stores/turso && go test ./...
 make guard
 ```
 
-Acceptance: the declared userset relation changes authorization outcomes in all
-three implementations and no broader relation can satisfy a narrower one.
+Acceptance: the declared stored userset relation changes authorization outcomes
+in all three implementations, no broader relation can satisfy a narrower one,
+and a decision request cannot supply a userset.
 
 ## Task AZ3-1.2 — immutable compiled schema wiring and deterministic validation
 
@@ -76,8 +82,10 @@ Touch: check engine, lookup engine, reader port queries, all stores, tests.
 
 Implement:
 
-- Add one per-decision budget object shared across nested checks and datastore
-  calls. Charge queries, visited states, targets, results, and batch work.
+- Add one per-decision semantic budget object shared across nested checks.
+  Charge expanded graph states/edges, targets, results, depth, and batch work.
+  Query count is observed separately and may have an adapter-local emergency
+  ceiling, but it is not part of cross-store outcome parity.
 - Use path-local cycle detection for recursive Check and explicit memoization
   only where a completed sub-result is safe to reuse.
 - In Lookup, distinguish active recursion stack from completed memoized results;
@@ -96,8 +104,9 @@ cd features/authorization && go test -race ./... -run 'Budget|Depth|Fanout|Cance
 make guard
 ```
 
-Acceptance: the same budget produces the same allow/deny/error class on memory,
-pgx, and turso; exhaustion never appears as an ordinary denial or complete list.
+Acceptance: the same semantic budget produces the same allow/deny/error class on
+memory, pgx, and turso; exhaustion never appears as an ordinary denial or
+complete list. Adapter query telemetry need not be numerically equal.
 
 ## Task AZ3-1.4 — complete LookupResources and Check/Lookup parity
 
@@ -135,17 +144,21 @@ Touch: role port/service/stores/storetest.
 
 Implement:
 
-- Add effective resource enumeration that includes direct scoped assignments and
-  global assignments that satisfy scoped HasRole.
+- Add `ListEffectiveRoleGrantsByResource` that unions direct scoped assignments
+  with global assignments satisfying scoped `HasRole`. Return explicit
+  provenance (`direct`, `global`, or both) and de-duplicate one subject+role in a
+  deterministic order before pagination; do not rewrite a global assignment as
+  though it were stored at the requested resource scope.
 - Keep direct-scope listing as a clearly named raw method if needed; do not call
   it effective.
 - Apply the same subject/scope/role validation to assign, unassign, HasRole, and
   both listing families.
-- Add a host-supplied role assignment validator/catalog seam. It validates known
-  role names, allowed subject types, and allowed scope shape but does not add role
-  implication or turn roles into the deferred policy kind.
-- Add receipts/tests showing scoped revoke while global remains is not “access
-  removed.”
+- Keep role names opaque in the core. Validate non-empty role/subject fields and
+  exact global-or-fully-scoped shape symmetrically; host/admin policy owns any
+  catalog of known names or allowed assignments.
+- Add receipts/tests showing scoped revoke while the same global role remains as
+  `same_role_grant_remains=true`. Do not claim generic access remains: the host
+  may compose access from other role/ReBAC rules.
 
 Verify:
 

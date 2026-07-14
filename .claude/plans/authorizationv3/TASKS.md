@@ -6,11 +6,11 @@ entry is written.
 
 ## Phase 0 — security foundations
 
-- [ ] AZ3-0.1 — exact subject, userset, decision, and error vocabulary
+- [ ] AZ3-0.1 — exact principal, subject, userset, decision, and error vocabulary
 - [ ] AZ3-0.2 — strict schema compiler and immutable snapshot contract
 - [ ] AZ3-0.3 — evaluation limits and construction matrix
-- [ ] AZ3-0.4 — mutation, scope revision, idempotency, and disposition contract
-- [ ] AZ3-0.5 — actor, guard, audit, and effect-mode contracts
+- [ ] AZ3-0.4 — mutation, scope revision, idempotency, outcome, and replay contract
+- [ ] AZ3-0.5 — actor, guard, SystemMutator, and audit contracts
 
 ## Phase 1 — decision engine correctness
 
@@ -34,33 +34,35 @@ entry is written.
 
 - [ ] AZ3-3.1 — guarded relationship grant/revoke/replace lifecycle
 - [ ] AZ3-3.2 — atomic last-owner/guardian invariants
-- [ ] AZ3-3.3 — guarded role assign/unassign and effective disposition
-- [ ] AZ3-3.4 — trusted-system path and legacy API transition
+- [ ] AZ3-3.3 — guarded role assign/unassign and effective-grant result
+- [ ] AZ3-3.4 — SystemMutator capability and legacy API transition
 - [ ] AZ3-3.5 — mutation policy, retry, stale revision, and audit attempt suite
 
-## Phase 4 — effects and observability
+## Phase 4 — proof host (file 07)
 
-- [ ] AZ3-4.1 — stable authorization change event envelope
-- [ ] AZ3-4.2 — procedural post-commit effect mode
-- [ ] AZ3-4.3 — same-transaction events-outbox mode
-- [ ] AZ3-4.4 — decision/mutation observers, safe logs, and metrics guidance
-- [ ] AZ3-4.5 — construction negatives and real-interaction effects proof
+A defect found during proof reopens the owning implementation phase, never
+closeout; phase 5 does not begin until this phase's gate passes.
 
-## Phase 5 — admin surface and proof host
+- [ ] AZ3-4.1 — auth-cms guarded and SystemMutator composition
+- [ ] AZ3-4.2 — exact-semantics and concurrency proof protocol
 
-- [ ] AZ3-5.1 — optional protected JSON administration surface
-- [ ] AZ3-5.2 — strict HTTP body/origin/identity/error contracts
-- [ ] AZ3-5.3 — schema/check/explain read surface with anti-enumeration gates
-- [ ] AZ3-5.4 — auth-cms guarded mutation composition and step-up
-- [ ] AZ3-5.5 — exact-userset, hierarchy, role, and revoke proof protocol
-- [ ] AZ3-5.6 — procedural/events host variants and negative matrix
+## Phase 5 — documentation and closeout (file 07)
 
-## Phase 6 — documentation and closeout
+- [ ] AZ3-5.1 — final migration parity and execute upgrade runbook
+- [ ] AZ3-5.2 — public README/API/migration documentation
+- [ ] AZ3-5.3 — release and compatibility inventory
+- [ ] AZ3-5.4 — final adversarial and race audit
+- [ ] AZ3-5.5 — implementation-complete hermetic/live gate
+- [ ] AZ3-5.6 — post-implementation reviewer gate
+- [ ] AZ3-5.7 — accepted remediation, reverification, and PR-ready handoff
 
-- [ ] AZ3-6.1 — final migration parity and execute upgrade runbook
-- [ ] AZ3-6.2 — public README/API/migration/effects documentation
-- [ ] AZ3-6.3 — release and compatibility inventory
-- [ ] AZ3-6.4 — final adversarial and race audit
-- [ ] AZ3-6.5 — implementation-complete hermetic/live gate
-- [ ] AZ3-6.6 — post-implementation reviewer gate
-- [ ] AZ3-6.7 — accepted remediation, reverification, and PR-ready handoff
+## Deferred follow-ups — not part of authorization v3 completion
+
+Effects tasks `AZFX-1` through `AZFX-5` live in
+`05-effects-and-observability.md`. Generic admin tasks `AZADM-1` through
+`AZADM-6` live in `06-admin-and-proof-host.md`. They remain intentionally off
+this milestone checklist until separately ratified. AZADM is blocked
+indefinitely: it is unschedulable until a separately ratified authentication
+follow-up packet ships the public `SensitiveMutationProtector` seam; no such
+packet currently exists or is implied, and authorization must never unblock
+itself by importing authentication internals.
