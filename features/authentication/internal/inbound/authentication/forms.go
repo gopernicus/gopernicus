@@ -139,6 +139,13 @@ func formFailure(err error, generic string) (int, string) {
 	if errors.Is(err, authsvc.ErrRateLimited) || errors.Is(err, authsvc.ErrPasswordlessRateLimited) {
 		return http.StatusTooManyRequests, tooManyErrMsg
 	}
+	// A challenge-rail sentinel maps through the SAME §5.8 mapper the JSON arm uses, so
+	// both transports agree on the status for one service error (transport parity). The
+	// form copy stays generic — the machine code never leaks into the user-facing
+	// message.
+	if mapped, ok := challengeErrorFor(err); ok {
+		return mapped.Status, generic
+	}
 	return web.ErrFromDomain(err).Status, generic
 }
 
@@ -233,7 +240,14 @@ func (h *handlers) forgotPasswordForm(w http.ResponseWriter, r *http.Request) {
 	// addresses; a non-nil error is an internal failure. Success and unknown alike land
 	// on the same generic PRG confirmation.
 	if err := h.svc.ForgotPassword(r.Context(), form.Get("email")); err != nil {
-		h.renderError(w, r, http.StatusInternalServerError, "Something went wrong. Please try again.")
+		status := http.StatusInternalServerError
+		if deliveryUnavailable(err) {
+			// The bounded in-process outbox rejected admission (full / shutting down):
+			// an honest 503, never a success redirect after dropping the work. The class
+			// is identical for known and unknown addresses (admission precedes lookup).
+			status = http.StatusServiceUnavailable
+		}
+		h.renderError(w, r, status, "Something went wrong. Please try again.")
 		return
 	}
 	h.prgTo(w, r, "/auth/password/forgot?sent=1")
@@ -251,10 +265,13 @@ func (h *handlers) resetPasswordForm(w http.ResponseWriter, r *http.Request) {
 		status, msg := formFailure(err, resetErrMsg)
 		pc := h.newPageContext(w)
 		pc.Message = msg
-		// The token is fragment-read and never server-rendered; the page's nonced script
-		// re-reads it on re-render.
+		// The initial GET reads the token from the fragment; on this error RE-render the
+		// fragment is already scrubbed, so echo the SUBMITTED token back into the hidden
+		// field so a corrected retry survives (IX-11). It is the same value this POST
+		// carried — no new fragment/query/referrer copy, and the response HTML is not
+		// logged.
 		h.renderForm(w, r, status, pc.CSPNonce, h.views.ResetPassword(ResetPage{
-			PageContext: pc, RedeemPath: "/auth/password/reset",
+			PageContext: pc, RedeemPath: "/auth/password/reset", Token: form.Get("token"),
 		}))
 		return
 	}
@@ -279,6 +296,7 @@ func (h *handlers) passwordlessStartForm(w http.ResponseWriter, r *http.Request)
 		pc.ReturnTo, pc.Message = h.safeReturnTo(form.Get("return_to")), msg
 		h.renderForm(w, r, status, pc.CSPNonce, h.views.PasswordlessStart(PasswordlessStartPage{
 			PageContext: pc, Kind: kind, Identifier: identifier, Method: method,
+			Kinds: h.svc.PasswordlessKinds(),
 		}))
 		return
 	}

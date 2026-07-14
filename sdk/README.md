@@ -27,8 +27,14 @@ The module is LAYERED, and the layers are physical:
   semantics (web, workers, identity, crud, cryptids, validation,
   logging, conversion, slug, async, environment). Foundation packages
   import the ROOT only — the tier is FLAT.
-- **`capabilities/`** — capability ports + first-party defaults (cacher,
-  tracing, email, notify, oauth, filestorage, ratelimiter, events).
+- **`capabilities/`** — behavioral ports + the observable policy that
+  goes with them, pinned by conformance tests (cacher, tracing, email,
+  notify, oauth, filestorage, ratelimiter, events, work). A capability
+  MAY ship a first-party stdlib default (`cacher.Memory`, `email.Console`),
+  or its implementation of record may live in an integration
+  (`oauth` → `integrations/oauth/*`) or a feature
+  (`work` → `features/jobs`) — defaults are optional, not definitional
+  (sdk-work-protocol, 2026-07-13).
   Capabilities import root + foundation and NEVER each other;
   capability×capability composition leaves sdk as a composing
   integration (`integrations/notify/mailer` is the exemplar), and a
@@ -112,6 +118,7 @@ interface).
 | `cacher`, `filestorage` | facility ports — wired defaults `cacher.Memory` (used by every example) and `filestorage.Disk` (used by `examples/cms`; `examples/minimal` leaves blob storage unset); GCS/S3 backends in `integrations/filestorage/{gcs,s3}` |
 | `ratelimiter` | facility port — wired default `ratelimiter.Memory` (D6/phase-2); first real consumer is `features/authentication`'s login-attempt limiting; `Acquire` is the blocking counterpart for workers (waits on `RetryAfter` instead of rejecting — no separate throttler port) |
 | `workers` | facility: worker pool (adaptive polling, coalesced wake channel, middleware, panic recovery, graceful drain) + generic `Runner[T Job]` (claim → hooks → process → complete/fail); first consumer is `features/jobs`' runtime |
+| `work` | the keyed-work submission **protocol** (sdk-work-protocol, 2026-07-13): typed lifecycle `Status` with the frozen seven-value vocabulary (`pending`/`running`/`completed`/`failed`/`dead_letter`/`canceled`/`superseded`; `failed` is NON-terminal — retryable; `Terminal()`/`Known()` predicates), segregated consumer ports `Enqueuer` (idempotent keyed admission), `Replacer` (optional atomic replace/supersede), `StatusReader` (deterministic latest-by-key), opaque `[]byte` payload — NO default implementation (the oauth posture); the implementation of record is `features/jobs`; `worktest` ships the conformance suite. Executor-side (claim/lease/checkpoint/fencing) stays in `foundation/workers` + the jobs domain |
 | `feature` | the host↔feature pluggability contract (`Mount`, `RouteRegistrar`) — see [ARCHITECTURE.md](../ARCHITECTURE.md)'s Features section and the full charter, [features/README.md](../features/README.md) |
 
 ## Not responsible for

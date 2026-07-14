@@ -24,7 +24,7 @@ import (
 
 // jobTables are the feature's tables cleared before each newRepo call so every
 // leaf subtest starts from a clean, isolated store.
-var jobTables = []string{"job_queue", "job_schedules"}
+var jobTables = []string{"job_queue", "job_schedules", "fenced_job_queue"}
 
 // TestConformance_Queue runs the shared queue conformance suite against a live
 // Turso/libSQL database. Each newRepo call opens a connection, applies the
@@ -36,6 +36,23 @@ func TestConformance_Queue(t *testing.T) {
 	storetest.RunQueue(t, func(t *testing.T) job.QueueRepository {
 		db := openAndMigrate(t, url, token)
 		return NewQueueStore(db, WithLease(storetest.Lease))
+	})
+}
+
+// TestConformance_FencedQueue runs the shared fenced/keyed/checkpointed queue
+// conformance suite (job.FencedQueueRepository) against a live Turso/libSQL
+// database. Each newRepo call opens a connection, applies the canonical
+// migrations (including 0003_fenced_job_queue), truncates the jobs tables, and
+// constructs the FencedQueue. The lease is per-claim (the suite passes
+// storetest.Lease to Claim), so the store takes no lease option; the
+// stale-claim/reclaim, checkpoint-crash, and byte-exact non-UTF8 payload cases
+// run with real wall-clock time and a byte-exact BLOB column.
+func TestConformance_FencedQueue(t *testing.T) {
+	url, token := requireTursoEnv(t)
+
+	storetest.RunFencedQueue(t, func(t *testing.T) job.FencedQueueRepository {
+		db := openAndMigrate(t, url, token)
+		return NewFencedQueueStore(db)
 	})
 }
 

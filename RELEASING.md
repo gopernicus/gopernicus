@@ -221,12 +221,26 @@ auth-v3 (the identity milestone, 2026-07-13) reshapes the feature off a single
 email/phone identifiers with explicit login/recovery/notification/primary uses),
 adds `users.auth_revision` (the optimistic-serialization anchor) and session
 authentication-metadata columns, adds the `challenges` / `contact_changes` /
-`authentication_grants` / `delivery_jobs` flow tables, and retires the legacy
+`authentication_grants` flow tables, and retires the legacy
 `verification_codes` / `verification_tokens` rail. This is a **breaking** bump
 for `features/authentication` and BOTH nested store-module tags
 (`features/authentication/stores/{pgx,turso}`): the `Repositories` bundle grows
-identifier/challenge/contact-change/grant/delivery ports, `user.User` loses its
+identifier/challenge/contact-change/grant/credential ports, `user.User` loses its
 email field, and routes/entities change.
+
+The **AV3D delivery-runtime refactor** (2026-07-13, same untagged milestone) folds
+into this cut: it removed authentication's private durable delivery queue, so the
+canonical set is `0001…0013` with **no** delivery table (an earlier v3 cut's
+`delivery_jobs` table was removed). Durable delivery is now the generic **jobs**
+feature reached through `Config.DeliveryDispatcher`; the bounded ephemeral path is
+`in_process`. Public removals: `Repositories.DeliveryJobs`, `domain/deliveryjob`,
+`Service.RunDeliveryWorker`, and the delivery-durability errors. Rename:
+`Config.DeliveryWorkerAcknowledged` → `DeliveryJobsAcknowledged`. Additions:
+`Config.DeliveryMode`/`DeliveryDispatcher`/`InProcessDelivery`/`DeliveryEventsEmitter`/
+`DeliveryEphemeralAcknowledged`, `Service.RunDelivery`/`DeliveryJobRuntime`, and the
+generic-jobs fenced surface (`Repositories.FencedQueue`, `jobs.FencedRuntime`,
+migration `0003_fenced_job_queue`). Behavior: `DeliveryStatus.Attempt` now reads 0.
+The host-side upgrade is the **Auth delivery-runtime upgrade runbook** below.
 
 Per the greenfield-migrations rule (2026-07-12) the canonical migration set
 ships only the FINAL schema and carries **no** upgrade/evolution file — a live
@@ -281,6 +295,75 @@ unaffected. (`sdk/foundation/cryptids`'s HS256 default and `sdk/foundation/web`'
 `TrustProxies`/`ClientIP` were **not** touched by auth-v3 — HS256 belongs to the
 JWT-refresh cut and `TrustProxies` to middleware-consolidation, each keyed above.)
 
+### sdk/capabilities/work — next tag: NEW module (first tag)
+
+The SWP promotion (sdk-work-protocol, 2026-07-13) added `sdk/capabilities/work` —
+the **keyed-work submission protocol**: a vocabulary + narrow-port contract with
+**no default implementation** (the `oauth` posture). It has **no prior tag**, so it
+is a **new module, first tag**. It ships:
+
+- `work.Status` — the frozen seven-value lifecycle vocabulary
+  (`pending`/`running`/`completed`/`failed`/`dead_letter`/`canceled`/`superseded`;
+  `failed` is NON-terminal/retryable), with `Terminal()`/`Known()` predicates,
+  pinned byte-for-byte to the persisted job-status strings by the package's own
+  literal test;
+- segregated consumer ports `Enqueuer` (idempotent keyed admission), `Replacer`
+  (optional atomic replace/supersede), and `StatusReader` (deterministic
+  latest-by-key, lifecycle-only — never payload/attempt/secret);
+- an **opaque `[]byte`** payload (deliberately NOT `json.RawMessage`: some producers
+  submit ciphertext, so the protocol must not imply JSON); and
+- `worktest`, the conformance suite an implementation runs.
+
+The implementation of record is `features/jobs` (below). **Payload snapshot
+ownership (SWP-3 / IX-23).** The implementation of record deep-copies the payload
+with a central `bytes.Clone` at the protocol boundary, so a keyed unit's admitted
+bytes are a store-independent snapshot: a later caller mutation of its slice cannot
+alter admitted work, for every backing store, by construction. `worktest` pins this
+under `-race`; a new backend inherits the semantic from the protocol, not from its
+own storage layer.
+
+### features/jobs + both store modules — next tag: SWP fenced delivery surface (minor floor)
+
+auth-v3/AV3D (2026-07-13) made `features/jobs` the **implementation of record** for
+`sdk/capabilities/work` and added the opt-in lease-fenced delivery surface. All
+changes are **additive / source-compatible**, so the floor is a **minor** bump (no
+existing exported signature was removed or changed incompatibly), with two adopter
+notes:
+
+- **New sdk dependency floor.** `features/jobs` now imports `sdk/capabilities/work`;
+  a host pins sdk at or past the `work`-carrying tag.
+- **`job.Status` is now a source-compatible alias** `type Status = work.Status` (was
+  a distinct `type Status string`). The persisted strings are byte-identical, and an
+  alias is assignable both ways, so existing `job.Status` code compiles unchanged;
+  `job.StatusCanceled`/`job.StatusSuperseded` are new members produced only by the
+  fenced queue.
+- **Additive surface:** `Repositories.FencedQueue` (nil = the fenced surface is
+  off), the keyed-work primitives (`EnqueueOnce`/`Replace`/`LatestStatusByKey` over
+  opaque `[]byte`, `Checkpoint`/`PurgeTerminal`), `jobs.FencedRuntime`, and the
+  opt-in migration `0003_fenced_job_queue` (both dialects). The existing
+  unfenced `Queue`/cron surface, its migrations, and every current consumer are
+  unaffected. A host may now wire `FencedQueue` alone (delivery-only), `Queue` alone
+  (existing cron host), or both; `ErrQueueRequired`'s message widened accordingly.
+
+Downstream upgrade example — a consuming feature depends on the sdk `work` ports,
+never on `features/jobs` (constitution rule 6):
+
+```go
+// BEFORE (pre-SWP): a consumer hand-declared its own narrow enqueuer port.
+type enqueuer interface {
+    EnqueueOnce(ctx context.Context, kind, logicalKey string, payload []byte) (string, error)
+}
+
+// AFTER (SWP): depend on the canonical sdk ports; jobs.Service satisfies them.
+import "github.com/gopernicus/gopernicus/sdk/capabilities/work"
+
+type Deps struct {
+    Enqueuer work.Enqueuer     // jobs.Service.EnqueueOnce
+    Replacer work.Replacer     // jobs.Service.Replace     (optional)
+    Status   work.StatusReader // jobs.Service.LatestStatusByKey
+}
+```
+
 ### Auth v3 tag requirements + production checklist
 
 **Per-module tag requirements for the auth-v3 cut** (semver floors; no tag is cut
@@ -288,9 +371,11 @@ until the release workflow authorizes it):
 
 | Module | Floor | Why |
 |---|---|---|
-| `features/authentication` | **major / breaking** | `Repositories` grows identifier/challenge/contact-change/grant/credential/delivery ports; `user.User` loses its email field; `Config` and routes/entities change; the legacy `verification_*` rail is retired |
-| `features/authentication/stores/pgx` | **major / breaking** | implements the re-keyed `Repositories` over the greenfield `0001…0014` set |
+| `features/authentication` | **major / breaking** | `Repositories` grows identifier/challenge/contact-change/grant/credential ports (NO delivery port — durable delivery is the generic jobs feature via `Config.DeliveryDispatcher`); `user.User` loses its email field; `Config` and routes/entities change; the legacy `verification_*` rail is retired; the AV3D delivery removals/renames above apply |
+| `features/authentication/stores/pgx` | **major / breaking** | implements the re-keyed `Repositories` over the greenfield `0001…0013` set (no `delivery_jobs`) |
 | `features/authentication/stores/turso` | **major / breaking** | same, libSQL dialect |
+| `sdk/capabilities/work` | **new module — first tag** | the keyed-work submission protocol (vocabulary + ports, no default); `features/jobs` is its implementation of record |
+| `features/jobs` + both store modules | **minor** | implements `sdk/capabilities/work` (new sdk dep); additive fenced delivery surface: `Repositories.FencedQueue`, keyed-work primitives over opaque `[]byte`, `jobs.FencedRuntime`, `PurgeTerminal`, migration `0003_fenced_job_queue`; `job.Status` is now a source-compatible alias of `work.Status` (existing consumers unaffected) |
 | `features/authentication/views/templ` | **new module — first tag** | bundled default HTML views (additive; opt-in) |
 | `integrations/datastores/turso` | **patch (behavior fix)** | `BEGIN IMMEDIATE` write-intent transactions (required by a turso host adopting v3) |
 | `sdk/capabilities/{email,notify}` | **minor** | additive production-safety capability metadata |
@@ -306,20 +391,69 @@ dialects (AV3-9.2) and **not** applied to any real host.
 **Production readiness checklist** (fail-closed gates a host MUST satisfy before
 `RuntimeMode` production — detail in `features/authentication/README.md`):
 
-- **Five distinct secrets, each rotatable.** Session/JWT signer, OTP HMAC pepper
-  (with a key ring for rotation), delivery-job payload encryption key, magic-link /
-  reset-token material, and CSRF material are separate secrets — never reuse one
-  value for two roles. The OTP HMAC pepper is host key-ring code, not a service.
-- **Production rejects development transports and incomplete wiring.** A
-  `DevelopmentOnly` / metadata-less email or notify transport (the `console`
-  senders), a memory rate limiter, and missing security wiring (CSRF/origin,
-  trusted-proxy/`ClientIP`, `PublicAuthBaseURL`, `AllowedOrigins`) all fail
-  construction in production mode. `console` senders are development-only.
-- **The delivery worker is host-lifecycle-owned.** The host must run
-  `Service.RunDeliveryWorker` (start on boot, stop on shutdown) or enumeration-safe
-  verification/recovery/notification email + OTP delivery never drains. Delivery is
-  at-least-once (idempotency-keyed; consumers tolerate duplicates), payloads are
-  encrypted at rest, and terminal jobs are purged on a host schedule.
+- **Five distinct host-supplied secrets — never reuse one value for two roles.**
+  The real key material the host wires into `Config` (proof-host env names in
+  parentheses) and each key's ACTUAL rotation story:
+  1. **Access-JWT signer** (`Config.TokenSigner`, `AUTH_JWT_SECRET`). Signs the
+     access JWT (required — `ErrTokenSignerRequired`). **Single-key, disruptive:**
+     rotating it invalidates every live access JWT, forcing re-authentication; a
+     multi-instance deployment MUST share one value (a per-instance key flaps auth).
+     Use a rolling deploy and expect existing bearer sessions to re-auth.
+  2. **Challenge HMAC pepper** (`Config.ChallengeProtector`, `AUTH_CHALLENGE_PEPPER`).
+     Protects OTP short codes AND digests magic-link / password-reset tokens — there
+     is NO separate magic-link/reset secret; those ride this pepper. It is the ONE
+     key with **continuity-supporting rotation**: the bundled `HMACChallengeProtector`
+     takes an `HMACKeyRing` (active key ID + retained older keys), so a rotation
+     verified by `TestChallengeProtectorKeyRotation` keeps pending codes/links under a
+     retained old key valid; removing an old key from the ring invalidates challenges
+     still pending under it (the user restarts the flow).
+  3. **Delivery payload AES key** (`Config.DeliveryEncrypter`, `AUTH_DELIVERY_ENCRYPTER_KEY`,
+     AES-256-GCM). Seals the delivery-outbox envelope. **Single-key, disruptive:**
+     rotating it only affects payloads sealed after the change, so **drain in-flight
+     delivery work before retiring the old key** (an in-flight payload sealed under a
+     removed key dead-letters and the user restarts the flow).
+  4. **Provider-token AES key** (`Config.TokenEncrypter`, `AUTH_TOKEN_ENCRYPTER_KEY`,
+     AES-256-GCM; optional — nil = provider OAuth tokens are not persisted). Encrypts
+     stored OAuth access/refresh tokens at rest. **Single-key, disruptive:** stored
+     tokens sealed under the old key become undecryptable on rotation (**stored-token
+     loss** — affected users re-link the OAuth provider).
+  5. **Identifier HMAC key** (`Config.IdentifierKeyer`, `AUTH_IDENTIFIER_KEY`; required
+     in production — `ErrIdentifierKeyerRequired`). Derives PII-free rate-limit /
+     idempotency keys. **Single-key**, but rotation is the least disruptive: derived
+     limiter/idempotency keys change, so rate-limit buckets and enqueue-idempotency
+     dedup reset once (transient; no session or credential loss). A multi-instance
+     deployment MUST share one value so one identifier maps to one bucket.
+
+  There is deliberately **no separate CSRF secret**: the double-submit CSRF token is a
+  fresh per-render random value set as the `auth_csrf` cookie and compared in constant
+  time against the `csrf_token` field — no host key material to manage or rotate.
+- **Production rejects development transports and unacknowledged/incomplete wiring.**
+  In `RuntimeMode` production, `NewService` fails construction on: a `DevelopmentOnly`
+  / metadata-less email or notify transport (the `console` senders), a memory rate
+  limiter, a missing `IdentifierKeyer`, a delivery runtime whose mode is unacknowledged
+  (`DeliveryJobsAcknowledged` / `DeliveryEphemeralAcknowledged`), and — when the
+  passwordless/link surface is wired — a missing or non-HTTPS `PublicAuthBaseURL`.
+  `console` senders are development-only. **What `NewService` does NOT gate (host
+  deployment checklist, not a construction guarantee):** `AllowedOrigins` may be empty
+  at construction (an empty allowlist simply rejects every cross-origin browser POST at
+  request time — the host must populate it for browser clients), and **trusted-proxy /
+  `ClientIP` wiring is router-level** (`sdk/foundation/web` `TrustProxies`, wired by the
+  host) and therefore **unobservable by `NewService`** — it cannot and does not reject a
+  host that forgot it. Both are deployment-checklist items the host verifies, not
+  construction-time failures.
+- **The delivery runtime is host-lifecycle-owned, and its mode is explicit.**
+  `Config.DeliveryMode` is required with no default (never inferred from a non-nil
+  collaborator). The recommended production posture is `"jobs"`: wire
+  `Config.DeliveryDispatcher` over the generic **jobs** feature, run the generic
+  `jobs.FencedRuntime` (start on boot, stop on shutdown), and set
+  `DeliveryJobsAcknowledged: true` (production rejects an unacknowledged jobs
+  runtime and a `jobs`-mode config with no dispatcher). `"in_process"` is a bounded
+  EPHEMERAL pool the host drives with `Service.RunDelivery(ctx)`; it does NOT
+  survive a crash and has no cross-instance coordination, so production requires the
+  explicit `DeliveryEphemeralAcknowledged: true`. In either mode the dispatcher is
+  the only send path, delivery is **at-least-once** (not exactly-once — consumers
+  tolerate duplicates; a resend cannot retract an in-flight provider call), payloads
+  are always encrypted at rest, and terminal work is purged under bounded retention.
 - **Migrations are host-owned and applied pre-boot** — the greenfield canonical set
   for a new host, or this runbook's backfill-first procedure for a live v2 host
   (never blind-copy the canonical `0001_users.sql` onto a populated v2 `users`).
@@ -558,6 +692,17 @@ Additive. `users.auth_revision` is the optimistic-serialization anchor; the
 session metadata columns back the recent-primary-login shortcut; the four flow
 tables need no backfill (they start empty).
 
+> **`delivery_jobs` is obsolete at/after the AV3D delivery refactor
+> (2026-07-13).** The `delivery_jobs` CREATE below reflects the auth-v3 schema as
+> shipped through AV3D-5.0; the retained DDL preserves the validation record. Auth
+> no longer owns a delivery table — durable delivery is the generic **jobs**
+> feature's schema and `in_process` delivery is ephemeral (see "Migrations are
+> host-owned" in `features/authentication/README.md`). A host adopting auth at or
+> past the delivery refactor **skips the `delivery_jobs` CREATE here** and wires
+> delivery per the **Auth delivery-runtime upgrade runbook** below; a host that
+> already created `delivery_jobs` under an earlier v3 cut drains and drops it via
+> that same runbook.
+
 pgx:
 
 ```sql
@@ -725,8 +870,10 @@ the app is fully functional at this point.
 Run this only after the v3 binary has been confirmed healthy **and** the
 recovery flows that replaced the verification rail are verified end to end
 (registration email verification and forgot/reset password both complete on the
-v3 challenge rail — the `challenges` / `delivery_jobs` tables — and the Step-4
-parity checks still hold). The legacy `verification_codes` / `verification_tokens`
+v3 challenge rail — the `challenges` table, with delivery drained through the
+runtime the host wired: `delivery_jobs` for a host still on a pre-refactor cut, or
+the generic jobs / `in_process` runtime past it — and the Step-4 parity checks
+still hold). The legacy `verification_codes` / `verification_tokens`
 tables are inert to the v3 binary; drop them only once that cutover succeeds.
 This step is the point of no return for a v2-binary rollback.
 
@@ -842,6 +989,214 @@ password-only, and an un-normalized duplicate-collision pair.
   **0 rows** written. **PASS (expected failure observed).**
 
 **Do not apply this runbook to segovia or another real host in this milestone.**
+
+## Auth delivery-runtime upgrade runbook (bespoke auth outbox → generic jobs / in_process)
+
+A **host-owned** procedure for a database already running auth-v3 as shipped
+through the AV3D-5.0 cut — i.e. one that scaffolded and populated the bespoke
+`delivery_jobs` outbox table — that is upgrading to auth at or past the AV3D
+delivery refactor (2026-07-13). After the refactor auth owns **no** delivery
+table: durable delivery is the generic **jobs** feature's `fenced_job_queue`
+(host-owned in the jobs migration tree) and `in_process` delivery is a bounded
+ephemeral pool with no table. `Repositories.DeliveryJobs`, the private
+claim/poll/purge worker, and `Service.RunDeliveryWorker` are gone; the send path
+is now `Config.DeliveryMode` + a host-wired `Config.DeliveryDispatcher` (jobs
+mode) or `Service.RunDelivery(ctx)` (`in_process`).
+
+Per the standing greenfield-migrations rule (2026-07-12) this is **not** a
+canonical migration — the canonical auth set ships the final schema only
+(`0001–0013`, no `delivery_jobs`). This runbook is host-side prose; every DDL
+step below runs from the host's **own** migration tree, pre-boot, exactly like
+every other host-owned migration.
+
+**A host with an EMPTY or absent `delivery_jobs` table has nothing to drain** —
+skip Steps 1–2/4, apply the new host wiring (Step 3), drop the empty table
+(Step 5), and start the chosen runtime (Step 6).
+
+**Tooling never decrypts a payload.** Every `delivery_jobs.payload` (and every
+`fenced_job_queue.payload`) is an opaque, AES-GCM-sealed `command.Envelope`
+(`AUTH_DELIVERY_ENCRYPTER_KEY`) carrying the rendered secret and destination. No
+step here — count or drop — opens that ciphertext. Only the running auth delivery
+processor, holding the encrypter key, ever unseals it: during this upgrade that is
+the OLD binary's worker as it drains.
+
+The drain is the **single supported path**. A prior draft offered an opaque
+export/re-enqueue copy of the bespoke rows into the generic queue; that path is
+unsafe and has been removed — the legacy ciphertext encodes the removed bespoke
+envelope shape (not the generic queue's versioned command), the legacy rail kinds
+(`email`/`phone`) are not the registered `authentication.delivery` job kind the
+generic runtime dispatches on, the copy never terminalized its source rows (so the
+zero-source-count check could never pass honestly), and the libSQL variant minted
+`datetime('now')` strings the turso connector's fixed-width `Time.Scan` cannot
+parse. An opaque copy cannot work in either dialect. Drain-then-drop is the only
+supported procedure off the bespoke outbox.
+
+### Preconditions
+
+- A confirmed, restorable **backup** taken before Step 1.
+- The OLD binary retains its existing **`AUTH_DELIVERY_ENCRYPTER_KEY`** through the
+  drain: it is the only process that unseals `delivery_jobs` payloads and must hold
+  the key that sealed them. No payload crosses queues (the drain is in place), so no
+  cross-queue key portability is required; the NEW binary seals its own newly
+  admitted work under its own key.
+- **Do not rotate the delivery key mid-drain** — the old worker cannot unseal
+  in-flight rows that were sealed under the previous key.
+
+### Deploy ordering (single cutover — do NOT roll)
+
+Old and new binaries must not both serve the same database across the cutover:
+the old binary claims `delivery_jobs`, the new binary has no code that reads it.
+Quiesce the old binary's admission, drain, upgrade, then start the new runtime.
+
+### Step 1 — Stop old delivery workers and quiesce admission
+
+Stop the old binary's delivery worker loop (`Service.RunDeliveryWorker`) — or
+stop the old binary outright — and quiesce admission so no NEW `delivery_jobs`
+rows are written (drain traffic to the start endpoints, or take the maintenance
+window). No new opaque command lands in the bespoke table from this point.
+
+### Step 2 — Drain the pending encrypted commands
+
+Keep the OLD binary's delivery worker running (admission still quiesced from
+Step 1) until it processes every non-terminal row: `state = 'pending'` rows are
+sent or retried to their terminal state (`succeeded`/`failed`/`canceled`), and
+terminally undeliverable rows discard their bound challenge best-effort. A leased,
+in-flight row is still `state = 'pending'` (the lease is `lease_id`/`leased_until`,
+not a separate state), so it counts as non-terminal until the worker terminalizes
+it. When the pending count reaches zero (Step 4), upgrade.
+
+The drain preserves at-least-once semantics and never decrypts a payload in
+tooling: only the old worker, holding the encrypter key, unseals a row, and it
+does so on the normal send path.
+
+- *Tradeoffs.* Requires the old binary + worker to keep running through the
+  drain; the drain is bounded by the old queue's retry/backoff horizon (a row in
+  long backoff delays completion; you may let it dead-letter rather than wait).
+  No encryption handling, no key coupling, no logical-key bookkeeping, no payload
+  movement. A large dead-letter/backoff backlog only means a longer drain window,
+  not a different path — there is no supported alternative to the drain.
+
+### Step 3 — Apply the generic jobs schema and new host wiring
+
+- **jobs mode (recommended production posture).** Scaffold the generic jobs
+  migration tree into the host (`jobsstore.ExportMigrations` from
+  `features/jobs/stores/{pgx,turso}`; canonical set `0001_job_queue`,
+  `0002_job_schedules`, `0003_fenced_job_queue` — identical filename set across
+  both dialects) and apply it pre-boot. Wire `Config.DeliveryMode = "jobs"`, a
+  `Config.DeliveryDispatcher` backed by the generic jobs feature, and set the
+  `DeliveryJobsAcknowledged` wiring assertion (production requires it —
+  `ErrDeliveryJobsUnacknowledged`). A composition adapter (never a feature core)
+  bridges auth's `Service.DeliveryJobRuntime()` onto `jobs.Runtime`.
+- **in_process mode.** No jobs schema is needed (the bounded pool owns no table).
+  Set `Config.DeliveryMode = "in_process"`, keep `Config.DeliveryEncrypter`, and
+  set `DeliveryEphemeralAcknowledged` (production requires the crash-loss
+  acknowledgment — `ErrDeliveryEphemeralUnacknowledged`). Accepted work does NOT
+  survive a restart, so the bespoke outbox must be fully drained (Step 2) before
+  cutover — there is no supported path that moves a durable backlog into an
+  ephemeral queue.
+
+`Register` starts no runtime in either mode; the host runs the selected runtime
+in Step 6.
+
+### Step 4 — Verify no active auth delivery rows remain
+
+Before dropping the table, confirm the bespoke outbox holds no live work. The
+active-work count MUST be zero:
+
+pgx / SQLite / libSQL:
+
+```sql
+-- Active (unprocessed) bespoke delivery rows — MUST be 0 before Step 5.
+SELECT count(*) AS active_delivery_jobs FROM delivery_jobs WHERE state = 'pending';
+```
+
+The Step-2 drain drives this to 0: once every `state = 'pending'` row (including
+leased, in-flight rows) has reached a terminal state, the count is exact and no
+row is lost or duplicated (terminal rows are retained with `terminal_at` set until
+Step 5 drops the table). A non-zero active count **stops the upgrade** — finish the
+drain first; never drop a table with live encrypted work in it.
+
+### Step 5 — Drop the obsolete `delivery_jobs` table (host-owned)
+
+Once Step 4 shows zero active rows, remove the bespoke table from the host's own
+migration tree. This is a host-owned destructive migration, not a canonical one.
+
+pgx:
+
+```sql
+DROP TABLE IF EXISTS delivery_jobs;
+```
+
+SQLite / libSQL (`DROP TABLE` also drops the table's indexes):
+
+```sql
+DROP TABLE IF EXISTS delivery_jobs;
+```
+
+This is the point of no return for reading any residual bespoke row; take it only
+after Step 4 is clean (zero active rows).
+
+### Step 6 — Start the generic jobs runtime or the bounded runtime
+
+- **jobs mode:** start the generic jobs runtime the host wired in Step 3
+  (`go rt.Run(ctx)` for the composed `jobs.Runtime`); cancel the ctx to drain.
+  Newly admitted commands now process on the durable fenced queue.
+- **in_process mode:** start the bounded pool with `go authSvc.RunDelivery(ctx)`
+  for the process lifetime; cancel the ctx for a bounded shutdown drain.
+
+Confirm end to end that a fresh start endpoint (register verification,
+forgot-password, passwordless start) delivers OFF the request path on the new
+runtime before reopening admission.
+
+### Forward-only recovery and the no-decrypt / no-blind-copy warnings
+
+- **Forward-only.** There is no down-migration. If the upgrade must be abandoned
+  before Step 5, redeploy the old binary (it still reads `delivery_jobs`); after
+  Step 5 recovery requires the Step-1 backup.
+- **Never decrypt a payload in tooling.** The count and drop steps treat
+  `payload` as opaque bytes. Only the running processor with the encrypter key
+  unseals it — during this upgrade that is the old worker draining the outbox.
+- **Never blind-copy a canonical migration.** The canonical auth set is
+  greenfield/final-shape and carries no `delivery_jobs`; this host-owned
+  drain-then-drop procedure is the only supported path off the bespoke outbox.
+- **`in_process` is ephemeral.** Accepted work does not survive a restart, so
+  drain the bespoke outbox before cutover; there is no supported copy of a durable
+  backlog into an ephemeral queue.
+
+This delivery-runtime runbook has **not** been applied to a real application host
+(no auth module tag has been cut — `git tag -l` is empty, so the greenfield
+rewrite that removed `delivery_jobs` from the canonical set is allowed with no
+append-only constraint).
+
+### AV3-9.8 drain-path fixture verification (both dialects)
+
+The drain-only path's Step-4 verification query and source-row accounting were
+proven on disposable fixtures on both dialects (IX-01 remediation). Each fixture
+seeds legacy-shape `delivery_jobs` rows in mixed states, runs the Step-4 count,
+terminalizes the remaining non-terminal rows exactly as a drained worker would,
+and re-runs the count — proving it reaches 0 with no row lost or duplicated.
+
+- **pgx** — disposable database `dr_drain_fixture` (`TEMPLATE template0
+  LC_COLLATE 'C' LC_CTYPE 'C'`), legacy `delivery_jobs` created from the shipped
+  `0014` shape. Seed: 5 rows — 2 `pending` (one unleased, one leased/in-flight),
+  1 `succeeded`, 1 `failed`, 1 `canceled`. Step-4 count → `active_delivery_jobs =
+  2` (the leased in-flight row counts as pending — exact). Drained-worker
+  terminalize (`UPDATE … SET state='succeeded', terminal_at=now(), lease_id='',
+  leased_until=NULL WHERE state='pending'`) → `UPDATE 2`. Step-4 re-count → `0`.
+  Total accounting: `SELECT count(*)` = 5 before and after (no row lost or
+  duplicated); terminal breakdown afterward `succeeded=3, failed=1, canceled=1`.
+  Fixture database dropped afterward.
+- **turso/libSQL** — live server, isolated `dr_`-prefixed fixture table
+  `dr_delivery_jobs` created from the shipped turso `0014` shape (fixed-width TEXT
+  timestamps). Same 5-row mixed-state seed via `POST /v2/pipeline`. Step-4 count →
+  `2`. Terminalize (`… SET state='succeeded', terminal_at=<fixed-width ISO>,
+  leased_until=NULL WHERE state='pending'`) → 2 rows affected. Step-4 re-count →
+  `0`. Total accounting: 5 rows before and after; terminal breakdown `succeeded=3,
+  failed=1, canceled=1`. All `dr_`-prefixed fixture tables dropped afterward; the
+  standing conformance schema was untouched.
+
+Both container databases were left running; no canonical/conformance table was
+modified.
 
 ## What this repo is not doing (yet)
 

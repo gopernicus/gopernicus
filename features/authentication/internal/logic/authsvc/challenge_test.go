@@ -279,8 +279,6 @@ func newChallengeHarness(t *testing.T, prot *fakeProtector) *challengeHarness {
 		Challenges:     ch,
 		Protector:      prot,
 		Hasher:         &fakeHasher{},
-		Mailer:         &recordingMailer{},
-		MailFrom:       "noreply@example.com",
 		Limiter:        ratelimiter.NewMemory(),
 		SecurityEvents: events,
 		TokenSigner:    newFakeSigner(),
@@ -664,7 +662,6 @@ func TestChallengeSubsystemOff(t *testing.T) {
 	svc := NewService(Deps{
 		Users:       newFakeUsers(),
 		Hasher:      &fakeHasher{},
-		Mailer:      &recordingMailer{},
 		Limiter:     ratelimiter.NewMemory(),
 		TokenSigner: newFakeSigner(),
 	})

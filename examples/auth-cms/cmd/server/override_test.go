@@ -70,6 +70,10 @@ func TestEmailLayerAppOverrideWins(t *testing.T) {
 	}
 	cap := &captureSender{}
 	cfg.Mailer = cap // capture the rendered verification email instead of logging it
+	// Drive delivery with the self-contained bounded in-process runtime so this test
+	// needs no generic-jobs composition — the branded template render is what is under
+	// test, not the transport.
+	cfg.DeliveryMode = auth.DeliveryModeInProcess
 
 	svc, err := auth.NewService(authmem.New().Repositories(), cfg)
 	if err != nil {
@@ -79,10 +83,10 @@ func TestEmailLayerAppOverrideWins(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// The outbox is the only send path, so run the worker to drain the verification
-	// job registration enqueues.
+	// The outbox is the only send path, so run the delivery runtime to drain the
+	// verification job registration enqueues.
 	workerDone := make(chan error, 1)
-	go func() { workerDone <- svc.RunDeliveryWorker(ctx) }()
+	go func() { workerDone <- svc.RunDelivery(ctx) }()
 
 	if _, err := svc.RegisterUser(ctx, "brand@example.com", "correct-horse-battery-staple", "Brand User"); err != nil {
 		t.Fatalf("RegisterUser: %v", err)

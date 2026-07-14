@@ -34,11 +34,14 @@
 // host-owned POST /outbox-demo append through an example-local in-memory outbox
 // (internal/outboxmem) and a host-driven events.Poller on an sdk/foundation/workers pool:
 // outbox -> poll -> emit -> SSE, id: = the durable outbox EventID. The shutdown
-// order is HTTP server -> poller pool -> bus.Close (see run's tail comment).
+// order is HTTP server -> delivery runtime -> terminal-purge scheduler -> poller pool
+// -> bus.Close (see run's tail comment); HTTP and the delivery runtime are supervised
+// as one lifecycle, so an unexpected delivery-runtime exit drives the same drain.
 package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -48,7 +51,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authjobs"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/deliveryhealth"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authpages"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/memstore"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/outboxmem"
@@ -60,6 +65,8 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
 	cmstempl "github.com/gopernicus/gopernicus/features/cms/views/templ"
 	eventsfeature "github.com/gopernicus/gopernicus/features/events"
+	"github.com/gopernicus/gopernicus/features/jobs"
+	jobsmem "github.com/gopernicus/gopernicus/features/jobs/memstore"
 	"github.com/gopernicus/gopernicus/integrations/cryptids/bcrypt"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
@@ -104,6 +111,45 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// drives). The Store is kept so the debug route can read the audit rail.
 	authStore := authmem.New()
 	authRepos := authStore.Repositories()
+
+	// Delivery mode selection (authv3-delivery-refactor AV3D-5.3). DELIVERY_MODE selects
+	// the host's outbound-delivery composition: the generic-jobs-mode wiring (default) or the
+	// bounded in-process mode. On THIS proof host BOTH are non-durable — jobs mode backs its
+	// fenced queue with jobsmem.NewFencedQueue (in-memory), so a real durable posture is a
+	// store swap a production host makes (features/jobs/stores/{pgx,turso}). The bounded mode
+	// is never hidden — it announces its crash-loss + per-process posture LOUDLY at startup
+	// (see the WARN below where the config is flipped).
+	mode := deliveryMode()
+
+	// Host operational health for delivery (AV3D-5.3): a secret-free, bounded, host-COMPOSED
+	// surface (internal/deliveryhealth). It observes the runtime lifecycle (host-owned), the
+	// secret-free delivery lifecycle events (wrapping Config.DeliveryEventsEmitter), jobs-mode
+	// admissions (wrapping Config.DeliveryDispatcher), and the in_process queue depth (the
+	// auth Service's InProcessQueueDepth read). It carries counters/gauges/enums only — never
+	// a recipient, payload, or logical key. The host mounts it at GET /healthz/delivery.
+	health := deliveryhealth.New(string(mode))
+
+	// Outbound delivery on the generic jobs feature (authv3-delivery-refactor
+	// AV3D-3.1), wired ONLY in jobs mode: authentication submits encrypted
+	// delivery commands to a generic jobs fenced queue, and the host runs the jobs
+	// FencedRuntime that invokes auth's delivery processor. The in-memory fenced queue
+	// (jobsmem.NewFencedQueue) is the zero-infra stand-in, so jobs mode is NON-DURABLE here —
+	// queued work is lost on restart with no cross-instance coordination; a durable posture is
+	// a pgx/turso FencedQueue store swap a real host makes. The composition adapter
+	// (internal/authjobs) is the ONE place that imports BOTH features; neither feature core
+	// imports the other (constitution rule 6).
+	var (
+		deliveryJobs       *jobs.Service
+		deliveryDispatcher *authjobs.Dispatcher
+	)
+	if mode == auth.DeliveryModeJobs {
+		dj, err := jobs.NewService(jobs.Repositories{FencedQueue: jobsmem.NewFencedQueue()}, jobs.Config{Logger: log})
+		if err != nil {
+			return err
+		}
+		deliveryJobs = dj
+		deliveryDispatcher = authjobs.NewDispatcher(dj)
+	}
 
 	// Host-owned router + middleware. Both features and the host demo routes mount
 	// onto this.
@@ -178,6 +224,34 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	// Apply the selected delivery mode to the auth config. buildAuthConfig returns the
+	// jobs-mode posture (in-memory fenced queue on this host); DELIVERY_MODE=in_process flips
+	// it to the bounded EPHEMERAL pool here — and announces that posture LOUDLY. Neither mode
+	// is durable on this proof host (both use in-memory stores).
+	switch mode {
+	case auth.DeliveryModeInProcess:
+		authCfg.DeliveryMode = auth.DeliveryModeInProcess
+		authCfg.DeliveryJobsAcknowledged = false
+		authCfg.DeliveryEphemeralAcknowledged = true
+		authCfg.DeliveryDispatcher = nil // in_process owns its bounded pool; no dispatcher
+		log.WarnContext(ctx, "DELIVERY_MODE=in_process: EPHEMERAL bounded delivery selected — "+
+			"accepted in-flight work is LOST on crash or restart, there is NO cross-instance "+
+			"coordination, and running multiple instances de-duplicates on NEITHER (a user may "+
+			"receive duplicate messages). DELIVERY_MODE=jobs on this proof host is ALSO in-memory "+
+			"(non-durable); a durable posture requires a pgx/turso FencedQueue store, not this demo.",
+			"delivery_mode", "in_process")
+	default:
+		// Route delivery through the generic-jobs dispatcher built above (AV3D-3.1), wrapped
+		// by the health admission counter so the operational surface can report backlog. The
+		// base config already selects DeliveryMode "jobs" + the runtime acknowledgment.
+		authCfg.DeliveryDispatcher = health.Dispatcher(deliveryDispatcher)
+	}
+	// Publish the optional, secret-free delivery lifecycle events (delivered, skipped,
+	// retried, dead_lettered, purged) onto the shared bus (AV3D-3.4) THROUGH the health
+	// counter, which classifies each bounded transition and forwards to the bus. Observation
+	// is best-effort: a dropped or failed event never changes delivery state, and a forward
+	// failure surfaces on the health endpoint as observer_failures.
+	authCfg.DeliveryEventsEmitter = health.Emitter(bus)
 
 	// authSvc is the auth feature's driving surface (FS2): its RequireUser method
 	// value is the middleware cms gates its admin routes on, and RequirePrincipal/
@@ -190,6 +264,50 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 	if err := authSvc.Register(mount); err != nil {
 		return err
+	}
+
+	// In the bounded in_process mode the health surface reads the live queue depth from the
+	// auth Service (a secret-free counts-only seam) so it can report backlog/saturation.
+	if mode == auth.DeliveryModeInProcess {
+		health.SetDepthSource(authSvc.InProcessQueueDepth)
+	}
+
+	// The delivery processor is fully attached now (its account resolver is this built
+	// authSvc). In jobs mode, ONLY NOW read the registered job kind/handler seam and build
+	// the jobs FencedRuntime over it (AV3D-3.1) — so no handler can run against a half-built
+	// auth Service. In in_process mode the host runs authSvc.RunDelivery instead. The runtime
+	// is built here but STARTED explicitly by the host, below.
+	var deliveryFenced *jobs.FencedRuntime
+	// deliveryPurge is the jobs-mode host-owned terminal-purge pass (IX-10). In in_process
+	// mode it stays nil: that mode's queue is ephemeral and its latest-by-key status map is
+	// already self-bounding (a finite max-entry count + TTL), so nothing accumulates to purge.
+	var deliveryPurge func(context.Context) (int, error)
+	var deliveryPurgeInterval time.Duration
+	if mode == auth.DeliveryModeJobs {
+		deliveryRuntime, ok := authSvc.DeliveryJobRuntime()
+		if !ok {
+			return fmt.Errorf("auth delivery job runtime unavailable: jobs-mode dispatcher not wired")
+		}
+		df, err := jobs.NewFencedRuntime(deliveryJobs, authjobs.FencedRuntimeConfig(deliveryRuntime,
+			func(c *jobs.FencedRuntimeConfig) {
+				c.Logger = log
+				c.PollInterval = time.Second
+				// Provider timeout safely inside the claim lease (AV3D-3.4): a stuck send is
+				// cancelled well before the 30s default lease lapses and a second worker could
+				// reclaim the job. NewFencedRuntime rejects a ProcessTimeout >= LeaseFor.
+				c.ProcessTimeout = 20 * time.Second
+			}))
+		if err != nil {
+			return err
+		}
+		deliveryFenced = df
+		// Bind the bounded terminal-purge pass over the SAME jobs Service. Each pass removes
+		// at most Batch terminal delivery rows older than the retention window and emits the
+		// purged lifecycle observation (which the health surface counts). The host owns the
+		// schedule/lifecycle below; the feature purges nothing on its own.
+		purgeCfg := deliveryPurgeConfigFromEnv(log)
+		deliveryPurge = newDeliveryPurge(deliveryJobs, deliveryRuntime, purgeCfg, time.Now)
+		deliveryPurgeInterval = purgeCfg.Interval
 	}
 
 	if err := cms.Register(mount, cmsRepos, cms.Config{
@@ -315,25 +433,73 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// probe can't log in.
 	router.Handle(http.MethodGet, "/healthz", healthzHandler())
 
-	// The durable delivery worker (design §6.1.1) drains the auth outbox off the
-	// request path — the host owns its lifecycle (the feature starts no goroutine).
-	// It runs on its OWN Background-derived context (never the parent ctx) so
-	// shutdown stops it AFTER HTTP has drained, mirroring the poller order below.
+	// Host-local delivery operational health (AV3D-5.3): a secret-free, bounded status
+	// surface distinguishing runtime not-started/running, backlog/saturation, provider retry
+	// + dead-letter activity, and observer emit failures. Counters/gauges/enums only — no
+	// recipient, payload, or logical key. Unauthenticated like /healthz (an operator probe
+	// cannot log in); it exposes nothing sensitive.
+	router.Handle(http.MethodGet, "/healthz/delivery", health.Handler())
+
+	// The selected delivery runtime drains the auth delivery queue off the request path —
+	// the host owns its lifecycle (the feature starts no goroutine). Jobs mode runs the
+	// generic-jobs FencedRuntime (AV3D-3.1); in_process mode runs authSvc.RunDelivery (the
+	// bounded ephemeral pool, AV3D-4.1). It runs on its OWN Background-derived context (never
+	// the parent ctx) so shutdown stops it AFTER HTTP has drained, mirroring the poller order
+	// below. MarkStarted/MarkStopped bracket the goroutine so the health surface reports
+	// not-started vs running.
+	var deliveryRun func(context.Context) error
+	switch mode {
+	case auth.DeliveryModeInProcess:
+		deliveryRun = authSvc.RunDelivery
+	default:
+		deliveryRun = deliveryFenced.Run
+	}
+
+	// IX-02: supervise HTTP + delivery as ONE lifecycle. web.Run blocks on hostCtx — a
+	// cancelable child of the incoming signal ctx — so BOTH a signal AND an UNEXPECTED
+	// delivery-runtime exit drive the SAME ordered drain below. The delivery runtime still
+	// runs on its own Background-derived deliveryCtx (canceled AFTER HTTP drains, like the
+	// poller). If deliveryRun returns while deliveryCtx is NOT canceled that is an unexpected
+	// exit (error OR nil): the host must not keep admitting work against a dead delivery
+	// runtime, so the supervisor cancels hostCtx (web.Run drains) and records the cause so run
+	// returns nonzero. This mechanism is chosen over a health-503-only reaction because this
+	// file's shutdown idiom already funnels every stop through web.Run's context — reusing it
+	// keeps ONE documented drain order for signal-stop and delivery-failure-stop alike (the
+	// health surface still flips to not_started via the supervisor's MarkStopped).
+	hostCtx, cancelHost := context.WithCancel(ctx)
+	defer cancelHost()
 	deliveryCtx, cancelDelivery := context.WithCancel(context.Background())
-	deliveryDone := make(chan struct{})
-	go func() {
-		defer close(deliveryDone)
-		if err := authSvc.RunDeliveryWorker(deliveryCtx); err != nil {
-			log.ErrorContext(deliveryCtx, "delivery worker stopped with error", "error", err)
-		}
-	}()
+	supervisor := superviseDelivery(deliveryCtx, cancelHost, deliveryRun, health, log)
+
+	// Host-owned scheduled terminal purge (IX-10), jobs mode only. Without it the durable
+	// delivery rows and their encrypted metadata grow without bound despite the documented
+	// retention posture. It runs on its OWN Background-derived context (never the parent ctx)
+	// so shutdown stops it AFTER HTTP drains, in the documented order below — exactly like the
+	// delivery runtime and the poller. A purge-pass error is logged and the loop continues; a
+	// purge is never on the request path.
+	var (
+		cancelPurge context.CancelFunc
+		purgeDone   chan struct{}
+	)
+	if deliveryPurge != nil {
+		var purgeCtx context.Context
+		purgeCtx, cancelPurge = context.WithCancel(context.Background())
+		purgeDone = make(chan struct{})
+		go func() {
+			defer close(purgeDone)
+			runDeliveryPurgeLoop(purgeCtx, deliveryPurgeInterval, deliveryPurge, log)
+		}()
+		log.InfoContext(ctx, "delivery terminal purge scheduler ENABLED (jobs mode)",
+			"interval", deliveryPurgeInterval)
+	}
 
 	// Shutdown order (design §7, phase 5 — with the poller, corrected context idiom
 	// P3):
-	//  1. web.Run blocks until ctx is canceled, then drains in-flight HTTP on its
+	//  1. web.Run blocks until hostCtx is canceled (by the signal ctx OR by the delivery
+	//     supervisor on an unexpected runtime exit), then drains in-flight HTTP on its
 	//     OWN fresh Background+ShutdownTimeout context (run.go), closing every open
-	//     SSE stream via its request context. By the time web.Run returns, the
-	//     parent ctx is already canceled.
+	//     SSE stream via its request context. By the time web.Run returns, hostCtx is
+	//     already canceled.
 	//  2. THEN stop the poller pool. It runs on its OWN Background-derived context
 	//     (never the parent ctx — a canceled parent would tear it down before HTTP
 	//     finished draining), so cancel that context now and wait, bounded, for the
@@ -342,17 +508,33 @@ func run(ctx context.Context, log *slog.Logger) error {
 	//     would make Memory.Close drain nothing). Closing after the poller stops is
 	//     why the poller's closed-bus edge (Poll emitting into a closed bus) never
 	//     happens.
-	runErr := web.Run(ctx, router, serverConfig(), log)
+	runErr := web.Run(hostCtx, router, serverConfig(), log)
 
-	// Stop the delivery worker after HTTP drains (its own context, like the poller).
-	log.InfoContext(context.Background(), "stopping delivery worker")
+	// Stop the delivery runtime after HTTP drains (its own context, like the poller).
+	log.InfoContext(context.Background(), "stopping delivery runtime")
 	cancelDelivery()
-	select {
-	case <-deliveryDone:
-	case <-time.After(5 * time.Second):
-		log.WarnContext(context.Background(), "delivery worker did not stop within 5s")
+	if !supervisor.wait(5 * time.Second) {
+		log.WarnContext(context.Background(), "delivery runtime did not stop within 5s")
 	}
-	log.InfoContext(context.Background(), "delivery worker stopped")
+	log.InfoContext(context.Background(), "delivery runtime stopped")
+	// If the delivery runtime exited unexpectedly (it drove this shutdown, not a signal),
+	// surface its cause so run returns nonzero even though web.Run drained cleanly.
+	if runErr == nil {
+		runErr = supervisor.exitErr()
+	}
+
+	// Stop the terminal-purge scheduler after the delivery runtime (its own context, like the
+	// poller). Purging after delivery has stopped means no new terminal rows arrive mid-purge.
+	if cancelPurge != nil {
+		log.InfoContext(context.Background(), "stopping delivery terminal purge scheduler")
+		cancelPurge()
+		select {
+		case <-purgeDone:
+		case <-time.After(5 * time.Second):
+			log.WarnContext(context.Background(), "delivery terminal purge scheduler did not stop within 5s")
+		}
+		log.InfoContext(context.Background(), "delivery terminal purge scheduler stopped")
+	}
 
 	if cancelPool != nil {
 		log.InfoContext(context.Background(), "stopping outbox poller pool")
@@ -377,6 +559,19 @@ func run(ctx context.Context, log *slog.Logger) error {
 // (EVENTS_OUTBOX=memory). Default (unset/other) keeps the direct-emit rail.
 func durableOutbox() bool {
 	return environment.GetEnvOrDefault("EVENTS_OUTBOX", "") == "memory"
+}
+
+// deliveryMode selects the host's outbound-delivery composition from DELIVERY_MODE
+// (authv3-delivery-refactor AV3D-5.3). The default (unset or "jobs") is the generic-jobs-mode
+// wiring — non-durable on this proof host (in-memory fenced queue). "in_process" selects the
+// bounded EPHEMERAL pool, whose crash-loss + per-process posture run() announces LOUDLY at
+// startup. Any other value falls back to jobs — fail-safe: the host never silently selects a
+// different mode. (Neither mode is durable here; durability is a pgx/turso store swap.)
+func deliveryMode() auth.DeliveryMode {
+	if environment.GetEnvOrDefault("DELIVERY_MODE", "") == "in_process" {
+		return auth.DeliveryModeInProcess
+	}
+	return auth.DeliveryModeJobs
 }
 
 // trustedProxyCount is the number of trusted reverse proxies in front of the
@@ -521,8 +716,9 @@ func seed(ctx context.Context, repos cms.Repositories) error {
 //     outbox + link-capable PublicAuthBaseURL wired here;
 //   - the magic-link base URL (design §6.4), built ONLY from configuration — request
 //     Host/forwarded headers never participate;
-//   - DeliveryWorkerAcknowledged: the outbox is the only send path (AV3-4.3), so the
-//     feature is told run() actually runs RunDeliveryWorker (it does, below); and
+//   - DeliveryMode "jobs" + DeliveryJobsAcknowledged: the queue is the only send path
+//     (AV3-4.3), so the feature is told run() actually runs the generic-jobs delivery
+//     runtime (jobs.FencedRuntime, below); and
 //   - every development secret (JWT signer, challenge pepper, delivery + identifier +
 //     token-encryption keys) from a DISTINCT env var, never a committed constant, and
 //     never printing key material (see demo.go builders).
@@ -532,8 +728,8 @@ func seed(ctx context.Context, repos cms.Repositories) error {
 func buildAuthConfig(log *slog.Logger, granter auth.Granter) (auth.Config, error) {
 	// The REQUIRED access-JWT signer, optional provider-token encrypter, REQUIRED
 	// challenge protector (authmem wires Challenges), REQUIRED delivery-outbox
-	// encrypter (authmem wires DeliveryJobs), and identifier keyer — each from its
-	// own distinct env var (demo.go).
+	// encrypter (jobs mode seals every command envelope), and identifier keyer — each
+	// from its own distinct env var (demo.go).
 	signer, err := buildTokenSigner(log)
 	if err != nil {
 		return auth.Config{}, err
@@ -561,9 +757,16 @@ func buildAuthConfig(log *slog.Logger, granter auth.Granter) (auth.Config, error
 		MailFrom:             "auth@localhost",
 		RequireVerifiedEmail: true,
 		RuntimeMode:          auth.RuntimeModeDevelopment,
-		ChallengeProtector:   challengeProtector,
-		DeliveryEncrypter:    deliveryEncrypter,
-		IdentifierKeyer:      identifierKeyer,
+		// Delivery on the generic jobs runtime (authv3-delivery-refactor
+		// AV3D-0.1). run() wires the generic-jobs dispatcher (authCfg.DeliveryDispatcher)
+		// over an in-memory fenced queue for this demo, so it is NON-DURABLE here (a real
+		// durable posture is a pgx/turso FencedQueue store swap); the production-negative
+		// matrix proves the SAME wiring flipped to production fails closed on an
+		// unacknowledged runtime.
+		DeliveryMode:       auth.DeliveryModeJobs,
+		ChallengeProtector: challengeProtector,
+		DeliveryEncrypter:  deliveryEncrypter,
+		IdentifierKeyer:    identifierKeyer,
 		// The optional HTML surface (design §9.2): this host's REAL partial override
 		// (authpages.New) embeds the bundled templ Views and overrides only the Login
 		// page with Gopernicus-CMS branding — presentation changes only, the JSON API
@@ -584,16 +787,17 @@ func buildAuthConfig(log *slog.Logger, granter auth.Granter) (auth.Config, error
 		Passwordless: passwordlessKinds(),
 		// The magic-link / redemption-page base URL (design §6.4), config-only.
 		PublicAuthBaseURL: publicAuthBaseURL(),
-		// The outbox is the only send path; affirm run() runs the worker (design §8).
-		DeliveryWorkerAcknowledged: true,
-		Providers:                  []oauth.Provider{fakeOAuthProvider{}},
-		OAuthCallbackBase:          callbackBase(),
-		RedirectAllowlist:          []string{"/"},
-		TokenEncrypter:             encrypter,
-		TokenSigner:                signer,
-		AccessTokenTTL:             accessTokenTTL(),
-		RefreshTTL:                 refreshTTL(),
-		Granter:                    granter,
+		// The queue is the only send path; affirm run() runs the generic-jobs delivery
+		// runtime (jobs.FencedRuntime) (authv3-delivery-refactor AV3D-0.1).
+		DeliveryJobsAcknowledged: true,
+		Providers:                []oauth.Provider{fakeOAuthProvider{}},
+		OAuthCallbackBase:        callbackBase(),
+		RedirectAllowlist:        []string{"/"},
+		TokenEncrypter:           encrypter,
+		TokenSigner:              signer,
+		AccessTokenTTL:           accessTokenTTL(),
+		RefreshTTL:               refreshTTL(),
+		Granter:                  granter,
 		// The phone-kind console notifier makes phone a supported delivery kind
 		// (deny-by-absence; the dev stand-in for SMS — the token lands in the log).
 		Notifiers: []notify.Notifier{notify.NewConsole(identity.KindPhone, log)},

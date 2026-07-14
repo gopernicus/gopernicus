@@ -117,6 +117,10 @@ type authService interface {
 	// is the enumeration-safe asynchronous start: it never resolves the account or
 	// calls a provider on the request path.
 	PasswordlessEnabled() bool
+	// PasswordlessKinds lists the enabled kinds in deterministic order; the HTML
+	// start page renders the kind select/hidden-field from it so the form POST
+	// always carries the kind the service validates.
+	PasswordlessKinds() []string
 	StartPasswordless(ctx context.Context, kind, identifier, method string) error
 	// VerifyPasswordless completes the OTP rail: it re-resolves the current identifier,
 	// consumes the login_otp bound to it, and mints a session. Every failure is one
@@ -316,10 +320,24 @@ func (h *handlers) verifyJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.Verify(r.Context(), req.Email, req.Code); err != nil {
-		web.RespondJSONDomainError(w, err)
+		// The challenge rail's stable sentinels surface here; respondDomainError emits
+		// the named §5.8 codes (challenge_expired/invalid/too_many_attempts) and falls
+		// back to the generic sdk-kind mapping for anything else.
+		respondDomainError(w, err)
 		return
 	}
 	web.RespondJSONOK(w, map[string]string{"status": "verified"})
+}
+
+// deliveryUnavailable reports whether err is a bounded in-process delivery admission
+// rejection — the queue is at capacity or the runtime is shutting down
+// (delivery.ErrDeliveryCapacity / delivery.ErrDeliveryClosed). Both mean the work was
+// NOT accepted, so the honest response is 503 Service Unavailable, never a
+// 202-accepted lie after dropping work. The classification is by error KIND, identical
+// for a known and an unknown identifier (admission precedes any account lookup), so it
+// introduces no enumeration signal.
+func deliveryUnavailable(err error) bool {
+	return errors.Is(err, delivery.ErrDeliveryCapacity) || errors.Is(err, delivery.ErrDeliveryClosed)
 }
 
 // forgotPasswordJSON is the JSON transport for POST /auth/password/forgot
@@ -330,10 +348,17 @@ func (h *handlers) forgotPasswordJSON(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	// The service returns nil for unknown emails; a non-nil error here is an
-	// internal failure (store/mail), which is a 500 for registered and
-	// unregistered emails alike — so the response still cannot enumerate.
+	// The service returns nil for unknown emails; a non-nil error here is a failure
+	// class that is identical for registered and unregistered emails alike (the error
+	// KIND never depends on existence), so the response still cannot enumerate. A
+	// delivery admission rejection (bounded queue full / runtime shutting down) is an
+	// honest 503 — never a 202 accepted after dropping the work; every other failure is
+	// a 500.
 	if err := h.svc.ForgotPassword(r.Context(), req.Email); err != nil {
+		if deliveryUnavailable(err) {
+			web.RespondJSONError(w, web.ErrUnavailable("could not process request"))
+			return
+		}
 		web.RespondJSONError(w, web.ErrInternal("could not process request"))
 		return
 	}

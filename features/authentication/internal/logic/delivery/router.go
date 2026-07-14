@@ -72,6 +72,10 @@ var (
 	// email is always-on via the required Mailer (§6.1), so the router cannot exist
 	// without it.
 	ErrMailerRequired = fmt.Errorf("delivery: email sender is required: %w", sdk.ErrInvalidInput)
+	// ErrRouterRequired is returned by NewJobsProcessor when no Router is supplied: the
+	// delivery processor renders and sends through the kind-aware router, so it cannot
+	// exist without it.
+	ErrRouterRequired = fmt.Errorf("delivery: router is required: %w", sdk.ErrInvalidInput)
 	// ErrUnknownPurpose is returned by Render for a purpose with no registered
 	// template.
 	ErrUnknownPurpose = fmt.Errorf("delivery: unknown purpose: %w", sdk.ErrInvalidInput)

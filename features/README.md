@@ -342,6 +342,30 @@ ports; the graduation bar is unchanged. `cms`'s `CurrentUser` port above stays i
 admission policy's three tests (plurality, narrow + stable, real shared
 policy) all hold.
 
+**Amended 2026-07-13 (sdk-work-protocol): the ratified-platform-protocol
+graduation path.** Consumer-declared ports remain the DEFAULT — this
+amendment adds an exception, it does not weaken the rule. A shape may
+graduate into sdk only as a **ratified platform protocol**, meeting ALL five
+criteria:
+
+1. a real producer and a real consumer in separate modules,
+2. semantics meant to be canonical across gopernicus,
+3. no feature aggregate or persistence model in the contract,
+4. narrow enough for independent implementations,
+5. a conformance suite can describe observable behavior.
+
+The five criteria are CONJUNCTIVE WITH — never a substitute for —
+`sdk/README.md`'s admission policy and ARCHITECTURE.md's five-point
+sdk-vs-logic test: a graduation must pass all three gates, so this path can
+never become an admission back door. The first graduation under this path is
+the keyed-work submission protocol, `sdk/capabilities/work`, implemented by
+`features/jobs` as the implementation of record; its lifecycle vocabulary is
+the frozen seven-value status set (`pending`/`running`/`completed`/`failed`/
+`dead_letter`/`canceled`/`superseded` — `failed` is non-terminal), adopted
+verbatim from the persisted jobs strings. Authorization's check/decision
+vocabulary explicitly **fails criterion 2 today** and stays consumer-declared
+(deferred; trigger: authorizationv3 settles its semantics).
+
 ## 6. C3 — Mount evolution policy
 
 `feature.Mount` (`sdk/feature/feature.go`) grows **only** by adding narrow,

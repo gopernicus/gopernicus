@@ -37,7 +37,6 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/challenge"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/contactchange"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/credential"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/deliveryjob"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/identifier"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/invitation"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthaccount"
@@ -54,6 +53,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/internal/redirect"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
+	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
@@ -211,6 +211,82 @@ type CompromisedPasswordChecker interface {
 	IsCompromised(ctx context.Context, password string) (bool, error)
 }
 
+// DeliveryDispatcher is the transport-neutral outbound-delivery seam for
+// DeliveryMode "jobs" (authv3-delivery-refactor AV3D-3.1). A host composes an
+// adapter over the generic jobs feature and wires it here (Config.DeliveryDispatcher)
+// so authentication runs its encrypted delivery work on durable generic jobs while
+// the authentication core imports NO sibling feature (constitution rule 6): every
+// method is STDLIB-TYPED, so the adapter — which lives in a composition boundary that
+// imports both features — satisfies it structurally.
+//
+// payload is the opaque sealed command.Envelope the queue stores and never
+// interprets; kind and purpose are the secret-free routing metadata; logicalKey is
+// the PII-free receipt key that makes a duplicate Submit idempotent and lets Replace
+// supersede exactly the prior active generation. LatestStatus returns a generic job
+// lifecycle string; the feature normalizes it into the stable, secret-free
+// DeliveryStatus projection. Submit admits work under logicalKey exactly once; Replace
+// supersedes every active generation and admits a fresh one.
+//
+// Replace fences a superseded worker's checkpoint and completion (both lease-fenced,
+// so a stale claim conflicts and cannot clobber the fresh generation), but it CANNOT
+// retract a provider call already in flight: a superseded worker that has already
+// checkpointed and begun its send delivers the old proof at-least-once and only then
+// fails to record success. This is the unavoidable in-flight race — delivery is
+// at-least-once, not exactly-once. The freshly issued challenge REPLACES the old proof
+// (a new challenge for the same purpose supersedes the prior one), so the stale
+// delivery is harmless, and status always reflects the latest generation.
+type DeliveryDispatcher interface {
+	Submit(ctx context.Context, kind, purpose, logicalKey string, payload []byte) (executionID string, err error)
+	Replace(ctx context.Context, kind, purpose, logicalKey string, payload []byte) (executionID string, err error)
+	LatestStatus(ctx context.Context, logicalKey string) (state string, err error)
+}
+
+// DeliveryJobKind is the single generic-jobs kind an authentication delivery command
+// is submitted under in DeliveryMode "jobs": one kind, handled by the one
+// transport-neutral delivery processor, regardless of the message rail (email/SMS) —
+// the rail and purpose travel inside the sealed envelope, not as the queue's routing
+// kind. A composition adapter registers DeliveryJobRuntime().Handle under this kind.
+const DeliveryJobKind = delivery.JobKind
+
+// DeliveryClaim is one claimed delivery job a jobs-mode transport hands the
+// authentication processor (AV3D-3.1). It is stdlib-typed so a composition adapter
+// builds it from a generic job without the authentication core importing the jobs
+// feature. Payload is the sealed command envelope; Attempt is the number of process
+// attempts already spent; Checkpoint persists a freshly rendered sealed payload under
+// the current claim fence before any provider send.
+type DeliveryClaim struct {
+	// ExecutionID is the opaque unit-of-work ID (never a recipient or the logical key),
+	// used only for the best-effort lifecycle observation the transport emits.
+	ExecutionID string
+	Payload     []byte
+	Attempt     int
+	Checkpoint  func(ctx context.Context, sealed []byte) error
+}
+
+// DeliveryJobRuntime is the narrow, stdlib-typed seam a composition adapter registers
+// on the generic jobs runtime for DeliveryMode "jobs" (AV3D-3.1). Kind is the job kind
+// (DeliveryJobKind); Handle runs the delivery processor over one claim (returning nil
+// for a completed/skipped outcome, a plain secret-free error for a transient retry, and
+// a permanent-classified error — DeliveryErrorPermanent reports true — for an immediate
+// dead-letter); Discard is the per-kind terminal hook the runtime invokes AFTER it
+// records a dead-letter, voiding the undeliverable challenge. Purged is the batch hook
+// a host calls after driving the generic terminal purge, so the optional lifecycle
+// observer emits a purged event. Service.DeliveryJobRuntime returns it only when the
+// jobs-mode processor is wired.
+type DeliveryJobRuntime struct {
+	Kind    string
+	Handle  func(ctx context.Context, claim DeliveryClaim) error
+	Discard func(ctx context.Context, executionID string, payload []byte) error
+	Purged  func(ctx context.Context, count int)
+}
+
+// DeliveryErrorPermanent reports whether a DeliveryJobRuntime.Handle error carries the
+// permanent disposition — the signal a jobs-mode composition adapter uses to route the
+// failure onto the generic runtime's IMMEDIATE dead-letter path rather than a bounded
+// retry (authv3-delivery-refactor AV3D-3.4). A plain (transient) handle error reports
+// false and is retried with capped exponential backoff.
+func DeliveryErrorPermanent(err error) bool { return delivery.HandleErrorPermanent(err) }
+
 // Repositories is the set of outbound ports the feature needs. A store adapter
 // (e.g. features/authentication/stores/turso) or a host fills it; the feature stays
 // dialect-blind. Passwords is split from Users on purpose — credential material
@@ -281,12 +357,6 @@ type Repositories struct {
 	// The slot is frozen here (AV3-0.4); it becomes REQUIRED when the credential
 	// suite is enabled (phase 6). Nil is tolerated until then.
 	CredentialMutations credential.MutationRepository
-	// DeliveryJobs backs the durable, enumeration-safe outbound outbox (design
-	// §6.1.1): atomic enqueue-idempotency, due-job claim with lease expiry,
-	// at-least-once completion, resend replacement, and bounded terminal purge. The
-	// slot is frozen here (AV3-0.6); it becomes REQUIRED when the delivery worker is
-	// wired (phase 4). Nil is tolerated until then.
-	DeliveryJobs deliveryjob.Repository
 }
 
 // CookieConfig is the session-cookie policy. Zero values are safe: an empty Name
@@ -301,6 +371,52 @@ type CookieConfig struct {
 	Domain string
 	Secure bool
 	MaxAge int
+}
+
+// InProcessDeliveryConfig tunes the bounded, EPHEMERAL in-process delivery runtime
+// (DeliveryMode "in_process", authv3-delivery-refactor AV3D-4.5). Every knob is
+// NIL-SAFE: a ZERO value selects the package default, so the zero InProcessDeliveryConfig
+// is a valid, fully-defaulted configuration. A NEGATIVE bound (or a StatusMaxEntries
+// smaller than QueueCapacity) fails LOUDLY at construction with a typed error wrapping
+// sdk.ErrInvalidInput — an invalid bound is never silently coerced to a default. The
+// whole struct is meaningful ONLY for DeliveryMode "in_process".
+//
+// MULTI-INSTANCE WARNING: these bounds are PER PROCESS. The in-process runtime keeps its
+// queue, its fixed worker pool, its submit-once de-duplication, its replace/generation
+// arbiter, and its latest-by-key status entirely in one process's memory. Two instances
+// of the host do NOT share any of it: the same logical delivery admitted on two
+// instances is de-duplicated on NEITHER, so BOTH can render and BOTH can send — a user
+// may receive two messages. There is no cross-instance coordination and no durability;
+// accepted, in-flight work is lost on a crash or restart. For a multi-instance
+// deployment use DeliveryMode "jobs" (durable, cross-instance de-duplicated).
+type InProcessDeliveryConfig struct {
+	// Workers is the FIXED worker-pool size (never one goroutine per request); 0 selects
+	// the package default. Negative → ErrInProcessWorkersInvalid.
+	Workers int
+	// QueueCapacity is the FINITE admission-queue depth; 0 selects the package default.
+	// Negative → ErrInProcessCapacityInvalid.
+	QueueCapacity int
+	// AdmissionDeadline bounds how long an enqueue waits for a free slot before returning
+	// a typed capacity error; 0 selects the package default. Negative →
+	// ErrInProcessAdmissionDeadlineInvalid.
+	AdmissionDeadline time.Duration
+	// ShutdownDeadline bounds how long RunDelivery waits for in-flight workers to drain
+	// after the host cancels its context; 0 selects the package default. Negative →
+	// ErrInProcessShutdownDeadlineInvalid.
+	ShutdownDeadline time.Duration
+	// MaxAttempts caps process-local delivery attempts before a transient failure becomes
+	// a terminal dead-letter; 0 selects the package default. Negative →
+	// ErrInProcessMaxAttemptsInvalid.
+	MaxAttempts int
+	// StatusMaxEntries bounds the latest-by-key status map so retention never grows with
+	// process lifetime; 0 selects the package default. It must be at least QueueCapacity
+	// (a queued generation is never evicted): a smaller value →
+	// ErrInProcessStatusRetentionTooSmall. Negative → ErrInProcessStatusMaxEntriesInvalid.
+	StatusMaxEntries int
+	// StatusTTL bounds how long a terminal latest-by-key status is retained before it
+	// reads as unknown; 0 selects the package default. Negative →
+	// ErrInProcessStatusTTLInvalid.
+	StatusTTL time.Duration
 }
 
 // Config carries host-provided collaborators. The Hasher and Mailer are
@@ -352,6 +468,18 @@ type Config struct {
 	// design §6.3); "development" warns instead.
 	RuntimeMode RuntimeMode `env:"AUTH_RUNTIME_MODE"`
 
+	// DeliveryMode is the REQUIRED explicit selection of the outbound-delivery execution
+	// model (authv3-delivery-refactor AV3D-0.1). It has no default: empty →
+	// ErrDeliveryModeRequired, unknown → ErrDeliveryModeInvalid, so construction never
+	// infers a mode from a non-nil collaborator. "jobs" runs delivery on the durable
+	// generic jobs runtime (requires Config.DeliveryDispatcher + DeliveryEncrypter;
+	// production requires DeliveryJobsAcknowledged); "in_process" runs the bounded,
+	// EPHEMERAL in-process pool (production requires DeliveryEphemeralAcknowledged);
+	// "off" runs no delivery runtime (rejected when a delivery dispatcher is wired or
+	// passwordless is enabled). Register starts no worker in any mode — the host owns
+	// the runtime lifecycle.
+	DeliveryMode DeliveryMode `env:"AUTH_DELIVERY_MODE"`
+
 	// ChallengeProtector protects short codes (HMAC pepper) and digests tokens
 	// (auth v3 §3.3). The slot is frozen here; it becomes REQUIRED when the
 	// challenge subsystem is enabled (phase 3, ErrChallengeProtectorRequired).
@@ -378,15 +506,51 @@ type Config struct {
 	// ErrDeliveryEncrypterRequired); bundled cryptids.AESGCM satisfies it with a
 	// distinct key.
 	DeliveryEncrypter cryptids.Encrypter
-	// DeliveryWorkerAcknowledged affirms that the host runs RunDeliveryWorker in its
-	// process lifecycle (auth v3 §8). The outbox is the ONLY send path (AV3-4.3), so
-	// a wired outbox whose worker never runs silently swallows every verification,
-	// reset, and magic-link message. The feature cannot observe the host lifecycle,
-	// so production REQUIRES this explicit acknowledgment once DeliveryJobs is wired
-	// (ErrDeliveryWorkerUnacknowledged) rather than failing open on a stalled outbox.
-	// Development tolerates the zero value (a test or manual drain may run the
-	// worker). It is a wiring assertion set in the composition root, not an env knob.
-	DeliveryWorkerAcknowledged bool
+	// DeliveryDispatcher is the generic-jobs delivery transport for DeliveryMode
+	// "jobs" (authv3-delivery-refactor AV3D-3.1). It is the delivery queue: producers
+	// submit sealed command envelopes through it and the host runs the generic jobs
+	// runtime that invokes DeliveryJobRuntime().Handle. A jobs-mode host wires this
+	// stdlib-typed seam, keeping the authentication core free of any jobs import.
+	// REQUIRED for DeliveryMode "jobs" (ErrDeliveryQueueRequired); requires
+	// DeliveryEncrypter (the payload is always sealed) and, in production,
+	// DeliveryJobsAcknowledged.
+	DeliveryDispatcher DeliveryDispatcher
+	// DeliveryEventsEmitter is the OPTIONAL, secret-free delivery lifecycle observer's
+	// event rail for DeliveryMode "jobs" (authv3-delivery-refactor AV3D-3.4). When set,
+	// the jobs-mode transport emits a bounded lifecycle event (delivered, skipped,
+	// retried, dead_lettered, purged) per transition onto this emitter. Emission is
+	// strictly best-effort and observation-only: it is never on the path that records
+	// delivery state, so a nil emitter, an emit error, or a panic never loses, retries,
+	// duplicates, or fails accepted delivery work. Leave nil to run delivery with no
+	// observation. It is meaningful only for DeliveryMode "jobs".
+	DeliveryEventsEmitter sdkevents.Emitter
+	// DeliveryJobsAcknowledged affirms that the host runs the durable jobs delivery
+	// runtime in its process lifecycle (authv3-delivery-refactor AV3D-0.1). It is
+	// meaningful only for DeliveryMode "jobs". The queue is the ONLY send path, so a
+	// jobs-mode host that enqueues without running the runtime silently swallows every
+	// verification, reset, and magic-link message. The feature cannot observe the host
+	// lifecycle, so production REQUIRES this explicit acknowledgment
+	// (ErrDeliveryJobsUnacknowledged) rather than failing open on a stalled queue.
+	// Development tolerates the zero value (a test or manual drain may run the runtime).
+	// It is a wiring assertion set in the composition root, not an env knob.
+	DeliveryJobsAcknowledged bool
+	// DeliveryEphemeralAcknowledged affirms that the host accepts the crash-loss
+	// guarantee of DeliveryMode "in_process" (authv3-delivery-refactor AV3D-0.1). The
+	// in-process pool is process-local: accepted, in-flight delivery work is lost on a
+	// crash. The feature cannot make an ephemeral send path durable, so production
+	// REFUSES in_process without this explicit acknowledgment
+	// (ErrDeliveryEphemeralUnacknowledged) — the recommended production posture is
+	// "jobs". Development tolerates the zero value. It is a wiring assertion set in the
+	// composition root, not an env knob.
+	DeliveryEphemeralAcknowledged bool
+	// InProcessDelivery tunes the bounded, EPHEMERAL in-process delivery runtime
+	// (authv3-delivery-refactor AV3D-4.5). Meaningful ONLY for DeliveryMode
+	// "in_process"; the zero value is a valid, fully-defaulted configuration. Every knob
+	// is nil-safe (zero → default) and every invalid bound (a negative value, or a
+	// StatusMaxEntries below QueueCapacity) fails LOUDLY at construction. See
+	// InProcessDeliveryConfig for the per-process (NOT cross-instance) semantics: two
+	// instances each keep their own queue, de-duplication, and status, so both can send.
+	InProcessDelivery InProcessDeliveryConfig
 	// PublicAuthBaseURL is the absolute base URL magic links and redemption pages
 	// are built from (auth v3 §6.4). REQUIRED when a link flow is enabled
 	// (phase 7, ErrPublicAuthBaseURLRequired); production requires HTTPS. Request
@@ -402,10 +566,10 @@ type Config struct {
 	// Mailer (or an email-kind Notifier), phone via a wired phone-kind Notifier — else
 	// ErrPasswordlessKindUnsupported; in production the wired transport must also be
 	// production-capable. Enabling passwordless requires the atomic challenge rail
-	// (Repositories.Challenges + ChallengeProtector) and the durable delivery outbox
-	// (Repositories.DeliveryJobs — starts issue challenges and enqueue asynchronously,
-	// V14), plus a valid Config.PublicAuthBaseURL for magic links (HTTPS in
-	// production). Listing a kind permits its active verified login-enabled
+	// (Repositories.Challenges + ChallengeProtector) and a delivery runtime — a
+	// DeliveryMode of "jobs" (Config.DeliveryDispatcher) or "in_process" — since starts
+	// issue challenges and enqueue asynchronously (V14), plus a valid
+	// Config.PublicAuthBaseURL for magic links (HTTPS in production). Listing a kind permits its active verified login-enabled
 	// identifiers as direct methods under the §5.6 credential policy. It NEVER
 	// auto-provisions and NEVER enables phone+password login (phone stays
 	// passwordless-only, V10).
@@ -540,9 +704,23 @@ type Service struct {
 	// mounts its routes and NewService injects it into authsvc as the
 	// resolve-on-registration collaborator; both use this single instance.
 	inv *invitationsvc.Service
-	// worker drains the durable delivery outbox (design §6.1.1). Nil when the
-	// DeliveryJobs outbox is not wired; the host runs it via RunDeliveryWorker.
-	worker *delivery.Worker
+	// jobsProcessor is the jobs-mode delivery processor (AV3D-3.1), non-nil only when
+	// DeliveryMode is "jobs" and Config.DeliveryDispatcher is wired. The host reaches
+	// it through DeliveryJobRuntime() to register the handler on the generic jobs
+	// runtime; the feature starts no goroutine.
+	jobsProcessor *delivery.JobsProcessor
+	// inProcessRuntime is the bounded, EPHEMERAL in-process delivery runtime (AV3D-4.1),
+	// non-nil only when DeliveryMode is "in_process". It owns a fixed worker pool that
+	// drains a finite admission queue; the host runs it via RunDelivery. The feature
+	// starts no goroutine at construction. Accepted, in-flight work is LOST on a crash
+	// or restart — this mode is process-local and never claims durability or
+	// cross-instance coordination.
+	inProcessRuntime *delivery.InProcessRuntime
+	// inProcessQueue is the bounded, EPHEMERAL in-process admission queue (AV3D-4.1),
+	// non-nil only when DeliveryMode is "in_process". It is retained solely so
+	// InProcessQueueDepth can expose the bounded, secret-free queue depth for host
+	// operational health (AV3D-5.3); it is never a delivery seam callers reach directly.
+	inProcessQueue *delivery.InProcessQueue
 	// listStrategy is the resolved Config.ListStrategy the shipped HTTP adapter
 	// passes as the transport-edge DefaultStrategy (Register → Mount → handlers).
 	listStrategy crud.Strategy
@@ -592,6 +770,29 @@ func resolveListStrategy(s string) (crud.Strategy, error) {
 	}
 }
 
+// inProcessQueueConfig maps the host's nil-safe in-process tuning knobs onto the
+// bounded delivery queue's config (AV3D-4.5). Zero knobs pass through as zero, which
+// the delivery constructor reads as "use the package default".
+func inProcessQueueConfig(cfg Config) delivery.InProcessQueueConfig {
+	return delivery.InProcessQueueConfig{
+		Capacity:          cfg.InProcessDelivery.QueueCapacity,
+		AdmissionDeadline: cfg.InProcessDelivery.AdmissionDeadline,
+		StatusMaxEntries:  cfg.InProcessDelivery.StatusMaxEntries,
+		StatusTTL:         cfg.InProcessDelivery.StatusTTL,
+	}
+}
+
+// inProcessRuntimeConfig maps the host's nil-safe in-process tuning knobs onto the
+// bounded delivery runtime's config (AV3D-4.5). The Logger is filled at the construction
+// site (it is not an InProcessDeliveryConfig knob).
+func inProcessRuntimeConfig(cfg Config) delivery.InProcessRuntimeConfig {
+	return delivery.InProcessRuntimeConfig{
+		Workers:          cfg.InProcessDelivery.Workers,
+		ShutdownDeadline: cfg.InProcessDelivery.ShutdownDeadline,
+		MaxAttempts:      cfg.InProcessDelivery.MaxAttempts,
+	}
+}
+
 // NewService builds the auth Service, validating the required Config fields and
 // defaulting a nil RateLimiter to an in-memory one. It does not mount HTTP
 // routes (see Register for that).
@@ -611,6 +812,14 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 	if err := validateRuntimeMode(cfg.RuntimeMode); err != nil {
 		return nil, err
 	}
+	// DeliveryMode is a required enum with no default (the RuntimeMode precedent), so a
+	// host explicitly selects the outbound-delivery execution model and never inherits
+	// one from a non-nil collaborator (AV3D-0.1). Validated here for the loud
+	// empty/unknown failure; the mode-specific capability/acknowledgment matrix is
+	// enforced in the delivery block below.
+	if err := validateDeliveryMode(cfg.DeliveryMode); err != nil {
+		return nil, err
+	}
 	if len(cfg.Providers) > 0 && (repos.OAuthAccounts == nil || repos.OAuthStates == nil) {
 		return nil, ErrOAuthReposRequired
 	}
@@ -627,27 +836,60 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 	if repos.Challenges != nil && cfg.ChallengeProtector == nil {
 		return nil, ErrChallengeProtectorRequired
 	}
-	// Enable-time validation for the durable delivery outbox (design §6.1.1): wiring
-	// the DeliveryJobs repository enables the at-least-once worker, whose retryable
-	// jobs temporarily carry a rendered secret/destination — so the payload envelope
-	// is ALWAYS sealed and a DeliveryEncrypter is REQUIRED. Nil is tolerated only
-	// while the outbox is off (repos.DeliveryJobs == nil).
-	if repos.DeliveryJobs != nil {
-		if cfg.DeliveryEncrypter == nil {
-			return nil, ErrDeliveryEncrypterRequired
+	// Delivery-mode matrix (authv3-delivery-refactor AV3D-0.1). DeliveryMode is the
+	// host's explicit selection of the outbound-delivery execution model — never
+	// inferred from a non-nil collaborator. The payload envelope is ALWAYS sealed
+	// wherever delivery can happen (retryable work temporarily carries a rendered
+	// secret/destination), so a wired jobs dispatcher REQUIRES a DeliveryEncrypter;
+	// checked first so a missing encrypter is reported before the mode-specific
+	// acknowledgment posture. in_process additionally builds a feature-internal bounded
+	// delivery queue (the ephemeral runtime, AV3D-4.1), which also seals its payload —
+	// so it requires the encrypter even without a wired collaborator.
+	deliveryWired := cfg.DeliveryDispatcher != nil
+	inProcessDelivery := cfg.DeliveryMode == DeliveryModeInProcess
+	if (deliveryWired || inProcessDelivery) && cfg.DeliveryEncrypter == nil {
+		return nil, ErrDeliveryEncrypterRequired
+	}
+	switch cfg.DeliveryMode {
+	case DeliveryModeOff:
+		// off: no delivery runtime. A wired generic-jobs dispatcher means a configured
+		// flow could deliver, so off is contradictory and fails closed. Passwordless — the
+		// other deliverable flow — is caught by validatePasswordless below
+		// (ErrPasswordlessDeliveryRequired). Other flows (verification, forgot-password,
+		// invitations) all route through the same queue, so off uniformly disables them
+		// rather than erroring.
+		if deliveryWired {
+			return nil, ErrDeliveryOffButDeliverable
 		}
-		// Fail closed on a non-durable outbox in production (design §8): a repository
-		// that identifies itself as in-process-only would drop delivery on restart.
-		// A store that declares no durability metadata is tolerated.
-		if err := validateDeliveryDurability(cfg.RuntimeMode, repos.DeliveryJobs); err != nil {
+	case DeliveryModeJobs:
+		// jobs: durable delivery on the generic jobs runtime. The queue capability is
+		// mandatory — the stdlib-typed Config.DeliveryDispatcher (the composition adapter
+		// over generic jobs, AV3D-3.1) is the delivery transport. Production fails closed
+		// on an unacknowledged runtime (the queue is the only send path); durability is
+		// the generic jobs store's responsibility, asserted by DeliveryJobsAcknowledged.
+		if cfg.DeliveryDispatcher == nil {
+			return nil, ErrDeliveryQueueRequired
+		}
+		if cfg.RuntimeMode == RuntimeModeProduction && !cfg.DeliveryJobsAcknowledged {
+			return nil, ErrDeliveryJobsUnacknowledged
+		}
+	case DeliveryModeInProcess:
+		// in_process: bounded, process-local, EPHEMERAL delivery. It is explicitly
+		// non-durable; production requires the explicit crash-loss acknowledgment, since
+		// in-flight work is lost on a restart.
+		if cfg.RuntimeMode == RuntimeModeProduction && !cfg.DeliveryEphemeralAcknowledged {
+			return nil, ErrDeliveryEphemeralUnacknowledged
+		}
+		// Bounded-runtime knob validation (AV3D-4.5): every knob is nil-safe (zero →
+		// default), but a NEGATIVE bound (or a status retention smaller than the queue it
+		// must cover) fails LOUDLY here with a typed error wrapping sdk.ErrInvalidInput —
+		// never silently coerced to a default. The validated configs are reused at the
+		// queue/runtime construction sites below.
+		if err := inProcessQueueConfig(cfg).Validate(); err != nil {
 			return nil, err
 		}
-		// Production must not silently run without a worker (design §8): the outbox is
-		// the only send path, so an enqueue-without-worker configuration would swallow
-		// every message. The host affirms it runs RunDeliveryWorker via
-		// Config.DeliveryWorkerAcknowledged; development tolerates its absence.
-		if cfg.RuntimeMode == RuntimeModeProduction && !cfg.DeliveryWorkerAcknowledged {
-			return nil, ErrDeliveryWorkerUnacknowledged
+		if err := inProcessRuntimeConfig(cfg).Validate(); err != nil {
+			return nil, err
 		}
 	}
 	listStrategy, err := resolveListStrategy(cfg.ListStrategy)
@@ -715,17 +957,37 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 		return nil, err
 	}
 
-	// The durable delivery queue (design §6.1.1): every auth outbound message now
-	// enqueues here instead of a request-time provider send, so account resolution
-	// and provider latency happen in the host-owned worker off the request path. It
-	// is built only when the DeliveryJobs outbox is wired (the encrypter is required
-	// alongside it, validated above); nil leaves the send sites fail-closed
-	// (ErrDeliveryDisabled) rather than silently synchronous.
+	// The delivery queue (design §6.1.1): every auth outbound message enqueues here
+	// instead of a request-time provider send, so account resolution and provider
+	// latency happen in the host-owned delivery runtime off the request path. It is
+	// built only for a mode that can deliver (the encrypter is required alongside it,
+	// validated above); nil leaves the send sites fail-closed (ErrDeliveryDisabled)
+	// rather than silently synchronous. The payload is ALWAYS sealed as the versioned
+	// command envelope, so the same transport-neutral command.Engine both modes drive
+	// opens exactly what admission sealed.
 	var deliveryQueue *delivery.Service
-	if repos.DeliveryJobs != nil {
+	var inProcessQueue *delivery.InProcessQueue
+	switch {
+	case cfg.DeliveryMode == DeliveryModeInProcess:
+		// in_process mode (AV3D-4.1): build the feature-internal bounded admission queue.
+		// It is the ephemeral runtime's Dispatcher — a fixed worker pool drains it, built
+		// after authService below and run by the host via RunDelivery. Accepted work is
+		// process-local and does NOT survive a restart.
+		inProcessQueue = delivery.NewInProcessQueue(inProcessQueueConfig(cfg))
 		deliveryQueue, err = delivery.NewService(delivery.ServiceDeps{
-			Repo:      repos.DeliveryJobs,
-			Encrypter: cfg.DeliveryEncrypter,
+			Dispatcher: inProcessQueue,
+			Encrypter:  cfg.DeliveryEncrypter,
+		})
+		if err != nil {
+			return nil, err
+		}
+	case cfg.DeliveryMode == DeliveryModeJobs && cfg.DeliveryDispatcher != nil:
+		// jobs mode over generic jobs (AV3D-3.1): submit sealed command envelopes through
+		// the host-composed dispatcher; the jobs-mode processor opens exactly what the
+		// service seals.
+		deliveryQueue, err = delivery.NewService(delivery.ServiceDeps{
+			Dispatcher: cfg.DeliveryDispatcher,
+			Encrypter:  cfg.DeliveryEncrypter,
 		})
 		if err != nil {
 			return nil, err
@@ -741,7 +1003,7 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 	// production durable-limiter / identifier-keyer / worker-acknowledgment gates are
 	// validated above, so a passwordless-enabled production host inherits them. A
 	// half-wired passwordless config would strand the users it is enabled for.
-	if err := validatePasswordless(cfg.RuntimeMode, cfg.Passwordless, deliveryRouter, repos.Challenges != nil, repos.DeliveryJobs != nil, cfg.PublicAuthBaseURL); err != nil {
+	if err := validatePasswordless(cfg.RuntimeMode, cfg.Passwordless, deliveryRouter, repos.Challenges != nil, deliveryWired || inProcessDelivery, cfg.PublicAuthBaseURL); err != nil {
 		return nil, err
 	}
 
@@ -814,8 +1076,6 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 		CredentialPolicy:     cfg.CredentialPolicy,
 		Hasher:               cfg.Hasher,
 		CompromisedFailOpen:  cfg.CompromisedPasswordFailOpen,
-		Mailer:               cfg.Mailer,
-		MailFrom:             cfg.MailFrom,
 		Deliver:              deliveryRouter,
 		Limiter:              limiter,
 		Cookie: authsvc.CookieConfig{
@@ -876,30 +1136,74 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 
 	authService = authsvc.NewService(deps)
 
-	// The at-least-once delivery worker (design §6.1.1) drains the outbox off the
-	// request path. It is built only when the outbox is wired; its Initializer is the
-	// auth service itself (it resolves accounts and issues challenges for opaque start
-	// jobs). The host runs it through RunDeliveryWorker — the feature never starts a
-	// goroutine at construction.
-	var worker *delivery.Worker
-	if deliveryQueue != nil {
-		worker, err = delivery.NewWorker(delivery.WorkerDeps{
-			Repo:        repos.DeliveryJobs,
+	// The outbound delivery executor is built AFTER authService so its Initializer —
+	// the auth service itself, which resolves accounts and issues challenges for opaque
+	// start jobs — is fully attached before any handler can run. The feature starts no
+	// goroutine at construction; the host runs the selected runtime.
+	//
+	//   - jobs mode over generic jobs (AV3D-3.1): build the transport-neutral
+	//     command.Engine processor and expose it through DeliveryJobRuntime(); the host
+	//     registers it on the generic jobs runtime.
+	//   - in_process mode (AV3D-4.1): build the same processor behind a bounded pool the
+	//     host runs via RunDelivery.
+	var jobsProcessor *delivery.JobsProcessor
+	var inProcessRuntime *delivery.InProcessRuntime
+	switch {
+	case cfg.DeliveryMode == DeliveryModeInProcess:
+		// in_process mode (AV3D-4.1/4.3): build the delivery processor (the transport-neutral
+		// command.Engine, wrapped with the Router/Initializer adapters) over the fully-built
+		// authService, then attach it to the bounded pool that drains the admission queue
+		// built above. The processor is the SAME one jobs mode runs, so the bounded pool
+		// applies the identical provider timeout, error classification, attempt cap,
+		// context-cancellable backoff, observer transitions, and terminal challenge discard.
+		// The feature starts no goroutine — the host runs RunDelivery.
+		inProcDeps := delivery.JobsProcessorDeps{
 			Encrypter:   cfg.DeliveryEncrypter,
 			Router:      deliveryRouter,
 			Initializer: authService,
-			Logger:      cfg.Logger,
-		})
+		}
+		// The optional, best-effort lifecycle observer emits secret-free delivery events
+		// (delivered/skipped/retried and, after a recorded dead-letter, dead_lettered) onto
+		// the host's rail; a nil emitter leaves Observer a true nil interface (a no-op path).
+		if cfg.DeliveryEventsEmitter != nil {
+			inProcDeps.Observer = delivery.NewEventObserver(cfg.DeliveryEventsEmitter, cfg.Logger)
+		}
+		var proc *delivery.JobsProcessor
+		proc, err = delivery.NewJobsProcessor(inProcDeps)
+		if err != nil {
+			return nil, err
+		}
+		rtCfg := inProcessRuntimeConfig(cfg)
+		rtCfg.Logger = cfg.Logger
+		inProcessRuntime, err = delivery.NewInProcessRuntime(inProcessQueue, proc, rtCfg)
+		if err != nil {
+			return nil, err
+		}
+	case cfg.DeliveryMode == DeliveryModeJobs && cfg.DeliveryDispatcher != nil:
+		jobsDeps := delivery.JobsProcessorDeps{
+			Encrypter:   cfg.DeliveryEncrypter,
+			Router:      deliveryRouter,
+			Initializer: authService,
+		}
+		// The optional, best-effort lifecycle observer emits secret-free delivery events
+		// onto the host's rail; a nil emitter leaves Observer a true nil interface (a
+		// no-op path) rather than a typed-nil.
+		if cfg.DeliveryEventsEmitter != nil {
+			jobsDeps.Observer = delivery.NewEventObserver(cfg.DeliveryEventsEmitter, cfg.Logger)
+		}
+		jobsProcessor, err = delivery.NewJobsProcessor(jobsDeps)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	return &Service{
-		svc:          authService,
-		inv:          invSvc,
-		worker:       worker,
-		listStrategy: listStrategy,
+		svc:              authService,
+		inv:              invSvc,
+		jobsProcessor:    jobsProcessor,
+		inProcessRuntime: inProcessRuntime,
+		inProcessQueue:   inProcessQueue,
+		listStrategy:     listStrategy,
 		mutationSecurity: inbound.MutationSecurity{
 			AllowedOrigins:    cfg.AllowedOrigins,
 			SessionCookieName: authService.SessionCookieName(),
@@ -1052,15 +1356,69 @@ func (s *Service) ForgotPassword(ctx context.Context, email string) error {
 	return s.svc.ForgotPassword(ctx, email)
 }
 
-// RunDeliveryWorker runs the durable delivery worker until ctx is canceled (design
-// §6.1.1). The host owns the lifecycle: call it in a goroutine and cancel ctx to
-// stop. When the outbox is not wired it is a no-op (returns nil immediately), so a
-// host may call it unconditionally.
-func (s *Service) RunDeliveryWorker(ctx context.Context) error {
-	if s.worker == nil {
+// RunDelivery runs the bounded, EPHEMERAL in-process delivery runtime until ctx is
+// canceled (DeliveryMode "in_process", authv3-delivery-refactor AV3D-4.1). The host
+// owns the lifecycle: call it in a goroutine and cancel ctx to stop. It launches a
+// FIXED worker pool over a FINITE admission queue — never one goroutine per request —
+// and, on cancellation, stops admission, lets in-flight provider calls observe
+// cancellation, and drains within a bounded shutdown window. When the in-process
+// runtime is not wired (any other DeliveryMode) it is a no-op (returns nil
+// immediately), so a host may call it unconditionally.
+//
+// This mode is process-local and EPHEMERAL: accepted, in-flight delivery work is LOST
+// on a crash or restart, there is no cross-instance coordination, and its process-local
+// de-duplication (submit-once/replace by logical key), generation fencing, and bounded
+// latest-by-key status are all lost on restart (AV3D-4.2). Running the host as MULTIPLE
+// instances gives each its OWN queue, de-duplication, and status, so the same logical
+// delivery admitted on two instances is de-duplicated on neither — both can render and
+// both can send (a user may receive two messages). The durable, cross-instance
+// de-duplicated posture is DeliveryMode "jobs".
+func (s *Service) RunDelivery(ctx context.Context) error {
+	if s.inProcessRuntime == nil {
 		return nil
 	}
-	return s.worker.Run(ctx)
+	return s.inProcessRuntime.Run(ctx)
+}
+
+// InProcessQueueDepth reports the bounded in-process delivery queue's current depth and
+// capacity for host operational health (DeliveryMode "in_process", AV3D-5.3). ok is true
+// only in in_process mode; in every other mode it returns 0, 0, false — the backlog of
+// the durable "jobs" mode lives in the generic jobs store, not process-local, so it is not
+// observable here. The two counts are bounded and secret-free: they carry no recipient,
+// payload, or logical key. A queued count at capacity indicates a saturated, backlogged
+// queue.
+func (s *Service) InProcessQueueDepth() (queued, capacity int, ok bool) {
+	if s.inProcessQueue == nil {
+		return 0, 0, false
+	}
+	queued, capacity = s.inProcessQueue.Depth()
+	return queued, capacity, true
+}
+
+// DeliveryJobRuntime returns the narrow, stdlib-typed jobs-mode delivery seam a
+// composition adapter registers on the generic jobs runtime (authv3-delivery-refactor
+// AV3D-3.1). ok is true only when DeliveryMode is "jobs" and Config.DeliveryDispatcher
+// is wired — the processor is fully built (its collaborators, including this Service's
+// account resolver, are attached) BEFORE this returns, so a handler can never run
+// against a half-built service. In every other mode ok is false and the host wires no
+// handler. It starts no goroutine: the host owns the jobs runtime lifecycle.
+func (s *Service) DeliveryJobRuntime() (DeliveryJobRuntime, bool) {
+	if s.jobsProcessor == nil {
+		return DeliveryJobRuntime{}, false
+	}
+	p := s.jobsProcessor
+	return DeliveryJobRuntime{
+		Kind: DeliveryJobKind,
+		Handle: func(ctx context.Context, claim DeliveryClaim) error {
+			return p.Handle(ctx, claim.ExecutionID, claim.Payload, claim.Attempt, claim.Checkpoint)
+		},
+		Discard: func(ctx context.Context, executionID string, payload []byte) error {
+			return p.Discard(ctx, executionID, payload)
+		},
+		Purged: func(ctx context.Context, count int) {
+			p.ObservePurge(ctx, count)
+		},
+	}, true
 }
 
 // DeliveryStatus returns the current delivery status for a receipt key (design

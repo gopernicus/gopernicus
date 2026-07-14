@@ -35,7 +35,6 @@ func Repositories(db *tursodb.DB) auth.Repositories {
 		ContactChanges:       NewContactChangeStore(db),
 		AuthenticationGrants: NewAuthGrantStore(db),
 		CredentialMutations:  NewCredentialMutationStore(db),
-		DeliveryJobs:         NewDeliveryJobStore(db),
 	}
 }
 

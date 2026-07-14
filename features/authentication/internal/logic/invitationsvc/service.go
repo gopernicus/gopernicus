@@ -198,9 +198,9 @@ type Deps struct {
 	// invitation/member-added send sites enqueue rendered commands through Queue
 	// (AV3-4.3).
 	Deliver *delivery.Router
-	// Queue is the durable delivery outbox (design §6.1.1) the send sites enqueue
-	// through. Wired whenever DeliveryJobs is (package auth builds it); nil →
-	// outbound disabled.
+	// Queue is the delivery dispatch seam the send sites enqueue through. Wired
+	// whenever a delivery dispatcher is (package auth builds it); nil → outbound
+	// disabled.
 	Queue          deliveryQueue
 	Redirects      redirect.Allowlist
 	SecurityEvents securityevent.SecurityEventRepository

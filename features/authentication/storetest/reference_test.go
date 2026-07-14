@@ -15,7 +15,6 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/challenge"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/contactchange"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/credential"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/deliveryjob"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/identifier"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/invitation"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthaccount"
@@ -63,7 +62,6 @@ type reference struct {
 	identifiers     map[string][]credential.IdentifierMethod // phase-1 credential-projection stand-in (design §5.6), by user ID
 	userIdentifiers map[string]identifier.Identifier         // real identifier rows (design §2.2), by identifier ID
 	contactChanges  map[string]contactchange.PendingChange   // pending identifier changes (design §2.4), by (user, kind)
-	deliveryJobs    map[string]deliveryjob.Job               // durable outbox, by ID (design §6.1.1)
 
 	// resetFailAt/resetFailErr inject an all-or-nothing rollback failure into
 	// refPasswordResets.Redeem (design §5.9): resetFailAt=N fails just after the
@@ -88,7 +86,6 @@ func newReference() *reference {
 		identifiers:     map[string][]credential.IdentifierMethod{},
 		userIdentifiers: map[string]identifier.Identifier{},
 		contactChanges:  map[string]contactchange.PendingChange{},
-		deliveryJobs:    map[string]deliveryjob.Job{},
 	}
 }
 
@@ -109,7 +106,6 @@ func (r *reference) repositories() auth.Repositories {
 		ContactChanges:       refContactChanges{r},
 		AuthenticationGrants: refAuthGrants{r},
 		CredentialMutations:  refCredentialMutations{r},
-		DeliveryJobs:         refDeliveryJobs{r},
 	}
 }
 
@@ -1552,208 +1548,4 @@ func applyWithPolicy(repo refCredentialMutations, policy credential.DefaultPolic
 		}
 	}
 	return false
-}
-
-// --- deliveryjob.Repository ---
-
-// refDeliveryJobs keys jobs by ID and hand-enforces the durable-outbox invariants
-// a SQL store gets from its unique idempotency index and transactional claim:
-// enqueue is idempotent by IdempotencyKey among non-terminal rows, a claim leases
-// exactly the oldest due job under one mutex (so concurrent workers see one
-// winner), lease-checked completion rejects a reclaimed job, and an expired lease
-// makes a still-pending job claimable again (at-least-once). Each promised atomic
-// operation runs inside ONE mutex-held critical section.
-type refDeliveryJobs struct{ *reference }
-
-func (r refDeliveryJobs) Enqueue(_ context.Context, job deliveryjob.Job) (deliveryjob.Job, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, ex := range r.deliveryJobs {
-		if !ex.Terminal() && ex.IdempotencyKey == job.IdempotencyKey {
-			return ex, nil // idempotent: the existing non-terminal job wins
-		}
-	}
-	return r.insertLocked(job), nil
-}
-
-func (r refDeliveryJobs) Replace(_ context.Context, job deliveryjob.Job) (deliveryjob.Job, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	now := time.Now().UTC()
-	for id, ex := range r.deliveryJobs {
-		if !ex.Terminal() && ex.IdempotencyKey == job.IdempotencyKey {
-			ex.State = deliveryjob.StateCanceled
-			ex.TerminalAt = now
-			ex.LeaseID = ""
-			ex.LeasedUntil = time.Time{}
-			ex.UpdatedAt = now
-			r.deliveryJobs[id] = ex
-		}
-	}
-	return r.insertLocked(job), nil
-}
-
-// insertLocked stores job as a fresh pending row; callers hold r.mu.
-func (r refDeliveryJobs) insertLocked(job deliveryjob.Job) deliveryjob.Job {
-	if job.ID == "" {
-		job.ID = ids.MustGenerate()
-	}
-	job.State = deliveryjob.StatePending
-	job.LeaseID = ""
-	job.LeasedUntil = time.Time{}
-	job.TerminalAt = time.Time{}
-	r.deliveryJobs[job.ID] = job
-	return job
-}
-
-func (r refDeliveryJobs) Claim(_ context.Context, now time.Time, leaseID string, leaseFor time.Duration) (deliveryjob.Job, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	now = now.UTC()
-
-	var dueIDs []string
-	for id, ex := range r.deliveryJobs {
-		if ex.Due(now) {
-			dueIDs = append(dueIDs, id)
-		}
-	}
-	if len(dueIDs) == 0 {
-		return deliveryjob.Job{}, sdk.ErrNotFound
-	}
-	// Deterministic oldest-first selection: available_at, then created_at, then id.
-	sort.Slice(dueIDs, func(i, j int) bool {
-		a, b := r.deliveryJobs[dueIDs[i]], r.deliveryJobs[dueIDs[j]]
-		if !a.AvailableAt.Equal(b.AvailableAt) {
-			return a.AvailableAt.Before(b.AvailableAt)
-		}
-		if !a.CreatedAt.Equal(b.CreatedAt) {
-			return a.CreatedAt.Before(b.CreatedAt)
-		}
-		return dueIDs[i] < dueIDs[j]
-	})
-	job := r.deliveryJobs[dueIDs[0]]
-	job.AttemptCount++
-	job.LeaseID = leaseID
-	job.LeasedUntil = now.Add(leaseFor)
-	job.UpdatedAt = now
-	r.deliveryJobs[job.ID] = job
-	return job, nil
-}
-
-func (r refDeliveryJobs) Succeed(_ context.Context, id, leaseID string, now time.Time) error {
-	return r.complete(id, leaseID, deliveryjob.StateSucceeded, "", now)
-}
-
-func (r refDeliveryJobs) Fail(_ context.Context, id, leaseID, lastErr string, now time.Time) error {
-	return r.complete(id, leaseID, deliveryjob.StateFailed, lastErr, now)
-}
-
-// complete moves a leaseID-held job to a terminal state; an already-in-that-state
-// completion is idempotent, a reclaimed lease or a different terminal state is a
-// conflict.
-func (r refDeliveryJobs) complete(id, leaseID, state, lastErr string, now time.Time) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	job, ok := r.deliveryJobs[id]
-	if !ok {
-		return sdk.ErrNotFound
-	}
-	if job.State == state {
-		return nil // idempotent at-least-once report
-	}
-	if job.Terminal() || job.LeaseID != leaseID {
-		return sdk.ErrConflict // a different terminal state or a reclaimed lease
-	}
-	job.State = state
-	job.LastError = lastErr
-	job.TerminalAt = now.UTC()
-	job.LeaseID = ""
-	job.LeasedUntil = time.Time{}
-	job.UpdatedAt = now.UTC()
-	r.deliveryJobs[id] = job
-	return nil
-}
-
-func (r refDeliveryJobs) Retry(_ context.Context, id, leaseID string, availableAt time.Time, lastErr string, now time.Time) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	job, ok := r.deliveryJobs[id]
-	if !ok {
-		return sdk.ErrNotFound
-	}
-	if job.Terminal() || job.LeaseID != leaseID {
-		return sdk.ErrConflict
-	}
-	job.AvailableAt = availableAt.UTC()
-	job.LastError = lastErr
-	job.LeaseID = ""
-	job.LeasedUntil = time.Time{}
-	job.UpdatedAt = now.UTC()
-	r.deliveryJobs[id] = job
-	return nil
-}
-
-func (r refDeliveryJobs) Cancel(_ context.Context, id string, now time.Time) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	job, ok := r.deliveryJobs[id]
-	if !ok {
-		return sdk.ErrNotFound
-	}
-	if job.State == deliveryjob.StateCanceled {
-		return nil // idempotent
-	}
-	if job.Terminal() {
-		return sdk.ErrConflict // cannot cancel a succeeded/failed job
-	}
-	job.State = deliveryjob.StateCanceled
-	job.TerminalAt = now.UTC()
-	job.LeaseID = ""
-	job.LeasedUntil = time.Time{}
-	job.UpdatedAt = now.UTC()
-	r.deliveryJobs[id] = job
-	return nil
-}
-
-func (r refDeliveryJobs) GetLatestByIdempotencyKey(_ context.Context, idempotencyKey string) (deliveryjob.Job, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var latest deliveryjob.Job
-	found := false
-	for _, ex := range r.deliveryJobs {
-		if ex.IdempotencyKey != idempotencyKey {
-			continue
-		}
-		if !found ||
-			ex.CreatedAt.After(latest.CreatedAt) ||
-			(ex.CreatedAt.Equal(latest.CreatedAt) && ex.ID > latest.ID) {
-			latest = ex
-			found = true
-		}
-	}
-	if !found {
-		return deliveryjob.Job{}, sdk.ErrNotFound
-	}
-	return latest, nil
-}
-
-func (r refDeliveryJobs) PurgeTerminal(_ context.Context, before time.Time, limit int) (int, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var purgeable []string
-	for id, ex := range r.deliveryJobs {
-		if ex.Terminal() && !ex.TerminalAt.After(before) { // terminal_at <= before
-			purgeable = append(purgeable, id)
-		}
-	}
-	sort.Strings(purgeable) // deterministic bounded batch
-	n := 0
-	for _, id := range purgeable {
-		if limit > 0 && n >= limit {
-			break
-		}
-		delete(r.deliveryJobs, id)
-		n++
-	}
-	return n, nil
 }

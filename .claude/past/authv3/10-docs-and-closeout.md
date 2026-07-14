@@ -177,6 +177,12 @@ No PR is opened from this task.
 
 Depends on: AV3-9.7.
 
+The owner-gated implementation plan is recorded in the execution log under
+"Integrated reviewer addendum + draft AV3-9.8 plan." Recording that plan does
+not authorize remediation: first import Claude's canonical 41-row disposition
+table, merge the independently reproduced findings by contract, and obtain the
+owner's approval of the resulting scope and the named decision gates.
+
 Return accepted findings to the implementer in bounded fix batches, preserving
 the same architecture and atomicity rules. Add regression tests for every
 security/concurrency correctness fix. Update docs/runbook when a public or
@@ -864,3 +870,611 @@ then AV3-9.8 (bounded remediation of accepted findings, regression tests, re-run
 `make generate`/`check`/`guard`/`test-stores`, and the PR-ready handoff). No PR is opened
 before AV3-9.8. The two live DSNs and the `C`-collation pgx / reset-libsql fresh-DB
 procedure used here are the reproducible live-gate recipe for AV3-9.8's re-verification.
+
+### 2026-07-13 — AV3-9.7 post-implementation full reviewer gate
+
+Task: AV3-9.7. Outcome: **wave RUN and DISPOSITIONED — 41 findings, 0 critical, 4 high.
+Zero files edited (reviewers are read-only); no PR.** Remediation is AV3-9.8's, gated on
+the owner's disposition of the table below.
+
+Scope handed to reviewers: the uncommitted working tree as ONE untagged cut — the auth-v3
+identity milestone + the AV3D delivery-runtime refactor + the SWP sdk-work-protocol
+promotion — plus the three plan packets, `NOTES.md` 2131–2286 (the AV3-9.4 inventory and
+the AV3D-5.4 delta), `RELEASING.md`, and the per-phase execution logs as evidence. Every
+reviewer was pre-briefed with the parked-item list (pgx pagination-collation; §5.8 named
+error codes; `DeliveryStatus.Attempt`=0; the SWP-3 `bytes.Clone` judgment call; the six
+NOTES deferrals; the env-gated live legs; LICENSE-absent-by-owner-intent) and required to
+DISPOSITION rather than rediscover them.
+
+Eight read-only specialist reviews, one per dimension named in the task:
+
+| Dimension | Findings | Verdict |
+|---|---|---|
+| Application security / account-recovery abuse | SEC-1..4 (2 med, 2 low) | sound; two hardening gaps |
+| Go concurrency / atomic repository semantics | BE-1..4 (1 med, 3 low) | ship-with-edits; **no fence-bypass or stale-write path exists** |
+| pgx/turso schema, migrations, parity | DATA-1..3 (1 high, 2 low) | ship-with-edits |
+| Architecture / module boundaries / API ergonomics | ARCH-1..4 (1 med, 3 low) | aligned-with-edits; all 15 guards green |
+| SRE production wiring / secrets / workers / observability | SRE-1..7 (1 high, 3 med, 3 low) | ship-with-edits |
+| JSON/HTML transport parity, CSRF/origin/redirect | HTTP-1..4 (1 med, 3 low) | ship-with-edits |
+| templ view security / a11y / override ergonomics | VIEW-1..8 (2 med, 6 low) | ship-with-edits; **no view-layer security defect** |
+| Release/upgrade docs + downstream adoption | DOC-1..7 (2 high, 3 med, 2 low) | ship-with-edits |
+
+The four **high** findings: DATA-1 (the RELEASING.md Option-B turso re-enqueue emits
+`datetime('now')`, which the turso connector's fixed-width `Time.Scan` cannot parse — every
+re-enqueued row becomes poison: it sorts first in `Claim` but errors on the `RETURNING`
+scan, so the worker error-loops and delivery never completes); SRE-1 (the `in_process`
+worker path has **no `recover()`** — a provider/engine panic takes down the entire host,
+HTTP included, where jobs mode is protected by the fenced runner's recover); and DOC-1 +
+DOC-2 (the SWP surface — the new `sdk/capabilities/work` package and the `features/jobs`
+signature change to `[]byte` / `work.Status` — is absent from BOTH `RELEASING.md` and the
+NOTES release inventory, so the breaking/change record is incomplete for the exact tree
+being cut).
+
+**Cross-cutting escalation (two reviewers, independently).** The backend reviewer (BE-3)
+and the SRE reviewer both escalated the standing live-store owner gate from "parked" to
+the top residual risk in their dimension: the lease/generation fence — the entire point of
+the AV3D hardening — has never executed against real Postgres or libSQL concurrency. Every
+restart / stale-claim / resend proof ran against the in-memory fenced queue; the live
+`RunFencedQueue` legs and the eight-proof `livedelivery` harness LOUD-SKIP with the DSNs
+unset. Hermetic green must not stand in for it before production sign-off.
+
+**Parked items: all seven upheld, none rediscovered.** Notably the SWP-3 `bytes.Clone` call
+was independently ratified by both the architecture and backend reviewers (the clone sits on
+the implementation-of-record's protocol surface, so payload isolation holds for every backing
+store by construction, and `worktest` pins the semantic under `-race`); `DeliveryStatus.Attempt`=0
+was upheld as architecturally correct (carrying the executor's retry counter through the
+consumer status seam would push executor mechanics into the sdk protocol) with an SRE doc
+note that tooling reading `attempt` must repoint to the `retried` health counter; and §5.8's
+named error codes were confirmed NOT a parity defect (every code-carrying sentinel also wraps
+an sdk kind, so both transports derive the same status — the only kind-less sentinels are the
+rate-limit ones, which is HTTP-3).
+
+The consolidated, severity-ranked disposition table (accept / reject-with-reason / defer) is
+the deliverable of this task and was returned to the owner. AV3-9.8 remediation is a separate,
+owner-gated step; no fixes were applied here and no PR was opened.
+
+### 2026-07-13 — integrated reviewer addendum + draft AV3-9.8 plan
+
+Purpose: integrate the independent Codex read-only review into the Claude reviewer-wave
+record and draft the bounded AV3-9.8 execution order. This entry is **planning only**:
+no product/docs remediation, PR, commit, tag, or release action is authorized by it.
+
+#### Canonicalization precondition
+
+Claude's entry above summarizes 41 findings by ID range and describes four high findings,
+but the referenced 41-row disposition table is not embedded in this packet and no other
+repository file contains those IDs. Exact row-for-row deduplication is therefore impossible
+from the checked-in evidence alone. Before AV3-9.8 starts:
+
+1. import the owner's canonical Claude table verbatim into this task record or attach a
+   stable path to it;
+2. merge rows that name the same file/contract and failure mechanism; preserve the stronger
+   severity and the more complete reproduction;
+3. keep genuinely independent failure mechanisms as separate rows even when their fixes
+   touch the same file; and
+4. obtain an owner decision on every `OWNER DECISION` row below. Do not infer approval from
+   the recommended default.
+
+The independent review ran read-only against the same uncommitted cut. Its hermetic evidence
+was: `make check` green (all modules and 15 guards), template generation drift-clean,
+`git diff --check` green, and fresh `-race -count=1` runs green for authentication inbound +
+delivery, all jobs packages, and the auth-cms `authjobs`, `deliveryhealth`, and server
+packages. These results do not close any live-environment gate.
+
+#### Integrated disposition delta
+
+`Merge` names a proven overlap with Claude's summary. `Possible overlap` means the full
+Claude table is required before assigning its final canonical ID.
+
+| ID | Severity | Contract and integrated finding | Merge / disposition | AV3-9.8 treatment |
+|---|---|---|---|---|
+| IX-01 | **Critical** | `RELEASING.md` delivery-runtime runbook, Option B: opaque copy cannot work in either dialect. Legacy ciphertext encodes the removed envelope, not the new versioned `deliverycmd.Envelope`; the copied legacy rail kind (`email`/`phone`) is not the registered `authentication.delivery` job kind; and the SQL never terminalizes the source rows despite requiring a zero source count. | **Supersedes/expands DATA-1. ACCEPT.** DATA-1's Turso `datetime('now')` poison is an additional defect inside the already-invalid option, not the root issue. | **OWNER DECISION:** recommended default is delete Option B and make drain-only normative. Alternative: authorize a real application migration that decrypts, converts, reseals, enqueues under the canonical kind, verifies, and terminalizes source rows. Never retain the opaque SQL copy. |
+| IX-02 | High | `examples/auth-cms/cmd/server/main.go`: an unexpected `Service.RunDelivery` error is logged from an unsupervised goroutine while HTTP stays ready and continues admitting work. | Possible SRE overlap; distinct from summarized SRE-1 panic containment. **ACCEPT.** | Supervise HTTP + delivery as one lifecycle. Runtime exit must cancel the host or make readiness 503 and stop admission. Add injected-run-error coverage. |
+| IX-03 | High | `examples/auth-cms` README/main: jobs mode is labelled recommended/durable while it uses `jobsmem.NewFencedQueue`; restart loses queued work and instances do not coordinate. | Possible SRE/DOC overlap. **ACCEPT.** | **OWNER DECISION:** recommended default is correct the example/docs to say non-durable jobs semantics. If the proof host is meant to prove durability, wire a durable backend and corresponding environment/runbook instead. |
+| IX-04 | High | `security.go:browserOriginAllowed`: `Sec-Fetch-Site: same-site` bypasses the exact `Origin` allowlist, permitting an attacker-controlled sibling origin to submit credential-establishment forms. | Possible SEC/HTTP overlap. **ACCEPT.** | Auto-allow only `same-origin`; require exact allowlisted `Origin` for `same-site`. Add sibling-origin JSON/form regressions expecting 403. |
+| IX-05 | High release gate | The AV3D pgx/Turso fenced-queue and proof-host `livedelivery` legs remain loud-skips/compile-only; the lease/generation fence has not run against real database concurrency after the refactor. | **Merge BE-3 + SRE cross-cutting escalation. ACCEPT.** | Owner supplies authorized fresh/reset pgx C-collation and libSQL environments. Run every fenced-store conformance and eight-proof `livedelivery` leg with `-count=1`; retain redacted evidence. No production sign-off on skips. |
+| IX-06 | High | `RELEASING.md` secret inventory and proof-host wiring overstate “five distinct secrets, each rotatable.” The named inventory omits identifier-HMAC/provider-token AES and invents managed magic/reset/CSRF key material; several real keys are single-key/disruptive. | Possible SRE/DOC overlap. **ACCEPT.** | **OWNER DECISION:** choose continuity-supporting multi-key/key-ID work per secret or explicitly disruptive rotation procedures. Correct the inventory either way; document rolling-deploy, drain, session invalidation, and stored-token consequences. |
+| IX-07 | High release gate, outside v3 | No `LICENSE` exists; the owner ledger already says first public tags are blocked. | Parked item upheld. **DEFER OUT OF V3 SCOPE.** | No AV3 code fix. Owner selects/adds an SPDX-identifiable license before any public tag. Keep this as a release stop, not a reason to widen AV3-9.8. |
+| IX-08 | High | `in_process` delivery has no panic containment, so a provider/engine panic can terminate the host. | **Merge SRE-1. ACCEPT.** | Add a narrow recover boundary at the in-process execution boundary, emit terminal/lifecycle evidence without exposing payloads, and prove provider/engine panic behavior plus clean shutdown under `-race`. |
+| IX-09 | High | The SWP package introduction and `features/jobs` `[]byte`/`work.Status` signature change are missing from the release/change inventories. | **Merge DOC-1 + DOC-2. ACCEPT.** | Update `RELEASING.md`, `NOTES.md`, SDK/jobs docs, module/tag floors, and downstream upgrade examples as one docs batch after public signatures settle. |
+| IX-10 | Medium | No host invokes bounded terminal purge; durable rows and encrypted delivery metadata grow without limit despite the documented retention posture. | Possible SRE overlap. **ACCEPT.** | Add or document a host-owned scheduled purge loop with retention, batch size, errors/metrics, and shutdown semantics. Test bounded batches and scheduler failure. |
+| IX-11 | Medium | Reset/passwordless templ pages scrub `#token` before POST; an error rerender has no fragment/token, so a valid reset cannot be corrected and retried. | Possible HTTP/VIEW overlap. **ACCEPT.** | Retain the token client-side until success without server rendering/logging it. Add a real browser regression: valid token + invalid password, then corrected retry succeeds. Keep distinct from the deferred host reset-link builder. |
+| IX-12 | Medium | `deliveryhealth` computes `in_flight = admitted - terminals`, but increments before failed admission and on duplicate/replacement calls; it is not an authoritative backlog. | Possible SRE overlap. **ACCEPT.** | Prefer a durable nonterminal-count metric. Otherwise rename it to request accounting and remove the backlog claim; add failed-submit, idempotent-submit, and replace tests. |
+| IX-13 | Medium | `examples/auth-cms/go.mod` omits requirements/replacements for the pgx/Turso modules imported by tagged live tests; `GOWORK=off go mod tidy -diff` tries to resolve sibling modules remotely. | Possible ARCH/DOC overlap. **ACCEPT.** | Put live harnesses in an integration-test module that owns driver dependencies, or make the example module graph self-contained. Gate with `GOWORK=off go mod tidy -diff` and tagged compile. |
+| IX-14 | Medium | `RELEASING.md` claims missing `AllowedOrigins` and trusted-proxy wiring fail construction; `auth.NewService` accepts empty origins and cannot observe router proxy configuration. | Possible SRE/DOC overlap. **ACCEPT.** | Add explicit production acknowledgments/validation, or truthfully reframe these as host deployment checks and add proof-host negative tests. Do not retain a false construction guarantee. |
+| IX-15 | Medium | §5.8 design promises `challenge_expired`, `challenge_invalid`, and `too_many_attempts`; implementation intentionally emits generic SDK-derived code strings. | **Conflict:** Claude rejects as non-parity because statuses match; independent review accepts as a stable machine-API contract break. **OWNER DECISION.** | Recommended default: treat the design's “stable machine codes, kept” language as normative and add an auth-specific mapper. Alternative: explicitly amend the design/public contract and record the breaking choice; status parity alone does not resolve code-string compatibility. |
+| IX-16 | Medium | `/auth/logout` is cookie-driven but has neither origin nor CSRF protection; avoiding live-session middleware does not require accepting same-site sibling form posts. | Possible SEC/HTTP overlap. **ACCEPT.** | Add browser-origin/CSRF protection while preserving expired-access-token logout and bearer/native behavior. Add same-site sibling and expired-session regressions. |
+| IX-17 | Medium, pre-existing | pgx cursor ordering depends on C/byte-wise collation. | Parked item upheld. **DEFER OUT OF V3 SCOPE.** | Keep the deployment prerequisite and assign a later shared datastore fix; do not spend AV3-9.8 on it. |
+| IX-18 | Low | Hard-coded view CSP has no supported styling/asset policy for branded `Views` overrides. | Possible VIEW/ARCH overlap. **ACCEPT, subject to scope.** | **OWNER DECISION:** either add a constrained host policy/layout hook now, or explicitly narrow v3 override claims to markup-only and defer broader asset ergonomics. Never weaken secure defaults implicitly. |
+| IX-19 | Low | In-process saturation/shutdown wraps `sdk.ErrConflict`, while HTTP special-cases it to 503; non-HTTP callers receive the wrong retry taxonomy. | Possible ARCH overlap. **ACCEPT, API-scope gate.** | Prefer a stable unavailable/backpressure kind or classifier. If adding an SDK kind is too broad for the cut, document and explicitly defer it rather than silently keeping conflicting semantics. |
+| IX-20 | Low | `authsvc.Service` retains unused `mailer`/`mailFrom` fields after delivery ownership moved to `delivery.Router`. | Possible ARCH overlap. **ACCEPT.** | Remove dead internal dependency plumbing and stale old-delivery comments after behavioral batches, then rerun layering guards. |
+| IX-21 | Informational | MFA, real SMS, `CompleteStepUpWithOAuth`, recovery-link builder, and PII audit retention/redaction remain intentionally absent. | Parked deferrals upheld. **DEFER OUT OF V3 SCOPE.** | Preserve triggers and avoid claiming support. Downstream hosts still document notifier and audit-retention choices. |
+| IX-22 | Informational | `DeliveryStatus.Attempt == 0` is intentional executor/consumer separation. | Parked item upheld. **REJECT WITH EVIDENCE.** | No v3 change; document that operational attempt counts come from lifecycle/health events. Reconsider the field only in a breaking revision. |
+| IX-23 | Informational | Central `bytes.Clone` at the SWP boundary correctly provides store-independent payload snapshot semantics. | **Merge Claude architecture/backend ratification. REJECT WITH EVIDENCE.** | Keep the clone; add protocol ownership/snapshot wording only if not already covered by DOC/SWP remediation. |
+
+#### Owner gates before implementation
+
+The owner approves the canonical merged table and resolves these choices before any
+remediation batch begins:
+
+1. **Option B:** delete and require drain-only (recommended), or authorize a real
+   decrypt/convert/reseal migration tool.
+2. **Proof-host promise:** document the in-memory jobs example honestly (recommended),
+   or expand it into a durable-host example.
+3. **Key rotation:** truthful disruptive runbooks only, or implementation of the
+   necessary key-ID/dual-read mechanisms.
+4. **§5.8 codes:** retain the named machine-code contract (recommended), or amend the
+   design/docs and accept the compatibility change.
+5. **View override scope:** secure constrained asset policy now, or markup-only v3
+   promise with broader styling deferred.
+6. **SDK unavailable taxonomy:** authorize the cross-SDK addition, or explicitly defer
+   it as a post-v3 API cleanup.
+7. **Live environments:** authorize fresh/reset pgx C-collation and libSQL databases
+   for the fenced-queue and `livedelivery` gates.
+
+LICENSE remains a separate release-owner gate and does not authorize AV3-9.8 scope.
+
+#### Bounded remediation batches
+
+Each batch stops on a failed regression and records exact files, tests, and any contract
+adaptation before the next batch starts. Incorporate all accepted Claude-only findings
+from the imported 41-row table into the closest batch; do not create a second track.
+
+**Batch 1 — release/runbook correctness and public inventory**
+
+- Resolve IX-01/DATA-1 first; no other release text may continue to point at an unsafe
+  Option B. Add pgx and Turso legacy-row fixtures that prove the chosen migration/drain
+  behavior and source-row accounting.
+- Resolve IX-09/DOC-1/DOC-2 and the documentation portions of IX-03, IX-06, IX-14,
+  IX-15, IX-18, IX-19, IX-22, and IX-23 after their owner decisions.
+- Make `RELEASING.md`, `NOTES.md`, feature/jobs/SDK READMEs, and module/tag floors agree
+  on the exact cut. Run doc guards and every runbook fixture affected by the edits.
+
+**Batch 2 — browser and transport security/correctness**
+
+- Resolve IX-04, IX-11, and IX-16 together because they share browser-origin/form
+  behavior. Preserve native/bearer clients and JSON/form service-call parity.
+- Add exact-origin sibling-host tests, logout-with-expired-session tests, and a browser
+  retry drive for fragment-carried reset/passwordless tokens.
+- Apply any accepted Claude SEC/HTTP/VIEW findings that touch the same routes/templates
+  in this batch, deduplicated by contract.
+
+**Batch 3 — runtime containment, lifecycle, and observability**
+
+- Resolve IX-08/SRE-1 panic containment before IX-02 supervision so tests distinguish
+  recovered job failure from an unexpected runtime-loop exit.
+- Resolve IX-02, IX-10, and IX-12: lifecycle supervision/readiness, bounded terminal
+  purge, and authoritative metrics. Then settle IX-03's proof-host wiring/docs choice.
+- Run focused `-race -count=1` tests for panic, injected runtime exit, shutdown, retry,
+  replace, purge, failed admission, duplicate admission, and readiness transitions.
+
+**Batch 4 — module/API cleanup and remaining accepted Claude findings**
+
+- Resolve IX-13, IX-18, IX-19, and IX-20 according to the owner decisions; run
+  `GOWORK=off go mod tidy -diff` for the resulting example/integration modules.
+- Apply remaining accepted Claude DATA/ARCH/SRE/VIEW/DOC findings not already absorbed
+  by Batches 1–3, smallest-risk changes first. Every security/concurrency fix receives
+  a regression; documentation-only hardening names the verified contract.
+- Rerun all 15 layering/architecture guards after public or module-boundary changes.
+
+**Batch 5 — fresh hermetic and live reverification**
+
+Run, without test-cache substitution:
+
+```sh
+make generate
+git diff --check
+make check
+make guard
+POSTGRES_TEST_DSN='<redacted C-collation DSN>' \
+  TURSO_DATABASE_URL='<redacted libSQL URL>' \
+  TURSO_AUTH_TOKEN='<redacted>' make test-stores
+```
+
+Then run all fenced pgx/Turso conformance and proof-host `livedelivery` tests with
+their live tags and `-count=1`, plus the affected JSON + HTML/browser proof-host legs.
+Fresh/reset databases are mandatory; loud skips leave AV3-9.8 open. Redact endpoints,
+tokens, codes, payloads, and key material in retained evidence. Stop all proof-host
+processes and release ports afterward.
+
+### 2026-07-13 — AV3-9.8 owner gate resolved: canonical table + all seven decisions
+
+The owner resolved the canonicalization precondition and every owner gate. Remediation
+is now authorized under the bounded-batch plan above with these bindings:
+
+- **Canonical table.** The integrated **IX-01..IX-23 table above is adopted as the
+  canonical disposition record.** It already merges/supersedes all four Claude high
+  findings (IX-01⊃DATA-1, IX-05=BE-3+SRE escalation, IX-08=SRE-1, IX-09=DOC-1+DOC-2)
+  and the cross-cutting escalation. The 37 unmerged Claude medium/low rows are
+  represented by their per-dimension verdict summaries in the AV3-9.7 entry; the
+  standalone 41-row export was never checked in and is not recoverable verbatim.
+  Batch language reading "accepted Claude-only findings from the imported 41-row
+  table" therefore resolves to: apply the per-dimension summarized intents where they
+  are identifiable from the AV3-9.7 entry, and otherwise the IX table governs.
+- **Gate 1 (Option B / IX-01): delete Option B; drain-only is normative.** No opaque
+  SQL copy survives anywhere in release text. Fixtures prove drain verification and
+  source-row accounting.
+- **Gate 2 (proof-host promise / IX-03): document honestly as non-durable.** The
+  auth-cms jobs mode is in-memory fenced — restart loses queued work, no cross-instance
+  coordination. Wording fix only, no durable-backend example this cut.
+- **Gate 3 (key rotation / IX-06): truthful disruptive runbooks.** Correct the secret
+  inventory to the real key list (including identifier-HMAC and provider-token AES);
+  document each key's actual rotation consequence. No key-ID/dual-read mechanisms.
+- **Gate 4 (§5.8 codes / IX-15): the named machine-code contract is normative.** Add
+  an auth-specific error-code mapper emitting `challenge_expired` / `challenge_invalid`
+  / `too_many_attempts` etc., with JSON/form transport-parity regressions.
+- **Gate 5 (view override scope / IX-18): markup-only v3 promise.** Docs narrow the
+  override claim; the constrained host asset/styling policy hook is deferred post-v3.
+  No CSP change.
+- **Gate 6 (SDK taxonomy / IX-19): ADD the SDK unavailable/backpressure kind now**
+  (owner chose the non-default). Batch 4 gains the cross-SDK kind and reclassifies the
+  in-process delivery saturation/shutdown paths; HTTP mapping stays 503.
+- **Gate 7 (live environments / IX-05): authorized.** Fresh/reset databases on the
+  running `authv3-pg` (C-collation) and `authv3-libsql` containers for every fenced
+  pgx/turso conformance and eight-proof `livedelivery` leg, `-count=1`, redacted
+  evidence. No production sign-off on skips.
+- LICENSE remains a separate release-owner gate outside AV3-9.8 scope (standing
+  owner intent: deliberately absent).
+
+### 2026-07-13 — AV3-9.8 Batch 1 executed (release/runbook correctness + public inventory)
+
+Outcome: **PASS — docs + fixtures only (sole Go edits were comments); `make guard`
+green (15 guards); drain fixtures green on both live dialects and torn down.**
+
+Files: `RELEASING.md` (IX-01 Option B deleted, drain-only normative with removal
+rationale + fixture-verification subsection; IX-09 `sdk/capabilities/work` NEW-module
+keyed note + `features/jobs` SWP keyed note with before/after examples + tag-floor
+row + IX-23 clone wording; IX-06 secret checklist rewritten to the real five keys with
+true rotation stories; IX-14 construction claims reframed to real gates vs deployment
+checklist), `NOTES.md` (dated Batch 1 correction entry incl. IX-18 asset-hook post-v3
+deferral), `features/authentication/README.md` (IX-06 mirror, IX-18 markup-only
+override promise, IX-22 Attempt==0/`retried`-counter note), `features/jobs/README.md`
+(IX-23), `examples/auth-cms/README.md` + `cmd/server/main.go` comments (IX-03
+non-durable honesty).
+
+Fixture evidence: legacy `delivery_jobs` shape from git-HEAD `0014`; pgx disposable
+`dr_drain_fixture` (C-collation) and libsql isolated `dr_`-prefix tables — seed 5
+mixed-state rows → nonterminal count 2 → terminalize → 0 → total 5 before/after, both
+dialects; fixtures dropped, standing conformance schemas untouched, containers left
+running.
+
+Contract adaptations: (1) **`features/jobs` floor is MINOR, not breaking** — no
+exported signature changed incompatibly (`job.Status = work.Status` alias; fenced
+surface opt-in); recorded with the new `sdk/capabilities/work` dependency. (2) The
+real five keys are `AUTH_JWT_SECRET`, `AUTH_CHALLENGE_PEPPER` (only
+rotation-continuity key via `HMACKeyRing`), `AUTH_DELIVERY_ENCRYPTER_KEY`,
+`AUTH_TOKEN_ENCRYPTER_KEY`, `AUTH_IDENTIFIER_KEY` — the doc's "magic-link/reset" and
+"CSRF" key materials were invented (ride the pepper / per-render random) and the
+identifier-HMAC + provider-token AES keys were the omissions. (3) `auth.NewService`
+confirmed to have no AllowedOrigins gate and cannot observe router proxy wiring —
+RELEASING.md alone needed the IX-14 fix. (4) `sdk/README.md` already accurate for the
+`work` surface — untouched.
+
+### 2026-07-13 — AV3-9.8 Batch 2 executed (browser/transport security + §5.8 mapper)
+
+Outcome: **PASS — IX-04, IX-16, IX-15, IX-11 all fixed with regressions; full
+feature module + views/templ green `-race -count=1` (independently re-verified);
+`make generate` idempotent, `git diff --check` clean, `make guard` green.**
+
+Fixes: (IX-04) `browserOriginAllowed` auto-allows only `same-origin`; `same-site`
+now requires the exact Origin allowlist (empty Origin rejected); native no-header
+path unchanged. (IX-16) `/auth/logout` gated with `requireBrowserSafeOrigin` —
+origin-only by design so expired-session logout keeps working; bearer/native
+unaffected. (IX-15) new `errors.go` mapper `challengeErrorFor`/`respondDomainError`
+emits `challenge_expired`(410)/`challenge_invalid`(400)/`too_many_attempts`(403)
+from the stable sentinels via `errors.Is`, wired at verify/step-up/identifier-confirm/
+remove-password/OAuth-unlink JSON arms and the form arm (`formFailure`) for parity;
+statuses were already correct — only codes were generic. (IX-11) reset error-rerender
+echoes the submitted token into a hidden `ResetPage.Token` field (round-trips the
+POST body value only — no new exposure class, not logged; nonced script only
+overwrites when a fragment is present); corrected retry now succeeds.
+
+Key regressions: `TestCredentialEstablishmentRejectsSiblingOrigin`,
+`TestMutationRejectsSiblingOrigin`, `TestRequireBrowserSafeOriginSameSite`,
+`TestLogoutRejectsSiblingOrigin`, `TestLogoutSameOriginExpiredSessionSucceeds`,
+`TestLogoutBearerUnaffectedByOriginGate`, `TestRespondDomainErrorNamedChallengeCodes`,
+`TestVerifyJSON…{Invalid,LockedOut,Expired}Code`, `TestVerifyFormChallengeParityNoCodeLeak`,
+`TestResetFormRetainsTokenAcrossErrorRerender`, `TestReset_ErrorRerenderRetainsToken`.
+
+Contract adaptations: (1) no single transport error writer exists — the named codes
+are an auth-local seam over `web.RespondJSONDomainError`, sdk mapper untouched.
+(2) Passwordless and password-reset deliberately keep their collapsed generic
+outcomes (`ErrPasswordlessLogin` 401 / `ErrPasswordResetInvalid`) — they never
+surface the challenge sentinels; README documents this. (3) README error-code
+section + `challenge.go` sentinel comment updated to shipped behavior.
+
+Known gate note: `make check`'s templ-drift step diffs `*_templ.go` against HEAD;
+the IX-11 `recovery_templ.go` regeneration is a legitimately dirty generated file in
+this uncommitted milestone (generation idempotent, `.go` matches `.templ`) and will
+clear when `.templ` + generated file are committed together. Batch 5 must account
+for this when running `make check`.
+
+### 2026-07-13 — AV3-9.8 Batch 3 executed (runtime containment, lifecycle, observability)
+
+Outcome: **PASS — IX-08, IX-02, IX-10, IX-12 fixed with regressions; both modules
+green `-race -count=1` (panic + supervision legs independently re-verified);
+`make guard` 15/15.** IX-08 landed before IX-02 per the batch order.
+
+Fixes: (IX-08) narrow recover boundary (`handleOnce`) in
+`internal/logic/delivery/inprocess.go` wrapping exactly the per-job
+`processor.Handle`; a panicking provider/engine dead-letters the job as a
+PERMANENT failure (no re-panic on retry) with sanitized evidence — `runtime.Error`
+messages surface verbatim, any other panic value reduces to its Go type so a
+decrypted payload/destination can never leak; worker keeps running, slot released,
+clean shutdown proven. (IX-02) `supervisor.go` `deliverySupervisor` — `run` wraps
+the signal ctx in a cancelable `hostCtx`; an unexpected delivery-runtime exit
+(error OR nil while deliveryCtx uncanceled) cancels the host so web.Run drains
+through the documented shutdown order and main exits nonzero; normal shutdown
+stays quiet. (IX-10) host-owned purge scheduler (`purge.go`, jobs-mode only):
+`DELIVERY_PURGE_INTERVAL`=1h / `DELIVERY_PURGE_RETENTION`=24h /
+`DELIVERY_PURGE_BATCH`=500, WARN+default on bad values, lifecycle wired like the
+poller, purged count flows to the existing `purged` health counter; in_process is
+ephemeral/self-bounding (max-entries + TTL) with no durable purge surface — nothing
+accumulates. (IX-12) honest-rename path: no cheap authoritative nonterminal count
+exists on the fenced surface (no Count/Depth/Stats; adding one = interface + three
+stores, out of scope), so `in_flight`→`outstanding` reframed as derived request
+accounting; `admitted` now counts only ACCEPTED Submit/Replace, superseded added to
+the terminal subtraction; the authoritative backlog remains in_process's live
+`queued/capacity/saturated`.
+
+Key regressions: `TestInProcessRuntimeProviderPanicDeadLettersAndContinues`,
+`TestInProcessRuntimeEngineStepPanicDeadLetters`, `TestInProcessRuntimePanicCleanShutdown`,
+`TestSanitizePanicSurfacesRuntimeErrorsHidesArbitraryValues`,
+`TestSuperviseDeliveryUnexpectedErrorCancelsHost`, `…UnexpectedCleanExitCancelsHost`,
+`…NormalShutdownIsQuiet`, `TestDeliveryPurgeBoundedBatch`,
+`TestDeliveryPurgeLoopContinuesAfterError`, `…CleanShutdown`,
+`TestAdmittedCountsOnlyAcceptedRequests`, `TestOutstandingSubtractsSupersededTerminal`,
+`TestOutstandingGaugeClampsAtZero`.
+
+Contract adaptations: (1) supervision extracted behind a `deliveryHealthMarker`
+interface for unit-testability without booting `run()`. (2) `.env.example` still
+carried the stale "jobs = durable/survives restart" claim Batch 1 fixed elsewhere —
+corrected under the IX-03 gate-2 decision, plus the three purge knobs added.
+(3) README/main comments re-synced to the shipped lifecycle (supervision, purge,
+`outstanding` semantics).
+
+### 2026-07-13 — AV3-9.8 Batch 4 executed (module/API cleanup + SDK unavailable kind)
+
+Outcome: **PASS — IX-19, IX-13, IX-20 fixed with regressions; IX-18 residue confirmed
+(no code); sdk/features/authentication/features/jobs/examples/auth-cms green
+`-race -count=1`; `GOWORK=off go mod tidy -diff` clean; all 15 layering guards green;
+repo-wide `make build` green (37 modules).**
+
+Fixes:
+
+- **IX-19 (owner gate 6 — ADD the SDK kind).** New kernel sentinel
+  `sdk.ErrUnavailable` ("unavailable") in `sdk/errors.go` with a doc comment defining
+  backpressure/shutdown/degraded-dependency semantics (retry unchanged) explicitly
+  distinct from `ErrConflict` (state contention, retry may differ); added to
+  `expectedErrors` (so `IsExpected` covers it). Mapped in `sdk/foundation/web`
+  `ErrFromDomain` → `ErrUnavailable(...)` = **503** code string **`unavailable`** (the
+  pre-existing 503 constructor; no new writer machinery, no Retry-After — the writer
+  has no header seam). Reclassified the two in-process delivery admission rejections
+  `ErrDeliveryCapacity` / `ErrDeliveryClosed` (features/authentication
+  `internal/logic/delivery/inprocess.go`) from `sdk.ErrConflict` → `sdk.ErrUnavailable`;
+  `ErrDeliverySuperseded` and `ErrInProcessAlreadyRunning` deliberately KEEP
+  `sdk.ErrConflict` (genuine state contention, not backpressure). HTTP special-cases
+  simplified: the `passwordless` start and the HTML `formFailure` arms dropped their
+  `deliveryUnavailable(err)` branch — the domain-error writer now yields 503 by kind;
+  the two enumeration-safe forgot paths (JSON + form, which deliberately default to 500)
+  keep the `deliveryUnavailable` helper (still a precise two-sentinel check, no import
+  churn). Other consumers of the conflict-wrap checked: `storetest`, `invitationsvc`,
+  `authsvc` CAS paths, and the stores all wrap `ErrConflict` for optimistic-lock/state
+  reasons unrelated to delivery — none touched. Where produced/mapped now:
+  produced by the two delivery sentinels; mapped to 503 by `web.ErrFromDomain` (and via
+  `RespondJSONDomainError` / `formFailure`). No non-test HTTP behavior changed (still 503).
+
+- **IX-13 (example module graph self-contained).** Chose **Option B** (self-contained
+  example `go.mod`), following the repo's established precedent: `examples/cms/go.mod`
+  already requires its datastore/store modules directly with local replaces, and there
+  is NO integration-test-module precedent anywhere in the tree. Moving the harness into a
+  new module (Option A) was infeasible surgically — `jobs_delivery_live_test.go` is
+  `package main` and reuses the untagged hermetic helpers (`payloadRecord`, host
+  composition), so a split would force a large shared-helper extraction. Added four
+  direct requires + local replaces to `examples/auth-cms/go.mod` (features/jobs/stores/
+  {pgx,turso}, integrations/datastores/{pgxdb,turso}); `GOWORK=off go mod tidy` populated
+  the pgx/libsql indirect block. No new module → `go.work` unchanged (all four already in
+  it), `make check` module discovery unaffected.
+
+- **IX-20 (dead mailer plumbing).** Removed the unused `Service.mailer`/`mailFrom` fields
+  and their wiring in `authsvc/service.go`; the fields had zero non-test reads (delivery
+  ownership is the `delivery.Router`, which carries its own `r.mailer`). Also removed the
+  now-orphaned internal `authsvc.Deps.Mailer`/`MailFrom` entries (nothing read them — the
+  production router is built from `cfg.Mailer` in `authentication.go`, and tests wire
+  delivery via `wireSyncDelivery`) and dropped the orphaned `sdk/capabilities/email`
+  import + the `d.Mailer`/`d.MailFrom` populators in `authentication.go` and ~30 test
+  literals across the authsvc + inbound packages. Fixed the stale `Deps.Deliver` comment
+  ("Wired whenever the Mailer is"). **Public surface unchanged: `auth.Config.Mailer`/
+  `MailFrom` still accepted and still flow to the delivery router** (authentication.go
+  `delivery.NewRouter(delivery.Deps{Mailer: cfg.Mailer, ...})`).
+
+- **IX-18 residue (gate 5).** Confirmed the markup-only override promise + hard-coded-CSP
+  note is present in `features/authentication/README.md` (§ Views/override, "The v3
+  override promise is markup-only"); no Batch 4 change touches CSP or the override claim.
+  No code work (asset-policy hook is post-v3 deferred).
+
+New regressions: `sdk/foundation/web` `TestErrFromDomain_Kinds` (Unavailable→503,
+Conflict stays 409, etc.); delivery `inprocess_test.go` updated to assert
+`ErrDeliveryCapacity`/`ErrDeliveryClosed` wrap `sdk.ErrUnavailable` and NOT
+`sdk.ErrConflict`; inbound `TestFormFailureDeliveryUnavailableMapsTo503` (capacity/closed/
+raw-unavailable → 503, conflict → 409). The pre-existing HTTP saturation suite
+(`TestForgotPasswordSaturationReturns503NotAccepted`,
+`TestPasswordlessStartSaturationReturns503NotAccepted`) stays green — 503 now via the new
+kind.
+
+Premise adaptations: (1) **No IX-19 "kind pending" note existed to update.** The task
+premise said Batch 1's `RELEASING.md` IX-19 note flagged the kind as pending; grep of
+`RELEASING.md`/`NOTES.md`/READMEs found no such note and the delivery README section never
+named the saturation error kind — so there was no stale conflict-semantics doc to correct
+(Batch 1 deferred IX-19 entirely to Batch 4). (2) **IX-13 = Option B, not a new module**,
+per the examples/cms precedent + the harness's package-main coupling (rationale above).
+(3) IX-20 removed the internal `authsvc.Deps` mailer entries too (not just the Service
+fields) because they were fully orphaned once the Service fields went; the public
+`auth.Config` surface is untouched.
+
+Verification: `sdk` `go build && go vet && go test -race -count=1 ./...` → ok;
+`features/authentication` `go test -race -count=1 ./...` → all ok; `features/jobs`
+build/vet/test → ok; `examples/auth-cms` build/vet/`go test -race -count=1 ./...` → ok;
+`GOWORK=off go mod tidy -diff` (and normal) → clean, EXIT 0; tagged compile
+`go vet -tags='livedelivery integration' ./cmd/server` → EXIT 0 both `GOWORK=off` and
+normally; `make guard` → EXIT 0, **15 guards**; `make build` → EXIT 0, all 37 modules.
+No PR/tag/push; no pre-existing uncommitted change reset. The Batch 2 `recovery_templ.go`
+templ-drift caveat is the known accepted state (not touched by Batch 4).
+
+### 2026-07-13/14 — AV3-9.8 Batch 5 gate run #1 (INTERIM — two defects found, fix round in flight)
+
+Verifier ran the full gate sequence. Results:
+
+- `make generate` ×2 → byte-idempotent; `git diff --check` clean. **PASS.**
+- templ drift → only the known Batch-2 `recovery_templ.go` exception. **PASS.**
+- per-module vet+build+test (36 modules) → 35 clean; **FAIL: sdk module —
+  `sdk/foundation/cryptids` `TestHS256TamperedSignatureRejected` FLAKY (3/20
+  isolated `-count=1` runs fail).** Security-relevant: must be proven a
+  test-construction bug, not a verifier accepting tampered signatures.
+- integration-tag vet (5 turso modules) → **PASS.**
+- `make guard` → **PASS** 15/15.
+- fresh dual-store `make test-stores` → **PASS 10/10 legs**, all `-count=1`,
+  fresh DBs (pg `authv3_cconf` recreated C-collation; libsql fully wiped — the
+  wipe removed a stale pre-AV3D bespoke `delivery_jobs` table, proving the reset
+  was load-bearing).
+- fenced-queue live conformance (`-race -count=1`, first-ever real-DB run) →
+  **PASS 41/41 subtests BOTH dialects** (pgx ok 17.3s, turso ok 13.8s). The
+  IX-05 fenced-store leg is green.
+- eight-proof livedelivery harness (`-tags='livedelivery integration' -race
+  -count=1`, both DSNs, zero skips) → **FAIL, FLAKY**: different subtests fail
+  across runs. pgx run A: KnownUnknownOpaqueAdmissionParity ("delivered 2, want
+  exactly 1"), ProviderTimeoutAndRetryOffRequestPath ("running, want completed"),
+  RestartAfterCheckpointResendsSameSecret (new secret minted on retry),
+  RestartAfterProviderAcceptanceResendsSameSecret (resend was an UNRELATED
+  earlier message — Verify email in a Reset proof), ResendConvergesToLatestGeneration
+  ("delivered 2, want 1"). Run B: different subset. turso: two proofs each failed
+  once/passed once; ProviderTimeoutAndRetryOffRequestPath failed once WITHOUT
+  `-race`. Suspected mechanisms: harness margins tuned for in-memory speed
+  (lease TTL vs `-race`-slowed handle cycle → legitimate at-least-once resend),
+  poll deadlines, and cross-proof state bleed (the unrelated-message failure) —
+  but a real fence defect is NOT yet excluded and would be a milestone stop
+  condition.
+- post-run sweep → containers running, no leftover processes/ports, git tree
+  unchanged by the gate run. **PASS.**
+
+Two parallel fix/diagnosis rounds dispatched (cryptids flake; livedelivery
+harness), each under the explicit discipline: prove test/harness bug and fix it
+without weakening any semantic assertion, or prove a product defect and STOP
+(stop condition — owner decision). Batch 5 remains OPEN; no completion claim.
+
+#### AV3-9.8 completion record
+
+The PR-ready handoff must contain one canonical severity-ranked table with every Claude
+and independent-review row marked fixed, rejected-with-evidence, or deferred-out-of-v3-
+scope; owner decisions; files changed; regression names; hermetic and fresh live evidence;
+runbook fixture results; remaining release gates (including LICENSE); and confirmation
+that no PR, tag, or push occurred without separate authorization. Do not mark AV3-9.8 or
+the milestone complete while the canonical Claude table is absent, a live leg skips, or
+IX-01's unsafe migration path remains published.
+
+### 2026-07-14 — AV3-9.8 Batch 5 completed + PR-ready completion record
+
+Outcome: **PASS — AV3-9.8 COMPLETE.** The gate-run #1 defects were both
+root-caused as test/harness bugs (no product defect), fixed, and re-proven;
+every gate then passed with zero skips; the IX-11 real-browser drive passed
+9/9 checks. No PR, tag, push, or commit was made — that remains the owner's
+workflow.
+
+**Gate-run defect resolutions (both World B — no product code touched):**
+
+- `TestHS256TamperedSignatureRejected` flake = TEST bug: the tamper flipped the
+  token's final base64url character (`'A'`→`'B'`), which differs only in the two
+  discarded padding bits of a 43-char RawURL signature — ~1/16 runs the
+  "tampered" token decoded to byte-identical MAC bytes and correctly verified.
+  The product verifier (constant-time `hmac.Equal` over decoded bytes) is
+  CORRECT. Fix: decode, flip a bit in `sig[0]` (full data byte), re-encode,
+  assert difference pre-verify. Stability: `-count=500` green + full sdk module
+  `-race` green + independent `-count=200` re-check.
+- livedelivery eight-proof flakes = HARNESS margins: (1) setup drains called
+  `stopRuntime` in the window between a successful `Send` and the `Complete`
+  commit, leaving the registration-verification job reclaimable; its 300ms lease
+  lapsed and a later worker legitimately resent it into the next proof's
+  observation window (the "unrelated Verify email", "delivered 2 want 1", and
+  "new secret minted" failures — all the same stray); (2) `Complete` racing the
+  final `stopRuntime` left jobs "running" at assert time; (3) a poll loop broke
+  on `Retries>=2` before the cross-goroutine `hang.count()` caught up. The fence
+  behaved exactly to its at-least-once contract in every case. Fixes (harness
+  file only, `jobs_delivery_live_test.go`): `waitLiveJobTerminal` /
+  `waitLiveQueueDrained` helpers so setup and observation phases reach durable
+  terminal state before `stopRuntime`; poll loop requires BOTH counters;
+  `ProcessTimeout` 60ms→400ms (still ≪ the 3s lease). NO semantic assertion
+  weakened (exactly-1, same-secret, completed, retries≥2 all still enforced).
+  Acceptance: 3 consecutive full `-race -count=1` runs green both dialects +
+  no-race run + 8/8 turso stability + one independent confirmation run
+  (`ok 20.141s`). `make guard` re-run green (exit 0).
+
+**IX-11 real-browser drive (the Batch 2 deferred leg) — 9/9 PASS** (headless
+Chromium via Playwright against a live `go run ./cmd/server` boot on :8082, dev
+mode, console transports, worker live): reset landing loads; fragment scrubbed
+from URL/history; hidden field carries the token after the bare-fragment read;
+valid-token + short-password → error rerender RETAINS the token (the IX-11 fix,
+live); raw token appears exactly once in the DOM (the hidden field); corrected
+retry PRGs to `/auth/login`; login with the NEW password succeeds; the OLD
+password is rejected. Token egress: exactly 1 occurrence in the host log — the
+console mailer's email body (development-only transport, production-rejected by
+construction) — and ZERO in any handler/service log line. Drive-harness note:
+the bundled landing's contract is a BARE fragment (`#<token>`); a first drive
+attempt using `#token=<value>` failed by harness error, consistent with the
+recorded IX-21 `#token=` link-builder deferral. Host stopped, port 8082
+released, containers left running.
+
+**Canonical disposition table — final outcomes** (canonical per the owner's
+2026-07-13 adoption: the IX table governs; unmerged Claude medium/low rows are
+represented by the AV3-9.7 per-dimension summaries and were absorbed into the
+batches where identifiable):
+
+| ID | Sev | Outcome |
+|---|---|---|
+| IX-01 | Critical | **FIXED** (B1): Option B deleted, drain-only normative; drain fixtures green both dialects (seed 5 → nonterminal 2 → terminalize → 0; accounting exact; fixtures dropped) |
+| IX-02 | High | **FIXED** (B3): delivery supervisor cancels host on unexpected runtime exit; injected-error + quiet-shutdown regressions |
+| IX-03 | High | **FIXED-docs** (gate 2, B1+B3): proof host documented honestly as in-memory fenced/non-durable (README, main.go, .env.example) |
+| IX-04 | High | **FIXED** (B2): `same-site` no longer auto-passes — exact Origin allowlist required; sibling-origin 403 regressions JSON+form, both gates |
+| IX-05 | High gate | **CLOSED** (B5): fenced live conformance 41/41 both dialects `-race`; eight-proof livedelivery green 3× consecutive `-race` + no-race + independent run, fresh DBs, zero skips; harness-margin fixes only — verdict: no fence defect |
+| IX-06 | High | **FIXED-docs** (gate 3, B1): truthful five-key inventory (JWT_SECRET, CHALLENGE_PEPPER, DELIVERY_ENCRYPTER_KEY, TOKEN_ENCRYPTER_KEY, IDENTIFIER_KEY) + real per-key rotation consequences; invented keys removed |
+| IX-07 | High gate | **DEFERRED out of v3**: LICENSE remains the owner's standing release stop |
+| IX-08 | High | **FIXED** (B3): narrow recover at per-job execution; panic → sanitized dead-letter, worker survives, clean shutdown under `-race` |
+| IX-09 | High | **FIXED-docs** (B1): SWP inventory in RELEASING.md + NOTES; adaptation — `features/jobs` floor is MINOR (source-compatible alias), `sdk/capabilities/work` NEW module |
+| IX-10 | Med | **FIXED** (B3): host purge scheduler (interval/retention/batch env knobs), bounded-batch + error-continue + shutdown regressions |
+| IX-11 | Med | **FIXED** (B2+B5): error rerender retains token via hidden-field echo; httptest + templ regressions + 9/9 real-browser drive; token never logged |
+| IX-12 | Med | **FIXED** (B3): honest rename `in_flight`→`outstanding` (request accounting); accepted-only admission counting; superseded subtracted |
+| IX-13 | Med | **FIXED** (B4): example go.mod self-contained (requires+replaces per examples/cms precedent); `GOWORK=off go mod tidy -diff` clean + tagged vet clean |
+| IX-14 | Med | **FIXED-docs** (B1): construction claims reframed truthfully (NewService has no AllowedOrigins gate; proxy wiring is a host deployment check) |
+| IX-15 | Med | **FIXED** (gate 4, B2): named machine codes shipped via auth-local mapper (`challenge_expired` 410 / `challenge_invalid` 400 / `too_many_attempts` 403), JSON+form parity regressions; passwordless/reset deliberately stay collapsed-generic |
+| IX-16 | Med | **FIXED** (B2): `/auth/logout` origin-gated (origin-only by design — expired-session logout preserved); sibling/expired/bearer regressions |
+| IX-17 | Med | **DEFERRED out of v3**: pgx C-collation deployment prerequisite stands (documented); shared datastore fix later |
+| IX-18 | Low | **FIXED-docs** (gate 5, B1): markup-only override promise; asset-policy hook recorded as post-v3 deferral |
+| IX-19 | Low | **FIXED** (gate 6 non-default, B4): `sdk.ErrUnavailable` added, mapped 503/`unavailable`; delivery capacity/closed reclassified from ErrConflict; redundant transport special-cases removed; 503s regression-pinned |
+| IX-20 | Low | **FIXED** (B4): dead `mailer`/`mailFrom` Service plumbing removed; public `auth.Config` unchanged (mailer still flows to the delivery router) |
+| IX-21 | Info | **DEFERRED upheld**: MFA, real SMS, `CompleteStepUpWithOAuth`, `#token=` link builder, PII-audit retention lifecycle |
+| IX-22 | Info | **REJECTED w/ evidence** + doc note (B1): `Attempt==0` intentional; operational counts come from lifecycle/`retried` |
+| IX-23 | Info | **REJECTED w/ evidence** + wording (B1): central `bytes.Clone` kept; snapshot semantics documented |
+
+Plus two gate-discovered defects, both **FIXED** as test/harness bugs (above);
+the HS256 one belongs to the JWT-refresh workstream's code but rode this
+verification.
+
+**Final verification state:** `make generate` idempotent; `git diff --check`
+clean; per-module vet+build+test green 36/36 (after the HS256 test fix); `make
+guard` 15/15; fresh dual-store `make test-stores` 10/10 legs `-count=1` on
+recreated C-collation pgx + fully wiped libsql; fenced live conformance 41/41
+×2 dialects `-race`; livedelivery 8-proof green ×4 runs; proof-host browser
+drive 9/9. Sole known `make check` caveat: the templ-drift step flags
+`recovery_templ.go` as dirty vs HEAD — expected for an uncommitted generated
+file whose `.templ` changed with it (generation idempotent); clears when both
+are committed together.
+
+**Remaining release gates (outside AV3-9.8):** LICENSE (owner's standing stop —
+blocks first public tags); turso CI secrets upload; committing the milestone
+tree and opening the PR (owner's normal workflow); tagging per the RELEASING.md
+floors (feature + both auth store modules = major, `views/templ` + `work` =
+first tags, `features/jobs` = minor, turso datastore = patch, sdk capabilities
+= minor).
+
+Confirmation: **no PR, tag, push, or commit was created at any point in
+AV3-9.8.** Reviewer wave ran once (AV3-9.7) and was not restarted; the only
+post-remediation review activity was the targeted verification runs above.

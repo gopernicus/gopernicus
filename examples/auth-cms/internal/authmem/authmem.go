@@ -36,7 +36,6 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/authgrant"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/challenge"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/contactchange"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/deliveryjob"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/identifier"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/invitation"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthaccount"
@@ -78,7 +77,6 @@ type data struct {
 	// auth_revision rides the user row.
 	challenges     map[string]challenge.Challenge
 	authGrants     map[string]authgrant.Grant
-	deliveryJobs   map[string]deliveryjob.Job
 	contactChanges map[string]contactchange.PendingChange
 }
 
@@ -100,7 +98,6 @@ func New() *Store {
 
 		challenges:     map[string]challenge.Challenge{},
 		authGrants:     map[string]authgrant.Grant{},
-		deliveryJobs:   map[string]deliveryjob.Job{},
 		contactChanges: map[string]contactchange.PendingChange{},
 	}}
 }
@@ -108,8 +105,8 @@ func New() *Store {
 // Repositories bundles the per-port views as the feature's repository set. Every
 // port is wired: the A9 proof host needs the v2 ports (OAuth, machine identity,
 // security events, invitations) live, not nil, and AV3-1.4 wires the v3 atomic
-// rails (challenges, contact changes, step-up grants, credential mutations,
-// delivery jobs) so the exported storetest suite proves them here too.
+// rails (challenges, contact changes, step-up grants, credential mutations) so the
+// exported storetest suite proves them here too.
 func (s *Store) Repositories() auth.Repositories {
 	return auth.Repositories{
 		Users:           userRepo{s.d},
@@ -128,7 +125,6 @@ func (s *Store) Repositories() auth.Repositories {
 		ContactChanges:       contactChangeRepo{s.d},
 		AuthenticationGrants: authGrantRepo{s.d},
 		CredentialMutations:  credentialMutationRepo{s.d},
-		DeliveryJobs:         deliveryJobRepo{s.d},
 	}
 }
 

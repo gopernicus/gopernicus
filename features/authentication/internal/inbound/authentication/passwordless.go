@@ -114,6 +114,10 @@ func (h *handlers) passwordlessStartJSON(w http.ResponseWriter, r *http.Request)
 			web.RespondJSONError(w, web.NewError(http.StatusTooManyRequests, "too many requests").WithCode("rate_limited"))
 			return
 		}
+		// A bounded in-process outbox admission rejection (queue full / shutting down)
+		// wraps sdk.ErrUnavailable, so the domain-error writer maps it to an honest 503
+		// — never a 202 accepted after dropping the work — identical for a known and an
+		// unknown identifier (admission precedes any account lookup).
 		web.RespondJSONDomainError(w, err)
 		return
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/challenge"
@@ -103,6 +104,19 @@ func (s *Service) PasswordlessEnabled() bool {
 // kind the host has not enabled, before resolving any account.
 func (s *Service) PasswordlessKindEnabled(kind string) bool {
 	return s.passwordless[kind]
+}
+
+// PasswordlessKinds returns the enabled passwordless kinds in deterministic
+// (sorted) order. The HTML start page uses it to render the kind field — a
+// select when several kinds are enabled, a hidden input when exactly one — so
+// the form always posts the kind StartPasswordless validates against.
+func (s *Service) PasswordlessKinds() []string {
+	kinds := make([]string, 0, len(s.passwordless))
+	for kind := range s.passwordless {
+		kinds = append(kinds, kind)
+	}
+	sort.Strings(kinds)
+	return kinds
 }
 
 // StartPasswordless is the enumeration-safe unauthenticated passwordless start

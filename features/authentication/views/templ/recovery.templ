@@ -2,19 +2,22 @@ package templ
 
 import "github.com/gopernicus/gopernicus/features/authentication"
 
-// ResetPassword renders the reset form reached from a reset link. The reset token
-// is NOT a server-rendered value (design §6.4): a CSP-nonced script reads it from
-// the URL fragment, scrubs it from history, and stashes it in a hidden field the
-// form posts alongside the new password. The token never appears in a query
-// string, in the page markup at render time, or in the referrer. The password
-// field is never repopulated.
+// ResetPassword renders the reset form reached from a reset link. On the initial
+// render the token is NOT a server-rendered value (design §6.4): a CSP-nonced script
+// reads it from the URL fragment, scrubs it from history, and stashes it in the hidden
+// field the form posts alongside the new password, so it never appears in a query
+// string, the initial markup, or the referrer. On a validation-error RE-render the
+// fragment is gone, so m.Token carries the SUBMITTED token back into the hidden field
+// (the same value the failed POST already sent) so a corrected retry survives (IX-11);
+// the nonced script only overwrites it when a fragment IS present, so it never clobbers
+// the retained value. The password field is never repopulated.
 templ ResetPassword(m authentication.ResetPage) {
 	@Layout("Choose a new password") {
 		@message(m.PageContext)
 		@errorSummary(m.PageContext)
 		<form id="reset-form" method="post" action={ templ.SafeURL(m.RedeemPath) } autocomplete="off">
 			@csrfField(m.PageContext)
-			<input type="hidden" name="token" id="reset-token"/>
+			<input type="hidden" name="token" id="reset-token" value={ m.Token }/>
 			<p>
 				<label for="password">New password</label><br/>
 				<input id="password" name="password" type="password" autocomplete="new-password" required aria-describedby="password-error"/>

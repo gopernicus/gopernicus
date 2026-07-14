@@ -228,6 +228,8 @@ func writeIdentifierError(w http.ResponseWriter, err error) {
 	case errors.Is(err, sdk.ErrAlreadyExists):
 		web.RespondJSONError(w, web.NewError(http.StatusConflict, "identifier already claimed").WithCode("identifier_exists"))
 	default:
-		web.RespondJSONDomainError(w, err)
+		// A wrong/expired/locked-out confirmation code surfaces a challenge-rail
+		// sentinel; respondDomainError emits the named §5.8 challenge codes.
+		respondDomainError(w, err)
 	}
 }

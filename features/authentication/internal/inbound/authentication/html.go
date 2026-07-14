@@ -189,6 +189,7 @@ func (h *handlers) passwordlessStartPage(w http.ResponseWriter, r *http.Request)
 	m := PasswordlessStartPage{
 		PageContext: pc,
 		Kind:        r.URL.Query().Get("kind"),
+		Kinds:       h.svc.PasswordlessKinds(),
 	}
 	h.renderPage(w, r, pc.CSPNonce, h.views.PasswordlessStart(m))
 }

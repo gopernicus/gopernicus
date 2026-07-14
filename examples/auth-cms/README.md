@@ -7,7 +7,9 @@ identity middleware into cms's admin surface. It is both the auth-v2 milestone's
 **A9 proof host** (OAuth, machine identity, JWT bearer, security-event audit, and
 ReBAC-decoupled invitations) and the **auth-v3 identity proof host**: it wires the
 full v3 surface with zero infra — the `user_identifiers` model, the atomic
-challenge rail, the durable delivery worker, passwordless email/phone login, the
+challenge rail, the two-mode delivery runtime (generic **jobs** wiring /
+bounded **in_process** — both backed by in-memory stores here, so both are
+non-durable on this proof host), passwordless email/phone login, the
 step-up-gated credential/identifier management suite, the bundled default HTML/
 templ pages (`authtempl`) **with a real host page override** (`internal/authpages`),
 and a `RuntimeMode=development` posture whose production-negative twin is proven
@@ -122,9 +124,10 @@ Roles are **opaque strings** the host interprets. Demo routes:
 - **auth store**: `internal/authmem` — an in-memory implementation of **every**
   auth port: v1 user/password/session, the v2 oauth-account/oauth-state/
   service-account/api-key/security-event/invitation ports, and the v3 identity +
-  atomic-security + delivery rails (identifier, challenge, password-reset,
-  contact-change, authentication-grant, credential-mutation, delivery-job — see
-  `ports_v3.go`). It honors the contracts the shared `features/authentication/storetest`
+  atomic-security rails (identifier, challenge, password-reset, contact-change,
+  authentication-grant, credential-mutation — see `ports_v3.go`; delivery owns no
+  auth port — durable delivery runs on the generic jobs feature). It honors the
+  contracts the shared `features/authentication/storetest`
   suite proves (uniqueness, sentinels, expired-at-read, the pinned GetByHash and
   partial-pending-uniqueness contracts, atomic single-use consume + revision-CAS,
   and the created_at DESC, id DESC paging), and projects the masked credential
@@ -178,10 +181,54 @@ Roles are **opaque strings** the host interprets. Demo routes:
 - **Challenge rail**: `ChallengeProtector` (`buildChallengeProtector`, HMAC key
   ring with active key ID `dev`) + the `Challenges`/`PasswordResets`/`Challenges`
   ports from `authmem` back verify/reset/step-up/passwordless.
-- **Delivery worker**: `DeliveryEncrypter` (AES-GCM) + `DeliveryWorkerAcknowledged:
-  true`; the host runs `authSvc.RunDeliveryWorker(ctx)` in a goroutine with graceful
-  shutdown. The outbox is the ONLY send path — the console mailer/notifier log the
-  delivered secret; drive codes/tokens/links from the server log.
+- **Delivery** (two proof-host variants, `DELIVERY_MODE`): the queue is the ONLY
+  send path in either — the console mailer/notifier log the delivered secret, so
+  drive codes/tokens/links from the server log.
+  - **`DELIVERY_MODE=jobs` (default — jobs-mode wiring over an IN-MEMORY fenced
+    queue):** `DeliveryMode: jobs` + `DeliveryEncrypter` (AES-GCM) +
+    `DeliveryJobsAcknowledged: true`; the host wires `Config.DeliveryDispatcher` over
+    the generic **jobs** feature and runs the jobs `FencedRuntime` (bound to
+    `authSvc.DeliveryJobRuntime()`) in a **supervised** goroutine (see the shutdown
+    section: an unexpected runtime exit brings the host down rather than serving with a
+    dead delivery runtime). This demonstrates the exemplary jobs-mode composition
+    (`internal/authjobs` is the ONE adapter importing both features), but **this proof
+    host backs the fenced queue with `jobsmem.NewFencedQueue` — an in-memory store**. So
+    on THIS host jobs mode is **NOT durable**: accepted work is **lost on restart** and
+    there is **no cross-instance coordination** (the same development posture as
+    `in_process`, just via the jobs wiring). Durability is a store swap a real host makes
+    — a durable `FencedQueue` adapter (`features/jobs/stores/{pgx,turso}` + its
+    `0003_fenced_job_queue` migration) — which this in-memory demo deliberately does not
+    wire. In jobs mode the host also runs a **scheduled terminal-purge loop** (a
+    host-owned goroutine on its own context, stopped in shutdown order) that removes at
+    most a bounded batch of terminal delivery rows older than a retention window each
+    tick, so durable rows and their encrypted metadata do not grow without bound:
+    `DELIVERY_PURGE_INTERVAL` (default `1h`), `DELIVERY_PURGE_RETENTION` (default `24h`),
+    `DELIVERY_PURGE_BATCH` (default `500`). It is a no-op posture on this in-memory demo
+    (nothing survives restart) but exercises the exact host-owned purge wiring a durable
+    host uses; the purged count surfaces on `/healthz/delivery`.
+  - **`DELIVERY_MODE=in_process` (small/development — EPHEMERAL):** the same delivery
+    processor runs behind a bounded queue + fixed worker pool the host drives via
+    `authSvc.RunDelivery`. No dispatcher, no jobs runtime;
+    `DeliveryEphemeralAcknowledged: true`. Its posture is **never hidden**: startup
+    logs a LOUD WARN that accepted in-flight work is **LOST on crash or restart**,
+    there is **no cross-instance coordination**, and running multiple instances
+    de-duplicates on **neither** (a user may receive duplicate messages). Any value
+    other than `in_process` falls back to `jobs` — the host never *silently* selects
+    an ephemeral mode.
+- **Delivery operational health** (`GET /healthz/delivery`, AV3D-5.3): a host-COMPOSED,
+  secret-free, bounded status surface (`internal/deliveryhealth`) — counters/gauges/
+  enums only, **never** a recipient, payload, secret, or logical key. It distinguishes
+  runtime **not-started vs running** (host-owned lifecycle), **request accounting /
+  backlog** (jobs mode: `admitted` counts **accepted** admission requests over the
+  wrapped dispatcher — a rejected admission is not counted — and `outstanding` =
+  admitted − delivered − skipped − dead_lettered − superseded, a **derived**
+  request-accounting figure clamped at zero, **not** an authoritative queue depth; the
+  fenced queue exposes no cheap authoritative nonterminal count. in_process mode: live
+  `queued`/`capacity`/`saturated` from the auth Service's `InProcessQueueDepth` read is
+  the **authoritative** backlog), **provider retry + dead-letter activity** (counted from
+  the wrapped secret-free `authentication.delivery.*` lifecycle events), and
+  **observer failure** (`observer_failures` increments when the events emitter errors).
+  It is host-composed over existing/narrow-additive seams — NOT a new feature route.
 - **Passwordless**: `Passwordless: [email, phone]` (`AUTH_PASSWORDLESS`) — email
   via the console Mailer, phone via the console Notifier;
   `POST /auth/passwordless/{start,verify,redeem}` and the bundled magic-link
@@ -215,8 +262,9 @@ Roles are **opaque strings** the host interprets. Demo routes:
 | `Config.TokenEncrypter` | AES-GCM iff `AUTH_TOKEN_ENCRYPTER_KEY` | provider tokens not persisted (login/link still work) |
 | `Config.Granter` | engine `relationshipGranter` (`authorizer.CreateRelationships`) | invitation routes not registered (deny-by-absence) |
 | `Config.RuntimeMode` | `development` (explicit) | REQUIRED, no default — nil is `ErrRuntimeModeRequired` |
+| `Config.DeliveryMode` | `jobs` (explicit) | REQUIRED, no default — empty is `ErrDeliveryModeRequired`, unknown is `ErrDeliveryModeInvalid` |
 | `Config.ChallengeProtector` | HMAC key ring (`AUTH_CHALLENGE_PEPPER` or ephemeral) | REQUIRED once `Challenges` wired — `ErrChallengeProtectorRequired` |
-| `Config.DeliveryEncrypter` | AES-GCM (`AUTH_DELIVERY_ENCRYPTER_KEY` or ephemeral) | REQUIRED once `DeliveryJobs` wired — `ErrDeliveryEncrypterRequired` |
+| `Config.DeliveryEncrypter` | AES-GCM (`AUTH_DELIVERY_ENCRYPTER_KEY` or ephemeral) | REQUIRED once delivery can send (`jobs` dispatcher or `in_process`) — `ErrDeliveryEncrypterRequired` |
 | `Config.IdentifierKeyer` | HMAC (`AUTH_IDENTIFIER_KEY` or ephemeral) | production-required; dev falls back to per-instance SHA-256 |
 | `Config.Passwordless` | `[email, phone]` (`AUTH_PASSWORDLESS`) | empty → passwordless routes not registered |
 | `Config.PublicAuthBaseURL` | `…/auth/magic` (`AUTH_PUBLIC_BASE_URL`) | REQUIRED once a link flow is enabled; production requires HTTPS |
@@ -232,7 +280,9 @@ the JWT/session knobs (`AUTH_JWT_SECRET`, `AUTH_ACCESS_TOKEN_TTL` default 15m,
 `AUTH_REFRESH_TTL` default 7d, `AUTH_TOKEN_ENCRYPTER_KEY`), the four other distinct
 v3 secrets (`AUTH_CHALLENGE_PEPPER`, `AUTH_IDENTIFIER_KEY`,
 `AUTH_DELIVERY_ENCRYPTER_KEY`), the v3 HTML/passwordless/magic-link knobs
-(`AUTH_PUBLIC_BASE_URL`, `AUTH_ALLOWED_ORIGINS`, `AUTH_PASSWORDLESS`), and
+(`AUTH_PUBLIC_BASE_URL`, `AUTH_ALLOWED_ORIGINS`, `AUTH_PASSWORDLESS`),
+`DELIVERY_MODE` (`jobs` default / `in_process` for the ephemeral bounded variant —
+see the Delivery wiring bullet), and
 `AUTH_DEBUG` + `OAUTH_CLIENT_ID/SECRET`. The host boots with **none** of them set:
 every secret gets a required-but-ephemeral single-instance key at boot
 (WARN-logged, never printed), passwordless defaults to `email,phone`, the magic
@@ -496,9 +546,16 @@ curl -sX POST -b jar http://localhost:8082/outbox-demo        # -> 202 {"event_i
 #      data: {"type":"demo.outbox","occurred_at":"…","aggregate_type":"demo","aggregate_id":"outbox-demo"}
 ```
 
-Shutdown order (SIGTERM): **HTTP server → poller pool → `bus.Close`** — the poller
-pool runs on its own Background-derived context so it stops only after HTTP has
-drained, and the bus closes last on a fresh bounded context.
+Shutdown order (SIGTERM): **HTTP server → delivery runtime → terminal-purge scheduler
+→ poller pool → `bus.Close`** — the delivery runtime, purge scheduler, and poller pool
+each run on their own Background-derived context so they stop only after HTTP has
+drained, and the bus closes last on a fresh bounded context. HTTP and delivery are
+**supervised as one lifecycle** (IX-02): the server blocks on a cancelable child of the
+signal context, and if the delivery runtime exits unexpectedly (error OR a clean return)
+while the host is running, the supervisor cancels that context — so the server drains
+and the process exits nonzero rather than continuing to admit work against a dead
+delivery runtime. A normal signal-driven shutdown (the delivery context is canceled by
+the ordered stop above) takes the quiet path and is never treated as a failure.
 
 ### Leg 7 — the authorization flagship (both kinds)
 
@@ -612,7 +669,7 @@ password set/change/remove, and OAuth unlink — the HTML forms call the SAME se
 methods (the HTML layer recalculates no policy). A stale/revoked session on an
 account page redirects to login (after validating a safe relative return-to).
 
-### Leg 11 — auth-v3: override systems + delivery worker
+### Leg 11 — auth-v3: override systems + delivery runtime
 
 The host demonstrates the **two distinct override facilities**: `Config.Views`
 (the branded Login page, Leg 8) and `Config.EmailContentTemplates` (a branded
@@ -621,13 +678,14 @@ verification body reads "Your Gopernicus CMS verification code is: …" (the
 LayerApp override), not the bundled default — proof the two systems are distinct.
 The startup log shows the development console-transport WARNs (email sender + phone
 notifier) and the per-job delivery lifecycle (`delivery job … outcome=delivered
-attempt=1`). The outbox is the ONLY send path: worker retry/replacement/terminal/
-purge are proven hermetically (`internal/logic/delivery`), and a memory host cannot
+attempt=1`). The delivery dispatcher is the ONLY send path:
+retry/replacement/terminal/purge are proven hermetically
+(`internal/logic/delivery` + the jobs-mode host proofs), and a memory host cannot
 boot production, so the production-negative gates
 (`cmd/server/production_test.go`) are hermetic: console→`ErrInsecureDeliveryTransport`,
 http-base→`ErrPublicAuthBaseURLInsecure`, memory-limiter→`ErrNonDurableRateLimiter`,
-nil-keyer→`ErrIdentifierKeyerRequired`, non-durable outbox→`ErrNonDurableDeliveryRepository`,
-unacknowledged worker→`ErrDeliveryWorkerUnacknowledged`.
+nil-keyer→`ErrIdentifierKeyerRequired`, and (default `jobs` mode) an unacknowledged
+jobs runtime→`ErrDeliveryJobsUnacknowledged`.
 
 ## Invitation kinds demo (identity-resolution, 2026-07-10)
 
@@ -677,4 +735,8 @@ unwired kind (e.g. `slack`) fails 400; email is always-on via the Mailer.
   demo flow.
 - **host-local health** (host code, not feature surface): `GET /healthz` —
   unauthenticated liveness probe. Both stores are memory-backed, so there is no
-  DB to probe: reaching the handler returns `200`.
+  DB to probe: reaching the handler returns `200`. `GET /healthz/delivery` —
+  unauthenticated, secret-free delivery operational health (bounded counters/gauges/
+  enums): `{mode, runtime, admitted, outstanding, queued, capacity, saturated,
+  delivered, skipped, retried, dead_lettered, superseded, purged, observer_failures}`.
+  See the "Delivery operational health" wiring bullet above.

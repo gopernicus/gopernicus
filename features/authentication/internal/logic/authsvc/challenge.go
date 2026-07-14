@@ -67,11 +67,13 @@ var challengeSpecs = map[string]challengeSpec{
 	challenge.PurposeStepUp:             {format: formatCode, ttl: 5 * time.Minute, maxAttempts: challenge.MaxAttempts},
 }
 
-// Stable challenge-rail errors (design §5.8). The transport maps the wrapped sdk
-// kind to the machine codes challenge_expired (410), challenge_invalid (400), and
-// too_many_attempts (403). Every non-success disposition collapses to one of
-// these three so a response never distinguishes "no such challenge" from "wrong
-// code" (enumeration protection) — a secret is never named in the error.
+// Stable challenge-rail errors (design §5.8). The transport recognizes these
+// sentinels (errors.Is) and emits the named machine codes challenge_expired (410),
+// challenge_invalid (400), and too_many_attempts (403); the wrapped sdk kind fixes
+// the same status even where the generic mapper handles the error. Every non-success
+// disposition collapses to one of these three so a response never distinguishes "no
+// such challenge" from "wrong code" (enumeration protection) — a secret is never
+// named in the error.
 var (
 	// ErrChallengeExpired is returned when the challenge existed but was past its
 	// TTL; the row is already deleted. Maps to 410.

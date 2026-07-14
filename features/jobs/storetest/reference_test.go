@@ -28,3 +28,15 @@ func TestReferenceSchedules(t *testing.T) {
 		return memstore.NewSchedules()
 	})
 }
+
+// TestReferenceFencedQueue runs the fenced/keyed/checkpointed queue suite against
+// the in-core memstore reference. As of AV3D-1.4 every case is load-bearing here:
+// AV3D-1.1 activated lease-fencing, AV3D-1.2 the logical-key admission/supersession
+// and concurrency cases, AV3D-1.3 the claimed-payload checkpoint cases, and AV3D-1.4
+// the retry-at, permanent dead-letter, and bounded-purge cases. No case is deferred;
+// the pgx/turso stores run the same suite live under -race at AV3D-1.5.
+func TestReferenceFencedQueue(t *testing.T) {
+	RunFencedQueue(t, func(t *testing.T) job.FencedQueueRepository {
+		return memstore.NewFencedQueue()
+	})
+}

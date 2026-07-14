@@ -94,8 +94,6 @@ func newTokenHandler(t *testing.T, signer cryptids.JWTSigner, requireVerified bo
 		Passwords:            &memPasswords{m: map[string]string{}},
 		Sessions:             &memSessions{m: map[string]session.Session{}},
 		Hasher:               fakeHasher{},
-		Mailer:               nopMailer{},
-		MailFrom:             "noreply@example.com",
 		Limiter:              limiter,
 		Cookie:               authsvc.CookieConfig{},
 		RequireVerifiedEmail: requireVerified,

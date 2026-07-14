@@ -34,7 +34,6 @@ func serviceWithResolver(t *testing.T, resolver invitationResolver) (*Service, *
 		Challenges:  newFakeChallenges(),
 		Protector:   newFakeProtector("k1", "k1"),
 		Hasher:      &fakeHasher{},
-		Mailer:      mailer,
 		Limiter:     ratelimiter.NewMemory(),
 		Cookie:      CookieConfig{},
 		Invitations: resolver,

@@ -87,6 +87,21 @@ func TestRequireBrowserSafeMutation(t *testing.T) {
 			want: http.StatusForbidden,
 		},
 		{
+			name: "same-site sibling origin is rejected even with a matching token (IX-04)",
+			req:  csrfReq{origin: "https://evil.example.com", secFetchSite: "same-site", sessionCookie: true, csrfCookie: "abc", csrfHeader: "abc"},
+			want: http.StatusForbidden,
+		},
+		{
+			name: "same-site allowlisted origin passes with a matching token",
+			req:  csrfReq{origin: "https://app.example.com", secFetchSite: "same-site", sessionCookie: true, csrfCookie: "abc", csrfHeader: "abc"},
+			want: http.StatusOK,
+		},
+		{
+			name: "same-site with no origin is rejected (IX-04)",
+			req:  csrfReq{secFetchSite: "same-site", sessionCookie: true, csrfCookie: "abc", csrfHeader: "abc"},
+			want: http.StatusForbidden,
+		},
+		{
 			name: "non-allowlisted origin without sec-fetch-site is rejected",
 			req:  csrfReq{origin: "https://evil.example.com", sessionCookie: true, csrfCookie: "abc", csrfHeader: "abc"},
 			want: http.StatusForbidden,
@@ -103,6 +118,42 @@ func TestRequireBrowserSafeMutation(t *testing.T) {
 		},
 	}
 
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, tt.req.build())
+			if rec.Code != tt.want {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.want)
+			}
+		})
+	}
+}
+
+// TestRequireBrowserSafeOriginSameSite is the IX-04 regression for the
+// credential-establishment origin gate: only same-origin auto-passes; a same-site
+// sibling (an attacker-controlled origin under the same registrable domain) must clear
+// the exact Origin allowlist, a same-site request with no Origin is rejected, and the
+// native no-headers client still passes.
+func TestRequireBrowserSafeOriginSameSite(t *testing.T) {
+	mw := requireBrowserSafeOrigin(csrfConfig{
+		allowedOrigins:    []string{"https://app.example.com"},
+		sessionCookieName: testSessionCookie,
+	})
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	handler := mw(next)
+
+	tests := []struct {
+		name string
+		req  csrfReq
+		want int
+	}{
+		{"same-origin auto-allows", csrfReq{secFetchSite: "same-origin"}, http.StatusOK},
+		{"same-site sibling rejected", csrfReq{origin: "https://evil.example.com", secFetchSite: "same-site"}, http.StatusForbidden},
+		{"same-site allowlisted passes", csrfReq{origin: "https://app.example.com", secFetchSite: "same-site"}, http.StatusOK},
+		{"same-site with no origin rejected", csrfReq{secFetchSite: "same-site"}, http.StatusForbidden},
+		{"cross-site allowlisted passes", csrfReq{origin: "https://app.example.com", secFetchSite: "cross-site"}, http.StatusOK},
+		{"native no headers passes", csrfReq{}, http.StatusOK},
+	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()

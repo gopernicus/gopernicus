@@ -156,12 +156,21 @@ func TestHS256TamperedSignatureRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
-	last := token[len(token)-1]
-	flip := byte('A')
-	if last == 'A' {
-		flip = 'B'
+	parts := strings.Split(token, ".")
+	// Flip a bit in the decoded signature bytes rather than a base64 character:
+	// the final base64url char carries two unused padding bits, so mutating it
+	// can decode to the same MAC bytes and leave a valid token. Mutating a byte
+	// guarantees the MAC differs.
+	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		t.Fatalf("decode signature: %v", err)
 	}
-	tampered := token[:len(token)-1] + string(flip)
+	sig[0] ^= 0x01
+	tamperedSeg := base64.RawURLEncoding.EncodeToString(sig)
+	if tamperedSeg == parts[2] {
+		t.Fatal("tamper did not change the signature segment")
+	}
+	tampered := parts[0] + "." + parts[1] + "." + tamperedSeg
 	if _, err := s.Verify(tampered); !errors.Is(err, ErrSignatureInvalid) {
 		t.Fatalf("err = %v, want ErrSignatureInvalid", err)
 	}

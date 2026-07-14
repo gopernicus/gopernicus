@@ -9,7 +9,7 @@ worked example `examples/cms`.
 ```
 <repo>/
   go.work                                # ties the modules together for local dev (dev-only)
-  sdk/                    module github.com/gopernicus/gopernicus/sdk                         — stdlib-only, LAYERED (sdk-layering 2026-07-10): the root package is the KERNEL (errors.go, context.go); foundation/ = agnostic mechanism/vocabulary (imports the root only, flat); capabilities/ = capability ports + defaults (import root+foundation, never each other); feature/ = the one sanctioned composer
+  sdk/                    module github.com/gopernicus/gopernicus/sdk                         — stdlib-only, LAYERED (sdk-layering 2026-07-10): the root package is the KERNEL (errors.go, context.go); foundation/ = agnostic mechanism/vocabulary (imports the root only, flat); capabilities/ = behavioral ports + policy, defaults optional (import root+foundation, never each other); feature/ = the one sanctioned composer
   integrations/
     cryptids/bcrypt/      module …/integrations/cryptids/bcrypt         — a connector (x/crypto bcrypt)
     cryptids/golang-jwt/  module …/integrations/cryptids/golang-jwt     — a connector (golang-jwt/jwt v5)
@@ -87,10 +87,13 @@ sdk/                      ROOT package sdk — the KERNEL (errors.go,
                           cryptids, validation, logging, conversion,
                           slug, async, environment). May import the ROOT
                           only — FLAT, no foundation→foundation edges.
-  capabilities/<pkg>      capability ports + first-party defaults
-                          (cacher, tracing, email, notify, oauth,
-                          filestorage, ratelimiter, events). May import
-                          root + foundation — NEVER another capability.
+  capabilities/<pkg>      behavioral ports + observable policy, pinned
+                          by conformance tests; first-party defaults
+                          OPTIONAL (cacher, tracing, email, notify,
+                          oauth, filestorage, ratelimiter, events,
+                          work — oauth and work ship no default). May
+                          import root + foundation — NEVER another
+                          capability.
   feature/                the ONE sanctioned composition package (the
                           mount contract composes by definition).
 ```
@@ -103,6 +106,39 @@ composition leaves sdk entirely (a composing integration —
 law over production code (tests exempt, the G6 precedent — two
 deliberate env round-trip tests are why); G13 keeps integrations
 pointing outward-only.
+
+## Protocols and feature relationships (sdk-work-protocol, 2026-07-13)
+
+sdk owns the **interoperability grammar** — vocabulary, narrow contracts, and
+conformance semantics; features either IMPLEMENT that grammar or BUILD ON it
+while retaining their own aggregates, schema, lifecycle, and routes. The
+relationship is not uniform:
+
+| sdk contract | feature | relationship |
+|---|---|---|
+| `sdk/foundation/identity.Resolver` | `features/authentication` | IMPLEMENTS the Resolver; users/credentials stay feature-owned |
+| `sdk/capabilities/events.Bus` | `features/events` | BUILDS ON the Bus (durable outbox + SSE gateway); is not the Bus implementation |
+| `sdk/capabilities/work` — the keyed-work submission protocol | `features/jobs` | IMPLEMENTS the protocol as the **implementation of record** — a capability with NO default (the oauth precedent); the durable `Job` aggregate and fenced runtime stay feature-owned |
+| authorization check/decision vocabulary | `features/authorization` | **deferred** — stays consumer-declared (fails graduation criterion 2 of `features/README.md` §5 today; trigger: authorizationv3 settles its semantics) |
+
+Placement within sdk is determined by what the package MEANS and may depend
+on, never by where a current implementation happens to live: pure
+mechanism/vocabulary → `foundation/`; behavioral port + observable policy
+pinned by a conformance suite → `capabilities/`. A capability need not ship a
+default (`oauth`, `work`). This keeps the tier predictive if an implementation
+later moves or another implementation appears. Executor-side mechanics
+(claim/lease/checkpoint/fencing) are not part of the work protocol: the
+mechanism stays `sdk/foundation/workers`, the domain contract stays
+`features/jobs/domain/job.FencedQueueRepository`. The work protocol's lifecycle
+vocabulary is the frozen seven-value set — `pending` / `running` / `completed`
+/ `failed` (non-terminal) / `dead_letter` / `canceled` / `superseded` — locked
+to its persisted strings by the sdk package's own literal test.
+
+A shape graduates from a feature-declared port into an sdk protocol only by
+passing **all three gates**: `sdk/README.md`'s admission policy, the
+five-point sdk-vs-logic test below, and the five graduation criteria of
+`features/README.md` §5 — the criteria are conjunctive with, never a
+substitute for, the other two gates.
 
 ## Where middleware lives (middleware-consolidation, 2026-07-11)
 
@@ -134,7 +170,7 @@ workshop-v2-scaffolding W5, adding the workshop row):
 
 | kind | definition | examples | swap unit |
 |---|---|---|---|
-| **sdk facility** | a capability **port** + a first-party stdlib default + a conformance suite; its state is opaque to the host (no host-owned schema, no migrations, no routes) | `cacher`+`Memory`, `email`+`Console`/`SMTP`, `notify`+`Console`/`MailerBridge`, `ratelimiter`+`Memory`, `filestorage`+`Disk`, `workers` (pool + `Runner[T]`) | a config value — the swap is invisible outside the process |
+| **sdk facility** | a capability **port** + a conformance suite, usually with a first-party stdlib default — defaults are OPTIONAL (sdk-work-protocol, 2026-07-13): the implementation of record may instead be an integration (`oauth`) or a feature (`work` → `features/jobs`); its state is opaque to the host (no host-owned schema, no migrations, no routes) | `cacher`+`Memory`, `email`+`Console`/`SMTP`, `notify`+`Console`/`MailerBridge`, `ratelimiter`+`Memory`, `filestorage`+`Disk`, `workers` (pool + `Runner[T]`), `work` (no default) | a config value — the swap is invisible outside the process |
 | **integration** | a third-party backend for a port; isolates exactly one external dependency — a third-party library or an external vendor's live API contract — **or implements one sdk capability port by composing other sdk packages** (zero external deps, never importing features/, examples/, or another integration; guard G13; `notify/mailer`, 2026-07-10); one module | `datastores/turso`, `datastores/pgxdb`, `kvstores/goredis` | a module import in the host's `main` |
 | **feature** | a mountable domain module: own entities, **own durable schema + migrations**, and/or **own route surface**; its core module requires **sdk only** (FS1, 2026-07-07) | `cms`, `auth`, `jobs`; next: `events` | `NewService` + a `svc.Register` call |
 | **store module** | a feature's store implementation — SQL + migrations written against one driver package's API (`stores/<package>`) | `cms/stores/turso`, `cms/stores/pgx` | a module import + one `Open` call |
@@ -154,9 +190,13 @@ nil-safe port field, wired (or not) in the host's `main`.
   `Sender`, `cacher.Storer`, the generic `crud` CRUD shape), the **services**
   (the KERNEL error/id-context vocabulary in the root package; `foundation/{web, logging,
   environment, cryptids, slug, identity, …}`; `capabilities/{cacher, email, notify, …}` — the
-  layered shape, sdk-layering 2026-07-10), **and a zero-dependency
-  default implementation of each facility port, shipped right next to it**
-  (slog-style): `cacher.Memory`, `filestorage.Disk`, `email.SMTP` + `email.Console`.
+  layered shape, sdk-layering 2026-07-10), **and — where a vendor-neutral
+  stdlib implementation honestly exists — a zero-dependency default
+  implementation of the facility port, shipped right next to it**
+  (slog-style): `cacher.Memory`, `filestorage.Disk`, `email.SMTP` +
+  `email.Console`. Defaults are optional, not definitional: `oauth` and
+  `work` ship none (their implementations of record live in
+  `integrations/oauth/*` and `features/jobs` respectively).
   Its `go.mod` has **no `require` block** — "imports only the standard library" is
   enforced by the module boundary, not just a grep.
 - **`integrations/<category>/<tech>` — connectors.** Each isolates exactly **one
@@ -395,7 +435,12 @@ makes that structural.
 | app contract (post repository, asset store with CMS rules) | `internal/logic/domains/<domain>` | — | `internal/outbound/<kind>/<tech>` (app-specific) **or** `features/<name>/stores/<package>` (feature store adapter module, for a reusable domain) |
 
 The contract lives with the code that **consumes** it, never with the code that
-implements it.
+implements it — as the DEFAULT. The one exception is a **ratified platform
+protocol** (sdk-work-protocol, 2026-07-13): a shape that passes all three
+graduation gates (`sdk/README.md` admission, the five-point test below, and
+`features/README.md` §5's five criteria) moves into sdk as canonical
+vocabulary + contract, and a feature may be its implementation of record —
+`sdk/capabilities/work` implemented by `features/jobs` is the exemplar.
 
 ## sdk vs internal/logic — the test
 
@@ -407,6 +452,10 @@ domain port):
 3. You can write a conformance suite for it.
 4. Most apps would benefit from the same vocabulary.
 5. It stays useful without knowing CMS-specific domain concepts.
+
+This five-point test is one of the three conjunctive graduation gates for a
+shape leaving a feature-declared port (see "Protocols and feature
+relationships" above); passing it alone never admits a contract into sdk.
 
 `sdk` is meant to be **opinionated** about platform semantics and defaults
 (context-first, error kinds, cursor pagination, cache TTL/miss semantics, file

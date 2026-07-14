@@ -557,8 +557,6 @@ func newTestHandler(t *testing.T, limiter ratelimiter.Limiter) http.Handler {
 		Protector:      memProtector{},
 		PasswordResets: &memPasswordResets{ch: challenges, pw: passwords, sess: sessions},
 		Hasher:         fakeHasher{},
-		Mailer:         nopMailer{},
-		MailFrom:       "noreply@example.com",
 		Deliver:        router,
 		Queue:          stubQueue{},
 		Limiter:        limiter,

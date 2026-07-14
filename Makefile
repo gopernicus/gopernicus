@@ -15,7 +15,8 @@ STORE_MODULES = features/cms/stores/pgx features/cms/stores/turso features/authe
 	guard-sdk-stdlib guard-feature-isolation guard-sdk-no-outward guard-no-legacy-path \
 	guard-feature-core-sdk-only guard-feature-transport-sdk-web guard-feature-no-cross-feature \
 	guard-store-no-foreign-feature guard-no-underlying guard-no-lax-scan \
-	guard-workshop-boundary guard-sdk-layering guard-integration-no-inward
+	guard-workshop-boundary guard-sdk-layering guard-integration-no-inward \
+	guard-auth-no-delivery-repo guard-auth-no-request-time-provider
 
 # Regenerate *_templ.go from .templ sources. Each bundled views/templ module pins
 # its own templ tool; generation runs inside each so the tool version is
@@ -87,11 +88,12 @@ tidy:
 # Layering guards — each enforces one architectural boundary from the
 # constitution (00-overview.md) or the feature-standard charter (FS rules,
 # 2026-07-07); every target must print nothing and exit 0 on a clean tree.
-# `make guard` runs all thirteen.
+# `make guard` runs all fifteen.
 guard: guard-sdk-stdlib guard-feature-isolation guard-sdk-no-outward guard-no-legacy-path \
 	guard-feature-core-sdk-only guard-feature-transport-sdk-web guard-feature-no-cross-feature \
 	guard-store-no-foreign-feature guard-no-underlying guard-no-lax-scan \
-	guard-workshop-boundary guard-sdk-layering guard-integration-no-inward
+	guard-workshop-boundary guard-sdk-layering guard-integration-no-inward \
+	guard-auth-no-delivery-repo guard-auth-no-request-time-provider
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -242,6 +244,32 @@ guard-sdk-layering:
 guard-integration-no-inward:
 	@echo "== guard: integrations import no features/examples/workshop =="
 	@! grep -rn --include='*.go' -E '"github.com/gopernicus/gopernicus/(features|examples|workshop)' integrations/ || { echo "ERROR (G13): an integration imports inward"; exit 1; }
+
+# G14 (authv3-delivery-refactor AV3D-5.1): authentication owns NO bespoke durable
+# delivery queue. The private deliveryjob domain, its `delivery_jobs` table, and
+# its pgx/turso stores were removed — durable delivery is the generic jobs feature
+# reached through a host-wired Config.DeliveryDispatcher; auth owns no delivery
+# table. This tripwire fails if either bespoke marker returns. The snake_case
+# `delivery_jobs` (SQL table) is case-sensitive so it never matches the legitimate
+# jobs-mode names (DeliveryJobKind, DeliveryJobRuntime, DeliveryJobsAcknowledged),
+# and the deliveryjob package clause/import path catches a renamed resurrection.
+guard-auth-no-delivery-repo:
+	@echo "== guard: authentication owns no bespoke delivery table/repository (AV3D-5.1) =="
+	@! grep -rn 'delivery_jobs' features/authentication || { echo "ERROR (AV3D-5.1): a 'delivery_jobs' table returned to authentication — durable delivery is the generic jobs feature; auth owns no delivery table"; exit 1; }
+	@! grep -rnE 'domain/deliveryjob|package deliveryjob' --include='*.go' features/authentication examples/auth-cms || { echo "ERROR (AV3D-5.1): the bespoke deliveryjob domain package returned — durable delivery is the generic jobs feature, reached via Config.DeliveryDispatcher"; exit 1; }
+
+# G15 (authv3-delivery-refactor AV3D-2.4/5.1): no auth producer calls a provider
+# on the request path. Every outbound message is admitted through the delivery
+# dispatcher seam; the actual send (Router.Deliver, email.Sender.Send,
+# notify.Notifier.Notify) is the off-request processor's job. A producer that
+# called any send verb directly would leak a secret on the request path, defeating
+# enumeration safety. The delivery/ package (where those verbs legitimately live)
+# is excluded; the AST-precise companion is TestNoProducerBypassesDispatcherSeam
+# (producer_seam_test.go) — this coarse grep keeps the boundary in `make guard`.
+guard-auth-no-request-time-provider:
+	@echo "== guard: no authentication producer calls a provider on the request path (AV3D-2.4) =="
+	@hits=$$(grep -rnE '\.(Deliver|Send|Notify)\(' --include='*.go' --exclude='*_test.go' features/authentication/internal/logic | grep -v '/delivery/' || true); \
+		if [ -n "$$hits" ]; then echo "ERROR (AV3D-2.4): a producer package calls a provider-send verb directly — outbound must go through the delivery dispatcher seam, never a request-time send:"; echo "$$hits"; exit 1; fi
 
 # CI-style gate: templ generation must be a no-op (no drift), then per-module
 # vet/build/test across all MODULES, then the four layering guards. Drift

@@ -170,3 +170,23 @@ be opened before AV3-9.8.
 
 Append only. Phase files own task-level entries; this overview receives the
 final milestone-close entry.
+
+### 2026-07-14 — MILESTONE CLOSE
+
+Auth v3 is COMPLETE per the completion criteria above. AV3-0.1 through AV3-9.8
+are all checked off with dated execution-log entries in their phase files.
+Final state: one post-implementation reviewer wave (AV3-9.7, eight specialist
+reviews over the auth-v3 + AV3D + SWP cut, 41 findings) dispositioned via the
+canonical IX-01..IX-23 integrated table (owner-adopted 2026-07-13); all seven
+owner gates resolved; remediation executed in five bounded batches (files,
+regressions, and adaptations logged per batch in 10-docs-and-closeout.md);
+reverification green with zero skips — hermetic 36/36 modules + 15/15 guards,
+fresh dual-store conformance 10/10 legs, the lease/generation fence's
+first-ever live pgx/turso concurrency run 41/41 subtests `-race` both dialects,
+the eight-proof livedelivery harness green ×4 runs, and the IX-11 reset-retry
+browser drive 9/9. Two verification-discovered defects were root-caused as
+test/harness bugs (no product defect; no assertion weakened). The PR-ready
+completion record and final disposition table live in 10-docs-and-closeout.md.
+No PR, tag, push, or commit was made — committing the tree, opening the PR,
+tagging per the RELEASING.md floors, LICENSE, and turso CI secrets remain the
+owner's release workflow.
