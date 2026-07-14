@@ -47,13 +47,17 @@ Acceptance: a host can wire safely without reading internal code or this plan.
 
 Record:
 
-- breaking public API/port/schema changes and next tag floor;
+- breaking public API/port/schema changes and next tag floor, using the
+  per-module tag floors now recorded in `RELEASING.md` as the vocabulary;
 - consumer changes in auth invitations, events authorization closure, auth-cms,
   and external host recipes;
 - canonical migration rewrite versus append-only decision at actual preflight;
-- delivery/jobs owner note and what was intentionally not changed in auth v3;
+- the settled jobs/work dependency: `sdk/capabilities/work` is a new first-tag
+  module and `features/jobs` carries a MINOR floor from the delivery refactor —
+  record what authorization adds on top, if anything;
 - every accepted premise adaptation and deferred item; and
-- module/go.work/Makefile/guard changes.
+- module/go.work/Makefile/guard changes (fifteen layering guards exist today;
+  number any new ones consistently).
 
 Acceptance: release notes distinguish semantic access changes from source-only
 renames.
@@ -90,13 +94,17 @@ cd features/authorization && go test -race ./...
 
 Plus full pgx and Turso live conformance, repeated concurrent mutation tests,
 upgrade protocol, admin negative matrix, proof-host protocol, and both effect
-modes. Live skips do not close the task.
+modes. Live skips do not close the task. Live legs follow the auth v3 recipe:
+`authv3-pg` (C-collation) and `authv3-libsql` containers, fresh/reset databases,
+explicit `-count=1`, and harness margins that reach durable terminal state
+before stopping runtimes (lease TTLs versus `-race` slowdown).
 
 ## Task AZ3-6.6 — post-implementation reviewer gate
 
 Depends on: AZ3-6.5.
 
-Run one review wave over the completed implementation, focusing on:
+Run one review wave over the completed implementation — the auth v3 shape (one
+post-implementation wave, then owner-gated remediation in AZ3-6.7) — focusing on:
 
 - ReBAC/userset semantics and graph correctness;
 - database atomicity/isolation and migration safety;

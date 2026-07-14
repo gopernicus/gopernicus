@@ -26,6 +26,12 @@ Implement:
 - Add stable reason/error codes for invalid request, unknown model symbol,
   denied, evaluation limit, stale revision, invariant conflict, mutation-ID
   replay, committed-effect-failed, and infrastructure failure.
+- Align with the post-AV3-9.8 sdk taxonomy: backpressure/shutdown/degraded
+  unavailability wraps the existing `sdk.ErrUnavailable` (mapped 503/`unavailable`
+  by `web.ErrFromDomain`) — do not invent a new kind or reuse `sdk.ErrConflict`
+  for saturation. Where named machine codes are needed, follow auth v3's
+  precedent: a feature-local mapper seam over `web.RespondJSONDomainError`, with
+  the sdk mapper untouched.
 - Validate non-empty type/ID/relation/permission fields, bounded lengths, UTF-8,
   and reject control characters. Do not invent global lowercasing; names and IDs
   are opaque exact strings unless the host's schema says otherwise.

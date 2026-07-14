@@ -34,8 +34,8 @@ Implement:
 Verify:
 
 ```sh
-cd features/authorization/stores/pgx && go test ./... -run 'Migration|Schema|Probe'
-cd features/authorization/stores/turso && go test ./... -run 'Migration|Schema|Probe'
+cd features/authorization/stores/pgx && go test -count=1 ./... -run 'Migration|Schema|Probe'
+cd features/authorization/stores/turso && go test -count=1 ./... -run 'Migration|Schema|Probe'
 make guard
 ```
 
@@ -94,7 +94,7 @@ Implement:
 Verify:
 
 ```sh
-cd features/authorization/stores/pgx && go test -race ./...
+cd features/authorization/stores/pgx && go test -race -count=1 ./...
 make guard
 ```
 
@@ -121,7 +121,7 @@ Implement the pgx contract in libSQL/SQLite without weakening it:
 Verify:
 
 ```sh
-cd features/authorization/stores/turso && go test -tags=integration -race ./...
+cd features/authorization/stores/turso && go test -tags=integration -race -count=1 ./...
 make guard
 ```
 
@@ -150,6 +150,17 @@ Implement named sub-runners for:
 Run live concurrency cases at least ten times per dialect under `-race`. Inspect
 stored rows for invalid usersets, revision gaps, duplicate receipts, and orphaned
 events.
+
+Live environment recipe (the auth v3 AV3-9.8 lessons; do not relearn them):
+
+- run against the standing `authv3-pg` (C-collation — pgx test databases must be
+  C-collation) and `authv3-libsql` containers with fresh/reset databases per leg;
+- always pass an explicit `-count` on live legs so the test cache cannot replay
+  results across database resets; and
+- harness phases must drive every mutation/job to a durable terminal state
+  before stopping runtimes or pools, and wait margins must respect lease/lock
+  TTLs against `-race` slowdown — the auth v3 livedelivery flakes were harness
+  margins, and a repeat here would mask (or fake) a real race defect.
 
 Verify:
 

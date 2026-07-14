@@ -1,7 +1,9 @@
 # Phase 5 — optional admin surface and proof host
 
-Status: DRAFT; ready after phases 3–4 and stable auth v3 composition seams.
-Depends on: guarded mutation service, effects modes, auth v3 identity/step-up.
+Status: DRAFT; ready after phases 3–4. The auth v3 composition seams this phase
+consumes are stable — auth v3 closed 2026-07-14.
+Depends on: guarded mutation service, effects modes, auth v3 identity/step-up
+(satisfied).
 
 ## Goal
 
@@ -51,7 +53,11 @@ Implement:
   middleware failed to stash one.
 - Errors: 401 absent identity, 403 guard denial, 404 only after authorized lookup,
   409 stale/conflict/invariant, 422 invalid schema/command, 429/503 evaluation
-  budget/infrastructure as ratified, and 500 otherwise. Do not leak store errors.
+  budget/infrastructure as ratified, and 500 otherwise. Unavailability/
+  backpressure wraps `sdk.ErrUnavailable` (503/`unavailable` via
+  `web.ErrFromDomain`); any named machine codes come from a feature-local mapper
+  over `web.RespondJSONDomainError`, per the auth v3 precedent — the sdk mapper
+  stays untouched. Do not leak store errors.
 - Never trust request Host/forwarded headers for policy or actor identity.
 - Add self-escalation, CSRF/origin, stale revision, duplicate MutationID, body
   smuggling, oversized batch, and store-failure tests.
@@ -94,8 +100,13 @@ or use the feature as a policy oracle.
 
 ## Task AZ3-5.4 — auth-cms guarded mutation composition and step-up
 
-Depends on: AZ3-5.1, stable auth v3.
-Touch: auth-cms composition root/demo/tests only.
+Depends on: AZ3-5.1, stable auth v3 (satisfied — closed 2026-07-14).
+Touch: auth-cms composition root/demo/tests only, plus the example's `go.mod`
+where new module dependencies land — the example is self-contained (direct
+requires + local replaces, the IX-13 layout), so wiring authorization store
+modules follows that same pattern, not bare workspace resolution. The host's
+post-remediation lifecycle (supervised delivery runtime, purge scheduler,
+`outstanding` health accounting) is not this phase's to change.
 
 Implement:
 
@@ -150,7 +161,11 @@ Implement/prove two composition variants:
 - procedural: post-commit notification handler receives the change; simulated
   failure reports committed receipt and retry is safe;
 - events: authorization store appends to generic outbox, poller emits, generic
-  jobs handler receives/de-dupes MutationID.
+  jobs handler receives/de-dupes MutationID. Durability lives in the
+  same-transaction outbox row; the host's default jobs runtime is the in-memory
+  fenced mode documented as non-durable, so either wire a durable fenced jobs
+  store for this variant or state honestly that handler execution is
+  restart-lossy while the event record is not.
 
 Negative boot matrix: admin partial wiring, missing guard, missing sensitive
 middleware, events without appender/table/acknowledgment, orphan procedural

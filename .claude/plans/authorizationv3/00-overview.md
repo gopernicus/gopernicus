@@ -1,11 +1,14 @@
 # Authorization v3 hardening packet
 
-Status: **DRAFT — audit complete; owner ratification required before execution.**
+Status: **READY FOR RATIFICATION — audit complete; prerequisites satisfied;
+owner ratification is the only remaining gate before execution.**
 Working name: `authorizationv3`; task prefix: `AZ3`.
 Depends on: auth v3 and `.claude/plans/authv3-delivery-refactor/` reaching the
-combined AV3-9.7/9.8 closeout point, because the proof host and optional
-administration/effects surfaces compose authentication identity, step-up, jobs,
-and events with this feature without the feature cores importing one another.
+combined AV3-9.7/9.8 closeout point — **satisfied 2026-07-14** (AV3-9.8 complete;
+completion record in `.claude/past/authv3/10-docs-and-closeout.md`) — because
+the proof host and optional administration/effects surfaces compose
+authentication identity, step-up, jobs, and events with this feature without
+the feature cores importing one another.
 
 ## Outcome
 
@@ -43,7 +46,10 @@ to import this module or apply its migrations.
 The current module is a strong v1 base: independently wireable relationship and
 role kinds, schema validation, through traversal, middleware, memory/pgx/turso
 stores, boot probes, and one shared adversarial conformance suite. Its hermetic
-module suite is green as of 2026-07-13.
+module suite is green as of 2026-07-13, and the module was not modified by the
+AV3-9.8 remediation, so every finding below was re-verified against the
+post-remediation tree on 2026-07-14 (e.g. the pgx CTE still hard-codes
+`relation = 'member'`).
 
 The hardening plan is driven by these concrete findings:
 
@@ -122,18 +128,24 @@ optional best-effort `AuditSink` with coarse error classes. Successful durable
 events use the mutation ID as the de-duplication key. Neither logs nor metrics
 carry unbounded resource/subject IDs as labels.
 
-### Auth v3 delivery follow-up (now planned)
+### Auth v3 delivery follow-up (now shipped)
 
-`.claude/plans/authv3-delivery-refactor/` now owns the prerequisite decision and
-implementation. Its settled direction is: generic jobs execute durable work;
-optional events observe lifecycle; otherwise an explicitly selected bounded
-in-process pool runs the same processor with documented crash loss. It preserves
-opaque off-request-path resolution, encrypted payloads, idempotency, resend
-supersession, checkpoint-before-send, retry/status, and enumeration parity.
+`.claude/plans/authv3-delivery-refactor/` owned the prerequisite decision and
+implementation, and it is complete. The shipped shape is: generic jobs execute
+durable work through the settled work protocol — `sdk/capabilities/work` (a new
+first-tag module) with typed `work.Status` and opaque `[]byte` payloads —
+implemented by `features/jobs` (tag floor MINOR), whose fenced surface includes
+`PurgeTerminal`; optional events observe lifecycle; otherwise an explicitly selected
+bounded in-process pool runs the same processor with documented crash loss. It
+preserves opaque off-request-path resolution, encrypted payloads, idempotency,
+resend supersession, checkpoint-before-send, retry/status, and enumeration
+parity. The auth-cms proof host runs the in-memory fenced jobs mode and
+documents it honestly as non-durable, with a supervised delivery runtime.
 
 Authorization v3 must not execute its effects phase against the old bespoke-auth
-queue pattern. Preflight waits for the combined auth closeout so authorization's
-procedural/events composition consumes the final shared jobs/events vocabulary.
+queue pattern. The combined auth closeout completed 2026-07-14, so
+authorization's procedural/events composition consumes the final shared
+jobs/events vocabulary as it exists in the tree today.
 
 ## Recommended defaults requiring ratification
 
@@ -157,12 +169,17 @@ procedural/events composition consumes the final shared jobs/events vocabulary.
 
 Before `AZ3-0.1`:
 
-1. Finish auth v3 plus `.claude/plans/authv3-delivery-refactor/` through the
-   combined AV3-9.7/9.8 closeout; do not mix auth delivery redesign into
-   authorization implementation.
+1. **Satisfied 2026-07-14:** auth v3 plus `.claude/plans/authv3-delivery-refactor/`
+   reached the combined AV3-9.7/9.8 closeout; auth delivery redesign is done and
+   stays out of authorization implementation.
 2. Run `git status --short` and preserve the current auth v3 worktree.
 3. Run `make check`, `make guard`, and authorization's hermetic conformance.
-4. Record pgx/turso live authorization conformance availability and DSNs.
+4. Record pgx/turso live authorization conformance availability and DSNs. The
+   auth v3 live legs ran against the standing `authv3-pg` (C-collation
+   PostgreSQL — pgx test databases must be C-collation) and `authv3-libsql`
+   containers; reuse that environment, reset/fresh databases per leg, and always
+   pass `-count=1` on live legs so the Go test cache cannot replay results
+   across database resets.
 5. Confirm no authorization or authorization-store tags exist. If they do,
    revise the migration strategy and upgrade runbook before code.
 6. Ratify the seven defaults above and the route/effect vocabulary.

@@ -81,13 +81,15 @@ Implement:
 - Rollback and duplicate EventID roll back the domain mutation. Mutation replay
   returns the original receipt without appending again.
 - Demonstrate a generic events subscriber enqueueing a generic jobs handler for
-  a notification. Authorization imports neither feature.
+  a notification, through the settled `sdk/capabilities/work` protocol and the
+  `features/jobs` fenced surface as shipped by the delivery refactor.
+  Authorization imports neither feature.
 
 Verify:
 
 ```sh
-cd features/authorization/stores/pgx && go test -race ./... -run 'Event|AppendTx|Rollback|Replay'
-cd features/authorization/stores/turso && go test -tags=integration -race ./... -run 'Event|AppendTx|Rollback|Replay'
+cd features/authorization/stores/pgx && go test -race -count=1 ./... -run 'Event|AppendTx|Rollback|Replay'
+cd features/authorization/stores/turso && go test -tags=integration -race -count=1 ./... -run 'Event|AppendTx|Rollback|Replay'
 make guard
 ```
 
