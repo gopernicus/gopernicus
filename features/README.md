@@ -39,6 +39,40 @@ type. A global registry would hide wiring order and make two hosts
 silently share state through package-level variables; explicit `Repositories`
 + `Config` + `Register` keeps every dependency visible at the call site.
 
+### FS2 amendment — the authorization `Components` bundle (AUTHORIZATION-SPECIFIC)
+
+`features/authorization` (v3) is the one sanctioned deviation from FS2's
+`svc, err := NewService(repos, cfg)` return: its constructor returns a
+**`Components{Service, SystemMutator}`** bundle instead of a bare `*Service`
+(ratified default #4, authorizationv3). This is an **authorization-specific
+amended shape, not a general replacement of FS2** — a sanctioned variant for the
+narrow case where a feature has a **separately-held trusted capability** that
+must not be reachable from its ordinary driving surface:
+
+- `Components.Service` is the ordinary FS2 driving surface — decisions, lists,
+  and actor-facing *guarded* mutations. HTTP handlers and consumer seams receive
+  only this. `svc.Register(mount)` is unchanged.
+- `Components.SystemMutator` is the trusted, actor-free write capability
+  (bootstrap, migration, invitation acceptance, resource teardown). It is
+  **structurally unreachable from `Service`** and is handed by the composition
+  root only to code that legitimately needs it. This is the whole point of the
+  bundle: a bag with two members that must be *held apart* cannot be one
+  `*Service`, and stapling the trusted methods onto `Service` (or gating them
+  behind an `Actor{Kind: system}` flag) would put a self-grant one reflection or
+  one constructed-value away.
+
+Why this stays an exception, not the new default (the ruling, with reasoning):
+**no other feature in the repo has a SystemMutator-like separately-trusted
+capability.** cms, authentication, events, and jobs all return the bare FS2
+`*Service` and have no second, deliberately-partitioned surface — a survey of
+their `<name>.go` constructors confirms `*Service`-only returns and no
+system/trusted sibling. Generalizing `Components` would tax every conforming
+feature with a one-member bundle for a capability it does not have. The rule a
+future feature applies: **return the bare `*Service` unless you have a second
+surface that MUST be partitioned from the driving surface by construction** — in
+which case a named `Components{Service, …}` bundle is the sanctioned shape, and
+the extra member is a real trust/lifecycle boundary, never mere grouping.
+
 ## 2. Anatomy
 
 Mirrors `features/cms` and `features/authentication`, generalized (trio layout,

@@ -13,7 +13,7 @@ type stubStorer struct{}
 
 var _ Storer = (*stubStorer)(nil)
 
-func (stubStorer) CheckRelationWithGroupExpansion(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) (bool, error) {
+func (stubStorer) CheckRelationWithGroupExpansion(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string, maxExpansionStates int) (bool, error) {
 	return false, nil
 }
 
@@ -25,7 +25,7 @@ func (stubStorer) CheckRelationExists(ctx context.Context, resourceType, resourc
 	return false, nil
 }
 
-func (stubStorer) CheckBatchDirect(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string) (map[string]bool, error) {
+func (stubStorer) CheckBatchDirect(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) (map[string]bool, error) {
 	return nil, nil
 }
 
@@ -57,14 +57,14 @@ func (stubStorer) ListRelationshipsByResource(ctx context.Context, resourceType,
 	return crud.Page[ResourceRelationship]{}, nil
 }
 
-func (stubStorer) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID string) ([]string, error) {
+func (stubStorer) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID string, limit int) ([]string, error) {
 	return nil, nil
 }
 
-func (stubStorer) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string) ([]string, error) {
+func (stubStorer) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string, limit int) ([]string, error) {
 	return nil, nil
 }
 
-func (stubStorer) LookupDescendantResourceIDs(ctx context.Context, resourceType, relation, subjectType string, rootIDs []string) ([]string, error) {
+func (stubStorer) LookupDescendantResourceIDs(ctx context.Context, resourceType, relation, subjectType string, rootIDs []string, limit int) ([]string, error) {
 	return nil, nil
 }

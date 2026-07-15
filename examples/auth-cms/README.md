@@ -53,8 +53,8 @@ hermetically.
   rotating store-backed refresh tokens (host-signed by the sdk stdlib HS256
   default, `sdk/foundation/cryptids`), security-event audit rows,
   and invitations that grant through the **`features/authorization` engine's
-  `relationshipGranter`** — invitation-accept writes a real ReBAC tuple via
-  `authorizer.CreateRelationships` (the flagship posture; the memstore-backed
+  `relationshipGranter`** — invitation-accept writes a real ReBAC tuple via the
+  trusted `SystemMutator.GrantRelationship` (the flagship posture; the memstore-backed
   engine keeps the host **driver-free** — no libsql in the graph). The A9 milestone
   shipped this seam with a toy in-memory `Granter` instead (ratified AV4:
   invitations work with no ReBAC in the graph); `authorization-v1` Z4 commit 2
@@ -79,18 +79,26 @@ history:
   `events.Config.Authorize` seam now delegates to `authorizer.Check`, and the
   invitation `Granter` is the engine's `relationshipGranter`.
 
-**The relationship kind.** `main` declares a schema (`authorization.NewSchema`) with
-a `project` resource type (`owner`/`member` relations, `view` = `AnyOf(owner,
-member)`) and a `platform` resource type (`admin` relation + `admin` permission).
-The boot seed registers a demo admin (`admin@example.com`), then writes
-`project:demo#owner@user:<admin>` and the **platform-admin data tuple**
-`platform:main#admin@user:<admin>` via `CreateRelationships` — platform-admin is
-DATA (a tuple over a `platform` resource type), never a Config field. **`Check` is
-pure schema evaluation**: the engine grants no bypass, so the host runs the
-platform-admin recipe itself — an `admin` permission `Check` on `platform/main`,
-first, in its own closure (`isPlatformAdmin` in `membership.go`). A member gets
-`view` on `project/demo` the moment the invitation is accepted (the Granter writes
-the tuple). Demo routes:
+**The relationship kind (GUARDED, AZ3-4.1).** `main` declares a schema
+(`authorization.NewSchema`) with a `project` resource type (`owner`/`member`
+relations, `view` = `AnyOf(owner, member)`, and `manage_access` = `Direct(owner)` —
+the permission the host `MutationGuard` enforces) and a flat `platform` admin-list
+type (`admin` relation + `admin` permission). The composition is guarded: actor-facing
+writes pass a host `MutationGuard` (`guard.go`) that reads `manage_access` (its backing
+`owner` relation) plus the platform-admin short-circuit **only through the mutation
+repository's dependency-tracking `DecisionView`**, and the ownable `project` type
+carries the ratified guardian minimum (`owner`, min-1). At boot the host seeds
+`project:demo#owner@user:demo-owner` (establishing the guardian minimum FIRST) and the
+**platform-admin data tuple** `platform:main#admin@user:demo-owner` through the
+**trusted `SystemMutator`** (`seedAuthorization`) — platform-admin is DATA (a tuple over
+a `platform` resource type), never a Config field, and establishing the first owner is
+inherently trusted. **`Check` is pure schema evaluation**: the engine grants no bypass,
+so the host runs the platform-admin recipe itself — an `admin` permission `Check` on
+`platform/main`, first, in its own closure (`isPlatformAdmin` in `membership.go`). A
+member gets `view` on `project/demo` the moment the invitation is accepted (the Granter
+writes the tuple through the `SystemMutator`). Demo routes are READ-ONLY (AZ3-4.1
+removed the session-only mutation routes — see below); the guarded actor path and
+`SystemMutator` composition are proven by `authorization_test.go`, not a browser flow.
 
 - `GET /demo/members-only` — gated through the host closure: platform admin (via
   `isPlatformAdmin`) OR `authorizer.Check` (`view` on `project/demo`) → 200,
@@ -115,8 +123,12 @@ Roles are **opaque strings** the host interprets. Demo routes:
   the listing is **direct-scope only** — so a subject allowed via a global grant is
   allowed yet does NOT appear in the read-back (the documented v1
   enumeration-vs-decision divergence, visible in the JSON).
-- `POST /demo/roles/{assign,unassign}` — session-gated (the admin drives them):
-  assign/unassign a role to a subject, scoped to `project/demo` or `{"global":true}`.
+Role assignment has **no shipped HTTP surface** on this host: AZ3-4.1 removed the
+session-only `POST /demo/roles/{assign,unassign}` and `POST /demo/admin/bootstrap`
+routes (a shipped route must never mutate authorization with session presence alone,
+and authentication does not yet export a public sensitive-operation protector). Boot
+seeding runs through the trusted `SystemMutator`; the browser-driven role-assignment
+surface is deferred with the AZADM packet.
 
 ## Wiring
 
@@ -145,8 +157,9 @@ Roles are **opaque strings** the host interprets. Demo routes:
   (per-instance keys can't cross-verify). API clients recover a dead access JWT via
   `POST /auth/refresh` (refresh tokens are store-backed).
 - **Granter**: `relationshipGranter` (`cmd/server/membership.go`) — a host-local
-  adapter whose `Grant` calls `authorizer.CreateRelationships`, so invitation-accept
-  writes a real ReBAC tuple (the flagship posture; the A9 toy map is retired).
+  adapter whose `Grant` calls the trusted `SystemMutator.GrantRelationship` with a
+  stable derived MutationID, so invitation-accept writes a real ReBAC tuple, trusted
+  and idempotent (the flagship posture; the A9 toy map is retired).
 - **authorization**: `features/authorization` (`cmd/server/main.go`) — BOTH kinds
   (relationships + roles), memstore-backed (no driver in the graph). Backs
   `auth.Config.Granter`, `events.Config.Authorize` (`authorizer.Check`), and the
@@ -260,7 +273,7 @@ Roles are **opaque strings** the host interprets. Demo routes:
 | `Config.Providers` | the fake provider | OAuth routes not registered (deny-by-absence) |
 | `Config.TokenSigner` | sdk HS256 over `AUTH_JWT_SECRET` (or ephemeral dev key) | REQUIRED — nil is `ErrTokenSignerRequired` at construction (no nil variant) |
 | `Config.TokenEncrypter` | AES-GCM iff `AUTH_TOKEN_ENCRYPTER_KEY` | provider tokens not persisted (login/link still work) |
-| `Config.Granter` | engine `relationshipGranter` (`authorizer.CreateRelationships`) | invitation routes not registered (deny-by-absence) |
+| `Config.Granter` | engine `relationshipGranter` (`SystemMutator.GrantRelationship`) | invitation routes not registered (deny-by-absence) |
 | `Config.RuntimeMode` | `development` (explicit) | REQUIRED, no default — nil is `ErrRuntimeModeRequired` |
 | `Config.DeliveryMode` | `jobs` (explicit) | REQUIRED, no default — empty is `ErrDeliveryModeRequired`, unknown is `ErrDeliveryModeInvalid` |
 | `Config.ChallengeProtector` | HMAC key ring (`AUTH_CHALLENGE_PEPPER` or ephemeral) | REQUIRED once `Challenges` wired — `ErrChallengeProtectorRequired` |
@@ -416,18 +429,18 @@ curl -i -X POST http://localhost:8082/auth/refresh -H 'Content-Type: application
 
 Stateless `RequireUser`/`RequirePrincipal` routes honor an outstanding access JWT
 for up to `AUTH_ACCESS_TOKEN_TTL` (default 15m) after logout; a
-**`RequireLiveSession`** route denies immediately. On this host the most
-privileged action — `POST /demo/admin/bootstrap` (it grants the caller
-platform-admin) — is gated on `RequireLiveSession` as the host-side demonstration.
+**`RequireLiveSession`** route denies immediately. AZ3-4.1 removed the host demo route
+(`POST /demo/admin/bootstrap`) that illustrated this tier — a session-only
+authorization-mutation route is exactly what the packet forbids — so the live-session
+gate is now exercised only by authentication's own sensitive-operation routes. The
+stateless-vs-live contrast still shows on the surviving stateless demo route:
 
 ```sh
 # log in (cookie jar), then copy the access JWT out of the `session` cookie.
-# pre-logout: the live-session-gated route accepts it
-curl -i -H "Authorization: Bearer <ACCESS_JWT>" -X POST http://localhost:8082/demo/admin/bootstrap  # 200
-curl -sX POST -c jar -b jar http://localhost:8082/auth/logout        # clears both cookies, deletes session
-# post-logout, within the 15m access window:
-curl -i -H "Authorization: Bearer <ACCESS_JWT>" http://localhost:8082/demo/whoami                   # 200 (stateless)
-curl -i -H "Authorization: Bearer <ACCESS_JWT>" -X POST http://localhost:8082/demo/admin/bootstrap  # 401 (live gate)
+curl -i -H "Authorization: Bearer <ACCESS_JWT>" http://localhost:8082/demo/whoami   # 200 (stateless)
+curl -sX POST -c jar -b jar http://localhost:8082/auth/logout                        # clears cookies, deletes session
+# post-logout, within the 15m access window the stateless route still accepts the JWT:
+curl -i -H "Authorization: Bearer <ACCESS_JWT>" http://localhost:8082/demo/whoami   # 200 (stateless honors the TTL)
 ```
 
 Ephemeral-restart recovery (API lane) — with `AUTH_JWT_SECRET` **unset**, a restart
@@ -452,8 +465,8 @@ curl -i -X POST http://localhost:8082/auth/refresh -H 'Content-Type: application
 The membership-gated route is `GET /demo/members-only` — it checks `view` on the
 `project/demo` resource through `authorizer.Check` (the flagship posture). An
 accepted invitation grants the `member` tuple via the engine `relationshipGranter`
-(`authorizer.CreateRelationships`), and `view = AnyOf(owner, member)`, so the
-member passes the gate. The observable codes are identical to the A9 toy-Granter
+(the trusted `SystemMutator.GrantRelationship`), and `view = AnyOf(owner, member)`, so
+the member passes the gate. The observable codes are identical to the A9 toy-Granter
 run — the swap is invisible at the seam.
 
 ```sh
@@ -557,37 +570,35 @@ and the process exits nonzero rather than continuing to admit work against a dea
 delivery runtime. A normal signal-driven shutdown (the delivery context is canceled by
 the ordered stop above) takes the quiet path and is never treated as a failure.
 
-### Leg 7 — the authorization flagship (both kinds)
+### Leg 7 — the authorization flagship (guarded, AZ3-4.1)
 
-The admin (any verified session) seeds itself as `project:demo` owner + platform
-admin, then drives both kinds. `<BID>`/`<CID>` are B/C's principal ids from
-`GET /demo/whoami`.
+The `project:demo` owner and the `platform:main#admin` data tuple are **boot-seeded
+for `user:demo-owner`** through the trusted `SystemMutator` (`seedAuthorization`) — the
+host no longer self-bootstraps the caller through a session-only route. The READ demos
+below still drive live off invitation-granted membership; `<BID>`/`<CID>` are B/C's
+principal ids from `GET /demo/whoami`.
 
 ```sh
-# admin session (jar) bootstraps itself: project:demo#owner + platform:main#admin
-curl -sX POST -c jar -b jar http://localhost:8082/demo/admin/bootstrap            # 200 {"status":"bootstrapped",...}
-
 # relationship kind — B is a member (Leg 4 accept); enumeration (demonstration b):
 curl -s -b bjar http://localhost:8082/demo/my-projects                            # {"admin":false,"ids":["demo"]}
 curl -s -b cjar http://localhost:8082/demo/my-projects                            # {"admin":false,"ids":[]}
-curl -s -b jar  http://localhost:8082/demo/my-projects                            # {"admin":true,"ids":[]}  (platform admin)
 # resource-scoped stream gated through authorizer.Check:
 curl -N --max-time 2 -b bjar http://localhost:8082/events/project/demo            # 200 (member)
 curl -N --max-time 2 -b cjar http://localhost:8082/events/project/demo            # 403 (non-member)
 
-# roles kind — independently wireable, opaque-string roles, scoped + global:
+# roles kind — /demo/audit gates on HasRole (global fallback + direct-scope read-back):
 curl -i -b bjar http://localhost:8082/demo/audit                                  # 403 (no role)
-curl -sX POST -c jar -b jar http://localhost:8082/demo/roles/assign \
-  -H 'Content-Type: application/json' -d '{"subject_id":"<BID>","role":"auditor","global":false}'   # 200
-curl -s -b bjar http://localhost:8082/demo/audit    # 200 {"resource":"project/demo","scoped_auditors":[{"subject_id":"<BID>","role":"auditor"}]}
-curl -sX POST -c jar -b jar http://localhost:8082/demo/roles/unassign \
-  -H 'Content-Type: application/json' -d '{"subject_id":"<BID>","role":"auditor","global":false}'   # 200 -> /demo/audit 403 again
-
-# Q5 global fallback + the enumeration-vs-decision divergence:
-curl -sX POST -c jar -b jar http://localhost:8082/demo/roles/assign \
-  -H 'Content-Type: application/json' -d '{"subject_id":"<CID>","role":"auditor","global":true}'    # 200 (GLOBAL)
-curl -s -b cjar http://localhost:8082/demo/audit    # 200 (global satisfies the scoped gate) BUT "scoped_auditors":[] — C is NOT listed
 ```
+
+**Role assignment has no HTTP surface** (AZ3-4.1): the session-only `POST
+/demo/roles/{assign,unassign}` and self-bootstrap routes were removed because a shipped
+route must not mutate authorization on session presence alone, and authentication does
+not yet export a public sensitive-operation protector. The guarded actor-mutation path
+(manage_access + platform-admin over the `DecisionView`), the trusted `SystemMutator`
+seeding/invitation flow, the last-owner guardian minimum, the roles kind's global
+fallback, and the enumeration-vs-decision divergence are all proven in
+`cmd/server/authorization_test.go`, not a browser flow. The browser-driven
+role-assignment surface returns with the deferred AZADM packet.
 
 ### Leg 8 — auth-v3: normal HTML pages (twice-through)
 
@@ -729,10 +740,10 @@ unwired kind (e.g. `slack`) fails 400; email is always-on via the Mailer.
   200, resolved non-member → 403), `GET /demo/my-projects` (the relationship
   kind's `LookupResources` enumeration → `{admin, ids}`), `GET /demo/audit`
   (the roles kind's `HasRole` gate + a direct-scope `ListRoleAssignmentsByResource`
-  read-back), `POST /demo/roles/{assign,unassign}` and `POST /demo/admin/bootstrap`
-  (RequireUser-gated, admin-driven), and `GET /debug/security-events`
-  (`AUTH_DEBUG=1` + `RequireUser`). See "Authorization postures" for the flagship
-  demo flow.
+  read-back), and `GET /debug/security-events`
+  (`AUTH_DEBUG=1` + `RequireUser`). The demo routes are READ-ONLY: AZ3-4.1 removed the
+  session-only `POST /demo/roles/{assign,unassign}` and `POST /demo/admin/bootstrap`
+  mutation routes. See "Authorization postures" for the flagship demo flow.
 - **host-local health** (host code, not feature surface): `GET /healthz` —
   unauthenticated liveness probe. Both stores are memory-backed, so there is no
   DB to probe: reaching the handler returns `200`. `GET /healthz/delivery` —
