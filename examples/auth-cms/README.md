@@ -157,9 +157,21 @@ surface is deferred with the AZADM packet.
   (per-instance keys can't cross-verify). API clients recover a dead access JWT via
   `POST /auth/refresh` (refresh tokens are store-backed).
 - **Granter**: `relationshipGranter` (`cmd/server/membership.go`) — a host-local
-  adapter whose `Grant` calls the trusted `SystemMutator.GrantRelationship` with a
-  stable derived MutationID, so invitation-accept writes a real ReBAC tuple, trusted
-  and idempotent (the flagship posture; the A9 toy map is retired).
+  adapter whose `Grant` validates the target resource still exists (failing loudly
+  with `sdk.ErrNotFound` otherwise), derives the `MutationID` from a fixed purpose +
+  the authentication **operation id** + the tuple (so a retried invitation replays
+  while a re-invitation after a revoke is a fresh grant that restores the tuple), and
+  INSPECTS the returned receipt — only `applied`/`no_change` are success; a
+  `semantic_conflict` or `invariant_blocked` is a loud error wrapping `sdk.ErrConflict`
+  (no implicit `ReplaceRelationship`). It writes through the trusted
+  `SystemMutator.GrantRelationship`, so invitation-accept records a real ReBAC tuple,
+  trusted and idempotent (the flagship posture; the A9 toy map is retired).
+- **InviteCheck** (`hostInviteCheck`, `cmd/server/membership.go`) — the required
+  relation-aware host authorization policy the feature calls from its parsed
+  create/list invitation handlers (`auth.Config.InviteCheck`): a platform admin may
+  invite any relation, owner-granting is otherwise reserved to platform admins (the
+  editor→owner escalation guard), and every other create/list requires `manage_access`
+  on the resource. Denials fail closed (`sdk.ErrForbidden` → 403).
 - **authorization**: `features/authorization` (`cmd/server/main.go`) — BOTH kinds
   (relationships + roles), memstore-backed (no driver in the graph). Backs
   `auth.Config.Granter`, `events.Config.Authorize` (`authorizer.Check`), and the
@@ -273,7 +285,8 @@ surface is deferred with the AZADM packet.
 | `Config.Providers` | the fake provider | OAuth routes not registered (deny-by-absence) |
 | `Config.TokenSigner` | sdk HS256 over `AUTH_JWT_SECRET` (or ephemeral dev key) | REQUIRED — nil is `ErrTokenSignerRequired` at construction (no nil variant) |
 | `Config.TokenEncrypter` | AES-GCM iff `AUTH_TOKEN_ENCRYPTER_KEY` | provider tokens not persisted (login/link still work) |
-| `Config.Granter` | engine `relationshipGranter` (`SystemMutator.GrantRelationship`) | invitation routes not registered (deny-by-absence) |
+| `Config.Granter` | engine `relationshipGranter` (`SystemMutator.GrantRelationship`, structured `GrantInput`, receipt-inspecting) | invitation routes not registered (deny-by-absence) |
+| `Config.InviteCheck` | relation-aware `hostInviteCheck` (platform-admin bypass, owner-grant reserved, else `manage_access`) | REQUIRED once `Granter` is wired — nil is `ErrInviteCheckRequired`; set without a `Granter` is `ErrInviteCheckWithoutGranter` |
 | `Config.RuntimeMode` | `development` (explicit) | REQUIRED, no default — nil is `ErrRuntimeModeRequired` |
 | `Config.DeliveryMode` | `jobs` (explicit) | REQUIRED, no default — empty is `ErrDeliveryModeRequired`, unknown is `ErrDeliveryModeInvalid` |
 | `Config.ChallengeProtector` | HMAC key ring (`AUTH_CHALLENGE_PEPPER` or ephemeral) | REQUIRED once `Challenges` wired — `ErrChallengeProtectorRequired` |

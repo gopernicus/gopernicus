@@ -209,16 +209,70 @@ both wired; all session-gated:**
   refresh_token}` (the API twin of `/auth/login`). Shares login's pre-credential
   rate limit and verified-email gating; clients rotate via `/auth/refresh`.
 
-**Invitations — registered only when `Config.Granter` is wired; session-gated
-except decline:**
+**Invitations — registered only when `Config.Granter` is wired; every
+authenticated route is `RequireLiveSession`-gated (immediate revocation), only
+decline is public:**
 
 - `POST /auth/invitations/{resource_type}/{resource_id}` — `{identifier,
   relation, identifier_kind?, auto_accept?}` → 201 pending (or immediate
-  direct-add for a known email invitee).
-- `GET /auth/invitations/{resource_type}/{resource_id}`, `GET /auth/invitations/mine`
+  direct-add for a known email invitee). After live-session validation, principal
+  resolution, and parsing, the handler calls the required host `InviteCheck` with
+  the exact requested relation; a denial fails closed before the service runs.
+- `GET /auth/invitations/{resource_type}/{resource_id}` — calls `InviteCheck`
+  with `InviteList` (empty relation) after the same resolution; `GET
+  /auth/invitations/mine`.
 - `POST /auth/invitations/accept` — `{token}` → grant through the Granter.
+  Acceptance does NOT re-run inviter authority (issuance-time authority, below).
 - `POST /auth/invitations/{id}/{cancel,resend}` — `InvitedBy == caller` checks.
-- `POST /auth/invitations/{id}/decline` — public, token-authorized, IP-limited.
+- `POST /auth/invitations/{id}/decline` — public, token-authorized, IP-limited
+  (the one invitation route with no session gate).
+
+**The Granter contract and invitation authority (D1–D3).** `Config.Granter` is
+the host seam an accepted, auto-accepted, or directly-added invitation grants
+through — a structured, operation-scoped request:
+
+```go
+type GrantInput struct {
+    OperationID  string // stable per logical grant (see below)
+    ResourceType string
+    ResourceID   string
+    Relation     string
+    SubjectType  string
+    SubjectID    string
+}
+type Granter interface{ Grant(context.Context, GrantInput) error }
+```
+
+- **Operation-scoped identity.** `OperationID` is an opaque, non-secret handle
+  for THIS logical grant. Pending accept and resolve-on-registration use the
+  persisted invitation row id — a retry of the same invitation reuses it, while a
+  later invitation row for the same tuple gets a distinct id. Direct-add has no
+  invitation row, so the feature mints a fresh high-entropy id from its
+  unconditional secret generator (never `Config.IDs`, whose `cryptids.Database`
+  strategy yields an empty id until an entity is inserted). A host derives its own
+  authorization mutation identity from a fixed purpose + `OperationID` + the tuple,
+  so a retry replays idempotently while a re-invitation after a revoke is a fresh,
+  tuple-restoring mutation.
+- **Strengthened success contract.** `Grant` returns nil ONLY when the EXACT
+  requested relation was applied or is already exactly present. A different
+  existing relation, an invariant refusal, a missing/deleted host resource, and
+  any infrastructure error all fail loud — there is **no implicit replace**. A host
+  adapter maps its authorization receipt outcome (applied / no_change → nil;
+  semantic_conflict / invariant_blocked / anything else → a loud error).
+- **Required `InviteCheck`.** Whenever a `Granter` enables invitations,
+  `Config.InviteCheck` is REQUIRED at construction — nil → `ErrInviteCheckRequired`;
+  an `InviteCheck` wired with no `Granter` → `ErrInviteCheckWithoutGranter`. It runs
+  in the feature's own parsed create/list handlers (after live-session validation,
+  principal resolution, and parsing), so the host sees the caller, resource,
+  action, and validated relation a route wrapper cannot — and can refuse, e.g., an
+  editor inviting a co-owner. HTTP create/list call it; host-direct `Service`
+  methods are trusted composition calls that document they skip HTTP policy.
+  Denial (wrap `sdk.ErrForbidden`) or an infrastructure error fails closed.
+- **Issuance-time authority.** An invitation authorized at creation is a durable,
+  expiring capability; acceptance does not re-check inviter authority, and a later
+  loss of the inviter's host permission does not silently invalidate an already
+  issued invitation. Deleted-resource refusal at acceptance is the Granter's duty —
+  only the host knows whether the target still exists.
 
 ## HTML surface (Views) — the optional presentation tier
 
@@ -315,8 +369,13 @@ different subsystems, no shared type.
 ## Repositories (the ports a host or store adapter satisfies)
 
 The bundled store adapters fill the whole bundle from one handle
-(`authstore.Repositories(db)`). The v1/v2 core ports are unchanged; v3 adds the
-identity + atomic-security rails. Delivery owns **no** repository here — durable
+(`authstore.Repositories(db) (Repositories, error)`). Both dialect constructors
+now **return an error**: before returning repos they probe all 13 canonical
+tables and fail loudly — naming the missing table and the `authentication`
+migration source, wrapping `sdk.ErrNotFound` — when a migration was not applied
+pre-boot, so an omission surfaces at wiring time rather than on the first query.
+Constructors never apply migrations. The v1/v2 core ports are unchanged; v3 adds
+the identity + atomic-security rails. Delivery owns **no** repository here — durable
 delivery runs on the generic **jobs** feature and `in_process` delivery is
 process-local (see "Delivery execution modes").
 
@@ -365,8 +424,11 @@ consumes atomically (`ConsumeCode`/`RedeemToken` are delete-returning);
 (`sdk.ErrConflict` on a stale `auth_revision`, the service re-evaluates policy and
 retries); a lost auth-claim race surfaces the generic `sdk.ErrAlreadyExists`.
 Paginated ports order by `created_at DESC, id DESC` — the id tiebreak is
-contractual (and assumes byte-wise text collation; a fresh pg conformance/upgrade
-DB must be created with `C` collation).
+contractual and byte-wise. The pgx canonical migrations now carry per-column
+`COLLATE "C"` on the contractual keyset id columns (`service_accounts`,
+`api_keys`, `security_events`, `invitations`), so byte-order pagination holds on
+any database's default collation; a `C`-locale database remains a supported
+belt-and-suspenders posture, not a requirement.
 
 ## Config — required vs defaulted vs deny-by-absence
 
@@ -406,7 +468,7 @@ default, so a host can never inherit the development posture; unknown →
 | `TokenSigner` (cryptids.JWTSigner) | **REQUIRED.** `sdk/foundation/cryptids.NewHS256` is the stdlib default; `integrations/cryptids/golang-jwt` covers RS256/ES256. **Multi-instance hosts MUST share the signing secret** (§1.6). |
 | `AccessTokenTTL` | 0 → 15m (bounds the stateless revocation window). `AUTH_ACCESS_TOKEN_TTL`. |
 | `RefreshTTL` | 0 → 7d — the FIXED refresh horizon; rotation never extends it. `AUTH_REFRESH_TTL`. |
-| `Granter` / `MemberCheck` / `Notifiers` | invitation subsystem seams (unchanged from v2; see the invitation section). |
+| `Granter` / `InviteCheck` / `MemberCheck` / `Notifiers` | invitation subsystem seams (see the invitation section). `Granter` now takes a structured `GrantInput` (operation-scoped, fail-loud). `InviteCheck` (the relation-aware host policy) is REQUIRED whenever `Granter` is wired — nil → `ErrInviteCheckRequired`; set without a `Granter` → `ErrInviteCheckWithoutGranter`. |
 | `ListStrategy` | `"cursor"` default; `"offset"` allowed; anything else `ErrInvalidListStrategy`. |
 | `IDs` (cryptids.IDGenerator) | entity-ID strategy; NEVER mints secrets (codes/tokens/keys keep their own high-entropy generator). |
 | `Logger` | best-effort WARN sink for audit-write failures + the ephemeral-key/console-transport warnings; nil → `slog.Default()`. |
@@ -746,7 +808,7 @@ cfg := auth.Config{
     // AccessTokenTTL / RefreshTTL omitted → 15m / 7d.
     // Views: authtempl.New()                 // add HTML pages; omit for API-only
 }
-authSvc, err := auth.NewService(repos, cfg)   // repos = authstore.Repositories(db)
+authSvc, err := auth.NewService(repos, cfg)   // repos, err := authstore.Repositories(db) — probes the 13 tables
 // run the in-process delivery runtime for the whole process lifetime:
 go authSvc.RunDelivery(ctx)
 authSvc.Register(feature.Mount{Router: router, Logger: log})

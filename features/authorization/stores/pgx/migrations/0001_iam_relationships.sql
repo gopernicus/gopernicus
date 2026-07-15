@@ -23,8 +23,23 @@
 -- is the exact userset relation, NOT NULL but legitimately empty for a concrete
 -- subject and non-empty (group:eng#member) for a userset — the non-empty check
 -- must never conflate that relation state.
+-- Contractual COLLATE "C" (AAH-5 / plan D5): relationship_id is the keyset
+-- tiebreak of the created_at DESC, relationship_id DESC relationship listings
+-- (and, since CreateRelationships store-stamps a whole batch with one created_at,
+-- it is the effective ordering discriminator). Per-column collation makes that
+-- byte-order contract travel with the schema instead of relying on the cluster
+-- default. The other structural columns are DELIBERATELY left uncollated:
+-- resource_type, resource_id, relation, subject_type, subject_id, and
+-- subject_relation are the recursion columns of the reachable userset-expansion
+-- CTE, whose anchor term seeds them from default-collation parameters — pinning
+-- them to "C" would raise a recursive-term collation-mismatch (SQLSTATE 42P21)
+-- unless the store SQL also collated the anchor casts, which is out of this
+-- task's scope. Their ordering (the LookupResourceIDs "sorted" contract) is only
+-- required to be a deterministic total order, which any collation supplies, and
+-- their equality/unique-index parity already holds under any deterministic
+-- collation.
 CREATE TABLE IF NOT EXISTS iam_relationships (
-    relationship_id  TEXT        NOT NULL PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    relationship_id  TEXT COLLATE "C" NOT NULL PRIMARY KEY DEFAULT gen_random_uuid()::text,
     resource_type    TEXT        NOT NULL,
     resource_id      TEXT        NOT NULL,
     relation         TEXT        NOT NULL,

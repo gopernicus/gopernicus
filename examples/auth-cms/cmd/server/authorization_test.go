@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	auth "github.com/gopernicus/gopernicus/features/authentication"
 	authorization "github.com/gopernicus/gopernicus/features/authorization"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
@@ -205,34 +206,56 @@ func TestHostMutationGuardGlobalMutationTrustedOnly(t *testing.T) {
 	}
 }
 
+// hostGranter builds the reference relationshipGranter over sm plus a resource registry
+// seeded with the given resource keys — the exact wiring run() composes (the SystemMutator
+// and the host resource-existence seam).
+func hostGranter(sm *authorization.SystemMutator, existing ...string) (relationshipGranter, *hostResourceRegistry) {
+	reg := newHostResourceRegistry(existing...)
+	return relationshipGranter{system: sm, exists: reg.Exists}, reg
+}
+
+// demoGrant is a GrantInput on the demo resource, distinguished by its OperationID — the
+// logical invitation identity authentication supplies (the invitation row id, or a fresh
+// value for direct-add).
+func demoGrant(operationID, relation, subjectID string) auth.GrantInput {
+	return auth.GrantInput{
+		OperationID:  operationID,
+		ResourceType: demoResourceType,
+		ResourceID:   demoResourceID,
+		Relation:     relation,
+		SubjectType:  "user",
+		SubjectID:    subjectID,
+	}
+}
+
 // TestInvitationAcceptanceTrustedAndIdempotent proves the host invitation seam
-// (relationshipGranter → the deliberately held SystemMutator, stable derived MutationID)
-// is trusted and idempotent: accepting the same invitation twice grants view and does NOT
-// duplicate the stored mutation or bump the revision again (the second application is a
-// replay). This is the acceptance's "invitation acceptance is visibly trusted and
+// (relationshipGranter → the deliberately held SystemMutator, operation-scoped MutationID)
+// is trusted and idempotent: an EXACT retry of one invitation (same OperationID) grants view
+// and REPLAYS — it does NOT duplicate the stored mutation or bump the revision again. This is
+// adversarial case 1 and the acceptance's "invitation acceptance is visibly trusted and
 // idempotent".
 func TestInvitationAcceptanceTrustedAndIdempotent(t *testing.T) {
 	comps := hostAuthz(t)
 	svc, sm := comps.Service, comps.SystemMutator
-	if err := seedAuthorization(context.Background(), sm); err != nil { // establish the owner minimum
+	ctx := context.Background()
+	if err := seedAuthorization(ctx, sm); err != nil { // establish the owner minimum
 		t.Fatalf("seedAuthorization: %v", err)
 	}
-	g := relationshipGranter{system: sm}
-	ctx := context.Background()
+	g, _ := hostGranter(sm, resourceKey(demoResourceType, demoResourceID))
 
 	// First acceptance grants the member — TRUSTED (it bypasses the host guard: an invitee
 	// is not an owner and could never self-grant through the actor path).
-	if err := g.Grant(ctx, demoResourceType, demoResourceID, "member", "user", "invitee"); err != nil {
+	if err := g.Grant(ctx, demoGrant("inv-A", "member", "invitee")); err != nil {
 		t.Fatalf("first invitation grant: %v", err)
 	}
 	if !allowed(t, svc, "invitee", demoPermission, demoResourceID) {
 		t.Fatal("invitee does not have view after acceptance")
 	}
 
-	// The stable derived MutationID makes a retried acceptance a replay: applying it again
-	// through the SystemMutator returns Replayed=true and does not re-apply.
+	// The operation-scoped MutationID makes a retry of the SAME invitation a replay: applying
+	// its derived id again through the SystemMutator returns Replayed=true and does not re-apply.
 	derived := authorization.DeriveMutationID("auth-cms/invitation-grant",
-		demoResourceType, demoResourceID, "member", "user", "invitee")
+		"inv-A", demoResourceType, demoResourceID, "member", "user", "invitee")
 	rcpt, err := sm.GrantRelationship(ctx, authorization.GrantRelationshipCommand{
 		MutationID: derived, ResourceType: demoResourceType, ResourceID: demoResourceID, Relation: "member",
 		Subject: authorization.SubjectRef{Type: "user", ID: "invitee"},
@@ -244,9 +267,167 @@ func TestInvitationAcceptanceTrustedAndIdempotent(t *testing.T) {
 		t.Fatal("retried invitation grant was not a replay: a duplicate mutation/revision bump would occur")
 	}
 
-	// And the host seam itself stays idempotent (nil on the retry).
-	if err := g.Grant(ctx, demoResourceType, demoResourceID, "member", "user", "invitee"); err != nil {
+	// And the host seam itself stays idempotent (nil on the retry of the same invitation).
+	if err := g.Grant(ctx, demoGrant("inv-A", "member", "invitee")); err != nil {
 		t.Fatalf("idempotent retried grant through the granter: %v", err)
+	}
+}
+
+// TestInvitationReinviteAfterRevokeRestoresTuple is the CORE bug fix (adversarial case 2):
+// deriving the MutationID from the tuple alone made a re-invitation after a revoke a silent
+// replay that never restored the tuple. With operation-scoped identity, a DISTINCT invitation
+// (distinct OperationID → distinct MutationID) is a FRESH grant that restores the revoked
+// tuple end-to-end.
+func TestInvitationReinviteAfterRevokeRestoresTuple(t *testing.T) {
+	comps := hostAuthz(t)
+	svc, sm := comps.Service, comps.SystemMutator
+	ctx := context.Background()
+	if err := seedAuthorization(ctx, sm); err != nil {
+		t.Fatalf("seedAuthorization: %v", err)
+	}
+	g, _ := hostGranter(sm, resourceKey(demoResourceType, demoResourceID))
+
+	// Invitation A grants tuple T (project:demo#member@user:invitee).
+	if err := g.Grant(ctx, demoGrant("inv-A", "member", "invitee")); err != nil {
+		t.Fatalf("invitation A grant: %v", err)
+	}
+	if !allowed(t, svc, "invitee", demoPermission, demoResourceID) {
+		t.Fatal("invitee lacks view after invitation A")
+	}
+
+	// The demo owner (holds manage_access on project:demo) revokes T through the guarded
+	// actor path — the tuple is gone.
+	if _, err := svc.RevokeRelationship(ctx, actor(seedOwnerSubject.ID), authorization.RevokeRelationshipCommand{
+		MutationID:   mustMutationID(t),
+		ResourceType: demoResourceType, ResourceID: demoResourceID, Relation: "member",
+		Subject: authorization.SubjectRef{Type: "user", ID: "invitee"},
+	}); err != nil {
+		t.Fatalf("revoke tuple T: %v", err)
+	}
+	if allowed(t, svc, "invitee", demoPermission, demoResourceID) {
+		t.Fatal("view survived the revoke: tuple T was not removed")
+	}
+
+	// Invitation B is a DISTINCT invitation for the same tuple (distinct OperationID). Under
+	// the retired tuple-derived id this would replay A's consumed mutation and restore
+	// NOTHING; with operation-scoped identity it is a fresh grant that restores T.
+	if err := g.Grant(ctx, demoGrant("inv-B", "member", "invitee")); err != nil {
+		t.Fatalf("invitation B grant: %v", err)
+	}
+	if !allowed(t, svc, "invitee", demoPermission, demoResourceID) {
+		t.Fatal("re-invitation after revoke did NOT restore the tuple (the core bug)")
+	}
+}
+
+// TestInvitationGrantDifferentRelationConflicts proves adversarial case 3: an existing
+// DIFFERENT relation for the subject makes a grant a semantic conflict — the host Granter
+// returns a loud error wrapping sdk.ErrConflict (it does NOT ReplaceRelationship), so
+// authentication never records the invitation as accepted and no relation is upgraded.
+func TestInvitationGrantDifferentRelationConflicts(t *testing.T) {
+	comps := hostAuthz(t)
+	svc, sm := comps.Service, comps.SystemMutator
+	ctx := context.Background()
+	if err := seedAuthorization(ctx, sm); err != nil {
+		t.Fatalf("seedAuthorization: %v", err)
+	}
+	g, _ := hostGranter(sm, resourceKey(demoResourceType, demoResourceID))
+
+	// The subject already holds member on project:demo.
+	if err := g.Grant(ctx, demoGrant("inv-member", "member", "conflictee")); err != nil {
+		t.Fatalf("seed member grant: %v", err)
+	}
+
+	// A DIFFERENT relation (owner) for the same subject is the one-relation conflict.
+	err := g.Grant(ctx, demoGrant("inv-owner", "owner", "conflictee"))
+	if !errors.Is(err, sdk.ErrConflict) {
+		t.Fatalf("conflicting relation grant: want sdk.ErrConflict, got %v", err)
+	}
+	// State is not advanced: the subject still holds only member (no owner ⇒ no manage_access).
+	if allowed(t, svc, "conflictee", manageAccessPerm, demoResourceID) {
+		t.Fatal("refused conflict nonetheless wrote an owner row (manage_access satisfied)")
+	}
+	if !allowed(t, svc, "conflictee", demoPermission, demoResourceID) {
+		t.Fatal("the original member tuple was disturbed by the refused conflict")
+	}
+}
+
+// TestInvitationGrantDeletedResourceNotFound proves adversarial case 4: a grant against a
+// since-deleted host resource fails wrapping sdk.ErrNotFound and writes no tuple. Only the
+// host knows the resource is gone, so the check is the Granter's duty (design D2).
+func TestInvitationGrantDeletedResourceNotFound(t *testing.T) {
+	comps := hostAuthz(t)
+	svc, sm := comps.Service, comps.SystemMutator
+	ctx := context.Background()
+
+	// A separate project the host once owned, then destroyed.
+	const gone = "pdel"
+	g, reg := hostGranter(sm, resourceKey(demoResourceType, gone))
+	reg.remove(demoResourceType, gone)
+
+	err := g.Grant(ctx, auth.GrantInput{
+		OperationID: "inv-ghost", ResourceType: demoResourceType, ResourceID: gone,
+		Relation: "member", SubjectType: "user", SubjectID: "invitee",
+	})
+	if !errors.Is(err, sdk.ErrNotFound) {
+		t.Fatalf("grant against deleted resource: want sdk.ErrNotFound, got %v", err)
+	}
+	if allowed(t, svc, "invitee", demoPermission, gone) {
+		t.Fatal("a grant against a deleted resource wrote a tuple")
+	}
+}
+
+// TestHostInviteCheckPermissionMapping proves adversarial case 5 at the host-policy layer:
+// hostInviteCheck (auth.Config.InviteCheck) lets a member-capable manager invite a member but
+// NOT an owner (the editor→owner escalation guard), reserves owner-granting to platform
+// admins, and requires manage_access for both non-owner create and list. Denials wrap
+// sdk.ErrForbidden (the feature maps that to 403 before the invitation service is reached —
+// proven in the authentication feature's handler tests).
+func TestHostInviteCheckPermissionMapping(t *testing.T) {
+	comps := hostAuthz(t)
+	svc, sm := comps.Service, comps.SystemMutator
+	ctx := context.Background()
+	if err := seedAuthorization(ctx, sm); err != nil { // seeds platform:main#admin@demo-owner
+		t.Fatalf("seedAuthorization: %v", err)
+	}
+	seedTrustedOwner(t, sm, "pinv", "u-manager") // u-manager holds manage_access on project:pinv
+	check := hostInviteCheck(svc)
+
+	create := func(subjectID, relation, resourceID string) error {
+		return check(ctx, auth.InviteCheckRequest{
+			Principal:    identity.Principal{Type: "user", ID: subjectID},
+			Action:       auth.InviteCreate,
+			ResourceType: demoResourceType, ResourceID: resourceID, Relation: relation,
+		})
+	}
+	list := func(subjectID, resourceID string) error {
+		return check(ctx, auth.InviteCheckRequest{
+			Principal:    identity.Principal{Type: "user", ID: subjectID},
+			Action:       auth.InviteList,
+			ResourceType: demoResourceType, ResourceID: resourceID,
+		})
+	}
+
+	// A member-capable manager MAY invite a member...
+	if err := create("u-manager", "member", "pinv"); err != nil {
+		t.Fatalf("manager invite member: %v", err)
+	}
+	// ...but MAY NOT invite an owner (escalation guard).
+	if err := create("u-manager", "owner", "pinv"); !errors.Is(err, sdk.ErrForbidden) {
+		t.Fatalf("manager invite owner: want forbidden, got %v", err)
+	}
+	// A platform admin MAY invite an owner (even on a resource it does not own).
+	if err := create(seedOwnerSubject.ID, "owner", "pnew"); err != nil {
+		t.Fatalf("platform admin invite owner: %v", err)
+	}
+	// A stranger (no manage_access) is denied create and list; the manager may list.
+	if err := create("u-stranger", "member", "pinv"); !errors.Is(err, sdk.ErrForbidden) {
+		t.Fatalf("stranger create: want forbidden, got %v", err)
+	}
+	if err := list("u-stranger", "pinv"); !errors.Is(err, sdk.ErrForbidden) {
+		t.Fatalf("stranger list: want forbidden, got %v", err)
+	}
+	if err := list("u-manager", "pinv"); err != nil {
+		t.Fatalf("manager list: %v", err)
 	}
 }
 

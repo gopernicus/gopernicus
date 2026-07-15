@@ -251,6 +251,76 @@ backfill-first, validated migration procedure — exact pgx and SQLite/libSQL SQ
 for both dialects — is the **Auth v3 host upgrade runbook** below. The same note
 is mirrored in `features/authentication/README.md`.
 
+### features/authentication + both store modules (+ authorization pgx) — next tag: auth adopter hardening (BREAKING, pre-tag)
+
+auth-adopter-hardening (2026-07-15, task prefix `AAH`) is a **pre-tag breaking**
+hardening packet folded into the same untagged auth-v3 cut — preflight re-confirmed
+zero `features/authentication*` tags (`git tag -l` empty, 2026-07-15), so the
+public-API and canonical-migration edits carry no append-only constraint. It closes
+the framework gaps the first authorization-v3/authentication-v3 adopter exposed. The
+breaking surface:
+
+- **`auth.Granter` is now structured and fail-loud (D1/D2).** `Grant(ctx,
+  resourceType, resourceID, relation, subjectType, subjectID string) error` became
+  `Grant(ctx, GrantInput) error`, where `GrantInput{OperationID, ResourceType,
+  ResourceID, Relation, SubjectType, SubjectID}` carries an operation-scoped identity
+  (persisted invitation row id for accept/resolve-on-registration; a fresh
+  high-entropy id from the unconditional secret generator — never `Config.IDs` — for
+  direct-add). Success (nil) now means the EXACT requested relation was applied or is
+  already exactly present; a different existing relation, an invariant refusal, a
+  missing/deleted host resource, or any infrastructure error must fail loud (no
+  implicit replace). A host adapter inspects its authorization receipt outcome. Any
+  host implementing `Granter` updates to the struct signature and the outcome-aware
+  contract (the `examples/auth-cms` `relationshipGranter` is the reference).
+- **`Config.InviteCheck` is REQUIRED with a `Granter` (D3).** New `InviteAction`
+  (`InviteCreate`/`InviteList`), `InviteCheckRequest{Principal, Action, ResourceType,
+  ResourceID, Relation}`, and the `InviteCheck` func. A `Granter` with a nil
+  `InviteCheck` is `ErrInviteCheckRequired` at construction; an `InviteCheck` with no
+  `Granter` is `ErrInviteCheckWithoutGranter`. The feature's parsed create/list HTTP
+  handlers call it after live-session validation and principal resolution;
+  host-direct `Service` methods are trusted composition calls that skip HTTP policy.
+  All authenticated invitation routes (create, resource-list, mine, accept, cancel,
+  resend) moved from `RequireUser` to `RequireLiveSession` (immediate revocation);
+  public decline is unchanged. Invitation authority is **issuance-time**: an issued
+  invitation is a durable expiring capability, and acceptance does not re-check
+  inviter authority.
+- **Both store constructors now return `(auth.Repositories, error)` (D4).**
+  `features/authentication/stores/{pgx,turso}.Repositories(db)` probe all 13 canonical
+  tables before returning and error (`sdk.ErrNotFound`, naming the table + the
+  `authentication` migration source) when one is missing — pgx via `to_regclass`,
+  turso via `sqlite_master`. Constructors never apply schema. Every call site (the
+  proof host, store harnesses) takes the new return signature.
+- **Canonical pgx migrations carry per-column `COLLATE "C"` (D5, pre-tag fold).**
+  The opaque text keyset/derived-key columns fold `COLLATE "C"` into their canonical
+  CREATEs: authentication `service_accounts.id`, `api_keys.id`, `security_events.id`,
+  `invitations.id`; authorization `iam_relationships.relationship_id` and all five
+  `iam_roles` derived-key columns (`subject_type`, `subject_id`, `role`,
+  `resource_type`, `resource_id`). Byte-order pagination parity now holds on any
+  database's default collation. Deliberate **EXCLUSION**: the `iam_relationships`
+  recursion columns (`resource_type`, `resource_id`, `relation`, `subject_type`,
+  `subject_id`, `subject_relation`) are left uncollated — collating them raises
+  SQLSTATE 42P21 in the recursive reachable CTE (the anchor seeds default-collation
+  parameters), and those queries need only deterministic order/equality. Human
+  display/content columns are untouched; Turso migrations are unchanged.
+
+**v1→v3 collation upgrade caveat.** `CREATE ... IF NOT EXISTS` no-ops on a
+pre-existing table, so a host upgrading from a pre-v3 schema does **not**
+retroactively gain the per-column collation on already-created tables. Per the
+standing greenfield-migrations rule the canonical set ships the final schema only and
+hosts own their own schema evolution — a host that needs the per-column collation on
+an existing table adds it with its own host-tree migration (`ALTER TABLE … ALTER
+COLUMN … TYPE TEXT COLLATE "C"`) or runs the database in the `C` locale. No canonical
+upgrade/evolution file ships. A `C`-locale database remains a supported
+belt-and-suspenders posture either way.
+
+These changes fold into the auth-v3 **major / breaking** floor already recorded for
+`features/authentication` and both nested store modules; the authorization pgx
+collation fold rides the `features/authorization` first-tag breaking-vintage cut (no
+authorization Go-API change). The `examples/auth-cms` proof host (never tagged)
+carries the reference composition: the structured `GrantInput` granter, a host
+resource-existence check, receipt-outcome mapping, and the relation-aware
+`InviteCheck`.
+
 ### features/authentication/views/templ — next tag: NEW module (first tag)
 
 auth-v3 (2026-07-13, AV3-8.2) added `features/authentication/views/templ`, the
@@ -474,11 +544,14 @@ must consume the shared jobs/events vocabulary, never revive a bespoke queue.
 
 - **Auth invitation Granter** (`examples/auth-cms/cmd/server/membership.go`): the
   invitation-accept `auth.Granter` adapter moved from
-  `authorizer.CreateRelationships` (v1) to `SystemMutator.GrantRelationship` with a
-  stable `DeriveMutationID("auth-cms/invitation-grant", resource, relation, subject)`
-  — the tuple identity IS the operation identity, so a retried accept replays
-  without a duplicate revision bump. Any host wiring invitation acceptance to
-  authorization adopts the same SystemMutator + DeriveMutationID shape.
+  `authorizer.CreateRelationships` (v1) to `SystemMutator.GrantRelationship`. It
+  derives a stable `DeriveMutationID` from a fixed purpose + the authentication
+  **operation id** + the tuple (updated by the auth-adopter-hardening packet below;
+  the earlier tuple-only derivation was replaced), so a retried accept replays
+  without a duplicate revision bump while a re-invitation after a revoke carries a
+  distinct operation id → a fresh, tuple-restoring mutation. Any host wiring
+  invitation acceptance to authorization adopts the same SystemMutator +
+  operation-scoped `DeriveMutationID` shape.
 - **Events authorization closure:** `features/events` itself needs **no change** —
   its `AuthorizeStream` config seam is a host-supplied closure and does not import
   authorization. A host whose events `Authorize` closure delegates to

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/invitation"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/redirect"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
@@ -25,16 +26,18 @@ type grantCall struct {
 
 type fakeGranter struct {
 	calls  []grantCall
-	err    error  // blanket failure
-	failOn string // fail only when resourceID == failOn
+	ops    []string // operation IDs, parallel to calls
+	err    error    // blanket failure
+	failOn string   // fail only when resourceID == failOn
 }
 
-func (g *fakeGranter) Grant(_ context.Context, rt, rid, rel, st, sid string) error {
-	g.calls = append(g.calls, grantCall{rt, rid, rel, st, sid})
+func (g *fakeGranter) Grant(_ context.Context, in GrantInput) error {
+	g.calls = append(g.calls, grantCall{in.ResourceType, in.ResourceID, in.Relation, in.SubjectType, in.SubjectID})
+	g.ops = append(g.ops, in.OperationID)
 	if g.err != nil {
 		return g.err
 	}
-	if g.failOn != "" && rid == g.failOn {
+	if g.failOn != "" && in.ResourceID == g.failOn {
 		return errors.New("grant rejected")
 	}
 	return nil
@@ -650,5 +653,135 @@ func TestCreatePhoneNormalizesE164(t *testing.T) {
 	}
 	if res.Invitation.Identifier != "+15550102345" {
 		t.Errorf("stored phone = %q, want strict E.164 %q", res.Invitation.Identifier, "+15550102345")
+	}
+}
+
+// --- operation identity (D1) ---
+
+// fakeSecurityEvents captures the audit rows a grant records so a test can assert
+// no StatusSuccess grant is recorded when the Granter fails.
+type fakeSecurityEvents struct{ created []securityevent.SecurityEvent }
+
+func (r *fakeSecurityEvents) Create(_ context.Context, evt securityevent.SecurityEvent) (securityevent.SecurityEvent, error) {
+	r.created = append(r.created, evt)
+	return evt, nil
+}
+
+func (r *fakeSecurityEvents) List(_ context.Context, _ securityevent.ListFilter, _ crud.ListRequest) (crud.Page[securityevent.SecurityEvent], error) {
+	return crud.Page[securityevent.SecurityEvent]{}, nil
+}
+
+// grantSuccessRecorded reports whether a StatusSuccess grant audit row is present.
+func (r *fakeSecurityEvents) grantSuccessRecorded() bool {
+	for _, evt := range r.created {
+		if evt.EventType == securityevent.TypeInvitationGranted && evt.EventStatus == securityevent.StatusSuccess {
+			return true
+		}
+	}
+	return false
+}
+
+// TestAcceptOperationIDReusedOnRetry pins D1: the grant operation ID is the
+// persisted invitation row ID, so retrying the SAME invitation (after a failed
+// grant leaves it pending) reuses exactly one operation ID.
+func TestAcceptOperationIDReusedOnRetry(t *testing.T) {
+	repo := newFakeInvRepo()
+	granter := &fakeGranter{err: errors.New("grant down")}
+	svc := newSvc(t, repo, granter, Deps{})
+	inv := seedInvite(t, repo, "project", "p1", "member", "invitee@x.com", "inviter", "secret-a", false, time.Now().Add(time.Hour))
+
+	in := AcceptInput{Token: "secret-a", SubjectType: "user", SubjectID: "user-9", Identifier: "invitee@x.com"}
+	if _, err := svc.Accept(context.Background(), in); err == nil {
+		t.Fatal("Accept: expected the grant failure")
+	}
+	// The failed grant left the invitation pending, so a retry re-runs the grant.
+	granter.err = nil
+	if _, err := svc.Accept(context.Background(), in); err != nil {
+		t.Fatalf("Accept retry: %v", err)
+	}
+	if len(granter.ops) != 2 {
+		t.Fatalf("grant attempts = %d, want 2", len(granter.ops))
+	}
+	if granter.ops[0] == "" || granter.ops[0] != inv.ID || granter.ops[1] != inv.ID {
+		t.Errorf("operation IDs = %q, want both == invitation ID %q", granter.ops, inv.ID)
+	}
+}
+
+// TestReinviteSameTupleDistinctOperationID pins D1: a LATER invitation row for the
+// same tuple carries its own row ID, so its grant is a distinct host operation.
+func TestReinviteSameTupleDistinctOperationID(t *testing.T) {
+	repo := newFakeInvRepo()
+	granter := &fakeGranter{}
+	svc := newSvc(t, repo, granter, Deps{})
+	invA := seedInvite(t, repo, "project", "p1", "member", "invitee@x.com", "inviter", "secret-a", false, time.Now().Add(time.Hour))
+	invB := seedInvite(t, repo, "project", "p1", "member", "invitee@x.com", "inviter", "secret-b", false, time.Now().Add(time.Hour))
+	if invA.ID == invB.ID {
+		t.Fatalf("seed produced identical invitation IDs %q", invA.ID)
+	}
+
+	inA := AcceptInput{Token: "secret-a", SubjectType: "user", SubjectID: "user-9", Identifier: "invitee@x.com"}
+	inB := AcceptInput{Token: "secret-b", SubjectType: "user", SubjectID: "user-9", Identifier: "invitee@x.com"}
+	if _, err := svc.Accept(context.Background(), inA); err != nil {
+		t.Fatalf("Accept A: %v", err)
+	}
+	if _, err := svc.Accept(context.Background(), inB); err != nil {
+		t.Fatalf("Accept B: %v", err)
+	}
+	if len(granter.ops) != 2 {
+		t.Fatalf("grant attempts = %d, want 2", len(granter.ops))
+	}
+	if granter.ops[0] != invA.ID || granter.ops[1] != invB.ID {
+		t.Errorf("operation IDs = %q, want [%q %q]", granter.ops, invA.ID, invB.ID)
+	}
+	if granter.ops[0] == granter.ops[1] {
+		t.Errorf("later invitation reused the same operation ID: %q", granter.ops[0])
+	}
+}
+
+// TestDirectAddOperationIDNonEmpty pins D1: direct-add has no invitation row, so it
+// mints a fresh non-empty high-entropy operation ID before the grant.
+func TestDirectAddOperationIDNonEmpty(t *testing.T) {
+	repo := newFakeInvRepo()
+	granter := &fakeGranter{}
+	svc := newSvc(t, repo, granter, Deps{
+		UserLookup: func(_ context.Context, _ string) (string, bool, error) { return "user-known", true, nil },
+	})
+
+	if _, err := svc.Create(context.Background(), CreateInput{
+		ResourceType: "project", ResourceID: "p1", Relation: "member",
+		Identifier: "known@x.com", InvitedBy: "inviter", AutoAccept: true,
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(granter.ops) != 1 {
+		t.Fatalf("grant attempts = %d, want 1", len(granter.ops))
+	}
+	if granter.ops[0] == "" {
+		t.Error("direct-add grant carried an empty operation ID")
+	}
+}
+
+// TestAcceptGrantFailureDoesNotAdvanceState pins the ordering: a Granter failure on
+// accept never marks the invitation accepted and never records a StatusSuccess
+// grant audit row — the invitation stays pending and only a failure is recorded.
+func TestAcceptGrantFailureDoesNotAdvanceState(t *testing.T) {
+	repo := newFakeInvRepo()
+	granter := &fakeGranter{err: errors.New("grant rejected")}
+	events := &fakeSecurityEvents{}
+	svc := newSvc(t, repo, granter, Deps{SecurityEvents: events})
+	inv := seedInvite(t, repo, "project", "p1", "member", "invitee@x.com", "inviter", "secret-a", false, time.Now().Add(time.Hour))
+
+	if _, err := svc.Accept(context.Background(), AcceptInput{Token: "secret-a", SubjectType: "user", SubjectID: "user-9", Identifier: "invitee@x.com"}); err == nil {
+		t.Fatal("Accept: expected the grant failure")
+	}
+	got, _ := repo.Get(context.Background(), inv.ID)
+	if got.Status != invitation.StatusPending {
+		t.Errorf("status = %q, want pending (grant failed)", got.Status)
+	}
+	if !got.AcceptedAt.IsZero() || got.ResolvedSubjectID != "" {
+		t.Errorf("invitation advanced despite grant failure: %+v", got)
+	}
+	if events.grantSuccessRecorded() {
+		t.Error("a StatusSuccess grant was recorded despite the Granter failure")
 	}
 }

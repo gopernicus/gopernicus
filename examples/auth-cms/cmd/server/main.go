@@ -207,15 +207,28 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return err
 	}
 
+	// The host's authoritative resource registry: only the host knows whether a resource
+	// still exists (authorization tuples merely describe host-owned resources). Seeded with
+	// the demo project so an invitation-accept validates existence before the Granter writes
+	// a tuple; a production host consults its own datastore instead (membership.go).
+	hostResources := newHostResourceRegistry(resourceKey(demoResourceType, demoResourceID))
+
 	// Auth config, assembled in the testable composition seam buildAuthConfig
 	// (AV3-8.6): development posture, bundled templ Views, browser-safe Origin
 	// allowlist, passwordless enablement, magic-link base URL, and every development
 	// secret from a distinct env var. The invitation grant-on-accept seam is the
-	// host-local relationshipGranter over the authorization engine.
-	authCfg, err := buildAuthConfig(log, relationshipGranter{system: systemMutator})
+	// host-local relationshipGranter over the authorization engine, carrying the host
+	// resource-existence seam so acceptance against a deleted resource fails loudly.
+	authCfg, err := buildAuthConfig(log, relationshipGranter{system: systemMutator, exists: hostResources.Exists})
 	if err != nil {
 		return err
 	}
+	// A Granter enables invitations, so the feature REQUIRES a relation-aware host
+	// authorization policy (auth.Config.InviteCheck, design D3) — the two are wired
+	// together. hostInviteCheck consults the authorizer so a member-capable manager cannot
+	// escalate by inviting an owner; a nil InviteCheck here would be ErrInviteCheckRequired
+	// at NewService, never an allow-by-default.
+	authCfg.InviteCheck = hostInviteCheck(authorizer)
 	// Apply the selected delivery mode to the auth config. buildAuthConfig returns the
 	// jobs-mode posture (in-memory fenced queue on this host); DELIVERY_MODE=in_process flips
 	// it to the bounded EPHEMERAL pool here — and announces that posture LOUDLY. Neither mode
@@ -721,8 +734,10 @@ func seed(ctx context.Context, repos cms.Repositories) error {
 //     token-encryption keys) from a DISTINCT env var, never a committed constant, and
 //     never printing key material (see demo.go builders).
 //
-// The granter is the invitation grant-on-accept seam (nil → invitations off). It
-// builds no goroutines and reads no host lifecycle; run() owns the worker + shutdown.
+// The granter is the invitation grant-on-accept seam (nil → invitations off). When run()
+// passes a non-nil Granter it also sets the REQUIRED relation-aware auth.Config.InviteCheck
+// (hostInviteCheck) right after this seam returns — the two are wired together (design D3).
+// It builds no goroutines and reads no host lifecycle; run() owns the worker + shutdown.
 func buildAuthConfig(log *slog.Logger, granter auth.Granter) (auth.Config, error) {
 	// The REQUIRED access-JWT signer, optional provider-token encrypter, REQUIRED
 	// challenge protector (authmem wires Challenges), REQUIRED delivery-outbox

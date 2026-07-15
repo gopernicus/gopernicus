@@ -2569,3 +2569,102 @@ build/vet/test → ok; `stores/turso` build/vet/`vet -tags=integration`/test →
 `make check` "all checks passed"; `make guard` 16 lines exit 0; both live `-count=2` legs
 above green. No `.claude/plans/` edit; no commit/tag/push. Sole code change: the one new
 auth-cms regression test file.
+
+## 2026-07-15 — auth-adopter-hardening CLOSED (AAH-1..6): invitation operation integrity, host authorization, store preflight, canonical collation
+
+The pre-tag breaking hardening packet that closes the framework gaps the first
+authorization-v3/authentication-v3 adopter (Segovia's v2 plan) exposed, folded into
+the same untagged auth-v3 cut (plan `.claude/plans/auth-adopter-hardening/plan.md`,
+task prefix `AAH`; owner ratified D1–D5 in-session 2026-07-15, D3 = issuance-time
+authority). Preflight re-confirmed zero `features/authentication*`/`features/authorization*`
+tags (`git tag -l` empty), so the public-API and canonical-migration edits carried no
+append-only constraint. AAH-6 is this closeout (docs + verification transcript).
+
+**What shipped (AAH-1..5):**
+
+- **Structured, operation-scoped, fail-loud `auth.Granter` (D1/D2).** `Grant(ctx,
+  GrantInput) error` replaces the six-positional-string method;
+  `GrantInput{OperationID, ResourceType, ResourceID, Relation, SubjectType, SubjectID}`.
+  OperationID = the persisted invitation row id for accept/resolve-on-registration
+  (retry reuses it; a later invitation row for the same tuple gets a distinct one);
+  direct-add mints a high-entropy id from the unconditional secret generator, never
+  `Config.IDs`. Success (nil) means the EXACT relation was applied or already exactly
+  present; different-relation / invariant refusal / missing resource / infra error all
+  fail loud — no implicit replace.
+- **Required relation-aware `InviteCheck` + live-session invitation routes (D3).**
+  `Config.InviteCheck` is REQUIRED with a `Granter` (nil → `ErrInviteCheckRequired`;
+  `InviteCheck` without `Granter` → `ErrInviteCheckWithoutGranter`). HTTP create/list
+  call it after live-session validation, principal resolution, and parsing; host-direct
+  `Service` methods skip HTTP policy. All authenticated invitation routes (create,
+  resource-list, mine, accept, cancel, resend) moved `RequireUser` → `RequireLiveSession`;
+  public decline unchanged. Authority is issuance-time — an issued invitation is a durable
+  expiring capability and acceptance does not re-check inviter authority.
+- **auth-cms reference composition (AAH-3).** `relationshipGranter` takes `GrantInput`,
+  checks host resource existence before mutating (`sdk.ErrNotFound`), derives
+  `DeriveMutationID("auth-cms/invitation-grant", OperationID, tuple…)`, and maps the
+  receipt (applied/no_change → nil; semantic_conflict/invariant_blocked/default →
+  `sdk.ErrConflict`). `hostInviteCheck` is relation-aware (platform admin may grant owner;
+  non-admin owner-invite denied; member-invite and list require `manage_access`).
+- **Dual-dialect store boot probes (D4).** Both `features/authentication/stores/{pgx,turso}.Repositories(db)`
+  now return `(auth.Repositories, error)`, probing all 13 canonical tables (pgx via
+  `to_regclass`, turso via `sqlite_master`) and erroring with the missing table + the
+  `authentication` migration source, wrapping `sdk.ErrNotFound`; constructors never apply
+  schema. 15 ports map onto 13 tables (PasswordResets/CredentialMutations reuse existing tables).
+- **Canonical pgx collation fold (D5).** Per-column `COLLATE "C"` folded into canonical
+  CREATEs for the contractual keyset/derived-key text columns: authentication
+  `service_accounts.id` / `api_keys.id` / `security_events.id` / `invitations.id`;
+  authorization `iam_relationships.relationship_id` + all five `iam_roles` derived-key
+  columns. Turso migrations unchanged; display/content columns untouched.
+
+**AAH-5 findings (recorded for the next maintainer):**
+
+- **Recursion-column exclusion (SQLSTATE 42P21).** The `iam_relationships` recursion
+  columns (`resource_type`, `resource_id`, `relation`, `subject_type`, `subject_id`,
+  `subject_relation`) are DELIBERATELY left uncollated. Collating them raises SQLSTATE
+  42P21 ("collation mismatch in the recursive term") in the recursive reachable CTE —
+  the anchor term seeds default-collation parameters, so a `COLLATE "C"` recursion column
+  cannot union with them. Those queries need only deterministic order/equality, which any
+  deterministic collation supplies; only the byte-order keyset/derived-ordering columns
+  need the explicit `C`.
+- **Ledger reset after a canonical checksum change.** Folding `COLLATE "C"` into a
+  canonical CREATE changes that migration file's checksum, so a database whose
+  `schema_migrations` ledger recorded the pre-fold checksum fails on a checksum conflict.
+  The fix is to reset that database's schema (`DROP SCHEMA public CASCADE; CREATE SCHEMA
+  public;`) and re-migrate — never weaken a test. The `aah_c` proof DB was reset/re-migrated
+  before this closeout run; no suite hit a checksum conflict.
+- **Greenfield collation caveat (documented in RELEASING.md + the pgx README).**
+  `CREATE ... IF NOT EXISTS` no-ops on a pre-existing table, so a host upgrading from a
+  pre-v3 schema does NOT retroactively gain the per-column collation — hosts own their own
+  schema evolution (canonical sets ship the final schema only). A `C`-locale database
+  remains a supported belt-and-suspenders posture.
+
+**AAH-6 docs changed:** `features/authentication/README.md` (invitation section: structured
+Granter + operation-ID semantics + strengthened contract + required InviteCheck +
+issuance-time authority + live-session routes; store constructor error return; collation
+note re-scoped to belt-and-suspenders), `features/authentication/stores/pgx/README.md` +
+its `postgres.go` package comment (five-store / `0001–0005` / plaintext claims → 15-port /
+13-table / `0001–0013` / digest-at-rest / boot-probe / collation-contract), the turso
+package comment already reflected v3 (no README exists), `features/authorization/README.md`
+(invitation-grant recipe → operation-scoped derivation + receipt inspection; the stale
+tuple-derived comment corrected), `examples/auth-cms/README.md` (InviteCheck collaborator
+row), and `RELEASING.md` (new AAH keyed breaking-change note + corrected the authorization-v3
+note's "tuple identity IS the operation identity" line). No new doc files.
+
+**Live-verification matrix (AAH-6 closeout, agent-run 2026-07-15):**
+
+- `make check` → "all checks passed" (36 modules vet/build/test + integration-tag vet +
+  16 guards); `make guard` → all 16 guard lines, exit 0.
+- `POSTGRES_TEST_DSN=…/aah_c TURSO_DATABASE_URL=http://127.0.0.1:8080 TURSO_AUTH_TOKEN=''
+  make test-stores` (containers `authv3-pg` C-collation `aah_c` + `authv3-libsql`) → all
+  ten store legs `ok`: cms pgx 2.858s, **authentication pgx 13.826s**, jobs pgx 12.817s,
+  cms turso 0.185s, **authentication turso 1.740s**, jobs turso 0.176s, events pgx 0.580s,
+  events turso 0.175s, **authorization pgx 9.933s**, authorization turso 0.182s. No
+  `schema_migrations` checksum conflict (ledger already reset/re-migrated).
+- `cd examples/auth-cms && go test -count=1 ./...` → all seven packages `ok` (cmd/server
+  11.147s — the adversarial invitation proofs: exact-retry replay, revoke-then-reinvite
+  restore, different-relation refusal, deleted-resource refusal, editor→owner escalation
+  denial).
+
+No commit, tag, or push. The uncommitted worktree is the milestone diff; release gates
+(LICENSE, turso CI secrets, committing the tree, PR, tags per RELEASING.md floors) remain
+owner-owned.
