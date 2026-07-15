@@ -6,7 +6,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
-// stubStorer pins the 5-method role.Storer surface at compile time. Behavioral
+// stubStorer pins the role.Storer surface at compile time. Behavioral
 // conformance lives in storetest's Roles/* family.
 type stubStorer struct{}
 
@@ -28,4 +28,8 @@ func (stubStorer) ListBySubject(ctx context.Context, subjectType, subjectID stri
 
 func (stubStorer) ListByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[Assignment], error) {
 	return crud.Page[Assignment]{}, nil
+}
+
+func (stubStorer) ListEffectiveByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[EffectiveGrant], error) {
+	return crud.Page[EffectiveGrant]{}, nil
 }

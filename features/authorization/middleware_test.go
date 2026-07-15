@@ -12,10 +12,11 @@ import (
 // fail-fast: a roles-only Service (relationship kind unwired) mounting the
 // builder panics rather than deferring to a per-request 500.
 func TestRequirePermissionPanicsOnRolesOnly(t *testing.T) {
-	svc, err := NewService(Repositories{Roles: &roleFake{}}, Config{})
+	comps, err := NewService(Repositories{Roles: &roleFake{}}, Config{})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
+	svc := comps.Service
 
 	defer func() {
 		if recover() == nil {
@@ -29,10 +30,11 @@ func TestRequirePermissionPanicsOnRolesOnly(t *testing.T) {
 // implementation: no principal → 401, a principal without a grant → 403 (relFake
 // denies every Check).
 func TestRequirePermissionDelegates(t *testing.T) {
-	svc, err := NewService(Repositories{Relationships: &relFake{}}, Config{Model: validModel()})
+	comps, err := NewService(Repositories{Relationships: &relFake{}}, Config{Model: validModel()})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
+	svc := comps.Service
 
 	gate := svc.RequirePermission("delete", FixedResource("post", "p1"))
 	handler := gate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

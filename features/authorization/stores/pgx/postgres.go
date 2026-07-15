@@ -16,7 +16,7 @@
 //
 // Group expansion (CheckRelationWithGroupExpansion) and descendant lookup
 // (LookupDescendantResourceIDs) are recursive CTEs, cycle-safe by construction
-// via UNION dedup and UNBOUNDED (no depth term — MaxTraversalDepth is an
+// via UNION dedup and UNBOUNDED (no depth term — the engine's MaxThroughDepth is an
 // engine-only bound and never reaches the store), mirroring the memstore's Go
 // graph walk and the turso sibling. CountByResourceAndRelation counts DIRECT
 // tuples only (the security pin: it feeds last-owner protection).
@@ -43,6 +43,7 @@ import (
 	"fmt"
 
 	"github.com/gopernicus/gopernicus/features/authorization"
+	"github.com/gopernicus/gopernicus/features/authorization/domain/mutation"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/sdk"
 )
@@ -57,17 +58,41 @@ var MigrationsFS embed.FS
 // MigrationsDir is the directory within MigrationsFS holding the .sql files.
 const MigrationsDir = "migrations"
 
-// Repositories returns the authorization repository set backed by db — BOTH
-// kinds wired — AFTER verifying the iam_relationships AND iam_roles tables exist
-// (the boot-time probe). It errors with sdk.ErrNotFound naming the specific
-// missing table when the "authorization" migration source was not applied before
-// boot, so the failure surfaces at wiring time rather than on the first query. It
-// does NOT touch migrations: the host owns and applies the schema (see
-// ExportMigrations). db is the connector wrapper (error mapping + Tx), not a raw
-// pool.
-func Repositories(db *pgxdb.DB) (authorization.Repositories, error) {
+// Option configures the store set at construction.
+type Option func(*config)
+
+type config struct {
+	guardian mutation.GuardianPolicy
+}
+
+// WithGuardianPolicy overrides the default guardian invariant (owner protected on
+// every resource type, minimum one direct anchor) the atomic mutation repository
+// enforces under its scope lock. Supply an empty policy to declare no invariant, or
+// a narrower rule set to protect specific resource types. It mirrors the reference
+// memstore's WithGuardianPolicy so the guardian contract is wired identically
+// across dialects.
+func WithGuardianPolicy(p mutation.GuardianPolicy) Option {
+	return func(c *config) { c.guardian = p }
+}
+
+// Repositories returns the authorization repository set backed by db — ALL THREE
+// ports wired (relationship.Storer, role.Storer, and the atomic
+// mutation.MutationRepository over the shared iam_* tables) — AFTER verifying the
+// iam_relationships, iam_roles, iam_scopes, AND iam_mutations tables exist (the
+// boot-time probe). It errors with sdk.ErrNotFound naming the specific missing
+// table when the "authorization" migration source was not applied before boot, so
+// the failure surfaces at wiring time rather than on the first query. It does NOT
+// touch migrations: the host owns and applies the schema (see ExportMigrations). db
+// is the connector wrapper (error mapping + Tx), not a raw pool. The mutation
+// repository defaults to the ratified guardian policy unless WithGuardianPolicy
+// overrides it.
+func Repositories(db *pgxdb.DB, opts ...Option) (authorization.Repositories, error) {
+	cfg := config{guardian: mutation.DefaultGuardianPolicy()}
+	for _, o := range opts {
+		o(&cfg)
+	}
 	ctx := context.Background()
-	for _, table := range []string{"iam_relationships", "iam_roles"} {
+	for _, table := range []string{"iam_relationships", "iam_roles", "iam_scopes", "iam_mutations"} {
 		if err := probeTable(ctx, db, table); err != nil {
 			return authorization.Repositories{}, err
 		}
@@ -75,6 +100,7 @@ func Repositories(db *pgxdb.DB) (authorization.Repositories, error) {
 	return authorization.Repositories{
 		Relationships: newRelationshipStore(db),
 		Roles:         newRoleStore(db),
+		Mutations:     newMutationStore(db, cfg.guardian),
 	}, nil
 }
 

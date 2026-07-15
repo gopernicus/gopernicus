@@ -11,6 +11,14 @@
 -- cryptids.Database wiring the engine mints no id, the store omits the
 -- relationship_id column for the whole batch, and this DEFAULT fills the key
 -- (there is no RETURNING — CreateRelationships is error-only).
+--
+-- v3 canonical greenfield schema (authorizationv3, AZ3-2.1; folded clean because
+-- no module tag exists). The ck_iam_relationships_nonempty constraint pins the
+-- structural columns non-empty at the storage layer — a defense-in-depth mirror
+-- of the domain's ValidateRefField. subject_relation is DELIBERATELY excluded: it
+-- is the exact userset relation, NOT NULL but legitimately empty for a concrete
+-- subject and non-empty (group:eng#member) for a userset — the non-empty check
+-- must never conflate that relation state.
 CREATE TABLE IF NOT EXISTS iam_relationships (
     relationship_id  TEXT NOT NULL PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
     resource_type    TEXT NOT NULL,
@@ -19,7 +27,11 @@ CREATE TABLE IF NOT EXISTS iam_relationships (
     subject_type     TEXT NOT NULL,
     subject_id       TEXT NOT NULL,
     subject_relation TEXT NOT NULL DEFAULT '',
-    created_at       TEXT NOT NULL
+    created_at       TEXT NOT NULL,
+    CONSTRAINT ck_iam_relationships_nonempty CHECK (
+        resource_type <> '' AND resource_id <> '' AND relation <> ''
+        AND subject_type <> '' AND subject_id <> ''
+    )
 );
 
 -- Unique-tuple index: no duplicate (resource, relation, subject) rows. Plain
@@ -30,11 +42,17 @@ CREATE TABLE IF NOT EXISTS iam_relationships (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_iam_relationships_unique_tuple
     ON iam_relationships (resource_type, resource_id, relation, subject_type, subject_id, subject_relation);
 
--- Unique-subject index: one relation per subject per resource (owner OR member,
--- never both — the schema's AnyOf handles implication; a role change is
--- delete+create). A second, different relation for the same (resource, subject)
--- conflicts here and is a SILENT no-op under the store's bare ON CONFLICT DO
--- NOTHING (Q7). Plain columns for the same NOT-NULL reason as above.
+-- Unique-subject index: ONE relation per exact SubjectRef per resource (the
+-- ratified one-relation rule, default #1). The key is (resource, subject_type,
+-- subject_id, subject_relation) WITHOUT `relation`, so a subject already related
+-- to the resource cannot acquire a second, different relation. Because
+-- subject_relation IS in the key, group:eng#member and group:eng#admin are
+-- distinct exact SubjectRefs, each free to hold its own one relation — relation
+-- state is preserved, never conflated. Under v3 a conflicting second relation is
+-- surfaced as an explicit semantic_conflict outcome (not a silent ON CONFLICT DO
+-- NOTHING) and resolved atomically by OpReplace; this index is the arbiter the
+-- atomic mutation repositories (AZ3-2.3/2.4) lock and read against. Plain columns
+-- for the same NOT-NULL reason as above.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_iam_relationships_unique_subject
     ON iam_relationships (resource_type, resource_id, subject_type, subject_id, subject_relation);
 

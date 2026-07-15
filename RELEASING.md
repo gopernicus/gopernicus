@@ -364,6 +364,167 @@ type Deps struct {
 }
 ```
 
+### features/authorization + both store modules — next tag: authorization v3 correctness kernel (BREAKING; FIRST tags)
+
+authorizationv3 (2026-07-14, task prefix `AZ3`) hardens the v1 IAM feature into an
+exact-semantics correctness kernel. **Preflight re-confirmed zero
+`features/authorization*` tags exist (`git tag -l` empty, 2026-07-14),** so this
+cut is the module's **first tag** and — per recommended-default #7 and the packet's
+pre-tag breaking policy — the canonical migration set was **rewritten greenfield**
+(fold-to-final, not append-only). This note **supersedes** the pending
+middleware-consolidation "additive gate symbols (minor floor)" note above: with no
+tag ever cut, the v3 breaking surface simply absorbs that pending minor floor into
+the first tag.
+
+**Breaking-change taxonomy — this note distinguishes SEMANTIC access changes from
+source-only renames** (the AZ3-5.3 acceptance criterion):
+
+- **SEMANTIC (a decision or stored-state meaning changed):**
+  - **Userset relations are now load-bearing at runtime** (critical finding #1). A
+    stored `group#admin` is no longer silently satisfied by `group#member`; a
+    concrete-group grant reaches only the group entity; a tuple missing its
+    required userset relation is now rejected. Any adopter whose v1 data relied on
+    the decorative-relation bug gets DIFFERENT (correct) decisions. This is the
+    single change most likely to alter live access — the AZ3-5.1 upgrade audit
+    classifies each v1 row RETAIN / LOSE and stops on ambiguity (see
+    `features/authorization/stores/UPGRADE.md`).
+  - **Decision requests are concrete-principal-only.** A non-empty relation at a
+    decision boundary is now rejected, never ignored; `Check`/`CheckBatch`/
+    `FilterAuthorized`/`LookupResources` fail closed on malformed refs.
+  - **Evaluation is now bounded and fail-closed.** Limit/graph/fan-out/lookup
+    exhaustion returns an indeterminate `ErrEvaluationLimit` (wraps
+    `sdk.ErrUnavailable`; middleware maps it to 503), never a silent deny or a
+    truncated-complete list. A caller that treated "no error, empty result" as
+    "denied" must now fail closed on the error.
+  - **Mutations are atomic, revisioned, idempotent, and outcome-explicit.** A
+    conflicting create no longer silently succeeds: apply/revoke/replace return an
+    explicit `Receipt.Outcome` (applied/no_change/semantic_conflict/
+    invariant_blocked/not_found) plus an independent `Replayed` flag; stale
+    revision and MutationID payload mismatch are command ERRORS, not outcomes.
+    Last-owner protection is now a single-winner repository invariant
+    (`OutcomeInvariantBlocked`), replacing the non-atomic exists→count→delete.
+  - **`LookupResources` completeness + Check/Lookup parity.** Lookup now returns
+    Through-derived descendants it previously omitted (the D1(b)/D1(c) gap), so an
+    adopter enumerating resources sees a larger, correct set.
+  - **Effective role listing with provenance.** A scoped revoke that leaves a
+    global grant now reports `SameRoleGrantRemains=true`; `ListEffectiveRoleGrantsByResource`
+    reports direct/global/both provenance (raw `ListByResource` retained,
+    documented as raw).
+  - **Actor/guard authority is now mandatory for untrusted writes.** A guarded
+    write commits only if every authorization scope its guard read has the same
+    revision when the repository locks; there is no default-allow.
+- **SOURCE-ONLY renames / shape changes (compile break, no access-meaning change):**
+  - **Decision vocabulary rename:** `CheckRequest.Subject` (type `Subject`) →
+    `CheckRequest.Principal` (type `PrincipalRef{Type, ID}`); the stored-subject
+    type is now `SubjectRef{Type, ID, Relation}`. These are intentionally distinct
+    types (concrete principal vs. possibly-userset stored subject).
+  - **Construction shape:** `NewService(repos, cfg)` now returns
+    `(Components{Service, SystemMutator}, error)` — the authorization-specific FS2
+    amendment (a feature holding a separately-partitioned trusted capability; see
+    `features/README.md` §5 FS2 amendment; NOT a general FS2 replacement).
+  - **Raw mutation methods removed from `Service`:** `CreateRelationships`,
+    `DeleteRelationship`, `DeleteResourceRelationships`, `DeleteByResourceAndSubject`,
+    raw `AssignRole`/`UnassignRole`. Actor-facing typed guarded commands
+    (`GrantRelationship`/`RevokeRelationship`/`ReplaceRelationship`/`AssignRole`/
+    `UnassignRole`) and the separately held `SystemMutator` replace them. The store
+    ports keep the raw methods (stores/storetest/migrations sanctioned).
+  - **Reader ports gained a `limit int`:** the three `Lookup*` reader methods bound
+    their result set (SQL `LIMIT` / memstore cap); a custom store implementation
+    must add the parameter.
+  - **`GetSchema()` returns a `SchemaSnapshot`** (deep-copy read-only projection)
+    instead of the mutable `Schema`; new `SchemaDigest()`.
+  - **Role effective-listing port addition:** `role.Storer.ListEffectiveByResource`
+    (+ `EffectiveGrant`) — a custom store must implement it.
+
+**Canonical migration set (greenfield rewrite).** Both dialect trees ship the final
+v3 schema with byte-identical filename sets: `0001_iam_relationships`,
+`0002_iam_roles`, `0003_iam_scopes`, `0004_iam_mutations` (the `iam_*` prefix per
+owner ruling R4). The `iam_scopes` (revision anchors) and `iam_mutations` (receipt
+ledger) tables are new in v3. A v1 adopter does **not** blind-copy these onto a
+populated v1 database — the **AZ3-5.1 data-preserving adopter path** (detection →
+blocked-until-repaired → conversion + anchor seeding → v3 boot → access comparison →
+rollback boundary) is published in `features/authorization/stores/UPGRADE.md` and
+linked from `features/authorization/README.md`. It was **executed live** on
+fresh/reset PostgreSQL (C-collation) + libSQL both dialects (AZ3-5.1) and has **not**
+been applied to a real host.
+
+**Jobs/work axis: authorization adds NOTHING.** authorizationv3 imports **`sdk`
+only** (verified: `features/authorization/go.mod` requires only `sdk`; zero
+`sdk/capabilities/work`, `features/jobs`, or `features/events` imports in the core).
+The v3 correctness kernel emits **no effects** — no authorization delivery queue, no
+post-commit dispatch, no event append, no authorization-specific jobs table. This is
+enforced permanently by the sixteenth layering guard,
+`guard-authorization-no-delivery-repo` (AZ3-5.3), the `guard-auth-no-delivery-repo`
+twin pointed at `features/authorization` migrations + repositories. So the settled
+`sdk/capabilities/work` (new first-tag module) and `features/jobs` (MINOR floor)
+notes above carry **no authorization rider**; a future authorization effects packet
+must consume the shared jobs/events vocabulary, never revive a bespoke queue.
+
+**Per-module tag requirements (semver floors; no tag cut this milestone):**
+
+| Module | Floor | Why |
+|---|---|---|
+| `features/authorization` | **first tag — breaking-vintage** | userset relations load-bearing, concrete-principal decisions, immutable `SchemaSnapshot`, bounded evaluation, `Components{Service, SystemMutator}` construction, raw `Service` mutation methods removed, atomic revisioned receipts. Pre-`v1`, breaking is expected (Go pre-release semantics); move to `v1.0.0` deliberately, not on this first tag |
+| `features/authorization/stores/pgx` | **first tag — breaking-vintage** | implements the relation-aware readers (+`limit`), the three atomic mutation repositories (`iam_scopes`/`iam_mutations`), and `ListEffectiveByResource` over the greenfield `0001…0004` set |
+| `features/authorization/stores/turso` | **first tag — breaking-vintage** | same, libSQL dialect; requires the turso connector's `BEGIN IMMEDIATE` write-intent transactions (already keyed above) for the concurrent mutation CAS |
+
+`examples/auth-cms` is the v3 proof host — a demonstration, never tagged.
+
+**Consumer changes a host/feature must make:**
+
+- **Auth invitation Granter** (`examples/auth-cms/cmd/server/membership.go`): the
+  invitation-accept `auth.Granter` adapter moved from
+  `authorizer.CreateRelationships` (v1) to `SystemMutator.GrantRelationship` with a
+  stable `DeriveMutationID("auth-cms/invitation-grant", resource, relation, subject)`
+  — the tuple identity IS the operation identity, so a retried accept replays
+  without a duplicate revision bump. Any host wiring invitation acceptance to
+  authorization adopts the same SystemMutator + DeriveMutationID shape.
+- **Events authorization closure:** `features/events` itself needs **no change** —
+  its `AuthorizeStream` config seam is a host-supplied closure and does not import
+  authorization. A host whose events `Authorize` closure delegates to
+  `authorizer.Check` must update the call to the new `CheckRequest{Principal:
+  PrincipalRef{...}}` shape (was `CheckRequest{Subject: Subject{...}}`). This is the
+  source-only decision-vocabulary rename; the Check-only gate semantics are
+  unchanged.
+- **auth-cms (done — cite):** the proof host is fully migrated — `hostMutationGuard`
+  (`cmd/server/guard.go`) composes the schema `manage_access` relation and the
+  platform-admin recipe over the dependency-tracking `DecisionView`;
+  `cmd/server/authorization.go` seeds via `SystemMutator`+`DeriveMutationID`; all
+  session-only authorization-mutation HTTP routes were removed (browser
+  role-assignment deferred to the AZADM packet). Migration proven by the AZ3-4.1/4.2
+  host-composition tests and the checked-in
+  `examples/auth-cms/cmd/server/testdata/az3-proof-transcript.md`.
+- **External host recipe (README wiring page):** a generic host wires
+  `Components{Service, SystemMutator}` from `NewService`, composes a host
+  `MutationGuard` (schema-declared relation + any platform-admin short-circuit) that
+  fails closed, holds the `SystemMutator` apart for bootstrap/invitation/teardown,
+  and adapts `identity.Principal → Actor`/`PrincipalRef` at the boundary. The full
+  wiring recipe and every API is documented in `features/authorization/README.md`
+  (AZ3-5.2) — a host wires safely without reading internal code or the plan.
+
+**sdk graduation decision (RECORDED for owner review — NO code moved).** This
+milestone fires the ARCHITECTURE protocol-table trigger ("authorizationv3 settles
+its semantics"). Re-running the three conjunctive graduation gates over the
+authorization check/decision vocabulary: **RE-DEFER — stays consumer-declared.** The
+semantics are now settled (the trigger's condition), but graduation still fails:
+- *sdk/README.md admission (plurality):* exactly ONE honest implementation exists
+  (`features/authorization`); host "closures" are arbitrary access composition, not
+  second implementations of a shared decision contract. FAILS test 1.
+- *ARCHITECTURE five-point sdk-vs-logic:* multiple honest adapters do NOT exist
+  (point 1), and the conformance suite (`storetest`) is feature-coupled, not an
+  sdk-generic suite (point 3). FAILS.
+- *features/README.md §5 five criteria:* criterion 1 (real producer + real consumer
+  in SEPARATE modules) is not met — the only cross-feature usage is consumer-declared
+  Check-only closures per the C2 DEFAULT, not a separate module consuming a graduated
+  sdk authorization port; and criterion 2 (canonical-across-gopernicus) is still not
+  established. FAILS.
+Recommendation to the owner: update the ARCHITECTURE protocol-table row reason from
+"trigger: authorizationv3 settles its semantics" to "settled, but re-deferred:
+single implementation; consumer-declared Check-only closures remain the only
+cross-feature usage — re-evaluate when a second authorization decision
+implementation or a feature needing the identical decision vocabulary appears." The
+owner ratifies any table edit separately; this task records the decision only.
+
 ### Auth v3 tag requirements + production checklist
 
 **Per-module tag requirements for the auth-v3 cut** (semver floors; no tag is cut

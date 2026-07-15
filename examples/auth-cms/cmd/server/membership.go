@@ -11,7 +11,7 @@ import (
 
 // The demo resource the flagship checks against. An invitation created at
 // POST /auth/invitations/project/demo with relation "member" grants — through the
-// relationshipGranter → authorizer.CreateRelationships — the tuple
+// relationshipGranter → the trusted SystemMutator — the tuple
 // project:demo#member@user:<id>. The demo `view` permission is AnyOf(owner,
 // member), so both an owner and a member pass the gate.
 const (
@@ -21,29 +21,36 @@ const (
 	demoPermission   = "view"
 )
 
-// relationshipGranter adapts the authorization engine to auth.Granter — design
-// §6's promised completion (authorization-v1 Z4 commit 2). Invitation-accept now
-// writes a real ReBAC tuple via authorizer.CreateRelationships, retiring the A9
-// toy in-memory membership map. There is STILL no import edge between features:
-// the host is the only party that holds both auth and authorization, wiring them
-// through this host-local adapter over the sdk-shaped Granter seam.
+// relationshipGranter adapts the authorization write path to auth.Granter — design
+// §6's promised completion (authorization-v1 Z4 commit 2). Invitation-accept is a
+// TRUSTED operation (a listed SystemMutator holder), so it writes through the
+// separately held SystemMutator, not the actor-facing Service (which now requires a
+// host MutationGuard). There is STILL no import edge between features: the host is
+// the only party that holds both auth and authorization, wiring them through this
+// host-local adapter over the sdk-shaped Granter seam.
 type relationshipGranter struct {
-	authorizer *authorization.Service
+	system *authorization.SystemMutator
 }
 
 var _ auth.Granter = relationshipGranter{}
 
 // Grant records that (subjectType, subjectID) holds relation on the resource as a
-// relationship tuple. CreateRelationships is idempotent (a duplicate is a silent
-// no-op), satisfying the Granter contract's idempotence requirement.
+// relationship tuple. The MutationID is DERIVED deterministically from the grant's
+// operation identity (its resulting tuple), so a retried accept dedups against the
+// stored mutation — no duplicate stored mutation and no duplicate revision bump,
+// satisfying the Granter contract's idempotence requirement (AZ3-3.4). A persisted
+// outcome (applied / no_change / a one-relation conflict) returns nil; only a genuine
+// command/infrastructure error propagates.
 func (g relationshipGranter) Grant(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) error {
-	return g.authorizer.CreateRelationships(ctx, []authorization.CreateRelationship{{
+	mid := authorization.DeriveMutationID("auth-cms/invitation-grant", resourceType, resourceID, relation, subjectType, subjectID)
+	_, err := g.system.GrantRelationship(ctx, authorization.GrantRelationshipCommand{
+		MutationID:   mid,
 		ResourceType: resourceType,
 		ResourceID:   resourceID,
 		Relation:     relation,
-		SubjectType:  subjectType,
-		SubjectID:    subjectID,
-	}})
+		Subject:      authorization.SubjectRef{Type: subjectType, ID: subjectID},
+	})
+	return err
 }
 
 // isPlatformAdmin is the HOST-side platform-admin recipe (host composition —
@@ -54,7 +61,7 @@ func (g relationshipGranter) Grant(ctx context.Context, resourceType, resourceID
 // FIRST in its own closure, before the resource-specific check.
 func isPlatformAdmin(ctx context.Context, authorizer *authorization.Service, subjectType, subjectID string) bool {
 	res, err := authorizer.Check(ctx, authorization.CheckRequest{
-		Subject:    authorization.Subject{Type: subjectType, ID: subjectID},
+		Principal:  authorization.PrincipalRef{Type: subjectType, ID: subjectID},
 		Permission: "admin",
 		Resource:   authorization.Resource{Type: "platform", ID: "main"},
 	})

@@ -3,6 +3,8 @@ package rolesvc
 import (
 	"context"
 	"errors"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/gopernicus/gopernicus/features/authorization/domain/role"
@@ -52,6 +54,46 @@ func (f *fakeRoleStore) ListBySubject(ctx context.Context, subjectType, subjectI
 
 func (f *fakeRoleStore) ListByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[role.Assignment], error) {
 	return crud.Page[role.Assignment]{}, f.err
+}
+
+// ListEffectiveByResource unions the direct scoped rows with the global rows a
+// scoped query would fall back to, keyed by (subject, role) with provenance — a
+// faithful-enough reference for the service delegation/validation tests.
+func (f *fakeRoleStore) ListEffectiveByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[role.EffectiveGrant], error) {
+	if f.err != nil {
+		return crud.Page[role.EffectiveGrant]{}, f.err
+	}
+	scoped := resourceType != "" || resourceID != ""
+	byKey := map[string]*role.EffectiveGrant{}
+	var order []string
+	for k := range f.rows {
+		parts := strings.SplitN(k, "|", 5)
+		st, sid, roleName, rt, rid := parts[0], parts[1], parts[2], parts[3], parts[4]
+		directMatch := rt == resourceType && rid == resourceID
+		globalMatch := scoped && rt == "" && rid == ""
+		if !directMatch && !globalMatch {
+			continue
+		}
+		gk := st + "|" + sid + "|" + roleName
+		g := byKey[gk]
+		if g == nil {
+			g = &role.EffectiveGrant{SubjectType: st, SubjectID: sid, Role: roleName}
+			byKey[gk] = g
+			order = append(order, gk)
+		}
+		if directMatch {
+			g.Direct = true
+		}
+		if globalMatch {
+			g.Global = true
+		}
+	}
+	sort.Strings(order)
+	items := make([]role.EffectiveGrant, 0, len(order))
+	for _, gk := range order {
+		items = append(items, *byKey[gk])
+	}
+	return crud.Page[role.EffectiveGrant]{Items: items}, nil
 }
 
 func TestAssignRoleIdempotentPassThrough(t *testing.T) {
@@ -110,6 +152,79 @@ func TestHasRoleScopeRule(t *testing.T) {
 	// A miss is (false, nil).
 	if ok, err := svc.HasRole(context.Background(), "user", "nobody", "editor", "doc", "d1"); err != nil || ok {
 		t.Fatalf("miss must be (false, nil): ok=%v err=%v", ok, err)
+	}
+}
+
+func TestEffectiveEnumerationAgreesWithHasRole(t *testing.T) {
+	store := &fakeRoleStore{}
+	svc := NewService(store)
+	ctx := context.Background()
+
+	// u1: global auditor (satisfies a scoped HasRole via fallback, no direct row).
+	// u2: direct scoped auditor. u3: BOTH direct and global.
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("assign: %v", err)
+		}
+	}
+	must(svc.AssignRole(ctx, "user", "u1", "auditor", "", ""))
+	must(svc.AssignRole(ctx, "user", "u2", "auditor", "doc", "d1"))
+	must(svc.AssignRole(ctx, "user", "u3", "auditor", "doc", "d1"))
+	must(svc.AssignRole(ctx, "user", "u3", "auditor", "", ""))
+	// A grant on a DIFFERENT scope must not leak into d1's enumeration.
+	must(svc.AssignRole(ctx, "user", "u4", "auditor", "doc", "d2"))
+
+	page, err := svc.ListEffectiveRoleGrantsByResource(ctx, "doc", "d1", crud.ListRequest{})
+	if err != nil {
+		t.Fatalf("ListEffectiveRoleGrantsByResource: %v", err)
+	}
+
+	prov := map[string]string{}
+	for _, g := range page.Items {
+		prov[g.SubjectID] = g.Provenance()
+	}
+	want := map[string]string{"u1": "global", "u2": "direct", "u3": "both"}
+	if len(prov) != len(want) {
+		t.Fatalf("effective set = %v, want subjects %v", prov, want)
+	}
+	for id, p := range want {
+		if prov[id] != p {
+			t.Fatalf("subject %s provenance = %q, want %q (set %v)", id, prov[id], p, prov)
+		}
+	}
+	if _, leaked := prov["u4"]; leaked {
+		t.Fatalf("a grant scoped to doc/d2 leaked into doc/d1 enumeration: %v", prov)
+	}
+
+	// Symmetry: every enumerated subject passes HasRole at the same scope, and
+	// HasRole grants nobody the enumeration omits.
+	for id := range want {
+		if ok, err := svc.HasRole(ctx, "user", id, "auditor", "doc", "d1"); err != nil || !ok {
+			t.Fatalf("HasRole(%s) = %v,%v; enumeration and decision must agree", id, ok, err)
+		}
+	}
+	if ok, _ := svc.HasRole(ctx, "user", "u4", "auditor", "doc", "d1"); ok {
+		t.Fatalf("HasRole must deny u4 on d1 just as enumeration omits it")
+	}
+}
+
+func TestListValidationSymmetry(t *testing.T) {
+	svc := NewService(&fakeRoleStore{})
+	ctx := context.Background()
+
+	if _, err := svc.ListRoleAssignmentsBySubject(ctx, "", "u1", crud.ListRequest{}); !errors.Is(err, ErrInvalidRoleAssignment) {
+		t.Fatalf("ListBySubject empty subject: want ErrInvalidRoleAssignment, got %v", err)
+	}
+	if _, err := svc.ListRoleAssignmentsByResource(ctx, "doc", "", crud.ListRequest{}); !errors.Is(err, ErrHalfScopedAssignment) {
+		t.Fatalf("ListByResource half-scoped: want ErrHalfScopedAssignment, got %v", err)
+	}
+	if _, err := svc.ListEffectiveRoleGrantsByResource(ctx, "doc", "", crud.ListRequest{}); !errors.Is(err, ErrHalfScopedAssignment) {
+		t.Fatalf("ListEffective half-scoped: want ErrHalfScopedAssignment, got %v", err)
+	}
+	// A global ("","") resource listing is a valid shape (not half-scoped).
+	if _, err := svc.ListEffectiveRoleGrantsByResource(ctx, "", "", crud.ListRequest{}); err != nil {
+		t.Fatalf("ListEffective global scope must be accepted, got %v", err)
 	}
 }
 

@@ -16,7 +16,8 @@ STORE_MODULES = features/cms/stores/pgx features/cms/stores/turso features/authe
 	guard-feature-core-sdk-only guard-feature-transport-sdk-web guard-feature-no-cross-feature \
 	guard-store-no-foreign-feature guard-no-underlying guard-no-lax-scan \
 	guard-workshop-boundary guard-sdk-layering guard-integration-no-inward \
-	guard-auth-no-delivery-repo guard-auth-no-request-time-provider
+	guard-auth-no-delivery-repo guard-auth-no-request-time-provider \
+	guard-authorization-no-delivery-repo
 
 # Regenerate *_templ.go from .templ sources. Each bundled views/templ module pins
 # its own templ tool; generation runs inside each so the tool version is
@@ -88,12 +89,13 @@ tidy:
 # Layering guards — each enforces one architectural boundary from the
 # constitution (00-overview.md) or the feature-standard charter (FS rules,
 # 2026-07-07); every target must print nothing and exit 0 on a clean tree.
-# `make guard` runs all fifteen.
+# `make guard` runs all sixteen.
 guard: guard-sdk-stdlib guard-feature-isolation guard-sdk-no-outward guard-no-legacy-path \
 	guard-feature-core-sdk-only guard-feature-transport-sdk-web guard-feature-no-cross-feature \
 	guard-store-no-foreign-feature guard-no-underlying guard-no-lax-scan \
 	guard-workshop-boundary guard-sdk-layering guard-integration-no-inward \
-	guard-auth-no-delivery-repo guard-auth-no-request-time-provider
+	guard-auth-no-delivery-repo guard-auth-no-request-time-provider \
+	guard-authorization-no-delivery-repo
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -270,6 +272,21 @@ guard-auth-no-request-time-provider:
 	@echo "== guard: no authentication producer calls a provider on the request path (AV3D-2.4) =="
 	@hits=$$(grep -rnE '\.(Deliver|Send|Notify)\(' --include='*.go' --exclude='*_test.go' features/authentication/internal/logic | grep -v '/delivery/' || true); \
 		if [ -n "$$hits" ]; then echo "ERROR (AV3D-2.4): a producer package calls a provider-send verb directly — outbound must go through the delivery dispatcher seam, never a request-time send:"; echo "$$hits"; exit 1; fi
+
+# G16 (authorizationv3 AZ3-5.3): authorization owns NO authorization-specific
+# jobs/delivery table or repository. The v3 correctness kernel emits no effects
+# (00-overview.md standing invariant: "Production/example wiring never relies on
+# an authorization-specific jobs queue"); a later effects packet must consume the
+# generic jobs feature + a same-transaction events outbox, never an
+# authorization-owned queue. This tripwire — the guard-auth-no-delivery-repo twin
+# pointed at features/authorization migrations + repositories — fails if a
+# delivery/jobs table or a bespoke deliveryjob domain package appears in the
+# authorization feature or its stores. The snake_case table tokens are
+# case-sensitive so they never match a legitimate camelCase Go identifier.
+guard-authorization-no-delivery-repo:
+	@echo "== guard: authorization owns no bespoke jobs/delivery table/repository (AZ3-5.3) =="
+	@! grep -rnE 'delivery_jobs|fenced_job_queue|job_queue|job_schedules' features/authorization || { echo "ERROR (AZ3-5.3): an authorization-specific jobs/delivery table returned to authorization — the v3 kernel emits no effects; durable delivery would be the generic jobs feature reached via a same-transaction events outbox, never an authorization-owned queue"; exit 1; }
+	@! grep -rnE 'domain/deliveryjob|package deliveryjob' --include='*.go' features/authorization || { echo "ERROR (AZ3-5.3): a bespoke deliveryjob domain package appeared in authorization — the v3 kernel ships no effects/delivery domain"; exit 1; }
 
 # CI-style gate: templ generation must be a no-op (no drift), then per-module
 # vet/build/test across all MODULES, then the four layering guards. Drift

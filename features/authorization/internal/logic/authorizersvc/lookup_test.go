@@ -15,7 +15,7 @@ func TestLookupResourcesDirect(t *testing.T) {
 		relationship.CreateRelationship{ResourceType: "post", ResourceID: "p1", Relation: "owner", SubjectType: "user", SubjectID: "u1"},
 		relationship.CreateRelationship{ResourceType: "post", ResourceID: "p2", Relation: "owner", SubjectType: "user", SubjectID: "u1"},
 	)
-	res, err := svc.LookupResources(context.Background(), Subject{Type: "user", ID: "u1"}, "delete", "post")
+	res, err := svc.LookupResources(context.Background(), PrincipalRef{Type: "user", ID: "u1"}, "delete", "post")
 	if err != nil {
 		t.Fatalf("LookupResources: %v", err)
 	}
@@ -26,7 +26,7 @@ func TestLookupResourcesDirect(t *testing.T) {
 
 func TestLookupResourcesEmptyIsNonNil(t *testing.T) {
 	svc := newTestService(t, &fakeStore{}, cryptids.IDGenerator{})
-	res, err := svc.LookupResources(context.Background(), Subject{Type: "user", ID: "nobody"}, "delete", "post")
+	res, err := svc.LookupResources(context.Background(), PrincipalRef{Type: "user", ID: "nobody"}, "delete", "post")
 	if err != nil {
 		t.Fatalf("LookupResources: %v", err)
 	}
@@ -48,7 +48,7 @@ func TestLookupResourcesPlatformAdminIsNotMagic(t *testing.T) {
 	store.tuples = append(store.tuples, relationship.CreateRelationship{
 		ResourceType: "platform", ResourceID: "main", Relation: "admin", SubjectType: "user", SubjectID: "admin1",
 	})
-	res, err := svc.LookupResources(context.Background(), Subject{Type: "user", ID: "admin1"}, "delete", "post")
+	res, err := svc.LookupResources(context.Background(), PrincipalRef{Type: "user", ID: "admin1"}, "delete", "post")
 	if err != nil {
 		t.Fatalf("LookupResources: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestLookupResourcesThrough(t *testing.T) {
 		relationship.CreateRelationship{ResourceType: "post", ResourceID: "p1", Relation: "org", SubjectType: "org", SubjectID: "o1"},
 		relationship.CreateRelationship{ResourceType: "post", ResourceID: "p2", Relation: "org", SubjectType: "org", SubjectID: "o1"},
 	)
-	res, err := svc.LookupResources(context.Background(), Subject{Type: "user", ID: "u1"}, "view", "post")
+	res, err := svc.LookupResources(context.Background(), PrincipalRef{Type: "user", ID: "u1"}, "view", "post")
 	if err != nil {
 		t.Fatalf("LookupResources: %v", err)
 	}

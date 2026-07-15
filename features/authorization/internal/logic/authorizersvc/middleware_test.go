@@ -16,7 +16,7 @@ import (
 // relationship.Storer).
 type erroringStore struct{ *fakeStore }
 
-func (erroringStore) CheckRelationWithGroupExpansion(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) (bool, error) {
+func (erroringStore) CheckRelationWithGroupExpansion(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string, maxExpansionStates int) (bool, error) {
 	return false, errors.New("store exploded")
 }
 

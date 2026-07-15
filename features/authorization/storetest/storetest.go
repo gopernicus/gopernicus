@@ -42,11 +42,29 @@ func Run(t *testing.T, newRepos func(t *testing.T) authorization.Repositories) {
 		}
 		runAdversarial(t, newRepos)
 	})
+	t.Run("Budget", func(t *testing.T) {
+		if newRepos(t).Relationships == nil {
+			t.Skip("relationship kind not wired")
+		}
+		runBudget(t, newRepos)
+	})
+	t.Run("Parity", func(t *testing.T) {
+		if newRepos(t).Relationships == nil {
+			t.Skip("relationship kind not wired")
+		}
+		runParity(t, newRepos)
+	})
 	t.Run("Roles", func(t *testing.T) {
 		if newRepos(t).Roles == nil {
 			t.Skip("roles kind not wired")
 		}
 		runRoles(t, newRepos)
+	})
+	t.Run("Mutations", func(t *testing.T) {
+		if newRepos(t).Mutations == nil {
+			t.Skip("mutation repository not wired")
+		}
+		runMutations(t, newRepos)
 	})
 }
 
@@ -73,7 +91,7 @@ func runRelationshipContracts(t *testing.T, newRepos func(t *testing.T) authoriz
 			t.Fatalf("created tuple should exist: ok=%v err=%v", ok, err)
 		}
 		targets, err := s.GetRelationTargets(ctx, "doc", "d1", "owner")
-		if err != nil || len(targets) != 1 || targets[0].SubjectID != "u1" {
+		if err != nil || len(targets) != 1 || targets[0].ID != "u1" {
 			t.Fatalf("GetRelationTargets: %+v err=%v", targets, err)
 		}
 		if err := s.DeleteRelationship(ctx, "doc", "d1", "owner", "user", "u1"); err != nil {
@@ -115,6 +133,44 @@ func runRelationshipContracts(t *testing.T, newRepos func(t *testing.T) authoriz
 		}
 	})
 
+	t.Run("UsersetSubjectRelationsCoexistOnResource", func(t *testing.T) {
+		s := newRepos(t).Relationships
+		// group:eng#member and group:eng#admin are DISTINCT subject references
+		// (same type+id, different subject_relation). The unique-SUBJECT key
+		// includes subject_relation (idx_iam_relationships_unique_subject), so a RAW
+		// create of BOTH usersets on ONE resource persists BOTH and they are
+		// independently observable — never a silent collision that drops the second.
+		mustCreate(t, s,
+			ctUserset("doc", "d1", "viewer", "group", "eng", "member"),
+			ctUserset("doc", "d1", "viewer", "group", "eng", "admin"),
+		)
+		targets, err := s.GetRelationTargets(ctx, "doc", "d1", "viewer")
+		if err != nil {
+			t.Fatalf("GetRelationTargets: %v", err)
+		}
+		relations := map[string]bool{}
+		for _, tgt := range targets {
+			if tgt.Type != "group" || tgt.ID != "eng" {
+				t.Fatalf("unexpected target %+v", tgt)
+			}
+			relations[tgt.Relation] = true
+		}
+		if len(relations) != 2 || !relations["member"] || !relations["admin"] {
+			t.Fatalf("group:eng#member and group:eng#admin must both persist, got %+v", targets)
+		}
+		// The one-relation rule still holds PER subject reference: re-creating the
+		// SAME reference (group:eng#member) with a DIFFERENT relation is the silent
+		// no-op — it must not gain the new relation nor drop the existing one.
+		if err := s.CreateRelationships(ctx, []relationship.CreateRelationship{
+			ctUserset("doc", "d1", "owner", "group", "eng", "member"),
+		}); err != nil {
+			t.Fatalf("second relation for an existing subject reference must be a nil no-op, got %v", err)
+		}
+		if n, _ := s.CountByResourceAndRelation(ctx, "doc", "d1", "owner"); n != 0 {
+			t.Fatalf("the group:eng#member reference must stay viewer, not gain owner, got %d owner rows", n)
+		}
+	})
+
 	t.Run("DeleteVariants", func(t *testing.T) {
 		s := newRepos(t).Relationships
 		mustCreate(t, s,
@@ -147,7 +203,7 @@ func runRelationshipContracts(t *testing.T, newRepos func(t *testing.T) authoriz
 			ct("doc", "d1", "viewer", "user", "u1"),
 			ct("doc", "d3", "viewer", "user", "u1"),
 		)
-		got, err := s.CheckBatchDirect(ctx, "doc", []string{"d1", "d2", "d3"}, "viewer", "user", "u1")
+		got, err := s.CheckBatchDirect(ctx, "doc", []string{"d1", "d2", "d3"}, "viewer", "user", "u1", 0)
 		if err != nil {
 			t.Fatalf("CheckBatchDirect: %v", err)
 		}
@@ -177,17 +233,23 @@ func runRelationshipContracts(t *testing.T, newRepos func(t *testing.T) authoriz
 			ct("space", "s2", "parent", "space", "s1"),
 			ct("space", "s3", "parent", "space", "s2"),
 		)
-		ids, _ := s.LookupResourceIDs(ctx, "doc", []string{"viewer"}, "user", "u1")
+		ids, _ := s.LookupResourceIDs(ctx, "doc", []string{"viewer"}, "user", "u1", 100)
 		if len(ids) != 2 {
 			t.Fatalf("LookupResourceIDs want 2, got %v", ids)
 		}
-		byTarget, _ := s.LookupResourceIDsByRelationTarget(ctx, "space", "parent", "space", []string{"s1"})
+		byTarget, _ := s.LookupResourceIDsByRelationTarget(ctx, "space", "parent", "space", []string{"s1"}, 100)
 		if len(byTarget) != 1 || byTarget[0] != "s2" {
 			t.Fatalf("LookupResourceIDsByRelationTarget want [s2], got %v", byTarget)
 		}
-		desc, _ := s.LookupDescendantResourceIDs(ctx, "space", "parent", "space", []string{"s1"})
+		desc, _ := s.LookupDescendantResourceIDs(ctx, "space", "parent", "space", []string{"s1"}, 100)
 		if len(desc) != 2 {
 			t.Fatalf("descendants want [s2 s3], got %v", desc)
+		}
+		// The result cap is a distinguishable overflow signal: a cap of 1 returns
+		// exactly 1 of the 2 viewer docs (never a silent "complete" 2).
+		capped, _ := s.LookupResourceIDs(ctx, "doc", []string{"viewer"}, "user", "u1", 1)
+		if len(capped) != 1 {
+			t.Fatalf("LookupResourceIDs cap=1 must return exactly 1 (overflow signal), got %v", capped)
 		}
 	})
 

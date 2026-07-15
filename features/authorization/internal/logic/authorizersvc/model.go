@@ -10,16 +10,29 @@
 // (the EAV-spine philosophy applied to permissions).
 package authorizersvc
 
+import "github.com/gopernicus/gopernicus/features/authorization/domain/relationship"
+
 // =============================================================================
 // Core check types
 // =============================================================================
 
-// Subject is who is requesting access. Relation is optional, naming a userset
-// ("group#member") rather than a concrete principal.
-type Subject struct {
-	Type     string // "user" or "service_account" (the runtime principal types)
-	ID       string
-	Relation string // optional, for "group#member" style
+// PrincipalRef is a concrete decision caller or actor — always a (Type, ID)
+// pair, NEVER a userset. It is the only subject a decision request carries: a
+// userset relation cannot be expressed here, so no public decision path can
+// smuggle one in. It mirrors identity.Principal field-for-field and is directly
+// convertible from it (see authorization.PrincipalFrom).
+type PrincipalRef struct {
+	Type string // "user" or "service_account" (the runtime principal types)
+	ID   string
+}
+
+// Validate reports whether the principal is structurally usable: both Type and
+// ID must be present and well formed (see relationship.ValidateRefField).
+func (p PrincipalRef) Validate() error {
+	if err := relationship.ValidateRefField("principal type", p.Type); err != nil {
+		return err
+	}
+	return relationship.ValidateRefField("principal id", p.ID)
 }
 
 // Resource is what is being accessed.
@@ -28,19 +41,43 @@ type Resource struct {
 	ID   string
 }
 
-// CheckRequest is a permission-check query.
+// CheckRequest is a permission-check query. Principal is concrete: a decision
+// request never carries a userset relation.
 type CheckRequest struct {
-	Subject    Subject
+	Principal  PrincipalRef
 	Permission string // "view", "edit", "delete"
 	Resource   Resource
 }
 
-// CheckResult is the outcome of a permission check. Reason aids debugging
-// ("direct:owner", "through:org->direct:admin", "no matching rule"). It is
-// informational only — its vocabulary is not a contract.
+// Validate reports whether the request is structurally well formed: the
+// principal, the permission, and the resource type/id are all present and well
+// formed. It applies no schema knowledge.
+func (r CheckRequest) Validate() error {
+	if err := r.Principal.Validate(); err != nil {
+		return err
+	}
+	if err := relationship.ValidateRefField("permission", r.Permission); err != nil {
+		return err
+	}
+	if err := relationship.ValidateRefField("resource type", r.Resource.Type); err != nil {
+		return err
+	}
+	return relationship.ValidateRefField("resource id", r.Resource.ID)
+}
+
+// CheckResult is the outcome of a permission check.
+//
+// ReasonCode is the STABLE, coarse machine classification of the decision:
+// ReasonGranted when Allowed, ReasonDenied otherwise. It is the CONTRACT surface
+// — a host, an audit sink, or the explain trace may switch on it, and it is
+// deterministic (equivalent state yields the same code regardless of map
+// iteration or which path granted). Reason is non-contract debug text
+// ("direct:owner", "through:org->direct:admin", "no matching rule"); its
+// vocabulary is not frozen and callers must never switch on it.
 type CheckResult struct {
-	Allowed bool
-	Reason  string
+	Allowed    bool
+	ReasonCode Reason
+	Reason     string
 }
 
 // =============================================================================

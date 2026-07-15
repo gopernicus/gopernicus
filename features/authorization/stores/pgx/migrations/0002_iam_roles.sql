@@ -11,13 +11,26 @@
 -- NULL — so a global assignment participates in the unique index (a nullable
 -- scope would make two ('', '') rows DISTINCT under PostgreSQL NULL semantics,
 -- silently duplicating global grants).
+--
+-- v3 canonical greenfield schema (authorizationv3, AZ3-2.1). Two constraints pin
+-- the row shape: ck_iam_roles_nonempty keeps the structural subject/role columns
+-- non-empty, and ck_iam_roles_scope_pair enforces a CONSISTENT global/scoped
+-- pair — both scope columns empty (a global grant) or both non-empty (a scoped
+-- grant), never a half-populated ('x', '') that would be neither honest scope.
 CREATE TABLE IF NOT EXISTS iam_roles (
     subject_type  TEXT        NOT NULL,
     subject_id    TEXT        NOT NULL,
     role          TEXT        NOT NULL,
     resource_type TEXT        NOT NULL DEFAULT '',
     resource_id   TEXT        NOT NULL DEFAULT '',
-    created_at    TIMESTAMPTZ NOT NULL
+    created_at    TIMESTAMPTZ NOT NULL,
+    CONSTRAINT ck_iam_roles_nonempty CHECK (
+        subject_type <> '' AND subject_id <> '' AND role <> ''
+    ),
+    CONSTRAINT ck_iam_roles_scope_pair CHECK (
+        (resource_type = '' AND resource_id = '')
+        OR (resource_type <> '' AND resource_id <> '')
+    )
 );
 
 -- Unique 5-tuple: the natural key and the ON CONFLICT target the idempotent

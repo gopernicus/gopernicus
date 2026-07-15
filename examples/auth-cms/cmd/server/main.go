@@ -59,7 +59,6 @@ import (
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/outboxmem"
 	auth "github.com/gopernicus/gopernicus/features/authentication"
 	authorization "github.com/gopernicus/gopernicus/features/authorization"
-	authzmem "github.com/gopernicus/gopernicus/features/authorization/memstore"
 	"github.com/gopernicus/gopernicus/features/cms"
 	"github.com/gopernicus/gopernicus/features/cms/domain/content"
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
@@ -175,43 +174,36 @@ func run(ctx context.Context, log *slog.Logger) error {
 	mount := feature.Mount{Router: router, Logger: log, Events: bus}
 
 	// The authorization feature (authorization-v1 Z4 commit 2 — the FLAGSHIP
-	// posture): BOTH kinds wired, memstore-backed, so the host stays zero-infra (no
-	// driver in the graph — GOWORK=off go list -m all still has no libsql). The
-	// relationship kind's schema declares a `project` resource type (owner/member
-	// relations, view = AnyOf(owner, member)) and a `platform` resource type whose
-	// `admin` relation backs the platform-admin DATA tuple (platform-admin is data,
-	// never Config). The roles kind (demo.go) needs no model. Register logs only.
-	authzModel := authorization.NewSchema([]authorization.ResourceSchema{
-		{Name: demoResourceType, Def: authorization.ResourceTypeDef{
-			Relations: map[string]authorization.RelationDef{
-				"owner":  {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}}},
-				"member": {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}}},
-			},
-			Permissions: map[string]authorization.PermissionRule{
-				demoPermission: authorization.AnyOf(authorization.Direct("owner"), authorization.Direct("member")),
-			},
-		}},
-		{Name: "platform", Def: authorization.ResourceTypeDef{
-			Relations: map[string]authorization.RelationDef{
-				"admin": {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}}},
-			},
-			// The `admin` permission makes platform-admin an ordinary
-			// schema-declared check the host runs first in its own Check
-			// closure (see requireMembership / demoMyProjects). The engine no
-			// longer bypasses on this tuple — the host composes it.
-			Permissions: map[string]authorization.PermissionRule{
-				"admin": authorization.AnyOf(authorization.Direct("admin")),
-			},
-		}},
-	})
-	authorizer, err := authorization.NewService(authorization.Repositories{
-		Relationships: authzmem.NewRelationships(),
-		Roles:         authzmem.NewRoles(),
-	}, authorization.Config{Model: authzModel})
+	// posture), now GUARDED (AZ3-4.1): BOTH kinds wired, memstore-backed, so the host
+	// stays zero-infra (no driver in the graph — GOWORK=off go list -m all still has no
+	// libsql). newAuthorization composes the schema (manage_access declared), the
+	// project-scoped guardian minimum, and the host MutationGuard (manage_access +
+	// platform-admin over the DecisionView) — the testable composition seam run() and
+	// the guarded-composition tests share.
+	authzComponents, err := newAuthorization()
 	if err != nil {
 		return err
 	}
+	// Actor-facing writes are GUARDED (Config.Guard = hostMutationGuard): HTTP handlers
+	// receive only the Service, and every actor-facing mutation is authorized inside the
+	// atomic boundary. The trusted SystemMutator is held apart and passed deliberately to
+	// the trusted seams (the boot owner/platform-admin seed and invitation
+	// grant-on-accept) — never to an actor-facing gate. Ordinary host code (the
+	// authorizer below) has no raw write and no constructible system actor
+	// (authorization_test.go pins both).
+	authorizer := authzComponents.Service
+	systemMutator := authzComponents.SystemMutator
 	if err := authorizer.Register(mount); err != nil {
+		return err
+	}
+	// Bootstrap the ownable scope through the TRUSTED SystemMutator BEFORE serving:
+	// establish project:demo#owner (the guardian minimum) and the platform:main#admin
+	// data tuple, so the host runs under the ratified owner-minimum posture with an owner
+	// already in place and invitation member-grants are never invariant-blocked
+	// (member-first on a fresh protected resource is blocked by design). This replaces
+	// the retired session-only POST /demo/admin/bootstrap route (AZ3-4.1): first owner is
+	// inherently a trusted operation (it cannot yet prove it manages the resource).
+	if err := seedAuthorization(ctx, systemMutator); err != nil {
 		return err
 	}
 
@@ -220,7 +212,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// allowlist, passwordless enablement, magic-link base URL, and every development
 	// secret from a distinct env var. The invitation grant-on-accept seam is the
 	// host-local relationshipGranter over the authorization engine.
-	authCfg, err := buildAuthConfig(log, relationshipGranter{authorizer: authorizer})
+	authCfg, err := buildAuthConfig(log, relationshipGranter{system: systemMutator})
 	if err != nil {
 		return err
 	}
@@ -372,11 +364,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 		// retired toy map (commit 1). The host stays zero-infra (the authorizer is
 		// memstore-backed — no libsql). A non-nil Authorize registers the
 		// resource-scoped GET /events/{resource_type}/{resource_id} route; the
-		// closure maps the stream's identity.Principal onto an authorization.Subject
+		// closure maps the stream's identity.Principal onto an authorization.PrincipalRef
 		// unadapted and asks the engine for the `view` permission on the (type, id).
 		Authorize: func(ctx context.Context, p identity.Principal, resourceType, resourceID string) (bool, error) {
 			res, err := authorizer.Check(ctx, authorization.CheckRequest{
-				Subject:    authorization.Subject{Type: p.Type, ID: p.ID},
+				Principal:  authorization.PrincipalRef{Type: p.Type, ID: p.ID},
 				Permission: demoPermission,
 				Resource:   authorization.Resource{Type: resourceType, ID: resourceID},
 			})
@@ -423,7 +415,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 			"outbox", "in-memory (internal/outboxmem)", "trigger", "POST /outbox-demo")
 	}
 
-	// Host-local demo + debug routes (host code, not feature surface).
+	// Host-local demo + debug routes (host code, not feature surface). The demo routes
+	// are READ-ONLY (AZ3-4.1): the session-only authorization-mutation routes
+	// (POST /demo/roles/{assign,unassign}, POST /demo/admin/bootstrap) were REMOVED — no
+	// shipped HTTP route mutates authorization with session presence alone. Trusted
+	// seeding runs at boot (seedAuthorization) and invitation acceptance rides the
+	// SystemMutator (membership.go); the guarded actor path is proven by
+	// authorization_test.go, not a browser flow.
 	registerDemoRoutes(router, authSvc, authorizer)
 	registerDebugRoutes(router, authSvc, authRepos, log)
 

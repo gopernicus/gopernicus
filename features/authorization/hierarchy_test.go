@@ -27,13 +27,17 @@ func hierarchySchema() Schema {
 	}})
 }
 
-func hierarchyService(t *testing.T, model Schema) *Service {
+// hierarchyService builds the engine and returns it together with the backing
+// relationship store, so tests SEED via the store PORT (the raw Service write path
+// was removed at AZ3-3.4) and exercise the engine via the Service.
+func hierarchyService(t *testing.T, model Schema) (*Service, *memstore.Relationships) {
 	t.Helper()
-	svc, err := NewService(Repositories{Relationships: memstore.NewRelationships()}, Config{Model: model})
+	store := memstore.NewRelationships()
+	comps, err := NewService(Repositories{Relationships: store}, Config{Model: model})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	return svc
+	return comps.Service, store
 }
 
 func sortedEqual(got, want []string) bool {
@@ -58,10 +62,10 @@ func sortedEqual(got, want []string) bool {
 // descendants when the root is granted DIRECTLY.
 func TestHierarchySelfReferentialThrough(t *testing.T) {
 	ctx := context.Background()
-	svc := hierarchyService(t, hierarchySchema())
+	svc, store := hierarchyService(t, hierarchySchema())
 
 	// root <- mid <- leaf: each child's `parent` points at its parent space.
-	if err := svc.CreateRelationships(ctx, []CreateRelationship{
+	if err := store.CreateRelationships(ctx, []CreateRelationship{
 		{ResourceType: "space", ResourceID: "mid", Relation: "parent", SubjectType: "space", SubjectID: "root"},
 		{ResourceType: "space", ResourceID: "leaf", Relation: "parent", SubjectType: "space", SubjectID: "mid"},
 		{ResourceType: "space", ResourceID: "root", Relation: "viewer", SubjectType: "user", SubjectID: "u1"},
@@ -69,9 +73,9 @@ func TestHierarchySelfReferentialThrough(t *testing.T) {
 		t.Fatalf("CreateRelationships: %v", err)
 	}
 
-	user := Subject{Type: "user", ID: "u1"}
+	user := PrincipalRef{Type: "user", ID: "u1"}
 
-	res, err := svc.Check(ctx, CheckRequest{Subject: user, Permission: "view", Resource: Resource{Type: "space", ID: "leaf"}})
+	res, err := svc.Check(ctx, CheckRequest{Principal: user, Permission: "view", Resource: Resource{Type: "space", ID: "leaf"}})
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
@@ -88,17 +92,14 @@ func TestHierarchySelfReferentialThrough(t *testing.T) {
 	}
 }
 
-// TestHierarchyLookupBoundaryOrgSeededRoot pins the documented D1(b) boundary:
+// TestHierarchyLookupOrgSeededRootExpandsDescendants proves the D1(c) closure:
 // when the chain root is reachable ONLY through a NON-self Through (here the
 // user is admin on an org, with NO direct viewer grant anywhere), Check honors
-// the org-derived root and allows the grandchild, but LookupResources returns
-// only the org-reachable root — its self-referential descendant walk seeds from
-// DIRECT grants alone, so mid/leaf are missing.
-//
-// This asymmetry is deliberate, not a bug: closing it is the named D1(c) engine
-// follow-up. When that lands, this test's LookupResources assertion flips to
-// expect {root, mid, leaf} — the flip is the signal the boundary moved.
-func TestHierarchyLookupBoundaryOrgSeededRoot(t *testing.T) {
+// the org-derived root and allows the grandchild, AND LookupResources now
+// enumerates the org-reachable root PLUS its self-referential descendants —
+// the self-hierarchy walk seeds from every root the permission grants, not
+// direct-only roots. This is the flip that closed the former D1(b) divergence.
+func TestHierarchyLookupOrgSeededRootExpandsDescendants(t *testing.T) {
 	ctx := context.Background()
 
 	// Extended schema: an org grants view via `admin`, and a space may inherit
@@ -125,10 +126,10 @@ func TestHierarchyLookupBoundaryOrgSeededRoot(t *testing.T) {
 			},
 		},
 	})
-	svc := hierarchyService(t, model)
+	svc, store := hierarchyService(t, model)
 
 	// root <- mid <- leaf, root's access flows ONLY from org O; no viewer grants.
-	if err := svc.CreateRelationships(ctx, []CreateRelationship{
+	if err := store.CreateRelationships(ctx, []CreateRelationship{
 		{ResourceType: "space", ResourceID: "mid", Relation: "parent", SubjectType: "space", SubjectID: "root"},
 		{ResourceType: "space", ResourceID: "leaf", Relation: "parent", SubjectType: "space", SubjectID: "mid"},
 		{ResourceType: "space", ResourceID: "root", Relation: "org", SubjectType: "org", SubjectID: "O"},
@@ -137,9 +138,9 @@ func TestHierarchyLookupBoundaryOrgSeededRoot(t *testing.T) {
 		t.Fatalf("CreateRelationships: %v", err)
 	}
 
-	user := Subject{Type: "user", ID: "u1"}
+	user := PrincipalRef{Type: "user", ID: "u1"}
 
-	res, err := svc.Check(ctx, CheckRequest{Subject: user, Permission: "view", Resource: Resource{Type: "space", ID: "leaf"}})
+	res, err := svc.Check(ctx, CheckRequest{Principal: user, Permission: "view", Resource: Resource{Type: "space", ID: "leaf"}})
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
@@ -151,8 +152,60 @@ func TestHierarchyLookupBoundaryOrgSeededRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LookupResources: %v", err)
 	}
-	// D1(b) boundary: only the org-reachable root; descendants are NOT expanded.
-	if want := []string{"root"}; !sortedEqual(look.IDs, want) {
-		t.Fatalf("LookupResources D1(b) boundary: want %v (org-reachable root only), got %v", want, look.IDs)
+	// D1(c) closed: the org-reachable root AND its parent-chain descendants.
+	if want := []string{"root", "mid", "leaf"}; !sortedEqual(look.IDs, want) {
+		t.Fatalf("LookupResources D1(c): want %v (org root + descendants), got %v", want, look.IDs)
+	}
+}
+
+// TestHierarchyLookupMultipleSelfRelationsFixpoint proves LookupResources reaches
+// a fixpoint across TWO same-permission self-referential relations that
+// interleave: a node discovered as a descendant via one relation is a valid root
+// for the other. `folder` and `parent` both inherit `view`; the chain crosses
+// relations at each hop (root --parent-- a --folder-- b), so a single per-relation
+// walk from the roots would miss b. The engine's fixpoint loop must find it.
+func TestHierarchyLookupMultipleSelfRelationsFixpoint(t *testing.T) {
+	ctx := context.Background()
+	model := NewSchema([]ResourceSchema{{
+		Name: "doc",
+		Def: ResourceTypeDef{
+			Relations: map[string]RelationDef{
+				"parent": {AllowedSubjects: []SubjectTypeRef{{Type: "doc"}}},
+				"folder": {AllowedSubjects: []SubjectTypeRef{{Type: "doc"}}},
+				"viewer": {AllowedSubjects: []SubjectTypeRef{{Type: "user"}}},
+			},
+			Permissions: map[string]PermissionRule{
+				"view": AnyOf(Direct("viewer"), Through("parent", "view"), Through("folder", "view")),
+			},
+		},
+	}})
+	svc, store := hierarchyService(t, model)
+
+	// root (direct viewer) --parent-- a --folder-- b: a inherits via parent from
+	// root, b inherits via folder from a.
+	if err := store.CreateRelationships(ctx, []CreateRelationship{
+		{ResourceType: "doc", ResourceID: "root", Relation: "viewer", SubjectType: "user", SubjectID: "u1"},
+		{ResourceType: "doc", ResourceID: "a", Relation: "parent", SubjectType: "doc", SubjectID: "root"},
+		{ResourceType: "doc", ResourceID: "b", Relation: "folder", SubjectType: "doc", SubjectID: "a"},
+	}); err != nil {
+		t.Fatalf("CreateRelationships: %v", err)
+	}
+
+	user := PrincipalRef{Type: "user", ID: "u1"}
+	// Check honors the cross-relation chain.
+	res, err := svc.Check(ctx, CheckRequest{Principal: user, Permission: "view", Resource: Resource{Type: "doc", ID: "b"}})
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if !res.Allowed {
+		t.Fatalf("Check view on b: want allowed (cross-relation chain), got denied (%s)", res.Reason)
+	}
+
+	look, err := svc.LookupResources(ctx, user, "view", "doc")
+	if err != nil {
+		t.Fatalf("LookupResources: %v", err)
+	}
+	if want := []string{"root", "a", "b"}; !sortedEqual(look.IDs, want) {
+		t.Fatalf("LookupResources fixpoint: want %v, got %v", want, look.IDs)
 	}
 }

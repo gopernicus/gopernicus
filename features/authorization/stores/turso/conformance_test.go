@@ -24,9 +24,11 @@ import (
 )
 
 // authorizationTables are the feature's tables cleared before each newRepos call
-// so every leaf subtest starts from a clean, isolated store. No FKs between them,
-// so order is immaterial.
-var authorizationTables = []string{"iam_relationships", "iam_roles"}
+// so every leaf subtest starts from a clean, isolated store — including the v3
+// write-path tables (iam_scopes revision anchors, iam_mutations receipts) so the
+// Mutations conformance suite starts from revision 0 with no consumed MutationIDs.
+// No FKs between them, so order is immaterial.
+var authorizationTables = []string{"iam_relationships", "iam_roles", "iam_scopes", "iam_mutations"}
 
 // TestConformance runs the shared authorization conformance suite (both kinds)
 // against a live Turso/libSQL database. Each newRepos call opens a connection,
