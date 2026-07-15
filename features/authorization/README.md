@@ -707,19 +707,34 @@ if _, err := system.GrantRelationship(ctx, seed); err != nil {
 }
 
 // Stop 1 — the Granter seam (auth): invitation-accept writes a real tuple through
-// the TRUSTED SystemMutator with a stable derived MutationID (idempotent retry):
+// the TRUSTED SystemMutator, derives its MutationID from the authentication
+// OPERATION id (not the tuple alone), and INSPECTS the receipt outcome:
 //
 //   type invitationGranter struct{ system *authorization.SystemMutator }
-//   func (g invitationGranter) Grant(ctx context.Context, resourceType,
-//       resourceID, relation, subjectType, subjectID string) error {
+//   func (g invitationGranter) Grant(ctx context.Context, in auth.GrantInput) error {
 //       cmd := authorization.GrantRelationshipCommand{
-//           ResourceType: resourceType, ResourceID: resourceID, Relation: relation,
-//           Subject: authorization.SubjectRef{Type: subjectType, ID: subjectID},
+//           ResourceType: in.ResourceType, ResourceID: in.ResourceID, Relation: in.Relation,
+//           Subject: authorization.SubjectRef{Type: in.SubjectType, ID: in.SubjectID},
 //       }
+//       // Purpose + OPERATION id + tuple: a retry of ONE invitation replays; a
+//       // re-invitation after a revoke carries a DISTINCT operation id, so it is a
+//       // fresh mutation that restores the tuple. (Deriving from the tuple alone
+//       // collapsed those into one identity and silently replayed — the retired bug.)
 //       cmd.MutationID = authorization.DeriveMutationID("host/invitation-grant",
-//           resourceType, resourceID, relation, subjectType, subjectID)
-//       _, err := g.system.GrantRelationship(ctx, cmd)
-//       return err
+//           in.OperationID, in.ResourceType, in.ResourceID, in.Relation, in.SubjectType, in.SubjectID)
+//       receipt, err := g.system.GrantRelationship(ctx, cmd)
+//       if err != nil {
+//           return err
+//       }
+//       // nil ONLY for the exact relation applied/already present; a
+//       // semantic_conflict or invariant block is a loud error (no implicit
+//       // replace), so auth never records a non-applied grant as success.
+//       switch receipt.Outcome {
+//       case authorization.OutcomeApplied, authorization.OutcomeNoChange:
+//           return nil
+//       default:
+//           return fmt.Errorf("grant not applied (%s): %w", receipt.Outcome, sdk.ErrConflict)
+//       }
 //   }
 authCfg.Granter = invitationGranter{system: system}
 

@@ -102,6 +102,21 @@ var ErrMachineReposRequired = errors.New("auth: Repositories.ServiceAccounts and
 // half-on state.
 var ErrInvitationRepoRequired = errors.New("auth: Config.Granter set but Repositories.Invitations is nil")
 
+// ErrInviteCheckRequired is returned by NewService/Register when Config.Granter
+// enables invitations but Config.InviteCheck is nil (design §6/D3). The relation-
+// aware host policy is REQUIRED with invitations — a nil check is never an
+// allow-by-default or a silently unprotected create/list route — so it degrades
+// LOUDLY at construction alongside ErrInvitationRepoRequired, mirroring the
+// Hasher/Mailer required posture.
+var ErrInviteCheckRequired = errors.New("auth: Config.Granter set but Config.InviteCheck is nil")
+
+// ErrInviteCheckWithoutGranter is returned by NewService/Register when
+// Config.InviteCheck is wired but Config.Granter is nil (invitations off). A
+// policy for a subsystem that will never run is a contradictory wiring that gives
+// false confidence, so — matching the ErrDeliveryOffButDeliverable / partial-
+// wiring posture — it fails LOUDLY rather than silently ignoring the dead check.
+var ErrInviteCheckWithoutGranter = errors.New("auth: Config.InviteCheck set but Config.Granter is nil (invitations off)")
+
 // ErrInvalidListStrategy is returned by NewService/Register when
 // Config.ListStrategy is set to a value other than "cursor" or "offset". Like
 // the Hasher/Mailer requirements it degrades loudly at construction (the Config
@@ -131,17 +146,66 @@ var ErrDuplicateNotifierKind = errors.New("auth: Config.Notifiers has more than 
 var ErrKindNotSupported = invitationsvc.ErrKindNotSupported
 
 // Granter is the ReBAC-decoupled grant-on-accept seam for invitations (design
-// §2.2/§6, ratified AV4): Grant(ctx, resourceType, resourceID, relation,
-// subjectType, subjectID). A host adapts it to whatever authorizer it runs — a
-// ReBAC CreateRelationships, a role-column write, or the proof host's toy
-// membership map — or wires none. The grant must be idempotent in the Granter's
-// world (a duplicate accept must not error). Aliased from invitationsvc so the
-// sibling service can call it without an import cycle.
+// §2.2/§6, ratified AV4, structured at D1): Grant(ctx, GrantInput). A host adapts
+// it to whatever authorizer it runs — a ReBAC CreateRelationships, a role-column
+// write, or the proof host's toy membership map — or wires none.
+//
+// Success contract (D2, strengthened): a nil return means the EXACT requested
+// relation was applied or was already exactly present. A DIFFERENT existing
+// relation is NOT success; an invariant refusal is NOT success; a missing or
+// deleted host resource is NOT success — each must return an error (a ReBAC host
+// maps a conflicting/invariant outcome to sdk.ErrConflict and a missing resource
+// to sdk.ErrNotFound). Infrastructure/command failures propagate. The grant must
+// be idempotent for the exact tuple (a duplicate accept of the SAME relation must
+// not error), but the Granter must NOT implicitly replace, upgrade, or downgrade
+// an existing relation — the feature cannot decide that an invitation may change a
+// standing membership. Aliased from invitationsvc so the sibling service can call
+// it without an import cycle.
 type Granter = invitationsvc.Granter
+
+// GrantInput is the structured request the Granter receives for one invitation
+// grant (D1). OperationID is an opaque, non-empty, non-secret identifier of the
+// logical grant: the persisted invitation row ID for accept/resolve (a retry
+// reuses it; a later invitation row for the same tuple gets a different ID) and a
+// freshly minted high-entropy value for direct-add. A host derives its own
+// mutation identity from a fixed purpose, OperationID, and the tuple fields.
+// Aliased from invitationsvc per the Granter precedent.
+type GrantInput = invitationsvc.GrantInput
 
 // MemberCheck is the optional duplicate-membership predicate consulted before a
 // direct-add grant (design §6). Nil → no dup check. Aliased from invitationsvc.
 type MemberCheck = invitationsvc.MemberCheck
+
+// InviteAction is the invitation operation a host InviteCheck policy is asked
+// about (design §6/D3): InviteCreate or InviteList. Aliased from invitationsvc.
+type InviteAction = invitationsvc.InviteAction
+
+// InviteCreate and InviteList are the two InviteAction values the feature's
+// create/list invitation handlers pass to InviteCheck (design §6/D3). InviteCreate
+// carries the exact requested relation; InviteList carries an empty relation.
+const (
+	InviteCreate = invitationsvc.InviteCreate
+	InviteList   = invitationsvc.InviteList
+)
+
+// InviteCheckRequest is the parsed, principal-resolved authorization question the
+// feature poses to a host InviteCheck (design §6/D3): the Principal, the Action,
+// the resource, and — for InviteCreate — the exact validated Relation (empty for
+// InviteList). Aliased from invitationsvc per the CreateInput precedent so a host
+// names one type across the public and internal packages.
+type InviteCheckRequest = invitationsvc.InviteCheckRequest
+
+// InviteCheck is the relation-aware host authorization seam for invitation
+// create/list (design §6/D3). It runs in the feature's own parsed request path —
+// after live-session validation, principal resolution, and request parsing — so
+// the host sees the caller, resource, action, and validated relation a
+// RouteRegistrar wrapper cannot. It is REQUIRED whenever Config.Granter enables
+// invitations: a nil InviteCheck is ErrInviteCheckRequired at construction, never
+// an allow-by-default. A nil return authorizes; a denial (wrap sdk.ErrForbidden)
+// or an infrastructure error fails closed through the normal web/sdk mapping.
+// Authority is issuance-time: authorizing at creation issues a durable capability,
+// and acceptance does not re-run inviter authority. Aliased from invitationsvc.
+type InviteCheck = invitationsvc.InviteCheck
 
 // CreateInput is the input to Service.Create (an invitation). Aliased from
 // invitationsvc per the Principal precedent so a host wiring its own invitation
@@ -647,6 +711,14 @@ type Config struct {
 	// Non-nil → Repositories.Invitations is required (ErrInvitationRepoRequired),
 	// and Register/verify resolve pending auto-accept invitations for the invitee.
 	Granter Granter
+	// InviteCheck is the relation-aware host authorization seam the feature's
+	// create/list invitation handlers call after live-session validation, principal
+	// resolution, and request parsing (design §6/D3). It is REQUIRED whenever Granter
+	// enables invitations — nil → ErrInviteCheckRequired at construction, never an
+	// allow-by-default. Wiring it without a Granter (invitations off) is the
+	// contradictory ErrInviteCheckWithoutGranter. A nil return authorizes; a denial
+	// or infrastructure error fails closed through the normal web/sdk mapping.
+	InviteCheck InviteCheck
 	// MemberCheck is the optional duplicate-membership predicate for the direct-add
 	// path (known invitee + AutoAccept). Nil → no dup check (idempotent grants
 	// absorb duplicates). Meaningful only when Granter is wired.
@@ -721,6 +793,12 @@ type Service struct {
 	// InProcessQueueDepth can expose the bounded, secret-free queue depth for host
 	// operational health (AV3D-5.3); it is never a delivery seam callers reach directly.
 	inProcessQueue *delivery.InProcessQueue
+	// inviteCheck is the host's relation-aware invitation authorization seam
+	// (Config.InviteCheck, design §6/D3) the shipped HTTP adapter's create/list
+	// invitation handlers call after live-session validation, principal resolution,
+	// and parsing (Register → Mount → handlers). Non-nil exactly when inv is non-nil
+	// (NewService requires it whenever a Granter enables invitations).
+	inviteCheck invitationsvc.InviteCheck
 	// listStrategy is the resolved Config.ListStrategy the shipped HTTP adapter
 	// passes as the transport-edge DefaultStrategy (Register → Mount → handlers).
 	listStrategy crud.Strategy
@@ -828,6 +906,17 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 	}
 	if cfg.Granter != nil && repos.Invitations == nil {
 		return nil, ErrInvitationRepoRequired
+	}
+	// Relation-aware host policy is required with invitations (design §6/D3): a
+	// Granter enables invitations, so a nil InviteCheck would leave create/list
+	// unprotected — that fails loudly, not allow-by-default. Wiring InviteCheck with
+	// invitations off is the contradictory-wiring error (the ErrInvitationRepoRequired
+	// posture), so a dead policy never gives false confidence.
+	if cfg.Granter != nil && cfg.InviteCheck == nil {
+		return nil, ErrInviteCheckRequired
+	}
+	if cfg.Granter == nil && cfg.InviteCheck != nil {
+		return nil, ErrInviteCheckWithoutGranter
 	}
 	// Enable-time validation for the challenge subsystem (design §3.3): wiring the
 	// Challenges repository enables the atomic secret rail, which REQUIRES a
@@ -1200,6 +1289,7 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 	return &Service{
 		svc:              authService,
 		inv:              invSvc,
+		inviteCheck:      cfg.InviteCheck,
 		jobsProcessor:    jobsProcessor,
 		inProcessRuntime: inProcessRuntime,
 		inProcessQueue:   inProcessQueue,
@@ -1496,7 +1586,10 @@ func (s *Service) IssueToken(ctx context.Context, email, password string) (pair 
 	return s.svc.IssueToken(ctx, email, password)
 }
 
-// Create invites an identifier to a resource; ErrInvitationsDisabled when no Granter is wired.
+// Create invites an identifier to a resource; ErrInvitationsDisabled when no
+// Granter is wired. This is a TRUSTED composition call: unlike the shipped HTTP
+// create handler, it does NOT apply the Config.InviteCheck host authorization
+// policy (design §6/D3) — a host driving the Service directly owns that decision.
 func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, error) {
 	if s.inv == nil {
 		return CreateResult{}, ErrInvitationsDisabled
@@ -1504,7 +1597,10 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, err
 	return s.inv.Create(ctx, in)
 }
 
-// ListByResource pages a resource's invitations; ErrInvitationsDisabled when no Granter is wired.
+// ListByResource pages a resource's invitations; ErrInvitationsDisabled when no
+// Granter is wired. This is a TRUSTED composition call: unlike the shipped HTTP
+// list handler, it does NOT apply the Config.InviteCheck host authorization policy
+// (design §6/D3) — a host driving the Service directly owns that decision.
 func (s *Service) ListByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
 	if s.inv == nil {
 		return crud.Page[invitation.Invitation]{}, ErrInvitationsDisabled
@@ -1596,6 +1692,6 @@ func (s *Service) Register(m feature.Mount) error {
 	if s.inv != nil {
 		inv = s.inv
 	}
-	inbound.Mount(m.Router, s.svc, inv, s.listStrategy, s.mutationSecurity, s.views)
+	inbound.Mount(m.Router, s.svc, inv, s.inviteCheck, s.listStrategy, s.mutationSecurity, s.views)
 	return nil
 }

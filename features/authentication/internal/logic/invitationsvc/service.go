@@ -87,6 +87,13 @@ var (
 	// wired: the durable outbox is required to deliver any invitation message
 	// (design §6.1.1), so a send with the subsystem off fails loudly.
 	ErrDeliveryDisabled = fmt.Errorf("delivery outbox not wired: %w", sdk.ErrForbidden)
+	// errEmptyOperationID is the internal fail-closed guard: every grant carries a
+	// non-empty operation ID (the durable invitation row ID for accept/resolve, a
+	// minted high-entropy ID for direct-add). An empty one is a wiring/logic bug,
+	// so the grant is refused rather than sent with an unidentified operation. It
+	// wraps no domain sentinel, so the transport maps it to 500 (an internal fault),
+	// never a caller-actionable status.
+	errEmptyOperationID = errors.New("invitation grant operation id is empty")
 )
 
 // deliveryQueue is the durable outbound outbox seam (design §6.1.1): invitation and
@@ -98,18 +105,78 @@ type deliveryQueue interface {
 	Replace(ctx context.Context, cmd delivery.Command) (delivery.Receipt, error)
 }
 
+// GrantInput is the structured request for one invitation grant (design §2.2, D1).
+// OperationID is an opaque, non-empty, non-secret identifier of THIS logical
+// invitation grant: the persisted invitation row ID for pending-accept and
+// resolve-on-registration (a retry of the same invitation reuses the same ID; a
+// later invitation row for the same tuple gets a different ID), and a freshly
+// minted high-entropy value for direct-add (no invitation row exists). It is not
+// authority and the feature does not dictate how the host uses it. The remaining
+// fields are the ReBAC tuple: grant SubjectType/SubjectID the Relation on
+// (ResourceType, ResourceID).
+type GrantInput struct {
+	OperationID  string
+	ResourceType string
+	ResourceID   string
+	Relation     string
+	SubjectType  string
+	SubjectID    string
+}
+
 // Granter grants a subject a relation on a resource — the ONE ReBAC-decoupled
 // seam (design §2.2), called on accept, direct-add, and resolve-on-registration
 // and NOTHING else. A ReBAC host adapts it to CreateRelationships; a role-column
 // host to a role write; the proof host to a toy in-memory membership map. Grants
 // must be idempotent in the Granter's world (a duplicate accept must not error).
+// nil means the EXACT requested relation was applied or was already exactly
+// present; a different existing relation, an invariant refusal, and a
+// missing/deleted host resource are NOT success and must return an error, and
+// infrastructure failures propagate (design §6/D2).
 type Granter interface {
-	Grant(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) error
+	Grant(ctx context.Context, in GrantInput) error
 }
 
 // MemberCheck is the optional duplicate-membership predicate consulted before a
 // direct-add grant. Nil → no dup check (idempotent grants absorb duplicates).
 type MemberCheck func(ctx context.Context, resourceType, resourceID, subjectType, subjectID string) (bool, error)
+
+// InviteAction is the invitation operation a host authorization policy
+// (InviteCheck) is asked about (design §6/D3): creating an invitation or listing
+// a resource's invitations.
+type InviteAction string
+
+const (
+	// InviteCreate is the create-an-invitation action; the check carries the exact
+	// requested Relation so the host can prevent privilege escalation (e.g. an
+	// editor inviting an owner).
+	InviteCreate InviteAction = "create"
+	// InviteList is the list-a-resource's-invitations action; the check carries an
+	// empty Relation.
+	InviteList InviteAction = "list"
+)
+
+// InviteCheckRequest is the parsed, principal-resolved authorization question the
+// feature's create/list invitation handlers pose to the host policy (design
+// §6/D3). Relation is set for InviteCreate and empty for InviteList. The feature
+// owns parsing, so the host sees the caller, resource, action, and — for create —
+// the exact validated relation, which a RouteRegistrar decorator cannot.
+type InviteCheckRequest struct {
+	Principal    identity.Principal
+	Action       InviteAction
+	ResourceType string
+	ResourceID   string
+	Relation     string
+}
+
+// InviteCheck is the host authorization seam the feature's create/list invitation
+// handlers call after live-session validation, principal resolution, and request
+// parsing (design §6/D3). It is REQUIRED whenever a Granter enables invitations —
+// package auth rejects a nil InviteCheck at construction (ErrInviteCheckRequired),
+// never an allow-by-default. A nil return authorizes; a denial (wrapping
+// sdk.ErrForbidden) or an infrastructure error fails closed through the normal
+// web/sdk error path. Authority is issuance-time: a create-time authorization is a
+// durable capability and acceptance never re-runs inviter authority.
+type InviteCheck func(ctx context.Context, req InviteCheckRequest) error
 
 // UserLookup resolves an invitee email to an existing user's subject id for the
 // direct-add path. found=false means no such user (→ a pending invitation is
@@ -365,7 +432,12 @@ func (s *Service) directAdd(ctx context.Context, in CreateInput, subjectID strin
 			return CreateResult{}, ErrAlreadyMember
 		}
 	}
-	if err := s.granter.Grant(ctx, in.ResourceType, in.ResourceID, in.Relation, subjectTypeUser, subjectID); err != nil {
+	// Direct-add has no invitation row, so it mints a fresh high-entropy operation
+	// ID immediately before the grant (D1): a distinct logical operation each time,
+	// from the unconditional secret generator — NOT the entity Config.IDs strategy,
+	// whose cryptids.Database mode yields an empty ID until an entity is inserted.
+	operationID := mintOperationID()
+	if err := s.grant(ctx, operationID, in.ResourceType, in.ResourceID, in.Relation, subjectTypeUser, subjectID); err != nil {
 		s.recordGrant(ctx, subjectID, in.ResourceType, in.ResourceID, in.Relation, in.Identifier, securityevent.StatusFailure)
 		return CreateResult{}, fmt.Errorf("grant: %w", err)
 	}
@@ -445,7 +517,10 @@ func (s *Service) Accept(ctx context.Context, in AcceptInput) (AcceptResult, err
 	if subjectType == "" {
 		subjectType = subjectTypeUser
 	}
-	if err := s.granter.Grant(ctx, inv.ResourceType, inv.ResourceID, inv.Relation, subjectType, in.SubjectID); err != nil {
+	// The persisted invitation row ID is this grant's operation ID (D1): accepting
+	// the same invitation again reuses it, while a later invitation row for the same
+	// tuple carries a different ID and is therefore a distinct host operation.
+	if err := s.grant(ctx, inv.ID, inv.ResourceType, inv.ResourceID, inv.Relation, subjectType, in.SubjectID); err != nil {
 		s.recordGrant(ctx, in.SubjectID, inv.ResourceType, inv.ResourceID, inv.Relation, inv.Identifier, securityevent.StatusFailure)
 		return AcceptResult{}, fmt.Errorf("grant: %w", err)
 	}
@@ -613,7 +688,9 @@ func (s *Service) ResolveInvitations(ctx context.Context, email, subjectType, su
 			if inv.Status != invitation.StatusPending || !inv.AutoAccept || inv.Expired(s.now()) {
 				continue
 			}
-			if err := s.granter.Grant(ctx, inv.ResourceType, inv.ResourceID, inv.Relation, subjectType, subjectID); err != nil {
+			// The persisted invitation row ID is the operation ID (D1), so a resolve
+			// and a later explicit accept of the SAME row present one host operation.
+			if err := s.grant(ctx, inv.ID, inv.ResourceType, inv.ResourceID, inv.Relation, subjectType, subjectID); err != nil {
 				s.recordGrant(ctx, subjectID, inv.ResourceType, inv.ResourceID, inv.Relation, inv.Identifier, securityevent.StatusFailure)
 				continue // best-effort — one failed grant never aborts registration
 			}
@@ -793,6 +870,27 @@ func inviteLink(dest, secret string) string {
 
 // --- helpers ---
 
+// grant invokes the host Granter for one logical invitation grant (D1). It
+// enforces the non-empty operation-ID invariant BEFORE any Granter call: an empty
+// operationID is an internal bug (the durable invitation ID and the minted
+// direct-add ID are always non-empty), so the grant is refused fail-closed with
+// errEmptyOperationID rather than sent as an unidentified operation. A nil return
+// carries the strengthened success contract (D2): the exact requested relation is
+// effective; any non-applied outcome is a non-nil error the caller propagates.
+func (s *Service) grant(ctx context.Context, operationID, resourceType, resourceID, relation, subjectType, subjectID string) error {
+	if operationID == "" {
+		return errEmptyOperationID
+	}
+	return s.granter.Grant(ctx, GrantInput{
+		OperationID:  operationID,
+		ResourceType: resourceType,
+		ResourceID:   resourceID,
+		Relation:     relation,
+		SubjectType:  subjectType,
+		SubjectID:    subjectID,
+	})
+}
+
 // callerIdentifierMatches reports whether userID owns an active VERIFIED
 // identifier of kind whose normalized value equals want (design §7/V11). It fails
 // CLOSED: an unwired accessor, a resolution error (including no such verified
@@ -821,6 +919,17 @@ func (s *Service) hashSecret(secret string) (string, error) {
 // sdk/foundation/cryptids' alphabet — no dots, so it never collides with the JWT-detection
 // heuristic and is URL-safe in the mailed link.
 func mintSecret() string {
+	return (secrets.MustGenerate() + secrets.MustGenerate())[:tokenSecretLen]
+}
+
+// mintOperationID mints a fresh, non-empty, high-entropy operation ID for the
+// direct-add grant path, which has no persisted invitation row to identify it
+// (D1). It draws from the SAME unconditional random generator as mintSecret —
+// deliberately NOT the entity Config.IDs strategy, whose cryptids.Database mode
+// yields an empty ID until an entity is inserted (and direct-add inserts none).
+// It is an operation identity, not a secret, so entropy sufficiency is all that
+// matters here.
+func mintOperationID() string {
 	return (secrets.MustGenerate() + secrets.MustGenerate())[:tokenSecretLen]
 }
 

@@ -91,7 +91,7 @@ func newHTMLTestHandler(t *testing.T, views Views) http.Handler {
 		PublicAuthBaseURL: "https://auth.example.com",
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, nil, "", MutationSecurity{}, views)
+	Mount(h, svc, nil, nil, "", MutationSecurity{}, views)
 	return h
 }
 

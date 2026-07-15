@@ -187,6 +187,6 @@ func newVerifyClockHandler(t *testing.T, clock func() time.Time) http.Handler {
 		Clock:       clock,
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, nil, "", MutationSecurity{}, nil)
+	Mount(h, svc, nil, nil, "", MutationSecurity{}, nil)
 	return h
 }
