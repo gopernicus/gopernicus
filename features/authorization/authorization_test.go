@@ -32,6 +32,12 @@ func (f *relFake) CheckBatchDirect(ctx context.Context, resourceType string, res
 func (f *relFake) CreateRelationships(ctx context.Context, relationships []relationship.CreateRelationship) error {
 	return nil
 }
+func (f *relFake) SetRelationTargets(ctx context.Context, resourceType, resourceID, relationName string, targets []relationship.CreateRelationship) error {
+	return nil
+}
+func (f *relFake) DeleteRelationshipTarget(ctx context.Context, resourceType, resourceID, relationName string, target relationship.SubjectRef) error {
+	return nil
+}
 func (f *relFake) DeleteResourceRelationships(ctx context.Context, resourceType, resourceID string) error {
 	return nil
 }

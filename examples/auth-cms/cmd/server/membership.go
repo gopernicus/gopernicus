@@ -74,16 +74,16 @@ func (r *hostResourceRegistry) remove(resourceType, resourceID string) {
 	delete(r.live, resourceKey(resourceType, resourceID))
 }
 
-// relationshipGranter adapts the authorization write path to auth.Granter — design
-// §6's promised completion (authorization-v1 Z4 commit 2). Invitation-accept is a
-// TRUSTED operation (a listed SystemMutator holder), so it writes through the
-// separately held SystemMutator, not the actor-facing Service (which now requires a
-// host MutationGuard). There is STILL no import edge between features: the host is
-// the only party that holds both auth and authorization, wiring them through this
-// host-local adapter over the sdk-shaped Granter seam. It also holds the host's
-// resource-existence seam, because only the host knows whether the target still exists.
+// relationshipGranter is the ordinary collaboration posture: it adapts the
+// trusted application-side RelationshipWriter to auth.Granter. The invitation's
+// OperationID is intentionally unused because this state-convergent path needs no
+// mutation identity or receipt. InviteCheck still decides who may invite; that
+// detached host authorization decision is simply not transactionally coupled to
+// the tuple write. The host also checks resource existence because authentication
+// does not own resource lifecycle.
 type relationshipGranter struct {
-	system *authorization.SystemMutator
+	writer *authorization.RelationshipWriter
+	reader *authorization.Service
 	exists resourceExistsFn
 }
 
@@ -97,25 +97,12 @@ var _ auth.Granter = relationshipGranter{}
 // a since-deleted resource fails loudly (sdk.ErrNotFound) and writes nothing; nil could
 // otherwise grant access to a resource that no longer exists.
 //
-// Operation-scoped identity (D1). The MutationID is derived from a fixed host purpose, the
-// authentication OPERATION ID, and the exact tuple — NOT from the tuple alone. Authentication
-// guarantees a distinct operation id per logical invitation grant (the persisted invitation
-// row id; a fresh high-entropy value for direct-add). So a retry of the SAME invitation
-// reuses the SAME MutationID (an idempotent replay), while a LATER invitation that re-grants
-// the same tuple after a revoke carries a DISTINCT operation id → a DISTINCT MutationID → a
-// fresh grant that restores the tuple. Deriving from the tuple alone (the retired bug)
-// collapsed those into one mutation, so the re-grant silently replayed and never restored the
-// revoked tuple while authentication recorded the grant as successful.
-//
-// Receipt outcome mapping (D2). A non-error receipt is NOT automatically success. Only
-// OutcomeApplied and OutcomeNoChange mean the EXACT requested relation is now effective →
-// nil. OutcomeSemanticConflict (a DIFFERENT relation already exists for the subject under the
-// one-relation rule) and OutcomeInvariantBlocked (a guardian minimum refused the write)
-// changed nothing and persisted no receipt, so authentication must not record them as a
-// successful grant → a loud error wrapping sdk.ErrConflict. We deliberately do NOT
-// ReplaceRelationship: authentication cannot decide an invitation may upgrade or downgrade an
-// existing membership. Any other outcome (e.g. not_found) is likewise not a provable success
-// and fails closed.
+// The writer validates the tuple against the compiled schema. Its raw create is
+// idempotent; afterward this adapter performs the Granter contract's detached
+// exact-state check so a pre-existing different relation is a loud conflict, never
+// an implicit upgrade/downgrade. A concurrent later write may of course win after
+// that check: this is the ordinary application race posture chosen for project
+// member invitations.
 func (g relationshipGranter) Grant(ctx context.Context, in auth.GrantInput) error {
 	if g.exists == nil {
 		return fmt.Errorf("auth-cms: relationshipGranter resource-existence seam is not wired")
@@ -129,32 +116,71 @@ func (g relationshipGranter) Grant(ctx context.Context, in auth.GrantInput) erro
 			in.ResourceType, in.ResourceID, in.Relation, in.SubjectType, in.SubjectID, sdk.ErrNotFound)
 	}
 
-	mid := authorization.DeriveMutationID("auth-cms/invitation-grant",
-		in.OperationID, in.ResourceType, in.ResourceID, in.Relation, in.SubjectType, in.SubjectID)
-	receipt, err := g.system.GrantRelationship(ctx, authorization.GrantRelationshipCommand{
-		MutationID:   mid,
+	if g.writer == nil || g.reader == nil {
+		return fmt.Errorf("auth-cms: relationshipGranter authorization capabilities are not wired")
+	}
+	if err := g.writer.CreateRelationships(ctx, []authorization.CreateRelationship{{
 		ResourceType: in.ResourceType,
 		ResourceID:   in.ResourceID,
 		Relation:     in.Relation,
-		Subject:      authorization.SubjectRef{Type: in.SubjectType, ID: in.SubjectID},
+		SubjectType:  in.SubjectType,
+		SubjectID:    in.SubjectID,
+	}}); err != nil {
+		return err
+	}
+	targets, err := g.reader.GetRelationTargets(ctx, in.ResourceType, in.ResourceID, in.Relation)
+	if err != nil {
+		return err
+	}
+	for _, target := range targets {
+		if target.Type == in.SubjectType && target.ID == in.SubjectID && target.Relation == "" {
+			return nil
+		}
+	}
+	return fmt.Errorf("auth-cms: %s:%s already holds a different relation on %s:%s; grant of %q refused (no implicit replace): %w",
+		in.SubjectType, in.SubjectID, in.ResourceType, in.ResourceID, in.Relation, sdk.ErrConflict)
+}
+
+// guardedRelationshipGranter is the opt-in high-integrity invitation posture.
+// It consumes OperationID to derive durable mutation idempotency and maps guarded
+// mutation receipts. A host can select this adapter for tenant/account owner or
+// administrator invitations while ordinary resource sharing uses relationshipGranter.
+type guardedRelationshipGranter struct {
+	system *authorization.SystemMutator
+	exists resourceExistsFn
+}
+
+var _ auth.Granter = guardedRelationshipGranter{}
+
+func (g guardedRelationshipGranter) Grant(ctx context.Context, in auth.GrantInput) error {
+	if g.exists == nil {
+		return fmt.Errorf("auth-cms: guardedRelationshipGranter resource-existence seam is not wired")
+	}
+	exists, err := g.exists(ctx, in.ResourceType, in.ResourceID)
+	if err != nil {
+		return fmt.Errorf("auth-cms: resource existence probe for %s:%s failed: %w", in.ResourceType, in.ResourceID, err)
+	}
+	if !exists {
+		return fmt.Errorf("auth-cms: host resource %s:%s no longer exists; not granting %q to %s:%s: %w",
+			in.ResourceType, in.ResourceID, in.Relation, in.SubjectType, in.SubjectID, sdk.ErrNotFound)
+	}
+
+	mid := authorization.DeriveMutationID("auth-cms/invitation-grant",
+		in.OperationID, in.ResourceType, in.ResourceID, in.Relation, in.SubjectType, in.SubjectID)
+	receipt, err := g.system.GrantRelationship(ctx, authorization.GrantRelationshipCommand{
+		MutationID: mid, ResourceType: in.ResourceType, ResourceID: in.ResourceID, Relation: in.Relation,
+		Subject: authorization.SubjectRef{Type: in.SubjectType, ID: in.SubjectID},
 	})
 	if err != nil {
 		return err
 	}
-
 	switch receipt.Outcome {
 	case authorization.OutcomeApplied, authorization.OutcomeNoChange:
 		return nil
-	case authorization.OutcomeSemanticConflict:
-		return fmt.Errorf("auth-cms: %s:%s already holds a different relation on %s:%s; grant of %q refused "+
-			"(one-relation conflict, no implicit replace): %w",
-			in.SubjectType, in.SubjectID, in.ResourceType, in.ResourceID, in.Relation, sdk.ErrConflict)
-	case authorization.OutcomeInvariantBlocked:
-		return fmt.Errorf("auth-cms: grant of %q to %s:%s on %s:%s was blocked by a protected invariant: %w",
-			in.Relation, in.SubjectType, in.SubjectID, in.ResourceType, in.ResourceID, sdk.ErrConflict)
+	case authorization.OutcomeSemanticConflict, authorization.OutcomeInvariantBlocked:
+		return fmt.Errorf("auth-cms: guarded invitation grant returned %q: %w", receipt.Outcome, sdk.ErrConflict)
 	default:
-		return fmt.Errorf("auth-cms: grant of %q to %s:%s on %s:%s returned non-success outcome %q: %w",
-			in.Relation, in.SubjectType, in.SubjectID, in.ResourceType, in.ResourceID, receipt.Outcome, sdk.ErrConflict)
+		return fmt.Errorf("auth-cms: guarded invitation grant returned non-success outcome %q: %w", receipt.Outcome, sdk.ErrConflict)
 	}
 }
 

@@ -42,14 +42,15 @@ v3 settled its semantics.
 
 Living/recorded artifacts, one per posture: `examples/minimal` (wires
 nothing — posture 1); the middle-posture ownership-closure artifact — posture
-2; the `examples/auth-cms` HEAD host — posture 3, both kinds, guarded, with a
-separately held trusted `SystemMutator`.
+2; the `examples/auth-cms` HEAD host — posture 3, both relationship write paths:
+ordinary member invitations use `RelationshipWriter`, while guarded actor
+mutations and sensitive invitation tests use the v3 lifecycle.
 
 ## The kinds
 
 | kind | expresses | `Repositories` field | table | nil semantics |
 |---|---|---|---|---|
-| **relationships** | ReBAC tuples + a schema: who relates to what, and which permissions those relations grant (exact-userset group expansion, `Through` traversal; `Check` is pure schema evaluation — platform-admin/self-access are host recipes) | `.Relationships` (+ `.Mutations` for writes) | `iam_relationships` | nil ⇒ kind OFF structurally; every read method returns `ErrRelationshipsNotConfigured` |
+| **relationships** | ReBAC tuples + a schema: who relates to what, and which permissions those relations grant (exact-userset group expansion, `Through` traversal; `Check` is pure schema evaluation — platform-admin/self-access are host recipes) | `.Relationships`; optional `.Mutations` only for guarded writes | `iam_relationships` | nil ⇒ kind OFF structurally; every read method returns `ErrRelationshipsNotConfigured` |
 | **roles** | opaque-string role grants — `(subject, role)` pairs, resource-scoped or global | `.Roles` (+ `.Mutations` for writes) | `iam_roles` | nil ⇒ kind OFF; every method returns `ErrRolesNotConfigured` |
 | **policy** (deferred) | attribute/condition-shaped rules | (future) `.Policies` | (future) `iam_policies` | a designed, named seam — see "The policy seam" below |
 
@@ -66,14 +67,13 @@ actor-facing writes (require `Config.Guard` + `Repositories.Mutations`):
 `ListEffectiveRoleGrantsByResource` (effective). Guarded actor-facing writes:
 `AssignRole`, `UnassignRole`.
 
-**There are no raw create/delete/assign methods on `Service`.** v3 removed the
-v1 `CreateRelationships`/`DeleteRelationship`/`DeleteResourceRelationships`/
-`DeleteByResourceAndSubject`/`RemoveMember`/raw `AssignRole`/`UnassignRole`
-(pre-tag breaking policy, AZ3-3.4). Ordinary host code writes only through the
-guarded typed commands above or through the separately held `SystemMutator`
-(see "The mutation lifecycle"). The raw port methods survive on the
-`relationship.Storer`/`role.Storer` ports for store conformance and migrations
-only, never on the feature's driving surface.
+**Baseline writes are held apart from `Service`.** `Components.RelationshipWriter`
+exposes schema-validated `CreateRelationships`, exact/idempotent
+`DeleteRelationship`, idempotent `DeleteResourceRelationships`, and atomic
+`SetRelationTargets`. This is the normal trusted application-side capability,
+not an unsafe or legacy API. Keeping it out of `Service` means a composition root
+must place it deliberately; `Register` still mounts no HTTP routes. Raw role
+assignment remains on the guarded mutation path.
 
 Rules of the kinds:
 
@@ -240,27 +240,80 @@ are frozen wire codes a host, audit sink, or explain trace can switch on;
 evaluation path and budget (it cannot create a separate, more permissive
 evaluator, cannot change the decision, and is never auto-logged).
 
-## The mutation lifecycle — actors, guard, SystemMutator, receipts
+## Choosing a relationship write path
 
-Every write is one atomic command with a `MutationID`, one mutation scope, an
-optional expected revision, and an explicit domain outcome. There are two write
-capabilities, held apart by construction.
+ReBAC tuples are ordinary application state by default. The guarded mutation
+lifecycle is an optional security tool for operations whose threat model needs
+it; it is not the preferred default merely because a host writes relationships.
+
+| use case | recommended path | why |
+|---|---|---|
+| host-domain topology or projection | baseline `RelationshipWriter`, especially `SetRelationTargets` | state convergence and atomic parent/container replacement |
+| bootstrap, migration, fixture, authoritative-table synchronization | baseline writer | no occurrence identity or receipt ledger is needed |
+| ordinary folder/document sharing | baseline writer by default; guarded is optional | normal last-write-wins or detached-check races are often acceptable |
+| account/tenant membership | host threat-model decision; guarded is commonly appropriate, not mandatory | authority and blast radius vary by product |
+| owner/admin replacement with a last-owner rule | guarded lifecycle | repository-atomic guardian invariant |
+| compliance audit, durable idempotency, or evidence requirements | guarded lifecycle | receipts, replay identity, revisions, audit |
+| public actor-facing generic authorization management API | guarded lifecycle | fail-closed actor policy inside the atomic boundary |
+| resource teardown | baseline `DeleteResourceRelationships` for ordinary desired-state cleanup; guarded `TeardownAuthorizationScope` when bypassing a configured guardian is itself an audited security event | the host chooses whether teardown needs a reason, receipt, and invariant exception |
+
+The trade-off is explicit:
+
+- **Baseline:** simpler, schema-valid, atomic per desired-state operation, and
+  state-convergent. Actor authorization may be a detached host check; races use
+  normal application state-write semantics.
+- **Guarded:** atomically couples host authorization dependencies and the write,
+  supports guardian invariants, durable idempotency, receipts, revisions, and
+  audit, at greater API and operational complexity.
+
+Neither is universally correct. Do not mix the two paths for the same
+security-sensitive relation and expect guarded dependency revisions or guardian
+rules to observe baseline writes: select ownership by resource type/relation.
+
+### Baseline desired-state writer
+
+`RelationshipWriter` is returned whenever `Repositories.Relationships` and the
+schema are configured, even when `Repositories.Mutations == nil`. It never
+silently routes through `SystemMutator`.
+
+```go
+writer := comps.RelationshipWriter // composition-root capability; not on Service
+
+err := writer.SetRelationTargets(ctx,
+    authorization.Resource{Type: "space", ID: "child"},
+    "parent",
+    []authorization.SubjectRef{{Type: "space", ID: "new"}},
+)
+```
+
+`SetRelationTargets` makes one resource+relation exactly equal the supplied
+target set in one honest store transaction/lock. Repeating A is a no-op;
+A → B → A restores A; an empty set clears idempotently. The memstore, PostgreSQL,
+and Turso implementations serialize competing calls so a parent move never
+accumulates old and new targets. Additions are validated against the immutable
+compiled schema before storage. Deletions validate reference shape but may
+remove a tuple no longer accepted by a newer schema.
+
+### The optional high-integrity mutation lifecycle
+
+On this path every write is one atomic command with a `MutationID`, one mutation
+scope, an optional expected revision, and an explicit domain outcome.
 
 ### Construction — the `Components` bundle
 
-`NewService` returns a **`Components{Service, SystemMutator}`** bundle (not a
+`NewService` returns a **`Components{Service, RelationshipWriter, SystemMutator}`** bundle (not a
 bare `*Service`):
 
 ```go
 comps, err := authorization.NewService(repos, cfg)
 // comps.Service       — the host-facing decision/list/guarded-mutation surface
+// comps.RelationshipWriter — baseline trusted application-state capability
 // comps.SystemMutator  — the separately held, trusted, actor-free capability
 ```
 
-`Service` cannot recover `SystemMutator`; the composition root hands the trusted
-capability only to code that legitimately needs it (bootstrap, migration,
-invitation acceptance, resource teardown, test fixtures). HTTP handlers receive
-`Components.Service` only.
+`Service` cannot recover either write capability. The composition root places
+each deliberately; HTTP handlers receive `Components.Service` only unless the
+host explicitly builds a guarded management endpoint.
 
 Construction matrix (all loud at `NewService`):
 
@@ -270,7 +323,7 @@ Construction matrix (all loud at `NewService`):
 | `Relationships` set XOR `Config.Model` set | `ErrModelRequired` |
 | `Config.Guard` set, `Repositories.Mutations` nil | `ErrGuardWithoutMutations` (a guard has no atomic write path) |
 | `Config.Audit` set, `Config.Guard` nil | `ErrAuditWithoutGuard` (nothing to observe) |
-| nil `Config.Guard` (the READ-ONLY posture) | construction succeeds; every actor-facing mutation fails closed with `ErrMutationsNotConfigured`; decision/list APIs and `SystemMutator` remain available |
+| nil `Config.Guard` | construction succeeds; every actor-facing guarded mutation fails closed with `ErrMutationsNotConfigured`; decision/list APIs and `RelationshipWriter` remain available, and `SystemMutator` is callable only if `.Mutations` is wired |
 | negative `Config.Limits` field (relationship kind wired) | `ErrInvalidLimits` |
 
 There is **no default allow guard**: the absence of a guard closes the
@@ -395,12 +448,15 @@ transaction; a host deleting a resource orders its own teardown, and the
 ordering + ID-reuse hazard is documented on the method rather than misrepresented
 as cross-feature database atomicity.
 
-### Legacy migration and best-effort audit
+### Compatibility and best-effort audit
 
-The v1→v3 legacy API transition is complete: the raw unguarded mutation surface
-is removed from `Service`; the `examples/auth-cms` invitation `Granter` was
-migrated to `SystemMutator.GrantRelationship` with a stable `DeriveMutationID`,
-so a retried accept replays without a duplicate revision bump. `Config.Audit`
+The original validated relationship-state capabilities are restored on the
+separately held `RelationshipWriter`, not on the actor-facing `Service`. The
+baseline is genuinely state based and does not inherit permanent MutationID
+replay behavior. `examples/auth-cms` uses it for ordinary project-member
+invitations; the example also retains a `guardedRelationshipGranter` showing how
+`OperationID` can opt a sensitive invitation into `SystemMutator` receipts and
+durable replay semantics. `Config.Audit`
 (optional `AuditSink`) observes actor-facing and teardown attempts as
 accepted/denied/failed with coarse bounded fields — never raw resource/subject
 IDs as labels, never changing a committed mutation; a sink failure is warned and
@@ -441,7 +497,7 @@ never as a cms→authorization import (rule 6).
 
 ```
 authorization.go         the socket: Repositories, Config, Service,
-                         NewService (→ Components{Service, SystemMutator}),
+                         NewService (→ Components{Service, RelationshipWriter, SystemMutator}),
                          Register; root aliases for the engine + mutation
                          vocabulary; the errs vars
 codes.go                 stable Reason codes + feature error sentinels + the
@@ -484,13 +540,13 @@ a future admin surface (the deferred AZADM packet).
 |---|---|
 | `Repositories.Relationships` | nil = relationship kind off. Wired ⇔ `Config.Model` set — either without the other is a loud `ErrModelRequired`. |
 | `Repositories.Roles` | nil = roles kind off. Needs no Config at all. |
-| `Repositories.Mutations` | the atomic write path (`mutation.MutationRepository`). Independent of the read ports (a store implements all three). Required whenever `Config.Guard` is set (`ErrGuardWithoutMutations`); the `SystemMutator` also needs it. |
+| `Repositories.Mutations` | optional high-integrity command path (`mutation.MutationRepository`). Required only when `Config.Guard` is set or `SystemMutator` is used. Baseline relationship writes do not depend on it. |
 | both kind fields nil | loud `ErrNoKindConfigured` at `NewService`. |
 | an unwired kind's methods | fail closed with that kind's sentinel (`ErrRelationshipsNotConfigured` / `ErrRolesNotConfigured`). |
 | `Config.Model` | REQUIRED with `Relationships`, forbidden without it; compiled + schema-validated at `NewService` (see validation-failures list). |
 | `Config.Limits` | optional `EvaluationLimits`; zero fields → safe defaults, negative → `ErrInvalidLimits`. Relationship-kind-scoped; ignored-with-note under roles-only wiring. |
 | `Config.IDs` | optional (`cryptids.IDGenerator`); zero value ⇒ the nanoid default; `cryptids.Database` defers to the store's DDL DEFAULT. Relationship-kind-scoped. |
-| `Config.Guard` | nil = READ-ONLY posture (actor-facing mutations fail closed with `ErrMutationsNotConfigured`; decisions/lists and `SystemMutator` still work). Non-nil requires `Repositories.Mutations`. No default-allow policy. |
+| `Config.Guard` | nil = actor-facing guarded mutations fail closed with `ErrMutationsNotConfigured`; decisions/lists and baseline `RelationshipWriter` still work. Non-nil requires `Repositories.Mutations`. No default-allow policy. |
 | `Config.Audit` | optional best-effort `AuditSink`; requires `Config.Guard` (`ErrAuditWithoutGuard`). |
 
 The nil-Guard/nil-Model asymmetry is deliberate: an orphaned `Model` errors
@@ -688,7 +744,8 @@ if err != nil {
     return err
 }
 authorizer := comps.Service
-system := comps.SystemMutator // held apart — hand only to trusted bootstrap/invitation code
+writer := comps.RelationshipWriter // normal trusted application-state writer
+system := comps.SystemMutator       // advanced high-integrity capability
 if err := authorizer.Register(mount); err != nil { // logs only; no routes
     return err
 }
@@ -706,37 +763,30 @@ if _, err := system.GrantRelationship(ctx, seed); err != nil {
     return err
 }
 
-// Stop 1 — the Granter seam (auth): invitation-accept writes a real tuple through
-// the TRUSTED SystemMutator, derives its MutationID from the authentication
-// OPERATION id (not the tuple alone), and INSPECTS the receipt outcome:
+// Stop 1 — the Granter seam (auth): ordinary project sharing uses the baseline
+// writer. OperationID remains available but this adapter does not need it.
 //
-//   type invitationGranter struct{ system *authorization.SystemMutator }
+//   type invitationGranter struct {
+//       writer *authorization.RelationshipWriter
+//       reader *authorization.Service
+//   }
 //   func (g invitationGranter) Grant(ctx context.Context, in auth.GrantInput) error {
-//       cmd := authorization.GrantRelationshipCommand{
+//       row := authorization.CreateRelationship{
 //           ResourceType: in.ResourceType, ResourceID: in.ResourceID, Relation: in.Relation,
-//           Subject: authorization.SubjectRef{Type: in.SubjectType, ID: in.SubjectID},
+//           SubjectType: in.SubjectType, SubjectID: in.SubjectID,
 //       }
-//       // Purpose + OPERATION id + tuple: a retry of ONE invitation replays; a
-//       // re-invitation after a revoke carries a DISTINCT operation id, so it is a
-//       // fresh mutation that restores the tuple. (Deriving from the tuple alone
-//       // collapsed those into one identity and silently replayed — the retired bug.)
-//       cmd.MutationID = authorization.DeriveMutationID("host/invitation-grant",
-//           in.OperationID, in.ResourceType, in.ResourceID, in.Relation, in.SubjectType, in.SubjectID)
-//       receipt, err := g.system.GrantRelationship(ctx, cmd)
-//       if err != nil {
+//       if err := g.writer.CreateRelationships(ctx, []authorization.CreateRelationship{row}); err != nil {
 //           return err
 //       }
-//       // nil ONLY for the exact relation applied/already present; a
-//       // semantic_conflict or invariant block is a loud error (no implicit
-//       // replace), so auth never records a non-applied grant as success.
-//       switch receipt.Outcome {
-//       case authorization.OutcomeApplied, authorization.OutcomeNoChange:
-//           return nil
-//       default:
-//           return fmt.Errorf("grant not applied (%s): %w", receipt.Outcome, sdk.ErrConflict)
-//       }
+//       // Detached exact-state verification maps the one-relation conflict to
+//       // sdk.ErrConflict; see examples/auth-cms/cmd/server/membership.go.
+//       return verifyExactGrant(ctx, g.reader, in)
 //   }
-authCfg.Granter = invitationGranter{system: system}
+authCfg.Granter = invitationGranter{writer: writer, reader: authorizer}
+
+// A tenant-owner adapter can instead hold system, derive a MutationID from
+// in.OperationID + tuple, call SystemMutator.GrantRelationship, and inspect the
+// receipt. The same process may select that posture by resource type/relation.
 
 // Stop 2 — the Check seam (events): the scoped SSE stream authorizes through the
 // engine. This closure shape satisfies ANY Check-only seam. PrincipalRef is

@@ -9,6 +9,7 @@ import (
 
 	auth "github.com/gopernicus/gopernicus/features/authentication"
 	authorization "github.com/gopernicus/gopernicus/features/authorization"
+	authzmem "github.com/gopernicus/gopernicus/features/authorization/memstore"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 )
@@ -17,9 +18,9 @@ import (
 // newAuthorization() builds — the same wiring run() serves: the shared-state memstore
 // bundle, the project-scoped guardian minimum, and the host MutationGuard (manage_access
 // + platform-admin over the DecisionView). It proves the composed HOST behavior: an
-// untrusted actor cannot self-grant, invitation acceptance is visibly trusted and
-// idempotent through the SystemMutator, ordinary host code has no raw write or
-// constructible system actor, and the three postures stay demonstrable. There is no
+// untrusted actor cannot self-grant, both baseline and guarded invitation adapters
+// are idempotent under their chosen semantics, write capabilities remain separately
+// placed, and no caller can construct a system actor. There is no
 // browser flow — the actor-facing HTTP mutation surface is deferred with AZADM.
 
 // hostAuthz builds the guarded components the way run() does. It fatals on error so the
@@ -209,9 +210,9 @@ func TestHostMutationGuardGlobalMutationTrustedOnly(t *testing.T) {
 // hostGranter builds the reference relationshipGranter over sm plus a resource registry
 // seeded with the given resource keys — the exact wiring run() composes (the SystemMutator
 // and the host resource-existence seam).
-func hostGranter(sm *authorization.SystemMutator, existing ...string) (relationshipGranter, *hostResourceRegistry) {
+func hostGranter(sm *authorization.SystemMutator, existing ...string) (guardedRelationshipGranter, *hostResourceRegistry) {
 	reg := newHostResourceRegistry(existing...)
-	return relationshipGranter{system: sm, exists: reg.Exists}, reg
+	return guardedRelationshipGranter{system: sm, exists: reg.Exists}, reg
 }
 
 // demoGrant is a GrantInput on the demo resource, distinguished by its OperationID — the
@@ -225,6 +226,42 @@ func demoGrant(operationID, relation, subjectID string) auth.GrantInput {
 		Relation:     relation,
 		SubjectType:  "user",
 		SubjectID:    subjectID,
+	}
+}
+
+// TestBaselineInvitationGranterNeedsNoMutationLifecycle proves the bundled
+// ordinary-sharing adapter satisfies auth.Granter with only relationship state
+// and schema configured. Reusing the same OperationID after deletion restores the
+// tuple because the adapter does not consume it as a permanent replay identity.
+func TestBaselineInvitationGranterNeedsNoMutationLifecycle(t *testing.T) {
+	rels := authzmem.NewRelationships()
+	comps, err := authorization.NewService(authorization.Repositories{Relationships: rels}, authorization.Config{Model: authzSchema()})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	reg := newHostResourceRegistry(resourceKey(demoResourceType, demoResourceID))
+	g := relationshipGranter{writer: comps.RelationshipWriter, reader: comps.Service, exists: reg.Exists}
+	ctx := context.Background()
+	in := demoGrant("optional-operation-id", "member", "invitee")
+	if err := g.Grant(ctx, in); err != nil {
+		t.Fatalf("baseline invitation grant: %v", err)
+	}
+	if !allowed(t, comps.Service, "invitee", demoPermission, demoResourceID) {
+		t.Fatal("baseline invitation did not grant membership")
+	}
+	if err := comps.RelationshipWriter.DeleteRelationship(ctx,
+		authorization.Resource{Type: demoResourceType, ID: demoResourceID}, "member",
+		authorization.SubjectRef{Type: "user", ID: "invitee"}); err != nil {
+		t.Fatalf("delete grant: %v", err)
+	}
+	if err := g.Grant(ctx, in); err != nil {
+		t.Fatalf("same operation id must not suppress state restoration: %v", err)
+	}
+	if !allowed(t, comps.Service, "invitee", demoPermission, demoResourceID) {
+		t.Fatal("baseline re-grant did not restore membership")
+	}
+	if _, err := comps.SystemMutator.GrantRelationship(ctx, authorization.GrantRelationshipCommand{}); !errors.Is(err, authorization.ErrMutationsNotConfigured) {
+		t.Fatalf("advanced mutation repository unexpectedly required/wired: %v", err)
 	}
 }
 
@@ -463,7 +500,7 @@ func TestHostAuthorizationHasNoRawWriteOrSystemActor(t *testing.T) {
 		"DeleteByResourceAndSubject",
 	} {
 		if _, ok := svcType.MethodByName(name); ok {
-			t.Fatalf("Service.%s is a raw unguarded write path and must not exist on the host-facing surface", name)
+			t.Fatalf("Service.%s must remain on the separately placed RelationshipWriter, not the handler-facing Service", name)
 		}
 	}
 	// Every actor-facing mutation method takes an Actor (never a privilege flag).

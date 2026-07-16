@@ -43,7 +43,7 @@ silently share state through package-level variables; explicit `Repositories`
 
 `features/authorization` (v3) is the one sanctioned deviation from FS2's
 `svc, err := NewService(repos, cfg)` return: its constructor returns a
-**`Components{Service, SystemMutator}`** bundle instead of a bare `*Service`
+**`Components{Service, RelationshipWriter, SystemMutator}`** bundle instead of a bare `*Service`
 (ratified default #4, authorizationv3). This is an **authorization-specific
 amended shape, not a general replacement of FS2** — a sanctioned variant for the
 narrow case where a feature has a **separately-held trusted capability** that
@@ -52,11 +52,14 @@ must not be reachable from its ordinary driving surface:
 - `Components.Service` is the ordinary FS2 driving surface — decisions, lists,
   and actor-facing *guarded* mutations. HTTP handlers and consumer seams receive
   only this. `svc.Register(mount)` is unchanged.
-- `Components.SystemMutator` is the trusted, actor-free write capability
-  (bootstrap, migration, invitation acceptance, resource teardown). It is
+- `Components.RelationshipWriter` is the normal trusted application-side ReBAC
+  state capability (schema-valid create/delete and atomic desired-state
+  reconciliation). It is independent of the advanced mutation repository.
+- `Components.SystemMutator` is the optional high-integrity actor-free command
+  capability (revisions, guardian invariants, receipts, audit, teardown). Both are
   **structurally unreachable from `Service`** and is handed by the composition
   root only to code that legitimately needs it. This is the whole point of the
-  bundle: a bag with two members that must be *held apart* cannot be one
+  bundle: capabilities that must be *held apart* cannot be one
   `*Service`, and stapling the trusted methods onto `Service` (or gating them
   behind an `Actor{Kind: system}` flag) would put a self-grant one reflection or
   one constructed-value away.

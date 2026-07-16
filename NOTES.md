@@ -2668,3 +2668,23 @@ note's "tuple identity IS the operation identity" line). No new doc files.
 No commit, tag, or push. The uncommitted worktree is the milestone diff; release gates
 (LICENSE, turso CI secrets, committing the tree, PR, tags per RELEASING.md floors) remain
 owner-owned.
+
+## 2026-07-16 — authorization writes split into baseline state and optional guarded mutations
+
+The authorization-v3 closeout above is historical context, not the current
+universal-write recommendation. ReBAC tuples are ordinary application state by
+default. `NewService` now returns the separately held
+`Components.RelationshipWriter` whenever relationships + schema are configured,
+including with `Repositories.Mutations == nil`. It provides schema-valid create,
+exact/idempotent delete, resource cleanup, and atomic `SetRelationTargets` desired
+state. The memstore, pgx, and Turso stores conform; pgx serializes one
+resource+relation with an advisory transaction lock and Turso uses retrying
+`BEGIN IMMEDIATE`.
+
+The existing `Service` guarded commands and `SystemMutator` remain unchanged as
+the opt-in high-integrity path for atomic authority dependencies, revisions,
+guardian invariants, receipts, durable replay, and audit. Ordinary auth-cms member
+invitations now use the baseline writer and ignore `OperationID`; the separately
+named guarded adapter demonstrates sensitive invitation posture. See the current
+decision table in `features/authorization/README.md` and the superseding upgrade
+note in `features/authorization/stores/UPGRADE.md`.

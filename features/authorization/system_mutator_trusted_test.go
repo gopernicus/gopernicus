@@ -12,7 +12,7 @@ import (
 // -----------------------------------------------------------------------------
 // AZ3-3.4 — trusted SystemMutator convenience surface, its parity with the
 // actor-facing guarded seam (schema digest + semantic validator), the invitation
-// deterministic-MutationID idempotency contract, and the legacy raw-method removal.
+// deterministic-MutationID idempotency contract, and capability placement.
 // All over the REAL memstore bundle (shared-state relationship/role/mutation repos).
 // -----------------------------------------------------------------------------
 
@@ -183,12 +183,11 @@ func TestTrustedDeriveMutationIDStableAndValid(t *testing.T) {
 	}
 }
 
-// TestLegacyRawMutationMethodsRemovedFromService pins the pre-tag breaking removal:
-// the ordinary Service exposes no raw create/delete/assign/unassign write method — no
-// unguarded synonym for the guarded lifecycle remains. AssignRole/UnassignRole exist
-// only in their GUARDED form (first arg is an Actor), and the raw relationship writes
-// are gone entirely.
-func TestLegacyRawMutationMethodsRemovedFromService(t *testing.T) {
+// TestBaselineWriterHeldApartFromService pins capability placement: the ordinary
+// Service exposes no baseline create/delete methods. Those normal state operations
+// live on Components.RelationshipWriter; AssignRole/UnassignRole remain guarded on
+// Service because the baseline capability is relationship-specific.
+func TestBaselineWriterHeldApartFromService(t *testing.T) {
 	svcType := reflect.TypeOf(&Service{})
 	removed := []string{
 		"CreateRelationships",
@@ -198,7 +197,7 @@ func TestLegacyRawMutationMethodsRemovedFromService(t *testing.T) {
 	}
 	for _, name := range removed {
 		if _, ok := svcType.MethodByName(name); ok {
-			t.Fatalf("Service.%s must be removed (raw unguarded write path)", name)
+			t.Fatalf("Service.%s must stay on the separately held RelationshipWriter", name)
 		}
 	}
 

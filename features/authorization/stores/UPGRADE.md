@@ -1,5 +1,29 @@
 # Authorization v1 → v3 host upgrade runbook — EXECUTED / VALIDATED
 
+## Current write-architecture note (2026-07-16)
+
+The v3 guarded mutation lifecycle remains intact but is now optional.
+`NewService` also returns `Components.RelationshipWriter` whenever the
+relationship repository and schema are configured, including when
+`Repositories.Mutations` is nil. No database migration is required for this API
+change: baseline writes use `iam_relationships` directly and
+`SetRelationTargets` is implemented atomically by every bundled store.
+
+Adopters should classify writers by resource type/relation. Topology,
+projections, bootstrap, fixtures, migrations, synchronization, and ordinary
+folder/document sharing normally use the baseline writer. Security-sensitive
+membership, owner/admin replacement, compliance/audit, or public actor-facing
+management can retain the guarded lifecycle. Do not send baseline writes through
+`SystemMutator` merely to create tuples; doing so preserves occurrence/replay
+semantics that desired state does not need. Conversely, do not mix baseline and
+guarded writes for the same invariant-protected relation and assume scope
+revisions or guardian rules cover the baseline changes.
+
+Existing v3 hosts need only update composition from
+`Components{Service,SystemMutator}` to include the optional separately held
+`RelationshipWriter` where appropriate. `Register` still mounts no routes, so
+the new capability is not automatically public.
+
 Status: **EXECUTED & VALIDATED 2026-07-14** (authorizationv3, AZ3-5.1; drafted at
 AZ3-2.6). This is the operational protocol a host runs to move a live v1
 authorization database to v3. It **wraps** [`CONVERSION.md`](CONVERSION.md) — the

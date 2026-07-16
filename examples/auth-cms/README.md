@@ -53,8 +53,8 @@ hermetically.
   rotating store-backed refresh tokens (host-signed by the sdk stdlib HS256
   default, `sdk/foundation/cryptids`), security-event audit rows,
   and invitations that grant through the **`features/authorization` engine's
-  `relationshipGranter`** — invitation-accept writes a real ReBAC tuple via the
-  trusted `SystemMutator.GrantRelationship` (the flagship posture; the memstore-backed
+  `relationshipGranter`** — ordinary member invitation-accept writes a real ReBAC
+  tuple via the trusted application-side `RelationshipWriter` (the memstore-backed
   engine keeps the host **driver-free** — no libsql in the graph). The A9 milestone
   shipped this seam with a toy in-memory `Granter` instead (ratified AV4:
   invitations work with no ReBAC in the graph); `authorization-v1` Z4 commit 2
@@ -96,7 +96,7 @@ inherently trusted. **`Check` is pure schema evaluation**: the engine grants no 
 so the host runs the platform-admin recipe itself — an `admin` permission `Check` on
 `platform/main`, first, in its own closure (`isPlatformAdmin` in `membership.go`). A
 member gets `view` on `project/demo` the moment the invitation is accepted (the Granter
-writes the tuple through the `SystemMutator`). Demo routes are READ-ONLY (AZ3-4.1
+writes the tuple through the baseline writer). Demo routes are READ-ONLY (AZ3-4.1
 removed the session-only mutation routes — see below); the guarded actor path and
 `SystemMutator` composition are proven by `authorization_test.go`, not a browser flow.
 
@@ -156,16 +156,15 @@ surface is deferred with the AZADM packet.
   **multi-instance** deployment MUST share `AUTH_JWT_SECRET` across every instance
   (per-instance keys can't cross-verify). API clients recover a dead access JWT via
   `POST /auth/refresh` (refresh tokens are store-backed).
-- **Granter**: `relationshipGranter` (`cmd/server/membership.go`) — a host-local
-  adapter whose `Grant` validates the target resource still exists (failing loudly
-  with `sdk.ErrNotFound` otherwise), derives the `MutationID` from a fixed purpose +
-  the authentication **operation id** + the tuple (so a retried invitation replays
-  while a re-invitation after a revoke is a fresh grant that restores the tuple), and
-  INSPECTS the returned receipt — only `applied`/`no_change` are success; a
-  `semantic_conflict` or `invariant_blocked` is a loud error wrapping `sdk.ErrConflict`
-  (no implicit `ReplaceRelationship`). It writes through the trusted
-  `SystemMutator.GrantRelationship`, so invitation-accept records a real ReBAC tuple,
-  trusted and idempotent (the flagship posture; the A9 toy map is retired).
+- **Granter**: `relationshipGranter` (`cmd/server/membership.go`) — the ordinary
+  collaboration adapter. It validates the target resource still exists, writes
+  through `RelationshipWriter.CreateRelationships`, then performs the detached
+  exact-state check required by the Granter contract. It intentionally ignores
+  `OperationID`: no MutationID, receipt, or mutation repository is needed, and a
+  re-grant after deletion restores current state. A separately named
+  `guardedRelationshipGranter` in the same file demonstrates the sensitive posture:
+  it derives a MutationID from `OperationID`, calls `SystemMutator`, and inspects
+  receipts. The host can select either posture per resource type/relation.
 - **InviteCheck** (`hostInviteCheck`, `cmd/server/membership.go`) — the required
   relation-aware host authorization policy the feature calls from its parsed
   create/list invitation handlers (`auth.Config.InviteCheck`): a platform admin may
@@ -285,7 +284,7 @@ surface is deferred with the AZADM packet.
 | `Config.Providers` | the fake provider | OAuth routes not registered (deny-by-absence) |
 | `Config.TokenSigner` | sdk HS256 over `AUTH_JWT_SECRET` (or ephemeral dev key) | REQUIRED — nil is `ErrTokenSignerRequired` at construction (no nil variant) |
 | `Config.TokenEncrypter` | AES-GCM iff `AUTH_TOKEN_ENCRYPTER_KEY` | provider tokens not persisted (login/link still work) |
-| `Config.Granter` | engine `relationshipGranter` (`SystemMutator.GrantRelationship`, structured `GrantInput`, receipt-inspecting) | invitation routes not registered (deny-by-absence) |
+| `Config.Granter` | engine `relationshipGranter` (baseline `RelationshipWriter`, structured `GrantInput`; guarded alternative also demonstrated) | invitation routes not registered (deny-by-absence) |
 | `Config.InviteCheck` | relation-aware `hostInviteCheck` (platform-admin bypass, owner-grant reserved, else `manage_access`) | REQUIRED once `Granter` is wired — nil is `ErrInviteCheckRequired`; set without a `Granter` is `ErrInviteCheckWithoutGranter` |
 | `Config.RuntimeMode` | `development` (explicit) | REQUIRED, no default — nil is `ErrRuntimeModeRequired` |
 | `Config.DeliveryMode` | `jobs` (explicit) | REQUIRED, no default — empty is `ErrDeliveryModeRequired`, unknown is `ErrDeliveryModeInvalid` |
@@ -478,7 +477,7 @@ curl -i -X POST http://localhost:8082/auth/refresh -H 'Content-Type: application
 The membership-gated route is `GET /demo/members-only` — it checks `view` on the
 `project/demo` resource through `authorizer.Check` (the flagship posture). An
 accepted invitation grants the `member` tuple via the engine `relationshipGranter`
-(the trusted `SystemMutator.GrantRelationship`), and `view = AnyOf(owner, member)`, so
+(the baseline `RelationshipWriter`), and `view = AnyOf(owner, member)`, so
 the member passes the gate. The observable codes are identical to the A9 toy-Granter
 run — the swap is invisible at the seam.
 

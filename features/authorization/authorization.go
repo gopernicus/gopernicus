@@ -141,10 +141,8 @@ type Assignment = role.Assignment
 // (Direct, Global, or both). A global grant is not rewritten as a scoped row.
 type EffectiveGrant = role.EffectiveGrant
 
-// Root aliases — the atomic mutation vocabulary (AZ3-0.4). The write path is
-// frozen here as a contract; store implementations of MutationRepository land in
-// phase 2 (AZ3-2.2/2.3/2.4), and the actor/guard/SystemMutator composition lands
-// in AZ3-0.5. Hosts and phase-2 code use authorization.Command / .Receipt / …
+// Root aliases — the optional high-integrity mutation vocabulary. Hosts use
+// authorization.Command / .Receipt / …
 // without importing the domain/mutation package directly.
 type (
 	MutationID         = mutation.MutationID
@@ -192,7 +190,7 @@ var DefaultGuardianPolicy = mutation.DefaultGuardianPolicy
 var NewMutationID = mutation.NewMutationID
 
 // DeriveMutationID re-exports the deterministic MutationID derivation for TRUSTED
-// idempotency: a SystemMutator holder (bootstrap, migration, invitation acceptance)
+// idempotency: a SystemMutator holder (for a use case that opts into durable replay)
 // derives a stable MutationID from a fixed operation identity so a retry of the same
 // operation dedups against its stored receipt — no duplicate mutation or revision
 // bump — while still satisfying MutationID.Validate. Actor-facing callers use the
@@ -246,10 +244,9 @@ type Repositories struct {
 	// Roles backs the roles kind; nil = the roles kind is off.
 	Roles role.Storer
 
-	// Mutations backs the atomic write path (mutation.MutationRepository). It is
-	// the frozen AZ3-0.4 contract; a nil field means the atomic mutation surface is
-	// not yet wired (store implementations land in phase 2). It is independent of
-	// the read/check ports above — a store may implement all three.
+	// Mutations backs the optional high-integrity guarded/receipted write path. A
+	// nil field leaves baseline RelationshipWriter operations fully available.
+	// It is independent of the read/check ports above.
 	Mutations mutation.MutationRepository
 }
 
@@ -305,8 +302,8 @@ type Service struct {
 }
 
 // NewService validates the (repos, cfg) pair, builds the wired kinds, and returns
-// the Components bundle: the host-facing Service and the separately held, trusted
-// SystemMutator (ratified default #4). Zero kinds is ErrNoKindConfigured; a
+// the Components bundle: the host-facing Service plus separately held baseline
+// and high-integrity write capabilities. Zero kinds is ErrNoKindConfigured; a
 // relationship kind wired without its Model (or vice versa) is ErrModelRequired;
 // an invalid Model is the schema validator's loud error. A roles-only wiring
 // succeeds with no Model.
@@ -358,8 +355,13 @@ func NewService(repos Repositories, cfg Config) (Components, error) {
 	if hasRoles {
 		svc.roles = rolesvc.NewService(repos.Roles)
 	}
+	var writer *RelationshipWriter
+	if svc.relationships != nil {
+		writer = &RelationshipWriter{relationships: svc.relationships}
+	}
 	return Components{
-		Service: svc,
+		Service:            svc,
+		RelationshipWriter: writer,
 		// The trusted SystemMutator shares the same audit sink (when wired) so a
 		// resource teardown is observed on the same seam as actor-facing attempts, and
 		// the same relationship engine so its trusted calls stamp the governing schema
@@ -378,6 +380,7 @@ func (s *Service) Register(m feature.Mount) error {
 		m.Logger.Info("registered authorization feature",
 			"relationships", s.relationships != nil,
 			"roles", s.roles != nil,
+			"baseline_relationship_writes", s.relationships != nil,
 			"actor_mutations", s.guard != nil,
 		)
 	}

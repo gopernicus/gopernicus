@@ -25,7 +25,7 @@ import (
 // authorization-mutation routes (POST /demo/roles/{assign,unassign}, POST
 // /demo/admin/bootstrap), because a shipped HTTP route must never mutate authorization
 // with session presence alone. Trusted seeding happens at boot (seedAuthorization) and
-// invitation acceptance rides the SystemMutator (membership.go); the browser-driven
+// invitation acceptance rides the baseline RelationshipWriter (membership.go); the browser-driven
 // role-assignment surface is deferred until authentication exports a public
 // sensitive-operation protector (the AZADM packet), so the guarded actor-mutation path
 // is proven by authorization_test.go, not a browser flow.

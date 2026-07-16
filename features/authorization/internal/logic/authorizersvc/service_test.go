@@ -62,6 +62,22 @@ func (f *fakeStore) CreateRelationships(ctx context.Context, relationships []rel
 	return nil
 }
 
+func (f *fakeStore) SetRelationTargets(ctx context.Context, resourceType, resourceID, relationName string, targets []relationship.CreateRelationship) error {
+	f.tuples = filter(f.tuples, func(t relationship.CreateRelationship) bool {
+		return !(t.ResourceType == resourceType && t.ResourceID == resourceID && t.Relation == relationName)
+	})
+	f.tuples = append(f.tuples, targets...)
+	return nil
+}
+
+func (f *fakeStore) DeleteRelationshipTarget(ctx context.Context, resourceType, resourceID, relationName string, target relationship.SubjectRef) error {
+	f.tuples = filter(f.tuples, func(t relationship.CreateRelationship) bool {
+		return !(t.ResourceType == resourceType && t.ResourceID == resourceID && t.Relation == relationName &&
+			t.SubjectType == target.Type && t.SubjectID == target.ID && t.SubjectRelation == target.Relation)
+	})
+	return nil
+}
+
 func (f *fakeStore) DeleteResourceRelationships(ctx context.Context, resourceType, resourceID string) error {
 	f.tuples = filter(f.tuples, func(t relationship.CreateRelationship) bool {
 		return !(t.ResourceType == resourceType && t.ResourceID == resourceID)

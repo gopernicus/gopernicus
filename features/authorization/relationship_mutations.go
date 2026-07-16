@@ -6,8 +6,8 @@ import "context"
 // typed command builds one atomic mutation.Command and drives it through the guarded
 // applyMutation seam — the host MutationGuard is evaluated INSIDE the repository's
 // dependency-tracking ApplyGuarded boundary, so a denial never reaches Apply and no
-// detached Check→Apply exists. None of these delegate to the legacy raw
-// create/delete methods on Service.
+// detached Check→Apply exists. None of these delegate to the baseline
+// RelationshipWriter; the two paths have intentionally different semantics.
 //
 // Each returns the mutation *Receipt: its Outcome is the explicit domain result
 // (applied, no_change, semantic_conflict, invariant_blocked, not_found — the

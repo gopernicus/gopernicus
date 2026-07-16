@@ -489,15 +489,16 @@ source-only renames** (the AZ3-5.3 acceptance criterion):
     type is now `SubjectRef{Type, ID, Relation}`. These are intentionally distinct
     types (concrete principal vs. possibly-userset stored subject).
   - **Construction shape:** `NewService(repos, cfg)` now returns
-    `(Components{Service, SystemMutator}, error)` — the authorization-specific FS2
+    `(Components{Service, RelationshipWriter, SystemMutator}, error)` — the authorization-specific FS2
     amendment (a feature holding a separately-partitioned trusted capability; see
     `features/README.md` §5 FS2 amendment; NOT a general FS2 replacement).
-  - **Raw mutation methods removed from `Service`:** `CreateRelationships`,
+  - **Relationship state writes moved off `Service`:** `CreateRelationships`,
     `DeleteRelationship`, `DeleteResourceRelationships`, `DeleteByResourceAndSubject`,
     raw `AssignRole`/`UnassignRole`. Actor-facing typed guarded commands
     (`GrantRelationship`/`RevokeRelationship`/`ReplaceRelationship`/`AssignRole`/
-    `UnassignRole`) and the separately held `SystemMutator` replace them. The store
-    ports keep the raw methods (stores/storetest/migrations sanctioned).
+    `UnassignRole`) remain guarded on `Service`; normal relationship state writes
+    live on the separately held `RelationshipWriter`, while `SystemMutator` is the
+    opt-in high-integrity path.
   - **Reader ports gained a `limit int`:** the three `Lookup*` reader methods bound
     their result set (SQL `LIMIT` / memstore cap); a custom store implementation
     must add the parameter.
@@ -534,7 +535,7 @@ must consume the shared jobs/events vocabulary, never revive a bespoke queue.
 
 | Module | Floor | Why |
 |---|---|---|
-| `features/authorization` | **first tag — breaking-vintage** | userset relations load-bearing, concrete-principal decisions, immutable `SchemaSnapshot`, bounded evaluation, `Components{Service, SystemMutator}` construction, raw `Service` mutation methods removed, atomic revisioned receipts. Pre-`v1`, breaking is expected (Go pre-release semantics); move to `v1.0.0` deliberately, not on this first tag |
+| `features/authorization` | **first tag — breaking-vintage** | userset relations load-bearing, concrete-principal decisions, immutable `SchemaSnapshot`, bounded evaluation, `Components{Service, RelationshipWriter, SystemMutator}` construction, separately held baseline state writes, and optional atomic revisioned receipts. Pre-`v1`, breaking is expected (Go pre-release semantics); move to `v1.0.0` deliberately, not on this first tag |
 | `features/authorization/stores/pgx` | **first tag — breaking-vintage** | implements the relation-aware readers (+`limit`), the three atomic mutation repositories (`iam_scopes`/`iam_mutations`), and `ListEffectiveByResource` over the greenfield `0001…0004` set |
 | `features/authorization/stores/turso` | **first tag — breaking-vintage** | same, libSQL dialect; requires the turso connector's `BEGIN IMMEDIATE` write-intent transactions (already keyed above) for the concurrent mutation CAS |
 
@@ -543,15 +544,12 @@ must consume the shared jobs/events vocabulary, never revive a bespoke queue.
 **Consumer changes a host/feature must make:**
 
 - **Auth invitation Granter** (`examples/auth-cms/cmd/server/membership.go`): the
-  invitation-accept `auth.Granter` adapter moved from
-  `authorizer.CreateRelationships` (v1) to `SystemMutator.GrantRelationship`. It
-  derives a stable `DeriveMutationID` from a fixed purpose + the authentication
-  **operation id** + the tuple (updated by the auth-adopter-hardening packet below;
-  the earlier tuple-only derivation was replaced), so a retried accept replays
-  without a duplicate revision bump while a re-invitation after a revoke carries a
-  distinct operation id → a fresh, tuple-restoring mutation. Any host wiring
-  invitation acceptance to authorization adopts the same SystemMutator +
-  operation-scoped `DeriveMutationID` shape.
+  ordinary project-member adapter uses the separately held `RelationshipWriter`
+  and intentionally ignores `OperationID`; exact creation is naturally
+  idempotent and later re-grants restore current state. A second
+  `guardedRelationshipGranter` demonstrates the opt-in sensitive posture:
+  `SystemMutator` + operation-scoped `DeriveMutationID` + receipt inspection.
+  Hosts choose by resource type/relation; authentication mandates neither path.
 - **Events authorization closure:** `features/events` itself needs **no change** —
   its `AuthorizeStream` config seam is a host-supplied closure and does not import
   authorization. A host whose events `Authorize` closure delegates to
@@ -568,9 +566,11 @@ must consume the shared jobs/events vocabulary, never revive a bespoke queue.
   host-composition tests and the checked-in
   `examples/auth-cms/cmd/server/testdata/az3-proof-transcript.md`.
 - **External host recipe (README wiring page):** a generic host wires
-  `Components{Service, SystemMutator}` from `NewService`, composes a host
+  `Components{Service, RelationshipWriter, SystemMutator}` from `NewService`, uses
+  the baseline writer for application-maintained tuple state, and composes a host
   `MutationGuard` (schema-declared relation + any platform-admin short-circuit) that
-  fails closed, holds the `SystemMutator` apart for bootstrap/invitation/teardown,
+  fails closed, holding `SystemMutator` apart for the sensitive operations that
+  opt into revisions/invariants/receipts/audit,
   and adapts `identity.Principal → Actor`/`PrincipalRef` at the boundary. The full
   wiring recipe and every API is documented in `features/authorization/README.md`
   (AZ3-5.2) — a host wires safely without reading internal code or the plan.

@@ -292,6 +292,10 @@ SELECT cnt.n, m.rid FROM cnt LEFT JOIN matches m ON 1=1`
 // MIXED batch is a loud store error (the engine mints all-or-none). There is no
 // RETURNING — the port is error-only.
 func (s *relationshipStore) CreateRelationships(ctx context.Context, in []relationship.CreateRelationship) error {
+	return createRelationships(ctx, s.db, in)
+}
+
+func createRelationships(ctx context.Context, db tursodb.Querier, in []relationship.CreateRelationship) error {
 	if len(in) == 0 {
 		return nil
 	}
@@ -332,16 +336,81 @@ func (s *relationshipStore) CreateRelationships(ctx context.Context, in []relati
 	}
 	buf.WriteString(" ON CONFLICT DO NOTHING")
 
-	if _, err := s.db.Exec(ctx, buf.String(), args...); err != nil {
+	if _, err := db.Exec(ctx, buf.String(), args...); err != nil {
 		return err
 	}
 	return nil
+}
+
+// SetRelationTargets reconciles one resource+relation inside Turso's
+// BEGIN IMMEDIATE transaction. Competing writers serialize before reading, so
+// concurrent desired-state moves cannot commit an accidental union. Retrying a
+// residual busy error is naturally safe because the operation describes state,
+// not a one-time occurrence.
+func (s *relationshipStore) SetRelationTargets(ctx context.Context, resourceType, resourceID, relationName string, in []relationship.CreateRelationship) error {
+	desired := make(map[relationship.SubjectRef]relationship.CreateRelationship, len(in))
+	for _, c := range in {
+		if c.ResourceType != resourceType || c.ResourceID != resourceID || c.Relation != relationName {
+			return fmt.Errorf("authorization turso store: SetRelationTargets row is outside requested scope: %w", sdk.ErrInvalidInput)
+		}
+		desired[c.Subject()] = c
+	}
+	rows := make([]relationship.CreateRelationship, 0, len(desired))
+	for _, c := range desired {
+		rows = append(rows, c)
+	}
+
+	return retryBusy(ctx, func() error {
+		return s.db.InTx(ctx, func(tx *tursodb.Tx) error {
+			if len(rows) == 0 {
+				_, err := tx.Exec(ctx, `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ?`, resourceType, resourceID, relationName)
+				return tursodb.MapError(err)
+			}
+
+			var predicate strings.Builder
+			args := make([]any, 0, len(rows)*3)
+			for i, c := range rows {
+				if i > 0 {
+					predicate.WriteString(" OR ")
+				}
+				predicate.WriteString("(subject_type = ? AND subject_id = ? AND subject_relation = ?)")
+				args = append(args, c.SubjectType, c.SubjectID, c.SubjectRelation)
+			}
+			pred := predicate.String()
+
+			conflictArgs := []any{resourceType, resourceID, relationName}
+			conflictArgs = append(conflictArgs, args...)
+			var conflict bool
+			conflictQ := `SELECT EXISTS (SELECT 1 FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation <> ? AND (` + pred + `))`
+			if err := tx.QueryRow(ctx, conflictQ, conflictArgs...).Scan(&conflict); err != nil {
+				return tursodb.MapError(err)
+			}
+			if conflict {
+				return fmt.Errorf("authorization turso store: a desired target already holds a different relation on %s:%s: %w", resourceType, resourceID, sdk.ErrConflict)
+			}
+
+			deleteArgs := []any{resourceType, resourceID, relationName}
+			deleteArgs = append(deleteArgs, args...)
+			deleteQ := `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ? AND NOT (` + pred + `)`
+			if _, err := tx.Exec(ctx, deleteQ, deleteArgs...); err != nil {
+				return tursodb.MapError(err)
+			}
+			return createRelationships(ctx, tx, rows)
+		})
+	})
 }
 
 // DeleteResourceRelationships removes every tuple for a resource (idempotent).
 func (s *relationshipStore) DeleteResourceRelationships(ctx context.Context, resourceType, resourceID string) error {
 	const q = `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ?`
 	_, err := s.db.Exec(ctx, q, resourceType, resourceID)
+	return err
+}
+
+// DeleteRelationshipTarget removes one exact tuple, including subject_relation.
+func (s *relationshipStore) DeleteRelationshipTarget(ctx context.Context, resourceType, resourceID, relationName string, target relationship.SubjectRef) error {
+	const q = `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ? AND subject_type = ? AND subject_id = ? AND subject_relation = ?`
+	_, err := s.db.Exec(ctx, q, resourceType, resourceID, relationName, target.Type, target.ID, target.Relation)
 	return err
 }
 

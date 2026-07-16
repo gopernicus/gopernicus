@@ -9,7 +9,9 @@ It fills **all three** outbound ports over the `integrations/datastores/pgxdb`
 connector:
 
 - `relationship.Storer` over **`iam_relationships`** — the ReBAC tuple store
-  (group expansion and descendant lookup as recursive CTEs; land in task-2).
+  (group expansion and descendant lookup as recursive CTEs). Its baseline
+  `SetRelationTargets` uses a transaction-scoped advisory lock per
+  resource+relation, so competing desired states serialize and never union.
 - `role.Storer` over **`iam_roles`** — the roles kind's plain assignment lookups.
 - `mutation.MutationRepository` — the atomic v3 write path over the shared `iam_*`
   tables plus the **`iam_scopes`** revision anchors and **`iam_mutations`**
@@ -41,6 +43,10 @@ failure surfaces at wiring time, before the host serves traffic. Scaffold this
 store's migrations with `ExportMigrations` and apply them with your host's runner
 pre-boot, alongside every other feature source you wire.
 
+A deliberately baseline-only host may call `RelationshipRepository(db)` instead;
+it probes only `iam_relationships` and returns no mutation repository. Applying
+the wholesale canonical source remains the normal migration practice.
+
 **Hosts never renumber** the scaffolded files: the filenames are the shared
 `(source, version)` ledger keys and the turso sibling carries the byte-identical
 set (same filename == same logical schema step; content is per-dialect).
@@ -64,6 +70,7 @@ structurally (deny-by-absence) at `authorization.NewService`.
 
 | member | shape |
 |---|---|
+| `RelationshipRepository(db *pgxdb.DB) (relationship.Storer, error)` | baseline-only constructor; probes only `iam_relationships`, so the host may wire `Repositories{Relationships: repo}` with `.Mutations == nil` |
 | `Repositories(db *pgxdb.DB, opts ...Option) (authorization.Repositories, error)` | all three ports wired (relationships, roles, atomic mutations); errors if any `iam_*` table is missing (boot-time probe, names the missing table) |
 | `WithGuardianPolicy(p mutation.GuardianPolicy) Option` | overrides the mutation repository's guardian invariant (default: owner protected on every type, min one direct anchor) — mirrors the memstore option |
 | `ExportMigrations(dst string) error` | copies the canonical `migrations/*.sql` into the host's dir |

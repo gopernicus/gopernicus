@@ -20,8 +20,8 @@
 // rows surfaced through a
 // DEFAULT-OFF debug route, and invitations that grant through the authorization
 // engine's relationshipGranter (membership.go) — authorization-v1's FLAGSHIP
-// posture (Z4 commit 2): invitation-accept writes a real ReBAC tuple via
-// authorizer.CreateRelationships, retiring the A9 toy membership map; the
+// posture (Z4 commit 2): ordinary invitation-accept writes a real ReBAC tuple
+// via the separately held baseline RelationshipWriter, retiring the A9 toy membership map; the
 // memstore-backed engine keeps the host zero-infra (no libsql). The host-local
 // demo routes (demo.go) are gated variously on a resolved principal, an engine
 // Check, a LookupResources enumeration, and a roles-kind HasRole check.
@@ -53,8 +53,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authjobs"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
-	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/deliveryhealth"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authpages"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/deliveryhealth"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/memstore"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/outboxmem"
 	auth "github.com/gopernicus/gopernicus/features/authentication"
@@ -186,13 +186,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 	// Actor-facing writes are GUARDED (Config.Guard = hostMutationGuard): HTTP handlers
 	// receive only the Service, and every actor-facing mutation is authorized inside the
-	// atomic boundary. The trusted SystemMutator is held apart and passed deliberately to
-	// the trusted seams (the boot owner/platform-admin seed and invitation
-	// grant-on-accept) — never to an actor-facing gate. Ordinary host code (the
-	// authorizer below) has no raw write and no constructible system actor
-	// (authorization_test.go pins both).
+	// atomic boundary. The advanced SystemMutator is held apart for the sensitive
+	// boot owner/platform-admin seed. The baseline RelationshipWriter is separately
+	// passed to the ordinary-member invitation adapter. Neither capability is
+	// recoverable from Service or automatically exposed through HTTP.
 	authorizer := authzComponents.Service
 	systemMutator := authzComponents.SystemMutator
+	relationshipWriter := authzComponents.RelationshipWriter
 	if err := authorizer.Register(mount); err != nil {
 		return err
 	}
@@ -219,7 +219,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// secret from a distinct env var. The invitation grant-on-accept seam is the
 	// host-local relationshipGranter over the authorization engine, carrying the host
 	// resource-existence seam so acceptance against a deleted resource fails loudly.
-	authCfg, err := buildAuthConfig(log, relationshipGranter{system: systemMutator, exists: hostResources.Exists})
+	authCfg, err := buildAuthConfig(log, relationshipGranter{
+		writer: relationshipWriter,
+		reader: authorizer,
+		exists: hostResources.Exists,
+	})
 	if err != nil {
 		return err
 	}
@@ -432,8 +436,8 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// are READ-ONLY (AZ3-4.1): the session-only authorization-mutation routes
 	// (POST /demo/roles/{assign,unassign}, POST /demo/admin/bootstrap) were REMOVED — no
 	// shipped HTTP route mutates authorization with session presence alone. Trusted
-	// seeding runs at boot (seedAuthorization) and invitation acceptance rides the
-	// SystemMutator (membership.go); the guarded actor path is proven by
+	// seeding runs at boot (seedAuthorization) and ordinary invitation acceptance rides
+	// the baseline RelationshipWriter (membership.go); the guarded actor path is proven by
 	// authorization_test.go, not a browser flow.
 	registerDemoRoutes(router, authSvc, authorizer)
 	registerDebugRoutes(router, authSvc, authRepos, log)

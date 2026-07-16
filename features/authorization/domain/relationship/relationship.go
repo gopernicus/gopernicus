@@ -224,7 +224,7 @@ type ResourceRelationshipFilter struct {
 	Relation    *string // filter to a specific relation (e.g. "owner")
 }
 
-// Storer is the storage contract for the relationship kind — the full 14-method
+// Storer is the storage contract for the relationship kind — the full 16-method
 // surface the engine needs for permission checks, tuple CRUD, direct counts,
 // listing, and resource lookup. It is intentionally lean: business logic
 // (last-owner guards, role-change validation) lives on the engine, not the
@@ -308,6 +308,26 @@ type Storer interface {
 	// bare ON CONFLICT DO NOTHING (nil error, existing row unchanged, never
 	// ErrAlreadyExists). An empty batch is nil.
 	CreateRelationships(ctx context.Context, relationships []CreateRelationship) error
+
+	// SetRelationTargets atomically makes the stored targets for exactly one
+	// (resource_type, resource_id, relation) equal the supplied set. Every input
+	// row must name that same resource and relation. Existing matching rows are
+	// retained, absent desired rows are inserted, and rows not in the desired set
+	// are removed. An empty set clears the relation. Repeating a desired state is
+	// a no-op, and concurrent calls for the same key must serialize rather than
+	// merge into an accidental union. Store adapters must provide real transaction
+	// or lock atomicity; a delete-then-create implementation is non-conforming.
+	//
+	// The engine validates and de-duplicates the rows before calling this method.
+	// Store implementations should nevertheless reject a desired target that is
+	// already related to the resource under a different relation, because the
+	// one-relation-per-subject invariant would otherwise make the requested state
+	// impossible. The whole operation must then roll back unchanged.
+	SetRelationTargets(ctx context.Context, resourceType, resourceID, relation string, targets []CreateRelationship) error
+
+	// DeleteRelationshipTarget removes one exact tuple, including the userset
+	// relation carried by target. Deleting an absent tuple is nil (idempotent).
+	DeleteRelationshipTarget(ctx context.Context, resourceType, resourceID, relation string, target SubjectRef) error
 
 	// DeleteResourceRelationships removes every relationship for a resource.
 	DeleteResourceRelationships(ctx context.Context, resourceType, resourceID string) error
