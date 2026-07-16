@@ -15,9 +15,10 @@ import (
 // authorization-mutation route. It drives the real registerDemoRoutes registration over
 // httptest and asserts the retired mutation paths are unregistered (404), while a retained
 // read route answers 405 to a POST — proving the router is live, so the 404s are a real
-// absence rather than a dead router. Trusted authorization writes reach the SystemMutator
-// only at boot (seedAuthorization) and through the invitation Granter (membership.go), never
-// an ordinary HTTP route. This complements TestHostSystemMutatorHeldApartFromService (which
+// absence rather than a dead router. The SystemMutator reaches only boot seeding;
+// the baseline RelationshipWriter reaches only the invitation adapter. Neither is
+// automatically exposed by an ordinary HTTP route. This complements
+// TestHostSystemMutatorHeldApartFromService (which
 // pins that the Service handed to handlers cannot yield the SystemMutator) by pinning the
 // ROUTE surface itself — a future re-addition of a browser-driven mutation route regresses
 // here.

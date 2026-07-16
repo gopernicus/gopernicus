@@ -13,12 +13,14 @@ package memstore
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/authorization/domain/mutation"
 	"github.com/gopernicus/gopernicus/features/authorization/domain/relationship"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
@@ -115,6 +117,62 @@ func (r *Relationships) CreateRelationships(ctx context.Context, in []relationsh
 			subjectID:       c.SubjectID,
 			subjectRelation: c.SubjectRelation,
 			createdAt:       now,
+		})
+	}
+	return nil
+}
+
+// SetRelationTargets atomically reconciles one resource+relation under the
+// store's shared mutex. Existing desired rows retain their identity/timestamp;
+// surplus rows are removed and missing rows are added. A desired subject already
+// holding a different relation makes the requested state impossible under the
+// one-relation rule, so the method fails before changing anything.
+func (r *Relationships) SetRelationTargets(_ context.Context, resourceType, resourceID, relationName string, in []relationship.CreateRelationship) error {
+	r.st.mu.Lock()
+	defer r.st.mu.Unlock()
+
+	desired := make(map[relationship.SubjectRef]relationship.CreateRelationship, len(in))
+	for _, c := range in {
+		if c.ResourceType != resourceType || c.ResourceID != resourceID || c.Relation != relationName {
+			return fmt.Errorf("authorization memstore: SetRelationTargets row is outside requested scope: %w", sdk.ErrInvalidInput)
+		}
+		desired[c.Subject()] = c
+	}
+	for _, row := range r.st.rel {
+		ref := relationship.SubjectRef{Type: row.subjectType, ID: row.subjectID, Relation: row.subjectRelation}
+		if row.resourceType == resourceType && row.resourceID == resourceID && row.relation != relationName {
+			if _, ok := desired[ref]; ok {
+				return fmt.Errorf("authorization memstore: target %s already holds relation %q on %s:%s: %w",
+					ref, row.relation, resourceType, resourceID, sdk.ErrConflict)
+			}
+		}
+	}
+
+	existing := make(map[relationship.SubjectRef]struct{}, len(desired))
+	r.st.rel = keepRows(r.st.rel, func(row relRow) bool {
+		if row.resourceType != resourceType || row.resourceID != resourceID || row.relation != relationName {
+			return true
+		}
+		ref := relationship.SubjectRef{Type: row.subjectType, ID: row.subjectID, Relation: row.subjectRelation}
+		if _, ok := desired[ref]; ok {
+			existing[ref] = struct{}{}
+			return true
+		}
+		return false
+	})
+
+	now := time.Now().UTC()
+	for ref, c := range desired {
+		if _, ok := existing[ref]; ok {
+			continue
+		}
+		id := c.RelationshipID
+		if id == "" {
+			id = memIDs.MustGenerate()
+		}
+		r.st.rel = append(r.st.rel, relRow{
+			id: id, resourceType: resourceType, resourceID: resourceID, relation: relationName,
+			subjectType: ref.Type, subjectID: ref.ID, subjectRelation: ref.Relation, createdAt: now,
 		})
 	}
 	return nil
@@ -290,6 +348,17 @@ func (r *Relationships) DeleteResourceRelationships(ctx context.Context, resourc
 	defer r.st.mu.Unlock()
 	r.st.rel = keepRows(r.st.rel, func(row relRow) bool {
 		return !(row.resourceType == resourceType && row.resourceID == resourceID)
+	})
+	return nil
+}
+
+// DeleteRelationshipTarget removes one exact tuple, including subject_relation.
+func (r *Relationships) DeleteRelationshipTarget(_ context.Context, resourceType, resourceID, relationName string, target relationship.SubjectRef) error {
+	r.st.mu.Lock()
+	defer r.st.mu.Unlock()
+	r.st.rel = keepRows(r.st.rel, func(row relRow) bool {
+		return !(row.resourceType == resourceType && row.resourceID == resourceID && row.relation == relationName &&
+			row.subjectType == target.Type && row.subjectID == target.ID && row.subjectRelation == target.Relation)
 	})
 	return nil
 }

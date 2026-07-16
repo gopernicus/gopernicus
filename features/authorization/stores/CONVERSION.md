@@ -116,10 +116,14 @@ FROM iam_relationships
 ORDER BY resource_type, resource_id, subject_type, subject_id, subject_relation;
 ```
 
-Under v3 the same conflict is no longer silent — it surfaces as an explicit
-`semantic_conflict` outcome and is resolved atomically with `OpReplace`. There is
-nothing to repair in the table here; this step exists so the operator *knows*
-whether v1 dropped any intended grants.
+On the guarded v3 path the same conflict surfaces as an explicit
+`semantic_conflict` outcome and can be resolved atomically with `OpReplace`.
+Baseline `CreateRelationships` preserves the original idempotent first-write
+behavior; callers needing authoritative desired state use atomic
+`SetRelationTargets`, which never implements a parent move as delete-then-create
+and fails unchanged if another relation makes the requested target set
+impossible. There is nothing to repair in the table here; this step exists so
+the operator *knows* whether v1 dropped any intended grants.
 
 ## Step 2 — repair
 

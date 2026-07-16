@@ -167,8 +167,9 @@ type Granter = invitationsvc.Granter
 // grant (D1). OperationID is an opaque, non-empty, non-secret identifier of the
 // logical grant: the persisted invitation row ID for accept/resolve (a retry
 // reuses it; a later invitation row for the same tuple gets a different ID) and a
-// freshly minted high-entropy value for direct-add. A host derives its own
-// mutation identity from a fixed purpose, OperationID, and the tuple fields.
+// freshly minted high-entropy value for direct-add. A host MAY derive its own
+// advanced mutation identity from a fixed purpose, OperationID, and the tuple
+// fields; a baseline state writer may ignore it.
 // Aliased from invitationsvc per the Granter precedent.
 type GrantInput = invitationsvc.GrantInput
 

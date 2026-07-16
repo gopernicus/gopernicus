@@ -31,7 +31,7 @@
 // Cross-source ordering hazard: the shared ledger keyed (source, version)
 // expresses NO ordering between sources, so a host that scaffolds another
 // feature's migrations but not "authorization" would fail at runtime, not boot.
-// Mitigation: Repositories probes BOTH tables at construction and errors —
+// Mitigation: Repositories probes all four tables at construction and errors —
 // naming the specific missing table — before the host serves traffic; the README
 // documents the prerequisite (including the roles-only adopter, which still
 // applies the FULL "authorization" source, iam_relationships included).
@@ -44,6 +44,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authorization"
 	"github.com/gopernicus/gopernicus/features/authorization/domain/mutation"
+	"github.com/gopernicus/gopernicus/features/authorization/domain/relationship"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/sdk"
 )
@@ -102,6 +103,16 @@ func Repositories(db *pgxdb.DB, opts ...Option) (authorization.Repositories, err
 		Roles:         newRoleStore(db),
 		Mutations:     newMutationStore(db, cfg.guardian),
 	}, nil
+}
+
+// RelationshipRepository returns only the relationship port after probing only
+// iam_relationships. It is the direct constructor for a baseline-only host that
+// intentionally does not wire the advanced mutation repository.
+func RelationshipRepository(db *pgxdb.DB) (relationship.Storer, error) {
+	if err := probeTable(context.Background(), db, "iam_relationships"); err != nil {
+		return nil, err
+	}
+	return newRelationshipStore(db), nil
 }
 
 // probeTable reports whether table exists, mapping its absence to a clear, stable

@@ -28,7 +28,7 @@
 // Cross-source ordering hazard: the shared ledger keyed (source, version)
 // expresses NO ordering between sources, so a host that scaffolds another
 // feature's migrations but not "authorization" would fail at runtime, not boot.
-// Mitigation: Repositories probes BOTH tables at construction and errors —
+// Mitigation: Repositories probes all four tables at construction and errors —
 // naming the specific missing table — before the host serves traffic; the README
 // documents the prerequisite (including the roles-only adopter, which still
 // applies the FULL "authorization" source, iam_relationships included).
@@ -44,6 +44,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authorization"
 	"github.com/gopernicus/gopernicus/features/authorization/domain/mutation"
+	"github.com/gopernicus/gopernicus/features/authorization/domain/relationship"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/sdk"
 )
@@ -106,6 +107,18 @@ func Repositories(db *tursodb.DB, opts ...Option) (authorization.Repositories, e
 		Roles:         newRoleStore(db),
 		Mutations:     newMutationStore(db, cfg.guardian),
 	}, nil
+}
+
+// RelationshipRepository returns only the relationship port after probing only
+// iam_relationships. It is the direct constructor for a baseline-only host that
+// intentionally does not wire the advanced mutation repository.
+func RelationshipRepository(db *tursodb.DB) (relationship.Storer, error) {
+	ctx := context.Background()
+	if err := probeTable(ctx, db, "iam_relationships"); err != nil {
+		return nil, err
+	}
+	_, _ = db.Exec(ctx, "PRAGMA busy_timeout = 5000")
+	return newRelationshipStore(db), nil
 }
 
 // probeTable reports whether table exists, mapping its absence to a clear, stable

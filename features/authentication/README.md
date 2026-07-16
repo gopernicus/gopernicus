@@ -243,22 +243,27 @@ type GrantInput struct {
 type Granter interface{ Grant(context.Context, GrantInput) error }
 ```
 
-- **Operation-scoped identity.** `OperationID` is an opaque, non-secret handle
+- **Optional operation-scoped identity.** `OperationID` is an opaque, non-secret handle
   for THIS logical grant. Pending accept and resolve-on-registration use the
   persisted invitation row id — a retry of the same invitation reuses it, while a
   later invitation row for the same tuple gets a distinct id. Direct-add has no
   invitation row, so the feature mints a fresh high-entropy id from its
   unconditional secret generator (never `Config.IDs`, whose `cryptids.Database`
-  strategy yields an empty id until an entity is inserted). A host derives its own
-  authorization mutation identity from a fixed purpose + `OperationID` + the tuple,
-  so a retry replays idempotently while a re-invitation after a revoke is a fresh,
-  tuple-restoring mutation.
+  strategy yields an empty id until an entity is inserted). It is available to an
+  adapter that chooses durable command idempotency: such an adapter can derive an
+  authorization MutationID from a fixed purpose + `OperationID` + the tuple. A
+  baseline relationship-state adapter may ignore it; exact tuple creation is
+  naturally idempotent and a later re-grant simply restores current state. The
+  field is metadata, not authority and not a mandate to use receipts or a mutation
+  repository.
 - **Strengthened success contract.** `Grant` returns nil ONLY when the EXACT
   requested relation was applied or is already exactly present. A different
   existing relation, an invariant refusal, a missing/deleted host resource, and
   any infrastructure error all fail loud — there is **no implicit replace**. A host
-  adapter maps its authorization receipt outcome (applied / no_change → nil;
-  semantic_conflict / invariant_blocked / anything else → a loud error).
+  baseline adapter verifies the exact resulting tuple (accepting ordinary detached
+  race semantics); a guarded adapter maps its authorization receipt outcome
+  (applied / no_change → nil; semantic_conflict / invariant_blocked / anything
+  else → a loud error).
 - **Required `InviteCheck`.** Whenever a `Granter` enables invitations,
   `Config.InviteCheck` is REQUIRED at construction — nil → `ErrInviteCheckRequired`;
   an `InviteCheck` wired with no `Granter` → `ErrInviteCheckWithoutGranter`. It runs
@@ -273,6 +278,14 @@ type Granter interface{ Grant(context.Context, GrantInput) error }
   loss of the inviter's host permission does not silently invalidate an already
   issued invitation. Deleted-resource refusal at acceptance is the Granter's duty —
   only the host knows whether the target still exists.
+
+The host chooses posture per resource type/relation. Ordinary folder/document
+sharing should normally use a trusted application-side relationship writer and
+accept ordinary state-write races. Tenant/account owner or administrator grants
+can opt into a guarded lifecycle when atomic authority checks, last-owner rules,
+audit evidence, or durable idempotency justify it. `InviteCheck` remains required
+in both cases: choosing simpler tuple-write semantics does not make invitation
+authority optional.
 
 ## HTML surface (Views) — the optional presentation tier
 

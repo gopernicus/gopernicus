@@ -19,6 +19,7 @@ package storetest
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/gopernicus/gopernicus/features/authorization"
@@ -194,6 +195,94 @@ func runRelationshipContracts(t *testing.T, newRepos func(t *testing.T) authoriz
 		}
 		if ok, _ := s.CheckRelationExists(ctx, "doc", "d1", "viewer", "user", "u2"); ok {
 			t.Fatalf("d1 relations should all be gone")
+		}
+	})
+
+	t.Run("SetRelationTargetsDesiredState", func(t *testing.T) {
+		s := newRepos(t).Relationships
+		set := func(ids ...string) error {
+			rows := make([]relationship.CreateRelationship, 0, len(ids))
+			for _, id := range ids {
+				rows = append(rows, ct("space", "child", "parent", "space", id))
+			}
+			return s.SetRelationTargets(ctx, "space", "child", "parent", rows)
+		}
+		if err := set("old"); err != nil {
+			t.Fatalf("set old: %v", err)
+		}
+		first, err := s.ListRelationshipsByResource(ctx, "space", "child", relationship.ResourceRelationshipFilter{}, crud.ListRequest{})
+		if err != nil || len(first.Items) != 1 {
+			t.Fatalf("list first: %+v err=%v", first, err)
+		}
+		if err := set("old"); err != nil {
+			t.Fatalf("repeat old: %v", err)
+		}
+		repeated, _ := s.ListRelationshipsByResource(ctx, "space", "child", relationship.ResourceRelationshipFilter{}, crud.ListRequest{})
+		if len(repeated.Items) != 1 || repeated.Items[0].ID != first.Items[0].ID || !repeated.Items[0].CreatedAt.Equal(first.Items[0].CreatedAt) {
+			t.Fatalf("repeat rewrote existing state: first=%+v repeated=%+v", first.Items, repeated.Items)
+		}
+		if err := set("new"); err != nil {
+			t.Fatalf("replace parent: %v", err)
+		}
+		targets, err := s.GetRelationTargets(ctx, "space", "child", "parent")
+		if err != nil || len(targets) != 1 || targets[0].ID != "new" {
+			t.Fatalf("replace must expose only new parent: %+v err=%v", targets, err)
+		}
+		if err := set("old"); err != nil {
+			t.Fatalf("restore old: %v", err)
+		}
+		targets, _ = s.GetRelationTargets(ctx, "space", "child", "parent")
+		if len(targets) != 1 || targets[0].ID != "old" {
+			t.Fatalf("old -> new -> old must restore old: %+v", targets)
+		}
+		if err := set(); err != nil {
+			t.Fatalf("clear: %v", err)
+		}
+		if err := set(); err != nil {
+			t.Fatalf("repeat clear: %v", err)
+		}
+		if targets, _ := s.GetRelationTargets(ctx, "space", "child", "parent"); len(targets) != 0 {
+			t.Fatalf("clear must be idempotently empty: %+v", targets)
+		}
+	})
+
+	t.Run("SetRelationTargetsConcurrentCallsDoNotUnion", func(t *testing.T) {
+		s := newRepos(t).Relationships
+		var wg sync.WaitGroup
+		for _, id := range []string{"a", "b"} {
+			id := id
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if err := s.SetRelationTargets(ctx, "space", "child", "parent", []relationship.CreateRelationship{
+					ct("space", "child", "parent", "space", id),
+				}); err != nil {
+					t.Errorf("set %s: %v", id, err)
+				}
+			}()
+		}
+		wg.Wait()
+		targets, err := s.GetRelationTargets(ctx, "space", "child", "parent")
+		if err != nil || len(targets) != 1 {
+			t.Fatalf("concurrent desired states must serialize to one winner: %+v err=%v", targets, err)
+		}
+	})
+
+	t.Run("SetRelationTargetsConflictRollsBack", func(t *testing.T) {
+		s := newRepos(t).Relationships
+		mustCreate(t, s,
+			ct("space", "child", "parent", "space", "keep"),
+			ct("space", "child", "owner", "space", "occupied"),
+		)
+		err := s.SetRelationTargets(ctx, "space", "child", "parent", []relationship.CreateRelationship{
+			ct("space", "child", "parent", "space", "occupied"),
+		})
+		if !errors.Is(err, sdk.ErrConflict) {
+			t.Fatalf("desired target holding another relation: want conflict, got %v", err)
+		}
+		targets, err := s.GetRelationTargets(ctx, "space", "child", "parent")
+		if err != nil || len(targets) != 1 || targets[0].ID != "keep" {
+			t.Fatalf("conflicting reconciliation changed prior state: %+v err=%v", targets, err)
 		}
 	})
 

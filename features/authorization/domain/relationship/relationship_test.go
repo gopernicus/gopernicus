@@ -6,7 +6,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
-// stubStorer pins the full 14-method Storer surface at compile time. The real
+// stubStorer pins the full 16-method Storer surface at compile time. The real
 // implementations (memstore, stores/turso, stores/pgx) are conformance-tested
 // in storetest; this stub only guards the port's shape from silent drift.
 type stubStorer struct{}
@@ -30,6 +30,14 @@ func (stubStorer) CheckBatchDirect(ctx context.Context, resourceType string, res
 }
 
 func (stubStorer) CreateRelationships(ctx context.Context, relationships []CreateRelationship) error {
+	return nil
+}
+
+func (stubStorer) SetRelationTargets(ctx context.Context, resourceType, resourceID, relationName string, targets []CreateRelationship) error {
+	return nil
+}
+
+func (stubStorer) DeleteRelationshipTarget(ctx context.Context, resourceType, resourceID, relationName string, target SubjectRef) error {
 	return nil
 }
 

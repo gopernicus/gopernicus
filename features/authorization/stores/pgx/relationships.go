@@ -324,6 +324,10 @@ FROM cnt LEFT JOIN matches m ON true`
 // key; an ALL-populated batch includes them; a MIXED batch is a loud store error
 // (the engine mints all-or-none). There is no RETURNING — the port is error-only.
 func (s *relationshipStore) CreateRelationships(ctx context.Context, in []relationship.CreateRelationship) error {
+	return createRelationships(ctx, s.db, in)
+}
+
+func createRelationships(ctx context.Context, db pgxdb.Querier, in []relationship.CreateRelationship) error {
 	if len(in) == 0 {
 		return nil
 	}
@@ -390,16 +394,92 @@ FROM UNNEST(@resource_types::text[], @resource_ids::text[], @relations::text[], 
 ON CONFLICT DO NOTHING`
 	}
 
-	if _, err := s.db.Exec(ctx, q, args); err != nil {
+	if _, err := db.Exec(ctx, q, args); err != nil {
 		return err
 	}
 	return nil
+}
+
+// SetRelationTargets serializes calls for one resource+relation with a
+// transaction-scoped advisory lock, then reconciles the set in one transaction.
+// The lock prevents two concurrent desired-state moves from committing a union.
+func (s *relationshipStore) SetRelationTargets(ctx context.Context, resourceType, resourceID, relationName string, in []relationship.CreateRelationship) error {
+	desired := make(map[relationship.SubjectRef]relationship.CreateRelationship, len(in))
+	for _, c := range in {
+		if c.ResourceType != resourceType || c.ResourceID != resourceID || c.Relation != relationName {
+			return fmt.Errorf("authorization pgx store: SetRelationTargets row is outside requested scope: %w", sdk.ErrInvalidInput)
+		}
+		desired[c.Subject()] = c
+	}
+	rows := make([]relationship.CreateRelationship, 0, len(desired))
+	for _, c := range desired {
+		rows = append(rows, c)
+	}
+
+	return s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
+		lockKey := resourceType + "\x1f" + resourceID + "\x1f" + relationName
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended(@lock_key, 0))`, pgx.NamedArgs{"lock_key": lockKey}); err != nil {
+			return pgxdb.MapError(err)
+		}
+
+		if len(rows) == 0 {
+			_, err := tx.Exec(ctx, `DELETE FROM iam_relationships WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation`, pgx.NamedArgs{
+				"resource_type": resourceType, "resource_id": resourceID, "relation": relationName,
+			})
+			return pgxdb.MapError(err)
+		}
+
+		subjectTypes := make([]string, len(rows))
+		subjectIDs := make([]string, len(rows))
+		subjectRelations := make([]string, len(rows))
+		for i, c := range rows {
+			subjectTypes[i], subjectIDs[i], subjectRelations[i] = c.SubjectType, c.SubjectID, c.SubjectRelation
+		}
+		args := pgx.NamedArgs{
+			"resource_type": resourceType, "resource_id": resourceID, "relation": relationName,
+			"subject_types": subjectTypes, "subject_ids": subjectIDs, "subject_relations": subjectRelations,
+		}
+		const conflictQ = `SELECT EXISTS (
+	SELECT 1 FROM iam_relationships r
+	JOIN UNNEST(@subject_types::text[], @subject_ids::text[], @subject_relations::text[]) AS d(st, sid, sr)
+	  ON r.subject_type = d.st AND r.subject_id = d.sid AND r.subject_relation = d.sr
+	WHERE r.resource_type = @resource_type AND r.resource_id = @resource_id AND r.relation <> @relation
+)`
+		var conflict bool
+		if err := tx.QueryRow(ctx, conflictQ, args).Scan(&conflict); err != nil {
+			return pgxdb.MapError(err)
+		}
+		if conflict {
+			return fmt.Errorf("authorization pgx store: a desired target already holds a different relation on %s:%s: %w", resourceType, resourceID, sdk.ErrConflict)
+		}
+
+		const deleteQ = `DELETE FROM iam_relationships r
+WHERE r.resource_type = @resource_type AND r.resource_id = @resource_id AND r.relation = @relation
+  AND NOT EXISTS (
+	SELECT 1 FROM UNNEST(@subject_types::text[], @subject_ids::text[], @subject_relations::text[]) AS d(st, sid, sr)
+	WHERE r.subject_type = d.st AND r.subject_id = d.sid AND r.subject_relation = d.sr
+  )`
+		if _, err := tx.Exec(ctx, deleteQ, args); err != nil {
+			return pgxdb.MapError(err)
+		}
+		return createRelationships(ctx, tx, rows)
+	})
 }
 
 // DeleteResourceRelationships removes every tuple for a resource (idempotent).
 func (s *relationshipStore) DeleteResourceRelationships(ctx context.Context, resourceType, resourceID string) error {
 	const q = `DELETE FROM iam_relationships WHERE resource_type = @resource_type AND resource_id = @resource_id`
 	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{"resource_type": resourceType, "resource_id": resourceID})
+	return err
+}
+
+// DeleteRelationshipTarget removes one exact tuple, including subject_relation.
+func (s *relationshipStore) DeleteRelationshipTarget(ctx context.Context, resourceType, resourceID, relationName string, target relationship.SubjectRef) error {
+	const q = `DELETE FROM iam_relationships WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation AND subject_type = @subject_type AND subject_id = @subject_id AND subject_relation = @subject_relation`
+	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
+		"resource_type": resourceType, "resource_id": resourceID, "relation": relationName,
+		"subject_type": target.Type, "subject_id": target.ID, "subject_relation": target.Relation,
+	})
 	return err
 }
 

@@ -111,8 +111,10 @@ type deliveryQueue interface {
 // resolve-on-registration (a retry of the same invitation reuses the same ID; a
 // later invitation row for the same tuple gets a different ID), and a freshly
 // minted high-entropy value for direct-add (no invitation row exists). It is not
-// authority and the feature does not dictate how the host uses it. The remaining
-// fields are the ReBAC tuple: grant SubjectType/SubjectID the Relation on
+// authority and the feature does not dictate how the host uses it: guarded
+// adapters may derive durable mutation idempotency while baseline state adapters
+// may ignore it. The remaining fields are the ReBAC tuple: grant
+// SubjectType/SubjectID the Relation on
 // (ResourceType, ResourceID).
 type GrantInput struct {
 	OperationID  string

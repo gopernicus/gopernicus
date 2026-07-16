@@ -189,8 +189,10 @@ type AuditSink interface {
 	RecordMutation(ctx context.Context, event AuditEvent) error
 }
 
-// SystemMutator is the trusted, actor-free mutation capability: bootstrap,
-// invitation acceptance, controlled migrations, and explicit resource teardown.
+// SystemMutator is the trusted, actor-free HIGH-INTEGRITY mutation capability for
+// operations that opt into durable idempotency, revisions, invariants, receipts,
+// audit, or explicit resource teardown. Ordinary relationship state instead uses
+// the separately held RelationshipWriter.
 // It runs the repository's unguarded Apply path (no MutationGuard), so it is
 // deliberately held SEPARATELY from Service and passed by the composition root
 // only to trusted callers — it is NOT reachable from Service and HTTP handlers
@@ -395,16 +397,20 @@ func (m *SystemMutator) recordTeardown(ctx context.Context, cmd Command, reason 
 	}
 }
 
-// Components is the construction bundle NewService returns (ratified default #4):
-// the host-facing Service and the separately held, trusted SystemMutator. HTTP
-// handlers and ordinary composition receive only Service; SystemMutator is passed
-// deliberately, by the composition root, to trusted callers. SystemMutator is not
-// reachable from Service by design (a structural test pins it).
+// Components is the construction bundle NewService returns: the host-facing
+// Service, the separately held baseline RelationshipWriter, and the separately
+// held high-integrity SystemMutator. The composition root deliberately places
+// capabilities; none is recoverable from Service and Register mounts no routes.
 type Components struct {
 	// Service is the host-facing decision/list/actor-mutation surface.
 	Service *Service
+	// RelationshipWriter is the normal trusted application-side state writer. It
+	// is non-nil whenever the relationship kind is configured, independently of
+	// Repositories.Mutations.
+	RelationshipWriter *RelationshipWriter
 	// SystemMutator is the trusted, actor-free mutation capability, held apart from
-	// Service.
+	// Service. It is the advanced occurrence-oriented path and requires
+	// Repositories.Mutations when called.
 	SystemMutator *SystemMutator
 }
 

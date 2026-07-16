@@ -419,6 +419,53 @@ func (s *Service) CreateRelationships(ctx context.Context, relationships []relat
 	return s.store.CreateRelationships(ctx, out)
 }
 
+// SetRelationTargets validates and atomically reconciles one resource+relation
+// to the supplied target set. It is state based: no operation identity or replay
+// ledger participates, so A -> B -> A restores A. Duplicate targets are folded
+// before IDs are minted and before the store call.
+func (s *Service) SetRelationTargets(ctx context.Context, resource Resource, relationName string, targets []relationship.SubjectRef) error {
+	if err := relationship.ValidateRefField("resource type", resource.Type); err != nil {
+		return err
+	}
+	if err := relationship.ValidateRefField("resource id", resource.ID); err != nil {
+		return err
+	}
+	if err := relationship.ValidateRefField("relation", relationName); err != nil {
+		return err
+	}
+	if err := s.ValidateRelationName(resource.Type, relationName); err != nil {
+		return err
+	}
+
+	seen := make(map[relationship.SubjectRef]struct{}, len(targets))
+	rows := make([]relationship.CreateRelationship, 0, len(targets))
+	for _, target := range targets {
+		if _, ok := seen[target]; ok {
+			continue
+		}
+		seen[target] = struct{}{}
+		row := relationship.CreateRelationship{
+			ResourceType:    resource.Type,
+			ResourceID:      resource.ID,
+			Relation:        relationName,
+			SubjectType:     target.Type,
+			SubjectID:       target.ID,
+			SubjectRelation: target.Relation,
+		}
+		if err := row.Validate(); err != nil {
+			return fmt.Errorf("relationship %s:%s#%s@%s: %w",
+				row.ResourceType, row.ResourceID, row.Relation, row.Subject(), err)
+		}
+		if err := s.ValidateRelation(row.ResourceType, row.Relation, row.SubjectType, row.SubjectRelation); err != nil {
+			return fmt.Errorf("relationship %s:%s#%s@%s: %w",
+				row.ResourceType, row.ResourceID, row.Relation, row.Subject(), err)
+		}
+		row.RelationshipID = s.ids.MustGenerate()
+		rows = append(rows, row)
+	}
+	return s.store.SetRelationTargets(ctx, resource.Type, resource.ID, relationName, rows)
+}
+
 // CheckRelationExists is a raw existence probe for a direct tuple: it does not
 // consult the schema, traverse, or honor platform-admin/self bypasses. Use it
 // for dedup before CreateRelationships, never for permission decisions.
@@ -428,7 +475,32 @@ func (s *Service) CheckRelationExists(ctx context.Context, resourceType, resourc
 
 // DeleteResourceRelationships removes all relationships for a resource.
 func (s *Service) DeleteResourceRelationships(ctx context.Context, resourceType, resourceID string) error {
+	if err := relationship.ValidateRefField("resource type", resourceType); err != nil {
+		return err
+	}
+	if err := relationship.ValidateRefField("resource id", resourceID); err != nil {
+		return err
+	}
 	return s.store.DeleteResourceRelationships(ctx, resourceType, resourceID)
+}
+
+// DeleteRelationshipTarget removes one exact tuple, including a userset's
+// relation component. It deliberately performs structural rather than current
+// schema validation so a tuple rejected by a newer schema remains removable.
+func (s *Service) DeleteRelationshipTarget(ctx context.Context, resource Resource, relationName string, target relationship.SubjectRef) error {
+	if err := relationship.ValidateRefField("resource type", resource.Type); err != nil {
+		return err
+	}
+	if err := relationship.ValidateRefField("resource id", resource.ID); err != nil {
+		return err
+	}
+	if err := relationship.ValidateRefField("relation", relationName); err != nil {
+		return err
+	}
+	if err := target.Validate(); err != nil {
+		return err
+	}
+	return s.store.DeleteRelationshipTarget(ctx, resource.Type, resource.ID, relationName, target)
 }
 
 // DeleteRelationship removes a specific relationship tuple.
@@ -471,6 +543,20 @@ func (s *Service) ValidateRelation(resourceType, relation, subjectType, subjectR
 		subj = subjectType + "#" + subjectRelation
 	}
 	return fmt.Errorf("subject %q not allowed for %q on %q: %w", subj, relation, resourceType, ErrInvalidRelation)
+}
+
+// ValidateRelationName reports whether a resource type and relation exist in
+// the compiled schema. It is needed for an empty desired target set: there is no
+// subject row through which ValidateRelation could otherwise validate the key.
+func (s *Service) ValidateRelationName(resourceType, relationName string) error {
+	_, resourceTypeOK, relationOK := s.compiled.relationSubjects(resourceType, relationName)
+	if !resourceTypeOK {
+		return fmt.Errorf("unknown resource type %q: %w", resourceType, ErrInvalidRelation)
+	}
+	if !relationOK {
+		return fmt.Errorf("unknown relation %q on %q: %w", relationName, resourceType, ErrInvalidRelation)
+	}
+	return nil
 }
 
 // ValidateRelationships validates every relationship: first the structural
