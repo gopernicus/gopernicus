@@ -5,10 +5,12 @@ modules today: `sdk`; `integrations/{cryptids/bcrypt, cryptids/golang-jwt, crypt
 datastores/pgxdb, datastores/turso, email/sendgrid, filestorage/gcs,
 filestorage/s3, kvstores/goredis, oauth/github, oauth/google,
 notify/mailer, scheduling/robfig-cron, tracing/otel}`; `features/authentication`
-(+ `views/templ`, its bundled default views module — auth-v3 AV3-8.2, 2026-07-13),
-`features/authorization` (authorization-v1, 2026-07-09), `features/cms`
-(+ `views/templ`, its bundled default views module — feature-standard B2,
-2026-07-07), `features/events` (events-v1, 2026-07-08), `features/jobs`
+(+ `views/goth`, its bundled default views module — auth-v3 AV3-8.2, 2026-07-13;
+renamed from `views/templ` and re-implemented on `ui/goth` in ui-goth GOTH-7.2,
+2026-07-18), `features/authorization` (authorization-v1, 2026-07-09), `features/cms`
+(+ `views/goth`, its bundled default views module — feature-standard B2, 2026-07-07;
+renamed from `views/templ` and re-implemented on `ui/goth` in ui-goth GOTH-7.3,
+2026-07-18), `features/events` (events-v1, 2026-07-08), `features/jobs`
 (each feature + `stores/{turso,pgx}`); `examples/{cms,
 minimal, auth-cms, jobs-minimal}`; `workshop/gopernicus` (the scaffolding
 CLI — a `go install`-able tool, tagged like any importable module). Each importable module (everything except the four
@@ -28,12 +30,23 @@ sdk/v0.1.0
 integrations/datastores/turso/v0.1.0
 features/cms/v0.1.0
 features/cms/stores/turso/v0.1.0
+ui/goth/v0.1.0
 ```
 
 Each module's own `go.mod` `require` versions (e.g. `features/cms/stores/turso`
 requiring `sdk`) are bumped and tagged independently — a patch release of
 `sdk` does not force a release of every module that depends on it, only the
 ones whose `go.mod` is updated to require the new version.
+
+**UI-implementation modules (ui-goth GOTH-0.2, 2026-07-17).** The seventh module
+kind — a UI implementation under the top-level `ui/` family — tags the same
+nested way and is versioned independently (`ui/goth/v0.1.0`). Unlike the four
+`examples/*` hosts it is an **importable** module, so it IS tagged; its `go.mod`
+requires its own view/runtime libraries and `sdk`, never a feature/integration/
+example/workshop (guard G17). A feature's `views/goth` adapter module (when it
+lands) tags independently and requires its feature core + `sdk` + the pinned
+`ui/goth` tag. The `ui/goth` module itself is created at GOTH-1.1; no `ui/*` tag
+is cut this milestone.
 
 ## Preconditions before the first tag
 
@@ -77,6 +90,14 @@ Standard Go module semver rules apply per-module:
   and do not require a major bump by Go's own pre-release semantics; each
   module should still move to `v1.0.0` deliberately once its contract is
   considered stable, not accidentally on the first tag.
+
+**`ui/goth` `Requirements`-surface convention (ui-goth gate-b, 2026-07-18).** Any
+change to a `ui/goth` bundle's browser `Requirements` — a new CSP directive, a new
+required source, or a change to what a profile requires — is an **adopter-facing
+upgrade note even when it is only a semver patch**. Adopters map `Requirements` into
+their own CSP (see `ui/goth/README.md` §11.3), so a widened requirement that ships
+silently would break a host whose CSP no longer covers the kit's assets. Record it in
+the module's next-tag upgrade note below and tell hosts to re-derive their CSP header.
 
 ## Upgrade notes (keyed to each module's next tag)
 
@@ -150,8 +171,10 @@ Go-API break.
 middleware-consolidation (2026-07-11) rewrote `Service.RateLimitByIP`'s body to
 delegate to `ratelimiter.Middleware` with its exact prior signature and
 semantics; no exported surface changed. This is a **patch**, not a minor — the
-proof is auth's existing rate-limit tests passing unmodified. (Superseded for
-the same tag by the refresh change below, which forces a **breaking** bump.)
+proof is auth's existing rate-limit tests passing unmodified. (Superseded for the
+same tag by the refresh change below AND the auth-v3 identity cut, which force a
+**breaking** bump; the additive HTML resource-policy seam — ui-goth GOTH-0.4 — folds
+into that same breaking cut, see its note below.)
 
 ### features/authentication — next tag: JWT sessions + refresh rotation (BREAKING)
 
@@ -321,17 +344,82 @@ carries the reference composition: the structured `GrantInput` granter, a host
 resource-existence check, receipt-outcome mapping, and the relation-aware
 `InviteCheck`.
 
-### features/authentication/views/templ — next tag: NEW module (first tag)
+### features/authentication — next tag: optional HTML resource-policy seam (additive; folds into the auth-v3 breaking cut)
 
-auth-v3 (2026-07-13, AV3-8.2) added `features/authentication/views/templ`, the
-feature's bundled default HTML view module (the thirty-seventh workspace module),
-sibling to `features/cms/views/templ`. It carries the `a-h/templ`-rendered default
-auth pages so the feature core stays presentation-free (`Config.Views == nil` is
-API-only; a non-nil `Views` — the bundled module or a host's own — adds HTML
-without changing any JSON contract). This is a **new, standalone module getting its
-first tag**; it depends on `features/authentication` (for the exported view models)
-and is tagged independently like every other importable module. A host that renders
-its own views never imports it.
+ui-goth (2026-07-17, GOTH-0.4; Gate C accepted 2026-07-17) added a
+technology-neutral, feature-owned HTML resource-policy seam so a selected HTML view
+can declare the external styles, scripts, fonts, and images it needs. The whole
+surface is **additive** — every change is a new optional field/type, no existing
+symbol changed — so on its own it would floor at a **minor**; it folds into the
+already-**breaking** auth-v3 identity cut. Adopter-facing surface:
+
+- **New optional `Config.HTMLPolicy *HTMLResourcePolicy`.** `nil` (the default)
+  reproduces the historical asset-free CSP **byte-for-byte** (`default-src 'none';
+  base-uri 'none'; form-action 'self'; frame-ancestors 'none'; script-src
+  'nonce-…'|'none'`) — an upgrading host that leaves it unset sees no header change.
+- **New public types/constructor:** `HTMLResourcePolicy` (opaque, validated,
+  immutable), `HTMLResourceDirective`, `HTMLResourceKind`, the seven frozen
+  widenable-class constants (`HTMLScriptSrc`/`HTMLStyleSrc`/`HTMLImgSrc`/`HTMLFontSrc`/
+  `HTMLConnectSrc`/`HTMLMediaSrc`/`HTMLWorkerSrc`), `NewHTMLResourcePolicy` (validates
+  loudly, wrapping `sdk.ErrInvalidInput`), and `var ErrHTMLPolicyWithoutViews`.
+- **Behavior contract:** a policy only WIDENS the seven frozen resource classes and
+  can NEVER name, relax, or remove a fixed protection (the fixed CSP prefix and the
+  `Cache-Control`/`Referrer-Policy`/`X-Frame-Options`/`X-Content-Type-Options`
+  headers). A non-nil policy REPLACES the default `script-src` tail entirely, so a
+  policy that omits `HTMLScriptSrc` (or supplies it without `Nonce: true`) is
+  fail-closed on scripts. Setting `HTMLPolicy` with a nil `Views` is
+  `ErrHTMLPolicyWithoutViews` at construction (contradictory wiring, never a silent
+  no-op). The seam validates directive STRUCTURE, not source VALUES — source-value
+  hardening rests on the view adapter / host.
+- **No new dependency.** The feature core imports no templ, Alpine, HTMX, or
+  `ui/goth`; `HTMLResourcePolicy` is a plain value. The `ui/goth` authentication view
+  adapter that maps `goth.Bundle.Requirements()` into a policy lands in GOTH-7.2.
+
+### features/authentication/views/goth — next tag: NEW module (first tag; renamed from views/templ)
+
+auth-v3 (2026-07-13, AV3-8.2) added the feature's bundled default HTML view module
+(the thirty-seventh workspace module), sibling to `features/cms/views/goth`, as
+`features/authentication/views/templ`. ui-goth GOTH-7.2 (2026-07-18) **renamed the
+module path to `features/authentication/views/goth`** (Gate A's tag-sensitive rule —
+the untagged module is renamed in place, no compatibility shim) and re-implemented it
+on `ui/goth`: the default auth pages now render through the `ui/goth` primitives/
+components and the fingerprinted asset bundle. It carries a `HTMLPolicy()` that maps
+`goth.Bundle.Requirements()` into `authentication.HTMLResourcePolicy` (the host wires
+it into `Config.HTMLPolicy`), and it **externalizes the reset/magic-link
+fragment-token readers** into a served `fragment.js` (`FragmentScriptHandler`,
+`DefaultFragmentScriptPath`) so the pages run under a CSP whose `script-src` is
+`'self'` + the per-render nonce, with no inline script. Construction is now
+`New(bundle *goth.Bundle) (Views, error)` (was `New()`); a host that renders its own
+views never imports it. **Migration for an adopter on the old path:** update the
+import/require/replace from `.../views/templ` to `.../views/goth`, pass a
+`*goth.Bundle` to `New`, serve the bundle assets + `FragmentScriptHandler()`, and set
+`Config.HTMLPolicy = views.HTMLPolicy()`. The feature core stays presentation-free
+(`Config.Views == nil` is API-only; the feature core imports no templ or `ui/goth`).
+This is a **new, standalone module getting its first tag** (no prior tag existed on
+the old path); it depends on `features/authentication` and `ui/goth` and is tagged
+independently like every other importable module.
+
+### features/cms/views/goth — next tag: NEW module (first tag; renamed from views/templ)
+
+feature-standard B2 (2026-07-07) added the CMS feature's bundled default HTML view
+module `features/cms/views/templ`. ui-goth GOTH-7.3 (2026-07-18) **renamed the module
+path to `features/cms/views/goth`** (Gate A's tag-sensitive rule — the untagged module
+is renamed in place, no compatibility shim) and re-implemented it on `ui/goth`: the
+default CMS pages (public site chrome + admin management) now render through the
+`ui/goth` primitives/components and the fingerprinted asset bundle. The admin
+entries-list is HTMX-enhanced (the status filter, created_at sort toggle, and
+pagination swap the `#cms-entries-content` region via explicit `hx-*`, degrading to
+full-document no-JS reloads); the feature core reads the `HX-Request` header as a
+presentation hint only and gains no templ/`ui/goth` dependency. Construction is now
+`New(bundle *goth.Bundle) (Views, error)` (was `New()`); a host serves the bundle
+assets under the path it names. The CMS `Views` port gained one method
+(`EntriesListContent`, the HTMX content fragment) and `Pager` gained a `Status` field.
+**Migration for an adopter on the old path:** update the import/require/replace from
+`.../views/templ` to `.../views/goth`, pass a `*goth.Bundle` to `New` (embedding hosts
+build the bundle and serve its assets), and — if the host implements the `Views` port
+by hand rather than embedding the default — add `EntriesListContent`. This is a **new,
+standalone module getting its first tag** (no prior tag existed on the old path); it
+depends on `features/cms` and `ui/goth` and is tagged independently.
 
 ### integrations/datastores/turso — next tag: BEGIN IMMEDIATE write-intent transactions (patch, behavior fix)
 

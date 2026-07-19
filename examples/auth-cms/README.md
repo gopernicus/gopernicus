@@ -10,8 +10,9 @@ full v3 surface with zero infra — the `user_identifiers` model, the atomic
 challenge rail, the two-mode delivery runtime (generic **jobs** wiring /
 bounded **in_process** — both backed by in-memory stores here, so both are
 non-durable on this proof host), passwordless email/phone login, the
-step-up-gated credential/identifier management suite, the bundled default HTML/
-templ pages (`authtempl`) **with a real host page override** (`internal/authpages`),
+step-up-gated credential/identifier management suite, the bundled default HTML
+pages (the `ui/goth` adapter `authgoth`) **with a real host page override**
+(`internal/authpages`),
 and a `RuntimeMode=development` posture whose production-negative twin is proven
 hermetically.
 
@@ -264,12 +265,16 @@ surface is deferred with the AZADM packet.
 - **AllowedOrigins**: defaults to this host's own origin (`AUTH_ALLOWED_ORIGINS`)
   so same-origin browser forms pass the browser-safe gate and cross-site
   credentialed POSTs are refused.
-- **Views (HTML) + page override**: `Config.Views = authpages.New()` —
-  `internal/authpages` **embeds the bundled `authtempl.Views`** and overrides ONLY
-  `Login` with a Gopernicus-CMS-branded page rendered through stdlib
+- **Views (HTML) + page override**: `Config.Views = authpages.New(bundle)` —
+  `internal/authpages` **embeds the bundled `ui/goth` `authgoth.Views`** and overrides
+  ONLY `Login` with a Gopernicus-CMS-branded page rendered through stdlib
   `html/template` (no templ import in the host). Every other page is the promoted
-  bundled default; the override changes presentation ONLY (same endpoints, CSRF/
-  origin gate, PRG, status mapping, JSON contract).
+  ui/goth default (rendered from the fingerprinted assets the host serves under
+  `/assets/goth`); the override changes presentation ONLY (same endpoints, CSRF/
+  origin gate, PRG, status mapping, JSON contract). The embedded `authgoth.Views`
+  promotes `HTMLPolicy()`, which the host wires into `Config.HTMLPolicy` so the CSP
+  widens exactly enough for the ui/goth pages + the externalized `fragment.js`
+  (served via `authgoth.FragmentScriptHandler()`).
 - **EmailContentTemplates (distinct override system)**: `authpages.EmailOverride()`
   — a branded verification email BODY at `email.LayerApp`, the SECOND, DISTINCT
   override facility from `Views` (different field, different subsystem).
@@ -293,7 +298,7 @@ surface is deferred with the AZADM packet.
 | `Config.IdentifierKeyer` | HMAC (`AUTH_IDENTIFIER_KEY` or ephemeral) | production-required; dev falls back to per-instance SHA-256 |
 | `Config.Passwordless` | `[email, phone]` (`AUTH_PASSWORDLESS`) | empty → passwordless routes not registered |
 | `Config.PublicAuthBaseURL` | `…/auth/magic` (`AUTH_PUBLIC_BASE_URL`) | REQUIRED once a link flow is enabled; production requires HTTPS |
-| `Config.Views` | `authpages.New()` (branded-Login override of `authtempl.Views`) | nil → API-only (no HTML pages, no templ in the graph) |
+| `Config.Views` | `authpages.New(bundle)` (branded-Login override of the ui/goth `authgoth.Views`) | nil → API-only (no HTML pages, no templ/`ui/goth` in the graph) |
 | `Config.EmailContentTemplates` | `authpages.EmailOverride()` | empty → bundled LayerCore email bodies |
 | `Repositories.SecurityEvents` | authmem | no audit trail (recording site is a no-op) |
 | `AUTH_DEBUG` | off by default | `/debug/security-events` not registered (404) |

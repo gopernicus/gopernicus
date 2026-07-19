@@ -91,7 +91,7 @@ func mountHTML(r feature.RouteRegistrar, h *handlers, browserSafe web.Middleware
 // injected Views port. nonce is the model's CSP nonce (empty → the fail-safe
 // no-script CSP).
 func (h *handlers) renderPage(w http.ResponseWriter, r *http.Request, nonce string, page web.Renderer) {
-	writeHTMLSecurity(w, nonce)
+	writeHTMLSecurity(w, h.htmlPolicy, nonce)
 	web.Render(r.Context(), w, http.StatusOK, page)
 }
 
@@ -552,7 +552,7 @@ func (h *handlers) populateIdentifierEdit(ctx context.Context, userID, id string
 // generic so it never distinguishes an unknown/unverified account (design §9.2).
 func (h *handlers) renderError(w http.ResponseWriter, r *http.Request, status int, message string) {
 	pc := h.newPageContext(w)
-	writeHTMLSecurity(w, pc.CSPNonce)
+	writeHTMLSecurity(w, h.htmlPolicy, pc.CSPNonce)
 	web.Render(r.Context(), w, status, h.views.Error(ErrorPage{
 		PageContext: pc,
 		Status:      status,

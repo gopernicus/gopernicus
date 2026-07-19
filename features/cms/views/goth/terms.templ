@@ -1,0 +1,72 @@
+package goth
+
+import (
+	"github.com/gopernicus/gopernicus/features/cms"
+	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
+	"github.com/gopernicus/gopernicus/ui/goth/components/forms"
+	"github.com/gopernicus/gopernicus/ui/goth/components/layouts"
+	"github.com/gopernicus/gopernicus/ui/goth/primitives"
+)
+
+// termsListBody is the taxonomy admin index: categories and tags, each with an
+// edit link and a delete form (a real POST form — a mutation always rides a form,
+// so a hidden CSRF input suffices where a host adds CSRF).
+templ termsListBody(categories, tags []taxonomy.Term) {
+	@layouts.PageHeader(layouts.PageHeaderProps{Title: "Taxonomy"})
+	<section data-slot="cms-terms-categories">
+		<h2>Categories <a href="/terms/new?kind=category">+ new</a></h2>
+		@termItems(categories)
+	</section>
+	<section data-slot="cms-terms-tags">
+		<h2>Tags <a href="/terms/new?kind=tag">+ new</a></h2>
+		@termItems(tags)
+	</section>
+}
+
+templ termItems(terms []taxonomy.Term) {
+	if len(terms) == 0 {
+		<p>None yet.</p>
+	} else {
+		<ul data-slot="cms-term-list">
+			for _, t := range terms {
+				<li>
+					<a href={ templ.SafeURL("/" + string(t.Kind) + "/" + t.Slug) }>{ t.Name }</a>
+					<span>({ t.Slug })</span>
+					<a href={ templ.SafeURL("/terms/" + t.ID + "/edit") }>edit</a>
+					<form method="post" action={ templ.SafeURL("/terms/" + t.ID + "/delete") } data-slot="cms-term-delete">
+						@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit, Variant: primitives.ButtonDestructive, Size: primitives.ButtonSizeSmall}) {
+							delete
+						}
+					</form>
+				</li>
+			}
+		</ul>
+	}
+}
+
+// termFormBody is the create/edit taxonomy term form.
+templ termFormBody(m cms.TermFormModel) {
+	@layouts.PageHeader(layouts.PageHeaderProps{Title: m.Heading})
+	@formError(m.FormError)
+	<form method="post" action={ templ.SafeURL(m.Action) } data-slot="cms-term-form">
+		if m.Kind != "" {
+			<input type="hidden" name="kind" value={ m.Kind }/>
+		}
+		@forms.FormField(forms.FormFieldProps{Label: "Name", For: "name"}) {
+			@primitives.Input(primitives.InputProps{Base: primitives.Base{ID: "name"}, Name: "name", Value: m.Name})
+		}
+		if m.Kind == "category" {
+			@forms.FormField(forms.FormFieldProps{Label: "Parent category ID", For: "parent_id", Description: "Optional."}) {
+				@primitives.Input(primitives.InputProps{Base: primitives.Base{ID: "parent_id"}, Name: "parent_id", Value: m.ParentID})
+			}
+		}
+		@forms.FormActions(forms.FormActionsProps{}) {
+			@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit}) {
+				Save
+			}
+			@primitives.Button(primitives.ButtonProps{Variant: primitives.ButtonGhost, URL: parseURL("/terms")}) {
+				Cancel
+			}
+		}
+	</form>
+}

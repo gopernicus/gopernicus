@@ -1,0 +1,8 @@
+package primitives
+
+// Textarea (P25, family F1) renders a native <textarea>. Its value is the
+// element's text content, so it submits natively with no JavaScript. Autosize is
+// an enhancement boundary the primitive does not force.
+templ Textarea(p TextareaProps) {
+	<textarea class={ textareaClass(p) } { textareaAttrs(p)... }>{ p.Value }</textarea>
+}

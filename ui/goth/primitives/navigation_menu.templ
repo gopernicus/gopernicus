@@ -1,0 +1,58 @@
+package primitives
+
+// Navigation Menu (P44, family F4). See navigation_menu.go for the link-first,
+// native-<details> no-JS baseline (no controller). The caller composes a
+// NavigationMenuList of NavigationMenuItem entries; each item is either a direct
+// NavigationMenuLink or a NavigationMenuSub disclosure of links.
+templ NavigationMenu(p NavigationMenuProps) {
+	<nav class={ classNames("goth-navigation-menu", p.Class) } { navigationMenuAttrs(p)... }>
+		{ children... }
+	</nav>
+}
+
+templ NavigationMenuList(p NavigationMenuListProps) {
+	<ul class={ classNames("goth-navigation-menu-list", p.Class) } { navigationMenuListAttrs(p.Base)... }>
+		{ children... }
+	</ul>
+}
+
+templ NavigationMenuItem(p NavigationMenuItemProps) {
+	<li class={ classNames("goth-navigation-menu-item", p.Class) } { navigationMenuItemAttrs(p.Base)... }>
+		{ children... }
+	</li>
+}
+
+templ NavigationMenuLink(p NavigationMenuLinkProps) {
+	if p.URL.IsZero() {
+		<a class={ classNames("goth-navigation-menu-link", p.Class) } { navigationMenuLinkAttrs(p)... }>
+			{ children... }
+		</a>
+	} else {
+		<a href={ p.URL.SafeURL() } class={ classNames("goth-navigation-menu-link", p.Class) } { navigationMenuLinkAttrs(p)... }>
+			{ children... }
+		</a>
+	}
+}
+
+// NavigationMenuSub is a native <details> disclosure: a <summary> trigger and a
+// panel of links, all operable with no JavaScript.
+templ NavigationMenuSub(p NavigationMenuSubProps) {
+	<details class={ classNames("goth-navigation-menu-sub", p.Class) } { navigationMenuSubAttrs(p)... }>
+		{ children... }
+	</details>
+}
+
+templ NavigationMenuTrigger(p NavigationMenuTriggerProps) {
+	<summary class={ classNames("goth-navigation-menu-trigger", p.Class) } { navigationMenuTriggerAttrs(p.Base)... }>
+		{ children... }
+		<span class="goth-navigation-menu-chevron" aria-hidden="true">
+			@chevronDownGlyph()
+		</span>
+	</summary>
+}
+
+templ NavigationMenuContent(p NavigationMenuContentProps) {
+	<div class={ classNames("goth-navigation-menu-content", p.Class) } { navigationMenuContentAttrs(p.Base)... }>
+		{ children... }
+	</div>
+}

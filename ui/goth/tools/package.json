@@ -1,0 +1,20 @@
+{
+  "name": "@gopernicus/goth-tools",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Repository-local, exact-pinned asset build toolchain for ui/goth. Not shipped to Go consumers; the committed Go module embeds only the compiled dist outputs.",
+  "type": "module",
+  "engines": {
+    "node": "24.0.1",
+    "npm": "11.3.0"
+  },
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "@alpinejs/csp": "3.15.12",
+    "alpinejs": "3.15.12",
+    "esbuild": "0.28.1",
+    "htmx.org": "2.0.10"
+  }
+}

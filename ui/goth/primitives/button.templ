@@ -1,0 +1,42 @@
+package primitives
+
+// Button (P06, family F2) renders a native <button> or, when ButtonProps.URL is
+// set, an anchor styled as a button. The principal label is templ children;
+// optional leading/trailing icon slots and a loading spinner arrange around it in
+// a fixed layout the primitive owns. data-slot="button"; data-variant/data-size
+// are the stable emitted surface.
+templ Button(p ButtonProps) {
+	if p.renderAsLink() {
+		<a href={ p.URL.SafeURL() } class={ buttonClass(p) } { buttonAttrs(p)... }>
+			@buttonInner(p) {
+				{ children... }
+			}
+		</a>
+	} else {
+		<button class={ buttonClass(p) } { buttonAttrs(p)... }>
+			@buttonInner(p) {
+				{ children... }
+			}
+		</button>
+	}
+}
+
+// buttonInner arranges the optional leading glyph (or a decorative loading
+// spinner), the principal label (templ children), and the optional trailing
+// glyph. Icon slots are aria-hidden decoration; the accessible name comes from
+// the visible label or ButtonProps.Label.
+templ buttonInner(p ButtonProps) {
+	if p.Loading {
+		@Spinner(SpinnerProps{Decorative: true, Base: Base{Class: "goth-button-spinner"}})
+	} else if p.LeadingIcon != nil {
+		<span data-slot="button-icon" aria-hidden="true">
+			@p.LeadingIcon
+		</span>
+	}
+	{ children... }
+	if p.TrailingIcon != nil {
+		<span data-slot="button-icon" aria-hidden="true">
+			@p.TrailingIcon
+		</span>
+	}
+}

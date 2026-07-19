@@ -1,0 +1,9 @@
+package primitives
+
+// Slider (P32) renders a single-thumb native <input type="range">. It submits its
+// value natively with no JavaScript; the track and thumb are drawn by component
+// CSS. No controller is bound — the native range keyboard model (arrows, Home/End,
+// PageUp/PageDown) and native focus are the interaction model.
+templ Slider(p SliderProps) {
+	<input class={ sliderClass(p) } { sliderAttrs(p)... }/>
+}

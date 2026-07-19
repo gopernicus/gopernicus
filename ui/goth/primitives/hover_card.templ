@@ -1,0 +1,32 @@
+package primitives
+
+// HoverCard (P42, family F4). See hover_card.go for the no-JS baseline (CSS hover/
+// focus-within reveal) and the gothHoverCard enhancement. The caller composes
+// HoverCardTrigger and HoverCardContent as children.
+templ HoverCard(p HoverCardProps) {
+	<div class={ hoverCardClass(p) } { hoverCardAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// HoverCardTrigger renders an anchor when URL is set (links remain links) and a
+// button otherwise. Either way it is focusable, so a keyboard user opens the card.
+templ HoverCardTrigger(p HoverCardTriggerProps) {
+	if p.URL.IsZero() {
+		<button class={ classNames("goth-hover-card-trigger", p.Class) } { hoverCardTriggerButtonAttrs(p)... }>
+			{ children... }
+		</button>
+	} else {
+		<a href={ p.URL.SafeURL() } class={ classNames("goth-hover-card-trigger", p.Class) } { hoverCardTriggerLinkAttrs(p)... }>
+			{ children... }
+		</a>
+	}
+}
+
+// HoverCardContent is the floating panel. Its content may be interactive; the
+// controller does not trap focus and pointer travel into it is grace-timed.
+templ HoverCardContent(p HoverCardContentProps) {
+	<div class={ classNames("goth-hover-card-content", p.Class) } { hoverCardContentAttrs(p)... }>
+		{ children... }
+	</div>
+}

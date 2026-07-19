@@ -46,6 +46,12 @@ type handlers struct {
 	// pages render through it. The core never imports templ; this is a technology-
 	// neutral web.Renderer port a host (or the bundled views/templ module) satisfies.
 	views Views
+	// htmlPolicy is the optional, technology-neutral HTML resource policy (design
+	// §9.2, GOTH-0.4) writeHTMLSecurity applies to every HTML page and redirect. Nil
+	// → the historical asset-free CSP (script-src nonce-only); non-nil → the fixed
+	// protections plus the policy's validated widening resource directives. It only
+	// widens; it can never remove a fixed protection.
+	htmlPolicy *HTMLResourcePolicy
 }
 
 // Mount registers the auth feature's routes on the registrar. The route surface
@@ -63,9 +69,9 @@ type handlers struct {
 // surface (design §9.2) is registered only when a Views port is wired (views !=
 // nil): mountHTML adds the HTML pages while the JSON contracts stay byte-compatible.
 // A nil views leaves the feature API-only, uniformly.
-func Mount(r feature.RouteRegistrar, svc authService, inv InvitationService, inviteCheck invitationsvc.InviteCheck, listStrategy crud.Strategy, mutation MutationSecurity, views Views) {
+func Mount(r feature.RouteRegistrar, svc authService, inv InvitationService, inviteCheck invitationsvc.InviteCheck, listStrategy crud.Strategy, mutation MutationSecurity, views Views, htmlPolicy *HTMLResourcePolicy) {
 	r = clientInfoRegistrar{inner: r}
-	h := &handlers{svc: svc, inv: inv, inviteCheck: inviteCheck, listStrategy: listStrategy, mutation: mutation, views: views}
+	h := &handlers{svc: svc, inv: inv, inviteCheck: inviteCheck, listStrategy: listStrategy, mutation: mutation, views: views, htmlPolicy: htmlPolicy}
 	r.Handle("POST", "/auth/register", h.register)
 	r.Handle("POST", "/auth/login", h.login)
 	r.Handle("POST", "/auth/verify", h.verify)

@@ -1,0 +1,30 @@
+package primitives
+
+// Collapsible (P29, family F4). Native <details> is the no-JS baseline: the
+// summary toggles the region with the mouse or keyboard and native focus, with no
+// script. x-data="gothCollapse" enhances it (data-state + goth:open/goth:close);
+// the enhancement is additive and the primitive is fully usable without it.
+templ Collapsible(p CollapsibleProps) {
+	<details class={ collapsibleClass(p) } { collapsibleAttrs(p)... }>
+		{ children... }
+	</details>
+}
+
+// CollapsibleTrigger is the native <summary>. It is keyboard- and pointer-operable
+// with no JavaScript.
+templ CollapsibleTrigger(p CollapsibleTriggerProps) {
+	<summary class={ collapsiblePartClass(p.Base, "goth-collapsible-trigger") } { collapsiblePartAttrs(p.Base, "collapsible-trigger")... }>
+		<span data-slot="collapsible-label">
+			{ children... }
+		</span>
+		<span class="goth-collapsible-chevron" data-slot="collapsible-chevron" aria-hidden="true">
+			@chevronDownGlyph()
+		</span>
+	</summary>
+}
+
+templ CollapsibleContent(p CollapsibleContentProps) {
+	<div class={ collapsiblePartClass(p.Base, "goth-collapsible-content") } { collapsiblePartAttrs(p.Base, "collapsible-content")... }>
+		{ children... }
+	</div>
+}

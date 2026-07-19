@@ -34,7 +34,7 @@ features/authorization/stores/turso/ authorization's Turso store adapter, its ow
 features/cms/                       the CMS hexagon — datastore-free; domain/ public rim, internal/ interior
 features/cms/stores/pgx/            the CMS feature's pgx store adapter, its own module
 features/cms/stores/turso/          the CMS feature's Turso store adapter, its own module
-features/cms/views/templ/           cms's bundled default views (templ) — the FS3 sibling, its own module
+features/cms/views/goth/            cms's bundled default views (ui/goth) — the FS3 sibling, its own module
 features/events/                    durable outbox + SSE gateway hexagon — datastore-free; domain/ public rim
 features/events/stores/pgx/         events' pgx store adapter, its own module
 features/events/stores/turso/       events' Turso store adapter, its own module
@@ -72,8 +72,18 @@ tagged versions, not the workspace.
   surface, and the shipped HTTP layer is an optional adapter over it (cms
   still takes the earlier `Register(mount, repos, cfg)` form until its
   public Service lands).
+- **A UI implementation is a reusable presentation system, not a feature.**
+  The top-level `ui/` family (`ui/goth`, later `ui/react`/`ui/vue`) is the
+  seventh module kind: it owns view-library dependencies, semantic tokens,
+  components, controllers, and assets, but owns no schema and no routes. It may
+  require its own view/runtime libraries and `sdk`, and never imports a feature,
+  integration, example, or workshop package; a feature reaches it only through
+  that feature's own `views/<pkg>` adapter module. See ARCHITECTURE.md for the
+  dependency arrows.
 - **Dependencies point inward.** `examples` → `features`/`integrations` →
-  `sdk`, never the reverse. `make check`'s thirteen layering guards enforce this.
+  `sdk`, never the reverse; a `ui/` implementation depends only on its own
+  view/runtime libraries and `sdk`. `make check`'s seventeen layering guards
+  enforce this.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full detail, including the
 feature contract (`sdk/feature`), the app-hexagon pattern (`internal/logic`),
@@ -96,6 +106,6 @@ make run                # or: cd examples/cms && go run ./cmd/server
 ```
 
 From the repo root, `make check` builds, vets, and tests all thirty-six modules
-and runs the thirteen layering guards; `make test-stores` runs the live dialect
+and runs the seventeen layering guards; `make test-stores` runs the live dialect
 conformance suites (expects `POSTGRES_TEST_DSN` / `TURSO_*`). See [examples/cms/README.md](examples/cms/README.md)
 for that host's full env/make-target reference.

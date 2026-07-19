@@ -141,7 +141,7 @@ func newMachineHandler(t *testing.T) http.Handler {
 		TokenSigner:     newFakeSigner(),
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, nil, nil, crud.StrategyCursor, MutationSecurity{}, nil)
+	Mount(h, svc, nil, nil, crud.StrategyCursor, MutationSecurity{}, nil, nil)
 	return h
 }
 

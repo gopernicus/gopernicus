@@ -14,7 +14,7 @@ import (
 
 // stubViews is a package-local marker implementation of the Views port for the
 // handler tests. Its renderers emit just the data/markers each handler test
-// asserts — the real bundled chrome is tested in features/cms/views/templ. It is
+// asserts — the real bundled chrome is tested in features/cms/views/goth. It is
 // the seam a host would fill; embedding it and overriding one method is the
 // blessed partial-override path (see TestViews_HostOverridesHome).
 type stubViews struct{}
@@ -54,6 +54,10 @@ func (stubViews) MenuNav(_ menus.Menu, items []menus.MenuItem) web.Renderer {
 
 func (stubViews) EntriesList(heading, _, _ string, _ []EntryListItem, _ Pager) web.Renderer {
 	return stringRenderer("STUB-ENTRIES:" + heading)
+}
+
+func (stubViews) EntriesListContent(heading, _, _ string, _ []EntryListItem, _ Pager) web.Renderer {
+	return stringRenderer("STUB-ENTRIES-CONTENT:" + heading)
 }
 
 func (stubViews) EntryForm(m EntryFormModel) web.Renderer {

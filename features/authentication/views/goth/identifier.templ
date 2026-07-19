@@ -1,0 +1,117 @@
+package goth
+
+import (
+	"github.com/gopernicus/gopernicus/features/authentication"
+	"github.com/gopernicus/gopernicus/ui/goth/components/forms"
+	"github.com/gopernicus/gopernicus/ui/goth/primitives"
+)
+
+// identifierFormBody renders the add/confirm/edit identifier form. On add the entered
+// address is echoed (a contact address, not a secret) and the form starts the
+// ownership-proof flow; on confirm a one-time code proves ownership of the new address
+// (never echoed); on edit the existing address is shown masked and only the role
+// selection is editable (with a remove control). No ownership code is echoed.
+templ identifierFormBody(m authentication.IdentifierFormPage) {
+	if m.Mode == "edit" {
+		@shell("Manage identifier", "") {
+			@message(m.PageContext)
+			@errorSummary(m.PageContext)
+			if m.MaskedValue != "" {
+				<p>{ m.Kind }: { m.MaskedValue }</p>
+			}
+			<form method="post" action={ templ.SafeURL(identifierEditAction(m.ID)) } autocomplete="off">
+				@csrfField(m.PageContext)
+				<input type="hidden" name="id" value={ m.ID }/>
+				@usesFieldset(m)
+				@forms.FormActions(forms.FormActionsProps{}) {
+					@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit}) {
+						Save changes
+					}
+				}
+			</form>
+			<form method="post" action={ templ.SafeURL(identifierEditAction(m.ID)) } autocomplete="off">
+				@csrfField(m.PageContext)
+				<input type="hidden" name="id" value={ m.ID }/>
+				<input type="hidden" name="action" value="remove"/>
+				@forms.FormActions(forms.FormActionsProps{}) {
+					@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit, Variant: primitives.ButtonDestructive}) {
+						Remove this identifier
+					}
+				}
+			</form>
+			<nav class="goth-auth-links" data-slot="auth-links">
+				<p><a href="/auth/account">Back to account security</a></p>
+			</nav>
+		}
+	} else if m.Mode == "confirm" {
+		@shell("Confirm your new identifier", "") {
+			@message(m.PageContext)
+			@errorSummary(m.PageContext)
+			<p>Enter the code we sent to your new { identifierLabel(m.Kind) } to confirm it.</p>
+			<form method="post" action={ templ.SafeURL(confirmIdentifierAction(m.Kind)) } autocomplete="off">
+				@csrfField(m.PageContext)
+				if m.Kind != "" {
+					<input type="hidden" name="kind" value={ m.Kind }/>
+				}
+				@forms.FormField(forms.FormFieldProps{Label: "One-time code", For: "code", Required: true, Error: fieldErrorText(m.PageContext, "code")}) {
+					@primitives.Input(primitives.InputProps{
+						Base:     primitives.Base{ID: "code", Attributes: codeFieldAttrs("code")},
+						Type:     primitives.InputText,
+						Name:     "code",
+						Required: true,
+					})
+				}
+				@forms.FormActions(forms.FormActionsProps{}) {
+					@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit}) {
+						Confirm
+					}
+				}
+			</form>
+			<nav class="goth-auth-links" data-slot="auth-links">
+				<p><a href="/auth/account">Back to account security</a></p>
+			</nav>
+		}
+	} else {
+		@shell("Add an identifier", "") {
+			@message(m.PageContext)
+			@errorSummary(m.PageContext)
+			<form method="post" action={ templ.SafeURL(identifierAddAction(m.Kind)) } autocomplete="on">
+				@csrfField(m.PageContext)
+				if m.Kind != "" {
+					<input type="hidden" name="kind" value={ m.Kind }/>
+				}
+				@forms.FormField(forms.FormFieldProps{Label: identifierLabel(m.Kind), For: "value", Required: true, Error: fieldErrorText(m.PageContext, "value")}) {
+					@primitives.Input(primitives.InputProps{
+						Base:     primitives.Base{ID: "value", Attributes: identifierFieldAttrs(m.Kind, "value")},
+						Type:     identifierInputType(m.Kind),
+						Name:     "value",
+						Value:    m.Value,
+						Required: true,
+					})
+				}
+				@usesFieldset(m)
+				@forms.FormActions(forms.FormActionsProps{}) {
+					@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit}) {
+						Send verification
+					}
+				}
+			</form>
+			<nav class="goth-auth-links" data-slot="auth-links">
+				<p><a href="/auth/account">Back to account security</a></p>
+			</nav>
+		}
+	}
+}
+
+// usesFieldset renders the login/recovery/notification role checkboxes and the
+// make-primary control shared by the add and edit forms as a native fieldset (no
+// controller; submits with no JavaScript).
+templ usesFieldset(m authentication.IdentifierFormPage) {
+	<fieldset data-slot="identifier-uses">
+		<legend>Uses</legend>
+		<label><input type="checkbox" name="login" value="true" checked?={ m.LoginEnabled }/> Sign in</label><br/>
+		<label><input type="checkbox" name="recovery" value="true" checked?={ m.RecoveryEnabled }/> Account recovery</label><br/>
+		<label><input type="checkbox" name="notification" value="true" checked?={ m.NotificationEnabled }/> Notifications</label><br/>
+		<label><input type="checkbox" name="primary" value="true" checked?={ m.MakePrimary }/> Make primary</label>
+	</fieldset>
+}

@@ -484,6 +484,65 @@ type InProcessDeliveryConfig struct {
 	StatusTTL time.Duration
 }
 
+// HTMLResourcePolicy is the technology-neutral, validated HTML resource policy a host
+// hands the feature through Config.HTMLPolicy (design §9.2, GOTH-0.4). It carries a
+// deterministically ordered set of ADDITIONAL Content-Security-Policy resource
+// directives (script, style, image, font, connect, media, worker) so a selected HTML
+// view can load the assets it needs. It WIDENS resource loading and can never remove
+// the fixed protections every auth HTML page and redirect carries (no-store,
+// no-referrer, X-Frame-Options: DENY, X-Content-Type-Options: nosniff, and the CSP
+// default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
+// prefix). A nil *HTMLResourcePolicy selects the historical asset-free CSP exactly.
+// The feature core never imports templ or ui/goth: this is a plain, feature-owned
+// value the future ui/goth authentication adapter constructs from
+// goth.Bundle.Requirements(). Aliased from the internal inbound package (the
+// MutationSecurity precedent) so a host names one type across the public and internal
+// surfaces.
+type HTMLResourcePolicy = inbound.HTMLResourcePolicy
+
+// HTMLResourceDirective is one requested CSP resource directive — a Kind, its Sources,
+// and an optional per-render Nonce — passed to NewHTMLResourcePolicy. Aliased from the
+// internal inbound package per the HTMLResourcePolicy precedent.
+type HTMLResourceDirective = inbound.HTMLResourceDirective
+
+// HTMLResourceKind is the CSP resource class an HTMLResourceDirective widens. Only the
+// frozen widenable classes below are valid; the fixed protection directives are not
+// members, so a policy structurally cannot name them. Aliased from the internal inbound
+// package.
+type HTMLResourceKind = inbound.HTMLResourceKind
+
+// The frozen widenable CSP resource classes (GOTH-0.4): script, style, image, font,
+// connect, media, worker. Re-exported from the internal inbound package so a host
+// builds directives without importing internal.
+const (
+	HTMLScriptSrc  = inbound.HTMLScriptSrc
+	HTMLStyleSrc   = inbound.HTMLStyleSrc
+	HTMLImgSrc     = inbound.HTMLImgSrc
+	HTMLFontSrc    = inbound.HTMLFontSrc
+	HTMLConnectSrc = inbound.HTMLConnectSrc
+	HTMLMediaSrc   = inbound.HTMLMediaSrc
+	HTMLWorkerSrc  = inbound.HTMLWorkerSrc
+)
+
+// ErrHTMLPolicyWithoutViews is returned by NewService/Register when Config.HTMLPolicy
+// is set while Config.Views is nil (design §9.2, GOTH-0.4). The HTML surface is gated
+// entirely on Views: with a nil Views no HTML page renders, so a resource policy that
+// can never be consulted is a contradictory wiring giving false confidence. Matching
+// the ErrInviteCheckWithoutGranter / partial-wiring posture, it degrades LOUDLY at
+// construction rather than silently ignoring the dead policy.
+var ErrHTMLPolicyWithoutViews = errors.New("auth: Config.HTMLPolicy set but Config.Views is nil (no HTML surface)")
+
+// NewHTMLResourcePolicy validates the requested resource directives and returns an
+// immutable HTMLResourcePolicy, or an error wrapping sdk.ErrInvalidInput for an
+// unknown/fixed directive key, a directive with neither a source nor a nonce, an empty
+// source, or a source carrying a control character, whitespace, ';', or ',' (the
+// header-injection guard). It is the feature-owned constructor a host or the ui/goth
+// authentication adapter calls to build Config.HTMLPolicy. It re-exports the internal
+// inbound constructor so a host never imports internal.
+func NewHTMLResourcePolicy(directives ...HTMLResourceDirective) (*HTMLResourcePolicy, error) {
+	return inbound.NewHTMLResourcePolicy(directives...)
+}
+
 // Config carries host-provided collaborators. The Hasher and Mailer are
 // REQUIRED (nil → ErrHasherRequired / ErrMailerRequired at construction);
 // everything else is optional with a safe default.
@@ -748,6 +807,23 @@ type Config struct {
 	// instead satisfy the port with html/template via sdk/foundation/web.Template.
 	Views Views
 
+	// HTMLPolicy is the OPTIONAL, technology-neutral HTML resource policy (design
+	// §9.2, GOTH-0.4). Nil (default) → the historical asset-free CSP: every auth HTML
+	// page and redirect keeps script-src nonce-only with no external asset origins,
+	// the secure default. Non-nil → the SAME fixed protections plus the policy's
+	// validated widening resource directives (script/style/image/font/connect/media/
+	// worker), so a selected HTML view can load the styles, scripts, fonts, and images
+	// it declares. A policy only WIDENS; it can never remove a fixed protection
+	// (no-store, no-referrer, X-Frame-Options: DENY, X-Content-Type-Options: nosniff,
+	// default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none').
+	// Build it with NewHTMLResourcePolicy (validated at construction); the ui/goth
+	// authentication adapter maps goth.Bundle.Requirements() into one. Setting
+	// HTMLPolicy while Views is nil is ErrHTMLPolicyWithoutViews at construction — a
+	// policy for an absent HTML surface is contradictory wiring, never a silent no-op.
+	// The feature core never imports templ or ui/goth: HTMLResourcePolicy is a plain
+	// feature-owned value.
+	HTMLPolicy *HTMLResourcePolicy
+
 	// EmailContentTemplates registers host overrides of the feature's default email
 	// content at email.LayerApp (design §6.2) — the DISTINCT second override system
 	// alongside Views (which overrides HTML pages). Empty (default) → the bundled
@@ -810,6 +886,11 @@ type Service struct {
 	// views is the optional HTML rendering port (design §9.2). Nil → the shipped
 	// adapter mounts the JSON API only; non-nil → it also mounts the HTML GET pages.
 	views inbound.Views
+	// htmlPolicy is the optional HTML resource policy the shipped adapter applies to
+	// every HTML page and redirect (design §9.2, GOTH-0.4). Nil → the historical
+	// asset-free CSP; non-nil → the fixed protections plus the policy's widening
+	// resource directives. Threaded Register → Mount → handlers.
+	htmlPolicy *inbound.HTMLResourcePolicy
 }
 
 // DeliveryStatus is the read-only delivery-status projection a session-gated caller
@@ -918,6 +999,14 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 	}
 	if cfg.Granter == nil && cfg.InviteCheck != nil {
 		return nil, ErrInviteCheckWithoutGranter
+	}
+	// A resource policy is only ever consulted by the HTML surface, which is gated on
+	// Views (design §9.2, GOTH-0.4). Setting HTMLPolicy with a nil Views is a policy
+	// that can never render — the contradictory-wiring error (the
+	// ErrInviteCheckWithoutGranter posture), so a dead policy never gives false
+	// confidence.
+	if cfg.HTMLPolicy != nil && cfg.Views == nil {
+		return nil, ErrHTMLPolicyWithoutViews
 	}
 	// Enable-time validation for the challenge subsystem (design §3.3): wiring the
 	// Challenges repository enables the atomic secret rail, which REQUIRES a
@@ -1299,7 +1388,8 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 			AllowedOrigins:    cfg.AllowedOrigins,
 			SessionCookieName: authService.SessionCookieName(),
 		},
-		views: cfg.Views,
+		views:      cfg.Views,
+		htmlPolicy: cfg.HTMLPolicy,
 	}, nil
 }
 
@@ -1693,6 +1783,6 @@ func (s *Service) Register(m feature.Mount) error {
 	if s.inv != nil {
 		inv = s.inv
 	}
-	inbound.Mount(m.Router, s.svc, inv, s.inviteCheck, s.listStrategy, s.mutationSecurity, s.views)
+	inbound.Mount(m.Router, s.svc, inv, s.inviteCheck, s.listStrategy, s.mutationSecurity, s.views, s.htmlPolicy)
 	return nil
 }

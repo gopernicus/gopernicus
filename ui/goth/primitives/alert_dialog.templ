@@ -1,0 +1,60 @@
+package primitives
+
+// Alert Dialog (P37, family F4). See alert_dialog.go for the modal/decision
+// contract (always modal, no outside dismiss, Escape cancels) and ARIA rules.
+templ AlertDialog(p AlertDialogProps) {
+	<div class={ alertDialogClass(p) } { alertDialogAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+templ AlertDialogTrigger(p AlertDialogTriggerProps) {
+	<button class={ classNames("goth-alert-dialog-trigger", p.Class) } { overlayTriggerAttrs(p.Base, "dialog")... }>
+		{ children... }
+	</button>
+}
+
+templ AlertDialogContent(p AlertDialogContentProps) {
+	<div class="goth-overlay" data-slot="overlay">
+		<div class="goth-overlay-scrim" data-slot="scrim" aria-hidden="true"></div>
+		<div class={ classNames("goth-overlay-panel", p.Class) } { alertDialogContentAttrs(p)... }>
+			{ children... }
+		</div>
+	</div>
+}
+
+templ AlertDialogHeader(p AlertDialogHeaderProps) {
+	<div class={ classNames("goth-alert-dialog-header", p.Class) } { overlayPartAttrs(p.Base, "header")... }>
+		{ children... }
+	</div>
+}
+
+templ AlertDialogFooter(p AlertDialogFooterProps) {
+	<div class={ classNames("goth-alert-dialog-footer", p.Class) } { overlayPartAttrs(p.Base, "footer")... }>
+		{ children... }
+	</div>
+}
+
+templ AlertDialogTitle(p AlertDialogTitleProps) {
+	<h2 class={ classNames("goth-alert-dialog-title", p.Class) } { overlayPartAttrs(p.Base, "title")... }>
+		{ children... }
+	</h2>
+}
+
+templ AlertDialogDescription(p AlertDialogDescriptionProps) {
+	<p class={ classNames("goth-alert-dialog-description", p.Class) } { overlayPartAttrs(p.Base, "description")... }>
+		{ children... }
+	</p>
+}
+
+templ AlertDialogAction(p AlertDialogActionProps) {
+	<button class={ classNames("goth-alert-dialog-action", p.Class) } { alertDialogActionAttrs(p)... }>
+		{ children... }
+	</button>
+}
+
+templ AlertDialogCancel(p AlertDialogCancelProps) {
+	<button class={ classNames("goth-alert-dialog-cancel", p.Class) } { alertDialogCancelAttrs(p)... }>
+		{ children... }
+	</button>
+}

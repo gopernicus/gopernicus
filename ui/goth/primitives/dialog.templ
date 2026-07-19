@@ -1,0 +1,56 @@
+package primitives
+
+// Dialog (P39, family F4). See dialog.go for the no-JS baseline and ARIA rules.
+// DialogContent owns the frozen overlay/scrim/panel structure so a caller cannot
+// break the mechanics: the caller composes DialogTitle/DialogDescription and body
+// as children of DialogContent.
+templ Dialog(p DialogProps) {
+	<div class={ dialogClass(p) } { dialogAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+templ DialogTrigger(p DialogTriggerProps) {
+	<button class={ classNames("goth-dialog-trigger", p.Class) } { overlayTriggerAttrs(p.Base, "dialog")... }>
+		{ children... }
+	</button>
+}
+
+templ DialogContent(p DialogContentProps) {
+	<div class="goth-overlay" data-slot="overlay">
+		<div class="goth-overlay-scrim" data-slot="scrim" aria-hidden="true"></div>
+		<div class={ classNames("goth-overlay-panel", p.Class) } { dialogContentAttrs(p)... }>
+			{ children... }
+		</div>
+	</div>
+}
+
+templ DialogHeader(p DialogHeaderProps) {
+	<div class={ classNames("goth-dialog-header", p.Class) } { overlayPartAttrs(p.Base, "header")... }>
+		{ children... }
+	</div>
+}
+
+templ DialogFooter(p DialogFooterProps) {
+	<div class={ classNames("goth-dialog-footer", p.Class) } { overlayPartAttrs(p.Base, "footer")... }>
+		{ children... }
+	</div>
+}
+
+templ DialogTitle(p DialogTitleProps) {
+	<h2 class={ classNames("goth-dialog-title", p.Class) } { overlayPartAttrs(p.Base, "title")... }>
+		{ children... }
+	</h2>
+}
+
+templ DialogDescription(p DialogDescriptionProps) {
+	<p class={ classNames("goth-dialog-description", p.Class) } { overlayPartAttrs(p.Base, "description")... }>
+		{ children... }
+	</p>
+}
+
+templ DialogClose(p DialogCloseProps) {
+	<button class={ classNames("goth-dialog-close", p.Class) } { overlayCloseAttrs(p.Base)... }>
+		{ children... }
+	</button>
+}

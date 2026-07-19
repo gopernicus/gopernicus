@@ -76,7 +76,7 @@ func newSaturationHandler(t *testing.T, q testQueue, passwordless bool) http.Han
 	}
 	svc := authsvc.NewService(deps)
 	h := web.NewWebHandler()
-	Mount(h, svc, nil, nil, "", MutationSecurity{}, nil)
+	Mount(h, svc, nil, nil, "", MutationSecurity{}, nil, nil)
 	return h
 }
 

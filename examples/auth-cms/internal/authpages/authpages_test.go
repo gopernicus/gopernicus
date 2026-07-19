@@ -8,6 +8,7 @@ import (
 
 	auth "github.com/gopernicus/gopernicus/features/authentication"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	uigoth "github.com/gopernicus/gopernicus/ui/goth"
 )
 
 // renderMethod executes a web.Renderer to a string.
@@ -20,6 +21,20 @@ func renderMethod(t *testing.T, r web.Renderer) string {
 	return buf.String()
 }
 
+// newViews builds the host override over a default ui/goth bundle.
+func newViews(t *testing.T) Views {
+	t.Helper()
+	b, err := uigoth.New(uigoth.Config{})
+	if err != nil {
+		t.Fatalf("bundle: %v", err)
+	}
+	v, err := New(b)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return v
+}
+
 // TestLoginOverrideRendersBrandedForm proves the host's Login override renders the
 // Gopernicus-CMS-branded page while preserving every field the feature's dispatcher,
 // CSRF gate, and service call require: the canonical /auth/login action, the
@@ -27,7 +42,7 @@ func renderMethod(t *testing.T, r web.Renderer) string {
 // autocompleted email/password inputs. The password input never carries a value, so
 // a failed attempt cannot repopulate it.
 func TestLoginOverrideRendersBrandedForm(t *testing.T) {
-	v := New()
+	v := newViews(t)
 	m := auth.LoginPage{
 		PageContext: auth.PageContext{CSRFToken: "csrf-abc", ReturnTo: "/dashboard"},
 		Email:       "user@example.com",
@@ -60,7 +75,7 @@ func TestLoginOverrideRendersBrandedForm(t *testing.T) {
 // page the host does NOT override (Register) is served by the promoted bundled
 // default, so the override changes exactly one page and leaves the rest intact.
 func TestPromotedDefaultsServeOtherPages(t *testing.T) {
-	v := New()
+	v := newViews(t)
 	// The compile-time assertion var _ auth.Views = Views{} (in authpages.go) already
 	// proves every method exists; this confirms a non-overridden method renders the
 	// bundled default rather than a host page.

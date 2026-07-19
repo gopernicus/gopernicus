@@ -1,0 +1,175 @@
+package primitives
+
+// Sidebar (P54, family F4). See sidebar.go for the server-ownership model (mobile
+// open + desktop collapsed both server-rendered), the no-JS baseline (server-open
+// sheet + SidebarRail round-trip toggle + real navigation links), the responsive
+// one-markup rail/sheet composition, and the gothDialog/Collapsible reuse (no new
+// controller). The caller composes SidebarTrigger and SidebarPanel inside Sidebar,
+// then SidebarHeader/SidebarContent/SidebarFooter inside SidebarPanel.
+// SidebarProvider is the app-shell layout row holding the Sidebar and SidebarInset.
+templ SidebarProvider(p SidebarProviderProps) {
+	<div class={ sidebarPartClass(p.Base, "goth-sidebar-provider") } { sidebarPartAttrs(p.Base, "sidebar-provider")... }>
+		{ children... }
+	</div>
+}
+
+// SidebarInset is the main content region beside the rail.
+templ SidebarInset(p SidebarInsetProps) {
+	<div class={ sidebarPartClass(p.Base, "goth-sidebar-inset") } { sidebarPartAttrs(p.Base, "sidebar-inset")... }>
+		{ children... }
+	</div>
+}
+
+templ Sidebar(p SidebarProps) {
+	<div class={ sidebarClass(p) } { sidebarAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// SidebarTrigger opens the mobile off-canvas sheet (gothDialog show). It is
+// display:none on the desktop rail, where the panel is always visible.
+templ SidebarTrigger(p SidebarTriggerProps) {
+	<button class={ classNames("goth-sidebar-trigger", p.Class) } { overlayTriggerAttrs(p.Base, "dialog")... }>
+		{ children... }
+	</button>
+}
+
+// SidebarPanel emits the frozen overlay/scrim structure and the <nav> navigation
+// landmark (data-slot="content" = the gothDialog focus-trap region on mobile). On
+// the desktop rail CSS suppresses the scrim and lays the nav out in flow.
+templ SidebarPanel(p SidebarPanelProps) {
+	<div class="goth-sidebar-overlay" data-slot="overlay">
+		<div class="goth-sidebar-scrim" data-slot="scrim" aria-hidden="true"></div>
+		<nav class={ sidebarPanelClass(p) } { sidebarPanelAttrs(p)... }>
+			{ children... }
+		</nav>
+	</div>
+}
+
+templ SidebarHeader(p SidebarHeaderProps) {
+	<div class={ sidebarPartClass(p.Base, "goth-sidebar-header") } { sidebarPartAttrs(p.Base, "sidebar-header")... }>
+		{ children... }
+	</div>
+}
+
+templ SidebarContent(p SidebarContentProps) {
+	<div class={ sidebarPartClass(p.Base, "goth-sidebar-content") } { sidebarPartAttrs(p.Base, "sidebar-content")... }>
+		{ children... }
+	</div>
+}
+
+templ SidebarFooter(p SidebarFooterProps) {
+	<div class={ sidebarPartClass(p.Base, "goth-sidebar-footer") } { sidebarPartAttrs(p.Base, "sidebar-footer")... }>
+		{ children... }
+	</div>
+}
+
+templ SidebarGroup(p SidebarGroupProps) {
+	<div class={ sidebarPartClass(p.Base, "goth-sidebar-group") } { sidebarPartAttrs(p.Base, "sidebar-group")... }>
+		{ children... }
+	</div>
+}
+
+// SidebarGroupLabel is a group heading; the collapsed rail hides it via CSS.
+templ SidebarGroupLabel(p SidebarGroupLabelProps) {
+	<div class={ sidebarPartClass(p.Base, "goth-sidebar-group-label") } { sidebarPartAttrs(p.Base, "sidebar-group-label")... }>
+		{ children... }
+	</div>
+}
+
+templ SidebarMenu(p SidebarMenuProps) {
+	<ul class={ sidebarPartClass(p.Base, "goth-sidebar-menu") } { sidebarPartAttrs(p.Base, "sidebar-menu")... }>
+		{ children... }
+	</ul>
+}
+
+templ SidebarMenuItem(p SidebarMenuItemProps) {
+	<li class={ sidebarPartClass(p.Base, "goth-sidebar-menu-item") } { sidebarPartAttrs(p.Base, "sidebar-menu-item")... }>
+		{ children... }
+	</li>
+}
+
+// SidebarMenuButton is a navigation entry. A set URL renders a real <a> (the no-JS
+// baseline) carrying aria-current for the active page; an empty URL renders a
+// <button> for a caller-driven action. The optional icon shows in both the expanded
+// and collapsed rails; the label collapses to a visually hidden accessible name in
+// the icon rail.
+templ SidebarMenuButton(p SidebarMenuButtonProps) {
+	if p.URL.IsZero() {
+		<button class={ sidebarPartClass(p.Base, "goth-sidebar-menu-button") } { sidebarMenuButtonAttrs(p.Base, p.Active, false, "sidebar-menu-button")... }>
+			if p.Icon != nil {
+				<span class="goth-sidebar-menu-icon" data-slot="sidebar-menu-icon" aria-hidden="true">
+					@p.Icon
+				</span>
+			}
+			<span class="goth-sidebar-menu-label" data-slot="sidebar-menu-label">
+				{ children... }
+			</span>
+		</button>
+	} else {
+		<a href={ p.URL.SafeURL() } class={ sidebarPartClass(p.Base, "goth-sidebar-menu-button") } { sidebarMenuButtonAttrs(p.Base, p.Active, true, "sidebar-menu-button")... }>
+			if p.Icon != nil {
+				<span class="goth-sidebar-menu-icon" data-slot="sidebar-menu-icon" aria-hidden="true">
+					@p.Icon
+				</span>
+			}
+			<span class="goth-sidebar-menu-label" data-slot="sidebar-menu-label">
+				{ children... }
+			</span>
+		</a>
+	}
+}
+
+templ SidebarMenuSub(p SidebarMenuSubProps) {
+	<ul class={ sidebarPartClass(p.Base, "goth-sidebar-menu-sub") } { sidebarPartAttrs(p.Base, "sidebar-menu-sub")... }>
+		{ children... }
+	</ul>
+}
+
+templ SidebarMenuSubItem(p SidebarMenuSubItemProps) {
+	<li class={ sidebarPartClass(p.Base, "goth-sidebar-menu-sub-item") } { sidebarPartAttrs(p.Base, "sidebar-menu-sub-item")... }>
+		{ children... }
+	</li>
+}
+
+templ SidebarMenuSubButton(p SidebarMenuSubButtonProps) {
+	if p.URL.IsZero() {
+		<button class={ sidebarPartClass(p.Base, "goth-sidebar-menu-sub-button") } { sidebarMenuButtonAttrs(p.Base, p.Active, false, "sidebar-menu-sub-button")... }>
+			{ children... }
+		</button>
+	} else {
+		<a href={ p.URL.SafeURL() } class={ sidebarPartClass(p.Base, "goth-sidebar-menu-sub-button") } { sidebarMenuButtonAttrs(p.Base, p.Active, true, "sidebar-menu-sub-button")... }>
+			{ children... }
+		</a>
+	}
+}
+
+// SidebarSeparator is a decorative divider between groups.
+templ SidebarSeparator(p SidebarSeparatorProps) {
+	<div class={ sidebarPartClass(p.Base, "goth-sidebar-separator") } role="none" { sidebarPartAttrs(p.Base, "sidebar-separator")... }></div>
+}
+
+// SidebarRail is the desktop collapse/expand control: a real link (server
+// round-trip) to a host toggle route, carrying aria-expanded for the current state.
+// With no JavaScript it navigates and the server re-renders the new collapsed state;
+// enhanced, hx-* on Base.Attributes can swap instead. An empty URL renders a
+// <button> (a caller must then wire behavior). It is display:none on mobile.
+templ SidebarRail(p SidebarRailProps) {
+	if p.URL.IsZero() {
+		<button class={ classNames("goth-sidebar-rail", p.Class) } { sidebarRailAttrs(p)... }>
+			{ children... }
+		</button>
+	} else {
+		<a href={ p.URL.SafeURL() } class={ classNames("goth-sidebar-rail", p.Class) } { sidebarRailAttrs(p)... }>
+			{ children... }
+		</a>
+	}
+}
+
+// SidebarClose dismisses the mobile sheet (gothDialog hide). It is display:none on
+// the desktop rail.
+templ SidebarClose(p SidebarCloseProps) {
+	<button class={ classNames("goth-sidebar-close", p.Class) } { overlayCloseAttrs(p.Base)... }>
+		{ children... }
+	</button>
+}

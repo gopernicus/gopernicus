@@ -1,0 +1,159 @@
+package goth
+
+import (
+	"strconv"
+
+	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
+	"github.com/gopernicus/gopernicus/ui/goth/components/forms"
+	"github.com/gopernicus/gopernicus/ui/goth/components/layouts"
+	"github.com/gopernicus/gopernicus/ui/goth/primitives"
+)
+
+// menusListBody is the menus admin index.
+templ menusListBody(ms []menus.Menu) {
+	@layouts.PageHeader(layouts.PageHeaderProps{Title: "Menus", Actions: newEntryAction("/menus/new")})
+	if len(ms) == 0 {
+		<p>No menus yet.</p>
+	} else {
+		<ul data-slot="cms-menu-list">
+			for _, m := range ms {
+				<li>
+					<a href={ templ.SafeURL("/menus/" + m.ID) }>{ m.Name }</a>
+					<span>({ m.Slug })</span>
+					<a href={ templ.SafeURL("/menu/" + m.Slug) }>public nav</a>
+				</li>
+			}
+		</ul>
+	}
+}
+
+// menuNewBody is the create-menu form.
+templ menuNewBody(formErr string) {
+	@layouts.PageHeader(layouts.PageHeaderProps{Title: "New Menu"})
+	@formError(formErr)
+	<form method="post" action="/menus" data-slot="cms-menu-new-form">
+		@forms.FormField(forms.FormFieldProps{Label: "Name", For: "name"}) {
+			@primitives.Input(primitives.InputProps{Base: primitives.Base{ID: "name"}, Name: "name"})
+		}
+		@forms.FormActions(forms.FormActionsProps{}) {
+			@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit}) {
+				Create
+			}
+		}
+	</form>
+}
+
+// menuDetailBody renders a menu, its items, and the add-item form.
+templ menuDetailBody(m menus.Menu, items []menus.MenuItem) {
+	@layouts.PageHeader(layouts.PageHeaderProps{Title: m.Name, Description: m.Slug})
+	<p>
+		<a href={ templ.SafeURL("/menu/" + m.Slug) }>view public nav</a>
+		·
+		<a href="/menus">all menus</a>
+	</p>
+	<h2>Items</h2>
+	if len(items) == 0 {
+		<p>No items yet.</p>
+	} else {
+		<ul data-slot="cms-menu-items">
+			for _, it := range items {
+				<li>
+					if it.ParentID != "" {
+						<span>&mdash;</span>
+					}
+					<strong>{ it.Label }</strong>
+					<span>{ it.URL }</span>
+					<span>(pos { strconv.Itoa(it.Position) })</span>
+					<a href={ templ.SafeURL("/menu-items/" + it.ID + "/edit") }>edit</a>
+					<form method="post" action={ templ.SafeURL("/menu-items/" + it.ID + "/delete") } data-slot="cms-menu-item-delete">
+						@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit, Variant: primitives.ButtonDestructive, Size: primitives.ButtonSizeSmall}) {
+							delete
+						}
+					</form>
+				</li>
+			}
+		</ul>
+	}
+	<h2>Add item</h2>
+	<form method="post" action={ templ.SafeURL("/menus/" + m.ID + "/items") } data-slot="cms-menu-add-item">
+		@forms.FormField(forms.FormFieldProps{Label: "Label", For: "label"}) {
+			@primitives.Input(primitives.InputProps{Base: primitives.Base{ID: "label"}, Name: "label"})
+		}
+		@forms.FormField(forms.FormFieldProps{Label: "URL", For: "url"}) {
+			@primitives.Input(primitives.InputProps{Base: primitives.Base{ID: "url"}, Name: "url", Placeholder: "/page/about"})
+		}
+		@forms.FormField(forms.FormFieldProps{Label: "Parent", For: "parent_id"}) {
+			@primitives.NativeSelect(primitives.NativeSelectProps{Base: primitives.Base{ID: "parent_id"}, Name: "parent_id"}) {
+				@primitives.NativeSelectOption(primitives.NativeSelectOptionProps{Value: ""}) {
+					(top level)
+				}
+				for _, it := range items {
+					@primitives.NativeSelectOption(primitives.NativeSelectOptionProps{Value: it.ID}) {
+						{ it.Label }
+					}
+				}
+			}
+		}
+		@forms.FormField(forms.FormFieldProps{Label: "Position", For: "position"}) {
+			@primitives.Input(primitives.InputProps{Base: primitives.Base{ID: "position"}, Type: primitives.InputNumber, Name: "position", Value: "0"})
+		}
+		@forms.FormActions(forms.FormActionsProps{}) {
+			@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit}) {
+				Add
+			}
+		}
+	</form>
+}
+
+// menuItemFormBody is the edit-menu-item form.
+templ menuItemFormBody(it menus.MenuItem) {
+	@layouts.PageHeader(layouts.PageHeaderProps{Title: "Edit item"})
+	<form method="post" action={ templ.SafeURL("/menu-items/" + it.ID) } data-slot="cms-menu-item-form">
+		@forms.FormField(forms.FormFieldProps{Label: "Label", For: "label"}) {
+			@primitives.Input(primitives.InputProps{Base: primitives.Base{ID: "label"}, Name: "label", Value: it.Label})
+		}
+		@forms.FormField(forms.FormFieldProps{Label: "URL", For: "url"}) {
+			@primitives.Input(primitives.InputProps{Base: primitives.Base{ID: "url"}, Name: "url", Value: it.URL})
+		}
+		@forms.FormField(forms.FormFieldProps{Label: "Parent ID", For: "parent_id"}) {
+			@primitives.Input(primitives.InputProps{Base: primitives.Base{ID: "parent_id"}, Name: "parent_id", Value: it.ParentID})
+		}
+		@forms.FormField(forms.FormFieldProps{Label: "Position", For: "position"}) {
+			@primitives.Input(primitives.InputProps{Base: primitives.Base{ID: "position"}, Type: primitives.InputNumber, Name: "position", Value: strconv.Itoa(it.Position)})
+		}
+		@forms.FormActions(forms.FormActionsProps{}) {
+			@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit}) {
+				Save
+			}
+			@primitives.Button(primitives.ButtonProps{Variant: primitives.ButtonGhost, URL: parseURL("/menus/" + it.MenuID)}) {
+				Cancel
+			}
+		}
+	</form>
+}
+
+// menuNavBody renders a menu's items as a public nav tree (the admin-preview and
+// public-render body).
+templ menuNavBody(m menus.Menu, items []menus.MenuItem) {
+	<h1>{ m.Name }</h1>
+	<nav aria-label={ m.Name }>
+		@navItems(items, "")
+	</nav>
+}
+
+templ navItems(items []menus.MenuItem, parentID string) {
+	<ul>
+		for _, it := range items {
+			if it.ParentID == parentID {
+				<li>
+					if it.URL != "" {
+						<a href={ templ.SafeURL(it.URL) }>{ it.Label }</a>
+					} else {
+						<span>{ it.Label }</span>
+					}
+					@navItems(items, it.ID)
+				</li>
+			}
+		}
+	</ul>
+}

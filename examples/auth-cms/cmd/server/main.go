@@ -58,11 +58,12 @@ import (
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/memstore"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/outboxmem"
 	auth "github.com/gopernicus/gopernicus/features/authentication"
+	authgoth "github.com/gopernicus/gopernicus/features/authentication/views/goth"
 	authorization "github.com/gopernicus/gopernicus/features/authorization"
 	"github.com/gopernicus/gopernicus/features/cms"
 	"github.com/gopernicus/gopernicus/features/cms/domain/content"
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
-	cmstempl "github.com/gopernicus/gopernicus/features/cms/views/templ"
+	cmsgoth "github.com/gopernicus/gopernicus/features/cms/views/goth"
 	eventsfeature "github.com/gopernicus/gopernicus/features/events"
 	"github.com/gopernicus/gopernicus/features/jobs"
 	jobsmem "github.com/gopernicus/gopernicus/features/jobs/memstore"
@@ -79,7 +80,22 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 	"github.com/gopernicus/gopernicus/sdk/foundation/workers"
+	uigoth "github.com/gopernicus/gopernicus/ui/goth"
+	uigothassets "github.com/gopernicus/gopernicus/ui/goth/assets"
 )
+
+// authAssetBasePath is the public URL prefix this host serves the ui/goth
+// fingerprinted assets under; newAuthBundle pins it so buildAuthConfig's mapped CSP
+// and the asset route agree (ui-goth GOTH-7.2).
+const authAssetBasePath = "/assets/goth"
+
+// newAuthBundle constructs the immutable ui/goth presentation bundle the auth pages
+// render through. StylesOnly is the smallest safe profile for the native auth forms;
+// the externalized fragment-reader script is served separately and covered by the
+// adapter's script-src 'self'.
+func newAuthBundle() (*uigoth.Bundle, error) {
+	return uigoth.New(uigoth.Config{AssetBasePath: authAssetBasePath})
+}
 
 func main() {
 	_ = environment.LoadEnv()
@@ -160,6 +176,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// security-event audit rows; a proxied deployment sets it to its trusted-proxy
 	// hop count.
 	router.Use(web.TrustProxies(trustedProxyCount()), web.RequestID(), web.Logger(log), web.Panics(log))
+
+	// Serve the ui/goth fingerprinted assets (the auth pages' stylesheet) and the
+	// externalized fragment-reader script the reset/magic-link landings load. Both are
+	// same-origin, so the auth adapter's mapped CSP (style-src/script-src 'self')
+	// covers them; the kit owns no route, so the host mounts them (ui-goth GOTH-7.2).
+	uigothStatic := web.NewStaticFileServer(uigothassets.FS, web.WithAssetPrefix("dist/"))
+	uigothStatic.AddRoutes(router, authAssetBasePath)
+	router.Handle(http.MethodGet, authgoth.DefaultFragmentScriptPath, authgoth.FragmentScriptHandler().ServeHTTP)
 
 	// Shared in-process event bus (sdk default Memory). cms is the emitter (it
 	// publishes content.* post-write through mount.Events); the host subscribes
@@ -319,8 +343,20 @@ func run(ctx context.Context, log *slog.Logger) error {
 		deliveryPurgeInterval = purgeCfg.Interval
 	}
 
+	// The CMS pages render through the same ui/goth bundle as auth (assets already
+	// served under authAssetBasePath above). The admin entries list is HTMX-enhanced
+	// (ui-goth GOTH-7.3); auth's RequireUser gates that admin surface below.
+	cmsBundle, err := newAuthBundle()
+	if err != nil {
+		return err
+	}
+	cmsViews, err := cmsgoth.New(cmsBundle)
+	if err != nil {
+		return err
+	}
+
 	if err := cms.Register(mount, cmsRepos, cms.Config{
-		Views:           cmstempl.New(),                          // FS3 one-line default: the bundled views module
+		Views:           cmsViews,                                // the ui/goth-backed bundled default
 		Types:           []content.ContentType{productType()},    // host-registered custom type (zero migration)
 		Templates:       []cms.TemplateBinding{productBinding()}, // its dev-authored renderer
 		Cache:           pageCache,
@@ -768,6 +804,21 @@ func buildAuthConfig(log *slog.Logger, granter auth.Granter) (auth.Config, error
 		return auth.Config{}, err
 	}
 
+	// The ui/goth HTML surface: build the presentation bundle, then this host's
+	// partial override (authpages.New) which embeds the ui/goth Views and overrides
+	// only Login with Gopernicus-CMS branding. The embedded Views promotes HTMLPolicy(),
+	// which maps the bundle's browser Requirements (+ the fragment-reader script-src)
+	// into the feature's CSP so the auth pages load their assets under default-src
+	// 'none' — the host never hand-writes that CSP (ui-goth GOTH-7.2).
+	bundle, err := newAuthBundle()
+	if err != nil {
+		return auth.Config{}, err
+	}
+	authViews, err := authpages.New(bundle)
+	if err != nil {
+		return auth.Config{}, err
+	}
+
 	return auth.Config{
 		Hasher:               bcrypt.New(),
 		Mailer:               email.NewConsole(log),
@@ -785,11 +836,17 @@ func buildAuthConfig(log *slog.Logger, granter auth.Granter) (auth.Config, error
 		DeliveryEncrypter:  deliveryEncrypter,
 		IdentifierKeyer:    identifierKeyer,
 		// The optional HTML surface (design §9.2): this host's REAL partial override
-		// (authpages.New) embeds the bundled templ Views and overrides only the Login
-		// page with Gopernicus-CMS branding — presentation changes only, the JSON API
-		// and every route/service/redirect policy are unchanged (AV3-8.9, proven
-		// isolation-safe in AV3-8.5). Every non-overridden page is the promoted default.
-		Views: authpages.New(),
+		// (authpages.New) embeds the ui/goth Views and overrides only the Login page
+		// with Gopernicus-CMS branding — presentation changes only, the JSON API and
+		// every route/service/redirect policy are unchanged (AV3-8.9, proven
+		// isolation-safe in AV3-8.5). Every non-overridden page is the promoted ui/goth
+		// default rendered from the fingerprinted assets under authAssetBasePath.
+		Views: authViews,
+		// The resource policy the ui/goth adapter derives from the bundle: it widens the
+		// feature's strict CSP exactly far enough to load the GOTH stylesheet and the
+		// same-origin fragment-reader script (script-src 'self' + the per-render nonce),
+		// and can never remove the feature-owned fixed protections (ui-goth GOTH-7.2).
+		HTMLPolicy: authViews.HTMLPolicy(),
 		// The DISTINCT second override system (design §6.2): a host email LayerApp
 		// content override that rebrands the verification email body. It swaps an EMAIL,
 		// not a page — a different facility from Views, wired through a different Config

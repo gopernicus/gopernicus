@@ -1,0 +1,44 @@
+package goth
+
+import (
+	"strconv"
+	"strings"
+
+	"github.com/gopernicus/gopernicus/features/cms/domain/media"
+	"github.com/gopernicus/gopernicus/ui/goth/components/layouts"
+	"github.com/gopernicus/gopernicus/ui/goth/primitives"
+)
+
+// mediaLibraryBody is the media library + multipart upload form. The upload is a
+// real no-JS multipart form (the host owns storage); a mutation always rides a form.
+templ mediaLibraryBody(assets []media.Asset, formErr string) {
+	@layouts.PageHeader(layouts.PageHeaderProps{Title: "Media library"})
+	@formError(formErr)
+	<form method="post" action="/media" enctype="multipart/form-data" data-slot="cms-media-upload">
+		@primitives.Input(primitives.InputProps{Base: primitives.Base{ID: "file"}, Type: primitives.InputFile, Name: "file"})
+		@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit}) {
+			Upload
+		}
+	</form>
+	if len(assets) == 0 {
+		<p>No assets yet.</p>
+	} else {
+		<ul data-slot="cms-media-list">
+			for _, a := range assets {
+				<li>
+					if strings.HasPrefix(a.ContentType, "image/") {
+						<img src={ templ.SafeURL("/media/" + a.ID + "/file") } alt={ a.Filename } height="48"/>
+					}
+					<a href={ templ.SafeURL("/media/" + a.ID + "/file") }>{ a.Filename }</a>
+					<span>({ a.ContentType }, { strconv.FormatInt(a.Size, 10) } bytes)</span>
+					<code>/media/{ a.ID }/file</code>
+					<form method="post" action={ templ.SafeURL("/media/" + a.ID + "/delete") } data-slot="cms-media-delete">
+						@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit, Variant: primitives.ButtonDestructive, Size: primitives.ButtonSizeSmall}) {
+							delete
+						}
+					</form>
+				</li>
+			}
+		</ul>
+	}
+}

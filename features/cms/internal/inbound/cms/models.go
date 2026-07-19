@@ -76,6 +76,7 @@ type Pager struct {
 	HasPrev        bool
 	PreviousCursor string
 	Order          string // active order, carried in the pagination links ("" = default)
+	Status         string // active status filter, carried in the list links ("" = any)
 	BaseHref       string // the list's base URL — the first-page target
 }
 

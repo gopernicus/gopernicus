@@ -57,7 +57,8 @@ func NewEntryHandlers(svc entryService, taxo taxonomyService, media mediaService
 // page's bidirectional pagination state through the Pager.
 func (h *EntryHandlers) List(w http.ResponseWriter, r *http.Request, ct content.ContentType) {
 	order, linkOrder := parseEntryOrder(r)
-	q := content.EntryQuery{Type: ct.Slug, ListRequest: crud.ListRequest{
+	status := parseEntryStatus(r)
+	q := content.EntryQuery{Type: ct.Slug, Status: status, ListRequest: crud.ListRequest{
 		Cursor: r.URL.Query().Get("cursor"),
 		Limit:  atoiOrZero(r.URL.Query().Get("limit")),
 		Order:  order,
@@ -77,9 +78,41 @@ func (h *EntryHandlers) List(w http.ResponseWriter, r *http.Request, ct content.
 		HasPrev:        page.HasPrev,
 		PreviousCursor: page.PreviousCursor,
 		Order:          linkOrder,
+		Status:         string(status),
 		BaseHref:       base,
 	}
+	// HTMX enhancement: a sort/filter/page request carries HX-Request, so we return
+	// ONLY the swappable content region; a non-HTMX request (or no-JS) gets the full
+	// document. Both render the same server-owned content, so the HTMX path degrades
+	// to a full-document reload. The HX-Request header is a presentation hint read
+	// directly here — the feature core takes no dependency on any HTMX/UI package,
+	// and no identity/CSRF/authorization is ever derived from it.
+	if isHTMX(r) {
+		web.Render(r.Context(), w, http.StatusOK, h.views.EntriesListContent(ct.Plural, base+"/new", base, items, pager))
+		return
+	}
 	web.Render(r.Context(), w, http.StatusOK, h.views.EntriesList(ct.Plural, base+"/new", base, items, pager))
+}
+
+// parseEntryStatus resolves the admin list's ?status filter against the content
+// status set. An unknown value falls back to "any" (no 4xx/5xx), matching the Q3
+// order-fallback discipline, and is NOT carried into the links.
+func parseEntryStatus(r *http.Request) content.Status {
+	switch content.Status(r.URL.Query().Get("status")) {
+	case content.StatusDraft:
+		return content.StatusDraft
+	case content.StatusPublished:
+		return content.StatusPublished
+	default:
+		return "" // any
+	}
+}
+
+// isHTMX reports whether r is an HTMX-issued request. It reads the HX-Request
+// header as a presentation hint only (never an identity/CSRF/authorization
+// signal), so the feature core needs no dependency on the UI/HTMX package.
+func isHTMX(r *http.Request) bool {
+	return r.Header.Get("HX-Request") == "true"
 }
 
 // parseEntryOrder resolves the admin list's ?order param against the content

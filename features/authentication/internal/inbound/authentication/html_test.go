@@ -64,6 +64,13 @@ func (stubViews) Error(ErrorPage) web.Renderer                   { return stubRe
 // given Views. A nil views proves the API-only posture: no HTML page mounts while the
 // JSON API stays.
 func newHTMLTestHandler(t *testing.T, views Views) http.Handler {
+	return newHTMLTestHandlerWithPolicy(t, views, nil)
+}
+
+// newHTMLTestHandlerWithPolicy is newHTMLTestHandler with an explicit HTML resource
+// policy, so a test can prove the wired policy widens the CSP on a live HTML response
+// while the fixed protections stay.
+func newHTMLTestHandlerWithPolicy(t *testing.T, views Views, policy *HTMLResourcePolicy) http.Handler {
 	t.Helper()
 	users := newMemUsers()
 	router, err := delivery.NewRouter(delivery.Deps{Mailer: nopMailer{}, MailFrom: "noreply@example.com"})
@@ -91,7 +98,7 @@ func newHTMLTestHandler(t *testing.T, views Views) http.Handler {
 		PublicAuthBaseURL: "https://auth.example.com",
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, nil, nil, "", MutationSecurity{}, views)
+	Mount(h, svc, nil, nil, "", MutationSecurity{}, views, policy)
 	return h
 }
 

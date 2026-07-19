@@ -15,7 +15,7 @@ import (
 // Every method returns a web.Renderer over domain types and the port's own view
 // models; per-entry bodies ride the content.Registry via SeedTemplates.
 //
-// The bundled default lives in the sibling module features/cms/views/templ. The
+// The bundled default lives in the sibling module features/cms/views/goth. The
 // blessed way to customize is partial override: embed that concrete default and
 // override individual methods (e.g. only the four chrome methods). Implementing
 // all methods from scratch (e.g. over sdk/foundation/web.Template) is possible but not the
@@ -37,6 +37,13 @@ type Views interface {
 
 	// Admin.
 	EntriesList(heading, newHref, editPrefix string, items []EntryListItem, pager Pager) web.Renderer
+	// EntriesListContent renders ONLY the swappable content region of the admin
+	// entry index (the table + pagination), keyed for the HTMX target the full
+	// EntriesList page carries. The List handler returns this fragment for an HTMX
+	// request (a sort/filter/page swap) and the full EntriesList document
+	// otherwise — the same server-rendered content, so the HTMX path degrades to a
+	// no-JS full reload. It takes the same inputs as EntriesList.
+	EntriesListContent(heading, newHref, editPrefix string, items []EntryListItem, pager Pager) web.Renderer
 	EntryForm(m EntryFormModel) web.Renderer
 	TermsList(categories, tags []taxonomy.Term) web.Renderer
 	TermForm(m TermFormModel) web.Renderer
