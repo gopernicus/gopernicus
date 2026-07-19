@@ -77,7 +77,7 @@ func newStepUpHandler(t *testing.T) (http.Handler, *memAuthGrants) {
 	Mount(h, svc, nil, nil, "", MutationSecurity{
 		AllowedOrigins:    []string{"https://app.example.com"},
 		SessionCookieName: svc.SessionCookieName(),
-	}, nil)
+	}, nil, nil)
 	return h, grants
 }
 

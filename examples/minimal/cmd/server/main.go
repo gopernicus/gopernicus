@@ -1,7 +1,7 @@
 // Command server is a second CMS host that proves the feature-module opt-out
 // (plan §1.5): it mounts features/cms backed by an in-memory store, so its
 // module graph contains NO libsql — only features/cms, its bundled views module
-// features/cms/views/templ, and sdk.
+// features/cms/views/goth, ui/goth, and sdk.
 // Compare its go.mod to examples/cms: same feature, different datastore, and the
 // driver a host doesn't use never enters its build.
 package main
@@ -19,7 +19,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/cms"
 	"github.com/gopernicus/gopernicus/features/cms/domain/content"
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
-	cmstempl "github.com/gopernicus/gopernicus/features/cms/views/templ"
+	cmsgoth "github.com/gopernicus/gopernicus/features/cms/views/goth"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
 	"github.com/gopernicus/gopernicus/sdk/feature"
@@ -27,7 +27,14 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
 	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	uigoth "github.com/gopernicus/gopernicus/ui/goth"
+	uigothassets "github.com/gopernicus/gopernicus/ui/goth/assets"
 )
+
+// gothAssetBasePath is the public URL prefix this host serves the ui/goth
+// fingerprinted assets (the CMS pages' stylesheet) under. The bundle pins the same
+// path so the emitted stylesheet href and the asset route agree.
+const gothAssetBasePath = "/assets/goth"
 
 func main() {
 	_ = environment.LoadEnv()
@@ -61,8 +68,22 @@ func run(ctx context.Context, log *slog.Logger) error {
 
 	mount := feature.Mount{Router: router, Logger: log}
 
+	// The ui/goth presentation bundle backs the CMS views; the host serves the
+	// kit's fingerprinted assets (the CMS pages' stylesheet) under the path the
+	// bundle names. The kit owns no route, so the host mounts it.
+	bundle, err := uigoth.New(uigoth.Config{AssetBasePath: gothAssetBasePath})
+	if err != nil {
+		return err
+	}
+	cmsViews, err := cmsgoth.New(bundle)
+	if err != nil {
+		return err
+	}
+	uigothStatic := web.NewStaticFileServer(uigothassets.FS, web.WithAssetPrefix("dist/"))
+	uigothStatic.AddRoutes(router, gothAssetBasePath)
+
 	if err := cms.Register(mount, repos, cms.Config{
-		Views:     cmstempl.New(),                          // FS3 one-line default: the bundled views module
+		Views:     cmsViews,                                 // the ui/goth-backed bundled default
 		Types:     []content.ContentType{productType()},    // host-registered custom type (zero migration)
 		Templates: []cms.TemplateBinding{productBinding()}, // its dev-authored renderer
 		Cache:     cacher.NewMemory(),

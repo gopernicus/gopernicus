@@ -1,0 +1,29 @@
+package primitives
+
+// Typography (P26, family F2) renders the semantic element matching its variant
+// with a text recipe, wrapping the principal content (templ children). Heading
+// variants emit real <h1>–<h4> so the document outline is honest; other variants
+// emit the appropriate element. data-slot="typography", data-variant selects the
+// recipe.
+templ Typography(p TypographyProps) {
+	switch p.Variant.orDefault() {
+		case TypographyH1:
+			<h1 class={ typographyClass(p) } { typographyAttrs(p)... }>{ children... }</h1>
+		case TypographyH2:
+			<h2 class={ typographyClass(p) } { typographyAttrs(p)... }>{ children... }</h2>
+		case TypographyH3:
+			<h3 class={ typographyClass(p) } { typographyAttrs(p)... }>{ children... }</h3>
+		case TypographyH4:
+			<h4 class={ typographyClass(p) } { typographyAttrs(p)... }>{ children... }</h4>
+		case TypographyBlockquote:
+			<blockquote class={ typographyClass(p) } { typographyAttrs(p)... }>{ children... }</blockquote>
+		case TypographyCode:
+			<code class={ typographyClass(p) } { typographyAttrs(p)... }>{ children... }</code>
+		case TypographyList:
+			<ul class={ typographyClass(p) } { typographyAttrs(p)... }>{ children... }</ul>
+		case TypographySmall:
+			<small class={ typographyClass(p) } { typographyAttrs(p)... }>{ children... }</small>
+		default:
+			<p class={ typographyClass(p) } { typographyAttrs(p)... }>{ children... }</p>
+	}
+}

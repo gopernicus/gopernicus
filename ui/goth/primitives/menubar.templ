@@ -1,0 +1,84 @@
+package primitives
+
+// Menubar (P43, family F4). See menubar.go for the gothMenu backing, horizontal
+// coordination, and no-JS baseline. The caller composes several MenubarMenu
+// groups inside Menubar; each MenubarMenu holds a MenubarTrigger and a
+// MenubarContent (with items).
+templ Menubar(p MenubarProps) {
+	<div class={ classNames("goth-menubar", p.Class) } { menubarAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+templ MenubarMenu(p MenubarMenuProps) {
+	<div class={ classNames("goth-menu goth-menubar-menu", p.Class) } { menubarMenuAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+templ MenubarTrigger(p MenubarTriggerProps) {
+	<button class={ classNames("goth-menubar-trigger", p.Class) } { menubarTriggerAttrs(p.Base)... }>
+		{ children... }
+	</button>
+}
+
+templ MenubarContent(p MenubarContentProps) {
+	<div class={ classNames("goth-floating goth-menu-content", p.Class) } { menubarContentAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+templ MenubarItem(p MenubarItemProps) {
+	<button class={ classNames("goth-menu-item", p.Class) } { menuItemAttrs(p.Base, p.Value, p.Disabled)... }>
+		{ children... }
+	</button>
+}
+
+templ MenubarCheckboxItem(p MenubarCheckboxItemProps) {
+	<button class={ classNames("goth-menu-item goth-menu-check-item", p.Class) } { menuCheckedItemAttrs(p.Base, "menuitemcheckbox", p.Value, p.Checked, p.Disabled)... }>
+		<span class="goth-menu-item-indicator" data-slot="item-indicator" aria-hidden="true">
+			@checkGlyph()
+		</span>
+		{ children... }
+	</button>
+}
+
+templ MenubarRadioItem(p MenubarRadioItemProps) {
+	<button class={ classNames("goth-menu-item goth-menu-check-item", p.Class) } { menuCheckedItemAttrs(p.Base, "menuitemradio", p.Value, p.Checked, p.Disabled)... }>
+		<span class="goth-menu-item-indicator" data-slot="item-indicator" aria-hidden="true">
+			@dotGlyph()
+		</span>
+		{ children... }
+	</button>
+}
+
+templ MenubarLabel(p MenubarLabelProps) {
+	<div class={ classNames("goth-menu-label", p.Class) } { menuLabelAttrs(p.Base)... }>
+		{ children... }
+	</div>
+}
+
+templ MenubarSeparator(p MenubarSeparatorProps) {
+	<div class={ classNames("goth-menu-separator", p.Class) } { menuSeparatorAttrs(p.Base)... }></div>
+}
+
+templ MenubarSub(p MenubarSubProps) {
+	<div class={ classNames("goth-submenu-root", p.Class) } { menuSubRootAttrs(p.Base)... }>
+		{ children... }
+	</div>
+}
+
+templ MenubarSubTrigger(p MenubarSubTriggerProps) {
+	<button class={ classNames("goth-menu-item goth-menu-sub-trigger", p.Class) } { menuSubTriggerAttrs(p.Base)... }>
+		{ children... }
+		<span class="goth-menu-sub-chevron" aria-hidden="true">
+			@chevronRightGlyph()
+		</span>
+	</button>
+}
+
+templ MenubarSubContent(p MenubarSubContentProps) {
+	<div class={ classNames("goth-floating goth-menu-content", p.Class) } { menuSubContentAttrs(p.Base)... }>
+		{ children... }
+	</div>
+}

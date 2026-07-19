@@ -2688,3 +2688,36 @@ invitations now use the baseline writer and ignore `OperationID`; the separately
 named guarded adapter demonstrates sensitive invitation posture. See the current
 decision table in `features/authorization/README.md` and the superseding upgrade
 note in `features/authorization/stores/UPGRADE.md`.
+
+## 2026-07-18 — ui-goth GOTH-7.4: adoption/theming/security/handoff docs written
+
+Documented the real shipped `ui/goth` adopter surface (GOTH-7.4). No Go/`.templ`/
+asset/generated file changed except one new host test that proves the load-bearing
+snippets; the rest is docs.
+
+- **`ui/goth/README.md`** gained **§11 Adoption, theming, security, and handoff
+  recipes** (install/wiring, profiles + asset route, the `Requirements`→CSP formatter
+  recipe, the `components/` layer API, the "forgot to mount the asset route" failure
+  mode + boot-time `Manifest.Assets()` reachability self-check, the `views/goth`
+  adapter + `HTMLPolicy` recipe, the HTMX migration trigger + settled hidden-input CSRF,
+  the `views/templ`→`views/goth` tag posture, the SRI + CDN-relocation caveats, and the
+  GPS-token brand override + Segovia/GPS360 handoff — no Segovia code imported). §1–§10
+  frozen contract untouched.
+- **Gate-C GOTH-7.4 obligations discharged in §11:** the asset-route self-check pattern
+  (§11.5), the SRI CDN-relocation caveat (§11.9). The `Requirements`→CSP-directive-string
+  formatter is documented as the sanctioned **host-side recipe** (proven in a test), NOT
+  added as a new exported kit helper — a first-class helper would reopen the GOTH-0.3
+  frozen surface and re-enter Gate B, so it is recorded as a deferred owner decision.
+- **`RELEASING.md`** recorded the gate-b convention: any `ui/goth` `Requirements`-surface
+  change is an adopter-facing upgrade note even at semver-patch.
+- **Doc lags fixed:** `ui/goth/assets/THIRD_PARTY_NOTICES.md` (`views/templ`→`views/goth`,
+  rename now applied not pending); `features/authentication/README.md`,
+  `examples/auth-cms/README.md`, `examples/cms/README.md`, `features/README.md`,
+  `features/events/README.md` stale `views/templ`/`authtempl`/`cmstempl`/`.templ`-location
+  references corrected to the GOTH surface. `ui/README.md` gained an adoption pointer to
+  §11; `ARCHITECTURE.md` gained a one-line `Requirements`→CSP/`HTMLPolicy` ownership note.
+- **Snippet proof:** `examples/minimal/cmd/server/goth_doc_snippets_test.go` compiles and
+  runs the two Phase-7-learning recipes (CSP formatter → `style-src 'self'` with no
+  remote/nonce/unsafe; asset-reachability self-check passes wired, fails when the asset
+  route is unmounted). The host-wiring + HTMX + HTMLPolicy snippets are proven by the
+  existing GOTH-7.2/7.3 proof tests.

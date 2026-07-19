@@ -2,7 +2,16 @@
 
 A hand-written server-side-rendered CMS host, built on the `features/cms`
 feature module over the `sdk` framework kernel, persisted in Turso/libSQL,
-rendered with [`templ`](https://templ.guide).
+rendered through the [`ui/goth`](../../ui/goth/README.md) kit (templ + plain CSS)
+via the `features/cms/views/goth` adapter.
+
+The host builds a `ui/goth` bundle (`uigoth.New(uigoth.Config{AssetBasePath:
+"/assets/goth"})`), serves its embedded fingerprinted assets under that path with
+`web.NewStaticFileServer(uigothassets.FS, web.WithAssetPrefix("dist/"))`, and passes
+the bundle to `cmsViews`. The admin CRUD pages render through the GOTH default; the
+public site is this host's custom theme (`internal/theme`, the feature's
+view-override seam) composing the same bundle. See `ui/goth/README.md` §11 for the
+full adopter guide.
 
 **Domains (from `features/cms`):** `content` (posts, hierarchical pages, and
 host-registered custom types via the Registry model), `taxonomy` (categories +
@@ -42,8 +51,8 @@ never imports this app or `integrations/`, and everything ultimately stands on
 
 - Go 1.26+
 - A Turso / libSQL database (remote). `templ` is pinned via the `tool`
-  directive in `features/cms/go.mod` (where the `.templ` sources live); `go
-  tool templ` needs no global install.
+  directive in `features/cms/views/goth/go.mod` (where the `.templ` sources live
+  since the GOTH migration); `go tool templ` needs no global install.
 
 ## Environment
 
@@ -66,7 +75,7 @@ Run from the repo root (the `Makefile` covers all 6 modules):
 
 | target | does |
 |---|---|
-| `make generate` | `templ generate` in `features/cms` → `*_templ.go` |
+| `make generate` | `templ generate` in the `views/goth` + `ui/goth` modules → `*_templ.go` |
 | `make build` | generate + `go build ./...` per module |
 | `make run` | generate + migrate + `go run ./cmd/server` (this app) |
 | `make migrate` | applies `workshop/migrations` pre-boot (host-owned, separate from `run`'s server boot) |

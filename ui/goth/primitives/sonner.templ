@@ -1,0 +1,39 @@
+package primitives
+
+// Sonner (P63, family F4). The opinionated facade over the shared gothToast queue.
+// Sonner is a Toaster marked data-sonner; the caller places SonnerToast entries (or
+// raw Toast parts) inside.
+templ Sonner(p SonnerProps) {
+	@Toaster(sonnerToaster(p)) {
+		{ children... }
+	}
+}
+
+// SonnerToast renders a COMPLETE opinionated toast from props: a status accent (via
+// data-variant), the title, optional description, optional action, and a close button —
+// all composed over the shared Toast parts so it rides the same queue runtime.
+templ SonnerToast(p SonnerToastProps) {
+	@Toast(sonnerToast(p)) {
+		<div class="goth-sonner-toast-body" data-slot="sonner-body">
+			<span class="goth-sonner-toast-accent" data-slot="sonner-accent" aria-hidden="true"></span>
+			<div class="goth-sonner-toast-text" data-slot="sonner-text">
+				@ToastTitle(ToastTitleProps{}) {
+					{ p.Title }
+				}
+				if p.Description != "" {
+					@ToastDescription(ToastDescriptionProps{}) {
+						{ p.Description }
+					}
+				}
+			</div>
+			if p.ActionLabel != "" {
+				@ToastAction(sonnerActionProps(p)) {
+					{ p.ActionLabel }
+				}
+			}
+			@ToastClose(sonnerCloseProps(p)) {
+				<span class="goth-sonner-toast-close-glyph" aria-hidden="true">&#215;</span>
+			}
+		</div>
+	}
+}

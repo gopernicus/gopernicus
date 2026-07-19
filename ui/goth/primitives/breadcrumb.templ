@@ -1,0 +1,59 @@
+package primitives
+
+// Breadcrumb (P05, family F3). The caller composes the parts inside the labelled
+// nav: a BreadcrumbList holds BreadcrumbItem parts, each carrying a
+// BreadcrumbLink (prior page) or a BreadcrumbPage (current page). Native links
+// stay links; the current page is announced with aria-current="page".
+templ Breadcrumb(p BreadcrumbProps) {
+	<nav class={ breadcrumbClass(p) } { breadcrumbAttrs(p)... }>
+		{ children... }
+	</nav>
+}
+
+templ BreadcrumbList(p BreadcrumbListProps) {
+	<ol class={ breadcrumbListClass(p) } { breadcrumbListAttrs(p)... }>
+		{ children... }
+	</ol>
+}
+
+templ BreadcrumbItem(p BreadcrumbItemProps) {
+	<li class={ breadcrumbItemClass(p) } { breadcrumbItemAttrs(p)... }>
+		{ children... }
+	</li>
+}
+
+templ BreadcrumbLink(p BreadcrumbLinkProps) {
+	<a href={ p.URL.SafeURL() } class={ breadcrumbLinkClass(p) } { breadcrumbLinkAttrs(p)... }>
+		{ children... }
+	</a>
+}
+
+// BreadcrumbPage is the current page: a non-link span announced as the current
+// location. Its label is templ children.
+templ BreadcrumbPage(p BreadcrumbPageProps) {
+	<span class={ breadcrumbPageClass(p) } { breadcrumbPageAttrs(p)... }>
+		{ children... }
+	</span>
+}
+
+// BreadcrumbSeparator sits between items. It is presentational; a caller-provided
+// Icon overrides the default chevron glyph.
+templ BreadcrumbSeparator(p BreadcrumbSeparatorProps) {
+	<li class={ breadcrumbSeparatorClass(p) } { breadcrumbSeparatorAttrs(p)... }>
+		if p.Icon != nil {
+			@p.Icon
+		} else {
+			@chevronRightGlyph()
+		}
+	</li>
+}
+
+// BreadcrumbEllipsis is the responsive-collapse slot: a decorative glyph with a
+// visually-hidden "More" label so the collapse is announced to assistive
+// technology.
+templ BreadcrumbEllipsis(p BreadcrumbEllipsisProps) {
+	<span class={ breadcrumbEllipsisClass(p) } { breadcrumbEllipsisAttrs(p)... }>
+		@ellipsisGlyph()
+		<span class="goth-sr-only">More</span>
+	</span>
+}

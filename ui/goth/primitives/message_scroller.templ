@@ -1,0 +1,56 @@
+package primitives
+
+// MessageScroller (P60, family F4). The caller composes and places the parts; each
+// shares the data-slot contract. The root binds gothMessageScroller (inert with no JS);
+// the viewport is a native scroll region with a role=log transcript.
+templ MessageScroller(p MessageScrollerProps) {
+	<div class={ messageScrollerClass(p) } { messageScrollerAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// MessageScrollerViewport is the scrollable role=log region. The caller places the
+// history trigger and content inside it.
+templ MessageScrollerViewport(p MessageScrollerViewportProps) {
+	<div class={ messageScrollerViewportClass(p) } { messageScrollerViewportAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// MessageScrollerHistory is the "load earlier" trigger: a real link (URL set, the no-JS
+// reload of earlier history) or a button. It is marked data-goth-history so the
+// controller anchors the viewport across an HTMX afterbegin (prepend) swap.
+templ MessageScrollerHistory(p MessageScrollerHistoryProps) {
+	if !p.URL.IsZero() {
+		<a href={ p.URL.SafeURL() } class={ messageScrollerHistoryClass(p) } { messageScrollerHistoryAttrs(p, true)... }>
+			{ children... }
+		</a>
+	} else {
+		<button class={ messageScrollerHistoryClass(p) } { messageScrollerHistoryAttrs(p, false)... }>
+			{ children... }
+		</button>
+	}
+}
+
+// MessageScrollerContent is the turns list and the HTMX prepend/append swap target.
+templ MessageScrollerContent(p MessageScrollerContentProps) {
+	<div class={ messageScrollerContentClass(p) } { messageScrollerContentAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// MessageScrollerStatus is the unread / jump-to-latest affordance. CSS hides it while
+// the root is data-unread="0"; the controller reveals it and updates the count text.
+templ MessageScrollerStatus(p MessageScrollerStatusProps) {
+	<button class={ messageScrollerStatusClass(p) } { messageScrollerStatusAttrs(p)... }>
+		<span class="goth-message-scroller-status-label" data-slot="message-scroller-status-label">{ messageScrollerStatusLabel(p) }</span>
+	</button>
+}
+
+// MessageScrollerJump is a jump-to-message link: a native #id anchor (the no-JS baseline)
+// that the controller enhances by focusing the target message.
+templ MessageScrollerJump(p MessageScrollerJumpProps) {
+	<a href={ messageScrollerJumpHref(p) } class={ messageScrollerJumpClass(p) } { messageScrollerJumpAttrs(p)... }>
+		{ children... }
+	</a>
+}

@@ -1,0 +1,37 @@
+package primitives
+
+// Accordion (P27, family F4). Each AccordionItem is a native <details>, so items
+// disclose and toggle with no JavaScript. In single mode the caller gives every
+// item the SAME Name, which forms a native exclusive group (opening one closes the
+// others) — again with no JavaScript. gothCollapse enhances each item with a
+// data-state hook and goth:open/goth:close events; it never owns disclosure.
+templ Accordion(p AccordionProps) {
+	<div class={ accordionClass(p) } { accordionAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+templ AccordionItem(p AccordionItemProps) {
+	<details class={ accordionItemClass(p) } { accordionItemAttrs(p)... }>
+		{ children... }
+	</details>
+}
+
+// AccordionTrigger is the native <summary>: Tab moves focus between item headers
+// and Enter/Space toggles, all natively.
+templ AccordionTrigger(p AccordionTriggerProps) {
+	<summary class={ accordionPartClass(p.Base, "goth-accordion-trigger") } { accordionPartAttrs(p.Base, "accordion-trigger")... }>
+		<span data-slot="accordion-label">
+			{ children... }
+		</span>
+		<span class="goth-accordion-chevron" data-slot="accordion-chevron" aria-hidden="true">
+			@chevronDownGlyph()
+		</span>
+	</summary>
+}
+
+templ AccordionContent(p AccordionContentProps) {
+	<div class={ accordionPartClass(p.Base, "goth-accordion-content") } { accordionPartAttrs(p.Base, "accordion-content")... }>
+		{ children... }
+	</div>
+}

@@ -35,7 +35,7 @@ worked example `examples/cms`.
     cms/                  module github.com/gopernicus/gopernicus/features/cms                — the CMS hexagon (datastore-free)
       stores/pgx/         module …/features/cms/stores/pgx              — the CMS feature's pgx store adapter
       stores/turso/       module …/features/cms/stores/turso            — the CMS feature's Turso store adapter
-      views/templ/        module …/features/cms/views/templ             — cms's bundled default views (templ; FS3 sibling)
+      views/goth/         module …/features/cms/views/goth              — cms's bundled default views (ui/goth; FS3 sibling)
     events/               module github.com/gopernicus/gopernicus/features/events             — durable outbox + SSE gateway hexagon (datastore-free)
       stores/pgx/         module …/features/events/stores/pgx           — events' pgx store adapter
       stores/turso/       module …/features/events/stores/turso         — events' Turso store adapter
@@ -163,10 +163,11 @@ state. `authorization.RequirePermission` fails CLOSED (engine or resolver error
 
 ## Kinds of module — the taxonomy
 
-Six kinds of thing live in this ecosystem (ratified 2026-07-02, R6 —
+Seven kinds of thing live in this ecosystem (ratified 2026-07-02, R6 —
 `.claude/plans/roadmap/00-intersections.md` §1; amended 2026-07-07,
 feature-standard FS3, adding the views-module row; amended 2026-07-09,
-workshop-v2-scaffolding W5, adding the workshop row):
+workshop-v2-scaffolding W5, adding the workshop row; amended 2026-07-17,
+ui-goth GOTH-0.2, adding the UI-implementation row):
 
 | kind | definition | examples | swap unit |
 |---|---|---|---|
@@ -174,8 +175,9 @@ workshop-v2-scaffolding W5, adding the workshop row):
 | **integration** | a third-party backend for a port; isolates exactly one external dependency — a third-party library or an external vendor's live API contract — **or implements one sdk capability port by composing other sdk packages** (zero external deps, never importing features/, examples/, or another integration; guard G13; `notify/mailer`, 2026-07-10); one module | `datastores/turso`, `datastores/pgxdb`, `kvstores/goredis` | a module import in the host's `main` |
 | **feature** | a mountable domain module: own entities, **own durable schema + migrations**, and/or **own route surface**; its core module requires **sdk only** (FS1, 2026-07-07) | `cms`, `auth`, `jobs`; next: `events` | `NewService` + a `svc.Register` call |
 | **store module** | a feature's store implementation — SQL + migrations written against one driver package's API (`stores/<package>`) | `cms/stores/turso`, `cms/stores/pgx` | a module import + one `Open` call |
-| **views module** | a feature's bundled presentation default — the implementation of the core's `Views` port, written against one view package's API (`views/<package>`; FS3, 2026-07-07 — amends R6's four-kind table). Nil `Config.Views` → the feature's HTML surface is not registered, uniformly | `cms/views/templ` (landed at feature-standard B2, 2026-07-07) | a module import + one `Config` field |
+| **views module** | a feature's bundled presentation default — the implementation of the core's `Views` port, written against one view package's API (`views/<package>`; FS3, 2026-07-07 — amends R6's four-kind table). Nil `Config.Views` → the feature's HTML surface is not registered, uniformly | `cms/views/goth` (landed at feature-standard B2, 2026-07-07; migrated templ→ui/goth at ui-goth GOTH-7.3, 2026-07-18) | a module import + one `Config` field |
 | **workshop tool** | a developer-time tool that EMITS the other kinds' anatomies and never links them (guard G11: nothing imports `workshop/`, workshop imports no feature/example); its output is verified by scaffold-compile tests inside `make check`, not by runtime coupling | `workshop/gopernicus` (the scaffolding CLI: `init` / `new feature` / `db` verbs; workshop-v2-scaffolding, 2026-07-09) | a `go install` — never a runtime dependency |
+| **UI implementation** | a reusable presentation system for ONE rendering/runtime family (ui-goth GOTH-0.2, 2026-07-17): it owns view-library dependencies, semantic tokens, primitives/components, interaction controllers, and distributable assets, and owns NO domain schema and NO routes. Its `go.mod` may require its own view/runtime libraries (templ and its pinned inputs) plus `sdk`; it never imports a feature, integration, example, or workshop package (guard G17). A feature reaches a UI implementation only through that feature's own `views/<pkg>` adapter module — never the reverse; the UI implementation never registers routes, installs middleware, or writes HTTP response headers (the host composes assets + route registration) | `ui/goth` (templ + plain CSS + Alpine + optional HTMX); later `ui/react`, `ui/vue` | a host/view-adapter import plus theme/bundle configuration |
 
 The two litmus tests: **if swapping the adapter changes what the host must
 migrate, it's a store module per implementation; if the swap is invisible outside
@@ -183,6 +185,43 @@ the process boundary, it's one port with swappable backends.** And: **needs
 its own migrations or routes → feature; pure behavior a consumer calls →
 sdk facility.** Features never fork into variants — optional capability is a
 nil-safe port field, wired (or not) in the host's `main`.
+
+**UI-implementation dependency arrows (ui-goth GOTH-0.2, 2026-07-17).** The
+seventh kind sits at the top-level `ui/` family — neither a feature nor an
+integration — because it is a reusable presentation system that owns no domain
+schema and no routes. The arrows only ever point outward-and-down:
+
+```
+feature core  <--- feature views/<pkg> adapter ---> ui/goth ---> templ/runtime
+      ^                       ^                        ^
+      |                       |                        |
+      +---------------------- host -------------------+
+                              |
+                              +-- sdk web static serving / route registration
+```
+
+- a UI implementation → its own view/runtime libraries (templ + pinned inputs)
+  and `sdk`, never a feature/integration/example/workshop (guard G17);
+- a feature's `views/<pkg>` adapter → its feature core + `sdk` + `ui/goth`;
+- a host → selected features, selected view adapters, `ui/goth`, and `sdk`;
+- only the host registers an asset route and chooses the public asset base URL,
+  and only the host/owning feature writes HTTP response/security headers — the
+  UI implementation exposes assets, renderers, and requirements, never routes. A
+  host maps the bundle's deterministic `Requirements` into its own CSP header; a
+  security-sensitive feature (authentication) instead has its `views/goth` adapter
+  map `Requirements` into the feature's technology-neutral resource policy
+  (`HTMLPolicy()`), so the feature core stays view-technology-free. See
+  `ui/goth/README.md` §11 for the adopter recipes.
+
+**`ui/` versus app-local `internal/inbound/views/`.** The Inbound anatomy below
+reserves `internal/inbound/views/` as a host's PRIVATE presentation tree — its
+shared `Shell`/layouts and its own bespoke kit, sealed by Go's `internal/`. The
+top-level `ui/` family is the REUSABLE, importable counterpart: a host that wants
+the shared kit imports `ui/goth` (and the relevant feature `views/goth` adapters)
+instead of growing a private kit under `internal/inbound/views/`. The two are not
+in tension — a host may consume `ui/goth` and still keep app-local overrides in
+`internal/inbound/views/` — but the importable theme root is `ui/`, and the
+app-local tree is the escape hatch, not the framework's shared UI kit.
 
 ## The framework: `sdk` + `integrations`
 
@@ -351,7 +390,8 @@ internal/inbound/
     templates/          #   bundled default implementation (templ), co-located
   http/                 # transport plumbing only (middleware) — never handlers
   views/                # the GLOBAL presentation tree: shared Shell/layouts,
-                        #   the future UI kit — the theme root
+                        #   the host's PRIVATE kit — the app-local theme root
+                        #   (the reusable, importable kit is top-level ui/)
 ```
 
 - **The render port (FS3 scaled to app-local).** `views.go` defines the
@@ -361,8 +401,11 @@ internal/inbound/
   View-tech dependencies ride the app module's go.mod and touch only
   `internal/inbound` — `internal/logic` stays sdk-only (the one rule).
 - **The theming seam.** `internal/inbound/views/` holds the shared
-  `Shell`/layouts and the future UI kit, consumed by every domain's
-  templates; a themed kit is a new implementation of the ports plus one
+  `Shell`/layouts and the host's private kit, consumed by every domain's
+  templates; the reusable, importable counterpart is the top-level `ui/`
+  family (`ui/goth`), which a host imports instead of growing a bespoke
+  kit here (the UI-implementation module kind, GOTH-0.2). A themed kit is
+  a new implementation of the ports plus one
   `cmd` wiring change. **Partial override via embedding:** the default is
   a concrete exported struct, so a host (or a single binary —
   `cmd/<binary>/views/`) embeds it and overrides individual port methods;

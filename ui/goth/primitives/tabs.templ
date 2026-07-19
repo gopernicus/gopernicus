@@ -1,0 +1,31 @@
+package primitives
+
+// Tabs (P34, family F4). No-JS baseline: the server-selected TabsContent renders
+// visible and the other panels render hidden, so the active tab's content is fully
+// readable without JavaScript. x-data="gothTabs" enhances the list with roving
+// focus (arrow/Home/End), manual or automatic activation, and client-side panel
+// switching. ARIA linkage (aria-controls / aria-labelledby / aria-selected) is
+// carried by caller-passed Base.ID per part.
+templ Tabs(p TabsProps) {
+	<div class={ tabsClass(p) } { tabsAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+templ TabsList(p TabsListProps) {
+	<div class={ tabsListClass(p) } { tabsListAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+templ TabsTrigger(p TabsTriggerProps) {
+	<button class={ tabsTriggerClass(p) } { tabsTriggerAttrs(p)... }>
+		{ children... }
+	</button>
+}
+
+templ TabsContent(p TabsContentProps) {
+	<div class={ tabsContentClass(p) } { tabsContentAttrs(p)... }>
+		{ children... }
+	</div>
+}

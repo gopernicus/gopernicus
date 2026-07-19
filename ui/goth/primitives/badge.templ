@@ -1,0 +1,17 @@
+package primitives
+
+// Badge (P04, family F1) renders a small inline status/label. Its content is the
+// single inline label passed as templ children. With BadgeProps.URL set it
+// renders an anchor styled as a badge; otherwise a span. data-slot="badge" and
+// data-variant are the stable emitted surface.
+templ Badge(p BadgeProps) {
+	if !p.URL.IsZero() {
+		<a href={ p.URL.SafeURL() } class={ badgeClass(p) } { badgeAttrs(p)... }>
+			{ children... }
+		</a>
+	} else {
+		<span class={ badgeClass(p) } { badgeAttrs(p)... }>
+			{ children... }
+		</span>
+	}
+}

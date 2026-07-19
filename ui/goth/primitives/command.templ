@@ -1,0 +1,65 @@
+package primitives
+
+// Command (P51, family F4). See command.go for the inline gothCombobox reuse, the
+// server-ownership model, and the link-first no-JS baseline. The caller composes
+// CommandInput and CommandList (holding CommandGroup / CommandItem / CommandEmpty /
+// CommandSeparator children) inside Command.
+templ Command(p CommandProps) {
+	<div class={ classNames("goth-command", p.Class) } { commandAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// CommandInput is the palette search field. It filters the list (client) or
+// triggers an async server fetch (server) and drives the active item through
+// aria-activedescendant while keeping focus on itself.
+templ CommandInput(p CommandInputProps) {
+	<input class={ classNames("goth-command-input", p.Class) } { commandInputAttrs(p)... }/>
+}
+
+// CommandList is the always-visible role=listbox of results.
+templ CommandList(p CommandListProps) {
+	<div class={ classNames("goth-command-list", p.Class) } { commandListAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// CommandGroup is a role=group of related items labelled by its heading.
+templ CommandGroup(p CommandGroupProps) {
+	<div class={ classNames("goth-command-group", p.Class) } { commandGroupAttrs(p)... }>
+		if p.Heading != "" {
+			<div class="goth-command-group-heading" data-slot="group-heading" id={ p.HeadingID } aria-hidden="true">
+				{ p.Heading }
+			</div>
+		}
+		{ children... }
+	</div>
+}
+
+// CommandItem is one role=option command. A URL renders a link (link-first);
+// otherwise a submit button carrying name/value. With no JavaScript it navigates
+// or submits; enhanced, the controller moves the active item and Enter activates it.
+templ CommandItem(p CommandItemProps) {
+	if p.URL.IsZero() {
+		<button class={ classNames("goth-command-item", p.Class) } { commandItemButtonAttrs(p)... }>
+			{ children... }
+		</button>
+	} else {
+		<a href={ p.URL.SafeURL() } class={ classNames("goth-command-item", p.Class) } { commandItemLinkAttrs(p)... }>
+			{ children... }
+		</a>
+	}
+}
+
+// CommandEmpty is the no-results message. In client-filter mode the controller
+// toggles it; in server-filter mode the server renders it.
+templ CommandEmpty(p CommandEmptyProps) {
+	<div class={ classNames("goth-command-empty", p.Class) } { commandEmptyAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// CommandSeparator is a role=separator divider between groups.
+templ CommandSeparator(p CommandSeparatorProps) {
+	<div class={ classNames("goth-command-separator", p.Class) } { commandSeparatorAttrs(p)... }></div>
+}

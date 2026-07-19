@@ -1,0 +1,55 @@
+package primitives
+
+// Toast (P64, family F4). The caller composes and places the parts; each shares the
+// data-slot contract. The Toaster region binds gothToast (inert with no JS) and is a
+// server-rendered role=region landmark; the toasts inside are readable with no JS.
+templ Toaster(p ToasterProps) {
+	<div class={ toasterClass(p) } { toasterAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// Toast is one notification entry. The caller composes ToastTitle / ToastDescription /
+// ToastAction / ToastClose inside. data-state="open" is the server-owned baseline; the
+// controller flips it to "closed" on dismissal and owns data-index stacking order.
+templ Toast(p ToastProps) {
+	<div class={ toastClass(p) } { toastAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// ToastTitle is the toast's primary line (also the first announced fragment).
+templ ToastTitle(p ToastTitleProps) {
+	<div class={ toastPartClass(p.Base, "goth-toast-title") } { toastPartAttrs(p.Base, "toast-title")... }>
+		{ children... }
+	</div>
+}
+
+// ToastDescription is the toast's supporting detail (the second announced fragment).
+templ ToastDescription(p ToastDescriptionProps) {
+	<div class={ toastPartClass(p.Base, "goth-toast-description") } { toastPartAttrs(p.Base, "toast-description")... }>
+		{ children... }
+	</div>
+}
+
+// ToastAction is an optional action: a real link (URL set — the no-JS action) or a
+// button that dispatches goth:select and dismisses the toast.
+templ ToastAction(p ToastActionProps) {
+	if !p.URL.IsZero() {
+		<a href={ p.URL.SafeURL() } class={ toastPartClass(p.Base, "goth-toast-action") } { toastActionAttrs(p, true)... }>
+			{ children... }
+		</a>
+	} else {
+		<button class={ toastPartClass(p.Base, "goth-toast-action") } { toastActionAttrs(p, false)... }>
+			{ children... }
+		</button>
+	}
+}
+
+// ToastClose is the dismiss button. The controller delegates its click to dismiss the
+// toast; it is a real button so keyboard activation dismisses with no extra wiring.
+templ ToastClose(p ToastCloseProps) {
+	<button class={ toastPartClass(p.Base, "goth-toast-close") } { toastCloseAttrs(p)... }>
+		{ children... }
+	</button>
+}

@@ -1,0 +1,14 @@
+package primitives
+
+// Label (P16, family F1) renders a native <label>. Its content is the label
+// text (templ children). With LabelProps.For set it associates with a control by
+// id so a click focuses it and assistive tech announces the name; Required adds a
+// decorative indicator (the control owns the authoritative required state).
+templ Label(p LabelProps) {
+	<label class={ labelClass(p) } { labelAttrs(p)... }>
+		{ children... }
+		if p.Required {
+			<span class="goth-label-required" aria-hidden="true">*</span>
+		}
+	</label>
+}

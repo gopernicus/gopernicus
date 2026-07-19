@@ -1,0 +1,114 @@
+package primitives
+
+// Chart (P58, family F4 shipped native/no-controller). See chart.go for the
+// server-geometry model, the no-JS baseline, and the tooltip/table-fallback story.
+// The caller composes the frame parts; ChartContent is the engine-neutral seam that
+// holds either ChartSVG (the kit's server renderer) or a host-rendered <svg>.
+
+templ Chart(p ChartProps) {
+	<figure class={ classNames("goth-chart", p.Class) } { chartAttrs(p)... }>
+		{ children... }
+	</figure>
+}
+
+// ChartHeader groups the title and description above the plot.
+templ ChartHeader(p ChartHeaderProps) {
+	<div class={ classNames("goth-chart-header", p.Class) } { chartPartAttrs(p.Base, "chart-header")... }>
+		{ children... }
+	</div>
+}
+
+// ChartTitle is the visible chart caption. Give it a stable ID to link the SVG's
+// aria-labelledby.
+templ ChartTitle(p ChartTitleProps) {
+	<div class={ classNames("goth-chart-title", p.Class) } { chartPartAttrs(p.Base, "chart-title")... }>
+		{ children... }
+	</div>
+}
+
+// ChartDescription is the supporting sub-caption.
+templ ChartDescription(p ChartDescriptionProps) {
+	<p class={ classNames("goth-chart-description", p.Class) } { chartPartAttrs(p.Base, "chart-description")... }>
+		{ children... }
+	</p>
+}
+
+// ChartContent is the SVG surface wrapper (the engine-neutral seam). Compose ChartSVG
+// or a host-rendered <svg> inside it.
+templ ChartContent(p ChartContentProps) {
+	<div class={ classNames("goth-chart-content", p.Class) } { chartPartAttrs(p.Base, "chart-content")... }>
+		{ children... }
+	</div>
+}
+
+// ChartSVG renders the server-computed chart as an SVG using only presentation and
+// geometry attributes plus .goth-* classes over the chart-N tokens. role="img" plus
+// the <title>/<desc> name the graphic; every mark carries a native <title> tooltip.
+templ ChartSVG(d ChartData) {
+	{{ layout := computeChartLayout(d) }}
+	<svg
+		class="goth-chart-svg"
+		data-slot="chart-svg"
+		viewBox={ layout.ViewBox }
+		role="img"
+		preserveAspectRatio="xMidYMid meet"
+		focusable="false"
+		if d.labelledBy() != "" {
+			aria-labelledby={ d.labelledBy() }
+		}
+	>
+		<title if d.titleID() != "" { id={ d.titleID() } }>{ d.Title }</title>
+		if d.Description != "" {
+			<desc if d.descID() != "" { id={ d.descID() } }>{ d.Description }</desc>
+		}
+		for _, g := range layout.YTicks {
+			<line class="goth-chart-grid" x1={ g.X1 } y1={ g.Y1 } x2={ g.X2 } y2={ g.Y2 }></line>
+			<text class="goth-chart-axis goth-chart-axis-y" x={ g.TX } y={ g.TY } text-anchor="end">{ g.Text }</text>
+		}
+		<line class="goth-chart-axis-line" x1={ layout.AxisX1 } y1={ layout.AxisY1 } x2={ layout.AxisX2 } y2={ layout.AxisY2 }></line>
+		for _, b := range layout.Bars {
+			<rect class="goth-chart-bar" data-series={ b.Series } x={ b.X } y={ b.Y } width={ b.W } height={ b.H } rx="2">
+				<title>{ b.Title }</title>
+			</rect>
+		}
+		for _, ln := range layout.Lines {
+			if ln.Area != "" {
+				<path class="goth-chart-area" data-series={ ln.Series } d={ ln.Area }></path>
+			}
+			<polyline class="goth-chart-line" data-series={ ln.Series } points={ ln.Points } fill="none"></polyline>
+			for _, dot := range ln.Dots {
+				<circle class="goth-chart-dot" data-series={ dot.Series } cx={ dot.CX } cy={ dot.CY } r="3">
+					<title>{ dot.Title }</title>
+				</circle>
+			}
+		}
+		for _, x := range layout.XLabels {
+			<text class="goth-chart-axis goth-chart-axis-x" x={ x.X } y={ x.Y } text-anchor="middle">{ x.Text }</text>
+		}
+	</svg>
+}
+
+// ChartLegend is the series key list. Its items carry data-series so their swatch
+// color matches the plotted series.
+templ ChartLegend(p ChartLegendProps) {
+	<ul class={ classNames("goth-chart-legend", p.Class) } { chartLegendAttrs(p)... }>
+		{ children... }
+	</ul>
+}
+
+// ChartLegendItem is one legend key: a series swatch plus its label.
+templ ChartLegendItem(p ChartLegendItemProps) {
+	<li class={ classNames("goth-chart-legend-item", p.Class) } { chartLegendItemAttrs(p)... }>
+		<span class="goth-chart-swatch" data-slot="chart-swatch" aria-hidden="true"></span>
+		<span class="goth-chart-legend-label" data-slot="chart-legend-label">{ children... }</span>
+	</li>
+}
+
+// ChartTable is the accessible tabular fallback: a native <details> disclosure (no
+// JavaScript) whose content the caller composes from the Table (P24) primitives.
+templ ChartTable(p ChartTableProps) {
+	<details class={ classNames("goth-chart-table", p.Class) } { chartPartAttrs(p.Base, "chart-table")... }>
+		<summary class="goth-chart-table-summary" data-slot="chart-table-summary">{ chartTableSummaryText(p) }</summary>
+		{ children... }
+	</details>
+}

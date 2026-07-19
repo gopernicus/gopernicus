@@ -1,0 +1,22 @@
+/*
+ * host_theme.css — a real host-authored theme stylesheet the showcase serves and
+ * wires via goth.Config.ThemeStylesheetPath (the WordPress model: the kit ships
+ * compiled component CSS, the host ships a stylesheet loaded AFTER it). It is
+ * embedded into the Go binary and served with an explicit text/css content type.
+ *
+ * It proves BOTH override axes over the kit default theme:
+ *   - token-level: --primary is retuned, so every primary-driven surface shifts.
+ *   - class-level: .goth-badge gets border-radius: 0, a squared badge the kit
+ *     default rounds.
+ * The theme-host-stylesheet specimen renders against a bundle configured with this
+ * file's public path; the e2e theme.spec.ts asserts the computed --primary equals
+ * the host value and the computed badge radius is 0px.
+ */
+
+:root {
+  --primary: oklch(0.55 0.22 265);
+}
+
+.goth-badge {
+  border-radius: 0;
+}

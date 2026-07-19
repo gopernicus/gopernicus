@@ -28,7 +28,14 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
 	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	uigoth "github.com/gopernicus/gopernicus/ui/goth"
+	uigothassets "github.com/gopernicus/gopernicus/ui/goth/assets"
 )
+
+// gothAssetBasePath is the public URL prefix this host serves the ui/goth
+// fingerprinted assets (the admin pages' stylesheet) under. The bundle pins the
+// same path so the emitted stylesheet href and the asset route agree.
+const gothAssetBasePath = "/assets/goth"
 
 func main() {
 	// Load .env (missing file is not an error) before reading any config.
@@ -118,12 +125,28 @@ func run(ctx context.Context, log *slog.Logger) error {
 		sender = email.NewConsole(log)
 	}
 
+	// The ui/goth presentation bundle backs the admin pages; the host serves the
+	// kit's fingerprinted assets (the admin pages' stylesheet) under the path the
+	// bundle names. The host's custom public-site theme embeds the ui/goth default,
+	// so its admin/forms pages render through the bundle while the public chrome
+	// stays ACME-branded.
+	bundle, err := uigoth.New(uigoth.Config{AssetBasePath: gothAssetBasePath})
+	if err != nil {
+		return err
+	}
+	cmsViews, err := theme.New(bundle)
+	if err != nil {
+		return err
+	}
+	uigothStatic := web.NewStaticFileServer(uigothassets.FS, web.WithAssetPrefix("dist/"))
+	uigothStatic.AddRoutes(router, gothAssetBasePath)
+
 	// Mount the CMS feature: the store adapter supplies the repositories (the
 	// schema was applied pre-boot by the host's migration runner); the feature
 	// wires its services + routes.
 	repos := cmsturso.Repositories(db)
 	if err := cms.Register(mount, repos, cms.Config{
-		Views:     theme.New(), // host-owned custom public-site theme (the §6 seam)
+		Views:     cmsViews, // host-owned custom public-site theme (the §6 seam) over ui/goth
 		Blobs:     blobs,
 		Cache:     cacher.NewMemory(), // in-memory public-page cache; redis later
 		Mailer:    sender,

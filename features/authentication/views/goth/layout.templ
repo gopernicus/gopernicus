@@ -1,0 +1,85 @@
+package goth
+
+import (
+	"github.com/gopernicus/gopernicus/features/authentication"
+	"github.com/gopernicus/gopernicus/ui/goth/components/forms"
+	"github.com/gopernicus/gopernicus/ui/goth/components/layouts"
+)
+
+// document is the shared page chrome for every auth page. It composes the ui/goth
+// bundle head (the fingerprinted GOTH stylesheet + any profile scripts, served from
+// the host origin under a strict CSP) with the fixed auth meta tags. headExtra is an
+// optional per-page head node — the externalized fragment-reader <script> on the
+// reset/magic-link landings. A host that wants different chrome overrides individual
+// Views methods.
+templ document(head templ.Component, title string, headExtra templ.Component, body templ.Component) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<meta name="referrer" content="no-referrer"/>
+			<title>{ title }</title>
+			@head
+			if headExtra != nil {
+				@headExtra
+			}
+		</head>
+		<body>
+			@body
+		</body>
+	</html>
+}
+
+// shell centers the page content in the ui/goth AuthShell (a Card-composed layout).
+// The page title rides an <h1> brand so a screen reader still gets a single top-level
+// heading for orientation and focus.
+templ shell(title, description string) {
+	<main class="goth-auth-main" data-slot="auth-main">
+		@layouts.AuthShell(layouts.AuthShellProps{Description: description, Brand: authHeading(title)}) {
+			{ children... }
+		}
+	</main>
+}
+
+// authHeading is the AuthShell brand slot: the page's single <h1>.
+templ authHeading(title string) {
+	<h1 class="goth-auth-title" data-slot="auth-title">{ title }</h1>
+}
+
+// fragmentScriptTag loads the externalized fragment-reader script for the reset and
+// magic-link landings. It is same-origin ('self') and deferred, so it runs after the
+// form is parsed and needs no inline script (design §6.4; GOTH-7.2).
+templ fragmentScriptTag(src string) {
+	<script src={ src } defer></script>
+}
+
+// message renders the generic, enumeration-resistant notice when present. It is
+// never a value that distinguishes an unknown/unverified account.
+templ message(pc authentication.PageContext) {
+	if pc.Message != "" {
+		<p role="status" data-slot="auth-message">{ pc.Message }</p>
+	}
+}
+
+// errorSummary renders the accessible validation summary (a destructive Alert whose
+// entries link to each offending control) via the ui/goth forms.ErrorSummary
+// composition. It renders nothing when there are no field errors.
+templ errorSummary(pc authentication.PageContext) {
+	@forms.ErrorSummary(forms.ErrorSummaryProps{Errors: fieldMessages(pc)})
+}
+
+// csrfField renders the double-submit CSRF hidden input every mutation form carries.
+// The value is a per-request anti-CSRF token, never a credential.
+templ csrfField(pc authentication.PageContext) {
+	<input type="hidden" name="csrf_token" value={ pc.CSRFToken }/>
+}
+
+// returnToField renders the allowlist-validated return-to destination as a hidden
+// input when present. The handler has already validated it against the exact
+// redirect allowlist; it is never a Host-derived or attacker-controlled URL.
+templ returnToField(pc authentication.PageContext) {
+	if pc.ReturnTo != "" {
+		<input type="hidden" name="return_to" value={ pc.ReturnTo }/>
+	}
+}

@@ -1,0 +1,48 @@
+package primitives
+
+// Carousel (P57, family F4 shipped native/no-controller). The caller composes and
+// places the parts. The scroll-snap track (CarouselContent) is the focusable,
+// keyboard-scrollable region; each CarouselItem is a snap-aligned slide; the
+// CarouselDots are real in-page anchor links that scroll a slide into view with no
+// JavaScript.
+templ Carousel(p CarouselProps) {
+	<section class={ carouselClass(p) } { carouselAttrs(p)... }>
+		{ children... }
+	</section>
+}
+
+// CarouselContent is the scroll-snap track. tabindex=0 + aria-label make it a named
+// keyboard-scrollable region; scroll-snap settles slides into place.
+templ CarouselContent(p CarouselContentProps) {
+	<div class={ carouselContentClass(p) } { carouselContentAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// CarouselItem is one slide. Give it a stable ID so a CarouselDot can link to it.
+templ CarouselItem(p CarouselItemProps) {
+	<div class={ carouselItemClass(p) } { carouselItemAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// CarouselDots groups the direct-navigation dots.
+templ CarouselDots(p CarouselDotsProps) {
+	<div class={ carouselDotsClass(p) } { carouselDotsAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// CarouselDot is one direct-navigation anchor: a real link that scrolls its target
+// slide into view with no JavaScript. An empty Target renders an inert marker.
+templ CarouselDot(p CarouselDotProps) {
+	if !p.Target.IsZero() {
+		<a href={ p.Target.SafeURL() } class={ carouselDotClass(p) } { carouselDotAttrs(p)... }>
+			{ children... }
+		</a>
+	} else {
+		<span class={ carouselDotClass(p) } { carouselDotAttrs(p)... }>
+			{ children... }
+		</span>
+	}
+}

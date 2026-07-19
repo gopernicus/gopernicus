@@ -19,21 +19,23 @@ use (
 	./features/authentication
 	./features/authentication/stores/pgx
 	./features/authentication/stores/turso
-	./features/authentication/views/templ
+	./features/authentication/views/goth
 	./features/authorization
 	./features/authorization/stores/pgx
 	./features/authorization/stores/turso
 	./features/cms
 	./features/cms/stores/pgx
 	./features/cms/stores/turso
-	./features/cms/views/templ
+	./features/cms/views/goth
 	./features/events
 	./features/events/stores/pgx
 	./features/events/stores/turso
 	./features/jobs
 	./features/jobs/stores/pgx
 	./features/jobs/stores/turso
+	./ui/goth
 	./examples/auth-cms
+	./examples/goth-showcase
 	./examples/cms
 	./examples/jobs-minimal
 	./examples/minimal

@@ -1,0 +1,44 @@
+package goth
+
+import (
+	"github.com/gopernicus/gopernicus/features/authentication"
+	"github.com/gopernicus/gopernicus/ui/goth/components/forms"
+	"github.com/gopernicus/gopernicus/ui/goth/primitives"
+)
+
+// resetBody renders the reset form reached from a reset link. On the initial render
+// the token is NOT a server-rendered value (design §6.4): the externalized
+// fragment-reader script (loaded in the head, keyed off the form's data-auth-fragment
+// attributes) reads it from the URL fragment, scrubs it from history, and stashes it
+// in the hidden field the form posts alongside the new password, so it never appears
+// in a query string, the initial markup, or the referrer. On a validation-error
+// RE-render the fragment is gone, so m.Token carries the SUBMITTED token back into the
+// hidden field (the same value the failed POST already sent) so a corrected retry
+// survives (IX-11); the reader only overwrites it when a fragment IS present, so it
+// never clobbers the retained value. The password field is never repopulated.
+templ resetBody(m authentication.ResetPage) {
+	@shell("Choose a new password", "") {
+		@message(m.PageContext)
+		@errorSummary(m.PageContext)
+		<form id="reset-form" method="post" action={ templ.SafeURL(m.RedeemPath) } autocomplete="off" data-auth-fragment="hash" data-auth-fragment-target="reset-token">
+			@csrfField(m.PageContext)
+			<input type="hidden" name="token" id="reset-token" value={ m.Token }/>
+			@forms.FormField(forms.FormFieldProps{Label: "New password", For: "password", Required: true, Error: fieldErrorText(m.PageContext, "password")}) {
+				@primitives.Input(primitives.InputProps{
+					Base:     primitives.Base{ID: "password", Attributes: autocompleteAttrs("new-password", "password")},
+					Type:     primitives.InputPassword,
+					Name:     "password",
+					Required: true,
+				})
+			}
+			@forms.FormActions(forms.FormActionsProps{}) {
+				@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit}) {
+					Set new password
+				}
+			}
+		</form>
+		<noscript>
+			<p>JavaScript is required to complete a password reset from an email link.</p>
+		</noscript>
+	}
+}

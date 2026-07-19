@@ -1,0 +1,9 @@
+package primitives
+
+// Checkbox (P28, family F1) renders a native <input type="checkbox">. It submits
+// natively with no JavaScript; the styled tick/dash comes from component CSS keyed
+// off :checked and the data-state hook. No controller is bound — native keyboard
+// (Space) and focus are the interaction model.
+templ Checkbox(p CheckboxProps) {
+	<input class={ checkboxClass(p) } { checkboxAttrs(p)... }/>
+}

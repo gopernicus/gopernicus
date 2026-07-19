@@ -38,6 +38,9 @@ func (stubViews) MenuNav(menus.Menu, []menus.MenuItem) web.Renderer             
 func (stubViews) EntriesList(string, string, string, []EntryListItem, Pager) web.Renderer {
 	return nil
 }
+func (stubViews) EntriesListContent(string, string, string, []EntryListItem, Pager) web.Renderer {
+	return nil
+}
 func (stubViews) EntryForm(EntryFormModel) web.Renderer                   { return nil }
 func (stubViews) TermsList([]taxonomy.Term, []taxonomy.Term) web.Renderer { return nil }
 func (stubViews) TermForm(TermFormModel) web.Renderer                     { return nil }

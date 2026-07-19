@@ -1,0 +1,27 @@
+package primitives
+
+// Avatar (P03, family F3) is a compound: Avatar wraps a caller-composed
+// AvatarFallback (placed first, sitting behind) and AvatarImage (placed last,
+// covering the fallback when it loads). On image load failure the alt text and
+// fallback remain, so there is no blank avatar even without JavaScript.
+// data-slot hooks: avatar, avatar-image, avatar-fallback.
+templ Avatar(p AvatarProps) {
+	<span class={ avatarClass(p) } { avatarAttrs(p)... }>
+		{ children... }
+	</span>
+}
+
+// AvatarImage renders the avatar image. Src is a validated URL; Alt is the
+// accessible name. It renders nothing when Src is the zero URL.
+templ AvatarImage(p AvatarImageProps) {
+	if !p.Src.IsZero() {
+		<img src={ p.Src.String() } alt={ p.Alt } class={ avatarImageClass(p) } { avatarImageAttrs(p)... }/>
+	}
+}
+
+// AvatarFallback shows initials or an icon (templ children) behind the image.
+templ AvatarFallback(p AvatarFallbackProps) {
+	<span class={ avatarFallbackClass(p) } aria-hidden="true" { avatarFallbackAttrs(p)... }>
+		{ children... }
+	</span>
+}

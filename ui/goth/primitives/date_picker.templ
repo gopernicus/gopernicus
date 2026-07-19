@@ -1,0 +1,34 @@
+package primitives
+
+// DatePicker (P53, family F4). The caller composes DatePickerInput (the formatted,
+// server-parsed value), DatePickerTrigger (the native popover invoker), and
+// DatePickerContent (the native popover panel) — placing a Calendar inside the
+// content. The value is submitted by the input's form; the popover, its dismissal,
+// and the Calendar's server-owned selection need no controller.
+templ DatePicker(p DatePickerProps) {
+	<div class={ datePickerClass(p) } { datePickerAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// DatePickerInput is the formatted date text input. It is directly editable (the
+// no-JS entry path); the server parses it and re-renders with Invalid set on error.
+templ DatePickerInput(p DatePickerInputProps) {
+	<input class={ datePickerInputClass(p) } { datePickerInputAttrs(p)... }/>
+}
+
+// DatePickerTrigger toggles the native popover with no JavaScript.
+templ DatePickerTrigger(p DatePickerTriggerProps) {
+	<button class={ datePickerTriggerClass(p) } { datePickerTriggerAttrs(p)... }>
+		{ children... }
+	</button>
+}
+
+// DatePickerContent is the native popover panel: light-dismiss, Escape-close, and
+// top-layer are browser-native. Set Base.ID to match the trigger's Target and place
+// a Calendar inside.
+templ DatePickerContent(p DatePickerContentProps) {
+	<div class={ datePickerContentClass(p) } { datePickerContentAttrs(p)... }>
+		{ children... }
+	</div>
+}

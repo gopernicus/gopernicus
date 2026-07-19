@@ -1,0 +1,91 @@
+package goth
+
+import (
+	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
+	"github.com/gopernicus/gopernicus/ui/goth/components/layouts"
+)
+
+// document is the shared admin document chrome: the ui/goth bundle head (the
+// fingerprinted GOTH stylesheet, served from the host origin under a strict CSP)
+// plus the fixed meta tags, wrapping an in-<body> component. A host that wants
+// different chrome overrides the individual Views methods.
+templ document(head templ.Component, title string, body templ.Component) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title }</title>
+			@head
+		</head>
+		<body>
+			@body
+		</body>
+	</html>
+}
+
+// publicDocument is the shared public document chrome: the bundle head plus the
+// SEO/OpenGraph meta tags every public page carries.
+templ publicDocument(head templ.Component, title, metaDesc string, body templ.Component) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>{ title }</title>
+			if metaDesc != "" {
+				<meta name="description" content={ metaDesc }/>
+				<meta property="og:description" content={ metaDesc }/>
+			}
+			<meta property="og:title" content={ title }/>
+			<meta property="og:type" content="website"/>
+			@head
+		</head>
+		<body>
+			@body
+		</body>
+	</html>
+}
+
+// adminShell is the admin chrome: the ui/goth AppShell (a nav rail beside the main
+// region) wrapping the page body. The body renders its own PageHeader/heading.
+templ adminShell(title string, body templ.Component) {
+	@layouts.AppShell(layouts.AppShellProps{Sidebar: adminNav()}) {
+		@body
+	}
+}
+
+// adminNav is the admin AppShell sidebar: link-first navigation to the fixed
+// management sections (real <a href> links, no controller — the P44 link-first
+// precedent). Content-type index links are reached from the site itself.
+templ adminNav() {
+	<nav aria-label="Admin" data-slot="cms-admin-nav">
+		<ul>
+			<li><a href="/">Site home</a></li>
+			<li><a href="/terms">Taxonomy</a></li>
+			<li><a href="/menus">Menus</a></li>
+			<li><a href="/media">Media</a></li>
+			<li><a href="/inquiries">Inquiries</a></li>
+		</ul>
+	</nav>
+}
+
+// publicShell is the public site chrome: the menu-driven nav bar and the main
+// content region. The page body renders inside <main>.
+templ publicShell(title string, nav []menus.MenuItem, body templ.Component) {
+	@layouts.DocumentShell(layouts.DocumentShellProps{Header: publicNav(nav)}) {
+		@body
+	}
+}
+
+// publicNav renders the public navigation bar from the resolved menu items.
+templ publicNav(nav []menus.MenuItem) {
+	<nav aria-label="Primary" data-slot="cms-public-nav">
+		<ul>
+			<li><a href="/">Home</a></li>
+			for _, it := range nav {
+				<li><a href={ templ.SafeURL(it.URL) }>{ it.Label }</a></li>
+			}
+		</ul>
+	</nav>
+}

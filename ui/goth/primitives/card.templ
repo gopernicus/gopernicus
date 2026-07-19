@@ -1,0 +1,47 @@
+package primitives
+
+// Card (P08, family F3). The caller composes and places the parts; each shares
+// the data-slot contract (card, card-header, card-title, card-description,
+// card-action, card-content, card-footer). Titles render as div so the caller
+// keeps ownership of heading levels.
+templ Card(p CardProps) {
+	<div class={ cardPartClass(p.Base, "goth-card") } { cardPartAttrs(p.Base, "card")... }>
+		{ children... }
+	</div>
+}
+
+templ CardHeader(p CardHeaderProps) {
+	<div class={ cardPartClass(p.Base, "goth-card-header") } { cardPartAttrs(p.Base, "card-header")... }>
+		{ children... }
+	</div>
+}
+
+templ CardTitle(p CardTitleProps) {
+	<div class={ cardPartClass(p.Base, "goth-card-title") } { cardPartAttrs(p.Base, "card-title")... }>
+		{ children... }
+	</div>
+}
+
+templ CardDescription(p CardDescriptionProps) {
+	<div class={ cardPartClass(p.Base, "goth-card-description") } { cardPartAttrs(p.Base, "card-description")... }>
+		{ children... }
+	</div>
+}
+
+templ CardAction(p CardActionProps) {
+	<div class={ cardPartClass(p.Base, "goth-card-action") } { cardPartAttrs(p.Base, "card-action")... }>
+		{ children... }
+	</div>
+}
+
+templ CardContent(p CardContentProps) {
+	<div class={ cardPartClass(p.Base, "goth-card-content") } { cardPartAttrs(p.Base, "card-content")... }>
+		{ children... }
+	</div>
+}
+
+templ CardFooter(p CardFooterProps) {
+	<div class={ cardPartClass(p.Base, "goth-card-footer") } { cardPartAttrs(p.Base, "card-footer")... }>
+		{ children... }
+	</div>
+}

@@ -1,0 +1,9 @@
+package primitives
+
+// Input (P12, family F1) renders a native <input>. It carries the complete
+// native attribute surface (type/name/value/placeholder/required/disabled/
+// readonly) and an invalid state, and submits in an ordinary HTML form with no
+// JavaScript. A password Input never echoes its Value back into the markup.
+templ Input(p InputProps) {
+	<input class={ inputClass(p) } { inputAttrs(p)... }/>
+}

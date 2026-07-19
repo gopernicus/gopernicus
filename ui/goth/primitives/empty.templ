@@ -1,0 +1,29 @@
+package primitives
+
+// Empty (P10, family F2) arranges an optional media glyph, a title, a
+// description, a principal content region (templ children), and an optional
+// action inside a fixed centered layout the primitive owns. data-slot hooks:
+// empty, empty-media, empty-title, empty-description, empty-content, empty-action.
+templ Empty(p EmptyProps) {
+	<div class={ emptyClass(p) } { emptyAttrs(p)... }>
+		if p.Media != nil {
+			<div data-slot="empty-media" aria-hidden="true">
+				@p.Media
+			</div>
+		}
+		if p.Title != "" {
+			<div data-slot="empty-title">{ p.Title }</div>
+		}
+		if p.Description != "" {
+			<div data-slot="empty-description">{ p.Description }</div>
+		}
+		<div data-slot="empty-content">
+			{ children... }
+		</div>
+		if p.Action != nil {
+			<div data-slot="empty-action">
+				@p.Action
+			</div>
+		}
+	</div>
+}
