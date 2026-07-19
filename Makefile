@@ -1,29 +1,43 @@
 # gopernicus — framework monorepo (sdk + integrations + features + examples)
 #
 # Multi-module workspace (go.work), 36 modules. templ is pinned via the `tool`
-# directive in features/cms/views/templ/go.mod (where the .templ sources live),
+# directive in features/cms/views/goth/go.mod (where the .templ sources live),
 # so `go tool templ` is reproducible.
 
-MODULES = sdk integrations/cryptids/bcrypt integrations/cryptids/golang-jwt integrations/cryptids/google-uuid integrations/datastores/pgxdb integrations/datastores/turso integrations/email/sendgrid integrations/filestorage/gcs integrations/filestorage/s3 integrations/kvstores/goredis integrations/notify/mailer integrations/oauth/github integrations/oauth/google integrations/scheduling/robfig-cron integrations/tracing/otel features/authentication features/authentication/stores/pgx features/authentication/stores/turso features/authentication/views/templ features/authorization features/authorization/stores/pgx features/authorization/stores/turso features/cms features/cms/stores/pgx features/cms/stores/turso features/cms/views/templ features/events features/events/stores/pgx features/events/stores/turso features/jobs features/jobs/stores/pgx features/jobs/stores/turso examples/auth-cms examples/cms examples/jobs-minimal examples/minimal workshop/gopernicus
+MODULES = sdk integrations/cryptids/bcrypt integrations/cryptids/golang-jwt integrations/cryptids/google-uuid integrations/datastores/pgxdb integrations/datastores/turso integrations/email/sendgrid integrations/filestorage/gcs integrations/filestorage/s3 integrations/kvstores/goredis integrations/notify/mailer integrations/oauth/github integrations/oauth/google integrations/scheduling/robfig-cron integrations/tracing/otel features/authentication features/authentication/stores/pgx features/authentication/stores/turso features/authentication/views/goth features/authorization features/authorization/stores/pgx features/authorization/stores/turso features/cms features/cms/stores/pgx features/cms/stores/turso features/cms/views/goth features/events features/events/stores/pgx features/events/stores/turso features/jobs features/jobs/stores/pgx features/jobs/stores/turso ui/goth examples/auth-cms examples/cms examples/goth-showcase examples/jobs-minimal examples/minimal workshop/gopernicus
 
 # STORE_MODULES carry env-gated live conformance suites (storetest against a real
 # database). `make check`/`make test` run them hermetically (loud skips); `make
 # test-stores` runs them EXPECTING the datastore env vars set.
 STORE_MODULES = features/cms/stores/pgx features/cms/stores/turso features/authentication/stores/pgx features/authentication/stores/turso features/jobs/stores/pgx features/jobs/stores/turso features/events/stores/pgx features/events/stores/turso features/authorization/stores/pgx features/authorization/stores/turso
 
-.PHONY: generate build vet test test-stores run migrate check tidy guard warm-scaffold-cache \
+.PHONY: generate generate-ui-assets build vet test test-stores test-ui-browser run migrate check tidy guard warm-scaffold-cache \
 	guard-sdk-stdlib guard-feature-isolation guard-sdk-no-outward guard-no-legacy-path \
 	guard-feature-core-sdk-only guard-feature-transport-sdk-web guard-feature-no-cross-feature \
 	guard-store-no-foreign-feature guard-no-underlying guard-no-lax-scan \
 	guard-workshop-boundary guard-sdk-layering guard-integration-no-inward \
-	guard-auth-no-delivery-repo guard-auth-no-request-time-provider
+	guard-auth-no-delivery-repo guard-auth-no-request-time-provider \
+	guard-authorization-no-delivery-repo guard-ui-no-inward guard-ui-require-whitelist
 
 # Regenerate *_templ.go from .templ sources. Each bundled views/templ module pins
 # its own templ tool; generation runs inside each so the tool version is
 # reproducible per module.
 generate:
-	cd features/cms/views/templ && go tool templ generate
-	cd features/authentication/views/templ && go tool templ generate
+	cd features/cms/views/goth && go tool templ generate
+	cd features/authentication/views/goth && go tool templ generate
+	cd ui/goth && go tool templ generate
+
+# Regenerate the ui/goth CSS/JS/HTMX assets + fingerprinted manifest from source.
+# NODE-GATED: this is the only target that needs the repository-local Node
+# toolchain (pinned via ui/goth/tools/.nvmrc + package-lock.json). It is
+# deliberately NOT a dependency of `generate`, `build`, or `check` — Go consumers
+# and Node-free contributors never run it. `make check` instead proves the
+# committed dist/ + manifest.json are in sync via a plain-git diff (see `check`),
+# so stale assets still fail CI without invoking Node. `npm ci --ignore-scripts`
+# installs exactly the committed lockfile with no install scripts (esbuild's
+# platform binary ships as an optional dependency package, not a postinstall).
+generate-ui-assets:
+	cd ui/goth/tools && npm ci --ignore-scripts && npm run build
 
 build: generate
 	@for m in $(MODULES); do echo "build $$m"; (cd $$m && go build ./...) || exit 1; done
@@ -71,6 +85,17 @@ test-stores:
 	@echo "== features/authorization/stores/turso (live, -tags=integration) =="
 	@cd features/authorization/stores/turso && go test -tags=integration ./...
 
+# test-ui-browser runs the ui/goth three-engine Playwright + axe harness
+# (Chromium, Firefox, WebKit) against the zero-datastore examples/goth-showcase
+# host. NODE-GATED and browser-gated: it is deliberately NOT a dependency of
+# `check`/`test`/`build`, so the hermetic Go loop and Node-free contributors never
+# run it, while the UI milestone/release gate requires it (plan Layer 3). axe-core
+# (MPL-2.0) lives ONLY in the e2e toolchain and never reaches ui/goth/assets/dist.
+# Playwright starts the Go server itself (webServer in playwright.config.ts). On a
+# cold machine the browser binaries download once via `npx playwright install`.
+test-ui-browser:
+	cd examples/goth-showcase/e2e && npm ci && npx playwright install chromium firefox webkit && npm test
+
 # The server binary never migrates; `run` applies host-owned migrations first
 # (pre-boot), then serves — keeping migration a separate, explicit step.
 run: generate migrate
@@ -88,12 +113,13 @@ tidy:
 # Layering guards — each enforces one architectural boundary from the
 # constitution (00-overview.md) or the feature-standard charter (FS rules,
 # 2026-07-07); every target must print nothing and exit 0 on a clean tree.
-# `make guard` runs all fifteen.
+# `make guard` runs all eighteen.
 guard: guard-sdk-stdlib guard-feature-isolation guard-sdk-no-outward guard-no-legacy-path \
 	guard-feature-core-sdk-only guard-feature-transport-sdk-web guard-feature-no-cross-feature \
 	guard-store-no-foreign-feature guard-no-underlying guard-no-lax-scan \
 	guard-workshop-boundary guard-sdk-layering guard-integration-no-inward \
-	guard-auth-no-delivery-repo guard-auth-no-request-time-provider
+	guard-auth-no-delivery-repo guard-auth-no-request-time-provider \
+	guard-authorization-no-delivery-repo guard-ui-no-inward guard-ui-require-whitelist
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -105,10 +131,12 @@ guard-sdk-stdlib:
 # G2: every feature core (features/*, excluding their own store/views adapter
 # modules) never imports integrations, examples, or any feature's stores or
 # views (A4: generalized from features/cms to all features/*; views added
-# 2026-07-07, feature-standard FS3).
+# 2026-07-07, feature-standard FS3; ui/ added 2026-07-17, GOTH-1.1, for grep-level
+# symmetry with G13/G17 — a feature core reaches a UI implementation only through
+# its own views/<pkg> adapter module, never directly).
 guard-feature-isolation:
-	@echo "== guard: features/* cores never import integrations/examples/their own stores/views =="
-	@! grep -rn --include='*.go' -E '"github.com/gopernicus/gopernicus/(integrations|examples|features/[a-z0-9]+/(stores|views))' features --exclude-dir=stores --exclude-dir=views || { echo "ERROR: a features/* core imports an adapter layer"; exit 1; }
+	@echo "== guard: features/* cores never import integrations/examples/ui/their own stores/views =="
+	@! grep -rn --include='*.go' -E '"github.com/gopernicus/gopernicus/(integrations|examples|ui|features/[a-z0-9]+/(stores|views))' features --exclude-dir=stores --exclude-dir=views || { echo "ERROR: a features/* core imports an adapter layer"; exit 1; }
 
 # G3: sdk never imports outward (features/integrations/examples).
 guard-sdk-no-outward:
@@ -271,6 +299,60 @@ guard-auth-no-request-time-provider:
 	@hits=$$(grep -rnE '\.(Deliver|Send|Notify)\(' --include='*.go' --exclude='*_test.go' features/authentication/internal/logic | grep -v '/delivery/' || true); \
 		if [ -n "$$hits" ]; then echo "ERROR (AV3D-2.4): a producer package calls a provider-send verb directly — outbound must go through the delivery dispatcher seam, never a request-time send:"; echo "$$hits"; exit 1; fi
 
+# G16 (authorizationv3 AZ3-5.3): authorization owns NO authorization-specific
+# jobs/delivery table or repository. The v3 correctness kernel emits no effects
+# (00-overview.md standing invariant: "Production/example wiring never relies on
+# an authorization-specific jobs queue"); a later effects packet must consume the
+# generic jobs feature + a same-transaction events outbox, never an
+# authorization-owned queue. This tripwire — the guard-auth-no-delivery-repo twin
+# pointed at features/authorization migrations + repositories — fails if a
+# delivery/jobs table or a bespoke deliveryjob domain package appears in the
+# authorization feature or its stores. The snake_case table tokens are
+# case-sensitive so they never match a legitimate camelCase Go identifier.
+guard-authorization-no-delivery-repo:
+	@echo "== guard: authorization owns no bespoke jobs/delivery table/repository (AZ3-5.3) =="
+	@! grep -rnE 'delivery_jobs|fenced_job_queue|job_queue|job_schedules' features/authorization || { echo "ERROR (AZ3-5.3): an authorization-specific jobs/delivery table returned to authorization — the v3 kernel emits no effects; durable delivery would be the generic jobs feature reached via a same-transaction events outbox, never an authorization-owned queue"; exit 1; }
+	@! grep -rnE 'domain/deliveryjob|package deliveryjob' --include='*.go' features/authorization || { echo "ERROR (AZ3-5.3): a bespoke deliveryjob domain package appeared in authorization — the v3 kernel ships no effects/delivery domain"; exit 1; }
+
+# G17 (ui-goth GOTH-0.2, 2026-07-17): the seventh module kind — a UI
+# implementation (a reusable presentation system for one rendering/runtime
+# family: ui/goth today, ui/react/ui/vue later) — imports NO features/,
+# integrations/, examples/, or workshop/. It owns its view-library dependencies,
+# semantic tokens, components, controllers, and distributable assets, and it owns
+# no domain schema or routes; it may depend on its own view/runtime libraries
+# (templ and its pinned inputs) and sdk, but never inward. A feature reaches a UI
+# implementation only through its own views/<pkg> adapter module (which legally
+# imports ui/goth) — never the other way. Same import-direction discipline as G13
+# (integrations import no inward): the arrow is what keeps "UI implementation"
+# meaning something. Third-party view/runtime deps (github.com/a-h/templ, …) never
+# match the inward gopernicus/(features|integrations|examples|workshop) pattern,
+# so a legal presentation dependency is not misclassified. A legitimate future hit
+# gets a named per-line exception HERE — never a regex weakening.
+guard-ui-no-inward:
+	@echo "== guard: ui/* implementations import no features/integrations/examples/workshop =="
+	@! grep -rn --include='*.go' -E '"github.com/gopernicus/gopernicus/(features|integrations|examples|workshop)' ui/ || { echo "ERROR (G17): a ui/ implementation imports inward — a UI implementation depends on its own view/runtime libraries and sdk, never a feature/integration/example/workshop"; exit 1; }
+
+# G18 (ui-goth GOTH-1.1, 2026-07-17): the UI-implementation go.mod require
+# whitelist — the G5 analogue for the seventh module kind. A ui/* implementation's
+# go.mod requires ONLY its own view/runtime library (github.com/a-h/templ) plus
+# sdk; nothing else (direct requires only — "// indirect" lines are MVS
+# bookkeeping, and the templ `tool` directive is that same view library, not a new
+# dependency). The frozen GOTH-0.3 surface imports no sdk, but the taxonomy
+# (ARCHITECTURE.md UI-implementation row) permits it, so sdk stays on the
+# whitelist. It also imports no sdk/feature: a UI implementation is not a feature
+# composer (the sdk/feature.Mount seam is a host/feature concern). A legitimate
+# future view library gets a named addition to the whitelist HERE — never a regex
+# weakening.
+guard-ui-require-whitelist:
+	@echo "== guard: ui/* go.mod requires only templ + sdk, and never imports sdk/feature (G5 analogue) =="
+	@fail=0; for f in ui/*/go.mod; do \
+		[ -f "$$f" ] || continue; \
+		extras=$$(awk '/^require \(/{inblk=1; next} inblk && /^\)/{inblk=0; next} inblk && !/\/\/ indirect/{print $$1} /^require [^(]/{print $$2}' $$f \
+			| grep -vE '^(github.com/a-h/templ|github.com/gopernicus/gopernicus/sdk)$$' || true); \
+		if [ -n "$$extras" ]; then echo "ERROR (G18): $$f requires beyond templ/sdk:"; echo "$$extras"; fail=1; fi; \
+	done; exit $$fail
+	@! grep -rn --include='*.go' '"github.com/gopernicus/gopernicus/sdk/feature' ui/ || { echo "ERROR (G18): a ui/ implementation imports sdk/feature — a UI implementation is not a feature composer"; exit 1; }
+
 # CI-style gate: templ generation must be a no-op (no drift), then per-module
 # vet/build/test across all MODULES, then the four layering guards. Drift
 # is checked via `git diff` when this tree is a git repo; this repo IS a git
@@ -294,6 +376,7 @@ check:
 	@if [ -d .git ]; then \
 		$(MAKE) generate; \
 		git diff --exit-code -- '*_templ.go' || { echo "ERROR: templ generation drift (git diff)"; exit 1; }; \
+		git diff --exit-code -- ui/goth/assets/dist ui/goth/assets/manifest.json || { echo "ERROR: ui/goth asset drift (git diff) — regenerate with 'make generate-ui-assets' and commit dist/ + manifest.json"; exit 1; }; \
 	else \
 		before=$$(find . -name '*_templ.go' -not -path './.git/*' -exec shasum {} \; | sort); \
 		$(MAKE) generate >/dev/null; \

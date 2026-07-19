@@ -1,0 +1,19 @@
+package primitives
+
+// ButtonGroup (P07, family F3) groups related actions/inputs into one joined
+// control. It carries role="group" so assistive technology treats the buttons as
+// a set; the caller composes Button (or ButtonGroupText addons) as children and
+// external CSS joins the borders and focus rings by orientation.
+templ ButtonGroup(p ButtonGroupProps) {
+	<div class={ buttonGroupClass(p) } { buttonGroupAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// ButtonGroupText renders a non-interactive addon/label segment joined into the
+// group (e.g. a leading prefix). Its content is templ children.
+templ ButtonGroupText(p ButtonGroupTextProps) {
+	<div class={ buttonGroupTextClass(p) } { buttonGroupTextAttrs(p)... }>
+		{ children... }
+	</div>
+}

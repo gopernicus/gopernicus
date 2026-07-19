@@ -1,0 +1,23 @@
+package primitives
+
+// ToggleGroup (P36) is a role="group" container the caller fills with
+// ToggleGroupItem parts. Single mode is native radios (no controller); multiple
+// mode is native checkboxes enhanced with the frozen gothRovingFocus controller for
+// a single tab stop and arrow-key navigation. Both modes submit natively.
+templ ToggleGroup(p ToggleGroupProps) {
+	<div class={ toggleGroupClass(p) } { toggleGroupAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// ToggleGroupItem renders one checkbox-backed (multiple) or radio-backed (single)
+// toggle button. The styled <label> is the button and wraps the native input whose
+// checked state is the pressed state. Pass the item content as children.
+templ ToggleGroupItem(p ToggleGroupItemProps) {
+	<label class={ toggleGroupItemClass(p) } { toggleGroupItemAttrs(p)... }>
+		<input class="goth-toggle-group-input" { toggleGroupItemInputAttrs(p)... }/>
+		<span class="goth-toggle-group-label" data-slot="toggle-group-label">
+			{ children... }
+		</span>
+	</label>
+}

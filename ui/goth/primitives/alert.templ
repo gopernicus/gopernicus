@@ -1,0 +1,29 @@
+package primitives
+
+// Alert (P01, family F2) renders a status/alert region with an optional icon,
+// title, and action arranged around a principal description region (templ
+// children). The role is status (polite) by default and alert (assertive) for
+// the destructive/warning variants. data-slot hooks: alert, alert-icon,
+// alert-title, alert-description, alert-action.
+templ Alert(p AlertProps) {
+	<div class={ alertClass(p) } { alertAttrs(p)... }>
+		if p.Icon != nil {
+			<span data-slot="alert-icon" aria-hidden="true">
+				@p.Icon
+			</span>
+		}
+		<div data-slot="alert-body">
+			if p.Title != "" {
+				<div data-slot="alert-title">{ p.Title }</div>
+			}
+			<div data-slot="alert-description">
+				{ children... }
+			</div>
+		</div>
+		if p.Action != nil {
+			<div data-slot="alert-action">
+				@p.Action
+			</div>
+		}
+	</div>
+}

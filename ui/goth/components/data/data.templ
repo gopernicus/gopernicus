@@ -1,0 +1,37 @@
+package data
+
+import "github.com/gopernicus/gopernicus/ui/goth/primitives"
+
+// TableToolbar is the searchable filter row above a list/table: a search Input, a
+// no-JS submit Button, an optional Filters slot, and an optional trailing Actions
+// slot, wrapped in a role="search" form GET. Filtering has a shareable URL and
+// works with no JavaScript; a host enhances the search input via SearchAttributes.
+templ TableToolbar(p TableToolbarProps) {
+	<form { p.formAttrs()... }>
+		@primitives.DataTableToolbar(primitives.DataTableToolbarProps{}) {
+			@primitives.Input(primitives.InputProps{
+				Type:        primitives.InputSearch,
+				Name:        p.searchName(),
+				Value:       p.SearchValue,
+				Placeholder: p.placeholder(),
+				Base:        primitives.Base{ID: p.searchID(), Attributes: p.searchAttrs()},
+			})
+			@primitives.Button(primitives.ButtonProps{
+				Type:    primitives.ButtonTypeSubmit,
+				Variant: primitives.ButtonSecondary,
+			}) {
+				{ p.submitLabel() }
+			}
+			if p.Filters != nil {
+				<div data-slot="table-toolbar-filters">
+					@p.Filters
+				</div>
+			}
+			if p.Actions != nil {
+				<div data-slot="table-toolbar-actions">
+					@p.Actions
+				</div>
+			}
+		}
+	</form>
+}

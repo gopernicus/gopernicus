@@ -1,0 +1,4201 @@
+/*
+ * ui/goth component styles for the Phase 2 content/status primitives (GOTH-2.1:
+ * P01 Alert, P02 Aspect Ratio, P03 Avatar, P04 Badge, P08 Card, P10 Empty,
+ * P14 Item, P15 Kbd, P17 Marker, P22 Skeleton, P23 Spinner, P26 Typography) and
+ * the action/navigation primitives (GOTH-2.2: P05 Breadcrumb, P06 Button,
+ * P07 Button Group, P09 Direction, P19 Pagination, P21 Separator) and the
+ * field/data primitives (GOTH-2.3: P11 Field, P12 Input, P13 Input Group,
+ * P16 Label, P18 Native Select, P20 Progress, P24 Table, P25 Textarea).
+ *
+ * These rules key off the stable emitted surface — the goth-<primitive> base
+ * class plus data-slot / data-variant / data-state / data-tone hooks — and
+ * consume the frozen semantic tokens (theme/contract.css, theme/default.css)
+ * directly. That keeps the visual contract stable even if internal utility
+ * classes change (README §7). No rule emits or requires an inline style, and
+ * every animation collapses under prefers-reduced-motion (invariant a / plan
+ * reduced-motion policy). Never hand-edit the compiled dist/theme.<hash>.css —
+ * edit this source and run the Node-gated asset build.
+ */
+
+/* ---- P04 Badge ------------------------------------------------------------ */
+.goth-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  border: 1px solid transparent;
+  border-radius: calc(var(--radius) - 2px);
+  padding: 0 var(--space-2);
+  height: 1.375rem;
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  text-decoration: none;
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+.goth-badge[data-variant="secondary"] {
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+}
+.goth-badge[data-variant="destructive"] {
+  background: var(--destructive);
+  color: var(--destructive-foreground);
+}
+.goth-badge[data-variant="outline"] {
+  background: transparent;
+  color: var(--foreground);
+  border-color: var(--border);
+}
+a.goth-badge:hover {
+  text-decoration: underline;
+}
+
+/* ---- P01 Alert ------------------------------------------------------------ */
+.goth-alert {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-3) var(--space-4);
+  background: var(--card);
+  color: var(--card-foreground);
+}
+.goth-alert [data-slot="alert-icon"] {
+  display: inline-flex;
+  flex: none;
+  line-height: 1;
+  margin-top: 0.125rem;
+}
+.goth-alert [data-slot="alert-body"] {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.goth-alert [data-slot="alert-title"] {
+  font-weight: 600;
+  line-height: 1.4;
+}
+.goth-alert [data-slot="alert-description"] {
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+}
+.goth-alert [data-slot="alert-action"] {
+  flex: none;
+}
+.goth-alert[data-variant="destructive"] {
+  border-color: var(--destructive);
+  color: var(--destructive);
+}
+.goth-alert[data-variant="destructive"] [data-slot="alert-description"] {
+  color: var(--destructive);
+}
+.goth-alert[data-variant="success"] {
+  border-color: var(--success);
+}
+.goth-alert[data-variant="warning"] {
+  border-color: var(--warning);
+}
+
+/* ---- P02 Aspect Ratio ----------------------------------------------------- */
+.goth-aspect-ratio {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border-radius: var(--radius);
+  aspect-ratio: 1 / 1;
+}
+.goth-aspect-ratio[data-ratio="video"] {
+  aspect-ratio: 16 / 9;
+}
+.goth-aspect-ratio[data-ratio="wide"] {
+  aspect-ratio: 21 / 9;
+}
+.goth-aspect-ratio[data-ratio="four-three"] {
+  aspect-ratio: 4 / 3;
+}
+.goth-aspect-ratio[data-ratio="portrait"] {
+  aspect-ratio: 3 / 4;
+}
+.goth-aspect-ratio > * {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* ---- P03 Avatar ----------------------------------------------------------- */
+.goth-avatar {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  flex: none;
+  border-radius: 9999px;
+  overflow: hidden;
+  background: var(--muted);
+  color: var(--foreground);
+  user-select: none;
+}
+.goth-avatar-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.goth-avatar-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+/* ---- P08 Card ------------------------------------------------------------- */
+.goth-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) + 4px);
+  background: var(--card);
+  color: var(--card-foreground);
+  padding: var(--space-6);
+  box-shadow: var(--shadow-sm);
+}
+.goth-card-header {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--space-1);
+}
+.goth-card-title {
+  grid-column: 1;
+  font-weight: 600;
+  font-size: 1.125rem;
+  line-height: 1.3;
+}
+.goth-card-description {
+  grid-column: 1;
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+}
+.goth-card-action {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  justify-self: end;
+}
+.goth-card-content {
+  font-size: 0.9375rem;
+}
+.goth-card-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* ---- P10 Empty ------------------------------------------------------------ */
+.goth-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-2);
+  padding: var(--space-8) var(--space-4);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--card-foreground);
+}
+.goth-empty [data-slot="empty-media"] {
+  display: inline-flex;
+  color: var(--muted-foreground);
+  margin-bottom: var(--space-2);
+}
+.goth-empty [data-slot="empty-title"] {
+  font-weight: 600;
+  font-size: 1rem;
+}
+.goth-empty [data-slot="empty-description"] {
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+  max-width: 40ch;
+}
+.goth-empty [data-slot="empty-content"]:empty {
+  display: none;
+}
+.goth-empty [data-slot="empty-action"] {
+  margin-top: var(--space-2);
+}
+
+/* ---- P14 Item ------------------------------------------------------------- */
+.goth-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--radius);
+  color: var(--foreground);
+  text-decoration: none;
+}
+.goth-item[data-variant="outline"] {
+  border: 1px solid var(--border);
+}
+.goth-item[data-variant="muted"] {
+  /* De-emphasized row: muted text on the base surface (muted-foreground only
+   * clears AA contrast on the near-white base, not on a tinted surface). */
+  color: var(--muted-foreground);
+}
+a.goth-item:hover {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+.goth-item-media {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: var(--muted-foreground);
+}
+.goth-item-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.goth-item-title {
+  font-weight: 600;
+  line-height: 1.3;
+}
+.goth-item-description {
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+}
+.goth-item-actions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* ---- P15 Kbd -------------------------------------------------------------- */
+.goth-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  height: 1.5rem;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--muted);
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1;
+}
+.goth-kbd-group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* ---- P17 Marker ----------------------------------------------------------- */
+.goth-marker {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--foreground);
+  text-decoration: none;
+  font-size: 0.875rem;
+}
+.goth-marker [data-slot="marker-icon"] {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: var(--muted-foreground);
+}
+.goth-marker .goth-marker-dot {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 9999px;
+  background: var(--muted-foreground);
+}
+.goth-marker[data-tone="success"] .goth-marker-dot,
+.goth-marker[data-tone="success"] [data-slot="marker-icon"] {
+  background: var(--success);
+  color: var(--success);
+}
+.goth-marker[data-tone="warning"] .goth-marker-dot,
+.goth-marker[data-tone="warning"] [data-slot="marker-icon"] {
+  background: var(--warning);
+  color: var(--warning);
+}
+.goth-marker[data-tone="destructive"] .goth-marker-dot,
+.goth-marker[data-tone="destructive"] [data-slot="marker-icon"] {
+  background: var(--destructive);
+  color: var(--destructive);
+}
+.goth-marker[data-variant="note"] {
+  align-items: flex-start;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius);
+  background: var(--muted);
+}
+.goth-marker[data-variant="row"] {
+  display: flex;
+  width: 100%;
+  padding: var(--space-2) 0;
+}
+.goth-marker[data-variant="separator"] {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.goth-marker[data-variant="separator"]::before,
+.goth-marker[data-variant="separator"]::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--border);
+}
+a.goth-marker:hover {
+  text-decoration: underline;
+}
+
+/* ---- P22 Skeleton --------------------------------------------------------- */
+.goth-skeleton {
+  display: block;
+  width: 100%;
+  height: 1rem;
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--muted);
+  animation: goth-skeleton-pulse 1.6s ease-in-out infinite;
+}
+@keyframes goth-skeleton-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* ---- P23 Spinner ---------------------------------------------------------- */
+.goth-spinner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary);
+}
+.goth-spinner-icon {
+  width: 1.25rem;
+  height: 1.25rem;
+  animation: goth-spinner-rotate 0.8s linear infinite;
+}
+.goth-spinner-track {
+  opacity: 0.25;
+}
+.goth-spinner-head {
+  opacity: 0.9;
+}
+@keyframes goth-spinner-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---- P26 Typography ------------------------------------------------------- */
+.goth-typography {
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+.goth-typography[data-variant="h1"] {
+  font-size: 2.25rem;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+.goth-typography[data-variant="h2"] {
+  font-size: 1.75rem;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+.goth-typography[data-variant="h3"] {
+  font-size: 1.375rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.goth-typography[data-variant="h4"] {
+  font-size: 1.125rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.goth-typography[data-variant="p"] {
+  font-size: 1rem;
+  line-height: 1.7;
+}
+.goth-typography[data-variant="lead"] {
+  font-size: 1.25rem;
+  color: var(--muted-foreground);
+  line-height: 1.6;
+}
+.goth-typography[data-variant="large"] {
+  font-size: 1.125rem;
+  font-weight: 600;
+}
+.goth-typography[data-variant="small"] {
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.4;
+}
+.goth-typography[data-variant="muted"] {
+  font-size: 0.875rem;
+  color: var(--muted-foreground);
+}
+.goth-typography[data-variant="blockquote"] {
+  border-left: 3px solid var(--border);
+  padding-left: var(--space-4);
+  font-style: italic;
+  color: var(--muted-foreground);
+}
+.goth-typography[data-variant="code"] {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  background: var(--muted);
+  color: var(--foreground);
+  padding: 0.125rem 0.375rem;
+  border-radius: calc(var(--radius) - 4px);
+}
+.goth-typography[data-variant="list"] {
+  list-style: disc;
+  padding-left: var(--space-6);
+  line-height: 1.7;
+}
+
+/* ---- P21 Separator -------------------------------------------------------- */
+.goth-separator {
+  flex-shrink: 0;
+  background: var(--border);
+  border: 0;
+}
+.goth-separator[data-orientation="horizontal"] {
+  display: block;
+  width: 100%;
+  height: 1px;
+}
+.goth-separator[data-orientation="vertical"] {
+  display: inline-block;
+  width: 1px;
+  height: 100%;
+  min-height: 1rem;
+  vertical-align: middle;
+}
+
+/* ---- P09 Direction -------------------------------------------------------- */
+.goth-direction {
+  display: contents;
+}
+
+/* ---- P06 Button ----------------------------------------------------------- */
+.goth-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 0 var(--space-4);
+  height: 2.25rem;
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
+  user-select: none;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  transition: background var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease);
+}
+.goth-button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.goth-button[data-variant="secondary"] {
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+}
+.goth-button[data-variant="destructive"] {
+  background: var(--destructive);
+  color: var(--destructive-foreground);
+}
+.goth-button[data-variant="outline"] {
+  background: var(--background);
+  color: var(--foreground);
+  border-color: var(--border);
+}
+.goth-button[data-variant="ghost"] {
+  background: transparent;
+  color: var(--foreground);
+}
+.goth-button[data-variant="link"] {
+  background: transparent;
+  color: var(--primary);
+  padding: 0;
+  height: auto;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.goth-button[data-size="sm"] {
+  height: 2rem;
+  padding: 0 var(--space-3);
+  font-size: 0.8125rem;
+}
+.goth-button[data-size="lg"] {
+  height: 2.5rem;
+  padding: 0 var(--space-6);
+  font-size: 0.9375rem;
+}
+.goth-button[data-size="icon"] {
+  width: 2.25rem;
+  padding: 0;
+}
+.goth-button:disabled,
+.goth-button[disabled] {
+  opacity: 0.5;
+  pointer-events: none;
+  cursor: not-allowed;
+}
+.goth-button [data-slot="button-icon"] {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.goth-button .goth-button-spinner {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+/* ---- P07 Button Group ----------------------------------------------------- */
+.goth-button-group {
+  display: inline-flex;
+  align-items: stretch;
+}
+.goth-button-group[data-orientation="vertical"] {
+  flex-direction: column;
+}
+.goth-button-group > .goth-button,
+.goth-button-group > .goth-button-group-text {
+  border-radius: 0;
+}
+.goth-button-group[data-orientation="horizontal"] > :first-child {
+  border-top-left-radius: var(--radius);
+  border-bottom-left-radius: var(--radius);
+}
+.goth-button-group[data-orientation="horizontal"] > :last-child {
+  border-top-right-radius: var(--radius);
+  border-bottom-right-radius: var(--radius);
+}
+.goth-button-group[data-orientation="horizontal"] > :not(:first-child) {
+  margin-left: -1px;
+}
+.goth-button-group[data-orientation="vertical"] > :first-child {
+  border-top-left-radius: var(--radius);
+  border-top-right-radius: var(--radius);
+}
+.goth-button-group[data-orientation="vertical"] > :last-child {
+  border-bottom-left-radius: var(--radius);
+  border-bottom-right-radius: var(--radius);
+}
+.goth-button-group[data-orientation="vertical"] > :not(:first-child) {
+  margin-top: -1px;
+}
+.goth-button-group > .goth-button:focus-visible,
+.goth-button-group > .goth-button:hover {
+  z-index: var(--z-base);
+}
+.goth-button-group-text {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--space-3);
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+  color: var(--foreground);
+  background: var(--muted);
+  border: 1px solid var(--border);
+}
+
+/* ---- P05 Breadcrumb ------------------------------------------------------- */
+.goth-breadcrumb {
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+}
+.goth-breadcrumb-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--muted-foreground);
+}
+.goth-breadcrumb-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.goth-breadcrumb-link {
+  color: var(--muted-foreground);
+  text-decoration: none;
+  border-radius: calc(var(--radius) - 4px);
+}
+.goth-breadcrumb-link:hover {
+  color: var(--foreground);
+}
+.goth-breadcrumb-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.goth-breadcrumb-page {
+  color: var(--foreground);
+  font-weight: 500;
+}
+.goth-breadcrumb-separator {
+  display: inline-flex;
+  align-items: center;
+}
+.goth-breadcrumb-separator svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+.goth-breadcrumb-ellipsis {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+}
+
+/* ---- P19 Pagination ------------------------------------------------------- */
+.goth-pagination {
+  font-family: var(--font-sans);
+}
+.goth-pagination-content {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.goth-pagination-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  min-width: 2.25rem;
+  height: 2.25rem;
+  padding: 0 var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+  color: var(--foreground);
+  text-decoration: none;
+}
+.goth-pagination-link:hover {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+.goth-pagination-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.goth-pagination-link[data-active="true"] {
+  border-color: var(--border);
+  background: var(--background);
+  color: var(--foreground);
+  font-weight: 600;
+}
+.goth-pagination-link svg {
+  width: 1rem;
+  height: 1rem;
+}
+.goth-pagination-ellipsis {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.25rem;
+  height: 2.25rem;
+  color: var(--muted-foreground);
+}
+
+/* ---- P16 Label ------------------------------------------------------------ */
+.goth-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--foreground);
+}
+.goth-label[data-disabled="true"] {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.goth-label-required {
+  color: var(--destructive);
+}
+
+/* ---- P12 Input / P25 Textarea --------------------------------------------- */
+.goth-input,
+.goth-textarea {
+  display: block;
+  width: 100%;
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+  line-height: 1.4;
+  color: var(--foreground);
+  background: var(--background);
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+  transition: border-color var(--duration-fast) var(--ease), box-shadow var(--duration-fast) var(--ease);
+}
+.goth-input {
+  height: 2.25rem;
+  padding: 0 var(--space-3);
+}
+.goth-textarea {
+  min-height: 4.5rem;
+  padding: var(--space-2) var(--space-3);
+  resize: vertical;
+}
+.goth-input::placeholder,
+.goth-textarea::placeholder {
+  color: var(--muted-foreground);
+}
+.goth-input:focus-visible,
+.goth-textarea:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+  border-color: var(--ring);
+}
+.goth-input:disabled,
+.goth-textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.goth-input[aria-invalid="true"],
+.goth-textarea[aria-invalid="true"] {
+  border-color: var(--destructive);
+}
+.goth-input[aria-invalid="true"]:focus-visible,
+.goth-textarea[aria-invalid="true"]:focus-visible {
+  outline-color: var(--destructive);
+  border-color: var(--destructive);
+}
+.goth-input[type="file"] {
+  padding: var(--space-1) var(--space-3);
+  line-height: 2;
+}
+
+/* ---- P18 Native Select ---------------------------------------------------- */
+.goth-native-select {
+  display: block;
+  width: 100%;
+  height: 2.25rem;
+  padding: 0 var(--space-8) 0 var(--space-3);
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+  color: var(--foreground);
+  background: var(--background);
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+  appearance: none;
+  cursor: pointer;
+}
+.goth-native-select:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+  border-color: var(--ring);
+}
+.goth-native-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.goth-native-select[aria-invalid="true"] {
+  border-color: var(--destructive);
+}
+
+/* ---- P11 Field ------------------------------------------------------------ */
+.goth-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.goth-field[data-orientation="horizontal"] {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-4);
+}
+.goth-field-description {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--muted-foreground);
+}
+.goth-field-error {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--destructive);
+  font-weight: 500;
+}
+.goth-field-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+.goth-field-set {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  margin: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.goth-field-legend {
+  padding: 0 var(--space-2);
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+/* ---- P13 Input Group ------------------------------------------------------ */
+.goth-input-group {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+  background: var(--background);
+  overflow: hidden;
+}
+.goth-input-group:focus-within {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+  border-color: var(--ring);
+}
+.goth-input-group[data-invalid="true"] {
+  border-color: var(--destructive);
+}
+/* The inner control is a real Input/Textarea; flatten it inside the group so the
+ * group draws the single shared border and focus ring. */
+.goth-input-group .goth-input,
+.goth-input-group .goth-textarea,
+.goth-input-group .goth-native-select {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.goth-input-group .goth-input:focus-visible,
+.goth-input-group .goth-textarea:focus-visible,
+.goth-input-group .goth-native-select:focus-visible {
+  outline: none;
+}
+.goth-input-group-addon {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+.goth-input-group-addon[data-align="start"] {
+  order: -1;
+}
+.goth-input-group-text {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--space-3);
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+  /* --foreground (not --muted-foreground) so addon text clears AA contrast on
+   * the muted addon surface, matching the GOTH-2.1/2.2 muted-on-muted fix. */
+  color: var(--foreground);
+  background: var(--muted);
+  white-space: nowrap;
+}
+.goth-input-group-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-3);
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--foreground);
+  background: var(--muted);
+  border: 0;
+  cursor: pointer;
+}
+.goth-input-group-button:hover {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+.goth-input-group-button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.goth-input-group-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ---- P20 Progress --------------------------------------------------------- */
+.goth-progress {
+  display: block;
+  width: 100%;
+  height: 0.5rem;
+  border: 0;
+  border-radius: 9999px;
+  overflow: hidden;
+  appearance: none;
+  color: var(--primary);
+  background: var(--muted);
+}
+.goth-progress::-webkit-progress-bar {
+  background: var(--muted);
+  border-radius: 9999px;
+}
+.goth-progress::-webkit-progress-value {
+  background: var(--primary);
+  border-radius: 9999px;
+  transition: width var(--duration) var(--ease);
+}
+.goth-progress::-moz-progress-bar {
+  background: var(--primary);
+  border-radius: 9999px;
+}
+.goth-progress[data-state="indeterminate"] {
+  background-image: linear-gradient(
+    90deg,
+    var(--muted) 0%,
+    var(--primary) 50%,
+    var(--muted) 100%
+  );
+  background-size: 200% 100%;
+  animation: goth-progress-indeterminate 1.4s ease-in-out infinite;
+}
+
+@keyframes goth-progress-indeterminate {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+/* ---- P24 Table ------------------------------------------------------------ */
+.goth-table-wrapper {
+  width: 100%;
+  overflow-x: auto;
+}
+.goth-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+  color: var(--foreground);
+  caption-side: bottom;
+}
+.goth-table-caption {
+  padding: var(--space-2);
+  color: var(--muted-foreground);
+  font-size: 0.8125rem;
+  text-align: left;
+}
+.goth-table-head,
+.goth-table-cell {
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  vertical-align: middle;
+}
+.goth-table-head {
+  font-weight: 600;
+  color: var(--muted-foreground);
+  border-bottom: 1px solid var(--border);
+}
+.goth-table-body .goth-table-row {
+  border-bottom: 1px solid var(--border);
+}
+.goth-table-body .goth-table-row:hover {
+  background: var(--muted);
+}
+.goth-table-footer {
+  font-weight: 600;
+}
+.goth-table-footer .goth-table-row {
+  border-top: 1px solid var(--border);
+}
+
+/* ---- P29 Collapsible / P27 Accordion (native <details>) ------------------- */
+/* Both build on native <details>/<summary>: the summary is the disclosure
+ * control (keyboard/focus/toggle are native), so the rules below are purely
+ * visual. The default disclosure marker is removed in favour of the kit chevron,
+ * which rotates from data-state / the native [open] attribute — never an inline
+ * style. Height reveal uses ::details-content where the engine supports it and
+ * degrades to an instant open elsewhere; reduced motion disables both. */
+.goth-collapsible,
+.goth-accordion-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--card-foreground);
+}
+.goth-accordion {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.goth-collapsible-trigger,
+.goth-accordion-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  font-family: var(--font-sans);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--foreground);
+  cursor: pointer;
+  list-style: none;
+}
+.goth-collapsible-trigger::-webkit-details-marker,
+.goth-accordion-trigger::-webkit-details-marker {
+  display: none;
+}
+.goth-collapsible-trigger:focus-visible,
+.goth-accordion-trigger:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+  border-radius: var(--radius);
+}
+.goth-collapsible-chevron,
+.goth-accordion-chevron {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted-foreground);
+  transition: transform var(--duration-fast) var(--ease);
+}
+.goth-collapsible[open] > .goth-collapsible-trigger .goth-collapsible-chevron,
+.goth-accordion-item[open] > .goth-accordion-trigger .goth-accordion-chevron {
+  transform: rotate(180deg);
+}
+.goth-collapsible-content,
+.goth-accordion-content {
+  padding: 0 var(--space-4) var(--space-4);
+  color: var(--card-foreground);
+  font-size: 0.9375rem;
+}
+
+/* ---- P34 Tabs ------------------------------------------------------------- */
+.goth-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.goth-tabs[data-orientation="vertical"] {
+  flex-direction: row;
+}
+.goth-tabs-list {
+  display: inline-flex;
+  align-items: stretch;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--border);
+}
+.goth-tabs[data-orientation="vertical"] .goth-tabs-list {
+  flex-direction: column;
+  align-items: stretch;
+  border-bottom: 0;
+  border-inline-end: 1px solid var(--border);
+}
+.goth-tabs-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: -1px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--duration-fast) var(--ease), border-color var(--duration-fast) var(--ease);
+}
+.goth-tabs[data-orientation="vertical"] .goth-tabs-trigger {
+  margin-bottom: 0;
+  margin-inline-end: -1px;
+  border-bottom: 0;
+  border-inline-end: 2px solid transparent;
+  justify-content: flex-start;
+}
+.goth-tabs-trigger:hover {
+  color: var(--foreground);
+}
+.goth-tabs-trigger:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+  border-radius: calc(var(--radius) - 2px);
+}
+.goth-tabs-trigger[data-state="active"] {
+  color: var(--foreground);
+  border-color: var(--primary);
+}
+.goth-tabs-content {
+  color: var(--foreground);
+  font-size: 0.9375rem;
+}
+.goth-tabs-content:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: calc(var(--radius) - 2px);
+}
+.goth-tabs[data-orientation="vertical"] .goth-tabs-content {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* ---- P28 Checkbox --------------------------------------------------------- */
+/* Native <input type="checkbox"> with the platform box replaced by an
+ * appearance:none surface. The tick and dash are drawn with a pseudo-element
+ * (borders/background, no external image), so nothing widens the strict img-src
+ * CSP, no inline style is emitted, and the control needs no JavaScript: :checked
+ * draws the tick, the data-state="indeterminate" hook draws the dash. */
+.goth-checkbox {
+  appearance: none;
+  position: relative;
+  flex: none;
+  width: 1.05rem;
+  height: 1.05rem;
+  margin: 0;
+  border: 1px solid var(--input);
+  border-radius: calc(var(--radius) - 3px);
+  background-color: var(--background);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease), border-color var(--duration-fast) var(--ease);
+}
+.goth-checkbox:checked,
+.goth-checkbox[data-state="indeterminate"] {
+  background-color: var(--primary);
+  border-color: var(--primary);
+}
+.goth-checkbox:checked::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 46%;
+  width: 0.28rem;
+  height: 0.55rem;
+  border: solid var(--primary-foreground);
+  border-width: 0 2px 2px 0;
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+.goth-checkbox[data-state="indeterminate"]::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0.55rem;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--primary-foreground);
+  transform: translate(-50%, -50%);
+}
+.goth-checkbox:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.goth-checkbox:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.goth-checkbox[aria-invalid="true"] {
+  border-color: var(--destructive);
+}
+
+/* ---- P33 Switch ----------------------------------------------------------- */
+/* Native checkbox (role="switch") styled as a track; the thumb is a background
+ * radial-gradient circle that slides via background-position on :checked — no
+ * pseudo-elements (cross-engine safe) and no JavaScript. */
+.goth-switch {
+  appearance: none;
+  flex: none;
+  width: 2.25rem;
+  height: 1.25rem;
+  margin: 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background-color: var(--input);
+  background-image: radial-gradient(circle, var(--background) 42%, transparent 44%);
+  background-repeat: no-repeat;
+  background-size: 1.25rem 1.25rem;
+  background-position: left center;
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease), background-position var(--duration-fast) var(--ease);
+}
+.goth-switch:checked {
+  background-color: var(--primary);
+  background-position: right center;
+}
+.goth-switch:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.goth-switch:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.goth-switch[aria-invalid="true"] {
+  outline: 1px solid var(--destructive);
+}
+
+/* ---- P31 Radio Group ------------------------------------------------------ */
+/* A role="radiogroup" of native radios sharing one name: single selection,
+ * arrow-key navigation, roving focus, and submission are all native (no
+ * controller). The dot is a background radial-gradient on :checked. */
+.goth-radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.goth-radio-group[data-orientation="horizontal"] {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+.goth-radio-group-item {
+  appearance: none;
+  flex: none;
+  width: 1.05rem;
+  height: 1.05rem;
+  margin: 0;
+  border: 1px solid var(--input);
+  border-radius: 999px;
+  background-color: var(--background);
+  background-repeat: no-repeat;
+  background-position: center;
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease);
+}
+.goth-radio-group-item:checked {
+  border-color: var(--primary);
+  background-image: radial-gradient(circle, var(--primary) 40%, transparent 42%);
+}
+.goth-radio-group-item:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.goth-radio-group-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.goth-radio-group-item[aria-invalid="true"] {
+  border-color: var(--destructive);
+}
+
+/* ---- P32 Slider ----------------------------------------------------------- */
+/* Single-thumb native <input type="range">: submission and the whole keyboard
+ * model (arrows, Home/End, PageUp/PageDown) are native. The track and thumb are
+ * styled through the vendor range pseudo-elements; no pseudo-element hosts an
+ * inline style and no controller is bound. */
+.goth-slider {
+  appearance: none;
+  width: 100%;
+  height: 1.25rem;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.goth-slider::-webkit-slider-runnable-track {
+  height: 0.375rem;
+  border-radius: 999px;
+  background: var(--muted);
+}
+.goth-slider::-moz-range-track {
+  height: 0.375rem;
+  border-radius: 999px;
+  background: var(--muted);
+}
+.goth-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 1.05rem;
+  height: 1.05rem;
+  margin-top: -0.34rem;
+  border-radius: 999px;
+  background: var(--primary);
+  border: 2px solid var(--background);
+}
+.goth-slider::-moz-range-thumb {
+  width: 1.05rem;
+  height: 1.05rem;
+  border-radius: 999px;
+  background: var(--primary);
+  border: 2px solid var(--background);
+}
+.goth-slider:focus-visible {
+  outline: none;
+}
+.goth-slider:focus-visible::-webkit-slider-thumb {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.goth-slider:focus-visible::-moz-range-thumb {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.goth-slider:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.goth-slider[aria-invalid="true"]::-webkit-slider-thumb {
+  background: var(--destructive);
+}
+.goth-slider[aria-invalid="true"]::-moz-range-thumb {
+  background: var(--destructive);
+}
+
+/* ---- P30 Input OTP -------------------------------------------------------- */
+/* A role="group" of native single-character inputs: each slot submits and
+ * navigates (Tab/Backspace) natively with no JavaScript. The mono figure and the
+ * focus ring come from component CSS; no controller and no inline style. */
+.goth-input-otp {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.goth-input-otp-slot {
+  width: 2.5rem;
+  height: 2.75rem;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 1.05rem;
+  color: var(--foreground);
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+  background-color: var(--background);
+  transition: border-color var(--duration-fast) var(--ease), box-shadow var(--duration-fast) var(--ease);
+}
+.goth-input-otp-slot:focus-visible {
+  outline: none;
+  border-color: var(--ring);
+  box-shadow: 0 0 0 2px var(--ring);
+}
+.goth-input-otp-slot:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.goth-input-otp-slot[aria-invalid="true"] {
+  border-color: var(--destructive);
+}
+.goth-input-otp-separator {
+  color: var(--muted-foreground);
+  user-select: none;
+}
+
+/* ---- P35 Toggle ----------------------------------------------------------- */
+/* Checkbox-backed toggle button: the styled label is the button and wraps a
+ * visually-hidden native checkbox. The pressed visual is drawn off the input's
+ * :checked pseudo-class through :has(), so pressing and submitting are native (no
+ * controller, no inline style). */
+.goth-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  position: relative;
+  min-width: 2.25rem;
+  height: 2.25rem;
+  padding: 0 var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background-color: transparent;
+  color: var(--foreground);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease);
+}
+.goth-toggle[data-variant="outline"] {
+  border-color: var(--input);
+}
+.goth-toggle[data-size="sm"] {
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0 var(--space-1);
+}
+.goth-toggle[data-size="lg"] {
+  min-width: 2.5rem;
+  height: 2.5rem;
+  padding: 0 var(--space-3);
+}
+.goth-toggle-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.goth-toggle:hover {
+  background-color: var(--muted);
+  color: var(--muted-foreground);
+}
+.goth-toggle:has(.goth-toggle-input:checked) {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+}
+.goth-toggle:has(.goth-toggle-input:focus-visible) {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.goth-toggle:has(.goth-toggle-input:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ---- P36 Toggle Group ----------------------------------------------------- */
+/* A joined row/column of checkbox-backed (multiple) or radio-backed (single)
+ * toggle buttons. Selection and submission are native; the multiple mode is
+ * enhanced by gothRovingFocus for a single tab stop. */
+.goth-toggle-group {
+  display: inline-flex;
+}
+.goth-toggle-group[data-orientation="vertical"] {
+  flex-direction: column;
+}
+.goth-toggle-group-item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  min-width: 2.25rem;
+  height: 2.25rem;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--input);
+  background-color: transparent;
+  color: var(--foreground);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease);
+}
+.goth-toggle-group-item + .goth-toggle-group-item {
+  margin-left: -1px;
+}
+.goth-toggle-group[data-orientation="vertical"] .goth-toggle-group-item + .goth-toggle-group-item {
+  margin-left: 0;
+  margin-top: -1px;
+}
+.goth-toggle-group[data-orientation="horizontal"] .goth-toggle-group-item:first-child,
+.goth-toggle-group:not([data-orientation="vertical"]) .goth-toggle-group-item:first-child {
+  border-top-left-radius: var(--radius);
+  border-bottom-left-radius: var(--radius);
+}
+.goth-toggle-group[data-orientation="horizontal"] .goth-toggle-group-item:last-child,
+.goth-toggle-group:not([data-orientation="vertical"]) .goth-toggle-group-item:last-child {
+  border-top-right-radius: var(--radius);
+  border-bottom-right-radius: var(--radius);
+}
+.goth-toggle-group[data-orientation="vertical"] .goth-toggle-group-item:first-child {
+  border-top-left-radius: var(--radius);
+  border-top-right-radius: var(--radius);
+}
+.goth-toggle-group[data-orientation="vertical"] .goth-toggle-group-item:last-child {
+  border-bottom-left-radius: var(--radius);
+  border-bottom-right-radius: var(--radius);
+}
+.goth-toggle-group-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.goth-toggle-group-item:hover {
+  background-color: var(--muted);
+}
+.goth-toggle-group-item:has(.goth-toggle-group-input:checked) {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+}
+.goth-toggle-group-item:has(.goth-toggle-group-input:focus-visible) {
+  outline: 2px solid var(--ring);
+  outline-offset: -1px;
+  z-index: 1;
+}
+.goth-toggle-group-item:has(.goth-toggle-group-input:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ---- Shared overlay/menu mechanics (GOTH-4.1) ---------------------------- *
+ * The overlay/navigation wave (P37–P48) shares these mechanic styles. They key
+ * off the runtime-managed data-state / data-side / data-align hooks and the two
+ * --goth-anchor-* custom properties the anchor mechanic sets through the CSSOM
+ * (CSP-safe; no inline style attribute, no 'unsafe-inline'). Every floating layer
+ * is display:none until its controller sets data-state="open", so a no-JS page
+ * shows the closed baseline with no flash. */
+
+/* Scroll lock: a modal overlay adds .goth-scroll-locked to <html> (the scroll-
+ * lock mechanic toggles a CLASS, never an inline style). */
+html.goth-scroll-locked {
+  overflow: hidden;
+}
+
+/* Modal dialog scrim + panel. The scrim uses the frozen --overlay scrim token on
+ * the --z-overlay layer; the panel sits on --z-modal with the --shadow-lg
+ * elevation ceiling. */
+.goth-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay);
+  display: none;
+  place-items: center;
+  padding: var(--space-4);
+}
+/* Direct-child combinator so a nested dialog's overlay is driven only by ITS OWN
+ * root's open state, never by an ancestor dialog that happens to be open. */
+[data-state="open"] > .goth-overlay {
+  display: grid;
+}
+.goth-overlay-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay);
+  background-color: var(--overlay);
+}
+.goth-overlay-panel {
+  position: relative;
+  z-index: var(--z-modal);
+  max-width: min(32rem, 100%);
+  max-height: 100%;
+  overflow: auto;
+  padding: var(--space-4);
+  background-color: var(--popover);
+  color: var(--popover-foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+
+/* Anchored floating panel (menu / listbox / submenu). Positioned by the anchor
+ * mechanic through --goth-anchor-top/left plus data-side/data-align. */
+.goth-floating {
+  position: fixed;
+  top: var(--goth-anchor-top, 0);
+  left: var(--goth-anchor-left, 0);
+  z-index: var(--z-popover);
+  min-width: 12rem;
+  display: none;
+  flex-direction: column;
+  gap: 1px;
+  padding: var(--space-1);
+  background-color: var(--popover);
+  color: var(--popover-foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+.goth-floating[data-state="open"] {
+  display: flex;
+}
+.goth-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: calc(var(--radius) - 2px);
+  background-color: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.875rem;
+  text-align: start;
+  cursor: pointer;
+}
+.goth-menu-item:hover,
+.goth-menu-item:focus-visible {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+  outline: none;
+}
+.goth-submenu-root {
+  position: relative;
+}
+
+/* ---- Modal/panel primitives (GOTH-4.2) ---------------------------------- *
+ * Dialog (P39), Alert Dialog (P37), Drawer (P40), Sheet (P47). All gothDialog-
+ * backed and composed from the shared overlay mechanics above (scrim/panel, focus
+ * trap/restore, scroll lock, inert, nested dismiss). The no-JS baseline is
+ * server-owned: a root rendered data-state="open" shows its overlay via the
+ * [data-state="open"] > .goth-overlay rule with no JavaScript; closed shows only
+ * the trigger. Dialog/Alert Dialog reuse the centered .goth-overlay-panel; Sheet/
+ * Drawer use an edge-anchored panel keyed off data-side. */
+
+/* Shared header/footer/title/description layout across the four families. */
+.goth-dialog-header,
+.goth-alert-dialog-header,
+.goth-sheet-header,
+.goth-drawer-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  text-align: start;
+}
+.goth-dialog-footer,
+.goth-alert-dialog-footer,
+.goth-sheet-footer,
+.goth-drawer-footer {
+  display: flex;
+  flex-direction: column-reverse;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+@media (min-width: 40rem) {
+  .goth-dialog-footer,
+  .goth-alert-dialog-footer,
+  .goth-sheet-footer,
+  .goth-drawer-footer {
+    flex-direction: row;
+    justify-content: flex-end;
+  }
+}
+.goth-dialog-title,
+.goth-alert-dialog-title,
+.goth-sheet-title,
+.goth-drawer-title {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.goth-dialog-description,
+.goth-alert-dialog-description,
+.goth-sheet-description,
+.goth-drawer-description {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--muted-foreground);
+}
+
+/* Centered dialog/alert-dialog panel enter animation (zoom+fade). Exit is instant
+ * because display:none removal cannot animate — an honest no-exit-animation
+ * dialog. */
+@keyframes goth-dialog-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+[data-state="open"] > .goth-overlay > .goth-overlay-panel {
+  animation: goth-dialog-in var(--duration-fast) var(--ease);
+}
+
+/* Sheet/Drawer edge panels: position:fixed pinned to a side, sized to the edge. */
+.goth-sheet-panel,
+.goth-drawer-panel {
+  position: fixed;
+  z-index: var(--z-modal);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  overflow: auto;
+  background-color: var(--popover);
+  color: var(--popover-foreground);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
+}
+.goth-sheet-panel[data-side="right"],
+.goth-drawer-panel[data-side="right"] {
+  inset: 0 0 0 auto;
+  width: min(24rem, 100%);
+}
+.goth-sheet-panel[data-side="left"],
+.goth-drawer-panel[data-side="left"] {
+  inset: 0 auto 0 0;
+  width: min(24rem, 100%);
+}
+.goth-sheet-panel[data-side="top"],
+.goth-drawer-panel[data-side="top"] {
+  inset: 0 0 auto 0;
+  max-height: 85vh;
+}
+.goth-sheet-panel[data-side="bottom"],
+.goth-drawer-panel[data-side="bottom"] {
+  inset: auto 0 0 0;
+  max-height: 85vh;
+}
+/* The drawer's default bottom/top edge rounds its inner corners and centers a
+ * decorative drag handle (drag-to-dismiss is out of this wave's scope). */
+.goth-drawer-panel[data-side="bottom"] {
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+.goth-drawer-panel[data-side="top"] {
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+.goth-drawer-handle {
+  align-self: center;
+  width: 5rem;
+  height: 0.375rem;
+  border-radius: 9999px;
+  background-color: var(--muted);
+}
+
+/* Edge slide-in animations (enter only, per the no-exit-animation note above). */
+@keyframes goth-slide-from-right {
+  from {
+    transform: translateX(100%);
+  }
+}
+@keyframes goth-slide-from-left {
+  from {
+    transform: translateX(-100%);
+  }
+}
+@keyframes goth-slide-from-top {
+  from {
+    transform: translateY(-100%);
+  }
+}
+@keyframes goth-slide-from-bottom {
+  from {
+    transform: translateY(100%);
+  }
+}
+[data-state="open"] > .goth-overlay > .goth-sheet-panel[data-side="right"],
+[data-state="open"] > .goth-overlay > .goth-drawer-panel[data-side="right"] {
+  animation: goth-slide-from-right var(--duration) var(--ease-emphasized);
+}
+[data-state="open"] > .goth-overlay > .goth-sheet-panel[data-side="left"],
+[data-state="open"] > .goth-overlay > .goth-drawer-panel[data-side="left"] {
+  animation: goth-slide-from-left var(--duration) var(--ease-emphasized);
+}
+[data-state="open"] > .goth-overlay > .goth-sheet-panel[data-side="top"],
+[data-state="open"] > .goth-overlay > .goth-drawer-panel[data-side="top"] {
+  animation: goth-slide-from-top var(--duration) var(--ease-emphasized);
+}
+[data-state="open"] > .goth-overlay > .goth-sheet-panel[data-side="bottom"],
+[data-state="open"] > .goth-overlay > .goth-drawer-panel[data-side="bottom"] {
+  animation: goth-slide-from-bottom var(--duration) var(--ease-emphasized);
+}
+
+/* ---- Anchored information/selection primitives (GOTH-4.3) ---------------- *
+ * Tooltip (P48), Hover Card (P42), Popover (P45), Select (P46). Tooltip and Hover
+ * Card have a pure CSS hover/focus-within no-JS baseline (content positioned near
+ * the trigger); when the gothTooltip/gothHoverCard controller is present it sets
+ * data-enhanced on the root and the reveal switches to the controller-owned
+ * [data-state="open"] (carrying the hover-intent delay + Escape). Once the shared
+ * anchor mechanic runs it sets data-side + the --goth-anchor-* CSSOM offsets, so
+ * the floating panel switches to viewport-fixed collision-aware positioning with
+ * NO inline style. Popover rides the native popover API (UA-centered until the
+ * runtime anchors it); Select is a styled native <select>. */
+
+@keyframes goth-anchored-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+/* Tooltip */
+.goth-tooltip {
+  position: relative;
+  display: inline-block;
+}
+.goth-tooltip-content {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-popover);
+  display: none;
+  width: max-content;
+  max-width: 18rem;
+  padding: var(--space-1) var(--space-2);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: var(--popover-foreground);
+  background-color: var(--popover);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  box-shadow: var(--shadow-md);
+}
+/* No-JS baseline: reveal on hover/focus-within until the controller enhances it. */
+.goth-tooltip:not([data-enhanced]):hover > .goth-tooltip-content,
+.goth-tooltip:not([data-enhanced]):focus-within > .goth-tooltip-content {
+  display: block;
+}
+/* Enhanced: controller-owned, intent-delayed, Escape-dismissible. */
+.goth-tooltip[data-enhanced][data-state="open"] > .goth-tooltip-content {
+  display: block;
+  animation: goth-anchored-in var(--duration-fast) var(--ease);
+}
+/* Once the anchor mechanic runs it sets data-side → switch to fixed positioning. */
+.goth-tooltip-content[data-side] {
+  position: fixed;
+  top: var(--goth-anchor-top, 0);
+  left: var(--goth-anchor-left, 0);
+  transform: none;
+}
+
+/* Hover Card */
+.goth-hover-card {
+  position: relative;
+  display: inline-block;
+}
+.goth-hover-card-trigger {
+  color: inherit;
+}
+.goth-hover-card-content {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-popover);
+  display: none;
+  width: max-content;
+  max-width: 20rem;
+  padding: var(--space-4);
+  color: var(--popover-foreground);
+  background-color: var(--popover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+.goth-hover-card:not([data-enhanced]):hover > .goth-hover-card-content,
+.goth-hover-card:not([data-enhanced]):focus-within > .goth-hover-card-content {
+  display: block;
+}
+.goth-hover-card[data-enhanced][data-state="open"] > .goth-hover-card-content {
+  display: block;
+  animation: goth-anchored-in var(--duration-fast) var(--ease);
+}
+.goth-hover-card-content[data-side] {
+  position: fixed;
+  top: var(--goth-anchor-top, 0);
+  left: var(--goth-anchor-left, 0);
+  transform: none;
+}
+
+/* Popover (native popover API). The panel visuals apply always; positioning is
+ * left to the UA (top-layer, centered) until the runtime anchor enhancement sets
+ * data-side and switches it to fixed collision-aware placement. */
+.goth-popover-content {
+  min-width: 12rem;
+  max-width: min(22rem, 100%);
+  padding: var(--space-4);
+  color: var(--popover-foreground);
+  background-color: var(--popover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+.goth-popover-content:popover-open {
+  animation: goth-anchored-in var(--duration-fast) var(--ease);
+}
+.goth-popover-content[data-side] {
+  position: fixed;
+  margin: 0;
+  inset: auto;
+  top: var(--goth-anchor-top, 0);
+  left: var(--goth-anchor-left, 0);
+}
+
+/* Select (styled native <select>). appearance:none hides only the UA closed-state
+ * arrow; the native listbox/typeahead/keyboard/form-value/validation are intact. */
+.goth-select {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 100%;
+  max-width: 20rem;
+}
+.goth-select-input {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
+  padding: var(--space-2) var(--space-8) var(--space-2) var(--space-3);
+  font: inherit;
+  color: var(--foreground);
+  background-color: var(--background);
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.goth-select-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.goth-select-input[data-invalid="true"] {
+  border-color: var(--destructive);
+}
+.goth-select-input:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.goth-select-icon {
+  position: absolute;
+  right: var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted-foreground);
+  pointer-events: none;
+}
+
+/* ---- Menu primitives (GOTH-4.4) ----------------------------------------- *
+ * Dropdown Menu (P41), Context Menu (P38), and Menubar (P43) are gothMenu-backed
+ * and reuse the shared .goth-floating / .goth-menu-item mechanics above. These
+ * add the item roles, indicators, labels, separators, submenu chevron, the
+ * menubar bar, and the context-menu region. Navigation Menu (P44) is link-first
+ * and native (<details>), no controller. Every floating panel stays display:none
+ * until data-state="open" (or, for nav, until the native <details> is open), so a
+ * no-JS page shows the closed baseline. */
+
+/* A gentle fade-in for the opened action-menu panel (reused anchored keyframe). */
+.goth-menu-content[data-state="open"] {
+  animation: goth-anchored-in var(--duration-fast) var(--ease);
+}
+
+/* Dropdown trigger: a neutral button; callers usually add .goth-button via Class. */
+.goth-menu-trigger {
+  cursor: pointer;
+}
+
+/* Disabled items are dimmed and non-interactive. */
+.goth-menu-item:disabled,
+.goth-menu-item[aria-disabled="true"] {
+  opacity: 0.5;
+  pointer-events: none;
+  cursor: not-allowed;
+}
+
+/* Checkbox/radio menu items: a leading indicator shown only when checked. */
+.goth-menu-item-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 1rem;
+  opacity: 0;
+}
+.goth-menu-check-item[aria-checked="true"] > .goth-menu-item-indicator {
+  opacity: 1;
+}
+
+/* Group label + separator. A group is transparent so its items stay in the
+ * panel's single column. */
+.goth-menu-label {
+  padding: var(--space-1) var(--space-2);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted-foreground);
+}
+.goth-menu-separator {
+  height: 1px;
+  margin: var(--space-1) 0;
+  background-color: var(--border);
+}
+.goth-menu-group {
+  display: contents;
+}
+
+/* Submenu trigger: label on the leading edge, chevron pinned to the trailing edge
+ * (mirrored under RTL where the submenu opens toward the leading side). */
+.goth-menu-sub-trigger {
+  justify-content: space-between;
+}
+.goth-menu-sub-chevron {
+  display: inline-flex;
+  margin-inline-start: auto;
+}
+[dir="rtl"] .goth-menu-sub-chevron {
+  transform: scaleX(-1);
+}
+
+/* Context menu: the target region is a focusable dashed drop-area; the menu is
+ * absolutely anchored at the pointer by the anchor mechanic. */
+.goth-context-menu {
+  position: relative;
+}
+.goth-context-menu-trigger {
+  display: grid;
+  place-items: center;
+  min-height: 8rem;
+  padding: var(--space-4);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--muted-foreground);
+  text-align: center;
+  user-select: none;
+}
+.goth-context-menu-trigger:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* Menubar: a horizontal bar of menu buttons. */
+.goth-menubar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: fit-content;
+  padding: var(--space-1);
+  background-color: var(--background);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.goth-menubar-menu {
+  position: relative;
+}
+.goth-menubar-trigger {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: calc(var(--radius) - 2px);
+  background-color: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+.goth-menubar-trigger:hover,
+.goth-menubar-trigger:focus-visible,
+.goth-menubar-menu[data-state="open"] > .goth-menubar-trigger {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+  outline: none;
+}
+
+/* Navigation Menu: real links + a native <details> disclosure of link panels. */
+.goth-navigation-menu-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.goth-navigation-menu-item {
+  position: relative;
+}
+.goth-navigation-menu-link {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-1) var(--space-2);
+  border-radius: calc(var(--radius) - 2px);
+  color: inherit;
+  font-size: 0.875rem;
+  text-decoration: none;
+}
+.goth-navigation-menu-link:hover,
+.goth-navigation-menu-link:focus-visible {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+  outline: none;
+}
+.goth-navigation-menu-link[data-active="true"] {
+  font-weight: 600;
+}
+.goth-navigation-menu-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border-radius: calc(var(--radius) - 2px);
+  font-size: 0.875rem;
+  cursor: pointer;
+  list-style: none;
+}
+.goth-navigation-menu-trigger::-webkit-details-marker {
+  display: none;
+}
+.goth-navigation-menu-trigger:hover,
+.goth-navigation-menu-trigger:focus-visible {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+  outline: none;
+}
+.goth-navigation-menu-chevron {
+  display: inline-flex;
+  transition: transform var(--duration-fast) var(--ease);
+}
+.goth-navigation-menu-sub[open] > .goth-navigation-menu-trigger .goth-navigation-menu-chevron {
+  transform: rotate(180deg);
+}
+.goth-navigation-menu-content {
+  position: absolute;
+  z-index: var(--z-popover);
+  margin-top: var(--space-1);
+  min-width: 12rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: var(--space-1);
+  background-color: var(--popover);
+  color: var(--popover-foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+
+/* Calendar (P49): a server-rendered month grid. Layout, weekday headers, and day
+ * states are computed in Go; the styling keys off the stable goth-calendar surface
+ * and data-* selection/state hooks. No inline style is emitted. */
+.goth-calendar {
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  color: var(--foreground);
+  background-color: var(--background);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.goth-calendar [data-slot="calendar-header"] {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.goth-calendar [data-slot="calendar-caption"] {
+  font-weight: 600;
+  font-size: 0.9375rem;
+  text-align: center;
+  flex: 1 1 auto;
+}
+.goth-calendar-nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  color: var(--foreground);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease);
+}
+.goth-calendar-nav:hover {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+}
+.goth-calendar-nav:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+[dir="rtl"] .goth-calendar-nav > svg {
+  transform: scaleX(-1);
+}
+.goth-calendar-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.goth-calendar [data-slot="calendar-weekdays"],
+.goth-calendar [data-slot="calendar-week"] {
+  display: grid;
+  grid-template-columns: repeat(7, 2.25rem);
+  gap: var(--space-1);
+}
+.goth-calendar [data-slot="calendar-weekday"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 2rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+.goth-calendar [data-slot="calendar-cell"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.goth-calendar-day {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
+  font: inherit;
+  font-size: 0.875rem;
+  color: var(--foreground);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease);
+}
+button.goth-calendar-day:hover {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+}
+button.goth-calendar-day:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.goth-calendar-day[data-today] {
+  border-color: var(--border);
+  font-weight: 600;
+}
+.goth-calendar-day[data-selected] {
+  background-color: var(--primary);
+  color: var(--primary-foreground);
+  border-color: var(--primary);
+}
+button.goth-calendar-day[data-selected]:hover {
+  background-color: var(--primary);
+  color: var(--primary-foreground);
+}
+span.goth-calendar-day {
+  cursor: default;
+  color: var(--muted-foreground);
+}
+.goth-calendar-day[data-outside] {
+  color: var(--muted-foreground);
+  opacity: 0.5;
+}
+.goth-calendar-day[data-disabled] {
+  color: var(--muted-foreground);
+  opacity: 0.4;
+  text-decoration: line-through;
+}
+
+/* Date Picker (P53): a text field, a native popover trigger, and a native popover
+ * panel that holds a Calendar. The panel reuses the popover surface and anchor
+ * hooks; no controller is bound. */
+.goth-date-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.goth-date-picker-input {
+  padding: var(--space-2) var(--space-3);
+  font: inherit;
+  color: var(--foreground);
+  background-color: var(--background);
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+}
+.goth-date-picker-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.goth-date-picker-input[aria-invalid="true"] {
+  border-color: var(--destructive);
+}
+.goth-date-picker-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
+  color: var(--foreground);
+  background-color: var(--background);
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease);
+}
+.goth-date-picker-trigger:hover {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+}
+.goth-date-picker-trigger:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.goth-date-picker-content {
+  width: max-content;
+  max-width: min(22rem, 100%);
+  padding: var(--space-3);
+  color: var(--popover-foreground);
+  background-color: var(--popover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+.goth-date-picker-content:popover-open {
+  animation: goth-anchored-in var(--duration-fast) var(--ease);
+}
+.goth-date-picker-content[data-side] {
+  position: fixed;
+  margin: 0;
+  inset: auto;
+  top: var(--goth-anchor-top, 0);
+  left: var(--goth-anchor-left, 0);
+}
+
+/* Combobox (P50): an editable input with a listbox of server-owned options
+ * (GOTH-5.2). The listbox is absolutely positioned under the input so it anchors
+ * with plain CSS (no inline style, no JS anchor needed) and is readable server-open
+ * for the no-JS baseline. Options are submit buttons; the keyboard-active option is
+ * marked data-active by gothCombobox. */
+.goth-combobox {
+  position: relative;
+  display: inline-block;
+  min-width: 16rem;
+}
+.goth-combobox-input {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  font: inherit;
+  color: var(--foreground);
+  background-color: var(--background);
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+}
+.goth-combobox-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.goth-combobox-input[data-invalid="true"] {
+  border-color: var(--destructive);
+}
+.goth-combobox-listbox {
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  right: 0;
+  z-index: var(--z-popover);
+  display: none;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 16rem;
+  overflow-y: auto;
+  padding: var(--space-1);
+  background-color: var(--popover);
+  color: var(--popover-foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+/* Visibility follows the root's data-state so the controller (which owns the root
+ * state) and the server-open no-JS baseline agree from one selector. */
+.goth-combobox[data-state="open"] .goth-combobox-listbox {
+  display: flex;
+}
+.goth-combobox-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: calc(var(--radius) - 2px);
+  background-color: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.875rem;
+  text-align: start;
+  cursor: pointer;
+}
+.goth-combobox-option:hover,
+.goth-combobox-option:focus-visible,
+.goth-combobox-option[data-active="true"] {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+  outline: none;
+}
+.goth-combobox-option[data-selected="true"] {
+  font-weight: 600;
+}
+.goth-combobox-option[disabled],
+.goth-combobox-option[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.goth-combobox-empty {
+  padding: var(--space-2);
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+}
+
+/* Command (P51): a command palette — a search input over a grouped, always-visible
+ * listbox. Reuses gothCombobox in inline mode (the list is never a popup); the
+ * keyboard-active item is marked data-active. Items are links (link-first) or submit
+ * buttons and work with no JavaScript. */
+.goth-command {
+  display: flex;
+  flex-direction: column;
+  min-width: 20rem;
+  max-width: 100%;
+  overflow: hidden;
+  background-color: var(--popover);
+  color: var(--popover-foreground);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+.goth-command-input {
+  width: 100%;
+  padding: var(--space-3);
+  font: inherit;
+  color: var(--foreground);
+  background-color: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+}
+.goth-command-input:focus-visible {
+  outline: none;
+}
+.goth-command-list {
+  max-height: 20rem;
+  overflow-y: auto;
+  padding: var(--space-1);
+}
+.goth-command-group {
+  padding: var(--space-1) 0;
+}
+.goth-command-group-heading {
+  padding: var(--space-1) var(--space-2);
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.goth-command-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: calc(var(--radius) - 2px);
+  background-color: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.875rem;
+  text-align: start;
+  text-decoration: none;
+  cursor: pointer;
+}
+.goth-command-item:hover,
+.goth-command-item:focus-visible,
+.goth-command-item[data-active="true"] {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+  outline: none;
+}
+.goth-command-item[data-selected="true"] {
+  font-weight: 600;
+}
+.goth-command-item[disabled],
+.goth-command-item[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.goth-command-empty {
+  padding: var(--space-3);
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+  text-align: center;
+}
+.goth-command-separator {
+  height: 1px;
+  margin: var(--space-1) 0;
+  background-color: var(--border);
+}
+
+/* ---- P52 Data Table (GOTH-5.3) -------------------------------------------- */
+/* A server-owned data grid composed from Table (P24), Pagination (P19), Checkbox
+ * (P28), and menus. Sort/filter/page are real links and a form GET (shareable
+ * URLs, no-JS baseline); the styling keys off the stable goth-data-table surface
+ * and data-* hooks — no inline style. The loading affordance is driven by the
+ * server-owned data-state / HTMX's own .htmx-request class, never JS geometry. */
+.goth-data-table {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.goth-data-table-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.goth-data-table-content {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+/* Loading affordance: dim the content and show progress while a swap is in
+ * flight. Both the server-owned data-state and HTMX's request class drive it. */
+.goth-data-table-content[data-state="loading"],
+.goth-data-table-content.htmx-request {
+  opacity: 0.6;
+  transition: opacity 0.15s ease;
+}
+/* Sortable header: the whole cell is a link target; aria-sort is the accessible
+ * source of truth and the glyph is decorative. */
+.goth-data-table-sort-header {
+  padding: 0;
+}
+.goth-data-table-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  font: inherit;
+  font-weight: 600;
+  color: var(--muted-foreground);
+  text-decoration: none;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.goth-data-table-sort:hover {
+  color: var(--foreground);
+}
+.goth-data-table-sort:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.goth-data-table-sort-glyph {
+  display: inline-flex;
+  color: var(--muted-foreground);
+}
+.goth-data-table-sort-header[data-direction="none"] .goth-data-table-sort-glyph {
+  opacity: 0.4;
+}
+.goth-data-table-sort-header[data-direction="ascending"] .goth-data-table-sort,
+.goth-data-table-sort-header[data-direction="descending"] .goth-data-table-sort {
+  color: var(--foreground);
+}
+.goth-data-table-empty-cell {
+  padding: var(--space-6) var(--space-3);
+  color: var(--muted-foreground);
+  text-align: center;
+}
+/* The live-region status text is available to assistive tech without being a
+ * visual banner; the server writes result counts / errors into it. */
+.goth-data-table-status {
+  font-size: 0.8125rem;
+  color: var(--muted-foreground);
+}
+.goth-data-table-status[role="alert"] {
+  color: var(--destructive);
+}
+
+/* ---- P54 Sidebar (GOTH-5.4) ---------------------------------------------- *
+ * Application navigation shell. ONE markup renders both breakpoints with no inline
+ * style and no new controller: below the sidebar breakpoint the panel is an
+ * off-canvas sheet (scrim + slide-in; gothDialog governs open/close via the
+ * server-owned data-state; SidebarTrigger opens it, SidebarClose/scrim/Escape close
+ * it); at/above it the panel is a static rail in flow (scrim/trigger/close
+ * suppressed) whose width is driven by the SERVER-owned data-collapsed. The rail
+ * collapse toggle (SidebarRail) is a real link — collapse is a server round-trip,
+ * client enhancement optional. Sidebar surfaces use the frozen --sidebar-* tokens. */
+
+/* App-shell layout: the Sidebar rail and the main content sit in a flex row; the
+ * off-canvas mobile sheet floats over the row. */
+.goth-sidebar-provider {
+  display: flex;
+  align-items: flex-start;
+  min-height: 0;
+}
+.goth-sidebar-inset {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The root is a scope wrapper (gothDialog x-data + server state); it lays nothing
+ * out itself, so its panel participates in the provider's flex row. */
+.goth-sidebar {
+  display: contents;
+}
+
+/* Mobile: the overlay is a fixed sheet, hidden until the server/gothDialog opens it.
+ * The direct-child combinator keys visibility to THIS sidebar's own data-state. */
+.goth-sidebar-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay);
+  display: none;
+}
+[data-slot="sidebar"][data-state="open"] > .goth-sidebar-overlay {
+  display: block;
+}
+.goth-sidebar-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay);
+  background-color: var(--overlay);
+}
+.goth-sidebar-panel {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  z-index: var(--z-modal);
+  width: min(18rem, 85vw);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  overflow-y: auto;
+  background-color: var(--sidebar);
+  color: var(--sidebar-foreground);
+}
+.goth-sidebar-panel[data-side="left"] {
+  inset-inline-start: 0;
+  border-inline-end: 1px solid var(--sidebar-border);
+}
+.goth-sidebar-panel[data-side="right"] {
+  inset-inline-end: 0;
+  border-inline-start: 1px solid var(--sidebar-border);
+}
+/* Mobile slide-in (enter only; exit is instant, like the other overlays). */
+@keyframes goth-sidebar-in-left {
+  from {
+    transform: translateX(-100%);
+  }
+}
+@keyframes goth-sidebar-in-right {
+  from {
+    transform: translateX(100%);
+  }
+}
+[data-slot="sidebar"][data-state="open"] > .goth-sidebar-overlay > .goth-sidebar-panel[data-side="left"] {
+  animation: goth-sidebar-in-left var(--duration) var(--ease-emphasized);
+}
+[data-slot="sidebar"][data-state="open"] > .goth-sidebar-overlay > .goth-sidebar-panel[data-side="right"] {
+  animation: goth-sidebar-in-right var(--duration) var(--ease-emphasized);
+}
+/* The panel is positioned with logical insets, so under RTL data-side="left"
+   settles at the physical right edge (and vice versa). translateX is physical, so
+   the entrance keyframe must follow the resolved edge, not the physical side. */
+[dir="rtl"] [data-slot="sidebar"][data-state="open"] > .goth-sidebar-overlay > .goth-sidebar-panel[data-side="left"] {
+  animation-name: goth-sidebar-in-right;
+}
+[dir="rtl"] [data-slot="sidebar"][data-state="open"] > .goth-sidebar-overlay > .goth-sidebar-panel[data-side="right"] {
+  animation-name: goth-sidebar-in-left;
+}
+
+/* Panel interior (shared across breakpoints). */
+.goth-sidebar-header,
+.goth-sidebar-footer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.goth-sidebar-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  overflow-y: auto;
+}
+.goth-sidebar-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.goth-sidebar-group-label {
+  padding-inline: var(--space-2);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--sidebar-foreground);
+  opacity: 0.72;
+}
+.goth-sidebar-menu,
+.goth-sidebar-menu-sub {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.goth-sidebar-menu-sub {
+  margin-inline-start: var(--space-4);
+  padding-inline-start: var(--space-2);
+  border-inline-start: 1px solid var(--sidebar-border);
+}
+.goth-sidebar-menu-button,
+.goth-sidebar-menu-sub-button {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2);
+  border: 0;
+  border-radius: var(--radius);
+  background-color: transparent;
+  color: var(--sidebar-foreground);
+  font: inherit;
+  font-size: 0.875rem;
+  text-align: start;
+  text-decoration: none;
+  cursor: pointer;
+}
+.goth-sidebar-menu-button:hover,
+.goth-sidebar-menu-sub-button:hover {
+  background-color: var(--sidebar-accent);
+  color: var(--sidebar-accent-foreground);
+}
+.goth-sidebar-menu-button:focus-visible,
+.goth-sidebar-menu-sub-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--sidebar-ring);
+}
+.goth-sidebar-menu-button[data-active="true"],
+.goth-sidebar-menu-sub-button[data-active="true"] {
+  background-color: var(--sidebar-primary);
+  color: var(--sidebar-primary-foreground);
+  font-weight: 500;
+}
+.goth-sidebar-menu-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+}
+.goth-sidebar-menu-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.goth-sidebar-separator {
+  height: 1px;
+  margin-block: var(--space-1);
+  background-color: var(--sidebar-border);
+}
+.goth-sidebar-trigger,
+.goth-sidebar-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid var(--sidebar-border);
+  border-radius: var(--radius);
+  background-color: transparent;
+  color: var(--sidebar-foreground);
+  font: inherit;
+  cursor: pointer;
+}
+.goth-sidebar-trigger:focus-visible,
+.goth-sidebar-close:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--sidebar-ring);
+}
+/* SidebarRail is the desktop collapse control; hidden on mobile (where the trigger
+ * governs the sheet). */
+.goth-sidebar-rail {
+  display: none;
+}
+
+/* Desktop rail: the panel is a static in-flow column; the sheet chrome is
+ * suppressed. data-collapsed (server-owned) narrows it to an icon rail. */
+@media (min-width: 48rem) {
+  .goth-sidebar-overlay {
+    display: contents;
+  }
+  .goth-sidebar-scrim,
+  .goth-sidebar-trigger,
+  .goth-sidebar-close {
+    display: none;
+  }
+  .goth-sidebar-panel {
+    position: sticky;
+    top: 0;
+    inset-inline: auto;
+    height: 100vh;
+    width: 16rem;
+    animation: none;
+    transition: width var(--duration) var(--ease);
+  }
+  [data-slot="sidebar"][data-collapsed="true"] > .goth-sidebar-overlay > .goth-sidebar-panel {
+    width: 3.75rem;
+    padding-inline: var(--space-1);
+  }
+  [data-slot="sidebar"][data-collapsed="true"] .goth-sidebar-group-label,
+  [data-slot="sidebar"][data-collapsed="true"] .goth-sidebar-menu-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
+  [data-slot="sidebar"][data-collapsed="true"] .goth-sidebar-menu-button,
+  [data-slot="sidebar"][data-collapsed="true"] .goth-sidebar-menu-sub-button {
+    justify-content: center;
+  }
+  [data-slot="sidebar"][data-collapsed="true"] .goth-sidebar-menu-sub {
+    display: none;
+  }
+  .goth-sidebar-rail {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: var(--space-1) var(--space-2);
+    border: 0;
+    border-radius: var(--radius);
+    background-color: transparent;
+    color: var(--sidebar-foreground);
+    font: inherit;
+    font-size: 0.8125rem;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .goth-sidebar-rail:hover {
+    background-color: var(--sidebar-accent);
+    color: var(--sidebar-accent-foreground);
+  }
+  .goth-sidebar-rail:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--sidebar-ring);
+  }
+}
+
+/* ---- P55 Attachment (GOTH-6.1) ------------------------------------------- *
+ * A compound file/media card that DISPLAYS caller-owned upload state (the server
+ * owns idle/uploading/processing/error/done + progress; the primitive selects no
+ * file and owns no route). State is conveyed with a glyph AND a text label (never
+ * color alone); AttachmentTrigger stretches over the card via ::after while
+ * AttachmentActions/status sit above it (position/z-index) so each stays an
+ * independent, nameable tab stop. Three sizes (sm/md/lg) and two orientations
+ * (horizontal/vertical) come off data-size/data-orientation with no inline style. */
+.goth-attachment {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background-color: var(--card);
+  color: var(--card-foreground);
+}
+.goth-attachment[data-orientation="vertical"] {
+  flex-direction: column;
+  align-items: stretch;
+  text-align: start;
+}
+.goth-attachment[data-size="sm"] {
+  gap: var(--space-2);
+  padding: var(--space-2);
+}
+.goth-attachment[data-size="lg"] {
+  gap: var(--space-4);
+  padding: var(--space-4);
+}
+.goth-attachment[data-state="error"] {
+  border-color: var(--destructive);
+}
+.goth-attachment[data-state="done"] {
+  border-color: var(--success);
+}
+.goth-attachment[data-state="uploading"],
+.goth-attachment[data-state="processing"] {
+  border-color: var(--ring);
+}
+
+.goth-attachment-media {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  overflow: hidden;
+  border-radius: calc(var(--radius) - 2px);
+  background-color: var(--muted);
+  color: var(--muted-foreground);
+}
+.goth-attachment[data-size="sm"] .goth-attachment-media {
+  width: 2rem;
+  height: 2rem;
+}
+.goth-attachment[data-size="lg"] .goth-attachment-media {
+  width: 3.5rem;
+  height: 3.5rem;
+}
+.goth-attachment[data-orientation="vertical"] .goth-attachment-media {
+  width: 100%;
+  height: 8rem;
+}
+.goth-attachment-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.goth-attachment-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.goth-attachment-title {
+  font-weight: 600;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.goth-attachment-description {
+  color: var(--muted-foreground);
+  font-size: 0.8125rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Actions and status sit above the stretched trigger so they stay clickable and
+ * focusable independently of the full-card affordance. */
+.goth-attachment-actions {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+}
+.goth-attachment-status {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 0.8125rem;
+  color: var(--muted-foreground);
+}
+.goth-attachment[data-orientation="vertical"] .goth-attachment-status {
+  align-self: flex-start;
+}
+/* The state hue rides the glyph (and the card border) only; the label text stays
+ * at the AA-safe muted foreground so state is conveyed by shape + text, not by a
+ * low-contrast tint. */
+.goth-attachment[data-state="error"] .goth-attachment-status svg {
+  color: var(--destructive);
+}
+.goth-attachment[data-state="done"] .goth-attachment-status svg {
+  color: var(--success);
+}
+.goth-attachment-progress {
+  inline-size: 6rem;
+}
+.goth-attachment-spinner {
+  animation: goth-spinner-rotate 0.8s linear infinite;
+}
+
+/* Full-card affordance: the trigger element carries the accessible name and its
+ * ::after stretches over the whole card (no inline style). The focus ring lands
+ * on the stretched area so keyboard focus is visible on the card. */
+.goth-attachment-trigger {
+  position: static;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.goth-attachment-trigger::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius);
+}
+.goth-attachment-trigger:focus-visible {
+  outline: none;
+}
+.goth-attachment-trigger:focus-visible::after {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+/* Group: a horizontally scrolling shelf of cards. */
+.goth-attachment-group {
+  display: flex;
+  gap: var(--space-3);
+  overflow-x: auto;
+  padding-bottom: var(--space-2);
+}
+.goth-attachment-group > .goth-attachment {
+  flex: 0 0 auto;
+  min-width: 16rem;
+}
+.goth-attachment-group.goth-attachment-group-stack {
+  flex-direction: column;
+  overflow-x: visible;
+}
+.goth-attachment-group.goth-attachment-group-stack > .goth-attachment {
+  min-width: 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Bubble (P56) — GOTH-6.2. A compound chat bubble: the aligned wrapper (.goth-bubble
+ * owns data-align via logical properties so start/end follow the writing direction),
+ * the coloured surface (.goth-bubble-content owns data-variant across seven semantic
+ * theme roles), a reactions row of interactive chips, and a group wrapper that
+ * tightens inner corner radii. No inline style; alignment/variant come off data-*.
+ * ------------------------------------------------------------------------- */
+.goth-bubble {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  max-width: 32rem;
+}
+.goth-bubble[data-align="end"] {
+  align-items: flex-end;
+  margin-inline-start: auto;
+}
+
+.goth-bubble-content {
+  display: inline-block;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  background-color: var(--muted);
+  color: var(--card-foreground);
+}
+/* A trailing (sent) bubble points its trailing-bottom corner in; a leading
+ * (received) bubble points its leading-bottom corner in. Logical radii keep this
+ * correct under RTL. */
+.goth-bubble[data-align="start"] > .goth-bubble-content {
+  border-end-start-radius: calc(var(--radius) / 3);
+}
+.goth-bubble[data-align="end"] > .goth-bubble-content {
+  border-end-end-radius: calc(var(--radius) / 3);
+}
+.goth-bubble-content[data-variant="primary"] {
+  background-color: var(--primary);
+  color: var(--primary-foreground);
+}
+.goth-bubble-content[data-variant="secondary"] {
+  background-color: var(--secondary);
+  color: var(--secondary-foreground);
+}
+/* Muted is the quiet/system bubble: no fill, de-emphasized text on the page
+ * background (where --muted-foreground meets AA; --muted-foreground on the --muted
+ * surface would fall just under 4.5:1). */
+.goth-bubble-content[data-variant="muted"] {
+  background-color: transparent;
+  color: var(--muted-foreground);
+}
+.goth-bubble-content[data-variant="accent"] {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+}
+.goth-bubble-content[data-variant="destructive"] {
+  background-color: var(--destructive);
+  color: var(--destructive-foreground);
+}
+.goth-bubble-content[data-variant="outline"] {
+  background-color: transparent;
+  border-color: var(--border);
+  color: var(--card-foreground);
+}
+/* Interactive content inside a bubble stays legible against the surface. */
+.goth-bubble-content a {
+  color: inherit;
+  text-decoration: underline;
+}
+
+.goth-bubble-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.goth-bubble-reaction {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.125rem var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background-color: var(--card);
+  color: var(--card-foreground);
+  font: inherit;
+  font-size: 0.8125rem;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.goth-bubble-reaction[data-pressed="true"] {
+  border-color: var(--ring);
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+}
+.goth-bubble-reaction:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.goth-bubble-reaction-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.goth-bubble-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  align-items: flex-start;
+}
+.goth-bubble-group[data-align="end"] {
+  align-items: flex-end;
+  margin-inline-start: auto;
+}
+/* Grouped bubbles read as one thread: flatten the corners that touch a neighbour. */
+.goth-bubble-group > .goth-bubble:not(:last-child) > .goth-bubble-content {
+  border-end-start-radius: calc(var(--radius) / 3);
+  border-end-end-radius: calc(var(--radius) / 3);
+}
+.goth-bubble-group > .goth-bubble:not(:first-child) > .goth-bubble-content {
+  border-start-start-radius: calc(var(--radius) / 3);
+  border-start-end-radius: calc(var(--radius) / 3);
+}
+
+/* ---------------------------------------------------------------------------
+ * Message (P59) — GOTH-6.2. An aligned message row: a leading avatar slot beside a
+ * content column (header / body / footer). data-align="end" flips the row and the
+ * text alignment via logical properties (RTL-correct). MessageGroup heads several
+ * consecutive messages with one avatar column. Composes Avatar (P03) and Bubble
+ * (P56) but requires neither. No inline style.
+ * ------------------------------------------------------------------------- */
+.goth-message {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+}
+.goth-message[data-align="end"] {
+  flex-direction: row-reverse;
+  text-align: end;
+}
+.goth-message-avatar {
+  flex: none;
+}
+.goth-message-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+.goth-message[data-align="end"] .goth-message-content {
+  align-items: flex-end;
+}
+.goth-message-header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-size: 0.8125rem;
+}
+.goth-message-header > :first-child {
+  font-weight: 600;
+}
+.goth-message-footer {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.goth-message-group {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+}
+.goth-message-group[data-align="end"] {
+  flex-direction: row-reverse;
+  text-align: end;
+}
+/* The grouped column stacks its message contents under the single avatar. */
+.goth-message-group > .goth-message-content,
+.goth-message-group > [data-slot="message-content"] {
+  gap: var(--space-2);
+}
+
+/* ---------------------------------------------------------------------------
+ * Message Scroller (P60) — GOTH-6.2. A controller-backed transcript scroller. The
+ * viewport is a native scroll region (overflow-anchor keeps an HTMX prepend from
+ * jumping with no JS); the content stacks the turns. The unread status affordance is
+ * absolutely positioned over the live edge and hidden while data-unread="0" so no-JS
+ * never shows a dead control. No inline style; scroll/unread state rides data-*.
+ * ------------------------------------------------------------------------- */
+.goth-message-scroller {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background-color: var(--card);
+  color: var(--card-foreground);
+}
+.goth-message-scroller-viewport {
+  overflow-y: auto;
+  /* No-JS baseline: native scroll anchoring keeps a prepend from jumping. When the
+   * controller is active it owns anchoring instead (data-enhanced below), so the two
+   * never double-correct. */
+  overflow-anchor: auto;
+  max-height: 24rem;
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.goth-message-scroller[data-enhanced] .goth-message-scroller-viewport {
+  overflow-anchor: none;
+}
+.goth-message-scroller-viewport:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.goth-message-scroller-history {
+  align-self: center;
+  padding: 0.25rem var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background-color: var(--card);
+  color: var(--card-foreground);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+.goth-message-scroller-history:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.goth-message-scroller-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+/* Jumped-to message gets a brief focus ring without entering the tab order. */
+.goth-message-scroller-content [tabindex="-1"]:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: var(--radius);
+}
+.goth-message-scroller-jump {
+  color: inherit;
+  text-decoration: underline;
+}
+.goth-message-scroller-status {
+  position: absolute;
+  inset-inline: 0;
+  inset-block-end: var(--space-3);
+  margin-inline: auto;
+  width: max-content;
+  max-width: calc(100% - var(--space-6));
+  padding: 0.25rem var(--space-3);
+  border: 1px solid var(--ring);
+  border-radius: 999px;
+  background-color: var(--primary);
+  color: var(--primary-foreground);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  box-shadow: var(--shadow, 0 1px 3px rgb(0 0 0 / 0.2));
+}
+.goth-message-scroller-status:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+/* No-JS / following: no unread, so the affordance is not shown. */
+.goth-message-scroller[data-unread="0"] .goth-message-scroller-status {
+  display: none;
+}
+
+/* ---------------------------------------------------------------------------
+ * Scroll Area (P62) — GOTH-6.3. A native overflow region (no synthetic scrollbar,
+ * no controller). The region is focusable + named so the keyboard can scroll it;
+ * data-orientation picks the axis. The affordance enhancement is a slim themed
+ * scrollbar via scrollbar-width/color and the WebKit scrollbar pseudo-elements.
+ * No inline style.
+ * ------------------------------------------------------------------------- */
+.goth-scroll-area {
+  max-height: 18rem;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background-color: var(--card);
+  color: var(--card-foreground);
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.goth-scroll-area[data-orientation="vertical"] {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.goth-scroll-area[data-orientation="horizontal"] {
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-height: none;
+  white-space: nowrap;
+}
+.goth-scroll-area[data-orientation="both"] {
+  overflow: auto;
+}
+.goth-scroll-area:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.goth-scroll-area::-webkit-scrollbar {
+  width: 0.5rem;
+  height: 0.5rem;
+}
+.goth-scroll-area::-webkit-scrollbar-thumb {
+  background-color: var(--border);
+  border-radius: 999px;
+}
+.goth-scroll-area::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---------------------------------------------------------------------------
+ * Carousel (P57) — GOTH-6.3. A CSS scroll-snap slide viewport (no controller). The
+ * track (.goth-carousel-content) is a focusable, keyboard-scrollable overflow
+ * region with mandatory snapping; slides fill the track and align to its start;
+ * the dots are real in-page anchor links (direct no-JS navigation + current
+ * status). data-orientation picks the axis; smooth scrolling is gated on
+ * prefers-reduced-motion below. RTL rides the native inline scroll direction and
+ * logical properties. No inline style.
+ * ------------------------------------------------------------------------- */
+.goth-carousel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.goth-carousel-content {
+  display: flex;
+  gap: var(--space-3);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  scroll-behavior: smooth;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+  border-radius: var(--radius);
+}
+.goth-carousel[data-orientation="vertical"] .goth-carousel-content {
+  flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scroll-snap-type: y mandatory;
+  max-height: 18rem;
+}
+.goth-carousel-content:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.goth-carousel-item {
+  flex: 0 0 100%;
+  scroll-snap-align: start;
+  min-width: 0;
+}
+.goth-carousel[data-orientation="vertical"] .goth-carousel-item {
+  flex-basis: auto;
+}
+.goth-carousel-dots {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: center;
+}
+.goth-carousel-dot {
+  inline-size: 0.75rem;
+  block-size: 0.75rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background-color: var(--muted);
+  transition: background-color 0.15s ease, transform 0.15s ease;
+}
+.goth-carousel-dot[data-current="true"] {
+  background-color: var(--primary);
+  border-color: var(--primary);
+}
+.goth-carousel-dot:hover {
+  background-color: var(--accent);
+}
+.goth-carousel-dot:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------------------
+ * Resizable (P61) — GOTH-6.3. A split-pane layout with a draggable/keyboard
+ * separator (gothResizable, §8). The server owns the default split: the root's
+ * data-default-size buckets map to the primary pane's flex-basis through the
+ * --goth-resize-basis custom property, so the initial geometry renders with NO
+ * JavaScript and NO inline style. The controller overrides the same custom property
+ * via the CSSOM (element.style.setProperty) on drag/keyboard — a controller-owned
+ * write, never a server-rendered style attribute.
+ * ------------------------------------------------------------------------- */
+.goth-resizable {
+  display: flex;
+  --goth-resize-basis: 50%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  min-block-size: 10rem;
+}
+.goth-resizable[data-orientation="vertical"] {
+  flex-direction: column;
+  block-size: 18rem;
+}
+.goth-resizable > .goth-resizable-pane {
+  min-inline-size: 0;
+  min-block-size: 0;
+  overflow: auto;
+  padding: var(--space-3);
+  background-color: var(--card);
+  color: var(--card-foreground);
+}
+.goth-resizable > .goth-resizable-pane:first-child {
+  flex: 0 0 var(--goth-resize-basis);
+}
+.goth-resizable > .goth-resizable-pane:last-child {
+  flex: 1 1 0;
+}
+/* Server-owned default split buckets (no-JS geometry; the controller overrides the
+ * same property via the CSSOM once enhanced). */
+.goth-resizable[data-default-size="5"] { --goth-resize-basis: 5%; }
+.goth-resizable[data-default-size="10"] { --goth-resize-basis: 10%; }
+.goth-resizable[data-default-size="15"] { --goth-resize-basis: 15%; }
+.goth-resizable[data-default-size="20"] { --goth-resize-basis: 20%; }
+.goth-resizable[data-default-size="25"] { --goth-resize-basis: 25%; }
+.goth-resizable[data-default-size="30"] { --goth-resize-basis: 30%; }
+.goth-resizable[data-default-size="35"] { --goth-resize-basis: 35%; }
+.goth-resizable[data-default-size="40"] { --goth-resize-basis: 40%; }
+.goth-resizable[data-default-size="45"] { --goth-resize-basis: 45%; }
+.goth-resizable[data-default-size="50"] { --goth-resize-basis: 50%; }
+.goth-resizable[data-default-size="55"] { --goth-resize-basis: 55%; }
+.goth-resizable[data-default-size="60"] { --goth-resize-basis: 60%; }
+.goth-resizable[data-default-size="65"] { --goth-resize-basis: 65%; }
+.goth-resizable[data-default-size="70"] { --goth-resize-basis: 70%; }
+.goth-resizable[data-default-size="75"] { --goth-resize-basis: 75%; }
+.goth-resizable[data-default-size="80"] { --goth-resize-basis: 80%; }
+.goth-resizable[data-default-size="85"] { --goth-resize-basis: 85%; }
+.goth-resizable[data-default-size="90"] { --goth-resize-basis: 90%; }
+.goth-resizable[data-default-size="95"] { --goth-resize-basis: 95%; }
+.goth-resizable-handle {
+  flex: 0 0 auto;
+  align-self: stretch;
+  border: 0;
+  padding: 0;
+  background-color: var(--border);
+  background-clip: padding-box;
+  touch-action: none;
+  position: relative;
+}
+.goth-resizable[data-orientation="horizontal"] > .goth-resizable-handle {
+  inline-size: 0.375rem;
+  cursor: col-resize;
+}
+.goth-resizable[data-orientation="vertical"] > .goth-resizable-handle {
+  block-size: 0.375rem;
+  cursor: row-resize;
+}
+.goth-resizable-handle::after {
+  content: "";
+  position: absolute;
+  inset-block: 50%;
+  inset-inline: 50%;
+  inline-size: 2px;
+  block-size: 1.5rem;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background-color: var(--muted-foreground);
+}
+.goth-resizable[data-orientation="vertical"] > .goth-resizable-handle::after {
+  inline-size: 1.5rem;
+  block-size: 2px;
+}
+.goth-resizable-handle:hover {
+  background-color: var(--ring);
+}
+.goth-resizable-handle:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+/* ---------------------------------------------------------------------------
+ * Chart (P58) — GOTH-6.4. A server-rendered SVG chart (no controller, no charting
+ * library). The Go side computes every scale/coordinate; ChartSVG emits an <svg>
+ * with sanctioned presentation/geometry attributes only. Series color rides the
+ * data-series hook and the frozen chart-1..chart-5 tokens through THESE classes —
+ * never a server-rendered fill=/style= per data point — so a host theme retints the
+ * whole chart by redeclaring the tokens. No inline style. Marks carry a native
+ * <title> tooltip; the ChartTable disclosure is the keyboard/AT data path.
+ * ------------------------------------------------------------------------- */
+.goth-chart {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background-color: var(--card);
+  color: var(--card-foreground);
+}
+.goth-chart-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.goth-chart-title {
+  font-weight: 600;
+}
+.goth-chart-description {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+}
+.goth-chart-content {
+  position: relative;
+  inline-size: 100%;
+}
+.goth-chart-svg {
+  display: block;
+  inline-size: 100%;
+  block-size: auto;
+  overflow: visible;
+}
+.goth-chart-grid {
+  stroke: var(--border);
+  stroke-width: 1;
+  opacity: 0.5;
+}
+.goth-chart-axis-line {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+.goth-chart-axis {
+  fill: var(--muted-foreground);
+  font-family: var(--font-sans);
+  font-size: 11px;
+}
+.goth-chart-bar,
+.goth-chart-dot,
+.goth-chart-line,
+.goth-chart-area {
+  transition: opacity 0.15s ease;
+}
+.goth-chart-bar {
+  fill: var(--chart-1);
+}
+.goth-chart-bar:hover,
+.goth-chart-dot:hover {
+  opacity: 0.8;
+}
+.goth-chart-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.goth-chart-area {
+  opacity: 0.16;
+  stroke: none;
+}
+.goth-chart-dot {
+  stroke: var(--card);
+  stroke-width: 1.5;
+}
+/* Series color mapping: the ONLY place chart marks get their hue, from the frozen
+ * chart-N tokens via the data-series hook. */
+.goth-chart-bar[data-series="1"] { fill: var(--chart-1); }
+.goth-chart-bar[data-series="2"] { fill: var(--chart-2); }
+.goth-chart-bar[data-series="3"] { fill: var(--chart-3); }
+.goth-chart-bar[data-series="4"] { fill: var(--chart-4); }
+.goth-chart-bar[data-series="5"] { fill: var(--chart-5); }
+.goth-chart-dot[data-series="1"] { fill: var(--chart-1); }
+.goth-chart-dot[data-series="2"] { fill: var(--chart-2); }
+.goth-chart-dot[data-series="3"] { fill: var(--chart-3); }
+.goth-chart-dot[data-series="4"] { fill: var(--chart-4); }
+.goth-chart-dot[data-series="5"] { fill: var(--chart-5); }
+.goth-chart-line[data-series="1"] { stroke: var(--chart-1); }
+.goth-chart-line[data-series="2"] { stroke: var(--chart-2); }
+.goth-chart-line[data-series="3"] { stroke: var(--chart-3); }
+.goth-chart-line[data-series="4"] { stroke: var(--chart-4); }
+.goth-chart-line[data-series="5"] { stroke: var(--chart-5); }
+.goth-chart-area[data-series="1"] { fill: var(--chart-1); }
+.goth-chart-area[data-series="2"] { fill: var(--chart-2); }
+.goth-chart-area[data-series="3"] { fill: var(--chart-3); }
+.goth-chart-area[data-series="4"] { fill: var(--chart-4); }
+.goth-chart-area[data-series="5"] { fill: var(--chart-5); }
+.goth-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.goth-chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.875rem;
+}
+.goth-chart-swatch {
+  inline-size: 0.75rem;
+  block-size: 0.75rem;
+  border-radius: 3px;
+  background-color: var(--muted);
+}
+.goth-chart-legend-item[data-series="1"] .goth-chart-swatch { background-color: var(--chart-1); }
+.goth-chart-legend-item[data-series="2"] .goth-chart-swatch { background-color: var(--chart-2); }
+.goth-chart-legend-item[data-series="3"] .goth-chart-swatch { background-color: var(--chart-3); }
+.goth-chart-legend-item[data-series="4"] .goth-chart-swatch { background-color: var(--chart-4); }
+.goth-chart-legend-item[data-series="5"] .goth-chart-swatch { background-color: var(--chart-5); }
+.goth-chart-table {
+  font-size: 0.875rem;
+}
+.goth-chart-table-summary {
+  cursor: pointer;
+  padding: var(--space-1) 0;
+  color: var(--muted-foreground);
+}
+.goth-chart-table-summary:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.goth-chart-table[open] .goth-chart-table-summary {
+  margin-bottom: var(--space-2);
+}
+
+/* ---- P64 Toast + P63 Sonner (GOTH-6.5) ----------------------------------- *
+ * ONE gothToast-backed live-region queue. The Toaster is a fixed, corner-anchored
+ * region landmark (reachable, non-trapping); toasts inside are readable with no JS.
+ * No inline style and no server-rendered style attribute anywhere: placement rides
+ * data-position, stacking rides data-index, and every animation collapses in the
+ * reduced-motion block below. z-index rides the frozen --z-toast token. */
+.goth-toaster {
+  position: fixed;
+  z-index: var(--z-toast);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: min(24rem, calc(100vw - var(--space-8)));
+  max-height: calc(100vh - var(--space-8));
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  /* The region itself is click-through; each toast re-enables pointer events. */
+  pointer-events: none;
+}
+.goth-toaster > * {
+  pointer-events: auto;
+}
+/* Corner placement via logical insets. Bottom corners stack newest nearest the edge. */
+.goth-toaster[data-position="bottom-end"] {
+  inset-block-end: var(--space-4);
+  inset-inline-end: var(--space-4);
+  flex-direction: column;
+}
+.goth-toaster[data-position="bottom-start"] {
+  inset-block-end: var(--space-4);
+  inset-inline-start: var(--space-4);
+  flex-direction: column;
+}
+.goth-toaster[data-position="top-end"] {
+  inset-block-start: var(--space-4);
+  inset-inline-end: var(--space-4);
+}
+.goth-toaster[data-position="top-start"] {
+  inset-block-start: var(--space-4);
+  inset-inline-start: var(--space-4);
+}
+
+.goth-toast {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--popover, var(--background));
+  color: var(--popover-foreground, var(--foreground));
+  box-shadow: var(--shadow-lg);
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease;
+}
+.goth-toast[data-state="open"] {
+  animation: goth-toast-in 0.2s ease;
+}
+.goth-toast[data-state="closed"] {
+  opacity: 0;
+  transform: translateY(0.5rem) scale(0.98);
+}
+@keyframes goth-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.goth-toast-title {
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+.goth-toast-description {
+  font-size: 0.8125rem;
+  color: var(--muted-foreground);
+}
+.goth-toast-action {
+  align-self: flex-start;
+  margin-top: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  background: transparent;
+  color: var(--foreground);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: none;
+}
+.goth-toast-action:hover {
+  background: var(--muted);
+}
+.goth-toast-action:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.goth-toast-close {
+  position: absolute;
+  inset-block-start: var(--space-2);
+  inset-inline-end: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: calc(var(--radius) - 4px);
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.goth-toast-close:hover {
+  color: var(--foreground);
+  background: var(--muted);
+}
+.goth-toast-close:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* Sonner: the opinionated facade — a status accent bar + expandable stack. */
+.goth-sonner-toast {
+  padding-inline-start: var(--space-5);
+}
+.goth-sonner-toast-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.goth-sonner-toast-close-glyph {
+  font-size: 1rem;
+  line-height: 1;
+}
+.goth-sonner-toast-accent {
+  position: absolute;
+  inset-block: var(--space-3);
+  inset-inline-start: var(--space-2);
+  width: 3px;
+  border-radius: 3px;
+  background: var(--border);
+}
+.goth-sonner-toast[data-variant="success"] .goth-sonner-toast-accent {
+  background: var(--success);
+}
+.goth-sonner-toast[data-variant="warning"] .goth-sonner-toast-accent {
+  background: var(--warning);
+}
+.goth-sonner-toast[data-variant="error"] .goth-sonner-toast-accent {
+  background: var(--destructive);
+}
+.goth-sonner-toast[data-variant="info"] .goth-sonner-toast-accent {
+  background: var(--primary);
+}
+/* Collapsed Sonner stack: toasts behind the newest peek, then expand on hover/focus
+ * (data-expanded set by the controller). Presentation only; the queue order is owned
+ * by the controller via data-index. */
+.goth-sonner:not([data-expanded]) .goth-toast[data-index="1"] {
+  transform: scale(0.96);
+}
+.goth-sonner:not([data-expanded]) .goth-toast[data-index="2"] {
+  transform: scale(0.92);
+}
+.goth-sonner:not([data-expanded]) .goth-toast[data-index="3"],
+.goth-sonner:not([data-expanded]) .goth-toast[data-index="4"] {
+  transform: scale(0.88);
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Reduced motion: all kit animations collapse to a static state. */
+@media (prefers-reduced-motion: reduce) {
+  .goth-carousel-content {
+    scroll-behavior: auto;
+  }
+  .goth-skeleton,
+  .goth-attachment-spinner,
+  .goth-spinner-icon,
+  .goth-progress[data-state="indeterminate"],
+  [data-state="open"] > .goth-overlay > .goth-overlay-panel,
+  [data-state="open"] > .goth-overlay > .goth-sheet-panel,
+  [data-state="open"] > .goth-overlay > .goth-drawer-panel,
+  [data-slot="sidebar"][data-state="open"] > .goth-sidebar-overlay > .goth-sidebar-panel[data-side="left"],
+  [data-slot="sidebar"][data-state="open"] > .goth-sidebar-overlay > .goth-sidebar-panel[data-side="right"],
+  .goth-tooltip[data-enhanced][data-state="open"] > .goth-tooltip-content,
+  .goth-hover-card[data-enhanced][data-state="open"] > .goth-hover-card-content,
+  .goth-popover-content:popover-open,
+  .goth-date-picker-content:popover-open,
+  .goth-menu-content[data-state="open"],
+  .goth-toast[data-state="open"] {
+    animation: none;
+  }
+  .goth-button,
+  .goth-input,
+  .goth-textarea,
+  .goth-progress::-webkit-progress-value,
+  .goth-collapsible-chevron,
+  .goth-accordion-chevron,
+  .goth-tabs-trigger,
+  .goth-checkbox,
+  .goth-switch,
+  .goth-radio-group-item,
+  .goth-input-otp-slot,
+  .goth-toggle,
+  .goth-toggle-group-item,
+  .goth-navigation-menu-chevron,
+  .goth-calendar-nav,
+  .goth-calendar-day,
+  .goth-date-picker-trigger,
+  .goth-data-table-content,
+  .goth-sidebar-panel,
+  .goth-bubble-reaction,
+  .goth-carousel-dot,
+  .goth-chart-bar,
+  .goth-chart-dot,
+  .goth-chart-line,
+  .goth-chart-area,
+  .goth-toast,
+  .goth-toast-action,
+  .goth-toast-close,
+  .goth-sonner .goth-toast {
+    transition: none;
+  }
+}
+
+/* ==========================================================================
+ * GOTH-7.1 components layer — opinionated, domain-neutral compositions over the
+ * primitives. These rules provide the layout the shells/headers/panels need; the
+ * composed primitives keep their own styling. No rule emits or requires an inline
+ * style; every value rides the frozen tokens. Layout-only (no animation), so no
+ * reduced-motion override is required.
+ * ========================================================================== */
+
+/* ---- layouts: DocumentShell ---------------------------------------------- */
+.goth-document-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  gap: var(--space-6);
+}
+.goth-document-shell > [data-slot="document-shell-main"] {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: 72rem;
+  margin-inline: auto;
+  padding-inline: var(--space-4);
+}
+.goth-document-shell > [data-slot="document-shell-header"],
+.goth-document-shell > [data-slot="document-shell-footer"] {
+  width: 100%;
+  max-width: 72rem;
+  margin-inline: auto;
+  padding-inline: var(--space-4);
+}
+.goth-document-shell > [data-slot="document-shell-footer"] {
+  color: var(--muted-foreground);
+  border-top: 1px solid var(--border);
+  padding-block: var(--space-4);
+}
+
+/* ---- layouts: AppShell (mobile-first; static rail at >= 48rem) ------------ */
+.goth-app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+.goth-app-shell > [data-slot="app-shell-body"] {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.goth-app-shell [data-slot="app-shell-header"] {
+  border-bottom: 1px solid var(--border);
+  padding: var(--space-3) var(--space-4);
+}
+.goth-app-shell [data-slot="app-shell-main"] {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: var(--space-6) var(--space-4);
+}
+@media (min-width: 48rem) {
+  .goth-app-shell {
+    flex-direction: row;
+  }
+  .goth-app-shell > [data-slot="app-shell-sidebar"] {
+    flex: 0 0 auto;
+  }
+}
+
+/* ---- layouts: AuthShell (centered card) ---------------------------------- */
+.goth-auth-shell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100%;
+  padding: var(--space-6) var(--space-4);
+}
+.goth-auth-shell > .goth-auth-shell-card {
+  width: 100%;
+  max-width: 24rem;
+}
+.goth-auth-shell [data-slot="auth-shell-brand"] {
+  display: flex;
+  justify-content: center;
+  margin-bottom: var(--space-2);
+}
+
+/* ---- layouts: PageHeader ------------------------------------------------- */
+.goth-page-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+.goth-page-header [data-slot="page-header-bar"] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.goth-page-header [data-slot="page-header-heading"] {
+  min-width: 0;
+}
+.goth-page-header [data-slot="page-header-title"] {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 1.5rem;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--foreground);
+}
+.goth-page-header [data-slot="page-header-description"] {
+  margin: var(--space-1) 0 0;
+  color: var(--muted-foreground);
+}
+.goth-page-header [data-slot="page-header-actions"] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* ---- layouts: ActionBar -------------------------------------------------- */
+.goth-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.goth-action-bar [data-slot="action-bar-start"],
+.goth-action-bar [data-slot="action-bar-end"] {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* ---- forms: FormField required marker ------------------------------------ */
+.goth-field [data-slot="field-required"] {
+  margin-inline-start: var(--space-1);
+  color: var(--destructive);
+}
+
+/* ---- forms: FormSection -------------------------------------------------- */
+.goth-form-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.goth-form-section > [data-slot="form-section-header"] [data-slot="form-section-title"] {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.goth-form-section > [data-slot="form-section-header"] [data-slot="form-section-description"] {
+  margin: var(--space-1) 0 0;
+  color: var(--muted-foreground);
+}
+
+/* ---- forms: ErrorSummary (list on top of goth-alert) --------------------- */
+.goth-error-summary [data-slot="error-summary-list"] {
+  margin: var(--space-2) 0 0;
+  padding-inline-start: var(--space-5);
+}
+.goth-error-summary [data-slot="error-summary-item"] + [data-slot="error-summary-item"] {
+  margin-top: var(--space-1);
+}
+.goth-error-summary [data-slot="error-summary-item"] a {
+  color: inherit;
+  text-underline-offset: 2px;
+}
+
+/* ---- forms: FormActions -------------------------------------------------- */
+.goth-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+.goth-form-actions[data-align="start"] {
+  justify-content: flex-start;
+}
+.goth-form-actions[data-align="between"] {
+  justify-content: space-between;
+}
+
+/* ---- feedback: shared panel surface + tones ------------------------------ */
+.goth-feedback-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  text-align: center;
+  padding: var(--space-8) var(--space-6);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--card-foreground);
+}
+.goth-feedback-panel[data-tone="error"] {
+  border-color: var(--destructive);
+}
+.goth-feedback-panel[data-tone="error"] [data-slot="empty-title"] {
+  color: var(--destructive);
+}
+.goth-feedback-panel [data-slot="feedback-panel-title"] {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  color: var(--foreground);
+}
+.goth-feedback-panel [data-slot="feedback-panel-description"] {
+  margin: 0;
+  color: var(--muted-foreground);
+}
+
+/* ---- feedback: ConfirmDialog destructive confirm ------------------------- */
+.goth-alert-dialog-action[data-variant="destructive"] {
+  background: var(--destructive);
+  color: var(--destructive-foreground);
+  border-color: var(--destructive);
+}
+
+/* ---- data: TableToolbar form --------------------------------------------- */
+[data-slot="table-toolbar-form"] {
+  display: block;
+}
+[data-slot="table-toolbar-filters"],
+[data-slot="table-toolbar-actions"] {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+[data-slot="table-toolbar-actions"] {
+  margin-inline-start: auto;
+}

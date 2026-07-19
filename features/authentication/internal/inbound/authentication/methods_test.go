@@ -125,7 +125,7 @@ func newMethodsHandler(t *testing.T) methodsFixture {
 		TokenSigner:         newFakeSigner(),
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, nil, "", MutationSecurity{}, nil)
+	Mount(h, svc, nil, nil, "", MutationSecurity{}, nil, nil)
 	return methodsFixture{h: h, users: users, idents: idents, passwords: passwords, sessions: sessions}
 }
 
@@ -312,7 +312,7 @@ func TestMethodsFailsClosedWithoutCredentialRail(t *testing.T) {
 		TokenSigner: newFakeSigner(),
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, nil, "", MutationSecurity{}, nil)
+	Mount(h, svc, nil, nil, "", MutationSecurity{}, nil, nil)
 	f := methodsFixture{h: h, users: users, idents: idents, passwords: passwords, sessions: sessions}
 	f.seedUser("u1")
 	f.seedIdentifier(verifiedEmail("id-primary", "u1", "alice@example.com"))

@@ -1,0 +1,17 @@
+package primitives
+
+// Kbd (P15, family F3) renders a single keyboard key using the semantic <kbd>
+// element; the key label is templ children.
+templ Kbd(p KbdProps) {
+	<kbd class={ kbdClass(p) } { kbdAttrs(p)... }>
+		{ children... }
+	</kbd>
+}
+
+// KbdGroup groups several Kbd keys into one shortcut (e.g. Ctrl+K). The caller
+// composes the Kbd children.
+templ KbdGroup(p KbdGroupProps) {
+	<span class={ kbdGroupClass(p) } { kbdGroupAttrs(p)... }>
+		{ children... }
+	</span>
+}

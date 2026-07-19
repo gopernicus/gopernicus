@@ -1,0 +1,90 @@
+package forms
+
+import (
+	"github.com/gopernicus/gopernicus/ui/goth/components/internal/kit"
+	"github.com/gopernicus/gopernicus/ui/goth/primitives"
+)
+
+// FormField groups a label, the control (templ children), an optional description,
+// and an optional error into a primitives.Field. A non-empty Error flags the
+// field invalid; the caller wires the control's aria-describedby at
+// DescriptionID(For)/ErrorID(For).
+templ FormField(p FormFieldProps) {
+	@primitives.Field(primitives.FieldProps{
+		Base:        primitives.Base{ID: p.ID, Class: p.Class, Attributes: p.Attributes},
+		Orientation: p.Orientation,
+		Invalid:     p.Error != "",
+	}) {
+		if p.Label != "" {
+			@primitives.FieldLabel(primitives.FieldLabelProps{For: p.For}) {
+				{ p.Label }
+				if p.Required {
+					<span data-slot="field-required" aria-hidden="true">*</span>
+				}
+			}
+		}
+		{ children... }
+		if p.Description != "" {
+			@primitives.FieldDescription(primitives.FieldDescriptionProps{Base: primitives.Base{ID: DescriptionID(p.For)}}) {
+				{ p.Description }
+			}
+		}
+		if p.Error != "" {
+			@primitives.FieldError(primitives.FieldErrorProps{Base: primitives.Base{ID: ErrorID(p.For)}}) {
+				{ p.Error }
+			}
+		}
+	}
+}
+
+// FormSection groups related fields under an optional heading/description; the
+// fields (templ children) stack in a primitives.FieldGroup.
+templ FormSection(p FormSectionProps) {
+	<section class={ kit.Class(p.Base, "goth-form-section") } { formSectionAttrs(p)... }>
+		if p.Title != "" || p.Description != "" {
+			<div data-slot="form-section-header">
+				if p.Title != "" {
+					<h2 data-slot="form-section-title">{ p.Title }</h2>
+				}
+				if p.Description != "" {
+					<p data-slot="form-section-description">{ p.Description }</p>
+				}
+			</div>
+		}
+		@primitives.FieldGroup(primitives.FieldGroupProps{}) {
+			{ children... }
+		}
+	</section>
+}
+
+// ErrorSummary renders a destructive Alert listing validation messages, each an
+// in-page link to its field. With no Errors it renders nothing.
+templ ErrorSummary(p ErrorSummaryProps) {
+	if len(p.Errors) > 0 {
+		@primitives.Alert(primitives.AlertProps{
+			Base:    primitives.Base{ID: p.ID, Class: kit.Class(primitives.Base{Class: p.Class}, "goth-error-summary"), Attributes: p.Attributes},
+			Variant: primitives.AlertDestructive,
+			Title:   p.title(),
+		}) {
+			<ul { errorSummaryListAttrs()... }>
+				for _, e := range p.Errors {
+					<li data-slot="error-summary-item">
+						if e.FieldID != "" {
+							<a href={ "#" + e.FieldID }>{ e.Message }</a>
+						} else {
+							{ e.Message }
+						}
+					</li>
+				}
+			</ul>
+		}
+	}
+}
+
+// FormActions is the submit/cancel button row at the foot of a form; the buttons
+// are templ children and Align distributes them.
+templ FormActions(p FormActionsProps) {
+	<div class={ kit.Class(p.Base, "goth-form-actions") } { formActionsAttrs(p)... }>
+		{ children... }
+	</div>
+}

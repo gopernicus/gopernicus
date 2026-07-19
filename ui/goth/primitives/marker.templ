@@ -1,0 +1,36 @@
+package primitives
+
+// Marker (P17, family F2) renders a labelled marker with an optional leading
+// icon and a principal content region (templ children) inside a fixed layout
+// selected by data-variant (status/note/row/separator) and toned by data-tone.
+// With MarkerProps.URL set it renders as a link. data-slot hooks: marker,
+// marker-icon, marker-label.
+templ Marker(p MarkerProps) {
+	if !p.URL.IsZero() {
+		<a href={ p.URL.SafeURL() } class={ markerClass(p) } { markerAttrs(p)... }>
+			@markerGlyph(p)
+			<span data-slot="marker-label">
+				{ children... }
+			</span>
+		</a>
+	} else {
+		<span class={ markerClass(p) } { markerAttrs(p)... }>
+			@markerGlyph(p)
+			<span data-slot="marker-label">
+				{ children... }
+			</span>
+		</span>
+	}
+}
+
+// markerGlyph renders the leading icon slot, or the default status dot when the
+// status variant has no explicit icon. It carries no children of its own.
+templ markerGlyph(p MarkerProps) {
+	if p.Icon != nil {
+		<span data-slot="marker-icon" aria-hidden="true">
+			@p.Icon
+		</span>
+	} else if p.Variant.orDefault() == MarkerStatus {
+		<span data-slot="marker-icon" class="goth-marker-dot" aria-hidden="true"></span>
+	}
+}

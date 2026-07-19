@@ -102,6 +102,21 @@ var ErrMachineReposRequired = errors.New("auth: Repositories.ServiceAccounts and
 // half-on state.
 var ErrInvitationRepoRequired = errors.New("auth: Config.Granter set but Repositories.Invitations is nil")
 
+// ErrInviteCheckRequired is returned by NewService/Register when Config.Granter
+// enables invitations but Config.InviteCheck is nil (design §6/D3). The relation-
+// aware host policy is REQUIRED with invitations — a nil check is never an
+// allow-by-default or a silently unprotected create/list route — so it degrades
+// LOUDLY at construction alongside ErrInvitationRepoRequired, mirroring the
+// Hasher/Mailer required posture.
+var ErrInviteCheckRequired = errors.New("auth: Config.Granter set but Config.InviteCheck is nil")
+
+// ErrInviteCheckWithoutGranter is returned by NewService/Register when
+// Config.InviteCheck is wired but Config.Granter is nil (invitations off). A
+// policy for a subsystem that will never run is a contradictory wiring that gives
+// false confidence, so — matching the ErrDeliveryOffButDeliverable / partial-
+// wiring posture — it fails LOUDLY rather than silently ignoring the dead check.
+var ErrInviteCheckWithoutGranter = errors.New("auth: Config.InviteCheck set but Config.Granter is nil (invitations off)")
+
 // ErrInvalidListStrategy is returned by NewService/Register when
 // Config.ListStrategy is set to a value other than "cursor" or "offset". Like
 // the Hasher/Mailer requirements it degrades loudly at construction (the Config
@@ -131,17 +146,67 @@ var ErrDuplicateNotifierKind = errors.New("auth: Config.Notifiers has more than 
 var ErrKindNotSupported = invitationsvc.ErrKindNotSupported
 
 // Granter is the ReBAC-decoupled grant-on-accept seam for invitations (design
-// §2.2/§6, ratified AV4): Grant(ctx, resourceType, resourceID, relation,
-// subjectType, subjectID). A host adapts it to whatever authorizer it runs — a
-// ReBAC CreateRelationships, a role-column write, or the proof host's toy
-// membership map — or wires none. The grant must be idempotent in the Granter's
-// world (a duplicate accept must not error). Aliased from invitationsvc so the
-// sibling service can call it without an import cycle.
+// §2.2/§6, ratified AV4, structured at D1): Grant(ctx, GrantInput). A host adapts
+// it to whatever authorizer it runs — a ReBAC CreateRelationships, a role-column
+// write, or the proof host's toy membership map — or wires none.
+//
+// Success contract (D2, strengthened): a nil return means the EXACT requested
+// relation was applied or was already exactly present. A DIFFERENT existing
+// relation is NOT success; an invariant refusal is NOT success; a missing or
+// deleted host resource is NOT success — each must return an error (a ReBAC host
+// maps a conflicting/invariant outcome to sdk.ErrConflict and a missing resource
+// to sdk.ErrNotFound). Infrastructure/command failures propagate. The grant must
+// be idempotent for the exact tuple (a duplicate accept of the SAME relation must
+// not error), but the Granter must NOT implicitly replace, upgrade, or downgrade
+// an existing relation — the feature cannot decide that an invitation may change a
+// standing membership. Aliased from invitationsvc so the sibling service can call
+// it without an import cycle.
 type Granter = invitationsvc.Granter
+
+// GrantInput is the structured request the Granter receives for one invitation
+// grant (D1). OperationID is an opaque, non-empty, non-secret identifier of the
+// logical grant: the persisted invitation row ID for accept/resolve (a retry
+// reuses it; a later invitation row for the same tuple gets a different ID) and a
+// freshly minted high-entropy value for direct-add. A host MAY derive its own
+// advanced mutation identity from a fixed purpose, OperationID, and the tuple
+// fields; a baseline state writer may ignore it.
+// Aliased from invitationsvc per the Granter precedent.
+type GrantInput = invitationsvc.GrantInput
 
 // MemberCheck is the optional duplicate-membership predicate consulted before a
 // direct-add grant (design §6). Nil → no dup check. Aliased from invitationsvc.
 type MemberCheck = invitationsvc.MemberCheck
+
+// InviteAction is the invitation operation a host InviteCheck policy is asked
+// about (design §6/D3): InviteCreate or InviteList. Aliased from invitationsvc.
+type InviteAction = invitationsvc.InviteAction
+
+// InviteCreate and InviteList are the two InviteAction values the feature's
+// create/list invitation handlers pass to InviteCheck (design §6/D3). InviteCreate
+// carries the exact requested relation; InviteList carries an empty relation.
+const (
+	InviteCreate = invitationsvc.InviteCreate
+	InviteList   = invitationsvc.InviteList
+)
+
+// InviteCheckRequest is the parsed, principal-resolved authorization question the
+// feature poses to a host InviteCheck (design §6/D3): the Principal, the Action,
+// the resource, and — for InviteCreate — the exact validated Relation (empty for
+// InviteList). Aliased from invitationsvc per the CreateInput precedent so a host
+// names one type across the public and internal packages.
+type InviteCheckRequest = invitationsvc.InviteCheckRequest
+
+// InviteCheck is the relation-aware host authorization seam for invitation
+// create/list (design §6/D3). It runs in the feature's own parsed request path —
+// after live-session validation, principal resolution, and request parsing — so
+// the host sees the caller, resource, action, and validated relation a
+// RouteRegistrar wrapper cannot. It is REQUIRED whenever Config.Granter enables
+// invitations: a nil InviteCheck is ErrInviteCheckRequired at construction, never
+// an allow-by-default. A nil return authorizes; a denial (wrap sdk.ErrForbidden)
+// or an infrastructure error fails closed through the normal web/sdk mapping.
+// Authority is issuance-time: authorizing at creation issues a durable capability,
+// and acceptance does not re-run inviter authority. Aliased from invitationsvc.
+type InviteCheck = invitationsvc.InviteCheck
 
 // CreateInput is the input to Service.Create (an invitation). Aliased from
 // invitationsvc per the Principal precedent so a host wiring its own invitation
@@ -419,6 +484,65 @@ type InProcessDeliveryConfig struct {
 	StatusTTL time.Duration
 }
 
+// HTMLResourcePolicy is the technology-neutral, validated HTML resource policy a host
+// hands the feature through Config.HTMLPolicy (design §9.2, GOTH-0.4). It carries a
+// deterministically ordered set of ADDITIONAL Content-Security-Policy resource
+// directives (script, style, image, font, connect, media, worker) so a selected HTML
+// view can load the assets it needs. It WIDENS resource loading and can never remove
+// the fixed protections every auth HTML page and redirect carries (no-store,
+// no-referrer, X-Frame-Options: DENY, X-Content-Type-Options: nosniff, and the CSP
+// default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
+// prefix). A nil *HTMLResourcePolicy selects the historical asset-free CSP exactly.
+// The feature core never imports templ or ui/goth: this is a plain, feature-owned
+// value the future ui/goth authentication adapter constructs from
+// goth.Bundle.Requirements(). Aliased from the internal inbound package (the
+// MutationSecurity precedent) so a host names one type across the public and internal
+// surfaces.
+type HTMLResourcePolicy = inbound.HTMLResourcePolicy
+
+// HTMLResourceDirective is one requested CSP resource directive — a Kind, its Sources,
+// and an optional per-render Nonce — passed to NewHTMLResourcePolicy. Aliased from the
+// internal inbound package per the HTMLResourcePolicy precedent.
+type HTMLResourceDirective = inbound.HTMLResourceDirective
+
+// HTMLResourceKind is the CSP resource class an HTMLResourceDirective widens. Only the
+// frozen widenable classes below are valid; the fixed protection directives are not
+// members, so a policy structurally cannot name them. Aliased from the internal inbound
+// package.
+type HTMLResourceKind = inbound.HTMLResourceKind
+
+// The frozen widenable CSP resource classes (GOTH-0.4): script, style, image, font,
+// connect, media, worker. Re-exported from the internal inbound package so a host
+// builds directives without importing internal.
+const (
+	HTMLScriptSrc  = inbound.HTMLScriptSrc
+	HTMLStyleSrc   = inbound.HTMLStyleSrc
+	HTMLImgSrc     = inbound.HTMLImgSrc
+	HTMLFontSrc    = inbound.HTMLFontSrc
+	HTMLConnectSrc = inbound.HTMLConnectSrc
+	HTMLMediaSrc   = inbound.HTMLMediaSrc
+	HTMLWorkerSrc  = inbound.HTMLWorkerSrc
+)
+
+// ErrHTMLPolicyWithoutViews is returned by NewService/Register when Config.HTMLPolicy
+// is set while Config.Views is nil (design §9.2, GOTH-0.4). The HTML surface is gated
+// entirely on Views: with a nil Views no HTML page renders, so a resource policy that
+// can never be consulted is a contradictory wiring giving false confidence. Matching
+// the ErrInviteCheckWithoutGranter / partial-wiring posture, it degrades LOUDLY at
+// construction rather than silently ignoring the dead policy.
+var ErrHTMLPolicyWithoutViews = errors.New("auth: Config.HTMLPolicy set but Config.Views is nil (no HTML surface)")
+
+// NewHTMLResourcePolicy validates the requested resource directives and returns an
+// immutable HTMLResourcePolicy, or an error wrapping sdk.ErrInvalidInput for an
+// unknown/fixed directive key, a directive with neither a source nor a nonce, an empty
+// source, or a source carrying a control character, whitespace, ';', or ',' (the
+// header-injection guard). It is the feature-owned constructor a host or the ui/goth
+// authentication adapter calls to build Config.HTMLPolicy. It re-exports the internal
+// inbound constructor so a host never imports internal.
+func NewHTMLResourcePolicy(directives ...HTMLResourceDirective) (*HTMLResourcePolicy, error) {
+	return inbound.NewHTMLResourcePolicy(directives...)
+}
+
 // Config carries host-provided collaborators. The Hasher and Mailer are
 // REQUIRED (nil → ErrHasherRequired / ErrMailerRequired at construction);
 // everything else is optional with a safe default.
@@ -647,6 +771,14 @@ type Config struct {
 	// Non-nil → Repositories.Invitations is required (ErrInvitationRepoRequired),
 	// and Register/verify resolve pending auto-accept invitations for the invitee.
 	Granter Granter
+	// InviteCheck is the relation-aware host authorization seam the feature's
+	// create/list invitation handlers call after live-session validation, principal
+	// resolution, and request parsing (design §6/D3). It is REQUIRED whenever Granter
+	// enables invitations — nil → ErrInviteCheckRequired at construction, never an
+	// allow-by-default. Wiring it without a Granter (invitations off) is the
+	// contradictory ErrInviteCheckWithoutGranter. A nil return authorizes; a denial
+	// or infrastructure error fails closed through the normal web/sdk mapping.
+	InviteCheck InviteCheck
 	// MemberCheck is the optional duplicate-membership predicate for the direct-add
 	// path (known invitee + AutoAccept). Nil → no dup check (idempotent grants
 	// absorb duplicates). Meaningful only when Granter is wired.
@@ -674,6 +806,23 @@ type Config struct {
 	// path is embedding that default and overriding individual methods. A host may
 	// instead satisfy the port with html/template via sdk/foundation/web.Template.
 	Views Views
+
+	// HTMLPolicy is the OPTIONAL, technology-neutral HTML resource policy (design
+	// §9.2, GOTH-0.4). Nil (default) → the historical asset-free CSP: every auth HTML
+	// page and redirect keeps script-src nonce-only with no external asset origins,
+	// the secure default. Non-nil → the SAME fixed protections plus the policy's
+	// validated widening resource directives (script/style/image/font/connect/media/
+	// worker), so a selected HTML view can load the styles, scripts, fonts, and images
+	// it declares. A policy only WIDENS; it can never remove a fixed protection
+	// (no-store, no-referrer, X-Frame-Options: DENY, X-Content-Type-Options: nosniff,
+	// default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none').
+	// Build it with NewHTMLResourcePolicy (validated at construction); the ui/goth
+	// authentication adapter maps goth.Bundle.Requirements() into one. Setting
+	// HTMLPolicy while Views is nil is ErrHTMLPolicyWithoutViews at construction — a
+	// policy for an absent HTML surface is contradictory wiring, never a silent no-op.
+	// The feature core never imports templ or ui/goth: HTMLResourcePolicy is a plain
+	// feature-owned value.
+	HTMLPolicy *HTMLResourcePolicy
 
 	// EmailContentTemplates registers host overrides of the feature's default email
 	// content at email.LayerApp (design §6.2) — the DISTINCT second override system
@@ -721,6 +870,12 @@ type Service struct {
 	// InProcessQueueDepth can expose the bounded, secret-free queue depth for host
 	// operational health (AV3D-5.3); it is never a delivery seam callers reach directly.
 	inProcessQueue *delivery.InProcessQueue
+	// inviteCheck is the host's relation-aware invitation authorization seam
+	// (Config.InviteCheck, design §6/D3) the shipped HTTP adapter's create/list
+	// invitation handlers call after live-session validation, principal resolution,
+	// and parsing (Register → Mount → handlers). Non-nil exactly when inv is non-nil
+	// (NewService requires it whenever a Granter enables invitations).
+	inviteCheck invitationsvc.InviteCheck
 	// listStrategy is the resolved Config.ListStrategy the shipped HTTP adapter
 	// passes as the transport-edge DefaultStrategy (Register → Mount → handlers).
 	listStrategy crud.Strategy
@@ -731,6 +886,11 @@ type Service struct {
 	// views is the optional HTML rendering port (design §9.2). Nil → the shipped
 	// adapter mounts the JSON API only; non-nil → it also mounts the HTML GET pages.
 	views inbound.Views
+	// htmlPolicy is the optional HTML resource policy the shipped adapter applies to
+	// every HTML page and redirect (design §9.2, GOTH-0.4). Nil → the historical
+	// asset-free CSP; non-nil → the fixed protections plus the policy's widening
+	// resource directives. Threaded Register → Mount → handlers.
+	htmlPolicy *inbound.HTMLResourcePolicy
 }
 
 // DeliveryStatus is the read-only delivery-status projection a session-gated caller
@@ -828,6 +988,25 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 	}
 	if cfg.Granter != nil && repos.Invitations == nil {
 		return nil, ErrInvitationRepoRequired
+	}
+	// Relation-aware host policy is required with invitations (design §6/D3): a
+	// Granter enables invitations, so a nil InviteCheck would leave create/list
+	// unprotected — that fails loudly, not allow-by-default. Wiring InviteCheck with
+	// invitations off is the contradictory-wiring error (the ErrInvitationRepoRequired
+	// posture), so a dead policy never gives false confidence.
+	if cfg.Granter != nil && cfg.InviteCheck == nil {
+		return nil, ErrInviteCheckRequired
+	}
+	if cfg.Granter == nil && cfg.InviteCheck != nil {
+		return nil, ErrInviteCheckWithoutGranter
+	}
+	// A resource policy is only ever consulted by the HTML surface, which is gated on
+	// Views (design §9.2, GOTH-0.4). Setting HTMLPolicy with a nil Views is a policy
+	// that can never render — the contradictory-wiring error (the
+	// ErrInviteCheckWithoutGranter posture), so a dead policy never gives false
+	// confidence.
+	if cfg.HTMLPolicy != nil && cfg.Views == nil {
+		return nil, ErrHTMLPolicyWithoutViews
 	}
 	// Enable-time validation for the challenge subsystem (design §3.3): wiring the
 	// Challenges repository enables the atomic secret rail, which REQUIRES a
@@ -1200,6 +1379,7 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 	return &Service{
 		svc:              authService,
 		inv:              invSvc,
+		inviteCheck:      cfg.InviteCheck,
 		jobsProcessor:    jobsProcessor,
 		inProcessRuntime: inProcessRuntime,
 		inProcessQueue:   inProcessQueue,
@@ -1208,7 +1388,8 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 			AllowedOrigins:    cfg.AllowedOrigins,
 			SessionCookieName: authService.SessionCookieName(),
 		},
-		views: cfg.Views,
+		views:      cfg.Views,
+		htmlPolicy: cfg.HTMLPolicy,
 	}, nil
 }
 
@@ -1496,7 +1677,10 @@ func (s *Service) IssueToken(ctx context.Context, email, password string) (pair 
 	return s.svc.IssueToken(ctx, email, password)
 }
 
-// Create invites an identifier to a resource; ErrInvitationsDisabled when no Granter is wired.
+// Create invites an identifier to a resource; ErrInvitationsDisabled when no
+// Granter is wired. This is a TRUSTED composition call: unlike the shipped HTTP
+// create handler, it does NOT apply the Config.InviteCheck host authorization
+// policy (design §6/D3) — a host driving the Service directly owns that decision.
 func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, error) {
 	if s.inv == nil {
 		return CreateResult{}, ErrInvitationsDisabled
@@ -1504,7 +1688,10 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, err
 	return s.inv.Create(ctx, in)
 }
 
-// ListByResource pages a resource's invitations; ErrInvitationsDisabled when no Granter is wired.
+// ListByResource pages a resource's invitations; ErrInvitationsDisabled when no
+// Granter is wired. This is a TRUSTED composition call: unlike the shipped HTTP
+// list handler, it does NOT apply the Config.InviteCheck host authorization policy
+// (design §6/D3) — a host driving the Service directly owns that decision.
 func (s *Service) ListByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
 	if s.inv == nil {
 		return crud.Page[invitation.Invitation]{}, ErrInvitationsDisabled
@@ -1596,6 +1783,6 @@ func (s *Service) Register(m feature.Mount) error {
 	if s.inv != nil {
 		inv = s.inv
 	}
-	inbound.Mount(m.Router, s.svc, inv, s.listStrategy, s.mutationSecurity, s.views)
+	inbound.Mount(m.Router, s.svc, inv, s.inviteCheck, s.listStrategy, s.mutationSecurity, s.views, s.htmlPolicy)
 	return nil
 }

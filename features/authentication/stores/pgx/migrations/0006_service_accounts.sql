@@ -6,8 +6,13 @@
 -- FK).
 -- id defaults DB-side (a cryptids.Database host sends Create an empty id; the
 -- store omits the column and RETURNING reads the generated key back).
+-- id carries COLLATE "C": it is the keyset tiebreak of the created_at DESC, id
+-- DESC List, and the storetest collision suite pins that tiebreak to the
+-- reference store's byte-wise (Go string) order. The per-column collation makes
+-- that byte-order contract travel with the schema, independent of the cluster's
+-- default collation (AAH-5 / plan D5).
 CREATE TABLE IF NOT EXISTS service_accounts (
-    id            TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    id            TEXT COLLATE "C" PRIMARY KEY DEFAULT gen_random_uuid()::text,
     name          TEXT NOT NULL,
     description   TEXT NOT NULL DEFAULT '',
     created_by    TEXT NOT NULL,

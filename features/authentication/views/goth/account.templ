@@ -1,0 +1,67 @@
+package goth
+
+import (
+	"github.com/gopernicus/gopernicus/features/authentication"
+)
+
+// accountSecurityBody renders the masked method inventory (design §5.1). Every
+// address is masked; no password/code/token appears. It links to the management
+// forms, which drive the same service methods the JSON API uses.
+templ accountSecurityBody(m authentication.AccountSecurityPage) {
+	@shell("Account security", "") {
+		@message(m.PageContext)
+		if m.Actor != "" {
+			<p>Signed in as { m.Actor }.</p>
+		}
+		<section aria-labelledby="password-heading" data-slot="account-section">
+			<h2 id="password-heading">Password</h2>
+			if m.HasPassword {
+				<p>A password is set.</p>
+				<p>
+					<a href="/auth/password/change">Change password</a>
+					· <a href="/auth/password/remove">Remove password</a>
+				</p>
+			} else {
+				<p>No password is set.</p>
+				<p><a href="/auth/password/set">Set a password</a></p>
+			}
+		</section>
+		<section aria-labelledby="identifiers-heading" data-slot="account-section">
+			<h2 id="identifiers-heading">Identifiers</h2>
+			if len(m.Identifiers) == 0 {
+				<p>No identifiers.</p>
+			} else {
+				<ul>
+					for _, it := range m.Identifiers {
+						<li>
+							<span>{ it.Kind }: { it.MaskedValue }</span>
+							if it.Primary {
+								<span> (primary)</span>
+							}
+							<span> — uses: { usesText(it.Uses) }</span>
+							<a href={ templ.SafeURL(identifierEditAction(it.ID) + "/edit") }>Manage</a>
+						</li>
+					}
+				</ul>
+			}
+			<p><a href="/auth/identifiers/new">Add an identifier</a></p>
+		</section>
+		<section aria-labelledby="oauth-heading" data-slot="account-section">
+			<h2 id="oauth-heading">Linked accounts</h2>
+			if len(m.OAuth) == 0 {
+				<p>No linked accounts.</p>
+			} else {
+				<ul>
+					for _, o := range m.OAuth {
+						<li>
+							<span>{ o.Provider }</span>
+							if o.Removable {
+								<a href={ templ.SafeURL(oauthUnlinkAction(o.Provider)) }>Unlink</a>
+							}
+						</li>
+					}
+				</ul>
+			}
+		</section>
+	}
+}

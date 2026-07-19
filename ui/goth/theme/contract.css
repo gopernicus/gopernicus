@@ -1,0 +1,111 @@
+/*
+ * ui/goth semantic-variable contract + neutral fallback layer (GOTH-1.3).
+ *
+ * This file declares every frozen semantic token (README.md §5) as a CSS custom
+ * property with a NEUTRAL fallback value, so an application that never loads a
+ * branded palette still resolves a complete, working (grayscale) theme. The
+ * polished default light/dark palette lives in default.css and composes OVER this
+ * layer (default.css is imported AFTER contract.css). A host overrides any token
+ * by loading its own stylesheet AFTER the kit stylesheet — CSS source-order
+ * cascade makes the last :root declaration win, so a plain CSS file is all a host
+ * needs; there is no recompilation or module-cache scan.
+ *
+ * Token NAMES are frozen public compatibility surface (README.md §5). The values
+ * here are neutral fallbacks and may change. Never hand-edit the compiled
+ * dist/theme.<hash>.css — edit this source and run the Node-gated asset build.
+ *
+ * The non-color tokens (radius/shadow/typography/motion/density/layering) live
+ * ONLY here: they are appearance-independent, so default.css does not redeclare
+ * them and they stay identical to package theme's DefaultTheme values.
+ */
+
+:root {
+  /* Surfaces & text (neutral). */
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.2 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.2 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.2 0 0);
+  --overlay: oklch(0.2 0 0 / 0.5);
+
+  /* Semantic roles (neutral). */
+  --primary: oklch(0.3 0 0);
+  --primary-foreground: oklch(0.98 0 0);
+  --secondary: oklch(0.95 0 0);
+  --secondary-foreground: oklch(0.3 0 0);
+  --muted: oklch(0.95 0 0);
+  --muted-foreground: oklch(0.5 0 0);
+  --accent: oklch(0.95 0 0);
+  --accent-foreground: oklch(0.3 0 0);
+  --destructive: oklch(0.58 0.22 27);
+  --destructive-foreground: oklch(0.98 0 0);
+
+  /* Status roles (neutral). */
+  --success: oklch(0.62 0.17 145);
+  --success-foreground: oklch(0.98 0 0);
+  --warning: oklch(0.75 0.16 80);
+  --warning-foreground: oklch(0.2 0 0);
+  --tertiary: oklch(0.62 0.15 250);
+  --tertiary-foreground: oklch(0.98 0 0);
+
+  /* Form / outline (neutral). */
+  --border: oklch(0.9 0 0);
+  --input: oklch(0.9 0 0);
+  --ring: oklch(0.3 0 0);
+
+  /* Charts (neutral grayscale ramp). */
+  --chart-1: oklch(0.55 0 0);
+  --chart-2: oklch(0.6 0 0);
+  --chart-3: oklch(0.65 0 0);
+  --chart-4: oklch(0.7 0 0);
+  --chart-5: oklch(0.75 0 0);
+
+  /* Sidebar (neutral). */
+  --sidebar: oklch(0.98 0 0);
+  --sidebar-foreground: oklch(0.2 0 0);
+  --sidebar-primary: oklch(0.3 0 0);
+  --sidebar-primary-foreground: oklch(0.98 0 0);
+  --sidebar-accent: oklch(0.95 0 0);
+  --sidebar-accent-foreground: oklch(0.3 0 0);
+  --sidebar-border: oklch(0.9 0 0);
+  --sidebar-ring: oklch(0.3 0 0);
+
+  /* Shape & elevation. shadow-lg is the frozen elevation ceiling (overlays). */
+  --radius: 0.5rem;
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1);
+
+  /* Typography. */
+  --font-sans: ui-sans-serif, system-ui, sans-serif;
+  --font-serif: ui-serif, Georgia, serif;
+  --font-mono: ui-monospace, SFMono-Regular, monospace;
+
+  /* Motion. */
+  --duration-fast: 120ms;
+  --duration: 200ms;
+  --duration-slow: 320ms;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-emphasized: cubic-bezier(0.2, 0, 0, 1);
+
+  /* Density & layering. `density` is a real spacing-scale multiplier: component
+   * padding and gap are DERIVED from it below (component padding = base × density)
+   * so a host retunes compactness by setting one token. The --space-* scale is the
+   * derivation surface later primitive CSS consumes for padding/gap. */
+  --density: 1;
+  --space-1: calc(0.25rem * var(--density));
+  --space-2: calc(0.5rem * var(--density));
+  --space-3: calc(0.75rem * var(--density));
+  --space-4: calc(1rem * var(--density));
+  --space-6: calc(1.5rem * var(--density));
+  --space-8: calc(2rem * var(--density));
+
+  --z-base: 0;
+  --z-sticky: 100;
+  --z-overlay: 1000;
+  --z-modal: 1100;
+  --z-popover: 1200;
+  --z-toast: 1300;
+}

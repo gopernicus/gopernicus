@@ -1,0 +1,130 @@
+/*
+ * ui/goth default light/dark palette (GOTH-1.3; standalone artifact GOTH-A.2).
+ *
+ * This file compiles into its OWN fingerprinted asset, theme-default.css — NOT
+ * baked into theme.css. Head() injects it after the kit stylesheet only when the
+ * host supplies no ThemeStylesheetPath, so the default palette layers over the
+ * neutral contract.css fallbacks (which ship inside theme.css) by CSS source
+ * order: theme.css loads first, theme-default.css after. The light values on
+ * :root are the owner-default palette; a drift test (contract_css_test.go) keeps
+ * them aligned with the frozen token list. Dark values apply under BOTH the
+ * `.dark` class (host toggles it) and `[data-theme="dark"]` (theme.HTMLAttributes
+ * emits it); system preference is a host/controller selection policy, never baked
+ * in.
+ *
+ * This file also doubles as the copyable STARTER a host clones to author its own
+ * theme stylesheet: copy it, edit the values, serve it, and point
+ * Config.ThemeStylesheetPath at it (see ../README.md §5).
+ *
+ * Only appearance-dependent color tokens are declared here; radius, shadows,
+ * typography, motion, density, and z-index layers live once in contract.css.
+ * Never hand-edit the compiled dist/theme-default.<hash>.css — edit this source
+ * and run the Node-gated asset build.
+ */
+
+:root {
+  /* Surfaces & text (light, owner default). */
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.15 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.15 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.15 0 0);
+  --overlay: oklch(0.15 0 0 / 0.5);
+
+  /* Semantic roles (light). */
+  --primary: oklch(0.21 0.02 265);
+  --primary-foreground: oklch(0.98 0 0);
+  --secondary: oklch(0.96 0 0);
+  --secondary-foreground: oklch(0.21 0.02 265);
+  --muted: oklch(0.96 0 0);
+  --muted-foreground: oklch(0.55 0 0);
+  --accent: oklch(0.96 0 0);
+  --accent-foreground: oklch(0.21 0.02 265);
+  --destructive: oklch(0.58 0.22 27);
+  --destructive-foreground: oklch(0.98 0 0);
+
+  /* Status roles (light). */
+  --success: oklch(0.62 0.17 145);
+  --success-foreground: oklch(0.98 0 0);
+  --warning: oklch(0.75 0.16 80);
+  --warning-foreground: oklch(0.21 0.02 265);
+  --tertiary: oklch(0.62 0.15 250);
+  --tertiary-foreground: oklch(0.98 0 0);
+
+  /* Form / outline (light). */
+  --border: oklch(0.9 0 0);
+  --input: oklch(0.9 0 0);
+  --ring: oklch(0.21 0.02 265);
+
+  /* Charts (light). */
+  --chart-1: oklch(0.62 0.19 30);
+  --chart-2: oklch(0.6 0.12 185);
+  --chart-3: oklch(0.4 0.07 230);
+  --chart-4: oklch(0.83 0.19 85);
+  --chart-5: oklch(0.77 0.19 70);
+
+  /* Sidebar (light). */
+  --sidebar: oklch(0.98 0 0);
+  --sidebar-foreground: oklch(0.15 0 0);
+  --sidebar-primary: oklch(0.21 0.02 265);
+  --sidebar-primary-foreground: oklch(0.98 0 0);
+  --sidebar-accent: oklch(0.96 0 0);
+  --sidebar-accent-foreground: oklch(0.21 0.02 265);
+  --sidebar-border: oklch(0.9 0 0);
+  --sidebar-ring: oklch(0.21 0.02 265);
+}
+
+.dark,
+[data-theme="dark"] {
+  /* Surfaces & text (dark). */
+  --background: oklch(0.15 0 0);
+  --foreground: oklch(0.98 0 0);
+  --card: oklch(0.2 0 0);
+  --card-foreground: oklch(0.98 0 0);
+  --popover: oklch(0.2 0 0);
+  --popover-foreground: oklch(0.98 0 0);
+  --overlay: oklch(0 0 0 / 0.6);
+
+  /* Semantic roles (dark). */
+  --primary: oklch(0.92 0 0);
+  --primary-foreground: oklch(0.2 0 0);
+  --secondary: oklch(0.27 0 0);
+  --secondary-foreground: oklch(0.98 0 0);
+  --muted: oklch(0.27 0 0);
+  --muted-foreground: oklch(0.71 0 0);
+  --accent: oklch(0.27 0 0);
+  --accent-foreground: oklch(0.98 0 0);
+  --destructive: oklch(0.7 0.19 22);
+  --destructive-foreground: oklch(0.98 0 0);
+
+  /* Status roles (dark). */
+  --success: oklch(0.7 0.17 162);
+  --success-foreground: oklch(0.2 0 0);
+  --warning: oklch(0.77 0.17 70);
+  --warning-foreground: oklch(0.2 0 0);
+  --tertiary: oklch(0.6 0.12 250);
+  --tertiary-foreground: oklch(0.98 0 0);
+
+  /* Form / outline (dark). */
+  --border: oklch(1 0 0 / 0.1);
+  --input: oklch(1 0 0 / 0.15);
+  --ring: oklch(0.56 0 0);
+
+  /* Charts (dark). */
+  --chart-1: oklch(0.49 0.24 264);
+  --chart-2: oklch(0.7 0.15 162);
+  --chart-3: oklch(0.77 0.19 70);
+  --chart-4: oklch(0.63 0.27 304);
+  --chart-5: oklch(0.65 0.24 16);
+
+  /* Sidebar (dark). */
+  --sidebar: oklch(0.2 0 0);
+  --sidebar-foreground: oklch(0.98 0 0);
+  --sidebar-primary: oklch(0.92 0 0);
+  --sidebar-primary-foreground: oklch(0.2 0 0);
+  --sidebar-accent: oklch(0.27 0 0);
+  --sidebar-accent-foreground: oklch(0.98 0 0);
+  --sidebar-border: oklch(1 0 0 / 0.1);
+  --sidebar-ring: oklch(0.56 0 0);
+}

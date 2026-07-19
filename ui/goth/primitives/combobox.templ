@@ -1,0 +1,43 @@
+package primitives
+
+// Combobox (P50, family F4). See combobox.go for the server-ownership model, the
+// no-JS baseline (submit-button options + server-open listbox), and the
+// gothCombobox enhancement. The caller composes ComboboxInput, ComboboxListbox
+// (holding ComboboxOption / ComboboxEmpty children) inside Combobox.
+templ Combobox(p ComboboxProps) {
+	<div class={ classNames("goth-combobox", p.Class) } { comboboxAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// ComboboxInput is the editable role=combobox field. It filters the options
+// (client) or triggers an async server fetch (server) and drives the active
+// option through aria-activedescendant while keeping focus on itself.
+templ ComboboxInput(p ComboboxInputProps) {
+	<input class={ classNames("goth-combobox-input", p.Class) } { comboboxInputAttrs(p)... }/>
+}
+
+// ComboboxListbox is the role=listbox popup. Render it Open for the server-owned
+// no-JS baseline; the controller opens/closes it on focus/typing otherwise.
+templ ComboboxListbox(p ComboboxListboxProps) {
+	<div class={ classNames("goth-combobox-listbox", p.Class) } { comboboxListboxAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// ComboboxOption is one role=option submit control. With no JavaScript it submits
+// its name/value to the enclosing form; enhanced, the controller moves the active
+// option and Enter activates it (the same submit/HTMX round-trip).
+templ ComboboxOption(p ComboboxOptionProps) {
+	<button class={ classNames("goth-combobox-option", p.Class) } { comboboxOptionAttrs(p)... }>
+		{ children... }
+	</button>
+}
+
+// ComboboxEmpty is the no-results message. In client-filter mode the controller
+// toggles it; in server-filter mode the server renders it.
+templ ComboboxEmpty(p ComboboxEmptyProps) {
+	<div class={ classNames("goth-combobox-empty", p.Class) } { comboboxEmptyAttrs(p)... }>
+		{ children... }
+	</div>
+}

@@ -1,0 +1,56 @@
+package primitives
+
+// Field (P11, family F3). The caller composes and places the parts; each shares
+// the data-slot contract. ARIA linkage (label `for`, control aria-describedby)
+// is caller-passed via Base.ID per the frozen grammar.
+templ Field(p FieldProps) {
+	<div class={ fieldClass(p) } { fieldAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// FieldLabel renders a native <label>; FieldLabelProps.For associates it with a
+// control by id. Its content is the label text (templ children).
+templ FieldLabel(p FieldLabelProps) {
+	<label class={ fieldPartClass(p.Base, "goth-field-label") } { fieldLabelAttrs(p)... }>
+		{ children... }
+	</label>
+}
+
+// FieldDescription renders helper text a control references through
+// aria-describedby (caller sets Base.ID and the control's aria-describedby).
+templ FieldDescription(p FieldDescriptionProps) {
+	<p class={ fieldPartClass(p.Base, "goth-field-description") } { fieldPartAttrs(p.Base, "field-description")... }>
+		{ children... }
+	</p>
+}
+
+// FieldError renders the validation message a control references through
+// aria-describedby (caller sets Base.ID and the control's aria-describedby).
+templ FieldError(p FieldErrorProps) {
+	<p class={ fieldPartClass(p.Base, "goth-field-error") } { fieldPartAttrs(p.Base, "field-error")... }>
+		{ children... }
+	</p>
+}
+
+// FieldGroup stacks several related fields vertically.
+templ FieldGroup(p FieldGroupProps) {
+	<div class={ fieldPartClass(p.Base, "goth-field-group") } { fieldPartAttrs(p.Base, "field-group")... }>
+		{ children... }
+	</div>
+}
+
+// FieldSet renders a native <fieldset> grouping related controls under a
+// FieldLegend.
+templ FieldSet(p FieldSetProps) {
+	<fieldset class={ fieldPartClass(p.Base, "goth-field-set") } { fieldPartAttrs(p.Base, "field-set")... }>
+		{ children... }
+	</fieldset>
+}
+
+// FieldLegend renders a native <legend> naming a FieldSet.
+templ FieldLegend(p FieldLegendProps) {
+	<legend class={ fieldPartClass(p.Base, "goth-field-legend") } { fieldPartAttrs(p.Base, "field-legend")... }>
+		{ children... }
+	</legend>
+}

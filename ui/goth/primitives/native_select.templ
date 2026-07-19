@@ -1,0 +1,25 @@
+package primitives
+
+// NativeSelect (P18, family F3) renders a native <select>. The caller composes
+// NativeSelectOption / NativeSelectGroup children; the control submits natively
+// with no JavaScript.
+templ NativeSelect(p NativeSelectProps) {
+	<select class={ nativeSelectClass(p) } { nativeSelectAttrs(p)... }>
+		{ children... }
+	</select>
+}
+
+// NativeSelectOption renders one <option>; its visible label is templ children.
+templ NativeSelectOption(p NativeSelectOptionProps) {
+	<option { nativeSelectOptionAttrs(p)... }>
+		{ children... }
+	</option>
+}
+
+// NativeSelectGroup renders an <optgroup> labelled by NativeSelectGroupProps.Label
+// grouping its child options.
+templ NativeSelectGroup(p NativeSelectGroupProps) {
+	<optgroup { nativeSelectGroupAttrs(p)... }>
+		{ children... }
+	</optgroup>
+}

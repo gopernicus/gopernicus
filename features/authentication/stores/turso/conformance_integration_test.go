@@ -63,7 +63,11 @@ func TestConformance_Turso(t *testing.T) {
 		truncate(t, db)
 		t.Cleanup(func() { truncate(t, db) })
 
-		return Repositories(db)
+		repos, err := Repositories(db)
+		if err != nil {
+			t.Fatalf("Repositories: %v", err)
+		}
+		return repos
 	})
 }
 

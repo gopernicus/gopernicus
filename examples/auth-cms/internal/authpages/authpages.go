@@ -1,12 +1,14 @@
 // Package authpages is this host's REAL partial override of the authentication
-// feature's HTML surface (design §9.2, AV3-8.9): it embeds the bundled default
-// views/templ.Views and overrides exactly ONE page — Login — with a
+// feature's HTML surface (design §9.2, AV3-8.9): it embeds the ui/goth
+// views/goth.Views and overrides exactly ONE page — Login — with a
 // Gopernicus-CMS-branded template rendered through sdk/foundation/web.Template
 // (stdlib html/template, no templ import here). Every other page is served by the
-// promoted bundled default, so the override changes presentation ONLY: route
+// promoted ui/goth default, so the override changes presentation ONLY: route
 // security, request decoding, service policy, redirect resolution, and error
 // classification all live in the feature's inbound handlers, never in a Views
-// method (proven byte-identical in AV3-8.5's isolation tests).
+// method (proven byte-identical in AV3-8.5's isolation tests). Because it embeds
+// authgoth.Views, HTMLPolicy() is promoted too, so the host wires the exact CSP the
+// ui/goth pages need from this same value (ui-goth GOTH-7.2).
 //
 // It also carries the host's email LayerApp content override (EmailOverride), so
 // this one package demonstrates BOTH override systems side by side and proves they
@@ -25,8 +27,9 @@ import (
 	"html/template"
 
 	auth "github.com/gopernicus/gopernicus/features/authentication"
-	authtempl "github.com/gopernicus/gopernicus/features/authentication/views/templ"
+	authgoth "github.com/gopernicus/gopernicus/features/authentication/views/goth"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	uigoth "github.com/gopernicus/gopernicus/ui/goth"
 )
 
 // loginTemplateName is the parsed template Login executes.
@@ -35,12 +38,13 @@ const loginTemplateName = "login"
 //go:embed templates/verification.html
 var brandEmailFS embed.FS
 
-// Views embeds the bundled default authtempl.Views and overrides only Login. Every
-// method the host does not override is promoted from the embedded default, so Views
+// Views embeds the ui/goth authgoth.Views and overrides only Login. Every method
+// the host does not override is promoted from the embedded default, so Views
 // satisfies auth.Views in full (the compile assertion below) while presenting the
-// host's own Login page.
+// host's own Login page. The embedded authgoth.Views also promotes HTMLPolicy(), the
+// CSP the host wires so the ui/goth pages load their assets.
 type Views struct {
-	authtempl.Views
+	authgoth.Views
 	login *template.Template
 }
 
@@ -48,12 +52,18 @@ type Views struct {
 // fifteen non-overridden methods, and Login below supplies the sixteenth.
 var _ auth.Views = Views{}
 
-// New returns the host override with its branded Login template parsed once.
-func New() Views {
-	return Views{
-		Views: authtempl.New(),
-		login: template.Must(template.New(loginTemplateName).Parse(loginHTML)),
+// New returns the host override over the ui/goth bundle, with its branded Login
+// template parsed once. It fails loudly if the ui/goth Views cannot be constructed
+// (a nil bundle).
+func New(bundle *uigoth.Bundle) (Views, error) {
+	gv, err := authgoth.New(bundle)
+	if err != nil {
+		return Views{}, err
 	}
+	return Views{
+		Views: gv,
+		login: template.Must(template.New(loginTemplateName).Parse(loginHTML)),
+	}, nil
 }
 
 // Login renders the Gopernicus-CMS-branded sign-in page. It posts to the same

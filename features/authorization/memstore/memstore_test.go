@@ -20,33 +20,46 @@ func rel(rt, rid, relation, st, sid string) relationship.CreateRelationship {
 	return relationship.CreateRelationship{ResourceType: rt, ResourceID: rid, Relation: relation, SubjectType: st, SubjectID: sid}
 }
 
+// relUserset builds a tuple whose subject is the exact userset st:sid#subjRel.
+func relUserset(rt, rid, relation, st, sid, subjRel string) relationship.CreateRelationship {
+	c := rel(rt, rid, relation, st, sid)
+	c.SubjectRelation = subjRel
+	return c
+}
+
 func TestGroupExpansionTransitive(t *testing.T) {
 	r := NewRelationships()
-	// u1 ∈ group:eng (member); group:eng is viewer of doc:d1.
+	// u1 ∈ group:eng (member); the exact userset group:eng#member is viewer of doc:d1.
 	mustCreate(t, r,
 		rel("group", "eng", "member", "user", "u1"),
-		rel("doc", "d1", "viewer", "group", "eng"),
+		relUserset("doc", "d1", "viewer", "group", "eng", "member"),
 	)
-	ok, err := r.CheckRelationWithGroupExpansion(context.Background(), "doc", "d1", "viewer", "user", "u1")
+	ok, err := r.CheckRelationWithGroupExpansion(context.Background(), "doc", "d1", "viewer", "user", "u1", 0)
 	if err != nil || !ok {
-		t.Fatalf("transitive group membership should grant viewer: ok=%v err=%v", ok, err)
+		t.Fatalf("transitive userset membership should grant viewer: ok=%v err=%v", ok, err)
 	}
 	// u2 is not a member.
-	if ok, _ := r.CheckRelationWithGroupExpansion(context.Background(), "doc", "d1", "viewer", "user", "u2"); ok {
+	if ok, _ := r.CheckRelationWithGroupExpansion(context.Background(), "doc", "d1", "viewer", "user", "u2", 0); ok {
 		t.Fatalf("non-member must be denied")
+	}
+	// A CONCRETE group:eng grant is NOT satisfied by a member: userset ≠ concrete.
+	mustCreate(t, r, rel("doc", "d2", "viewer", "group", "eng"))
+	if ok, _ := r.CheckRelationWithGroupExpansion(context.Background(), "doc", "d2", "viewer", "user", "u1", 0); ok {
+		t.Fatalf("member must NOT satisfy a concrete-group grant")
 	}
 }
 
 func TestGroupExpansionCycleSafe(t *testing.T) {
 	r := NewRelationships()
-	// A ∈ B and B ∈ A (mutual membership) must not loop.
+	// A#member ∋ B#member and B#member ∋ A#member (mutual userset membership) must
+	// not loop; u1 ∈ B#member resolves through the cycle to A#member.
 	mustCreate(t, r,
-		rel("group", "a", "member", "group", "b"),
-		rel("group", "b", "member", "group", "a"),
-		rel("doc", "d1", "viewer", "group", "a"),
+		relUserset("group", "a", "member", "group", "b", "member"),
+		relUserset("group", "b", "member", "group", "a", "member"),
+		relUserset("doc", "d1", "viewer", "group", "a", "member"),
 		rel("group", "b", "member", "user", "u1"),
 	)
-	ok, err := r.CheckRelationWithGroupExpansion(context.Background(), "doc", "d1", "viewer", "user", "u1")
+	ok, err := r.CheckRelationWithGroupExpansion(context.Background(), "doc", "d1", "viewer", "user", "u1", 0)
 	if err != nil || !ok {
 		t.Fatalf("cycle expansion should terminate and grant: ok=%v err=%v", ok, err)
 	}
@@ -107,7 +120,7 @@ func TestDescendantWalk(t *testing.T) {
 		rel("space", "s2", "parent", "space", "s1"),
 		rel("space", "s3", "parent", "space", "s2"),
 	)
-	ids, err := r.LookupDescendantResourceIDs(context.Background(), "space", "parent", "space", []string{"s1"})
+	ids, err := r.LookupDescendantResourceIDs(context.Background(), "space", "parent", "space", []string{"s1"}, 100)
 	if err != nil {
 		t.Fatalf("descendants: %v", err)
 	}

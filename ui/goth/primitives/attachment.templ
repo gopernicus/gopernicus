@@ -1,0 +1,104 @@
+package primitives
+
+// Attachment (P55, family F3). The caller composes and places the parts; each
+// shares the data-slot contract. The root emits data-size/data-orientation and the
+// caller-owned data-state. When State is not idle the root appends an owned status
+// affordance (state glyph + text label, and a determinate <progress> while
+// uploading) so the state is conveyed with meaning beyond color and the error
+// label is the accessible error description.
+templ Attachment(p AttachmentProps) {
+	<div class={ attachmentClass(p) } { attachmentAttrs(p)... }>
+		{ children... }
+		if p.State != AttachmentIdle {
+			@attachmentStatus(p)
+		}
+	</div>
+}
+
+// attachmentStatus is the owned per-state affordance. It is non-interactive and
+// sits above the stretched trigger via components.css. The label text is always
+// present so the state never relies on color.
+templ attachmentStatus(p AttachmentProps) {
+	<div class="goth-attachment-status" data-slot="attachment-status" data-state={ p.State.attr() }>
+		@attachmentStateGlyph(p.State)
+		<span class="goth-attachment-status-label">{ p.statusLabel() }</span>
+		if p.State == AttachmentUploading && p.Progress > 0 {
+			@Progress(ProgressProps{Value: p.clampedProgress(), Max: 100, Label: p.statusLabel(), Base: Base{Class: "goth-attachment-progress"}})
+		} else if p.State == AttachmentUploading {
+			<span class="goth-attachment-progress-text">{ attachmentProgressText(p) }</span>
+		}
+	</div>
+}
+
+templ AttachmentMedia(p AttachmentMediaProps) {
+	<div class={ attachmentPartClass(p.Base, "goth-attachment-media") } { attachmentPartAttrs(p.Base, "attachment-media")... }>
+		{ children... }
+	</div>
+}
+
+templ AttachmentContent(p AttachmentContentProps) {
+	<div class={ attachmentPartClass(p.Base, "goth-attachment-content") } { attachmentPartAttrs(p.Base, "attachment-content")... }>
+		{ children... }
+	</div>
+}
+
+templ AttachmentTitle(p AttachmentTitleProps) {
+	<div class={ attachmentPartClass(p.Base, "goth-attachment-title") } { attachmentPartAttrs(p.Base, "attachment-title")... }>
+		{ children... }
+	</div>
+}
+
+templ AttachmentDescription(p AttachmentDescriptionProps) {
+	<div class={ attachmentPartClass(p.Base, "goth-attachment-description") } { attachmentPartAttrs(p.Base, "attachment-description")... }>
+		{ children... }
+	</div>
+}
+
+templ AttachmentActions(p AttachmentActionsProps) {
+	<div class={ attachmentPartClass(p.Base, "goth-attachment-actions") } { attachmentPartAttrs(p.Base, "attachment-actions")... }>
+		{ children... }
+	</div>
+}
+
+// AttachmentTrigger is the full-card affordance: a real link (URL set) or button
+// that the CSS ::after stretches over the whole card. Its accessible name comes
+// from Label; actions sit above it and stay independently focusable.
+templ AttachmentTrigger(p AttachmentTriggerProps) {
+	if !p.URL.IsZero() {
+		<a href={ p.URL.SafeURL() } class={ attachmentPartClass(p.Base, "goth-attachment-trigger") } { attachmentTriggerAttrs(p, true)... }>
+			{ children... }
+		</a>
+	} else {
+		<button class={ attachmentPartClass(p.Base, "goth-attachment-trigger") } { attachmentTriggerAttrs(p, false)... }>
+			{ children... }
+		</button>
+	}
+}
+
+templ AttachmentGroup(p AttachmentGroupProps) {
+	<div class={ attachmentPartClass(p.Base, "goth-attachment-group") } { attachmentGroupAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// attachmentStateGlyph draws a small decorative (aria-hidden) glyph per state: a
+// spinning ring for uploading/processing, a check for done, an alert triangle for
+// error. The accessible meaning is carried by the sibling status label text.
+templ attachmentStateGlyph(state AttachmentState) {
+	switch state {
+		case AttachmentUploading, AttachmentProcessing:
+			<svg class="goth-attachment-spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false">
+				<path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
+			</svg>
+		case AttachmentDone:
+			<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+				<path d="M20 6 9 17l-5-5"></path>
+			</svg>
+		case AttachmentError:
+			<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+				<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path>
+				<path d="M12 9v4"></path>
+				<path d="M12 17h.01"></path>
+			</svg>
+	}
+}

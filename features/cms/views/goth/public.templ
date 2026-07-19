@@ -1,0 +1,65 @@
+package goth
+
+import "github.com/gopernicus/gopernicus/features/cms"
+
+// homeBody renders recent published entries for the public home page.
+templ homeBody(items []cms.ListItem) {
+	<h1>Latest posts</h1>
+	if len(items) == 0 {
+		<p>Nothing published yet.</p>
+	} else {
+		for _, it := range items {
+			<article>
+				<h2><a href={ templ.SafeURL(it.Href) }>{ it.Title }</a></h2>
+				if it.Excerpt != "" {
+					<p>{ it.Excerpt }</p>
+				}
+			</article>
+		}
+	}
+}
+
+// archiveBody renders a taxonomy archive listing (entries sharing a term).
+templ archiveBody(heading string, items []cms.ListItem, pager cms.Pager) {
+	<h1>{ heading }</h1>
+	if len(items) == 0 {
+		<p>Nothing here yet.</p>
+	} else {
+		<ul>
+			for _, it := range items {
+				<li><a href={ templ.SafeURL(it.Href) }>{ it.Title }</a></li>
+			}
+		</ul>
+	}
+	@publicPagerNav(pager)
+}
+
+// publicPagerNav renders the public archive's bidirectional pager as plain links
+// (public pages are not HTMX-enhanced — the entries-admin list is the HTMX proof).
+templ publicPagerNav(pager cms.Pager) {
+	if pager.HasPrev || pager.NextCursor != "" {
+		<nav aria-label="Pagination">
+			if pager.HasPrev {
+				<a href={ templ.SafeURL(newerHref(pager)) }>&larr; Newer</a>
+				{ " " }
+			}
+			if pager.NextCursor != "" {
+				<a href={ templ.SafeURL(olderHref(pager)) }>Older &rarr;</a>
+			}
+		</nav>
+	}
+}
+
+// publicErrorBody renders the public error page body inside the site chrome.
+templ publicErrorBody(status int, message string) {
+	<h1>{ statusText(status) }</h1>
+	<p>{ message }</p>
+	<p><a href="/">Back home &rarr;</a></p>
+}
+
+// adminErrorBody renders the admin error page body inside the admin chrome.
+templ adminErrorBody(status int, message string) {
+	<h1>{ statusText(status) }</h1>
+	<p>{ message }</p>
+	<p><a href="/articles">Back to articles</a></p>
+}

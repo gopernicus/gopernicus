@@ -1,7 +1,10 @@
 # Authorization v3 hardening packet
 
-Status: **DRAFT — correctness kernel recut after skeptical review; semantic and
-transaction-protocol ratification remains before execution.**
+Status: **RATIFIED — execution in progress (2026-07-14).** Ratified basis:
+the ten recommended defaults below at their recommended values, plus owner
+rulings R1–R4 (nested userset membership IN / rewrite operators OUT; separate
+proof phase with the reopen rule; AZADM blocked indefinitely; `iam_*` table
+prefix). Ratified 2026-07-14 by jrazmi via the execution-loop handoff.
 Working name: `authorizationv3`; task prefix: `AZ3`.
 Depends on: auth v3 and `.claude/plans/authv3-delivery-refactor/` reaching the
 combined AV3-9.7/9.8 closeout point — **satisfied 2026-07-14** (AV3-9.8 complete;

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/gopernicus/gopernicus/features/authorization/domain/relationship"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 )
@@ -29,7 +30,7 @@ func (f *fakeStore) match(resourceType, resourceID, relation, subjectType, subje
 	return false
 }
 
-func (f *fakeStore) CheckRelationWithGroupExpansion(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) (bool, error) {
+func (f *fakeStore) CheckRelationWithGroupExpansion(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string, maxExpansionStates int) (bool, error) {
 	return f.match(resourceType, resourceID, relation, subjectType, subjectID), nil
 }
 
@@ -41,13 +42,13 @@ func (f *fakeStore) GetRelationTargets(ctx context.Context, resourceType, resour
 	var out []relationship.RelationTarget
 	for _, t := range f.tuples {
 		if t.ResourceType == resourceType && t.ResourceID == resourceID && t.Relation == relation {
-			out = append(out, relationship.RelationTarget{SubjectType: t.SubjectType, SubjectID: t.SubjectID, SubjectRelation: t.SubjectRelation})
+			out = append(out, relationship.RelationTarget{Type: t.SubjectType, ID: t.SubjectID, Relation: t.SubjectRelation})
 		}
 	}
 	return out, nil
 }
 
-func (f *fakeStore) CheckBatchDirect(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string) (map[string]bool, error) {
+func (f *fakeStore) CheckBatchDirect(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) (map[string]bool, error) {
 	out := make(map[string]bool, len(resourceIDs))
 	for _, id := range resourceIDs {
 		out[id] = f.match(resourceType, id, relation, subjectType, subjectID)
@@ -58,6 +59,22 @@ func (f *fakeStore) CheckBatchDirect(ctx context.Context, resourceType string, r
 func (f *fakeStore) CreateRelationships(ctx context.Context, relationships []relationship.CreateRelationship) error {
 	f.lastBatch = relationships
 	f.tuples = append(f.tuples, relationships...)
+	return nil
+}
+
+func (f *fakeStore) SetRelationTargets(ctx context.Context, resourceType, resourceID, relationName string, targets []relationship.CreateRelationship) error {
+	f.tuples = filter(f.tuples, func(t relationship.CreateRelationship) bool {
+		return !(t.ResourceType == resourceType && t.ResourceID == resourceID && t.Relation == relationName)
+	})
+	f.tuples = append(f.tuples, targets...)
+	return nil
+}
+
+func (f *fakeStore) DeleteRelationshipTarget(ctx context.Context, resourceType, resourceID, relationName string, target relationship.SubjectRef) error {
+	f.tuples = filter(f.tuples, func(t relationship.CreateRelationship) bool {
+		return !(t.ResourceType == resourceType && t.ResourceID == resourceID && t.Relation == relationName &&
+			t.SubjectType == target.Type && t.SubjectID == target.ID && t.SubjectRelation == target.Relation)
+	})
 	return nil
 }
 
@@ -102,7 +119,7 @@ func (f *fakeStore) ListRelationshipsByResource(ctx context.Context, resourceTyp
 	return crud.Page[relationship.ResourceRelationship]{}, nil
 }
 
-func (f *fakeStore) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID string) ([]string, error) {
+func (f *fakeStore) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID string, limit int) ([]string, error) {
 	var out []string
 	for _, t := range f.tuples {
 		if t.ResourceType != resourceType || t.SubjectType != subjectType || t.SubjectID != subjectID {
@@ -117,7 +134,7 @@ func (f *fakeStore) LookupResourceIDs(ctx context.Context, resourceType string, 
 	return out, nil
 }
 
-func (f *fakeStore) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string) ([]string, error) {
+func (f *fakeStore) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string, limit int) ([]string, error) {
 	set := make(map[string]bool, len(targetIDs))
 	for _, id := range targetIDs {
 		set[id] = true
@@ -131,7 +148,7 @@ func (f *fakeStore) LookupResourceIDsByRelationTarget(ctx context.Context, resou
 	return out, nil
 }
 
-func (f *fakeStore) LookupDescendantResourceIDs(ctx context.Context, resourceType, relation, subjectType string, rootIDs []string) ([]string, error) {
+func (f *fakeStore) LookupDescendantResourceIDs(ctx context.Context, resourceType, relation, subjectType string, rootIDs []string, limit int) ([]string, error) {
 	return nil, nil
 }
 
@@ -197,17 +214,62 @@ func TestCheckDirectRelation(t *testing.T) {
 	})
 
 	res, err := svc.Check(context.Background(), CheckRequest{
-		Subject: Subject{Type: "user", ID: "u1"}, Permission: "delete", Resource: Resource{Type: "post", ID: "p1"},
+		Principal: PrincipalRef{Type: "user", ID: "u1"}, Permission: "delete", Resource: Resource{Type: "post", ID: "p1"},
 	})
 	if err != nil || !res.Allowed {
 		t.Fatalf("owner should have delete: allowed=%v reason=%q err=%v", res.Allowed, res.Reason, err)
 	}
 
 	deny, _ := svc.Check(context.Background(), CheckRequest{
-		Subject: Subject{Type: "user", ID: "u2"}, Permission: "delete", Resource: Resource{Type: "post", ID: "p1"},
+		Principal: PrincipalRef{Type: "user", ID: "u2"}, Permission: "delete", Resource: Resource{Type: "post", ID: "p1"},
 	})
 	if deny.Allowed {
 		t.Fatalf("non-owner must be denied delete")
+	}
+}
+
+// budgetExceededStore returns the store-layer group-expansion overflow sentinel
+// from both check-path methods; the engine must map it to ErrEvaluationLimit.
+type budgetExceededStore struct{ *fakeStore }
+
+func (budgetExceededStore) CheckRelationWithGroupExpansion(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string, maxExpansionStates int) (bool, error) {
+	return false, relationship.ErrExpansionBudgetExceeded
+}
+
+func (budgetExceededStore) CheckBatchDirect(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) (map[string]bool, error) {
+	return nil, relationship.ErrExpansionBudgetExceeded
+}
+
+// TestCheckGroupExpansionOverflowMapsToEvaluationLimit proves the F4 boundary: a
+// store reporting relationship.ErrExpansionBudgetExceeded surfaces from the engine
+// as ErrEvaluationLimit (the indeterminate budget class, wrapping
+// sdk.ErrUnavailable) — never a deny, and the engine never leaks the store
+// sentinel. Both the direct and the batch-optimized paths map.
+func TestCheckGroupExpansionOverflowMapsToEvaluationLimit(t *testing.T) {
+	store := budgetExceededStore{&fakeStore{}}
+	svc := newTestService(t, store, cryptids.IDGenerator{})
+
+	_, err := svc.Check(context.Background(), CheckRequest{
+		Principal: PrincipalRef{Type: "user", ID: "u1"}, Permission: "delete", Resource: Resource{Type: "post", ID: "p1"},
+	})
+	if !errors.Is(err, ErrEvaluationLimit) {
+		t.Fatalf("direct check overflow: want ErrEvaluationLimit, got %v", err)
+	}
+	if !errors.Is(err, sdk.ErrUnavailable) {
+		t.Fatalf("ErrEvaluationLimit must classify as unavailable, got %v", err)
+	}
+	if errors.Is(err, relationship.ErrExpansionBudgetExceeded) {
+		t.Fatalf("engine must not leak the store sentinel, got %v", err)
+	}
+
+	// The batch-optimized path (a Direct-only permission across shared subject +
+	// resource type) maps identically.
+	_, err = svc.CheckBatch(context.Background(), []CheckRequest{
+		{Principal: PrincipalRef{Type: "user", ID: "u1"}, Permission: "delete", Resource: Resource{Type: "post", ID: "p1"}},
+		{Principal: PrincipalRef{Type: "user", ID: "u1"}, Permission: "delete", Resource: Resource{Type: "post", ID: "p2"}},
+	})
+	if !errors.Is(err, ErrEvaluationLimit) {
+		t.Fatalf("batch check overflow: want ErrEvaluationLimit, got %v", err)
 	}
 }
 
@@ -217,7 +279,7 @@ func TestCheckDirectRelation(t *testing.T) {
 func TestCheckNoImplicitSelfAccess(t *testing.T) {
 	svc := newTestService(t, &fakeStore{}, cryptids.IDGenerator{})
 	res, err := svc.Check(context.Background(), CheckRequest{
-		Subject: Subject{Type: "user", ID: "u1"}, Permission: "read", Resource: Resource{Type: "user", ID: "u1"},
+		Principal: PrincipalRef{Type: "user", ID: "u1"}, Permission: "read", Resource: Resource{Type: "user", ID: "u1"},
 	})
 	if err != nil {
 		t.Fatalf("Check: %v", err)
@@ -239,7 +301,7 @@ func TestCheckPlatformAdminIsNotMagic(t *testing.T) {
 			ResourceType: "platform", ResourceID: "main", Relation: "admin", SubjectType: subjType, SubjectID: "admin1",
 		})
 		res, err := svc.Check(context.Background(), CheckRequest{
-			Subject: Subject{Type: subjType, ID: "admin1"}, Permission: "delete", Resource: Resource{Type: "post", ID: "pX"},
+			Principal: PrincipalRef{Type: subjType, ID: "admin1"}, Permission: "delete", Resource: Resource{Type: "post", ID: "pX"},
 		})
 		if err != nil {
 			t.Fatalf("%s Check: %v", subjType, err)
@@ -259,7 +321,7 @@ func TestCheckThroughTraversal(t *testing.T) {
 		relationship.CreateRelationship{ResourceType: "post", ResourceID: "p1", Relation: "org", SubjectType: "org", SubjectID: "o1"},
 	)
 	res, err := svc.Check(context.Background(), CheckRequest{
-		Subject: Subject{Type: "user", ID: "u1"}, Permission: "view", Resource: Resource{Type: "post", ID: "p1"},
+		Principal: PrincipalRef{Type: "user", ID: "u1"}, Permission: "view", Resource: Resource{Type: "post", ID: "p1"},
 	})
 	if err != nil || !res.Allowed {
 		t.Fatalf("through traversal should allow view: %+v err=%v", res, err)
@@ -273,7 +335,7 @@ func TestCheckBatchAndFilterAuthorized(t *testing.T) {
 		relationship.CreateRelationship{ResourceType: "post", ResourceID: "p1", Relation: "owner", SubjectType: "user", SubjectID: "u1"},
 		relationship.CreateRelationship{ResourceType: "post", ResourceID: "p3", Relation: "owner", SubjectType: "user", SubjectID: "u1"},
 	)
-	got, err := svc.FilterAuthorized(context.Background(), Subject{Type: "user", ID: "u1"}, "delete", "post", []string{"p1", "p2", "p3"})
+	got, err := svc.FilterAuthorized(context.Background(), PrincipalRef{Type: "user", ID: "u1"}, "delete", "post", []string{"p1", "p2", "p3"})
 	if err != nil {
 		t.Fatalf("FilterAuthorized: %v", err)
 	}

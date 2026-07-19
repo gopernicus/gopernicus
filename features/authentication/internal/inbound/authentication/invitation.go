@@ -90,20 +90,25 @@ func newInvitationResponse(inv invitation.Invitation) invitationResponse {
 }
 
 // mountInvitations registers the invitation route surface (design §6). Called
-// from Mount only when a Granter is wired. All routes are session-gated except
-// decline, which is public and IP-rate-limited.
-func mountInvitations(r feature.RouteRegistrar, h *handlers, requireUser, declineLimit web.Middleware) {
-	r.Handle("POST", "/auth/invitations/{resource_type}/{resource_id}", h.createInvitation, requireUser)
-	r.Handle("GET", "/auth/invitations/{resource_type}/{resource_id}", h.listResourceInvitations, requireUser)
-	r.Handle("GET", "/auth/invitations/mine", h.listMyInvitations, requireUser)
-	r.Handle("POST", "/auth/invitations/accept", h.acceptInvitation, requireUser)
-	r.Handle("POST", "/auth/invitations/{id}/cancel", h.cancelInvitation, requireUser)
-	r.Handle("POST", "/auth/invitations/{id}/resend", h.resendInvitation, requireUser)
+// from Mount only when a Granter is wired. Every authenticated route rides
+// requireLiveSession (design §6/D3), so a revoked session's outstanding access
+// JWT is denied within one round-trip; decline is public and IP-rate-limited.
+func mountInvitations(r feature.RouteRegistrar, h *handlers, requireLiveSession, declineLimit web.Middleware) {
+	r.Handle("POST", "/auth/invitations/{resource_type}/{resource_id}", h.createInvitation, requireLiveSession)
+	r.Handle("GET", "/auth/invitations/{resource_type}/{resource_id}", h.listResourceInvitations, requireLiveSession)
+	r.Handle("GET", "/auth/invitations/mine", h.listMyInvitations, requireLiveSession)
+	r.Handle("POST", "/auth/invitations/accept", h.acceptInvitation, requireLiveSession)
+	r.Handle("POST", "/auth/invitations/{id}/cancel", h.cancelInvitation, requireLiveSession)
+	r.Handle("POST", "/auth/invitations/{id}/resend", h.resendInvitation, requireLiveSession)
 	r.Handle("POST", "/auth/invitations/{id}/decline", h.declineInvitation, declineLimit)
 }
 
-// createInvitation invites an identifier to the path resource (session-gated).
-// A direct add (known invitee + auto_accept) returns 200; a pending invite 201.
+// createInvitation invites an identifier to the path resource (live-session
+// gated). A direct add (known invitee + auto_accept) returns 200; a pending
+// invite 201. After principal resolution and parsing, the host InviteCheck
+// authorizes the EXACT requested relation on the parsed resource (design §6/D3):
+// a denial or infrastructure error fails closed through the normal web/sdk
+// mapping BEFORE the service is reached, so a forbidden create never mutates.
 func (h *handlers) createInvitation(w http.ResponseWriter, r *http.Request) {
 	var req createInvitationRequest
 	if !decode(w, r, &req) {
@@ -114,9 +119,21 @@ func (h *handlers) createInvitation(w http.ResponseWriter, r *http.Request) {
 		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return
 	}
+	resourceType := web.Param(r, "resource_type")
+	resourceID := web.Param(r, "resource_id")
+	if err := h.inviteCheck(r.Context(), invitationsvc.InviteCheckRequest{
+		Principal:    identity.Principal{Type: identity.User, ID: invitedBy},
+		Action:       invitationsvc.InviteCreate,
+		ResourceType: resourceType,
+		ResourceID:   resourceID,
+		Relation:     req.Relation,
+	}); err != nil {
+		web.RespondJSONDomainError(w, err)
+		return
+	}
 	res, err := h.inv.Create(r.Context(), invitationsvc.CreateInput{
-		ResourceType:   web.Param(r, "resource_type"),
-		ResourceID:     web.Param(r, "resource_id"),
+		ResourceType:   resourceType,
+		ResourceID:     resourceID,
 		Relation:       req.Relation,
 		Identifier:     req.Identifier,
 		IdentifierKind: req.IdentifierKind,
@@ -135,13 +152,34 @@ func (h *handlers) createInvitation(w http.ResponseWriter, r *http.Request) {
 	web.RespondJSONCreated(w, newInvitationResponse(res.Invitation))
 }
 
-// listResourceInvitations pages a resource's invitations (session-gated).
+// listResourceInvitations pages a resource's invitations (live-session gated).
+// It resolves CurrentUser both to keep the surface user-only (a service-account
+// principal that RequireLiveSession admits is rejected here, exactly as
+// RequireUser's JWT-only gate rejected it) and to pose the host InviteCheck:
+// InviteList carries an empty Relation (design §6/D3). A denial or infrastructure
+// error fails closed through the normal web/sdk mapping before the service call.
 func (h *handlers) listResourceInvitations(w http.ResponseWriter, r *http.Request) {
 	req, ok := h.parseListRequest(w, r, invitation.OrderFields, invitation.DefaultOrder)
 	if !ok {
 		return
 	}
-	page, err := h.inv.ListByResource(r.Context(), web.Param(r, "resource_type"), web.Param(r, "resource_id"), req)
+	userID, ok := h.svc.CurrentUser(r.Context())
+	if !ok {
+		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
+		return
+	}
+	resourceType := web.Param(r, "resource_type")
+	resourceID := web.Param(r, "resource_id")
+	if err := h.inviteCheck(r.Context(), invitationsvc.InviteCheckRequest{
+		Principal:    identity.Principal{Type: identity.User, ID: userID},
+		Action:       invitationsvc.InviteList,
+		ResourceType: resourceType,
+		ResourceID:   resourceID,
+	}); err != nil {
+		web.RespondJSONDomainError(w, err)
+		return
+	}
+	page, err := h.inv.ListByResource(r.Context(), resourceType, resourceID, req)
 	if err != nil {
 		web.RespondJSONDomainError(w, err)
 		return

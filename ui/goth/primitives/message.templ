@@ -1,0 +1,48 @@
+package primitives
+
+// Message (P59, family F3). The caller composes and places the parts; each shares
+// the data-slot contract. The root is an aligned row (avatar beside content); the
+// column holds MessageHeader, the body children, and MessageFooter.
+templ Message(p MessageProps) {
+	<div class={ messageClass(p) } { messageAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// MessageAvatar is the leading avatar slot. The caller places an Avatar primitive
+// (or a spacer for a grouped continuation) inside.
+templ MessageAvatar(p MessageAvatarProps) {
+	<div class={ messagePartClass(p.Base, "goth-message-avatar") } { messagePartAttrs(p.Base, "message-avatar")... }>
+		{ children... }
+	</div>
+}
+
+// MessageContent is the column holding the header, message body, and footer.
+templ MessageContent(p MessageContentProps) {
+	<div class={ messagePartClass(p.Base, "goth-message-content") } { messagePartAttrs(p.Base, "message-content")... }>
+		{ children... }
+	</div>
+}
+
+// MessageHeader holds the author name and timestamp.
+templ MessageHeader(p MessageHeaderProps) {
+	<div class={ messagePartClass(p.Base, "goth-message-header") } { messagePartAttrs(p.Base, "message-header")... }>
+		{ children... }
+	</div>
+}
+
+// MessageFooter holds status, actions, or a timestamp beneath the body.
+templ MessageFooter(p MessageFooterProps) {
+	<div class={ messagePartClass(p.Base, "goth-message-footer") } { messagePartAttrs(p.Base, "message-footer")... }>
+		{ children... }
+	</div>
+}
+
+// MessageGroup heads several consecutive messages from one sender with a single
+// avatar column. The caller places one MessageAvatar and a stack of MessageContent
+// (each optionally its own body) inside.
+templ MessageGroup(p MessageGroupProps) {
+	<div class={ messageGroupClass(p) } { messageGroupAttrs(p)... }>
+		{ children... }
+	</div>
+}

@@ -1,0 +1,56 @@
+package primitives
+
+// Pagination (P19, family F3). The caller composes the parts inside the labelled
+// nav. Every link is a real server-produced URL, so page navigation works with no
+// JavaScript; the current page is marked aria-current="page".
+templ Pagination(p PaginationProps) {
+	<nav class={ paginationClass(p) } { paginationAttrs(p)... }>
+		{ children... }
+	</nav>
+}
+
+templ PaginationContent(p PaginationContentProps) {
+	<ul class={ paginationContentClass(p) } { paginationContentAttrs(p)... }>
+		{ children... }
+	</ul>
+}
+
+templ PaginationItem(p PaginationItemProps) {
+	<li class={ paginationItemClass(p) } { paginationItemAttrs(p)... }>
+		{ children... }
+	</li>
+}
+
+// PaginationLink is a page link. Its visible content (the page number) is templ
+// children. Active marks the current page.
+templ PaginationLink(p PaginationLinkProps) {
+	<a href={ p.URL.SafeURL() } class={ paginationLinkClass(p) } { paginationLinkAttrs(p)... }>
+		{ children... }
+	</a>
+}
+
+// PaginationPrevious is the previous-page edge link: a chevron plus a visible
+// label (which is also the accessible name).
+templ PaginationPrevious(p PaginationPreviousProps) {
+	<a href={ p.URL.SafeURL() } class={ paginationPreviousClass(p) } { paginationPreviousAttrs(p)... }>
+		@chevronLeftGlyph()
+		<span data-slot="pagination-label">{ p.label() }</span>
+	</a>
+}
+
+// PaginationNext is the next-page edge link: a visible label plus a chevron.
+templ PaginationNext(p PaginationNextProps) {
+	<a href={ p.URL.SafeURL() } class={ paginationNextClass(p) } { paginationNextAttrs(p)... }>
+		<span data-slot="pagination-label">{ p.label() }</span>
+		@chevronRightGlyph()
+	</a>
+}
+
+// PaginationEllipsis marks a collapsed page range. It is decorative with a
+// visually-hidden "More pages" label.
+templ PaginationEllipsis(p PaginationEllipsisProps) {
+	<span class={ paginationEllipsisClass(p) } { paginationEllipsisAttrs(p)... }>
+		@ellipsisGlyph()
+		<span class="goth-sr-only">More pages</span>
+	</span>
+}

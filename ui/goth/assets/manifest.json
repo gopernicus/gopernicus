@@ -1,0 +1,28 @@
+{
+  "assets": [
+    {
+      "logicalName": "htmx.js",
+      "path": "dist/htmx.8689e2e2.js",
+      "integrity": "sha384-7epZ05eBokGHal5S20+uUv9bLg/CiK+7K1Fre83u23/RUIvUgB1w0uD9b60U9VWN",
+      "bytes": 51533
+    },
+    {
+      "logicalName": "runtime.js",
+      "path": "dist/runtime.ddc6f2ce.js",
+      "integrity": "sha384-CSsyNvsbp133kxN0FvXYRBqpY4gHXGgNpDOKpUe95nfn1KYNyUoP6/Prve529LH/",
+      "bytes": 94471
+    },
+    {
+      "logicalName": "theme-default.css",
+      "path": "dist/theme-default.ae49d971.css",
+      "integrity": "sha384-LqXsNzHYwA5AmrXImvelEl/7io1Aq8bkbPxbZFVsrQFmthr71RGynmHoQTltxQsr",
+      "bytes": 2524
+    },
+    {
+      "logicalName": "theme.css",
+      "path": "dist/theme.b554d930.css",
+      "integrity": "sha384-MICeiv1MrkxzDclqzfR+0fTD1E9RNz4F9lwKR91bc89CC2Lv1Jha9MyGvUOKH36K",
+      "bytes": 82398
+    }
+  ]
+}

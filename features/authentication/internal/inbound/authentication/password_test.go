@@ -61,10 +61,10 @@ func newPasswordFixture(t *testing.T) passwordFixture {
 		TokenSigner:          newFakeSigner(),
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, nil, "", MutationSecurity{
+	Mount(h, svc, nil, nil, "", MutationSecurity{
 		AllowedOrigins:    []string{"https://app.example.com"},
 		SessionCookieName: svc.SessionCookieName(),
-	}, nil)
+	}, nil, nil)
 	return passwordFixture{h: h, users: users, idents: idents, passwords: passwords, grants: grants}
 }
 

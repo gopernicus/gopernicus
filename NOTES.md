@@ -2397,3 +2397,327 @@ all owner-owned: LICENSE (blocks first public tags), turso CI secrets,
 committing the tree (clears the expected recovery_templ.go drift flag), PR,
 and tags per the RELEASING.md floors. No PR, tag, push, or commit was made
 during the milestone.
+
+## 2026-07-14 — authorization-v3 release/compatibility inventory (AZ3-5.3)
+
+The authorizationv3 correctness-kernel milestone's release/version/tag inventory
+(plan `.claude/plans/authorizationv3/07-docs-and-closeout.md`, task AZ3-5.3; phases
+0–4 closed, AZ3-5.1/5.2 complete). Docs + one Makefile guard; the milestone diff is
+the uncommitted worktree (no tags cut — tagging is owner-authorized release
+execution). The breaking surface, consumer changes, migration decision, jobs/work
+axis, and the sdk-graduation decision are anchored in `RELEASING.md`'s new
+"features/authorization + both store modules — next tag" keyed note; this entry is
+the milestone-level record over that same surface plus the consolidated
+premise-adaptation / deferred-item table the phase logs accrued.
+
+- **Preflight re-confirmed zero `features/authorization*` tags** (`git tag -l`
+  empty, 2026-07-14). Per recommended-default #7 the canonical migration set was
+  **rewritten greenfield** (fold-to-final `0001_iam_relationships` /
+  `0002_iam_roles` / `0003_iam_scopes` / `0004_iam_mutations`, `iam_*` prefix per
+  R4; `iam_scopes`/`iam_mutations` are new v3 tables), NOT append-only. Cutting the
+  pending middleware-consolidation minor tag first would have flipped the packet to
+  append-only — preflight verified it was never cut, so the v3 breaking surface
+  absorbs that pending minor floor into the module's **first tag**.
+- **Tag floors: first tags, breaking-vintage.** `features/authorization` +
+  `features/authorization/stores/{pgx,turso}` are all first tags; pre-`v1` breaking
+  is expected under Go pre-release semantics, so each carries a breaking-vintage
+  first tag (deliberate `v1.0.0` later, not on this cut). `examples/auth-cms` (proof
+  host) is never tagged.
+- **Breaking changes distinguish SEMANTIC from source-only rename** (the acceptance
+  criterion; full taxonomy in RELEASING.md). SEMANTIC (access/decision meaning
+  changed): userset relations load-bearing at runtime (no more decorative
+  `group#admin`≈`group#member`), concrete-principal-only decisions, bounded
+  fail-closed evaluation (`ErrEvaluationLimit`→503), atomic revisioned
+  outcome-explicit mutations + single-winner last-owner, complete Lookup/Check
+  parity, effective-role provenance + `SameRoleGrantRemains`, mandatory actor/guard.
+  SOURCE-ONLY (compile break, no meaning change): `CheckRequest.Subject`→`.Principal`
+  (`Subject`→`PrincipalRef`; stored subject `SubjectRef`), `NewService`→
+  `Components{Service, SystemMutator}`, raw `Service` mutation methods removed,
+  `Lookup*` readers gained `limit int`, `GetSchema()`→`SchemaSnapshot` + new
+  `SchemaDigest()`, `role.Storer.ListEffectiveByResource` port addition.
+- **Consumer changes:** auth invitation Granter → `SystemMutator.GrantRelationship`
+  + stable `DeriveMutationID` (auth-cms `membership.go`); events feature needs NO
+  change (its `AuthorizeStream` is a host closure — a host's Check-delegating
+  closure adopts the `CheckRequest.Principal` rename only); auth-cms fully migrated
+  (`hostMutationGuard`, SystemMutator seed, session-only mutation routes removed —
+  proven by AZ3-4.1/4.2 tests + `testdata/az3-proof-transcript.md`); external host
+  recipe wires `Components` + a fail-closed host `MutationGuard` + a held
+  `SystemMutator`, all documented in `features/authorization/README.md` (AZ3-5.2).
+- **Jobs/work axis — authorization adds NOTHING.** The core imports `sdk` only
+  (go.mod verified; zero `capabilities/work`/`features/jobs`/`features/events`
+  imports); the v3 kernel emits no effects and owns no delivery/jobs table. The
+  settled `sdk/capabilities/work` (new first-tag module) + `features/jobs` (MINOR
+  floor) notes carry no authorization rider. Enforced permanently by the new
+  sixteenth guard.
+- **sdk graduation decision — RE-DEFER (recorded for owner; no code moved).** The
+  milestone fired the ARCHITECTURE protocol-table trigger ("authorizationv3 settles
+  its semantics"); re-running all three conjunctive gates, the authorization
+  check/decision vocabulary stays consumer-declared. Per gate: sdk/README.md
+  admission FAILS plurality (one honest implementation; host closures are arbitrary
+  composition, not second implementations); the five-point sdk-vs-logic test FAILS
+  points 1 (no multiple honest adapters) + 3 (the `storetest` suite is
+  feature-coupled, not sdk-generic); features/README.md §5 FAILS criterion 1 (no
+  real consumer in a SEPARATE module — only C2-default Check-only host closures) and
+  criterion 2 (not canonical-across-gopernicus). Recommendation: owner updates the
+  protocol-table row reason to "settled, but re-deferred: single implementation;
+  consumer-declared Check-only closures remain the only cross-feature usage" — the
+  table edit is owner-ratified separately.
+- **Sixteenth layering guard.** `guard-authorization-no-delivery-repo` (Makefile
+  G16), the `guard-auth-no-delivery-repo` twin pointed at `features/authorization`
+  migrations + repositories: greps `delivery_jobs`/`fenced_job_queue`/`job_queue`/
+  `job_schedules` and a bespoke `deliveryjob` package, both zero-hit today. `make
+  guard` now prints 16 guard lines and exits 0. No `go.work` change; the Makefile
+  `MODULES`/`STORE_MODULES` lists were untouched (authorization modules pre-existed
+  from v1).
+- **No never-logged breaking change was found** (no REOPEN-grade surprise). Every
+  v3 breaking change traces to a logged phase-0–3 execution entry. The one defect
+  surfaced (during AZ3-5.1) was a DOCUMENTATION error in the upgrade-runbook §7 text
+  (CREATE-IF-NOT-EXISTS cannot add v3 constraints to existing tables), corrected as
+  the AZ3-2.6 §7a ALTER-TABLE addendum — not a code reopen.
+
+**Consolidated premise-adaptation / deferred-item table** (swept from every phase
+execution log; ~40 accepted adaptations across AZ3-0.1…5.2, most resolved within the
+milestone — counts by phase: phase 0 ≈ 17, phase 1 ≈ 15, phase 2 ≈ 8, phase 3 ≈ 12,
+phase 4 ≈ 5, phase 5 ≈ 6). The load-bearing ones:
+
+| Kind | Item | Origin → disposition |
+|---|---|---|
+| adaptation | `CreateRelationship` keeps flat subject fields + `Subject()` accessor (not embedded `SubjectRef`) — kept ~31 tuple literals compiling | AZ3-0.1 → mechanical fold available, not done |
+| adaptation | `Compile`/`SchemaSnapshot` not root-re-exported at 0.2 | AZ3-0.2 → RESOLVED AZ3-1.2 (swapped into `NewService`/`GetSchema`) |
+| adaptation | depth-exhaustion silent-deny flipped to `ErrEvaluationLimit`; middleware 500→503 | AZ3-0.3 flag → RESOLVED AZ3-1.3 |
+| adaptation | `ApplyGuarded` Guard-closure seam so Actor+MutationGuard compose with no breaking port change | AZ3-0.4/0.5 → shipped |
+| adaptation | `Command.SchemaDigest` reconciles the phase-2 digest flag (metadata, digest-excluded) | phase-2 flag → RESOLVED AZ3-3.1 |
+| adaptation | existing adversarial/memstore fixtures encoded the decorative-relation bug; converted to exact usersets (old assertions WERE the bug) | AZ3-1.1 |
+| adaptation | `Repositories` gained variadic `...Option`; memstore leaves it empty | AZ3-2.2 flag → reconciled AZ3-2.5/phase-3 |
+| adaptation | pgx/turso atomicity via `FOR UPDATE` / `BEGIN IMMEDIATE` write-intent (auth-v3 precedent), never a service-level read-then-write | AZ3-2.3/2.4 |
+| adaptation | teardown reason via structured log + audit `Detail`; a receipt `reason` column deliberately REJECTED (would churn frozen migration parity) | AZ3-3.2 → flagged reviewer follow-up with cost stated |
+| adaptation | auth-cms wired an EXPLICITLY EMPTY `GuardianPolicy` at 3.4 | AZ3-3.4 flag → RESOLVED AZ3-4.1 (`hostMutationGuard` + project-narrowed guardian) |
+| adaptation | proof-schema group/doc + org/space types for userset/Through points; deterministic `DeriveMutationID` for a reproducible transcript | AZ3-4.2 (task-sanctioned) |
+| adaptation | AZ3-5.1 pgx-only Go boot; turso validated at SQL level via sqlite3 (AZ3-2.6 precedent) | AZ3-5.1 |
+| deferred | internal engine raw methods (`Create`/`Delete*`, `Assign`/`Unassign`) now production-orphaned, exercised only by their own package tests | AZ3-3.4 → AZ3-5.4 audit/cleanup candidate |
+| deferred | auth-cms `demo.go` still demonstrates RAW role listing (not the effective method) | AZ3-1.5 flag → later-task candidate |
+| deferred | stores READMEs / memstore doc still call `CONVERSION.md` a "draft" after the label flip | AZ3-5.2 flag → AZ3-5.7 remediation |
+| deferred | browser role-assignment surface (auth-cms) intentionally lost until AZADM | AZ3-4.1 → AZADM packet (blocked indefinitely — no authentication sensitive-operation seam exists) |
+| deferred | effects delivery + generic JSON admin API | 00-overview / packets 05, 06 (non-blocking follow-ups; effects must consume shared jobs/events vocabulary, never a bespoke authorization queue) |
+
+Verify (agent-run): `make guard` prints 16 guard lines and exits 0 (the new
+`guard-authorization-no-delivery-repo` runs last, zero-hit); `make check` "all checks
+passed". No `.claude/plans/` file was edited; no commit/tag/push. The sole
+code-adjacent change is the Makefile guard; all other edits are RELEASING.md +
+this NOTES.md entry (docs).
+
+## 2026-07-14 — authorization-v3 final adversarial and race audit (AZ3-5.4)
+
+Final adversarial/race audit of the authorizationv3 correctness kernel (plan
+`.claude/plans/authorizationv3/07-docs-and-closeout.md`, task AZ3-5.4; phases 0–4 closed,
+AZ3-5.1/5.2/5.3 complete). Outcome: **PASS — no overgrant, double mutation,
+system-capability leak, or shipped session-only mutation path surfaced; NO stop condition
+triggered; NO REOPEN**. Two in-task fixes made (one named regression test added; one
+disposition table swept); the two flagged production-orphan cleanups are reject-with-evidence
+(one blocked by a public-API cascade). Live confirmation legs re-run per dialect at
+`-count=2`, both green.
+
+**Placement of this audit record:** a dated NOTES.md section under the AZ3-5.3 entry — the
+option the task offers and the shape AZ3-5.5's gate can cite. (auth-v3 recorded AV3-9.5 in
+its plan execution log, but `.claude/plans/` is off-limits this task, so NOTES.md is the
+repo-convention home.)
+
+**The 13-item audit table** (item → evidence → disposition; every item is a finding):
+
+| # | Item | Evidence | Disposition |
+|---|---|---|---|
+| 1 | ignored `Subject.Relation`/`subject_relation` or hard-coded `member` | both stores' `reachableCTE` joins `r.subject_relation = reachable.arelation` exactly and carries the tuple relation into `arelation` (pgx/turso `relationships.go`); the only `"member"` literals are code COMMENTS (`model.go:122`, `relationship.go:194`); named: `TestExactUserset*`/adversarial usersets converted from the v1 decorative bug | SAFE — exact-userset, no member-defaulting; both dialects identical |
+| 2 | mutable schema references | `GetSchema` returns a deep `SchemaSnapshot` sharing no memory; named `TestNewServiceDoesNotRetainCallerSchema`, `TestServiceSchemaImmutableUnderConcurrentSourceMutation`, `TestCompileImmutableAfterSourceMutation`, `TestSchemaSnapshotAccessorsReturnCopies`, `TestCompileConcurrentReadsDoNotRaceEngine` (all `-race`) | SAFE |
+| 3 | read/count/write & delete/create mutation sequences | mutations apply inside ONE tx with write-intent lock — pgx anchors `FOR UPDATE` in canonical order (`mutations.go:106–133`), turso `BEGIN IMMEDIATE` serializes writers (`mutations.go`/`busy.go`); guard reads + evaluate + commit all inside the one critical section; no service-level read-then-write | SAFE — atomic |
+| 4 | decision/lookup divergence & partial list success | Check/Lookup parity seeds descendant walk from every granted root (`LookupResources` doc + `hierarchy_test.go`, `lookup_test.go`); limit exhaustion returns `ErrEvaluationLimit`, never a truncated list (`storetest/budget.go`, `oracle.go`); role enumeration agrees with `HasRole` (`TestEffectiveEnumerationAgreesWithHasRole`) | SAFE |
+| 5 | unbounded recursion/fan-out/batches | engine budget charged per dimension — `MaxThroughDepth`/`MaxGraphStates`/`MaxRelationTargets`/`MaxBatchSize`(→`MaxAffectedRows`)/`MaxLookupResults`; named `TestBudgetThroughDepthExhaustionIsError`, `TestBudgetGraphStatesExhaustion`, budget/oracle storetest; SQL group-expansion CTE bounded by finite universe + `UNION` dedup (cycle-terminating) | SAFE |
+| 6 | missing actor/guard; SystemMutator-from-HTTP named regression | `TestHostSystemMutatorHeldApartFromService` covers the SERVICE surface only (no method returns `*SystemMutator`); INSUFFICIENT for the HTTP-route dimension → **ADDED** `TestNoSessionOnlyAuthorizationMutationRoute` (drives `registerDemoRoutes` over httptest: retired mutation paths 404, retained read route 405) | FIXED (test added) |
+| 7 | MutationID replay/payload mismatch & revision gaps | `applyTx` steps 3–6: dedup under lock, `ErrPayloadMismatch`, `validateDeps` stale-revision, `ErrStaleRevision`, replay→`Replayed=true` no bump; named `TestGrantRelationshipExactReplay`, `TestUnassignRoleExactReplay`, `TestStaleRevisionReloadRetryProtocol`, `TestReplayIsIndependentOfOutcome`, `TestGrantReplaySurvivesSchemaChange` | SAFE |
+| 8 | last-owner race & effective global role fallback | guardian invariant enforced atomically inside the scope lock; named `TestConcurrentTwoOwnerRevokeRounds`/`LastOwnerGuardianScenarios`/`GuardianEstablishesMinimum` (storetest, live `-count=2`); global-role fallback in `rolesvc.HasRole` + `ListEffective` (`TestEffectiveEnumerationAgreesWithHasRole`) | SAFE |
+| 9 | dependency scopes locked without canonical order / revisions unvalidated | `lockSet` sorted by `ScopeKey.Canonical()` (global lock order, no deadlock); absent anchors materialized at rev 0; `validateDeps` re-reads under lock (`mutations.go:121–158`) | SAFE |
+| 10 | effects/admin code pulled into the v3 kernel | core `go.mod` requires `sdk` ONLY (no `features/events`/`features/jobs`/`capabilities/work`); sole hit is a naming-precedent COMMENT in `memstore.go`; enforced permanently by guard G16 | SAFE |
+| 11 | unsafe logs/metrics & unbounded IDs as metric labels | ZERO metrics/prometheus in the kernel; warn logs carry only `mutation_id` (opaque random token), `operation`, `scope_kind`, `reason`, `error` — never `scope_id`/subject/principal (`mutation_service.go:331,359`); `RequirePermission` returns generic messages, logs no principal; `AuditEvent` doc explicitly forbids sinks turning IDs into labels | SAFE |
+| 12 | shipped session-only authorization mutation route | AZ3-4.1 removed POST `/demo/roles/{assign,unassign}` + `/demo/admin/bootstrap`; `registerDemoRoutes` registers GET reads only; now PERMANENTLY pinned by the new `TestNoSessionOnlyAuthorizationMutationRoute` | SAFE (now regression-covered) |
+| 13 | goroutines started by authorization Register | `Register` logs one line and registers no routes/goroutines; the only `go func` in the module is `storetest/mutations.go` (the concurrency conformance harness, test code) | SAFE |
+
+**Deferral dispositions:**
+
+- **(a) production-orphaned internal engine raw methods** (`authorizersvc.Service.CreateRelationships`/`DeleteResourceRelationships`/`DeleteRelationship`/`DeleteByResourceAndSubject`; `rolesvc.Service.AssignRole`/`UnassignRole`, flagged AZ3-3.4) — **REJECT-WITH-EVIDENCE, keep (safely deferred).** They are `internal/logic`, NOT re-exported by the root `Service` (confirmed: root `Service` method list uses none of them), so structurally unreachable from any host/HTTP code — reachability is PINNED by `TestLegacyRawMutationMethodsRemovedFromService` (module) + `TestHostAuthorizationHasNoRawWriteOrSystemActor` (host). Removing them is NOT clean dead-code removal: (1) `Service.CreateRelationships` is the SOLE live consumer of the PUBLIC `authorization.Config.IDs` field (`s.ids.MustGenerate()` at `authorizersvc/service.go:403`) — deleting it orphans a documented public config field, a breaking public-API change beyond the audit's sanctioned scope and NOT in the AZ3-5.3 release inventory; (2) `rolesvc.AssignRole/UnassignRole` are used to SEED still-live `HasRole`/`ListEffective` tests, so removal means rewriting seed sites in non-orphan tests. Complete removal (incl. the public `Config.IDs` decision) is REOPEN-grade cleanup for a separate owner-gated change, not an audit micro-fix.
+- **(b) auth-cms `demo.go` RAW role listing** (`GET /demo/audit` uses `ListRoleAssignmentsByResource`, flagged AZ3-1.5) — **REJECT-WITH-EVIDENCE, keep (safely deferred).** The raw direct-scope listing is a DELIBERATE, README-documented teaching demonstration of the raw-vs-effective distinction (README lines ~119-121, 589-590, 741-742 narrate the intentional HasRole-fallback-vs-direct-readback contrast). Swapping to `ListEffectiveRoleGrantsByResource` ripples into that README narrative and removes an intentional teaching contrast — it is neither purely surgical nor an unambiguous improvement, so it is not a safe in-task swap. It is a read-only listing (no overgrant/security concern). Remains an AZ3-5.7 remediation / owner call.
+- **(c) anything else flagged "AZ3-5.4"** — none beyond (a). (The AZ3-5.2 "CONVERSION.md draft" stores-README staleness is flagged for AZ3-5.7, not this audit.)
+
+**Fixes made (in-task):**
+- `examples/auth-cms/cmd/server/route_no_mutation_test.go` (NEW) — `TestNoSessionOnlyAuthorizationMutationRoute`, the item-6/12 named permanent regression test (in-process delivery mode to construct a real `auth.Service`; drives `registerDemoRoutes` over httptest asserting retired mutation paths 404 + retained read route 405). Green under `-race`.
+
+**Named SystemMutator-HTTP regression situation:** `TestHostSystemMutatorHeldApartFromService`
+covers the Service surface (SystemMutator not recoverable FROM the Service). The HTTP-route
+dimension ("no ordinary route invokes a directly-held SystemMutator" / "no session-only
+mutation route ships") was previously proven only by AZ3-4.1's one-time boot-and-drive
+(404s), not a permanent test — now closed by the added `TestNoSessionOnlyAuthorizationMutationRoute`.
+
+**Live confirmation legs (auth-v3 recipe, `-count=2`):**
+- pgx — fresh C-collation DB `authv3_az354` on `authv3-pg` via `POSTGRES_TEST_DSN`, filter
+  `TestConformance/.*/Concurrent`: both iterations PASS (all 8 Concurrent subtests, `ok 2.837s`);
+  DB dropped after. Container left running.
+- turso — `-tags=integration`, `TURSO_DATABASE_URL=http://127.0.0.1:8080` on `authv3-libsql`,
+  same filter `-count=2`: both iterations PASS (all 8 Concurrent subtests, `ok 2.843s`).
+  Container left running.
+
+Verify (agent-run): `features/authorization` build/vet/`test -race` → ok; `stores/pgx`
+build/vet/test → ok; `stores/turso` build/vet/`vet -tags=integration`/test → ok;
+`examples/auth-cms` build/vet/`test -race` → ok (`cmd/server` 29.3s, new test included);
+`make check` "all checks passed"; `make guard` 16 lines exit 0; both live `-count=2` legs
+above green. No `.claude/plans/` edit; no commit/tag/push. Sole code change: the one new
+auth-cms regression test file.
+
+## 2026-07-15 — auth-adopter-hardening CLOSED (AAH-1..6): invitation operation integrity, host authorization, store preflight, canonical collation
+
+The pre-tag breaking hardening packet that closes the framework gaps the first
+authorization-v3/authentication-v3 adopter (Segovia's v2 plan) exposed, folded into
+the same untagged auth-v3 cut (plan `.claude/plans/auth-adopter-hardening/plan.md`,
+task prefix `AAH`; owner ratified D1–D5 in-session 2026-07-15, D3 = issuance-time
+authority). Preflight re-confirmed zero `features/authentication*`/`features/authorization*`
+tags (`git tag -l` empty), so the public-API and canonical-migration edits carried no
+append-only constraint. AAH-6 is this closeout (docs + verification transcript).
+
+**What shipped (AAH-1..5):**
+
+- **Structured, operation-scoped, fail-loud `auth.Granter` (D1/D2).** `Grant(ctx,
+  GrantInput) error` replaces the six-positional-string method;
+  `GrantInput{OperationID, ResourceType, ResourceID, Relation, SubjectType, SubjectID}`.
+  OperationID = the persisted invitation row id for accept/resolve-on-registration
+  (retry reuses it; a later invitation row for the same tuple gets a distinct one);
+  direct-add mints a high-entropy id from the unconditional secret generator, never
+  `Config.IDs`. Success (nil) means the EXACT relation was applied or already exactly
+  present; different-relation / invariant refusal / missing resource / infra error all
+  fail loud — no implicit replace.
+- **Required relation-aware `InviteCheck` + live-session invitation routes (D3).**
+  `Config.InviteCheck` is REQUIRED with a `Granter` (nil → `ErrInviteCheckRequired`;
+  `InviteCheck` without `Granter` → `ErrInviteCheckWithoutGranter`). HTTP create/list
+  call it after live-session validation, principal resolution, and parsing; host-direct
+  `Service` methods skip HTTP policy. All authenticated invitation routes (create,
+  resource-list, mine, accept, cancel, resend) moved `RequireUser` → `RequireLiveSession`;
+  public decline unchanged. Authority is issuance-time — an issued invitation is a durable
+  expiring capability and acceptance does not re-check inviter authority.
+- **auth-cms reference composition (AAH-3).** `relationshipGranter` takes `GrantInput`,
+  checks host resource existence before mutating (`sdk.ErrNotFound`), derives
+  `DeriveMutationID("auth-cms/invitation-grant", OperationID, tuple…)`, and maps the
+  receipt (applied/no_change → nil; semantic_conflict/invariant_blocked/default →
+  `sdk.ErrConflict`). `hostInviteCheck` is relation-aware (platform admin may grant owner;
+  non-admin owner-invite denied; member-invite and list require `manage_access`).
+- **Dual-dialect store boot probes (D4).** Both `features/authentication/stores/{pgx,turso}.Repositories(db)`
+  now return `(auth.Repositories, error)`, probing all 13 canonical tables (pgx via
+  `to_regclass`, turso via `sqlite_master`) and erroring with the missing table + the
+  `authentication` migration source, wrapping `sdk.ErrNotFound`; constructors never apply
+  schema. 15 ports map onto 13 tables (PasswordResets/CredentialMutations reuse existing tables).
+- **Canonical pgx collation fold (D5).** Per-column `COLLATE "C"` folded into canonical
+  CREATEs for the contractual keyset/derived-key text columns: authentication
+  `service_accounts.id` / `api_keys.id` / `security_events.id` / `invitations.id`;
+  authorization `iam_relationships.relationship_id` + all five `iam_roles` derived-key
+  columns. Turso migrations unchanged; display/content columns untouched.
+
+**AAH-5 findings (recorded for the next maintainer):**
+
+- **Recursion-column exclusion (SQLSTATE 42P21).** The `iam_relationships` recursion
+  columns (`resource_type`, `resource_id`, `relation`, `subject_type`, `subject_id`,
+  `subject_relation`) are DELIBERATELY left uncollated. Collating them raises SQLSTATE
+  42P21 ("collation mismatch in the recursive term") in the recursive reachable CTE —
+  the anchor term seeds default-collation parameters, so a `COLLATE "C"` recursion column
+  cannot union with them. Those queries need only deterministic order/equality, which any
+  deterministic collation supplies; only the byte-order keyset/derived-ordering columns
+  need the explicit `C`.
+- **Ledger reset after a canonical checksum change.** Folding `COLLATE "C"` into a
+  canonical CREATE changes that migration file's checksum, so a database whose
+  `schema_migrations` ledger recorded the pre-fold checksum fails on a checksum conflict.
+  The fix is to reset that database's schema (`DROP SCHEMA public CASCADE; CREATE SCHEMA
+  public;`) and re-migrate — never weaken a test. The `aah_c` proof DB was reset/re-migrated
+  before this closeout run; no suite hit a checksum conflict.
+- **Greenfield collation caveat (documented in RELEASING.md + the pgx README).**
+  `CREATE ... IF NOT EXISTS` no-ops on a pre-existing table, so a host upgrading from a
+  pre-v3 schema does NOT retroactively gain the per-column collation — hosts own their own
+  schema evolution (canonical sets ship the final schema only). A `C`-locale database
+  remains a supported belt-and-suspenders posture.
+
+**AAH-6 docs changed:** `features/authentication/README.md` (invitation section: structured
+Granter + operation-ID semantics + strengthened contract + required InviteCheck +
+issuance-time authority + live-session routes; store constructor error return; collation
+note re-scoped to belt-and-suspenders), `features/authentication/stores/pgx/README.md` +
+its `postgres.go` package comment (five-store / `0001–0005` / plaintext claims → 15-port /
+13-table / `0001–0013` / digest-at-rest / boot-probe / collation-contract), the turso
+package comment already reflected v3 (no README exists), `features/authorization/README.md`
+(invitation-grant recipe → operation-scoped derivation + receipt inspection; the stale
+tuple-derived comment corrected), `examples/auth-cms/README.md` (InviteCheck collaborator
+row), and `RELEASING.md` (new AAH keyed breaking-change note + corrected the authorization-v3
+note's "tuple identity IS the operation identity" line). No new doc files.
+
+**Live-verification matrix (AAH-6 closeout, agent-run 2026-07-15):**
+
+- `make check` → "all checks passed" (36 modules vet/build/test + integration-tag vet +
+  16 guards); `make guard` → all 16 guard lines, exit 0.
+- `POSTGRES_TEST_DSN=…/aah_c TURSO_DATABASE_URL=http://127.0.0.1:8080 TURSO_AUTH_TOKEN=''
+  make test-stores` (containers `authv3-pg` C-collation `aah_c` + `authv3-libsql`) → all
+  ten store legs `ok`: cms pgx 2.858s, **authentication pgx 13.826s**, jobs pgx 12.817s,
+  cms turso 0.185s, **authentication turso 1.740s**, jobs turso 0.176s, events pgx 0.580s,
+  events turso 0.175s, **authorization pgx 9.933s**, authorization turso 0.182s. No
+  `schema_migrations` checksum conflict (ledger already reset/re-migrated).
+- `cd examples/auth-cms && go test -count=1 ./...` → all seven packages `ok` (cmd/server
+  11.147s — the adversarial invitation proofs: exact-retry replay, revoke-then-reinvite
+  restore, different-relation refusal, deleted-resource refusal, editor→owner escalation
+  denial).
+
+No commit, tag, or push. The uncommitted worktree is the milestone diff; release gates
+(LICENSE, turso CI secrets, committing the tree, PR, tags per RELEASING.md floors) remain
+owner-owned.
+
+## 2026-07-16 — authorization writes split into baseline state and optional guarded mutations
+
+The authorization-v3 closeout above is historical context, not the current
+universal-write recommendation. ReBAC tuples are ordinary application state by
+default. `NewService` now returns the separately held
+`Components.RelationshipWriter` whenever relationships + schema are configured,
+including with `Repositories.Mutations == nil`. It provides schema-valid create,
+exact/idempotent delete, resource cleanup, and atomic `SetRelationTargets` desired
+state. The memstore, pgx, and Turso stores conform; pgx serializes one
+resource+relation with an advisory transaction lock and Turso uses retrying
+`BEGIN IMMEDIATE`.
+
+The existing `Service` guarded commands and `SystemMutator` remain unchanged as
+the opt-in high-integrity path for atomic authority dependencies, revisions,
+guardian invariants, receipts, durable replay, and audit. Ordinary auth-cms member
+invitations now use the baseline writer and ignore `OperationID`; the separately
+named guarded adapter demonstrates sensitive invitation posture. See the current
+decision table in `features/authorization/README.md` and the superseding upgrade
+note in `features/authorization/stores/UPGRADE.md`.
+
+## 2026-07-18 — ui-goth GOTH-7.4: adoption/theming/security/handoff docs written
+
+Documented the real shipped `ui/goth` adopter surface (GOTH-7.4). No Go/`.templ`/
+asset/generated file changed except one new host test that proves the load-bearing
+snippets; the rest is docs.
+
+- **`ui/goth/README.md`** gained **§11 Adoption, theming, security, and handoff
+  recipes** (install/wiring, profiles + asset route, the `Requirements`→CSP formatter
+  recipe, the `components/` layer API, the "forgot to mount the asset route" failure
+  mode + boot-time `Manifest.Assets()` reachability self-check, the `views/goth`
+  adapter + `HTMLPolicy` recipe, the HTMX migration trigger + settled hidden-input CSRF,
+  the `views/templ`→`views/goth` tag posture, the SRI + CDN-relocation caveats, and the
+  GPS-token brand override + Segovia/GPS360 handoff — no Segovia code imported). §1–§10
+  frozen contract untouched.
+- **Gate-C GOTH-7.4 obligations discharged in §11:** the asset-route self-check pattern
+  (§11.5), the SRI CDN-relocation caveat (§11.9). The `Requirements`→CSP-directive-string
+  formatter is documented as the sanctioned **host-side recipe** (proven in a test), NOT
+  added as a new exported kit helper — a first-class helper would reopen the GOTH-0.3
+  frozen surface and re-enter Gate B, so it is recorded as a deferred owner decision.
+- **`RELEASING.md`** recorded the gate-b convention: any `ui/goth` `Requirements`-surface
+  change is an adopter-facing upgrade note even at semver-patch.
+- **Doc lags fixed:** `ui/goth/assets/THIRD_PARTY_NOTICES.md` (`views/templ`→`views/goth`,
+  rename now applied not pending); `features/authentication/README.md`,
+  `examples/auth-cms/README.md`, `examples/cms/README.md`, `features/README.md`,
+  `features/events/README.md` stale `views/templ`/`authtempl`/`cmstempl`/`.templ`-location
+  references corrected to the GOTH surface. `ui/README.md` gained an adoption pointer to
+  §11; `ARCHITECTURE.md` gained a one-line `Requirements`→CSP/`HTMLPolicy` ownership note.
+- **Snippet proof:** `examples/minimal/cmd/server/goth_doc_snippets_test.go` compiles and
+  runs the two Phase-7-learning recipes (CSP formatter → `style-src 'self'` with no
+  remote/nonce/unsafe; asset-reachability self-check passes wired, fails when the asset
+  route is unmounted). The host-wiring + HTMX + HTMLPolicy snippets are proven by the
+  existing GOTH-7.2/7.3 proof tests.

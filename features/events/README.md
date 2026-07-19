@@ -202,7 +202,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// [elided: auth Service build + authSvc.Register(mount) — see the twin]
 
 	if err := cms.Register(mount, cmsRepos, cms.Config{
-		Views:           cmstempl.New(),
+		Views:           cmsViews, // cmsgoth.New(bundle) — the ui/goth adapter
 		Cache:           pageCache,
 		AdminMiddleware: []web.Middleware{authSvc.RequireUser},
 		// [elided: Types/Templates/Mailer fields — see the twin]

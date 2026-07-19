@@ -1,0 +1,129 @@
+package goth
+
+import (
+	"github.com/gopernicus/gopernicus/features/cms"
+	"github.com/gopernicus/gopernicus/ui/goth/components/forms"
+	"github.com/gopernicus/gopernicus/ui/goth/components/layouts"
+	"github.com/gopernicus/gopernicus/ui/goth/primitives"
+)
+
+// entryFormBody is the generated entry editor: spine inputs plus one control per
+// the content type's FieldDefs, keyed off each field's Kind. One form renders every
+// content type. It composes forms.FormField over the ui/goth Input/Textarea/
+// NativeSelect primitives; a failed submit re-renders with FormError and the
+// user's values (no field is a secret, so all repopulate).
+templ entryFormBody(m cms.EntryFormModel) {
+	@layouts.PageHeader(layouts.PageHeaderProps{Title: m.Heading})
+	@formError(m.FormError)
+	<form method="post" action={ templ.SafeURL(m.Action) } data-slot="cms-entry-form">
+		@forms.FormField(forms.FormFieldProps{Label: "Title", For: "title"}) {
+			@primitives.Input(primitives.InputProps{Base: primitives.Base{ID: "title"}, Name: "title", Value: m.Title})
+		}
+		@forms.FormField(forms.FormFieldProps{Label: "Excerpt", For: "excerpt"}) {
+			@primitives.Textarea(primitives.TextareaProps{Base: primitives.Base{ID: "excerpt"}, Name: "excerpt", Rows: 2, Value: m.Excerpt})
+		}
+		@forms.FormField(forms.FormFieldProps{Label: "Body (markdown)", For: "body"}) {
+			@primitives.Textarea(primitives.TextareaProps{Base: primitives.Base{ID: "body"}, Name: "body", Rows: 12, Value: m.Body})
+		}
+		@forms.FormField(forms.FormFieldProps{Label: "Author", For: "author"}) {
+			@primitives.Input(primitives.InputProps{Base: primitives.Base{ID: "author"}, Name: "author", Value: m.Author})
+		}
+		if len(m.Templates) > 1 {
+			@forms.FormField(forms.FormFieldProps{Label: "Template", For: "template"}) {
+				@primitives.NativeSelect(primitives.NativeSelectProps{Base: primitives.Base{ID: "template"}, Name: "template"}) {
+					for _, o := range m.Templates {
+						@selectOption(o)
+					}
+				}
+			}
+		}
+		if m.Hierarchical {
+			@forms.FormField(forms.FormFieldProps{Label: "Parent", For: "parent_id"}) {
+				@primitives.NativeSelect(primitives.NativeSelectProps{Base: primitives.Base{ID: "parent_id"}, Name: "parent_id"}) {
+					@primitives.NativeSelectOption(primitives.NativeSelectOptionProps{Value: "", Selected: m.ParentID == ""}) {
+						(none)
+					}
+					for _, o := range m.Parents {
+						@selectOption(o)
+					}
+				}
+			}
+			@forms.FormField(forms.FormFieldProps{Label: "Menu order", For: "menu_order"}) {
+				@primitives.Input(primitives.InputProps{Base: primitives.Base{ID: "menu_order"}, Type: primitives.InputNumber, Name: "menu_order", Value: menuOrderStr(m.MenuOrder)})
+			}
+		}
+		for _, f := range m.Fields {
+			@fieldControl(f)
+		}
+		@forms.FormField(forms.FormFieldProps{Label: "Status", For: "status"}) {
+			@primitives.NativeSelect(primitives.NativeSelectProps{Base: primitives.Base{ID: "status"}, Name: "status"}) {
+				@primitives.NativeSelectOption(primitives.NativeSelectOptionProps{Value: "draft", Selected: m.Status == "draft"}) {
+					draft
+				}
+				@primitives.NativeSelectOption(primitives.NativeSelectOptionProps{Value: "published", Selected: m.Status == "published"}) {
+					published
+				}
+			}
+		}
+		if len(m.Terms) > 0 {
+			<fieldset data-slot="cms-entry-terms">
+				<legend>Terms</legend>
+				for _, t := range m.Terms {
+					<label data-slot="cms-entry-term">
+						@primitives.Checkbox(primitives.CheckboxProps{Name: "term_id", Value: t.ID, Checked: t.Checked})
+						{ t.Label }
+					</label>
+				}
+			</fieldset>
+		}
+		@forms.FormActions(forms.FormActionsProps{}) {
+			@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit}) {
+				Save
+			}
+		}
+	</form>
+}
+
+// formError renders the single form-level error (validation/collision) as a
+// destructive alert when present.
+templ formError(msg string) {
+	if msg != "" {
+		<p role="alert" data-slot="cms-form-error">{ msg }</p>
+	}
+}
+
+// selectOption renders one <option> from a cms.SelectOption.
+templ selectOption(o cms.SelectOption) {
+	@primitives.NativeSelectOption(primitives.NativeSelectOptionProps{Value: o.Value, Selected: o.Selected}) {
+		{ o.Label }
+	}
+}
+
+// fieldControl renders one custom-field input, choosing the control by Kind
+// (richtext→textarea, number→number input, bool→checkbox, date→date input,
+// image/relation→select, default→text input).
+templ fieldControl(f cms.FieldInput) {
+	@forms.FormField(forms.FormFieldProps{Label: f.Label, For: "field_" + f.Key, Required: f.Required, Description: f.Help}) {
+		switch f.Kind {
+			case "richtext":
+				@primitives.Textarea(primitives.TextareaProps{Base: primitives.Base{ID: "field_" + f.Key}, Name: "field_" + f.Key, Rows: 6, Value: f.Value, Required: f.Required})
+			case "number":
+				@primitives.Input(primitives.InputProps{Base: primitives.Base{ID: "field_" + f.Key}, Type: primitives.InputNumber, Name: "field_" + f.Key, Value: f.Value, Required: f.Required})
+			case "bool":
+				@primitives.Checkbox(primitives.CheckboxProps{Base: primitives.Base{ID: "field_" + f.Key}, Name: "field_" + f.Key, Value: "true", Checked: f.Checked})
+			case "date":
+				@primitives.Input(primitives.InputProps{Base: primitives.Base{ID: "field_" + f.Key}, Type: primitives.InputDate, Name: "field_" + f.Key, Value: f.Value, Required: f.Required})
+			case "image", "relation":
+				@primitives.NativeSelect(primitives.NativeSelectProps{Base: primitives.Base{ID: "field_" + f.Key}, Name: "field_" + f.Key, Required: f.Required}) {
+					@primitives.NativeSelectOption(primitives.NativeSelectOptionProps{Value: ""}) {
+						(none)
+					}
+					for _, o := range f.Options {
+						@selectOption(o)
+					}
+				}
+			default:
+				@primitives.Input(primitives.InputProps{Base: primitives.Base{ID: "field_" + f.Key}, Name: "field_" + f.Key, Value: f.Value, Required: f.Required})
+		}
+	}
+}

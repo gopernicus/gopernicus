@@ -1,0 +1,28 @@
+package primitives
+
+// Resizable (P61, family F4). The caller composes a primary ResizablePane, a
+// ResizableHandle, and a secondary ResizablePane. The root binds gothResizable
+// (inert on StylesOnly — the no-JS baseline renders the server-owned split); the
+// controller reads drag/keyboard input and writes --goth-resize-basis via the CSSOM
+// (never a server-rendered style attribute).
+templ Resizable(p ResizableProps) {
+	<div class={ resizableClass(p) } { resizableAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// ResizablePane is one scrollable content region. Compose the primary pane first,
+// then the handle, then the secondary pane; component CSS sizes the first pane from
+// --goth-resize-basis.
+templ ResizablePane(p ResizablePaneProps) {
+	<div class={ resizablePaneClass(p) } { resizablePaneAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// ResizableHandle is the role=separator between the panes. It is focusable and
+// carries aria-valuenow/min/max + aria-controls; the controller updates
+// aria-valuenow as the split changes.
+templ ResizableHandle(p ResizableHandleProps) {
+	<div class={ resizableHandleClass(p) } { resizableHandleAttrs(p)... }></div>
+}

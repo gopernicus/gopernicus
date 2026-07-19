@@ -8,6 +8,11 @@ examples/*/server
 *.db
 *.db-*
 
+# ui/goth Node build toolchain — repository-local, never shipped to Go consumers.
+# The committed package.json/package-lock.json + compiled assets/dist stay tracked;
+# only the installed dependency tree is ignored.
+ui/goth/tools/node_modules/
+
 # macOS
 .DS_Store
 

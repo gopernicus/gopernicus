@@ -1,0 +1,27 @@
+package primitives
+
+// Tooltip (P48, family F4). See tooltip.go for the no-JS baseline (CSS hover/
+// focus-within reveal + aria-describedby) and the gothTooltip enhancement. The
+// caller composes TooltipTrigger and TooltipContent as children. The root is an
+// inline-block span so the tooltip sits alongside its trigger in text flow.
+templ Tooltip(p TooltipProps) {
+	<span class={ tooltipClass(p) } { tooltipAttrs(p)... }>
+		{ children... }
+	</span>
+}
+
+// TooltipTrigger is the focusable control the tooltip describes. Set
+// TooltipTriggerProps.Describedby to the TooltipContent id.
+templ TooltipTrigger(p TooltipTriggerProps) {
+	<button class={ classNames("goth-tooltip-trigger", p.Class) } { tooltipTriggerAttrs(p)... }>
+		{ children... }
+	</button>
+}
+
+// TooltipContent is the role="tooltip" region; set its Base.ID and reference it
+// from TooltipTrigger.Describedby. Its content is textual (non-interactive).
+templ TooltipContent(p TooltipContentProps) {
+	<span class={ classNames("goth-tooltip-content", p.Class) } { tooltipContentAttrs(p)... }>
+		{ children... }
+	</span>
+}

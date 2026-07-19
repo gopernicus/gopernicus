@@ -1,0 +1,8 @@
+package primitives
+
+// Progress (P20, family F1) renders a native <progress>. Determinate bars carry
+// value/max (native geometry, no inline style); an indeterminate bar omits value.
+// The text child is the pre-<progress> fallback for unsupporting agents.
+templ Progress(p ProgressProps) {
+	<progress class={ progressClass(p) } { progressAttrs(p)... }>{ p.fallbackText() }</progress>
+}

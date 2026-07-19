@@ -257,3 +257,244 @@ trusted mutation is a separately held capability.
 ## Execution log
 
 Append only during execution.
+
+### 2026-07-14 — AZ3-0.1 — exact principal, subject, userset, decision, and error vocabulary — PASS
+
+Outcome: vocabulary frozen. Decision requests structurally cannot carry a
+userset (no field exists); stored subject relation is a canonical non-pointer
+`string`, removing the nullable-erase hazard.
+
+- New public vocabulary: `relationship.SubjectRef{Type, ID, Relation}`
+  (comparable; `IsUserset()`, `String()`, `Validate()`; `RelationTarget` is now
+  an alias of it), `relationship.ValidateRefField`/`MaxRefFieldLen`/
+  `ErrInvalidRef` (non-empty, ≤256 bytes, UTF-8, no control chars, no
+  lowercasing), `authorizersvc.PrincipalRef{Type, ID}` replacing `Subject`
+  (`CheckRequest.Subject` → `.Principal`), root re-exports
+  `authorization.PrincipalRef`/`SubjectRef` + `PrincipalFrom(identity.Principal)`.
+  Removed `authorization.Subject` and `ErrUsersetSubjectOnRole` (role methods
+  take concrete `PrincipalRef`; userset rejection is structural).
+- New `codes.go`: reasons `invalid_request`, `unknown_model_symbol`, `denied`,
+  `evaluation_limit`, `stale_revision`, `invariant_conflict`,
+  `mutation_payload_mismatch`, `infrastructure_failure`; sentinels per default
+  #9 (`ErrEvaluationLimit` wraps `sdk.ErrUnavailable`; stale/invariant/mismatch
+  wrap `sdk.ErrConflict`; invalid/unknown wrap `sdk.ErrInvalidInput`). Feature-
+  local mapper seam `RespondError`/`ReasonFor` over
+  `web.RespondJSONDomainError`; sdk mapper untouched.
+- Files: domain/relationship/relationship.go; internal/logic/authorizersvc/
+  {model,service,lookup,middleware}.go; authorization.go; codes.go (new);
+  stores/{pgx,turso}/relationships.go, memstore, storetest, examples/auth-cms
+  (mechanical adaptation — pointer helpers deleted). New tests:
+  domain/relationship/subjectref_test.go, authorizersvc/principalref_test.go,
+  codes_test.go.
+- Tests (re-run independently by orchestrator, `-count=1`):
+  TestSubjectRefUsersetDistinct (group / group#member / group#admin never
+  equal), TestSubjectRefValidateInvalid, TestCreateRelationshipInvalid,
+  TestPrincipalRefInvalid, TestCheckRequestInvalidRejectedAtBoundary,
+  TestVocabularyErrorKinds, TestVocabularyReasonFor — all PASS.
+- Verify (agent ran; orchestrator re-ran all): core
+  `go build/vet/test ./...` green; stores/pgx and stores/turso
+  `go build/vet/test ./...` green (hermetic); examples/auth-cms
+  `go build ./... && go test ./...` green; `make guard` green.
+- Premise adaptations: (1) `CreateRelationship` keeps flat subject fields with
+  `SubjectRelation *string`→`string` plus a `Subject() SubjectRef` accessor,
+  rather than embedding `SubjectRef` — kept ~31 tuple literals compiling;
+  folding to an embedded field is a mechanical follow-up if wanted. (2)
+  Decision-boundary validation wired now (Check/CheckBatch/LookupResources
+  fail closed on malformed refs) since acceptance requires rejection today.
+  (3) Pre-existing gofmt import-order flag in auth-cms main.go left untouched
+  (unrelated).
+
+### 2026-07-14 — AZ3-0.2 — strict schema compiler and immutable snapshot contract — PASS
+
+Outcome: strict compiler + immutable snapshot + deterministic digest landed in
+`authorizersvc`; runtime wiring deliberately deferred to AZ3-1.2 (`NewService`
+still calls `ValidateSchema`; the compiler is exercised by its own tests).
+
+- New: internal/logic/authorizersvc/compiler.go — `Compile(Schema)
+  (*CompiledSchema, error)`, `CompiledSchema{Digest(), EncodingVersion(),
+  Snapshot()}`, `SchemaCompileError` (sorted errors, unwraps
+  `sdk.ErrInvalidInput`), `SchemaEncodingVersion =
+  "gopernicus.authorization.schema/1"`; digest = SHA-256(version prefix ||
+  0x00 || canonical length-prefixed bytes), lowercase hex. Rejects empty
+  names/rules, duplicate declarations after composition, ambiguous checks
+  (both/neither Direct/Through), unknown direct/userset relations, userset
+  targets on navigational relations, Through permission absent from any
+  target, relations with no subjects, genuine cycles, unsatisfiable graphs;
+  accepts the sanctioned self-hierarchy. Direct-vs-navigational
+  classification is derived from compiled use and folded into the digest.
+- New: snapshot.go — `SchemaSnapshot` deep-copy read-only projection; internal
+  compiled maps never returned. New tests: compiler_test.go,
+  immutable_test.go. Reused existing schema_validator.go cycle/unsatisfiable/
+  through-target helpers (no duplication).
+- Tests (orchestrator re-ran `-race -count=1`): TestCompileAcceptsValidSchemas,
+  TestCompileClassifiesNavigationalRelation, TestCompileRejects (13 cases),
+  TestCompileErrorsSortedDeterministic,
+  TestSchemaDigestDeterministicAcrossIterationOrder,
+  TestSchemaDigestNormalizesDeclarationOrder, TestSchemaDigestChangesWithPolicy,
+  TestCompileImmutableAfterSourceMutation,
+  TestSchemaSnapshotAccessorsReturnCopies,
+  TestCompileConcurrentReadsDoNotRaceEngine — all PASS.
+- Verify (agent + orchestrator re-run): module `go build/vet/test -race ./...`
+  green; `make guard` exit 0; stores/pgx, stores/turso, auth-cms hermetic
+  builds unaffected (no consumed public type changed).
+- Premise adaptations: (1) "duplicate declarations after composition" =
+  exact-duplicate AllowedSubjects/AnyOf entries post-`NewSchema` merge;
+  encoder still sorts+dedupes defensively. (2) "resolved defaults included" =
+  the derived relation classification folded into canonical bytes (the DSL has
+  no other defaulted fields today). (3) "meaningful as a userset" = Type is a
+  declared resource type and Relation exists on it (R1: nested membership in,
+  no operators). (4) Added rejection of relations with zero allowed subjects
+  (unsatisfiable-declaration case). (5) `Compile`/`SchemaSnapshot` not
+  root-re-exported yet — AZ3-1.2 owns the swap into `NewService`/`GetSchema`.
+
+### 2026-07-14 — AZ3-0.3 — evaluation limits and construction matrix — PASS
+
+Outcome: single depth knob replaced by resolved semantic `EvaluationLimits`
+with construction-time validation, exhaustion error semantics, and a full
+construction matrix. Contract-scoped: engine-wide budget charging is handed to
+AZ3-1.3 (obligations pinned in doc comments and tests).
+
+- New: internal/logic/authorizersvc/limits.go —
+  `EvaluationLimits{MaxThroughDepth, MaxGraphStates, MaxRelationTargets,
+  MaxBatchSize, MaxLookupResults int}`, pure `Resolve()`, defaults
+  10/10000/1000/1000/1000; zero→default, negative→`ErrInvalidLimits`
+  (wraps `sdk.ErrInvalidInput`, all offending fields named via `errors.Join`);
+  zero never means unlimited; no unlimited mode. Query count deliberately
+  absent (adapter-local telemetry, not a semantic field).
+- Changed: engine `Config.MaxTraversalDepth` → `Config.Limits`; public
+  `authorization.Config.Limits` + root aliases for `EvaluationLimits` and the
+  five `Default*` consts; depth exhaustion flipped from silent
+  deny-with-reason to `ErrEvaluationLimit` (indeterminate); sentinel moved to
+  authorizersvc/limits.go with root re-export (import-cycle constraint), same
+  `sdk.ErrUnavailable` identity end-to-end. Doc-comment rename
+  MaxTraversalDepth→MaxThroughDepth in stores/domain comments (no logic).
+- Tests (orchestrator re-ran fresh + `-race -count=1` full module):
+  TestConstructionDefaultLimits, TestConstructionExplicitLimits,
+  TestConstructionNegativeLimitRejected,
+  TestConstructionOrphanedLimitsUnderRolesOnly,
+  TestEvaluationLimitsResolve{Defaults,ExplicitPreserved,NegativeRejected},
+  TestNewServiceRejectsNegativeLimit, TestBudgetThroughDepthExhaustionIsError,
+  TestBudgetDefaultDepthReachesGrant — all PASS. stores/pgx, stores/turso,
+  auth-cms hermetic build+test green; `make guard` exit 0.
+- Premise adaptations: (1) depth exhaustion silent-deny → error is real
+  enforcement of the already-enforced dimension, not fake enforcement. (2)
+  Orphaned limits under roles-only wiring are ignored, not an error (the
+  documented MailFrom precedent) — pinned by test. (3) Construction
+  (`ErrInvalidLimits`/invalid-input) vs runtime
+  (`ErrEvaluationLimit`/unavailable) kept deliberately distinct.
+- Handed to AZ3-1.3: MaxGraphStates state accounting across nested checks;
+  MaxRelationTargets per-hop fan-out; MaxBatchSize pre-store rejection;
+  MaxLookupResults max+1 fetch/overflow (incl. SQL bounding); no store call
+  after observed cancellation/exhaustion. FLAGGED for phase 1: middleware
+  currently maps limit exhaustion to 500 via fail-closed `web.ErrInternal`;
+  surfacing 503 through the codes.go mapper is a small AZ3-1.3/1.6 refinement.
+
+### 2026-07-14 — AZ3-0.4 — mutation, scope revision, idempotency, outcome, and replay contract — PASS
+
+Outcome: atomic write contract frozen as new public `domain/mutation` package
+with normative port doc comments + executable reference specification. No
+store implements Apply yet (phase 2 owns that); storetest `Mutations` runner
+nil-skips until then (verified skipping in memstore conformance).
+
+- New domain/mutation package: mutation.go (`MutationID` + `NewMutationID`,
+  crypto-strong, `MutationIDBytes=32`/`MinMutationIDLen=26`; `Revision`
+  uint64; `ScopeKind`/`ScopeKey{Kind,Type,ID}` with length-prefixed
+  `Canonical()` lock-order key; `Operation`; `RelationshipRow`/`RoleRow`;
+  `Command` — single scope by construction, `Validate()` enforces the
+  operation/scope/rows matrix); digest.go (`MutationEncodingVersion =
+  "gopernicus.authorization.mutation/1"`, SHA-256 over version prefix +
+  length-prefixed canonical bytes of operation+scope+sorted rows; excludes
+  MutationID/ExpectedRevision/actor); receipt.go (outcomes applied/no_change/
+  semantic_conflict/invariant_blocked/not_found; `Receipt` with payload
+  digest+encoding, resulting revision, governing schema digest, independent
+  `Replayed`); repository.go (normative `MutationRepository.Apply/
+  ApplyGuarded`, `DecisionView`, `Dependency`, `Guard`, `SemanticValidator`).
+- Scope kinds per default #3: `ScopeResource` (relationships + scoped roles),
+  `ScopeSubject` (global roles). Operations: grant/revoke/replace/
+  resource_purge/resource_teardown (trusted-only)/role_assign/role_unassign.
+  No subject-purge.
+- storetest/mutations.go: six named spec cases wired into `Run` (nil-skip):
+  ExactReplayReturnsOriginalReceipt, MutationIDPayloadMismatchChangesNothing,
+  StaleRevisionRejected, RollbackLeavesNoTrace, NoPartialBatch,
+  ConcurrentSingleWinner. Pure tests (run now, orchestrator re-ran `-race
+  -count=1`): TestMutationIDNewIsStrongAndUnique, …ValidateRejectsWeak,
+  TestMutationCommandValidate{Accepts,Rejects},
+  TestMutationScopeCanonicalOrdering, TestMutationExpectedRevisionOptional,
+  TestMutationPayloadDigest{Deterministic,ActorIndependentButStateSensitive,
+  RoleRows}, TestIdempotencyOutcomePersistenceContract,
+  TestReplayIsIndependentOfOutcome — all PASS.
+- Root: `Repositories.Mutations` field + root aliases for the vocabulary.
+  Verify (orchestrator re-ran): module `-race -count=1` green; stores/pgx,
+  stores/turso, auth-cms hermetic green; `make guard` exit 0.
+- Premise adaptations: (1) AZ3-0.5 SEAM: `ApplyGuarded` takes `Guard =
+  func(ctx, DecisionView) error`; AZ3-0.5 composes Actor+MutationGuard into
+  that closure — no breaking change needed. `DecisionView` uses primitive
+  subjectType/subjectID (public rim never imports internal/logic). (2) Domain
+  outcomes ride `Receipt.Outcome` with nil error (never `(nil,nil)`);
+  command errors return `(nil, err)`; only applied/no_change/not_found persist
+  replayable receipts — semantic_conflict/invariant_blocked persist nothing so
+  retries re-evaluate. (3) Cross-scope batch structurally impossible (one
+  `ScopeKey` per Command, rows carry no scope). (4) No new batch-size
+  constant — `EvaluationLimits.MaxBatchSize` remains the ceiling, applied by
+  the service. (5) Benign lint notes in tests (deliberate determinism
+  self-compare; conceptual Replayed write) reviewed by orchestrator — not
+  defects.
+
+### 2026-07-14 — AZ3-0.5 — actor, guard, SystemMutator, and audit contracts — PASS (phase 0 gate green)
+
+Outcome: actor/guard/SystemMutator/audit contracts and the
+`Components{Service, SystemMutator}` construction shape frozen with a full
+construction matrix. Guarded path exercised via test stubs only — no store
+claimed atomic.
+
+- New mutation_service.go: `Actor{PrincipalRef}` (untrusted only; empty
+  invalid; NO system/kind/trust field — pinned by reflection test);
+  `MutationGuard.AuthorizeMutation(ctx, MutationAttempt, DecisionView) error`
+  (`MutationAttempt{Actor, Operation, Scope, Change ProposedChange}`; nil =
+  allow; no default-allow policy); `composeGuard` completes the AZ3-0.4 seam
+  (closure captures Actor + command state, passes the repository's
+  DecisionView straight through — repository port unchanged);
+  `AuditSink.RecordMutation` + `AuditEvent`/`AuditDecision`
+  (accepted/denied/failed; best-effort; failure warned via slog with coarse
+  bounded fields, never raw IDs, never changes committed result);
+  `SystemMutator` (trusted Apply, structurally unreachable from Service);
+  generic guarded seam `Service.ApplyMutation` (phase 3 layers typed methods
+  over it; passes nil SemanticValidator until AZ3-3.x wires the compiled-
+  schema validator).
+- Construction: `NewService` now returns `(Components, error)`; `Config` gains
+  `Guard`/`Audit`. Matrix: nil guard = read-only posture
+  (`ErrMutationsNotConfigured` wraps `sdk.ErrInvalidInput` — deterministic
+  precondition refusal, deliberately not ErrUnavailable (saturation, default
+  #9) nor ErrForbidden (falsely implies another principal could succeed));
+  `Audit!=nil && Guard==nil` fails boot (`ErrAuditWithoutGuard`);
+  `Guard!=nil && Mutations==nil` fails boot (`ErrGuardWithoutMutations`).
+  Call sites updated: module tests, storetest adversarial helper, auth-cms
+  main.go (documents its read-only actor-mutation posture).
+- Tests (orchestrator re-ran fresh `-count=1` + full `-race`):
+  TestConstructionReturnsComponents, …NilGuardIsReadOnlyPosture,
+  …ReadOnlyWithoutMutations, …GuardWithoutMutationsFails,
+  …AuditWithoutGuardFails, …MutationsNotConfiguredKind,
+  …FullActorMutationPostureApplies, TestActorValidateRejectsEmpty,
+  TestActorHasNoConstructibleSystemKind, TestGuardComposesIntoMutationGuard,
+  TestGuardDependenciesRecordedThroughView, TestAuditRecordsDeniedAttempt,
+  TestAuditSinkFailureDoesNotChangeMutation,
+  TestSystemMutatorUnreachableFromService — all PASS.
+- Premise adaptations: (1) the "orphaned actor-mutation setting" is
+  AuditSink-without-Guard (Mutations-without-guard is the valid read-only +
+  SystemMutator posture, so it cannot be the orphan). (2)
+  ErrGuardWithoutMutations added (guard with no atomic boundary = half-enabled
+  system, lesson #4). (3) Generic ApplyMutation seam landed now so the
+  not-configured and audit contracts are executable; legacy raw methods
+  untouched until AZ3-3.4; no new unguarded path added. (4) Pre-existing
+  auth-cms main.go gofmt drift left untouched.
+
+### Phase 0 acceptance — 2026-07-14 — GREEN
+
+All five tasks logged PASS. Contracts (exact userset, immutable schema,
+bounded evaluation, atomic mutation, actor, dependency-validation, system
+capability, audit) are executable in tests. No store adapter claimed atomic
+(storetest Mutations runner verified nil-skipping). Orchestrator re-ran:
+`make check` → "all checks passed"; `make guard` → exit 0; authorization
+module `go build/vet/test -race -count=1 ./...` green; stores/pgx,
+stores/turso, examples/auth-cms hermetic green. No stop condition
+encountered. Phase 1 may begin.
