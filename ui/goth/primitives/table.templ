@@ -1,0 +1,55 @@
+package primitives
+
+// Table (P24, family F3). The caller composes and places the parts; each shares
+// the data-slot contract. Table wraps the native <table> in a responsive scroll
+// container so wide tables stay reachable on narrow viewports without breaking
+// table semantics.
+templ Table(p TableProps) {
+	<div class="goth-table-wrapper" data-slot="table-container">
+		<table class={ tablePartClass(p.Base, "goth-table") } { tablePartAttrs(p.Base, "table")... }>
+			{ children... }
+		</table>
+	</div>
+}
+
+templ TableCaption(p TableCaptionProps) {
+	<caption class={ tablePartClass(p.Base, "goth-table-caption") } { tablePartAttrs(p.Base, "table-caption")... }>
+		{ children... }
+	</caption>
+}
+
+templ TableHeader(p TableHeaderProps) {
+	<thead class={ tablePartClass(p.Base, "goth-table-header") } { tablePartAttrs(p.Base, "table-header")... }>
+		{ children... }
+	</thead>
+}
+
+templ TableBody(p TableBodyProps) {
+	<tbody class={ tablePartClass(p.Base, "goth-table-body") } { tablePartAttrs(p.Base, "table-body")... }>
+		{ children... }
+	</tbody>
+}
+
+templ TableFooter(p TableFooterProps) {
+	<tfoot class={ tablePartClass(p.Base, "goth-table-footer") } { tablePartAttrs(p.Base, "table-footer")... }>
+		{ children... }
+	</tfoot>
+}
+
+templ TableRow(p TableRowProps) {
+	<tr class={ tablePartClass(p.Base, "goth-table-row") } { tablePartAttrs(p.Base, "table-row")... }>
+		{ children... }
+	</tr>
+}
+
+templ TableHead(p TableHeadProps) {
+	<th class={ tablePartClass(p.Base, "goth-table-head") } { tableHeadAttrs(p)... }>
+		{ children... }
+	</th>
+}
+
+templ TableCell(p TableCellProps) {
+	<td class={ tablePartClass(p.Base, "goth-table-cell") } { tablePartAttrs(p.Base, "table-cell")... }>
+		{ children... }
+	</td>
+}

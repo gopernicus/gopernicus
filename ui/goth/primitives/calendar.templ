@@ -1,0 +1,57 @@
+package primitives
+
+// Calendar (P49, family F4). The server owns every date computation: Go lays out
+// the month grid, orders the weekday headers from WeekStart, and marks the
+// selected/today/disabled/outside day states, so the calendar is fully readable
+// and operable with no JavaScript. Day selection and prev/next month navigation are
+// native submit buttons (wrap the Calendar in a form); the server re-renders for
+// the submitted month/date. x-data="gothRovingFocus" with data-orientation="grid"
+// enhances the grid with a single tab stop and APG arrow/Home/End keyboard
+// navigation. It emits no inline style — day/selection state is data-* + CSS.
+templ Calendar(p CalendarProps) {
+	<div class={ calendarClass(p) } { calendarAttrs(p)... }>
+		if !p.HideNav {
+			<div data-slot="calendar-header">
+				<button class="goth-calendar-nav" { calendarPrevAttrs(p)... }>
+					@chevronLeftGlyph()
+				</button>
+				<div data-slot="calendar-caption" aria-live="polite">{ p.monthLabel() }</div>
+				<button class="goth-calendar-nav" { calendarNextAttrs(p)... }>
+					@chevronRightGlyph()
+				</button>
+			</div>
+		} else {
+			<div data-slot="calendar-caption" aria-live="polite">{ p.monthLabel() }</div>
+		}
+		<div class="goth-calendar-grid" { calendarGridAttrs(p)... }>
+			<div role="row" data-slot="calendar-weekdays">
+				for _, wd := range p.weekdays() {
+					<span role="columnheader" data-slot="calendar-weekday" aria-label={ wd.Full }>
+						<span aria-hidden="true">{ wd.Short }</span>
+					</span>
+				}
+			</div>
+			for _, week := range calendarWeeks(p) {
+				<div role="row" data-slot="calendar-week">
+					for _, day := range week {
+						@calendarCell(p, day)
+					}
+				</div>
+			}
+		</div>
+	</div>
+}
+
+// calendarCell renders one grid cell: an interactive submit button for an in-month,
+// enabled day, or a non-focusable disabled/outside-month day.
+templ calendarCell(p CalendarProps, day calendarDay) {
+	if day.Interactive {
+		<div role="gridcell" data-slot="calendar-cell" aria-selected={ boolAttr(day.Selected) }>
+			<button class="goth-calendar-day" { calendarDayAttrs(p, day)... }>{ day.Label }</button>
+		</div>
+	} else {
+		<div role="gridcell" data-slot="calendar-cell" aria-disabled="true">
+			<span class="goth-calendar-day" { calendarOutsideAttrs(day)... }>{ day.Label }</span>
+		</div>
+	}
+}

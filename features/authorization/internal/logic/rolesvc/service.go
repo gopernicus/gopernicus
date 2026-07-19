@@ -39,7 +39,7 @@ func NewService(store role.Storer) *Service {
 // idempotent (a duplicate is a no-op nil). An empty subject/role or a
 // half-scoped resource pair is rejected loudly.
 func (s *Service) AssignRole(ctx context.Context, subjectType, subjectID, roleName, resourceType, resourceID string) error {
-	if err := validateScope(subjectType, subjectID, roleName, resourceType, resourceID); err != nil {
+	if err := validateAssignment(subjectType, subjectID, roleName, resourceType, resourceID); err != nil {
 		return err
 	}
 	return s.store.Assign(ctx, role.Assignment{
@@ -54,7 +54,7 @@ func (s *Service) AssignRole(ctx context.Context, subjectType, subjectID, roleNa
 // UnassignRole removes an exact assignment. It is idempotent (removing an absent
 // assignment is nil). Validation matches AssignRole.
 func (s *Service) UnassignRole(ctx context.Context, subjectType, subjectID, roleName, resourceType, resourceID string) error {
-	if err := validateScope(subjectType, subjectID, roleName, resourceType, resourceID); err != nil {
+	if err := validateAssignment(subjectType, subjectID, roleName, resourceType, resourceID); err != nil {
 		return err
 	}
 	return s.store.Unassign(ctx, subjectType, subjectID, roleName, resourceType, resourceID)
@@ -66,7 +66,7 @@ func (s *Service) UnassignRole(ctx context.Context, subjectType, subjectID, role
 // satisfies a scoped check, but a scoped assignment never satisfies a different
 // scope. Fail-closed: any store error returns (false, err).
 func (s *Service) HasRole(ctx context.Context, subjectType, subjectID, roleName, resourceType, resourceID string) (bool, error) {
-	if err := validateScope(subjectType, subjectID, roleName, resourceType, resourceID); err != nil {
+	if err := validateAssignment(subjectType, subjectID, roleName, resourceType, resourceID); err != nil {
 		return false, err
 	}
 
@@ -91,21 +91,66 @@ func (s *Service) HasRole(ctx context.Context, subjectType, subjectID, roleName,
 	return false, nil
 }
 
-// ListRoleAssignmentsBySubject pages a subject's assignments.
+// ListRoleAssignmentsBySubject pages a subject's assignments. The subject fields
+// are validated symmetrically with the mutation/decision methods (a non-empty
+// subject type and ID).
 func (s *Service) ListRoleAssignmentsBySubject(ctx context.Context, subjectType, subjectID string, req crud.ListRequest) (crud.Page[role.Assignment], error) {
+	if err := validateSubjectFields(subjectType, subjectID); err != nil {
+		return crud.Page[role.Assignment]{}, err
+	}
 	return s.store.ListBySubject(ctx, subjectType, subjectID, req)
 }
 
-// ListRoleAssignmentsByResource pages the assignments scoped to a resource
-// (direct-scope only; see role.Storer.ListByResource).
+// ListRoleAssignmentsByResource is the RAW direct-scope listing: it pages the
+// assignments stored exactly at (resourceType, resourceID). It never surfaces
+// globally-granted subjects — see ListEffectiveRoleGrantsByResource for the
+// enumeration that agrees with HasRole. The scope shape is validated
+// symmetrically (global-or-fully-scoped; a half-scoped pair is rejected).
 func (s *Service) ListRoleAssignmentsByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[role.Assignment], error) {
+	if err := validateResourceScope(resourceType, resourceID); err != nil {
+		return crud.Page[role.Assignment]{}, err
+	}
 	return s.store.ListByResource(ctx, resourceType, resourceID, req)
 }
 
-func validateScope(subjectType, subjectID, roleName, resourceType, resourceID string) error {
-	if subjectType == "" || subjectID == "" || roleName == "" {
+// ListEffectiveRoleGrantsByResource pages the EFFECTIVE role grants on a
+// resource: the union of the direct scoped assignments with the global
+// assignments that HasRole's scoped fallback satisfies, de-duplicated by
+// (subject, role) with explicit provenance. This is the enumeration side of Q5:
+// its grant set agrees with HasRole, without rewriting a global assignment as a
+// scoped row. The scope shape is validated symmetrically with the other methods.
+func (s *Service) ListEffectiveRoleGrantsByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[role.EffectiveGrant], error) {
+	if err := validateResourceScope(resourceType, resourceID); err != nil {
+		return crud.Page[role.EffectiveGrant]{}, err
+	}
+	return s.store.ListEffectiveByResource(ctx, resourceType, resourceID, req)
+}
+
+// validateAssignment is the full mutation/decision validation (subject, role,
+// and scope), shared by AssignRole, UnassignRole, and HasRole.
+func validateAssignment(subjectType, subjectID, roleName, resourceType, resourceID string) error {
+	if err := validateSubjectFields(subjectType, subjectID); err != nil {
+		return err
+	}
+	if roleName == "" {
 		return ErrInvalidRoleAssignment
 	}
+	return validateResourceScope(resourceType, resourceID)
+}
+
+// validateSubjectFields rejects an empty subject type or ID. Names and IDs stay
+// opaque exact strings — only emptiness is a structural error here.
+func validateSubjectFields(subjectType, subjectID string) error {
+	if subjectType == "" || subjectID == "" {
+		return ErrInvalidRoleAssignment
+	}
+	return nil
+}
+
+// validateResourceScope enforces the global-or-fully-scoped shape: both resource
+// fields set (a scoped assignment) or both empty (a global assignment). A
+// half-scoped pair is a caller error.
+func validateResourceScope(resourceType, resourceID string) error {
 	if (resourceType == "") != (resourceID == "") {
 		return ErrHalfScopedAssignment
 	}

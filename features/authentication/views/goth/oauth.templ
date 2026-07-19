@@ -1,0 +1,47 @@
+package goth
+
+import (
+	"github.com/gopernicus/gopernicus/features/authentication"
+	"github.com/gopernicus/gopernicus/ui/goth/components/forms"
+	"github.com/gopernicus/gopernicus/ui/goth/primitives"
+)
+
+// oauthUnlinkBody renders the provider-bound unlink confirmation. The unlink code is
+// delivered to a masked recovery address and never echoed; the confirmation posts to
+// the same provider it names, so it cannot be replayed against another link.
+templ oauthUnlinkBody(m authentication.OAuthUnlinkPage) {
+	@shell("Unlink account", "") {
+		@message(m.PageContext)
+		@errorSummary(m.PageContext)
+		<p>Confirm unlinking your { m.Provider } account.</p>
+		<form method="post" action={ templ.SafeURL(oauthUnlinkStartAction(m.Provider)) } autocomplete="off">
+			@csrfField(m.PageContext)
+			@forms.FormActions(forms.FormActionsProps{}) {
+				@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit}) {
+					if m.MaskedDestination != "" {
+						Send a code to { m.MaskedDestination }
+					} else {
+						Send me a code
+					}
+				}
+			}
+		</form>
+		<form method="post" action={ templ.SafeURL(oauthUnlinkAction(m.Provider)) } autocomplete="off">
+			@csrfField(m.PageContext)
+			<input type="hidden" name="provider" value={ m.Provider }/>
+			@forms.FormField(forms.FormFieldProps{Label: "One-time code", For: "code", Required: true, Error: fieldErrorText(m.PageContext, "code")}) {
+				@primitives.Input(primitives.InputProps{
+					Base:     primitives.Base{ID: "code", Attributes: codeFieldAttrs("code")},
+					Type:     primitives.InputText,
+					Name:     "code",
+					Required: true,
+				})
+			}
+			@forms.FormActions(forms.FormActionsProps{}) {
+				@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit, Variant: primitives.ButtonDestructive}) {
+					Unlink { m.Provider }
+				}
+			}
+		</form>
+	}
+}

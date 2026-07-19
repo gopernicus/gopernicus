@@ -20,6 +20,56 @@ const roleColumns = "subject_type, subject_id, role, resource_type, resource_id,
 // is backend-local and need not match the pgx sibling (which uses chr(1)).
 const roleKeyExpr = "subject_type || char(1) || subject_id || char(1) || role || char(1) || resource_type || char(1) || resource_id"
 
+// effectiveGrantKeyExpr is the effective listing's derived ordering/keyset key:
+// the (subject_type, subject_id, role) triple joined by char(1). It is DB-computed
+// and echoed back by PKOf so the cursor PK matches the column byte-for-byte.
+const effectiveGrantKeyExpr = "subject_type || char(1) || subject_id || char(1) || role"
+
+// effectiveRoleRow is the db-tagged effective-grant listing projection ScanStruct
+// scans into. IsDirect/IsGlobal are the MAX(CASE …) provenance flags (1/0);
+// GrantKey is the derived keyset key (see effectiveRolesBaseSQL).
+type effectiveRoleRow struct {
+	SubjectType string `db:"subject_type"`
+	SubjectID   string `db:"subject_id"`
+	Role        string `db:"role"`
+	IsDirect    int    `db:"is_direct"`
+	IsGlobal    int    `db:"is_global"`
+	GrantKey    string `db:"grant_key"`
+}
+
+func (r effectiveRoleRow) toDomain() role.EffectiveGrant {
+	return role.EffectiveGrant{
+		SubjectType: r.SubjectType,
+		SubjectID:   r.SubjectID,
+		Role:        r.Role,
+		Direct:      r.IsDirect == 1,
+		Global:      r.IsGlobal == 1,
+	}
+}
+
+// effectiveRolesBaseSQL builds the EFFECTIVE listing over iam_roles: it groups the
+// direct-scope rows and (for a scoped request) the global rows by (subject, role),
+// emitting a provenance flag per source plus the derived grant_key. scopedLiteral
+// is the SQL literal for "the request is scoped": 1 gates the global fallback in,
+// 0 (a global request) collapses it out so every grant is Direct — mirroring
+// HasRole's no-fallback path for an unscoped query. A global grant is NEVER
+// rewritten as a scoped row; only its provenance is reported. The outer
+// `WHERE 1 = 1` is load-bearing (see rolesBaseSQL): the inner GROUP BY subquery's
+// WHERE trips turso's List WHERE-vs-AND substring check, so the appended keyset
+// AND needs an outer WHERE to attach to.
+func effectiveRolesBaseSQL(scopedLiteral string) string {
+	return `SELECT subject_type, subject_id, role, is_direct, is_global, grant_key FROM (
+	SELECT subject_type, subject_id, role,
+		MAX(CASE WHEN resource_type = ? AND resource_id = ? THEN 1 ELSE 0 END) AS is_direct,
+		MAX(CASE WHEN ` + scopedLiteral + ` AND resource_type = '' AND resource_id = '' THEN 1 ELSE 0 END) AS is_global,
+		` + effectiveGrantKeyExpr + ` AS grant_key
+	FROM iam_roles
+	WHERE (resource_type = ? AND resource_id = ?)
+	   OR (` + scopedLiteral + ` AND resource_type = '' AND resource_id = '')
+	GROUP BY subject_type, subject_id, role
+) AS r WHERE 1 = 1`
+}
+
 // rolesBaseSQL wraps the filtered iam_roles rows in a derived table exposing the
 // computed role_key column, so the connector's keyset builder can reference it in
 // the outer WHERE (a WHERE cannot see a same-level SELECT alias) and ORDER BY as
@@ -119,8 +169,10 @@ func (s *roleStore) ListBySubject(ctx context.Context, subjectType, subjectID st
 	return crud.MapPage(page, roleRow.toDomain), nil
 }
 
-// ListByResource pages the assignments scoped to a resource — DIRECT-scope only
-// (it never surfaces globally-granted subjects the service would allow).
+// ListByResource is the RAW direct-scope listing: it pages the assignments stored
+// exactly at (resourceType, resourceID) and never surfaces globally-granted
+// subjects. Use ListEffectiveByResource for the enumeration that agrees with the
+// service's HasRole fallback.
 func (s *roleStore) ListByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[role.Assignment], error) {
 	q := tursodb.ListQuery[roleRow]{
 		BaseSQL:      rolesBaseSQL(" WHERE resource_type = ? AND resource_id = ?"),
@@ -136,4 +188,29 @@ func (s *roleStore) ListByResource(ctx context.Context, resourceType, resourceID
 		return crud.Page[role.Assignment]{}, err
 	}
 	return crud.MapPage(page, roleRow.toDomain), nil
+}
+
+// ListEffectiveByResource pages the EFFECTIVE role grants on a resource: the union
+// of the direct scoped assignments with the global assignments a scoped HasRole
+// satisfies, de-duplicated by (subject, role) with provenance, ordered by the
+// derived grant_key ascending. A global grant is never rewritten as a scoped row.
+func (s *roleStore) ListEffectiveByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[role.EffectiveGrant], error) {
+	scopedLiteral := "0"
+	if resourceType != "" || resourceID != "" {
+		scopedLiteral = "1"
+	}
+	q := tursodb.ListQuery[effectiveRoleRow]{
+		BaseSQL:      effectiveRolesBaseSQL(scopedLiteral),
+		Args:         []any{resourceType, resourceID, resourceType, resourceID},
+		OrderFields:  role.EffectiveOrderFields,
+		DefaultOrder: role.DefaultEffectiveOrder,
+		PK:           "grant_key",
+		OrderValueOf: func(r effectiveRoleRow, _ string) any { return r.GrantKey },
+		PKOf:         func(r effectiveRoleRow) string { return r.GrantKey },
+	}
+	page, err := tursodb.List(ctx, s.db, q, req)
+	if err != nil {
+		return crud.Page[role.EffectiveGrant]{}, err
+	}
+	return crud.MapPage(page, effectiveRoleRow.toDomain), nil
 }

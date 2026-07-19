@@ -20,8 +20,8 @@
 // rows surfaced through a
 // DEFAULT-OFF debug route, and invitations that grant through the authorization
 // engine's relationshipGranter (membership.go) — authorization-v1's FLAGSHIP
-// posture (Z4 commit 2): invitation-accept writes a real ReBAC tuple via
-// authorizer.CreateRelationships, retiring the A9 toy membership map; the
+// posture (Z4 commit 2): ordinary invitation-accept writes a real ReBAC tuple
+// via the separately held baseline RelationshipWriter, retiring the A9 toy membership map; the
 // memstore-backed engine keeps the host zero-infra (no libsql). The host-local
 // demo routes (demo.go) are gated variously on a resolved principal, an engine
 // Check, a LookupResources enumeration, and a roles-kind HasRole check.
@@ -53,17 +53,17 @@ import (
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authjobs"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
-	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/deliveryhealth"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authpages"
+	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/deliveryhealth"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/memstore"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/outboxmem"
 	auth "github.com/gopernicus/gopernicus/features/authentication"
+	authgoth "github.com/gopernicus/gopernicus/features/authentication/views/goth"
 	authorization "github.com/gopernicus/gopernicus/features/authorization"
-	authzmem "github.com/gopernicus/gopernicus/features/authorization/memstore"
 	"github.com/gopernicus/gopernicus/features/cms"
 	"github.com/gopernicus/gopernicus/features/cms/domain/content"
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
-	cmstempl "github.com/gopernicus/gopernicus/features/cms/views/templ"
+	cmsgoth "github.com/gopernicus/gopernicus/features/cms/views/goth"
 	eventsfeature "github.com/gopernicus/gopernicus/features/events"
 	"github.com/gopernicus/gopernicus/features/jobs"
 	jobsmem "github.com/gopernicus/gopernicus/features/jobs/memstore"
@@ -80,7 +80,22 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 	"github.com/gopernicus/gopernicus/sdk/foundation/workers"
+	uigoth "github.com/gopernicus/gopernicus/ui/goth"
+	uigothassets "github.com/gopernicus/gopernicus/ui/goth/assets"
 )
+
+// authAssetBasePath is the public URL prefix this host serves the ui/goth
+// fingerprinted assets under; newAuthBundle pins it so buildAuthConfig's mapped CSP
+// and the asset route agree (ui-goth GOTH-7.2).
+const authAssetBasePath = "/assets/goth"
+
+// newAuthBundle constructs the immutable ui/goth presentation bundle the auth pages
+// render through. StylesOnly is the smallest safe profile for the native auth forms;
+// the externalized fragment-reader script is served separately and covered by the
+// adapter's script-src 'self'.
+func newAuthBundle() (*uigoth.Bundle, error) {
+	return uigoth.New(uigoth.Config{AssetBasePath: authAssetBasePath})
+}
 
 func main() {
 	_ = environment.LoadEnv()
@@ -162,6 +177,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// hop count.
 	router.Use(web.TrustProxies(trustedProxyCount()), web.RequestID(), web.Logger(log), web.Panics(log))
 
+	// Serve the ui/goth fingerprinted assets (the auth pages' stylesheet) and the
+	// externalized fragment-reader script the reset/magic-link landings load. Both are
+	// same-origin, so the auth adapter's mapped CSP (style-src/script-src 'self')
+	// covers them; the kit owns no route, so the host mounts them (ui-goth GOTH-7.2).
+	uigothStatic := web.NewStaticFileServer(uigothassets.FS, web.WithAssetPrefix("dist/"))
+	uigothStatic.AddRoutes(router, authAssetBasePath)
+	router.Handle(http.MethodGet, authgoth.DefaultFragmentScriptPath, authgoth.FragmentScriptHandler().ServeHTTP)
+
 	// Shared in-process event bus (sdk default Memory). cms is the emitter (it
 	// publishes content.* post-write through mount.Events); the host subscribes
 	// below to invalidate the public-page cache. Delivery is async (O3): an
@@ -175,55 +198,65 @@ func run(ctx context.Context, log *slog.Logger) error {
 	mount := feature.Mount{Router: router, Logger: log, Events: bus}
 
 	// The authorization feature (authorization-v1 Z4 commit 2 — the FLAGSHIP
-	// posture): BOTH kinds wired, memstore-backed, so the host stays zero-infra (no
-	// driver in the graph — GOWORK=off go list -m all still has no libsql). The
-	// relationship kind's schema declares a `project` resource type (owner/member
-	// relations, view = AnyOf(owner, member)) and a `platform` resource type whose
-	// `admin` relation backs the platform-admin DATA tuple (platform-admin is data,
-	// never Config). The roles kind (demo.go) needs no model. Register logs only.
-	authzModel := authorization.NewSchema([]authorization.ResourceSchema{
-		{Name: demoResourceType, Def: authorization.ResourceTypeDef{
-			Relations: map[string]authorization.RelationDef{
-				"owner":  {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}}},
-				"member": {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}}},
-			},
-			Permissions: map[string]authorization.PermissionRule{
-				demoPermission: authorization.AnyOf(authorization.Direct("owner"), authorization.Direct("member")),
-			},
-		}},
-		{Name: "platform", Def: authorization.ResourceTypeDef{
-			Relations: map[string]authorization.RelationDef{
-				"admin": {AllowedSubjects: []authorization.SubjectTypeRef{{Type: "user"}}},
-			},
-			// The `admin` permission makes platform-admin an ordinary
-			// schema-declared check the host runs first in its own Check
-			// closure (see requireMembership / demoMyProjects). The engine no
-			// longer bypasses on this tuple — the host composes it.
-			Permissions: map[string]authorization.PermissionRule{
-				"admin": authorization.AnyOf(authorization.Direct("admin")),
-			},
-		}},
-	})
-	authorizer, err := authorization.NewService(authorization.Repositories{
-		Relationships: authzmem.NewRelationships(),
-		Roles:         authzmem.NewRoles(),
-	}, authorization.Config{Model: authzModel})
+	// posture), now GUARDED (AZ3-4.1): BOTH kinds wired, memstore-backed, so the host
+	// stays zero-infra (no driver in the graph — GOWORK=off go list -m all still has no
+	// libsql). newAuthorization composes the schema (manage_access declared), the
+	// project-scoped guardian minimum, and the host MutationGuard (manage_access +
+	// platform-admin over the DecisionView) — the testable composition seam run() and
+	// the guarded-composition tests share.
+	authzComponents, err := newAuthorization()
 	if err != nil {
 		return err
 	}
+	// Actor-facing writes are GUARDED (Config.Guard = hostMutationGuard): HTTP handlers
+	// receive only the Service, and every actor-facing mutation is authorized inside the
+	// atomic boundary. The advanced SystemMutator is held apart for the sensitive
+	// boot owner/platform-admin seed. The baseline RelationshipWriter is separately
+	// passed to the ordinary-member invitation adapter. Neither capability is
+	// recoverable from Service or automatically exposed through HTTP.
+	authorizer := authzComponents.Service
+	systemMutator := authzComponents.SystemMutator
+	relationshipWriter := authzComponents.RelationshipWriter
 	if err := authorizer.Register(mount); err != nil {
 		return err
 	}
+	// Bootstrap the ownable scope through the TRUSTED SystemMutator BEFORE serving:
+	// establish project:demo#owner (the guardian minimum) and the platform:main#admin
+	// data tuple, so the host runs under the ratified owner-minimum posture with an owner
+	// already in place and invitation member-grants are never invariant-blocked
+	// (member-first on a fresh protected resource is blocked by design). This replaces
+	// the retired session-only POST /demo/admin/bootstrap route (AZ3-4.1): first owner is
+	// inherently a trusted operation (it cannot yet prove it manages the resource).
+	if err := seedAuthorization(ctx, systemMutator); err != nil {
+		return err
+	}
+
+	// The host's authoritative resource registry: only the host knows whether a resource
+	// still exists (authorization tuples merely describe host-owned resources). Seeded with
+	// the demo project so an invitation-accept validates existence before the Granter writes
+	// a tuple; a production host consults its own datastore instead (membership.go).
+	hostResources := newHostResourceRegistry(resourceKey(demoResourceType, demoResourceID))
 
 	// Auth config, assembled in the testable composition seam buildAuthConfig
 	// (AV3-8.6): development posture, bundled templ Views, browser-safe Origin
 	// allowlist, passwordless enablement, magic-link base URL, and every development
 	// secret from a distinct env var. The invitation grant-on-accept seam is the
-	// host-local relationshipGranter over the authorization engine.
-	authCfg, err := buildAuthConfig(log, relationshipGranter{authorizer: authorizer})
+	// host-local relationshipGranter over the authorization engine, carrying the host
+	// resource-existence seam so acceptance against a deleted resource fails loudly.
+	authCfg, err := buildAuthConfig(log, relationshipGranter{
+		writer: relationshipWriter,
+		reader: authorizer,
+		exists: hostResources.Exists,
+	})
 	if err != nil {
 		return err
 	}
+	// A Granter enables invitations, so the feature REQUIRES a relation-aware host
+	// authorization policy (auth.Config.InviteCheck, design D3) — the two are wired
+	// together. hostInviteCheck consults the authorizer so a member-capable manager cannot
+	// escalate by inviting an owner; a nil InviteCheck here would be ErrInviteCheckRequired
+	// at NewService, never an allow-by-default.
+	authCfg.InviteCheck = hostInviteCheck(authorizer)
 	// Apply the selected delivery mode to the auth config. buildAuthConfig returns the
 	// jobs-mode posture (in-memory fenced queue on this host); DELIVERY_MODE=in_process flips
 	// it to the bounded EPHEMERAL pool here — and announces that posture LOUDLY. Neither mode
@@ -310,8 +343,20 @@ func run(ctx context.Context, log *slog.Logger) error {
 		deliveryPurgeInterval = purgeCfg.Interval
 	}
 
+	// The CMS pages render through the same ui/goth bundle as auth (assets already
+	// served under authAssetBasePath above). The admin entries list is HTMX-enhanced
+	// (ui-goth GOTH-7.3); auth's RequireUser gates that admin surface below.
+	cmsBundle, err := newAuthBundle()
+	if err != nil {
+		return err
+	}
+	cmsViews, err := cmsgoth.New(cmsBundle)
+	if err != nil {
+		return err
+	}
+
 	if err := cms.Register(mount, cmsRepos, cms.Config{
-		Views:           cmstempl.New(),                          // FS3 one-line default: the bundled views module
+		Views:           cmsViews,                                // the ui/goth-backed bundled default
 		Types:           []content.ContentType{productType()},    // host-registered custom type (zero migration)
 		Templates:       []cms.TemplateBinding{productBinding()}, // its dev-authored renderer
 		Cache:           pageCache,
@@ -372,11 +417,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 		// retired toy map (commit 1). The host stays zero-infra (the authorizer is
 		// memstore-backed — no libsql). A non-nil Authorize registers the
 		// resource-scoped GET /events/{resource_type}/{resource_id} route; the
-		// closure maps the stream's identity.Principal onto an authorization.Subject
+		// closure maps the stream's identity.Principal onto an authorization.PrincipalRef
 		// unadapted and asks the engine for the `view` permission on the (type, id).
 		Authorize: func(ctx context.Context, p identity.Principal, resourceType, resourceID string) (bool, error) {
 			res, err := authorizer.Check(ctx, authorization.CheckRequest{
-				Subject:    authorization.Subject{Type: p.Type, ID: p.ID},
+				Principal:  authorization.PrincipalRef{Type: p.Type, ID: p.ID},
 				Permission: demoPermission,
 				Resource:   authorization.Resource{Type: resourceType, ID: resourceID},
 			})
@@ -423,7 +468,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 			"outbox", "in-memory (internal/outboxmem)", "trigger", "POST /outbox-demo")
 	}
 
-	// Host-local demo + debug routes (host code, not feature surface).
+	// Host-local demo + debug routes (host code, not feature surface). The demo routes
+	// are READ-ONLY (AZ3-4.1): the session-only authorization-mutation routes
+	// (POST /demo/roles/{assign,unassign}, POST /demo/admin/bootstrap) were REMOVED — no
+	// shipped HTTP route mutates authorization with session presence alone. Trusted
+	// seeding runs at boot (seedAuthorization) and ordinary invitation acceptance rides
+	// the baseline RelationshipWriter (membership.go); the guarded actor path is proven by
+	// authorization_test.go, not a browser flow.
 	registerDemoRoutes(router, authSvc, authorizer)
 	registerDebugRoutes(router, authSvc, authRepos, log)
 
@@ -723,8 +774,10 @@ func seed(ctx context.Context, repos cms.Repositories) error {
 //     token-encryption keys) from a DISTINCT env var, never a committed constant, and
 //     never printing key material (see demo.go builders).
 //
-// The granter is the invitation grant-on-accept seam (nil → invitations off). It
-// builds no goroutines and reads no host lifecycle; run() owns the worker + shutdown.
+// The granter is the invitation grant-on-accept seam (nil → invitations off). When run()
+// passes a non-nil Granter it also sets the REQUIRED relation-aware auth.Config.InviteCheck
+// (hostInviteCheck) right after this seam returns — the two are wired together (design D3).
+// It builds no goroutines and reads no host lifecycle; run() owns the worker + shutdown.
 func buildAuthConfig(log *slog.Logger, granter auth.Granter) (auth.Config, error) {
 	// The REQUIRED access-JWT signer, optional provider-token encrypter, REQUIRED
 	// challenge protector (authmem wires Challenges), REQUIRED delivery-outbox
@@ -751,6 +804,21 @@ func buildAuthConfig(log *slog.Logger, granter auth.Granter) (auth.Config, error
 		return auth.Config{}, err
 	}
 
+	// The ui/goth HTML surface: build the presentation bundle, then this host's
+	// partial override (authpages.New) which embeds the ui/goth Views and overrides
+	// only Login with Gopernicus-CMS branding. The embedded Views promotes HTMLPolicy(),
+	// which maps the bundle's browser Requirements (+ the fragment-reader script-src)
+	// into the feature's CSP so the auth pages load their assets under default-src
+	// 'none' — the host never hand-writes that CSP (ui-goth GOTH-7.2).
+	bundle, err := newAuthBundle()
+	if err != nil {
+		return auth.Config{}, err
+	}
+	authViews, err := authpages.New(bundle)
+	if err != nil {
+		return auth.Config{}, err
+	}
+
 	return auth.Config{
 		Hasher:               bcrypt.New(),
 		Mailer:               email.NewConsole(log),
@@ -768,11 +836,17 @@ func buildAuthConfig(log *slog.Logger, granter auth.Granter) (auth.Config, error
 		DeliveryEncrypter:  deliveryEncrypter,
 		IdentifierKeyer:    identifierKeyer,
 		// The optional HTML surface (design §9.2): this host's REAL partial override
-		// (authpages.New) embeds the bundled templ Views and overrides only the Login
-		// page with Gopernicus-CMS branding — presentation changes only, the JSON API
-		// and every route/service/redirect policy are unchanged (AV3-8.9, proven
-		// isolation-safe in AV3-8.5). Every non-overridden page is the promoted default.
-		Views: authpages.New(),
+		// (authpages.New) embeds the ui/goth Views and overrides only the Login page
+		// with Gopernicus-CMS branding — presentation changes only, the JSON API and
+		// every route/service/redirect policy are unchanged (AV3-8.9, proven
+		// isolation-safe in AV3-8.5). Every non-overridden page is the promoted ui/goth
+		// default rendered from the fingerprinted assets under authAssetBasePath.
+		Views: authViews,
+		// The resource policy the ui/goth adapter derives from the bundle: it widens the
+		// feature's strict CSP exactly far enough to load the GOTH stylesheet and the
+		// same-origin fragment-reader script (script-src 'self' + the per-render nonce),
+		// and can never remove the feature-owned fixed protections (ui-goth GOTH-7.2).
+		HTMLPolicy: authViews.HTMLPolicy(),
 		// The DISTINCT second override system (design §6.2): a host email LayerApp
 		// content override that rebrands the verification email body. It swaps an EMAIL,
 		// not a page — a different facility from Views, wired through a different Config

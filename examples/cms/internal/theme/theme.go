@@ -1,6 +1,6 @@
 // Package theme is a host-owned custom public-site theme for the cms example. It
 // implements the cms.Views port by EMBEDDING the bundled default from
-// features/cms/views/templ and overriding only the four public-chrome methods
+// features/cms/views/goth and overriding only the four public-chrome methods
 // (Home, Archive, Single, Error) with ACME-branded html/template chrome — the
 // blessed partial-override path (FS3). Every non-chrome method (admin pages,
 // contact form, seed templates) falls through to the embedded default. Under the
@@ -21,8 +21,9 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/cms"
 	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
-	cmstempl "github.com/gopernicus/gopernicus/features/cms/views/templ"
+	cmsgoth "github.com/gopernicus/gopernicus/features/cms/views/goth"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	uigoth "github.com/gopernicus/gopernicus/ui/goth"
 )
 
 // pages is the parsed template set: a shared header/footer plus one template per
@@ -72,15 +73,23 @@ var pages = template.Must(template.New("theme").Parse(`
 `))
 
 // Theme is the host's custom cms.Views implementation. It embeds the bundled
-// default so every non-chrome method falls through, and overrides the four
-// public-chrome methods with ACME markup.
+// ui/goth default so every non-chrome method (the admin pages, contact form, seed
+// templates) falls through to GOTH, and overrides the four public-chrome methods
+// with ACME markup.
 type Theme struct {
-	cmstempl.Views
+	cmsgoth.Views
 }
 
-// New returns the custom theme. Pass it to cms.Config.Views to replace the
-// public site chrome while keeping the bundled admin/forms defaults.
-func New() Theme { return Theme{} }
+// New returns the custom theme over the ui/goth bundle. The embedded GOTH default
+// renders the admin pages through the bundle's assets; this theme overrides only the
+// public site chrome. Pass the result to cms.Config.Views.
+func New(bundle *uigoth.Bundle) (Theme, error) {
+	views, err := cmsgoth.New(bundle)
+	if err != nil {
+		return Theme{}, err
+	}
+	return Theme{Views: views}, nil
+}
 
 var _ cms.Views = Theme{}
 

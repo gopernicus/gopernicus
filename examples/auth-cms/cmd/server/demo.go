@@ -21,72 +21,33 @@ import (
 )
 
 // registerDemoRoutes mounts the host-local demo routes (host code, NOT feature
-// surface):
+// surface). Every route is READ-ONLY: AZ3-4.1 removed the session-only
+// authorization-mutation routes (POST /demo/roles/{assign,unassign}, POST
+// /demo/admin/bootstrap), because a shipped HTTP route must never mutate authorization
+// with session presence alone. Trusted seeding happens at boot (seedAuthorization) and
+// invitation acceptance rides the baseline RelationshipWriter (membership.go); the browser-driven
+// role-assignment surface is deferred until authentication exports a public
+// sensitive-operation protector (the AZADM packet), so the guarded actor-mutation path
+// is proven by authorization_test.go, not a browser flow.
 //
 //   - GET /demo/whoami — RequirePrincipal-gated: 200 for ANY valid credential
 //     class (session cookie, API-key bearer, or bearer JWT), echoing the resolved
 //     principal. A missing/invalid/expired/revoked credential → 401.
 //   - GET /demo/members-only — RequirePrincipal + engine-Check gated (the flagship
 //     posture): 200 only when the resolved principal holds `view` on project/demo
-//     through the authorization engine. B (granted on invitation accept) → 200; an
-//     ungranted user → 403.
+//     through the authorization engine. A member (granted on invitation accept) → 200;
+//     an ungranted user → 403.
 //   - GET /demo/my-projects — RequirePrincipal-gated: the relationship kind's
 //     LookupResources enumeration (demonstration (b)); {admin, ids} (admin flag
 //     is the host-composed platform-admin recipe, not an engine bypass).
 //   - GET /demo/audit — RequirePrincipal + roles-kind HasRole gated: 200 with a
 //     driven ListRoleAssignmentsByResource read-back, 403 without the role.
-//   - POST /demo/roles/{assign,unassign} — RequireUser-gated (the admin drives
-//     them): assign/unassign a role to a subject, scoped to project/demo or GLOBAL.
-//   - POST /demo/admin/bootstrap — RequireUser-gated: seeds the CALLER as
-//     project:demo#owner + the platform-admin data tuple (the runtime seed step).
 func registerDemoRoutes(router *web.WebHandler, authSvc *auth.Service, authorizer *authorization.Service) {
 	router.Handle("GET", "/demo/whoami", demoWhoami(authSvc), authSvc.RequirePrincipal)
 	router.Handle("GET", "/demo/members-only", demoMembersOnly(authSvc),
 		authSvc.RequirePrincipal, requireMembership(authSvc, authorizer))
 	router.Handle("GET", "/demo/my-projects", demoMyProjects(authSvc, authorizer), authSvc.RequirePrincipal)
 	router.Handle("GET", "/demo/audit", demoAudit(authSvc, authorizer), authSvc.RequirePrincipal)
-	router.Handle("POST", "/demo/roles/assign", demoAssignRole(authorizer), authSvc.RequireUser)
-	router.Handle("POST", "/demo/roles/unassign", demoUnassignRole(authorizer), authSvc.RequireUser)
-	// /demo/admin/bootstrap grants the caller platform-admin — the most privileged
-	// action on this host — so it is gated on a LIVE session (auth-jwt plan §7,
-	// RequireLiveSession, D1): one PK lookup denies a revoked-but-still-valid access
-	// JWT immediately, rather than honoring it for up to AccessTokenTTL like the
-	// stateless RequireUser tier. It returns a bare 401 on denial (this host's gated
-	// surface is JSON API, matching RequireUser's 401; the browser redirect-to-login
-	// UX is a host-rendered-page concern carried by segovia authpages, plan §8).
-	router.Handle("POST", "/demo/admin/bootstrap", demoBootstrapAdmin(authSvc, authorizer), authSvc.RequireLiveSession)
-}
-
-// demoBootstrapAdmin (authorization-v1 Z4, seeding choice — LOGGED in the report)
-// is a session-gated host route the protocol drives ONCE as the admin: it seeds
-// the CALLER as project:demo#owner AND the platform-admin DATA tuple
-// (platform:main#admin) via CreateRelationships. The A9 host seeds no user, so the
-// admin's principal id is only known once it has registered + logged in — hence a
-// runtime seed rather than a boot seed (the A9 protocol legs stay intact).
-// platform-admin is DATA (a tuple over a `platform` resource type), never Config.
-// Demo-only host surface. CreateRelationships is idempotent, so a repeat call is a
-// no-op.
-func demoBootstrapAdmin(authSvc *auth.Service, authorizer *authorization.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		p, ok := authSvc.CurrentPrincipal(r.Context())
-		if !ok {
-			writeHostJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
-			return
-		}
-		if err := authorizer.CreateRelationships(r.Context(), []authorization.CreateRelationship{
-			{ResourceType: demoResourceType, ResourceID: demoResourceID, Relation: "owner", SubjectType: p.Type, SubjectID: p.ID},
-			{ResourceType: "platform", ResourceID: "main", Relation: "admin", SubjectType: p.Type, SubjectID: p.ID},
-		}); err != nil {
-			writeHostJSON(w, http.StatusInternalServerError, map[string]string{"error": "seed failed"})
-			return
-		}
-		writeHostJSON(w, http.StatusOK, map[string]any{
-			"status":         "bootstrapped",
-			"subject":        p.Type + ":" + p.ID,
-			"owner":          demoResourceType + "/" + demoResourceID,
-			"platform_admin": "platform/main",
-		})
-	}
 }
 
 // demoRole is the opaque role the audit route gates on (roles are host-interpreted
@@ -95,7 +56,7 @@ const demoRole = "auditor"
 
 // demoMyProjects (authorization-v1 Z4, demonstration (b)) exercises the
 // relationship kind's ENUMERATION API — flagship-specific, NEVER a consumer seam.
-// It maps the resolved principal onto an authorization.Subject and asks the engine
+// It maps the resolved principal onto an authorization.PrincipalRef and asks the engine
 // which `project` resources the subject may `view`. LookupResources is now pure
 // enumeration (the engine grants no admin bypass), so the host composes
 // admin-sees-everything itself: it runs the isPlatformAdmin recipe FIRST and
@@ -110,7 +71,7 @@ func demoMyProjects(authSvc *auth.Service, authorizer *authorization.Service) ht
 			return
 		}
 		admin := isPlatformAdmin(r.Context(), authorizer, p.Type, p.ID)
-		res, err := authorizer.LookupResources(r.Context(), authorization.Subject{Type: p.Type, ID: p.ID}, demoPermission, demoResourceType)
+		res, err := authorizer.LookupResources(r.Context(), authorization.PrincipalRef{Type: p.Type, ID: p.ID}, demoPermission, demoResourceType)
 		if err != nil {
 			writeHostJSON(w, http.StatusInternalServerError, map[string]string{"error": "lookup failed"})
 			return
@@ -137,7 +98,7 @@ func demoAudit(authSvc *auth.Service, authorizer *authorization.Service) http.Ha
 			writeHostJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
 			return
 		}
-		allowed, err := authorizer.HasRole(r.Context(), authorization.Subject{Type: p.Type, ID: p.ID}, demoRole, demoResourceType, demoResourceID)
+		allowed, err := authorizer.HasRole(r.Context(), authorization.PrincipalRef{Type: p.Type, ID: p.ID}, demoRole, demoResourceType, demoResourceID)
 		if err != nil {
 			writeHostJSON(w, http.StatusInternalServerError, map[string]string{"error": "role check failed"})
 			return
@@ -161,70 +122,6 @@ func demoAudit(authSvc *auth.Service, authorizer *authorization.Service) http.Ha
 			"scoped_auditors": scoped,
 		})
 	}
-}
-
-// roleAssignRequest is the body of the admin-driven role assign/unassign routes.
-type roleAssignRequest struct {
-	SubjectID string `json:"subject_id"`
-	Role      string `json:"role"`
-	Global    bool   `json:"global"` // true → the empty-scope GLOBAL grant (Q5 fallback); else scoped to project/demo
-}
-
-// demoAssignRole (authorization-v1 Z4 roles leg) is a session-gated host route
-// (the /outbox-demo precedent) the protocol drives as the admin: it assigns a role
-// to a subject, either scoped to project/demo or GLOBAL. Roles are opaque strings.
-func demoAssignRole(authorizer *authorization.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		req, ok := decodeRoleRequest(w, r)
-		if !ok {
-			return
-		}
-		rt, rid := roleScope(req.Global)
-		if err := authorizer.AssignRole(r.Context(), authorization.Subject{Type: "user", ID: req.SubjectID}, req.Role, rt, rid); err != nil {
-			writeHostJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-		writeHostJSON(w, http.StatusOK, map[string]any{"status": "assigned", "subject_id": req.SubjectID, "role": req.Role, "global": req.Global})
-	}
-}
-
-// demoUnassignRole is the revoke leg — the exact-scope inverse of demoAssignRole.
-func demoUnassignRole(authorizer *authorization.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		req, ok := decodeRoleRequest(w, r)
-		if !ok {
-			return
-		}
-		rt, rid := roleScope(req.Global)
-		if err := authorizer.UnassignRole(r.Context(), authorization.Subject{Type: "user", ID: req.SubjectID}, req.Role, rt, rid); err != nil {
-			writeHostJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-		writeHostJSON(w, http.StatusOK, map[string]any{"status": "unassigned", "subject_id": req.SubjectID, "role": req.Role, "global": req.Global})
-	}
-}
-
-// roleScope maps the request's global flag to a scope pair: the empty ("","")
-// pair is a GLOBAL grant, otherwise the demo project scope.
-func roleScope(global bool) (resourceType, resourceID string) {
-	if global {
-		return "", ""
-	}
-	return demoResourceType, demoResourceID
-}
-
-// decodeRoleRequest reads and validates the assign/unassign body.
-func decodeRoleRequest(w http.ResponseWriter, r *http.Request) (roleAssignRequest, bool) {
-	var req roleAssignRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeHostJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
-		return roleAssignRequest{}, false
-	}
-	if req.SubjectID == "" || req.Role == "" {
-		writeHostJSON(w, http.StatusBadRequest, map[string]string{"error": "subject_id and role are required"})
-		return roleAssignRequest{}, false
-	}
-	return req, true
 }
 
 // demoWhoami echoes the resolved principal (RequirePrincipal ran first).

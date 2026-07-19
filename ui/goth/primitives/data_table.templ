@@ -1,0 +1,84 @@
+package primitives
+
+// DataTable (P52, family F4). See data_table.go for the server-ownership model,
+// the no-JS baseline (links + form GET), and the optional HTMX enhancement. The
+// caller composes DataTableToolbar and DataTableContent inside DataTable; inside
+// DataTableContent it composes the Table family (using DataTableSortHeader for
+// sortable columns and DataTableEmpty for the no-results row), Pagination, and
+// DataTableStatus.
+templ DataTable(p DataTableProps) {
+	<div class={ classNames("goth-data-table", p.Class) } { dataTableAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// DataTableToolbar is the row above the table for the filter form and bulk
+// actions. It sits OUTSIDE DataTableContent so a live filter input keeps its
+// focus/caret across an HTMX content swap.
+templ DataTableToolbar(p DataTableToolbarProps) {
+	<div class={ classNames("goth-data-table-toolbar", p.Class) } { dataTablePartAttrs(p.Base, "data-table-toolbar")... }>
+		{ children... }
+	</div>
+}
+
+// DataTableContent is the swappable inner region (the HTMX target). It holds the
+// Table, Pagination, and status; Busy renders the loading state.
+templ DataTableContent(p DataTableContentProps) {
+	<div class={ classNames("goth-data-table-content", p.Class) } { dataTableContentAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// DataTableSortHeader is a sortable column header: a <th> carrying aria-sort for
+// the CURRENT state, whose sort control is a real link to the server-produced
+// next-sort URL. With no JavaScript the link re-sorts via a full navigation;
+// enhanced, hx-* on Base.Attributes swaps the content region instead. The visible
+// label is templ children; the direction glyph is decorative (aria-sort is the
+// accessible source of truth).
+templ DataTableSortHeader(p DataTableSortHeaderProps) {
+	<th
+		class="goth-data-table-sort-header"
+		scope="col"
+		aria-sort={ p.Direction.ariaSort() }
+		data-slot="data-table-sort-header"
+		data-direction={ p.Direction.attr() }
+	>
+		<a href={ p.URL.SafeURL() } class={ classNames("goth-data-table-sort", p.Class) } { dataTableSortLinkAttrs(p)... }>
+			<span data-slot="data-table-sort-label">{ children... }</span>
+			@dataTableSortGlyph(p.Direction)
+		</a>
+	</th>
+}
+
+// dataTableSortGlyph renders the decorative direction indicator: an up/down
+// chevron for the active ascending/descending column, or a neutral up-down glyph
+// signalling the column is sortable but not the active sort.
+templ dataTableSortGlyph(d SortDirection) {
+	<span class="goth-data-table-sort-glyph" data-slot="data-table-sort-glyph" aria-hidden="true">
+		switch d {
+			case SortAscending:
+				@chevronUpGlyph()
+			case SortDescending:
+				@chevronDownGlyph()
+			default:
+				@sortNeutralGlyph()
+		}
+	</span>
+}
+
+// DataTableEmpty is the "no results" body row: a single cell spanning all columns.
+templ DataTableEmpty(p DataTableEmptyProps) {
+	<tr class={ classNames("goth-data-table-empty", p.Class) } { dataTablePartAttrs(p.Base, "data-table-empty")... }>
+		<td class="goth-data-table-empty-cell" { dataTableEmptyCellAttrs(p)... }>
+			{ children... }
+		</td>
+	</tr>
+}
+
+// DataTableStatus is an aria-live region for loading/result/error announcements.
+// The server writes the text; the primitive holds no state.
+templ DataTableStatus(p DataTableStatusProps) {
+	<div class={ classNames("goth-data-table-status", p.Class) } { dataTableStatusAttrs(p)... }>
+		{ children... }
+	</div>
+}

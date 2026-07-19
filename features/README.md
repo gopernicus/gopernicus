@@ -39,6 +39,43 @@ type. A global registry would hide wiring order and make two hosts
 silently share state through package-level variables; explicit `Repositories`
 + `Config` + `Register` keeps every dependency visible at the call site.
 
+### FS2 amendment — the authorization `Components` bundle (AUTHORIZATION-SPECIFIC)
+
+`features/authorization` (v3) is the one sanctioned deviation from FS2's
+`svc, err := NewService(repos, cfg)` return: its constructor returns a
+**`Components{Service, RelationshipWriter, SystemMutator}`** bundle instead of a bare `*Service`
+(ratified default #4, authorizationv3). This is an **authorization-specific
+amended shape, not a general replacement of FS2** — a sanctioned variant for the
+narrow case where a feature has a **separately-held trusted capability** that
+must not be reachable from its ordinary driving surface:
+
+- `Components.Service` is the ordinary FS2 driving surface — decisions, lists,
+  and actor-facing *guarded* mutations. HTTP handlers and consumer seams receive
+  only this. `svc.Register(mount)` is unchanged.
+- `Components.RelationshipWriter` is the normal trusted application-side ReBAC
+  state capability (schema-valid create/delete and atomic desired-state
+  reconciliation). It is independent of the advanced mutation repository.
+- `Components.SystemMutator` is the optional high-integrity actor-free command
+  capability (revisions, guardian invariants, receipts, audit, teardown). Both are
+  **structurally unreachable from `Service`** and is handed by the composition
+  root only to code that legitimately needs it. This is the whole point of the
+  bundle: capabilities that must be *held apart* cannot be one
+  `*Service`, and stapling the trusted methods onto `Service` (or gating them
+  behind an `Actor{Kind: system}` flag) would put a self-grant one reflection or
+  one constructed-value away.
+
+Why this stays an exception, not the new default (the ruling, with reasoning):
+**no other feature in the repo has a SystemMutator-like separately-trusted
+capability.** cms, authentication, events, and jobs all return the bare FS2
+`*Service` and have no second, deliberately-partitioned surface — a survey of
+their `<name>.go` constructors confirms `*Service`-only returns and no
+system/trusted sibling. Generalizing `Components` would tax every conforming
+feature with a one-member bundle for a capability it does not have. The rule a
+future feature applies: **return the bare `*Service` unless you have a second
+surface that MUST be partitioned from the driving surface by construction** — in
+which case a named `Components{Service, …}` bundle is the sanctioned shape, and
+the extra member is a real trust/lifecycle boundary, never mere grouping.
+
 ## 2. Anatomy
 
 Mirrors `features/cms` and `features/authentication`, generalized (trio layout,
@@ -52,7 +89,7 @@ ratified 2026-07-02 — `.claude/plans/roadmap/feature-trio-relayout.md`):
 | `internal/inbound/<feature>/` (e.g. `internal/inbound/cms/` — D1, segovia-lessons phase 01, 2026-07-08) | driving adapter wearing the ratified file anatomy: `routes.go` is the ONE readable route table (a `Mount` dispatcher; per-resource deny-by-absence `mountX` helpers live in their resource files — the authentication shape); per-resource files at resource #2 (`entries.go`, `media.go`, …); transport-named `api.go`/`html.go` only as the single-resource degenerate form; the maximal flatten (single resource, small handler set → handlers stay in `routes.go`; `features/events/internal/inbound/events/routes.go` is the blessed example); **never** `/api`/`/html`/`/htmx` subdirectories. Handlers are thin delegations to the Service, writing responses through `sdk/foundation/web` responders only (FS9); views are consumed through the feature's `Views` port, never hardcoded (FS3; cms converged at feature-standard B2, 2026-07-07). `internal/inbound/http/` means transport plumbing only (middleware), mirroring the app pattern — a feature has none until real plumbing appears | internal |
 | `stores/<package>/` | a **separate module** — the store implementation written against one driver package's API (`stores/pgx`, `stores/turso`; R-KV3), owning its SQL, canonical migrations, and `ExportMigrations` | public API, but never imported by the feature core |
 | `storetest/` | the exported conformance suite (`Run(t, newRepos)`) + the test-scoped reference in-memory implementation; every store implementation runs it | public test-support package inside the feature core (stdlib + sdk only — G2 keeps drivers out) |
-| `views/<pkg>` (per-concern, only if the feature has HTML) | a **separate module** — the bundled default implementation of the feature core's `Views` port, named for the package it's built on (`views/templ`; R-KV2). The core defines the port (domain-typed params, `web.Renderer` returns) and registers its HTML surface only when `Config.Views` is non-nil — uniform nil → HTML off (FS3). A host wires the default with one import + one Config field, implements the port itself (`html/template` via `web.Template` works in three lines), or wires nothing and runs API-only with zero view tech in its graph. cms's in-core `theme/` (`PublicViews` + `Default()`) was the reference implementation that proved the shape; it migrated to `views/templ` at feature-standard B2 (2026-07-07; the in-core `theme/` is now deleted) | public API, never imported by the feature core |
+| `views/<pkg>` (per-concern, only if the feature has HTML) | a **separate module** — the bundled default implementation of the feature core's `Views` port, named for the package it's built on (`views/goth`, the ui/goth adapter; R-KV2). The core defines the port (domain-typed params, `web.Renderer` returns) and registers its HTML surface only when `Config.Views` is non-nil — uniform nil → HTML off (FS3). A host wires the default with one import + one Config field, implements the port itself (`html/template` via `web.Template` works in three lines), or wires nothing and runs API-only with zero view tech in its graph. cms's in-core `theme/` (`PublicViews` + `Default()`) was the reference implementation that proved the shape; it migrated to `views/templ` at feature-standard B2 (2026-07-07; the in-core `theme/` is now deleted) | public API, never imported by the feature core |
 
 **How a feature maps onto the app hexagon** (`internal/{inbound,logic,
 outbound}` — ARCHITECTURE.md's app pattern). A feature is the same hexagon,

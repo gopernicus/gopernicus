@@ -1,0 +1,56 @@
+/*
+ * ui/goth theme/component CSS entry (GOTH-1.2 pipeline; GOTH-1.3 theme layers;
+ * GOTH-A.1 esbuild CSS build).
+ *
+ * The build has NO Tailwind: esbuild resolves these @import rules and minifies
+ * the result into the single fingerprinted theme.<hash>.css. The owned base
+ * reset (reset.css) is imported FIRST so it sits at the top of the cascade; then
+ * the semantic token contract + neutral fallbacks (theme/contract.css), so an app
+ * that never loads a palette still resolves a complete grayscale theme; then
+ * component styles. The default light/dark PALETTE is NOT imported here — it is a
+ * separate injected asset (theme-default.css, built from theme/default.css) that
+ * wiring links AFTER this stylesheet, so a host's own theme stylesheet replaces it
+ * by source-order cascade (amendment-1 D3). Never hand-edit the compiled dist
+ * output — edit these sources and run the Node-gated asset build.
+ */
+@import "./reset.css";
+@import "../../../theme/contract.css";
+/*
+ * Component styles for the implemented primitives (GOTH-2.1 onward). Component
+ * rules key off the stable goth-<primitive> + data-slot/data-variant surface with
+ * class/attribute specificity, so they win over the element-selector base reset
+ * in normal cascade order.
+ */
+@import "./components.css";
+
+/*
+ * .goth-sr-only is the visually-hidden utility the runtime's shared live regions
+ * (assets/src/js/mechanics/live-region.js, GOTH-1.4) attach to their aria-live
+ * announcer nodes, so announcements stay off-screen without an inline style
+ * (README §4 invariant a). It is the standard accessible screen-reader-only
+ * recipe and is part of the compiled theme.css.
+ */
+.goth-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/*
+ * The [hidden] attribute must hide an element even when a component rule gives it
+ * a display value (e.g. filtered .goth-command-item / .goth-combobox-option
+ * options that carry `hidden` but are also `display: flex`). This is placed LAST,
+ * after components — the same source-order-wins position the previous Tailwind
+ * preflight used for its own [hidden] rule — so it beats the component's display
+ * at equal specificity. Not part of reset.css because reset.css is imported first
+ * and would lose the source-order tie to the component rules.
+ */
+[hidden] {
+  display: none;
+}

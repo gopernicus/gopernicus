@@ -1,0 +1,9 @@
+package primitives
+
+// Switch (P33, family F1) renders a native <input type="checkbox" role="switch">.
+// It submits natively with no JavaScript; the track and thumb are drawn by
+// component CSS keyed off :checked. No controller is bound — native Space-key and
+// pointer toggling and native focus are the interaction model.
+templ Switch(p SwitchProps) {
+	<input class={ switchClass(p) } { switchAttrs(p)... }/>
+}

@@ -1,0 +1,55 @@
+package primitives
+
+// Sheet (P47, family F4). See sheet.go for the edge-panel/modal contract and ARIA
+// rules. SheetContent owns the frozen overlay/scrim structure; the panel is
+// edge-anchored via data-side.
+templ Sheet(p SheetProps) {
+	<div class={ sheetClass(p) } { sheetAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+templ SheetTrigger(p SheetTriggerProps) {
+	<button class={ classNames("goth-sheet-trigger", p.Class) } { overlayTriggerAttrs(p.Base, "dialog")... }>
+		{ children... }
+	</button>
+}
+
+templ SheetContent(p SheetContentProps) {
+	<div class="goth-overlay" data-slot="overlay">
+		<div class="goth-overlay-scrim" data-slot="scrim" aria-hidden="true"></div>
+		<div class={ sheetPanelClass(p) } { sheetPanelAttrs(p)... }>
+			{ children... }
+		</div>
+	</div>
+}
+
+templ SheetHeader(p SheetHeaderProps) {
+	<div class={ classNames("goth-sheet-header", p.Class) } { overlayPartAttrs(p.Base, "header")... }>
+		{ children... }
+	</div>
+}
+
+templ SheetFooter(p SheetFooterProps) {
+	<div class={ classNames("goth-sheet-footer", p.Class) } { overlayPartAttrs(p.Base, "footer")... }>
+		{ children... }
+	</div>
+}
+
+templ SheetTitle(p SheetTitleProps) {
+	<h2 class={ classNames("goth-sheet-title", p.Class) } { overlayPartAttrs(p.Base, "title")... }>
+		{ children... }
+	</h2>
+}
+
+templ SheetDescription(p SheetDescriptionProps) {
+	<p class={ classNames("goth-sheet-description", p.Class) } { overlayPartAttrs(p.Base, "description")... }>
+		{ children... }
+	</p>
+}
+
+templ SheetClose(p SheetCloseProps) {
+	<button class={ classNames("goth-sheet-close", p.Class) } { overlayCloseAttrs(p.Base)... }>
+		{ children... }
+	</button>
+}

@@ -67,8 +67,9 @@ storetest/               executable spec for domain/'s ports + the reference
 stores/turso/            the outbound tier: per-dialect SQL + canonical
 stores/pgx/              migrations (0001–0013; auth owns no delivery table),
                          each its own module
-views/templ/             the bundled default HTML surface — a SIBLING module
-                         (authtempl.New()); the feature core never imports templ
+views/goth/              the bundled default HTML surface — a SIBLING module
+                         (goth.New(bundle), the ui/goth adapter); the feature
+                         core never imports templ or ui/goth
 ```
 
 ## The identifier model (design §2.2)
@@ -209,16 +210,83 @@ both wired; all session-gated:**
   refresh_token}` (the API twin of `/auth/login`). Shares login's pre-credential
   rate limit and verified-email gating; clients rotate via `/auth/refresh`.
 
-**Invitations — registered only when `Config.Granter` is wired; session-gated
-except decline:**
+**Invitations — registered only when `Config.Granter` is wired; every
+authenticated route is `RequireLiveSession`-gated (immediate revocation), only
+decline is public:**
 
 - `POST /auth/invitations/{resource_type}/{resource_id}` — `{identifier,
   relation, identifier_kind?, auto_accept?}` → 201 pending (or immediate
-  direct-add for a known email invitee).
-- `GET /auth/invitations/{resource_type}/{resource_id}`, `GET /auth/invitations/mine`
+  direct-add for a known email invitee). After live-session validation, principal
+  resolution, and parsing, the handler calls the required host `InviteCheck` with
+  the exact requested relation; a denial fails closed before the service runs.
+- `GET /auth/invitations/{resource_type}/{resource_id}` — calls `InviteCheck`
+  with `InviteList` (empty relation) after the same resolution; `GET
+  /auth/invitations/mine`.
 - `POST /auth/invitations/accept` — `{token}` → grant through the Granter.
+  Acceptance does NOT re-run inviter authority (issuance-time authority, below).
 - `POST /auth/invitations/{id}/{cancel,resend}` — `InvitedBy == caller` checks.
-- `POST /auth/invitations/{id}/decline` — public, token-authorized, IP-limited.
+- `POST /auth/invitations/{id}/decline` — public, token-authorized, IP-limited
+  (the one invitation route with no session gate).
+
+**The Granter contract and invitation authority (D1–D3).** `Config.Granter` is
+the host seam an accepted, auto-accepted, or directly-added invitation grants
+through — a structured, operation-scoped request:
+
+```go
+type GrantInput struct {
+    OperationID  string // stable per logical grant (see below)
+    ResourceType string
+    ResourceID   string
+    Relation     string
+    SubjectType  string
+    SubjectID    string
+}
+type Granter interface{ Grant(context.Context, GrantInput) error }
+```
+
+- **Optional operation-scoped identity.** `OperationID` is an opaque, non-secret handle
+  for THIS logical grant. Pending accept and resolve-on-registration use the
+  persisted invitation row id — a retry of the same invitation reuses it, while a
+  later invitation row for the same tuple gets a distinct id. Direct-add has no
+  invitation row, so the feature mints a fresh high-entropy id from its
+  unconditional secret generator (never `Config.IDs`, whose `cryptids.Database`
+  strategy yields an empty id until an entity is inserted). It is available to an
+  adapter that chooses durable command idempotency: such an adapter can derive an
+  authorization MutationID from a fixed purpose + `OperationID` + the tuple. A
+  baseline relationship-state adapter may ignore it; exact tuple creation is
+  naturally idempotent and a later re-grant simply restores current state. The
+  field is metadata, not authority and not a mandate to use receipts or a mutation
+  repository.
+- **Strengthened success contract.** `Grant` returns nil ONLY when the EXACT
+  requested relation was applied or is already exactly present. A different
+  existing relation, an invariant refusal, a missing/deleted host resource, and
+  any infrastructure error all fail loud — there is **no implicit replace**. A host
+  baseline adapter verifies the exact resulting tuple (accepting ordinary detached
+  race semantics); a guarded adapter maps its authorization receipt outcome
+  (applied / no_change → nil; semantic_conflict / invariant_blocked / anything
+  else → a loud error).
+- **Required `InviteCheck`.** Whenever a `Granter` enables invitations,
+  `Config.InviteCheck` is REQUIRED at construction — nil → `ErrInviteCheckRequired`;
+  an `InviteCheck` wired with no `Granter` → `ErrInviteCheckWithoutGranter`. It runs
+  in the feature's own parsed create/list handlers (after live-session validation,
+  principal resolution, and parsing), so the host sees the caller, resource,
+  action, and validated relation a route wrapper cannot — and can refuse, e.g., an
+  editor inviting a co-owner. HTTP create/list call it; host-direct `Service`
+  methods are trusted composition calls that document they skip HTTP policy.
+  Denial (wrap `sdk.ErrForbidden`) or an infrastructure error fails closed.
+- **Issuance-time authority.** An invitation authorized at creation is a durable,
+  expiring capability; acceptance does not re-check inviter authority, and a later
+  loss of the inviter's host permission does not silently invalidate an already
+  issued invitation. Deleted-resource refusal at acceptance is the Granter's duty —
+  only the host knows whether the target still exists.
+
+The host chooses posture per resource type/relation. Ordinary folder/document
+sharing should normally use a trusted application-side relationship writer and
+accept ordinary state-write races. Tenant/account owner or administrator grants
+can opt into a guarded lifecycle when atomic authority checks, last-owner rules,
+audit evidence, or durable idempotency justify it. `InviteCheck` remains required
+in both cases: choosing simpler tuple-write semantics does not make invitation
+authority optional.
 
 ## HTML surface (Views) — the optional presentation tier
 
@@ -260,35 +328,73 @@ allowlisted `Origin`/`Sec-Fetch-Site` check WITHOUT a pre-existing CSRF session
 (a first-time browser sign-in has no cookie to compare), and native/no-Origin
 clients pass. **Authenticated mutations** (account-security forms) use the full
 double-submit CSRF contract: the form's `csrf_token` field is compared to the
-`auth_csrf` cookie in constant time. Every HTML response carries the full header
-policy: `Cache-Control: no-store`, `Referrer-Policy: no-referrer`,
-`X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, and a restrictive
-CSP (`default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors
-'none'; script-src 'nonce-…'|'none'`).
+`auth_csrf` cookie in constant time. Every HTML response carries the full **fixed**
+header policy — these are feature-owned and no policy or view can turn them off:
+`Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`,
+`X-Content-Type-Options: nosniff`, and the fixed CSP prefix `default-src 'none';
+base-uri 'none'; form-action 'self'; frame-ancestors 'none'`. With no resource
+policy (`Config.HTMLPolicy == nil`, the default) that prefix is followed by
+`script-src 'nonce-…'|'none'` — the historical asset-free posture.
 
 **Bundled default, `html/template` alternative, and overrides.** The blessed
-default lives in the sibling module `features/authentication/views/templ`
-(`authtempl.New()`, a zero-value-usable `Views`) — semantic, asset-free templates
-with labels, field associations, correct `autocomplete` (`email`,
-`current-password`, `new-password`, `one-time-code`, `tel`), CSRF hidden fields,
-masked methods, and a CSP-nonced magic/reset landing script that reads the URL
-fragment, scrubs history, and POSTs (with a manual visible fallback; the token
-never enters a query string). A host may instead satisfy the port with stdlib
-`html/template` via `sdk/foundation/web.Template` — no templ import required. The
-**blessed override path is embedding the bundled `authtempl.Views` and overriding
+default lives in the sibling module `features/authentication/views/goth`
+(`goth.New(bundle *uigoth.Bundle)`, the ui/goth adapter — GOTH-7.2) — pages
+rendered through `ui/goth` primitives/components with labels, field associations,
+correct `autocomplete` (`email`, `current-password`, `new-password`,
+`one-time-code`, `tel`), CSRF hidden fields, masked methods, and a magic/reset
+landing that reads the URL fragment through an externalized same-origin
+`fragment.js` (served by `goth.FragmentScriptHandler()`), scrubs history, and POSTs
+(with a manual visible fallback; the token never enters a query string, and no
+inline script is emitted). The adapter also derives `Config.HTMLPolicy` from the
+bundle via `authViews.HTMLPolicy()` (see §11.6 of `ui/goth/README.md` for the full
+adapter recipe). A host may instead satisfy the port with stdlib `html/template` via
+`sdk/foundation/web.Template` — no templ/`ui/goth` import required. The
+**blessed override path is embedding the bundled `goth.Views` and overriding
 individual methods**; promoted defaults satisfy every other page. Overriding
 presentation **cannot bypass** middleware, decoding, service, redirect, or status
 policy — all of that lives in the inbound handler, never a `Views` method (proven
 byte-identical across three presentations in `isolation_test.go`).
 
-**The v3 override promise is markup-only (presentation templates).** A `Views`
-override controls the rendered HTML markup; it does NOT get a styling / asset
-policy. The security CSP above is **hard-coded** (`default-src 'none'`, no
-`style-src`/`img-src`/external asset origins), so a branded override cannot
-introduce external stylesheets, images, fonts, or scripts beyond the nonce'd inline
-policy — the templates are deliberately asset-free. A constrained host asset/layout
-policy hook (a supported styling seam for branded overrides) is a **post-v3
-deferral**; v3 does not weaken the secure default to accommodate it.
+**A `Views` override is markup-only; assets are opened separately through
+`Config.HTMLPolicy`.** Overriding `Views` controls the rendered HTML markup; it does
+NOT by itself widen the CSP. The asset-free CSP above is the secure **default**, not a
+permanent restriction (GOTH-0.4): a host opts into loading external styles, scripts,
+fonts, and images by wiring a validated `Config.HTMLPolicy` — a technology-neutral,
+feature-owned resource policy built with `NewHTMLResourcePolicy`.
+
+- `HTMLResourcePolicy` carries a deterministically ordered set of ADDITIONAL CSP
+  resource directives across the frozen widenable classes `HTMLScriptSrc`,
+  `HTMLStyleSrc`, `HTMLImgSrc`, `HTMLFontSrc`, `HTMLConnectSrc`, `HTMLMediaSrc`,
+  `HTMLWorkerSrc`. The fixed protection directives (`default-src`, `base-uri`,
+  `form-action`, `frame-ancestors`) are not members of `HTMLResourceKind`, so a policy
+  **structurally cannot** name, relax, or drop them. A policy only widens.
+- **A non-nil policy REPLACES the default `script-src` tail entirely — fail-closed by
+  design.** With `HTMLPolicy == nil` the CSP appends the historical `script-src
+  'nonce-…'|'none'` tail after the fixed prefix; with a non-nil policy that default tail
+  is gone and ONLY the policy's own directives follow the fixed prefix. A policy that
+  omits `HTMLScriptSrc` (or supplies it without `Nonce: true`) therefore leaves scripts
+  governed by `default-src 'none'`, so the bundled magic-link/reset fragment readers do
+  not run. Include `HTMLResourceDirective{Kind: HTMLScriptSrc, Nonce: true}` in the
+  policy to retain them.
+- **Widening is unbounded by design.** The seam validates directive STRUCTURE (header
+  injection, fixed/unknown kinds) — never source VALUES. `'unsafe-inline'`,
+  `'unsafe-eval'`, and `*` are deliberately accepted: the seam stays value-neutral and
+  script hardening rests on the view adapter / host, not this feature.
+- `HTMLResourceDirective.Nonce` is the only channel to the per-render CSP nonce
+  (`'nonce-<value>'`); a caller never formats the nonce into `Sources`. A directive
+  requesting the nonce with no minted nonce renders `'none'` (fail-safe).
+- `NewHTMLResourcePolicy` validates LOUDLY at construction (errors wrap
+  `sdk.ErrInvalidInput`): an unknown/fixed directive key, a directive with neither a
+  source nor a nonce, an empty source, or a source carrying a control character,
+  whitespace, `;`, or `,` (the header-injection guard) is rejected — the feature never
+  emits an attacker-controlled header.
+- `Config.HTMLPolicy` is consulted only by the HTML surface, which is gated on `Views`.
+  Setting `HTMLPolicy` with a nil `Views` is `ErrHTMLPolicyWithoutViews` at construction
+  — a policy for an absent HTML surface is contradictory wiring, never a silent no-op.
+- The feature core imports no templ, Alpine, HTMX, or `ui/goth`:
+  `HTMLResourcePolicy` is a plain value. The future `ui/goth` authentication view
+  adapter maps `goth.Bundle.Requirements()` into one (GOTH-7.2). A nil `HTMLPolicy`
+  keeps the exact historical asset-free CSP.
 
 `Views` (HTML pages) and `EmailContentTemplates` (email bodies, below) are two
 **distinct** override facilities — different Config fields, different types,
@@ -315,8 +421,13 @@ different subsystems, no shared type.
 ## Repositories (the ports a host or store adapter satisfies)
 
 The bundled store adapters fill the whole bundle from one handle
-(`authstore.Repositories(db)`). The v1/v2 core ports are unchanged; v3 adds the
-identity + atomic-security rails. Delivery owns **no** repository here — durable
+(`authstore.Repositories(db) (Repositories, error)`). Both dialect constructors
+now **return an error**: before returning repos they probe all 13 canonical
+tables and fail loudly — naming the missing table and the `authentication`
+migration source, wrapping `sdk.ErrNotFound` — when a migration was not applied
+pre-boot, so an omission surfaces at wiring time rather than on the first query.
+Constructors never apply migrations. The v1/v2 core ports are unchanged; v3 adds
+the identity + atomic-security rails. Delivery owns **no** repository here — durable
 delivery runs on the generic **jobs** feature and `in_process` delivery is
 process-local (see "Delivery execution modes").
 
@@ -365,8 +476,11 @@ consumes atomically (`ConsumeCode`/`RedeemToken` are delete-returning);
 (`sdk.ErrConflict` on a stale `auth_revision`, the service re-evaluates policy and
 retries); a lost auth-claim race surfaces the generic `sdk.ErrAlreadyExists`.
 Paginated ports order by `created_at DESC, id DESC` — the id tiebreak is
-contractual (and assumes byte-wise text collation; a fresh pg conformance/upgrade
-DB must be created with `C` collation).
+contractual and byte-wise. The pgx canonical migrations now carry per-column
+`COLLATE "C"` on the contractual keyset id columns (`service_accounts`,
+`api_keys`, `security_events`, `invitations`), so byte-order pagination holds on
+any database's default collation; a `C`-locale database remains a supported
+belt-and-suspenders posture, not a requirement.
 
 ## Config — required vs defaulted vs deny-by-absence
 
@@ -395,7 +509,8 @@ default, so a host can never inherit the development posture; unknown →
 | `PublicAuthBaseURL` | the absolute base magic links + landing pages build from (`AUTH_PUBLIC_BASE_URL`). REQUIRED once a link flow is enabled (`ErrPublicAuthBaseURLRequired`); production requires **HTTPS** (`ErrPublicAuthBaseURLInsecure`). Request Host/forwarded headers NEVER participate. |
 | `Passwordless []string` | empty → passwordless OFF (routes not registered). Allowed v3 kinds are `"email"`/`"phone"` (`ErrPasswordlessKindInvalid`); each needs a wired delivery channel (`ErrPasswordlessKindUnsupported`), the challenge rail + durable outbox, and a valid `PublicAuthBaseURL`. NEVER auto-provisions; NEVER enables phone+password (phone stays passwordless-only). |
 | `AllowedOrigins []string` | the exact-match `Origin` allowlist for cookie-authenticated sensitive mutations and HTML form posts (design §9.1). `"*"` never authorizes a credentialed cross-origin mutation; empty rejects every cross-site cookie mutation. Bearer-only callers skip the gate. |
-| `Views` | **nil → API-only** (no HTML routes, JSON-only POSTs, no templ in the graph). Non-nil → HTML pages mount alongside the unchanged JSON API. The blessed default is `authtempl.New()`; the override path is embedding it. |
+| `Views` | **nil → API-only** (no HTML routes, JSON-only POSTs, no templ in the graph). Non-nil → HTML pages mount alongside the unchanged JSON API. The blessed default is the ui/goth adapter `authgoth.New(bundle)` (`features/authentication/views/goth`); the override path is embedding its `Views`. |
+| `HTMLPolicy` (*HTMLResourcePolicy) | **nil → the historical asset-free CSP** (script-src nonce-only, no external origins). Non-nil → the same fixed protections plus the policy's validated widening resource directives (script/style/image/font/connect/media/worker), so a selected HTML view can load its assets. Only WIDENS — a policy can never remove a fixed protection. Build with `NewHTMLResourcePolicy` (validates loudly). Set with a nil `Views` → `ErrHTMLPolicyWithoutViews` at construction (contradictory wiring). Technology-neutral — the core imports no templ/`ui/goth`. |
 | `EmailContentTemplates` | empty → the bundled `LayerCore` email bodies render unchanged. Each entry overrides a bundled template at `email.LayerApp` (Namespace must be `EmailContentNamespace`). Changes email BODIES only — a **distinct** override system from `Views`. |
 | `RequireVerifiedEmail` | false. true → login AND `/auth/token` refuse an unverified user with 403 (**requires a WORKING Mailer**, else total login lockout). |
 | `RateLimiter` | `ratelimiter.NewMemory()` — an in-process limiter (not "unlimited"). **Production rejects a per-process limiter** (`ErrNonDurableRateLimiter`): a multi-instance host needs a shared/durable one. |
@@ -406,7 +521,7 @@ default, so a host can never inherit the development posture; unknown →
 | `TokenSigner` (cryptids.JWTSigner) | **REQUIRED.** `sdk/foundation/cryptids.NewHS256` is the stdlib default; `integrations/cryptids/golang-jwt` covers RS256/ES256. **Multi-instance hosts MUST share the signing secret** (§1.6). |
 | `AccessTokenTTL` | 0 → 15m (bounds the stateless revocation window). `AUTH_ACCESS_TOKEN_TTL`. |
 | `RefreshTTL` | 0 → 7d — the FIXED refresh horizon; rotation never extends it. `AUTH_REFRESH_TTL`. |
-| `Granter` / `MemberCheck` / `Notifiers` | invitation subsystem seams (unchanged from v2; see the invitation section). |
+| `Granter` / `InviteCheck` / `MemberCheck` / `Notifiers` | invitation subsystem seams (see the invitation section). `Granter` now takes a structured `GrantInput` (operation-scoped, fail-loud). `InviteCheck` (the relation-aware host policy) is REQUIRED whenever `Granter` is wired — nil → `ErrInviteCheckRequired`; set without a `Granter` → `ErrInviteCheckWithoutGranter`. |
 | `ListStrategy` | `"cursor"` default; `"offset"` allowed; anything else `ErrInvalidListStrategy`. |
 | `IDs` (cryptids.IDGenerator) | entity-ID strategy; NEVER mints secrets (codes/tokens/keys keep their own high-entropy generator). |
 | `Logger` | best-effort WARN sink for audit-write failures + the ephemeral-key/console-transport warnings; nil → `slog.Default()`. |
@@ -744,9 +859,9 @@ cfg := auth.Config{
     // For durable delivery set DeliveryMode "jobs" and wire Config.DeliveryDispatcher
     // over the generic jobs feature instead (recommended production posture).
     // AccessTokenTTL / RefreshTTL omitted → 15m / 7d.
-    // Views: authtempl.New()                 // add HTML pages; omit for API-only
+    // Views: authViews                        // add HTML pages (authgoth.New(bundle)); omit for API-only
 }
-authSvc, err := auth.NewService(repos, cfg)   // repos = authstore.Repositories(db)
+authSvc, err := auth.NewService(repos, cfg)   // repos, err := authstore.Repositories(db) — probes the 13 tables
 // run the in-process delivery runtime for the whole process lifetime:
 go authSvc.RunDelivery(ctx)
 authSvc.Register(feature.Mount{Router: router, Logger: log})

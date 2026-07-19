@@ -4,10 +4,10 @@ go 1.26.1
 
 require (
 	github.com/gopernicus/gopernicus/features/authentication v0.0.0
-	github.com/gopernicus/gopernicus/features/authentication/views/templ v0.0.0
+	github.com/gopernicus/gopernicus/features/authentication/views/goth v0.0.0
 	github.com/gopernicus/gopernicus/features/authorization v0.0.0
 	github.com/gopernicus/gopernicus/features/cms v0.0.0
-	github.com/gopernicus/gopernicus/features/cms/views/templ v0.0.0
+	github.com/gopernicus/gopernicus/features/cms/views/goth v0.0.0
 	github.com/gopernicus/gopernicus/features/events v0.0.0
 	github.com/gopernicus/gopernicus/features/jobs v0.0.0
 	github.com/gopernicus/gopernicus/features/jobs/stores/pgx v0.0.0
@@ -16,6 +16,7 @@ require (
 	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.0.0
 	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.0.0
 	github.com/gopernicus/gopernicus/sdk v0.0.0
+	github.com/gopernicus/gopernicus/ui/goth v0.0.0
 )
 
 require (
@@ -35,13 +36,13 @@ require (
 
 replace github.com/gopernicus/gopernicus/features/authentication => ../../features/authentication
 
-replace github.com/gopernicus/gopernicus/features/authentication/views/templ => ../../features/authentication/views/templ
+replace github.com/gopernicus/gopernicus/features/authentication/views/goth => ../../features/authentication/views/goth
 
 replace github.com/gopernicus/gopernicus/features/authorization => ../../features/authorization
 
 replace github.com/gopernicus/gopernicus/features/cms => ../../features/cms
 
-replace github.com/gopernicus/gopernicus/features/cms/views/templ => ../../features/cms/views/templ
+replace github.com/gopernicus/gopernicus/features/cms/views/goth => ../../features/cms/views/goth
 
 replace github.com/gopernicus/gopernicus/features/events => ../../features/events
 
@@ -58,3 +59,5 @@ replace github.com/gopernicus/gopernicus/integrations/datastores/pgxdb => ../../
 replace github.com/gopernicus/gopernicus/integrations/datastores/turso => ../../integrations/datastores/turso
 
 replace github.com/gopernicus/gopernicus/sdk => ../../sdk
+
+replace github.com/gopernicus/gopernicus/ui/goth => ../../ui/goth

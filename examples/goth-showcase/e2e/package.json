@@ -1,0 +1,19 @@
+{
+  "name": "goth-showcase-e2e",
+  "version": "0.0.0",
+  "private": true,
+  "description": "ui/goth three-engine Playwright + axe accessibility/interaction harness (GOTH-1.5). Node-gated: runs behind `make test-ui-browser`, never in the hermetic `make check` loop. axe-core (MPL-2.0) lives ONLY in this dev toolchain and is never imported by ui/goth or embedded into assets/dist.",
+  "engines": {
+    "node": "24.0.1",
+    "npm": "11.3.0"
+  },
+  "scripts": {
+    "test": "playwright test",
+    "install-browsers": "playwright install chromium firefox webkit"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
+    "@playwright/test": "1.60.0",
+    "axe-core": "4.12.1"
+  }
+}

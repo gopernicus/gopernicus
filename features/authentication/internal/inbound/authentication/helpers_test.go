@@ -564,7 +564,7 @@ func newTestHandler(t *testing.T, limiter ratelimiter.Limiter) http.Handler {
 		TokenSigner:    newFakeSigner(),
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, nil, "", MutationSecurity{}, nil)
+	Mount(h, svc, nil, nil, "", MutationSecurity{}, nil, nil)
 	return h
 }
 

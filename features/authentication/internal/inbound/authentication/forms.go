@@ -127,7 +127,7 @@ func (h *handlers) prgRedirect(w http.ResponseWriter, r *http.Request, returnTo 
 // prgTo issues the 303 Post/Redirect/Get to a server-controlled destination (a fixed
 // same-origin path built by the handler — never a client-supplied absolute URL).
 func (h *handlers) prgTo(w http.ResponseWriter, r *http.Request, dest string) {
-	writeHTMLSecurity(w, "")
+	writeHTMLSecurity(w, h.htmlPolicy, "")
 	http.Redirect(w, r, dest, http.StatusSeeOther)
 }
 
@@ -153,7 +153,7 @@ func formFailure(err error, generic string) (int, string) {
 // a freshly minted PageContext so the re-rendered form carries a new CSRF token and
 // nonce.
 func (h *handlers) renderForm(w http.ResponseWriter, r *http.Request, status int, nonce string, page web.Renderer) {
-	writeHTMLSecurity(w, nonce)
+	writeHTMLSecurity(w, h.htmlPolicy, nonce)
 	web.Render(r.Context(), w, status, page)
 }
 

@@ -1,0 +1,80 @@
+package feedback
+
+import (
+	"github.com/gopernicus/gopernicus/ui/goth/components/internal/kit"
+	"github.com/gopernicus/gopernicus/ui/goth/primitives"
+)
+
+// EmptyPanel is a bordered empty-state surface composing primitives.Empty.
+templ EmptyPanel(p EmptyPanelProps) {
+	<div class={ kit.Class(p.Base, "goth-feedback-panel") } { emptyPanelAttrs(p)... }>
+		@primitives.Empty(primitives.EmptyProps{
+			Media:       p.Media,
+			Title:       p.Title,
+			Description: p.Description,
+			Action:      p.Action,
+		})
+	</div>
+}
+
+// LoadingPanel is a centered busy surface: the panel is the live region and the
+// composed spinner renders decorative so assistive tech announces the message once.
+templ LoadingPanel(p LoadingPanelProps) {
+	<div class={ kit.Class(p.Base, "goth-feedback-panel") } { loadingPanelAttrs(p)... }>
+		@primitives.Spinner(primitives.SpinnerProps{Decorative: true})
+		<div data-slot="feedback-panel-title">{ p.label() }</div>
+		if p.Description != "" {
+			<p data-slot="feedback-panel-description">{ p.Description }</p>
+		}
+	</div>
+}
+
+// ErrorPanel is a bordered error-state surface (role="alert") composing
+// primitives.Empty with a destructive tone.
+templ ErrorPanel(p ErrorPanelProps) {
+	<div class={ kit.Class(p.Base, "goth-feedback-panel") } { errorPanelAttrs(p)... }>
+		@primitives.Empty(primitives.EmptyProps{
+			Media:       p.Media,
+			Title:       p.title(),
+			Description: p.Description,
+			Action:      p.Action,
+		})
+	</div>
+}
+
+// ConfirmDialog is the destructive-confirmation workflow composing the
+// gothDialog-backed primitives.AlertDialog family (no new controller). The confirm
+// button submits an inline form to Action so the mutation is server-owned.
+templ ConfirmDialog(p ConfirmDialogProps) {
+	@primitives.AlertDialog(primitives.AlertDialogProps{
+		Base: primitives.Base{ID: p.ID, Class: p.Class, Attributes: p.Attributes},
+		Open: p.Open,
+	}) {
+		@primitives.AlertDialogTrigger(primitives.AlertDialogTriggerProps{}) {
+			{ p.TriggerLabel }
+		}
+		@primitives.AlertDialogContent(primitives.AlertDialogContentProps{
+			Labelledby:  p.titleID(),
+			Describedby: p.descriptionID(),
+		}) {
+			@primitives.AlertDialogHeader(primitives.AlertDialogHeaderProps{}) {
+				@primitives.AlertDialogTitle(primitives.AlertDialogTitleProps{Base: primitives.Base{ID: p.titleID()}}) {
+					{ p.Title }
+				}
+				@primitives.AlertDialogDescription(primitives.AlertDialogDescriptionProps{Base: primitives.Base{ID: p.descriptionID()}}) {
+					{ p.Description }
+				}
+			}
+			<form { p.confirmFormAttrs()... }>
+				@primitives.AlertDialogFooter(primitives.AlertDialogFooterProps{}) {
+					@primitives.AlertDialogCancel(primitives.AlertDialogCancelProps{}) {
+						{ p.cancelLabel() }
+					}
+					@primitives.AlertDialogAction(primitives.AlertDialogActionProps{Base: primitives.Base{Attributes: p.confirmAttrs()}}) {
+						{ p.confirmLabel() }
+					}
+				}
+			</form>
+		}
+	}
+}

@@ -1,0 +1,48 @@
+package goth
+
+// headTags emits, in order, the profile-selected kit stylesheet link(s), the
+// theme-stylesheet link (the configured host path, emitted verbatim with NO
+// integrity because the kit cannot know host bytes; OR the kit's embedded default
+// theme with integrity + crossorigin), then the deferred script tag(s). The
+// theme link loads AFTER the kit stylesheet so its :root palette wins by
+// source-order cascade. Every kit asset is fingerprinted and SRI-guarded; scripts
+// are external + integrity under script-src 'self'. The kit emits no
+// server-rendered style attribute and no inline <style> element.
+templ headTags(m headModel) {
+	for _, r := range m.styles {
+		<link rel="stylesheet" href={ r.href } integrity={ r.integrity } crossorigin="anonymous"/>
+	}
+	if m.theme.href != "" {
+		if m.theme.integrity != "" {
+			<link rel="stylesheet" href={ m.theme.href } integrity={ m.theme.integrity } crossorigin="anonymous"/>
+		} else {
+			<link rel="stylesheet" href={ m.theme.href }/>
+		}
+	}
+	for _, r := range m.scripts {
+		<script src={ r.href } integrity={ r.integrity } crossorigin="anonymous" defer></script>
+	}
+}
+
+// documentShell composes the full page: <html> with the appearance/direction
+// attributes, a <head> carrying the bundle head plus caller head extras, and a
+// <body> wrapping the caller body. It writes no inline script or style.
+templ documentShell(opts DocumentOptions, head templ.Component, body templ.Component) {
+	<!DOCTYPE html>
+	<html { documentHTMLAttrs(opts)... }>
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			if opts.Title != "" {
+				<title>{ opts.Title }</title>
+			}
+			@head
+			if opts.HeadExtra != nil {
+				@opts.HeadExtra
+			}
+		</head>
+		<body>
+			@body
+		</body>
+	</html>
+}

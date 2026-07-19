@@ -1,0 +1,9 @@
+package primitives
+
+// Separator (P21, family F1) renders a thin divider. It has no content: it is a
+// leaf element whose orientation comes from data-orientation and whose external
+// CSS draws the line. A decorative separator (the zero value) is role="none" +
+// aria-hidden; a semantic separator is role="separator" with aria-orientation.
+templ Separator(p SeparatorProps) {
+	<div class={ separatorClass(p) } { separatorAttrs(p)... }></div>
+}

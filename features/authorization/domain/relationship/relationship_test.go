@@ -6,14 +6,14 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
-// stubStorer pins the full 14-method Storer surface at compile time. The real
+// stubStorer pins the full 16-method Storer surface at compile time. The real
 // implementations (memstore, stores/turso, stores/pgx) are conformance-tested
 // in storetest; this stub only guards the port's shape from silent drift.
 type stubStorer struct{}
 
 var _ Storer = (*stubStorer)(nil)
 
-func (stubStorer) CheckRelationWithGroupExpansion(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) (bool, error) {
+func (stubStorer) CheckRelationWithGroupExpansion(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string, maxExpansionStates int) (bool, error) {
 	return false, nil
 }
 
@@ -25,11 +25,19 @@ func (stubStorer) CheckRelationExists(ctx context.Context, resourceType, resourc
 	return false, nil
 }
 
-func (stubStorer) CheckBatchDirect(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string) (map[string]bool, error) {
+func (stubStorer) CheckBatchDirect(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) (map[string]bool, error) {
 	return nil, nil
 }
 
 func (stubStorer) CreateRelationships(ctx context.Context, relationships []CreateRelationship) error {
+	return nil
+}
+
+func (stubStorer) SetRelationTargets(ctx context.Context, resourceType, resourceID, relationName string, targets []CreateRelationship) error {
+	return nil
+}
+
+func (stubStorer) DeleteRelationshipTarget(ctx context.Context, resourceType, resourceID, relationName string, target SubjectRef) error {
 	return nil
 }
 
@@ -57,14 +65,14 @@ func (stubStorer) ListRelationshipsByResource(ctx context.Context, resourceType,
 	return crud.Page[ResourceRelationship]{}, nil
 }
 
-func (stubStorer) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID string) ([]string, error) {
+func (stubStorer) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID string, limit int) ([]string, error) {
 	return nil, nil
 }
 
-func (stubStorer) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string) ([]string, error) {
+func (stubStorer) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string, limit int) ([]string, error) {
 	return nil, nil
 }
 
-func (stubStorer) LookupDescendantResourceIDs(ctx context.Context, resourceType, relation, subjectType string, rootIDs []string) ([]string, error) {
+func (stubStorer) LookupDescendantResourceIDs(ctx context.Context, resourceType, relation, subjectType string, rootIDs []string, limit int) ([]string, error) {
 	return nil, nil
 }

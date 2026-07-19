@@ -1,0 +1,85 @@
+package primitives
+
+// Dropdown Menu (P41, family F4). See dropdown_menu.go for the gothMenu backing,
+// no-JS baseline, and item roles. The caller composes DropdownMenuTrigger and
+// DropdownMenuContent (with items) as children of DropdownMenu.
+templ DropdownMenu(p DropdownMenuProps) {
+	<div class={ classNames("goth-menu goth-dropdown-menu", p.Class) } { dropdownMenuAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+templ DropdownMenuTrigger(p DropdownMenuTriggerProps) {
+	<button class={ classNames("goth-menu-trigger", p.Class) } { menuTriggerAttrs(p.Base)... }>
+		{ children... }
+	</button>
+}
+
+templ DropdownMenuContent(p DropdownMenuContentProps) {
+	<div class={ classNames("goth-floating goth-menu-content", p.Class) } { dropdownMenuContentAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+templ DropdownMenuItem(p DropdownMenuItemProps) {
+	<button class={ classNames("goth-menu-item", p.Class) } { menuItemAttrs(p.Base, p.Value, p.Disabled)... }>
+		{ children... }
+	</button>
+}
+
+templ DropdownMenuCheckboxItem(p DropdownMenuCheckboxItemProps) {
+	<button class={ classNames("goth-menu-item goth-menu-check-item", p.Class) } { menuCheckedItemAttrs(p.Base, "menuitemcheckbox", p.Value, p.Checked, p.Disabled)... }>
+		<span class="goth-menu-item-indicator" data-slot="item-indicator" aria-hidden="true">
+			@checkGlyph()
+		</span>
+		{ children... }
+	</button>
+}
+
+templ DropdownMenuRadioItem(p DropdownMenuRadioItemProps) {
+	<button class={ classNames("goth-menu-item goth-menu-check-item", p.Class) } { menuCheckedItemAttrs(p.Base, "menuitemradio", p.Value, p.Checked, p.Disabled)... }>
+		<span class="goth-menu-item-indicator" data-slot="item-indicator" aria-hidden="true">
+			@dotGlyph()
+		</span>
+		{ children... }
+	</button>
+}
+
+templ DropdownMenuLabel(p DropdownMenuLabelProps) {
+	<div class={ classNames("goth-menu-label", p.Class) } { menuLabelAttrs(p.Base)... }>
+		{ children... }
+	</div>
+}
+
+templ DropdownMenuSeparator(p DropdownMenuSeparatorProps) {
+	<div class={ classNames("goth-menu-separator", p.Class) } { menuSeparatorAttrs(p.Base)... }></div>
+}
+
+templ DropdownMenuGroup(p DropdownMenuGroupProps) {
+	<div class={ classNames("goth-menu-group", p.Class) } { menuGroupAttrs(p.Base)... }>
+		{ children... }
+	</div>
+}
+
+// DropdownMenuSub wraps a submenu trigger and its nested content. The controller
+// wires the pair (RTL-aware open/close keys, anchoring, own roving).
+templ DropdownMenuSub(p DropdownMenuSubProps) {
+	<div class={ classNames("goth-submenu-root", p.Class) } { menuSubRootAttrs(p.Base)... }>
+		{ children... }
+	</div>
+}
+
+templ DropdownMenuSubTrigger(p DropdownMenuSubTriggerProps) {
+	<button class={ classNames("goth-menu-item goth-menu-sub-trigger", p.Class) } { menuSubTriggerAttrs(p.Base)... }>
+		{ children... }
+		<span class="goth-menu-sub-chevron" aria-hidden="true">
+			@chevronRightGlyph()
+		</span>
+	</button>
+}
+
+templ DropdownMenuSubContent(p DropdownMenuSubContentProps) {
+	<div class={ classNames("goth-floating goth-menu-content", p.Class) } { menuSubContentAttrs(p.Base)... }>
+		{ children... }
+	</div>
+}

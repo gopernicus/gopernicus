@@ -15,15 +15,42 @@
 -- (there is no RETURNING — CreateRelationships is error-only). gen_random_uuid()
 -- is built into PostgreSQL 13+; the ::text cast keeps the key a TEXT column,
 -- matching the rim and the turso dialect's lower(hex(randomblob(16))).
+--
+-- v3 canonical greenfield schema (authorizationv3, AZ3-2.1; folded clean because
+-- no module tag exists). The ck_iam_relationships_nonempty constraint pins the
+-- structural columns non-empty at the storage layer — a defense-in-depth mirror
+-- of the domain's ValidateRefField. subject_relation is DELIBERATELY excluded: it
+-- is the exact userset relation, NOT NULL but legitimately empty for a concrete
+-- subject and non-empty (group:eng#member) for a userset — the non-empty check
+-- must never conflate that relation state.
+-- Contractual COLLATE "C" (AAH-5 / plan D5): relationship_id is the keyset
+-- tiebreak of the created_at DESC, relationship_id DESC relationship listings
+-- (and, since CreateRelationships store-stamps a whole batch with one created_at,
+-- it is the effective ordering discriminator). Per-column collation makes that
+-- byte-order contract travel with the schema instead of relying on the cluster
+-- default. The other structural columns are DELIBERATELY left uncollated:
+-- resource_type, resource_id, relation, subject_type, subject_id, and
+-- subject_relation are the recursion columns of the reachable userset-expansion
+-- CTE, whose anchor term seeds them from default-collation parameters — pinning
+-- them to "C" would raise a recursive-term collation-mismatch (SQLSTATE 42P21)
+-- unless the store SQL also collated the anchor casts, which is out of this
+-- task's scope. Their ordering (the LookupResourceIDs "sorted" contract) is only
+-- required to be a deterministic total order, which any collation supplies, and
+-- their equality/unique-index parity already holds under any deterministic
+-- collation.
 CREATE TABLE IF NOT EXISTS iam_relationships (
-    relationship_id  TEXT        NOT NULL PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    relationship_id  TEXT COLLATE "C" NOT NULL PRIMARY KEY DEFAULT gen_random_uuid()::text,
     resource_type    TEXT        NOT NULL,
     resource_id      TEXT        NOT NULL,
     relation         TEXT        NOT NULL,
     subject_type     TEXT        NOT NULL,
     subject_id       TEXT        NOT NULL,
     subject_relation TEXT        NOT NULL DEFAULT '',
-    created_at       TIMESTAMPTZ NOT NULL
+    created_at       TIMESTAMPTZ NOT NULL,
+    CONSTRAINT ck_iam_relationships_nonempty CHECK (
+        resource_type <> '' AND resource_id <> '' AND relation <> ''
+        AND subject_type <> '' AND subject_id <> ''
+    )
 );
 
 -- Unique-tuple index: no duplicate (resource, relation, subject) rows. Plain
@@ -34,11 +61,17 @@ CREATE TABLE IF NOT EXISTS iam_relationships (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_iam_relationships_unique_tuple
     ON iam_relationships (resource_type, resource_id, relation, subject_type, subject_id, subject_relation);
 
--- Unique-subject index: one relation per subject per resource (owner OR member,
--- never both — the schema's AnyOf handles implication; a role change is
--- delete+create). A second, different relation for the same (resource, subject)
--- conflicts here and is a SILENT no-op under the store's bare ON CONFLICT DO
--- NOTHING (Q7). Plain columns for the same NOT-NULL reason as above.
+-- Unique-subject index: ONE relation per exact SubjectRef per resource (the
+-- ratified one-relation rule, default #1). The key is (resource, subject_type,
+-- subject_id, subject_relation) WITHOUT `relation`, so a subject already related
+-- to the resource cannot acquire a second, different relation. Because
+-- subject_relation IS in the key, group:eng#member and group:eng#admin are
+-- distinct exact SubjectRefs, each free to hold its own one relation — relation
+-- state is preserved, never conflated. Under v3 a conflicting second relation is
+-- surfaced as an explicit semantic_conflict outcome (not a silent ON CONFLICT DO
+-- NOTHING) and resolved atomically by OpReplace; this index is the arbiter the
+-- atomic mutation repositories (AZ3-2.3/2.4) lock and read against. Plain columns
+-- for the same NOT-NULL reason as above.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_iam_relationships_unique_subject
     ON iam_relationships (resource_type, resource_id, subject_type, subject_id, subject_relation);
 

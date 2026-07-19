@@ -1,0 +1,22 @@
+package primitives
+
+// InputOTP (P30) is a role="group" container the caller fills with InputOTPSlot
+// and optional InputOTPSeparator parts. The grouped native single-character inputs
+// submit and navigate with no JavaScript; no controller is bound (paste-distribution
+// and auto-advance are a documented deferral).
+templ InputOTP(p InputOTPProps) {
+	<div class={ inputOTPClass(p) } { inputOTPAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// InputOTPSlot renders one native single-character <input>. Give the first slot
+// Autocomplete so the browser can offer a one-time-code.
+templ InputOTPSlot(p InputOTPSlotProps) {
+	<input class={ inputOTPSlotClass(p) } { inputOTPSlotAttrs(p)... }/>
+}
+
+// InputOTPSeparator renders a decorative (aria-hidden) separator between groups.
+templ InputOTPSeparator(p InputOTPSeparatorProps) {
+	<div class={ inputOTPSeparatorClass(p) } { inputOTPSeparatorAttrs(p)... }>&#8211;</div>
+}

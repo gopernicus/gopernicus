@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/apikey"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/invitation"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthaccount"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthstate"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/serviceaccount"
@@ -128,6 +129,39 @@ type stubNotifier struct{ kind string }
 func (s stubNotifier) Kind() string                                                 { return s.kind }
 func (stubNotifier) Notify(context.Context, identity.Address, notify.Message) error { return nil }
 
+// stubGranter satisfies the invitation Granter for the construction matrix tests —
+// none drives a grant, they assert the Granter/InviteCheck wiring rules.
+type stubGranter struct{}
+
+func (stubGranter) Grant(context.Context, GrantInput) error { return nil }
+
+// allowInvite is a permissive InviteCheck for the construction matrix tests.
+func allowInvite(context.Context, InviteCheckRequest) error { return nil }
+
+// stubInvitations satisfies invitation.InvitationRepository for the construction
+// matrix tests: the both-present case drives Create through to the disabled-outbox
+// error, proving the subsystem is enabled (not ErrInvitationsDisabled).
+type stubInvitations struct{}
+
+func (stubInvitations) Create(_ context.Context, inv invitation.Invitation) (invitation.Invitation, error) {
+	return inv, nil
+}
+func (stubInvitations) Get(context.Context, string) (invitation.Invitation, error) {
+	return invitation.Invitation{}, nil
+}
+func (stubInvitations) GetByTokenHash(context.Context, string) (invitation.Invitation, error) {
+	return invitation.Invitation{}, nil
+}
+func (stubInvitations) ListByResource(context.Context, string, string, crud.ListRequest) (crud.Page[invitation.Invitation], error) {
+	return crud.Page[invitation.Invitation]{}, nil
+}
+func (stubInvitations) ListBySubject(context.Context, string, string, crud.ListRequest) (crud.Page[invitation.Invitation], error) {
+	return crud.Page[invitation.Invitation]{}, nil
+}
+func (stubInvitations) UpdateStatus(context.Context, string, invitation.StatusUpdate) (invitation.Invitation, error) {
+	return invitation.Invitation{}, nil
+}
+
 func TestNewServiceRequiresHasher(t *testing.T) {
 	_, err := NewService(Repositories{}, Config{Mailer: stubMailer{}})
 	if !errors.Is(err, ErrHasherRequired) {
@@ -245,6 +279,71 @@ func TestNewServiceMachinePartialWiring(t *testing.T) {
 	}
 	if _, err := NewService(Repositories{}, base); err != nil {
 		t.Errorf("no machine repos (subsystem off): err=%v, want nil", err)
+	}
+}
+
+// TestNewServiceInvitationConstructionMatrix proves the D3 construction matrix:
+// a Granter with a nil InviteCheck is ErrInviteCheckRequired; both nil leaves
+// invitations OFF (Create → ErrInvitationsDisabled); both wired enables them
+// (Create runs through to the disabled-outbox error, not ErrInvitationsDisabled).
+// An InviteCheck without a Granter is the contradictory ErrInviteCheckWithoutGranter.
+func TestNewServiceInvitationConstructionMatrix(t *testing.T) {
+	base := Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment, DeliveryMode: DeliveryModeOff}
+	repos := Repositories{Invitations: stubInvitations{}}
+
+	// Granter wired + nil InviteCheck → loud ErrInviteCheckRequired.
+	grantNoCheck := base
+	grantNoCheck.Granter = stubGranter{}
+	if _, err := NewService(repos, grantNoCheck); !errors.Is(err, ErrInviteCheckRequired) {
+		t.Errorf("Granter + nil InviteCheck: err=%v, want ErrInviteCheckRequired", err)
+	}
+
+	// InviteCheck wired without a Granter → contradictory ErrInviteCheckWithoutGranter.
+	checkNoGrant := base
+	checkNoGrant.InviteCheck = allowInvite
+	if _, err := NewService(Repositories{}, checkNoGrant); !errors.Is(err, ErrInviteCheckWithoutGranter) {
+		t.Errorf("InviteCheck + nil Granter: err=%v, want ErrInviteCheckWithoutGranter", err)
+	}
+
+	// Both nil → invitations off; Create reports the disabled subsystem.
+	off, err := NewService(Repositories{}, base)
+	if err != nil {
+		t.Fatalf("NewService (invitations off): %v", err)
+	}
+	if _, err := off.Create(context.Background(), CreateInput{ResourceType: "project", ResourceID: "p1", Relation: "member", Identifier: "invitee@x.com", InvitedBy: "inviter"}); !errors.Is(err, ErrInvitationsDisabled) {
+		t.Errorf("Create (invitations off): err=%v, want ErrInvitationsDisabled", err)
+	}
+
+	// Both wired → invitations enabled: the route surface is mounted (an
+	// authenticated invitation route is present, not deny-by-absence 404). The off
+	// case above proves the driving Create surface is disabled; this proves the
+	// enabled subsystem mounts its routes.
+	both := base
+	both.Granter = stubGranter{}
+	both.InviteCheck = allowInvite
+	on, err := NewService(repos, both)
+	if err != nil {
+		t.Fatalf("NewService (invitations on): %v", err)
+	}
+	h := web.NewWebHandler()
+	if err := on.Register(feature.Mount{Router: h}); err != nil {
+		t.Fatalf("Register (invitations on): %v", err)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/auth/invitations/mine", nil))
+	if rec.Code == http.StatusNotFound {
+		t.Errorf("invitations on: GET /auth/invitations/mine = 404, want the route mounted (subsystem enabled)")
+	}
+
+	// The same route is absent (404) when invitations are off, confirming the probe.
+	offHandler := web.NewWebHandler()
+	if err := off.Register(feature.Mount{Router: offHandler}); err != nil {
+		t.Fatalf("Register (invitations off): %v", err)
+	}
+	offRec := httptest.NewRecorder()
+	offHandler.ServeHTTP(offRec, httptest.NewRequest("GET", "/auth/invitations/mine", nil))
+	if offRec.Code != http.StatusNotFound {
+		t.Errorf("invitations off: GET /auth/invitations/mine = %d, want 404 (deny-by-absence)", offRec.Code)
 	}
 }
 

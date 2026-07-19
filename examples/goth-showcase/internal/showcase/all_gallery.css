@@ -1,0 +1,59 @@
+/*
+ * all_gallery.css — the host-authored stylesheet for the /all "kitchen sink" page.
+ * It is served same-origin and linked after the kit stylesheet via
+ * goth.Config.ThemeStylesheetPath (the same WordPress-model, strict style-src 'self'
+ * pattern host_theme.css uses — no inline style, no nonce). It exists ONLY to make
+ * the combined single-page gallery coherent; it overrides no kit token or component.
+ *
+ * The load-bearing rule is `transform: translateZ(0)` on every specimen cell: a
+ * transform makes the cell the containing block for its position:fixed descendants
+ * (reliably across all three engines, where bare `contain: layout` does not), so
+ * overlay specimens that render open-by-default (dialogs, drawers, sheets, toasts,
+ * context/dropdown menus) stay pinned inside their own cell instead of escaping to
+ * the viewport and stacking over the whole page. `overflow: clip` keeps a
+ * viewport-sized backdrop from painting past the cell. Standalone /specimen/* pages
+ * are unaffected — they never link this file.
+ */
+
+[data-slot="all-toc"] {
+  margin-block: 1.5rem 2.5rem;
+}
+
+[data-slot="all-toc"] ul {
+  columns: 3 16rem;
+  gap: 1.5rem;
+}
+
+[data-all-section] {
+  margin-block: 3rem;
+}
+
+[data-all-specimen] {
+  transform: translateZ(0);
+  overflow: clip;
+  position: relative;
+  min-height: 8rem;
+  margin-block: 1.5rem;
+  padding: 1.5rem;
+  border: 1px solid var(--border, oklch(0.9 0 0));
+  border-radius: 0.75rem;
+}
+
+[data-slot="all-specimen-head"] {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border, oklch(0.9 0 0));
+}
+
+[data-slot="all-specimen-head"] h3 {
+  margin: 0;
+}
+
+[data-slot="all-back-to-top"] {
+  flex: none;
+  font-size: 0.875rem;
+}

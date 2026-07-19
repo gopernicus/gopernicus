@@ -1,0 +1,33 @@
+package primitives
+
+// InputGroup (P13, family F3). The caller composes an Input (P12) with
+// InputGroupAddon segments; the group draws the shared border while the inner
+// control renders borderless (kit stylesheet). The control submits natively.
+templ InputGroup(p InputGroupProps) {
+	<div class={ inputGroupClass(p) } { inputGroupAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// InputGroupAddon is an edge segment (start/end) holding InputGroupText or
+// InputGroupButton children.
+templ InputGroupAddon(p InputGroupAddonProps) {
+	<div class={ classNames("goth-input-group-addon", p.Class) } { inputGroupAddonAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// InputGroupText is a non-interactive text/icon addon (prefix/suffix label).
+templ InputGroupText(p InputGroupTextProps) {
+	<span class={ inputGroupTextClass(p.Base) } { inputGroupTextAttrs(p.Base)... }>
+		{ children... }
+	</span>
+}
+
+// InputGroupButton is a compact button addon; icon-only forms require a Label
+// (emitted as aria-label).
+templ InputGroupButton(p InputGroupButtonProps) {
+	<button class={ inputGroupButtonClass(p.Base) } { inputGroupButtonAttrs(p)... }>
+		{ children... }
+	</button>
+}

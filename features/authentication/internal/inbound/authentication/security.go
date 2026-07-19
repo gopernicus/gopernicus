@@ -269,26 +269,42 @@ func writeNoReferrer(w http.ResponseWriter) {
 	w.Header().Set("Referrer-Policy", "no-referrer")
 }
 
+// fixedCSPPrefix is the immutable head of every auth CSP (design §9.1/§9.2). It locks
+// all default resource loading off, stops base-tag hijacking and cross-origin form
+// posts, and forbids framing. No HTMLResourcePolicy can remove or weaken it: the policy
+// only appends widenable resource directives after this prefix, and the fixed directive
+// keys are not members of HTMLResourceKind.
+const fixedCSPPrefix = "default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+
 // writeHTMLSecurity applies the full HTML security-header policy every auth page and
 // redirect carries (design §9.1/§9.2): no-store so a shared cache never retains a
 // form or inventory, no-referrer so a fragment token never leaks downstream, frame
-// and content-type protections, and a restrictive Content-Security-Policy for the
-// deliberately asset-free pages. The bundled pages load no third-party asset and no
-// inline style; the only inline scripts are the nonced reset/magic fragment readers,
-// so script-src permits exactly the per-render nonce (or nothing when none was
-// minted — the fail-safe no-script path). base-uri and frame-ancestors are locked to
-// stop base-tag hijacking and clickjacking; form-action 'self' keeps a form from
-// posting a credential cross-origin.
-func writeHTMLSecurity(w http.ResponseWriter, nonce string) {
+// and content-type protections, and a Content-Security-Policy built by buildCSP. These
+// four headers plus the fixedCSPPrefix are FEATURE-OWNED and unremovable: a policy or a
+// view adapter can widen resource loading but can never turn them off.
+func writeHTMLSecurity(w http.ResponseWriter, policy *HTMLResourcePolicy, nonce string) {
 	h := w.Header()
 	h.Set("Cache-Control", "no-store")
 	h.Set("Referrer-Policy", "no-referrer")
 	h.Set("X-Frame-Options", "DENY")
 	h.Set("X-Content-Type-Options", "nosniff")
-	scriptSrc := "'none'"
-	if nonce != "" {
-		scriptSrc = "'nonce-" + nonce + "'"
+	h.Set("Content-Security-Policy", buildCSP(policy, nonce))
+}
+
+// buildCSP composes the CSP header value. A nil policy reproduces the historical
+// asset-free posture EXACTLY: the fixed prefix plus a script-src that permits only the
+// per-render nonce (or 'none' when none was minted — the fail-safe no-script path for
+// the bundled reset/magic fragment readers). A non-nil policy appends its validated,
+// deterministically ordered resource directives after the fixed prefix; a widening
+// policy that still wants the bundled inline scripts requests the nonce on its
+// script-src directive (HTMLResourceDirective.Nonce).
+func buildCSP(policy *HTMLResourcePolicy, nonce string) string {
+	if policy == nil {
+		scriptSrc := "'none'"
+		if nonce != "" {
+			scriptSrc = "'nonce-" + nonce + "'"
+		}
+		return fixedCSPPrefix + "; script-src " + scriptSrc
 	}
-	h.Set("Content-Security-Policy",
-		"default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; script-src "+scriptSrc)
+	return fixedCSPPrefix + policy.render(nonce)
 }

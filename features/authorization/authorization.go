@@ -33,7 +33,9 @@ package authorization
 import (
 	"context"
 	"errors"
+	"log/slog"
 
+	"github.com/gopernicus/gopernicus/features/authorization/domain/mutation"
 	"github.com/gopernicus/gopernicus/features/authorization/domain/relationship"
 	"github.com/gopernicus/gopernicus/features/authorization/domain/role"
 	"github.com/gopernicus/gopernicus/features/authorization/internal/logic/authorizersvc"
@@ -41,6 +43,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 )
 
 // Construction and per-kind sentinel errors. A misconfigured host fails at
@@ -62,31 +65,60 @@ var (
 	// ErrRolesNotConfigured is returned by every roles-kind method when that kind
 	// is off (Repositories.Roles was nil).
 	ErrRolesNotConfigured = errors.New("authorization: roles kind is not configured")
-
-	// ErrUsersetSubjectOnRole is returned by a roles-kind method given a Subject
-	// carrying a non-empty Relation. Userset subjects ("group#member") are a
-	// relationship-kind concept; silently dropping the field would treat the
-	// userset as the group principal itself — a wrong-grant hazard, so it fails
-	// closed.
-	ErrUsersetSubjectOnRole = errors.New("authorization: roles kind does not accept a userset subject (Subject.Relation must be empty)")
 )
 
 // Root aliases — the engine's model/check vocabulary, re-exported so hosts write
-// authorization.CheckRequest{Subject: authorization.Subject{…}} without importing
-// the internal engine package.
+// authorization.CheckRequest{Principal: authorization.PrincipalRef{…}} without
+// importing the internal engine package.
+//
+// PrincipalRef is the concrete decision caller/actor (Type, ID); SubjectRef is
+// the stored relationship subject (Type, ID, Relation) — intentionally different
+// types. A decision request carries a PrincipalRef only, never a userset.
 type (
-	Subject         = authorizersvc.Subject
-	Resource        = authorizersvc.Resource
-	CheckRequest    = authorizersvc.CheckRequest
-	CheckResult     = authorizersvc.CheckResult
-	LookupResult    = authorizersvc.LookupResult
+	PrincipalRef = authorizersvc.PrincipalRef
+	SubjectRef   = relationship.SubjectRef
+	Resource     = authorizersvc.Resource
+	CheckRequest = authorizersvc.CheckRequest
+	CheckResult  = authorizersvc.CheckResult
+	LookupResult = authorizersvc.LookupResult
+
+	// Explanation and ExplainStep are the opt-in, bounded explain trace returned
+	// by CheckExplain. The trace shares the decision's evaluation budget, records
+	// coarse rule/path decisions with a stable Outcome Reason (never a raw
+	// infrastructure error), and is never exposed to ordinary callers or logged
+	// automatically — a host asks for it explicitly.
+	Explanation     = authorizersvc.Explanation
+	ExplainStep     = authorizersvc.ExplainStep
 	Schema          = authorizersvc.Schema
+	SchemaSnapshot  = authorizersvc.SchemaSnapshot
 	ResourceSchema  = authorizersvc.ResourceSchema
 	ResourceTypeDef = authorizersvc.ResourceTypeDef
 	RelationDef     = authorizersvc.RelationDef
 	SubjectTypeRef  = authorizersvc.SubjectTypeRef
 	PermissionRule  = authorizersvc.PermissionRule
 	PermissionCheck = authorizersvc.PermissionCheck
+
+	// EvaluationLimits is the resolved semantic work budget for one decision or
+	// enumeration (Through depth, graph states, relation fan-out, batch size,
+	// lookup results). Zero fields resolve to safe defaults; negatives fail
+	// construction.
+	EvaluationLimits = authorizersvc.EvaluationLimits
+)
+
+// Explain step kinds — the coarse shape an ExplainStep records.
+const (
+	ExplainKindDirect  = authorizersvc.ExplainKindDirect
+	ExplainKindThrough = authorizersvc.ExplainKindThrough
+)
+
+// Resolved evaluation-budget defaults (each is the value a zero Config.Limits
+// field takes). Re-exported so a host can size relative to the safe defaults.
+const (
+	DefaultMaxThroughDepth    = authorizersvc.DefaultMaxThroughDepth
+	DefaultMaxGraphStates     = authorizersvc.DefaultMaxGraphStates
+	DefaultMaxRelationTargets = authorizersvc.DefaultMaxRelationTargets
+	DefaultMaxBatchSize       = authorizersvc.DefaultMaxBatchSize
+	DefaultMaxLookupResults   = authorizersvc.DefaultMaxLookupResults
 )
 
 // Root aliases — the relationship rim types hosts pass to / receive from the
@@ -103,6 +135,96 @@ type (
 // Assignment is the roles kind's grant record; hosts construct it via AssignRole
 // arguments and receive it from the role listings.
 type Assignment = role.Assignment
+
+// EffectiveGrant is one de-duplicated effective role grant on a resource,
+// returned by ListEffectiveRoleGrantsByResource with explicit provenance
+// (Direct, Global, or both). A global grant is not rewritten as a scoped row.
+type EffectiveGrant = role.EffectiveGrant
+
+// Root aliases — the optional high-integrity mutation vocabulary. Hosts use
+// authorization.Command / .Receipt / …
+// without importing the domain/mutation package directly.
+type (
+	MutationID         = mutation.MutationID
+	Revision           = mutation.Revision
+	ScopeKind          = mutation.ScopeKind
+	ScopeKey           = mutation.ScopeKey
+	Operation          = mutation.Operation
+	RelationshipRow    = mutation.RelationshipRow
+	RoleRow            = mutation.RoleRow
+	Command            = mutation.Command
+	Outcome            = mutation.Outcome
+	Receipt            = mutation.Receipt
+	Dependency         = mutation.Dependency
+	DecisionView       = mutation.DecisionView
+	Guard              = mutation.Guard
+	SemanticValidator  = mutation.SemanticValidator
+	MutationRepository = mutation.MutationRepository
+
+	// GuardianPolicy / GuardianRule are the last-owner/guardian invariant vocabulary
+	// (default #10 / AZ3-3.2): a protected relation on a resource type keeps at least
+	// N DIRECT anchors after every ordinary command, enforced atomically inside the
+	// MutationRepository under its scope lock.
+	//
+	// The sanctioned configuration seam is STORE CONSTRUCTION, not this Config: the
+	// invariant is a repository-atomic post-state rule, so it must be known where the
+	// atomic lock lives (memstore.WithGuardianPolicy, stores/pgx.WithGuardianPolicy,
+	// stores/turso.WithGuardianPolicy). Config cannot carry it — the feature core does
+	// not construct the store and could not push a policy into an already-built
+	// MutationRepository without a detached, non-atomic seam. These aliases only make
+	// the vocabulary reachable (authorization.GuardianPolicy) so a host names it
+	// without importing domain/mutation. The default is DefaultGuardianPolicy (owner,
+	// min-1, every type); an EXPLICITLY empty GuardianPolicy declares no invariant.
+	GuardianPolicy = mutation.GuardianPolicy
+	GuardianRule   = mutation.GuardianRule
+)
+
+// DefaultGuardianPolicy is the ratified default protected set (owner, minimum one
+// direct anchor, on every resource type — default #10). A host passes it, a
+// narrowed policy, or an explicitly empty GuardianPolicy to a store's
+// WithGuardianPolicy option.
+var DefaultGuardianPolicy = mutation.DefaultGuardianPolicy
+
+// NewMutationID re-exports the canonical cryptographically strong idempotency-key
+// generator (256-bit, base32).
+var NewMutationID = mutation.NewMutationID
+
+// DeriveMutationID re-exports the deterministic MutationID derivation for TRUSTED
+// idempotency: a SystemMutator holder (for a use case that opts into durable replay)
+// derives a stable MutationID from a fixed operation identity so a retry of the same
+// operation dedups against its stored receipt — no duplicate mutation or revision
+// bump — while still satisfying MutationID.Validate. Actor-facing callers use the
+// unguessable NewMutationID instead.
+var DeriveMutationID = mutation.DeriveMutationID
+
+// Mutation scope kinds, operations, and stable domain outcomes.
+const (
+	ScopeResource = mutation.ScopeResource
+	ScopeSubject  = mutation.ScopeSubject
+
+	OpGrant        = mutation.OpGrant
+	OpRevoke       = mutation.OpRevoke
+	OpReplace      = mutation.OpReplace
+	OpPurge        = mutation.OpPurge
+	OpTeardown     = mutation.OpTeardown
+	OpRoleAssign   = mutation.OpRoleAssign
+	OpRoleUnassign = mutation.OpRoleUnassign
+
+	OutcomeApplied          = mutation.OutcomeApplied
+	OutcomeNoChange         = mutation.OutcomeNoChange
+	OutcomeSemanticConflict = mutation.OutcomeSemanticConflict
+	OutcomeInvariantBlocked = mutation.OutcomeInvariantBlocked
+	OutcomeNotFound         = mutation.OutcomeNotFound
+
+	MutationEncodingVersion = mutation.MutationEncodingVersion
+)
+
+// PrincipalFrom converts a platform identity.Principal into the concrete
+// decision-caller PrincipalRef. The two types share the same (Type, ID) shape,
+// so a host maps its resolved principal onto a decision request with one call.
+func PrincipalFrom(p identity.Principal) PrincipalRef {
+	return PrincipalRef{Type: p.Type, ID: p.ID}
+}
 
 // Schema DSL, re-exported for host schema construction.
 var (
@@ -121,27 +243,48 @@ type Repositories struct {
 	Relationships relationship.Storer
 	// Roles backs the roles kind; nil = the roles kind is off.
 	Roles role.Storer
+
+	// Mutations backs the optional high-integrity guarded/receipted write path. A
+	// nil field leaves baseline RelationshipWriter operations fully available.
+	// It is independent of the read/check ports above.
+	Mutations mutation.MutationRepository
 }
 
 // Config carries the relationship kind's settings. All three fields are
 // relationship-kind-scoped; under a roles-only wiring they are ignored with no
-// error (an orphaned tuning field is silent, the auth MailFrom precedent).
+// error (an orphaned tuning field is silent, the auth MailFrom precedent) — so
+// negative Limits are only rejected when the relationship kind is actually wired.
 type Config struct {
 	// Model is the ReBAC schema. Required when Relationships is wired, forbidden
 	// otherwise (ErrModelRequired).
 	Model Schema
-	// MaxTraversalDepth bounds the engine's through-traversal recursion; <= 0
-	// resolves to the engine default (10). Engine-only — never passed to a store.
-	//
-	// D3 sizing: a host collapsing a hand-walked hierarchy into schema must size
-	// this deliberately — Check silently DENIES past the bound (reason "max depth
-	// exceeded"), and each hop costs one GetRelationTargets round-trip. The bound
-	// governs the engine's Go recursion ONLY, never the store's descendant walk
-	// (unbounded-but-cycle-safe, 2026-07-08 ruling).
-	MaxTraversalDepth int
+	// Limits is the resolved semantic evaluation budget (Through depth, graph
+	// states, relation fan-out, batch size, lookup results). Each zero field
+	// resolves to a safe nonzero default; a negative field fails NewService with
+	// ErrInvalidLimits. Zero never means unlimited. Every dimension is charged per
+	// decision (AZ3-1.3): exhaustion returns ErrEvaluationLimit (indeterminate),
+	// never a deny or a truncated list. The lookup result cap is the one dimension
+	// carried into a store (a MaxLookupResults+1 fetch, so overflow is
+	// distinguishable); the rest are engine-scoped.
+	Limits EvaluationLimits
 	// IDs mints each relationship_id at CreateRelationships. The zero value is the
 	// nanoid default; a cryptids.Database generator defers to the DDL DEFAULT.
 	IDs cryptids.IDGenerator
+
+	// Guard is the host authorization policy for actor-facing writes (AZ3-0.5). A
+	// nil Guard is the READ-ONLY posture: decision/list APIs and the separately held
+	// SystemMutator remain available, but every actor-facing mutation (the typed
+	// guarded methods) fails closed with ErrMutationsNotConfigured. There is
+	// no default allow guard. A non-nil Guard requires Repositories.Mutations
+	// (ErrGuardWithoutMutations) so it can only be enforced inside the atomic
+	// boundary.
+	Guard MutationGuard
+
+	// Audit is the optional best-effort sink for actor-facing mutation attempts
+	// (accepted/denied/failed). It requires a Guard (ErrAuditWithoutGuard): with the
+	// actor-mutation path off there is nothing for it to observe. Its failures are
+	// warned and never change a committed mutation.
+	Audit AuditSink
 }
 
 // Service is the authorization feature's host-facing surface. Each kind's method
@@ -149,50 +292,96 @@ type Config struct {
 // that kind's sentinel. There is no composed Check facade — a host composes the
 // kinds in its own closure.
 type Service struct {
-	relationships *authorizersvc.Service // nil = relationship kind off
-	roles         *rolesvc.Service       // nil = roles kind off
+	relationships *authorizersvc.Service      // nil = relationship kind off
+	roles         *rolesvc.Service            // nil = roles kind off
+	guard         MutationGuard               // nil = read-only actor-mutation posture
+	mutations     mutation.MutationRepository // nil = no atomic write path
+	audit         AuditSink                   // nil = no actor-mutation auditing
+	maxBatchSize  int                         // resolved EvaluationLimits.MaxBatchSize (0 = relationship kind off)
+	log           *slog.Logger                // set at Register; falls back to slog.Default()
 }
 
-// NewService validates the (repos, cfg) pair and builds the wired kinds. Zero
-// kinds is ErrNoKindConfigured; a relationship kind wired without its Model (or
-// vice versa) is ErrModelRequired; an invalid Model is the schema validator's
-// loud error. A roles-only wiring succeeds with no Model.
-func NewService(repos Repositories, cfg Config) (*Service, error) {
+// NewService validates the (repos, cfg) pair, builds the wired kinds, and returns
+// the Components bundle: the host-facing Service plus separately held baseline
+// and high-integrity write capabilities. Zero kinds is ErrNoKindConfigured; a
+// relationship kind wired without its Model (or vice versa) is ErrModelRequired;
+// an invalid Model is the schema validator's loud error. A roles-only wiring
+// succeeds with no Model.
+//
+// Actor-mutation construction matrix (AZ3-0.5): a nil Config.Guard is the
+// read-only posture (actor-facing mutations fail closed with
+// ErrMutationsNotConfigured); a Guard without Repositories.Mutations fails with
+// ErrGuardWithoutMutations; an Audit sink without a Guard is an orphaned
+// actor-mutation setting and fails with ErrAuditWithoutGuard.
+func NewService(repos Repositories, cfg Config) (Components, error) {
 	hasRel := repos.Relationships != nil
 	hasRoles := repos.Roles != nil
 	if !hasRel && !hasRoles {
-		return nil, ErrNoKindConfigured
+		return Components{}, ErrNoKindConfigured
 	}
 
 	modelSet := len(cfg.Model.ResourceTypes) > 0
 	if hasRel != modelSet {
-		return nil, ErrModelRequired
+		return Components{}, ErrModelRequired
 	}
 
-	svc := &Service{}
+	if cfg.Guard != nil && repos.Mutations == nil {
+		return Components{}, ErrGuardWithoutMutations
+	}
+	if cfg.Audit != nil && cfg.Guard == nil {
+		return Components{}, ErrAuditWithoutGuard
+	}
+
+	svc := &Service{
+		guard:     cfg.Guard,
+		mutations: repos.Mutations,
+		audit:     cfg.Audit,
+	}
 	if hasRel {
 		eng, err := authorizersvc.NewService(repos.Relationships, cfg.Model, authorizersvc.Config{
-			MaxTraversalDepth: cfg.MaxTraversalDepth,
-			IDs:               cfg.IDs,
+			Limits: cfg.Limits,
+			IDs:    cfg.IDs,
 		})
 		if err != nil {
-			return nil, err
+			return Components{}, err
 		}
 		svc.relationships = eng
+		// The engine build above already validated the limits, so Resolve cannot
+		// fail here; capture the resolved batch ceiling for the actor-facing
+		// mutation blast-radius bounds.
+		resolved, _ := cfg.Limits.Resolve()
+		svc.maxBatchSize = resolved.MaxBatchSize
 	}
 	if hasRoles {
 		svc.roles = rolesvc.NewService(repos.Roles)
 	}
-	return svc, nil
+	var writer *RelationshipWriter
+	if svc.relationships != nil {
+		writer = &RelationshipWriter{relationships: svc.relationships}
+	}
+	return Components{
+		Service:            svc,
+		RelationshipWriter: writer,
+		// The trusted SystemMutator shares the same audit sink (when wired) so a
+		// resource teardown is observed on the same seam as actor-facing attempts, and
+		// the same relationship engine so its trusted calls stamp the governing schema
+		// digest and run the current-schema semantic validator exactly as the guarded
+		// seam does — it bypasses only the host MutationGuard, never the atomic contract.
+		SystemMutator: &SystemMutator{mutations: repos.Mutations, audit: cfg.Audit, relationships: svc.relationships},
+	}, nil
 }
 
-// Register mounts the feature: it logs one line and registers NO routes (the
-// /authorization/* namespace is reserved). It tolerates a zero-value Mount.
+// Register mounts the feature: it logs one line, captures the Mount logger for
+// best-effort audit warnings, and registers NO routes (the /authorization/*
+// namespace is reserved). It tolerates a zero-value Mount.
 func (s *Service) Register(m feature.Mount) error {
 	if m.Logger != nil {
+		s.log = m.Logger
 		m.Logger.Info("registered authorization feature",
 			"relationships", s.relationships != nil,
 			"roles", s.roles != nil,
+			"baseline_relationship_writes", s.relationships != nil,
+			"actor_mutations", s.guard != nil,
 		)
 	}
 	return nil
@@ -210,6 +399,18 @@ func (s *Service) Check(ctx context.Context, req CheckRequest) (CheckResult, err
 	return s.relationships.Check(ctx, req)
 }
 
+// CheckExplain evaluates a permission check and returns a bounded Explanation of
+// the rule/path decisions taken. It rides the SAME evaluation path and work
+// budget as Check — an explain request cannot create a separate, more permissive
+// evaluator, cannot change the decision, and fails with the same limit class. The
+// trace excludes raw infrastructure errors and is not logged automatically.
+func (s *Service) CheckExplain(ctx context.Context, req CheckRequest) (CheckResult, Explanation, error) {
+	if s.relationships == nil {
+		return CheckResult{}, Explanation{}, ErrRelationshipsNotConfigured
+	}
+	return s.relationships.CheckExplain(ctx, req)
+}
+
 // CheckBatch evaluates multiple permission checks.
 func (s *Service) CheckBatch(ctx context.Context, reqs []CheckRequest) ([]CheckResult, error) {
 	if s.relationships == nil {
@@ -218,74 +419,37 @@ func (s *Service) CheckBatch(ctx context.Context, reqs []CheckRequest) ([]CheckR
 	return s.relationships.CheckBatch(ctx, reqs)
 }
 
-// FilterAuthorized returns only the resource IDs the subject can access.
-func (s *Service) FilterAuthorized(ctx context.Context, subject Subject, permission, resourceType string, resourceIDs []string) ([]string, error) {
+// FilterAuthorized returns only the resource IDs the principal can access.
+func (s *Service) FilterAuthorized(ctx context.Context, principal PrincipalRef, permission, resourceType string, resourceIDs []string) ([]string, error) {
 	if s.relationships == nil {
 		return nil, ErrRelationshipsNotConfigured
 	}
-	return s.relationships.FilterAuthorized(ctx, subject, permission, resourceType, resourceIDs)
+	return s.relationships.FilterAuthorized(ctx, principal, permission, resourceType, resourceIDs)
 }
 
 // LookupResources returns the resource IDs of a type the subject can access.
 //
-// D1(b) boundary: self-referential Through enumerates descendants of
-// DIRECTLY-granted roots only; roots granted via a non-self Through are not
-// expanded, though Check honors them. Closing the divergence is the named D1(c)
-// engine follow-up.
-func (s *Service) LookupResources(ctx context.Context, subject Subject, permission, resourceType string) (LookupResult, error) {
+// Check/Lookup parity (D1(c) closed, AZ3-1.4): every resource a Check allows for
+// a supported finite query is enumerated here. A self-referential Through
+// hierarchy seeds its descendant walk from EVERY root the permission grants —
+// direct grants AND roots derived through a non-self Through — so a grandchild
+// Check honors is no longer omitted. IDs are returned sorted, each exactly once;
+// limit exhaustion is ErrEvaluationLimit, never a partial list.
+func (s *Service) LookupResources(ctx context.Context, principal PrincipalRef, permission, resourceType string) (LookupResult, error) {
 	if s.relationships == nil {
 		return LookupResult{}, ErrRelationshipsNotConfigured
 	}
-	return s.relationships.LookupResources(ctx, subject, permission, resourceType)
+	return s.relationships.LookupResources(ctx, principal, permission, resourceType)
 }
 
-// CreateRelationships validates and persists a batch of relationship tuples,
-// minting each relationship_id from Config.IDs.
-func (s *Service) CreateRelationships(ctx context.Context, relationships []CreateRelationship) error {
+// ValidateRelation reports whether a relationship is allowed by the schema,
+// matching the full (subject type, subject relation) pair. subjectRelation is ""
+// for a concrete subject and the userset relation otherwise.
+func (s *Service) ValidateRelation(resourceType, relation, subjectType, subjectRelation string) error {
 	if s.relationships == nil {
 		return ErrRelationshipsNotConfigured
 	}
-	return s.relationships.CreateRelationships(ctx, relationships)
-}
-
-// DeleteRelationship removes a specific relationship tuple.
-func (s *Service) DeleteRelationship(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) error {
-	if s.relationships == nil {
-		return ErrRelationshipsNotConfigured
-	}
-	return s.relationships.DeleteRelationship(ctx, resourceType, resourceID, relation, subjectType, subjectID)
-}
-
-// DeleteResourceRelationships removes all relationships for a resource.
-func (s *Service) DeleteResourceRelationships(ctx context.Context, resourceType, resourceID string) error {
-	if s.relationships == nil {
-		return ErrRelationshipsNotConfigured
-	}
-	return s.relationships.DeleteResourceRelationships(ctx, resourceType, resourceID)
-}
-
-// DeleteByResourceAndSubject removes all relations a subject holds on a resource.
-func (s *Service) DeleteByResourceAndSubject(ctx context.Context, resourceType, resourceID, subjectType, subjectID string) error {
-	if s.relationships == nil {
-		return ErrRelationshipsNotConfigured
-	}
-	return s.relationships.DeleteByResourceAndSubject(ctx, resourceType, resourceID, subjectType, subjectID)
-}
-
-// RemoveMember removes a subject from a resource with last-owner protection.
-func (s *Service) RemoveMember(ctx context.Context, resourceType, resourceID, subjectType, subjectID string) error {
-	if s.relationships == nil {
-		return ErrRelationshipsNotConfigured
-	}
-	return s.relationships.RemoveMember(ctx, resourceType, resourceID, subjectType, subjectID)
-}
-
-// ValidateRelation reports whether a relationship is allowed by the schema.
-func (s *Service) ValidateRelation(resourceType, relation, subjectType string) error {
-	if s.relationships == nil {
-		return ErrRelationshipsNotConfigured
-	}
-	return s.relationships.ValidateRelation(resourceType, relation, subjectType)
+	return s.relationships.ValidateRelation(resourceType, relation, subjectType, subjectRelation)
 }
 
 // ValidateRelationships validates every relationship against the schema.
@@ -296,12 +460,24 @@ func (s *Service) ValidateRelationships(relationships []CreateRelationship) erro
 	return s.relationships.ValidateRelationships(relationships)
 }
 
-// GetSchema returns the relationship kind's schema.
-func (s *Service) GetSchema() (Schema, error) {
+// GetSchema returns a deep, read-only snapshot of the relationship kind's
+// compiled schema. The snapshot shares no memory with the runtime policy, so a
+// caller can neither mutate the live schema nor race the engine.
+func (s *Service) GetSchema() (SchemaSnapshot, error) {
 	if s.relationships == nil {
-		return Schema{}, ErrRelationshipsNotConfigured
+		return SchemaSnapshot{}, ErrRelationshipsNotConfigured
 	}
 	return s.relationships.GetSchema(), nil
+}
+
+// SchemaDigest returns the relationship kind's stable compiled-schema digest.
+// Equivalent schemas yield an identical digest; any policy change yields a
+// different one.
+func (s *Service) SchemaDigest() (string, error) {
+	if s.relationships == nil {
+		return "", ErrRelationshipsNotConfigured
+	}
+	return s.relationships.SchemaDigest(), nil
 }
 
 // GetPermissionsForRelation returns the permissions a relation grants on a type.
@@ -337,60 +513,51 @@ func (s *Service) ListRelationshipsByResource(ctx context.Context, resourceType,
 }
 
 // =============================================================================
-// Roles kind (fails closed with ErrRolesNotConfigured when off; a userset
-// Subject is rejected with ErrUsersetSubjectOnRole)
+// Roles kind (fails closed with ErrRolesNotConfigured when off)
+//
+// Role methods take a concrete PrincipalRef: userset subjects are structurally
+// impossible here, so there is no runtime userset-rejection path — the type
+// prevents it.
 // =============================================================================
 
-// AssignRole grants a subject a role, optionally scoped to a resource.
-func (s *Service) AssignRole(ctx context.Context, subject Subject, roleName, resourceType, resourceID string) error {
-	if s.roles == nil {
-		return ErrRolesNotConfigured
-	}
-	if subject.Relation != "" {
-		return ErrUsersetSubjectOnRole
-	}
-	return s.roles.AssignRole(ctx, subject.Type, subject.ID, roleName, resourceType, resourceID)
-}
-
-// UnassignRole removes an exact role assignment.
-func (s *Service) UnassignRole(ctx context.Context, subject Subject, roleName, resourceType, resourceID string) error {
-	if s.roles == nil {
-		return ErrRolesNotConfigured
-	}
-	if subject.Relation != "" {
-		return ErrUsersetSubjectOnRole
-	}
-	return s.roles.UnassignRole(ctx, subject.Type, subject.ID, roleName, resourceType, resourceID)
-}
-
-// HasRole reports whether a subject holds a role at a scope (with the global
+// HasRole reports whether a principal holds a role at a scope (with the global
 // fallback: a global grant satisfies a scoped check).
-func (s *Service) HasRole(ctx context.Context, subject Subject, roleName, resourceType, resourceID string) (bool, error) {
+func (s *Service) HasRole(ctx context.Context, principal PrincipalRef, roleName, resourceType, resourceID string) (bool, error) {
 	if s.roles == nil {
 		return false, ErrRolesNotConfigured
 	}
-	if subject.Relation != "" {
-		return false, ErrUsersetSubjectOnRole
-	}
-	return s.roles.HasRole(ctx, subject.Type, subject.ID, roleName, resourceType, resourceID)
+	return s.roles.HasRole(ctx, principal.Type, principal.ID, roleName, resourceType, resourceID)
 }
 
-// ListRoleAssignmentsBySubject pages a subject's role assignments.
-func (s *Service) ListRoleAssignmentsBySubject(ctx context.Context, subject Subject, req crud.ListRequest) (crud.Page[Assignment], error) {
+// ListRoleAssignmentsBySubject pages a principal's role assignments.
+func (s *Service) ListRoleAssignmentsBySubject(ctx context.Context, principal PrincipalRef, req crud.ListRequest) (crud.Page[Assignment], error) {
 	if s.roles == nil {
 		return crud.Page[Assignment]{}, ErrRolesNotConfigured
 	}
-	if subject.Relation != "" {
-		return crud.Page[Assignment]{}, ErrUsersetSubjectOnRole
-	}
-	return s.roles.ListRoleAssignmentsBySubject(ctx, subject.Type, subject.ID, req)
+	return s.roles.ListRoleAssignmentsBySubject(ctx, principal.Type, principal.ID, req)
 }
 
-// ListRoleAssignmentsByResource pages the assignments scoped to a resource
-// (direct-scope only).
+// ListRoleAssignmentsByResource pages the RAW direct-scope assignments stored at
+// a resource. It never surfaces globally-granted subjects — use
+// ListEffectiveRoleGrantsByResource for the enumeration that agrees with HasRole.
 func (s *Service) ListRoleAssignmentsByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[Assignment], error) {
 	if s.roles == nil {
 		return crud.Page[Assignment]{}, ErrRolesNotConfigured
 	}
 	return s.roles.ListRoleAssignmentsByResource(ctx, resourceType, resourceID, req)
+}
+
+// ListEffectiveRoleGrantsByResource pages the EFFECTIVE role grants on a
+// resource: the union of the direct scoped assignments with the global
+// assignments a scoped HasRole satisfies, de-duplicated by (subject, role) with
+// explicit provenance. Its grant set agrees with HasRole (the Q5 fallback), so a
+// subject allowed only via a global grant appears here with Global provenance —
+// closing the enumeration-vs-decision divergence — without rewriting the global
+// assignment as a scoped row. A generic access decision may still compose other
+// role/ReBAC rules the host owns; this enumerates the roles kind only.
+func (s *Service) ListEffectiveRoleGrantsByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[EffectiveGrant], error) {
+	if s.roles == nil {
+		return crud.Page[EffectiveGrant]{}, ErrRolesNotConfigured
+	}
+	return s.roles.ListEffectiveRoleGrantsByResource(ctx, resourceType, resourceID, req)
 }

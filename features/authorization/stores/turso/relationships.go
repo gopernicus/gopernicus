@@ -12,20 +12,66 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
-// reachableCTE is the group-expansion recursive CTE shared by the check and
-// lookup methods. reachable(atype, aid) is the set of identities the subject IS
-// transitively: it seeds with the subject itself and, at each step, adds every
-// group G for which a tuple `G#member@<current>` exists. UNION (never UNION ALL)
-// dedups, so a membership CYCLE terminates by construction; there is NO depth
-// term — the walk is unbounded, matching the memstore graph walk (MaxTraversalDepth
-// is an engine-only bound). Its two base placeholders bind (subjectType, subjectID).
-const reachableCTE = `WITH RECURSIVE reachable(atype, aid) AS (
-	SELECT ?, ?
+// reachableCTE is the relation-aware userset-expansion recursive CTE shared by the
+// check and lookup methods. reachable(atype, aid, arelation) is the set of exact
+// subject references the concrete subject IS transitively: it seeds with the
+// subject itself as a CONCRETE reference (empty arelation), and at each step adds
+// every exact userset (resource_type:resource_id#relation) the current reference
+// holds a relation on — carrying the tuple's relation into arelation so the
+// userset RELATION is load-bearing (a `member` edge yields a `#member` userset,
+// never `#admin`). The join matches subject_relation against the reached relation
+// state, so a grant referencing `group#admin` is only satisfied by admin
+// membership. UNION (never UNION ALL) dedups on the full (atype, aid, arelation)
+// key, so a membership CYCLE terminates by construction WITHOUT conflating
+// usersets; there is NO depth term — the walk is unbounded, matching the memstore
+// graph walk (the engine's MaxThroughDepth is an engine-only bound). Its two base
+// placeholders bind (subjectType, subjectID); the seed relation column is the
+// empty-string literal.
+const reachableCTE = `WITH RECURSIVE reachable(atype, aid, arelation) AS (
+	SELECT ?, ?, ''
 	UNION
-	SELECT r.resource_type, r.resource_id
+	SELECT r.resource_type, r.resource_id, r.relation
 	FROM iam_relationships r
-	JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid
-	WHERE r.relation = 'member'
+	JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
+)`
+
+// boundedReachableCTE is the BUDGETED sibling of reachableCTE used by the two
+// CHECK-path methods (CheckRelationWithGroupExpansion, CheckBatchDirect) to bound
+// group-expansion work against the engine's MaxGraphStates (F4). Two mechanisms
+// bound it and together guarantee that work depends on the CONFIGURED budget, not
+// on the adversary's graph size:
+//
+//   - a `depth` column carries the recursion level, and `WHERE depth < ?`
+//     (the max_depth placeholder = maxExpansionStates) stops the recursion from
+//     running away down a deep membership chain — at most maxExpansionStates
+//     recursion levels regardless of graph shape;
+//   - `capped` materializes the DISTINCT reachable states LIMITed to the
+//     state_cap placeholder (= maxExpansionStates+1), so the downstream match
+//     join never scans more than maxExpansionStates+1 states, and a
+//     `count(*) = state_cap` reading is the deterministic OVERFLOW signal the
+//     caller maps to relationship.ErrExpansionBudgetExceeded.
+//
+// Correctness pin: any state a within-budget graph needs has a shortest
+// membership path shorter than its distinct-state count <= maxExpansionStates, so
+// the depth bound never cuts a within-budget state; reaching a state at depth
+// beyond the bound implies > maxExpansionStates distinct states, which the
+// state_cap overflow catches. A within-budget graph yields the SAME bool as the
+// unbounded reachableCTE. Re-derived in the libSQL dialect (positional binds); the
+// storetest suite is the pgx-equivalence proof. Placeholder order: subject_type,
+// subject_id, max_depth, state_cap.
+const boundedReachableCTE = `WITH RECURSIVE reachable(atype, aid, arelation, depth) AS (
+	SELECT ?, ?, '', 0
+	UNION
+	SELECT r.resource_type, r.resource_id, r.relation, reachable.depth + 1
+	FROM iam_relationships r
+	JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
+	WHERE reachable.depth < ?
+),
+states AS (
+	SELECT DISTINCT atype, aid, arelation FROM reachable
+),
+capped AS (
+	SELECT atype, aid, arelation FROM states LIMIT ?
 )`
 
 // relationshipStore fills relationship.Storer over iam_relationships.
@@ -78,22 +124,47 @@ func (r resourceRelationshipRow) toDomain() relationship.ResourceRelationship {
 }
 
 // CheckRelationWithGroupExpansion reports whether the subject — or any group it
-// transitively belongs to — holds the relation on the resource (unbounded,
-// cycle-safe via the reachable CTE).
-func (s *relationshipStore) CheckRelationWithGroupExpansion(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) (bool, error) {
-	query := reachableCTE + `
+// transitively belongs to — holds the relation on the resource. maxExpansionStates
+// bounds the group expansion (boundedReachableCTE): more than maxExpansionStates
+// distinct reachable states returns relationship.ErrExpansionBudgetExceeded, never
+// a deny. maxExpansionStates <= 0 uses the unbounded reachableCTE.
+func (s *relationshipStore) CheckRelationWithGroupExpansion(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string, maxExpansionStates int) (bool, error) {
+	if maxExpansionStates <= 0 {
+		query := reachableCTE + `
 SELECT EXISTS(
 	SELECT 1
 	FROM iam_relationships r
-	JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid
+	JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 	WHERE r.resource_type = ? AND r.resource_id = ? AND r.relation = ?
 )`
-	return existsQuery(ctx, s.db, query, subjectType, subjectID, resourceType, resourceID, relation)
+		return existsQuery(ctx, s.db, query, subjectType, subjectID, resourceType, resourceID, relation)
+	}
+
+	query := boundedReachableCTE + `
+SELECT
+	(SELECT count(*) FROM capped),
+	EXISTS(
+		SELECT 1
+		FROM iam_relationships r
+		JOIN capped ON r.subject_type = capped.atype AND r.subject_id = capped.aid AND r.subject_relation = capped.arelation
+		WHERE r.resource_type = ? AND r.resource_id = ? AND r.relation = ?
+	)`
+	var stateCount, matched int
+	if err := s.db.QueryRow(ctx, query,
+		subjectType, subjectID, maxExpansionStates, maxExpansionStates+1,
+		resourceType, resourceID, relation,
+	).Scan(&stateCount, &matched); err != nil {
+		return false, tursodb.MapError(err)
+	}
+	if stateCount > maxExpansionStates {
+		return false, relationship.ErrExpansionBudgetExceeded
+	}
+	return matched != 0, nil
 }
 
 // GetRelationTargets returns the subjects holding a relation on a resource. An
-// empty subject_relation reads back as nil (a concrete subject); a non-empty one
-// as the userset relation.
+// empty subject_relation reads back as "" (a concrete subject); a non-empty one
+// as the exact userset relation.
 func (s *relationshipStore) GetRelationTargets(ctx context.Context, resourceType, resourceID, relation string) ([]relationship.RelationTarget, error) {
 	const q = `SELECT subject_type, subject_id, subject_relation FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ?`
 	rows, err := s.db.Query(ctx, q, resourceType, resourceID, relation)
@@ -109,9 +180,9 @@ func (s *relationshipStore) GetRelationTargets(ctx context.Context, resourceType
 			return nil, tursodb.MapError(err)
 		}
 		out = append(out, relationship.RelationTarget{
-			SubjectType:     subjectType,
-			SubjectID:       subjectID,
-			SubjectRelation: nullableString(subjectRelation),
+			Type:     subjectType,
+			ID:       subjectID,
+			Relation: subjectRelation,
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -120,17 +191,22 @@ func (s *relationshipStore) GetRelationTargets(ctx context.Context, resourceType
 	return out, nil
 }
 
-// CheckRelationExists reports whether an exact direct tuple is present (no
-// expansion, no subject_relation match — the platform-admin data-tuple check).
+// CheckRelationExists reports whether an exact direct tuple is present for a
+// CONCRETE subject (no expansion; subject_relation must be empty — a stored userset
+// tuple with the same type/id does not satisfy a concrete probe). Used for the
+// platform-admin data-tuple check and last-owner counting.
 func (s *relationshipStore) CheckRelationExists(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) (bool, error) {
-	const q = `SELECT EXISTS(SELECT 1 FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ? AND subject_type = ? AND subject_id = ?)`
+	const q = `SELECT EXISTS(SELECT 1 FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ? AND subject_type = ? AND subject_id = ? AND subject_relation = '')`
 	return existsQuery(ctx, s.db, q, resourceType, resourceID, relation, subjectType, subjectID)
 }
 
 // CheckBatchDirect returns resourceID -> allowed for one relation across the
 // requested ids (with group expansion). Every requested id is present in the map
-// (default false); matches are set true.
-func (s *relationshipStore) CheckBatchDirect(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string) (map[string]bool, error) {
+// (default false); matches are set true. maxExpansionStates bounds the shared
+// subject expansion (boundedReachableCTE): overflow returns
+// relationship.ErrExpansionBudgetExceeded, never a partial map.
+// maxExpansionStates <= 0 uses the unbounded reachableCTE.
+func (s *relationshipStore) CheckBatchDirect(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) (map[string]bool, error) {
 	out := make(map[string]bool, len(resourceIDs))
 	for _, id := range resourceIDs {
 		out[id] = false
@@ -139,22 +215,68 @@ func (s *relationshipStore) CheckBatchDirect(ctx context.Context, resourceType s
 		return out, nil
 	}
 
-	args := []any{subjectType, subjectID, resourceType, relation}
+	if maxExpansionStates <= 0 {
+		args := []any{subjectType, subjectID, resourceType, relation}
+		for _, id := range resourceIDs {
+			args = append(args, id)
+		}
+		query := reachableCTE + `
+SELECT DISTINCT r.resource_id
+FROM iam_relationships r
+JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
+WHERE r.resource_type = ? AND r.relation = ? AND r.resource_id IN ` + inClause(len(resourceIDs))
+
+		matched, err := queryStrings(ctx, s.db, query, args...)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range matched {
+			out[id] = true
+		}
+		return out, nil
+	}
+
+	// The distinct-state count rides every result row via the cnt cross-join, so
+	// overflow is detectable even when no resource matches (zero match rows).
+	args := []any{subjectType, subjectID, maxExpansionStates, maxExpansionStates + 1, resourceType, relation}
 	for _, id := range resourceIDs {
 		args = append(args, id)
 	}
-	query := reachableCTE + `
-SELECT DISTINCT r.resource_id
-FROM iam_relationships r
-JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid
-WHERE r.resource_type = ? AND r.relation = ? AND r.resource_id IN ` + inClause(len(resourceIDs))
+	query := boundedReachableCTE + `,
+cnt AS (SELECT count(*) AS n FROM capped),
+matches AS (
+	SELECT DISTINCT r.resource_id AS rid
+	FROM iam_relationships r
+	JOIN capped ON r.subject_type = capped.atype AND r.subject_id = capped.aid AND r.subject_relation = capped.arelation
+	WHERE r.resource_type = ? AND r.relation = ? AND r.resource_id IN ` + inClause(len(resourceIDs)) + `
+)
+SELECT cnt.n, m.rid FROM cnt LEFT JOIN matches m ON 1=1`
 
-	matched, err := queryStrings(ctx, s.db, query, args...)
+	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return nil, tursodb.MapError(err)
 	}
-	for _, id := range matched {
-		out[id] = true
+	defer rows.Close()
+
+	overflow := false
+	for rows.Next() {
+		var stateCount int
+		var rid *string
+		if err := rows.Scan(&stateCount, &rid); err != nil {
+			return nil, tursodb.MapError(err)
+		}
+		if stateCount > maxExpansionStates {
+			overflow = true
+		}
+		if rid != nil {
+			out[*rid] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, tursodb.MapError(err)
+	}
+	if overflow {
+		return nil, relationship.ErrExpansionBudgetExceeded
 	}
 	return out, nil
 }
@@ -170,6 +292,10 @@ WHERE r.resource_type = ? AND r.relation = ? AND r.resource_id IN ` + inClause(l
 // MIXED batch is a loud store error (the engine mints all-or-none). There is no
 // RETURNING — the port is error-only.
 func (s *relationshipStore) CreateRelationships(ctx context.Context, in []relationship.CreateRelationship) error {
+	return createRelationships(ctx, s.db, in)
+}
+
+func createRelationships(ctx context.Context, db tursodb.Querier, in []relationship.CreateRelationship) error {
 	if len(in) == 0 {
 		return nil
 	}
@@ -206,20 +332,85 @@ func (s *relationshipStore) CreateRelationships(ctx context.Context, in []relati
 		if withID {
 			args = append(args, c.RelationshipID)
 		}
-		args = append(args, c.ResourceType, c.ResourceID, c.Relation, c.SubjectType, c.SubjectID, subjectRelationValue(c.SubjectRelation), now)
+		args = append(args, c.ResourceType, c.ResourceID, c.Relation, c.SubjectType, c.SubjectID, c.SubjectRelation, now)
 	}
 	buf.WriteString(" ON CONFLICT DO NOTHING")
 
-	if _, err := s.db.Exec(ctx, buf.String(), args...); err != nil {
+	if _, err := db.Exec(ctx, buf.String(), args...); err != nil {
 		return err
 	}
 	return nil
+}
+
+// SetRelationTargets reconciles one resource+relation inside Turso's
+// BEGIN IMMEDIATE transaction. Competing writers serialize before reading, so
+// concurrent desired-state moves cannot commit an accidental union. Retrying a
+// residual busy error is naturally safe because the operation describes state,
+// not a one-time occurrence.
+func (s *relationshipStore) SetRelationTargets(ctx context.Context, resourceType, resourceID, relationName string, in []relationship.CreateRelationship) error {
+	desired := make(map[relationship.SubjectRef]relationship.CreateRelationship, len(in))
+	for _, c := range in {
+		if c.ResourceType != resourceType || c.ResourceID != resourceID || c.Relation != relationName {
+			return fmt.Errorf("authorization turso store: SetRelationTargets row is outside requested scope: %w", sdk.ErrInvalidInput)
+		}
+		desired[c.Subject()] = c
+	}
+	rows := make([]relationship.CreateRelationship, 0, len(desired))
+	for _, c := range desired {
+		rows = append(rows, c)
+	}
+
+	return retryBusy(ctx, func() error {
+		return s.db.InTx(ctx, func(tx *tursodb.Tx) error {
+			if len(rows) == 0 {
+				_, err := tx.Exec(ctx, `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ?`, resourceType, resourceID, relationName)
+				return tursodb.MapError(err)
+			}
+
+			var predicate strings.Builder
+			args := make([]any, 0, len(rows)*3)
+			for i, c := range rows {
+				if i > 0 {
+					predicate.WriteString(" OR ")
+				}
+				predicate.WriteString("(subject_type = ? AND subject_id = ? AND subject_relation = ?)")
+				args = append(args, c.SubjectType, c.SubjectID, c.SubjectRelation)
+			}
+			pred := predicate.String()
+
+			conflictArgs := []any{resourceType, resourceID, relationName}
+			conflictArgs = append(conflictArgs, args...)
+			var conflict bool
+			conflictQ := `SELECT EXISTS (SELECT 1 FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation <> ? AND (` + pred + `))`
+			if err := tx.QueryRow(ctx, conflictQ, conflictArgs...).Scan(&conflict); err != nil {
+				return tursodb.MapError(err)
+			}
+			if conflict {
+				return fmt.Errorf("authorization turso store: a desired target already holds a different relation on %s:%s: %w", resourceType, resourceID, sdk.ErrConflict)
+			}
+
+			deleteArgs := []any{resourceType, resourceID, relationName}
+			deleteArgs = append(deleteArgs, args...)
+			deleteQ := `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ? AND NOT (` + pred + `)`
+			if _, err := tx.Exec(ctx, deleteQ, deleteArgs...); err != nil {
+				return tursodb.MapError(err)
+			}
+			return createRelationships(ctx, tx, rows)
+		})
+	})
 }
 
 // DeleteResourceRelationships removes every tuple for a resource (idempotent).
 func (s *relationshipStore) DeleteResourceRelationships(ctx context.Context, resourceType, resourceID string) error {
 	const q = `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ?`
 	_, err := s.db.Exec(ctx, q, resourceType, resourceID)
+	return err
+}
+
+// DeleteRelationshipTarget removes one exact tuple, including subject_relation.
+func (s *relationshipStore) DeleteRelationshipTarget(ctx context.Context, resourceType, resourceID, relationName string, target relationship.SubjectRef) error {
+	const q = `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ? AND subject_type = ? AND subject_id = ? AND subject_relation = ?`
+	_, err := s.db.Exec(ctx, q, resourceType, resourceID, relationName, target.Type, target.ID, target.Relation)
 	return err
 }
 
@@ -308,8 +499,10 @@ func (s *relationshipStore) ListRelationshipsByResource(ctx context.Context, res
 }
 
 // LookupResourceIDs returns the distinct resource IDs (sorted) where the subject
-// has any of the relations, with group expansion.
-func (s *relationshipStore) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID string) ([]string, error) {
+// has any of the relations, with group expansion. It returns at most limit rows:
+// the engine passes MaxLookupResults+1 so a full-limit return is a distinguishable
+// overflow signal, never a silently truncated complete result.
+func (s *relationshipStore) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID string, limit int) ([]string, error) {
 	if len(relations) == 0 {
 		return nil, nil
 	}
@@ -320,15 +513,16 @@ func (s *relationshipStore) LookupResourceIDs(ctx context.Context, resourceType 
 	query := reachableCTE + `
 SELECT DISTINCT r.resource_id
 FROM iam_relationships r
-JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid
+JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 WHERE r.resource_type = ? AND r.relation IN ` + inClause(len(relations)) + `
 ORDER BY r.resource_id`
+	query, args = withLimit(query, args, limit)
 	return queryStrings(ctx, s.db, query, args...)
 }
 
 // LookupResourceIDsByRelationTarget returns the distinct resource IDs (sorted)
-// whose relation points at any of the target IDs (no expansion).
-func (s *relationshipStore) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string) ([]string, error) {
+// whose relation points at any of the target IDs (no expansion), at most limit rows.
+func (s *relationshipStore) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string, limit int) ([]string, error) {
 	if len(targetIDs) == 0 {
 		return nil, nil
 	}
@@ -337,15 +531,17 @@ func (s *relationshipStore) LookupResourceIDsByRelationTarget(ctx context.Contex
 		args = append(args, id)
 	}
 	query := `SELECT DISTINCT resource_id FROM iam_relationships
-WHERE resource_type = ? AND relation = ? AND subject_type = ? AND subject_id IN ` + inClause(len(targetIDs)) + `
+WHERE resource_type = ? AND relation = ? AND subject_type = ? AND subject_id IN ` + inClause(len(targetIDs)) + ` AND subject_relation = ''
 ORDER BY resource_id`
+	query, args = withLimit(query, args, limit)
 	return queryStrings(ctx, s.db, query, args...)
 }
 
 // LookupDescendantResourceIDs walks a self-referential relation transitively from
-// the root IDs (recursive CTE, cycle-safe via UNION dedup, unbounded). Roots are
-// not returned unless a cycle makes one a genuine descendant. Result is sorted.
-func (s *relationshipStore) LookupDescendantResourceIDs(ctx context.Context, resourceType, relation, subjectType string, rootIDs []string) ([]string, error) {
+// the root IDs (recursive CTE, cycle-safe via UNION dedup). Roots are not
+// returned unless a cycle makes one a genuine descendant. Result is sorted and
+// bounded at limit rows (the recursive-expansion result cap).
+func (s *relationshipStore) LookupDescendantResourceIDs(ctx context.Context, resourceType, relation, subjectType string, rootIDs []string, limit int) ([]string, error) {
 	if len(rootIDs) == 0 {
 		return nil, nil
 	}
@@ -358,32 +554,24 @@ func (s *relationshipStore) LookupDescendantResourceIDs(ctx context.Context, res
 	query := `WITH RECURSIVE descendants(rid) AS (
 	SELECT r.resource_id
 	FROM iam_relationships r
-	WHERE r.resource_type = ? AND r.relation = ? AND r.subject_type = ? AND r.subject_id IN ` + inClause(len(rootIDs)) + `
+	WHERE r.resource_type = ? AND r.relation = ? AND r.subject_type = ? AND r.subject_relation = '' AND r.subject_id IN ` + inClause(len(rootIDs)) + `
 	UNION
 	SELECT r.resource_id
 	FROM iam_relationships r
 	JOIN descendants d ON r.subject_id = d.rid
-	WHERE r.resource_type = ? AND r.relation = ? AND r.subject_type = ?
+	WHERE r.resource_type = ? AND r.relation = ? AND r.subject_type = ? AND r.subject_relation = ''
 )
 SELECT DISTINCT rid FROM descendants ORDER BY rid`
+	query, args = withLimit(query, args, limit)
 	return queryStrings(ctx, s.db, query, args...)
 }
 
-// subjectRelationValue renders an optional userset relation for storage: nil
-// stores as the empty string (the NOT NULL DEFAULT column), matching the
-// read-back mapping.
-func subjectRelationValue(sr *string) string {
-	if sr == nil {
-		return ""
+// withLimit appends a bounded ` LIMIT ?` and its argument when limit is positive
+// (the engine always passes MaxLookupResults+1). A non-positive limit is
+// unbounded (defensive).
+func withLimit(query string, args []any, limit int) (string, []any) {
+	if limit > 0 {
+		return query + "\nLIMIT ?", append(args, limit)
 	}
-	return *sr
-}
-
-// nullableString maps a stored subject_relation back to the rim's *string: the
-// empty string is a concrete subject (nil), any other value the userset relation.
-func nullableString(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
+	return query, args
 }

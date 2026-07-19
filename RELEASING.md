@@ -5,10 +5,12 @@ modules today: `sdk`; `integrations/{cryptids/bcrypt, cryptids/golang-jwt, crypt
 datastores/pgxdb, datastores/turso, email/sendgrid, filestorage/gcs,
 filestorage/s3, kvstores/goredis, oauth/github, oauth/google,
 notify/mailer, scheduling/robfig-cron, tracing/otel}`; `features/authentication`
-(+ `views/templ`, its bundled default views module — auth-v3 AV3-8.2, 2026-07-13),
-`features/authorization` (authorization-v1, 2026-07-09), `features/cms`
-(+ `views/templ`, its bundled default views module — feature-standard B2,
-2026-07-07), `features/events` (events-v1, 2026-07-08), `features/jobs`
+(+ `views/goth`, its bundled default views module — auth-v3 AV3-8.2, 2026-07-13;
+renamed from `views/templ` and re-implemented on `ui/goth` in ui-goth GOTH-7.2,
+2026-07-18), `features/authorization` (authorization-v1, 2026-07-09), `features/cms`
+(+ `views/goth`, its bundled default views module — feature-standard B2, 2026-07-07;
+renamed from `views/templ` and re-implemented on `ui/goth` in ui-goth GOTH-7.3,
+2026-07-18), `features/events` (events-v1, 2026-07-08), `features/jobs`
 (each feature + `stores/{turso,pgx}`); `examples/{cms,
 minimal, auth-cms, jobs-minimal}`; `workshop/gopernicus` (the scaffolding
 CLI — a `go install`-able tool, tagged like any importable module). Each importable module (everything except the four
@@ -28,12 +30,23 @@ sdk/v0.1.0
 integrations/datastores/turso/v0.1.0
 features/cms/v0.1.0
 features/cms/stores/turso/v0.1.0
+ui/goth/v0.1.0
 ```
 
 Each module's own `go.mod` `require` versions (e.g. `features/cms/stores/turso`
 requiring `sdk`) are bumped and tagged independently — a patch release of
 `sdk` does not force a release of every module that depends on it, only the
 ones whose `go.mod` is updated to require the new version.
+
+**UI-implementation modules (ui-goth GOTH-0.2, 2026-07-17).** The seventh module
+kind — a UI implementation under the top-level `ui/` family — tags the same
+nested way and is versioned independently (`ui/goth/v0.1.0`). Unlike the four
+`examples/*` hosts it is an **importable** module, so it IS tagged; its `go.mod`
+requires its own view/runtime libraries and `sdk`, never a feature/integration/
+example/workshop (guard G17). A feature's `views/goth` adapter module (when it
+lands) tags independently and requires its feature core + `sdk` + the pinned
+`ui/goth` tag. The `ui/goth` module itself is created at GOTH-1.1; no `ui/*` tag
+is cut this milestone.
 
 ## Preconditions before the first tag
 
@@ -77,6 +90,14 @@ Standard Go module semver rules apply per-module:
   and do not require a major bump by Go's own pre-release semantics; each
   module should still move to `v1.0.0` deliberately once its contract is
   considered stable, not accidentally on the first tag.
+
+**`ui/goth` `Requirements`-surface convention (ui-goth gate-b, 2026-07-18).** Any
+change to a `ui/goth` bundle's browser `Requirements` — a new CSP directive, a new
+required source, or a change to what a profile requires — is an **adopter-facing
+upgrade note even when it is only a semver patch**. Adopters map `Requirements` into
+their own CSP (see `ui/goth/README.md` §11.3), so a widened requirement that ships
+silently would break a host whose CSP no longer covers the kit's assets. Record it in
+the module's next-tag upgrade note below and tell hosts to re-derive their CSP header.
 
 ## Upgrade notes (keyed to each module's next tag)
 
@@ -150,8 +171,10 @@ Go-API break.
 middleware-consolidation (2026-07-11) rewrote `Service.RateLimitByIP`'s body to
 delegate to `ratelimiter.Middleware` with its exact prior signature and
 semantics; no exported surface changed. This is a **patch**, not a minor — the
-proof is auth's existing rate-limit tests passing unmodified. (Superseded for
-the same tag by the refresh change below, which forces a **breaking** bump.)
+proof is auth's existing rate-limit tests passing unmodified. (Superseded for the
+same tag by the refresh change below AND the auth-v3 identity cut, which force a
+**breaking** bump; the additive HTML resource-policy seam — ui-goth GOTH-0.4 — folds
+into that same breaking cut, see its note below.)
 
 ### features/authentication — next tag: JWT sessions + refresh rotation (BREAKING)
 
@@ -251,17 +274,152 @@ backfill-first, validated migration procedure — exact pgx and SQLite/libSQL SQ
 for both dialects — is the **Auth v3 host upgrade runbook** below. The same note
 is mirrored in `features/authentication/README.md`.
 
-### features/authentication/views/templ — next tag: NEW module (first tag)
+### features/authentication + both store modules (+ authorization pgx) — next tag: auth adopter hardening (BREAKING, pre-tag)
 
-auth-v3 (2026-07-13, AV3-8.2) added `features/authentication/views/templ`, the
-feature's bundled default HTML view module (the thirty-seventh workspace module),
-sibling to `features/cms/views/templ`. It carries the `a-h/templ`-rendered default
-auth pages so the feature core stays presentation-free (`Config.Views == nil` is
-API-only; a non-nil `Views` — the bundled module or a host's own — adds HTML
-without changing any JSON contract). This is a **new, standalone module getting its
-first tag**; it depends on `features/authentication` (for the exported view models)
-and is tagged independently like every other importable module. A host that renders
-its own views never imports it.
+auth-adopter-hardening (2026-07-15, task prefix `AAH`) is a **pre-tag breaking**
+hardening packet folded into the same untagged auth-v3 cut — preflight re-confirmed
+zero `features/authentication*` tags (`git tag -l` empty, 2026-07-15), so the
+public-API and canonical-migration edits carry no append-only constraint. It closes
+the framework gaps the first authorization-v3/authentication-v3 adopter exposed. The
+breaking surface:
+
+- **`auth.Granter` is now structured and fail-loud (D1/D2).** `Grant(ctx,
+  resourceType, resourceID, relation, subjectType, subjectID string) error` became
+  `Grant(ctx, GrantInput) error`, where `GrantInput{OperationID, ResourceType,
+  ResourceID, Relation, SubjectType, SubjectID}` carries an operation-scoped identity
+  (persisted invitation row id for accept/resolve-on-registration; a fresh
+  high-entropy id from the unconditional secret generator — never `Config.IDs` — for
+  direct-add). Success (nil) now means the EXACT requested relation was applied or is
+  already exactly present; a different existing relation, an invariant refusal, a
+  missing/deleted host resource, or any infrastructure error must fail loud (no
+  implicit replace). A host adapter inspects its authorization receipt outcome. Any
+  host implementing `Granter` updates to the struct signature and the outcome-aware
+  contract (the `examples/auth-cms` `relationshipGranter` is the reference).
+- **`Config.InviteCheck` is REQUIRED with a `Granter` (D3).** New `InviteAction`
+  (`InviteCreate`/`InviteList`), `InviteCheckRequest{Principal, Action, ResourceType,
+  ResourceID, Relation}`, and the `InviteCheck` func. A `Granter` with a nil
+  `InviteCheck` is `ErrInviteCheckRequired` at construction; an `InviteCheck` with no
+  `Granter` is `ErrInviteCheckWithoutGranter`. The feature's parsed create/list HTTP
+  handlers call it after live-session validation and principal resolution;
+  host-direct `Service` methods are trusted composition calls that skip HTTP policy.
+  All authenticated invitation routes (create, resource-list, mine, accept, cancel,
+  resend) moved from `RequireUser` to `RequireLiveSession` (immediate revocation);
+  public decline is unchanged. Invitation authority is **issuance-time**: an issued
+  invitation is a durable expiring capability, and acceptance does not re-check
+  inviter authority.
+- **Both store constructors now return `(auth.Repositories, error)` (D4).**
+  `features/authentication/stores/{pgx,turso}.Repositories(db)` probe all 13 canonical
+  tables before returning and error (`sdk.ErrNotFound`, naming the table + the
+  `authentication` migration source) when one is missing — pgx via `to_regclass`,
+  turso via `sqlite_master`. Constructors never apply schema. Every call site (the
+  proof host, store harnesses) takes the new return signature.
+- **Canonical pgx migrations carry per-column `COLLATE "C"` (D5, pre-tag fold).**
+  The opaque text keyset/derived-key columns fold `COLLATE "C"` into their canonical
+  CREATEs: authentication `service_accounts.id`, `api_keys.id`, `security_events.id`,
+  `invitations.id`; authorization `iam_relationships.relationship_id` and all five
+  `iam_roles` derived-key columns (`subject_type`, `subject_id`, `role`,
+  `resource_type`, `resource_id`). Byte-order pagination parity now holds on any
+  database's default collation. Deliberate **EXCLUSION**: the `iam_relationships`
+  recursion columns (`resource_type`, `resource_id`, `relation`, `subject_type`,
+  `subject_id`, `subject_relation`) are left uncollated — collating them raises
+  SQLSTATE 42P21 in the recursive reachable CTE (the anchor seeds default-collation
+  parameters), and those queries need only deterministic order/equality. Human
+  display/content columns are untouched; Turso migrations are unchanged.
+
+**v1→v3 collation upgrade caveat.** `CREATE ... IF NOT EXISTS` no-ops on a
+pre-existing table, so a host upgrading from a pre-v3 schema does **not**
+retroactively gain the per-column collation on already-created tables. Per the
+standing greenfield-migrations rule the canonical set ships the final schema only and
+hosts own their own schema evolution — a host that needs the per-column collation on
+an existing table adds it with its own host-tree migration (`ALTER TABLE … ALTER
+COLUMN … TYPE TEXT COLLATE "C"`) or runs the database in the `C` locale. No canonical
+upgrade/evolution file ships. A `C`-locale database remains a supported
+belt-and-suspenders posture either way.
+
+These changes fold into the auth-v3 **major / breaking** floor already recorded for
+`features/authentication` and both nested store modules; the authorization pgx
+collation fold rides the `features/authorization` first-tag breaking-vintage cut (no
+authorization Go-API change). The `examples/auth-cms` proof host (never tagged)
+carries the reference composition: the structured `GrantInput` granter, a host
+resource-existence check, receipt-outcome mapping, and the relation-aware
+`InviteCheck`.
+
+### features/authentication — next tag: optional HTML resource-policy seam (additive; folds into the auth-v3 breaking cut)
+
+ui-goth (2026-07-17, GOTH-0.4; Gate C accepted 2026-07-17) added a
+technology-neutral, feature-owned HTML resource-policy seam so a selected HTML view
+can declare the external styles, scripts, fonts, and images it needs. The whole
+surface is **additive** — every change is a new optional field/type, no existing
+symbol changed — so on its own it would floor at a **minor**; it folds into the
+already-**breaking** auth-v3 identity cut. Adopter-facing surface:
+
+- **New optional `Config.HTMLPolicy *HTMLResourcePolicy`.** `nil` (the default)
+  reproduces the historical asset-free CSP **byte-for-byte** (`default-src 'none';
+  base-uri 'none'; form-action 'self'; frame-ancestors 'none'; script-src
+  'nonce-…'|'none'`) — an upgrading host that leaves it unset sees no header change.
+- **New public types/constructor:** `HTMLResourcePolicy` (opaque, validated,
+  immutable), `HTMLResourceDirective`, `HTMLResourceKind`, the seven frozen
+  widenable-class constants (`HTMLScriptSrc`/`HTMLStyleSrc`/`HTMLImgSrc`/`HTMLFontSrc`/
+  `HTMLConnectSrc`/`HTMLMediaSrc`/`HTMLWorkerSrc`), `NewHTMLResourcePolicy` (validates
+  loudly, wrapping `sdk.ErrInvalidInput`), and `var ErrHTMLPolicyWithoutViews`.
+- **Behavior contract:** a policy only WIDENS the seven frozen resource classes and
+  can NEVER name, relax, or remove a fixed protection (the fixed CSP prefix and the
+  `Cache-Control`/`Referrer-Policy`/`X-Frame-Options`/`X-Content-Type-Options`
+  headers). A non-nil policy REPLACES the default `script-src` tail entirely, so a
+  policy that omits `HTMLScriptSrc` (or supplies it without `Nonce: true`) is
+  fail-closed on scripts. Setting `HTMLPolicy` with a nil `Views` is
+  `ErrHTMLPolicyWithoutViews` at construction (contradictory wiring, never a silent
+  no-op). The seam validates directive STRUCTURE, not source VALUES — source-value
+  hardening rests on the view adapter / host.
+- **No new dependency.** The feature core imports no templ, Alpine, HTMX, or
+  `ui/goth`; `HTMLResourcePolicy` is a plain value. The `ui/goth` authentication view
+  adapter that maps `goth.Bundle.Requirements()` into a policy lands in GOTH-7.2.
+
+### features/authentication/views/goth — next tag: NEW module (first tag; renamed from views/templ)
+
+auth-v3 (2026-07-13, AV3-8.2) added the feature's bundled default HTML view module
+(the thirty-seventh workspace module), sibling to `features/cms/views/goth`, as
+`features/authentication/views/templ`. ui-goth GOTH-7.2 (2026-07-18) **renamed the
+module path to `features/authentication/views/goth`** (Gate A's tag-sensitive rule —
+the untagged module is renamed in place, no compatibility shim) and re-implemented it
+on `ui/goth`: the default auth pages now render through the `ui/goth` primitives/
+components and the fingerprinted asset bundle. It carries a `HTMLPolicy()` that maps
+`goth.Bundle.Requirements()` into `authentication.HTMLResourcePolicy` (the host wires
+it into `Config.HTMLPolicy`), and it **externalizes the reset/magic-link
+fragment-token readers** into a served `fragment.js` (`FragmentScriptHandler`,
+`DefaultFragmentScriptPath`) so the pages run under a CSP whose `script-src` is
+`'self'` + the per-render nonce, with no inline script. Construction is now
+`New(bundle *goth.Bundle) (Views, error)` (was `New()`); a host that renders its own
+views never imports it. **Migration for an adopter on the old path:** update the
+import/require/replace from `.../views/templ` to `.../views/goth`, pass a
+`*goth.Bundle` to `New`, serve the bundle assets + `FragmentScriptHandler()`, and set
+`Config.HTMLPolicy = views.HTMLPolicy()`. The feature core stays presentation-free
+(`Config.Views == nil` is API-only; the feature core imports no templ or `ui/goth`).
+This is a **new, standalone module getting its first tag** (no prior tag existed on
+the old path); it depends on `features/authentication` and `ui/goth` and is tagged
+independently like every other importable module.
+
+### features/cms/views/goth — next tag: NEW module (first tag; renamed from views/templ)
+
+feature-standard B2 (2026-07-07) added the CMS feature's bundled default HTML view
+module `features/cms/views/templ`. ui-goth GOTH-7.3 (2026-07-18) **renamed the module
+path to `features/cms/views/goth`** (Gate A's tag-sensitive rule — the untagged module
+is renamed in place, no compatibility shim) and re-implemented it on `ui/goth`: the
+default CMS pages (public site chrome + admin management) now render through the
+`ui/goth` primitives/components and the fingerprinted asset bundle. The admin
+entries-list is HTMX-enhanced (the status filter, created_at sort toggle, and
+pagination swap the `#cms-entries-content` region via explicit `hx-*`, degrading to
+full-document no-JS reloads); the feature core reads the `HX-Request` header as a
+presentation hint only and gains no templ/`ui/goth` dependency. Construction is now
+`New(bundle *goth.Bundle) (Views, error)` (was `New()`); a host serves the bundle
+assets under the path it names. The CMS `Views` port gained one method
+(`EntriesListContent`, the HTMX content fragment) and `Pager` gained a `Status` field.
+**Migration for an adopter on the old path:** update the import/require/replace from
+`.../views/templ` to `.../views/goth`, pass a `*goth.Bundle` to `New` (embedding hosts
+build the bundle and serve its assets), and — if the host implements the `Views` port
+by hand rather than embedding the default — add `EntriesListContent`. This is a **new,
+standalone module getting its first tag** (no prior tag existed on the old path); it
+depends on `features/cms` and `ui/goth` and is tagged independently.
 
 ### integrations/datastores/turso — next tag: BEGIN IMMEDIATE write-intent transactions (patch, behavior fix)
 
@@ -363,6 +521,170 @@ type Deps struct {
     Status   work.StatusReader // jobs.Service.LatestStatusByKey
 }
 ```
+
+### features/authorization + both store modules — next tag: authorization v3 correctness kernel (BREAKING; FIRST tags)
+
+authorizationv3 (2026-07-14, task prefix `AZ3`) hardens the v1 IAM feature into an
+exact-semantics correctness kernel. **Preflight re-confirmed zero
+`features/authorization*` tags exist (`git tag -l` empty, 2026-07-14),** so this
+cut is the module's **first tag** and — per recommended-default #7 and the packet's
+pre-tag breaking policy — the canonical migration set was **rewritten greenfield**
+(fold-to-final, not append-only). This note **supersedes** the pending
+middleware-consolidation "additive gate symbols (minor floor)" note above: with no
+tag ever cut, the v3 breaking surface simply absorbs that pending minor floor into
+the first tag.
+
+**Breaking-change taxonomy — this note distinguishes SEMANTIC access changes from
+source-only renames** (the AZ3-5.3 acceptance criterion):
+
+- **SEMANTIC (a decision or stored-state meaning changed):**
+  - **Userset relations are now load-bearing at runtime** (critical finding #1). A
+    stored `group#admin` is no longer silently satisfied by `group#member`; a
+    concrete-group grant reaches only the group entity; a tuple missing its
+    required userset relation is now rejected. Any adopter whose v1 data relied on
+    the decorative-relation bug gets DIFFERENT (correct) decisions. This is the
+    single change most likely to alter live access — the AZ3-5.1 upgrade audit
+    classifies each v1 row RETAIN / LOSE and stops on ambiguity (see
+    `features/authorization/stores/UPGRADE.md`).
+  - **Decision requests are concrete-principal-only.** A non-empty relation at a
+    decision boundary is now rejected, never ignored; `Check`/`CheckBatch`/
+    `FilterAuthorized`/`LookupResources` fail closed on malformed refs.
+  - **Evaluation is now bounded and fail-closed.** Limit/graph/fan-out/lookup
+    exhaustion returns an indeterminate `ErrEvaluationLimit` (wraps
+    `sdk.ErrUnavailable`; middleware maps it to 503), never a silent deny or a
+    truncated-complete list. A caller that treated "no error, empty result" as
+    "denied" must now fail closed on the error.
+  - **Mutations are atomic, revisioned, idempotent, and outcome-explicit.** A
+    conflicting create no longer silently succeeds: apply/revoke/replace return an
+    explicit `Receipt.Outcome` (applied/no_change/semantic_conflict/
+    invariant_blocked/not_found) plus an independent `Replayed` flag; stale
+    revision and MutationID payload mismatch are command ERRORS, not outcomes.
+    Last-owner protection is now a single-winner repository invariant
+    (`OutcomeInvariantBlocked`), replacing the non-atomic exists→count→delete.
+  - **`LookupResources` completeness + Check/Lookup parity.** Lookup now returns
+    Through-derived descendants it previously omitted (the D1(b)/D1(c) gap), so an
+    adopter enumerating resources sees a larger, correct set.
+  - **Effective role listing with provenance.** A scoped revoke that leaves a
+    global grant now reports `SameRoleGrantRemains=true`; `ListEffectiveRoleGrantsByResource`
+    reports direct/global/both provenance (raw `ListByResource` retained,
+    documented as raw).
+  - **Actor/guard authority is now mandatory for untrusted writes.** A guarded
+    write commits only if every authorization scope its guard read has the same
+    revision when the repository locks; there is no default-allow.
+- **SOURCE-ONLY renames / shape changes (compile break, no access-meaning change):**
+  - **Decision vocabulary rename:** `CheckRequest.Subject` (type `Subject`) →
+    `CheckRequest.Principal` (type `PrincipalRef{Type, ID}`); the stored-subject
+    type is now `SubjectRef{Type, ID, Relation}`. These are intentionally distinct
+    types (concrete principal vs. possibly-userset stored subject).
+  - **Construction shape:** `NewService(repos, cfg)` now returns
+    `(Components{Service, RelationshipWriter, SystemMutator}, error)` — the authorization-specific FS2
+    amendment (a feature holding a separately-partitioned trusted capability; see
+    `features/README.md` §5 FS2 amendment; NOT a general FS2 replacement).
+  - **Relationship state writes moved off `Service`:** `CreateRelationships`,
+    `DeleteRelationship`, `DeleteResourceRelationships`, `DeleteByResourceAndSubject`,
+    raw `AssignRole`/`UnassignRole`. Actor-facing typed guarded commands
+    (`GrantRelationship`/`RevokeRelationship`/`ReplaceRelationship`/`AssignRole`/
+    `UnassignRole`) remain guarded on `Service`; normal relationship state writes
+    live on the separately held `RelationshipWriter`, while `SystemMutator` is the
+    opt-in high-integrity path.
+  - **Reader ports gained a `limit int`:** the three `Lookup*` reader methods bound
+    their result set (SQL `LIMIT` / memstore cap); a custom store implementation
+    must add the parameter.
+  - **`GetSchema()` returns a `SchemaSnapshot`** (deep-copy read-only projection)
+    instead of the mutable `Schema`; new `SchemaDigest()`.
+  - **Role effective-listing port addition:** `role.Storer.ListEffectiveByResource`
+    (+ `EffectiveGrant`) — a custom store must implement it.
+
+**Canonical migration set (greenfield rewrite).** Both dialect trees ship the final
+v3 schema with byte-identical filename sets: `0001_iam_relationships`,
+`0002_iam_roles`, `0003_iam_scopes`, `0004_iam_mutations` (the `iam_*` prefix per
+owner ruling R4). The `iam_scopes` (revision anchors) and `iam_mutations` (receipt
+ledger) tables are new in v3. A v1 adopter does **not** blind-copy these onto a
+populated v1 database — the **AZ3-5.1 data-preserving adopter path** (detection →
+blocked-until-repaired → conversion + anchor seeding → v3 boot → access comparison →
+rollback boundary) is published in `features/authorization/stores/UPGRADE.md` and
+linked from `features/authorization/README.md`. It was **executed live** on
+fresh/reset PostgreSQL (C-collation) + libSQL both dialects (AZ3-5.1) and has **not**
+been applied to a real host.
+
+**Jobs/work axis: authorization adds NOTHING.** authorizationv3 imports **`sdk`
+only** (verified: `features/authorization/go.mod` requires only `sdk`; zero
+`sdk/capabilities/work`, `features/jobs`, or `features/events` imports in the core).
+The v3 correctness kernel emits **no effects** — no authorization delivery queue, no
+post-commit dispatch, no event append, no authorization-specific jobs table. This is
+enforced permanently by the sixteenth layering guard,
+`guard-authorization-no-delivery-repo` (AZ3-5.3), the `guard-auth-no-delivery-repo`
+twin pointed at `features/authorization` migrations + repositories. So the settled
+`sdk/capabilities/work` (new first-tag module) and `features/jobs` (MINOR floor)
+notes above carry **no authorization rider**; a future authorization effects packet
+must consume the shared jobs/events vocabulary, never revive a bespoke queue.
+
+**Per-module tag requirements (semver floors; no tag cut this milestone):**
+
+| Module | Floor | Why |
+|---|---|---|
+| `features/authorization` | **first tag — breaking-vintage** | userset relations load-bearing, concrete-principal decisions, immutable `SchemaSnapshot`, bounded evaluation, `Components{Service, RelationshipWriter, SystemMutator}` construction, separately held baseline state writes, and optional atomic revisioned receipts. Pre-`v1`, breaking is expected (Go pre-release semantics); move to `v1.0.0` deliberately, not on this first tag |
+| `features/authorization/stores/pgx` | **first tag — breaking-vintage** | implements the relation-aware readers (+`limit`), the three atomic mutation repositories (`iam_scopes`/`iam_mutations`), and `ListEffectiveByResource` over the greenfield `0001…0004` set |
+| `features/authorization/stores/turso` | **first tag — breaking-vintage** | same, libSQL dialect; requires the turso connector's `BEGIN IMMEDIATE` write-intent transactions (already keyed above) for the concurrent mutation CAS |
+
+`examples/auth-cms` is the v3 proof host — a demonstration, never tagged.
+
+**Consumer changes a host/feature must make:**
+
+- **Auth invitation Granter** (`examples/auth-cms/cmd/server/membership.go`): the
+  ordinary project-member adapter uses the separately held `RelationshipWriter`
+  and intentionally ignores `OperationID`; exact creation is naturally
+  idempotent and later re-grants restore current state. A second
+  `guardedRelationshipGranter` demonstrates the opt-in sensitive posture:
+  `SystemMutator` + operation-scoped `DeriveMutationID` + receipt inspection.
+  Hosts choose by resource type/relation; authentication mandates neither path.
+- **Events authorization closure:** `features/events` itself needs **no change** —
+  its `AuthorizeStream` config seam is a host-supplied closure and does not import
+  authorization. A host whose events `Authorize` closure delegates to
+  `authorizer.Check` must update the call to the new `CheckRequest{Principal:
+  PrincipalRef{...}}` shape (was `CheckRequest{Subject: Subject{...}}`). This is the
+  source-only decision-vocabulary rename; the Check-only gate semantics are
+  unchanged.
+- **auth-cms (done — cite):** the proof host is fully migrated — `hostMutationGuard`
+  (`cmd/server/guard.go`) composes the schema `manage_access` relation and the
+  platform-admin recipe over the dependency-tracking `DecisionView`;
+  `cmd/server/authorization.go` seeds via `SystemMutator`+`DeriveMutationID`; all
+  session-only authorization-mutation HTTP routes were removed (browser
+  role-assignment deferred to the AZADM packet). Migration proven by the AZ3-4.1/4.2
+  host-composition tests and the checked-in
+  `examples/auth-cms/cmd/server/testdata/az3-proof-transcript.md`.
+- **External host recipe (README wiring page):** a generic host wires
+  `Components{Service, RelationshipWriter, SystemMutator}` from `NewService`, uses
+  the baseline writer for application-maintained tuple state, and composes a host
+  `MutationGuard` (schema-declared relation + any platform-admin short-circuit) that
+  fails closed, holding `SystemMutator` apart for the sensitive operations that
+  opt into revisions/invariants/receipts/audit,
+  and adapts `identity.Principal → Actor`/`PrincipalRef` at the boundary. The full
+  wiring recipe and every API is documented in `features/authorization/README.md`
+  (AZ3-5.2) — a host wires safely without reading internal code or the plan.
+
+**sdk graduation decision (RECORDED for owner review — NO code moved).** This
+milestone fires the ARCHITECTURE protocol-table trigger ("authorizationv3 settles
+its semantics"). Re-running the three conjunctive graduation gates over the
+authorization check/decision vocabulary: **RE-DEFER — stays consumer-declared.** The
+semantics are now settled (the trigger's condition), but graduation still fails:
+- *sdk/README.md admission (plurality):* exactly ONE honest implementation exists
+  (`features/authorization`); host "closures" are arbitrary access composition, not
+  second implementations of a shared decision contract. FAILS test 1.
+- *ARCHITECTURE five-point sdk-vs-logic:* multiple honest adapters do NOT exist
+  (point 1), and the conformance suite (`storetest`) is feature-coupled, not an
+  sdk-generic suite (point 3). FAILS.
+- *features/README.md §5 five criteria:* criterion 1 (real producer + real consumer
+  in SEPARATE modules) is not met — the only cross-feature usage is consumer-declared
+  Check-only closures per the C2 DEFAULT, not a separate module consuming a graduated
+  sdk authorization port; and criterion 2 (canonical-across-gopernicus) is still not
+  established. FAILS.
+Recommendation to the owner: update the ARCHITECTURE protocol-table row reason from
+"trigger: authorizationv3 settles its semantics" to "settled, but re-deferred:
+single implementation; consumer-declared Check-only closures remain the only
+cross-feature usage — re-evaluate when a second authorization decision
+implementation or a feature needing the identical decision vocabulary appears." The
+owner ratifies any table edit separately; this task records the decision only.
 
 ### Auth v3 tag requirements + production checklist
 

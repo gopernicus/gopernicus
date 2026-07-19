@@ -12,8 +12,14 @@
 -- TIMESTAMPTZ.
 -- id defaults DB-side (a cryptids.Database host sends Create an empty id; the
 -- store omits the column and RETURNING reads the generated key back).
+-- id carries COLLATE "C": it is the keyset tiebreak of the created_at DESC, id
+-- DESC ListByResource and ListBySubject, and the storetest collision suites pin
+-- that tiebreak to the reference store's byte-wise (Go string) order. The
+-- per-column collation makes that byte-order contract travel with the schema
+-- (AAH-5 / plan D5). identifier stays uncollated — it is the invitee's human
+-- email/phone address, filtered by equality only, never an ordering key.
 CREATE TABLE IF NOT EXISTS invitations (
-    id                  TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    id                  TEXT COLLATE "C" PRIMARY KEY DEFAULT gen_random_uuid()::text,
     resource_type       TEXT NOT NULL,
     resource_id         TEXT NOT NULL,
     relation            TEXT NOT NULL,

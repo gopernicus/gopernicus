@@ -117,10 +117,10 @@ func newAccountFormFixture(t *testing.T) accountFormFixture {
 	})
 	cap := &capturedModels{}
 	h := web.NewWebHandler()
-	Mount(h, svc, nil, "", MutationSecurity{
+	Mount(h, svc, nil, nil, "", MutationSecurity{
 		AllowedOrigins:    []string{"https://app.example.com"},
 		SessionCookieName: svc.SessionCookieName(),
-	}, captureViews{c: cap})
+	}, captureViews{c: cap}, nil)
 	return accountFormFixture{h: h, users: users, idents: idents, passwords: passwords, sessions: sessions, grants: grants, cap: cap}
 }
 

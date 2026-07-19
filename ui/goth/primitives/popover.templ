@@ -1,0 +1,28 @@
+package primitives
+
+// Popover (P45, family F3). See popover.go for the native-popover baseline and the
+// runtime anchor enhancement. The caller composes PopoverTrigger and
+// PopoverContent; wire the pair by matching PopoverTrigger.Target to
+// PopoverContent.Base.ID.
+templ Popover(p PopoverProps) {
+	<div class={ popoverClass(p) } { popoverAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// PopoverTrigger is the native popover invoker (popovertarget=Target). It toggles
+// the panel with no JavaScript.
+templ PopoverTrigger(p PopoverTriggerProps) {
+	<button class={ classNames("goth-popover-trigger", p.Class) } { popoverTriggerAttrs(p)... }>
+		{ children... }
+	</button>
+}
+
+// PopoverContent is the native popover panel (popover="auto"): light-dismiss,
+// Escape-close, and top-layer are browser-native. Set Base.ID to match the
+// trigger's Target.
+templ PopoverContent(p PopoverContentProps) {
+	<div class={ classNames("goth-popover-content", p.Class) } { popoverContentAttrs(p)... }>
+		{ children... }
+	</div>
+}

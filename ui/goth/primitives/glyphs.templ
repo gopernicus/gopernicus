@@ -1,0 +1,59 @@
+package primitives
+
+// Internal control glyphs. These are unexported, decorative (aria-hidden) SVG
+// components used as built-in defaults by navigation primitives (Breadcrumb
+// separator/ellipsis, Pagination previous/next/ellipsis). Public primitive APIs
+// still accept caller-provided icons as templ.Component; these cover only the
+// small set of control chevrons/ellipsis the kit draws itself. They emit no
+// inline style.
+
+templ chevronLeftGlyph() {
+	<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+		<path d="m15 18-6-6 6-6"></path>
+	</svg>
+}
+
+templ chevronRightGlyph() {
+	<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+		<path d="m9 18 6-6-6-6"></path>
+	</svg>
+}
+
+templ chevronDownGlyph() {
+	<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+		<path d="m6 9 6 6 6-6"></path>
+	</svg>
+}
+
+templ chevronUpGlyph() {
+	<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+		<path d="m18 15-6-6-6 6"></path>
+	</svg>
+}
+
+templ sortNeutralGlyph() {
+	<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+		<path d="m8 9 4-4 4 4"></path>
+		<path d="m16 15-4 4-4-4"></path>
+	</svg>
+}
+
+templ ellipsisGlyph() {
+	<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
+		<circle cx="5" cy="12" r="1.6"></circle>
+		<circle cx="12" cy="12" r="1.6"></circle>
+		<circle cx="19" cy="12" r="1.6"></circle>
+	</svg>
+}
+
+templ checkGlyph() {
+	<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+		<path d="M20 6 9 17l-5-5"></path>
+	</svg>
+}
+
+templ dotGlyph() {
+	<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
+		<circle cx="12" cy="12" r="4"></circle>
+	</svg>
+}

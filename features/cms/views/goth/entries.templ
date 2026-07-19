@@ -1,0 +1,139 @@
+package goth
+
+import (
+	"github.com/gopernicus/gopernicus/features/cms"
+	"github.com/gopernicus/gopernicus/ui/goth/components/layouts"
+	"github.com/gopernicus/gopernicus/ui/goth/primitives"
+)
+
+// entriesListBody is the admin index for one content type: a PageHeader with a
+// "New" action over a DataTable whose toolbar (status filter + sort toggle) sits
+// OUTSIDE the swappable content region. The toolbar's filter form and the sort/
+// pagination links carry explicit hx-* (built from the frozen htmx.Attrs) that swap
+// only the content region; with no JavaScript every control is a real form GET / <a>
+// link with a shareable URL and a full-document reload — the HTMX path degrades to
+// exactly the no-JS path.
+templ entriesListBody(heading, newHref, editPrefix string, items []cms.EntryListItem, pager cms.Pager) {
+	@layouts.PageHeader(layouts.PageHeaderProps{Title: heading, Actions: newEntryAction(newHref)})
+	@primitives.DataTable(primitives.DataTableProps{Label: heading}) {
+		@primitives.DataTableToolbar(primitives.DataTableToolbarProps{}) {
+			@entriesToolbar(pager)
+		}
+		@entriesContent(editPrefix, items, pager, false)
+	}
+}
+
+// newEntryAction is the PageHeader end-aligned "New" button (an anchor styled as a
+// button — a real navigation, no JavaScript required).
+templ newEntryAction(newHref string) {
+	@primitives.Button(primitives.ButtonProps{URL: parseURL(newHref)}) {
+		New
+	}
+}
+
+// entriesToolbar is the filter/sort row. The status filter is a real GET form
+// (no-JS submit button) enhanced with hx-* on the form so a change swaps the
+// content live; the sort toggle is a real link enhanced the same way. A hidden
+// "order" input preserves the active sort across a filter change (HTMX serializes
+// the form's fields, so no hx-include/hx-vals is needed).
+templ entriesToolbar(pager cms.Pager) {
+	<form
+		method="get"
+		action={ templ.SafeURL(filterHref(pager)) }
+		role="search"
+		data-slot="cms-entries-filter"
+		{ filterFormAttrs(filterHref(pager))... }
+	>
+		<input type="hidden" name="order" value={ pager.Order }/>
+		<label data-slot="cms-entries-filter-label">
+			Status
+			@primitives.NativeSelect(primitives.NativeSelectProps{Name: "status"}) {
+				@statusOption("", pager.Status)
+				@statusOption("draft", pager.Status)
+				@statusOption("published", pager.Status)
+			}
+		</label>
+		@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit, Variant: primitives.ButtonSecondary}) {
+			Filter
+		}
+		<a
+			href={ templ.SafeURL(sortToggleHref(pager)) }
+			data-slot="cms-entries-sort"
+			{ swapLinkAttrs(sortToggleHref(pager))... }
+		>{ sortToggleLabel(pager) }</a>
+	</form>
+}
+
+// statusOption is one status-filter <option>, selected when it matches the active
+// filter value.
+templ statusOption(value, selected string) {
+	@primitives.NativeSelectOption(primitives.NativeSelectOptionProps{Value: value, Selected: value == selected}) {
+		{ statusFilterLabel(value) }
+	}
+}
+
+// entriesContent is the swappable inner region (the HTMX target, id
+// cms-entries-content): the entries Table, an aria-live count, and the pagination
+// nav. Both the full EntriesList page and the EntriesListContent fragment render
+// this exact region, so an HTMX swap and a no-JS reload are equivalent.
+templ entriesContent(editPrefix string, items []cms.EntryListItem, pager cms.Pager, busy bool) {
+	@primitives.DataTableContent(primitives.DataTableContentProps{Base: primitives.Base{ID: entriesContentID}, Busy: busy}) {
+		if len(items) == 0 {
+			<p data-slot="cms-entries-empty">Nothing here yet.</p>
+		} else {
+			@primitives.Table(primitives.TableProps{}) {
+				@primitives.TableHeader(primitives.TableHeaderProps{}) {
+					@primitives.TableRow(primitives.TableRowProps{}) {
+						@primitives.TableHead(primitives.TableHeadProps{}) {
+							Title
+						}
+						@primitives.TableHead(primitives.TableHeadProps{}) {
+							Status
+						}
+						@primitives.TableHead(primitives.TableHeadProps{}) {
+							<span class="goth-sr-only">Actions</span>
+						}
+					}
+				}
+				@primitives.TableBody(primitives.TableBodyProps{}) {
+					for _, it := range items {
+						@primitives.TableRow(primitives.TableRowProps{}) {
+							@primitives.TableCell(primitives.TableCellProps{}) {
+								<a href={ templ.SafeURL(editPrefix + "/" + it.ID + "/edit") }>{ it.Title }</a>
+							}
+							@primitives.TableCell(primitives.TableCellProps{}) {
+								@primitives.Badge(primitives.BadgeProps{Variant: statusBadgeVariant(it.Status)}) {
+									{ it.Status }
+								}
+							}
+							@primitives.TableCell(primitives.TableCellProps{}) {
+								<a href={ templ.SafeURL(editPrefix + "/" + it.ID + "/edit") }>Edit</a>
+							}
+						}
+					}
+				}
+			}
+			@primitives.DataTableStatus(primitives.DataTableStatusProps{}) {
+				{ entryCountText(len(items)) }
+			}
+		}
+		@entriesPager(pager)
+	}
+}
+
+// entriesPager renders the bidirectional pager: "← Newer" (when a previous page
+// exists) beside "Older →" (when a next page exists). Both are real links carrying
+// the active order/status filter, enhanced with hx-* to swap the content region.
+templ entriesPager(pager cms.Pager) {
+	if pager.HasPrev || pager.NextCursor != "" {
+		<nav aria-label="Pagination" data-slot="cms-entries-pager">
+			if pager.HasPrev {
+				<a href={ templ.SafeURL(newerHref(pager)) } { swapLinkAttrs(newerHref(pager))... }>&larr; Newer</a>
+				{ " " }
+			}
+			if pager.NextCursor != "" {
+				<a href={ templ.SafeURL(olderHref(pager)) } { swapLinkAttrs(olderHref(pager))... }>Older &rarr;</a>
+			}
+		</nav>
+	}
+}

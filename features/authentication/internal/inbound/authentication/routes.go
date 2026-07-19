@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
+	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/invitationsvc"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
@@ -26,8 +27,15 @@ const refreshAttemptsPerMinute = 30
 // listStrategy is the transport-edge DefaultStrategy the list handlers pass to
 // crud.ParseListRequest (host-configured via authentication.Config.ListStrategy).
 type handlers struct {
-	svc          authService
-	inv          InvitationService
+	svc authService
+	inv InvitationService
+	// inviteCheck is the host's relation-aware invitation authorization seam
+	// (design §6/D3), invoked by the create/list handlers after live-session
+	// validation, principal resolution, and request parsing. It is non-nil exactly
+	// when inv is non-nil: package auth requires it at construction whenever a
+	// Granter enables invitations (ErrInviteCheckRequired), so a mounted invitation
+	// surface always carries a check.
+	inviteCheck  invitationsvc.InviteCheck
 	listStrategy crud.Strategy
 	// mutation is the browser-safe-mutation policy (design §9.1) applied to
 	// cookie-authenticated sensitive routes (step-up and, in later phase-6 tasks,
@@ -38,6 +46,12 @@ type handlers struct {
 	// pages render through it. The core never imports templ; this is a technology-
 	// neutral web.Renderer port a host (or the bundled views/templ module) satisfies.
 	views Views
+	// htmlPolicy is the optional, technology-neutral HTML resource policy (design
+	// §9.2, GOTH-0.4) writeHTMLSecurity applies to every HTML page and redirect. Nil
+	// → the historical asset-free CSP (script-src nonce-only); non-nil → the fixed
+	// protections plus the policy's validated widening resource directives. It only
+	// widens; it can never remove a fixed protection.
+	htmlPolicy *HTMLResourcePolicy
 }
 
 // Mount registers the auth feature's routes on the registrar. The route surface
@@ -55,9 +69,9 @@ type handlers struct {
 // surface (design §9.2) is registered only when a Views port is wired (views !=
 // nil): mountHTML adds the HTML pages while the JSON contracts stay byte-compatible.
 // A nil views leaves the feature API-only, uniformly.
-func Mount(r feature.RouteRegistrar, svc authService, inv InvitationService, listStrategy crud.Strategy, mutation MutationSecurity, views Views) {
+func Mount(r feature.RouteRegistrar, svc authService, inv InvitationService, inviteCheck invitationsvc.InviteCheck, listStrategy crud.Strategy, mutation MutationSecurity, views Views, htmlPolicy *HTMLResourcePolicy) {
 	r = clientInfoRegistrar{inner: r}
-	h := &handlers{svc: svc, inv: inv, listStrategy: listStrategy, mutation: mutation, views: views}
+	h := &handlers{svc: svc, inv: inv, inviteCheck: inviteCheck, listStrategy: listStrategy, mutation: mutation, views: views, htmlPolicy: htmlPolicy}
 	r.Handle("POST", "/auth/register", h.register)
 	r.Handle("POST", "/auth/login", h.login)
 	r.Handle("POST", "/auth/verify", h.verify)
@@ -157,8 +171,15 @@ func Mount(r feature.RouteRegistrar, svc authService, inv InvitationService, lis
 
 	// Invitation routes are registered only when a Granter is wired (deny-by-
 	// absence, design §6): an unwired host returns 404 for the entire surface.
+	// Every authenticated invitation route rides RequireLiveSession (design §6/D3):
+	// a revoked session's outstanding access JWT cannot create, list, read-mine,
+	// accept, cancel, or resend an invitation. User-only semantics are preserved by
+	// the handlers, which resolve CurrentUser (Type=user) and reject a
+	// service-account principal — RequireLiveSession admits an API-key caller that
+	// RequireUser's JWT-only gate did not, so the invitation surface is NOT a
+	// service-account administration API. Decline stays public and IP-rate-limited.
 	if inv != nil {
-		mountInvitations(r, h, svc.RequireUser, svc.RateLimitByIP("invitation_decline", declineAttemptsPerMinute))
+		mountInvitations(r, h, svc.RequireLiveSession, svc.RateLimitByIP("invitation_decline", declineAttemptsPerMinute))
 	}
 
 	// The optional HTML GET surface is registered only when a Views port is wired

@@ -2,6 +2,7 @@ package authorizersvc
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -15,10 +16,17 @@ func (e *SchemaValidationError) Error() string {
 		len(e.Errors), strings.Join(e.Errors, "\n  - "))
 }
 
-// ValidateSchema checks the schema for configuration errors, returning nil when
-// valid or a *SchemaValidationError listing every issue. It verifies:
+// ValidateSchema is the shared structural validator over a source Schema; it is
+// NOT the construction boot gate — NewService compiles through Compile, the sole
+// path that produces a Service (Compile is a strict superset that also deep-copies
+// into an immutable artifact and adds a digest). ValidateSchema is retained for
+// the focused cycle/unsatisfiable/self-hierarchy coverage below and shares its
+// Through/cycle helpers with Compile. It returns nil when valid or a
+// *SchemaValidationError listing every issue. It verifies:
 //   - Through references point to defined relations on the resource type;
-//   - the permission named by a through-check exists on the target type;
+//   - the permission named by a through-check exists on EVERY possible resource
+//     target of that relation (a mixed-target rule missing it on some target is
+//     rejected);
 //   - direct relation references exist on the resource type;
 //   - no circular through-relation would cause infinite recursion, except a
 //     direct self-loop on the same permission (a self-referential hierarchy
@@ -48,6 +56,10 @@ func ValidateSchema(schema Schema) error {
 	errs = append(errs, detectCircularThrough(schema)...)
 	errs = append(errs, detectUnsatisfiable(schema)...)
 
+	// The passes above range mutable source maps, so their append order follows
+	// map iteration. Sort and de-duplicate so equivalent input always reports the
+	// same ordered error list — matching Compile's deterministic aggregation.
+	errs = dedupeSortStrings(errs)
 	if len(errs) > 0 {
 		return &SchemaValidationError{Errors: errs}
 	}
@@ -69,20 +81,27 @@ func validateThrough(schema Schema, resourceType, permName string, check Permiss
 			resourceType, permName, check.Through))
 	}
 
-	permFound := false
+	// A Through traversal may land on ANY of the relation's possible resource
+	// targets at runtime, so the permission must exist on EVERY one of them — a
+	// permission present on only some targets is an ambiguous mixed-target rule
+	// that silently denies on the missing branch. Report the specific gaps.
+	var missing []string
 	for _, targetType := range targetTypes {
-		if targetDef, ok := schema.ResourceTypes[targetType]; ok {
-			if _, ok := targetDef.Permissions[check.Permission]; ok {
-				permFound = true
-				break
-			}
+		targetDef, ok := schema.ResourceTypes[targetType]
+		if !ok {
+			missing = append(missing, targetType)
+			continue
+		}
+		if _, ok := targetDef.Permissions[check.Permission]; !ok {
+			missing = append(missing, targetType)
 		}
 	}
-	if !permFound {
+	if len(missing) > 0 {
+		sort.Strings(missing)
 		errs = append(errs,
 			fmt.Sprintf("%s.%s: through(%s).%s - permission %q not found on target type(s) %v",
 				resourceType, permName, check.Through, check.Permission,
-				check.Permission, targetTypes))
+				check.Permission, missing))
 	}
 
 	return errs
@@ -144,7 +163,7 @@ func findCycle(schema Schema, resourceType string, check PermissionCheck, visite
 	for _, targetType := range getTargetResourceTypes(rel, schema) {
 		// A direct self-loop on the same permission (the canonical
 		// space.view = Through("parent","view") hierarchy) terminates at
-		// runtime: Check bounds it by MaxTraversalDepth, Lookup expands
+		// runtime: Check bounds it by MaxThroughDepth, Lookup expands
 		// descendants with a cycle-safe store walk. Sanction it without
 		// marking the key visited or recursing so the validator itself
 		// terminates. A rule composed ONLY of such self-loops never bottoms

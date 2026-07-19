@@ -1,0 +1,58 @@
+package primitives
+
+// Drawer (P40, family F4). See drawer.go for the edge-panel/modal contract and
+// ARIA rules. DrawerContent owns the frozen overlay/scrim structure; the panel is
+// edge-anchored via data-side and a bottom/top drawer shows a decorative handle.
+templ Drawer(p DrawerProps) {
+	<div class={ drawerClass(p) } { drawerAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+templ DrawerTrigger(p DrawerTriggerProps) {
+	<button class={ classNames("goth-drawer-trigger", p.Class) } { overlayTriggerAttrs(p.Base, "dialog")... }>
+		{ children... }
+	</button>
+}
+
+templ DrawerContent(p DrawerContentProps) {
+	<div class="goth-overlay" data-slot="overlay">
+		<div class="goth-overlay-scrim" data-slot="scrim" aria-hidden="true"></div>
+		<div class={ drawerPanelClass(p) } { drawerPanelAttrs(p)... }>
+			if drawerHasHandle(p) {
+				<div class="goth-drawer-handle" data-slot="handle" aria-hidden="true"></div>
+			}
+			{ children... }
+		</div>
+	</div>
+}
+
+templ DrawerHeader(p DrawerHeaderProps) {
+	<div class={ classNames("goth-drawer-header", p.Class) } { overlayPartAttrs(p.Base, "header")... }>
+		{ children... }
+	</div>
+}
+
+templ DrawerFooter(p DrawerFooterProps) {
+	<div class={ classNames("goth-drawer-footer", p.Class) } { overlayPartAttrs(p.Base, "footer")... }>
+		{ children... }
+	</div>
+}
+
+templ DrawerTitle(p DrawerTitleProps) {
+	<h2 class={ classNames("goth-drawer-title", p.Class) } { overlayPartAttrs(p.Base, "title")... }>
+		{ children... }
+	</h2>
+}
+
+templ DrawerDescription(p DrawerDescriptionProps) {
+	<p class={ classNames("goth-drawer-description", p.Class) } { overlayPartAttrs(p.Base, "description")... }>
+		{ children... }
+	</p>
+}
+
+templ DrawerClose(p DrawerCloseProps) {
+	<button class={ classNames("goth-drawer-close", p.Class) } { overlayCloseAttrs(p.Base)... }>
+		{ children... }
+	</button>
+}

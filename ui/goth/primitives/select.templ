@@ -1,0 +1,34 @@
+package primitives
+
+// Select (P46, family F4, native baseline). See select.go: a styled native
+// <select> whose closed-state arrow is replaced by a chevron while the native
+// listbox/typeahead/keyboard/form-value/validation are preserved — it works with
+// no JavaScript. The caller composes SelectOption / SelectGroup children.
+templ Select(p SelectProps) {
+	<div class={ selectClass(p) } data-slot="select">
+		<select class="goth-select-input" { selectInputAttrs(p)... }>
+			if p.Placeholder != "" {
+				<option class="goth-select-placeholder" value="" disabled selected hidden>{ p.Placeholder }</option>
+			}
+			{ children... }
+		</select>
+		<span class="goth-select-icon" data-slot="select-icon" aria-hidden="true">
+			@chevronDownGlyph()
+		</span>
+	</div>
+}
+
+// SelectOption renders one <option>; its visible label is templ children.
+templ SelectOption(p SelectOptionProps) {
+	<option { selectOptionAttrs(p)... }>
+		{ children... }
+	</option>
+}
+
+// SelectGroup renders an <optgroup> labelled by SelectGroupProps.Label grouping
+// its child options.
+templ SelectGroup(p SelectGroupProps) {
+	<optgroup { selectGroupAttrs(p)... }>
+		{ children... }
+	</optgroup>
+}

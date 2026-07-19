@@ -1,0 +1,57 @@
+package primitives
+
+// Bubble (P56, family F3). The caller composes and places the parts; each shares
+// the data-slot contract. The root owns alignment; BubbleContent owns the visual
+// variant. Reactions and interactive link/button content are ordinary children.
+templ Bubble(p BubbleProps) {
+	<div class={ bubbleClass(p) } { bubbleAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// BubbleContent is the coloured speech surface. Its children are the message text
+// or interactive link/button content.
+templ BubbleContent(p BubbleContentProps) {
+	<div class={ bubbleContentClass(p) } { bubbleContentAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// BubbleReactions is the row of reaction chips beneath a bubble.
+templ BubbleReactions(p BubbleReactionsProps) {
+	<div class={ bubbleReactionsClass(p) } { bubbleReactionsAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// BubbleReaction is one reaction chip: an interactive <button> (toggled via
+// Pressed) or a link when URL is set. The emoji is decorative; the accessible name
+// comes from Label and the count is announced in text.
+templ BubbleReaction(p BubbleReactionProps) {
+	if !p.URL.IsZero() {
+		<a href={ p.URL.SafeURL() } class={ bubbleReactionClass(p) } { bubbleReactionAttrs(p, true)... }>
+			@bubbleReactionBody(p)
+		</a>
+	} else {
+		<button class={ bubbleReactionClass(p) } { bubbleReactionAttrs(p, false)... }>
+			@bubbleReactionBody(p)
+		</button>
+	}
+}
+
+templ bubbleReactionBody(p BubbleReactionProps) {
+	if p.Emoji != "" {
+		<span class="goth-bubble-reaction-emoji" aria-hidden="true">{ p.Emoji }</span>
+	}
+	if bubbleReactionCount(p) != "" {
+		<span class="goth-bubble-reaction-count">{ bubbleReactionCount(p) }</span>
+	}
+}
+
+// BubbleGroup wraps consecutive bubbles from one sender. CSS tightens the inner
+// corner radii so the group reads as one thread; data-align is shared.
+templ BubbleGroup(p BubbleGroupProps) {
+	<div class={ bubbleGroupClass(p) } { bubbleGroupAttrs(p)... }>
+		{ children... }
+	</div>
+}

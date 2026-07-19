@@ -1,0 +1,8 @@
+# Node-gated browser toolchain — repository-local, never shipped to Go consumers.
+# The committed package.json + package-lock.json stay tracked; the installed
+# dependency tree and Playwright run artifacts are ignored.
+node_modules/
+test-results/
+playwright-report/
+blob-report/
+.playwright/

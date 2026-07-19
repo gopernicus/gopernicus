@@ -1,0 +1,57 @@
+package goth
+
+import (
+	"github.com/gopernicus/gopernicus/features/cms"
+	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
+	"github.com/gopernicus/gopernicus/ui/goth/components/forms"
+	"github.com/gopernicus/gopernicus/ui/goth/components/layouts"
+	"github.com/gopernicus/gopernicus/ui/goth/primitives"
+)
+
+// contactFormBody is the public contact form.
+templ contactFormBody(m cms.ContactModel) {
+	<h1>Contact</h1>
+	@formError(m.FormError)
+	<form method="post" action="/contact" data-slot="cms-contact-form">
+		@forms.FormField(forms.FormFieldProps{Label: "Name", For: "name"}) {
+			@primitives.Input(primitives.InputProps{Base: primitives.Base{ID: "name"}, Name: "name", Value: m.Name})
+		}
+		@forms.FormField(forms.FormFieldProps{Label: "Email", For: "email"}) {
+			@primitives.Input(primitives.InputProps{Base: primitives.Base{ID: "email"}, Type: primitives.InputEmail, Name: "email", Value: m.Email})
+		}
+		@forms.FormField(forms.FormFieldProps{Label: "Message", For: "message"}) {
+			@primitives.Textarea(primitives.TextareaProps{Base: primitives.Base{ID: "message"}, Name: "message", Rows: 6, Value: m.Message})
+		}
+		@forms.FormActions(forms.FormActionsProps{}) {
+			@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit}) {
+				Send
+			}
+		}
+	</form>
+}
+
+// contactThanksBody is the post-submit thank-you page.
+templ contactThanksBody() {
+	<h1>Thanks!</h1>
+	<p>Your message has been received. We'll be in touch.</p>
+	<p><a href="/contact">Send another</a></p>
+}
+
+// inquiriesListBody is the admin inquiry list.
+templ inquiriesListBody(items []messaging.Inquiry) {
+	@layouts.PageHeader(layouts.PageHeaderProps{Title: "Inquiries"})
+	if len(items) == 0 {
+		<p>No inquiries yet.</p>
+	} else {
+		<ul data-slot="cms-inquiry-list">
+			for _, in := range items {
+				<li>
+					<strong>{ in.Name }</strong>
+					<a href={ templ.SafeURL("mailto:" + in.Email) }>{ in.Email }</a>
+					<span>{ in.CreatedAt.Format("2006-01-02 15:04") }</span>
+					<blockquote>{ in.Message }</blockquote>
+				</li>
+			}
+		</ul>
+	}
+}

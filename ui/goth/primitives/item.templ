@@ -1,0 +1,48 @@
+package primitives
+
+// Item (P14, family F3) is a compound row: the caller composes ItemMedia,
+// ItemContent (holding ItemTitle/ItemDescription), and ItemActions. With
+// ItemProps.URL set the whole row is a link (<a>); otherwise a div. data-slot
+// hooks: item, item-media, item-content, item-title, item-description,
+// item-actions.
+templ Item(p ItemProps) {
+	if !p.URL.IsZero() {
+		<a href={ p.URL.SafeURL() } class={ itemClass(p) } { itemAttrs(p)... }>
+			{ children... }
+		</a>
+	} else {
+		<div class={ itemClass(p) } { itemAttrs(p)... }>
+			{ children... }
+		</div>
+	}
+}
+
+templ ItemMedia(p ItemMediaProps) {
+	<div class={ itemPartClass(p.Base, "goth-item-media") } { itemPartAttrs(p.Base, "item-media")... }>
+		{ children... }
+	</div>
+}
+
+templ ItemContent(p ItemContentProps) {
+	<div class={ itemPartClass(p.Base, "goth-item-content") } { itemPartAttrs(p.Base, "item-content")... }>
+		{ children... }
+	</div>
+}
+
+templ ItemTitle(p ItemTitleProps) {
+	<div class={ itemPartClass(p.Base, "goth-item-title") } { itemPartAttrs(p.Base, "item-title")... }>
+		{ children... }
+	</div>
+}
+
+templ ItemDescription(p ItemDescriptionProps) {
+	<div class={ itemPartClass(p.Base, "goth-item-description") } { itemPartAttrs(p.Base, "item-description")... }>
+		{ children... }
+	</div>
+}
+
+templ ItemActions(p ItemActionsProps) {
+	<div class={ itemPartClass(p.Base, "goth-item-actions") } { itemPartAttrs(p.Base, "item-actions")... }>
+		{ children... }
+	</div>
+}

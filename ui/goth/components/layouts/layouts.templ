@@ -1,0 +1,128 @@
+package layouts
+
+import (
+	"github.com/gopernicus/gopernicus/ui/goth/components/internal/kit"
+	"github.com/gopernicus/gopernicus/ui/goth/primitives"
+)
+
+// DocumentShell is the centered single-column page scaffold for public/content
+// pages. The header/footer are optional slots; the principal content is templ
+// children inside a centered reading column.
+templ DocumentShell(p DocumentShellProps) {
+	<div class={ kit.Class(p.Base, "goth-document-shell") } { documentShellAttrs(p)... }>
+		if p.Header != nil {
+			<header data-slot="document-shell-header">
+				@p.Header
+			</header>
+		}
+		<main data-slot="document-shell-main">
+			{ children... }
+		</main>
+		if p.Footer != nil {
+			<footer data-slot="document-shell-footer">
+				@p.Footer
+			</footer>
+		}
+	</div>
+}
+
+// AppShell is the admin application chrome: a sidebar region beside an optional
+// header bar and the main content (templ children). One markup drives both
+// breakpoints via CSS.
+templ AppShell(p AppShellProps) {
+	<div class={ kit.Class(p.Base, "goth-app-shell") } { appShellAttrs(p)... }>
+		if p.Sidebar != nil {
+			<div data-slot="app-shell-sidebar">
+				@p.Sidebar
+			</div>
+		}
+		<div data-slot="app-shell-body">
+			if p.Header != nil {
+				<header data-slot="app-shell-header">
+					@p.Header
+				</header>
+			}
+			<main data-slot="app-shell-main">
+				{ children... }
+			</main>
+		</div>
+	</div>
+}
+
+// AuthShell centers a Card carrying an optional brand, the title/description
+// header, the form (templ children), and an optional footer of secondary links.
+templ AuthShell(p AuthShellProps) {
+	<div class={ kit.Class(p.Base, "goth-auth-shell") } { authShellAttrs(p)... }>
+		@primitives.Card(primitives.CardProps{Base: primitives.Base{Class: "goth-auth-shell-card"}}) {
+			@primitives.CardHeader(primitives.CardHeaderProps{}) {
+				if p.Brand != nil {
+					<div data-slot="auth-shell-brand">
+						@p.Brand
+					</div>
+				}
+				if p.Title != "" {
+					@primitives.CardTitle(primitives.CardTitleProps{}) {
+						{ p.Title }
+					}
+				}
+				if p.Description != "" {
+					@primitives.CardDescription(primitives.CardDescriptionProps{}) {
+						{ p.Description }
+					}
+				}
+			}
+			@primitives.CardContent(primitives.CardContentProps{}) {
+				{ children... }
+			}
+			if p.Footer != nil {
+				@primitives.CardFooter(primitives.CardFooterProps{}) {
+					@p.Footer
+				}
+			}
+		}
+	</div>
+}
+
+// PageHeader is the title/description/actions row opening an admin or content
+// page. Title renders as an h1; Actions align to the end.
+templ PageHeader(p PageHeaderProps) {
+	<header class={ kit.Class(p.Base, "goth-page-header") } { pageHeaderAttrs(p)... }>
+		if p.Breadcrumb != nil {
+			<div data-slot="page-header-breadcrumb">
+				@p.Breadcrumb
+			</div>
+		}
+		<div data-slot="page-header-bar">
+			<div data-slot="page-header-heading">
+				if p.Title != "" {
+					<h1 data-slot="page-header-title">{ p.Title }</h1>
+				}
+				if p.Description != "" {
+					<p data-slot="page-header-description">{ p.Description }</p>
+				}
+			</div>
+			if p.Actions != nil {
+				<div data-slot="page-header-actions">
+					@p.Actions
+				</div>
+			}
+		</div>
+	</header>
+}
+
+// ActionBar is a role="toolbar" region grouping a Start and an End action cluster
+// with flexible space between them.
+templ ActionBar(p ActionBarProps) {
+	<div class={ kit.Class(p.Base, "goth-action-bar") } { actionBarAttrs(p)... }>
+		<div data-slot="action-bar-start">
+			if p.Start != nil {
+				@p.Start
+			}
+		</div>
+		<div data-slot="action-bar-end">
+			if p.End != nil {
+				@p.End
+			}
+		</div>
+	</div>
+}

@@ -1,0 +1,89 @@
+/*
+ * ui/goth owned base reset (GOTH-A.1).
+ *
+ * This is the kit's own minimal reset, authored for ui/goth — it carries NO
+ * vendored or copied text from any third-party reset. It replaces the Tailwind
+ * preflight the pipeline previously pulled in; the CSS build no longer depends on
+ * Tailwind. Imported FIRST in index.css so component rules (keyed off the stable
+ * .goth-* / data-* surface, higher specificity) always win in normal cascade
+ * order.
+ *
+ * Scope is deliberately small: normalize the box model, strip default document
+ * margins, keep media and form controls predictable, and set the base font from
+ * the theme token so controls can inherit it. Lists, anchors, and borders are
+ * left to the component layer — the primitives set their own list-style,
+ * link, and `border: … solid` rules, so a base rule here would only fight them.
+ * Never hand-edit the compiled dist/theme.<hash>.css; edit this source and run
+ * the Node-gated asset build.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  tab-size: 4;
+  font-family: var(--font-sans);
+}
+
+body {
+  margin: 0;
+  line-height: inherit;
+}
+
+/* Zero the margins the UA applies to flow content; spacing is a component or
+ * layout concern, never a base default. */
+h1, h2, h3, h4, h5, h6,
+p, figure, blockquote, dl, dd {
+  margin: 0;
+}
+
+/* Headings take their weight/size from the component layer, not the UA's
+ * bold/large defaults. */
+h1, h2, h3, h4, h5, h6 {
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+/* Replaced elements behave as blocks and never overflow their container. */
+img, svg, video, canvas, audio, iframe, embed, object {
+  display: block;
+  max-width: 100%;
+}
+
+img, video {
+  height: auto;
+}
+
+/* Form controls inherit typography and color rather than the UA's own font
+ * stack, and start from a zeroed box so component padding is authoritative. */
+button, input, optgroup, select, textarea {
+  font: inherit;
+  color: inherit;
+  margin: 0;
+  padding: 0;
+}
+
+button {
+  background: none;
+  border: 0;
+}
+
+button, [role="button"] {
+  cursor: pointer;
+}
+
+textarea {
+  resize: vertical;
+}
+
+/* Collapse table borders so component cell borders read as single lines. */
+table {
+  border-collapse: collapse;
+  border-spacing: 0;
+}

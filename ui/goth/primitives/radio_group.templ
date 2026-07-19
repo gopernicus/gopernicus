@@ -1,0 +1,19 @@
+package primitives
+
+// RadioGroup (P31) is a role="radiogroup" container the caller fills with
+// RadioGroupItem parts. The group's behavior — single selection, arrow-key
+// navigation, roving focus, and native form submission — is entirely native
+// (radios sharing one Name), so it works with no JavaScript and binds no
+// controller.
+templ RadioGroup(p RadioGroupProps) {
+	<div class={ radioGroupClass(p) } { radioGroupAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+// RadioGroupItem renders one native <input type="radio">. Pair it with a Label
+// (For -> the item's Base.ID) for an accessible name; the styled dot comes from
+// component CSS keyed off :checked.
+templ RadioGroupItem(p RadioGroupItemProps) {
+	<input class={ radioGroupItemClass(p) } { radioGroupItemAttrs(p)... }/>
+}

@@ -20,7 +20,7 @@
 # check` stays deterministic. Live legs live in live-stores.yml (task-6).
 #
 # templ comes ONLY from `go tool templ`, pinned via the `tool` directive in
-# features/cms/views/templ/go.mod (invoked by `make generate` inside `make check`). CI never
+# features/cms/views/goth/go.mod (invoked by `make generate` inside `make check`). CI never
 # `go install`s templ separately — if it did, the drift gate would compare
 # against an unpinned templ and be meaningless.
 name: check

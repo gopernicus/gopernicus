@@ -1,6 +1,7 @@
 package authorizersvc
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
@@ -28,9 +29,12 @@ func FixedResource(resourceType, resourceID string) ResourceResolver {
 // Semantics, all written through sdk/foundation/web (FS9 body shape):
 //   - no Principal on the context (identity.FromContext !ok) → 401.
 //   - resolver error → 500, fail closed.
-//   - Check error → 500, fail closed (D-D: RequirePermission fails CLOSED,
-//     the deliberate opposite of ratelimiter.Middleware's fail-open posture —
-//     do not "harmonize" them).
+//   - Check hit the evaluation budget (ErrEvaluationLimit / sdk.ErrUnavailable) →
+//     503, fail closed — the indeterminate/limit taxonomy (default #9) surfaced
+//     as a retryable "temporarily unavailable" rather than a flat 500.
+//   - any other Check error → 500, fail closed (D-D: RequirePermission fails
+//     CLOSED, the deliberate opposite of ratelimiter.Middleware's fail-open
+//     posture — do not "harmonize" them).
 //   - Check denies (!Allowed) → 403.
 //   - otherwise next runs against the original request.
 func (s *Service) RequirePermission(permission string, resource ResourceResolver) web.Middleware {
@@ -47,11 +51,15 @@ func (s *Service) RequirePermission(permission string, resource ResourceResolver
 				return
 			}
 			result, err := s.Check(r.Context(), CheckRequest{
-				Subject:    Subject{Type: principal.Type, ID: principal.ID},
+				Principal:  PrincipalRef{Type: principal.Type, ID: principal.ID},
 				Permission: permission,
 				Resource:   res,
 			})
 			if err != nil {
+				if errors.Is(err, ErrEvaluationLimit) {
+					web.RespondJSONError(w, web.NewError(http.StatusServiceUnavailable, "authorization temporarily unavailable"))
+					return
+				}
 				web.RespondJSONError(w, web.ErrInternal("internal error"))
 				return
 			}

@@ -1,0 +1,77 @@
+package primitives
+
+// Context Menu (P38, family F4). See context_menu.go for the gothMenu backing,
+// pointer/keyboard opening, and no-JS baseline. The caller composes
+// ContextMenuTrigger (the target region) and ContextMenuContent (with items).
+templ ContextMenu(p ContextMenuProps) {
+	<div class={ classNames("goth-menu goth-context-menu", p.Class) } { contextMenuAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+templ ContextMenuTrigger(p ContextMenuTriggerProps) {
+	<div class={ classNames("goth-context-menu-trigger", p.Class) } { contextMenuTriggerAttrs(p.Base)... }>
+		{ children... }
+	</div>
+}
+
+templ ContextMenuContent(p ContextMenuContentProps) {
+	<div class={ classNames("goth-floating goth-menu-content", p.Class) } { contextMenuContentAttrs(p)... }>
+		{ children... }
+	</div>
+}
+
+templ ContextMenuItem(p ContextMenuItemProps) {
+	<button class={ classNames("goth-menu-item", p.Class) } { menuItemAttrs(p.Base, p.Value, p.Disabled)... }>
+		{ children... }
+	</button>
+}
+
+templ ContextMenuCheckboxItem(p ContextMenuCheckboxItemProps) {
+	<button class={ classNames("goth-menu-item goth-menu-check-item", p.Class) } { menuCheckedItemAttrs(p.Base, "menuitemcheckbox", p.Value, p.Checked, p.Disabled)... }>
+		<span class="goth-menu-item-indicator" data-slot="item-indicator" aria-hidden="true">
+			@checkGlyph()
+		</span>
+		{ children... }
+	</button>
+}
+
+templ ContextMenuRadioItem(p ContextMenuRadioItemProps) {
+	<button class={ classNames("goth-menu-item goth-menu-check-item", p.Class) } { menuCheckedItemAttrs(p.Base, "menuitemradio", p.Value, p.Checked, p.Disabled)... }>
+		<span class="goth-menu-item-indicator" data-slot="item-indicator" aria-hidden="true">
+			@dotGlyph()
+		</span>
+		{ children... }
+	</button>
+}
+
+templ ContextMenuLabel(p ContextMenuLabelProps) {
+	<div class={ classNames("goth-menu-label", p.Class) } { menuLabelAttrs(p.Base)... }>
+		{ children... }
+	</div>
+}
+
+templ ContextMenuSeparator(p ContextMenuSeparatorProps) {
+	<div class={ classNames("goth-menu-separator", p.Class) } { menuSeparatorAttrs(p.Base)... }></div>
+}
+
+templ ContextMenuSub(p ContextMenuSubProps) {
+	<div class={ classNames("goth-submenu-root", p.Class) } { menuSubRootAttrs(p.Base)... }>
+		{ children... }
+	</div>
+}
+
+templ ContextMenuSubTrigger(p ContextMenuSubTriggerProps) {
+	<button class={ classNames("goth-menu-item goth-menu-sub-trigger", p.Class) } { menuSubTriggerAttrs(p.Base)... }>
+		{ children... }
+		<span class="goth-menu-sub-chevron" aria-hidden="true">
+			@chevronRightGlyph()
+		</span>
+	</button>
+}
+
+templ ContextMenuSubContent(p ContextMenuSubContentProps) {
+	<div class={ classNames("goth-floating goth-menu-content", p.Class) } { menuSubContentAttrs(p.Base)... }>
+		{ children... }
+	</div>
+}
