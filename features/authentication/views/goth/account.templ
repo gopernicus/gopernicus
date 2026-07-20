@@ -2,6 +2,8 @@ package goth
 
 import (
 	"github.com/gopernicus/gopernicus/features/authentication"
+	"github.com/gopernicus/gopernicus/ui/goth/components/forms"
+	"github.com/gopernicus/gopernicus/ui/goth/primitives"
 )
 
 // accountSecurityBody renders the masked method inventory (design §5.1). Every
@@ -45,6 +47,19 @@ templ accountSecurityBody(m authentication.AccountSecurityPage) {
 				</ul>
 			}
 			<p><a href="/auth/identifiers/new">Add an identifier</a></p>
+		</section>
+		<section aria-labelledby="session-heading" data-slot="account-section">
+			<h2 id="session-heading">Session</h2>
+			// Sign-out posts to /auth/logout, which is origin-only (design §9.1, D2):
+			// unlike every other account mutation form it carries NO @csrfField, mirroring
+			// the route's origin-only middleware so a shared-computer logout is never blocked.
+			<form method="post" action="/auth/logout">
+				@forms.FormActions(forms.FormActionsProps{}) {
+					@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit, Variant: primitives.ButtonSecondary}) {
+						Sign out
+					}
+				}
+			</form>
 		</section>
 		<section aria-labelledby="oauth-heading" data-slot="account-section">
 			<h2 id="oauth-heading">Linked accounts</h2>

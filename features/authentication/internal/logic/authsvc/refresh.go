@@ -229,6 +229,29 @@ func (s *Service) RequireLiveSession(next http.Handler) http.Handler {
 	})
 }
 
+// RequireLiveSessionBrowser is the browser-facing sibling of RequireLiveSession
+// (design §9.2): it enforces the SAME §1.4 live-session matrix through
+// resolveLiveSession and stashes the SAME Principal (and, on the user path, the live
+// session id), but on denial it 303s to the configured browser login path instead of
+// writing a JSON 401. A denied GET/HEAD carries a validated return_to
+// (redirectToBrowserLogin). It is mounted deliberately on HTML routes and NEVER sniffs
+// Accept or Fetch Metadata; a statelessly-valid but revoked user session that passes
+// RequirePrincipalBrowser is denied here.
+func (s *Service) RequireLiveSessionBrowser(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, sessionID, ok := s.resolveLiveSession(r)
+		if !ok {
+			s.redirectToBrowserLogin(w, r)
+			return
+		}
+		ctx := identity.WithPrincipal(r.Context(), p)
+		if sessionID != "" {
+			ctx = withSessionID(ctx, sessionID)
+		}
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 // resolveLiveSession classes the credential and enforces the §1.4 matrix. It
 // returns the resolved principal and, for a user session, the live session id (empty
 // for a session-less machine caller).

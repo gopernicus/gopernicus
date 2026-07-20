@@ -436,12 +436,14 @@ func (h *handlers) changePasswordJSON(w http.ResponseWriter, r *http.Request) {
 	web.RespondJSONOK(w, map[string]string{"status": "password_changed"})
 }
 
-// logout revokes the session behind the caller's credentials and clears BOTH
-// cookies (§1.5). It is NOT session-gated: an expired access JWT must still be
+// logoutJSON is the JSON transport for POST /auth/logout (dispatched by logout,
+// dispatch.go). It revokes the session behind the caller's credentials and clears
+// BOTH cookies (§1.5). It is NOT session-gated: an expired access JWT must still be
 // able to log out (never a no-op). The service resolves the session id from the
 // refresh token (primary) or the access JWT's session_id ignoring expiry
-// (fallback); logout is idempotent regardless of the delete outcome.
-func (h *handlers) logout(w http.ResponseWriter, r *http.Request) {
+// (fallback); logout is idempotent regardless of the delete outcome. A form body
+// goes to logoutForm.
+func (h *handlers) logoutJSON(w http.ResponseWriter, r *http.Request) {
 	refreshToken := ""
 	if c, err := r.Cookie(h.svc.RefreshCookieName()); err == nil {
 		refreshToken = c.Value

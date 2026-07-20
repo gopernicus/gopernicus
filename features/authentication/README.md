@@ -122,7 +122,10 @@ API callers skip it), and sets `Cache-Control: no-store`.
   an unverified login is 403.
 - `POST /auth/refresh` — rotates the presented refresh token (§1.3). Not gated;
   rotation IS the credential. Every denial is a generic 401.
-- `POST /auth/logout` — NOT gated (§1.5) → 200 + both cookies cleared.
+- `POST /auth/logout` — NOT gated (§1.5) → 200 + both cookies cleared. Origin-only
+  (no double-submit token, D2). Content-type dispatched like the other shared POSTs:
+  a form body (Views wired) clears both cookies and **303s to `/auth/login`**; nil
+  Views → 415.
 - `POST /auth/password/forgot` — `{email}` → 200 (never reveals existence).
   **Enumeration-safe and async:** it normalizes and enqueues an opaque delivery
   command WITHOUT resolving the account or calling a provider; the off-request
@@ -413,6 +416,15 @@ different subsystems, no shared type.
 - `Service.RequireServiceAccount` — API-key bearer only.
 - `Service.RequirePrincipal` — any configured credential class; stashes the
   resolved `auth.Principal{Type, ID}`.
+- `Service.RequirePrincipalBrowser` / `Service.RequireLiveSessionBrowser` — the
+  browser-facing siblings for HTML routes (design §9.2). They resolve the SAME
+  credentials and stash the SAME principal/session context as the JSON gates, but on
+  an authentication denial they **303 to `Config.BrowserLoginPath`** (default
+  `/auth/login`) instead of writing a JSON 401. A denied GET/HEAD carries a validated
+  `return_to` of the original path+query; an unsafe method carries none (a later GET
+  must not replay a mutation). They never sniff `Accept` or Fetch Metadata — mount
+  them deliberately on HTML routes. The JSON `RequirePrincipal` / `RequireLiveSession`
+  keep their byte-stable 401 behavior.
 - `Service.CurrentUser(ctx)` / `Service.CurrentPrincipal(ctx)` — read the resolved
   identity; `Service.AuthenticateAPIKey(ctx, rawKey)` for non-HTTP callers.
 - `Service.RunDelivery(ctx)` — the host-owned `in_process` delivery runtime loop
@@ -509,6 +521,7 @@ default, so a host can never inherit the development posture; unknown →
 | `PublicAuthBaseURL` | the absolute base magic links + landing pages build from (`AUTH_PUBLIC_BASE_URL`). REQUIRED once a link flow is enabled (`ErrPublicAuthBaseURLRequired`); production requires **HTTPS** (`ErrPublicAuthBaseURLInsecure`). Request Host/forwarded headers NEVER participate. |
 | `Passwordless []string` | empty → passwordless OFF (routes not registered). Allowed v3 kinds are `"email"`/`"phone"` (`ErrPasswordlessKindInvalid`); each needs a wired delivery channel (`ErrPasswordlessKindUnsupported`), the challenge rail + durable outbox, and a valid `PublicAuthBaseURL`. NEVER auto-provisions; NEVER enables phone+password (phone stays passwordless-only). |
 | `AllowedOrigins []string` | the exact-match `Origin` allowlist for cookie-authenticated sensitive mutations and HTML form posts (design §9.1). `"*"` never authorizes a credentialed cross-origin mutation; empty rejects every cross-site cookie mutation. Bearer-only callers skip the gate. |
+| `BrowserLoginPath string` | the login destination the browser identity gates (`RequirePrincipalBrowser` / `RequireLiveSessionBrowser`) 303 to on denial (`AUTH_BROWSER_LOGIN_PATH`). Empty → `/auth/login`. A non-empty value MUST be a safe root-relative path (leading `/`, no `//` prefix, scheme, backslash, or control character) or construction fails with `ErrBrowserLoginPathInvalid`. Configures ONLY the browser gates; the JSON middleware is unaffected. |
 | `Views` | **nil → API-only** (no HTML routes, JSON-only POSTs, no templ in the graph). Non-nil → HTML pages mount alongside the unchanged JSON API. The blessed default is the ui/goth adapter `authgoth.New(bundle)` (`features/authentication/views/goth`); the override path is embedding its `Views`. |
 | `HTMLPolicy` (*HTMLResourcePolicy) | **nil → the historical asset-free CSP** (script-src nonce-only, no external origins). Non-nil → the same fixed protections plus the policy's validated widening resource directives (script/style/image/font/connect/media/worker), so a selected HTML view can load its assets. Only WIDENS — a policy can never remove a fixed protection. Build with `NewHTMLResourcePolicy` (validates loudly). Set with a nil `Views` → `ErrHTMLPolicyWithoutViews` at construction (contradictory wiring). Technology-neutral — the core imports no templ/`ui/goth`. |
 | `EmailContentTemplates` | empty → the bundled `LayerCore` email bodies render unchanged. Each entry overrides a bundled template at `email.LayerApp` (Namespace must be `EmailContentNamespace`). Changes email BODIES only — a **distinct** override system from `Views`. |

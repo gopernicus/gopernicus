@@ -28,6 +28,14 @@ type migrationSource struct {
 // RunMigrations applies the host-owned SQL migration stream at migrationsDir.
 // Migrations are applied in filename order, in one transaction, and recorded in
 // schema_migrations with a checksum guard. Files prefixed with "_" are skipped.
+//
+// One database, one stream: a host exports every feature's migrations into a
+// single merged, filename-ordered directory and calls RunMigrations once per
+// database. All rows share one ledger source ("default"), so filenames must be
+// globally unique across the merged stream and are never renumbered — the
+// (source, version=filename) pair is the ledger identity, and renaming or
+// splitting the stream into multiple calls would make applied migrations look
+// new. migrationsDir is only an fs.FS subpath, never a ledger namespace.
 func RunMigrations(ctx context.Context, db *DB, migrationsFS fs.FS, migrationsDir string) error {
 	if err := StatusCheck(ctx, db); err != nil {
 		return fmt.Errorf("migration status check: %w", err)

@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 	"unicode/utf8"
 
@@ -80,6 +81,11 @@ const (
 	// refreshAttemptsPerMinute caps per-session refresh attempts (the by-session
 	// arm of the §6 refresh rate limit); the by-IP arm is a route middleware.
 	refreshAttemptsPerMinute = 30
+	// defaultBrowserLoginPath is the destination the browser identity gates
+	// (RequirePrincipalBrowser / RequireLiveSessionBrowser) 303 to on denial when
+	// Deps.BrowserLoginPath is unset (design §9.2). The public auth package validates
+	// a host override as a safe root-relative path before it reaches here.
+	defaultBrowserLoginPath = "/auth/login"
 )
 
 // TokenPair is the credential pair a session mint produces (§1.1): a
@@ -323,6 +329,13 @@ type Deps struct {
 	// never from a request Host/forwarded header. Package auth validates it (absolute
 	// http(s), HTTPS in production) whenever a passwordless kind is enabled.
 	PublicAuthBaseURL string
+
+	// BrowserLoginPath is the login destination the browser identity gates
+	// (RequirePrincipalBrowser / RequireLiveSessionBrowser) 303 to on denial (design
+	// §9.2). Empty → defaultBrowserLoginPath ("/auth/login"). Package auth validates a
+	// host override as a safe root-relative path before it reaches here, so it never
+	// carries a scheme, protocol-relative prefix, backslash, or control character.
+	BrowserLoginPath string
 }
 
 // Service implements the auth use cases over the repository ports.
@@ -420,6 +433,9 @@ type Service struct {
 	// publicBaseURL is the absolute base URL magic links are built from (Deps.PublicAuthBaseURL,
 	// design §6.4). Empty unless passwordless is enabled; package auth validates it.
 	publicBaseURL string
+	// browserLoginPath is the resolved login destination the browser identity gates
+	// 303 to on denial (Deps.BrowserLoginPath; empty defaults to "/auth/login").
+	browserLoginPath string
 }
 
 // NewService builds a Service from its dependencies, applying cookie name/path
@@ -464,6 +480,10 @@ func NewService(d Deps) *Service {
 	if credentialPolicy == nil {
 		credentialPolicy = credential.NewDefaultPolicy(credential.PolicyConfig{})
 	}
+	browserLoginPath := d.BrowserLoginPath
+	if browserLoginPath == "" {
+		browserLoginPath = defaultBrowserLoginPath
+	}
 	return &Service{
 		users:                d.Users,
 		identifiers:          d.Identifiers,
@@ -505,6 +525,7 @@ func NewService(d Deps) *Service {
 		refreshTTL:           refreshTTL,
 		passwordless:         passwordless,
 		publicBaseURL:        d.PublicAuthBaseURL,
+		browserLoginPath:     browserLoginPath,
 	}
 }
 
@@ -1208,6 +1229,28 @@ func (s *Service) RateLimitByIP(keyPrefix string, perMinute int) web.Middleware 
 // RequireUser's rejection matches the feature's other error responses (FS9).
 func writeUnauthorized(w http.ResponseWriter) {
 	web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
+}
+
+// redirectToBrowserLogin issues the 303 See Other a browser identity gate
+// (RequirePrincipalBrowser / RequireLiveSessionBrowser) sends on denial — no JSON
+// body, no response-writer interception (design §9.2). For a GET or HEAD it appends
+// ?return_to=<escaped original path+query> when the original target validates as a
+// safe root-relative path (redirect.SafeRelativePath, the same rule the form lane
+// uses); an unvalidated target is omitted so it can never seed an open redirect. For
+// any other method it redirects WITHOUT return_to — a later GET must not replay a
+// mutation.
+func (s *Service) redirectToBrowserLogin(w http.ResponseWriter, r *http.Request) {
+	loc := s.browserLoginPath
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		target := r.URL.Path
+		if r.URL.RawQuery != "" {
+			target += "?" + r.URL.RawQuery
+		}
+		if safe := redirect.SafeRelativePath(target); safe != "" {
+			loc += "?return_to=" + url.QueryEscape(safe)
+		}
+	}
+	http.Redirect(w, r, loc, http.StatusSeeOther)
 }
 
 // writeTooManyRequests writes a 429 JSON error via the shared sdk responder, so

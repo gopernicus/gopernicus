@@ -36,6 +36,14 @@ type migrationSource struct {
 // Migrations are applied in filename order, in one transaction, and recorded in
 // schema_migrations with a checksum guard. Files prefixed with "_" are skipped.
 //
+// One database, one stream: a host exports every feature's migrations into a
+// single merged, filename-ordered directory and calls RunMigrations once per
+// database. All rows share one ledger source ("default"), so filenames must be
+// globally unique across the merged stream and are never renumbered — the
+// (source, version=filename) pair is the ledger identity, and renaming or
+// splitting the stream into multiple calls would make applied migrations look
+// new. migrationsDir is only an fs.FS subpath, never a ledger namespace.
+//
 // On first run against a database with the old schema_migrations shape,
 // RunMigrations rebuilds the table to carry `source` and adopts legacy rows
 // into the internal default source by matching (version, checksum).

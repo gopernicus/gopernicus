@@ -161,6 +161,71 @@ limiter-side alerting; silent fail-open must never be mistaken for a monitored
 state. `authorization.RequirePermission` fails CLOSED (engine or resolver error
 → 500). The opposition is intentional — do not harmonize them.
 
+## Host HTML cross-origin posture (CSRF, ratified 2026-07-20)
+
+How host-rendered HTML mutations are protected against cross-origin request
+forgery. Ratified from the first `ui/goth` adopter's upstream trip (Segovia
+flag #11); the decisions are D1–D4 in that trip's plan.
+
+**The posture (D1): host HTML forms are origin-checked, not token-carrying.**
+A host mounts Go's `net/http.CrossOriginProtection` (Go 1.25+) on its
+browser-HTML route groups; host-rendered unsafe methods ride that check and do
+NOT require a framework-wide hidden token. The canonical construction is
+direct stdlib use (D4) — `(*http.CrossOriginProtection).Handler` already
+structurally satisfies `web.Middleware`, and `SetDenyHandler` takes the host's
+styled denial page — so there is deliberately NO sdk wrapper: a pass-through
+wrapper would add API without capability. The compiled reference is
+`sdk/foundation/web/crossorigin_example_test.go`, which pins both the
+construction and the exact accept/reject table below.
+
+**Scope — read this before citing the posture.** It covers modern-browser
+HTML routes on a host, not a blanket API-router wrapper and not every sdk
+consumer:
+
+- The stdlib check passes GET/HEAD/OPTIONS unconditionally — the posture
+  therefore RESTS on the invariant that safe methods never mutate state.
+  A host that mutates on GET has no protection here (or anywhere).
+- `Sec-Fetch-Site: same-origin` and `none` pass; `same-site`, `cross-site`,
+  and other non-empty values reject unless explicitly exempted. Rejecting
+  `same-site` is the point: it closes the untrusted-sibling gap that
+  `SameSite` cookies alone leave under a shared registrable domain.
+- When `Sec-Fetch-Site` is absent, an `Origin` whose host equals
+  `Request.Host` passes, as does an exact trusted origin added via
+  `AddTrustedOrigin`. Missing BOTH headers passes — the stdlib treats that as
+  "assume same-origin or non-browser", an assumption, not a proof. Headerless
+  clients (legacy browsers, some WebViews, non-browser tooling) therefore
+  FAIL OPEN; the posture is ratified for modern-browser staff/admin surfaces
+  and must not be presented as universally safe for WebView-embedding or
+  legacy-browser hosts.
+- The `Origin` fallback cannot distinguish an old-browser HTTP→HTTPS scheme
+  transition (`Request.Host` has no scheme); HSTS — owned at the host/edge,
+  never by a feature — is the mitigation.
+- Session-cookie delivery is the other layer: auth access/refresh cookies are
+  `SameSite=Lax`, so an ordinary cross-site unsafe request on an
+  authenticated host route generally arrives without the session cookie.
+  That statement is scoped to authenticated host routes; public
+  credential-establishment endpoints have no session gate.
+- CORS is a separate concern: `web.CORSMiddleware` grants cross-origin READ
+  access to declared origins; it is not, and never substitutes for,
+  cross-origin mutation protection.
+
+**What features do (D2).** The authentication feature keeps its own split,
+unchanged by this ratification: credential-establishment endpoints and logout
+are origin-only (`browserOriginAllowed`); authenticated account mutations
+carry origin + the feature's own plain double-submit token. Feature-owned
+forms may carry tokens when their owning feature requires them; removing
+auth's tokens would be a separate security change with its own review.
+
+**No mechanical convergence (D3).** Do not replace auth's
+`browserOriginAllowed` with the stdlib check as a cleanup: the existing gate
+bypasses bearer-only requests, and `Sec-Fetch-Site: none` / unknown-value
+behavior differ. Convergence requires an explicit compatibility matrix and a
+deliberate ruling on each behavior, or it does not happen.
+
+**No new generic header middleware rides this posture.**
+`web.DefaultHeadersMiddleware` already carries `nosniff`, `Referrer-Policy`,
+CSP, and other host defaults while letting handlers override them.
+
 ## Kinds of module — the taxonomy
 
 Seven kinds of thing live in this ecosystem (ratified 2026-07-02, R6 —

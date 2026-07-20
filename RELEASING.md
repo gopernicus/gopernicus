@@ -375,6 +375,32 @@ already-**breaking** auth-v3 identity cut. Adopter-facing surface:
   `ui/goth`; `HTMLResourcePolicy` is a plain value. The `ui/goth` authentication view
   adapter that maps `goth.Bundle.Requirements()` into a policy lands in GOTH-7.2.
 
+### features/authentication — next tag: browser HTML seams (additive; folds into the auth-v3 breaking cut)
+
+W2 (2026-07-20, flags #9 + #12) added the browser-facing HTML seams a host mounting
+the bundled views needs, all **additive** — no existing symbol changed, every JSON API
+byte-stable — so on their own they floor at a **minor**; they fold into the
+already-**breaking** auth-v3 identity cut. Adopter-facing surface:
+
+- **New `Service.RequirePrincipalBrowser` / `Service.RequireLiveSessionBrowser`.** The
+  browser-facing siblings of `RequirePrincipal` / `RequireLiveSession`: same credential
+  resolution and context stash, but on an authentication denial they **303 to
+  `Config.BrowserLoginPath`** instead of writing a JSON 401 — a denied GET/HEAD carries
+  a validated `return_to` of the original path+query, an unsafe method none. They never
+  sniff `Accept` or Fetch Metadata; mount them on HTML routes. The JSON gates keep their
+  byte-stable 401.
+- **New optional `Config.BrowserLoginPath string`** (`AUTH_BROWSER_LOGIN_PATH`). Empty
+  defaults to `/auth/login`; a non-empty value must be a safe root-relative path or
+  construction fails with the new `var ErrBrowserLoginPathInvalid`. It configures ONLY
+  the browser gates.
+- **Form-aware `POST /auth/logout`.** The logout route now content-type dispatches like
+  the other shared POSTs: the JSON contract is unchanged, and a form body (Views wired)
+  clears both cookies and 303s to `/auth/login`; nil Views → 415. Logout stays
+  origin-only (no double-submit token, D2). The bundled `features/authentication/views/goth`
+  account page gains a matching sign-out form (that module tagged separately below).
+- **No new dependency.** The feature core imports no templ or `ui/goth`; the shared
+  safe-relative-path validator (`redirect.SafeRelativePath`) is feature-internal.
+
 ### features/authentication/views/goth — next tag: NEW module (first tag; renamed from views/templ)
 
 auth-v3 (2026-07-13, AV3-8.2) added the feature's bundled default HTML view module
@@ -397,7 +423,8 @@ import/require/replace from `.../views/templ` to `.../views/goth`, pass a
 (`Config.Views == nil` is API-only; the feature core imports no templ or `ui/goth`).
 This is a **new, standalone module getting its first tag** (no prior tag existed on
 the old path); it depends on `features/authentication` and `ui/goth` and is tagged
-independently like every other importable module.
+independently like every other importable module. W2 (2026-07-20) additionally added a
+POST `/auth/logout` sign-out form to the account page (origin-only, no `@csrfField`).
 
 ### features/cms/views/goth — next tag: NEW module (first tag; renamed from views/templ)
 
@@ -1519,6 +1546,23 @@ and re-runs the count — proving it reaches 0 with no row lost or duplicated.
 
 Both container databases were left running; no canonical/conformance table was
 modified.
+
+## Migrating from the monolith repository
+
+The old monolith (`github.com/gopernicus/gopernicus v0.5.4`) and this
+multi-module repository share import-path prefixes: the monolith's packages and
+the nested modules here both resolve under `github.com/gopernicus/gopernicus/...`.
+Go module resolution cannot hold both in one active workspace — a `go.work` (or a
+single module graph) that references the monolith and any module from this repo
+sees two providers for one import prefix, so a migrating host can never keep the
+old and new dependencies live side by side.
+
+Migrate across a split workspace or module boundary instead: keep the
+still-on-monolith code in its own module tree with its own workspace file, and
+make the migrated tree's workspace reference only this repository's modules. The
+first adopter's working pattern is a v2-only root `go.work` with a shadowing
+`v1/go.work` for the legacy tree; the two trees converge only when the last
+monolith import is gone.
 
 ## What this repo is not doing (yet)
 
