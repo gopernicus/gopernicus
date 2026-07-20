@@ -1,12 +1,14 @@
 # `ui/goth` — frozen public contracts (GOTH-0.3)
 
-Status: **CONTRACTS FROZEN FOR GATE B REVIEW — GOTH-0.3, 2026-07-17.** No Go
-module, `.templ` source, asset, or generated file has been placed yet: the module
-and compile/render specimens land in **GOTH-1.1**, after Gate B ratifies this
-document. This file is the design gate. It freezes the exact proposed public
-grammar for props, slots, attributes, IDs, data hooks, bundle profiles, the asset
-manifest, browser requirements, theme tokens, Alpine controller rules, and
-explicit HTMX attributes.
+Status: **SHIPPED — the complete compiled module lives in this directory
+(ui-goth milestone, 2026-07-18); the contracts below remain FROZEN (GOTH-0.3,
+ratified Gate B).** Ground truth for the Go surface is `goth.go`; the tree
+carries the `.templ` sources with their generated twins, the fingerprinted
+asset bundle, the primitives/components/controllers, and the theme. This file
+is the frozen public contract: it fixes the exact public grammar for props,
+slots, attributes, IDs, data hooks, bundle profiles, the asset manifest,
+browser requirements, theme tokens, Alpine controller rules, and explicit HTMX
+attributes.
 
 The GOTH stack is **templ + plain CSS + Alpine CSP + optional HTMX**: the "T" is
 templ. Tailwind is **not** part of the kit's build, toolchain, or emitted output —
@@ -20,8 +22,9 @@ cross-implementation family charter and semantic-role vocabulary are in
 family each entry uses are in [`catalog.md`](catalog.md).
 
 This document uses Go signatures to fix names and shapes precisely. They are the
-**proposed frozen surface**, not compiled code; GOTH-1.1 implements exactly these
-names or reopens this task. Every public type below states its **zero value**,
+**frozen shipped surface** — the module implements exactly these names, and a
+change reopens the contract under RELEASING.md's `ui/goth` release discipline.
+Every public type below states its **zero value**,
 its **error behavior**, and its **ownership** (who constructs it, who may mutate
 it, who must not).
 
@@ -1251,10 +1254,17 @@ The frozen grammar and the typed `htmx.Attrs` builder are §9. Two adopter rules
   `hx-target="#cms-entries-content"` + `hx-swap="outerHTML show:none focus-scroll:false"`
   + `hx-push-url="true"`, and the same URL without `HX-Request` returns the full
   document. Do **not** HTMX-convert every route during a migration.
-- **CSRF is hidden-input-only (settled GOTH-7.3).** Every mutation rides a `<form>`
-  full-document POST with a hidden `csrf_token`; the HTMX surface is GET-only. There is
-  no `hx-headers` CSRF seam, and handlers derive no identity/CSRF/authorization from any
-  HTMX header — those are presentation hints only (§9).
+- **Mutation protection is host-owned (revised 2026-07-20; supersedes the GOTH-7.3
+  hidden-input-only wording).** Every mutation rides a `<form>` full-document POST; the
+  HTMX surface is GET-only until a mutation design is separately ratified. How those
+  POSTs are protected against cross-origin forgery is the HOST's decision, made per the
+  ratified web posture (`ARCHITECTURE.md`, "Host HTML cross-origin posture"): the
+  recommended modern-browser posture is origin-only — `http.CrossOriginProtection`
+  mounted on the host's HTML groups — with no kit-mandated hidden-field mechanism.
+  Feature-owned forms may still carry tokens when their owning feature requires them
+  (auth's account mutations do). Either way there is no `hx-headers` CSRF seam, and
+  handlers derive no identity/CSRF/authorization from any HTMX header — those are
+  presentation hints only (§9).
 
 ### 11.8 Module tags and the `views/templ` → `views/goth` rename
 
@@ -1292,13 +1302,30 @@ Theming is CSS-only (§5): the kit ships neutral contract fallbacks + a default 
 and a host overrides tokens by serving a stylesheet loaded *after* the kit stylesheet
 (`Config.ThemeStylesheetPath`). Brand values are override inputs, not part of the
 contract — the token **names** generalize, specific values do not, and **no Segovia or
-GPS360 code is imported into this repository.** A GPS-branded host ships its own
-stylesheet redeclaring the tokens it wants:
+GPS360 code is imported into this repository.**
+
+One rule is REQUIRED, not branding: **the kit reset deliberately leaves the document
+surface unpainted** — the kit reset touches `<body>` only for `margin`/line
+metrics and never sets a background or text color on it, so components theme
+themselves but the page around them does not. A host theme MUST carry the `body`
+paint rule below or dark mode flips the components and leaves the page background
+behind (the exact symptom that surfaced this rule in the first adopter's dark-mode
+screenshot). Because the rule reads the tokens, redeclaring `--background`/
+`--foreground` in the dark block repaints both appearances — verify light AND dark.
+
+A GPS-branded host ships its own stylesheet redeclaring the tokens it wants:
 
 ```css
 /* the host's own brand stylesheet, served under 'self' and pointed at by     */
 /* Config.ThemeStylesheetPath. This is illustrative GPS branding — no Segovia  */
 /* code or asset is imported; only the frozen kit token NAMES are used.        */
+
+/* REQUIRED: the kit reset leaves the document surface unpainted. */
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
 :root {
   --primary: oklch(0.52 0.17 250);           /* GPS brand blue */
   --primary-foreground: oklch(0.99 0 0);

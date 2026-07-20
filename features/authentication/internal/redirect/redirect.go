@@ -6,9 +6,36 @@
 // safe and needs no allowlisting.
 package redirect
 
+import "strings"
+
 // defaultTarget is the always-safe, same-origin fallback used when no target is
 // requested or the requested target is not allowlisted.
 const defaultTarget = "/"
+
+// SafeRelativePath returns p when it is a safe same-origin relative path (a single
+// leading slash, no scheme, no protocol-relative "//" or backslash trickery a
+// browser might normalize into one, and no control characters), else "". A relative
+// path is never an off-site open-redirect vector, so it needs no allowlisting. It is
+// the single validator every internal return-to (the form lane's stale-session
+// redirect and the browser identity gates' return_to) routes through, so the rule
+// can never drift between them.
+func SafeRelativePath(p string) string {
+	if p == "" || p[0] != '/' {
+		return ""
+	}
+	if strings.HasPrefix(p, "//") || strings.ContainsAny(p, "\\") || strings.Contains(p, "://") {
+		return ""
+	}
+	// Reject control characters (< 0x20 and DEL 0x7f): a browser or proxy may
+	// normalize an embedded CR/LF/NUL in ways that split a header or escape the
+	// path, so a target carrying one is never a safe same-origin path.
+	for i := 0; i < len(p); i++ {
+		if p[i] < 0x20 || p[i] == 0x7f {
+			return ""
+		}
+	}
+	return p
+}
 
 // Allowlist matches redirect targets by exact string equality.
 type Allowlist struct {

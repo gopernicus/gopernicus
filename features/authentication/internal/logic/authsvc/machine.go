@@ -227,6 +227,24 @@ func (s *Service) RequirePrincipal(next http.Handler) http.Handler {
 	})
 }
 
+// RequirePrincipalBrowser is the browser-facing sibling of RequirePrincipal (design
+// §9.2): it resolves the SAME credential classes through resolvePrincipal and stashes
+// the SAME Principal, but on denial it 303s to the configured browser login path
+// instead of writing a JSON 401. A denied GET/HEAD carries a validated return_to
+// (redirectToBrowserLogin). It is mounted deliberately on HTML routes and NEVER sniffs
+// Accept or Fetch Metadata; a valid API-key/bearer/session principal passes exactly as
+// through RequirePrincipal.
+func (s *Service) RequirePrincipalBrowser(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, ok := s.resolvePrincipal(r)
+		if !ok {
+			s.redirectToBrowserLogin(w, r)
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(identity.WithPrincipal(r.Context(), p)))
+	})
+}
+
 // resolvePrincipal classes and resolves the request's credential per the §4.3
 // rules. Each path is active only when its credential class is configured, so an
 // unwired class denies rather than half-resolving.

@@ -532,6 +532,14 @@ const (
 // construction rather than silently ignoring the dead policy.
 var ErrHTMLPolicyWithoutViews = errors.New("auth: Config.HTMLPolicy set but Config.Views is nil (no HTML surface)")
 
+// ErrBrowserLoginPathInvalid is returned by NewService/Register when a non-empty
+// Config.BrowserLoginPath is not a safe root-relative path (design §9.2): it must
+// start with a single "/", carry no protocol-relative "//" prefix, no scheme, no
+// backslash, and no control character, so the browser identity gates can never be
+// configured into an off-site open redirect. An empty value defaults to "/auth/login"
+// and never trips this. Checked at construction, the loud-Config posture.
+var ErrBrowserLoginPathInvalid = errors.New("auth: Config.BrowserLoginPath must be a safe root-relative path (leading /, no //, scheme, backslash, or control character)")
+
 // NewHTMLResourcePolicy validates the requested resource directives and returns an
 // immutable HTMLResourcePolicy, or an error wrapping sdk.ErrInvalidInput for an
 // unknown/fixed directive key, a directive with neither a source nor a nonce, an empty
@@ -580,6 +588,15 @@ type Config struct {
 	// reject every cross-site cookie mutation and any request carrying a
 	// disallowed Origin; bearer-only (API) callers skip the gate entirely.
 	AllowedOrigins []string
+	// BrowserLoginPath is the login destination the browser identity gates
+	// (Service.RequirePrincipalBrowser / RequireLiveSessionBrowser) 303 to on an
+	// authentication denial (design §9.2). Empty (default) → "/auth/login". A non-empty
+	// value MUST be a safe root-relative path (leading "/", no "//" prefix, no scheme,
+	// no backslash, no control character) or construction fails with
+	// ErrBrowserLoginPathInvalid — so a browser gate can never be pointed off-site. It
+	// configures ONLY the browser gates: the existing JSON RequirePrincipal /
+	// RequireLiveSession middleware keep their byte-stable 401 behavior regardless.
+	BrowserLoginPath string `env:"AUTH_BROWSER_LOGIN_PATH"`
 	// RequireVerifiedEmail, when true, makes login refuse an unverified user
 	// with a 403 (ErrEmailNotVerified). Default false (design §7.1, AV8):
 	// flipping it on requires a working Mailer so users can verify.
@@ -1008,6 +1025,14 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 	if cfg.HTMLPolicy != nil && cfg.Views == nil {
 		return nil, ErrHTMLPolicyWithoutViews
 	}
+	// A non-empty browser login path must be a safe root-relative target (design §9.2):
+	// the browser identity gates 303 to it on denial, so a scheme/protocol-relative/
+	// backslash/control-character value would be an off-site open redirect. Empty
+	// defaults to "/auth/login" in authsvc and never trips this. Validated through the
+	// same shared redirect.SafeRelativePath the gates and the form lane use.
+	if cfg.BrowserLoginPath != "" && redirect.SafeRelativePath(cfg.BrowserLoginPath) != cfg.BrowserLoginPath {
+		return nil, ErrBrowserLoginPathInvalid
+	}
 	// Enable-time validation for the challenge subsystem (design §3.3): wiring the
 	// Challenges repository enables the atomic secret rail, which REQUIRES a
 	// ChallengeProtector to protect its codes/tokens. Nil is tolerated only while
@@ -1279,6 +1304,7 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 		RefreshTTL:           cfg.RefreshTTL,
 		Passwordless:         cfg.Passwordless,
 		PublicAuthBaseURL:    cfg.PublicAuthBaseURL,
+		BrowserLoginPath:     cfg.BrowserLoginPath,
 		Logger:               cfg.Logger,
 		IDs:                  cfg.IDs,
 	}
@@ -1462,6 +1488,28 @@ func (s *Service) RequirePrincipal(next http.Handler) http.Handler {
 // on password-change, key-minting, invitation, or secret-read routes.
 func (s *Service) RequireLiveSession(next http.Handler) http.Handler {
 	return s.svc.RequireLiveSession(next)
+}
+
+// RequirePrincipalBrowser is the browser-facing sibling of RequirePrincipal for HTML
+// routes (design §9.2). It resolves the SAME credential classes and stashes the SAME
+// Principal (read via CurrentPrincipal), but on an authentication denial it 303s to
+// Config.BrowserLoginPath (default "/auth/login") instead of writing a JSON 401 — a
+// denied GET/HEAD carrying a validated return_to of the original path+query, an unsafe
+// method none. It never sniffs Accept or Fetch Metadata; mount it deliberately on the
+// HTML routes a host renders login pages for.
+func (s *Service) RequirePrincipalBrowser(next http.Handler) http.Handler {
+	return s.svc.RequirePrincipalBrowser(next)
+}
+
+// RequireLiveSessionBrowser is the browser-facing sibling of RequireLiveSession for
+// HTML routes (design §9.2). It enforces the SAME immediate-revocation live-session
+// matrix and stashes the SAME Principal/session id, but on denial it 303s to
+// Config.BrowserLoginPath (default "/auth/login") instead of writing a JSON 401 (same
+// validated return_to rule as RequirePrincipalBrowser). A statelessly-valid but
+// revoked user session passes RequirePrincipalBrowser and is denied here. Mount it on
+// unsafe HTML routes that need immediate revocation.
+func (s *Service) RequireLiveSessionBrowser(next http.Handler) http.Handler {
+	return s.svc.RequireLiveSessionBrowser(next)
 }
 
 // AuthenticateAPIKey resolves the effective Principal for a raw API key (design

@@ -4,9 +4,9 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
-	"strings"
 
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
+	"github.com/gopernicus/gopernicus/features/authentication/internal/redirect"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
@@ -74,18 +74,12 @@ func (h *handlers) resolveReturnTo(raw string) string {
 	return h.svc.ResolveRedirect(raw)
 }
 
-// safeRelativePath returns p when it is a safe same-origin relative path (a single
-// leading slash, no scheme, no protocol-relative "//" or backslash trickery a
-// browser might normalize into one), else "". It guards the internal return-to the
-// stale-session gate reflects into the login redirect.
+// safeRelativePath returns p when it is a safe same-origin relative path, else "".
+// It delegates to the shared redirect.SafeRelativePath validator (same rule the
+// browser identity gates apply), guarding the internal return-to the stale-session
+// gate reflects into the login redirect.
 func safeRelativePath(p string) string {
-	if p == "" || p[0] != '/' {
-		return ""
-	}
-	if strings.HasPrefix(p, "//") || strings.ContainsAny(p, "\\") || strings.Contains(p, "://") {
-		return ""
-	}
-	return p
+	return redirect.SafeRelativePath(p)
 }
 
 // formOriginOK enforces the credential-establishment origin policy for a public form
@@ -276,6 +270,32 @@ func (h *handlers) resetPasswordForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Reset revokes every session and does not auto-login (design §5.9); land on login.
+	h.prgTo(w, r, "/auth/login")
+}
+
+// logoutForm is the HTML transport for POST /auth/logout (dispatched by logout,
+// dispatch.go). It resolves the SAME credentials as logoutJSON — the refresh cookie
+// (primary) and the bearer-then-session-cookie access token (fallback) — calls the
+// same idempotent Logout service method, clears both cookies, and 303s to the login
+// page. Like logoutJSON it is NOT session-gated (§1.5): an expired access JWT must
+// still log out. The route's origin-only middleware (requireBrowserSafeOrigin) has
+// already rejected a cross-site submit, so this skips both formOriginOK and a
+// csrf_token check — logout is deliberately origin-only (design §9.1, D2), never
+// double-submit gated, so a shared-computer logout with no live auth_csrf cookie is
+// never blocked. There is no form body to parse beyond the transport classification.
+func (h *handlers) logoutForm(w http.ResponseWriter, r *http.Request) {
+	refreshToken := ""
+	if c, err := r.Cookie(h.svc.RefreshCookieName()); err == nil {
+		refreshToken = c.Value
+	}
+	accessToken := ""
+	if raw, ok := bearerToken(r); ok {
+		accessToken = raw
+	} else if c, err := r.Cookie(h.svc.SessionCookieName()); err == nil {
+		accessToken = c.Value
+	}
+	_ = h.svc.Logout(r.Context(), refreshToken, accessToken)
+	h.svc.ClearSessionCookies(w)
 	h.prgTo(w, r, "/auth/login")
 }
 

@@ -37,6 +37,31 @@ func TestResolveFallsBackToSafeDefault(t *testing.T) {
 	}
 }
 
+func TestSafeRelativePath(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"/admin", "/admin"},                           // safe root-relative
+		{"/admin/users?page=2", "/admin/users?page=2"}, // path + query preserved
+		{"/", "/"},                   // the same-origin root
+		{"", ""},                     // empty is never safe
+		{"admin", ""},                // no leading slash
+		{"//evil.com", ""},           // protocol-relative
+		{"https://evil.com", ""},     // absolute scheme
+		{"/\\evil.com", ""},          // backslash a browser may normalize
+		{"/path://x", ""},            // embedded scheme delimiter
+		{"/a\x00b", ""},              // NUL control character
+		{"/nav\r\nSet-Cookie:x", ""}, // CR/LF header-splitting vector
+		{"/tab\tend", ""},            // horizontal tab is a control character
+	}
+	for _, c := range cases {
+		if got := SafeRelativePath(c.in); got != c.want {
+			t.Errorf("SafeRelativePath(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 func TestEmptyAllowlistPermitsOnlyDefault(t *testing.T) {
 	a := New(nil)
 	if !a.Allowed("/") {

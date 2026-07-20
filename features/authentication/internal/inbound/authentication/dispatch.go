@@ -97,6 +97,10 @@ func (h *handlers) verify(w http.ResponseWriter, r *http.Request) {
 	h.dispatch(w, r, h.verifyJSON, h.verifyForm)
 }
 
+func (h *handlers) logout(w http.ResponseWriter, r *http.Request) {
+	h.dispatch(w, r, h.logoutJSON, h.logoutForm)
+}
+
 func (h *handlers) forgotPassword(w http.ResponseWriter, r *http.Request) {
 	h.dispatch(w, r, h.forgotPasswordJSON, h.forgotPasswordForm)
 }
