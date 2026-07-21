@@ -80,7 +80,7 @@ func (v Views) resourceDirectives() []authentication.HTMLResourceDirective {
 	req := v.bundle.Requirements()
 
 	var out []authentication.HTMLResourceDirective
-	scriptSeen := false
+	scriptSeen, imgSeen, fontSeen := false, false, false
 	for _, d := range req.Directives() {
 		kind, ok := directiveKind[d]
 		if !ok {
@@ -88,13 +88,20 @@ func (v Views) resourceDirectives() []authentication.HTMLResourceDirective {
 		}
 		sources, _ := req.Sources(d)
 		dir := authentication.HTMLResourceDirective{Kind: kind, Sources: append([]string(nil), sources...)}
-		if kind == authentication.HTMLScriptSrc {
+		switch kind {
+		case authentication.HTMLScriptSrc:
 			// The bundle's script-src (Interactive/Full) plus the same-origin
 			// fragment reader plus the per-render nonce channel (C5). Dedup keeps the
 			// first occurrence, so appending 'self' is safe if it is already present.
 			scriptSeen = true
 			dir.Sources = append(dir.Sources, selfSource)
 			dir.Nonce = true
+		case authentication.HTMLImgSrc:
+			imgSeen = true
+			dir.Sources = append(dir.Sources, selfSource)
+		case authentication.HTMLFontSrc:
+			fontSeen = true
+			dir.Sources = append(dir.Sources, selfSource)
 		}
 		out = append(out, dir)
 	}
@@ -108,6 +115,23 @@ func (v Views) resourceDirectives() []authentication.HTMLResourceDirective {
 			Kind:    authentication.HTMLScriptSrc,
 			Sources: []string{selfSource},
 			Nonce:   true,
+		})
+	}
+	// Same-origin imagery and fonts are the adapter's own surface, not the
+	// bundle's: the host's theme stylesheet (goth.Config.ThemeStylesheetPath)
+	// may declare @font-face over self-hosted files, and a WithBrand component
+	// renders self-hosted logo imagery. Widen exactly to 'self' — never a
+	// remote origin — so those load under the feature's default-src 'none'.
+	if !imgSeen {
+		out = append(out, authentication.HTMLResourceDirective{
+			Kind:    authentication.HTMLImgSrc,
+			Sources: []string{selfSource},
+		})
+	}
+	if !fontSeen {
+		out = append(out, authentication.HTMLResourceDirective{
+			Kind:    authentication.HTMLFontSrc,
+			Sources: []string{selfSource},
 		})
 	}
 	return out

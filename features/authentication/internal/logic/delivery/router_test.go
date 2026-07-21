@@ -297,3 +297,46 @@ func TestDeliverNotifierHonorsCancellation(t *testing.T) {
 		t.Fatalf("Deliver err=%v, want context.Canceled", err)
 	}
 }
+
+// A wired Deps.Branding reaches the shared email layouts: the rendered bodies
+// carry Brand.Name where the unset default falls back to "Your Company".
+func TestRenderEmailBranding(t *testing.T) {
+	r, err := NewRouter(Deps{
+		Mailer:   &stubSender{},
+		MailFrom: "no-reply@example.test",
+		Branding: &email.Branding{Name: "GPS Impact"},
+	})
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	env, err := r.Render(context.Background(), Request{
+		Kind:        identity.KindEmail,
+		Purpose:     PurposeRegistrationVerification,
+		Destination: "user@example.test",
+		Secret:      "123456",
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	for name, body := range map[string]string{"text": env.Body, "html": env.HTML} {
+		if !strings.Contains(body, "GPS Impact") {
+			t.Errorf("%s body missing Brand.Name: %q", name, body)
+		}
+		if strings.Contains(body, "Your Company") {
+			t.Errorf("%s body still carries the fallback brand: %q", name, body)
+		}
+	}
+
+	// Unset branding keeps the layouts' own fallback.
+	plain := newRouter(t, &stubSender{}, nil)
+	env, err = plain.Render(context.Background(), Request{
+		Kind: identity.KindEmail, Purpose: PurposeRegistrationVerification,
+		Destination: "user@example.test", Secret: "123456",
+	})
+	if err != nil {
+		t.Fatalf("Render (plain): %v", err)
+	}
+	if !strings.Contains(env.Body, "Your Company") {
+		t.Errorf("unset branding lost the fallback: %q", env.Body)
+	}
+}

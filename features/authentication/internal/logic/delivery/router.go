@@ -157,7 +157,10 @@ type Deps struct {
 	MailFrom     string
 	Notifiers    map[string]notify.Notifier
 	AppTemplates []TemplateOverride
-	Logger       *slog.Logger
+	// Branding fills the shared email layouts' {{.Brand.*}} values; nil keeps
+	// the layouts' own fallback ("Your Company").
+	Branding *email.Branding
+	Logger   *slog.Logger
 }
 
 // TemplateOverride registers a host's email content templates at email.LayerApp so
@@ -201,6 +204,9 @@ func NewRouter(d Deps) (*Router, error) {
 	opts := []email.Option{email.WithContentTemplates(namespace, coreTemplates, email.LayerCore)}
 	for _, o := range d.AppTemplates {
 		opts = append(opts, email.WithContentTemplates(o.Namespace, o.FS, email.LayerApp))
+	}
+	if d.Branding != nil {
+		opts = append(opts, email.WithBranding(d.Branding))
 	}
 	emailer, err := email.New(d.Mailer, d.MailFrom, opts...)
 	if err != nil {

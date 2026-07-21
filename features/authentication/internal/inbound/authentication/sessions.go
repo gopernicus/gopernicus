@@ -76,8 +76,10 @@ type authService interface {
 	RateLimitByIP(keyPrefix string, perMinute int) web.Middleware
 
 	// OAuth flow (design §3). OAuthEnabled gates whether the OAuth routes are
-	// registered at all (deny-by-absence).
+	// registered at all (deny-by-absence). OAuthProviderNames feeds the login
+	// page's "continue with" links (deterministic order, empty = OAuth off).
 	OAuthEnabled() bool
+	OAuthProviderNames() []string
 	StartOAuth(ctx context.Context, provider, redirectTo string) (authURL string, err error)
 	StartLink(ctx context.Context, userID, provider, redirectTo string) (authURL string, err error)
 	OAuthCallback(ctx context.Context, provider, code, state string) (authsvc.OAuthResult, error)

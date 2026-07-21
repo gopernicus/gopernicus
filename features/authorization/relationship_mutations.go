@@ -79,13 +79,7 @@ func (s *Service) RevokeRelationship(ctx context.Context, actor Actor, cmd Revok
 	if s.relationships == nil {
 		return nil, ErrRelationshipsNotConfigured
 	}
-	return s.applyMutation(ctx, actor, Command{
-		MutationID:       cmd.MutationID,
-		Scope:            resourceScope(cmd.ResourceType, cmd.ResourceID),
-		ExpectedRevision: cmd.ExpectedRevision,
-		Operation:        OpRevoke,
-		Relationships:    []RelationshipRow{{Relation: cmd.Relation, Subject: cmd.Subject}},
-	})
+	return s.applyMutation(ctx, actor, revokeRelationshipCommand(cmd))
 }
 
 // ReplaceRelationship runs a guarded atomic replace on behalf of actor.
@@ -128,6 +122,20 @@ func grantRelationshipCommand(cmd GrantRelationshipCommand) Command {
 		Scope:            resourceScope(cmd.ResourceType, cmd.ResourceID),
 		ExpectedRevision: cmd.ExpectedRevision,
 		Operation:        OpGrant,
+		Relationships:    []RelationshipRow{{Relation: cmd.Relation, Subject: cmd.Subject}},
+	}
+}
+
+// revokeRelationshipCommand builds the actor-independent OpRevoke command a
+// single relationship revoke applies. Shared by the guarded
+// Service.RevokeRelationship and the trusted SystemMutator.RevokeRelationship so
+// both build an identical command (the grant pair's symmetry).
+func revokeRelationshipCommand(cmd RevokeRelationshipCommand) Command {
+	return Command{
+		MutationID:       cmd.MutationID,
+		Scope:            resourceScope(cmd.ResourceType, cmd.ResourceID),
+		ExpectedRevision: cmd.ExpectedRevision,
+		Operation:        OpRevoke,
 		Relationships:    []RelationshipRow{{Relation: cmd.Relation, Subject: cmd.Subject}},
 	}
 }

@@ -130,6 +130,7 @@ func (h *handlers) loginPage(w http.ResponseWriter, r *http.Request) {
 		PageContext:         pc,
 		Email:               r.URL.Query().Get("email"),
 		PasswordlessEnabled: h.svc.PasswordlessEnabled(),
+		OAuthProviders:      h.svc.OAuthProviderNames(),
 	}
 	h.renderPage(w, r, pc.CSPNonce, h.views.Login(m))
 }

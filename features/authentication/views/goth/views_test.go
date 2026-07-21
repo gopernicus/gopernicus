@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/a-h/templ"
+
 	"github.com/gopernicus/gopernicus/features/authentication"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 	uigoth "github.com/gopernicus/gopernicus/ui/goth"
@@ -442,4 +444,70 @@ func TestEmbed_OverrideOneMethod(t *testing.T) {
 	if !strings.Contains(reg, `action="/auth/register"`) {
 		t.Fatalf("non-overridden Register did not render the ui/goth default:\n%s", reg)
 	}
+}
+
+// TestWithBrandAndAppName proves the chrome Options: the host brand component
+// renders above every page family's body, the document title carries the app
+// suffix, and the zero-option construction stays byte-identically unbranded.
+func TestWithBrandAndAppName(t *testing.T) {
+	b, err := uigoth.New(uigoth.Config{})
+	if err != nil {
+		t.Fatalf("bundle: %v", err)
+	}
+	brand := templ.Raw(`<header class="host-brand"><img src="/theme/brand/logo.png" alt="GPS Impact"></header>`)
+	v, err := New(b, WithBrand(brand), WithAppName("GPS Impact"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	login := render(t, v.Login(authentication.LoginPage{PageContext: ctx()}))
+	mustContain(t, "branded login", login,
+		`<title>Sign in · GPS Impact</title>`,
+		`class="host-brand"`,
+	)
+	// The brand renders BEFORE the shell main (a logo header above the card).
+	if strings.Index(login, `class="host-brand"`) > strings.Index(login, `data-slot="auth-main"`) {
+		t.Error("brand component rendered after the page body, want before")
+	}
+	// The single top-level page heading is preserved.
+	if got := strings.Count(login, "<h1"); got != 1 {
+		t.Errorf("branded login has %d <h1> elements, want exactly 1", got)
+	}
+
+	// The chrome rides the shared page seam: other page families carry it too.
+	reset := render(t, v.ResetPassword(authentication.ResetPage{PageContext: ctx()}))
+	mustContain(t, "branded reset", reset, `class="host-brand"`, "· GPS Impact</title>")
+	status := render(t, v.Status(authentication.StatusPage{PageContext: ctx()}))
+	mustContain(t, "branded status", status, `class="host-brand"`)
+
+	// Zero-option construction stays unbranded with bare titles.
+	plain := render(t, newViews(t).Login(authentication.LoginPage{PageContext: ctx()}))
+	mustNotContain(t, "plain login", plain, "host-brand", "· GPS Impact")
+	mustContain(t, "plain login", plain, "<title>Sign in</title>")
+}
+
+// TestLogin_ProviderButtons proves wired providers render as kit Button-styled
+// anchors with display-cased labels under a separator, and an empty provider
+// list renders none of it.
+func TestLogin_ProviderButtons(t *testing.T) {
+	body := render(t, newViews(t).Login(authentication.LoginPage{
+		PageContext:    ctx(),
+		OAuthProviders: []string{"google", "github"},
+	}))
+	mustContain(t, "providers", body,
+		`data-slot="auth-providers"`,
+		`href="/auth/oauth/google/start"`,
+		"Continue with Google",
+		`href="/auth/oauth/github/start"`,
+		"Continue with Github",
+		`rel="nofollow"`,
+		`data-slot="separator"`,
+	)
+	// The anchors carry the kit button surface.
+	if !strings.Contains(body, `data-slot="button"`) {
+		t.Error("provider anchors missing the kit button slot")
+	}
+
+	none := render(t, newViews(t).Login(authentication.LoginPage{PageContext: ctx()}))
+	mustNotContain(t, "no providers", none, `data-slot="auth-providers"`, "Continue with")
 }

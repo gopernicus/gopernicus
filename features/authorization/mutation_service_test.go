@@ -611,3 +611,43 @@ func TestSystemMutatorApplyRejectsTeardown(t *testing.T) {
 		t.Fatalf("typed teardown did not reach the trusted Apply path")
 	}
 }
+
+// TestSystemMutatorRevokeRelationship proves the trusted revoke seam: it drives
+// an OpRevoke command through the unguarded trusted Apply (not ApplyGuarded),
+// building the SAME command the guarded Service.RevokeRelationship builds, and
+// surfaces an invariant-blocked outcome (the guardian owner floor) in the
+// receipt rather than bypassing it.
+func TestSystemMutatorRevokeRelationship(t *testing.T) {
+	repo := &stubMutationRepo{receipt: &Receipt{Outcome: OutcomeApplied}}
+	comps := mustComponents(t, Repositories{Roles: &roleFake{}, Mutations: repo}, Config{})
+
+	cmd := RevokeRelationshipCommand{
+		MutationID:   DeriveMutationID("test/revoke", "dashboard", "d1", "owner", "user", "u1"),
+		ResourceType: "dashboard",
+		ResourceID:   "d1",
+		Relation:     "owner",
+		Subject:      SubjectRef{Type: "user", ID: "u1"},
+	}
+	if _, err := comps.SystemMutator.RevokeRelationship(context.Background(), cmd); err != nil {
+		t.Fatalf("SystemMutator.RevokeRelationship: %v", err)
+	}
+	if !repo.applyTrusted || repo.applyGuarded {
+		t.Fatalf("revoke did not take the trusted unguarded Apply path (trusted=%v guarded=%v)", repo.applyTrusted, repo.applyGuarded)
+	}
+	if repo.gotCmd.Operation != OpRevoke {
+		t.Errorf("command operation = %q, want OpRevoke", repo.gotCmd.Operation)
+	}
+	if got := revokeRelationshipCommand(cmd); repo.gotCmd.Scope != got.Scope || len(repo.gotCmd.Relationships) != 1 {
+		t.Errorf("trusted revoke command diverges from the shared builder: %+v", repo.gotCmd)
+	}
+
+	// An invariant-blocked outcome (last owner) surfaces in the receipt.
+	repo.receipt = &Receipt{Outcome: OutcomeInvariantBlocked}
+	rec, err := comps.SystemMutator.RevokeRelationship(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("invariant-blocked revoke must not error: %v", err)
+	}
+	if rec.Outcome != OutcomeInvariantBlocked {
+		t.Errorf("outcome = %q, want invariant_blocked (guardian honored)", rec.Outcome)
+	}
+}

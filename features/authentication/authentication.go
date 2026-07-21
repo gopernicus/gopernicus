@@ -850,6 +850,13 @@ type Config struct {
 	// email BODIES only — never a page, route, service policy, or the JSON API.
 	EmailContentTemplates []EmailContentTemplate
 
+	// EmailBranding sets the brand values the bundled email LAYOUTS render
+	// ({{.Brand.Name}}, .Tagline, .Address, .LogoURL — "Your Company" is the
+	// unset fallback). It composes with EmailContentTemplates (bodies) without
+	// overlap: branding fills the shared layout frame, content templates replace
+	// bodies. Nil (default) → today's fallback branding.
+	EmailBranding *email.Branding
+
 	// Logger receives the best-effort WARN line when a security-event audit write
 	// fails (design §5.1 — audit-write failures never fail the auth flow). Nil →
 	// slog.Default(); Register defaults it to the Mount's logger when unset.
@@ -1155,6 +1162,7 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 		MailFrom:     cfg.MailFrom,
 		Notifiers:    notifiers,
 		AppTemplates: cfg.EmailContentTemplates,
+		Branding:     cfg.EmailBranding,
 		Logger:       cfg.Logger,
 	})
 	if err != nil {
@@ -1662,6 +1670,12 @@ func (s *Service) DeliveryStatus(ctx context.Context, receiptKey string) (Delive
 // ResetPassword redeems a reset token and sets the new password.
 func (s *Service) ResetPassword(ctx context.Context, token, newPassword string) error {
 	return s.svc.ResetPassword(ctx, token, newPassword)
+}
+
+// OAuthProviderNames lists the wired OAuth provider names in deterministic
+// (sorted) order; empty means OAuth is off.
+func (s *Service) OAuthProviderNames() []string {
+	return s.svc.OAuthProviderNames()
 }
 
 // StartOAuth returns the provider authorization URL for an unauthenticated login/register flow.
