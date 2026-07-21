@@ -172,6 +172,7 @@ func (h *handlers) loginForm(w http.ResponseWriter, r *http.Request) {
 		pc.ReturnTo, pc.Message = h.safeReturnTo(returnTo), msg
 		h.renderForm(w, r, status, pc.CSPNonce, h.views.Login(LoginPage{
 			PageContext: pc, Email: email, PasswordlessEnabled: h.svc.PasswordlessEnabled(),
+			OAuthProviders: h.svc.OAuthProviderNames(),
 		}))
 		return
 	}

@@ -47,6 +47,14 @@ templ authHeading(title string) {
 	<h1 class="goth-auth-title" data-slot="auth-title">{ title }</h1>
 }
 
+// branded prefixes a page body with the host-supplied brand component
+// (WithBrand). The brand component owns its whole markup — no adapter wrapper —
+// so host chrome (a logo header) renders under the host's own classes/theme.
+templ branded(brand templ.Component, body templ.Component) {
+	@brand
+	@body
+}
+
 // fragmentScriptTag loads the externalized fragment-reader script for the reset and
 // magic-link landings. It is same-origin ('self') and deferred, so it runs after the
 // form is parsed and needs no inline script (design §6.4; GOTH-7.2).

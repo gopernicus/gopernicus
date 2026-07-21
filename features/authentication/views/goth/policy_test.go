@@ -135,3 +135,23 @@ func TestWithFragmentScriptPath(t *testing.T) {
 	body := render(t, v.ResetPassword(authentication.ResetPage{RedeemPath: "/auth/password/reset"}))
 	mustContain(t, "custom path", body, `src="/custom/reader.js"`)
 }
+
+// TestHTMLPolicy_ImgAndFontSrcSelf proves the mapped policy widens img-src and
+// font-src to 'self' across every profile: the host theme stylesheet's
+// @font-face files and a WithBrand component's logo imagery are same-origin
+// surfaces of the ADAPTER, not the bundle, and must load under the feature's
+// default-src 'none'.
+func TestHTMLPolicy_ImgAndFontSrcSelf(t *testing.T) {
+	for _, p := range []uigoth.Profile{uigoth.StylesOnly, uigoth.Interactive, uigoth.Full} {
+		dirs := viewsForProfile(t, p).resourceDirectives()
+		for _, kind := range []authentication.HTMLResourceKind{authentication.HTMLImgSrc, authentication.HTMLFontSrc} {
+			dir, ok := findDirective(dirs, kind)
+			if !ok {
+				t.Fatalf("profile %d: produced policy has no %s directive", p, kind)
+			}
+			if !hasSource(dir.Sources, "'self'") {
+				t.Errorf("profile %d: %s missing 'self': %v", p, kind, dir.Sources)
+			}
+		}
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/a-h/templ"
 
@@ -106,6 +107,29 @@ func confirmIdentifierAction(kind string) string {
 		return "/auth/identifiers/phone/confirm"
 	}
 	return "/auth/identifiers/email/confirm"
+}
+
+// oauthStartURL returns the provider's sign-in start URL as the primitives URL
+// type the Button link form takes. Provider names are wiring constants; a parse
+// failure renders an inert button rather than panicking.
+func oauthStartURL(provider string) primitives.URL {
+	u, err := primitives.ParseURL("/auth/oauth/" + provider + "/start")
+	if err != nil {
+		return primitives.URL{}
+	}
+	return u
+}
+
+// displayProviderName upper-cases a wired provider's first rune for the
+// "Continue with X" label ("google" → "Google"). Provider names are short
+// ASCII wiring constants; anything else passes through unchanged.
+func displayProviderName(provider string) string {
+	if provider == "" {
+		return provider
+	}
+	r := []rune(provider)
+	r[0] = unicode.ToUpper(r[0])
+	return string(r)
 }
 
 // oauthUnlinkStartAction / oauthUnlinkAction return the provider-bound unlink

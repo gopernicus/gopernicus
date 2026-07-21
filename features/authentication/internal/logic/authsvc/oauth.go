@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/challenge"
@@ -121,6 +122,18 @@ type pendingLink struct {
 // OAuthEnabled reports whether any provider is wired. The transport registers
 // the OAuth routes only when it is true (deny-by-absence, design §3).
 func (s *Service) OAuthEnabled() bool { return len(s.providers) > 0 }
+
+// OAuthProviderNames lists the wired provider names in deterministic
+// (sorted) order. The HTML login page renders its "continue with" links from
+// it; empty means OAuth is off and the page renders none.
+func (s *Service) OAuthProviderNames() []string {
+	names := make([]string, 0, len(s.providers))
+	for name := range s.providers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
 
 // StartOAuth begins a login/register authorization round-trip for providerName,
 // returning the provider authorization URL to redirect the browser to. It

@@ -246,6 +246,19 @@ func (m *SystemMutator) GrantRelationship(ctx context.Context, cmd GrantRelation
 	return m.Apply(ctx, grantRelationshipCommand(cmd))
 }
 
+// RevokeRelationship runs a TRUSTED single-relation revoke — the symmetric
+// companion to GrantRelationship (a SystemMutator holder driving a host's own
+// authorized removal, e.g. a manage-holder unsharing a resource). It builds the
+// same actor-independent command the guarded Service.RevokeRelationship builds
+// and drives it through the unguarded trusted Apply: it bypasses only the host
+// MutationGuard, and — unlike TeardownAuthorizationScope — it STILL honors the
+// guardian minimum, so revoking the last owner of a guarded resource is
+// invariant-blocked. Idempotency is by MutationID (derive a stable one with
+// DeriveMutationID so a retried revoke dedups).
+func (m *SystemMutator) RevokeRelationship(ctx context.Context, cmd RevokeRelationshipCommand) (*Receipt, error) {
+	return m.Apply(ctx, revokeRelationshipCommand(cmd))
+}
+
 // AssignRole runs a TRUSTED role assignment (a SystemMutator holder's bootstrap /
 // migration seam). It mirrors the guarded Service.AssignRole payload without the
 // actor/guard and drives it through trusted Apply. A half-scoped resource pair is

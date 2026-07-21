@@ -42,6 +42,8 @@ var _ authentication.Views = Views{}
 type Views struct {
 	bundle             *goth.Bundle
 	fragmentScriptPath string
+	brand              templ.Component
+	appName            string
 }
 
 // Option customizes a Views at construction.
@@ -56,6 +58,23 @@ func WithFragmentScriptPath(path string) Option {
 			v.fragmentScriptPath = path
 		}
 	}
+}
+
+// WithBrand sets a host-supplied brand component rendered ABOVE every page body
+// (typically a logo header). The component owns its entire markup and styling —
+// the adapter adds no wrapper element around it, so the host's own classes and
+// theme stylesheet govern the presentation. Nil keeps today's unbranded pages.
+// The page's <h1> title inside the shell is unaffected (single top-level
+// heading per page is preserved).
+func WithBrand(brand templ.Component) Option {
+	return func(v *Views) { v.brand = brand }
+}
+
+// WithAppName suffixes every document <title> with the application name
+// ("Sign in · <name>") so browser tabs and history identify the product.
+// Empty keeps today's bare page titles.
+func WithAppName(name string) Option {
+	return func(v *Views) { v.appName = name }
 }
 
 // New returns the ui/goth Views over bundle. It returns an error for a nil bundle so
@@ -77,6 +96,12 @@ func New(bundle *goth.Bundle, opts ...Option) (Views, error) {
 // and an optional per-page head extra (the fragment-reader <script> on the
 // fragment-token landings).
 func (v Views) page(title string, headExtra templ.Component, body templ.Component) web.Renderer {
+	if v.appName != "" {
+		title = title + " · " + v.appName
+	}
+	if v.brand != nil {
+		body = branded(v.brand, body)
+	}
 	return document(v.bundle.Head(), title, headExtra, body)
 }
 
