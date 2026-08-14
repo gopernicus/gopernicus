@@ -114,6 +114,22 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
+### integrations/datastores/{pgxdb,turso} — v0.2.0: crud.Transactor implemented (minor)
+
+transactor-connectors (2026-08-14) implemented the sdk transaction seam in BOTH
+datastore connectors — the seam's first consumer arrived (the Coordination-Hub
+timeline cascade, gpsimpact/Coordination-Hub#13). Additive only, so a **minor**
+floor: `(*DB).Transact` (commit on nil; rollback + fn's error unwrapped;
+rollback + re-panic on panic), the connector-typed `TxFromContext(ctx) (*Tx,
+bool)`, and `(*DB).QuerierFrom(ctx) Querier` (ambient tx when inside a
+Transact, else the pool). `InTx` and every existing symbol are unchanged.
+**Nesting is now RULED (was explicitly unpinned):** Transact inside an active
+Transact fails loud with the connector's `ErrNestedTransact` — the consumer's
+one-transaction-per-workflow invariant makes a silent nested begin an
+atomicity-splitting hazard; the error can graduate into defined behavior later
+without breaking anyone. The sdk contract comment (`sdk/foundation/crud/tx.go`)
+records the ruling; comment-only, no sdk API change.
+
 ### sdk — v0.2.0 (2026-08-14): FencedDeadLetterFunc carries the failure reason
 
 `workers.FencedDeadLetterFunc[T]` gained a `reason string` parameter —
