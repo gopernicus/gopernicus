@@ -147,9 +147,10 @@ func (s *Service) fire(ctx context.Context, sch schedule.Schedule, now time.Time
 
 	jobID := fmt.Sprintf("sched_%s_%d", sch.ID, sch.NextRunAt.Unix())
 	if _, err := s.enqueuer.EnqueueJob(ctx, job.Enqueue{
-		ID:      jobID,
-		Kind:    sch.Kind,
-		Payload: sch.Payload,
+		ID:       jobID,
+		Kind:     sch.Kind,
+		TenantID: sch.TenantID,
+		Payload:  sch.Payload,
 	}); err != nil && !errors.Is(err, sdk.ErrAlreadyExists) {
 		s.log.ErrorContext(ctx, "schedule: enqueue job failed", "schedule_id", sch.ID, "job_id", jobID, "error", err)
 		return

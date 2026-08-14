@@ -102,7 +102,7 @@ func TestFire_CASWin_EnqueuesDeterministicIDAndSetsLastJob(t *testing.T) {
 	now := slot.Add(time.Second) // on-time-ish
 	repo := &fakeSchedules{
 		due: []schedule.Schedule{{
-			ID: "s1", Name: "nightly", Kind: "demo.run",
+			ID: "s1", Name: "nightly", Kind: "demo.run", TenantID: "tenant-a",
 			Spec: schedule.Spec{Every: time.Hour}, NextRunAt: slot, Enabled: true,
 		}},
 	}
@@ -128,6 +128,11 @@ func TestFire_CASWin_EnqueuesDeterministicIDAndSetsLastJob(t *testing.T) {
 	wantID := fmt.Sprintf("sched_s1_%d", slot.Unix())
 	if len(enq.calls) != 1 || enq.calls[0].ID != wantID {
 		t.Fatalf("enqueue calls = %+v, want one with ID %q", enq.calls, wantID)
+	}
+	// The schedule's tenant is copied onto the fired job (vocabulary carry-through)
+	// so tenant-scoped ops queries see fired work.
+	if enq.calls[0].TenantID != "tenant-a" {
+		t.Fatalf("fired job TenantID = %q, want the schedule's %q", enq.calls[0].TenantID, "tenant-a")
 	}
 	if len(repo.setLast) != 1 || repo.setLast[0].jobID != wantID {
 		t.Fatalf("setLast = %+v, want one with jobID %q", repo.setLast, wantID)

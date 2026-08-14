@@ -25,9 +25,14 @@ type Spec struct {
 
 // Schedule is a recurring job template.
 type Schedule struct {
-	ID        string
-	Name      string // unique; the Ensure upsert key
-	Kind      string // job kind fired into the queue
+	ID   string
+	Name string // unique; the Ensure upsert key
+	Kind string // job kind fired into the queue
+	// TenantID is the OPTIONAL host-defined boundary the schedule belongs to. It
+	// is vocabulary only — the feature attaches no semantics to it, but it IS
+	// copied onto each job the schedule fires so tenant-scoped ops queries see
+	// fired work; stores map "" to NULL.
+	TenantID  string
 	Spec      Spec
 	Payload   json.RawMessage
 	Enabled   bool
@@ -40,10 +45,13 @@ type Schedule struct {
 
 // Ensure is the input for creating or updating a schedule by Name.
 type Ensure struct {
-	Name    string
-	Kind    string
-	Spec    Spec
-	Payload json.RawMessage
+	Name string
+	Kind string
+	// TenantID is the OPTIONAL host-defined boundary to stamp on the schedule
+	// (see Schedule.TenantID). Empty = no tenant.
+	TenantID string
+	Spec     Spec
+	Payload  json.RawMessage
 }
 
 // Repository is the schedule store outbound port. A store adapter or host fills

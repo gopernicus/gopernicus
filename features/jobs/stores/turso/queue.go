@@ -20,7 +20,7 @@ import (
 const DefaultLease = 15 * time.Minute
 
 // jobColumns is the job_queue projection, in jobRow's field order.
-const jobColumns = "job_id, kind, payload, status, priority, retry_count, max_attempts, worker_name, failure_reason, scheduled_for, claimed_at, completed_at, created_at, updated_at"
+const jobColumns = "job_id, kind, tenant_id, payload, status, priority, retry_count, max_attempts, worker_name, failure_reason, scheduled_for, claimed_at, completed_at, created_at, updated_at"
 
 // Compile-time seam: the Queue fills the exact job.QueueRepository port.
 var _ job.QueueRepository = (*Queue)(nil)
@@ -52,12 +52,13 @@ type Queue struct {
 }
 
 // jobRow is the store-local, db-tagged projection of a job_queue row ScanStruct
-// scans into; toDomain maps it to the domain entity. The nullable worker_name /
-// failure_reason columns scan into sql.NullString (read back as "" when NULL) and
-// the two nullable timestamps into turso.NullTime.
+// scans into; toDomain maps it to the domain entity. The nullable tenant_id /
+// worker_name / failure_reason columns scan into sql.NullString (read back as ""
+// when NULL) and the two nullable timestamps into turso.NullTime.
 type jobRow struct {
 	JobID         string           `db:"job_id"`
 	Kind          string           `db:"kind"`
+	TenantID      sql.NullString   `db:"tenant_id"`
 	Payload       []byte           `db:"payload"`
 	Status        string           `db:"status"`
 	Priority      int              `db:"priority"`
@@ -76,6 +77,7 @@ func (r jobRow) toDomain() job.Job {
 	return job.Job{
 		JobID:         r.JobID,
 		Kind:          r.Kind,
+		TenantID:      r.TenantID.String,
 		Payload:       json.RawMessage(r.Payload),
 		JobStatus:     job.Status(r.Status),
 		Priority:      r.Priority,
@@ -116,6 +118,7 @@ func (q *Queue) Enqueue(ctx context.Context, in job.Enqueue) (job.Job, error) {
 	j := job.Job{
 		JobID:        id,
 		Kind:         in.Kind,
+		TenantID:     in.TenantID,
 		Payload:      in.Payload,
 		JobStatus:    job.StatusPending,
 		Priority:     in.Priority,
@@ -126,10 +129,10 @@ func (q *Queue) Enqueue(ctx context.Context, in job.Enqueue) (job.Job, error) {
 	}
 
 	const insert = `INSERT INTO job_queue (` + jobColumns + `)
-		VALUES (?, ?, ?, 'pending', ?, 0, ?, NULL, NULL, ?, NULL, NULL, ?, ?)`
+		VALUES (?, ?, ?, ?, 'pending', ?, 0, ?, NULL, NULL, ?, NULL, NULL, ?, ?)`
 	err := retryBusy(ctx, func() error {
 		_, e := q.db.Exec(ctx, insert,
-			j.JobID, j.Kind, payloadValue(j.Payload), j.Priority, j.MaxAttempts,
+			j.JobID, j.Kind, nullString(j.TenantID), payloadValue(j.Payload), j.Priority, j.MaxAttempts,
 			tursodb.FormatTime(j.ScheduledFor), tursodb.FormatTime(j.CreatedAt), tursodb.FormatTime(j.UpdatedAt))
 		return e
 	})

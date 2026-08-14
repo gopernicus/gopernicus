@@ -38,6 +38,7 @@ func (s *Schedules) Ensure(_ context.Context, in schedule.Ensure, next time.Time
 	if existing, ok := s.findByName(in.Name); ok {
 		specChanged := existing.Spec != in.Spec
 		existing.Kind = in.Kind
+		existing.TenantID = in.TenantID
 		existing.Spec = in.Spec
 		existing.Payload = in.Payload
 		if specChanged {
@@ -52,6 +53,7 @@ func (s *Schedules) Ensure(_ context.Context, in schedule.Ensure, next time.Time
 		ID:        newID("sched"),
 		Name:      in.Name,
 		Kind:      in.Kind,
+		TenantID:  in.TenantID,
 		Spec:      in.Spec,
 		Payload:   in.Payload,
 		Enabled:   true,

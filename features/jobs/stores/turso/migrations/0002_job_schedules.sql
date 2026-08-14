@@ -1,11 +1,15 @@
 -- Recurring schedules. Exactly one of cron_expr / every_secs is set (the
 -- schedule.Spec, validated at Ensure). Timestamps are fixed-width ISO-8601 TEXT;
 -- payload is TEXT JSON; every_secs is an INTEGER count of seconds; enabled is a
--- 0/1 INTEGER. name is unique — the Ensure upsert key.
+-- 0/1 INTEGER. name is unique — the Ensure upsert key. tenant_id is the optional,
+-- host-defined boundary slot (see 0001): nullable, never derived, and copied
+-- onto each job the schedule fires (vocabulary carry-through, so tenant-scoped
+-- ops queries see fired work).
 CREATE TABLE IF NOT EXISTS job_schedules (
     schedule_id  TEXT    NOT NULL,
     name         TEXT    NOT NULL,
     kind         TEXT    NOT NULL,
+    tenant_id    TEXT,
     cron_expr    TEXT,
     every_secs   INTEGER,
     payload      TEXT    NOT NULL DEFAULT '{}',

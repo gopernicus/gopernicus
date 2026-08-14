@@ -64,6 +64,7 @@ func RunQueue(t *testing.T, newRepo func(t *testing.T) job.QueueRepository) {
 
 	t.Run("EnqueueAndGet", func(t *testing.T) { testEnqueueAndGet(t, newRepo(t)) })
 	t.Run("EnqueueIdempotency", func(t *testing.T) { testEnqueueIdempotency(t, newRepo(t)) })
+	t.Run("TenantRoundTrip", func(t *testing.T) { testQueueTenant(t, newRepo(t)) })
 	t.Run("ClaimEmptyQueue", func(t *testing.T) { testClaimEmpty(t, newRepo(t)) })
 	t.Run("ClaimOrdering", func(t *testing.T) { testClaimOrdering(t, newRepo(t)) })
 	t.Run("ScheduledForGating", func(t *testing.T) { testScheduledForGating(t, newRepo(t)) })
@@ -90,6 +91,7 @@ func RunSchedules(t *testing.T, newRepo func(t *testing.T) schedule.Repository) 
 	t.Helper()
 
 	t.Run("EnsureCreateGetUpsert", func(t *testing.T) { testEnsureUpsert(t, newRepo(t)) })
+	t.Run("TenantRoundTrip", func(t *testing.T) { testSchedulesTenant(t, newRepo(t)) })
 	t.Run("AbsentNotFound", func(t *testing.T) { testSchedulesAbsent(t, newRepo(t)) })
 	t.Run("ListDueEnabledGating", func(t *testing.T) { testListDueGating(t, newRepo(t)) })
 	t.Run("ClaimDueCAS", func(t *testing.T) { testClaimDueCAS(t, newRepo(t)) })
@@ -158,6 +160,68 @@ func testEnqueueIdempotency(t *testing.T, repo job.QueueRepository) {
 	}
 	if a.ID() == "" || b.ID() == "" || a.ID() == b.ID() {
 		t.Errorf("empty-id enqueues must get distinct non-empty ids, got %q and %q", a.ID(), b.ID())
+	}
+}
+
+// testQueueTenant: the optional host-defined tenant slot round-trips through
+// every read path a job surfaces on (the Enqueue return, Get, Claim, List), and an
+// unset tenant reads back as the empty string — the SQL stores persist it NULL and
+// must scan that back as "" rather than leaking a sentinel.
+func testQueueTenant(t *testing.T, repo job.QueueRepository) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	scoped := mustEnqueue(t, repo, job.Enqueue{ID: "tenanted", Kind: "demo", TenantID: "acme", ScheduledFor: now})
+	if scoped.TenantID != "acme" {
+		t.Errorf("Enqueue returned TenantID = %q, want acme", scoped.TenantID)
+	}
+	plain := mustEnqueue(t, repo, job.Enqueue{ID: "untenanted", Kind: "demo", ScheduledFor: now.Add(time.Hour)})
+	if plain.TenantID != "" {
+		t.Errorf("unset Enqueue returned TenantID = %q, want empty", plain.TenantID)
+	}
+
+	got, err := repo.Get(ctx, "tenanted")
+	if err != nil {
+		t.Fatalf("Get tenanted: %v", err)
+	}
+	if got.TenantID != "acme" {
+		t.Errorf("Get TenantID = %q, want acme", got.TenantID)
+	}
+	unset, err := repo.Get(ctx, "untenanted")
+	if err != nil {
+		t.Fatalf("Get untenanted: %v", err)
+	}
+	if unset.TenantID != "" {
+		t.Errorf("Get unset TenantID = %q, want empty (NULL scans back as \"\")", unset.TenantID)
+	}
+
+	// The claim projection carries it too, so a worker sees the scope of what it
+	// claimed. Only the tenanted job is due at now.
+	claimed, err := repo.Claim(ctx, "w1", now)
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	if claimed.ID() != "tenanted" {
+		t.Fatalf("Claim = %q, want tenanted", claimed.ID())
+	}
+	if claimed.TenantID != "acme" {
+		t.Errorf("Claim TenantID = %q, want acme", claimed.TenantID)
+	}
+
+	// And the list projection.
+	page, err := repo.List(ctx, job.ListFilter{Kind: "demo"}, crud.ListRequest{Limit: 10})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	seen := map[string]string{}
+	for _, j := range page.Items {
+		seen[j.ID()] = j.TenantID
+	}
+	if seen["tenanted"] != "acme" {
+		t.Errorf("List TenantID for tenanted = %q, want acme", seen["tenanted"])
+	}
+	if seen["untenanted"] != "" {
+		t.Errorf("List TenantID for untenanted = %q, want empty", seen["untenanted"])
 	}
 }
 
@@ -448,6 +512,69 @@ func testEnsureUpsert(t *testing.T, repo schedule.Repository) {
 	}
 	if !changed.NextRunAt.Equal(newNext) {
 		t.Errorf("changed-spec NextRunAt = %v, want advanced to %v", changed.NextRunAt, newNext)
+	}
+}
+
+// testSchedulesTenant: the optional host-defined tenant slot round-trips through
+// Ensure/Get/ListDue, an unset tenant reads back as the empty string (NULL in
+// SQL), and an upsert updates it like the schedule's other mutable fields.
+func testSchedulesTenant(t *testing.T, repo schedule.Repository) {
+	ctx := context.Background()
+
+	scoped := mustEnsure(t, repo, schedule.Ensure{Name: "scoped", Kind: "demo", TenantID: "acme", Spec: schedule.Spec{Every: time.Hour}}, suiteBase)
+	if scoped.TenantID != "acme" {
+		t.Errorf("Ensure returned TenantID = %q, want acme", scoped.TenantID)
+	}
+	plain := mustEnsure(t, repo, schedule.Ensure{Name: "plain", Kind: "demo", Spec: schedule.Spec{Every: time.Hour}}, suiteBase)
+	if plain.TenantID != "" {
+		t.Errorf("unset Ensure returned TenantID = %q, want empty", plain.TenantID)
+	}
+
+	got, err := repo.Get(ctx, scoped.ID)
+	if err != nil {
+		t.Fatalf("Get scoped: %v", err)
+	}
+	if got.TenantID != "acme" {
+		t.Errorf("Get TenantID = %q, want acme", got.TenantID)
+	}
+	unset, err := repo.Get(ctx, plain.ID)
+	if err != nil {
+		t.Fatalf("Get plain: %v", err)
+	}
+	if unset.TenantID != "" {
+		t.Errorf("Get unset TenantID = %q, want empty (NULL scans back as \"\")", unset.TenantID)
+	}
+
+	// The due-scan projection carries it.
+	due, err := repo.ListDue(ctx, suiteBase.Add(time.Minute), 10)
+	if err != nil {
+		t.Fatalf("ListDue: %v", err)
+	}
+	tenants := map[string]string{}
+	for _, s := range due {
+		tenants[s.ID] = s.TenantID
+	}
+	if tenants[scoped.ID] != "acme" {
+		t.Errorf("ListDue TenantID for the scoped schedule = %q, want acme", tenants[scoped.ID])
+	}
+	if tenants[plain.ID] != "" {
+		t.Errorf("ListDue TenantID for the unset schedule = %q, want empty", tenants[plain.ID])
+	}
+
+	// The upsert updates the tenant alongside kind/payload.
+	moved, err := repo.Ensure(ctx, schedule.Ensure{Name: "scoped", Kind: "demo", TenantID: "globex", Spec: schedule.Spec{Every: time.Hour}}, suiteBase)
+	if err != nil {
+		t.Fatalf("Ensure upsert: %v", err)
+	}
+	if moved.ID != scoped.ID {
+		t.Fatalf("upsert changed id from %q to %q", scoped.ID, moved.ID)
+	}
+	if moved.TenantID != "globex" {
+		t.Errorf("upsert TenantID = %q, want globex", moved.TenantID)
+	}
+	after, _ := repo.Get(ctx, scoped.ID)
+	if after.TenantID != "globex" {
+		t.Errorf("Get after upsert TenantID = %q, want globex", after.TenantID)
 	}
 }
 

@@ -19,7 +19,7 @@ import (
 // The same list backs every SELECT and every INSERT ... RETURNING, so a returned
 // job carries the stored (dialect-precision) timestamps a later Get reads back —
 // the returned generation and its Get are byte-identical.
-const fencedColumns = "job_id, kind, payload, status, priority, retry_count, max_attempts, logical_key, lease_id, leased_until, worker_name, failure_reason, scheduled_for, claimed_at, completed_at, terminal_at, created_at, updated_at"
+const fencedColumns = "job_id, kind, tenant_id, payload, status, priority, retry_count, max_attempts, logical_key, lease_id, leased_until, worker_name, failure_reason, scheduled_for, claimed_at, completed_at, terminal_at, created_at, updated_at"
 
 // Compile-time seams: the fenced store fills the frozen job.FencedQueueRepository
 // port (a strict superset of the kernel's workers.FencedStore).
@@ -53,6 +53,7 @@ func NewFencedQueueStore(db *pgxdb.DB) *FencedQueue {
 type fencedRow struct {
 	JobID         string     `db:"job_id"`
 	Kind          string     `db:"kind"`
+	TenantID      *string    `db:"tenant_id"`
 	Payload       []byte     `db:"payload"`
 	Status        string     `db:"status"`
 	Priority      int        `db:"priority"`
@@ -75,6 +76,7 @@ func (r fencedRow) toDomain() job.Job {
 	j := job.Job{
 		JobID:         r.JobID,
 		Kind:          r.Kind,
+		TenantID:      derefString(r.TenantID),
 		Payload:       json.RawMessage(r.Payload),
 		JobStatus:     job.Status(r.Status),
 		Priority:      r.Priority,
@@ -353,12 +355,13 @@ func insertFenced(ctx context.Context, tx *pgxdb.Tx, in job.Enqueue) (job.Job, e
 	}
 	now := time.Now().UTC()
 	const insert = `INSERT INTO fenced_job_queue (` + fencedColumns + `)
-		VALUES (@job_id, @kind, @payload, 'pending', @priority, 0, @max_attempts, @logical_key,
+		VALUES (@job_id, @kind, @tenant_id, @payload, 'pending', @priority, 0, @max_attempts, @logical_key,
 		        NULL, NULL, NULL, NULL, @scheduled_for, NULL, NULL, NULL, @created_at, @updated_at)
 		RETURNING ` + fencedColumns
 	row, err := pgxdb.QueryOne[fencedRow](ctx, tx, insert, pgx.NamedArgs{
 		"job_id":        id,
 		"kind":          in.Kind,
+		"tenant_id":     nullString(in.TenantID),
 		"payload":       payloadBytes(in.Payload),
 		"priority":      in.Priority,
 		"max_attempts":  in.MaxAttempts,

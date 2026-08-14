@@ -33,6 +33,13 @@ the upgrade notes for both tags below. No other module was bumped: only
 `features/jobs` consumes the changed kernel symbol, and its store modules'
 `features/jobs v0.1.0` pins upgrade at the host via MVS.
 
+**2026-08-14 (same day): `features/jobs/v0.2.0` +
+`features/jobs/stores/{pgx,turso}/v0.2.0`** — jobs tenant metadata (plan of
+record `.claude/plans/jobs-tenant-metadata.md`; Coordination-Hub issue #4).
+Minor bumps all three; store pins move to `features/jobs v0.2.0` / `sdk
+v0.2.0`. See the upgrade notes below — already-migrated hosts need a host-tree
+ALTER (reference SQL in the store note).
+
 ## Tagging scheme
 
 Nested Go modules in a single repo are tagged with the module's directory as a
@@ -150,6 +157,47 @@ the hook runs (Coordination-Hub issue #5). The AV3D-1.4 compile seam
 asserting `DeadLetterFunc` ≡ `workers.FencedDeadLetterFunc[job.Job]` is
 removed; the runtime's dispatch closure is the adapter. Hosts that retained
 their own handler-error fallback for the empty field can drop it.
+
+### features/jobs — v0.2.0 (2026-08-14): optional tenant metadata
+
+Additive (**minor**): `job.Job`/`job.Enqueue`/`schedule.Schedule`/
+`schedule.Ensure` gain `TenantID string` — an OPTIONAL, host-defined boundary
+slot, vocabulary only (the events posture): empty = none, stores map `"" ↔
+NULL`, the feature attaches no semantics. `jobs.FencedClaim` carries the
+claimed job's `TenantID`. The fenced path gains struct-input siblings
+`EnqueueOnceIn(ctx, EnqueueOnceInput{Kind, LogicalKey, Payload, TenantID})` /
+`ReplaceIn(ctx, ReplaceInput{...})`; the frozen `work` protocol methods
+(`EnqueueOnce`/`Replace`/`LatestStatusByKey`) are unchanged and delegate with
+empty tenant — the sdk `work` protocol's vocabulary does NOT gain tenant. A
+schedule's tenant is copied onto each job it fires (vocabulary carry-through so
+tenant-scoped ops queries see fired work). No new query APIs: the column's
+consumer is operator SQL. Pins `sdk v0.2.0`.
+
+### features/jobs stores (pgx + turso) — v0.2.0 (2026-08-14): tenant_id columns
+
+Per the greenfield-migrations rule, nullable `tenant_id TEXT` is folded into
+the canonical CREATEs of `0001_job_queue.sql`, `0002_job_schedules.sql`, and
+`0003_fenced_job_queue.sql` in BOTH dialects — **no evolution file ships**, so
+an already-migrated host's runner will refuse the changed canonical files
+(checksum mismatch) until the host applies its own host-tree migration and, if
+its ledger keys canonical filenames, reconciles it per its own migration
+policy. Reference host ALTER (both dialects; the partial index is the fenced
+queue's — the encrypted-payload rail where SQL is the ONLY way to scope rows,
+the reason this column exists at all):
+
+```sql
+ALTER TABLE job_queue        ADD COLUMN tenant_id TEXT;
+ALTER TABLE job_schedules    ADD COLUMN tenant_id TEXT;
+ALTER TABLE fenced_job_queue ADD COLUMN tenant_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_fenced_job_queue_tenant
+    ON fenced_job_queue (tenant_id, created_at DESC) WHERE tenant_id IS NOT NULL;
+```
+
+Storetest conformance gains tenant round-trip cases plus a
+tenant-does-not-affect-keying proof (enqueue-once dedup and Replace
+supersession ignore tenant — it is metadata, never part of the logical key).
+Both dialects passed live conformance for this tag (pgx against postgres:17,
+turso against a real libSQL server).
 
 ### features/authentication — next tag: session hashing invalidates all live sessions
 

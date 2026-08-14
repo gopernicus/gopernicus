@@ -15,13 +15,14 @@ import (
 )
 
 // scheduleColumns is the job_schedules column list, in Ensure's INSERT order.
-const scheduleColumns = "schedule_id, name, kind, cron_expr, every_secs, payload, enabled, next_run_at, last_run_at, last_job_id, created_at, updated_at"
+const scheduleColumns = "schedule_id, name, kind, tenant_id, cron_expr, every_secs, payload, enabled, next_run_at, last_run_at, last_job_id, created_at, updated_at"
 
 // scheduleRowColumns is the struct-scan projection for the NamedArgs read paths:
 // every column is name-aliased so pgx.RowToStructByName matches it against
-// scheduleRow's db tags. Nullable cron_expr/every_secs/last_job_id are COALESCEd
-// so they scan into plain scalars; only last_run_at stays nullable (*time.Time).
-const scheduleRowColumns = "schedule_id, name, kind, COALESCE(cron_expr, '') AS cron_expr, COALESCE(every_secs, 0) AS every_secs, payload, enabled, next_run_at, last_run_at, COALESCE(last_job_id, '') AS last_job_id, created_at, updated_at"
+// scheduleRow's db tags. Nullable tenant_id/cron_expr/every_secs/last_job_id are
+// COALESCEd so they scan into plain scalars; only last_run_at stays nullable
+// (*time.Time).
+const scheduleRowColumns = "schedule_id, name, kind, COALESCE(tenant_id, '') AS tenant_id, COALESCE(cron_expr, '') AS cron_expr, COALESCE(every_secs, 0) AS every_secs, payload, enabled, next_run_at, last_run_at, COALESCE(last_job_id, '') AS last_job_id, created_at, updated_at"
 
 // Compile-time seam: the Schedules store fills the exact schedule.Repository port.
 var _ schedule.Repository = (*Schedules)(nil)
@@ -40,6 +41,7 @@ type scheduleRow struct {
 	ID        string     `db:"schedule_id"`
 	Name      string     `db:"name"`
 	Kind      string     `db:"kind"`
+	TenantID  string     `db:"tenant_id"`
 	CronExpr  string     `db:"cron_expr"`
 	EverySecs int64      `db:"every_secs"`
 	Payload   []byte     `db:"payload"`
@@ -56,6 +58,7 @@ func (r scheduleRow) toDomain() schedule.Schedule {
 		ID:        r.ID,
 		Name:      r.Name,
 		Kind:      r.Kind,
+		TenantID:  r.TenantID,
 		Spec:      schedule.Spec{Cron: r.CronExpr, Every: time.Duration(r.EverySecs) * time.Second},
 		Payload:   json.RawMessage(r.Payload),
 		Enabled:   r.Enabled,
@@ -87,6 +90,7 @@ func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Ti
 			existing := row.toDomain()
 			specChanged := existing.Spec != in.Spec
 			existing.Kind = in.Kind
+			existing.TenantID = in.TenantID
 			existing.Spec = in.Spec
 			existing.Payload = in.Payload
 			if specChanged {
@@ -94,9 +98,10 @@ func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Ti
 			}
 			existing.UpdatedAt = now
 			cron, every := specColumns(existing.Spec)
-			const upd = `UPDATE job_schedules SET kind = @kind, cron_expr = @cron, every_secs = @every, payload = @payload, next_run_at = @next_run_at, updated_at = @updated_at WHERE schedule_id = @id`
+			const upd = `UPDATE job_schedules SET kind = @kind, tenant_id = @tenant_id, cron_expr = @cron, every_secs = @every, payload = @payload, next_run_at = @next_run_at, updated_at = @updated_at WHERE schedule_id = @id`
 			if _, err := tx.Exec(ctx, upd, pgx.NamedArgs{
 				"kind":        existing.Kind,
+				"tenant_id":   nullString(existing.TenantID),
 				"cron":        cron,
 				"every":       every,
 				"payload":     payloadValue(existing.Payload),
@@ -113,6 +118,7 @@ func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Ti
 				ID:        newID("sched"),
 				Name:      in.Name,
 				Kind:      in.Kind,
+				TenantID:  in.TenantID,
 				Spec:      in.Spec,
 				Payload:   in.Payload,
 				Enabled:   true,
@@ -121,11 +127,12 @@ func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Ti
 				UpdatedAt: now,
 			}
 			cron, every := specColumns(sch.Spec)
-			const ins = `INSERT INTO job_schedules (` + scheduleColumns + `) VALUES (@id, @name, @kind, @cron, @every, @payload, TRUE, @next_run_at, NULL, NULL, @created_at, @updated_at)`
+			const ins = `INSERT INTO job_schedules (` + scheduleColumns + `) VALUES (@id, @name, @kind, @tenant_id, @cron, @every, @payload, TRUE, @next_run_at, NULL, NULL, @created_at, @updated_at)`
 			if _, err := tx.Exec(ctx, ins, pgx.NamedArgs{
 				"id":          sch.ID,
 				"name":        sch.Name,
 				"kind":        sch.Kind,
+				"tenant_id":   nullString(sch.TenantID),
 				"cron":        cron,
 				"every":       every,
 				"payload":     payloadValue(sch.Payload),

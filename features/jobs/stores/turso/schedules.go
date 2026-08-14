@@ -14,7 +14,7 @@ import (
 )
 
 // scheduleColumns is the job_schedules projection, in scheduleRow's field order.
-const scheduleColumns = "schedule_id, name, kind, cron_expr, every_secs, payload, enabled, next_run_at, last_run_at, last_job_id, created_at, updated_at"
+const scheduleColumns = "schedule_id, name, kind, tenant_id, cron_expr, every_secs, payload, enabled, next_run_at, last_run_at, last_job_id, created_at, updated_at"
 
 // Compile-time seam: the Schedules store fills the exact schedule.Repository port.
 var _ schedule.Repository = (*Schedules)(nil)
@@ -29,12 +29,13 @@ type Schedules struct {
 
 // scheduleRow is the store-local, db-tagged projection of a job_schedules row
 // ScanStruct scans into; toDomain maps it to the domain entity. The nullable
-// cron_expr / every_secs / last_job_id columns scan into sql.Null* and last_run_at
-// into turso.NullTime; enabled is the 0/1 flag read via turso.Bool.
+// tenant_id / cron_expr / every_secs / last_job_id columns scan into sql.Null* and
+// last_run_at into turso.NullTime; enabled is the 0/1 flag read via turso.Bool.
 type scheduleRow struct {
 	ID        string           `db:"schedule_id"`
 	Name      string           `db:"name"`
 	Kind      string           `db:"kind"`
+	TenantID  sql.NullString   `db:"tenant_id"`
 	CronExpr  sql.NullString   `db:"cron_expr"`
 	EverySecs sql.NullInt64    `db:"every_secs"`
 	Payload   []byte           `db:"payload"`
@@ -51,6 +52,7 @@ func (r scheduleRow) toDomain() schedule.Schedule {
 		ID:        r.ID,
 		Name:      r.Name,
 		Kind:      r.Kind,
+		TenantID:  r.TenantID.String,
 		Spec:      schedule.Spec{Cron: r.CronExpr.String, Every: time.Duration(r.EverySecs.Int64) * time.Second},
 		Payload:   json.RawMessage(r.Payload),
 		Enabled:   bool(r.Enabled),
@@ -83,6 +85,7 @@ func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Ti
 				existing := row.toDomain()
 				specChanged := existing.Spec != in.Spec
 				existing.Kind = in.Kind
+				existing.TenantID = in.TenantID
 				existing.Spec = in.Spec
 				existing.Payload = in.Payload
 				if specChanged {
@@ -90,8 +93,8 @@ func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Ti
 				}
 				existing.UpdatedAt = now
 				cron, every := specColumns(existing.Spec)
-				const upd = `UPDATE job_schedules SET kind = ?, cron_expr = ?, every_secs = ?, payload = ?, next_run_at = ?, updated_at = ? WHERE schedule_id = ?`
-				if _, err := tx.Exec(ctx, upd, existing.Kind, cron, every, payloadValue(existing.Payload), tursodb.FormatTime(existing.NextRunAt), tursodb.FormatTime(existing.UpdatedAt), existing.ID); err != nil {
+				const upd = `UPDATE job_schedules SET kind = ?, tenant_id = ?, cron_expr = ?, every_secs = ?, payload = ?, next_run_at = ?, updated_at = ? WHERE schedule_id = ?`
+				if _, err := tx.Exec(ctx, upd, existing.Kind, nullString(existing.TenantID), cron, every, payloadValue(existing.Payload), tursodb.FormatTime(existing.NextRunAt), tursodb.FormatTime(existing.UpdatedAt), existing.ID); err != nil {
 					return err
 				}
 				out = existing
@@ -101,6 +104,7 @@ func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Ti
 					ID:        newID("sched"),
 					Name:      in.Name,
 					Kind:      in.Kind,
+					TenantID:  in.TenantID,
 					Spec:      in.Spec,
 					Payload:   in.Payload,
 					Enabled:   true,
@@ -109,8 +113,8 @@ func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Ti
 					UpdatedAt: now,
 				}
 				cron, every := specColumns(sch.Spec)
-				const ins = `INSERT INTO job_schedules (` + scheduleColumns + `) VALUES (?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, ?, ?)`
-				if _, err := tx.Exec(ctx, ins, sch.ID, sch.Name, sch.Kind, cron, every, payloadValue(sch.Payload), tursodb.FormatTime(sch.NextRunAt), tursodb.FormatTime(sch.CreatedAt), tursodb.FormatTime(sch.UpdatedAt)); err != nil {
+				const ins = `INSERT INTO job_schedules (` + scheduleColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, ?, ?)`
+				if _, err := tx.Exec(ctx, ins, sch.ID, sch.Name, sch.Kind, nullString(sch.TenantID), cron, every, payloadValue(sch.Payload), tursodb.FormatTime(sch.NextRunAt), tursodb.FormatTime(sch.CreatedAt), tursodb.FormatTime(sch.UpdatedAt)); err != nil {
 					return err
 				}
 				out = sch

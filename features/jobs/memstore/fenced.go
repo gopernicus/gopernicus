@@ -333,6 +333,7 @@ func (q *FencedQueue) insert(in job.Enqueue) (job.Job, error) {
 	j := job.Job{
 		JobID:        id,
 		Kind:         in.Kind,
+		TenantID:     in.TenantID,
 		Payload:      in.Payload,
 		JobStatus:    job.StatusPending,
 		Priority:     in.Priority,

@@ -17,6 +17,7 @@
 CREATE TABLE IF NOT EXISTS fenced_job_queue (
     job_id         TEXT        NOT NULL,
     kind           TEXT        NOT NULL,
+    tenant_id      TEXT,
     payload        BYTEA       NOT NULL DEFAULT '\x'::bytea,
     status         TEXT        NOT NULL DEFAULT 'pending'
                    CHECK (status IN ('pending','running','completed','failed','dead_letter','canceled','superseded')),
@@ -57,3 +58,11 @@ CREATE INDEX IF NOT EXISTS idx_fenced_job_queue_key
 -- The purge cursor batches terminal rows by terminal_at.
 CREATE INDEX IF NOT EXISTS idx_fenced_job_queue_terminal
     ON fenced_job_queue (terminal_at) WHERE terminal_at IS NOT NULL;
+
+-- Tenant-scoped operator queries, newest first. The fenced rail is the ONLY one
+-- indexed on tenant_id: its payloads are opaque ciphertext, so SQL over this
+-- column is the only way an operator can scope a question to a tenant. job_queue
+-- and job_schedules carry the column without an index until a demand justifies
+-- one. Partial — untenanted rows are excluded.
+CREATE INDEX IF NOT EXISTS idx_fenced_job_queue_tenant
+    ON fenced_job_queue (tenant_id, created_at DESC) WHERE tenant_id IS NOT NULL;

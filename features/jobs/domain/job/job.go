@@ -68,8 +68,14 @@ var (
 // store adapters in sibling modules can still construct and populate a Job
 // directly.
 type Job struct {
-	JobID         string
-	Kind          string
+	JobID string
+	Kind  string
+	// TenantID is the OPTIONAL host-defined boundary the job was enqueued under.
+	// It is vocabulary only: the feature attaches no semantics to it, never
+	// filters or authorizes by it, and never derives it — a host sets it or does
+	// not. Empty = no tenant, and stores map "" to NULL (the same empty-zero
+	// convention as WorkerName/FailureReason). Its consumer is operator SQL.
+	TenantID      string
 	Payload       json.RawMessage
 	JobStatus     Status
 	Priority      int
@@ -138,8 +144,11 @@ func (j Job) Leased(now time.Time) bool {
 type Enqueue struct {
 	// ID is optional; when set it is the UNIQUE EXECUTION key (a duplicate ID yields
 	// sdk.ErrAlreadyExists). The scheduler's deterministic refire relies on it.
-	ID           string
-	Kind         string
+	ID   string
+	Kind string
+	// TenantID is the OPTIONAL host-defined boundary to stamp on the job (see
+	// Job.TenantID). Empty = no tenant.
+	TenantID     string
 	Payload      json.RawMessage
 	ScheduledFor time.Time // zero = now
 	Priority     int
