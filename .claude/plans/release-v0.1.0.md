@@ -1,6 +1,6 @@
 # gopernicus — release v0.1.0: first tags for all importable modules
 
-Status: RATIFIED 2026-08-14 (tag all 33; keep coordination-hub vendoring; plain tag messages)
+Status: COMPLETE 2026-08-14 (tag all importable modules — 34, not 33 as drafted; keep coordination-hub vendoring; plain tag messages). All 34 tags pushed at commit 3ce8560; cold-cache go get/go install verified; coordination-hub swapped to tags via gpsimpact/Coordination-Hub PR #1 (main now requires PRs). Minor follow-up flagged: workshop CLI's installed binary reports version "0.0.0-dev" — the version var needs a build-time or tag-derived default.
 Date: 2026-08-14
 Driver: coordination-hub gains collaborators (Jake, Jim); pinned tags must replace the my-machine-only `replace` → local-checkout wiring.
 
