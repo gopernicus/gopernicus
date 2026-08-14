@@ -26,6 +26,13 @@ directory for local dev. All upgrade notes below keyed "next tag" describe the
 v0.1.0 vintage. Tags are immutable once the module proxy serves them — a
 correction is a new patch tag, never a retag.
 
+**2026-08-14 (same day): `sdk/v0.2.0` + `features/jobs/v0.1.1`** — the fenced
+dead-letter reason fix (plan of record
+`.claude/plans/deadletter-failure-reason.md`; Coordination-Hub issue #5). See
+the upgrade notes for both tags below. No other module was bumped: only
+`features/jobs` consumes the changed kernel symbol, and its store modules'
+`features/jobs v0.1.0` pins upgrade at the host via MVS.
+
 ## Tagging scheme
 
 Nested Go modules in a single repo are tagged with the module's directory as a
@@ -106,6 +113,27 @@ silently would break a host whose CSP no longer covers the kit's assets. Record 
 the module's next-tag upgrade note below and tell hosts to re-derive their CSP header.
 
 ## Upgrade notes (keyed to each module's next tag)
+
+### sdk — v0.2.0 (2026-08-14): FencedDeadLetterFunc carries the failure reason
+
+`workers.FencedDeadLetterFunc[T]` gained a `reason string` parameter —
+`func(ctx, job T, reason string) error` — carrying the terminal failure reason
+exactly as `Fail` durably recorded it (the runner cannot mutate an arbitrary
+`T`, so the reason rides alongside the as-claimed job value). A breaking
+exported signature change, released as a **minor** bump per the pre-`v1`
+convention above. Any hook registered via `FencedRunner.SetDeadLetterHook`
+adds the parameter; `features/jobs`' frozen host-facing `DeadLetterFunc` is
+unchanged (see its v0.1.1 note).
+
+### features/jobs — v0.1.1 (2026-08-14): DeadLetterFunc's job carries FailureReason
+
+Behavior fix, no exported API change (**patch**; pins `sdk v0.2.0`): the
+per-kind `DeadLetterFunc`'s `j.FailureReason` — structurally always empty
+before this tag — is now populated with the recorded terminal reason before
+the hook runs (Coordination-Hub issue #5). The AV3D-1.4 compile seam
+asserting `DeadLetterFunc` ≡ `workers.FencedDeadLetterFunc[job.Job]` is
+removed; the runtime's dispatch closure is the adapter. Hosts that retained
+their own handler-error fallback for the empty field can drop it.
 
 ### features/authentication — next tag: session hashing invalidates all live sessions
 

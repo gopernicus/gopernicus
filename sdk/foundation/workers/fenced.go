@@ -80,8 +80,12 @@ type FencedRetryDecider func(err error, attempt int) (delay time.Duration, retry
 // never propagated: a hook failure can never resurrect the job. It never runs on a
 // retry-at reschedule (not a terminal transition) or when Fail is fenced by a
 // reclaimed/superseded lease (this worker did not record the transition).
-// features/jobs' jobs.DeadLetterFunc is this hook with T = job.Job.
-type FencedDeadLetterFunc[T Job] func(ctx context.Context, job T) error
+//
+// job is the value as claimed — the runner cannot mutate an arbitrary T — so reason
+// carries the terminal failure reason exactly as Fail durably recorded it;
+// features/jobs' dispatch closure stamps it onto job.Job.FailureReason before the
+// per-kind jobs.DeadLetterFunc runs.
+type FencedDeadLetterFunc[T Job] func(ctx context.Context, job T, reason string) error
 
 // FencedRunner composes a FencedStore and a ProcessFunc into a WorkFunc, driving
 // the lease-fenced lifecycle:
@@ -395,7 +399,7 @@ func (r *FencedRunner[T]) deadLetterFail(ctx context.Context, job T, leaseID str
 	case err == nil:
 		r.log.ErrorContext(ctx, "fenced job failed",
 			"job_id", job.ID(), "lease_id", leaseID, "error", procErr, "duration", time.Since(start))
-		r.fireDeadLetter(ctx, job, leaseID)
+		r.fireDeadLetter(ctx, job, leaseID, reason)
 	case errors.Is(err, sdk.ErrConflict):
 		r.log.WarnContext(ctx, "fenced failure superseded by a reclaimed lease",
 			"job_id", job.ID(), "lease_id", leaseID)
@@ -406,12 +410,13 @@ func (r *FencedRunner[T]) deadLetterFail(ctx context.Context, job T, leaseID str
 }
 
 // fireDeadLetter runs the registered dead-letter hook after the transition is
-// recorded, logging (never propagating) a hook error.
-func (r *FencedRunner[T]) fireDeadLetter(ctx context.Context, job T, leaseID string) {
+// recorded, passing the reason Fail persisted and logging (never propagating) a
+// hook error.
+func (r *FencedRunner[T]) fireDeadLetter(ctx context.Context, job T, leaseID, reason string) {
 	if r.deadLetter == nil {
 		return
 	}
-	if err := r.deadLetter(ctx, job); err != nil {
+	if err := r.deadLetter(ctx, job, reason); err != nil {
 		r.log.ErrorContext(ctx, "fenced dead-letter hook failed",
 			"job_id", job.ID(), "lease_id", leaseID, "error", err)
 	}
