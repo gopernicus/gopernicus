@@ -11,7 +11,10 @@ EnqueueOnceInput{Kind, LogicalKey, Payload, TenantID})` / `ReplaceIn(...)`;
 carry-through so tenant-scoped ops queries see fired work (ruled after
 implementation flagged the ambiguity); (5) playground schema reset authorized
 for the turso conformance leg (both live legs PASSED). J1–J5 EXECUTED
-2026-08-14; J6 (coordination-hub adoption) in progress.
+2026-08-14. J6 EXECUTED same day — NOT its own PR: a concurrent session had
+coordination-hub PR #16 (the repin) open, so the adoption commit rode there
+(PR retitled to cover jobs v0.2.0 tenant metadata; Closes #4 + #5); issue #4
+answered citing #12's tenant=campaign ruling. Milestone closes when #16 merges.
 Date: 2026-08-14
 Driver: coordination-hub issue gpsimpact/Coordination-Hub#4 — campaign-scoped ops queries against the jobs rails. Events already carries first-class nullable `tenant_id` with store support; jobs lacks the parity, and the fenced queue's encrypted payloads make payload-embedded tenant identity unqueryable there. "Tenant" stays gopernicus-defined: an OPTIONAL, host-defined boundary slot — vocabulary only, never framework semantics (the events posture).
 
