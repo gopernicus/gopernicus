@@ -23,12 +23,19 @@ This host wires **no datastore** (`--db=none`): the store you supply — a real
 connector or an in-memory implementation — is your choice when you mount a
 feature.
 {{end}}
-## Pre-tag wiring
+## Resolving the framework
 
-gopernicus publishes no version tags yet, so `go get` cannot resolve the
-`github.com/gopernicus/gopernicus/*` modules this host requires. Until `v0.1.0`
-is cut, point each one at a local checkout of the gopernicus repo with a replace
-directive:
+The `github.com/gopernicus/gopernicus/*` modules resolve the normal Go way from
+their tagged releases (`v0.1.0` and later) — `go mod tidy` fetches them; nothing
+extra to configure.
+
+Then `make run` (or `go run ./cmd/server`) and hit `http://localhost:{{.Port}}/healthz`.
+
+### Local framework development
+
+To develop against a local gopernicus checkout instead of the tags, point each
+module at it with a replace directive (drop these before relying on tagged
+resolution again):
 
 ```
 go mod edit -replace github.com/gopernicus/gopernicus/sdk=/abs/path/to/gopernicus/sdk
@@ -38,15 +45,13 @@ go mod edit -replace {{.ConnectorPath}}=/abs/path/to/gopernicus/{{.ConnectorRel}
 go mod tidy
 ```
 
-Then `make run` (or `go run ./cmd/server`) and hit `http://localhost:{{.Port}}/healthz`.
-
 ## Wiring a feature
 
 A gopernicus feature reaches this host only through the narrow `feature.Mount` +
 `Register` surface — no init() registration, no service locator. Add the feature
-module (and its store adapter, if it persists data) to `go.mod`, add the replace
-directives above for it too, then wire it in the "mount your features here"
-block in `cmd/server/main.go`:
+module (and its store adapter, if it persists data) to `go.mod` at its tagged
+version, then wire it in the "mount your features here" block in
+`cmd/server/main.go`:
 
 ```go
 mount := feature.Mount{Router: router, Logger: log}

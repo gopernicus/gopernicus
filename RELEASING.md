@@ -17,8 +17,14 @@ CLI — a `go install`-able tool, tagged like any importable module). Each impor
 `examples/*` hosts, which are demonstrations, not libraries) is tagged and
 versioned **independently** — there is no single repo-wide version.
 
-No tags have been cut yet. This document is the procedure for when they are;
-cutting a tag is out of scope for the milestone that introduced this file.
+**First release cut 2026-08-14: every importable module tagged `<dir>/v0.1.0`**
+(33 tags — everything except the four `examples/*` hosts; plan of record
+`.claude/plans/release-v0.1.0.md`). The release commit dropped every nested
+module's pre-tag relative `replace` and pinned sibling requires at `v0.1.0`
+(precondition 2 below, satisfied); `go.work` continues to resolve siblings by
+directory for local dev. All upgrade notes below keyed "next tag" describe the
+v0.1.0 vintage. Tags are immutable once the module proxy serves them — a
+correction is a new patch tag, never a retag.
 
 ## Tagging scheme
 
