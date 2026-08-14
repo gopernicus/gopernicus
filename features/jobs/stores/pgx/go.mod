@@ -3,9 +3,9 @@ module github.com/gopernicus/gopernicus/features/jobs/stores/pgx
 go 1.26.1
 
 require (
-	github.com/gopernicus/gopernicus/features/jobs v0.0.0
-	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.0.0
-	github.com/gopernicus/gopernicus/sdk v0.0.0
+	github.com/gopernicus/gopernicus/features/jobs v0.1.0
+	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.1.0
+	github.com/gopernicus/gopernicus/sdk v0.1.0
 	github.com/jackc/pgx/v5 v5.8.0
 )
 
@@ -16,9 +16,3 @@ require (
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
 )
-
-replace github.com/gopernicus/gopernicus/features/jobs => ../..
-
-replace github.com/gopernicus/gopernicus/integrations/datastores/pgxdb => ../../../../integrations/datastores/pgxdb
-
-replace github.com/gopernicus/gopernicus/sdk => ../../../../sdk

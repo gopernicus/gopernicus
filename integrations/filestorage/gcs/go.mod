@@ -4,7 +4,7 @@ go 1.26.1
 
 require (
 	cloud.google.com/go/storage v1.61.3
-	github.com/gopernicus/gopernicus/sdk v0.0.0
+	github.com/gopernicus/gopernicus/sdk v0.1.0
 	google.golang.org/api v0.271.0
 )
 
@@ -55,5 +55,3 @@ require (
 	google.golang.org/grpc v1.79.2 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
-
-replace github.com/gopernicus/gopernicus/sdk => ../../../sdk

@@ -3,7 +3,7 @@ module github.com/gopernicus/gopernicus/integrations/tracing/otel
 go 1.26.1
 
 require (
-	github.com/gopernicus/gopernicus/sdk v0.0.0
+	github.com/gopernicus/gopernicus/sdk v0.1.0
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.44.0
 	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.44.0
@@ -30,5 +30,3 @@ require (
 	google.golang.org/grpc v1.81.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
-
-replace github.com/gopernicus/gopernicus/sdk => ../../../sdk
