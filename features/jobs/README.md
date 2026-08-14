@@ -111,7 +111,8 @@ first consumer. It adds what the basic queue could not safely provide:
 4. **Bounded retry + terminal callback + purge.** Capped exponential backoff, a
    `Permanent(reason)` disposition that dead-letters on the first attempt, a
    per-kind `DeadLetterFunc` fired **only after** the dead-letter transition is
-   durably recorded, and a bounded `Service.PurgeTerminal(ctx, before, limit)`.
+   durably recorded — with `j.FailureReason` populated with the recorded terminal
+   reason — and a bounded `Service.PurgeTerminal(ctx, before, limit)`.
 
 The consumer-facing seam is the **canonical keyed-work protocol**
 (`sdk/capabilities/work`): the jobs `Service` is its **implementation of record**,

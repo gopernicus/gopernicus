@@ -164,21 +164,15 @@ type FencedClaim struct {
 // the jobs domain.
 type FencedHandlerFunc func(ctx context.Context, claim FencedClaim) error
 
-// Compile-time seam: the frozen per-kind DeadLetterFunc is exactly the kernel's
-// generic fenced dead-letter hook specialized to job.Job, so a host registers it on
-// a workers.FencedRunner[job.Job] with a direct conversion and no adapter — the
-// runner fires it only after the permanent dead-letter transition is recorded
-// (AV3D-1.4). The conversion below fails to compile if the two shapes ever drift.
-var _ = func(f DeadLetterFunc) workers.FencedDeadLetterFunc[job.Job] {
-	return workers.FencedDeadLetterFunc[job.Job](f)
-}
-
 // DeadLetterFunc is the FROZEN (AV3D-0.3) per-kind terminal hook a host registers
 // for permanent-failure cleanup — e.g. discarding an undeliverable challenge. It
 // runs ONLY AFTER the dead-letter transition is durably recorded, and its failure
-// is logged/reported but never resurrects the job. As of AV3D-1.4 it is exactly the
-// kernel's workers.FencedDeadLetterFunc[job.Job] (the compile seam above), which a
-// fenced runtime sets via FencedRunner.SetDeadLetterHook and fires post-transition.
+// is logged/reported but never resurrects the job. j.FailureReason carries the
+// terminal reason exactly as the transition recorded it: the kernel's
+// workers.FencedDeadLetterFunc[job.Job] hands the reason alongside the as-claimed
+// job value (it cannot mutate an arbitrary T), and the runtime's dispatch closure
+// stamps it onto j before the per-kind hook runs — that closure is the adapter
+// between the two shapes, which intentionally differ since the reason threading.
 // It carries the domain job.Job because it is a host-registered hook, not a
 // cross-feature structural seam.
 type DeadLetterFunc func(ctx context.Context, j job.Job) error
@@ -327,8 +321,11 @@ func NewFencedRuntime(svc *Service, cfg FencedRuntimeConfig) (*FencedRuntime, er
 		}),
 	)
 	if len(deadLetters) > 0 {
-		runner.SetDeadLetterHook(func(ctx context.Context, j job.Job) error {
+		runner.SetDeadLetterHook(func(ctx context.Context, j job.Job, reason string) error {
 			if hook, ok := deadLetters[j.Kind]; ok {
+				// j is the value as claimed; stamp the recorded terminal reason so the
+				// per-kind hook sees the same FailureReason the store persisted.
+				j.FailureReason = reason
 				return hook(ctx, j)
 			}
 			return nil

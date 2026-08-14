@@ -144,6 +144,7 @@ func TestFencedRuntimeDeadLetters(t *testing.T) {
 
 	var mu sync.Mutex
 	var hookStatus string
+	var hookReason string
 	rt, err := NewFencedRuntime(svc, FencedRuntimeConfig{
 		Workers:      1,
 		MaxAttempts:  1, // first failure dead-letters
@@ -164,6 +165,7 @@ func TestFencedRuntimeDeadLetters(t *testing.T) {
 				if err == nil {
 					hookStatus = string(stored.JobStatus)
 				}
+				hookReason = j.FailureReason
 				mu.Unlock()
 				return nil
 			},
@@ -189,9 +191,13 @@ func TestFencedRuntimeDeadLetters(t *testing.T) {
 
 	mu.Lock()
 	got := hookStatus
+	gotReason := hookReason
 	mu.Unlock()
 	if got != "dead_letter" {
 		t.Fatalf("dead-letter hook observed status %q, want dead_letter (fired after the transition is recorded)", got)
+	}
+	if gotReason != errDeadLetterProbe.Error() {
+		t.Fatalf("dead-letter hook FailureReason = %q, want the recorded reason %q", gotReason, errDeadLetterProbe.Error())
 	}
 }
 

@@ -289,7 +289,7 @@ func TestFencedRunner_RetryReschedulesInsteadOfDeadLetter(t *testing.T) {
 		WithLeaseTokenFunc(func() string { return "L1" }),
 		WithFencedClock(func() time.Time { return fixed }),
 		WithFencedRetry(func(attempt int) (time.Duration, bool) { return time.Minute, attempt < 3 }))
-	runner.SetDeadLetterHook(func(ctx context.Context, job fakeJob) error { deadLettered = true; return nil })
+	runner.SetDeadLetterHook(func(ctx context.Context, job fakeJob, reason string) error { deadLettered = true; return nil })
 
 	if err := runner.WorkFunc()(WithWorkerID(context.Background(), "w1")); err != nil {
 		t.Fatalf("work returned error: %v", err)
@@ -369,17 +369,19 @@ func TestFencedRunner_RetryExhaustionDeadLetters(t *testing.T) {
 	store.enqueue("je", time.Time{})
 
 	var hookJob fakeJob
+	var hookReason string
 	hookRan := false
 	process := func(ctx context.Context, job fakeJob) (fakeJob, error) { return job, errors.New("permanent") }
 	runner := NewFencedRunner[fakeJob](store, process, silentLogger(),
 		WithLeaseTokenFunc(func() string { return "L1" }),
 		WithFencedRetry(func(attempt int) (time.Duration, bool) { return time.Minute, false }))
-	runner.SetDeadLetterHook(func(ctx context.Context, job fakeJob) error {
+	runner.SetDeadLetterHook(func(ctx context.Context, job fakeJob, reason string) error {
 		// The transition must already be recorded when the hook runs.
 		if got := store.snapshot(job.ID()); got.status != "dead_letter" {
 			t.Errorf("hook ran before the dead-letter transition was recorded: status=%q", got.status)
 		}
 		hookJob = job
+		hookReason = reason
 		hookRan = true
 		return nil
 	})
@@ -394,6 +396,9 @@ func TestFencedRunner_RetryExhaustionDeadLetters(t *testing.T) {
 	}
 	if !hookRan || hookJob.ID() != "je" {
 		t.Errorf("dead-letter hook ran=%v job=%q, want true/je", hookRan, hookJob.ID())
+	}
+	if hookReason != "permanent" {
+		t.Errorf("dead-letter hook reason=%q, want the recorded failure reason %q", hookReason, "permanent")
 	}
 }
 
@@ -412,7 +417,7 @@ func TestFencedRunner_DeadLetterHookNotFiredOnFencedFail(t *testing.T) {
 	}
 	runner := NewFencedRunner[fakeJob](store, process, silentLogger(),
 		WithLeaseTokenFunc(func() string { return "L1" }))
-	runner.SetDeadLetterHook(func(ctx context.Context, job fakeJob) error { hookRan = true; return errors.New("hook boom") })
+	runner.SetDeadLetterHook(func(ctx context.Context, job fakeJob, reason string) error { hookRan = true; return errors.New("hook boom") })
 
 	if err := runner.WorkFunc()(WithWorkerID(context.Background(), "w1")); err != nil {
 		t.Fatalf("work returned error: %v", err)
@@ -436,7 +441,7 @@ func TestFencedRunner_DeadLetterHookErrorSwallowed(t *testing.T) {
 	process := func(ctx context.Context, job fakeJob) (fakeJob, error) { return job, errors.New("boom") }
 	runner := NewFencedRunner[fakeJob](store, process, silentLogger(),
 		WithLeaseTokenFunc(func() string { return "L1" }))
-	runner.SetDeadLetterHook(func(ctx context.Context, job fakeJob) error { return errors.New("hook boom") })
+	runner.SetDeadLetterHook(func(ctx context.Context, job fakeJob, reason string) error { return errors.New("hook boom") })
 
 	if err := runner.WorkFunc()(WithWorkerID(context.Background(), "w1")); err != nil {
 		t.Fatalf("work returned error: %v", err)
