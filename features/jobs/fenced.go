@@ -40,36 +40,87 @@ var (
 	_ work.StatusReader = (*Service)(nil)
 )
 
-// EnqueueOnce admits payload under logicalKey exactly once (idempotent while an
-// active execution holds the key), returning the unique execution ID. It is the
-// producer half of the work.Enqueuer protocol, backed by the fenced queue. payload
-// is opaque bytes the queue never interprets; the Service deep-copies it at the
-// protocol boundary so a later caller mutation cannot alter the admitted work.
-func (s *Service) EnqueueOnce(ctx context.Context, kind, logicalKey string, payload []byte) (string, error) {
+// EnqueueOnceInput is the full-fidelity input for EnqueueOnceIn: the work
+// protocol's vocabulary plus the feature's optional TenantID slot. It is the
+// struct-input sibling of the frozen positional EnqueueOnce, matching the
+// EnqueueJob/EnsureSchedule convention so a later optional field costs no
+// signature change.
+type EnqueueOnceInput struct {
+	Kind       string
+	LogicalKey string
+	Payload    []byte
+	// TenantID is the OPTIONAL host-defined boundary to stamp on the execution
+	// (see job.Job.TenantID). Empty = no tenant.
+	TenantID string
+}
+
+// ReplaceInput is the full-fidelity input for ReplaceIn — EnqueueOnceInput's
+// supersession counterpart.
+type ReplaceInput struct {
+	Kind       string
+	LogicalKey string
+	Payload    []byte
+	// TenantID is the OPTIONAL host-defined boundary to stamp on the fresh
+	// execution (see job.Job.TenantID). Empty = no tenant.
+	TenantID string
+}
+
+// EnqueueOnceIn admits in.Payload under in.LogicalKey exactly once (idempotent
+// while an active execution holds the key), returning the unique execution ID. It
+// is EnqueueOnce with the feature's tenant slot: the work protocol's vocabulary is
+// unchanged, so a consuming feature that depends on work.Enqueuer keeps using the
+// positional form. Payload is opaque bytes the queue never interprets; the Service
+// deep-copies it so a later caller mutation cannot alter the admitted work.
+func (s *Service) EnqueueOnceIn(ctx context.Context, in EnqueueOnceInput) (string, error) {
 	if s.fencedQueue == nil {
 		return "", ErrFencedQueueRequired
 	}
-	j, err := s.fencedQueue.EnqueueOnce(ctx, job.Enqueue{Kind: kind, LogicalKey: logicalKey, Payload: json.RawMessage(bytes.Clone(payload))})
+	j, err := s.fencedQueue.EnqueueOnce(ctx, job.Enqueue{
+		Kind:       in.Kind,
+		TenantID:   in.TenantID,
+		LogicalKey: in.LogicalKey,
+		Payload:    json.RawMessage(bytes.Clone(in.Payload)),
+	})
 	if err != nil {
 		return "", err
 	}
 	return j.JobID, nil
 }
 
-// Replace supersedes every active execution holding logicalKey and inserts one
-// fresh execution, returning its ID — the user-requested resend. It is the
-// work.Replacer protocol. payload is opaque bytes the queue never interprets; the
-// Service deep-copies it at the protocol boundary so a later caller mutation cannot
-// alter the admitted work.
-func (s *Service) Replace(ctx context.Context, kind, logicalKey string, payload []byte) (string, error) {
+// ReplaceIn supersedes every active execution holding in.LogicalKey and inserts
+// one fresh execution, returning its ID — the user-requested resend with the
+// feature's tenant slot. See EnqueueOnceIn for the payload-copy note.
+func (s *Service) ReplaceIn(ctx context.Context, in ReplaceInput) (string, error) {
 	if s.fencedQueue == nil {
 		return "", ErrFencedQueueRequired
 	}
-	j, err := s.fencedQueue.Replace(ctx, job.Enqueue{Kind: kind, LogicalKey: logicalKey, Payload: json.RawMessage(bytes.Clone(payload))})
+	j, err := s.fencedQueue.Replace(ctx, job.Enqueue{
+		Kind:       in.Kind,
+		TenantID:   in.TenantID,
+		LogicalKey: in.LogicalKey,
+		Payload:    json.RawMessage(bytes.Clone(in.Payload)),
+	})
 	if err != nil {
 		return "", err
 	}
 	return j.JobID, nil
+}
+
+// EnqueueOnce admits payload under logicalKey exactly once (idempotent while an
+// active execution holds the key), returning the unique execution ID. It is the
+// producer half of the work.Enqueuer protocol, backed by the fenced queue; its
+// signature is FROZEN by that protocol, so it delegates to EnqueueOnceIn with no
+// tenant. A caller that needs the tenant slot calls EnqueueOnceIn.
+func (s *Service) EnqueueOnce(ctx context.Context, kind, logicalKey string, payload []byte) (string, error) {
+	return s.EnqueueOnceIn(ctx, EnqueueOnceInput{Kind: kind, LogicalKey: logicalKey, Payload: payload})
+}
+
+// Replace supersedes every active execution holding logicalKey and inserts one
+// fresh execution, returning its ID — the user-requested resend. It is the
+// work.Replacer protocol; its signature is FROZEN by that protocol, so it
+// delegates to ReplaceIn with no tenant.
+func (s *Service) Replace(ctx context.Context, kind, logicalKey string, payload []byte) (string, error) {
+	return s.ReplaceIn(ctx, ReplaceInput{Kind: kind, LogicalKey: logicalKey, Payload: payload})
 }
 
 // LatestStatusByKey returns the lifecycle status of the most-recent execution
@@ -151,6 +202,10 @@ type FencedClaim struct {
 	ExecutionID string
 	LeaseID     string
 	Payload     json.RawMessage
+	// TenantID is the claimed execution's OPTIONAL host-defined boundary (see
+	// job.Job.TenantID), so a handler sees the scope of what it claimed. Empty =
+	// the execution carries no tenant.
+	TenantID string
 	// Attempt is the number of process attempts already spent for retry
 	// classification (the claim increments it).
 	Attempt    int
@@ -290,6 +345,7 @@ func NewFencedRuntime(svc *Service, cfg FencedRuntimeConfig) (*FencedRuntime, er
 			ExecutionID: j.JobID,
 			LeaseID:     j.LeaseID,
 			Payload:     j.Payload,
+			TenantID:    j.TenantID,
 			Attempt:     j.Retries,
 			Checkpoint: func(ctx context.Context, payload json.RawMessage) error {
 				return store.Checkpoint(ctx, j.JobID, j.LeaseID, payload, clock())

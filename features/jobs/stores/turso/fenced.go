@@ -17,7 +17,7 @@ import (
 // fencedColumns is the fenced_job_queue projection, in fencedRow's field order.
 // The same list backs every SELECT and every INSERT ... RETURNING, so a returned
 // job carries the stored timestamps a later Get reads back.
-const fencedColumns = "job_id, kind, payload, status, priority, retry_count, max_attempts, logical_key, lease_id, leased_until, worker_name, failure_reason, scheduled_for, claimed_at, completed_at, terminal_at, created_at, updated_at"
+const fencedColumns = "job_id, kind, tenant_id, payload, status, priority, retry_count, max_attempts, logical_key, lease_id, leased_until, worker_name, failure_reason, scheduled_for, claimed_at, completed_at, terminal_at, created_at, updated_at"
 
 // Compile-time seams: the fenced store fills the frozen job.FencedQueueRepository
 // port (a strict superset of the kernel's workers.FencedStore).
@@ -54,6 +54,7 @@ func NewFencedQueueStore(db *tursodb.DB) *FencedQueue {
 type fencedRow struct {
 	JobID         string           `db:"job_id"`
 	Kind          string           `db:"kind"`
+	TenantID      sql.NullString   `db:"tenant_id"`
 	Payload       []byte           `db:"payload"`
 	Status        string           `db:"status"`
 	Priority      int              `db:"priority"`
@@ -76,6 +77,7 @@ func (r fencedRow) toDomain() job.Job {
 	j := job.Job{
 		JobID:         r.JobID,
 		Kind:          r.Kind,
+		TenantID:      r.TenantID.String,
 		Payload:       json.RawMessage(r.Payload),
 		JobStatus:     job.Status(r.Status),
 		Priority:      r.Priority,
@@ -379,10 +381,10 @@ func insertFenced(ctx context.Context, tx *tursodb.Tx, in job.Enqueue) (job.Job,
 	}
 	now := tursodb.FormatTime(time.Now().UTC())
 	const insert = `INSERT INTO fenced_job_queue (` + fencedColumns + `)
-		VALUES (?, ?, ?, 'pending', ?, 0, ?, ?, NULL, NULL, NULL, NULL, ?, NULL, NULL, NULL, ?, ?)
+		VALUES (?, ?, ?, ?, 'pending', ?, 0, ?, ?, NULL, NULL, NULL, NULL, ?, NULL, NULL, NULL, ?, ?)
 		RETURNING ` + fencedColumns
 	row, err := tursodb.QueryOne[fencedRow](ctx, tx, insert,
-		id, in.Kind, payloadBytes(in.Payload), in.Priority, in.MaxAttempts,
+		id, in.Kind, nullString(in.TenantID), payloadBytes(in.Payload), in.Priority, in.MaxAttempts,
 		nullString(in.LogicalKey), tursodb.FormatTime(in.ScheduledFor.UTC()), now, now)
 	if err != nil {
 		return job.Job{}, err

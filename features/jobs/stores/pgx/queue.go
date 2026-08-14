@@ -21,17 +21,17 @@ import (
 const DefaultLease = 15 * time.Minute
 
 // jobColumns is the job_queue column list, in Enqueue's INSERT order.
-const jobColumns = "job_id, kind, payload, status, priority, retry_count, max_attempts, worker_name, failure_reason, scheduled_for, claimed_at, completed_at, created_at, updated_at"
+const jobColumns = "job_id, kind, tenant_id, payload, status, priority, retry_count, max_attempts, worker_name, failure_reason, scheduled_for, claimed_at, completed_at, created_at, updated_at"
 
 // jobSelect is the job_queue read projection Claim's RETURNING scans positionally
 // via scanJob. Nullable text columns are COALESCEd to ” so they scan into plain
 // strings; the two nullable timestamps scan into *time.Time.
-const jobSelect = "job_id, kind, payload, status, priority, retry_count, max_attempts, COALESCE(worker_name, ''), COALESCE(failure_reason, ''), scheduled_for, claimed_at, completed_at, created_at, updated_at"
+const jobSelect = "job_id, kind, COALESCE(tenant_id, ''), payload, status, priority, retry_count, max_attempts, COALESCE(worker_name, ''), COALESCE(failure_reason, ''), scheduled_for, claimed_at, completed_at, created_at, updated_at"
 
 // jobRowColumns is the struct-scan projection for the NamedArgs read paths (Get,
 // List): every column is name-aliased so pgx.RowToStructByName matches it against
 // jobRow's db tags, with nullable text COALESCEd to ”.
-const jobRowColumns = "job_id, kind, payload, status, priority, retry_count, max_attempts, COALESCE(worker_name, '') AS worker_name, COALESCE(failure_reason, '') AS failure_reason, scheduled_for, claimed_at, completed_at, created_at, updated_at"
+const jobRowColumns = "job_id, kind, COALESCE(tenant_id, '') AS tenant_id, payload, status, priority, retry_count, max_attempts, COALESCE(worker_name, '') AS worker_name, COALESCE(failure_reason, '') AS failure_reason, scheduled_for, claimed_at, completed_at, created_at, updated_at"
 
 // Compile-time seam: the Queue fills the exact job.QueueRepository port.
 var _ job.QueueRepository = (*Queue)(nil)
@@ -67,6 +67,7 @@ type Queue struct {
 type jobRow struct {
 	JobID         string     `db:"job_id"`
 	Kind          string     `db:"kind"`
+	TenantID      string     `db:"tenant_id"`
 	Payload       []byte     `db:"payload"`
 	Status        string     `db:"status"`
 	Priority      int        `db:"priority"`
@@ -85,6 +86,7 @@ func (r jobRow) toDomain() job.Job {
 	return job.Job{
 		JobID:         r.JobID,
 		Kind:          r.Kind,
+		TenantID:      r.TenantID,
 		Payload:       json.RawMessage(r.Payload),
 		JobStatus:     job.Status(r.Status),
 		Priority:      r.Priority,
@@ -123,6 +125,7 @@ func (q *Queue) Enqueue(ctx context.Context, in job.Enqueue) (job.Job, error) {
 	j := job.Job{
 		JobID:        id,
 		Kind:         in.Kind,
+		TenantID:     in.TenantID,
 		Payload:      in.Payload,
 		JobStatus:    job.StatusPending,
 		Priority:     in.Priority,
@@ -133,10 +136,11 @@ func (q *Queue) Enqueue(ctx context.Context, in job.Enqueue) (job.Job, error) {
 	}
 
 	const insert = `INSERT INTO job_queue (` + jobColumns + `)
-		VALUES (@job_id, @kind, @payload, 'pending', @priority, 0, @max_attempts, NULL, NULL, @scheduled_for, NULL, NULL, @created_at, @updated_at)`
+		VALUES (@job_id, @kind, @tenant_id, @payload, 'pending', @priority, 0, @max_attempts, NULL, NULL, @scheduled_for, NULL, NULL, @created_at, @updated_at)`
 	if _, err := q.db.Exec(ctx, insert, pgx.NamedArgs{
 		"job_id":        j.JobID,
 		"kind":          j.Kind,
+		"tenant_id":     nullString(j.TenantID),
 		"payload":       payloadValue(j.Payload),
 		"priority":      j.Priority,
 		"max_attempts":  j.MaxAttempts,
@@ -284,7 +288,7 @@ func scanJob(sc scanner) (job.Job, error) {
 		claimedAt, completedAt *time.Time
 	)
 	err := sc.Scan(
-		&j.JobID, &j.Kind, &payload, &status, &j.Priority, &j.Retries, &j.MaxAttempts,
+		&j.JobID, &j.Kind, &j.TenantID, &payload, &status, &j.Priority, &j.Retries, &j.MaxAttempts,
 		&j.WorkerName, &j.FailureReason, &scheduledFor, &claimedAt, &completedAt, &createdAt, &updatedAt,
 	)
 	if err != nil {

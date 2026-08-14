@@ -3,10 +3,14 @@
 -- rely on); payload is TEXT JSON; ints are INTEGER. The status CHECK mirrors the
 -- job.Status vocabulary. worker_name and claimed_at are KEPT (design §6.1): they
 -- are the columns stale-claim recovery stands on (the running-with-expired-lease
--- claim arm reads claimed_at). No tenant/aggregate/correlation columns (§1).
+-- claim arm reads claimed_at). tenant_id is the ONE optional, host-defined
+-- boundary slot the feature carries (the events precedent): nullable, never
+-- derived, never filtered or authorized on by the feature — vocabulary for
+-- operator SQL only. No aggregate/correlation columns (§1).
 CREATE TABLE IF NOT EXISTS job_queue (
     job_id         TEXT    NOT NULL,
     kind           TEXT    NOT NULL,
+    tenant_id      TEXT,
     payload        TEXT    NOT NULL DEFAULT '{}',
     status         TEXT    NOT NULL DEFAULT 'pending'
                    CHECK (status IN ('pending','running','completed','failed','dead_letter')),

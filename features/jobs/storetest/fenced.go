@@ -34,6 +34,8 @@ func RunFencedQueue(t *testing.T, newRepo func(t *testing.T) job.FencedQueueRepo
 	t.Helper()
 
 	t.Run("UniqueExecutionIDAndLogicalKey", func(t *testing.T) { testFencedIDsAndKeys(t, newRepo) })
+	t.Run("TenantRoundTrip", func(t *testing.T) { testFencedTenant(t, newRepo) })
+	t.Run("TenantDoesNotAffectKeying", func(t *testing.T) { testFencedTenantNotKeyed(t, newRepo) })
 	t.Run("EnqueueOnceReturnsActive", func(t *testing.T) { testFencedEnqueueOnce(t, newRepo) })
 	t.Run("ReplaceSupersedesActive", func(t *testing.T) { testFencedReplaceSupersedes(t, newRepo) })
 	t.Run("LatestByKeyDeterministic", func(t *testing.T) { testFencedLatestByKey(t, newRepo) })
@@ -93,6 +95,125 @@ func testFencedIDsAndKeys(t *testing.T, newRepo func(t *testing.T) job.FencedQue
 	}
 	if _, err := repo.EnqueueOnce(ctx, job.Enqueue{ID: "exec-1", Kind: "email"}); !errors.Is(err, sdk.ErrAlreadyExists) {
 		t.Errorf("duplicate execution id: err=%v, want sdk.ErrAlreadyExists", err)
+	}
+}
+
+// testFencedTenant: the optional host-defined tenant slot round-trips through
+// every read path a fenced execution surfaces on (the admission return, Get,
+// Claim, GetLatestByKey), and an unset tenant reads back as the empty string — the
+// SQL stores persist it NULL and must scan that back as "". The claim projection
+// is the load-bearing one: it is what the runtime hands a handler as
+// jobs.FencedClaim.TenantID, and the fenced rail's encrypted payloads make the
+// column the only queryable scope an operator has.
+func testFencedTenant(t *testing.T, newRepo func(t *testing.T) job.FencedQueueRepository) {
+	repo := requireFenced(t, newRepo)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	scoped := mustEnqueueOnce(t, repo, job.Enqueue{Kind: "email", TenantID: "acme", LogicalKey: "k-scoped", ScheduledFor: now})
+	if scoped.TenantID != "acme" {
+		t.Errorf("EnqueueOnce returned TenantID = %q, want acme", scoped.TenantID)
+	}
+	plain := mustEnqueueOnce(t, repo, job.Enqueue{Kind: "email", LogicalKey: "k-plain", ScheduledFor: now.Add(time.Hour)})
+	if plain.TenantID != "" {
+		t.Errorf("unset EnqueueOnce returned TenantID = %q, want empty", plain.TenantID)
+	}
+
+	got, err := repo.Get(ctx, scoped.ID())
+	if err != nil {
+		t.Fatalf("Get scoped: %v", err)
+	}
+	if got.TenantID != "acme" {
+		t.Errorf("Get TenantID = %q, want acme", got.TenantID)
+	}
+	unset, err := repo.Get(ctx, plain.ID())
+	if err != nil {
+		t.Fatalf("Get plain: %v", err)
+	}
+	if unset.TenantID != "" {
+		t.Errorf("Get unset TenantID = %q, want empty (NULL scans back as \"\")", unset.TenantID)
+	}
+
+	latest, err := repo.GetLatestByKey(ctx, "k-scoped")
+	if err != nil {
+		t.Fatalf("GetLatestByKey: %v", err)
+	}
+	if latest.TenantID != "acme" {
+		t.Errorf("GetLatestByKey TenantID = %q, want acme", latest.TenantID)
+	}
+
+	// Only the scoped execution is due at now, so the claim is deterministic.
+	claimed, err := repo.Claim(ctx, now, "lease-A", Lease)
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	if claimed.ID() != scoped.ID() {
+		t.Fatalf("Claim = %q, want the scoped execution %q", claimed.ID(), scoped.ID())
+	}
+	if claimed.TenantID != "acme" {
+		t.Errorf("Claim TenantID = %q, want acme", claimed.TenantID)
+	}
+
+	// Replace stamps the fresh generation's tenant and leaves the tombstone's alone.
+	replacement, err := repo.Replace(ctx, job.Enqueue{Kind: "email", TenantID: "globex", LogicalKey: "k-scoped", ScheduledFor: now})
+	if err != nil {
+		t.Fatalf("Replace: %v", err)
+	}
+	if replacement.TenantID != "globex" {
+		t.Errorf("Replace TenantID = %q, want globex", replacement.TenantID)
+	}
+	tombstone, err := repo.Get(ctx, scoped.ID())
+	if err != nil {
+		t.Fatalf("Get tombstone: %v", err)
+	}
+	if tombstone.TenantID != "acme" {
+		t.Errorf("superseded tombstone TenantID = %q, want the unchanged acme", tombstone.TenantID)
+	}
+}
+
+// testFencedTenantNotKeyed: the tenant is METADATA, never part of the
+// idempotency key. Two EnqueueOnce calls under one logical key with DIFFERENT
+// tenants still admit exactly one execution (the second returns the first,
+// unchanged), and a Replace under a different tenant still supersedes the active
+// generation. A store that folded tenant into the active-key invariant would
+// admit a second concurrent execution here.
+func testFencedTenantNotKeyed(t *testing.T, newRepo func(t *testing.T) job.FencedQueueRepository) {
+	repo := requireFenced(t, newRepo)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	first := mustEnqueueOnce(t, repo, job.Enqueue{Kind: "email", TenantID: "acme", LogicalKey: "k1", ScheduledFor: now})
+	again, err := repo.EnqueueOnce(ctx, job.Enqueue{Kind: "email", TenantID: "globex", LogicalKey: "k1", ScheduledFor: now})
+	if err != nil {
+		t.Fatalf("second EnqueueOnce under a different tenant: %v", err)
+	}
+	if again.ID() != first.ID() {
+		t.Fatalf("EnqueueOnce under a different tenant admitted %q, want the existing active execution %q (tenant is not part of the key)", again.ID(), first.ID())
+	}
+	if again.TenantID != "acme" {
+		t.Errorf("the returned active execution's TenantID = %q, want the admitted acme (dedup returns it unchanged)", again.TenantID)
+	}
+
+	replacement, err := repo.Replace(ctx, job.Enqueue{Kind: "email", TenantID: "globex", LogicalKey: "k1", ScheduledFor: now})
+	if err != nil {
+		t.Fatalf("Replace under a different tenant: %v", err)
+	}
+	if replacement.ID() == first.ID() {
+		t.Fatalf("Replace must insert a fresh execution, got the prior id %q", first.ID())
+	}
+	old, err := repo.Get(ctx, first.ID())
+	if err != nil {
+		t.Fatalf("Get superseded: %v", err)
+	}
+	if old.JobStatus != job.StatusSuperseded || !old.Terminal() {
+		t.Errorf("prior generation status=%q terminal=%v, want superseded/terminal (a different tenant must not spare it)", old.JobStatus, old.Terminal())
+	}
+	latest, err := repo.GetLatestByKey(ctx, "k1")
+	if err != nil {
+		t.Fatalf("GetLatestByKey: %v", err)
+	}
+	if latest.ID() != replacement.ID() {
+		t.Errorf("GetLatestByKey = %q, want the replacement %q", latest.ID(), replacement.ID())
 	}
 }
 
