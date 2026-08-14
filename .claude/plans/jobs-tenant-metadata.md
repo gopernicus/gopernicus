@@ -14,7 +14,8 @@ for the turso conformance leg (both live legs PASSED). J1–J5 EXECUTED
 2026-08-14. J6 EXECUTED same day — NOT its own PR: a concurrent session had
 coordination-hub PR #16 (the repin) open, so the adoption commit rode there
 (PR retitled to cover jobs v0.2.0 tenant metadata; Closes #4 + #5); issue #4
-answered citing #12's tenant=campaign ruling. Milestone closes when #16 merges.
+answered citing #12's tenant=campaign ruling. #16 MERGED 2026-08-14 (9ee80f1);
+issues #4 and #5 closed. MILESTONE CLOSED.
 Date: 2026-08-14
 Driver: coordination-hub issue gpsimpact/Coordination-Hub#4 — campaign-scoped ops queries against the jobs rails. Events already carries first-class nullable `tenant_id` with store support; jobs lacks the parity, and the fenced queue's encrypted payloads make payload-embedded tenant identity unqueryable there. "Tenant" stays gopernicus-defined: an OPTIONAL, host-defined boundary slot — vocabulary only, never framework semantics (the events posture).
 
