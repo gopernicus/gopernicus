@@ -1,6 +1,6 @@
 # gopernicus — crud.Transactor implementations in both datastore connectors
 
-Status: RATIFIED 2026-08-14 (jrazmi: "let's get the transactor working in gopernicus")
+Status: COMPLETE 2026-08-14. Both connectors implement the seam; pgx semantics proven live (six tests green against postgres:17); tags integrations/datastores/{pgxdb,turso}/v0.2.0 pushed at 124e3cc; cold-cache `crud.Transactor = (*pgxdb.DB)` compile proof passed. Nesting ruled FAIL-LOUD (ErrNestedTransact); sdk contract comment updated (comment-only).
 Date: 2026-08-14
 Driver: Coordination-Hub PR #13 finding 1 — the timeline cascade is the first real
 consumer of the sdk's SCAFFOLDED, UNCONSUMED `crud.Transactor` seam
