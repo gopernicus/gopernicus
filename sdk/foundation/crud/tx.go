@@ -4,12 +4,14 @@ import "context"
 
 // Transactor is the sdk-level transaction seam.
 //
-// SCAFFOLDED, UNCONSUMED (datastore-hardening P6, 2026-07-09): no feature
-// consumes this interface yet. It exists so that when the consumer trigger
-// fires — the third durable emitter, i.e. the first use-case spanning two
-// repositories in one transaction (portability §8b) — the vocabulary is
-// already agreed and nobody works around the missing seam by reaching for a
-// connector's Underlying() handle (guard G9 bans exactly that).
+// CONSUMED (transactor-connectors, 2026-08-14): the trigger named below fired
+// — the first use-case spanning two repositories in one transaction is the
+// Coordination-Hub timeline cascade (gpsimpact/Coordination-Hub#13), and both
+// datastore connectors now implement the seam (pgxdb.Transact/TxFromContext/
+// QuerierFrom and the turso mirror). Originally scaffolded unconsumed
+// (datastore-hardening P6, 2026-07-09) so the vocabulary was agreed before
+// anyone worked around the missing seam by reaching for a connector's
+// Underlying() handle (guard G9 bans exactly that).
 //
 // Contract, pinned now so implementations cannot diverge before the first
 // consumer arrives:
@@ -26,9 +28,14 @@ import "context"
 //     this package — there is deliberately NO sdk-owned context stash, no
 //     WithTx(ctx, any), no TxFromContext(ctx) any: an untyped stash would be
 //     a service-locator hole, the same workaround class G9 exists to ban.
-//   - Nesting (Transact inside fn) is EXPLICITLY UNPINNED — neither allowed
-//     nor forbidden here — and is decided when the first real consumer
-//     arrives, not before.
+//   - Nesting (Transact inside fn) — RULED with the first consumer
+//     (transactor-connectors, 2026-08-14): implementations FAIL LOUD, returning
+//     a connector-typed sentinel (pgxdb.ErrNestedTransact / turso's mirror).
+//     The consumer's invariant is exactly one transaction per workflow
+//     (compositions own the Transact call; repositories' …InTx twins assume
+//     it), so a silent nested begin would split the atomicity the caller
+//     believes it has. The error may graduate into defined nesting behavior
+//     later (a minor change); silent behavior could never become an error.
 //
 // Implementation note: both datastore connectors already carry a
 // dialect-typed InTx(ctx, fn func(*Tx) error). Those signatures stay; a
