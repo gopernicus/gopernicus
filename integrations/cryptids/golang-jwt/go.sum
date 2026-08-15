@@ -1,2 +1,4 @@
 github.com/golang-jwt/jwt/v5 v5.3.1 h1:kYf81DTWFe7t+1VvL7eS+jKFVWaUnK9cB1qbwn63YCY=
 github.com/golang-jwt/jwt/v5 v5.3.1/go.mod h1:fxCRLWMO43lRc8nhHWY6LGqRcf+1gQWArsqaEUEa5bE=
+github.com/gopernicus/gopernicus/sdk v0.1.0 h1:ZrOT7HU/VYMHptQRQl5bZS+VjOQg5Ln41uPboSeRN9s=
+github.com/gopernicus/gopernicus/sdk v0.1.0/go.mod h1:z0bypQiCybwPoxoDfzhYvB1BtH2av549QR84GacngaE=

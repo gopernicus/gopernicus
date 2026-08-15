@@ -16,6 +16,12 @@ github.com/fsnotify/fsnotify v1.7.0 h1:8JEhPFa5W2WU7YfeZzPNqzMP6Lwt7L2715Ggo0nos
 github.com/fsnotify/fsnotify v1.7.0/go.mod h1:40Bi/Hjc2AVfZrqy+aj+yEI+/bRxZnMJyTJwOpGvigM=
 github.com/google/go-cmp v0.6.0 h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=
 github.com/google/go-cmp v0.6.0/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
+github.com/gopernicus/gopernicus/features/authentication v0.1.0 h1:5HCRCrD4x+NkPf/CukzMB5muJdd2hGUjPoikzRFL4g0=
+github.com/gopernicus/gopernicus/features/authentication v0.1.0/go.mod h1:WqwF0nR8unGrv00TQWkNQg8MpzUzPXYWy9jSwyXoxj8=
+github.com/gopernicus/gopernicus/sdk v0.1.0 h1:ZrOT7HU/VYMHptQRQl5bZS+VjOQg5Ln41uPboSeRN9s=
+github.com/gopernicus/gopernicus/sdk v0.1.0/go.mod h1:z0bypQiCybwPoxoDfzhYvB1BtH2av549QR84GacngaE=
+github.com/gopernicus/gopernicus/ui/goth v0.1.0 h1:G3MID0YKbIsq/8gMuGsgHspFX/AFvZqIMew7BXU75Ts=
+github.com/gopernicus/gopernicus/ui/goth v0.1.0/go.mod h1:oy3/FvmdW59V1nSZQdJtlC8TxJjVp+yIk3cuhJy/lFg=
 github.com/mattn/go-colorable v0.1.13 h1:fFA4WZxdEF4tXPZVKMLwD8oUnCTTo08duU7wxecdEvA=
 github.com/mattn/go-colorable v0.1.13/go.mod h1:7S9/ev0klgBDR4GtXTXX8a3vIGJpMovkB8vQcUbaXHg=
 github.com/mattn/go-isatty v0.0.16/go.mod h1:kYGgaQfpe5nmfYZH+SKPsOc2e4SrIfOl2e/yFXSvRLM=

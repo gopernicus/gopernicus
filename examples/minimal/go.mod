@@ -3,10 +3,10 @@ module github.com/gopernicus/gopernicus/examples/minimal
 go 1.26.1
 
 require (
-	github.com/gopernicus/gopernicus/features/cms v0.0.0
+	github.com/gopernicus/gopernicus/features/cms v0.1.0
 	github.com/gopernicus/gopernicus/features/cms/views/goth v0.0.0
-	github.com/gopernicus/gopernicus/sdk v0.0.0
-	github.com/gopernicus/gopernicus/ui/goth v0.0.0
+	github.com/gopernicus/gopernicus/sdk v0.1.0
+	github.com/gopernicus/gopernicus/ui/goth v0.1.0
 )
 
 require github.com/a-h/templ v0.3.1020 // indirect
