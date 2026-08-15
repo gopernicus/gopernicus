@@ -82,7 +82,8 @@ jobs:
         run: make test-stores
 
   # Job B — goredis conformance (-race) against redis, plus pgxdb's env-gated
-  # live migrate test against postgres. goredis is NOT in STORE_MODULES /
+  # live tests against postgres (migrate round-trip, List behavior, and the
+  # ratelimiter.Limiter legs). goredis is NOT in STORE_MODULES /
   # `make test-stores`, and the redis service alone gates nothing (the suites key
   # off REDIS_TEST_ADDR), so this is a separate job by necessity.
   redis-pgxdb:
@@ -123,9 +124,20 @@ jobs:
           # goredis conformance keys off this var; unset ⇒ loud skip.
           REDIS_TEST_ADDR: localhost:6379
         run: go test -race ./...
-      - name: pgxdb live migrate test against postgres
+      - name: pgxdb live tests (-race) against postgres
         working-directory: integrations/datastores/pgxdb
         env:
-          # pgxdb's TestLive_OpenAndMigrate gates on this var; unset ⇒ loud skip.
+          # pgxdb's live tests gate on this var; unset ⇒ loud skip.
+          #
+          # DESTRUCTIVE: point this ONLY at a throwaway/dedicated database. The
+          # limiter legs CREATE TABLE ratelimit_windows (plus an error-mapping
+          # schema they drop) and run an unqualified
+          # `DELETE FROM ratelimit_windows` for the pruning proof. The service
+          # container above is exactly that: created and destroyed per run.
+          #
+          # -race is Go-level hygiene here — it catches data races in the test's
+          # own 40 goroutines, and proves NOTHING about database atomicity. The
+          # atomicity proof is the live exact-K assertion itself: 40 concurrent
+          # callers at a ceiling of 8 must yield exactly 8 admissions.
           POSTGRES_TEST_DSN: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
-        run: go test ./...
+        run: go test -race ./...

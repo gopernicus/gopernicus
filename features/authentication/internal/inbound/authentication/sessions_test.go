@@ -10,7 +10,7 @@ import (
 
 // doChangePassword issues a cookie-lane POST /auth/password/change carrying the
 // double-submit CSRF token the browser-safe gate now requires (design §9.1, the
-// AV3-6.6 parity fix). The session cookie authenticates; the auth_csrf cookie plus
+// AV3-6.6 parity fix). The session cookie authenticates; the __Host-auth_csrf cookie plus
 // its matching X-CSRF-Token header satisfy the gate (newTestHandler's empty Origin
 // allowlist passes an Origin-less same-context request, so the token pair is the
 // operative check). Cases that expect a pre-gate rejection (no/revoked session ->

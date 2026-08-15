@@ -40,6 +40,20 @@ Minor bumps all three; store pins move to `features/jobs v0.2.0` / `sdk
 v0.2.0`. See the upgrade notes below — already-migrated hosts need a host-tree
 ALTER (reference SQL in the store note).
 
+**2026-08-14 (same day): PREPARED, NOT YET CUT — `sdk/v0.3.0`,
+`features/authentication/v0.2.0`, `integrations/datastores/pgxdb/v0.3.0`** — the
+coordination-hub authentication upstream batch (plan of record
+`.claude/plans/coordination-hub-auth-upstream/`; the owner-cut tag manifest and
+post-tag verification steps are in that directory's `tag-manifest.md`). Minor
+bumps all three: genuinely global middleware + configurable CORS, the browser
+cookie-flow seams (`RefreshCookiePath`, `/auth/csrf`, `/auth/me`,
+`origin_rejected`), and the durable pgx rate limiter. `features/authentication`
+pins `sdk v0.3.0`; `integrations/oauth/google` stays at **v0.1.0** (byte-identical
+to its tag, verified) and the authentication store modules do **not** retag (no
+repository contract changed). Read the three upgrade notes below before adopting —
+pgxdb v0.3.0 ships **host schema**, and the sdk note carries the batch's one silent
+behavior change (`HandleRaw` no longer bypasses global middleware).
+
 ## Tagging scheme
 
 Nested Go modules in a single repo are tagged with the module's directory as a
@@ -120,6 +134,168 @@ silently would break a host whose CSP no longer covers the kit's assets. Record 
 the module's next-tag upgrade note below and tell hosts to re-derive their CSP header.
 
 ## Upgrade notes (keyed to each module's next tag)
+
+### sdk — v0.3.0 (2026-08-14): global middleware is genuinely global + configurable CORS (minor)
+
+coordination-hub-auth-upstream U1 (plan of record `.claude/plans/`
+`coordination-hub-auth-upstream/`; Coordination-Hub upstream items 1b/3/5). Additive
+API, so a **minor** floor — but it carries the batch's one silent behavior change,
+which leads this note:
+
+- **`WebHandler.Use` now wraps the ENTIRE mux, and `HandleRaw` no longer bypasses
+  it.** Global middleware used to be baked into each registered pattern, so it never
+  observed mux-generated 404s, method-mismatch 405s (the symptom that broke
+  preflights to method-qualified feature routes), redirects, or `HandleRaw`
+  registrations. It now runs once around dispatch, so all of those pass through
+  panic recovery, request IDs, logging, and CORS. **This changes behavior for any
+  existing sdk consumer that relied on `HandleRaw` as a policy escape hatch** — a raw
+  OpenAPI/metrics/streaming handler that previously ran outside the global stack now
+  runs inside it. `HandleRaw`'s contract is now "raw `http.Handler` + raw ServeMux
+  pattern", never "no middleware". Route middleware order, global outermost-first
+  order, and the automatic 405 `Allow` header are unchanged (the mux still routes).
+  `Use` remains **boot-time-only**: it rebuilds the dispatch chain unsynchronized, so
+  it must not be called once the server is serving.
+- **`CORSWithConfig(CORSConfig{AllowedOrigins, AllowedHeaders, ExposedHeaders})`** is
+  the new configuration entry point. `CORSMiddleware(origins)` is retained as a
+  delegating compatibility constructor with byte-identical defaults. A nil
+  `AllowedHeaders` keeps `Accept, Content-Type, Authorization`; a non-nil list
+  REPLACES it (this is how a host opts in authentication's `X-CSRF-Token` — the sdk
+  never names a feature's header).
+- **`Access-Control-Expose-Headers` now defaults to `X-Request-ID`**, so cross-origin
+  JavaScript can read the framework's own request id. An explicit empty
+  `ExposedHeaders` suppresses the header entirely.
+- **`Vary: Origin` is now set on every response** through the middleware, matched
+  origin or not, appended without overwriting or duplicating an existing `Vary`
+  dimension. A host running the ~6-line `varyOrigin` wrapper as a workaround can drop
+  it; keeping it stays correct.
+- **Only a genuine preflight short-circuits with 204** — an `OPTIONS` request must
+  carry both `Origin` and `Access-Control-Request-Method`. Any other `OPTIONS`
+  request now continues to the mux, which matters precisely because `Use` is global:
+  a host's own `OPTIONS` route stays reachable.
+- Wildcard behavior is unchanged: `*` may echo an origin but never emits
+  `Access-Control-Allow-Credentials`.
+
+### features/authentication — v0.2.0 (2026-08-14): browser cookie-flow seams (minor; pins sdk v0.3.0)
+
+coordination-hub-auth-upstream U2–U4. Every change is additive — no existing request
+body, response shape, or route was changed or removed — so a **minor** bump. The
+module's `go.mod` now requires **`sdk v0.3.0`**: the documented cross-origin browser
+flow depends on the CORS seam above, and pinning is what stops a host from adopting
+`/auth/csrf` against an sdk that cannot be configured to allow the echo header.
+
+- **`Config.RefreshCookiePath string`** (`AUTH_REFRESH_COOKIE_PATH`). Empty keeps
+  today's `/auth`. A host mounting the feature under a prefix (`feature.PrefixRegistrar`)
+  MUST set the full prefixed path — `/api/v1/auth` — or the browser never sends the
+  refresh cookie and cookie-driven refresh dies silently. A non-empty value must be a
+  valid absolute cookie path (leading `/`, no query/fragment/control/header-delimiter
+  character, no trailing slash except `/`) or construction fails with the new
+  `var ErrRefreshCookiePathInvalid`; `net/http` would otherwise silently drop bad
+  bytes. The same resolved path is used for every issue AND the logout deletion, so a
+  prefixed host clears exactly what it set. It configures ONLY the refresh cookie —
+  the access cookie and the `SameSite=Lax` posture are untouched.
+- **`GET /auth/csrf`** — the JSON double-submit bootstrap for a cookie-authenticated
+  SPA on a different origin than the API (it cannot read the API-origin
+  `__Host-auth_csrf` cookie). Gated by `RequireLiveSession` plus the existing
+  origin-only browser gate; returns `{"csrf_token":"…"}` under
+  `Cache-Control: no-store`, and the body value is always the value of the
+  `__Host-auth_csrf` cookie on the same response. It REUSES a
+  well-formed existing token rather than rotating (a second tab may hold it in
+  flight) and fails closed — 500, no token, no cookie — if entropy is unavailable.
+  The host must list `X-CSRF-Token` in its sdk CORS `AllowedHeaders` for the browser
+  to send the echo header.
+- **The double-submit CSRF cookie is renamed `auth_csrf` → `__Host-auth_csrf`.**
+  The `__Host-` prefix makes a browser refuse the cookie unless it is `Secure`,
+  `Path=/`, and carries no `Domain` attribute — which is what stops a sibling host
+  under the same registrable domain from planting a well-formed token (the
+  fixation residual documented at v0.1.0). The cookie was already
+  `Secure`/`Path=/`/no-`Domain`, so **no deployment change is required**; the only
+  new failure mode is a plain-HTTP host, where the browser now refuses the cookie
+  outright. The JSON lane (`GET /auth/csrf`) is new in this tag, so it has no
+  migration concern. **The HTML views lane DID use `auth_csrf` at v0.1.0**: at
+  upgrade, a form page rendered before the deploy carries a token whose old-name
+  cookie the server no longer reads, so that one in-flight submission gets the
+  generic 403 CSRF page; reloading the form re-mints under the new name and
+  proceeds. The stale `auth_csrf` cookie is neither read nor deleted — it is
+  simply orphaned, keeps riding along until the browser session ends (it was set
+  without `Max-Age`/`Expires`), and is harmless.
+- **`GET /auth/me`** — session hydration behind `RequireLiveSession` (one revocation
+  lookup, the `GET /auth/methods` posture), returning the existing
+  `{id,email,display_name,email_verified}` shape under `Cache-Control: no-store`. A
+  machine/API-key principal is not a current user and gets 401, never a fabricated
+  profile.
+- **Login/register/`/auth/me` now render email through one service projection.** The
+  compatibility DTO is built at a single site over the account's active email
+  identity, so the address reported after registering `New@Example.com` is the
+  normalized stored value on all three paths instead of the raw submitted string on
+  one. A client that depended on the raw echo sees the normalized address.
+- **`origin_rejected` splits out of `permission_denied`.** An origin-gate denial
+  (both the mutation gate and the origin-only gate) now returns 403 with
+  `code: "origin_rejected"`; a failed double-submit keeps `permission_denied`.
+  Statuses and human messages are unchanged, so this is a diagnosability gain, not a
+  client break — a host that boot-fails on a CORS/auth allowlist mismatch can now
+  read the runtime symptom instead.
+
+### integrations/datastores/pgxdb — v0.3.0 (2026-08-14): durable rate limiter — this tag ships HOST SCHEMA (minor)
+
+coordination-hub-auth-upstream U5. The Go surface is additive (**minor**): `Limiter`,
+`NewLimiter(db *DB, opts ...LimiterOption)`, `WithLimiterKeyPrefix(prefix)` (default
+namespace `ratelimit:`), and `(*Limiter).StatusCheck(ctx)`. `NewLimiter` satisfies
+`sdk/capabilities/ratelimiter.Limiter` over the pool the host already owns — a
+cross-instance limiter with no Redis, the `kvstores/goredis` multi-port precedent.
+Semantics mirror goredis deliberately (`Requests + Burst` ceiling, independent keys,
+sliding-window tail, `Reset`, `Remaining`/`ResetAt`/`RetryAfter`), every decision is
+one atomic `INSERT … ON CONFLICT DO UPDATE … RETURNING`, all time is Postgres server
+time (weights clamped, so a stale `now` can never over-count or exceed the window),
+and a non-positive window or a zero ceiling is `sdk.ErrInvalidInput` rather than a
+silent deny-everything. `Close` is an idempotent no-op and never closes the caller's
+pool. Full reference DDL, pruning statement, and operational notes live in
+`integrations/datastores/pgxdb/README.md` — this tag is **not** adoptable from the
+Go API alone:
+
+- **This release ships host schema, not just an API.** The limiter requires a
+  host-owned `ratelimit_windows` table plus its `expires_at` index. The connector
+  creates and migrates NOTHING. **Copy the reference DDL into your own migration
+  ledger and apply it BEFORE deploying the binary that constructs a `Limiter`:
+  schema first, then binary.** A binary deployed against a missing table fails OPEN
+  and SILENT wherever the caller fails open (see the posture note below).
+- **The DDL is a versioned contract with no compiler signal.** Nothing in Go tells a
+  host that its copied table drifted from the shape this connector's SQL expects. A
+  future column/index/semantic change to the reference DDL is therefore a
+  **breaking** change for adopters even when the Go API is untouched, and MUST be
+  released with an explicit schema upgrade note here.
+- **Verify the table at boot.** `limiter.StatusCheck(ctx)` probes for it and reports a
+  missing table as `sdk.ErrNotFound` (SQLSTATE `42P01`); refuse to start on error.
+  Note it is a method on the concrete `*pgxdb.Limiter`, not on the
+  `ratelimiter.Limiter` port — the host must hold the concrete type at boot to call
+  it.
+- **Pruning scheduling, autovacuum, and pool sizing are launch prerequisites, not
+  follow-ups.** Every checked request is one non-HOT write (indexed `expires_at` is
+  rewritten each `Allow`), so this becomes one of the highest-churn small tables in
+  the database. The host schedules
+  `DELETE FROM ratelimit_windows WHERE expires_at < now();` (cron, `features/jobs`, or
+  pg_cron — the connector never runs it), tunes the storage parameters commented into
+  the DDL, and sizes the pool for a limiter check on every rate-limited request. The
+  limiter sets no internal deadline: it inherits the caller's context, so give that
+  context a deadline you are willing to serve. `UNLOGGED` is a supported tradeoff
+  (halves WAL, truncated on crash recovery); the limiter assumes the stock
+  `READ COMMITTED` default and never auto-retries `40001`.
+- **The `key` column is a durable PII surface.** It persists whatever the host puts in
+  its keys verbatim — with authentication wired that includes client IP addresses and
+  user identifiers — and it inherits the retention of your backups, WAL archive, and
+  replicas. **Pruning is the retention control**, not just capacity hygiene: keep the
+  table inside whatever DSR/erasure process covers request logs, prefer opaque or
+  digested key material, and do not enable `Config.LogQueries` on a connection with
+  the limiter wired (the tracer logs SQL args verbatim, IPs included, into logs that
+  are retained longer and read more widely than this table).
+- **Swapping `ratelimiter.NewMemory()` → `pgxdb.NewLimiter(db)` is a security-relevant
+  behavior change.** A Memory limiter cannot fail; this one can, and today's callers
+  disagree on posture: `sdk/capabilities/ratelimiter.Middleware` fails **OPEN** (the
+  error is swallowed and the request proceeds unthrottled) while authentication's
+  login and passwordless call sites fail **CLOSED** (the attempt is rejected; its
+  refresh path fails open). After the swap a database incident is an availability
+  event on the fail-closed paths and an unmetered brute-force window on the fail-open
+  ones. Decide per path before the swap, and monitor limiter error rate and latency
+  as first-class signals.
 
 ### integrations/datastores/{pgxdb,turso} — v0.2.0: crud.Transactor implemented (minor)
 
@@ -872,7 +1048,7 @@ dialects (AV3-9.2) and **not** applied to any real host.
      deployment MUST share one value so one identifier maps to one bucket.
 
   There is deliberately **no separate CSRF secret**: the double-submit CSRF token is a
-  fresh per-render random value set as the `auth_csrf` cookie and compared in constant
+  fresh per-render random value set as the `__Host-auth_csrf` cookie and compared in constant
   time against the `csrf_token` field — no host key material to manage or rotate.
 - **Production rejects development transports and unacknowledged/incomplete wiring.**
   In `RuntimeMode` production, `NewService` fails construction on: a `DevelopmentOnly`

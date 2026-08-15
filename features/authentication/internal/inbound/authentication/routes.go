@@ -88,7 +88,7 @@ func Mount(r feature.RouteRegistrar, svc authService, inv InvitationService, inv
 	// design §9.1): a same-origin browser passes and a same-site sibling is rejected,
 	// while a native/bearer client sending neither Origin nor Sec-Fetch-Site passes.
 	// The double-submit CSRF token is deliberately NOT required here — an
-	// expired-session logout has no live auth_csrf cookie to double-submit, so a hard
+	// expired-session logout has no live __Host-auth_csrf cookie to double-submit, so a hard
 	// double-submit gate would break exactly the shared-computer logout §1.5 protects.
 	r.Handle("POST", "/auth/logout", h.logout, requireBrowserSafeOrigin(h.mutation.csrf()))
 	// /auth/password/change is a sensitive route: RequireLiveSession revokes
@@ -108,6 +108,27 @@ func Mount(r feature.RouteRegistrar, svc authService, inv InvitationService, inv
 	// state changes); the handler sets Cache-Control: no-store. It subsumes and
 	// replaces GET /auth/oauth/linked (removed, pre-tag route break — design §9).
 	r.Handle("GET", "/auth/methods", h.methods, svc.RequireLiveSession)
+	// /auth/csrf is the JSON double-submit bootstrap (upstream evidence §1a): a
+	// cookie-authenticated SPA served from a DIFFERENT origin than the API cannot
+	// read the API-origin __Host-auth_csrf cookie, so it reads the matching token from
+	// this body instead and echoes it in X-CSRF-Token. It is gated by
+	// RequireLiveSession (only an established session bootstraps; a
+	// credential-establishment endpoint needs no token) plus the ORIGIN-ONLY
+	// browser gate — the double-submit gate cannot protect the very endpoint that
+	// hands out the token. The handler sets Cache-Control: no-store and reuses an
+	// existing well-formed token rather than rotating another tab's out from under
+	// it. The host must allow X-CSRF-Token in its CORS request-header policy
+	// (web.CORSWithConfig) for the browser to send the echo header.
+	r.Handle("GET", "/auth/csrf", h.csrfBootstrap, svc.RequireLiveSession, requireBrowserSafeOrigin(h.mutation.csrf()))
+	// /auth/me is session hydration: the cookie-authenticated client that cannot
+	// read its own session asks who it is signed in as, and gets the SAME
+	// userResponse body login and register return. It rides RequireLiveSession
+	// (ruling 6) rather than RequireUser — hydration intentionally pays one
+	// revocation lookup so a revoked access JWT cannot hydrate, matching
+	// /auth/methods. Like /auth/methods it is a bearer-safe GET with no body, so
+	// it skips the browser-safe-mutation CSRF gate; the handler sets
+	// Cache-Control: no-store and denies a machine principal (see me).
+	r.Handle("GET", "/auth/me", h.me, svc.RequireLiveSession)
 
 	// Step-up (recent-authentication grant) routes (design §5.0). Each is a
 	// cookie-authenticated sensitive mutation: RequireLiveSession proves revocation

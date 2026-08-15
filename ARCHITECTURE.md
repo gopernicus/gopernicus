@@ -14,7 +14,7 @@ worked example `examples/cms`.
     cryptids/bcrypt/      module …/integrations/cryptids/bcrypt         — a connector (x/crypto bcrypt)
     cryptids/golang-jwt/  module …/integrations/cryptids/golang-jwt     — a connector (golang-jwt/jwt v5)
     cryptids/google-uuid/ module …/integrations/cryptids/google-uuid    — a connector (google/uuid v4/v7)
-    datastores/pgxdb/       module …/integrations/datastores/pgxdb          — a connector (jackc/pgx v5)
+    datastores/pgxdb/       module …/integrations/datastores/pgxdb          — a connector (jackc/pgx v5; multi-port: crud.Transactor + ratelimiter)
     datastores/turso/     module …/integrations/datastores/turso        — a connector (sdk + libsql)
     email/sendgrid/       module …/integrations/email/sendgrid          — a connector (sendgrid/sendgrid-go)
     filestorage/gcs/      module …/integrations/filestorage/gcs         — a connector (cloud.google.com/go/storage)
@@ -147,7 +147,7 @@ HTTP middleware sorts onto the same three tiers, ratified so nobody
 
 | middleware | lives in | why |
 |---|---|---|
-| **foundation — pure HTTP mechanism** | `sdk/foundation/web` | `Panics`, `Logger`, `RequestID`, `TrustProxies`, `CORSMiddleware`, `DefaultHeadersMiddleware` — no capability port behind them, stdlib only, FLAT. `CORSMiddleware`/`DefaultHeadersMiddleware` are AVAILABLE host middleware, kept deliberately (owner call, 2026-07-11): expected wiring for any API-serving or browser-facing host, NOT prune candidates even though no example wires them yet. |
+| **foundation — pure HTTP mechanism** | `sdk/foundation/web` | `Panics`, `Logger`, `RequestID`, `TrustProxies`, `CORSMiddleware`/`CORSWithConfig`, `DefaultHeadersMiddleware` — no capability port behind them, stdlib only, FLAT. `CORSMiddleware`/`DefaultHeadersMiddleware` are AVAILABLE host middleware, kept deliberately (owner call, 2026-07-11): expected wiring for any API-serving or browser-facing host, NOT prune candidates even though no example wires them yet. |
 | **capability×foundation composition** | the capability that owns the semantics | `cacher.Pages`, `tracing.Middleware`, `ratelimiter.Middleware` — a capability producing a `web.Middleware`; web stays agnostic of the capability, the capability legally depends on web (capability → foundation). |
 | **identity/authorization gate** | the owning feature, as a root-package re-export of an `internal/` implementation | `authentication.RequireUser`, `authorization.RequirePermission` — the root package writes NO HTTP (the handler bodies live in `internal/logic/…svc`), so this REINFORCES the "services and HTTP are `internal/`" anatomy rather than amending it. Hosts inject them through `[]web.Middleware` config seams (`cms.Config.AdminMiddleware`, `events.Config.StreamMiddleware`) or at route registration. |
 | **host recipe** | a host closure | platform-admin/self-access short-circuits (auth-cms's `isPlatformAdmin`) — the authorization engine is a pure schema evaluator; bypasses are host composition, run first in the host's own closure, and fail closed. |

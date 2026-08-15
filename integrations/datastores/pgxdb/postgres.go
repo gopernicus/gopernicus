@@ -5,7 +5,8 @@
 // providers/ and consume this package's *DB.
 //
 // It is its own module (github.com/gopernicus/gopernicus/integrations/datastores/pgxdb), depending
-// only on sdk (for the errs sentinels MapError targets) and pgx/v5.
+// only on sdk (the sentinels MapError targets, plus the ports it satisfies —
+// crud.Transactor and ratelimiter.Limiter) and pgx/v5.
 //
 // Its exported surface mirrors the turso connector's by convention (Config /
 // Open / DB / MapError / StatusCheck / RunMigrations). Nothing mechanically proves
