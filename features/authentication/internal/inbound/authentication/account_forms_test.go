@@ -164,8 +164,8 @@ func (f accountFormFixture) login(t *testing.T, email string) *http.Cookie {
 	return c
 }
 
-// formCSRF POSTs a urlencoded body with a matching auth_csrf cookie + csrf_token field
-// (a valid double-submit) plus the given session cookie.
+// formCSRF POSTs a urlencoded body with a matching __Host-auth_csrf cookie +
+// csrf_token field (a valid double-submit) plus the given session cookie.
 func (f accountFormFixture) formCSRF(t *testing.T, path string, form url.Values, sess *http.Cookie) *httptest.ResponseRecorder {
 	t.Helper()
 	form.Set("csrf_token", "tok")

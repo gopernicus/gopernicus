@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
@@ -14,6 +15,16 @@ import (
 
 // RequestIDHeader is the canonical header used to carry the request ID in and out.
 const RequestIDHeader = "X-Request-ID"
+
+// CORS response defaults. corsDefaultAllowedHeaders is the compatibility
+// request-header allowlist; corsDefaultExposedHeaders makes the framework's own
+// request-id header readable by cross-origin JavaScript.
+const (
+	corsDefaultAllowedHeaders = "Accept, Content-Type, Authorization"
+	corsDefaultExposedHeaders = RequestIDHeader
+	corsAllowedMethods        = "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+	corsMaxAge                = "86400"
+)
 
 // Panics returns middleware that recovers from panics, logs the panic with a
 // stack trace, and returns an HTML 500 page.
@@ -91,49 +102,84 @@ func RequestID() Middleware {
 	}
 }
 
+// CORSConfig is the CORS policy a host declares. It carries only mechanism: the
+// sdk knows no feature's headers, so a host that needs a feature-specific
+// request header (a CSRF echo header, say) lists it in AllowedHeaders itself.
+type CORSConfig struct {
+	// AllowedOrigins is the origin allowlist. A "*" entry matches any origin.
+	AllowedOrigins []string
+
+	// AllowedHeaders is the request-header allowlist echoed in
+	// Access-Control-Allow-Headers. A nil list selects the default
+	// "Accept, Content-Type, Authorization"; a non-nil list replaces it.
+	AllowedHeaders []string
+
+	// ExposedHeaders is the response-header list echoed in
+	// Access-Control-Expose-Headers. A nil list selects the default
+	// X-Request-ID; an explicit empty list suppresses the header.
+	ExposedHeaders []string
+}
+
 // CORSMiddleware returns middleware that applies CORS headers using an origin
-// allowlist and short-circuits OPTIONS preflight requests with 204.
+// allowlist, with the default request-header allowlist and exposed-header list.
+// It is the compatibility constructor for
+// CORSWithConfig(CORSConfig{AllowedOrigins: origins}).
+func CORSMiddleware(origins []string) Middleware {
+	return CORSWithConfig(CORSConfig{AllowedOrigins: origins})
+}
+
+// CORSWithConfig returns middleware that applies the configured CORS policy and
+// short-circuits genuine preflight requests with 204.
 //
 // Semantics: a "*" entry matches any origin and echoes the request's Origin
 // back. Because a wildcard-configured origin cannot carry credentials, the
 // Access-Control-Allow-Credentials header is set only for explicit
 // (non-wildcard) allowlist matches. When no configured origin matches the
 // request, no CORS headers are written.
-func CORSMiddleware(origins []string) Middleware {
+//
+// Vary: Origin is added for every request — matched or not — because the
+// response depends on the request's Origin; an existing Vary value is extended,
+// never overwritten or duplicated.
+//
+// Only an OPTIONS request carrying both Origin and Access-Control-Request-Method
+// is treated as a preflight and answered with 204. Every other OPTIONS request
+// continues to the next handler, so a host's own OPTIONS route stays reachable
+// when this middleware is installed globally.
+func CORSWithConfig(cfg CORSConfig) Middleware {
+	origins := append([]string(nil), cfg.AllowedOrigins...)
+
+	allowedHeaders := corsDefaultAllowedHeaders
+	if cfg.AllowedHeaders != nil {
+		allowedHeaders = strings.Join(cfg.AllowedHeaders, ", ")
+	}
+	exposedHeaders := corsDefaultExposedHeaders
+	if cfg.ExposedHeaders != nil {
+		exposedHeaders = strings.Join(cfg.ExposedHeaders, ", ")
+	}
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
+			addVary(w.Header(), "Origin")
 
-			var allowedOrigin string
-			var wildcard bool
-
-			for _, o := range origins {
-				if o == "*" {
-					if origin != "" {
-						allowedOrigin = origin
-					} else {
-						allowedOrigin = "*"
-					}
-					wildcard = true
-					break
-				}
-				if o == origin {
-					allowedOrigin = origin
-					break
-				}
-			}
-
+			allowedOrigin, wildcard := matchOrigin(origins, origin)
 			if allowedOrigin != "" {
-				w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+				h := w.Header()
+				h.Set("Access-Control-Allow-Origin", allowedOrigin)
 				if !wildcard {
-					w.Header().Set("Access-Control-Allow-Credentials", "true")
+					h.Set("Access-Control-Allow-Credentials", "true")
 				}
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Authorization")
-				w.Header().Set("Access-Control-Max-Age", "86400")
+				h.Set("Access-Control-Allow-Methods", corsAllowedMethods)
+				if allowedHeaders != "" {
+					h.Set("Access-Control-Allow-Headers", allowedHeaders)
+				}
+				if exposedHeaders != "" {
+					h.Set("Access-Control-Expose-Headers", exposedHeaders)
+				}
+				h.Set("Access-Control-Max-Age", corsMaxAge)
 			}
 
-			if r.Method == http.MethodOptions {
+			if r.Method == http.MethodOptions && origin != "" && r.Header.Get("Access-Control-Request-Method") != "" {
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
@@ -155,6 +201,37 @@ func DefaultHeadersMiddleware(headers map[string]string) Middleware {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// matchOrigin resolves the Access-Control-Allow-Origin value for origin against
+// the allowlist, reporting whether the match came from a "*" entry. An empty
+// return means no configured origin matched.
+func matchOrigin(origins []string, origin string) (allowed string, wildcard bool) {
+	for _, o := range origins {
+		if o == "*" {
+			if origin != "" {
+				return origin, true
+			}
+			return "*", true
+		}
+		if o == origin {
+			return origin, false
+		}
+	}
+	return "", false
+}
+
+// addVary appends dimension to the Vary header unless it is already listed,
+// preserving any dimension another middleware or handler recorded first.
+func addVary(h http.Header, dimension string) {
+	for _, value := range h.Values("Vary") {
+		for _, field := range strings.Split(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(field), dimension) {
+				return
+			}
+		}
+	}
+	h.Add("Vary", dimension)
 }
 
 // newRequestID returns a 128-bit random hex string.

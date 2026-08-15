@@ -102,7 +102,10 @@ the replaced/displaced rows and adds the newly verified one atomically.
 
 ## Route surface (JSON)
 
-Claimed namespace **`/auth/*`** (prefixable via `feature.PrefixRegistrar`).
+Claimed namespace **`/auth/*`** (prefixable via `feature.PrefixRegistrar` — a
+prefixed host MUST also set `Config.RefreshCookiePath` to the full prefixed path,
+e.g. `/api/v1/auth`, or the browser never sends the refresh cookie to
+`/api/v1/auth/refresh`).
 JSON bodies are strictly decoded (unknown fields → 400). Optional subsystems are
 **deny-by-absence**: leave the enabling collaborator nil and the routes are NOT
 registered (404) — never a half-registered state. Every sensitive credential/
@@ -139,6 +142,24 @@ API callers skip it), and sets `Cache-Control: no-store`.
   with a `receipt` to learn a send failed without holding the start request open.
 - `GET /auth/methods` — live-session-gated **masked** method inventory (below);
   `Cache-Control: no-store`.
+- `GET /auth/csrf` — live-session-gated JSON **CSRF bootstrap** →
+  `{"csrf_token":"..."}` plus the matching `__Host-auth_csrf` cookie,
+  `Cache-Control: no-store`. Origin-gated only (the double-submit gate cannot
+  protect the endpoint that hands out the token). See the cross-origin SPA flow
+  below.
+- `GET /auth/me` — live-session-gated **session hydration** → the same
+  `userResponse` body login and register return: `{id, email, display_name,
+  email_verified}` with the **unmasked** active email (`/auth/methods` is the
+  masked inventory; this is the signed-in identity). `Cache-Control: no-store`.
+  Hydration deliberately pays one revocation lookup (`RequireLiveSession`, not
+  `RequireUser`), matching `/auth/methods`: a revoked access JWT is denied within
+  one round-trip. Bearer-safe (no body → no double-submit gate); both the session
+  cookie and a bearer access JWT hydrate. `email_verified` is `false` — with the
+  address still present — for an allowed-but-unverified account. A **machine
+  principal is not a current user**: a service-account API key is a valid live
+  credential elsewhere but gets 401 here rather than a fabricated profile (an
+  act-as-user service account is the exception by design — it resolves to its
+  human owner and hydrates that owner).
 
 **Step-up (recent-authentication grant, design §5.0) — all live + browser-safe:**
 
@@ -291,6 +312,73 @@ audit evidence, or durable idempotency justify it. `InviteCheck` remains require
 in both cases: choosing simpler tuple-write semantics does not make invitation
 authority optional.
 
+## Cross-origin SPA bootstrap (`GET /auth/csrf`)
+
+A SPA served from a **different origin than the API** (both HTTPS siblings under
+one registrable domain — cross-origin but same-site) cannot read the API-origin
+`__Host-auth_csrf` cookie, so it cannot satisfy the double-submit gate on its
+own. `GET /auth/csrf` is the supported seam: it returns the token in a JSON body while
+setting the matching cookie. Bearer-only clients need none of this — they skip the
+browser gate entirely. Arbitrary **cross-site** cookie authentication remains out
+of scope: both cookies stay `SameSite=Lax`.
+
+The flow:
+
+1. `POST /auth/login` — the browser stores the access + refresh cookies.
+2. `GET /auth/csrf` — read `csrf_token` from the **body** (never from the cookie;
+   the SPA origin cannot read it) and hold it in memory.
+3. Send `X-CSRF-Token: <token>` on every browser-safe mutation
+   (`/auth/password/*`, `/auth/step-up/*`, `/auth/identifiers/*`, …) with
+   `credentials: "include"` so the session and `__Host-auth_csrf` cookies ride
+   along.
+
+Contract details:
+
+- **The body value is always the effective cookie value.** The two can never
+  disagree.
+- **Bootstrapping does not rotate.** A well-formed existing `__Host-auth_csrf`
+  cookie is returned as-is, so a second tab holding the current token in flight is
+  not broken; only a missing or malformed cookie mints. A cookie value that does
+  not have the shape the feature mints is never echoed back — it is replaced.
+- **The cookie name is the provenance control; the shape check is not.** Rejecting
+  a malformed cookie does not prove the feature minted the value — any well-formed
+  32-byte base64url string is reused and echoed. What stops a *sibling* host under
+  the same registrable domain from planting one is the **`__Host-` prefix**: a
+  browser refuses a `Set-Cookie` for this name unless it is `Secure`, `Path=/`,
+  and carries **no `Domain` attribute**, which no sibling origin can satisfy for
+  another origin's cookie. The residual that remains is script already running on
+  the API origin itself, which is game-over independently of CSRF. Prefix rules
+  are enforced **by browsers**, not by Go's `net/http` or `net/http/cookiejar`, so
+  a server-side test can still hand the handler any value. The **Origin
+  allowlist** remains the mutation gate: even a fixated token cannot be spent
+  unless the mutation comes from an allowlisted origin.
+- **`__Host-` requires HTTPS.** The cookie was already `Secure`-only, so this adds
+  no deployment constraint — but the failure mode on a plain-HTTP host is now
+  "the browser refuses the cookie entirely" rather than "the cookie is set and
+  not sent". Serve the API over HTTPS (as production already must).
+- **It is live-session-gated.** No session and a revoked session are both 401;
+  credential-establishment endpoints (login, passwordless, verify) need no token
+  and must not be bootstrapped first.
+- **Entropy failure fails closed** — 500, no token, no cookie.
+
+**Host wiring is required (the sdk knows no feature header).** `X-CSRF-Token` is
+not in the sdk's default CORS request-header allowlist, so the host opts it in —
+otherwise the browser's preflight rejects the echo header and every mutation
+fails while simple GETs keep working:
+
+```go
+router.Use(web.CORSWithConfig(web.CORSConfig{
+    AllowedOrigins: []string{"https://spa.example.com"},
+    AllowedHeaders: []string{"Accept", "Content-Type", "Authorization", "X-CSRF-Token"},
+}))
+```
+
+The same origin must ALSO appear in `Config.AllowedOrigins`: CORS decides what the
+browser may read, the feature's own allowlist decides what may mutate. An origin
+that clears CORS but not `AllowedOrigins` gets a readable 403 with code
+`origin_rejected` (below) — that is the diagnosable signature of this exact
+misconfiguration.
+
 ## HTML surface (Views) — the optional presentation tier
 
 `Config.Views == nil` (the default) → **API-only**: no HTML GET page or form
@@ -331,8 +419,8 @@ allowlisted `Origin`/`Sec-Fetch-Site` check WITHOUT a pre-existing CSRF session
 (a first-time browser sign-in has no cookie to compare), and native/no-Origin
 clients pass. **Authenticated mutations** (account-security forms) use the full
 double-submit CSRF contract: the form's `csrf_token` field is compared to the
-`auth_csrf` cookie in constant time. Every HTML response carries the full **fixed**
-header policy — these are feature-owned and no policy or view can turn them off:
+`__Host-auth_csrf` cookie in constant time. Every HTML response carries the full
+**fixed** header policy — these are feature-owned and no policy or view can turn them off:
 `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`,
 `X-Content-Type-Options: nosniff`, and the fixed CSP prefix `default-src 'none';
 base-uri 'none'; form-action 'self'; frame-ancestors 'none'`. With no resource
@@ -528,6 +616,7 @@ default, so a host can never inherit the development posture; unknown →
 | `RequireVerifiedEmail` | false. true → login AND `/auth/token` refuse an unverified user with 403 (**requires a WORKING Mailer**, else total login lockout). |
 | `RateLimiter` | `ratelimiter.NewMemory()` — an in-process limiter (not "unlimited"). **Production rejects a per-process limiter** (`ErrNonDurableRateLimiter`): a multi-instance host needs a shared/durable one. |
 | `SessionCookie` (CookieConfig) | zero value usable: name `session`, path `/`, browser-session cookie backed by a 7-day server session. `Secure` is a host deployment choice (true behind TLS). |
+| `RefreshCookiePath string` | the refresh cookie's `Path` scope (`AUTH_REFRESH_COOKIE_PATH`). Empty → `/auth` (covers `/auth/refresh` AND `/auth/logout`). **A host mounting the feature under a prefix MUST set the FULL prefixed path** — `feature.PrefixRegistrar{Prefix: "/api/v1"}` → `RefreshCookiePath: "/api/v1/auth"` — else the browser never sends the refresh cookie to `/api/v1/auth/refresh` and cookie-driven refresh dies SILENTLY (the registrar exposes registration, not its mount prefix, so the feature cannot derive it). A non-empty value must be a valid absolute cookie path (leading `/`, no query/fragment/control/header-delimiter character, no trailing slash except `/` itself) or construction fails with `ErrRefreshCookiePathInvalid`. The SAME resolved path issues (login, rotation) and deletes (logout) the cookie. Configures ONLY the refresh cookie: the access cookie keeps `SessionCookie.Path` and both keep `SameSite=Lax`. |
 | `Providers []oauth.Provider` | OAuth OFF (deny-by-absence). Non-empty → both oauth repos required. |
 | `TokenEncrypter` (cryptids.Encrypter) | provider tokens NOT persisted (login/linking still work). Wire `cryptids.NewAESGCM` to store them. |
 | `OAuthCallbackBase`, `RedirectAllowlist` | callback origin / exact-match redirect allowlist (open-redirect guard; a non-allowlisted target falls back to `/`). |
@@ -737,10 +826,13 @@ credential rail is unwired.
   `X-Forwarded-For` is NEVER trusted** (a client cannot forge it to rotate
   limiter keys or poison audit rows). A multi-instance host wires a shared limiter.
 - **CSRF / origin / native clients.** Cookie-authenticated mutations require an
-  allowlisted `Origin` + a double-submit `auth_csrf` token; credential-
+  allowlisted `Origin` + a double-submit `__Host-auth_csrf` token; credential-
   establishment endpoints enforce origin WITHOUT a pre-existing CSRF session
   (first-time sign-in has no cookie); bearer/native callers with no Origin skip
-  the browser gate — origin enforcement never blocks a native client.
+  the browser gate — origin enforcement never blocks a native client. A
+  cross-origin SPA reads the token from `GET /auth/csrf` (above); an origin-gate
+  refusal answers 403 `origin_rejected`, a failed double-submit 403
+  `permission_denied`.
 - **Security events.** When `SecurityEvents` is wired, every sensitive operation
   records an append-only row synchronously (see below). Audit content carries
   identifiers, key PREFIXES, kind, and purpose ONLY — raw codes, tokens, JWTs,
@@ -756,7 +848,12 @@ credential rail is unwired.
 Two families. **Explicit stable codes** (set via `WithCode`): `password_already_set`
 (409), `password_not_set` (404), `cannot_remove_last_method` (409),
 `kind_not_supported` (400), `rate_limited` (429), `verification_required` (409),
-`identifier_exists` (409), `unsupported_media_type` (415). **Named challenge-rail
+`identifier_exists` (409), `unsupported_media_type` (415), `origin_rejected`
+(403 — the ORIGIN gate refused the request's `Origin`/`Sec-Fetch-Site`; distinct
+from the `permission_denied` a failed double-submit or an authorization denial
+carries, so a host can tell a misconfigured allowlist from a stale token without
+branching on message copy. The message stays generic and never says which origin
+would have been accepted). **Named challenge-rail
 codes** (design §5.8, emitted by the shared transport mapper for the
 challenge-redeeming endpoints — registration verify, step-up code, identifier
 confirm, remove-password / OAuth-unlink code): `challenge_expired` (410),
@@ -816,7 +913,8 @@ new pair; grace (previous, unused) → new access JWT only; reuse (previous, use
 thief on the stale token gets at most one grace access JWT; the second arrival on
 the consumed slot burns the session. Two HttpOnly `SameSite=Lax` cookies: the
 access-JWT cookie (`Path=/`) and the refresh cookie (`<name>_refresh`,
-`Path=/auth`).
+`Path=Config.RefreshCookiePath` — `/auth` by default, `/api/v1/auth` on a
+prefixed host; the same path issues and clears it).
 
 ## Migrations are host-owned (0001–0013)
 

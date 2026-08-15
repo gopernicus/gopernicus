@@ -540,6 +540,17 @@ var ErrHTMLPolicyWithoutViews = errors.New("auth: Config.HTMLPolicy set but Conf
 // and never trips this. Checked at construction, the loud-Config posture.
 var ErrBrowserLoginPathInvalid = errors.New("auth: Config.BrowserLoginPath must be a safe root-relative path (leading /, no //, scheme, backslash, or control character)")
 
+// ErrRefreshCookiePathInvalid is returned by NewService/Register when a non-empty
+// Config.RefreshCookiePath is not a valid absolute cookie path: it must start with
+// "/", carry no query ("?") or fragment ("#") marker, no control character and no
+// header-delimiter character (";", ",", space, quote), and no trailing slash unless
+// it is the root "/" itself. An empty value defaults to "/auth" and never trips
+// this. net/http silently DROPS invalid bytes when it sanitizes a cookie
+// attribute, so a malformed value would scope the refresh cookie somewhere the
+// host never asked for — it fails LOUDLY at construction instead (the loud-Config
+// posture).
+var ErrRefreshCookiePathInvalid = errors.New(`auth: Config.RefreshCookiePath must be an absolute cookie path (leading /, no query/fragment/control/delimiter character, no trailing slash except "/")`)
+
 // NewHTMLResourcePolicy validates the requested resource directives and returns an
 // immutable HTMLResourcePolicy, or an error wrapping sdk.ErrInvalidInput for an
 // unknown/fixed directive key, a directive with neither a source nor a nonce, an empty
@@ -581,6 +592,21 @@ type Config struct {
 	RateLimiter ratelimiter.Limiter
 	// SessionCookie configures the session cookie; the zero value is usable.
 	SessionCookie CookieConfig
+	// RefreshCookiePath scopes the refresh cookie. Empty (default) → "/auth", which
+	// covers /auth/refresh AND /auth/logout on a host that mounts the feature at the
+	// root. A host that mounts the feature under a path prefix (feature.PrefixRegistrar,
+	// e.g. "/api/v1") MUST set the FULL prefixed path — "/api/v1/auth" — or the browser
+	// never sends the refresh cookie to the endpoints that need it and cookie-driven
+	// refresh silently dies. The registrar deliberately exposes registration, not its
+	// mount prefix, so the feature cannot derive this.
+	//
+	// A non-empty value must be a valid absolute cookie path (leading "/", no query,
+	// fragment, control, or header-delimiter character, no trailing slash except "/"
+	// itself) or construction fails with ErrRefreshCookiePathInvalid. The SAME resolved
+	// path is used for every refresh-cookie issue (login, rotation) and deletion
+	// (logout). It configures ONLY the refresh cookie: the access cookie keeps
+	// SessionCookie.Path and both cookies keep the SameSite=Lax posture.
+	RefreshCookiePath string `env:"AUTH_REFRESH_COOKIE_PATH"`
 	// AllowedOrigins is the exact-match Origin allowlist that the browser-safe
 	// mutation gate on cookie-authenticated sensitive routes (step-up, credential and
 	// identifier management) validates against (design §9.1). A "*" entry never
@@ -954,6 +980,29 @@ func resolveListStrategy(s string) (crud.Strategy, error) {
 	}
 }
 
+// validRefreshCookiePath reports whether p is a valid absolute cookie path for
+// Config.RefreshCookiePath: a leading "/", no query ("?") or fragment ("#")
+// marker, no control character, no header-delimiter character (";", ",", space,
+// quote), and no trailing slash unless p is the root "/" itself. Only a non-empty
+// value is checked; empty means "use the /auth default".
+func validRefreshCookiePath(p string) bool {
+	if p[0] != '/' {
+		return false
+	}
+	if len(p) > 1 && p[len(p)-1] == '/' {
+		return false
+	}
+	for i := 0; i < len(p); i++ {
+		switch c := p[i]; {
+		case c < 0x20, c == 0x7f:
+			return false
+		case c == '?', c == '#', c == ';', c == ',', c == ' ', c == '"':
+			return false
+		}
+	}
+	return true
+}
+
 // inProcessQueueConfig maps the host's nil-safe in-process tuning knobs onto the
 // bounded delivery queue's config (AV3D-4.5). Zero knobs pass through as zero, which
 // the delivery constructor reads as "use the package default".
@@ -1039,6 +1088,14 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 	// same shared redirect.SafeRelativePath the gates and the form lane use.
 	if cfg.BrowserLoginPath != "" && redirect.SafeRelativePath(cfg.BrowserLoginPath) != cfg.BrowserLoginPath {
 		return nil, ErrBrowserLoginPathInvalid
+	}
+	// A non-empty refresh-cookie path must be a valid absolute cookie path (evidence
+	// §2): net/http sanitizes a cookie attribute by DROPPING invalid bytes, so a
+	// malformed value would silently scope the refresh cookie somewhere the host never
+	// asked for and cookie-driven refresh would die without a symptom. Empty defaults
+	// to "/auth" in authsvc and never trips this.
+	if cfg.RefreshCookiePath != "" && !validRefreshCookiePath(cfg.RefreshCookiePath) {
+		return nil, ErrRefreshCookiePathInvalid
 	}
 	// Enable-time validation for the challenge subsystem (design §3.3): wiring the
 	// Challenges repository enables the atomic secret rail, which REQUIRES a
@@ -1291,11 +1348,12 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 		Deliver:              deliveryRouter,
 		Limiter:              limiter,
 		Cookie: authsvc.CookieConfig{
-			Name:   cfg.SessionCookie.Name,
-			Path:   cfg.SessionCookie.Path,
-			Domain: cfg.SessionCookie.Domain,
-			Secure: cfg.SessionCookie.Secure,
-			MaxAge: cfg.SessionCookie.MaxAge,
+			Name:        cfg.SessionCookie.Name,
+			Path:        cfg.SessionCookie.Path,
+			Domain:      cfg.SessionCookie.Domain,
+			Secure:      cfg.SessionCookie.Secure,
+			MaxAge:      cfg.SessionCookie.MaxAge,
+			RefreshPath: cfg.RefreshCookiePath,
 		},
 		RequireVerifiedEmail: cfg.RequireVerifiedEmail,
 		OAuthAccounts:        repos.OAuthAccounts,

@@ -284,8 +284,8 @@ func doOrigin(t *testing.T, h http.Handler, path, body, origin, secFetchSite str
 
 // TestPasswordlessStartNoPreexistingCSRFSession proves the §9.1 credential-
 // establishment distinction: a same-origin browser start succeeds (202) WITHOUT any
-// pre-existing auth_csrf cookie/header — these endpoints have no session yet, so the
-// double-submit CSRF gate must not apply, or a first-time browser sign-in could never
+// pre-existing __Host-auth_csrf cookie/header — these endpoints have no session
+// yet, so the double-submit CSRF gate must not apply, or a first-time browser sign-in could never
 // begin.
 func TestPasswordlessStartNoPreexistingCSRFSession(t *testing.T) {
 	h := newPasswordlessHandlerWith(t, nil, passwordlessOrigins)

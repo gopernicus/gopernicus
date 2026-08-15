@@ -24,15 +24,36 @@ const (
 	// client echoes back in the csrfHeaderName header. It is readable by the
 	// page's own script so a same-origin SPA can attach it; a cross-site page
 	// cannot read it, which is what makes the double-submit comparison sound.
-	csrfCookieName = "auth_csrf"
+	// The __Host- prefix makes a browser refuse the cookie unless it is Secure,
+	// Path=/, and carries NO Domain attribute (see setCSRFCookie), which is what
+	// stops a sibling host under the same registrable domain from setting this
+	// name at all. The prefix therefore requires HTTPS: over plain http a browser
+	// rejects the Set-Cookie outright rather than downgrading it.
+	csrfCookieName = "__Host-auth_csrf"
 
 	// csrfHeaderName carries the CSRF token the client copies from the cookie.
 	csrfHeaderName = "X-CSRF-Token"
+
+	// csrfTokenBytes is the raw entropy behind a double-submit token. It also
+	// pins the shape the bootstrap accepts when reusing an existing cookie.
+	csrfTokenBytes = 32
+
+	// originRejectedCode is the stable machine-readable code an ORIGIN-gate denial
+	// carries. It is deliberately distinct from web.ErrForbidden's
+	// permission_denied (an authorization denial) and from the double-submit
+	// failure, so a host can tell a misconfigured Origin allowlist apart from a
+	// stale token without branching on message copy.
+	originRejectedCode = "origin_rejected"
 
 	// maxJSONBodyBytes bounds an auth JSON request body before decoding so an
 	// oversized upload is rejected with 413 rather than buffered whole.
 	maxJSONBodyBytes = 1 << 20 // 1 MiB
 )
+
+// randRead is the CSRF token entropy source. It is a var solely so a test can
+// prove the bootstrap fails closed — 500, no token, no cookie — when randomness
+// is unavailable; production always reads crypto/rand.
+var randRead = rand.Read
 
 // csrfConfig configures the browser-safe-mutation gate. allowedOrigins is the
 // exact-match Origin allowlist (a "*" entry never authorizes a credentialed
@@ -74,7 +95,7 @@ func requireBrowserSafeMutation(cfg csrfConfig) web.Middleware {
 			}
 
 			if !browserOriginAllowed(r, cfg.allowedOrigins) {
-				forbidCSRF(w, "cross-site request rejected")
+				forbidOrigin(w)
 				return
 			}
 
@@ -106,8 +127,9 @@ func requireBrowserSafeMutation(cfg csrfConfig) web.Middleware {
 // requireBrowserSafeOrigin returns middleware that enforces the allowlisted-Origin
 // / Sec-Fetch-Site policy for a CREDENTIAL-ESTABLISHMENT endpoint (passwordless
 // start/verify/redeem) WITHOUT the double-submit CSRF token check (design §9.1).
-// These endpoints have no pre-existing session, so there is no auth_csrf cookie to
-// double-submit; requiring one would break a first-time browser sign-in. The Origin
+// These endpoints have no pre-existing session, so there is no __Host-auth_csrf
+// cookie to double-submit; requiring one would break a first-time browser
+// sign-in. The Origin
 // allowlist alone prevents a cross-site page from forcing a credential mint (login
 // CSRF) — a minted session cookie therefore cannot be established from a disallowed
 // origin. A non-browser client that sends neither Origin nor Sec-Fetch-Site (a
@@ -117,7 +139,7 @@ func requireBrowserSafeOrigin(cfg csrfConfig) web.Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !browserOriginAllowed(r, cfg.allowedOrigins) {
-				forbidCSRF(w, "cross-site request rejected")
+				forbidOrigin(w)
 				return
 			}
 			next.ServeHTTP(w, r)
@@ -152,14 +174,23 @@ func browserOriginAllowed(r *http.Request, allowedOrigins []string) bool {
 
 // issueCSRFToken mints a 256-bit token, writes it as the double-submit cookie,
 // and returns it so a rendered form or JSON response can hand the same value to
-// the client for the csrfHeaderName header. The cookie is intentionally NOT
-// HttpOnly (the page script must read it) but is Secure + SameSite=Lax.
+// the client for the csrfHeaderName header. On a randomness failure it returns
+// the error having written NO cookie, so the caller can fail closed.
 func issueCSRFToken(w http.ResponseWriter) (string, error) {
-	var b [32]byte
-	if _, err := rand.Read(b[:]); err != nil {
+	var b [csrfTokenBytes]byte
+	if _, err := randRead(b[:]); err != nil {
 		return "", err
 	}
 	token := base64.RawURLEncoding.EncodeToString(b[:])
+	setCSRFCookie(w, token)
+	return token, nil
+}
+
+// setCSRFCookie writes token as the double-submit cookie. It is intentionally NOT
+// HttpOnly (the page script must read it) but is Secure + SameSite=Lax. Secure,
+// Path=/ and the absence of a Domain attribute are also the __Host- prefix
+// preconditions csrfCookieName depends on; none of the three may be relaxed.
+func setCSRFCookie(w http.ResponseWriter, token string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     csrfCookieName,
 		Value:    token,
@@ -168,7 +199,34 @@ func issueCSRFToken(w http.ResponseWriter) (string, error) {
 		HttpOnly: false,
 		SameSite: http.SameSiteLaxMode,
 	})
-	return token, nil
+}
+
+// currentCSRFToken returns the request's existing double-submit token when it is
+// present AND carries the exact shape issueCSRFToken mints (csrfTokenBytes of
+// base64url entropy). Reuse is what keeps a second tab's in-flight token valid
+// across a bootstrap.
+//
+// The shape check rejects a MALFORMED cookie only. It does NOT prove the feature
+// minted the value: any well-formed 32-byte base64url string passes and IS reused
+// and echoed. Provenance is enforced by the cookie NAME instead — the __Host-
+// prefix makes a browser refuse a Set-Cookie for this name that carries a Domain
+// attribute, so a sibling host under the same registrable domain can no longer
+// plant it. What remains is script already running on THIS origin, which is
+// game-over regardless of CSRF. The ORIGIN ALLOWLIST remains the mutation gate:
+// even a fixated token cannot be spent from a non-allowlisted origin. Note that
+// prefix rules are a BROWSER control — Go's net/http server and cookiejar treat
+// the name as an ordinary string, so a test may still supply any value it likes.
+// See TestCSRFBootstrapReusesForeignWellFormedToken, which pins the behavior.
+func currentCSRFToken(r *http.Request) (string, bool) {
+	cookie, err := r.Cookie(csrfCookieName)
+	if err != nil || cookie.Value == "" {
+		return "", false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(cookie.Value)
+	if err != nil || len(raw) != csrfTokenBytes {
+		return "", false
+	}
+	return cookie.Value, true
 }
 
 // isBearerOnly reports whether the request authenticates only via an
@@ -206,11 +264,54 @@ func originAllowed(origin string, allow []string) bool {
 	return false
 }
 
-// forbidCSRF writes the generic 403 for a rejected browser mutation. The
+// forbidCSRF writes the generic 403 for a rejected double-submit token. The
 // message never distinguishes which check failed, so a probe cannot map the
-// gate.
+// gate; the code stays web.ErrForbidden's permission_denied.
 func forbidCSRF(w http.ResponseWriter, msg string) {
 	web.RespondJSONError(w, web.ErrForbidden(msg))
+}
+
+// forbidOrigin writes the 403 for a request the ORIGIN gate rejected, carrying
+// the stable originRejectedCode. The human message stays the same non-sensitive
+// copy — the code, not the message, is what a client branches on, and a
+// misconfigured allowlist is the one thing worth diagnosing. It says nothing
+// about which origin would have been accepted.
+func forbidOrigin(w http.ResponseWriter) {
+	web.RespondJSONError(w, web.NewError(http.StatusForbidden, "cross-site request rejected").WithCode(originRejectedCode))
+}
+
+// csrfResponse is the GET /auth/csrf body. Token is ALWAYS the value of the
+// effective __Host-auth_csrf cookie on the same response, so a cross-origin SPA that
+// cannot read the API-origin cookie can still echo it in csrfHeaderName.
+type csrfResponse struct {
+	Token string `json:"csrf_token"`
+}
+
+// csrfBootstrap serves GET /auth/csrf: the JSON double-submit bootstrap for a
+// cookie-authenticated SPA on a different origin than the API, which cannot read
+// the __Host-auth_csrf cookie itself. The route is live-session-gated and rides the
+// origin-only browser gate (see Mount).
+//
+// It REUSES a well-formed existing token instead of rotating: another tab may be
+// holding the current value in flight, and blindly minting on every bootstrap
+// would invalidate it. A missing or malformed cookie mints a fresh token; a
+// randomness failure fails closed with a 500 and no token in the body. Either
+// way the response sets the cookie whose value the body reports, so the two can
+// never disagree.
+func (*handlers) csrfBootstrap(w http.ResponseWriter, r *http.Request) {
+	writeNoStore(w)
+	token, ok := currentCSRFToken(r)
+	if ok {
+		setCSRFCookie(w, token)
+	} else {
+		minted, err := issueCSRFToken(w)
+		if err != nil {
+			web.RespondJSONError(w, web.ErrInternal("could not issue a CSRF token"))
+			return
+		}
+		token = minted
+	}
+	web.RespondJSONOK(w, csrfResponse{Token: token})
 }
 
 // requireJSON enforces a strict application/json content type, writing 415 and

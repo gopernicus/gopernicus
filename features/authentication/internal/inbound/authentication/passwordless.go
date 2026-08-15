@@ -43,7 +43,7 @@ type passwordlessRedeemRequest struct {
 // credential-establishment endpoints (§9.1): each carries the allowlisted-Origin
 // gate (requireBrowserSafeOrigin) so a cross-site page cannot force a credential
 // mint, but NOT the double-submit CSRF gate — there is no pre-existing session, so
-// there is no auth_csrf cookie to compare, and a first-time browser sign-in must
+// there is no __Host-auth_csrf cookie to compare, and a first-time browser sign-in must
 // still succeed. A native/bearer client that sends no Origin passes the gate (the
 // non-cookie path). The blanket client-info middleware rides them via the wrapping
 // registrar for the rate-limit key.

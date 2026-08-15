@@ -282,7 +282,7 @@ func (h *handlers) resetPasswordForm(w http.ResponseWriter, r *http.Request) {
 // still log out. The route's origin-only middleware (requireBrowserSafeOrigin) has
 // already rejected a cross-site submit, so this skips both formOriginOK and a
 // csrf_token check — logout is deliberately origin-only (design §9.1, D2), never
-// double-submit gated, so a shared-computer logout with no live auth_csrf cookie is
+// double-submit gated, so a shared-computer logout with no live __Host-auth_csrf cookie is
 // never blocked. There is no form body to parse beyond the transport classification.
 func (h *handlers) logoutForm(w http.ResponseWriter, r *http.Request) {
 	refreshToken := ""

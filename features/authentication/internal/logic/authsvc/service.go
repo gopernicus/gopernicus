@@ -63,9 +63,12 @@ const (
 	// silently truncated (the bcrypt integration also errors past its 72-byte limit
 	// rather than truncating — the no-silent-truncation contract holds end to end).
 	maxPasswordInputBytes = 256
-	// refreshCookiePath scopes the refresh cookie to /auth (D4): it covers
-	// /auth/refresh AND /auth/logout, never riding on unrelated requests.
-	refreshCookiePath = "/auth"
+	// defaultRefreshCookiePath scopes the refresh cookie to /auth (D4) when
+	// CookieConfig.RefreshPath is unset: it covers /auth/refresh AND /auth/logout,
+	// never riding on unrelated requests. A host mounting the feature under a path
+	// prefix supplies the full prefixed path (auth.Config.RefreshCookiePath, e.g.
+	// "/api/v1/auth"), which package auth validates before it reaches here.
+	defaultRefreshCookiePath = "/auth"
 	// loginAttemptsPerMinute caps failed+successful login attempts per
 	// (email, client-IP) window before Login refuses with ErrRateLimited.
 	loginAttemptsPerMinute = 5
@@ -173,13 +176,20 @@ type invitationResolver interface {
 }
 
 // CookieConfig is the resolved session-cookie policy. The auth package fills it
-// from auth.Config.SessionCookie (applying name/path defaults).
+// from auth.Config.SessionCookie (applying name/path defaults) plus
+// auth.Config.RefreshCookiePath.
 type CookieConfig struct {
 	Name   string
 	Path   string
 	Domain string
 	Secure bool
 	MaxAge int // seconds; also the session lifetime when > 0
+	// RefreshPath scopes the refresh cookie (auth.Config.RefreshCookiePath). Empty
+	// → defaultRefreshCookiePath ("/auth"). It is the SINGLE path used to both
+	// issue and delete the refresh cookie, so a prefixed host ("/api/v1/auth")
+	// clears exactly what it set. Package auth validates a host override as an
+	// absolute cookie path before it reaches here.
+	RefreshPath string
 }
 
 // Deps are the collaborators the Service needs. The auth package builds this
@@ -455,6 +465,9 @@ func NewService(d Deps) *Service {
 	}
 	if cookie.Path == "" {
 		cookie.Path = "/"
+	}
+	if cookie.RefreshPath == "" {
+		cookie.RefreshPath = defaultRefreshCookiePath
 	}
 	providers := make(map[string]oauth.Provider, len(d.Providers))
 	for _, p := range d.Providers {
@@ -1005,9 +1018,10 @@ func (s *Service) CurrentUser(ctx context.Context) (string, bool) {
 // SameSite=Lax, Secure/Domain/MaxAge from config). It sets the refresh cookie
 // only when pair.RefreshToken is non-empty (so the grace lane, which issues no
 // new refresh token, leaves the client's refresh cookie intact); the refresh
-// cookie is HttpOnly, Path=/auth (covers /auth/refresh AND /auth/logout),
-// SameSite=Lax explicit (CSRF posture for the cookie-driven refresh endpoint),
-// with MaxAge tracking the fixed refresh horizon.
+// cookie is HttpOnly, scoped to the resolved refresh-cookie path (default
+// "/auth", covering /auth/refresh AND /auth/logout; a prefixed host configures
+// "/api/v1/auth"), SameSite=Lax explicit (CSRF posture for the cookie-driven
+// refresh endpoint), with MaxAge tracking the fixed refresh horizon.
 func (s *Service) SetSessionCookies(w http.ResponseWriter, pair TokenPair) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     s.cookie.Name,
@@ -1040,13 +1054,16 @@ func (s *Service) ClearSessionCookies(w http.ResponseWriter) {
 	http.SetCookie(w, s.refreshCookie("", -1))
 }
 
-// refreshCookie builds the refresh cookie with the fixed Path=/auth scope and the
-// explicit SameSite=Lax policy (D4). maxAge < 0 expires it.
+// refreshCookie builds the refresh cookie with the resolved refresh-cookie path
+// scope (CookieConfig.RefreshPath; "/auth" by default) and the explicit
+// SameSite=Lax policy (D4). maxAge < 0 expires it. It is the single construction
+// point for every refresh-cookie issue and deletion, so the issued and cleared
+// cookies can never be scoped to different paths.
 func (s *Service) refreshCookie(value string, maxAge int) *http.Cookie {
 	return &http.Cookie{
 		Name:     s.refreshCookieName(),
 		Value:    value,
-		Path:     refreshCookiePath,
+		Path:     s.cookie.RefreshPath,
 		Domain:   s.cookie.Domain,
 		Secure:   s.cookie.Secure,
 		HttpOnly: true,

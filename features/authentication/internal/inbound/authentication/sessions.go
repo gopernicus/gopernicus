@@ -15,7 +15,6 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
-	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
@@ -49,6 +48,11 @@ type authService interface {
 	CurrentUser(ctx context.Context) (userID string, ok bool)
 	CurrentSessionID(ctx context.Context) (sessionID string, ok bool)
 	ActiveVerifiedIdentifier(ctx context.Context, userID, kind string) (string, error)
+
+	// CurrentUserView is the live-session-gated hydration read behind GET /auth/me:
+	// the user aggregate plus the account's unmasked active email identity and its
+	// proof state, shaped so /auth/me reports exactly what login reported.
+	CurrentUserView(ctx context.Context, userID string) (authsvc.CurrentUserView, error)
 
 	// ResolveRedirect validates an HTML form's return-to against the exact redirect
 	// allowlist, returning the safe destination or the same-origin default "/" (design
@@ -214,17 +218,29 @@ type userResponse struct {
 	EmailVerified bool   `json:"email_verified"`
 }
 
-// userResponseFor renders the compatibility DTO, sourcing the email/verified
-// state from the caller's active verified email identifier — the authoritative
-// post-v3 identity. While the primary is still unverified (a just-registered
-// account has no verified identifier yet), it falls back to the submitted request
-// email with email_verified=false.
-func (h *handlers) userResponseFor(ctx context.Context, u user.User, requestEmail string) userResponse {
-	email, verified := requestEmail, false
-	if v, err := h.svc.ActiveVerifiedIdentifier(ctx, u.ID, identity.KindEmail); err == nil {
-		email, verified = v, true
-	}
+// newUserResponse is the ONE construction site for the compatibility DTO. Login,
+// register/OAuth (through userResponseFor) and GET /auth/me (through the service's
+// CurrentUserView) all render here, so the three paths cannot drift in shape.
+func newUserResponse(u user.User, email string, verified bool) userResponse {
 	return userResponse{ID: u.ID, Email: email, DisplayName: u.DisplayName, EmailVerified: verified}
+}
+
+// userResponseFor renders the compatibility DTO, sourcing the email/verified
+// state from the SAME projection GET /auth/me reads (CurrentUserView): the
+// account's active email identity — verified when one exists, otherwise the active
+// unverified primary — always the NORMALIZED stored value. Reading the one
+// projection is what keeps login, register and /auth/me from drifting: submitting
+// "New@Example.com" to register no longer reports back a raw address /auth/me then
+// reports as "new@example.com".
+//
+// The submitted request email remains the fallback for the only cases the
+// projection cannot serve — an unwired identity rail, or an account with no active
+// email identifier at all (an OAuth caller passes "" for it).
+func (h *handlers) userResponseFor(ctx context.Context, u user.User, requestEmail string) userResponse {
+	if view, err := h.svc.CurrentUserView(ctx, u.ID); err == nil && view.Email != "" {
+		return newUserResponse(u, view.Email, view.EmailVerified)
+	}
+	return newUserResponse(u, requestEmail, false)
 }
 
 // registerJSON is the JSON transport for POST /auth/register. The content-type
