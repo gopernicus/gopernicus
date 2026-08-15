@@ -245,7 +245,10 @@ type oauthHarness struct {
 	events   *spySecurityEvents
 }
 
-func newOAuthHarness(t *testing.T, provider *fakeProvider, enc cryptids.Encrypter) *oauthHarness {
+// newOAuthHarness builds the OAuth fixture. opts mutate the assembled Deps before
+// construction, so a test can wire an otherwise-absent collaborator (the
+// invitation resolver) without every call site growing a parameter.
+func newOAuthHarness(t *testing.T, provider *fakeProvider, enc cryptids.Encrypter, opts ...func(*Deps)) *oauthHarness {
 	t.Helper()
 	users := newFakeUsers()
 	pw := newFakePasswords()
@@ -261,7 +264,7 @@ func newOAuthHarness(t *testing.T, provider *fakeProvider, enc cryptids.Encrypte
 		provider: provider,
 		events:   newSpySecurityEvents(),
 	}
-	h.svc = NewService(Deps{
+	deps := Deps{
 		Users:               h.users,
 		Identifiers:         h.idents,
 		CredentialMutations: h.creds,
@@ -278,7 +281,11 @@ func newOAuthHarness(t *testing.T, provider *fakeProvider, enc cryptids.Encrypte
 		RedirectAllowlist:   []string{"https://app.example.com/welcome"},
 		SecurityEvents:      h.events,
 		TokenSigner:         newFakeSigner(),
-	})
+	}
+	for _, opt := range opts {
+		opt(&deps)
+	}
+	h.svc = NewService(deps)
 	wireSyncDelivery(t, h.svc, h.mailer, nil)
 	return h
 }

@@ -159,6 +159,44 @@ func TestSend_InvalidMessageNeverCallsAPI(t *testing.T) {
 	}
 }
 
+func TestCapabilities_DefaultHostIsProductionCapable(t *testing.T) {
+	sender := New(Config{APIKey: "k"}) // empty Host: SendGrid's default endpoint
+
+	caps := sender.Capabilities()
+	if caps.TransportSecurity != email.TransportSecurityTLS {
+		t.Errorf("TransportSecurity = %q, want %q", caps.TransportSecurity, email.TransportSecurityTLS)
+	}
+	if caps.DevelopmentOnly {
+		t.Error("DevelopmentOnly = true, want false for the default SendGrid host")
+	}
+}
+
+func TestCapabilities_ExplicitHTTPSHostIsProductionCapable(t *testing.T) {
+	sender := New(Config{APIKey: "k", Host: "https://api.eu.sendgrid.com"})
+
+	caps := sender.Capabilities()
+	if caps.TransportSecurity != email.TransportSecurityTLS {
+		t.Errorf("TransportSecurity = %q, want %q", caps.TransportSecurity, email.TransportSecurityTLS)
+	}
+	if caps.DevelopmentOnly {
+		t.Error("DevelopmentOnly = true, want false for an explicit HTTPS host")
+	}
+}
+
+func TestCapabilities_NonHTTPSHostIsDevelopmentOnly(t *testing.T) {
+	// newFakeSendGrid wires Config.Host to a plain-HTTP httptest.Server, the
+	// same shape as a local emulator: it must not claim production capability.
+	sender, _ := newFakeSendGrid(t, Config{APIKey: "k"}, http.StatusAccepted, "")
+
+	caps := sender.Capabilities()
+	if caps.DevelopmentOnly != true {
+		t.Error("DevelopmentOnly = false, want true for a non-HTTPS host")
+	}
+	if caps.TransportSecurity == email.TransportSecurityTLS {
+		t.Errorf("TransportSecurity = %q, must not claim TLS for a non-HTTPS host", caps.TransportSecurity)
+	}
+}
+
 func TestSend_StatusErrorsMapToKinds(t *testing.T) {
 	tests := []struct {
 		name   string

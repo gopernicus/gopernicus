@@ -252,6 +252,28 @@ decline is public:**
 - `POST /auth/invitations/{id}/decline` — public, token-authorized, IP-limited
   (the one invitation route with no session gate).
 
+Every response built from an invitation row (pending create, resource/mine list,
+resend) is `{id, resource_type, resource_id, relation, identifier, invited_by,
+status, auto_accept, resolved_subject_id?, expires_at, accepted_at?,
+created_at}`. It carries **no token** — the secret is only ever in the mail.
+`invited_by` is the owning user id, the same value cancel/resend ownership is
+enforced on, so a resource list can hide actions on another admin's rows; it is a
+rendering hint, never authority.
+
+**Resolve-on-provisioning.** A pending AUTO-ACCEPT invitation for an address is
+granted the moment an account for that address comes into existence, with no
+`POST /auth/invitations/accept` call: `Register` (so a no-verify host still
+resolves), `Verify`, and the OAuth register-and-link branch — a brand-new
+password-less account provisioned from a **provider-verified** email. All three
+call the one internal resolver, which is best-effort (a failure never fails
+registration or the OAuth login, and is audited by the invitation service) and
+idempotent (a resolved invitation moves off pending, so a second pass is a no-op
+and a failed grant stays pending for the next attempt). Ordinary OAuth login of an
+already-linked user and a pending-link completion for an already-registered
+address are **not** provisioning events and never re-grant — an address that
+already belongs to an account was direct-added at create time. Non-auto-accept
+invitations are never resolved this way; they stay pending for an explicit accept.
+
 **The Granter contract and invitation authority (D1–D3).** `Config.Granter` is
 the host seam an accepted, auto-accepted, or directly-added invitation grants
 through — a structured, operation-scoped request:

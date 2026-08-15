@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,6 +60,10 @@ type spyInvitationService struct {
 	cancelCalled bool
 	resendCalled bool
 	createResult invitationsvc.CreateResult
+	// listPage / resendResult are the configurable list and resend outcomes the
+	// response-shape tests assert the DTO mapping over.
+	listPage     crud.Page[invitation.Invitation]
+	resendResult invitation.Invitation
 }
 
 func (s *spyInvitationService) Create(context.Context, invitationsvc.CreateInput) (invitationsvc.CreateResult, error) {
@@ -67,7 +72,7 @@ func (s *spyInvitationService) Create(context.Context, invitationsvc.CreateInput
 }
 func (s *spyInvitationService) ListByResource(context.Context, string, string, crud.ListRequest) (crud.Page[invitation.Invitation], error) {
 	s.listCalled = true
-	return crud.Page[invitation.Invitation]{}, nil
+	return s.listPage, nil
 }
 func (s *spyInvitationService) Mine(context.Context, string, crud.ListRequest) (crud.Page[invitation.Invitation], error) {
 	s.mineCalled = true
@@ -84,7 +89,7 @@ func (s *spyInvitationService) Cancel(context.Context, string, string) error {
 }
 func (s *spyInvitationService) Resend(context.Context, string, string, string) (invitation.Invitation, error) {
 	s.resendCalled = true
-	return invitation.Invitation{}, nil
+	return s.resendResult, nil
 }
 
 // newInvitationTestHandler mounts the routes with a wired InvitationService, so
@@ -122,6 +127,14 @@ type invitationFixture struct {
 
 func newInvitationFixture(t *testing.T, check invitationsvc.InviteCheck, limiter ratelimiter.Limiter) invitationFixture {
 	t.Helper()
+	return newInvitationFixtureWith(t, nil, check, limiter)
+}
+
+// newInvitationFixtureWith is newInvitationFixture with an explicit
+// InvitationService: nil mounts the recording spy (fixture.inv), and a supplied
+// service replaces it for tests that need service-side behavior (ownership).
+func newInvitationFixtureWith(t *testing.T, inv InvitationService, check invitationsvc.InviteCheck, limiter ratelimiter.Limiter) invitationFixture {
+	t.Helper()
 	if limiter == nil {
 		limiter = ratelimiter.NewMemory()
 	}
@@ -130,6 +143,9 @@ func newInvitationFixture(t *testing.T, check invitationsvc.InviteCheck, limiter
 	passwords := &memPasswords{m: map[string]string{}}
 	sessions := &memSessions{m: map[string]session.Session{}}
 	spy := &spyInvitationService{}
+	if inv == nil {
+		inv = spy
+	}
 	svc := authsvc.NewService(authsvc.Deps{
 		Users:       users,
 		Identifiers: idents,
@@ -141,7 +157,7 @@ func newInvitationFixture(t *testing.T, check invitationsvc.InviteCheck, limiter
 		TokenSigner: newFakeSigner(),
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, spy, check, crud.StrategyCursor, MutationSecurity{}, nil, nil)
+	Mount(h, svc, inv, check, crud.StrategyCursor, MutationSecurity{}, nil, nil)
 	return invitationFixture{h: h, users: users, idents: idents, passwords: passwords, sessions: sessions, inv: spy}
 }
 
@@ -422,6 +438,151 @@ func TestInvitationDeclineRateLimited(t *testing.T) {
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("rate-limited decline = %d, want 429; body=%s", rec.Code, rec.Body)
 	}
+}
+
+// TestInvitationResponseCarriesInvitedBy proves the owner field is on EVERY
+// response built from the invitation DTO mapper — create (201), resource list
+// (200), and resend (200) — so a resource list can tell the rows the current admin
+// owns from another admin's. It is an identifier, never the token: the response
+// still carries no secret. The server enforces ownership on cancel/resend
+// regardless of what a client renders (see TestInvitationCancelResend*).
+func TestInvitationResponseCarriesInvitedBy(t *testing.T) {
+	const owner = "u-owner"
+	other := invitation.Invitation{
+		ID: "inv-2", ResourceType: "project", ResourceID: "p1", Relation: "member",
+		Identifier: "carol@example.com", InvitedBy: "u-other", Status: "pending",
+		ExpiresAt: time.Now().Add(time.Hour), CreatedAt: time.Now(),
+	}
+	mine := invitation.Invitation{
+		ID: "inv-1", ResourceType: "project", ResourceID: "p1", Relation: "member",
+		Identifier: "bob@example.com", InvitedBy: owner, Status: "pending",
+		ExpiresAt: time.Now().Add(time.Hour), CreatedAt: time.Now(),
+	}
+
+	assertNoToken := func(t *testing.T, body string) {
+		t.Helper()
+		if strings.Contains(body, "token") {
+			t.Fatalf("response leaked a token field: %s", body)
+		}
+	}
+
+	t.Run("create", func(t *testing.T) {
+		f := newInvitationFixture(t, allowInviteCheck, nil)
+		f.inv.createResult = invitationsvc.CreateResult{Invitation: mine}
+		f.seedLoginUser(owner, "alice@example.com")
+		cookie := f.login(t, "alice@example.com")
+
+		rec := do(t, f.h, "POST", "/auth/invitations/project/p1",
+			`{"identifier":"bob@example.com","relation":"member","auto_accept":true}`, cookie)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create = %d, want 201; body=%s", rec.Code, rec.Body)
+		}
+		var resp invitationResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v; body=%s", err, rec.Body)
+		}
+		if resp.InvitedBy != owner {
+			t.Errorf("create invited_by = %q, want %q", resp.InvitedBy, owner)
+		}
+		assertNoToken(t, rec.Body.String())
+	})
+
+	t.Run("resource list", func(t *testing.T) {
+		f := newInvitationFixture(t, allowInviteCheck, nil)
+		f.inv.listPage = crud.Page[invitation.Invitation]{Items: []invitation.Invitation{mine, other}}
+		f.seedLoginUser(owner, "alice@example.com")
+		cookie := f.login(t, "alice@example.com")
+
+		rec := do(t, f.h, "GET", "/auth/invitations/project/p1", "", cookie)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("list = %d, want 200; body=%s", rec.Code, rec.Body)
+		}
+		var page pageResponse[invitationResponse]
+		if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+			t.Fatalf("decode: %v; body=%s", err, rec.Body)
+		}
+		if len(page.Items) != 2 {
+			t.Fatalf("list items = %d, want 2", len(page.Items))
+		}
+		if page.Items[0].InvitedBy != owner || page.Items[1].InvitedBy != "u-other" {
+			t.Errorf("list invited_by = [%q %q], want [%q u-other]",
+				page.Items[0].InvitedBy, page.Items[1].InvitedBy, owner)
+		}
+		assertNoToken(t, rec.Body.String())
+	})
+
+	t.Run("resend", func(t *testing.T) {
+		f := newInvitationFixture(t, allowInviteCheck, nil)
+		f.inv.resendResult = mine
+		f.seedLoginUser(owner, "alice@example.com")
+		cookie := f.login(t, "alice@example.com")
+
+		rec := do(t, f.h, "POST", "/auth/invitations/inv-1/resend", "", cookie)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("resend = %d, want 200; body=%s", rec.Code, rec.Body)
+		}
+		var resp invitationResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v; body=%s", err, rec.Body)
+		}
+		if resp.InvitedBy != owner {
+			t.Errorf("resend invited_by = %q, want %q", resp.InvitedBy, owner)
+		}
+		assertNoToken(t, rec.Body.String())
+	})
+}
+
+// TestInvitationCancelResendOwnershipStaysServerEnforced proves the additive
+// invited_by field changed nothing about authorization: cancel and resend still
+// pass the SESSION caller's id to the service, which is the value ownership is
+// enforced on. A non-owner caller is refused (403) even though the list response
+// now tells every admin who owns a row; the field is a rendering hint, never
+// authority.
+func TestInvitationCancelResendOwnershipStaysServerEnforced(t *testing.T) {
+	routes := []struct{ name, path string }{
+		{"cancel", "/auth/invitations/inv-1/cancel"},
+		{"resend", "/auth/invitations/inv-1/resend"},
+	}
+	for _, rt := range routes {
+		t.Run(rt.name+"/owner", func(t *testing.T) {
+			f := newInvitationFixtureWith(t, &ownerAwareInvitationService{owner: "u-owner"}, allowInviteCheck, nil)
+			f.seedLoginUser("u-owner", "owner@example.com")
+			rec := do(t, f.h, "POST", rt.path, "", f.login(t, "owner@example.com"))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("owner %s = %d, want 200; body=%s", rt.name, rec.Code, rec.Body)
+			}
+		})
+		t.Run(rt.name+"/non-owner", func(t *testing.T) {
+			f := newInvitationFixtureWith(t, &ownerAwareInvitationService{owner: "u-owner"}, allowInviteCheck, nil)
+			f.seedLoginUser("u-other", "other@example.com")
+			rec := do(t, f.h, "POST", rt.path, "", f.login(t, "other@example.com"))
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("non-owner %s = %d, want 403; body=%s", rt.name, rec.Code, rec.Body)
+			}
+		})
+	}
+}
+
+// ownerAwareInvitationService enforces InvitedBy ownership like the real service,
+// so a handler test can assert the session caller id (never a client-supplied
+// value) is what cancel/resend authorize on.
+type ownerAwareInvitationService struct {
+	stubInvitationService
+	owner string
+}
+
+func (s *ownerAwareInvitationService) Cancel(_ context.Context, _, currentUserID string) error {
+	if currentUserID != s.owner {
+		return fmt.Errorf("not the invitation owner: %w", sdk.ErrForbidden)
+	}
+	return nil
+}
+
+func (s *ownerAwareInvitationService) Resend(_ context.Context, _, currentUserID, _ string) (invitation.Invitation, error) {
+	if currentUserID != s.owner {
+		return invitation.Invitation{}, fmt.Errorf("not the invitation owner: %w", sdk.ErrForbidden)
+	}
+	return invitation.Invitation{ID: "inv-1", InvitedBy: s.owner, Status: "pending"}, nil
 }
 
 // compile-time proof the spy satisfies the consumed InvitationService port.

@@ -54,6 +54,24 @@ repository contract changed). Read the three upgrade notes below before adopting
 pgxdb v0.3.0 ships **host schema**, and the sdk note carries the batch's one silent
 behavior change (`HandleRaw` no longer bypasses global middleware).
 
+**2026-08-15: `integrations/email/sendgrid/v0.2.0`** — truthful capability
+metadata (plan of record, in the Coordination-Hub repo,
+`.claude/plans/email-and-invitations.md`, task U1). A **minor**: `Sender` now
+implements `email.CapabilityReporter`, describing the configured instance —
+the default host and explicit HTTPS hosts report TLS/production-capable; a
+non-HTTPS custom host (tests, local emulators) reports development-only. No
+breaking API change. See the upgrade note below.
+
+**2026-08-15: `features/authentication/v0.2.1`** — the
+add-or-signup invitation lifecycle fix (plan of record, in the Coordination-Hub
+repo, `.claude/plans/email-and-invitations.md`, task U2). A **patch**: a brand-new
+OAuth-provisioned account now resolves its pending auto-accept invitations through
+the same best-effort resolver `Register`/`Verify` use, and the invitation JSON
+response gains the additive `invited_by` owner field. No exported API change, no
+schema change, no `go.mod` change (still `sdk v0.3.0`), and no store retags. Read
+the upgrade note below before adopting — it pins which OAuth branches do and do
+not grant.
+
 ## Tagging scheme
 
 Nested Go modules in a single repo are tagged with the module's directory as a
@@ -234,6 +252,71 @@ flow depends on the CORS seam above, and pinning is what stops a host from adopt
   Statuses and human messages are unchanged, so this is a diagnosability gain, not a
   client break — a host that boot-fails on a CORS/auth allowlist mismatch can now
   read the runtime symptom instead.
+
+### features/authentication — v0.2.1 (2026-08-15): add-or-signup invitation lifecycle finished (patch)
+
+coordination-hub `email-and-invitations` task U2 (plan of record, in the
+Coordination-Hub repo, `.claude/plans/email-and-invitations.md`). Both changes are
+additive/behavioral with no exported API change and no schema change, so a
+**patch**. `go.mod` is unchanged (still `sdk v0.3.0`); no store module retags.
+
+- **A brand-new OAuth-provisioned account now resolves its pending auto-accept
+  invitations.** The OAuth register-and-link branch (branch 3 — no account claims
+  the provider-verified email, so a password-less user is created and linked) calls
+  the SAME best-effort invitation resolver `Register` and `Verify` already call,
+  with the account's normalized stored primary email and its new user id. It runs
+  after the user + verified primary identifier + provider link exist and BEFORE the
+  session is minted, so the grants are effective before the caller ever holds a
+  session token. The contract is unchanged: nil resolver (invitations off) is a
+  no-op, a resolver error is a WARN line that never fails provisioning or the OAuth
+  login, and the invitation service audits each grant/failure itself. **This was
+  previously the one lifecycle hole in the add-or-signup product shape**: a host
+  that invited an unknown address and had the recipient sign up with Google left
+  the invitation pending forever.
+  - **No other OAuth branch resolves.** Ordinary login of an already-linked
+    identity (branch 1) and pending-link start/completion for an
+    already-registered address (branch 2) are not provisioning events, so they
+    never re-grant — an address that already belongs to an account is
+    direct-added at invitation-create time instead. A host that adopts this tag
+    therefore sees at most ONE grant per invitation per account, not one per
+    sign-in.
+  - Resolution is idempotent: a resolved invitation moves off pending, so a
+    second pass is a no-op, and a grant that failed stays pending and is retried
+    on the account's next resolve site.
+  - Unchanged and deliberate: the invitee lookup that decides direct-add vs
+    pending invitation is an ACCOUNT-EXISTENCE test, so an account still awaiting
+    registration verification is direct-added like any other registered email.
+    `Config.RequireVerifiedEmail` remains the independent password-login gate —
+    such a user holds the relation but cannot log in until `Verify` succeeds.
+    Non-auto-accept invitations are never resolved this way.
+- **`invited_by` is added to the invitation JSON response** (pending create, the
+  resource and `mine` lists, and resend all share one mapper). It is the owning
+  user id — the same value cancel/resend ownership is already enforced on — so an
+  admin-facing list can hide actions on another admin's rows. **Purely additive**:
+  no field was removed or renamed, the response still carries no token, and the
+  server enforces ownership regardless of what a client renders. A client that
+  ignores the field is unaffected.
+
+### integrations/email/sendgrid — v0.2.0 (2026-08-15): truthful capability metadata (minor)
+
+coordination-hub `email-and-invitations` task U1 (plan of record, in the
+Coordination-Hub repo, `.claude/plans/email-and-invitations.md`). Additive
+(**minor**): `Sender` now implements `email.CapabilityReporter`. The report is
+instance-sensitive — it describes the configured `Config.Host`, not merely the
+package default:
+
+- empty host (SendGrid's default `https://api.sendgrid.com`) or an explicit
+  `https://` host → `{TransportSecurity: TLS, DevelopmentOnly: false}`;
+- any non-HTTPS host (an httptest server, a local emulator) →
+  `{TransportSecurity: None, DevelopmentOnly: true}` — a test instance can no
+  longer claim production capability.
+
+Why it matters to adopters: `features/authentication`'s production runtime mode
+fail-closes on senders that declare no metadata or declare `DevelopmentOnly`.
+Before this tag a SendGrid sender was indistinguishable from a console mailer to
+that gate; after it, `AUTH_RUNTIME_MODE=production` can boot on a real SendGrid
+instance while test-pointed instances still fail closed. No exported API
+removed or renamed; `go.mod` unchanged.
 
 ### integrations/datastores/pgxdb — v0.3.0 (2026-08-14): durable rate limiter — this tag ships HOST SCHEMA (minor)
 

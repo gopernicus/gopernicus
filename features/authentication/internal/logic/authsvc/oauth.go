@@ -442,6 +442,14 @@ func (s *Service) linkAccount(ctx context.Context, userID, providerName string, 
 // reached only past the §5.7 gate), so the primary identifier is created VERIFIED —
 // login-, recovery-, and notification-enabled and primary. normEmail is the
 // already-normalized provider email.
+//
+// It is also the SINGLE OAuth site that resolves pending auto-accept invitations
+// (design §6): branch 3 is the only branch that PROVISIONS an account, so an
+// ordinary login of an already-linked identity (branch 1) and a pending-link
+// adoption of an already-registered address (branch 2) never re-grant. Branch 2's
+// account was already registered, so an invitation for its address was direct-added
+// at Create time — resolving again there would be a second grant for a lifecycle
+// event that is not an account creation.
 func (s *Service) registerAndLink(ctx context.Context, providerName, normEmail string, ident providerIdentity, tok *oauth.TokenResponse, redirectTo string) (OAuthResult, error) {
 	now := s.now()
 	primary, err := identifier.New(s.ids, s.normalizer, "", identifier.KindEmail, ident.Email,
@@ -450,13 +458,24 @@ func (s *Service) registerAndLink(ctx context.Context, providerName, normEmail s
 		return OAuthResult{}, err
 	}
 	u := user.NewUser(s.ids, "", now)
-	created, _, err := s.users.CreateWithPrimaryIdentifier(ctx, u, primary)
+	created, createdIdent, err := s.users.CreateWithPrimaryIdentifier(ctx, u, primary)
 	if err != nil {
 		return OAuthResult{}, err
 	}
 	if _, err := s.linkAccount(ctx, created.ID, providerName, ident, tok); err != nil {
 		return OAuthResult{}, err
 	}
+	// The account and its provider-VERIFIED primary email now exist and are linked, so
+	// the invitee's pending auto-accept invitations resolve exactly as they do at
+	// Register — same best-effort port, same normalized stored identifier value, same
+	// (user, id) subject. It runs BEFORE mintSession so the grants are effective before
+	// the caller ever holds a session token, and it is best-effort by contract: a
+	// failed or absent resolver never fails provisioning or the OAuth login.
+	primaryEmail := createdIdent.NormalizedValue
+	if primaryEmail == "" {
+		primaryEmail = normEmail // a store that does not echo the identifier back
+	}
+	s.resolvePendingInvitations(ctx, primaryEmail, created.ID)
 	pair, err := s.mintSession(ctx, created.ID, s.primaryAuthentication(session.MethodOAuth))
 	if err != nil {
 		return OAuthResult{}, err

@@ -23,6 +23,21 @@ SaaS mailer lives in its own module and is swapped in at the composition root.
 region). The sdk `email.Message` carries only a bare `From` address, so
 `FromName` supplies the optional display name paired with it.
 
+## Capability metadata
+
+`Sender` implements `email.CapabilityReporter`, so a production host can fail
+closed rather than trust an undeclared transport. `Capabilities()` describes
+the *configured instance* — it inspects the receiver's `Config.Host`, not
+merely SendGrid's default endpoint:
+
+- an empty `Config.Host` (SendGrid's default, `https://api.sendgrid.com`) or
+  any explicit `https://` host reports `{TransportSecurity: tls,
+  DevelopmentOnly: false}` — production-capable, since both deliver over TLS;
+- any other `Config.Host` (a plain-`http://` test server or local emulator)
+  reports `{TransportSecurity: none, DevelopmentOnly: true}` — it cannot
+  deliver over TLS, so it must not claim production capability regardless of
+  which vendor's API it emulates.
+
 ## Error contract
 
 `Send` calls `email.Message.Validate()` first (invalid input wraps
@@ -40,3 +55,8 @@ host — capture the constructed request in the handler, and assert the auth
 header, recipients, subject, from address, and content types, plus the non-2xx
 error mappings. There is deliberately no live SendGrid leg: a real call would
 send real email.
+
+`Capabilities()` is covered per configured instance: an empty `Config.Host`,
+an explicit `https://` host, and the plain-`http://` `httptest.Server` host the
+other tests already point the client at — the last of these must report
+`DevelopmentOnly: true` and must not claim `TransportSecurityTLS`.
