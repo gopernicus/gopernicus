@@ -1,7 +1,27 @@
 # coordination-hub-auth-upstream — owner-cut tag manifest
 
-Prepared by U7 (2026-08-14). **Nothing here has been committed, tagged, or
-pushed.** Tags are owner-cut and immutable; a correction is a new patch tag,
+Prepared by U7 (2026-08-14). **RELEASED 2026-08-15** on owner dispatch:
+batch commit `261f859` (with the owner-approved `__Host-auth_csrf` rename
+folded in), all three tags cut and pushed on it, cold-scratch resolution
+verified for each, post-tag `make tidy` committed as `fe3dc65`, and
+coordination-hub repinned on `authentication-ui` (`d4ccfad`).
+
+Release evidence:
+
+- `make check` green on `261f859` before tagging.
+- live-stores dispatches on `261f859`: runs 31889882851 and 31890041347.
+  Job `redis-pgxdb` (the limiter gate) **passed in both**. Job
+  `postgres-turso` failed in both on
+  `TestConformance_Postgres/Sessions/RotationKeepsExpiresAt` — a ns-vs-µs
+  timestamp-precision assertion in `features/authentication/stores/pgx`
+  (untouched since its v0.1.0 tag, not retagged by this batch; passes
+  locally against postgres:17, last CI green 2026-07-07 on identical code).
+  Recorded as a known flake / follow-up, not a batch defect.
+- Cold scratch: `sdk@v0.3.0`, `features/authentication@v0.2.0` (selected
+  sdk v0.3.0 with no workspace — the pin proof), `pgxdb@v0.3.0` all
+  resolved and built.
+
+Tags are owner-cut and immutable; a correction is a new patch tag,
 never a retag.
 
 Plan of record: the batch plan file (working tree `1.md` at the repo root —
