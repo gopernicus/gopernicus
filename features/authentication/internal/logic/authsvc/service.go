@@ -673,9 +673,10 @@ func (s *Service) Verify(ctx context.Context, emailAddr, code string) error {
 // auto-accept invitations, best-effort (design §6): a nil collaborator (off) or
 // any error never affects the register/verify outcome — one failed grant never
 // aborts registration. The invitation service audits each grant/failure itself;
-// here a resolve error is a coarse WARN line. Called from both Register (so a
-// no-verify host still resolves) and Verify; a second pass is a no-op because
-// resolved invitations move off pending.
+// here a resolve error is a coarse WARN line. Called from Register (so a
+// no-verify host still resolves), Verify, and the OAuth register-and-link branch
+// (a brand-new provider-provisioned account with a provider-verified email); a
+// second pass is a no-op because resolved invitations move off pending.
 func (s *Service) resolvePendingInvitations(ctx context.Context, email, userID string) {
 	if s.invitations == nil {
 		return

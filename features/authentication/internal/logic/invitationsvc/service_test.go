@@ -383,6 +383,71 @@ func TestResolveInvitationsBestEffort(t *testing.T) {
 	}
 }
 
+// TestResolveInvitationsRetryAndIdempotence: a grant that failed leaves its row
+// PENDING, so a later resolve for the same email retries exactly that row — and
+// only that row. An already-accepted row is off pending, so a second pass never
+// re-grants it. This is the contract the register/verify/OAuth-provision sites
+// lean on: they may each call the resolver for one account without duplicating a
+// grant, and a transient grant failure is recoverable on the next attempt.
+func TestResolveInvitationsRetryAndIdempotence(t *testing.T) {
+	repo := newFakeInvRepo()
+	granter := &fakeGranter{failOn: "B"}
+	svc := newSvc(t, repo, granter, Deps{})
+
+	future := time.Now().Add(time.Hour)
+	invA := seedInvite(t, repo, "project", "A", "member", "sub@x.com", "inviter", "s-a", true, future)
+	invB := seedInvite(t, repo, "project", "B", "member", "sub@x.com", "inviter", "s-b", true, future)
+
+	n, err := svc.ResolveInvitations(context.Background(), "sub@x.com", "user", "user-7")
+	if err != nil {
+		t.Fatalf("first ResolveInvitations: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("first resolve count = %d, want 1 (A; B's grant failed)", n)
+	}
+
+	// The failed row is still pending and the succeeded one is accepted.
+	if got, _ := repo.Get(context.Background(), invB.ID); got.Status != invitation.StatusPending {
+		t.Fatalf("failed grant left status %q, want pending (retryable)", got.Status)
+	}
+	if got, _ := repo.Get(context.Background(), invA.ID); got.Status != invitation.StatusAccepted {
+		t.Fatalf("succeeded grant status = %q, want accepted", got.Status)
+	}
+
+	// The retry: the transient failure clears, so only the still-pending row is
+	// granted again. A already moved off pending and is never re-granted.
+	granter.failOn = ""
+	granter.calls = nil
+	granter.ops = nil
+	n, err = svc.ResolveInvitations(context.Background(), "sub@x.com", "user", "user-7")
+	if err != nil {
+		t.Fatalf("retry ResolveInvitations: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("retry resolve count = %d, want 1 (B only)", n)
+	}
+	want := grantCall{"project", "B", "member", "user", "user-7"}
+	if len(granter.calls) != 1 || granter.calls[0] != want {
+		t.Fatalf("retry Grant calls = %+v, want exactly [%+v]", granter.calls, want)
+	}
+	// The operation ID of a retried grant is the durable invitation row id, so the
+	// host sees one logical operation across the failure and the retry.
+	if len(granter.ops) != 1 || granter.ops[0] != invB.ID {
+		t.Errorf("retry operation ids = %+v, want [%s] (the invitation row id)", granter.ops, invB.ID)
+	}
+
+	// A third pass has nothing left to do — resolve is idempotent.
+	granter.calls = nil
+	granter.ops = nil
+	n, err = svc.ResolveInvitations(context.Background(), "sub@x.com", "user", "user-7")
+	if err != nil {
+		t.Fatalf("third ResolveInvitations: %v", err)
+	}
+	if n != 0 || len(granter.calls) != 0 {
+		t.Errorf("third pass resolved=%d grants=%+v, want 0 and none", n, granter.calls)
+	}
+}
+
 func TestCancelOwnership(t *testing.T) {
 	repo := newFakeInvRepo()
 	granter := &fakeGranter{}

@@ -60,11 +60,17 @@ type declineInvitationRequest struct {
 // invitationResponse is an invitation WITHOUT its token — the secret is only
 // ever in the mail (design §5.1 WI3).
 type invitationResponse struct {
-	ID                string `json:"id"`
-	ResourceType      string `json:"resource_type"`
-	ResourceID        string `json:"resource_id"`
-	Relation          string `json:"relation"`
-	Identifier        string `json:"identifier"`
+	ID           string `json:"id"`
+	ResourceType string `json:"resource_type"`
+	ResourceID   string `json:"resource_id"`
+	Relation     string `json:"relation"`
+	Identifier   string `json:"identifier"`
+	// InvitedBy is the user id that created the invitation — the same value the
+	// service enforces cancel/resend ownership on. It is an identifier, never a
+	// token or secret, and it is what lets a resource list distinguish the rows the
+	// current admin owns (and may cancel/resend) from another admin's rows. The
+	// server still enforces ownership regardless of what a client renders.
+	InvitedBy         string `json:"invited_by"`
 	Status            string `json:"status"`
 	AutoAccept        bool   `json:"auto_accept"`
 	ResolvedSubjectID string `json:"resolved_subject_id,omitempty"`
@@ -80,6 +86,7 @@ func newInvitationResponse(inv invitation.Invitation) invitationResponse {
 		ResourceID:        inv.ResourceID,
 		Relation:          inv.Relation,
 		Identifier:        inv.Identifier,
+		InvitedBy:         inv.InvitedBy,
 		Status:            inv.Status,
 		AutoAccept:        inv.AutoAccept,
 		ResolvedSubjectID: inv.ResolvedSubjectID,

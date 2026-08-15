@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/sendgrid/sendgrid-go"
 	"github.com/sendgrid/sendgrid-go/helpers/mail"
@@ -24,8 +25,12 @@ import (
 // form the request BaseURL.
 const sendPath = "/v3/mail/send"
 
-// Compile-time assertion that Sender satisfies the sdk email port.
-var _ email.Sender = (*Sender)(nil)
+// Compile-time assertions that Sender satisfies the sdk email port and
+// declares production-safety capability metadata.
+var (
+	_ email.Sender             = (*Sender)(nil)
+	_ email.CapabilityReporter = (*Sender)(nil)
+)
 
 // Config holds SendGrid connection settings.
 type Config struct {
@@ -44,6 +49,23 @@ type Config struct {
 type Sender struct {
 	client   *sendgrid.Client
 	fromName string
+	// host is the configured Config.Host as given to New, before
+	// sendgrid-go's internal default substitution. Capabilities inspects it
+	// to describe this instance rather than SendGrid's default endpoint.
+	host string
+}
+
+// Capabilities declares SendGrid production-capable when the configured host
+// either is empty (SendGrid's default, https://api.sendgrid.com) or is
+// explicitly HTTPS: both deliver over TLS. A non-HTTPS Config.Host — the
+// httptest server integration tests point at, or a local emulator — cannot
+// deliver over TLS, so that instance is reported development-only rather than
+// allowed to claim a production capability it does not have.
+func (s *Sender) Capabilities() email.Capabilities {
+	if s.host == "" || strings.HasPrefix(s.host, "https://") {
+		return email.Capabilities{TransportSecurity: email.TransportSecurityTLS, DevelopmentOnly: false}
+	}
+	return email.Capabilities{TransportSecurity: email.TransportSecurityNone, DevelopmentOnly: true}
 }
 
 // New constructs a Sender. It builds a POST client for the Mail Send endpoint
@@ -55,6 +77,7 @@ func New(cfg Config) *Sender {
 	return &Sender{
 		client:   &sendgrid.Client{Request: request},
 		fromName: cfg.FromName,
+		host:     cfg.Host,
 	}
 }
 
