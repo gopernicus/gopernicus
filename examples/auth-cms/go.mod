@@ -3,20 +3,20 @@ module github.com/gopernicus/gopernicus/examples/auth-cms
 go 1.26.1
 
 require (
-	github.com/gopernicus/gopernicus/features/authentication v0.0.0
+	github.com/gopernicus/gopernicus/features/authentication v0.1.0
 	github.com/gopernicus/gopernicus/features/authentication/views/goth v0.0.0
 	github.com/gopernicus/gopernicus/features/authorization v0.0.0
-	github.com/gopernicus/gopernicus/features/cms v0.0.0
+	github.com/gopernicus/gopernicus/features/cms v0.1.0
 	github.com/gopernicus/gopernicus/features/cms/views/goth v0.0.0
 	github.com/gopernicus/gopernicus/features/events v0.0.0
-	github.com/gopernicus/gopernicus/features/jobs v0.0.0
+	github.com/gopernicus/gopernicus/features/jobs v0.2.0
 	github.com/gopernicus/gopernicus/features/jobs/stores/pgx v0.0.0
 	github.com/gopernicus/gopernicus/features/jobs/stores/turso v0.0.0
 	github.com/gopernicus/gopernicus/integrations/cryptids/bcrypt v0.0.0
-	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.0.0
-	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.0.0
-	github.com/gopernicus/gopernicus/sdk v0.0.0
-	github.com/gopernicus/gopernicus/ui/goth v0.0.0
+	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.1.0
+	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.1.0
+	github.com/gopernicus/gopernicus/sdk v0.3.0
+	github.com/gopernicus/gopernicus/ui/goth v0.1.0
 )
 
 require (

@@ -3,13 +3,13 @@ module github.com/gopernicus/gopernicus/examples/cms
 go 1.26.1
 
 require (
-	github.com/gopernicus/gopernicus/features/cms v0.0.0
+	github.com/gopernicus/gopernicus/features/cms v0.1.0
 	github.com/gopernicus/gopernicus/features/cms/stores/turso v0.0.0
 	github.com/gopernicus/gopernicus/features/cms/views/goth v0.0.0
-	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.0.0
+	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.1.0
 	github.com/gopernicus/gopernicus/integrations/tracing/otel v0.0.0
-	github.com/gopernicus/gopernicus/sdk v0.0.0
-	github.com/gopernicus/gopernicus/ui/goth v0.0.0
+	github.com/gopernicus/gopernicus/sdk v0.1.0
+	github.com/gopernicus/gopernicus/ui/goth v0.1.0
 )
 
 require (
