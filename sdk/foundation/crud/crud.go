@@ -247,6 +247,10 @@ func (r ListRequest) NormalizedLimit(l Limits) int {
 
 // Page is one page of a cursor-paginated list. The json tags anticipate the
 // JSON-API surface (the web kit); SSR consumers ignore them.
+//
+// Every field except Items is omitempty, so a final page serializes as just
+// {"items":[…]}. Clients must read an absent has_more/next_cursor as
+// false/empty — absence is the normal end-of-list signal, not an error.
 type Page[T any] struct {
 	Items          []T    `json:"items"`
 	NextCursor     string `json:"next_cursor,omitempty"`

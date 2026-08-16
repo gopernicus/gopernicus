@@ -103,6 +103,8 @@ func TestErrSentinels(t *testing.T) {
 		code   string
 	}{
 		{"PayloadTooLarge", ErrPayloadTooLarge("too big"), http.StatusRequestEntityTooLarge, "payload_too_large"},
+		{"Conflict", ErrConflict("duplicate slug"), http.StatusConflict, "already_exists"},
+		{"StateConflict", ErrStateConflict("last admin"), http.StatusConflict, "conflict"},
 		{"TooManyRequests", ErrTooManyRequests("slow down"), http.StatusTooManyRequests, "rate_limit_exceeded"},
 		{"Unavailable", ErrUnavailable("down"), http.StatusServiceUnavailable, "unavailable"},
 	}

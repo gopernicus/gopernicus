@@ -141,9 +141,18 @@ func ErrNotFound(msg string) *Error {
 	return &Error{Status: http.StatusNotFound, Message: msg, Code: "not_found"}
 }
 
-// ErrConflict returns a 409 error.
+// ErrConflict returns a 409 error for a duplicate resource (code
+// "already_exists"), pairing with [sdk.ErrAlreadyExists]. For a state
+// conflict — an invariant refusing a write, nothing duplicated — use
+// [ErrStateConflict].
 func ErrConflict(msg string) *Error {
 	return &Error{Status: http.StatusConflict, Message: msg, Code: "already_exists"}
+}
+
+// ErrStateConflict returns a 409 error for a state conflict (code "conflict"),
+// pairing with [sdk.ErrConflict]. For a duplicate resource, use [ErrConflict].
+func ErrStateConflict(msg string) *Error {
+	return &Error{Status: http.StatusConflict, Message: msg, Code: "conflict"}
 }
 
 // ErrGone returns a 410 error.
@@ -186,7 +195,7 @@ func ErrFromDomain(err error) *Error {
 	case errors.Is(err, sdk.ErrInvalidReference):
 		return ErrBadRequest("invalid reference")
 	case errors.Is(err, sdk.ErrConflict):
-		return &Error{Status: http.StatusConflict, Message: "conflict", Code: "conflict"}
+		return ErrStateConflict("conflict")
 	case errors.Is(err, sdk.ErrExpired):
 		return ErrGone("expired")
 	case errors.Is(err, sdk.ErrUnavailable):

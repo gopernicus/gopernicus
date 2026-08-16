@@ -72,6 +72,15 @@ schema change, no `go.mod` change (still `sdk v0.3.0`), and no store retags. Rea
 the upgrade note below before adopting — it pins which OAuth branches do and do
 not grant.
 
+**2026-08-15: `sdk/v0.3.1`** — the coordination-hub
+`coordination-api-consistency` upstream flags: `web.ErrStateConflict` completes
+the 409 vocabulary (code `conflict`, distinct from `ErrConflict`'s
+`already_exists`), and `crud.Page`'s absent-`has_more`-means-false end-of-list
+contract is now documented (godoc + sdk README). Cut as a **patch by owner
+ruling** despite the one additive symbol — see the upgrade note below. No other
+module bumps: the sdk tree is otherwise byte-identical to `sdk/v0.3.0`, and no
+in-repo module pins move.
+
 ## Tagging scheme
 
 Nested Go modules in a single repo are tagged with the module's directory as a
@@ -252,6 +261,29 @@ flow depends on the CORS seam above, and pinning is what stops a host from adopt
   Statuses and human messages are unchanged, so this is a diagnosability gain, not a
   client break — a host that boot-fails on a CORS/auth allowlist mismatch can now
   read the runtime symptom instead.
+
+### sdk — v0.3.1 (2026-08-15): 409 vocabulary completed + Page end-of-list contract documented (patch by owner ruling)
+
+The two upstream flags from coordination-hub's `coordination-api-consistency`
+work. **Owner ruling:** this tag carries one additive exported symbol, which the
+bump rules below classify as a minor; the owner cut it as a **patch** because it
+is a defect fix in an existing contract, not new surface. Pre-`v1` Go semantics
+make this safe for consumers either way.
+
+- **`web.ErrStateConflict(msg)`** — the missing constructor for the
+  state-conflict half of the 409 vocabulary (code `conflict`, pairing with
+  `sdk.ErrConflict`). `web.ErrConflict` keeps code `already_exists` (pairing
+  with `sdk.ErrAlreadyExists`) and both doc comments now cross-reference the
+  sibling, so the two 409 kinds are no longer conflated by the only reachable
+  constructor. `ErrFromDomain`'s `sdk.ErrConflict` arm now calls the new
+  constructor instead of an inline literal; its mapping is behaviorally
+  unchanged. A host that worked around this with
+  `ErrConflict(msg).WithCode("conflict")` can revert to the plain constructor.
+- **`crud.Page` end-of-list contract documented** (godoc + sdk README): every
+  field except `Items` is omitempty, so a final page serializes as
+  `{"items":[…]}` and clients must read absent `has_more`/`next_cursor` as
+  false/empty — the normal end-of-list signal, not an error. Doc-only; no
+  serialization change.
 
 ### features/authentication — v0.2.1 (2026-08-15): add-or-signup invitation lifecycle finished (patch)
 
