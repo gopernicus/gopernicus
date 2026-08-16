@@ -66,6 +66,21 @@ func newRouter(t *testing.T, sender email.Sender, notifiers map[string]notify.No
 	return r
 }
 
+// newLayoutRouter builds a Router over a stub sender with the given host layout
+// overrides registered at email.LayerApp.
+func newLayoutRouter(t *testing.T, layouts ...LayoutOverride) *Router {
+	t.Helper()
+	r, err := NewRouter(Deps{
+		Mailer:     &stubSender{},
+		MailFrom:   "no-reply@example.test",
+		AppLayouts: layouts,
+	})
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	return r
+}
+
 // A nil Mailer is rejected loudly: email is always-on via the required Mailer.
 func TestNewRouterRequiresMailer(t *testing.T) {
 	if _, err := NewRouter(Deps{}); !errors.Is(err, ErrMailerRequired) {
@@ -139,6 +154,110 @@ func TestRenderEmailAppOverride(t *testing.T) {
 	}
 	if !strings.Contains(env.HTML, "999000") {
 		t.Fatalf("override missing secret: %q", env.HTML)
+	}
+}
+
+// A host LayoutOverride registered at email.LayerApp wins over the sdk's bundled
+// transactional layout — the highest layer wins — while the LayerCore body still
+// renders inside it. An unset Dir walks "layouts"; an explicit Dir is honored.
+func TestRenderEmailAppLayoutOverride(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		dir  string
+	}{
+		{name: "default dir", dir: ""},
+		{name: "explicit dir", dir: "layouts"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newLayoutRouter(t, LayoutOverride{FS: testoverride.LayoutsFS, Dir: tc.dir})
+			env, err := r.Render(context.Background(), Request{
+				Kind:        identity.KindEmail,
+				Purpose:     PurposeRegistrationVerification,
+				Destination: "user@example.test",
+				Secret:      "424242",
+			})
+			if err != nil {
+				t.Fatalf("Render: %v", err)
+			}
+			if !strings.Contains(env.HTML, "APP LAYOUT HEADER") || !strings.Contains(env.HTML, "APP LAYOUT FOOTER") {
+				t.Fatalf("LayerApp layout did not win for HTML: %q", env.HTML)
+			}
+			if !strings.Contains(env.Body, "APP LAYOUT HEADER") || !strings.Contains(env.Body, "APP LAYOUT FOOTER") {
+				t.Fatalf("LayerApp layout did not win for text: %q", env.Body)
+			}
+			if strings.Contains(env.HTML, "Your Company") {
+				t.Fatalf("sdk layout still rendered under the override: %q", env.HTML)
+			}
+			if !strings.Contains(env.HTML, "424242") || !strings.Contains(env.Body, "424242") {
+				t.Fatalf("core body did not render inside the override: html=%q text=%q", env.HTML, env.Body)
+			}
+		})
+	}
+}
+
+// A layout override and a content override compose: the host frame wraps the host
+// body, both resolved at email.LayerApp.
+func TestRenderEmailAppLayoutComposesWithContentOverride(t *testing.T) {
+	r, err := NewRouter(Deps{
+		Mailer:       &stubSender{},
+		MailFrom:     "no-reply@example.test",
+		AppTemplates: []TemplateOverride{{Namespace: namespace, FS: testoverride.FS}},
+		AppLayouts:   []LayoutOverride{{FS: testoverride.LayoutsFS}},
+	})
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	env, err := r.Render(context.Background(), Request{
+		Kind:        identity.KindEmail,
+		Purpose:     PurposeRegistrationVerification,
+		Destination: "user@example.test",
+		Secret:      "111222",
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if !strings.Contains(env.HTML, "APP LAYOUT HEADER") || !strings.Contains(env.HTML, "APP OVERRIDE") {
+		t.Fatalf("layout and content overrides did not compose: %q", env.HTML)
+	}
+}
+
+// With no LayoutOverride registered the rendered envelope is BYTE-IDENTICAL to the
+// pre-seam output: the same LayerCore content wrapped in the sdk's bundled
+// transactional layout, rendered through a bare Emailer carrying no layout
+// registration at all. The seam is additive — its zero value adds nothing.
+func TestRenderEmailDefaultLayoutUnchanged(t *testing.T) {
+	r := newRouter(t, &stubSender{}, nil)
+	env, err := r.Render(context.Background(), Request{
+		Kind:        identity.KindEmail,
+		Purpose:     PurposeRegistrationVerification,
+		Destination: "user@example.test",
+		Secret:      "424242",
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	baseline, err := email.New(&stubSender{}, "no-reply@example.test",
+		email.WithContentTemplates(namespace, coreTemplates, email.LayerCore))
+	if err != nil {
+		t.Fatalf("baseline emailer: %v", err)
+	}
+	wantHTML, wantText, err := baseline.Render(namespace+":verification", map[string]any{
+		"Secret":  "424242",
+		"Subject": "Verify your email",
+	}, email.WithLayout(email.LayoutTransactional))
+	if err != nil {
+		t.Fatalf("baseline render: %v", err)
+	}
+	if !strings.Contains(wantHTML, "Your Company") || !strings.Contains(wantHTML, "424242") {
+		t.Fatalf("baseline is not the sdk layout render, comparison would be vacuous: %q", wantHTML)
+	}
+
+	if env.HTML != wantHTML {
+		t.Fatalf("default HTML drifted from the sdk layout render:\n got %q\nwant %q", env.HTML, wantHTML)
+	}
+	if env.Body != wantText {
+		t.Fatalf("default text drifted from the sdk layout render:\n got %q\nwant %q", env.Body, wantText)
 	}
 }
 

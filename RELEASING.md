@@ -62,6 +62,18 @@ the default host and explicit HTTPS hosts report TLS/production-capable; a
 non-HTTPS custom host (tests, local emulators) reports development-only. No
 breaking API change. See the upgrade note below.
 
+**2026-08-16: `features/authentication/v0.2.2`** — the email layout-override
+seam (plan of record, in the Coordination-Hub repo,
+`.claude/plans/branded-auth-mail-and-pages.md`, task U1). A **patch**, additive
+only: `Config.EmailLayouts []EmailLayoutOverride` (aliasing
+`delivery.LayoutOverride{FS embed.FS; Dir string}`, `Dir` defaulting to
+`"layouts"`) registers host layout files at `email.LayerApp`, so a host-shipped
+`transactional` pair re-frames every auth mail while the zero value keeps the
+sdk default byte-identically (pinned by test). Content templates
+(`EmailContentTemplates`) are untouched and compose with it. No exported API
+break, no schema change, no `go.mod` change (still `sdk v0.3.0`), no store
+retags.
+
 **2026-08-15: `features/authentication/v0.2.1`** — the
 add-or-signup invitation lifecycle fix (plan of record, in the Coordination-Hub
 repo, `.claude/plans/email-and-invitations.md`, task U2). A **patch**: a brand-new

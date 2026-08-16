@@ -876,6 +876,24 @@ type Config struct {
 	// email BODIES only — never a page, route, service policy, or the JSON API.
 	EmailContentTemplates []EmailContentTemplate
 
+	// EmailLayouts registers host overrides of the email LAYOUTS at email.LayerApp
+	// — the frame around the bodies EmailContentTemplates overrides. Empty
+	// (default) → the sdk's bundled layouts render unchanged. Every delivery
+	// purpose renders with email.LayoutTransactional, so ONE entry shipping
+	// "transactional.html" (and optionally "transactional.txt") re-frames all auth
+	// mail:
+	//
+	//	//go:embed layouts/*
+	//	var layoutsFS embed.FS
+	//	cfg.EmailLayouts = []auth.EmailLayoutOverride{{FS: layoutsFS}}
+	//
+	// The embed.FS is walked from "layouts/" unless the entry names another Dir;
+	// each file's base name is the layout type it replaces. Ship BOTH halves:
+	// resolution picks the winning layer's html/text pair, so an ".html"-only
+	// override renders the text half with no layout rather than the sdk's. Changes
+	// the email FRAME only — never a page, route, service policy, or the JSON API.
+	EmailLayouts []EmailLayoutOverride
+
 	// EmailBranding sets the brand values the bundled email LAYOUTS render
 	// ({{.Brand.Name}}, .Tagline, .Address, .LogoURL — "Your Company" is the
 	// unset fallback). It composes with EmailContentTemplates (bodies) without
@@ -964,6 +982,17 @@ type EmailContentTemplate = delivery.TemplateOverride
 // content templates under; a host LayerApp override targets a core template as
 // EmailContentNamespace + ":" + name (e.g. "authentication:verification").
 const EmailContentNamespace = delivery.Namespace
+
+// EmailLayoutOverride is a host override of the email LAYOUTS auth mail renders
+// inside, registered at email.LayerApp — the layout sibling of
+// EmailContentTemplate (design §6.2). Content overrides replace bodies; a layout
+// override replaces the frame around every body, so one entry re-brands all auth
+// mail. FS is walked from Dir ("layouts" when empty); a file's base name is the
+// layout type it replaces and the file names itself with
+// {{define "layout:<name>"}} (".text" for the .txt half), exactly like the sdk's
+// bundled layouts. Aliased from the internal delivery package per the
+// EmailContentTemplate precedent.
+type EmailLayoutOverride = delivery.LayoutOverride
 
 // resolveListStrategy validates Config.ListStrategy and maps it to a
 // crud.Strategy. Empty (the zero value of a literally-built Config) resolves to
@@ -1219,6 +1248,7 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 		MailFrom:     cfg.MailFrom,
 		Notifiers:    notifiers,
 		AppTemplates: cfg.EmailContentTemplates,
+		AppLayouts:   cfg.EmailLayouts,
 		Branding:     cfg.EmailBranding,
 		Logger:       cfg.Logger,
 	})
