@@ -509,9 +509,10 @@ feature-owned resource policy built with `NewHTMLResourcePolicy`.
   adapter maps `goth.Bundle.Requirements()` into one (GOTH-7.2). A nil `HTMLPolicy`
   keeps the exact historical asset-free CSP.
 
-`Views` (HTML pages) and `EmailContentTemplates` (email bodies, below) are two
-**distinct** override facilities — different Config fields, different types,
-different subsystems, no shared type.
+`Views` (HTML pages) and the email overrides — `EmailContentTemplates` (bodies)
+and `EmailLayouts` (the frame around them), both below — are **distinct**
+override facilities: different Config fields, different types, different
+subsystems, no shared type.
 
 ## The middleware surface (what other features and host routes gate on)
 
@@ -635,6 +636,7 @@ default, so a host can never inherit the development posture; unknown →
 | `Views` | **nil → API-only** (no HTML routes, JSON-only POSTs, no templ in the graph). Non-nil → HTML pages mount alongside the unchanged JSON API. The blessed default is the ui/goth adapter `authgoth.New(bundle)` (`features/authentication/views/goth`); the override path is embedding its `Views`. |
 | `HTMLPolicy` (*HTMLResourcePolicy) | **nil → the historical asset-free CSP** (script-src nonce-only, no external origins). Non-nil → the same fixed protections plus the policy's validated widening resource directives (script/style/image/font/connect/media/worker), so a selected HTML view can load its assets. Only WIDENS — a policy can never remove a fixed protection. Build with `NewHTMLResourcePolicy` (validates loudly). Set with a nil `Views` → `ErrHTMLPolicyWithoutViews` at construction (contradictory wiring). Technology-neutral — the core imports no templ/`ui/goth`. |
 | `EmailContentTemplates` | empty → the bundled `LayerCore` email bodies render unchanged. Each entry overrides a bundled template at `email.LayerApp` (Namespace must be `EmailContentNamespace`). Changes email BODIES only — a **distinct** override system from `Views`. |
+| `EmailLayouts` | empty → the sdk's bundled email layouts render unchanged. Each entry registers a host layout at `email.LayerApp` — the highest layer wins, so it resolves ahead of the sdk default. Every delivery purpose renders with `email.LayoutTransactional`, so ONE entry shipping `layouts/transactional.html` (+ optional `.txt`) re-frames ALL auth mail: `EmailLayouts: []auth.EmailLayoutOverride{{FS: layoutsFS}}`. `FS` is walked from `Dir` (empty → `"layouts"`); a file's base name is the layout type it replaces, and the file names itself with `{{define "layout:<name>"}}` (`.text` for the `.txt` half) like the sdk's bundled layouts. Changes the email FRAME only — bodies stay with `EmailContentTemplates`, brand values with `EmailBranding`. |
 | `RequireVerifiedEmail` | false. true → login AND `/auth/token` refuse an unverified user with 403 (**requires a WORKING Mailer**, else total login lockout). |
 | `RateLimiter` | `ratelimiter.NewMemory()` — an in-process limiter (not "unlimited"). **Production rejects a per-process limiter** (`ErrNonDurableRateLimiter`): a multi-instance host needs a shared/durable one. |
 | `SessionCookie` (CookieConfig) | zero value usable: name `session`, path `/`, browser-session cookie backed by a 7-day server session. `Secure` is a host deployment choice (true behind TLS). |

@@ -32,6 +32,11 @@ const Namespace = "authentication"
 // namespace is the internal spelling kept for the existing call sites.
 const namespace = Namespace
 
+// defaultLayoutDir is the embed.FS subdirectory a LayoutOverride is walked from
+// when it names none, mirroring the "templates" default RegisterTemplates applies
+// to content overrides.
+const defaultLayoutDir = "layouts"
+
 // Delivery purposes. A purpose is the template selector shared by both the email
 // (LayerCore templates) and the body-only SMS rails; it is deliberately decoupled
 // from a challenge purpose so one delivery template can serve several challenge
@@ -151,12 +156,18 @@ type Request struct {
 // Deps are the collaborators NewRouter needs. Mailer is required (email is
 // always-on); Notifiers is the host's wired delivery set keyed by kind (an
 // email-kind entry bridges email through notify instead of the Mailer directly);
-// AppTemplates registers host content overrides at email.LayerApp.
+// AppTemplates registers host content overrides at email.LayerApp, and AppLayouts
+// registers host LAYOUT overrides at the same layer.
 type Deps struct {
 	Mailer       email.Sender
 	MailFrom     string
 	Notifiers    map[string]notify.Notifier
 	AppTemplates []TemplateOverride
+	// AppLayouts registers host email layouts at email.LayerApp — the highest
+	// layer, and the higher layer wins — so a host layout named for a layout type
+	// resolves ahead of the sdk's bundled default. Empty (the zero value) → the
+	// sdk layouts render exactly as before.
+	AppLayouts []LayoutOverride
 	// Branding fills the shared email layouts' {{.Brand.*}} values; nil keeps
 	// the layouts' own fallback ("Your Company").
 	Branding *email.Branding
@@ -170,6 +181,22 @@ type Deps struct {
 type TemplateOverride struct {
 	Namespace string
 	FS        embed.FS
+}
+
+// LayoutOverride registers a host's email LAYOUTS at email.LayerApp — the sibling
+// of TemplateOverride for the frame rather than the body (design §6.2). Every
+// delivery purpose renders with email.LayoutTransactional, so a host that ships
+// "transactional.html" (and optionally "transactional.txt") brands ALL auth mail;
+// the file's base name is the layout type it replaces and the file's own
+// {{define "layout:<name>"}} / {{define "layout:<name>.text"}} block names it, per
+// the sdk's bundled layouts. Dir is the embed.FS subdirectory to walk; empty →
+// "layouts". Zero entries leave the sdk defaults untouched. Resolution picks the
+// winning layer's html/text PAIR, not file by file: an override shipping only
+// ".html" renders the text half with NO layout at all rather than the sdk's, so
+// ship both halves.
+type LayoutOverride struct {
+	FS  embed.FS
+	Dir string
 }
 
 // Router is the constructor-injected, kind-aware renderer/router shared by authsvc
@@ -190,8 +217,8 @@ type Router struct {
 }
 
 // NewRouter builds a Router. A nil Mailer is ErrMailerRequired. It registers the
-// feature's LayerCore email templates plus any host LayerApp overrides, and parses
-// the in-core subject and SMS body templates once.
+// feature's LayerCore email templates plus any host LayerApp content and layout
+// overrides, and parses the in-core subject and SMS body templates once.
 func NewRouter(d Deps) (*Router, error) {
 	if d.Mailer == nil {
 		return nil, ErrMailerRequired
@@ -204,6 +231,13 @@ func NewRouter(d Deps) (*Router, error) {
 	opts := []email.Option{email.WithContentTemplates(namespace, coreTemplates, email.LayerCore)}
 	for _, o := range d.AppTemplates {
 		opts = append(opts, email.WithContentTemplates(o.Namespace, o.FS, email.LayerApp))
+	}
+	for _, o := range d.AppLayouts {
+		dir := o.Dir
+		if dir == "" {
+			dir = defaultLayoutDir
+		}
+		opts = append(opts, email.WithLayouts(o.FS, dir, email.LayerApp))
 	}
 	if d.Branding != nil {
 		opts = append(opts, email.WithBranding(d.Branding))

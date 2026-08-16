@@ -1,0 +1,6 @@
+{{define "layout:transactional.text"}}APP LAYOUT HEADER
+
+{{.Content}}
+
+APP LAYOUT FOOTER
+{{end}}
