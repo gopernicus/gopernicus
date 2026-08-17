@@ -227,6 +227,11 @@
   background: #f4f1e9;
 }
 
+[data-theme='dark'] .illustrationSection {
+  background: #101d30;
+  color: #f3f0e8;
+}
+
 .illustrationGrid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
