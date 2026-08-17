@@ -1,235 +1,264 @@
-# coordination-hub-auth-upstream — owner-cut tag manifest
+# Tag manifest — coordination-hub auth upstream (+ crud search)
 
-Prepared by U7 (2026-08-14). **RELEASED 2026-08-15** on owner dispatch:
-batch commit `261f859` (with the owner-approved `__Host-auth_csrf` rename
-folded in), all three tags cut and pushed on it, cold-scratch resolution
-verified for each, post-tag `make tidy` committed as `fe3dc65`, and
-coordination-hub repinned on `authentication-ui` (`d4ccfad`).
+Status: **PREPARED, NOT CUT.** Every command in the "owner commands" sections is
+**DO NOT RUN BY THE PLANNING TASK**. Nothing here has been pushed, tagged, or
+adopted downstream.
 
-Release evidence:
+Date prepared: 2026-08-16
+Plans of record: `.claude/plans/coordination-hub-auth-upstream/` (phases 1–7) and
+`.claude/plans/crud.md` (T1–T4), stacked onto one release by owner direction.
 
-- `make check` green on `261f859` before tagging.
-- live-stores dispatches on `261f859`: runs 31889882851 and 31890041347.
-  Job `redis-pgxdb` (the limiter gate) **passed in both**. Job
-  `postgres-turso` failed in both on
-  `TestConformance_Postgres/Sessions/RotationKeepsExpiresAt` — a ns-vs-µs
-  timestamp-precision assertion in `features/authentication/stores/pgx`
-  (untouched since its v0.1.0 tag, not retagged by this batch; passes
-  locally against postgres:17, last CI green 2026-07-07 on identical code).
-  Recorded as a known flake / follow-up, not a batch defect.
-- Cold scratch: `sdk@v0.3.0`, `features/authentication@v0.2.0` (selected
-  sdk v0.3.0 with no workspace — the pin proof), `pgxdb@v0.3.0` all
-  resolved and built.
+> **Note on the previous manifest.** This file replaces one deleted in the working
+> tree by the owner along with the old single-file `plan.md`. The prior batch's
+> release evidence (sdk v0.3.0, authentication v0.2.0, pgxdb v0.3.0) is unchanged
+> in history at commit `9b73785` and can be recovered with
+> `git show 9b73785:.claude/plans/coordination-hub-auth-upstream/tag-manifest.md`.
+> `RELEASING.md` references this path, so it is restored rather than renamed.
 
-Tags are owner-cut and immutable; a correction is a new patch tag,
-never a retag.
+---
 
-Plan of record: the batch plan file (working tree `1.md` at the repo root —
-file it beside this manifest when the batch is committed). Upgrade notes for
-every tag below are in `RELEASING.md` under "Upgrade notes".
+## 1. Commit state
 
-## 1. Expected tags
+The working tree is **DIRTY and uncommitted**. `git status --short` at preparation
+time: **108 entries** — 50 modified, 56 untracked, 2 deleted.
 
-| Module | Tag | Bump | Why |
-|---|---|---|---|
-| `sdk` | `sdk/v0.3.0` | minor (additive API, one behavior change) | `CORSWithConfig`/`CORSConfig`; `Vary: Origin`; `Access-Control-Expose-Headers` defaulting to `X-Request-ID`; genuine-preflight-only 204. **`WebHandler.Use` now wraps the entire mux and `HandleRaw` no longer bypasses global middleware** — the batch's one silent behavior change for existing sdk consumers. |
-| `features/authentication` | `features/authentication/v0.2.0` | minor (additive) | `Config.RefreshCookiePath` + `ErrRefreshCookiePathInvalid`; `GET /auth/csrf`; `GET /auth/me`; `origin_rejected` code split; login/register/me share one email projection. `go.mod` now requires `sdk v0.3.0`. |
-| `integrations/datastores/pgxdb` | `integrations/datastores/pgxdb/v0.3.0` | minor (additive API; **ships host schema**) | `Limiter`, `NewLimiter`, `WithLimiterKeyPrefix`, `(*Limiter).StatusCheck`. Adopters must apply the reference DDL from the connector README before deploying. |
+The two deletions (`plan.md`, `tag-manifest.md`) are the **owner's**, not this
+task's: they were removed when the ten-file planning packet replaced the single
+plan file. They are preserved as-is except for restoring `tag-manifest.md` (this
+file), which `RELEASING.md` links to.
 
-### Modules that do NOT get a tag
+**No commit, tag, push, or downstream edit has been made.** The version proposals
+below are computed from the diff between each module's latest tag and the current
+working tree.
 
-- **`integrations/oauth/google` stays at `v0.1.0`** (U6 verdict). Evidence:
-  `git diff integrations/oauth/google/v0.1.0 -- integrations/oauth/google` is
-  **empty** — source and `go.mod` are byte-identical to the tag. Its only sdk
-  import is `sdk/capabilities/oauth`, which this batch did not touch (U1 changed
-  `sdk/foundation/web` only). Its `sdk v0.1.0` floor is deliberately NOT raised:
-  MVS supplies the host's higher compatible sdk. Build/test/vet are green under
-  the workspace-selected sdk.
-- **`features/authentication/stores/{pgx,turso}` do NOT retag.** No repository
-  contract changed: `git diff features/authentication/stores/pgx/v0.1.0 -- …` and
-  the turso equivalent are both **empty**, and the batch touched no `domain/`
-  port, no migration, and no store adapter. Their `features/authentication v0.1.0`
-  / `sdk v0.1.0` pins upgrade at the host through MVS.
-- **`features/authentication/views/goth`** — untouched; stays `v0.1.0`.
-- The four `examples/*` hosts are demonstrations and are never tagged.
+---
 
-### The one go.mod change in this batch
+## 2. Module → tag → rationale
 
-`features/authentication/go.mod`: `sdk v0.1.0` → **`sdk v0.3.0`**. This is the
-CSRF/CORS tag-coupling control (plan risk 2): the feature's documented
-cross-origin browser flow cannot work on an sdk whose CORS allow-header list is
-not configurable, so the pair is pinned rather than left to a host's MVS luck.
+| module | current | proposed | bump | why |
+|---|---|---|---|---|
+| `sdk` | `v0.3.1` | **`v0.4.0`** | minor | New canonical runtime posture (`environment.Mode` + validation), capability-owned transport checks (`email.CheckSender` / `notify.CheckNotifier` + `ErrInsecureTransport` + `TransportPosture`), and the restored list-search vocabulary (`crud.SearchField`, `ListParams.Search`, `ListRequest.Search`, `MatchesSearch`). All additive → minor. Also carries the transactional-layout logo fix, which is a patch on its own but must not be split from this commit. |
+| `integrations/datastores/pgxdb` | `v0.3.0` | **`v0.4.0`** | minor | `ListQuery.SearchFields`, `AddSearchClause`, `EscapeSearchTerm`, reserved `@list_search`. Requires `sdk v0.4.0`. |
+| `integrations/datastores/turso` | `v0.2.0` | **`v0.3.0`** | minor | The dialect-parity twin of the above. Requires `sdk v0.4.0`. |
+| `features/authentication` | `v0.2.2` | **`v0.3.0`** | minor | The largest surface: account lifecycle + operator directory, verification resend, password-reset links (**new required production config**), the `RuntimeMode` alias, the `q` search param, and — if the second train ships together — provision-on-consumption. Requires `sdk v0.4.0`. |
+| `features/authentication/stores/pgx` | `v0.1.0` | **`v0.2.0`** | minor | Two new canonical migrations (**host schema**), the `UserAdmin`/`ActiveSessions`/`Passwordless` ports, API-key `SearchFields`, the `users.id` collation pin, and a cross-dialect cursor fix. Requires the new authentication, sdk, and pgxdb tags. |
+| `features/authentication/stores/turso` | `v0.1.0` | **`v0.2.0`** | minor | The same, dialect-side. Requires the new authentication, sdk, and turso tags. |
+| `integrations/email/sendgrid` | `v0.2.0` | **no tag** | — | The only change is a new `posture_test.go`. Test-only; nothing importable changed. |
+| `examples/*` | — | **never tagged** | — | Demonstration hosts, not libraries. |
 
-**The pinned tag does not exist yet.** Workspace builds stay green because
-`go.work` resolves siblings by directory, but `go mod tidy` / any cold (`GOWORK=off`)
-resolution of `features/authentication` will fail until the owner pushes
-`sdk/v0.3.0`. Do not run `make tidy` on this tree before the sdk tag is pushed.
+### Source vs operator compatibility — classified separately
 
-No other in-repo module needs a corresponding bump: the auth store and views
-modules keep their `features/authentication v0.1.0` requirement (MVS raises it at
-the host), `integrations/datastores/pgxdb` keeps `sdk v0.1.0` (every sdk symbol
-its limiter uses shipped in v0.1.0), and the `examples/*` hosts resolve every
-sibling through relative `replace` directives at `v0.0.0`.
+**Source-compatible** for every existing caller. Nothing exported was removed or
+renamed. `auth.RuntimeMode` became a type ALIAS of `environment.Mode`, which is
+assignable in both directions. Two struct-field additions (`user.User.Status` /
+`StatusChangedAt`, `challenge.Challenge.SubjectKey`) would break only an
+exhaustive positional literal; no such construction exists in-repo.
 
-## 2. Owner tag commands — DO NOT RUN as part of U7
+Two error MESSAGES changed (`ErrRuntimeModeRequired` / `ErrRuntimeModeInvalid`
+gained a canonical-error suffix). `errors.Is` is unchanged and remains the
+supported matcher.
 
-Run from the repo root, on the commit that carries this batch, only after
-`make check` and the live gates are green on that exact commit:
+**Operator-INCOMPATIBLE** without action, in two specific ways:
+
+1. **Store migrations `0014` and `0015` must be applied before deploying binaries
+   built against the new store tags.** Both constructors now probe the added
+   columns by name and refuse to construct otherwise — a loud boot failure, not a
+   silent one.
+2. **`Config.PasswordResetURL` is REQUIRED in production** once the forgot/reset
+   rail is wired. A production host without it fails at construction. The example
+   host's own production baseline test caught this, which is exactly the signal
+   adopters will get.
+
+---
+
+## 3. Release trains
+
+The plan's release shape is followed: the high-risk provisioning work is a
+separate train from the console unblock.
+
+**Train 1 — core (phases 1–5, 7 + crud search).** Everything except
+provision-on-consumption. This unblocks the coordination-hub admin console,
+verification resend, reset links, the runtime-posture layering fix, sdk branding,
+and searchable lists.
+
+**Train 2 — provisioning (phase 6).** `PasswordlessProvisionOnRedeem`, the
+`domain/passwordless` port, both atomic store implementations, and migration
+`0015`.
+
+**They are currently ONE commit.** Splitting them means separating the phase-6
+changes (`domain/passwordless/`, `*/passwordless.go`, `0015_*.sql`, the challenge
+`SubjectKey` field, the `PasswordlessProvisionOnRedeem` config, and the
+provisioning tests) into a second commit before tagging. **Owner call:** ship both
+on one set of tags, or split. If shipped together, the version numbers above are
+unchanged — provisioning is additive and default-off, so it does not raise any
+bump. If split, train 1 takes the versions above and train 2 takes
+`features/authentication/v0.3.1` (or `v0.4.0` if the owner prefers a minor for a
+new security capability) plus store `v0.2.1`.
+
+---
+
+## 4. Owner commands — **DO NOT RUN BY THE PLANNING TASK**
+
+Dependency order matters: a store tag that pins an authentication tag which does
+not exist yet will not resolve.
 
 ```sh
-git tag sdk/v0.3.0 -m "sdk v0.3.0"
-git tag features/authentication/v0.2.0 -m "features/authentication v0.2.0"
-git tag integrations/datastores/pgxdb/v0.3.0 -m "integrations/datastores/pgxdb v0.3.0"
+# 0. Commit the work first. Nothing below is meaningful on a dirty tree.
+git add -A && git commit   # message is the owner's
 
-git push origin sdk/v0.3.0
-git push origin features/authentication/v0.2.0
-git push origin integrations/datastores/pgxdb/v0.3.0
+# 1. sdk — nothing depends on an unreleased tag.
+git tag sdk/v0.4.0 && git push origin sdk/v0.4.0
+
+# 2. Both connectors. Update each go.mod to require sdk v0.4.0 FIRST, then commit.
+#    (go.work masks a stale sibling require locally — the tag will not.)
+git tag integrations/datastores/pgxdb/v0.4.0 && git push origin integrations/datastores/pgxdb/v0.4.0
+git tag integrations/datastores/turso/v0.3.0 && git push origin integrations/datastores/turso/v0.3.0
+
+# 3. authentication core. Its go.mod must require sdk v0.4.0.
+git tag features/authentication/v0.3.0 && git push origin features/authentication/v0.3.0
+
+# 4. Both authentication store modules. Their go.mod files must require the tags
+#    from steps 1–3.
+git tag features/authentication/stores/pgx/v0.2.0   && git push origin features/authentication/stores/pgx/v0.2.0
+git tag features/authentication/stores/turso/v0.2.0 && git push origin features/authentication/stores/turso/v0.2.0
 ```
 
-Order matters for the first consumer resolution: push `sdk/v0.3.0` **before**
-`features/authentication/v0.2.0`, because the feature's `go.mod` requires it.
+**go.mod edits required before tagging** (currently every module still pins the
+v0.1.0-era siblings that `go.work` masks locally):
 
-## 3. Pre-tag evidence
+| module | change |
+|---|---|
+| `features/authentication` | `sdk v0.3.0` → `v0.4.0` |
+| `integrations/datastores/pgxdb` | `sdk v0.1.0` → `v0.4.0` |
+| `integrations/datastores/turso` | `sdk v0.1.0` → `v0.4.0` |
+| `features/authentication/stores/pgx` | `sdk v0.1.0` → `v0.4.0`; `features/authentication v0.1.0` → `v0.3.0`; `pgxdb v0.1.0` → `v0.4.0` |
+| `features/authentication/stores/turso` | `sdk v0.1.0` → `v0.4.0`; `features/authentication v0.1.0` → `v0.3.0`; `turso v0.1.0` → `v0.3.0` |
 
-- `make check` (full: templ/asset drift, warm scaffold cache, vet+build+test
-  across all 39 workspace modules, integration-tag vet, all eighteen guards).
-- Live pgxdb limiter gate: `POSTGRES_TEST_DSN=… go test -race ./...` in
-  `integrations/datastores/pgxdb` against a real postgres:17 — including the
-  exact-K concurrency proof (40 concurrent callers, ceiling 8) that the shared
-  sequential conformance suite cannot make.
-- Google gate: `go build ./... && go test ./... && go vet ./...` in
-  `integrations/oauth/google` under the workspace-selected sdk.
-- Cross-module acceptance:
-  `examples/auth-cms/cmd/server/browser_cookie_flow_test.go` — the full browser
-  flow through exported host seams only (section 5).
-- **Live-stores dispatch (per the platform-SRE review).** The
-  `live-stores` workflow is `workflow_dispatch`-only and NOT a required check —
-  the button is pressed before cutting a tag. Press it on the batch commit: job
-  `redis-pgxdb` now runs the pgxdb suite with `-race` against the postgres:17
-  service container (the limiter legs included). Its DSN is **DESTRUCTIVE** —
-  the limiter legs `CREATE TABLE ratelimit_windows`, create/drop a scratch
-  schema, and run an unqualified `DELETE FROM ratelimit_windows` — so it may only
-  ever point at the per-run service container, never a shared database. Failure
-  signal is GitHub's workflow-run-failure email to whoever pressed dispatch.
+---
 
-## 4. Post-tag verification — BLOCKED until the owner cuts the tags
+## 5. Pre-tag gate evidence (run 2026-08-16)
 
-This is the remaining step. It cannot run before the tags are pushed and the
-module proxy serves them.
+### Hermetic — ALL PASS
 
-1. Cold scratch resolution, one per tag, outside the workspace:
-
-   ```sh
-   cd "$(mktemp -d)" && go mod init scratch
-   GOWORK=off GOFLAGS=-mod=mod go get github.com/gopernicus/gopernicus/sdk@v0.3.0
-   GOWORK=off GOFLAGS=-mod=mod go get github.com/gopernicus/gopernicus/features/authentication@v0.2.0
-   GOWORK=off GOFLAGS=-mod=mod go get github.com/gopernicus/gopernicus/integrations/datastores/pgxdb@v0.3.0
-   GOWORK=off go build ./...
-   ```
-
-   The authentication leg is the one that proves the new pin: a cold resolution
-   must select `sdk v0.3.0` with no workspace and no local replace.
-
-2. Optionally re-run `make tidy` in this repo once the tags exist (it is expected
-   to fail before then — see section 1).
-
-3. Only then, in coordination-hub:
-
-   ```sh
-   go get github.com/gopernicus/gopernicus/sdk@v0.3.0
-   go get github.com/gopernicus/gopernicus/features/authentication@v0.2.0
-   go get github.com/gopernicus/gopernicus/integrations/datastores/pgxdb@v0.3.0
-   go mod tidy
-   go mod vendor
-   ```
-
-   `integrations/oauth/google` needs no `go get` — it stays at `v0.1.0`.
-
-## 5. coordination-hub wiring record
-
-The exact composition U7 proved end to end
-(`examples/auth-cms/cmd/server/browser_cookie_flow_test.go`, which uses exported
-seams only — it is in a different module from the feature and cannot reach an
-`internal/` package).
-
-### 5.1 Global CORS — one `Use`, whole mux
-
-```go
-router := web.NewWebHandler(web.WithLogging(log))
-router.Use(web.CORSWithConfig(web.CORSConfig{
-    AllowedOrigins: corsAllowedOrigins,                    // e.g. {"https://spa.example.com"}
-    AllowedHeaders: []string{"Accept", "Content-Type", "Authorization", "X-CSRF-Token"},
-    // ExposedHeaders nil ⇒ X-Request-ID is exposed by default.
-}))
+```
+(cd sdk                                    && go build ./... && go test -race -count=1 ./... && go vet ./...)
+(cd features/authentication                && go build ./... && go test -race -count=1 ./... && go vet ./...)
+(cd features/authentication/stores/pgx     && go test -race -count=1 ./...)
+(cd features/authentication/stores/turso   && go test -race -count=1 ./... && go vet -tags=integration ./...)
+(cd integrations/datastores/pgxdb          && go test -race -count=1 ./...)
+(cd integrations/datastores/turso          && go test -race -count=1 ./...)
+(cd integrations/email/sendgrid            && go test -race -count=1 ./...)
+(cd examples/auth-cms                      && go test -race -count=1 ./...)
+make check   # nineteen guards + every module's vet
 ```
 
-- `AllowedHeaders` is non-nil, so it **replaces** the default list — the
-  `Accept, Content-Type, Authorization` entries must be repeated. The sdk never
-  names a feature's header; the host opts `X-CSRF-Token` in.
-- `Use` now wraps the entire mux, so the preflight to the method-qualified
-  `POST /api/v1/auth/password/change` is answered. The local `varyOrigin`
-  wrapper and the "wrap the handler passed to `web.Run`" workaround can both be
-  dropped (keeping them stays correct).
-- `Use` is **boot-time-only**: it rebuilds the dispatch chain without
-  synchronization. Register all middleware before serving.
-- Anything registered through `HandleRaw` (OpenAPI/metrics/streaming handlers)
-  now runs INSIDE this stack. Re-check any raw handler that relied on the old
-  bypass.
+Every other workspace module (`features/{authorization,cms,events,jobs}`,
+`ui/goth`, `examples/{cms,minimal,jobs-minimal}`, `workshop/gopernicus`) builds
+clean.
 
-### 5.2 Authentication config + prefixed mount
+### Live gates — BOTH DIALECTS CLOSED
 
-```go
-authCfg.RefreshCookiePath = "/api/v1/auth"   // MUST match the mount prefix
-authCfg.AllowedOrigins    = []string{"https://spa.example.com"}
+*PostgreSQL 17*, in throwaway containers created and removed for these runs. The
+user's existing `coordination-hub-postgres` and `venona-*` containers were
+deliberately **not** used: the conformance harness truncates tables.
 
-authSvc, err := auth.NewService(authRepos, authCfg)
-// …
-err = authSvc.Register(feature.Mount{
-    Router: feature.PrefixRegistrar{Prefix: "/api/v1", Next: router},
-    Logger: log,
-    Events: bus,
-})
+| gate | result |
+|---|---|
+| full `storetest` conformance | PASS (55.1s) |
+| lifecycle groups (`UserDirectory` / `UserLifecycle` / `ActiveSessionMint`) | PASS, 14 cases |
+| deactivate-vs-mint race, `-count=5` (×12 rounds each) | PASS |
+| `PasswordlessRedeem`, 12 adversarial cases | PASS |
+| concurrent-redeem race, `-count=5` (×8 rounds each) | PASS |
+| `ListSearch` oracle, 13 terms + count + cursor paging | PASS |
+| `TestContractualCollation_Catalog` | PASS — `users.id` reports collation `C` |
+| schema probes | PASS |
+
+*Turso / libSQL*, against the authorized playground database
+(`libsql://gopernicus-cms-playground-gps-impact.aws-us-east-2.turso.io`, verified
+to match the recorded safe-to-wipe URL **before** any destructive run).
+
+| gate | result |
+|---|---|
+| migrations `0014` + `0015` apply | PASS (checksums `c80035ba`, `b7789bfc`) |
+| lifecycle groups | PASS, 14 cases (76.5s) |
+| `PasswordlessRedeem`, 12 cases | PASS (64.4s) |
+| `ListSearch` oracle | PASS (21.7s) |
+
+**One environment failure is recorded verbatim rather than retried into a green:**
+the first Turso conformance attempt failed with
+`checksum mismatch: migration default:0001_users.sql was modified after being applied`
+— a stale ledger row left on that shared playground database by an older auth
+cut. The integration schema-probe's own drop-and-remigrate reset cleared it. No
+canonical migration file was edited.
+
+### Gates NOT run
+
+- **`POSTGRES_NON_C_TEST_DSN`** (the non-C-collation ordering proof) was not set,
+  so `TestCollationControlsOrdering_NonC` **skipped**. The catalog check that
+  `users.id` reports collation `C` DID run and passed, so the new pin is verified;
+  what is unverified is the belt-and-braces ordering demonstration on a locale
+  database. **Open owner gate.**
+- **Live concurrency repetition.** The plan suggests `-count=10`. Runs were
+  `-count=5` (pgx) and `-count=1` (Turso), where each round costs ~8s of network
+  round-trips. Because each case loops internally (12 rounds for the mint race, 8
+  for the redeem race), the executed totals are 60 and 40 concurrent races on pgx
+  and 12/8 on Turso. Raising it is a scheduling decision.
+- **A real-browser flow.** Every user-facing flow is proven over real HTTP through
+  exported host seams with a real cookie jar (admin lifecycle, resend, reset link
+  redemption, OAuth link/unlink, provisioning), but no headless browser was
+  driven. **Open owner gate** if a browser-level check is required before release.
+
+### Documentation gate
+
+- Exported comments compile and were reviewed against behavior.
+- `features/authentication/README.md` gained five new sections (account lifecycle,
+  verification resend, password reset, OAuth linking, provision-on-consumption),
+  and its route table, config matrix, repositories table, and migration section
+  are internally consistent with them.
+- Store migration counts and file lists match: **15 files per dialect, filename
+  sets byte-identical** (verified by `diff`).
+- Every new production-required field (`PasswordResetURL`) appears in the example
+  host and in the upgrade notes.
+- Compatibility aliases (`RuntimeMode`, the runtime-mode errors, the reset
+  template's `.Secret`) each carry a stated deprecation/removal posture.
+- Downstream snippets use exported APIs and tagged module paths only.
+
+---
+
+## 6. Post-tag cold resolution — **owner runs after pushing**
+
+`go.work` and local replaces are NOT release evidence. Verify each tag outside the
+workspace:
+
+```sh
+cd "$(mktemp -d)"
+go mod init scratch
+GOWORK=off GOFLAGS=-mod=mod go get github.com/gopernicus/gopernicus/sdk@v0.4.0
+GOWORK=off GOFLAGS=-mod=mod go get github.com/gopernicus/gopernicus/features/authentication@v0.3.0
+GOWORK=off GOFLAGS=-mod=mod go get github.com/gopernicus/gopernicus/features/authentication/stores/pgx@v0.2.0
+GOWORK=off go build ./...
+
+# Authentication must select the intended sdk, and each store the intended authentication.
+GOWORK=off go list -m github.com/gopernicus/gopernicus/sdk                       # expect v0.4.0
+GOWORK=off go list -m github.com/gopernicus/gopernicus/features/authentication   # expect v0.3.0
 ```
 
-- An invalid `RefreshCookiePath` fails at construction with
-  `auth.ErrRefreshCookiePathInvalid` — it is never silently sanitized.
-- Keep the host's existing boot check that `CORS_ALLOWED_ORIGINS ⊆
-  AUTH_ALLOWED_ORIGINS`; the new `origin_rejected` code makes the runtime symptom
-  readable but does not replace the boot check.
+---
 
-### 5.3 Routes the SPA now uses
+## 7. Known-dirty / carried notes
 
-| Route (prefixed) | Gate | Notes |
-|---|---|---|
-| `GET /api/v1/auth/csrf` | `RequireLiveSession` + origin-only | `{"csrf_token":"…"}`, `Cache-Control: no-store`; body value always equals the `__Host-auth_csrf` cookie on the same response. Reuses a well-formed token (does not rotate another tab's). Echo it in `X-CSRF-Token` on every browser-safe mutation. |
-| `GET /api/v1/auth/me` | `RequireLiveSession` | `{id,email,display_name,email_verified}`, `Cache-Control: no-store`; a machine principal gets 401. |
-| `POST /api/v1/auth/refresh` | none (rotation IS the credential) | Cookie-driven with an empty body once `RefreshCookiePath` matches the prefix. |
-| `POST /api/v1/auth/logout` | origin-only | Clears the refresh cookie at the same `Path=/api/v1/auth` it was issued under. |
-
-### 5.4 pgxdb limiter — constructor, boot probe, host schema
-
-```go
-limiter := pgxdb.NewLimiter(db)                       // or pgxdb.NewLimiter(db, pgxdb.WithLimiterKeyPrefix("ch:rl:"))
-if err := limiter.StatusCheck(ctx); err != nil {      // BEFORE serving
-    return fmt.Errorf("rate limiter is not usable: %w", err)
-}
-authCfg.RateLimiter = limiter                          // satisfies ratelimiter.Limiter
-```
-
-- **`StatusCheck` is on the concrete `*pgxdb.Limiter`, not on the
-  `ratelimiter.Limiter` port.** Hold the concrete type at boot (construct it in
-  `main`, probe it, then hand it to config as the port) — a variable typed as the
-  port cannot call it without a type assertion.
-- The `ratelimit_windows` table + its `expires_at` index are **host-owned**.
-  Copy the reference DDL from `integrations/datastores/pgxdb/README.md` into the
-  coordination-hub migration ledger and apply it **before** deploying the binary.
-  Missing table ⇒ every `Allow` errors `42P01`, and the fail-open callers serve
-  unthrottled traffic silently — which is exactly what `StatusCheck` at boot
-  prevents.
-- Schedule `DELETE FROM ratelimit_windows WHERE expires_at < now();` (cron,
-  `features/jobs`, or pg_cron). Pruning is the **retention control** for the
-  `key` column, which persists client IPs and user identifiers verbatim.
-- Swapping `ratelimiter.NewMemory()` → this limiter is security-relevant: the
-  sdk `ratelimiter.Middleware` fails **open**, authentication's login/passwordless
-  paths fail **closed** (its refresh path fails open). Decide the posture per path
-  and monitor limiter error rate and latency.
+- `.claude/plans/crud.md` is untracked; it is the plan of record for the search
+  work and should be committed with it.
+- `RELEASING.md` still carries the 2026-08-14 "PREPARED, NOT YET CUT" entry for
+  the previous batch. That batch's tags (`sdk/v0.3.0`, `features/authentication/v0.2.0`,
+  `integrations/datastores/pgxdb/v0.3.0`) **do exist**, so that entry is stale
+  wording rather than pending work — worth a cleanup pass, not a blocker.
+- The pgx stores other than the user directory (`service_accounts`, `api_keys`,
+  `security_events`, `invitations`) still emit cursors carrying the session's time
+  zone offset rather than UTC. Only the new directory list was normalized, because
+  only it contractually promises byte-identical cursors across dialects. Flagged
+  for the owner; out of scope here.
+- `GET /auth/oauth/{provider}/link/start` uses the stateless `RequireUser` tier
+  and therefore honors an already-issued access JWT for up to `AccessTokenTTL`
+  after deactivation. Documented, deliberately not changed — it is a live-behavior
+  change for existing hosts and belongs to its own dispatch.

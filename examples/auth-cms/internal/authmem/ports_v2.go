@@ -200,13 +200,20 @@ func (r apiKeyRepo) GetByHash(_ context.Context, keyHash string) (apikey.APIKey,
 }
 
 func (r apiKeyRepo) ListByServiceAccount(_ context.Context, serviceAccountID string, req crud.ListRequest) (crud.Page[apikey.APIKey], error) {
+	// The search term is applied through crud.MatchesSearch — the SHARED oracle the
+	// SQL dialects are pinned against (crud-search-upstream T4) — so this host
+	// store cannot disagree with Postgres or libSQL about what a term matches.
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	all := make([]apikey.APIKey, 0)
 	for _, k := range r.apiKeys {
-		if k.ServiceAccountID == serviceAccountID {
-			all = append(all, k)
+		if k.ServiceAccountID != serviceAccountID {
+			continue
 		}
+		if !crud.MatchesSearch(k.Name, req.Search) {
+			continue
+		}
+		all = append(all, k)
 	}
 	return page(all, req, func(k apikey.APIKey) (time.Time, string) { return k.CreatedAt, k.ID })
 }

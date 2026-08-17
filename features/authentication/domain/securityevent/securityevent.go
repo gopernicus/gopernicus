@@ -129,6 +129,43 @@ const (
 	// through the revision-serialized credential rail (design §5.5).
 	TypeIdentifierUsesChanged = "identifier_uses_changed"
 
+	// TypeUserDeactivated is an applied account-lifecycle transition to
+	// "deactivated" (CHAU-1.1): the subject's sessions and authentication grants
+	// were revoked and no new session may be minted. UserID is the TARGET subject
+	// and Actor is the administrator who applied it. Details carries the resulting
+	// status and the revoked-session count only — never an address, display name,
+	// or credential material. A no-op replay records nothing.
+	TypeUserDeactivated = "user_deactivated"
+	// TypeUserReactivated is an applied account-lifecycle transition back to
+	// "active" (CHAU-1.1). It fabricates no session: the subject must authenticate
+	// again. Details follow TypeUserDeactivated's rules.
+	TypeUserReactivated = "user_reactivated"
+
+	// TypeVerificationResendRequested is a PUBLIC registration-verification resend
+	// request (CHAU-2.2): StatusSuccess when the opaque replacement job was
+	// admitted, StatusBlocked when a resend budget refused it. It carries NO user
+	// id — the public request path never resolves an account — and no address or
+	// code. Details carries the identifier kind only.
+	TypeVerificationResendRequested = "verification_resend_requested"
+	// TypeVerificationResendIssued is a registration-verification code actually
+	// re-issued: from the delivery worker after it resolved an active, unverified
+	// target, or from the authorized admin resend. UserID identifies the target;
+	// Actor is set only on the admin path. Details carries the identifier kind
+	// only — never the address or the code.
+	TypeVerificationResendIssued = "verification_resend_issued"
+
+	// TypePasswordlessProvisioned is a magic-link redemption that CREATED the
+	// account (CHAU-6.6): the address had no owner and the link's captured intent
+	// permitted provisioning. UserID is the new subject. Details carry the
+	// identifier kind, the challenge purpose, and the outcome class ONLY — never
+	// the address or the token. The public response stays generic; this rail is
+	// where an operator can tell provisioning from an ordinary login.
+	TypePasswordlessProvisioned = "passwordless_provisioned"
+	// TypePasswordlessAdopted is a magic-link redemption that VERIFIED and adopted
+	// a previously unverified claim, revoking every credential that predated the
+	// proof. Details follow TypePasswordlessProvisioned's rules.
+	TypePasswordlessAdopted = "passwordless_adopted"
+
 	// TypePasswordlessStart is a passwordless login start (design §4.3):
 	// StatusSuccess when the opaque delivery job was accepted (enqueued),
 	// StatusBlocked when a start budget refused it. Details carries the identifier

@@ -32,6 +32,20 @@ const (
 
 // Branding holds app-specific data for layout templates, reachable via
 // {{.Brand.Name}}, {{.Brand.LogoURL}}, and so on.
+//
+// Bundled layouts do not all render every field. The shipped matrix is:
+//
+//	layout         logo  name  tagline  address  social  unsubscribe
+//	transactional  yes   yes   yes      yes      yes     no
+//	marketing      yes   yes   no       yes      yes     yes
+//	minimal        no    no    no       no       no      no
+//
+// LayoutMinimal is deliberately unbranded and is the content-only fallback.
+// LogoURL should be an absolute, publicly fetchable HTTPS image URL: the
+// renderer never fetches, resolves, or validates it, and mail clients block
+// external images by default, so the brand name and tagline stay visible as the
+// text fallback. The URL is interpolated through html/template, which is the
+// injection safety boundary; it is never treated as template.HTML.
 type Branding struct {
 	Name           string
 	Tagline        string
@@ -93,10 +107,15 @@ func newTemplateRegistry() (*TemplateRegistry, error) {
 	return tr, nil
 }
 
-// SetBranding sets the branding configuration used by layout templates.
+// SetBranding sets the branding configuration used by layout templates. A nil
+// argument resets to empty branding: the registry's branding is never nil, so
+// layouts may dereference {{.Brand.*}} unconditionally.
 func (tr *TemplateRegistry) SetBranding(branding *Branding) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
+	if branding == nil {
+		branding = &Branding{}
+	}
 	tr.branding = branding
 }
 

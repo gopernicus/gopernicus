@@ -140,6 +140,8 @@ func (s *Service) DeliveryStatus(ctx context.Context, receiptKey string) (delive
 // known and unknown identifiers are indistinguishable.
 func (s *Service) Initialize(ctx context.Context, kind, purpose string, cmd delivery.Envelope) (delivery.Envelope, bool, error) {
 	switch purpose {
+	case delivery.PurposeRegistrationVerification:
+		return s.initRegistrationVerification(ctx, cmd)
 	case delivery.PurposePasswordReset:
 		return s.initPasswordReset(ctx, cmd)
 	case delivery.PurposeMagicLink:
@@ -170,13 +172,26 @@ func (s *Service) initPasswordReset(ctx context.Context, cmd delivery.Envelope) 
 	if err != nil {
 		return delivery.Envelope{}, false, err
 	}
-	env, err := s.deliver.Render(ctx, delivery.Request{
+	// Build the landing link from the CONFIGURED URL only (CHAU-5.2). This runs in
+	// the worker, off the request path, so no request header is even reachable
+	// here — which is exactly the property that makes a Host-derived reset link
+	// impossible rather than merely discouraged.
+	//
+	// Secret is still passed to the renderer so an app content-template override
+	// that reads {{.Secret}} keeps working for one compatibility window (the
+	// bundled template is link-only). It also remains in the encrypted delivery
+	// envelope so a terminal failure can discard the bound token.
+	req := delivery.Request{
 		Kind:            identity.KindEmail,
 		Purpose:         delivery.PurposePasswordReset,
 		Destination:     ident.NormalizedValue,
 		ResolutionInput: cmd.ResolutionInput,
 		Secret:          token,
-	})
+	}
+	if link := buildPasswordResetURL(s.passwordResetURL, token); link != "" {
+		req.Data = map[string]any{"Link": link}
+	}
+	env, err := s.deliver.Render(ctx, req)
 	if err != nil {
 		return delivery.Envelope{}, false, err
 	}
@@ -200,11 +215,14 @@ func (s *Service) Discard(ctx context.Context, kind, purpose string, env deliver
 	case delivery.PurposeMagicLink:
 		// A never-delivered magic-link token is voided by deleting its challenge row.
 		_, _ = s.RedeemToken(ctx, challenge.PurposeLoginMagicLink, env.Secret)
-	case delivery.PurposeLoginCode:
-		// The login OTP is an HMAC-protected code, not a token: there is no
-		// delete-by-secret path (that is the token rail). A never-delivered code cannot
-		// be voided by secret, so it is left to expire under its short TTL + attempt
-		// lockout — it was never delivered, so it discloses nothing meanwhile.
+	case delivery.PurposeLoginCode, delivery.PurposeRegistrationVerification:
+		// Both are HMAC-protected CODES, not tokens: there is no delete-by-secret
+		// path (that is the token rail). A never-delivered code cannot be voided by
+		// secret, so it is left to expire under its short TTL + attempt lockout — it
+		// was never delivered, so it discloses nothing meanwhile. For a
+		// registration-verification resend this also means a terminal delivery
+		// failure leaves the PRIOR code already invalidated by the replacement: the
+		// user requests another resend rather than falling back to a stale code.
 	}
 	return nil
 }

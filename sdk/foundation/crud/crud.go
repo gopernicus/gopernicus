@@ -83,12 +83,26 @@
 // # Query-param vocabulary
 //
 // Transport edges parse a standard vocabulary into a ListRequest: limit,
-// cursor, offset, and count map through ParseListRequest; order=field:direction
-// is parsed separately by ParseOrder because the allow-list is per-aggregate.
-// Each paginated aggregate declares its allow-list (map[string]OrderField) plus
-// a default Order in its feature-core domain package; ParseOrder validates the
-// requested field at the edge, and backends validate again (QuoteIdentifier or
-// allow-list membership) before use — raw request input never reaches SQL.
+// cursor, offset, count, and q map through ParseListRequest;
+// order=field:direction is parsed separately by ParseOrder because the allow-list
+// is per-aggregate. Each paginated aggregate declares its allow-list
+// (map[string]OrderField) plus a default Order in its feature-core domain
+// package; ParseOrder validates the requested field at the edge, and backends
+// validate again (QuoteIdentifier or allow-list membership) before use — raw
+// request input never reaches SQL.
+//
+// `q` is the SEARCH term, and it is the canonical v3 key. Search mirrors ordering
+// deliberately: an aggregate declares []SearchField beside its OrderFields, the
+// edge parses the term, and the store applies it. A legacy transport migrating v1
+// clients (which used `s`) may fall back to `s` when `q` is absent, but that alias
+// belongs at that host's edge with a documented removal milestone — it is not part
+// of this vocabulary, and new endpoints accept `q` only.
+//
+// Unlike a bad limit, a search term's CONTENTS are never invalid: `%`, `_`, `\`,
+// and non-ASCII text are all legal things a human types, and stores match them
+// LITERALLY (see MatchesSearch). What IS rejected is a non-blank term against a
+// list that declares no searchable fields — sdk.ErrInvalidInput, rather than an
+// unfiltered page presented as a search result.
 package crud
 
 import (
@@ -168,6 +182,15 @@ type ListRequest struct {
 	Order     Order
 	WithCount bool
 	Strategy  Strategy // "" resolves to StrategyCursor
+	// Search is the case-insensitive LITERAL substring a store applies across its
+	// declared SearchFields (crud-search-upstream T1). Blank means no search.
+	//
+	// Stores trim it again rather than trusting the transport parser, because a
+	// programmatically constructed ListRequest bypasses ParseListRequest entirely.
+	// A non-blank Search against a list that declares NO searchable fields is
+	// sdk.ErrInvalidInput — never a silently unfiltered page presented as a search
+	// result. See MatchesSearch for the exact matching and case-folding contract.
+	Search string
 }
 
 // ResolvedStrategy returns StrategyCursor when Strategy is empty, else Strategy

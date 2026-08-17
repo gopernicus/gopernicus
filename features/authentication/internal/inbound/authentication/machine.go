@@ -197,7 +197,8 @@ func (h *handlers) revokeAPIKey(w http.ResponseWriter, r *http.Request) {
 }
 
 // parseListRequest parses the strict transport-edge page params
-// (limit/cursor/offset/count plus a per-aggregate order) into a crud.ListRequest.
+// (limit/cursor/offset/count/q plus a per-aggregate order) into a
+// crud.ListRequest.
 // orderFields is the aggregate's allow-list and defaultOrder its default sort;
 // the order field is validated against the allow-list. The host-configured
 // DefaultStrategy (h.listStrategy) applies when a request names neither a cursor
@@ -206,10 +207,14 @@ func (h *handlers) revokeAPIKey(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) parseListRequest(w http.ResponseWriter, r *http.Request, orderFields map[string]crud.OrderField, defaultOrder crud.Order) (crud.ListRequest, bool) {
 	q := r.URL.Query()
 	req, err := crud.ParseListRequest(crud.ListParams{
-		Limit:           q.Get("limit"),
-		Cursor:          q.Get("cursor"),
-		Offset:          q.Get("offset"),
-		Count:           q.Get("count"),
+		Limit:  q.Get("limit"),
+		Cursor: q.Get("cursor"),
+		Offset: q.Get("offset"),
+		Count:  q.Get("count"),
+		// `q` is the canonical v3 search key (crud-search-upstream D3). A legacy
+		// edge migrating v1 clients may fall back to `s` at ITS OWN transport, with
+		// a documented removal milestone; this feature accepts `q` only.
+		Search:          q.Get("q"),
 		DefaultStrategy: h.listStrategy,
 	})
 	if err != nil {

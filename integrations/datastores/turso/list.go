@@ -30,6 +30,12 @@ type ListQuery[T any] struct {
 	Args         []any
 	OrderFields  map[string]crud.OrderField
 	DefaultOrder crud.Order
+	// SearchFields is the allow-list of searchable text columns — the twin of
+	// OrderFields (crud-search-upstream T3), and the dialect sibling of the pgx
+	// connector's field of the same name. Empty means the list is NOT searchable:
+	// a blank ListRequest.Search still works, and a NON-blank one is
+	// sdk.ErrInvalidInput rather than a silently unfiltered page.
+	SearchFields []crud.SearchField
 	PK           string
 	Limits       crud.Limits
 	Scan         func(Scanner) (T, error)
@@ -58,10 +64,43 @@ func List[T any](ctx context.Context, db Querier, q ListQuery[T], req crud.ListR
 		return crud.Page[T]{}, err
 	}
 
-	if req.ResolvedStrategy() == crud.StrategyOffset {
-		return q.listOffset(ctx, db, req, orderCol, castLower, direction)
+	// The search predicate is folded into BaseSQL BEFORE the strategy switch, so
+	// all FOUR query paths inherit it: the cursor page, the offset page, the
+	// cursor strategy's reverse probe, and the COUNT(*) wrap. Appending it to a
+	// per-page buffer instead would make WithCount report the UNFILTERED total and
+	// let the reverse probe derive HasPrev from rows the search excluded.
+	searched, err := q.withSearch(req.Search)
+	if err != nil {
+		return crud.Page[T]{}, err
 	}
-	return q.listCursor(ctx, db, req, orderCol, castLower, direction)
+
+	if req.ResolvedStrategy() == crud.StrategyOffset {
+		return searched.listOffset(ctx, db, req, orderCol, castLower, direction)
+	}
+	return searched.listCursor(ctx, db, req, orderCol, castLower, direction)
+}
+
+// withSearch returns a copy of q whose BaseSQL carries the search predicate and
+// whose Args carry the bound pattern(s). A blank term returns q unchanged.
+//
+// The args slice is COPIED rather than appended to in place: ListQuery is passed
+// by value, but a slice header shares its backing array, so an in-place append
+// could scribble into the caller's array when it has spare capacity. The copy
+// also preserves BaseSQL's own argument ORDER — search arguments land after the
+// caller's and before any cursor/limit/offset arguments a later step appends.
+func (q ListQuery[T]) withSearch(term string) (ListQuery[T], error) {
+	if strings.TrimSpace(term) == "" {
+		return q, nil
+	}
+	var buf strings.Builder
+	buf.WriteString(q.BaseSQL)
+	args := append([]any(nil), q.Args...)
+	if err := AddSearchClause(&buf, &args, q.SearchFields, term); err != nil {
+		return ListQuery[T]{}, err
+	}
+	q.BaseSQL = buf.String()
+	q.Args = args
+	return q, nil
 }
 
 // listCursor is the keyset flow: decode the cursor (a nil cursor — first page or

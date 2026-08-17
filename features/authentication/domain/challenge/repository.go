@@ -14,11 +14,20 @@ import (
 // The redemption operations are the whole security surface: each is ONE atomic
 // step so exactly one correct concurrent request can win.
 //
-//   - Replace atomically deletes the prior (user, purpose) row and inserts the
-//     new one, returning the stored challenge (with its assigned ID). Two active
-//     rows never coexist for a (user, purpose); a colliding (purpose,
-//     secret_digest) is sdk.ErrAlreadyExists.
-//   - ConsumeCode resolves the live (user, purpose) row, decides expiry, selects
+//   - Replace atomically deletes the prior (SUBJECT KEY, purpose) row and inserts
+//     the new one, returning the stored challenge (with its assigned ID). Two
+//     active rows never coexist for a (subject key, purpose); a colliding
+//     (purpose, secret_digest) is sdk.ErrAlreadyExists.
+//
+//     The subject key is Challenge.ResolvedSubjectKey() — the explicit SubjectKey
+//     when set, else UserID (CHAU-6.1). Every purpose that predates the field
+//     leaves it unset and therefore keys on the user id exactly as before; the
+//     email magic link sets a stable PII-free digest so a link issued for an
+//     address with NO account is still replaceable.
+//
+//   - ConsumeCode resolves the live (subject key, purpose) row — userID IS the
+//     subject key for every code purpose, since none of them can be issued
+//     without an account — decides expiry, selects
 //     the DigestCandidate whose KeyID matches the row's ProtectorKeyID, compares
 //     digests in constant time, and then EITHER counts a wrong attempt (deleting
 //     the row at maxAttempts) OR consumes the row on success — all inside one
@@ -26,18 +35,21 @@ import (
 //     reserved for infrastructure failures. A correct code whose bound context
 //     does not match expectedContextDigest is consumed anyway (OutcomeContext-
 //     Mismatch). An empty candidate digest never matches.
+//
 //   - ConsumeToken is an atomic delete-returning by (purpose, presentedDigest):
 //     an empty digest never matches (sdk.ErrNotFound), an expired row is deleted
 //     and returns sdk.ErrExpired, a live row is deleted and returned. It mirrors
 //     the oauthstate.Consume single-use get-and-delete contract.
+//
 //   - PurgeExpired deletes up to limit rows at or past before, returning the
 //     count removed (bounded batching).
 type Repository interface {
-	// Replace atomically replaces the prior (user, purpose) challenge with c and
-	// returns the stored row. A colliding (purpose, secret_digest) →
-	// sdk.ErrAlreadyExists.
+	// Replace atomically replaces the prior (subject key, purpose) challenge with c
+	// and returns the stored row, defaulting an unset SubjectKey to c.UserID. A
+	// colliding (purpose, secret_digest) → sdk.ErrAlreadyExists.
 	Replace(ctx context.Context, c Challenge) (Challenge, error)
-	// ConsumeCode atomically evaluates the (userID, purpose) code challenge
+	// ConsumeCode atomically evaluates the (userID, purpose) code challenge — the
+	// user id IS the subject key for every code purpose
 	// against candidates, binding expectedContextDigest, counting a wrong attempt
 	// up to maxAttempts, and consuming on success. The ConsumeOutcome is
 	// authoritative; error is infrastructure-only.
@@ -45,7 +57,8 @@ type Repository interface {
 		expectedContextDigest string, maxAttempts int, now time.Time) (Consumed, ConsumeOutcome, error)
 	// ConsumeToken atomically deletes and returns the (purpose, presentedDigest)
 	// token row: empty → sdk.ErrNotFound, expired → sdk.ErrExpired (row deleted),
-	// live → the Consumed row.
+	// live → the Consumed row. The Consumed carries BOTH SubjectKey and UserID, so
+	// a redeemer can act on a row whose UserID is empty.
 	ConsumeToken(ctx context.Context, purpose, presentedDigest string, now time.Time) (Consumed, error)
 	// PurgeExpired deletes up to limit rows at or past before and returns the
 	// number removed.

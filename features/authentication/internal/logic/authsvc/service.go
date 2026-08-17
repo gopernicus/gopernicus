@@ -29,6 +29,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/identifier"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthaccount"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthstate"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/passwordless"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/passwordreset"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/serviceaccount"
@@ -210,6 +211,32 @@ type Deps struct {
 	Normalizer identifier.Normalizer
 	Passwords  user.PasswordRepository
 	Sessions   session.SessionRepository
+	// UserAdmin is the OPTIONAL user-administration repository (CHAU-1.1): the
+	// paginated operator directory plus the atomic status/revocation transition.
+	// Nil → the administration service methods fail closed with
+	// ErrUserAdminUnavailable and the bundled admin routes are not registered.
+	UserAdmin user.AdminRepository
+	// UserAdminCheck is the host authorization seam the bundled admin handlers
+	// call. Nil → the bundled admin ROUTES are not registered even when UserAdmin
+	// is wired, so a store adapter can supply the capability without an
+	// authorization surface appearing. It never affects the trusted service
+	// methods, whose callers own authorization.
+	UserAdminCheck UserAdminCheck
+	// PasswordlessRedeem is the OPTIONAL atomic magic-link redemption repository
+	// (CHAU-6.1). Named apart from the Passwordless KIND list above, which is a
+	// different thing entirely. Required only when ProvisionOnRedeem is enabled;
+	// package auth enforces that pairing.
+	PasswordlessRedeem passwordless.Repository
+	// ProvisionOnRedeem enables account creation from an email magic link at
+	// CONSUME time (Config.PasswordlessProvisionOnRedeem).
+	ProvisionOnRedeem bool
+	// ActiveSessions is the OPTIONAL fenced session-minting capability (CHAU-1.1).
+	// When wired, EVERY new session is inserted only while the owning user is
+	// atomically proven active, closing the deactivate-versus-mint race. Nil →
+	// mintSession uses the ordinary Sessions.Create; package auth then refuses to
+	// enable the admin routes, so no host can advertise deactivation while
+	// retaining the race.
+	ActiveSessions session.ActiveUserRepository
 	// Challenges backs the atomic secret rail (design §3.2): HMAC-protected OTP
 	// codes and SHA-256 magic-link tokens with atomic replace/consume. Nil until a
 	// host wires the challenge subsystem; the challenge service methods refuse
@@ -339,6 +366,12 @@ type Deps struct {
 	// never from a request Host/forwarded header. Package auth validates it (absolute
 	// http(s), HTTPS in production) whenever a passwordless kind is enabled.
 	PublicAuthBaseURL string
+	// PasswordResetURL is the absolute public reset landing route, BEFORE the token
+	// query parameter is appended (CHAU-5.1). Empty → the legacy raw-token reset
+	// template is rendered instead; package auth rejects an empty value in
+	// production and warns in development. The link is built from THIS value only —
+	// never from a request header.
+	PasswordResetURL string
 
 	// BrowserLoginPath is the login destination the browser identity gates
 	// (RequirePrincipalBrowser / RequireLiveSessionBrowser) 303 to on denial (design
@@ -443,9 +476,32 @@ type Service struct {
 	// publicBaseURL is the absolute base URL magic links are built from (Deps.PublicAuthBaseURL,
 	// design §6.4). Empty unless passwordless is enabled; package auth validates it.
 	publicBaseURL string
+	// passwordResetURL is the absolute reset landing route the reset mail links to
+	// (Deps.PasswordResetURL, CHAU-5.1). Empty → the legacy raw-token template.
+	// Validated by package auth at construction; never derived from a request.
+	passwordResetURL string
 	// browserLoginPath is the resolved login destination the browser identity gates
 	// 303 to on denial (Deps.BrowserLoginPath; empty defaults to "/auth/login").
 	browserLoginPath string
+
+	// User-administration state (CHAU-1.1). userAdmin is the optional directory +
+	// atomic lifecycle repository; userAdminCheck is the host authorization seam.
+	// Both nil → the subsystem is off. The repository alone enables the TRUSTED
+	// service methods; the bundled admin ROUTES additionally require the check.
+	userAdmin      user.AdminRepository
+	userAdminCheck UserAdminCheck
+	// activeSessions is the optional fenced session-minting capability (CHAU-1.1):
+	// it inserts a session only while the owning user is atomically proven active.
+	// Nil → mintSession falls back to the ordinary sessions.Create, which cannot
+	// fence a concurrent deactivation; package auth refuses to enable the admin
+	// routes in that configuration.
+	activeSessions session.ActiveUserRepository
+
+	// passwordlessRedeem is the optional atomic magic-link redemption repository
+	// and provisionOnRedeem the host switch (CHAU-6.1). Both nil/false → the
+	// historical login-only redemption path.
+	passwordlessRedeem passwordless.Repository
+	provisionOnRedeem  bool
 }
 
 // NewService builds a Service from its dependencies, applying cookie name/path
@@ -538,7 +594,13 @@ func NewService(d Deps) *Service {
 		refreshTTL:           refreshTTL,
 		passwordless:         passwordless,
 		publicBaseURL:        d.PublicAuthBaseURL,
+		passwordResetURL:     d.PasswordResetURL,
 		browserLoginPath:     browserLoginPath,
+		userAdmin:            d.UserAdmin,
+		userAdminCheck:       d.UserAdminCheck,
+		activeSessions:       d.ActiveSessions,
+		passwordlessRedeem:   d.PasswordlessRedeem,
+		provisionOnRedeem:    d.ProvisionOnRedeem,
 	}
 }
 
@@ -769,7 +831,12 @@ func (s *Service) Login(ctx context.Context, emailAddr, password string) (TokenP
 
 	pair, err := s.mintSession(ctx, u.ID, s.primaryAuthentication(session.MethodPassword))
 	if err != nil {
-		return TokenPair{}, user.User{}, err
+		// A deactivated account is denied as ordinary bad credentials (CHAU-1.5):
+		// the admin lifecycle must not become an enumeration oracle.
+		if errors.Is(err, session.ErrUserNotActive) {
+			s.recordLogin(ctx, u.ID, normalized, securityevent.StatusBlocked)
+		}
+		return TokenPair{}, user.User{}, genericIfNotActive(err, invalidCredentials())
 	}
 	s.recordLogin(ctx, u.ID, normalized, securityevent.StatusSuccess)
 	return pair, u, nil
@@ -1103,7 +1170,7 @@ func (s *Service) mintSession(ctx context.Context, userID string, auth session.A
 	}
 	sess.RefreshTokenHash = refreshHash
 	sess.Authentication = auth
-	created, err := s.sessions.Create(ctx, sess)
+	created, err := s.createSession(ctx, sess)
 	if err != nil {
 		return TokenPair{}, err
 	}
@@ -1112,6 +1179,25 @@ func (s *Service) mintSession(ctx context.Context, userID string, auth session.A
 		return TokenPair{}, err
 	}
 	return TokenPair{AccessToken: access, AccessExpiresAt: expiresAt, RefreshToken: rawRefresh}, nil
+}
+
+// createSession persists a proposed session through the strongest available
+// path. This is the SINGLE session-insert seam for every credential flow —
+// password login, /auth/token, OAuth login/register/verify-link, and passwordless
+// completion all reach it through mintSession — so the lifecycle fence cannot be
+// bypassed by adding a new login method.
+//
+// With the ActiveSessions capability wired, the insert happens only while the
+// owning user is atomically proven active under the same serialization boundary,
+// so a concurrent deactivation either revokes this session or prevents it
+// (CHAU-1.4/1.5). Without it, the ordinary Sessions.Create runs and there is no
+// fence — which is why package auth refuses to enable the admin lifecycle routes
+// in that configuration rather than advertising a deactivation it cannot honor.
+func (s *Service) createSession(ctx context.Context, sess session.Session) (session.Session, error) {
+	if s.activeSessions != nil {
+		return s.activeSessions.CreateForActiveUser(ctx, sess)
+	}
+	return s.sessions.Create(ctx, sess)
 }
 
 // primaryAuthentication builds the session authentication metadata for a primary
@@ -1179,6 +1265,27 @@ func (s *Service) loginKey(kind, normalizedValue, clientIP string) string {
 // password".
 func invalidCredentials() error {
 	return fmt.Errorf("invalid email or password: %w", sdk.ErrUnauthorized)
+}
+
+// genericIfNotActive collapses a lifecycle refusal from the fenced session mint
+// into the calling flow's OWN generic public failure (CHAU-1.5). A deactivated
+// account must be indistinguishable from a wrong password, an unknown address, or
+// a stale magic link on every PUBLIC credential endpoint: returning
+// session.ErrUserNotActive verbatim would map to a distinctive 403 and turn the
+// admin console's deactivation into an account-enumeration oracle.
+//
+// Any other error — including an infrastructure failure — passes through
+// unchanged, so a store outage still surfaces as a 500 rather than being
+// misreported as bad credentials.
+//
+// Operator surfaces are deliberately NOT routed through this: the admin
+// directory reports the real status, because the caller there has already been
+// authorized to see it.
+func genericIfNotActive(err error, generic error) error {
+	if errors.Is(err, session.ErrUserNotActive) {
+		return generic
+	}
+	return err
 }
 
 // validatePassword enforces the single-factor password policy (design §5.9) and

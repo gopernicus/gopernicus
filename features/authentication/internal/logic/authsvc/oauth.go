@@ -236,7 +236,9 @@ func (s *Service) OAuthCallback(ctx context.Context, providerName, code, stateTo
 	case err == nil:
 		pair, err := s.mintSession(ctx, existing.UserID, s.primaryAuthentication(session.MethodOAuth))
 		if err != nil {
-			return OAuthResult{}, err
+			// A deactivated account is denied generically (CHAU-1.5): the provider
+			// round-trip must not become a status oracle either.
+			return OAuthResult{}, genericIfNotActive(err, invalidCredentials())
 		}
 		u, err := s.users.Get(ctx, existing.UserID)
 		if err != nil {
@@ -317,7 +319,8 @@ func (s *Service) VerifyLink(ctx context.Context, token string) (OAuthResult, er
 	}
 	pair, err := s.mintSession(ctx, created.UserID, s.primaryAuthentication(session.MethodOAuth))
 	if err != nil {
-		return OAuthResult{}, err
+		// A deactivated account is denied generically (CHAU-1.5).
+		return OAuthResult{}, genericIfNotActive(err, invalidCredentials())
 	}
 	u, err := s.users.Get(ctx, created.UserID)
 	if err != nil {

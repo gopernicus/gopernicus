@@ -73,13 +73,17 @@ func (s *ChallengeStore) Replace(ctx context.Context, c challenge.Challenge) (ch
 	if c.Version == 0 {
 		c.Version = 1
 	}
+	// The row is unique under the SUBJECT KEY, which defaults to the user id for
+	// every purpose that predates the field (CHAU-6.1).
+	subjectKey := c.ResolvedSubjectKey()
 	err := s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
 		if _, err := tx.Exec(ctx,
-			`DELETE FROM challenges WHERE user_id = @user_id AND purpose = @purpose`,
-			pgx.NamedArgs{"user_id": c.UserID, "purpose": c.Purpose}); err != nil {
+			`DELETE FROM challenges WHERE subject_key = @subject_key AND purpose = @purpose`,
+			pgx.NamedArgs{"subject_key": subjectKey, "purpose": c.Purpose}); err != nil {
 			return err
 		}
 		args := pgx.NamedArgs{
+			"subject_key":      subjectKey,
 			"user_id":          c.UserID,
 			"purpose":          c.Purpose,
 			"secret_digest":    c.SecretDigest,
@@ -92,8 +96,8 @@ func (s *ChallengeStore) Replace(ctx context.Context, c challenge.Challenge) (ch
 		}
 		if c.ID == "" {
 			const insert = `INSERT INTO challenges
-				(user_id, purpose, secret_digest, protector_key_id, context, attempt_count, expires_at, created_at, version)
-				VALUES (@user_id, @purpose, @secret_digest, @protector_key_id, @context, @attempt_count, @expires_at, @created_at, @version)
+				(subject_key, user_id, purpose, secret_digest, protector_key_id, context, attempt_count, expires_at, created_at, version)
+				VALUES (@subject_key, @user_id, @purpose, @secret_digest, @protector_key_id, @context, @attempt_count, @expires_at, @created_at, @version)
 				RETURNING id`
 			if err := tx.QueryRow(ctx, insert, args).Scan(&c.ID); err != nil {
 				return pgxdb.MapError(err)
@@ -102,8 +106,8 @@ func (s *ChallengeStore) Replace(ctx context.Context, c challenge.Challenge) (ch
 		}
 		args["id"] = c.ID
 		const insert = `INSERT INTO challenges
-			(id, user_id, purpose, secret_digest, protector_key_id, context, attempt_count, expires_at, created_at, version)
-			VALUES (@id, @user_id, @purpose, @secret_digest, @protector_key_id, @context, @attempt_count, @expires_at, @created_at, @version)`
+			(id, subject_key, user_id, purpose, secret_digest, protector_key_id, context, attempt_count, expires_at, created_at, version)
+			VALUES (@id, @subject_key, @user_id, @purpose, @secret_digest, @protector_key_id, @context, @attempt_count, @expires_at, @created_at, @version)`
 		if _, err := tx.Exec(ctx, insert, args); err != nil {
 			return err
 		}
@@ -135,8 +139,8 @@ func (s *ChallengeStore) ConsumeCode(ctx context.Context, userID, purpose string
 		)
 		selErr := tx.QueryRow(ctx,
 			`SELECT id, secret_digest, protector_key_id, context, attempt_count, expires_at
-				FROM challenges WHERE user_id = @user_id AND purpose = @purpose FOR UPDATE`,
-			pgx.NamedArgs{"user_id": userID, "purpose": purpose}).
+				FROM challenges WHERE subject_key = @subject_key AND purpose = @purpose FOR UPDATE`,
+			pgx.NamedArgs{"subject_key": userID, "purpose": purpose}).
 			Scan(&id, &secretDigest, &protectorKeyID, &contextText, &attemptCount, &expiresAt)
 		if selErr != nil {
 			if selErr == pgx.ErrNoRows {
@@ -214,6 +218,7 @@ func (s *ChallengeStore) ConsumeToken(ctx context.Context, purpose, presentedDig
 	}
 	var (
 		id             string
+		subjectKey     string
 		userID         string
 		gotPurpose     string
 		contextText    *string
@@ -221,9 +226,9 @@ func (s *ChallengeStore) ConsumeToken(ctx context.Context, purpose, presentedDig
 		expiresAt      time.Time
 	)
 	const q = `DELETE FROM challenges WHERE purpose = @purpose AND secret_digest = @digest
-		RETURNING id, user_id, purpose, context, protector_key_id, expires_at`
+		RETURNING id, subject_key, user_id, purpose, context, protector_key_id, expires_at`
 	err := s.db.QueryRow(ctx, q, pgx.NamedArgs{"purpose": purpose, "digest": presentedDigest}).
-		Scan(&id, &userID, &gotPurpose, &contextText, &protectorKeyID, &expiresAt)
+		Scan(&id, &subjectKey, &userID, &gotPurpose, &contextText, &protectorKeyID, &expiresAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return challenge.Consumed{}, sdk.ErrNotFound
@@ -235,6 +240,7 @@ func (s *ChallengeStore) ConsumeToken(ctx context.Context, purpose, presentedDig
 	}
 	return challenge.Consumed{
 		ID:             id,
+		SubjectKey:     subjectKey,
 		UserID:         userID,
 		Purpose:        gotPurpose,
 		Context:        bytesFrom(contextText),

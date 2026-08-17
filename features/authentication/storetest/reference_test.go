@@ -2,8 +2,11 @@ package storetest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"sync"
 	"testing"
@@ -19,6 +22,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/invitation"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthaccount"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthstate"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/passwordless"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/passwordreset"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/serviceaccount"
@@ -106,7 +110,145 @@ func (r *reference) repositories() auth.Repositories {
 		ContactChanges:       refContactChanges{r},
 		AuthenticationGrants: refAuthGrants{r},
 		CredentialMutations:  refCredentialMutations{r},
+		UserAdmin:            refUserAdmin{r},
+		Passwordless:         refPasswordless{r},
+		ActiveSessions:       refActiveSessions{r},
 	}
+}
+
+// --- user.AdminRepository ---
+
+// refUserAdmin is the reference user-administration capability (CHAU-1.1). Its
+// whole point is the SetStatus transaction: the status write, the auth_revision
+// increment, and the session/grant revocation all happen inside ONE critical
+// section, so no observer can see a deactivated user still holding sessions and
+// no concurrent mint can slip between them. A dialect adapter must give the same
+// guarantee with a real transaction.
+type refUserAdmin struct{ *reference }
+
+// summaryLocked projects a user plus its ACTIVE PRIMARY email identifier.
+// Callers hold r.mu. This mirrors the single JOIN a SQL store performs — the
+// projection must never issue one identifier read per user.
+func (r *reference) summaryLocked(u user.User) user.Summary {
+	s := user.Summary{
+		ID:              u.ID,
+		DisplayName:     u.DisplayName,
+		Status:          user.NormalizeStatus(u.Status),
+		StatusChangedAt: u.StatusChangedAt,
+		CreatedAt:       u.CreatedAt,
+		UpdatedAt:       u.UpdatedAt,
+	}
+	for _, it := range r.userIdentifiers {
+		if it.UserID != u.ID || it.Kind != identifier.KindEmail || !it.IsPrimary || !it.Active() {
+			continue
+		}
+		s.PrimaryEmail = it.NormalizedValue
+		s.EmailVerified = it.Verified()
+		break // the partial unique index guarantees at most one
+	}
+	return s
+}
+
+func (r refUserAdmin) List(_ context.Context, req crud.ListRequest) (crud.Page[user.Summary], error) {
+	r.mu.RLock()
+	all := make([]user.Summary, 0, len(r.users))
+	for _, u := range r.users {
+		all = append(all, r.summaryLocked(u))
+	}
+	r.mu.RUnlock()
+	return pageMem(all, req, func(s user.Summary) (time.Time, string) {
+		return s.CreatedAt, s.ID
+	})
+}
+
+func (r refUserAdmin) GetSummary(_ context.Context, id string) (user.Summary, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	u, ok := r.users[id]
+	if !ok {
+		return user.Summary{}, sdk.ErrNotFound
+	}
+	return r.summaryLocked(u), nil
+}
+
+func (r refUserAdmin) SetStatus(_ context.Context, id string, status user.Status, now time.Time) (user.StatusChange, error) {
+	if !status.Valid() {
+		return user.StatusChange{}, fmt.Errorf("reference: %q: %w", status, user.ErrInvalidStatus)
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	u, ok := r.users[id]
+	if !ok {
+		return user.StatusChange{}, sdk.ErrNotFound
+	}
+	current := user.NormalizeStatus(u.Status)
+	if current == status {
+		// Idempotent replay: no revision increment, no revocation, no change.
+		return user.StatusChange{Status: current, Changed: false, ChangedAt: u.StatusChangedAt}, nil
+	}
+
+	now = now.UTC()
+	u.Status = status
+	u.StatusChangedAt = now
+	u.UpdatedAt = now
+	u.AuthRevision++
+	r.users[id] = u
+	r.authRevisions[id] = u.AuthRevision
+
+	revoked := 0
+	for sid, s := range r.sessions {
+		if s.UserID != id {
+			continue
+		}
+		delete(r.sessions, sid)
+		revoked++
+		for gid, g := range r.grants {
+			if g.SessionID == sid {
+				delete(r.grants, gid)
+			}
+		}
+	}
+	// Grants are session-bound, but sweep any that reference the user directly so
+	// a grant whose session was already gone cannot survive the transition.
+	for gid, g := range r.grants {
+		if g.UserID == id {
+			delete(r.grants, gid)
+		}
+	}
+
+	return user.StatusChange{Status: status, Changed: true, ChangedAt: now, RevokedSessions: revoked}, nil
+}
+
+// --- session.ActiveUserRepository ---
+
+// refActiveSessions is the reference fenced session mint (CHAU-1.1): the status
+// read and the session insert happen under ONE lock, so a concurrent SetStatus
+// either commits first (and this refuses) or commits after (and revokes the row
+// this wrote). A SQL adapter must reach the same outcome with row locking or
+// conditional insertion inside its transaction.
+type refActiveSessions struct{ *reference }
+
+func (r refActiveSessions) CreateForActiveUser(_ context.Context, s session.Session) (session.Session, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	u, ok := r.users[s.UserID]
+	if !ok {
+		return session.Session{}, sdk.ErrNotFound
+	}
+	if !u.Active() {
+		return session.Session{}, session.ErrUserNotActive
+	}
+	// Same uniqueness contract as the ordinary Create.
+	for _, ex := range r.sessions {
+		if ex.RefreshTokenHash == s.RefreshTokenHash {
+			return session.Session{}, sdk.ErrAlreadyExists
+		}
+	}
+	r.sessions[s.ID] = s
+	return s, nil
 }
 
 // --- user.UserRepository ---
@@ -648,12 +790,22 @@ func (r refAPIKeys) GetByHash(_ context.Context, keyHash string) (apikey.APIKey,
 }
 
 func (r refAPIKeys) ListByServiceAccount(_ context.Context, serviceAccountID string, req crud.ListRequest) (crud.Page[apikey.APIKey], error) {
+	// The search term is applied through crud.MatchesSearch, the SHARED oracle both
+	// SQL dialects are pinned against (crud-search-upstream T4), so a memory store
+	// cannot quietly disagree with Postgres about what a term matches. A non-blank
+	// term against a list declaring no searchable fields is sdk.ErrInvalidInput —
+	// the same fail-loud rule the SQL connectors apply — but api_keys DOES declare
+	// one (apikey.SearchFields), so only the name is matched.
 	r.mu.RLock()
 	all := make([]apikey.APIKey, 0, len(r.apiKeys))
 	for _, k := range r.apiKeys {
-		if k.ServiceAccountID == serviceAccountID {
-			all = append(all, k)
+		if k.ServiceAccountID != serviceAccountID {
+			continue
 		}
+		if !crud.MatchesSearch(k.Name, req.Search) {
+			continue
+		}
+		all = append(all, k)
 	}
 	r.mu.RUnlock()
 	return pageMem(all, req, func(k apikey.APIKey) (time.Time, string) {
@@ -980,9 +1132,13 @@ type refChallenges struct{ *reference }
 func (r refChallenges) Replace(_ context.Context, c challenge.Challenge) (challenge.Challenge, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	// Delete the prior (user, purpose) row (the single-active claim).
+	// Delete the prior (SUBJECT KEY, purpose) row (the single-active claim). The
+	// subject key defaults to the user id for every purpose that predates it
+	// (CHAU-6.1), so this is unchanged for all of them.
+	subjectKey := c.ResolvedSubjectKey()
+	c.SubjectKey = subjectKey
 	for id, ex := range r.challenges {
-		if ex.UserID == c.UserID && ex.Purpose == c.Purpose {
+		if ex.ResolvedSubjectKey() == subjectKey && ex.Purpose == c.Purpose {
 			delete(r.challenges, id)
 		}
 	}
@@ -1075,10 +1231,12 @@ func (r refChallenges) PurgeExpired(_ context.Context, before time.Time, limit i
 	return n, nil
 }
 
-// findByUserPurpose returns the single (user, purpose) row; callers hold r.mu.
+// findByUserPurpose returns the single (subject key, purpose) row; callers hold
+// r.mu. Every CODE purpose keys on the user id, so the passed userID IS the
+// subject key.
 func (r refChallenges) findByUserPurpose(userID, purpose string) (string, challenge.Challenge, bool) {
 	for id, ex := range r.challenges {
-		if ex.UserID == userID && ex.Purpose == purpose {
+		if ex.ResolvedSubjectKey() == userID && ex.Purpose == purpose {
 			return id, ex, true
 		}
 	}
@@ -1088,6 +1246,7 @@ func (r refChallenges) findByUserPurpose(userID, purpose string) (string, challe
 func consumedOf(c challenge.Challenge, now time.Time) challenge.Consumed {
 	return challenge.Consumed{
 		ID:             c.ID,
+		SubjectKey:     c.ResolvedSubjectKey(),
 		UserID:         c.UserID,
 		Purpose:        c.Purpose,
 		Context:        c.Context,
@@ -1353,6 +1512,271 @@ func (r refAuthGrants) DeleteBySession(_ context.Context, sessionID string) erro
 		}
 	}
 	return nil
+}
+
+// --- passwordless.Repository ---
+
+// refPasswordless is the reference atomic magic-link redemption (CHAU-6.2). It is
+// the behavioral SPEC the two SQL implementations are held to, so it is written to
+// be readable rather than clever: one critical section, a snapshot taken before
+// any mutation, and an explicit restore on every rejection path so a refused
+// redemption leaves the store byte-identical — including the token, which stays
+// redeemable after an INFRASTRUCTURE failure but is consumed by a committed
+// outcome.
+type refPasswordless struct{ *reference }
+
+// passwordlessSnapshot copies every collection the redemption can mutate.
+type passwordlessSnapshot struct {
+	users         map[string]user.User
+	identifiers   map[string]identifier.Identifier
+	passwords     map[string]string
+	sessions      map[string]session.Session
+	grants        map[string]authgrant.Grant
+	challenges    map[string]challenge.Challenge
+	authRevisions map[string]int64
+}
+
+func (r refPasswordless) snapshot() passwordlessSnapshot {
+	snap := passwordlessSnapshot{
+		users:         make(map[string]user.User, len(r.users)),
+		identifiers:   make(map[string]identifier.Identifier, len(r.userIdentifiers)),
+		passwords:     make(map[string]string, len(r.passwords)),
+		sessions:      make(map[string]session.Session, len(r.sessions)),
+		grants:        make(map[string]authgrant.Grant, len(r.grants)),
+		challenges:    make(map[string]challenge.Challenge, len(r.challenges)),
+		authRevisions: make(map[string]int64, len(r.authRevisions)),
+	}
+	maps.Copy(snap.users, r.users)
+	maps.Copy(snap.identifiers, r.userIdentifiers)
+	maps.Copy(snap.passwords, r.passwords)
+	maps.Copy(snap.sessions, r.sessions)
+	maps.Copy(snap.grants, r.grants)
+	maps.Copy(snap.challenges, r.challenges)
+	maps.Copy(snap.authRevisions, r.authRevisions)
+	return snap
+}
+
+func (r refPasswordless) restore(snap passwordlessSnapshot) {
+	r.users = snap.users
+	r.userIdentifiers = snap.identifiers
+	r.passwords = snap.passwords
+	r.sessions = snap.sessions
+	r.grants = snap.grants
+	r.challenges = snap.challenges
+	r.authRevisions = snap.authRevisions
+}
+
+func (r refPasswordless) Redeem(_ context.Context, in passwordless.RedeemInput) (passwordless.RedeemResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	snap := r.snapshot()
+	reject := func() (passwordless.RedeemResult, error) {
+		r.restore(snap)
+		return passwordless.RedeemResult{}, passwordless.ErrRedemption
+	}
+
+	if in.TokenDigest == "" {
+		return reject()
+	}
+
+	// 1. Select and consume the live matching challenge. An expired row is deleted
+	//    (single-use even when stale) and still rejects.
+	var consumed challenge.Challenge
+	found := false
+	for id, ex := range r.challenges {
+		if ex.Purpose == in.Purpose && ex.SecretDigest == in.TokenDigest {
+			consumed, found = ex, true
+			delete(r.challenges, id)
+			break
+		}
+	}
+	if !found || consumed.Expired(in.Now) {
+		if !found {
+			r.restore(snap) // nothing was consumed; keep the store untouched
+		}
+		return passwordless.RedeemResult{}, passwordless.ErrRedemption
+	}
+
+	// 2. Decode and validate the versioned binding.
+	var binding passwordless.Binding
+	if err := json.Unmarshal(consumed.Context, &binding); err != nil {
+		return reject()
+	}
+	if binding.Version != passwordless.BindingVersion || binding.NormalizedValue == "" {
+		return reject()
+	}
+
+	now := in.Now.UTC()
+
+	// 3. Re-read the CURRENT active claim for the bound address. The binding's
+	//    identifier/user ids are an expectation, not an authority.
+	current, hasCurrent := r.findActiveAuthClaimLocked(identifier.Kind(binding.Kind), binding.NormalizedValue, nil)
+
+	switch {
+	case !hasCurrent:
+		// 3a. Nobody claims the address.
+		if !binding.ProvisionIfAbsent {
+			// A login-only link whose account vanished between issue and consume.
+			return reject()
+		}
+		return r.provisionLocked(in, binding, now, snap)
+
+	case current.Verified():
+		// 3b. A verified claim: ordinary login for its CURRENT owner, which may be a
+		//     different user than the one recorded at issue (the address was
+		//     registered between send and consume — the now-current owner wins).
+		if !current.LoginEnabled {
+			return reject()
+		}
+		return r.loginLocked(in, current, now, snap)
+
+	default:
+		// 3c. An UNVERIFIED claim: the click proves possession, so adopt it — after
+		//     revoking everything that predates the proof.
+		return r.adoptLocked(in, current, now, snap)
+	}
+}
+
+// provisionLocked creates one active user and one verified primary identifier,
+// then inserts the session. Callers hold r.mu.
+func (r refPasswordless) provisionLocked(in passwordless.RedeemInput, binding passwordless.Binding, now time.Time, snap passwordlessSnapshot) (passwordless.RedeemResult, error) {
+	u := in.NewUser
+	if u.ID == "" {
+		u.ID = ids.MustGenerate()
+	}
+	u.Status = user.NormalizeStatus(u.Status)
+	if !u.Active() {
+		r.restore(snap)
+		return passwordless.RedeemResult{}, passwordless.ErrRedemption
+	}
+	u.CreatedAt, u.UpdatedAt = now, now
+
+	ident := in.NewIdentifier
+	if ident.ID == "" {
+		ident.ID = ids.MustGenerate()
+	}
+	ident.UserID = u.ID
+	ident.NormalizedValue = binding.NormalizedValue
+	ident.Kind = identifier.Kind(binding.Kind)
+	ident.VerifiedAt = now
+	ident.CreatedAt, ident.UpdatedAt = now, now
+
+	// The authentication claim must still be free at commit time.
+	if _, taken := r.findActiveAuthClaimLocked(ident.Kind, ident.NormalizedValue, nil); taken {
+		r.restore(snap)
+		return passwordless.RedeemResult{}, passwordless.ErrRedemption
+	}
+
+	r.users[u.ID] = u
+	r.authRevisions[u.ID] = u.AuthRevision
+	r.userIdentifiers[ident.ID] = ident
+
+	sess, err := r.insertSessionLocked(in.Session, u.ID, snap)
+	if err != nil {
+		return passwordless.RedeemResult{}, err
+	}
+	return passwordless.RedeemResult{
+		Outcome:     passwordless.OutcomeProvisionNew,
+		User:        u,
+		Identifier:  ident,
+		Session:     sess,
+		Provisioned: true,
+	}, nil
+}
+
+// loginLocked mints a session for the identifier's current owner.
+func (r refPasswordless) loginLocked(in passwordless.RedeemInput, ident identifier.Identifier, _ time.Time, snap passwordlessSnapshot) (passwordless.RedeemResult, error) {
+	u, ok := r.users[ident.UserID]
+	if !ok || !u.Active() {
+		r.restore(snap)
+		return passwordless.RedeemResult{}, passwordless.ErrRedemption
+	}
+	sess, err := r.insertSessionLocked(in.Session, u.ID, snap)
+	if err != nil {
+		return passwordless.RedeemResult{}, err
+	}
+	return passwordless.RedeemResult{
+		Outcome:    passwordless.OutcomeLoginExistingVerified,
+		User:       u,
+		Identifier: ident,
+		Session:    sess,
+	}, nil
+}
+
+// adoptLocked verifies the previously-unverified identifier and revokes every
+// credential that predates the proof, BEFORE inserting the session. The ordering
+// is the invariant: a completed adoption cannot leave a squatter credential alive,
+// because the session is created only after the revocation.
+func (r refPasswordless) adoptLocked(in passwordless.RedeemInput, ident identifier.Identifier, now time.Time, snap passwordlessSnapshot) (passwordless.RedeemResult, error) {
+	u, ok := r.users[ident.UserID]
+	if !ok || !u.Active() {
+		r.restore(snap)
+		return passwordless.RedeemResult{}, passwordless.ErrRedemption
+	}
+
+	// Revoke first: password, sessions, grants, and the listed challenge purposes.
+	delete(r.passwords, u.ID)
+	for sid, sv := range r.sessions {
+		if sv.UserID == u.ID {
+			delete(r.sessions, sid)
+		}
+	}
+	for gid, g := range r.grants {
+		if g.UserID == u.ID {
+			delete(r.grants, gid)
+		}
+	}
+	for cid, c := range r.challenges {
+		if c.UserID != u.ID {
+			continue
+		}
+		if slices.Contains(in.RevokeChallengePurposes, c.Purpose) {
+			delete(r.challenges, cid)
+		}
+	}
+
+	// Then verify and adopt the identifier, and bump the revision so any in-flight
+	// credential mutation loses its CAS.
+	ident.VerifiedAt = now
+	ident.LoginEnabled = in.AdoptedIdentifierUses.Login
+	ident.RecoveryEnabled = in.AdoptedIdentifierUses.Recovery
+	ident.NotificationEnabled = in.AdoptedIdentifierUses.Notification
+	ident.UpdatedAt = now
+	r.userIdentifiers[ident.ID] = ident
+
+	u.AuthRevision++
+	u.UpdatedAt = now
+	r.users[u.ID] = u
+	r.authRevisions[u.ID] = u.AuthRevision
+
+	sess, err := r.insertSessionLocked(in.Session, u.ID, snap)
+	if err != nil {
+		return passwordless.RedeemResult{}, err
+	}
+	return passwordless.RedeemResult{
+		Outcome:    passwordless.OutcomeVerifyAndAdoptExistingUnverified,
+		User:       u,
+		Identifier: ident,
+		Session:    sess,
+	}, nil
+}
+
+// insertSessionLocked applies the ordinary session uniqueness contract inside the
+// transaction. A collision rolls the whole redemption back.
+func (r refPasswordless) insertSessionLocked(proposed session.Session, userID string, snap passwordlessSnapshot) (session.Session, error) {
+	proposed.UserID = userID
+	if proposed.ID == "" {
+		proposed.ID = ids.MustGenerate()
+	}
+	for _, ex := range r.sessions {
+		if ex.RefreshTokenHash == proposed.RefreshTokenHash {
+			r.restore(snap)
+			return session.Session{}, sdk.ErrAlreadyExists
+		}
+	}
+	r.sessions[proposed.ID] = proposed
+	return proposed, nil
 }
 
 // --- credential.MutationRepository ---

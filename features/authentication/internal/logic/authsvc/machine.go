@@ -154,6 +154,22 @@ func (s *Service) AuthenticateAPIKey(ctx context.Context, rawKey string) (Princi
 		return Principal{}, err
 	}
 	p := effectivePrincipal(sa)
+	// An act-as-user key authenticates AS a human subject, so the subject's
+	// lifecycle status governs it exactly as it governs a login (CHAU-1.5).
+	// Without this, deactivating a user would leave every act-as-user key still
+	// acting as them — a live credential the admin console believes it revoked.
+	// A service-account principal has no user subject and is unaffected.
+	if p.Type == PrincipalUser {
+		deactivated, err := s.userDeactivated(ctx, p.ID)
+		if err != nil {
+			// Fail closed: an unreadable subject is not proof of an active one.
+			return Principal{}, err
+		}
+		if deactivated {
+			s.recordAPIKeyAuth(ctx, key, securityevent.Principal{Type: p.Type, ID: p.ID}, securityevent.StatusBlocked)
+			return Principal{}, invalidAPIKey()
+		}
+	}
 	s.recordAPIKeyAuth(ctx, key, securityevent.Principal{Type: p.Type, ID: p.ID}, securityevent.StatusSuccess)
 	// Best-effort: a TouchLastUsed failure must never fail authentication
 	// (design §4.1). Now that the service carries a logger (A5), the previously

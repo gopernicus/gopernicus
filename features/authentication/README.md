@@ -65,7 +65,7 @@ internal/
 storetest/               executable spec for domain/'s ports + the reference
                          in-memory implementation
 stores/turso/            the outbound tier: per-dialect SQL + canonical
-stores/pgx/              migrations (0001–0013; auth owns no delivery table),
+stores/pgx/              migrations (0001–0015; auth owns no delivery table),
                          each its own module
 views/goth/              the bundled default HTML surface — a SIBLING module
                          (goth.New(bundle), the ui/goth adapter); the feature
@@ -215,9 +215,35 @@ API callers skip it), and sets `Cache-Control: no-store`.
   unverified/unlinked email → **pending link** (a mailed single-use secret;
   completes only via verify-link — the takeover gate); no user → register + link.
 - `POST /auth/oauth/verify-link` — `{token}` → completes a pending link.
-- session-gated: `GET /auth/oauth/{provider}/link/start`.
+- session-gated: `GET /auth/oauth/{provider}/link/start` — see
+  [OAuth account linking](#oauth-account-linking--two-distinct-flows).
 - **Removed in v3:** `GET /auth/oauth/linked` (subsumed by `/auth/methods`) and
   `DELETE /auth/oauth/{provider}/link` (replaced by the code-gated unlink pair).
+
+**Registration verification resend — the public half is UNCONDITIONAL; the
+authorized half mounts with the admin surface. See
+[Verification resend](#verification-resend--one-use-case-two-surfaces):**
+
+- `POST /auth/verification/resend` — `{email}` → **always 202
+  `{"status":"accepted"}`** for every target state. Origin-gated (no CSRF token —
+  the caller has no session). 429 on a budget (3/address/min, 10/IP/min), 503 on
+  a saturated delivery queue.
+- `POST /auth/admin/users/{id}/verification/resend` — authorized; 202 + a
+  secret-free receipt, or 409 `already_verified` / `user_deactivated`, or 404.
+
+**User administration — registered only when `Config.UserAdminCheck` is wired
+(deny-by-absence; repository presence alone is NOT enough). Each route is gated
+live session → (mutations only) browser-safe Origin/CSRF → `UserAdminCheck`, and
+answers `Cache-Control: no-store`. See
+[Account lifecycle](#account-lifecycle--the-operator-directory-and-deactivation):**
+
+| route | check action | result |
+|---|---|---|
+| `GET /auth/admin/users` | `UserAdminList` (no target) | `crud.Page[user summary]`, ordered `created_at DESC, id DESC`, with the usual `limit`/`cursor`/`offset`/`count` params |
+| `GET /auth/admin/users/{id}` | `UserAdminRead` | one summary |
+| `POST /auth/admin/users/{id}/deactivate` | `UserAdminDeactivate` | `{user, changed}` — `changed:false` on an idempotent replay |
+| `POST /auth/admin/users/{id}/reactivate` | `UserAdminReactivate` | `{user, changed}` |
+| `POST /auth/admin/users/{id}/verification/resend` | `UserAdminResendVerification` | 202 + secret-free receipt, or a typed 409/404 |
 
 **Machine identity — registered only when `ServiceAccounts` AND `APIKeys` are
 both wired; all session-gated:**
@@ -589,6 +615,7 @@ Nil semantics:
 | `ServiceAccounts`, `APIKeys` | both nil → machine subsystem OFF | **both-or-neither** → `ErrMachineReposRequired` |
 | `SecurityEvents` | **no audit trail** — the recording site is a no-op (AV9); degrades silently by design | none — never a construction error |
 | `Invitations` | allowed only while `Granter` is nil | Granter set + nil → `ErrInvitationRepoRequired` |
+| `UserAdmin`, `ActiveSessions` | the account-lifecycle capability is OFF: the trusted admin methods fail closed with `ErrUserAdminUnavailable`, the bundled admin routes are not registered, and session minting uses the unfenced `Sessions.Create` | `Config.UserAdminCheck` set + either nil → `ErrUserAdminReposRequired`. The reverse is **not** an error: a bundled store adapter always supplies both, and the routes stay unmounted until the host makes an authorization decision |
 
 Sentinel contract (the port doc comments are the spec; `storetest` is its
 executable form): duplicate → `errs.ErrAlreadyExists`; absent → `errs.ErrNotFound`;
@@ -615,7 +642,7 @@ default, so a host can never inherit the development posture; unknown →
 
 | field | nil/zero means |
 |---|---|
-| `RuntimeMode` | **REQUIRED, no default.** `"production"` rejects development-only delivery transports and every incomplete security wiring (below); `"development"` warns instead. |
+| `RuntimeMode` | **REQUIRED, no default.** `"production"` rejects development-only delivery transports and every incomplete security wiring (below); `"development"` warns instead. A **type alias** of `environment.Mode` (`sdk/foundation/environment`) — see [Security posture](#security-posture) for the canonical-name table; app-wide code should name `environment.Mode` and needs no auth import. |
 | `Hasher` (PasswordHasher) | **hard error** — a password feature with no hasher is a foot-gun. |
 | `Mailer` (email.Sender) | **hard error** — silently dropping mail is unsafe degradation. |
 | `MailFrom` | From address on verification/reset/change mail. |
@@ -630,18 +657,22 @@ default, so a host can never inherit the development posture; unknown →
 | `DeliveryJobsAcknowledged` | a wiring assertion that the host runs the durable generic jobs delivery runtime. Meaningful for `DeliveryMode: "jobs"`; the queue is the ONLY send path, so production REQUIRES it (`ErrDeliveryJobsUnacknowledged`) rather than silently swallowing every message; development tolerates the zero value. |
 | `DeliveryEphemeralAcknowledged` | a wiring assertion that the host accepts the crash-loss guarantee of `DeliveryMode: "in_process"` (in-flight work is lost on a restart). Production REQUIRES it (`ErrDeliveryEphemeralUnacknowledged`); the recommended production posture is `"jobs"`. |
 | `PublicAuthBaseURL` | the absolute base magic links + landing pages build from (`AUTH_PUBLIC_BASE_URL`). REQUIRED once a link flow is enabled (`ErrPublicAuthBaseURLRequired`); production requires **HTTPS** (`ErrPublicAuthBaseURLInsecure`). Request Host/forwarded headers NEVER participate. |
-| `Passwordless []string` | empty → passwordless OFF (routes not registered). Allowed v3 kinds are `"email"`/`"phone"` (`ErrPasswordlessKindInvalid`); each needs a wired delivery channel (`ErrPasswordlessKindUnsupported`), the challenge rail + durable outbox, and a valid `PublicAuthBaseURL`. NEVER auto-provisions; NEVER enables phone+password (phone stays passwordless-only). |
+| `Passwordless []string` | empty → passwordless OFF (routes not registered). Allowed v3 kinds are `"email"`/`"phone"` (`ErrPasswordlessKindInvalid`); each needs a wired delivery channel (`ErrPasswordlessKindUnsupported`), the challenge rail + durable outbox, and a valid `PublicAuthBaseURL`. Provisioning is OFF by default and opt-in per `PasswordlessProvisionOnRedeem` (email links only — see [Provision-on-consumption](#provision-on-consumption--magic-links-for-addresses-with-no-account)); NEVER enables phone+password (phone stays passwordless-only). |
+| `PasswordlessProvisionOnRedeem` | **false (default) → an email magic link sent to an address with no account delivers nothing and creates nothing** — the historical login-only behavior. true → the link is delivered, and the account is created **only when the link is successfully CONSUMED**, never when it is sent. Email links ONLY; never phone, OTP, OAuth, or another identifier kind. Requires the email passwordless kind, the challenge rail + `ChallengeProtector`, an `IdentifierKeyer`, a delivery runtime, a valid `PublicAuthBaseURL`, `Repositories.Passwordless`, and `Repositories.ActiveSessions` — anything missing is `ErrPasswordlessProvisionWiring` at construction. Read the [threat model](#provision-on-consumption--magic-links-for-addresses-with-no-account) before enabling. |
 | `AllowedOrigins []string` | the exact-match `Origin` allowlist for cookie-authenticated sensitive mutations and HTML form posts (design §9.1). `"*"` never authorizes a credentialed cross-origin mutation; empty rejects every cross-site cookie mutation. Bearer-only callers skip the gate. |
 | `BrowserLoginPath string` | the login destination the browser identity gates (`RequirePrincipalBrowser` / `RequireLiveSessionBrowser`) 303 to on denial (`AUTH_BROWSER_LOGIN_PATH`). Empty → `/auth/login`. A non-empty value MUST be a safe root-relative path (leading `/`, no `//` prefix, scheme, backslash, or control character) or construction fails with `ErrBrowserLoginPathInvalid`. Configures ONLY the browser gates; the JSON middleware is unaffected. |
 | `Views` | **nil → API-only** (no HTML routes, JSON-only POSTs, no templ in the graph). Non-nil → HTML pages mount alongside the unchanged JSON API. The blessed default is the ui/goth adapter `authgoth.New(bundle)` (`features/authentication/views/goth`); the override path is embedding its `Views`. |
 | `HTMLPolicy` (*HTMLResourcePolicy) | **nil → the historical asset-free CSP** (script-src nonce-only, no external origins). Non-nil → the same fixed protections plus the policy's validated widening resource directives (script/style/image/font/connect/media/worker), so a selected HTML view can load its assets. Only WIDENS — a policy can never remove a fixed protection. Build with `NewHTMLResourcePolicy` (validates loudly). Set with a nil `Views` → `ErrHTMLPolicyWithoutViews` at construction (contradictory wiring). Technology-neutral — the core imports no templ/`ui/goth`. |
 | `EmailContentTemplates` | empty → the bundled `LayerCore` email bodies render unchanged. Each entry overrides a bundled template at `email.LayerApp` (Namespace must be `EmailContentNamespace`). Changes email BODIES only — a **distinct** override system from `Views`. |
 | `EmailLayouts` | empty → the sdk's bundled email layouts render unchanged. Each entry registers a host layout at `email.LayerApp` — the highest layer wins, so it resolves ahead of the sdk default. Every delivery purpose renders with `email.LayoutTransactional`, so ONE entry shipping `layouts/transactional.html` (+ optional `.txt`) re-frames ALL auth mail: `EmailLayouts: []auth.EmailLayoutOverride{{FS: layoutsFS}}`. `FS` is walked from `Dir` (empty → `"layouts"`); a file's base name is the layout type it replaces, and the file names itself with `{{define "layout:<name>"}}` (`.text` for the `.txt` half) like the sdk's bundled layouts. Changes the email FRAME only — bodies stay with `EmailContentTemplates`, brand values with `EmailBranding`. |
+| `EmailBranding` (*email.Branding) | nil → the sdk's unset fallback (`Your Company`, no logo, no tagline, no address). Fills the bundled layout frame's `{{.Brand.*}}` values without touching bodies or routes. All auth mail renders with `email.LayoutTransactional`, which renders **`LogoURL`, `Name`, `Tagline`, and `Address`** — a non-empty `LogoURL` now emits an `<img>` above the brand name, so a logo works **without replacing the whole layout** (fixed in `sdk v0.3.x`; previously the transactional layout silently dropped it). `Name`/`Tagline` stay visible alongside the image because mail clients block external images by default, and the `alt` text is `Name` (falling back to `Your Company`). Use an absolute, publicly fetchable **HTTPS** URL: the sdk renderer never fetches, resolves, or validates it, and `html/template` is the escaping boundary. An `EmailLayouts` override at `LayerApp` still wins — a host replacing `transactional.html` owns its own logo markup. |
 | `RequireVerifiedEmail` | false. true → login AND `/auth/token` refuse an unverified user with 403 (**requires a WORKING Mailer**, else total login lockout). |
 | `RateLimiter` | `ratelimiter.NewMemory()` — an in-process limiter (not "unlimited"). **Production rejects a per-process limiter** (`ErrNonDurableRateLimiter`): a multi-instance host needs a shared/durable one. |
 | `SessionCookie` (CookieConfig) | zero value usable: name `session`, path `/`, browser-session cookie backed by a 7-day server session. `Secure` is a host deployment choice (true behind TLS). |
 | `RefreshCookiePath string` | the refresh cookie's `Path` scope (`AUTH_REFRESH_COOKIE_PATH`). Empty → `/auth` (covers `/auth/refresh` AND `/auth/logout`). **A host mounting the feature under a prefix MUST set the FULL prefixed path** — `feature.PrefixRegistrar{Prefix: "/api/v1"}` → `RefreshCookiePath: "/api/v1/auth"` — else the browser never sends the refresh cookie to `/api/v1/auth/refresh` and cookie-driven refresh dies SILENTLY (the registrar exposes registration, not its mount prefix, so the feature cannot derive it). A non-empty value must be a valid absolute cookie path (leading `/`, no query/fragment/control/header-delimiter character, no trailing slash except `/` itself) or construction fails with `ErrRefreshCookiePathInvalid`. The SAME resolved path issues (login, rotation) and deletes (logout) the cookie. Configures ONLY the refresh cookie: the access cookie keeps `SessionCookie.Path` and both keep `SameSite=Lax`. |
 | `Providers []oauth.Provider` | OAuth OFF (deny-by-absence). Non-empty → both oauth repos required. |
+| `PasswordResetURL` | **REQUIRED in production** whenever the forgot/reset rail is wired (`ErrPasswordResetURLRequired`); development permits empty with one startup WARN and keeps the legacy raw-token mail. The absolute public reset landing route BEFORE `?token=` is appended — a **separate** field from `PublicAuthBaseURL` (which is the full passwordless landing URL, not an origin). HTTPS in production; no fragment; no pre-existing `token` parameter; other query parameters preserved. Built in the worker from this value only — request `Host`/forwarded headers never participate. See [Password reset](#password-reset--the-link-rail). |
+| `UserAdminCheck` | **nil → the bundled admin routes are NOT registered**, even when the store supplies `Repositories.UserAdmin` — turning a store capability into an HTTP surface is the host's decision, not the store's. Non-nil → `GET /auth/admin/users`, `GET /auth/admin/users/{id}`, and the deactivate/reactivate POSTs mount, and BOTH `Repositories.UserAdmin` and `Repositories.ActiveSessions` become required (`ErrUserAdminReposRequired`). Authentication never invents a role named `admin` and never imports authorization — see [Account lifecycle](#account-lifecycle--the-operator-directory-and-deactivation). |
 | `TokenEncrypter` (cryptids.Encrypter) | provider tokens NOT persisted (login/linking still work). Wire `cryptids.NewAESGCM` to store them. |
 | `OAuthCallbackBase`, `RedirectAllowlist` | callback origin / exact-match redirect allowlist (open-redirect guard; a non-allowlisted target falls back to `/`). |
 | `TokenSigner` (cryptids.JWTSigner) | **REQUIRED.** `sdk/foundation/cryptids.NewHS256` is the stdlib default; `integrations/cryptids/golang-jwt` covers RS256/ES256. **Multi-instance hosts MUST share the signing secret** (§1.6). |
@@ -820,6 +851,621 @@ lifecycle, exactly like the jobs and events pollers.
   `DeliveryEphemeralAcknowledged: true` for production, and expect the ephemeral
   posture above.
 
+## Provision-on-consumption — magic links for addresses with no account
+
+By default a magic link sent to an address with no account delivers nothing: the
+worker resolves the address, finds no owner, and terminates the job silently. With
+`Config.PasswordlessProvisionOnRedeem` the link is delivered instead, and clicking
+it **creates the account** (CHAU-6.x).
+
+This is a real security decision, not a convenience toggle. Read the whole section
+before enabling it.
+
+### The one rule: creation happens at CONSUME, never at SEND
+
+Sending writes **no** user row and **no** identifier row. A link that is never
+clicked leaves nothing behind — there is no half-created account to clean up, no
+row an attacker can create by spraying addresses at the start endpoint, and no
+way to use the send path to squat an address.
+
+Redemption is **POST-only**. No GET consumes a token, so a link scanner, a
+preview fetcher, or an email-security crawler that merely *fetches* the URL
+cannot provision anything.
+
+### The intent is captured at issue
+
+The link's stored binding records `provision_if_absent` at the moment it was
+issued, and redemption reads it back **verbatim**. Flipping the configuration
+later does not change what an already-mailed link does in either direction: a link
+mailed while provisioning was off will not provision because the flag is on now,
+and one mailed while it was on keeps its meaning if the flag is turned off.
+
+The binding is **versioned**. A version this build does not understand is a
+generic redemption failure, never a best-guess — misreading it could create an
+account nobody asked for.
+
+### The four outcomes
+
+Redemption re-reads the **current** claim for the bound address (the ids recorded
+at issue are an expectation, not an authority) and commits exactly one of:
+
+| outcome | when | what happens |
+|---|---|---|
+| `login_existing_verified` | a verified, login-enabled claim | ordinary login for its **current** owner |
+| `verify_and_adopt_existing_unverified` | an UNVERIFIED claim | the address is verified and adopted — **after** revoking the squatter's credentials |
+| `provision_new` | no claim, and the link carried the intent | one active user + one verified primary email, created here |
+| generic rejection | everything else | `ErrPasswordlessLogin` (401); nothing written |
+
+All of it is **one store transaction**. A failure rolls back the token
+consumption too, so a transient error leaves the link redeemable rather than
+burning it.
+
+### Races, and what each one does
+
+- **Registered between send and consume.** The address gained a verified owner
+  while the link was in flight → the **now-current owner** is logged in. No
+  duplicate subject is created.
+- **Registered-but-unverified between send and consume.** The address was claimed
+  without being proven → the adoption branch. Clicking the link is the proof, so
+  the claim is adopted and the **squatter's password, sessions, recent-auth
+  grants, and outstanding reset/OTP/step-up challenges are revoked BEFORE the new
+  session is written**. A completed adoption cannot leave one of their credentials
+  alive. This is the same anti-takeover lesson the OAuth pending-link flow already
+  encodes.
+- **Two redemptions of one link.** The guarded consume serializes them: exactly
+  one commits a session, the other gets the generic rejection.
+- **Deactivated during the flow.** The redemption requires an active user inside
+  the same transaction, so it refuses.
+- **Resend across the unknown→registered boundary.** Every email link is keyed by
+  a stable PII-free subject digest derived from the address, not by a user id, so
+  a resend replaces its predecessor whether or not the address has an owner yet.
+
+### What the caller learns: nothing
+
+The public start is unchanged — it still resolves nothing on the request path, so
+a known and an unknown address produce byte-identical responses. What provisioning
+changes is whether the **worker** sends, not what the request reveals.
+
+The redemption response never says "account created" versus "logged in": every
+stable failure is one generic 401, and success is just a session. The hydration
+endpoint shows the resulting user afterwards, exactly as it would for any login.
+
+The **audit rail** is where an operator can tell them apart:
+`passwordless_provisioned`, `passwordless_adopted`, and the ordinary
+`passwordless_login`, each carrying the identifier kind, the challenge purpose,
+and the outcome class — never the address, never the token.
+
+### What a provisioned account looks like
+
+One active user with an **empty display name** — the feature has no name to
+invent, and asking for one would defeat the point of a link sign-in — and one
+**verified**, primary, login/recovery/notification-enabled email identifier.
+Fill in the profile afterwards through your own flow.
+
+Pending invitations for that address resolve **once**, on the provisioning commit,
+exactly as they do for a password registration or an OAuth provisioning. An
+adoption or an ordinary login does **not** re-resolve them.
+
+### PII and retention
+
+The link's binding stores the **normalized address** in the challenge row's
+context, because token redemption carries no identifier input and the redeemer
+must know what ownership was proven. That is the same retention the pre-existing
+known-user binding already had. It is bounded by the challenge TTL and the
+existing purge contract. The delivery envelope holds the address encrypted. The
+raw address never becomes a limiter key, a delivery logical key, a challenge
+subject key, a log label, or an audit detail.
+
+### Multi-instance requirement
+
+Provisioning inherits every multi-instance requirement passwordless already has,
+and they stop being optional: a **shared** rate limiter, a **durable** delivery
+runtime (`DeliveryMode: "jobs"`), a **shared** store, and the **same**
+`IdentifierKeyer` and `ChallengeProtector` key material on every instance.
+Different key material across instances means different subject keys for the same
+address, which means a resend from instance B will not replace instance A's link.
+
+### Wiring
+
+```go
+cfg.Passwordless = []string{"email"}          // the only rail provisioning applies to
+cfg.PasswordlessProvisionOnRedeem = true
+cfg.PublicAuthBaseURL = "https://app.example.com/login/link"
+cfg.IdentifierKeyer = yourKeyer               // the stable PII-free subject key
+cfg.ChallengeProtector = yourProtector
+// Repositories.Passwordless and Repositories.ActiveSessions come from the bundled
+// pgx/turso stores automatically.
+```
+
+Anything missing is `ErrPasswordlessProvisionWiring` at construction — provisioning
+never runs through a half-wired path.
+
+### Schema
+
+Migration **`0015_challenge_subject_keys.sql`** is append-only and must be applied
+before deploying a binary built against the new store tag. It generalizes the
+challenge row's single-active claim from `(user_id, purpose)` to
+`(subject_key, purpose)`, backfilling `subject_key := user_id`, so every existing
+purpose behaves exactly as before while an email link gains a key that exists
+without a user.
+
+The runnable proof — request a link for an unknown address, assert nothing exists
+yet, redeem by POST, assert the account exists and the caller is signed in, assert
+the replay fails, assert the invitation resolved once — is
+`examples/auth-cms/cmd/server/passwordless_provision_test.go`.
+
+## Password reset — the link rail
+
+Reset mail used to print a raw token and tell the user to "use this token". That
+is not a flow anyone can complete without a hand-built form. It now carries a
+clickable link to a landing route the host configures (CHAU-5.x).
+
+### Configuration
+
+`Config.PasswordResetURL` is the **absolute public reset landing route, before the
+token query parameter is appended** — for example
+`https://app.example.com/reset-password`.
+
+It is deliberately a **separate field** from `PublicAuthBaseURL`. That one is the
+full passwordless landing URL (e.g. `.../login/link`), not an application origin,
+so a reset route cannot be derived from it without guessing. Do not rename or
+reinterpret it.
+
+Validated at construction:
+
+| rule | error | why |
+|---|---|---|
+| absolute `http`/`https` with a host | `ErrPasswordResetURLInvalid` | a relative or scheme-relative value cannot be mailed |
+| HTTPS in production | `ErrPasswordResetURLInsecure` | the link carries a single-use credential |
+| **no fragment** | `ErrPasswordResetURLInvalid` | the builder appends `?token=…`; after a `#` the token lands *inside* the fragment where the SPA's query parser will not find it |
+| **no existing `token` parameter** | `ErrPasswordResetURLInvalid` | the builder would silently overwrite ambiguous host input |
+| other non-secret query params | *allowed* | `.../reset?app=console` is preserved and the token is appended alongside |
+
+**Compatibility posture:**
+
+- **Production** — the field is **REQUIRED** whenever the challenge-backed
+  forgot/reset rail is wired (`ErrPasswordResetURLRequired`). Raw-token-only reset
+  mail is no longer an acceptable production experience.
+- **Development** — empty is permitted with **one startup WARN**, and the bundled
+  template falls back to the historical raw-token body so console and local flows
+  keep working mid-migration.
+
+Once a URL is present, **all** modes render link-only mail.
+
+### Where the link comes from — and where it does not
+
+The link is built in the **delivery worker**, off the request path, from the
+configured value alone. Request `Host`, `Forwarded`, and `X-Forwarded-*` never
+participate — the builder never sees a request. That is not a convention to
+uphold; it is a structural property, and it matters because a Host-derived reset
+link is an account-takeover primitive: an attacker who could set `Host` on a
+forgot-password request would be mailed a link pointing at their own origin.
+`TestPasswordResetLinkIgnoresRequestHeaders` drives a forgot-password request
+with a hostile `Host`, `X-Forwarded-Host`, `Forwarded`, and `X-Original-Host` and
+asserts the delivered link is unchanged.
+
+Retry safety is unchanged: the rendered message is checkpointed before the
+provider send, so a retry re-sends the **byte-identical** link and token rather
+than minting another.
+
+### The landing page's responsibilities
+
+The token is a live credential sitting in the URL bar. A reset page should:
+
+- read the `token` query parameter **once**, then `history.replaceState` it away
+  so it does not sit in browser history or get shoulder-surfed;
+- submit it by **POST** to `/auth/password/reset` — never re-navigate with it;
+- send `Cache-Control: no-store` and `Referrer-Policy: no-referrer` on the landing
+  response, so no shared cache retains it and no third party receives it in a
+  `Referer`; and
+- avoid loading third-party resources **before** the URL is scrubbed — an
+  analytics beacon fired on load will carry the full URL.
+
+### Template overrides
+
+The bundled body is now link-only. An app content-template override that still
+reads `{{.Secret}}` keeps working for **one compatibility window**: the renderer
+passes both `.Link` and `.Secret`. Migrate overrides to `.Link` — `.Secret` is
+deprecated *for reset presentation*, and removing it is a later breaking-release
+decision, not a silent one. (`.Secret` remains in the encrypted delivery envelope
+regardless; the terminal-failure discard path needs it to void a never-delivered
+token.)
+
+### Host example
+
+```go
+cfg.PasswordResetURL = "https://app.example.com/reset-password"
+// or from the environment, via the AUTH_PASSWORD_RESET_URL tag
+```
+
+The public start (`POST /auth/password/forgot`) is unchanged: it still returns a
+uniform 202 for every address and resolves nothing on the request path, so adding
+a link added no enumeration signal.
+
+## Verification resend — one use case, two surfaces
+
+A user who never clicked the verification mail is locked out of a
+`RequireVerifiedEmail` host with no way back. The fix is one use case exposed
+twice, deliberately shaped differently (CHAU-2.x).
+
+### `POST /auth/verification/resend` — public, enumeration-safe
+
+Body `{"email": "..."}`. **Always answers `202 {"status":"accepted"}`**, with a
+byte-identical status, body, and header set for every target state:
+
+| target | response | what actually happens |
+|---|---|---|
+| unknown address | 202 accepted | opaque work submitted; the worker resolves nothing and sends nothing |
+| malformed address | 202 accepted | budget charged; no work queued (the worker could never resolve it) |
+| already verified | 202 accepted | opaque work submitted; the worker finds nothing to verify and sends nothing |
+| deactivated + unverified | 202 accepted | opaque work submitted; the worker sends nothing |
+| **active + unverified** | 202 accepted | the worker issues a **fresh** code, invalidating the previous one, and sends |
+
+The request path does exactly three things — **normalize, rate-limit, submit** —
+and then returns. It performs no account lookup, no challenge issue, no render,
+and no provider call, because every one of those is a timing and behavior signal.
+All of them happen later, in the delivery worker, off the request path.
+
+**202 means ADMITTED, not delivered.** There is deliberately no pollable receipt
+here: a receipt whose status eventually read "sent" versus "nothing to do" would
+be exactly the oracle the uniform 202 exists to prevent. A user who does not
+receive mail asks again.
+
+Two things — and only two — produce a different response, and neither depends on
+the target:
+
+- **429** when a budget is exhausted: **3 per address per minute** and **10 per
+  client IP per minute**, both keyed on PII-free digests and both charged before
+  any resolution, so they bite identically for known, unknown, and malformed
+  input. (They mirror the passwordless start budgets rather than inventing a
+  second cooldown idiom.)
+- **503** when the bounded delivery queue refuses admission, and **500** for
+  other infrastructure failure. A saturated queue is answered honestly rather
+  than with a 202 that quietly dropped the work.
+
+**Gate.** Like the passwordless starts this is an unauthenticated
+credential-establishment endpoint: it carries the allowlisted-`Origin` gate but
+**not** the double-submit CSRF gate, because the population it serves has no
+session and therefore no `__Host-auth_csrf` cookie to compare.
+
+### Code replacement, and the in-flight duplicate
+
+A resend uses delivery **replacement**, not idempotent enqueue: it supersedes any
+still-pending verification job for the same address, including an undelivered
+original registration mail, and issues a **new** challenge — which invalidates the
+previous code.
+
+Be honest about the limit: **replacement cannot retract a provider call already
+accepted.** If the earlier message was already handed to the provider, the user
+may receive two mails. Only the newest code verifies; the older one fails as
+invalid. That is the correct trade — the alternative is re-sending a code the
+user may never have received.
+
+### `POST /auth/admin/users/{id}/verification/resend` — authorized
+
+Mounts with the rest of the admin surface, so it exists only when the host wired
+`Config.UserAdminCheck` (action `resend-verification`). Because the caller has
+already been authorized, it **may** report real state:
+
+| target | response |
+|---|---|
+| active + unverified | `202 {"status":"sent","receipt":"…"}` — a secret-free receipt, pollable via `GET /auth/delivery/status` |
+| already verified | `409` code `already_verified` |
+| deactivated | `409` code `user_deactivated` |
+| no active primary email | `404` |
+| unknown user | `404` |
+
+It issues through the same challenge and delivery-replacement helper as the
+public path, so the two cannot drift into parallel mail implementations.
+
+### Audit
+
+- `verification_resend_requested` — the PUBLIC request. Carries **no user id**
+  (the request path never resolves one) and no address or code; `Details` carries
+  the identifier kind only. Status distinguishes accepted from throttled, which
+  is the same distinction the caller already sees.
+- `verification_resend_issued` — a code actually re-issued, from the worker or
+  the admin path. Carries the target user id (and, on the admin path, the actor),
+  never the address or the code.
+
+### Operator troubleshooting
+
+A dead-lettered verification mail shows up in the generic jobs dead-letter with
+its PII-free logical key, never the address. The user-visible fix is another
+resend, which supersedes the dead job's key. A terminal delivery failure does
+**not** restore the previous code: the replacement already invalidated it, so the
+account waits for the next successful resend. Check the transport before the auth
+feature — the worker's send is the only step that touches a provider.
+
+### Downstream shape
+
+The two surfaces serve two different screens, and a console should not confuse
+them: the **public registration screen** offers "resend verification email" and
+gets a uniform 202 it must not interpret; the **admin console's user row** offers
+a "resend verification" control that reports real state and a receipt. Wiring the
+admin control to the public route would throw away the operator feedback; wiring
+the registration screen to the admin route would require authorization it does
+not have.
+
+## Account lifecycle — the operator directory and deactivation
+
+An admin console needs two things authentication did not have: a list of users,
+and a way to switch one off. Both ship here as an **opt-in, host-authorized**
+capability (CHAU-1.1).
+
+### The closed vocabulary
+
+`UserStatus` has exactly two values in v1:
+
+| status | meaning |
+|---|---|
+| `active` | the default, and the backfill for every pre-existing row |
+| `deactivated` | no new session and no act-as-user authentication may succeed |
+
+Suspension, deletion, anonymization, and lock-until are deliberately **out of
+scope**: each needs its own rules on every credential path, and an open string
+would let a host invent a posture the feature has no rules for. Adding a third
+value is a design decision, not a constant.
+
+Status is **not** verification. Whether an address is proven is identifier state;
+whether the subject may authenticate at all is this. Either can be true without
+the other.
+
+### Deactivation is a real transition, not a flag
+
+`DeactivateUser` (and the route) runs **one store transaction** that:
+
+1. writes the status and its transition time;
+2. increments `auth_revision` exactly once, invalidating any in-flight
+   revision-CAS credential mutation; and
+3. deletes **every** session row and authentication grant for the subject.
+
+All three commit together or none does. An update-then-best-effort-delete is
+explicitly not an acceptable implementation, because a crash between the two
+would leave a deactivated user holding live sessions.
+
+It is **idempotent**: deactivating an already-deactivated user returns
+`changed:false` with no second revision increment and no audit event, so a
+retried console request is safe.
+
+### The mint fence (why `ActiveSessions` is required)
+
+A status check and a session insert done as two steps is a race: a deactivation
+committing between them leaves a live session on a deactivated user, and no
+ordering in the service can close it. `Repositories.ActiveSessions` inserts the
+session **only while the owning user is atomically proven active under the same
+serialization boundary** — a locked row in Postgres, the `BEGIN IMMEDIATE` write
+intent in libSQL. Exactly one of two things happens:
+
+- the mint commits first, and the deactivation that follows deletes it; or
+- the deactivation commits first, and the mint refuses.
+
+Every mint routes through it — password login, `/auth/token`, OAuth login /
+register / verify-link, passwordless code and link, and the password-mutation
+remint — so a new login method inherits the fence rather than needing to
+remember it. That is why wiring `UserAdminCheck` without it is
+`ErrUserAdminReposRequired`: a host must not ship a deactivate button a
+concurrent login can defeat.
+
+### Denial is generic (this is a security property, not politeness)
+
+Public credential endpoints **never** reveal that an account is deactivated. A
+deactivated login returns byte-identical status and body to a wrong password; a
+deactivated passwordless completion returns the same generic 401 every other
+rejection does. Distinguishing them would turn the console's deactivate button
+into an account-existence and account-status oracle. Operator surfaces — the
+directory and the single-user read — report the real status, because the caller
+there has already been authorized to see it.
+
+### Revocation timing: live sessions vs stateless JWTs
+
+Deactivation deletes the sessions, so anything gated on **`RequireLiveSession`**
+(`/auth/me`, `/auth/methods`, `/auth/csrf`, every credential mutation, the admin
+routes themselves) denies on the very next request. Refresh fails for the same
+reason: the row is gone.
+
+The **`RequireUser`** tier is stateless — it validates the access JWT's signature
+and expiry without a session lookup — so an access token issued *before* the
+transition stays acceptable on those routes for at most `Config.AccessTokenTTL`
+(default 15 minutes). This is the same bounded asymmetry logout has always had,
+and it is bounded by design rather than unnoticed. Two consequences worth
+knowing:
+
+- put anything that must revoke instantly behind `RequireLiveSession`; and
+- note that `GET /auth/oauth/{provider}/link/start` currently uses `RequireUser`,
+  so it carries that window (see the OAuth section below).
+
+### Wiring it
+
+```go
+cfg.UserAdminCheck = func(ctx context.Context, req auth.UserAdminCheckRequest) error {
+	// The host answers with ITS OWN policy. authentication never invents a role
+	// named "admin", never interprets a role string, and never imports
+	// features/authorization.
+	if err := authorizer.Check(ctx, req.Principal, "platform:main", "admin"); err != nil {
+		return err // a denial wraps sdk.ErrForbidden; an infra error fails closed too
+	}
+	// req.Action is one of list / read / deactivate / reactivate /
+	// resend-verification; req.TargetUserID is empty only for list.
+	return nil
+}
+```
+
+A nil return authorizes. A denial and an infrastructure error **both** fail
+closed — the feature never treats "the policy could not answer" as permission.
+The resolved `Principal` reaches the check verbatim, machine principals included:
+whether a service account may administer users is the host's call.
+
+**Self-deactivation is not generically forbidden.** A host policy may allow an
+administrator to act on their own account, and it may refuse. If your product
+has a last-admin invariant, it lives in this check — the feature does not know
+what an admin is and cannot enforce it for you.
+
+### Using it without the bundled routes
+
+The trusted methods are available whenever the repositories are wired, with or
+without a check:
+
+```go
+page, err := svc.ListUsers(ctx, req)              // crud.Page[auth.UserSummary]
+summary, err := svc.GetUserSummary(ctx, userID)
+summary, change, err := svc.DeactivateUser(ctx, actor, userID)
+summary, change, err := svc.ReactivateUser(ctx, actor, userID)
+```
+
+**They apply NO authorization.** They exist so a host can build its own transport,
+console, or CLI without SQL or internal imports — and the caller owns the
+decision the bundled handlers delegate to `UserAdminCheck`. `actor` is recorded
+on the audit event only; it is never consulted for permission.
+
+The runnable end-to-end proof (list → deactivate → prove generic denial on login,
+refresh, and hydration → idempotent replay → reactivate → log in again) is
+`examples/auth-cms/cmd/server/user_admin_test.go`.
+
+### Schema
+
+Migration **`0014_user_status.sql`** is append-only and must be applied before
+deploying a binary built against the new store tag — see the store READMEs.
+
+## OAuth account linking — two distinct flows
+
+There are **two** ways a provider identity ends up attached to a user, and they
+are not variations of each other. Conflating them is what makes people conclude
+the explicit one is missing.
+
+> **Version evidence.** `Service.StartLink`, the session-gated
+> `GET /auth/oauth/{provider}/link/start` route, the server-side state's
+> `LinkUserID` binding, the `ActionLinked` callback branch, `GET /auth/methods`,
+> and the code-gated unlink pair **all shipped in `features/authentication/v0.1.0`**
+> and are unchanged since. Nothing in this section requires a new tag: an adopter
+> on any tagged version already has it.
+
+### Flow 1 — explicit linking, initiated by a signed-in user
+
+This is the settings-page "Connect your Google account" button.
+
+```
+[settings page]                  [feature]                     [provider]
+   click Connect
+   GET /auth/oauth/{p}/link/start?redirect=/settings/security
+        ── session-gated (the caller IS the linking user) ──▶
+                             persist server-side state:
+                               provider, PKCE verifier, OIDC nonce,
+                               resolved redirect, LinkUserID
+        ◀── 302 to the provider authorization URL ──────────────▶ consent
+                             GET /auth/oauth/{p}/callback?code=…&state=…
+                             consume state (single use) → exchange code
+                             → read identity → LinkUserID set, so:
+                                 attach identity to THAT user
+                                 → OAuthResult{Action: "linked"}
+        ◀── 302 to the validated redirect ──
+   GET /auth/methods → the provider now appears in `oauth[]`
+```
+
+Properties worth relying on:
+
+- **The linking user comes from server-side state, never from the request.** The
+  callback accepts only `code` and `state`; `LinkUserID` was bound at start. A
+  leaked or replayed `state` redeemed by a *different* signed-in user still links
+  to the state's owner. There is no query parameter that retargets a link.
+- **No new session is minted.** The caller was already signed in, so the explicit
+  callback sets **no** cookie and returns an empty token pair — re-issuing one
+  would be a silent session swap. Only the `login`/`register` callback branches
+  set cookies.
+- **No second user is created.** The link lane never falls through to the
+  register branch, even when the provider's email matches no identifier on file.
+- **A provider identity owned by another user conflicts and does not move.** The
+  second claimant's callback fails and the original owner keeps the link.
+- **State is single-use** and expires (10 minutes); a replay is rejected.
+- **The redirect is allowlisted at START.** `redirect` is resolved against
+  `Config.RedirectAllowlist` before it is stored, so a non-allowlisted value is
+  replaced by the same-origin default `/` and the callback can only ever land
+  somewhere the host approved. The provider URL carries no redirect, verifier,
+  nonce, or user id — only the opaque state token.
+- **CSRF posture.** Both `link/start` and `callback` are GET redirect initiators,
+  not state-changing form posts, so they are not behind the browser-safe-mutation
+  Origin/CSRF gate. The anti-forgery property comes from the single-use
+  server-side `state` (the OAuth login-CSRF defense) plus the session gate on
+  `link/start`. A settings page navigates to `link/start` — it must not fetch it
+  with XHR and follow the redirect itself.
+- **Gate tier.** `link/start` uses the stateless `RequireUser` tier, so an
+  already-issued access JWT stays usable until `AccessTokenTTL` even after the
+  session is revoked. That bound is deliberate and documented rather than
+  silently changed here; whether this route should move to `RequireLiveSession`
+  is an open question for the lifecycle work (see
+  `.claude/plans/coordination-hub-auth-upstream/01-user-directory-and-lifecycle.md`).
+  The *sensitive* half of the pair — the unlink routes — already uses
+  `RequireLiveSession`.
+
+### Flow 2 — collision / pending link, initiated by an unauthenticated sign-in
+
+This is the anti-takeover path, and it is **not** user-initiated linking.
+
+```
+[visitor]                        [feature]                     [provider]
+   GET /auth/oauth/{p}/start ─────────────────────────────────▶ consent
+   GET /auth/oauth/{p}/callback?code=…&state=…
+        no LinkUserID; provider identity not linked;
+        the verified provider email matches an existing account
+        → mail a single-use secret to that address
+        → OAuthResult{Action: "pending_link"}, NO session
+   POST /auth/oauth/verify-link {token}
+        → creates the link AND mints a session
+```
+
+The difference in one line: **flow 1 proves account ownership with a session and
+does not mint one; flow 2 proves address ownership with a mailed secret and does
+mint one.** Flow 2 additionally revokes a squatter password/sessions when the
+matched identifier was unverified at flow start (design §5.7/V5).
+
+### Inventory and unlink
+
+- `GET /auth/methods` (live-session-gated, `no-store`) is the linked-method
+  inventory: `{has_password, oauth[], identifiers[]}`. A link shows up on the very
+  next read — there is no confirmation step.
+- Removing a link is the **code-gated pair**, not a DELETE:
+  `POST /auth/oauth/{provider}/unlink/start` (live session + browser-safe
+  mutation) mails a provider-bound code to the account's verified recovery
+  identifier and returns a secret-free receipt; `POST /auth/oauth/{provider}/unlink`
+  with `{code}` completes it. A code issued for one provider cannot unlink
+  another.
+
+### Settings-page client sketch
+
+```ts
+// Render: the inventory drives which providers show Connect vs Disconnect.
+const inv = await fetch('/auth/methods', { credentials: 'include' }).then(r => r.json());
+const linked = new Set(inv.oauth.map((o: { provider: string }) => o.provider));
+
+// Connect: a NAVIGATION, not an XHR — the browser must follow the 302 to the
+// provider and come back to the callback with its cookies.
+function connect(provider: string) {
+  const redirect = encodeURIComponent('/settings/security');
+  window.location.assign(`/auth/oauth/${provider}/link/start?redirect=${redirect}`);
+}
+
+// Disconnect: the two-step code-gated pair, a browser-safe mutation, so it
+// carries the Origin and the double-submit CSRF token from GET /auth/csrf.
+async function disconnect(provider: string, csrf: string, code?: string) {
+  const path = code
+    ? `/auth/oauth/${provider}/unlink`
+    : `/auth/oauth/${provider}/unlink/start`;
+  const res = await fetch(path, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
+    body: JSON.stringify(code ? { code } : {}),
+  });
+  return res.json(); // {status:"sent", receipt} then {status:"unlinked"}
+}
+```
+
+After returning to `/settings/security`, re-read `GET /auth/methods`; the
+callback itself carries no result body (it is a 302).
+
+The runnable version of this recipe, driven over real HTTP through exported host
+seams only, is `examples/auth-cms/cmd/server/oauth_link_settings_test.go`.
+
 ## Masked method inventory (design §5.1)
 
 `GET /auth/methods` (live-session-gated, `Cache-Control: no-store`) returns the
@@ -844,6 +1490,63 @@ credential rail is unwired.
   dispatcher (`ErrDeliveryQueueRequired`), an unacknowledged `jobs` delivery runtime
   (`ErrDeliveryJobsUnacknowledged`), and an unacknowledged `in_process` crash-loss
   posture (`ErrDeliveryEphemeralUnacknowledged`). Development WARNs on each instead.
+
+  **Deployment posture is app-wide vocabulary, not auth vocabulary.**
+  `auth.RuntimeMode` is a **type alias** of `environment.Mode`
+  (`sdk/foundation/environment`), and `RuntimeModeDevelopment`/`RuntimeModeProduction`
+  alias `environment.ModeDevelopment`/`ModeProduction`. Nothing to migrate: the
+  names are the same type, assignable in both directions, with the same
+  `"development"`/`"production"` wire values and the same `AUTH_RUNTIME_MODE`
+  env-tag parsing. What it buys is that a host's **general** mailer, notifier
+  composition, or any other component can name the posture — and enforce the
+  transport rule — without importing this feature:
+
+  | old (still compiles) | canonical, feature-free |
+  |---|---|
+  | `auth.RuntimeMode` | `environment.Mode` |
+  | `auth.RuntimeModeDevelopment` | `environment.ModeDevelopment` |
+  | `auth.RuntimeModeProduction` | `environment.ModeProduction` |
+  | `auth.ErrRuntimeModeRequired` | `environment.ErrModeRequired` |
+  | `auth.ErrRuntimeModeInvalid` | `environment.ErrModeInvalid` |
+  | `auth.ErrInsecureDeliveryTransport` | `email.ErrInsecureTransport` / `notify.ErrInsecureTransport` |
+  | (none — the rule lived here) | `email.CheckSender(mode, sender)` / `notify.CheckNotifier(mode, n)` |
+
+  Auth's sentinels **wrap** the canonical ones, so `errors.Is` matches either
+  target and existing host checks are unaffected; only the message text gained a
+  canonical suffix. Parse the mode with `environment.ParseMode` — it reads no
+  environment variable itself, so the host still owns the key name:
+
+  ```go
+  mode, err := environment.ParseMode(environment.GetEnvOrDefault("AUTH_RUNTIME_MODE", ""))
+  if err != nil { return err }
+  cfg.RuntimeMode = mode // same type; no conversion
+  ```
+
+  A general mailer package then enforces the identical transport rule with no
+  auth import at all:
+
+  ```go
+  package mailer // a host's own generic package
+
+  func RequireProductionCapable(mode environment.Mode, sender email.Sender) error {
+      posture, err := email.CheckSender(mode, sender)
+      if err != nil {
+          return fmt.Errorf("mail transport: %w", err) // wraps email.ErrInsecureTransport
+      }
+      if !posture.ProductionCapable() {
+          log.Warn("development-only mail transport wired; never use in production")
+      }
+      return nil
+  }
+  ```
+
+  **What stays feature-specific.** Only the *transport* verdict moved. The other
+  production gates listed above — the durable-limiter check, the identifier
+  keyer, the HTTPS public-link check, and the delivery-runtime acknowledgments —
+  remain authentication's, because they are policies about auth's own
+  collaborators. Auth also keeps its own startup WARN wording; the sdk validators
+  take no logger deliberately, since message text and log routing are composition
+  concerns.
 - **Rate-limit / trusted proxy.** Login/refresh/start limits are always active and
   keyed on the PII-free identifier digest + client IP. The client IP is the
   `web.TrustProxies`-resolved value when the host wires it; **a raw
@@ -940,18 +1643,40 @@ access-JWT cookie (`Path=/`) and the refresh cookie (`<name>_refresh`,
 `Path=Config.RefreshCookiePath` — `/auth` by default, `/api/v1/auth` on a
 prefixed host; the same path issues and clears it).
 
-## Migrations are host-owned (0001–0013)
+## Migrations are host-owned (0001–0015)
 
-Auth ships **thirteen** canonical migrations per dialect, byte-identical filename
+Auth ships **fifteen** canonical migrations per dialect, byte-identical filename
 sets across pgx and turso:
 
 ```
 0001_users              0006_service_accounts     0011_challenges
 0002_user_passwords     0007_api_keys             0012_contact_changes
 0003_sessions           0008_security_events      0013_authentication_grants
-0004_oauth_accounts     0009_invitations
-0005_oauth_states       0010_user_identifiers
+0004_oauth_accounts     0009_invitations          0014_user_status
+0005_oauth_states       0010_user_identifiers     0015_challenge_subject_keys
 ```
+
+Thirteen of those create tables; the last two **add columns** and are
+**append-only**, precisely because the tables they touch are already tagged and
+immutable:
+
+- **`0014_user_status.sql`** — the account-lifecycle `status` /
+  `status_changed_at` on `users`, the directory's `(created_at, id)` index, and —
+  on pgx — the `COLLATE "C"` pin `users.id` needs now that it is a keyset tiebreak.
+- **`0015_challenge_subject_keys.sql`** — `challenges.subject_key`, backfilled
+  from `user_id`, with the single-active claim moving from `(user_id, purpose)` to
+  `(subject_key, purpose)`. Every pre-existing purpose keys on the user id and is
+  unchanged; an email magic link gains a stable PII-free key that exists even when
+  the address has no account.
+
+**Upgrading from a host that copied an earlier set:** re-export or copy the
+missing files into your migration directory and apply them **before** deploying a
+binary built against the new store tag. Both store constructors probe the added
+COLUMNS by name — not just the tables — and refuse to construct otherwise, so a
+missed migration fails at wiring time rather than mid-request. On pgx, `0014` also
+runs `ALTER TABLE users ALTER COLUMN id TYPE TEXT COLLATE "C"`, which **rewrites
+the primary-key index under an ACCESS EXCLUSIVE lock** — schedule it accordingly
+on a large users table.
 
 Auth owns **no** delivery table: durable delivery is the generic **jobs**
 feature's schema (host-owned in its own tree), and `in_process` delivery is
@@ -1106,7 +1831,7 @@ execution record in `RELEASING.md`); not yet applied to a real host.
 The delivery-refactor (2026-07-13) removed authentication's private durable
 delivery queue. Durable delivery is now the generic **jobs** feature reached
 through a host-wired `Config.DeliveryDispatcher`; the bounded ephemeral path is
-`in_process`. Auth owns no delivery table (canonical set is `0001–0013`). See
+`in_process`. Auth owns no delivery table (canonical set is `0001–0015`). See
 "Delivery execution modes" above for the full model; this note is the compatibility
 delta.
 
@@ -1121,7 +1846,7 @@ delta.
   `ErrDeliveryWorkerUnacknowledged`, `ErrInProcessDurableDeliveryRepository`, and
   the delivery-durability construction funcs.
 - The auth `0014` delivery-outbox migration is removed from both dialect trees
-  (canonical set is now `0001–0013`).
+  (canonical set is now `0001–0015`).
 
 **Renames:**
 

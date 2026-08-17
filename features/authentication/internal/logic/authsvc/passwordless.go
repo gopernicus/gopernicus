@@ -11,6 +11,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/challenge"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/identifier"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/passwordless"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/delivery"
@@ -282,7 +283,12 @@ func (s *Service) VerifyPasswordless(ctx context.Context, kind, identifierValue,
 	// primary authentication happened.
 	pair, err := s.mintSession(ctx, ident.UserID, s.primaryAuthentication(passwordlessCodeMethod(kind)))
 	if err != nil {
-		return TokenPair{}, err
+		// A deactivated account joins every other rejection under the one generic
+		// passwordless failure (CHAU-1.5).
+		if errors.Is(err, session.ErrUserNotActive) {
+			s.recordPasswordlessLogin(ctx, ident.UserID, kind, purpose, securityevent.StatusFailure)
+		}
+		return TokenPair{}, genericIfNotActive(err, ErrPasswordlessLogin)
 	}
 	s.recordPasswordlessLogin(ctx, ident.UserID, kind, purpose, securityevent.StatusSuccess)
 	return pair, nil
@@ -342,6 +348,31 @@ func (s *Service) RedeemPasswordless(ctx context.Context, token string) (TokenPa
 		}
 		return TokenPair{}, err
 	}
+	// With provision-on-consumption wired, the WHOLE redemption — token consume,
+	// identity decision, any revocation, and the session insert — is ONE store
+	// transaction (CHAU-6.5). It has to be: creating an account as a side effect of
+	// consuming a token cannot be two steps without leaving a half-provisioned user
+	// behind a failure, and two concurrent redeems of one link must produce exactly
+	// one session.
+	//
+	// Without it, the historical login-only path below runs unchanged.
+	if s.provisionOnRedeemEnabled() {
+		pair, res, err := s.redeemPasswordlessAtomic(ctx, token)
+		if err != nil {
+			s.recordPasswordlessLogin(ctx, "", "", purpose, securityevent.StatusFailure)
+			return TokenPair{}, genericRedemptionError(err)
+		}
+		s.recordPasswordlessOutcome(ctx, res, string(identifier.KindEmail))
+		// A newly provisioned account resolves its pending invitations exactly as a
+		// password registration or an OAuth provisioning does — best-effort, after
+		// the domain commit, and ONLY for a provision: an adoption or a login must
+		// not re-grant invitations that were already resolved (CHAU-6.6).
+		if res.Provisioned {
+			s.resolvePendingInvitations(ctx, res.Identifier.NormalizedValue, res.User.ID)
+		}
+		return pair, nil
+	}
+
 	// Atomically delete-and-return the magic-link row by digest (design §3.2). Every
 	// stable disposition — missing/malformed/replayed or expired — is the one generic
 	// 401; only an infrastructure error propagates.
@@ -361,8 +392,12 @@ func (s *Service) RedeemPasswordless(ctx context.Context, token string) (TokenPa
 	// its identifier changed underneath it (design §4.1). This post-consume reload is
 	// the token twin of the OTP path's WithExpectedContext binding check — the redeem
 	// request supplies no identifier to pass as the expected context.
-	var binding loginBinding
-	if err := json.Unmarshal(consumed.Context, &binding); err != nil {
+	// The stored binding is the versioned passwordless.Binding (CHAU-6.1). A
+	// version this build does not know is a generic failure, never a silent
+	// fallback: the binding is what carries provisioning intent, and guessing at it
+	// could create an account nobody asked for.
+	var binding passwordless.Binding
+	if err := json.Unmarshal(consumed.Context, &binding); err != nil || binding.Version != passwordless.BindingVersion {
 		s.recordPasswordlessLogin(ctx, consumed.UserID, "", purpose, securityevent.StatusFailure)
 		return TokenPair{}, ErrPasswordlessLogin
 	}
@@ -378,7 +413,12 @@ func (s *Service) RedeemPasswordless(ctx context.Context, token string) (TokenPa
 	// email-link method so the session records how the primary authentication happened.
 	pair, err := s.mintSession(ctx, ident.UserID, s.primaryAuthentication(session.MethodEmailLink))
 	if err != nil {
-		return TokenPair{}, err
+		// A deactivated account joins every other rejection under the one generic
+		// passwordless failure (CHAU-1.5).
+		if errors.Is(err, session.ErrUserNotActive) {
+			s.recordPasswordlessLogin(ctx, ident.UserID, binding.Kind, purpose, securityevent.StatusFailure)
+		}
+		return TokenPair{}, genericIfNotActive(err, ErrPasswordlessLogin)
 	}
 	s.recordPasswordlessLogin(ctx, ident.UserID, binding.Kind, purpose, securityevent.StatusSuccess)
 	return pair, nil
@@ -467,18 +507,41 @@ func (s *Service) passwordlessStartBudget(ctx context.Context, kind, normalizedV
 // no send, so a start reveals no account existence.
 func (s *Service) initPasswordlessLink(ctx context.Context, kind string, cmd delivery.Envelope) (delivery.Envelope, bool, error) {
 	ident, ok, err := s.resolvePasswordlessLogin(ctx, kind, cmd.ResolutionInput)
-	if err != nil || !ok {
+	if err != nil {
 		return delivery.Envelope{}, false, err
 	}
+	// With provision-on-consumption enabled for the EMAIL LINK rail, an address
+	// that resolves to nothing is still deliverable (CHAU-6.4): the link is sent,
+	// and the account is created only if and when the link is CONSUMED. Sending
+	// creates no user row and no identifier row — there is nothing to clean up if
+	// it is never clicked.
+	//
+	// The public start is unaffected either way: it never resolved anything on the
+	// request path, so what changes here is whether the WORKER sends, not what the
+	// request learns.
+	provisioning := !ok && s.provisionOnRedeemEnabled() && kind == string(identifier.KindEmail)
+	if !ok && !provisioning {
+		return delivery.Envelope{}, false, nil
+	}
+
+	destination := cmd.ResolutionInput
+	if ok {
+		destination = ident.NormalizedValue
+	}
+
+	// The challenge is keyed under a stable PII-free subject key rather than the
+	// user id, so an unknown address HAS a key and a resend replaces its
+	// predecessor across the unknown→registered race.
 	token, err := s.IssueChallenge(ctx, ident.UserID, challenge.PurposeLoginMagicLink,
-		WithStoredContext(loginBinding{IdentifierID: ident.ID, Kind: kind, NormalizedValue: ident.NormalizedValue}))
+		WithStoredContext(s.newMagicLinkBinding(kind, destination, ident)),
+		WithSubjectKey(s.magicLinkSubjectKey(kind, destination)))
 	if err != nil {
 		return delivery.Envelope{}, false, err
 	}
 	env, err := s.deliver.Render(ctx, delivery.Request{
 		Kind:            kind,
 		Purpose:         delivery.PurposeMagicLink,
-		Destination:     ident.NormalizedValue,
+		Destination:     destination,
 		ResolutionInput: cmd.ResolutionInput,
 		Secret:          token,
 		Data:            map[string]any{"Link": s.magicLinkURL(token)},

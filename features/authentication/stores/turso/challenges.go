@@ -60,18 +60,21 @@ func bytesFrom(ns sql.NullString) []byte {
 	return []byte(ns.String)
 }
 
-// Replace atomically replaces the prior (user, purpose) challenge with c and
-// returns the stored row. A colliding (purpose, secret_digest) → sdk.ErrAlreadyExists.
+// Replace atomically replaces the prior (subject key, purpose) challenge with c
+// and returns the stored row, defaulting an unset SubjectKey to c.UserID
+// (CHAU-6.1). A colliding (purpose, secret_digest) → sdk.ErrAlreadyExists.
 func (s *ChallengeStore) Replace(ctx context.Context, c challenge.Challenge) (challenge.Challenge, error) {
 	if c.Version == 0 {
 		c.Version = 1
 	}
+	subjectKey := c.ResolvedSubjectKey()
 	err := s.db.InTx(ctx, func(tx *tursodb.Tx) error {
 		if _, err := tx.Exec(ctx,
-			`DELETE FROM challenges WHERE user_id = ? AND purpose = ?`, c.UserID, c.Purpose); err != nil {
+			`DELETE FROM challenges WHERE subject_key = ? AND purpose = ?`, subjectKey, c.Purpose); err != nil {
 			return err
 		}
 		args := []any{
+			subjectKey,
 			c.UserID,
 			c.Purpose,
 			c.SecretDigest,
@@ -84,8 +87,8 @@ func (s *ChallengeStore) Replace(ctx context.Context, c challenge.Challenge) (ch
 		}
 		if c.ID == "" {
 			const insert = `INSERT INTO challenges
-				(user_id, purpose, secret_digest, protector_key_id, context, attempt_count, expires_at, created_at, version)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+				(subject_key, user_id, purpose, secret_digest, protector_key_id, context, attempt_count, expires_at, created_at, version)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				RETURNING id`
 			if err := tx.QueryRow(ctx, insert, args...).Scan(&c.ID); err != nil {
 				return tursodb.MapError(err)
@@ -93,8 +96,8 @@ func (s *ChallengeStore) Replace(ctx context.Context, c challenge.Challenge) (ch
 			return nil
 		}
 		const insert = `INSERT INTO challenges
-			(id, user_id, purpose, secret_digest, protector_key_id, context, attempt_count, expires_at, created_at, version)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			(id, subject_key, user_id, purpose, secret_digest, protector_key_id, context, attempt_count, expires_at, created_at, version)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 		if _, err := tx.Exec(ctx, insert, append([]any{c.ID}, args...)...); err != nil {
 			return err
 		}
@@ -126,7 +129,7 @@ func (s *ChallengeStore) ConsumeCode(ctx context.Context, userID, purpose string
 		)
 		selErr := tx.QueryRow(ctx,
 			`SELECT id, secret_digest, protector_key_id, context, attempt_count, expires_at
-				FROM challenges WHERE user_id = ? AND purpose = ?`, userID, purpose).
+				FROM challenges WHERE subject_key = ? AND purpose = ?`, userID, purpose).
 			Scan(&id, &secretDigest, &protectorKeyID, &contextText, &attemptCount, &expiresAt)
 		if selErr != nil {
 			if errors.Is(selErr, sql.ErrNoRows) {
@@ -202,6 +205,7 @@ func (s *ChallengeStore) ConsumeToken(ctx context.Context, purpose, presentedDig
 	}
 	var (
 		id             string
+		subjectKey     string
 		userID         string
 		gotPurpose     string
 		contextText    sql.NullString
@@ -209,9 +213,9 @@ func (s *ChallengeStore) ConsumeToken(ctx context.Context, purpose, presentedDig
 		expiresAt      tursodb.Time
 	)
 	const q = `DELETE FROM challenges WHERE purpose = ? AND secret_digest = ?
-		RETURNING id, user_id, purpose, context, protector_key_id, expires_at`
+		RETURNING id, subject_key, user_id, purpose, context, protector_key_id, expires_at`
 	err := s.db.QueryRow(ctx, q, purpose, presentedDigest).
-		Scan(&id, &userID, &gotPurpose, &contextText, &protectorKeyID, &expiresAt)
+		Scan(&id, &subjectKey, &userID, &gotPurpose, &contextText, &protectorKeyID, &expiresAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return challenge.Consumed{}, sdk.ErrNotFound
@@ -223,6 +227,7 @@ func (s *ChallengeStore) ConsumeToken(ctx context.Context, purpose, presentedDig
 	}
 	return challenge.Consumed{
 		ID:             id,
+		SubjectKey:     subjectKey,
 		UserID:         userID,
 		Purpose:        gotPurpose,
 		Context:        bytesFrom(contextText),

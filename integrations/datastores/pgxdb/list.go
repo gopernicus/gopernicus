@@ -27,6 +27,11 @@ type ListQuery[T any] struct {
 	Args         pgx.NamedArgs
 	OrderFields  map[string]crud.OrderField
 	DefaultOrder crud.Order
+	// SearchFields is the allow-list of searchable text columns — the twin of
+	// OrderFields (crud-search-upstream T2). Empty means the list is NOT
+	// searchable: a blank ListRequest.Search still works, and a NON-blank one is
+	// sdk.ErrInvalidInput rather than a silently unfiltered page.
+	SearchFields []crud.SearchField
 	PK           string
 	Limits       crud.Limits
 	OrderValueOf func(row T, field string) any
@@ -53,10 +58,46 @@ func List[T any](ctx context.Context, db Querier, q ListQuery[T], req crud.ListR
 		return crud.Page[T]{}, err
 	}
 
-	if req.ResolvedStrategy() == crud.StrategyOffset {
-		return q.listOffset(ctx, db, req, orderCol, castLower, direction)
+	// The search predicate is folded into BaseSQL BEFORE the strategy switch, so
+	// all FOUR query paths inherit it: the cursor page, the offset page, the
+	// cursor strategy's reverse probe, and the COUNT(*) wrap.
+	//
+	// Appending it to a local per-page buffer instead — the way the cursor
+	// predicate is appended — would be a real defect with two symptoms: WithCount
+	// would report the UNFILTERED total (a page of 3 rows claiming 412 results),
+	// and the reverse probe would derive HasPrev/PreviousCursor from rows the
+	// search excluded.
+	searched, err := q.withSearch(req.Search)
+	if err != nil {
+		return crud.Page[T]{}, err
 	}
-	return q.listCursor(ctx, db, req, orderCol, castLower, direction)
+
+	if req.ResolvedStrategy() == crud.StrategyOffset {
+		return searched.listOffset(ctx, db, req, orderCol, castLower, direction)
+	}
+	return searched.listCursor(ctx, db, req, orderCol, castLower, direction)
+}
+
+// withSearch returns a copy of q whose BaseSQL carries the search predicate and
+// whose Args carry the bound pattern. A blank term returns q unchanged.
+//
+// The copy is not cosmetic. ListQuery is passed BY VALUE, but its pgx.NamedArgs
+// is a map — shared, not copied — so binding the reserved argument directly would
+// leak it into the caller's query struct and into every later query built from
+// it. cloneArgs gives this derivation its own map.
+func (q ListQuery[T]) withSearch(term string) (ListQuery[T], error) {
+	if strings.TrimSpace(term) == "" {
+		return q, nil
+	}
+	var buf strings.Builder
+	buf.WriteString(q.BaseSQL)
+	args := cloneArgs(q.Args)
+	if err := AddSearchClause(&buf, args, q.SearchFields, term); err != nil {
+		return ListQuery[T]{}, err
+	}
+	q.BaseSQL = buf.String()
+	q.Args = args
+	return q, nil
 }
 
 // listCursor is the keyset flow: decode the cursor (a nil cursor — first page or

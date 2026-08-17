@@ -111,6 +111,7 @@ type challengeProtector interface {
 type challengeOptions struct {
 	context    any
 	hasContext bool
+	subjectKey string
 }
 
 // ChallengeOption configures IssueChallenge / ConsumeChallenge / RedeemToken.
@@ -123,6 +124,18 @@ type ChallengeOption func(*challengeOptions)
 // a redemption-time binding validator.
 func WithStoredContext(v any) ChallengeOption {
 	return func(o *challengeOptions) { o.context = v; o.hasContext = true }
+}
+
+// WithSubjectKey overrides the key the issued challenge is unique under
+// (CHAU-6.1). Unset — the case for every purpose that predates it — the row keys
+// on the user id exactly as before.
+//
+// It exists for the email magic link, which may be issued for an address with NO
+// account: there is no user id to key on, so the issuer supplies a stable
+// PII-free digest derived from the address and the purpose. That makes a resend
+// replace its predecessor even when the address gains an owner in between.
+func WithSubjectKey(key string) ChallengeOption {
+	return func(o *challengeOptions) { o.subjectKey = key }
 }
 
 // WithExpectedContext supplies the CURRENT binding to validate a redemption
@@ -188,6 +201,7 @@ func (s *Service) IssueChallenge(ctx context.Context, userID, purpose string, op
 	}
 
 	ch := challenge.Challenge{
+		SubjectKey:     o.subjectKey,
 		UserID:         userID,
 		Purpose:        purpose,
 		SecretDigest:   digest,

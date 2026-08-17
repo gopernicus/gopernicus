@@ -39,18 +39,37 @@ type collatedColumn struct {
 // contractualCollatedColumns is the authentication inventory (AAH-5). Every entry
 // is the keyset PK tiebreak of a created_at DESC, id DESC listing whose storetest
 // collision suite pins the tiebreak to the reference store's byte-wise (Go
-// string) order. Tables without keyset pagination (users, sessions, oauth_states,
+// string) order. Tables without keyset pagination (sessions, oauth_states,
 // challenges, contact_changes, authentication_grants), list orders the port does
 // not promise and the suite does not assert (oauth_accounts.provider_user_id,
 // user_identifiers.id — the reference iterates an unordered map), and human
 // address/display columns (invitations.identifier, service_accounts.name, …) are
 // deliberately excluded: equality parity already holds under any deterministic
 // collation, and collating display text would change user-facing sort (Risk 7).
+//
+// users.id JOINED the inventory in CHAU-1.2: the operator directory
+// (user.AdminRepository.List) pages users by (created_at DESC, id DESC), and the
+// storetest UserDirectory/OrderingAndCursorParity collision case pins that
+// tiebreak. Its pin is an ALTER in migration 0014 rather than a CREATE TABLE
+// clause, because 0001_users.sql is tagged and immutable — see pinnedByAlter.
 var contractualCollatedColumns = []collatedColumn{
 	{"service_accounts", "id", "keyset PK tiebreak; collision suite pins byte order"},
 	{"api_keys", "id", "keyset PK tiebreak; collision suite pins byte order"},
 	{"security_events", "id", "keyset PK tiebreak; collision suite pins byte order"},
 	{"invitations", "id", "keyset PK tiebreak; collision suite pins byte order"},
+	{"users", "id", "operator-directory keyset PK tiebreak (CHAU-1.2); pinned by ALTER in 0014"},
+}
+
+// pinnedByAlter reports whether the canonical SQL pins table.column's collation
+// through an append-only ALTER instead of its CREATE TABLE. A column that became
+// contractual AFTER its table was tagged cannot be fixed in place — the tagged
+// migration is immutable — so the pin arrives as an ALTER and this is where the
+// hermetic assertion learns to accept it. The LIVE catalog check
+// (TestContractualCollation_Catalog) is unchanged and remains the real proof: it
+// reads collation_name from the applied schema and does not care how it got there.
+func pinnedByAlter(sql, table, column string) bool {
+	want := `ALTER TABLE ` + table + ` ALTER COLUMN ` + column + ` TYPE TEXT COLLATE "C"`
+	return strings.Contains(sql, want)
 }
 
 // assertNonCDatabase fails loudly unless the connected database's default
@@ -102,6 +121,9 @@ func TestContractualCollation_SQL(t *testing.T) {
 	sql := all.String()
 
 	for _, c := range contractualCollatedColumns {
+		if pinnedByAlter(sql, c.Table, c.Column) {
+			continue
+		}
 		body := tableCreateBody(t, sql, c.Table)
 		var found bool
 		for _, line := range strings.Split(body, "\n") {
