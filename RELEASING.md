@@ -40,7 +40,7 @@ Minor bumps all three; store pins move to `features/jobs v0.2.0` / `sdk
 v0.2.0`. See the upgrade notes below — already-migrated hosts need a host-tree
 ALTER (reference SQL in the store note).
 
-**2026-08-14 (same day): PREPARED, NOT YET CUT — `sdk/v0.3.0`,
+**2026-08-14 (same day): `sdk/v0.3.0`,
 `features/authentication/v0.2.0`, `integrations/datastores/pgxdb/v0.3.0`** — the
 coordination-hub authentication upstream batch (plan of record
 `.claude/plans/coordination-hub-auth-upstream/`; the owner-cut tag manifest and
@@ -92,6 +92,26 @@ contract is now documented (godoc + sdk README). Cut as a **patch by owner
 ruling** despite the one additive symbol — see the upgrade note below. No other
 module bumps: the sdk tree is otherwise byte-identical to `sdk/v0.3.0`, and no
 in-repo module pins move.
+
+**2026-08-16: `sdk/v0.4.0`, `integrations/datastores/pgxdb/v0.4.0`,
+`integrations/datastores/turso/v0.3.0`, `features/authentication/v0.3.0`,
+`features/authentication/stores/{pgx,turso}/v0.2.0`** — the coordination-hub
+authentication upstream batch, phases 1–8 (plan of record
+`.claude/plans/coordination-hub-auth-upstream/`), stacked with the crud search
+plan (`.claude/plans/crud.md`, T1–T4). Six minor bumps closing every hub flag:
+account lifecycle + operator directory, verification resend, canonical
+`environment.Mode` with capability-owned transport checks, password-reset links,
+provision-on-consumption (**default-off**), the transactional-layout logo fix,
+and SQL-side list search in both dialects. Shipped as **one train** by owner
+ruling — provisioning is additive and default-off, so it raised no bump.
+`integrations/email/sendgrid` did **not** retag (test-only change).
+
+**Two operator-incompatible changes — read before deploying.** Store migrations
+`0014` and `0015` must be applied *before* binaries built against the new store
+tags (both constructors probe the added columns and refuse to construct
+otherwise), and `Config.PasswordResetURL` is now **required in production**. The
+as-executed record, per-module upgrade notes, and the adopter checklist are in
+the plan directory's `tag-manifest.md` §8 and `adoption-checklist.md`.
 
 ## Tagging scheme
 
@@ -881,13 +901,15 @@ unaffected. (`sdk/foundation/cryptids`'s HS256 default and `sdk/foundation/web`'
 `TrustProxies`/`ClientIP` were **not** touched by auth-v3 — HS256 belongs to the
 JWT-refresh cut and `TrustProxies` to middleware-consolidation, each keyed above.)
 
-### features/authentication + both store modules — next tag (SECOND TRAIN): passwordless provision-on-consumption (MINOR floor; store migration REQUIRED)
+### features/authentication v0.3.0 + both store modules v0.2.0 (2026-08-16): passwordless provision-on-consumption (minor; store migration REQUIRED)
 
 coordination-hub auth upstream, phase 6 (`.claude/plans/coordination-hub-auth-upstream/06-passwordless-provisioning.md`,
-CHAU-6.1…6.7, 2026-08-16). The plan calls for a **separate release train** from
-the core admin/resend/reset work, and this entry is written for that: it is the
-highest-risk change in the packet, and coupling it to the console unblock would
-force adopters to take both or neither.
+CHAU-6.1…6.7, 2026-08-16). The plan called for a **separate release train** from
+the core admin/resend/reset work, since it is the highest-risk change in the
+packet. **The owner ruled one train**, so it shipped on the same tags: it is
+additive and default-off, and it raised no bump of its own. What adopters take
+regardless is store migration `0015` — the code stays dormant until they set the
+flag, but the schema is not optional.
 
 **Default behavior is unchanged.** `Config.PasswordlessProvisionOnRedeem` is false
 by default, and with it false a magic link to an address with no account still
@@ -938,7 +960,7 @@ grants, and outstanding challenges BEFORE the new session is written; a
 deactivated subject refused; two concurrent redemptions committing exactly one
 session; and every stable failure collapsing to one generic 401.
 
-### features/authentication — next tag: password-reset LINKS (minor floor; NEW REQUIRED PRODUCTION CONFIG)
+### features/authentication — v0.3.0 (2026-08-16): password-reset LINKS (minor; NEW REQUIRED PRODUCTION CONFIG)
 
 coordination-hub auth upstream, phase 5 (`.claude/plans/coordination-hub-auth-upstream/05-password-reset-links.md`,
 CHAU-5.1…5.4, 2026-08-16). Closes the "password-reset mail exposes only the raw
@@ -973,7 +995,7 @@ token" flag. **No schema change.**
   a forgot-password request with all of them hostile and asserting the delivered
   link is unchanged.
 
-### features/authentication — next tag: registration-verification resend (minor floor; additive)
+### features/authentication — v0.3.0 (2026-08-16): registration-verification resend (minor; additive)
 
 coordination-hub auth upstream, phase 2 (`.claude/plans/coordination-hub-auth-upstream/02-verification-resend.md`,
 CHAU-2.1…2.4, 2026-08-16). Closes the "no verification resend" flag. **No schema
@@ -1010,7 +1032,7 @@ FRESH CODE, invalidating the previous one. Replacement cannot retract a provider
 call already accepted, so a user may receive both the old and the new mail — only
 the newest code verifies. Document that in your UI copy.
 
-### features/authentication + both store modules — next tag: account lifecycle and the operator directory (MINOR floor; store migration REQUIRED)
+### features/authentication v0.3.0 + both store modules v0.2.0 (2026-08-16): account lifecycle and the operator directory (minor; store migration REQUIRED)
 
 coordination-hub auth upstream, phase 1 (`.claude/plans/coordination-hub-auth-upstream/01-user-directory-and-lifecycle.md`,
 CHAU-1.1…1.7, 2026-08-16). Closes two flags at once — "no administrative user
@@ -1086,7 +1108,7 @@ repeated concurrent deactivate-versus-mint race, against a live PostgreSQL 17 an
 the live Turso playground database, plus the pgx collation catalog check
 confirming `users.id` reports collation `C`.
 
-### sdk + both datastore connectors + features/authentication (+ its stores) — next tag: LIST SEARCH restored (minor floor)
+### sdk v0.4.0 + pgxdb v0.4.0 + turso v0.3.0 + features/authentication v0.3.0 (+ its stores v0.2.0) — 2026-08-16: LIST SEARCH restored (minor)
 
 Plan of record `.claude/plans/crud.md` (crud-search-upstream, T1–T4, 2026-08-16;
 stacked onto this release train by owner direction). This is a **regression fix**,
@@ -1151,7 +1173,7 @@ cursor paging with the predicate. All three implementations agree.
 v1 clients may fall back to `s` at its OWN edge with a documented removal
 milestone — that alias is deliberately not in `crud.ListParams`.
 
-### sdk — next tag: canonical runtime posture + capability-owned transport checks (MINOR floor)
+### sdk — v0.4.0 (2026-08-16): canonical runtime posture + capability-owned transport checks (minor)
 
 coordination-hub auth upstream, phase 3 (`.claude/plans/coordination-hub-auth-upstream/03-runtime-posture-foundation.md`,
 CHAU-3.1…3.4, 2026-08-16). The upstream flag: coordination-hub's **generic**
@@ -1190,7 +1212,7 @@ capability↔capability and capability→feature only.
 If the phase-4 transactional-logo change rides the same commit, do **not** split
 it into its own patch — this minor covers both.
 
-### features/authentication — next tag: RuntimeMode is now an alias of environment.Mode (minor floor; SOURCE-COMPATIBLE)
+### features/authentication — v0.3.0 (2026-08-16): RuntimeMode is now an alias of environment.Mode (minor; SOURCE-COMPATIBLE)
 
 The feature half of phase 3 (CHAU-3.3). **No host code change is required**, and
 none is expected to break:
@@ -1227,7 +1249,7 @@ import from the generic `internal/integrations/mailer` / notifymail packages and
 name `environment.Mode` + `email.CheckSender` instead. The auth composition may
 keep importing the feature — it needs `auth.Config` regardless.
 
-### sdk/capabilities/email — next tag: bundled transactional layout renders Brand.LogoURL (patch floor; RENDERED-OUTPUT change)
+### sdk/capabilities/email — sdk v0.4.0 (2026-08-16): bundled transactional layout renders Brand.LogoURL (RENDERED-OUTPUT change; rode the minor)
 
 coordination-hub auth upstream, phase 4 (`.claude/plans/coordination-hub-auth-upstream/04-email-layout-branding.md`,
 CHAU-4.1…4.3, 2026-08-16). The upstream flag read "sdk layouts ignore
