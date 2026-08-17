@@ -98,6 +98,22 @@ func Run(t *testing.T, newRepos func(t *testing.T) auth.Repositories) {
 		t.Run("ConcurrentClaimArbitration", func(t *testing.T) { testIdentifiersConcurrentClaim(t, newRepos(t)) })
 	})
 
+	// The user-administration directory, the atomic lifecycle transition, and the
+	// fenced session mint (CHAU-1.3/1.4). All three ports are OPTIONAL, so each
+	// group skips LOUDLY when unwired rather than claiming a conformance nothing
+	// verified. See useradmin.go.
+	runUserAdmin(t, newRepos)
+
+	// List search (crud-search-upstream T4): API-key `name` is the feature's first
+	// searchable field, and this group is the cross-dialect oracle — a store that
+	// escapes wildcards differently, folds case differently, or forgets to apply
+	// the predicate to the COUNT fails here rather than in production.
+	runSearch(t, newRepos)
+
+	// The atomic magic-link redemption (CHAU-6.2/6.3): the adversarial suite for
+	// provision-on-consumption. It skips LOUDLY when the port is unwired.
+	runPasswordless(t, newRepos)
+
 	t.Run("Passwords", func(t *testing.T) {
 		t.Run("SetGetUpsert", func(t *testing.T) { testPasswords(t, newRepos(t)) })
 		t.Run("AbsentNotFound", func(t *testing.T) { testPasswordsAbsent(t, newRepos(t)) })

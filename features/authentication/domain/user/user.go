@@ -22,13 +22,25 @@ import (
 // mutation rail both compare-and-swap on it so a stale, safe-looking method set
 // can never win a concurrent mutation. It starts at 0 and increments once per
 // applied mutation.
+// Status is the account lifecycle posture (CHAU-1.1); see status.go. It is
+// StatusActive for every user the domain constructs and, after the bundled
+// status migration, for every pre-existing row. A store reader may resolve a
+// legacy empty column with NormalizeStatus. StatusChangedAt is the last
+// transition time; its zero value means the account has never transitioned.
 type User struct {
-	ID           string
-	DisplayName  string
-	AuthRevision int64
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID              string
+	DisplayName     string
+	AuthRevision    int64
+	Status          Status
+	StatusChangedAt time.Time // zero → never transitioned
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
+
+// Active reports whether the user may obtain a new session. A zero-value Status
+// read from a pre-migration row counts as active (NormalizeStatus), so this is
+// safe to call on a user loaded by a store that has not yet been upgraded.
+func (u User) Active() bool { return NormalizeStatus(u.Status).Active() }
 
 // NewUser trims the display name, mints an ID from ids (empty under
 // cryptids.Database — the store then assigns the key), and returns a new user.
@@ -39,6 +51,7 @@ func NewUser(ids cryptids.IDGenerator, displayName string, now time.Time) User {
 	return User{
 		ID:          ids.MustGenerate(),
 		DisplayName: strings.TrimSpace(displayName),
+		Status:      StatusActive,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}

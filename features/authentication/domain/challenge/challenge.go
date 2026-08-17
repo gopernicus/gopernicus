@@ -125,7 +125,26 @@ type DigestCandidate struct {
 // validates from Consumed. AttemptCount is the wrong-code counter; Version is the
 // row's schema version.
 type Challenge struct {
-	ID             string
+	ID string
+	// SubjectKey is the stable, PII-FREE key a live challenge is unique under:
+	// Replace's uniqueness is (SubjectKey, Purpose), and ConsumeCode resolves by
+	// it (CHAU-6.1).
+	//
+	// For every purpose that already existed it IS the user id, and Replace
+	// defaults it to UserID when unset, so nothing changes for them. It exists
+	// because an email magic link may be issued for an address with NO account:
+	// there is no user id to key on, and putting a digest into UserID would make
+	// that column mean two different things. The passwordless issuer sets a stable
+	// digest derived from the host IdentifierKeyer plus the purpose, so a resend
+	// replaces the prior link even across the race where an unknown address
+	// becomes registered between the two.
+	//
+	// It is never a raw address. The digest is the same PII-free key the limiter
+	// and the delivery logical key derive from.
+	SubjectKey string
+	// UserID is the subject a challenge belongs to, and is EMPTY when none existed
+	// at issue (an email magic link to an unknown address). Every other purpose
+	// always carries one.
 	UserID         string
 	Purpose        string
 	SecretDigest   string
@@ -135,6 +154,16 @@ type Challenge struct {
 	ExpiresAt      time.Time
 	CreatedAt      time.Time
 	Version        int
+}
+
+// ResolvedSubjectKey returns the key the row is unique under: SubjectKey when
+// set, else UserID. It is the single place the "existing purposes key on the user
+// id" default lives, so a store and the reference cannot disagree about it.
+func (c Challenge) ResolvedSubjectKey() string {
+	if c.SubjectKey != "" {
+		return c.SubjectKey
+	}
+	return c.UserID
 }
 
 // Expired reports whether the challenge is at or past its expiry at now.
@@ -148,7 +177,12 @@ func (c Challenge) Expired(now time.Time) bool {
 // performing any business action (the token flow cannot know the user until the
 // atomically deleted row is returned).
 type Consumed struct {
-	ID             string
+	ID string
+	// SubjectKey is the key the consumed row was unique under; see
+	// Challenge.SubjectKey. It is returned so a redeemer can re-derive what was
+	// claimed even when UserID is empty.
+	SubjectKey string
+	// UserID is the subject the row belonged to, EMPTY when none existed at issue.
 	UserID         string
 	Purpose        string
 	Context        []byte

@@ -24,25 +24,33 @@ func NewUserStore(db *tursodb.DB) *UserStore {
 	return &UserStore{db: db}
 }
 
-const userColumns = "id, display_name, auth_revision, created_at, updated_at"
+// userColumns is the users projection. status/status_changed_at (migration 0014)
+// are read here so a loaded user carries its lifecycle posture: every credential
+// path that consults User.Active() depends on this projection, and omitting them
+// would silently normalize every row to active.
+const userColumns = "id, display_name, auth_revision, status, status_changed_at, created_at, updated_at"
 
 // userRow is the store-local, db-tagged projection of a users row ScanStruct scans
 // into; toDomain maps it to the persistence-free domain entity.
 type userRow struct {
-	ID           string       `db:"id"`
-	DisplayName  string       `db:"display_name"`
-	AuthRevision int64        `db:"auth_revision"`
-	CreatedAt    tursodb.Time `db:"created_at"`
-	UpdatedAt    tursodb.Time `db:"updated_at"`
+	ID              string           `db:"id"`
+	DisplayName     string           `db:"display_name"`
+	AuthRevision    int64            `db:"auth_revision"`
+	Status          string           `db:"status"`
+	StatusChangedAt tursodb.NullTime `db:"status_changed_at"`
+	CreatedAt       tursodb.Time     `db:"created_at"`
+	UpdatedAt       tursodb.Time     `db:"updated_at"`
 }
 
 func (r userRow) toDomain() user.User {
 	return user.User{
-		ID:           r.ID,
-		DisplayName:  r.DisplayName,
-		AuthRevision: r.AuthRevision,
-		CreatedAt:    r.CreatedAt.Time,
-		UpdatedAt:    r.UpdatedAt.Time,
+		ID:              r.ID,
+		DisplayName:     r.DisplayName,
+		AuthRevision:    r.AuthRevision,
+		Status:          user.NormalizeStatus(user.Status(r.Status)),
+		StatusChangedAt: r.StatusChangedAt.Time,
+		CreatedAt:       r.CreatedAt.Time,
+		UpdatedAt:       r.UpdatedAt.Time,
 	}
 }
 
@@ -53,20 +61,25 @@ func (r userRow) toDomain() user.User {
 // DB-generated convention (RETURNING id).
 func (s *UserStore) CreateWithPrimaryIdentifier(ctx context.Context, u user.User, ident identifier.Identifier) (user.User, identifier.Identifier, error) {
 	err := s.db.InTx(ctx, func(tx *tursodb.Tx) error {
+		// status is written explicitly rather than left to the column DEFAULT so the
+		// persisted posture is the one the domain constructed. A zero-value Status
+		// (a caller building a User by hand) normalizes to active, matching the
+		// reader; the 0014 CHECK rejects anything else.
+		u.Status = user.NormalizeStatus(u.Status)
 		if u.ID == "" {
-			const q = `INSERT INTO users (display_name, auth_revision, created_at, updated_at)
-				VALUES (?, ?, ?, ?) RETURNING id`
+			const q = `INSERT INTO users (display_name, auth_revision, status, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?) RETURNING id`
 			if err := tx.QueryRow(ctx, q,
-				u.DisplayName, u.AuthRevision,
+				u.DisplayName, u.AuthRevision, string(u.Status),
 				tursodb.FormatTime(u.CreatedAt), tursodb.FormatTime(u.UpdatedAt),
 			).Scan(&u.ID); err != nil {
 				return tursodb.MapError(err)
 			}
 		} else {
-			const q = `INSERT INTO users (id, display_name, auth_revision, created_at, updated_at)
-				VALUES (?, ?, ?, ?, ?)`
+			const q = `INSERT INTO users (id, display_name, auth_revision, status, created_at, updated_at)
+				VALUES (?, ?, ?, ?, ?, ?)`
 			if _, err := tx.Exec(ctx, q,
-				u.ID, u.DisplayName, u.AuthRevision,
+				u.ID, u.DisplayName, u.AuthRevision, string(u.Status),
 				tursodb.FormatTime(u.CreatedAt), tursodb.FormatTime(u.UpdatedAt),
 			); err != nil {
 				return tursodb.MapError(err)
@@ -98,7 +111,9 @@ func (s *UserStore) Get(ctx context.Context, id string) (user.User, error) {
 
 // Update persists changes to an existing user; missing id → sdk.ErrNotFound. It
 // leaves id, created_at, and auth_revision unchanged (the revision-CAS paths own
-// auth_revision).
+// auth_revision) and, deliberately, the lifecycle columns too: status transitions
+// go through the atomic AdminRepository.SetStatus, so a profile write can never
+// reactivate a deactivated account as a side effect.
 func (s *UserStore) Update(ctx context.Context, id string, u user.User) (user.User, error) {
 	const q = `UPDATE users SET display_name=?, updated_at=? WHERE id=?`
 	n, err := tursodb.ExecAffecting(ctx, s.db, q,

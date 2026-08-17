@@ -30,6 +30,11 @@ type authService interface {
 	Refresh(ctx context.Context, refreshToken string) (authsvc.TokenPair, error)
 	ChangePassword(ctx context.Context, userID, currentPassword, newPassword string) (pair authsvc.TokenPair, err error)
 	ForgotPassword(ctx context.Context, email string) error
+	// ResendVerification is the PUBLIC registration-verification resend: it
+	// normalizes, rate-limits, and submits opaque replacement work, resolving no
+	// account on the request path, so every target state yields one accepted
+	// outcome (CHAU-2.2).
+	ResendVerification(ctx context.Context, email string) error
 	ResetPassword(ctx context.Context, token, newPassword string) error
 
 	// Credential-suite password mutations (design §5.2/§5.3). SetPassword sets an
@@ -47,6 +52,9 @@ type authService interface {
 	DeliveryStatus(ctx context.Context, receiptKey string) (delivery.Status, error)
 	CurrentUser(ctx context.Context) (userID string, ok bool)
 	CurrentSessionID(ctx context.Context) (sessionID string, ok bool)
+	// CurrentPrincipal is the effective caller (human or machine) the
+	// user-administration handlers pass verbatim to the host authorization check.
+	CurrentPrincipal(ctx context.Context) (authsvc.Principal, bool)
 	ActiveVerifiedIdentifier(ctx context.Context, userID, kind string) (string, error)
 
 	// CurrentUserView is the live-session-gated hydration read behind GET /auth/me:
@@ -103,6 +111,21 @@ type authService interface {
 	ConfirmIdentifierChange(ctx context.Context, in authsvc.IdentifierChangeConfirm) error
 	RemoveIdentifier(ctx context.Context, in authsvc.IdentifierRemoveInput) error
 	SetIdentifierUses(ctx context.Context, in authsvc.IdentifierUsesInput) error
+
+	// User administration (CHAU-1.1/1.6). UserAdminEnabled reports the repository
+	// capability and UserAdminAuthorized the host policy; Mount registers the admin
+	// routes only when BOTH are true (deny-by-absence). AuthorizeUserAdmin runs the
+	// host check and fails closed; the three data methods are TRUSTED and apply no
+	// authorization of their own, so a handler must call AuthorizeUserAdmin first.
+	UserAdminEnabled() bool
+	UserAdminAuthorized() bool
+	AuthorizeUserAdmin(ctx context.Context, principal authsvc.Principal, action authsvc.UserAdminAction, targetUserID string) error
+	ListUsers(ctx context.Context, req crud.ListRequest) (crud.Page[user.Summary], error)
+	// ResendVerificationForUser is the authorized admin resend; the public,
+	// enumeration-safe twin is ResendVerification below.
+	ResendVerificationForUser(ctx context.Context, actor authsvc.Principal, userID string) (authsvc.StepUpReceipt, error)
+	GetUserSummary(ctx context.Context, id string) (user.Summary, error)
+	SetUserStatus(ctx context.Context, actor authsvc.Principal, id string, status user.Status) (user.Summary, user.StatusChange, error)
 
 	// Machine identity (design §4.1). MachineEnabled gates whether the lifecycle
 	// routes are registered at all (deny-by-absence).

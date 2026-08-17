@@ -861,6 +861,10 @@ func buildAuthConfig(log *slog.Logger, granter auth.Granter) (auth.Config, error
 		Passwordless: passwordlessKinds(),
 		// The magic-link / redemption-page base URL (design §6.4), config-only.
 		PublicAuthBaseURL: publicAuthBaseURL(),
+		// The password-reset landing route the reset mail links to (CHAU-5.1),
+		// config-only: the link is built in the delivery worker from THIS value,
+		// never from a request Host/forwarded header. Production requires it.
+		PasswordResetURL: passwordResetURL(),
 		// The queue is the only send path; affirm run() runs the generic-jobs delivery
 		// runtime (jobs.FencedRuntime) (authv3-delivery-refactor AV3D-0.1).
 		DeliveryJobsAcknowledged: true,

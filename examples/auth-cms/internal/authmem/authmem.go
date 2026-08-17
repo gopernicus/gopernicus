@@ -125,6 +125,15 @@ func (s *Store) Repositories() auth.Repositories {
 		ContactChanges:       contactChangeRepo{s.d},
 		AuthenticationGrants: authGrantRepo{s.d},
 		CredentialMutations:  credentialMutationRepo{s.d},
+
+		// The account-lifecycle capability (CHAU-1.1). Supplying it does NOT mount
+		// an admin HTTP surface — that needs the host's Config.UserAdminCheck — so a
+		// store adapter can always offer it.
+		UserAdmin:      userAdminRepo{s.d},
+		ActiveSessions: activeSessionRepo{s.d},
+		// The atomic magic-link redemption (CHAU-6.1). Supplying it changes nothing
+		// until the host sets Config.PasswordlessProvisionOnRedeem.
+		Passwordless: passwordlessRepo{s.d},
 	}
 }
 

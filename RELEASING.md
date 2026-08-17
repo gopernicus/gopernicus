@@ -881,6 +881,385 @@ unaffected. (`sdk/foundation/cryptids`'s HS256 default and `sdk/foundation/web`'
 `TrustProxies`/`ClientIP` were **not** touched by auth-v3 — HS256 belongs to the
 JWT-refresh cut and `TrustProxies` to middleware-consolidation, each keyed above.)
 
+### features/authentication + both store modules — next tag (SECOND TRAIN): passwordless provision-on-consumption (MINOR floor; store migration REQUIRED)
+
+coordination-hub auth upstream, phase 6 (`.claude/plans/coordination-hub-auth-upstream/06-passwordless-provisioning.md`,
+CHAU-6.1…6.7, 2026-08-16). The plan calls for a **separate release train** from
+the core admin/resend/reset work, and this entry is written for that: it is the
+highest-risk change in the packet, and coupling it to the console unblock would
+force adopters to take both or neither.
+
+**Default behavior is unchanged.** `Config.PasswordlessProvisionOnRedeem` is false
+by default, and with it false a magic link to an address with no account still
+delivers nothing and creates nothing.
+
+- **`Config.PasswordlessProvisionOnRedeem`** (env
+  `AUTH_PASSWORDLESS_PROVISION_ON_REDEEM`) — opt-in account creation from an
+  EMAIL magic link, at CONSUME time. Never phone, OTP, OAuth, or another kind.
+  Enabling it requires the email passwordless kind, the challenge rail +
+  `ChallengeProtector`, an `IdentifierKeyer`, a delivery runtime, a valid
+  `PublicAuthBaseURL`, `Repositories.Passwordless`, and
+  `Repositories.ActiveSessions`; anything missing is the new
+  `ErrPasswordlessProvisionWiring` at construction.
+- **`Repositories.Passwordless`** — the new one-transaction redemption port
+  (`domain/passwordless`). The bundled pgx/turso stores always supply it, so a
+  host that leaves the flag off is unaffected.
+- New audit types `passwordless_provisioned` and `passwordless_adopted`, both
+  secret-free (kind + purpose + outcome class; never the address or token).
+
+**Challenge domain generalization (source-visible).** `challenge.Challenge` and
+`challenge.Consumed` gain `SubjectKey`, and the single-active claim moves from
+`(user_id, purpose)` to `(subject_key, purpose)`. `Challenge.ResolvedSubjectKey()`
+defaults it to `UserID`, so **every purpose that predates this is unchanged**; the
+field exists because an email magic link may be issued for an address with no
+account, and overloading `user_id` with a digest would make one column mean two
+things. `authsvc.WithSubjectKey` is the issuer-side option.
+
+**This tag ships HOST SCHEMA:** new canonical migration
+**`0015_challenge_subject_keys.sql`** in both trees (append-only;
+`0011_challenges.sql` stays byte-identical to its tag). It adds
+`challenges.subject_key`, backfills `subject_key := user_id`, drops
+`idx_challenges_user_purpose`, and creates `idx_challenges_subject_purpose`.
+Dropping the old index is required, not cosmetic: leaving it would forbid two
+magic-link challenges that share an empty `user_id` for different addresses. Both
+store constructors now probe the ALTER-added columns by name.
+
+**Apply 0015 BEFORE deploying a binary built against these tags.**
+
+**Security properties, each proven rather than asserted** (shared conformance
+group `PasswordlessRedeem`, 12 adversarial cases, run against the reference, the
+example host's memory store, live PostgreSQL 17, and the live Turso playground):
+creation at CONSUME never at SEND; POST-only redemption so a link scanner cannot
+provision; the provisioning intent captured at ISSUE and never re-derived from
+current configuration; an unknown binding version rejected rather than guessed;
+the send-then-register race logging in the CURRENT owner with no duplicate
+subject; the unverified-claim adoption revoking the squatter's password, sessions,
+grants, and outstanding challenges BEFORE the new session is written; a
+deactivated subject refused; two concurrent redemptions committing exactly one
+session; and every stable failure collapsing to one generic 401.
+
+### features/authentication — next tag: password-reset LINKS (minor floor; NEW REQUIRED PRODUCTION CONFIG)
+
+coordination-hub auth upstream, phase 5 (`.claude/plans/coordination-hub-auth-upstream/05-password-reset-links.md`,
+CHAU-5.1…5.4, 2026-08-16). Closes the "password-reset mail exposes only the raw
+token" flag. **No schema change.**
+
+- **`Config.PasswordResetURL`** (env tag `AUTH_PASSWORD_RESET_URL`) — the absolute
+  public reset landing route before `?token=` is appended. A **separate** field
+  from `PublicAuthBaseURL`, which is the full passwordless landing URL and not an
+  origin; deriving a reset route from it would have been guesswork.
+- **New required-production configuration.** With the challenge-backed
+  forgot/reset rail wired, production construction now FAILS without it
+  (`ErrPasswordResetURLRequired`). Development permits empty with one startup
+  WARN and keeps the legacy raw-token mail, so a mid-migration local flow is not
+  broken. **Adopters must set this before deploying a production binary built
+  against this tag.**
+- New errors: `ErrPasswordResetURLRequired`, `ErrPasswordResetURLInvalid`
+  (non-absolute, non-http(s), a FRAGMENT, or a pre-existing `token` parameter),
+  `ErrPasswordResetURLInsecure` (plain HTTP in production). New exported constant
+  `PasswordResetTokenParam` (`"token"`), shared by the validator and the builder
+  so the two cannot drift.
+- **Rendered-output change:** the bundled `password_reset` body is now link-only
+  when a URL is configured (CTA + copy/paste address + "ignore this message"), and
+  keeps the historical raw-token body when it is not. The derived text alternative
+  carries the full link and no second standalone token.
+- **Template-override compatibility:** the renderer passes BOTH `.Link` and
+  `.Secret`, so an app override reading `{{.Secret}}` keeps working for one
+  window. `.Secret` is deprecated for reset PRESENTATION; removing it is a later
+  breaking decision. It remains in the encrypted envelope regardless — the
+  terminal-failure discard needs it.
+- The link is built in the delivery **worker** from the configured value alone.
+  Request `Host`/`Forwarded`/`X-Forwarded-*` never participate, proven by driving
+  a forgot-password request with all of them hostile and asserting the delivered
+  link is unchanged.
+
+### features/authentication — next tag: registration-verification resend (minor floor; additive)
+
+coordination-hub auth upstream, phase 2 (`.claude/plans/coordination-hub-auth-upstream/02-verification-resend.md`,
+CHAU-2.1…2.4, 2026-08-16). Closes the "no verification resend" flag. **No schema
+change**; the primitives (`deliveryQueue.Replace`, `enqueueRenderedReplace`,
+`verify_registration` challenges) already existed — what was missing was a
+service method, an off-request-path worker initializer, routes, budgets, and any
+documentation.
+
+- **`POST /auth/verification/resend`** — public and unconditional. Always
+  `202 {"status":"accepted"}`, byte-identical status/body/headers for unknown,
+  malformed, verified, deactivated, and active-unverified targets. Origin-gated,
+  **no** CSRF token (the caller has no session — that is the population it
+  serves). New budgets: **3 per address per minute**, **10 per client IP per
+  minute**, both keyed on PII-free digests and charged before any resolution.
+  429 on a budget, 503 on a saturated delivery queue, 500 otherwise.
+- **`POST /auth/admin/users/{id}/verification/resend`** — mounts with the admin
+  surface (`Config.UserAdminCheck`, action `resend-verification`). May report
+  real state: 202 + secret-free receipt, 409 `already_verified` /
+  `user_deactivated`, 404 unknown / no verifiable email.
+- New exported surface: `Service.ResendVerification`,
+  `Service.ResendVerificationForUser`, `StepUpReceipt` (newly aliased at the
+  feature root), `ErrVerificationResendRateLimited`, `ErrAlreadyVerified`,
+  `ErrUserDeactivated`, `ErrNoVerifiableEmail`.
+- Two new security-event types: `verification_resend_requested` (public; **no**
+  user id) and `verification_resend_issued` (worker or admin; target user id).
+- `PurposeRegistrationVerification` joins the delivery initializer registry, so a
+  resend resolves the account, issues the replacement challenge, and renders
+  entirely in the worker. Its `Discard` arm sits with the login-OTP arm: both are
+  HMAC codes with no delete-by-secret path, so a never-delivered code expires
+  under its TTL.
+
+**Behavior note for adopters:** a resend REPLACES the pending job and ISSUES A
+FRESH CODE, invalidating the previous one. Replacement cannot retract a provider
+call already accepted, so a user may receive both the old and the new mail — only
+the newest code verifies. Document that in your UI copy.
+
+### features/authentication + both store modules — next tag: account lifecycle and the operator directory (MINOR floor; store migration REQUIRED)
+
+coordination-hub auth upstream, phase 1 (`.claude/plans/coordination-hub-auth-upstream/01-user-directory-and-lifecycle.md`,
+CHAU-1.1…1.7, 2026-08-16). Closes two flags at once — "no administrative user
+listing" and "no account status/deactivation" — as one capability, because a
+directory you cannot act from and a deactivation you cannot see are each half a
+feature.
+
+**`features/authentication` — additive public surface:**
+
+- `UserStatus` (alias of `user.Status`) with `UserStatusActive` /
+  `UserStatusDeactivated`, `ErrInvalidUserStatus`, `UserSummary`,
+  `UserStatusChange`, `ErrUserAdminUnavailable`, `ErrUserNotActive`.
+- `UserAdminCheck` + `UserAdminCheckRequest` + `UserAdminAction` and its five
+  constants — the InviteCheck precedent applied to the user directory.
+- `Config.UserAdminCheck`; `Repositories.UserAdmin` and
+  `Repositories.ActiveSessions`; `ErrUserAdminReposRequired`.
+- Trusted `Service` methods `UserAdminEnabled`, `ListUsers`, `GetUserSummary`,
+  `DeactivateUser`, `ReactivateUser` — they apply NO authorization by design.
+- Two new security-event types: `user_deactivated`, `user_reactivated`.
+- `user.User` gains `Status` / `StatusChangedAt` and an `Active()` method. This is
+  a struct-field addition: a host constructing a `user.User` by hand still
+  compiles (the zero Status normalizes to active), but a host with an exhaustive
+  positional literal would not — no such construction exists in-repo.
+
+**Behavior changes to be aware of:**
+
+- With `Repositories.ActiveSessions` wired — the bundled stores always supply it —
+  **every** session mint routes through the fenced insert. A store that cannot
+  serialize it against a status transition must leave the slot nil.
+- An **act-as-user API key now denies a deactivated owner**. A key whose service
+  account has `ActAsUser` resolves the owner's status; an unknown owner is
+  deliberately NOT treated as deactivated (the vocabulary has no "deleted"), so
+  no existence requirement was added.
+- Public credential endpoints collapse a lifecycle refusal into their own generic
+  failure, so a deactivated login is byte-identical to a wrong password. Nothing
+  that previously succeeded now fails differently; this only constrains a NEW
+  failure mode.
+- `Config.UserAdminCheck` set without both repositories is a LOUD construction
+  error. Wiring the repositories without the check is not an error and mounts
+  nothing.
+
+**`features/authentication/stores/{pgx,turso}` — this tag ships HOST SCHEMA.**
+
+New canonical migration **`0014_user_status.sql`** in both trees (append-only;
+`0001_users.sql` stays byte-identical to its tag):
+
+- `users.status` — `TEXT NOT NULL DEFAULT 'active'` with a closed
+  `CHECK (status IN ('active','deactivated'))`; existing rows backfill to active
+  from the DEFAULT.
+- `users.status_changed_at` — nullable; NULL until the first transition.
+- `idx_users_created_at_id` — the directory's contractual keyset.
+- **pgx only:** `ALTER TABLE users ALTER COLUMN id TYPE TEXT COLLATE "C"`.
+  `users.id` became a keyset tiebreak with this release and joins the contractual
+  collation inventory. It is a **rewriting DDL under ACCESS EXCLUSIVE** — call it
+  out in the adopter's maintenance window.
+
+Both `Repositories()` constructors gained a **column** probe (`users.status`,
+`users.status_changed_at`) beside the existing table probes, so a host that
+copied 0001–0013 and skipped 0014 fails at wiring time naming the column rather
+than mid-request. Both bundles now always return `UserAdmin` and `ActiveSessions`.
+
+**Adopter order: apply 0014 BEFORE deploying a binary built against these tags.**
+
+One cross-dialect defect was found and fixed by the live gate: the pgx directory
+list now normalizes its cursor order value to UTC (`OrderValueOf` → `.UTC()`).
+Without it Postgres encodes the session-zone offset and libSQL encodes `Z`, so
+byte-identical cursors across dialects would have been false for identical data.
+The other pgx paged stores still encode the session offset; that is pre-existing
+and untouched here, but worth a look when their contracts next move.
+
+Live gates closed at authoring time: full `storetest` conformance including the
+repeated concurrent deactivate-versus-mint race, against a live PostgreSQL 17 and
+the live Turso playground database, plus the pgx collation catalog check
+confirming `users.id` reports collation `C`.
+
+### sdk + both datastore connectors + features/authentication (+ its stores) — next tag: LIST SEARCH restored (minor floor)
+
+Plan of record `.claude/plans/crud.md` (crud-search-upstream, T1–T4, 2026-08-16;
+stacked onto this release train by owner direction). This is a **regression fix**,
+not a feature request: v1 generated a `@search:` annotation, a `SearchTerm` filter
+field, a store-side predicate, and a transport key, and the de-generation dropped
+all of it. Two downstream repos had already invented their own word for it.
+
+**`sdk/foundation/crud`** — `SearchField`, `ListParams.Search`,
+`ListRequest.Search`, and `MatchesSearch`, plus the `q` entry in the package doc's
+query-param vocabulary. Additive; a caller that sends no search is unaffected.
+
+`MatchesSearch` is the SHARED oracle: a case-insensitive **LITERAL** substring
+under an **ASCII-only** fold. Both halves are deliberate. Literal, because v1
+built `"%" + term + "%"` unescaped — someone typing `100%` matched every row and
+`a_c` matched `abc`; that defect is not restored. ASCII-only, because the fold
+must be reproducible in three places that cannot share code (this function,
+PostgreSQL's `ILIKE`, SQLite's `LIKE`), and all three agree on ASCII letters while
+leaving non-ASCII code points alone. Go's `strings.ToLower` would have made the Go
+matcher disagree with both dialects.
+
+**`integrations/datastores/pgxdb`** — `ListQuery.SearchFields`,
+`AddSearchClause`, `EscapeSearchTerm`, and the reserved `@list_search` argument.
+The predicate is `(("col" COLLATE "C") ILIKE @list_search ESCAPE '\' OR …)`.
+`COLLATE "C"` is required: `ILIKE` under a non-deterministic collation errors, and
+under a locale collation its folding would diverge from the other two.
+
+**`integrations/datastores/turso`** — the positional twin. **SQLite has no
+`ILIKE`**; its `LIKE` is already ASCII-case-insensitive, so the predicate is
+`("col" LIKE ? ESCAPE '\' OR …)` with one bound argument per field (positional
+placeholders cannot be reused the way a named argument can). That dialect
+difference lives in the store, where it belongs.
+
+**The query fan-out, which is where this would have gone wrong.** The search
+predicate is folded into `BaseSQL` **before** the strategy switch, so all FOUR
+query paths inherit it: the cursor page, the offset page, the cursor strategy's
+reverse probe, and the `COUNT(*)` wrap. Appending it to a per-page buffer — the
+way the cursor predicate is appended — would make `WithCount` report the
+**unfiltered** total (a page of 2 rows claiming 8 results) and let the reverse
+probe derive `HasPrev`/`PreviousCursor` from rows the search excluded. Both
+connectors clone their args before binding, because `ListQuery` is passed by value
+but its args map/slice is not.
+
+**`features/authentication` + both store modules** — `apikey.SearchFields`
+declares `name` as the first searchable column (the key hash and prefix are
+credential material and are deliberately NOT searchable — a searchable prefix
+would let a caller probe for a key by fragment), both dialect stores declare it,
+`GET /auth/service-accounts/{id}/keys?q=…` parses it, and the reference/host
+memory stores apply `crud.MatchesSearch` so they cannot disagree with SQL.
+
+**Fail-loud rules:** a non-blank term against a list declaring no `SearchFields`
+is `sdk.ErrInvalidInput`, never a silently unfiltered page; an existing
+`@list_search` argument fails rather than being overwritten; an invalid column
+identifier fails before any SQL runs.
+
+**Live cross-dialect oracle CLOSED at authoring time.** The full term table —
+including `100%`, `a_c`, a lone `%`, a lone `_`, a literal backslash, ASCII case
+pairs, and non-Latin text — ran against a live PostgreSQL 17 and the live Turso
+playground database through the store conformance suite, plus `WithCount` and
+cursor paging with the predicate. All three implementations agree.
+
+**Migration for hosts:** none required. `q` is the canonical key; a transport with
+v1 clients may fall back to `s` at its OWN edge with a documented removal
+milestone — that alias is deliberately not in `crud.ListParams`.
+
+### sdk — next tag: canonical runtime posture + capability-owned transport checks (MINOR floor)
+
+coordination-hub auth upstream, phase 3 (`.claude/plans/coordination-hub-auth-upstream/03-runtime-posture-foundation.md`,
+CHAU-3.1…3.4, 2026-08-16). The upstream flag: coordination-hub's **generic**
+`internal/integrations/mailer` imported `features/authentication` for nothing but
+the runtime-mode vocabulary and the insecure-transport error. That is a layering
+inversion — an app-wide mailer should not depend on an auth feature to name its
+own deployment posture. Purely additive; no existing sdk symbol changed.
+
+- **`sdk/foundation/environment`** (new `mode.go`): `Mode` with `ModeDevelopment`
+  / `ModeProduction`, `ValidateMode`, `ParseMode`, and the
+  `ErrModeRequired` / `ErrModeInvalid` sentinels. A REQUIRED enum — the empty
+  value is an error, never a silent development default. It reads **no**
+  environment variable: the host names the key and passes the already-read
+  string, so nothing about mode selection is implicit. Only two values ship;
+  staging/preview/CI map onto the posture the host wants (normally production).
+  Stdlib-only, so `environment` keeps its "zero external dependencies" claim and
+  the foundation-imports-root-only guard (G12b) holds.
+- **`sdk/capabilities/email`**: `CheckSender(environment.Mode, Sender) (TransportPosture, error)`,
+  `InspectSender`, `TransportPosture{Declared, Capabilities}` with
+  `ProductionCapable()`, and `ErrInsecureTransport`. Production rejects a
+  development-only or metadata-less Sender; development accepts both and returns
+  the classification so the caller phrases its own warning. **No logger
+  parameter** — message text and log routing are composition concerns. An empty
+  or unknown mode is rejected rather than defaulted.
+- **`sdk/capabilities/notify`**: the same trio —
+  `CheckNotifier`/`InspectNotifier`/`TransportPosture`/`ErrInsecureTransport`.
+- Detection stays **structural** (a `CapabilityReporter` type assertion), so a
+  third-party transport opts in without the sdk knowing its type;
+  `integrations/email/sendgrid` now carries a compatibility test proving the real
+  Sender resolves through `email.CheckSender` as its `Capabilities` claim.
+
+Capabilities importing `foundation/environment` is legal under the layering
+guard (the `notify` → `foundation/identity` precedent); the guard forbids
+capability↔capability and capability→feature only.
+
+If the phase-4 transactional-logo change rides the same commit, do **not** split
+it into its own patch — this minor covers both.
+
+### features/authentication — next tag: RuntimeMode is now an alias of environment.Mode (minor floor; SOURCE-COMPATIBLE)
+
+The feature half of phase 3 (CHAU-3.3). **No host code change is required**, and
+none is expected to break:
+
+- `RuntimeMode` is a **type alias** of `environment.Mode`, and
+  `RuntimeModeDevelopment`/`RuntimeModeProduction` are the canonical constants.
+  Alias, not a new distinct type: values are assignable in both directions with
+  no conversion, `Config{RuntimeMode: …}` literals compile unchanged, the wire
+  values are still `"development"`/`"production"`, and the `AUTH_RUNTIME_MODE`
+  env tag parses identically.
+- `ErrRuntimeModeRequired` / `ErrRuntimeModeInvalid` now **wrap**
+  `environment.ErrModeRequired` / `ErrModeInvalid`. `errors.Is` against the auth
+  sentinels is unchanged, and sdk-only code can match the canonical sentinel for
+  the same failure. **The error TEXT changed**: each message gained a
+  `": environment: mode …"` suffix. Nothing in the repo asserted on that text
+  (only `errors.Is`), but a host string-matching on the message should switch to
+  `errors.Is`.
+- `ErrInsecureDeliveryTransport` is unchanged as a sentinel, but the returned
+  error now **also** wraps `email.ErrInsecureTransport` or
+  `notify.ErrInsecureTransport`, and its message gained the capability error as a
+  suffix. The verdict is now made by `email.CheckSender`/`notify.CheckNotifier`;
+  auth keeps the per-transport label and its own development WARN wording.
+- **Development WARN behavior is byte-identical to before**: only a transport
+  that *declared* itself development-only warns. A metadata-less transport is
+  still rejected in production and still silent in development — deliberately
+  not "improved" as a side effect of this refactor.
+- Requires the sdk tag above (`environment.Mode` + the capability checks).
+- The two unexported helpers `emailCapabilities`/`notifyCapabilities` were
+  removed as orphaned by this change; both were unexported and had no other
+  caller.
+
+Downstream action for coordination-hub: delete the `features/authentication`
+import from the generic `internal/integrations/mailer` / notifymail packages and
+name `environment.Mode` + `email.CheckSender` instead. The auth composition may
+keep importing the feature — it needs `auth.Config` regardless.
+
+### sdk/capabilities/email — next tag: bundled transactional layout renders Brand.LogoURL (patch floor; RENDERED-OUTPUT change)
+
+coordination-hub auth upstream, phase 4 (`.claude/plans/coordination-hub-auth-upstream/04-email-layout-branding.md`,
+CHAU-4.1…4.3, 2026-08-16). The upstream flag read "sdk layouts ignore
+`Brand.LogoURL`"; the audit found it true of exactly one bundled layout.
+`marketing.html` already rendered the logo and `minimal.html` is deliberately
+unbranded, but `transactional.html` — the layout **every** authentication
+delivery purpose uses — dropped it. A host that set `EmailBranding.LogoURL` got
+no image and no error.
+
+- `templates/layouts/transactional.html` gains a conditional logo block above the
+  brand name: `{{if .Brand.LogoURL}}<img src="{{.Brand.LogoURL}}" alt="…">{{end}}`,
+  with conservative email-client inline dimensions (`max-height: 48px`,
+  `max-width: 100%`, `height: auto`, `border: 0`). Name and tagline still render
+  beside it, so a blocked or broken image never erases brand identity.
+- `alt` is `Brand.Name`, falling back to `Your Company` — the same fallback the
+  visible header already used, so image and text identity cannot disagree.
+- `TemplateRegistry.SetBranding(nil)` now resets to empty branding instead of
+  storing nil, making the registry's documented "branding is never nil" invariant
+  hold for the public `email.WithBranding` path too.
+- Package docs gain the branding/layout field matrix, the escaping boundary
+  (`html/template`, never `template.HTML`; no fetching or URL validation), and
+  the external-image-blocking rationale. `Branding`'s godoc carries the matrix.
+
+**No exported symbol changed**, so this floors at a **patch**. It is, however, a
+**rendered-output change**: HTML differs *only* when `Branding.LogoURL` is
+non-empty, and only for hosts on the bundled transactional layout. A host that
+overrides the layout at `email.LayerApp` (coordination-hub does) sees **no
+change** — the override wins wholesale and owns its own logo markup. The
+plain-text alternatives are untouched and remain image-free. Do not split this
+into its own tag if the phase-3 runtime-posture work rides the same commit; that
+work floors sdk at a **minor**.
+
 ### sdk/capabilities/work — next tag: NEW module (first tag)
 
 The SWP promotion (sdk-work-protocol, 2026-07-13) added `sdk/capabilities/work` —

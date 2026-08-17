@@ -23,6 +23,9 @@
                     <!-- Header -->
                     <tr>
                         <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
+                            {{if .Brand.LogoURL}}
+                            <img src="{{.Brand.LogoURL}}" alt="{{if .Brand.Name}}{{.Brand.Name}}{{else}}Your Company{{end}}" style="display: block; margin: 0 auto 16px auto; max-height: 48px; max-width: 100%; height: auto; border: 0; outline: none; text-decoration: none;">
+                            {{end}}
                             <h1 style="margin: 0; color: #ffffff; font-size: 24px; font-weight: 700;">
                                 {{if .Brand.Name}}{{.Brand.Name}}{{else}}Your Company{{end}}
                             </h1>

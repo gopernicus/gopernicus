@@ -76,6 +76,13 @@ func Mount(r feature.RouteRegistrar, svc authService, inv InvitationService, inv
 	r.Handle("POST", "/auth/login", h.login)
 	r.Handle("POST", "/auth/verify", h.verify)
 	r.Handle("POST", "/auth/password/forgot", h.forgotPassword)
+	// The public registration-verification resend (CHAU-2.3) is an UNAUTHENTICATED
+	// credential-establishment endpoint, exactly like the passwordless starts: it
+	// carries the allowlisted-Origin gate but NOT the double-submit CSRF gate,
+	// because the population it serves — users who cannot log in because they never
+	// verified — has no session and therefore no __Host-auth_csrf cookie to compare.
+	// The gate is added below with the other origin-gated routes, once the shared
+	// middleware is built.
 	r.Handle("POST", "/auth/password/reset", h.resetPassword)
 	// /auth/refresh is rate-limited by IP (the by-session arm is enforced in the
 	// service once the session resolves — §6). It is cookie- or body-driven and
@@ -136,6 +143,7 @@ func Mount(r feature.RouteRegistrar, svc authService, inv InvitationService, inv
 	// allowlisted-Origin + double-submit CSRF protection (design §9.1). The handlers
 	// themselves enforce the strict JSON body and set Cache-Control: no-store.
 	browserSafe := requireBrowserSafeMutation(h.mutation.csrf())
+	r.Handle("POST", "/auth/verification/resend", h.resendVerification, requireBrowserSafeOrigin(h.mutation.csrf()))
 	r.Handle("POST", "/auth/password/change", h.changePassword, svc.RequireLiveSession, browserSafe)
 	r.Handle("POST", "/auth/step-up/begin", h.beginStepUp, svc.RequireLiveSession, browserSafe)
 	r.Handle("POST", "/auth/step-up/password", h.completeStepUpPassword, svc.RequireLiveSession, browserSafe)
@@ -163,6 +171,18 @@ func Mount(r feature.RouteRegistrar, svc authService, inv InvitationService, inv
 	r.Handle("POST", "/auth/identifiers/phone/confirm", h.confirmPhoneIdentifier, svc.RequireLiveSession, browserSafe)
 	r.Handle("PATCH", "/auth/identifiers/{id}", h.patchIdentifier, svc.RequireLiveSession, browserSafe)
 	r.Handle("DELETE", "/auth/identifiers/{id}", h.deleteIdentifier, svc.RequireLiveSession, browserSafe)
+
+	// The administrative user surface (CHAU-1.6) is registered only when the host
+	// made an explicit authorization decision AND the capability is wired
+	// (deny-by-absence). Repository presence alone is NOT enough: a bundled store
+	// adapter returns the administration ports for every host, and turning them
+	// into an HTTP surface must be the host's choice, not the store's. Package
+	// auth already rejected a check wired without the repositories
+	// (ErrUserAdminReposRequired), so reaching here with one and not the other is
+	// impossible — the belt-and-braces conjunction keeps the invariant local.
+	if svc.UserAdminEnabled() && svc.UserAdminAuthorized() {
+		mountUserAdmin(r, h, svc.RequireLiveSession, browserSafe)
+	}
 
 	// OAuth routes are registered only when at least one provider is wired
 	// (deny-by-absence, design §3): an unwired host returns 404 for them.

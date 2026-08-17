@@ -48,9 +48,13 @@ type challengeRepo struct{ *data }
 func (r challengeRepo) Replace(_ context.Context, c challenge.Challenge) (challenge.Challenge, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	// Delete the prior (user, purpose) row (the single-active claim).
+	// Delete the prior (SUBJECT KEY, purpose) row (the single-active claim). The
+	// subject key defaults to the user id for every purpose that predates it
+	// (CHAU-6.1), so this is unchanged for all of them.
+	subjectKey := c.ResolvedSubjectKey()
+	c.SubjectKey = subjectKey
 	for id, ex := range r.challenges {
-		if ex.UserID == c.UserID && ex.Purpose == c.Purpose {
+		if ex.ResolvedSubjectKey() == subjectKey && ex.Purpose == c.Purpose {
 			delete(r.challenges, id)
 		}
 	}
@@ -146,7 +150,7 @@ func (r challengeRepo) PurgeExpired(_ context.Context, before time.Time, limit i
 // findChallengeByUserPurpose returns the single (user, purpose) row; callers hold d.mu.
 func (r challengeRepo) findChallengeByUserPurpose(userID, purpose string) (string, challenge.Challenge, bool) {
 	for id, ex := range r.challenges {
-		if ex.UserID == userID && ex.Purpose == purpose {
+		if ex.ResolvedSubjectKey() == userID && ex.Purpose == purpose {
 			return id, ex, true
 		}
 	}
@@ -156,6 +160,7 @@ func (r challengeRepo) findChallengeByUserPurpose(userID, purpose string) (strin
 func consumedOf(c challenge.Challenge, now time.Time) challenge.Consumed {
 	return challenge.Consumed{
 		ID:             c.ID,
+		SubjectKey:     c.ResolvedSubjectKey(),
 		UserID:         c.UserID,
 		Purpose:        c.Purpose,
 		Context:        c.Context,

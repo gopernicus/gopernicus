@@ -41,6 +41,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/invitation"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthaccount"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/oauthstate"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/passwordless"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/passwordreset"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/serviceaccount"
@@ -101,6 +102,39 @@ var ErrMachineReposRequired = errors.New("auth: Repositories.ServiceAccounts and
 // without its store is a loud partial-wiring error (design §6), never a silent
 // half-on state.
 var ErrInvitationRepoRequired = errors.New("auth: Config.Granter set but Repositories.Invitations is nil")
+
+// ErrUserAdminReposRequired is returned by NewService/Register when
+// Config.UserAdminCheck enables the bundled user-administration routes but the
+// repositories that make them safe are not both wired (CHAU-1.1).
+//
+// BOTH are required, and the second is the load-bearing one:
+//
+//   - Repositories.UserAdmin supplies the directory and the atomic transition; and
+//   - Repositories.ActiveSessions fences session minting against a concurrent
+//     deactivation.
+//
+// Without ActiveSessions a host would expose a "deactivate" button while a login
+// racing it could still mint a session — advertising a revocation the wiring
+// cannot honor. That fails LOUDLY at construction rather than shipping a
+// half-closed door. Checked with errors.Is.
+var ErrUserAdminReposRequired = errors.New("auth: Config.UserAdminCheck set but Repositories.UserAdmin/ActiveSessions is nil (the admin lifecycle routes require both the administration repository and the fenced session mint)")
+
+// ErrPasswordlessProvisionWiring is returned by NewService/Register when
+// Config.PasswordlessProvisionOnRedeem is enabled but the wiring that makes
+// provision-on-consumption safe is incomplete (CHAU-6.1).
+//
+// Provisioning turns a magic link into an account-CREATION credential, so every
+// piece it depends on is required, not best-effort: the email passwordless kind
+// (the only rail it applies to), the atomic challenge rail and its protector (the
+// link's single-use secret), an IdentifierKeyer (the stable PII-free subject key
+// an unknown address is keyed under — without one, a resend to an unknown address
+// could not replace its predecessor), a delivery runtime, a valid
+// PublicAuthBaseURL, Repositories.Passwordless (the ONE-transaction redemption),
+// and Repositories.ActiveSessions (the lifecycle fence every mint rides).
+//
+// Half-wired provisioning would create accounts through a path that cannot
+// guarantee atomicity, so it fails at construction. Checked with errors.Is.
+var ErrPasswordlessProvisionWiring = errors.New("auth: Config.PasswordlessProvisionOnRedeem requires the email passwordless kind, the atomic challenge rail, a challenge protector, an identifier keyer, a delivery runtime, a valid PublicAuthBaseURL, Repositories.Passwordless, and Repositories.ActiveSessions")
 
 // ErrInviteCheckRequired is returned by NewService/Register when Config.Granter
 // enables invitations but Config.InviteCheck is nil (design §6/D3). The relation-
@@ -212,6 +246,123 @@ type InviteCheck = invitationsvc.InviteCheck
 // invitationsvc per the Principal precedent so a host wiring its own invitation
 // handler names one type across the public and internal packages.
 type CreateInput = invitationsvc.CreateInput
+
+// StepUpReceipt is the secret-free delivery receipt a code-issuing operation
+// returns: Delivered reports that work was admitted, and Receipt is the PII-free
+// key a session-gated caller polls through the delivery-status read. It never
+// carries the code or the destination. Aliased from authsvc per the Principal
+// precedent.
+type StepUpReceipt = authsvc.StepUpReceipt
+
+// Registration-verification resend errors (CHAU-2.1). These are returned ONLY by
+// the authorized admin resend; the public resend never distinguishes target state.
+var (
+	// ErrVerificationResendRateLimited is the exhausted public resend budget — the
+	// one non-uniform outcome of the public path, and one that says nothing about
+	// the target. The transport maps it to 429.
+	ErrVerificationResendRateLimited = authsvc.ErrVerificationResendRateLimited
+	// ErrAlreadyVerified is an admin resend for an account whose primary email is
+	// already proven. Wraps sdk.ErrConflict (409, code "already_verified").
+	ErrAlreadyVerified = authsvc.ErrAlreadyVerified
+	// ErrUserDeactivated is an admin resend for a deactivated account. Wraps
+	// sdk.ErrConflict (409, code "user_deactivated").
+	ErrUserDeactivated = authsvc.ErrUserDeactivated
+	// ErrNoVerifiableEmail is an admin resend for an account holding no active
+	// primary email identifier. Wraps sdk.ErrNotFound.
+	ErrNoVerifiableEmail = authsvc.ErrNoVerifiableEmail
+)
+
+// UserStatus is the closed account-lifecycle vocabulary (CHAU-1.1): exactly
+// UserStatusActive and UserStatusDeactivated in v1. Aliased from the user domain
+// so a host names one type across the public and domain packages (the
+// CredentialPolicy alias precedent).
+type UserStatus = user.Status
+
+// UserStatusActive and UserStatusDeactivated are the two lifecycle statuses.
+// Deactivated denies every new session and act-as-user authentication; the
+// transition itself revokes the subject's live sessions and grants.
+const (
+	UserStatusActive      = user.StatusActive
+	UserStatusDeactivated = user.StatusDeactivated
+)
+
+// ErrInvalidUserStatus is returned for a status outside the closed vocabulary. It
+// wraps sdk.ErrInvalidInput. Checked with errors.Is.
+var ErrInvalidUserStatus = user.ErrInvalidStatus
+
+// UserSummary is the operator-directory projection of a user (CHAU-1.1): id,
+// display name, lifecycle status and its last transition time, the normalized
+// ACTIVE PRIMARY email with its verified flag, and the row timestamps.
+//
+// It carries NO credential material — no password hash, OAuth token, session,
+// API-key material, challenge state, recovery inventory, or auth revision. The
+// email is NOT masked, because this projection is reachable only behind an
+// explicit host authorization decision; an empty PrimaryEmail means the subject
+// has no email identifier on file, never that one was hidden.
+type UserSummary = user.Summary
+
+// UserStatusChange is the outcome of a lifecycle transition: the resulting
+// Status, whether this call Changed it (so replaying a status is idempotent
+// rather than an error), the transition time, and the number of sessions the
+// transition revoked. Aliased from the user domain.
+type UserStatusChange = user.StatusChange
+
+// ErrUserAdminUnavailable is returned by the trusted user-administration methods
+// when Repositories.UserAdmin is not wired. It wraps sdk.ErrNotFound — an unwired
+// capability is absent, not forbidden. Checked with errors.Is.
+var ErrUserAdminUnavailable = authsvc.ErrUserAdminUnavailable
+
+// ErrUserNotActive is returned by the fenced session mint when the owning user is
+// not active at commit time. It wraps sdk.ErrForbidden. PUBLIC credential
+// endpoints never surface it — they collapse it into their own generic failure so
+// a deactivated account is indistinguishable from a wrong password — so a host
+// sees it only from a trusted call or an operator surface. Checked with errors.Is.
+var ErrUserNotActive = session.ErrUserNotActive
+
+// UserAdminAction is the user-administration operation a host UserAdminCheck is
+// asked about. The set is closed; see the UserAdmin* constants. Aliased from
+// authsvc per the InviteAction precedent.
+type UserAdminAction = authsvc.UserAdminAction
+
+// The closed set of user-administration actions a host policy may be asked
+// about. UserAdminList carries no target user; every other action carries the
+// target's id.
+const (
+	UserAdminList               = authsvc.UserAdminList
+	UserAdminRead               = authsvc.UserAdminRead
+	UserAdminDeactivate         = authsvc.UserAdminDeactivate
+	UserAdminReactivate         = authsvc.UserAdminReactivate
+	UserAdminResendVerification = authsvc.UserAdminResendVerification
+)
+
+// UserAdminCheckRequest is the parsed, principal-resolved authorization question
+// the feature poses to a host UserAdminCheck: the resolved Principal, the Action,
+// and the TargetUserID (empty for UserAdminList). Aliased from authsvc.
+type UserAdminCheckRequest = authsvc.UserAdminCheckRequest
+
+// UserAdminCheck is the host authorization seam for user administration
+// (CHAU-1.1) — the InviteCheck precedent applied to the user directory. The
+// feature owns live-session validation, principal resolution, and request
+// parsing, then asks the host one question it answers with its OWN roles,
+// tenancy, or policy engine.
+//
+// Authentication never invents a role named "admin", never interprets a role
+// string, and never imports features/authorization. A host with an authorization
+// feature wires a closure over it:
+//
+//	cfg.UserAdminCheck = func(ctx context.Context, req auth.UserAdminCheckRequest) error {
+//		return authorization.Check(ctx, req.Principal, "platform:main", "admin")
+//	}
+//
+// A nil return authorizes. A denial (wrap sdk.ErrForbidden) and an infrastructure
+// error BOTH fail closed.
+//
+// Wiring it is what MOUNTS the bundled admin routes. A nil check leaves them
+// unmounted even when the repositories are present, so a store adapter may supply
+// the capability without an authorization surface appearing. Wiring it WITHOUT
+// Repositories.UserAdmin and Repositories.ActiveSessions is
+// ErrUserAdminReposRequired at construction.
+type UserAdminCheck = authsvc.UserAdminCheck
 
 // CreateResult reports the outcome of Service.Create: DirectlyAdded true when a
 // known invitee was granted immediately, else Invitation is the pending record.
@@ -422,6 +573,46 @@ type Repositories struct {
 	// The slot is frozen here (AV3-0.4); it becomes REQUIRED when the credential
 	// suite is enabled (phase 6). Nil is tolerated until then.
 	CredentialMutations credential.MutationRepository
+
+	// UserAdmin is the OPTIONAL user-administration capability (CHAU-1.1): the
+	// paginated operator directory (user.Summary pages) plus the ATOMIC lifecycle
+	// transition that writes the status, increments auth_revision, and deletes
+	// every session and authentication grant in one store transaction.
+	//
+	// Presence alone does NOT mount an HTTP surface. The bundled admin routes
+	// require Config.UserAdminCheck as well, so a bundled store adapter can return
+	// a complete Repositories without any authorization surface appearing. When it
+	// is nil the trusted service methods fail closed with sdk.ErrNotFound.
+	UserAdmin user.AdminRepository
+
+	// ActiveSessions is the OPTIONAL fenced session-minting capability (CHAU-1.1):
+	// it inserts a proposed session only while the owning user is atomically proven
+	// active under the same serialization boundary, so a concurrent deactivation
+	// cannot leave a session created after it.
+	//
+	// When wired, EVERY session mint — password login, /auth/token, OAuth,
+	// passwordless, and the password-mutation remint — routes through it. When nil,
+	// minting falls back to the ordinary Sessions.Create and the race is open,
+	// which is why enabling the admin lifecycle routes without it is
+	// ErrUserAdminReposRequired: a host must not advertise deactivation it cannot
+	// honor.
+	//
+	// It must be backed by the same transaction-capable adapter as Users and
+	// Sessions.
+	ActiveSessions session.ActiveUserRepository
+
+	// Passwordless is the OPTIONAL atomic magic-link redemption capability
+	// (CHAU-6.1): ONE transaction that consumes the link's challenge, decides
+	// login / adopt / provision, performs the identity mutation and any revocation,
+	// and inserts the session.
+	//
+	// It is REQUIRED only when Config.PasswordlessProvisionOnRedeem is enabled,
+	// because provisioning is what makes the multi-table atomicity load-bearing: a
+	// service-level consume-then-create sequence would leave a half-provisioned
+	// account behind any failure. It must be backed by the same
+	// transaction-capable adapter as Users, Identifiers, Passwords, Sessions,
+	// Challenges, and AuthenticationGrants.
+	Passwordless passwordless.Repository
 }
 
 // CookieConfig is the session-cookie policy. Zero values are safe: an empty Name
@@ -724,6 +915,58 @@ type Config struct {
 	// Host/forwarded headers never participate.
 	PublicAuthBaseURL string `env:"AUTH_PUBLIC_BASE_URL"`
 
+	// PasswordResetURL is the absolute public landing route a password-reset email
+	// links to, BEFORE the token query parameter is appended (CHAU-5.1). It is
+	// deliberately a SEPARATE field from PublicAuthBaseURL: that one is the full
+	// passwordless landing URL (e.g. ".../login/link"), not an application origin,
+	// so a reset route cannot be derived from it without guessing.
+	//
+	// Validation at construction: an absolute http(s) URL with a host; HTTPS is
+	// REQUIRED in production RuntimeMode (ErrPasswordResetURLInsecure) because the
+	// link carries a single-use credential; a fragment is rejected
+	// (ErrPasswordResetURLInvalid) because the builder appends a QUERY parameter and
+	// a fragment would silently swallow it; and an existing `token` query parameter
+	// is rejected so the builder never overwrites ambiguous host input. Other
+	// non-secret query parameters are preserved.
+	//
+	// Compatibility posture (ratified CHAU-5.1):
+	//
+	//   - PRODUCTION: this field is REQUIRED whenever the challenge-backed
+	//     forgot/reset rail is wired — raw-token-only reset mail is no longer an
+	//     acceptable production experience (ErrPasswordResetURLRequired).
+	//   - DEVELOPMENT: empty is permitted with ONE startup WARN, and reset mail
+	//     falls back to the historical raw-token template so console and local
+	//     flows keep working during migration.
+	//
+	// Once a URL is present, ALL modes render link-only mail. Request Host,
+	// Forwarded, and X-Forwarded-* headers never participate: the link is built from
+	// this configured value alone.
+	PasswordResetURL string `env:"AUTH_PASSWORD_RESET_URL"`
+
+	// PasswordlessProvisionOnRedeem enables account creation from an EMAIL MAGIC
+	// LINK sent to an address with no account — created only when the link is
+	// successfully CONSUMED, never when it is sent (CHAU-6.1).
+	//
+	// The zero value is the historical login-only behavior: a link to an unknown
+	// address delivers nothing, and nothing is created. Turning it on is a real
+	// security decision, so read the README's threat model before you do.
+	//
+	// Scope is deliberately narrow. It applies to the EMAIL LINK rail only — never
+	// phone, never OTP codes, never OAuth, never an arbitrary identifier kind —
+	// because a link is the only one of those whose delivery to an address is
+	// itself proof of possession.
+	//
+	// Enabling it REQUIRES, and fails loudly at construction otherwise
+	// (ErrPasswordlessProvisionWiring): the email passwordless kind enabled, the
+	// atomic challenge rail, a ChallengeProtector, an IdentifierKeyer (the stable
+	// PII-free subject key an unknown address is keyed under), a delivery runtime,
+	// a valid PublicAuthBaseURL, Repositories.Passwordless, and
+	// Repositories.ActiveSessions.
+	//
+	// The intent is captured in the link's binding AT ISSUE: flipping this flag
+	// does not change what an already-mailed link does.
+	PasswordlessProvisionOnRedeem bool `env:"AUTH_PASSWORDLESS_PROVISION_ON_REDEEM"`
+
 	// Passwordless enables login-only passwordless authentication for the listed
 	// identifier kinds (auth v3 §4.2). Empty (default) → the passwordless routes are
 	// NOT registered (deny-by-absence — there is no natural nil collaborator, so the
@@ -822,6 +1065,29 @@ type Config struct {
 	// contradictory ErrInviteCheckWithoutGranter. A nil return authorizes; a denial
 	// or infrastructure error fails closed through the normal web/sdk mapping.
 	InviteCheck InviteCheck
+
+	// UserAdminCheck is the host authorization seam for user administration
+	// (CHAU-1.1), and the switch that MOUNTS the bundled admin routes.
+	//
+	// Nil (default) → the bundled admin routes are NOT registered, even when
+	// Repositories.UserAdmin is wired. This is deliberate: a store adapter returns
+	// a complete Repositories bundle, and only an explicit host authorization
+	// decision turns that capability into an HTTP surface. The trusted service
+	// methods (ListUsers/GetUserSummary/DeactivateUser/ReactivateUser) remain
+	// available whenever the repository is wired — their caller owns authorization.
+	//
+	// Non-nil → GET /auth/admin/users, GET /auth/admin/users/{id}, and the
+	// deactivate/reactivate mutations mount, each gated on a live session, the
+	// browser-safe-mutation Origin/CSRF gate (mutations only), and this check. It
+	// then REQUIRES both Repositories.UserAdmin and Repositories.ActiveSessions —
+	// missing either is ErrUserAdminReposRequired at construction, because a
+	// deactivate button without the fenced session mint would advertise a
+	// revocation a concurrent login could defeat.
+	//
+	// A denial or an infrastructure error both fail closed. The resolved Principal
+	// reaches the check verbatim, including a machine principal: whether a service
+	// account may administer users is the host's decision, not the feature's.
+	UserAdminCheck UserAdminCheck
 	// MemberCheck is the optional duplicate-membership predicate for the direct-add
 	// path (known invitee + AutoAccept). Nil → no dup check (idempotent grants
 	// absorb duplicates). Meaningful only when Granter is wired.
@@ -899,6 +1165,15 @@ type Config struct {
 	// unset fallback). It composes with EmailContentTemplates (bodies) without
 	// overlap: branding fills the shared layout frame, content templates replace
 	// bodies. Nil (default) → today's fallback branding.
+	//
+	// Every auth delivery purpose renders with email.LayoutTransactional, which
+	// renders LogoURL, Name, Tagline, and Address. A non-empty LogoURL emits an
+	// <img> above the brand name; an empty one emits no image element. Name and
+	// Tagline stay visible either way, because mail clients block external images
+	// by default. Set an absolute, publicly fetchable HTTPS URL: the renderer
+	// never fetches or validates it, and html/template is the escaping boundary.
+	// A host that overrides the transactional layout through EmailLayouts owns
+	// its own logo markup — the override replaces the bundled block.
 	EmailBranding *email.Branding
 
 	// Logger receives the best-effort WARN line when a security-event audit write
@@ -1101,6 +1376,43 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 	}
 	if cfg.Granter == nil && cfg.InviteCheck != nil {
 		return nil, ErrInviteCheckWithoutGranter
+	}
+	// The bundled user-administration routes mount ONLY on an explicit host
+	// authorization decision (CHAU-1.1), and only when the wiring can actually
+	// honor a deactivation: the administration repository supplies the atomic
+	// transition, and the fenced session mint closes the deactivate-versus-login
+	// race. A host that sets the check without both would ship a revocation
+	// button a concurrent mint could defeat, so this fails LOUDLY.
+	//
+	// The reverse is NOT an error: wiring the repositories without a check is the
+	// normal posture for a bundled store adapter, and simply leaves the routes
+	// unmounted while the trusted service methods stay available.
+	if cfg.UserAdminCheck != nil && (repos.UserAdmin == nil || repos.ActiveSessions == nil) {
+		return nil, ErrUserAdminReposRequired
+	}
+	// Relation-aware host policy is required with invitations (design §6/D3): a
+	// Granter enables invitations, so a nil InviteCheck would leave create/list
+	// unprotected — that fails loudly, not allow-by-default. Wiring InviteCheck with
+	// invitations off is the contradictory-wiring error (the ErrInvitationRepoRequired
+	// posture), so a dead policy never gives false confidence.
+	if cfg.Granter != nil && cfg.InviteCheck == nil {
+		return nil, ErrInviteCheckRequired
+	}
+	if cfg.Granter == nil && cfg.InviteCheck != nil {
+		return nil, ErrInviteCheckWithoutGranter
+	}
+	// The bundled user-administration routes mount ONLY on an explicit host
+	// authorization decision (CHAU-1.1), and only when the wiring can actually
+	// honor a deactivation: the administration repository supplies the atomic
+	// transition, and the fenced session mint closes the deactivate-versus-login
+	// race. A host that sets the check without both would ship a revocation
+	// button a concurrent mint could defeat, so this fails LOUDLY.
+	//
+	// The reverse is NOT an error: wiring the repositories without a check is the
+	// normal posture for a bundled store adapter, and simply leaves the routes
+	// unmounted while the trusted service methods stay available.
+	if cfg.UserAdminCheck != nil && (repos.UserAdmin == nil || repos.ActiveSessions == nil) {
+		return nil, ErrUserAdminReposRequired
 	}
 	// A resource policy is only ever consulted by the HTML surface, which is gated on
 	// Views (design §9.2, GOTH-0.4). Setting HTMLPolicy with a nil Views is a policy
@@ -1306,6 +1618,56 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 		return nil, err
 	}
 
+	// Provision-on-consumption turns a magic link into an account-CREATION
+	// credential (CHAU-6.1). Every dependency that makes that safe is required, and
+	// a half-wired configuration fails here rather than creating accounts through a
+	// path that cannot guarantee atomicity.
+	//
+	// The passwordless-kind and public-URL checks below run after this, so the
+	// error a host sees names the provisioning wiring specifically rather than a
+	// generic passwordless gap.
+	if cfg.PasswordlessProvisionOnRedeem {
+		emailEnabled := false
+		for _, k := range cfg.Passwordless {
+			if k == identity.KindEmail {
+				emailEnabled = true
+			}
+		}
+		switch {
+		case !emailEnabled,
+			repos.Passwordless == nil,
+			repos.ActiveSessions == nil,
+			repos.Challenges == nil,
+			cfg.ChallengeProtector == nil,
+			cfg.IdentifierKeyer == nil,
+			!(deliveryWired || inProcessDelivery),
+			cfg.PublicAuthBaseURL == "":
+			return nil, ErrPasswordlessProvisionWiring
+		}
+	}
+
+	// The password-reset landing URL (CHAU-5.1). It is validated whenever the
+	// challenge-backed forgot/reset rail is actually wired — a host with no reset
+	// rail is never asked for it.
+	//
+	// A non-empty value is validated in every mode (shape errors are shape errors);
+	// an EMPTY value is a production error and a development WARN, which is the
+	// ratified compatibility posture: a raw-token-only reset mail is not an
+	// acceptable production experience, but forcing it on a local console flow
+	// mid-migration would be gratuitous.
+	if repos.PasswordResets != nil && cfg.ChallengeProtector != nil {
+		switch {
+		case cfg.PasswordResetURL != "":
+			if err := validatePasswordResetURL(cfg.RuntimeMode, cfg.PasswordResetURL); err != nil {
+				return nil, err
+			}
+		case cfg.RuntimeMode == RuntimeModeProduction:
+			return nil, ErrPasswordResetURLRequired
+		default:
+			transportLog.Warn("auth: Config.PasswordResetURL is unset; password-reset mail will print the RAW TOKEN instead of a clickable link. Production requires this field — set it before deploying")
+		}
+	}
+
 	// authService is declared here and assigned below (authsvc.NewService), so the
 	// invitation service's accept-time identifier accessor can bind to it: the two
 	// services reference each other (authsvc holds invitationsvc for resolve-on-
@@ -1367,6 +1729,11 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 		Identifiers:          repos.Identifiers,
 		Passwords:            repos.Passwords,
 		Sessions:             repos.Sessions,
+		UserAdmin:            repos.UserAdmin,
+		PasswordlessRedeem:   repos.Passwordless,
+		ProvisionOnRedeem:    cfg.PasswordlessProvisionOnRedeem,
+		UserAdminCheck:       cfg.UserAdminCheck,
+		ActiveSessions:       repos.ActiveSessions,
 		Challenges:           repos.Challenges,
 		PasswordResets:       repos.PasswordResets,
 		ContactChanges:       repos.ContactChanges,
@@ -1400,6 +1767,7 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 		RefreshTTL:           cfg.RefreshTTL,
 		Passwordless:         cfg.Passwordless,
 		PublicAuthBaseURL:    cfg.PublicAuthBaseURL,
+		PasswordResetURL:     cfg.PasswordResetURL,
 		BrowserLoginPath:     cfg.BrowserLoginPath,
 		Logger:               cfg.Logger,
 		IDs:                  cfg.IDs,
@@ -1764,6 +2132,94 @@ func (s *Service) ResetPassword(ctx context.Context, token, newPassword string) 
 // (sorted) order; empty means OAuth is off.
 func (s *Service) OAuthProviderNames() []string {
 	return s.svc.OAuthProviderNames()
+}
+
+// ResendVerification re-issues a registration verification code for emailAddr.
+// It is the PUBLIC, enumeration-safe path (CHAU-2.2): the request normalizes,
+// rate-limits, and submits opaque replacement work, resolving no account and
+// rendering nothing on the request path, so the outcome is identical for unknown,
+// malformed, verified, unverified, and deactivated addresses.
+//
+// Only two things ever differ, and neither depends on the target: a rate limit
+// (ErrVerificationResendRateLimited) and infrastructure failure. Delivery uses
+// replacement semantics, so a resend supersedes any still-pending verification
+// mail for the same address and invalidates the previous code.
+func (s *Service) ResendVerification(ctx context.Context, emailAddr string) error {
+	return s.svc.ResendVerification(ctx, emailAddr)
+}
+
+// ResendVerificationForUser re-issues the target's registration verification code
+// and returns a secret-free delivery receipt.
+//
+// Unlike ResendVerification it MAY report real target state: an unknown user is
+// sdk.ErrNotFound, an already-verified account is ErrAlreadyVerified, and a
+// deactivated one is ErrUserDeactivated — all 409/404 rather than a uniform
+// accepted.
+//
+// TRUSTED: it applies NO authorization. The bundled
+// POST /auth/admin/users/{id}/verification/resend handler runs
+// Config.UserAdminCheck first; a host calling this directly owns that decision.
+func (s *Service) ResendVerificationForUser(ctx context.Context, actor Principal, userID string) (StepUpReceipt, error) {
+	return s.svc.ResendVerificationForUser(ctx, actor, userID)
+}
+
+// UserAdminEnabled reports whether Repositories.UserAdmin is wired, so the
+// trusted user-administration methods below are usable. It does NOT report
+// whether the bundled admin routes mounted — that additionally requires
+// Config.UserAdminCheck.
+func (s *Service) UserAdminEnabled() bool { return s.svc.UserAdminEnabled() }
+
+// ListUsers returns a page of the operator directory, ordered created_at DESC,
+// id DESC, honoring the crud cursor/offset/count modes like every other paged
+// auth port.
+//
+// TRUSTED: it applies NO authorization. The bundled GET /auth/admin/users handler
+// runs Config.UserAdminCheck first; a host calling this from its own transport,
+// console, or CLI owns that decision itself. Nil Repositories.UserAdmin →
+// ErrUserAdminUnavailable.
+func (s *Service) ListUsers(ctx context.Context, req crud.ListRequest) (crud.Page[UserSummary], error) {
+	return s.svc.ListUsers(ctx, req)
+}
+
+// GetUserSummary returns one user's directory projection; unknown →
+// sdk.ErrNotFound.
+//
+// TRUSTED: it applies NO authorization — see ListUsers.
+func (s *Service) GetUserSummary(ctx context.Context, id string) (UserSummary, error) {
+	return s.svc.GetUserSummary(ctx, id)
+}
+
+// DeactivateUser denies the subject every new session and act-as-user
+// authentication, and revokes what it already holds.
+//
+// The transition is ONE store transaction: it writes the status, increments
+// auth_revision (invalidating any in-flight credential mutation), and deletes
+// every session row and authentication grant for the user. With
+// Repositories.ActiveSessions wired, a login racing this either commits first and
+// is then revoked by it, or observes the deactivated status and refuses — a
+// session created after deactivation is not a reachable state.
+//
+// It is IDEMPOTENT: deactivating an already-deactivated user returns
+// Changed=false with no second revision increment and no audit event, so a
+// retried admin request is safe.
+//
+// Stateless access JWTs already issued remain accepted on RequireUser-tier routes
+// until Config.AccessTokenTTL elapses; RequireLiveSession routes deny immediately
+// because the sessions are gone. See the README's security posture section.
+//
+// TRUSTED: it applies NO authorization — see ListUsers. actor is recorded on the
+// audit event only; it is never consulted for permission.
+func (s *Service) DeactivateUser(ctx context.Context, actor Principal, userID string) (UserSummary, UserStatusChange, error) {
+	return s.svc.SetUserStatus(ctx, actor, userID, UserStatusDeactivated)
+}
+
+// ReactivateUser returns the subject to the active posture. It fabricates NO
+// session: the user must authenticate again, and their previously revoked
+// sessions stay revoked. Idempotent on the same terms as DeactivateUser.
+//
+// TRUSTED: it applies NO authorization — see ListUsers.
+func (s *Service) ReactivateUser(ctx context.Context, actor Principal, userID string) (UserSummary, UserStatusChange, error) {
+	return s.svc.SetUserStatus(ctx, actor, userID, UserStatusActive)
 }
 
 // StartOAuth returns the provider authorization URL for an unauthenticated login/register flow.

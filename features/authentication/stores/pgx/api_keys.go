@@ -113,6 +113,7 @@ func (s *APIKeyStore) ListByServiceAccount(ctx context.Context, serviceAccountID
 		Args:         pgx.NamedArgs{"service_account_id": serviceAccountID},
 		OrderFields:  apikey.OrderFields,
 		DefaultOrder: apikey.DefaultOrder,
+		SearchFields: apikey.SearchFields,
 		PK:           "id",
 		OrderValueOf: func(r apiKeyRow, _ string) any { return r.CreatedAt },
 		PKOf:         func(r apiKeyRow) string { return r.ID },

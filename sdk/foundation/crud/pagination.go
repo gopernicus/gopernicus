@@ -3,6 +3,7 @@ package crud
 import (
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // TrimPage trims an over-fetched result set to the requested limit and builds a
@@ -76,10 +77,19 @@ func MapPage[T, U any](p Page[T], fn func(T) U) Page[U] {
 // DefaultStrategy from an env-tagged config field (default:"cursor" via
 // sdk/config), never from os.Getenv inside crud.
 type ListParams struct {
-	Limit           string
-	Cursor          string
-	Offset          string
-	Count           string
+	Limit  string
+	Cursor string
+	Offset string
+	Count  string
+	// Search is the already-extracted search term (the canonical v3 query key is
+	// `q`). It is parsed like the rest: trimmed, with blank meaning "no search".
+	//
+	// Unlike a bad limit, the CONTENTS of a search term are never invalid — `%`,
+	// `_`, `\`, and non-ASCII text are all legal things a human types — so this
+	// parser never rejects a term. A term reaching a list that declares no
+	// SearchFields is rejected at the STORE edge with sdk.ErrInvalidInput, rather
+	// than silently returning an unfiltered page that looks like a search result.
+	Search          string
 	Limits          Limits
 	DefaultStrategy Strategy
 }
@@ -169,5 +179,6 @@ func ParseListRequest(p ListParams) (ListRequest, error) {
 		Offset:    offset,
 		WithCount: withCount,
 		Strategy:  strategy,
+		Search:    strings.TrimSpace(p.Search),
 	}, nil
 }

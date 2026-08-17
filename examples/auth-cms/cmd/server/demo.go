@@ -404,6 +404,19 @@ func publicAuthBaseURL() string {
 	return callbackBase() + "/auth/magic"
 }
 
+// passwordResetURL is the absolute public reset landing route the reset mail
+// links to, BEFORE the token query parameter is appended (CHAU-5.1). It is a
+// SEPARATE field from publicAuthBaseURL: that one is the full passwordless
+// landing URL, not an origin, so a reset route cannot be derived from it.
+// Production REQUIRES it; this host defaults it to its own /auth/password/reset
+// page so the demo works out of the box.
+func passwordResetURL() string {
+	if v := environment.GetEnvOrDefault("AUTH_PASSWORD_RESET_URL", ""); v != "" {
+		return v
+	}
+	return callbackBase() + "/auth/password/reset"
+}
+
 // allowedOrigins is the exact-match Origin allowlist the browser-safe mutation gate
 // validates cookie-authenticated sensitive mutations (and HTML form posts) against
 // (design §9.1), from a comma-separated AUTH_ALLOWED_ORIGINS; empty defaults to this

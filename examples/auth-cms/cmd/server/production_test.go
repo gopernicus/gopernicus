@@ -31,7 +31,7 @@ func (prodSender) Capabilities() email.Capabilities {
 // the valid baseline.
 type prodNotifier struct{ kind string }
 
-func (n prodNotifier) Kind() string                                        { return n.kind }
+func (n prodNotifier) Kind() string                                                 { return n.kind }
 func (prodNotifier) Notify(context.Context, identity.Address, notify.Message) error { return nil }
 func (prodNotifier) Capabilities() notify.Capabilities {
 	return notify.Capabilities{TransportSecurity: notify.TransportSecurityTLS, DevelopmentOnly: false}
@@ -68,6 +68,9 @@ func productionBaseline(t *testing.T) (auth.Config, auth.Repositories) {
 	cfg.Notifiers = []notify.Notifier{prodNotifier{kind: identity.KindPhone}}
 	cfg.RateLimiter = durableLimiter{}
 	cfg.PublicAuthBaseURL = "https://auth.example.com/auth/magic"
+	// Production requires an HTTPS reset landing route (CHAU-5.1); the host's own
+	// default is derived from callbackBase(), which is plain http in the demo.
+	cfg.PasswordResetURL = "https://auth.example.com/auth/password/reset"
 	// run() wires the generic-jobs dispatcher; reproduce it so jobs mode has its queue
 	// capability in the baseline.
 	cfg.DeliveryDispatcher = jobsDispatcher(t)
@@ -199,7 +202,7 @@ func (h *recordHandler) Handle(_ context.Context, r slog.Record) error {
 	return nil
 }
 func (h *recordHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
-func (h *recordHandler) WithGroup(string) slog.Handler       { return h }
+func (h *recordHandler) WithGroup(string) slog.Handler      { return h }
 
 // hasWarnContaining reports whether a WARN-level record's message contains sub.
 func (h *recordHandler) hasWarnContaining(sub string) bool {
