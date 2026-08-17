@@ -1,0 +1,13 @@
+packages:
+  - .
+
+overrides:
+  webpack: 5.105.4
+
+onlyBuiltDependencies: []
+
+verifyDepsBeforeRun: false
+
+allowBuilds:
+  core-js: set this to true or false
+  core-js-pure: set this to true or false

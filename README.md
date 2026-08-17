@@ -1,13 +1,14 @@
 # gopernicus
 
-A Go framework for building hexagonal, server-rendered apps: a stdlib-only
-kernel (`sdk`), reusable third-party connectors (`integrations/`), pluggable
-feature modules (`features/`), and worked example hosts (`examples/`) that
-prove the design end to end — one on Turso, one with zero external
-infrastructure. See [ARCHITECTURE.md](ARCHITECTURE.md) for the full layering
-rules and [NOTES.md](NOTES.md) for the decision log.
+A collection of opinionated Go packages for building hexagonal applications: a
+stdlib-only kernel (`sdk`), reusable third-party connectors (`integrations/`),
+pluggable feature modules (`features/`), and worked example hosts (`examples/`)
+that prove the design end to end — one on Turso, one with zero external
+infrastructure. Gopernicus is open source under the [MIT License](LICENSE),
+very much a work in progress, and not stable. See [ARCHITECTURE.md](ARCHITECTURE.md)
+for the full layering rules and [NOTES.md](NOTES.md) for the decision log.
 
-## The thirty-six modules
+## The thirty-nine modules
 
 ```
 sdk/                                stdlib-only, layered: root = kernel; foundation/ + capabilities/ + feature (empty go.mod = structural enforcement)
@@ -28,6 +29,7 @@ integrations/tracing/otel/          OpenTelemetry tracing connector (stdout/OTLP
 features/authentication/                      session-auth hexagon — datastore-free; domain/ public rim, internal/ interior
 features/authentication/stores/pgx/           auth's pgx store adapter, its own module
 features/authentication/stores/turso/         auth's Turso store adapter, its own module
+features/authentication/views/goth/           auth's bundled default views (ui/goth), its own module
 features/authorization/             IAM hexagon — independently wireable kinds (relationships/ReBAC + roles); datastore-free; public memstore/
 features/authorization/stores/pgx/  authorization's pgx store adapter, its own module
 features/authorization/stores/turso/ authorization's Turso store adapter, its own module
@@ -41,10 +43,12 @@ features/events/stores/turso/       events' Turso store adapter, its own module
 features/jobs/                      durable queue + schedules hexagon — datastore-free; public memstore/
 features/jobs/stores/pgx/           jobs' pgx store adapter, its own module
 features/jobs/stores/turso/         jobs' Turso store adapter, its own module
+ui/goth/                            reusable templ + plain-CSS presentation system, its own module
 examples/cms/                       a host app: features/cms on Turso, with a custom theme
 examples/minimal/                   a host app: features/cms on an in-memory store — zero libsql in its module graph
 examples/auth-cms/                  a host app: auth + cms + events + the authorization flagship composed in-memory (rule 6, live)
 examples/jobs-minimal/              a host app: features/jobs on its memstore — zero drivers, the §8 protocol host
+examples/goth-showcase/             a zero-datastore browser and accessibility proof for ui/goth
 workshop/gopernicus/                the scaffolding CLI (init / new feature / db verbs) — stdlib-only, its own module
 ```
 
@@ -73,7 +77,7 @@ tagged versions, not the workspace.
   still takes the earlier `Register(mount, repos, cfg)` form until its
   public Service lands).
 - **A UI implementation is a reusable presentation system, not a feature.**
-  The top-level `ui/` family (`ui/goth`, later `ui/react`/`ui/vue`) is the
+  The top-level `ui/` family (`ui/goth`, planned `ui/react`/`ui/vue`) is the
   seventh module kind: it owns view-library dependencies, semantic tokens,
   components, controllers, and assets, but owns no schema and no routes. It may
   require its own view/runtime libraries and `sdk`, and never imports a feature,
@@ -82,7 +86,7 @@ tagged versions, not the workspace.
   dependency arrows.
 - **Dependencies point inward.** `examples` → `features`/`integrations` →
   `sdk`, never the reverse; a `ui/` implementation depends only on its own
-  view/runtime libraries and `sdk`. `make check`'s seventeen layering guards
+  view/runtime libraries and `sdk`. `make check`'s eighteen layering guards
   enforce this.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full detail, including the
@@ -105,7 +109,27 @@ make migrate           # applies examples/cms/workshop/migrations pre-boot
 make run                # or: cd examples/cms && go run ./cmd/server
 ```
 
-From the repo root, `make check` builds, vets, and tests all thirty-six modules
-and runs the seventeen layering guards; `make test-stores` runs the live dialect
+From the repo root, `make check` builds, vets, and tests all thirty-nine modules
+and runs the eighteen layering guards; `make test-stores` runs the live dialect
 conformance suites (expects `POSTGRES_TEST_DSN` / `TURSO_*`). See [examples/cms/README.md](examples/cms/README.md)
 for that host's full env/make-target reference.
+
+## Documentation
+
+The documentation site lives in [`workshop/documentation`](workshop/documentation).
+It describes the current SDK, feature and integration boundaries, worked examples,
+the optional UI layers, and the Workshop CLI.
+
+```sh
+make docs-install  # install the pinned pnpm dependency graph
+make docs          # development server at localhost:3000/gopernicus/
+make docs-build    # type-check and create the production site
+```
+
+## Contributors
+
+Gopernicus is currently maintained by jrazmi and contributors. It is open source, but the
+contribution model is still being figured out. There is no formal contributor
+guide, support commitment, or release process yet. If you want to propose a
+change, an issue or pull request is the best place to start; please include the
+problem, the affected package boundaries, and any compatibility concerns.

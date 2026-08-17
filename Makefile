@@ -1,6 +1,6 @@
 # gopernicus — framework monorepo (sdk + integrations + features + examples)
 #
-# Multi-module workspace (go.work), 36 modules. templ is pinned via the `tool`
+# Multi-module workspace (go.work), 39 modules. templ is pinned via the `tool`
 # directive in features/cms/views/goth/go.mod (where the .templ sources live),
 # so `go tool templ` is reproducible.
 
@@ -11,7 +11,7 @@ MODULES = sdk integrations/cryptids/bcrypt integrations/cryptids/golang-jwt inte
 # test-stores` runs them EXPECTING the datastore env vars set.
 STORE_MODULES = features/cms/stores/pgx features/cms/stores/turso features/authentication/stores/pgx features/authentication/stores/turso features/jobs/stores/pgx features/jobs/stores/turso features/events/stores/pgx features/events/stores/turso features/authorization/stores/pgx features/authorization/stores/turso
 
-.PHONY: generate generate-ui-assets build vet test test-stores test-ui-browser run migrate check tidy guard warm-scaffold-cache \
+.PHONY: generate generate-ui-assets build vet test test-stores test-ui-browser docs-install docs docs-build run migrate check tidy guard warm-scaffold-cache \
 	guard-sdk-stdlib guard-feature-isolation guard-sdk-no-outward guard-no-legacy-path \
 	guard-feature-core-sdk-only guard-feature-transport-sdk-web guard-feature-no-cross-feature \
 	guard-store-no-foreign-feature guard-no-underlying guard-no-lax-scan \
@@ -95,6 +95,17 @@ test-stores:
 # cold machine the browser binaries download once via `npx playwright install`.
 test-ui-browser:
 	cd examples/goth-showcase/e2e && npm ci && npx playwright install chromium firefox webkit && npm test
+
+# Documentation is Node-gated and deliberately separate from the hermetic Go
+# gate. The lockfile pins the full Docusaurus toolchain.
+docs-install:
+	cd workshop/documentation && pnpm install --frozen-lockfile
+
+docs:
+	cd workshop/documentation && pnpm start
+
+docs-build:
+	cd workshop/documentation && pnpm typecheck && pnpm build
 
 # The server binary never migrates; `run` applies host-owned migrations first
 # (pre-boot), then serves — keeping migration a separate, explicit step.
@@ -354,7 +365,7 @@ guard-ui-require-whitelist:
 	@! grep -rn --include='*.go' '"github.com/gopernicus/gopernicus/sdk/feature' ui/ || { echo "ERROR (G18): a ui/ implementation imports sdk/feature — a UI implementation is not a feature composer"; exit 1; }
 
 # CI-style gate: templ generation must be a no-op (no drift), then per-module
-# vet/build/test across all MODULES, then the four layering guards. Drift
+# vet/build/test across all MODULES, then the eighteen layering guards. Drift
 # is checked via `git diff` when this tree is a git repo; this repo IS a git
 # repo (as of phase 2), so that branch runs. The before/after checksum branch
 # remains as a fallback for gitless checkouts of *_templ.go.

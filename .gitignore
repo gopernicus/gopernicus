@@ -13,6 +13,11 @@ examples/*/server
 # only the installed dependency tree is ignored.
 ui/goth/tools/node_modules/
 
+# Docusaurus documentation site — sources and lockfile stay tracked.
+workshop/documentation/node_modules/
+workshop/documentation/.docusaurus/
+workshop/documentation/build/
+
 # macOS
 .DS_Store
 
@@ -24,3 +29,4 @@ go.work.sum
 
 # transient local tooling artifact
 .claude/scheduled_tasks.lock
+.claude
