@@ -3,7 +3,7 @@ module github.com/gopernicus/gopernicus/integrations/datastores/turso
 go 1.26.1
 
 require (
-	github.com/gopernicus/gopernicus/sdk v0.1.0
+	github.com/gopernicus/gopernicus/sdk v0.4.0
 	github.com/tursodatabase/libsql-client-go v0.0.0-20260528064733-9d5d30a29a60
 	modernc.org/sqlite v1.52.0
 )
