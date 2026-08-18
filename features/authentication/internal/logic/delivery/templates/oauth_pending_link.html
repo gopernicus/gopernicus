@@ -1,3 +1,11 @@
+{{if .Link}}
+<p>To finish linking your {{.ProviderName}} account, confirm with the link below. It can be used once and expires shortly.</p>
+<p><a href="{{.Link}}">Confirm linking your {{.ProviderName}} account</a></p>
+<p>If the link does not open, copy and paste this address into your browser:</p>
+<p>{{.Link}}</p>
+<p>If you did not start this, you can ignore this message.</p>
+{{else}}
 <p>To finish linking your {{.ProviderName}} account, confirm with this token:</p>
 <p><strong>{{.Secret}}</strong></p>
 <p>If you did not start this, you can ignore this message.</p>
+{{end}}

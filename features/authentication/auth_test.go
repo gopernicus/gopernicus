@@ -235,6 +235,40 @@ func TestNewServiceOAuthPartialWiring(t *testing.T) {
 	}
 }
 
+// TestNewServiceOAuthLinkBaseURL proves the oauth-pending-link plan D5 posture:
+// with providers wired an EMPTY OAuthLinkBaseURL constructs successfully (it only
+// degrades the email to the bare-token line, with a startup WARN), while a non-empty
+// but malformed value fails LOUDLY at construction in every mode. The
+// production-HTTPS requirement is exercised directly at the validator level
+// (TestValidateOAuthLinkBaseURL), which does not need a production-capable Mailer.
+func TestNewServiceOAuthLinkBaseURL(t *testing.T) {
+	repos := Repositories{OAuthAccounts: stubOAuthAccounts{}, OAuthStates: stubOAuthStates{}}
+	base := Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment, DeliveryMode: DeliveryModeOff, Providers: []oauth.Provider{stubProvider{}}}
+
+	// Empty is allowed (degrade, don't break boot).
+	if _, err := NewService(repos, base); err != nil {
+		t.Errorf("providers set, empty OAuthLinkBaseURL: err=%v, want nil", err)
+	}
+	// A valid absolute https URL is accepted.
+	ok := base
+	ok.OAuthLinkBaseURL = "https://app.example.com/auth/oauth/link"
+	if _, err := NewService(repos, ok); err != nil {
+		t.Errorf("valid OAuthLinkBaseURL: err=%v, want nil", err)
+	}
+	// A malformed value fails in every mode.
+	bad := base
+	bad.OAuthLinkBaseURL = "not-a-url"
+	if _, err := NewService(repos, bad); !errors.Is(err, ErrOAuthLinkURLInvalid) {
+		t.Errorf("malformed OAuthLinkBaseURL: err=%v, want ErrOAuthLinkURLInvalid", err)
+	}
+	// A fragment is rejected — the token owns the fragment.
+	frag := base
+	frag.OAuthLinkBaseURL = "https://app.example.com/link#already"
+	if _, err := NewService(repos, frag); !errors.Is(err, ErrOAuthLinkURLInvalid) {
+		t.Errorf("fragment OAuthLinkBaseURL: err=%v, want ErrOAuthLinkURLInvalid", err)
+	}
+}
+
 // TestNewServiceOAuthOffAllowsNilRepos proves that with no providers (OAuth off)
 // the oauth repositories may be nil — deny-by-absence, not a wiring error.
 func TestNewServiceOAuthOffAllowsNilRepos(t *testing.T) {

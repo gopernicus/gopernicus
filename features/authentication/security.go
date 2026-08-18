@@ -227,6 +227,16 @@ var (
 	// Config.PasswordResetURL is not HTTPS: the link carries a single-use
 	// credential, and plain HTTP exposes it in transit.
 	ErrPasswordResetURLInsecure = errors.New("auth: production RuntimeMode requires an HTTPS Config.PasswordResetURL")
+	// ErrOAuthLinkURLInvalid is returned when a non-empty Config.OAuthLinkBaseURL is
+	// not a valid absolute http(s) URL with a host, or carries a FRAGMENT (the
+	// builder appends "#token=<token>", which an existing fragment would swallow —
+	// the token owns the fragment). Empty is allowed (the caller degrades to the
+	// bare-token email line), so this covers only the shape of a non-empty value.
+	ErrOAuthLinkURLInvalid = errors.New("auth: Config.OAuthLinkBaseURL must be a valid absolute http(s) URL with no fragment")
+	// ErrOAuthLinkURLInsecure is returned in production RuntimeMode when a non-empty
+	// Config.OAuthLinkBaseURL is not HTTPS: the pending-link URL carries a single-use
+	// credential in its fragment, and plain HTTP exposes it in transit.
+	ErrOAuthLinkURLInsecure = errors.New("auth: production RuntimeMode requires an HTTPS Config.OAuthLinkBaseURL")
 	// ErrCredentialPolicyRequired is reserved for the credential suite (phase 6):
 	// strict production validation rejects a configuration that disables the
 	// bundled default without supplying a replacement policy (design §5.6/§8). A
@@ -549,5 +559,36 @@ func validatePublicAuthBaseURL(mode RuntimeMode, raw string) error {
 		return nil
 	default:
 		return fmt.Errorf("%w: %q", ErrPublicAuthBaseURLInvalid, raw)
+	}
+}
+
+// validateOAuthLinkBaseURL validates the OAuth pending-link landing URL
+// (oauth-pending-link plan D2/D5).
+//
+// Empty is handled by the CALLER: an unset value degrades to the historical
+// bare-token email line, so what this function owns is the shape of a non-empty
+// value. The fragment rejection is not fussiness — the builder appends
+// "#token=<token>", and an existing fragment would swallow the token (a value
+// placed after a fragment lands INSIDE the fragment, where the SPA's fragment
+// parser will not find the token it expects). Existing non-secret QUERY parameters
+// are preserved by the builder and are not rejected here.
+func validateOAuthLinkBaseURL(mode RuntimeMode, raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || !u.IsAbs() || u.Host == "" {
+		return fmt.Errorf("%w: %q", ErrOAuthLinkURLInvalid, raw)
+	}
+	if u.Fragment != "" || strings.Contains(raw, "#") {
+		return fmt.Errorf("%w: fragment present in %q", ErrOAuthLinkURLInvalid, raw)
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if mode == RuntimeModeProduction {
+			return fmt.Errorf("%w: %q", ErrOAuthLinkURLInsecure, raw)
+		}
+		return nil
+	default:
+		return fmt.Errorf("%w: %q", ErrOAuthLinkURLInvalid, raw)
 	}
 }

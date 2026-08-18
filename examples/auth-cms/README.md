@@ -298,6 +298,7 @@ surface is deferred with the AZADM packet.
 | `Config.IdentifierKeyer` | HMAC (`AUTH_IDENTIFIER_KEY` or ephemeral) | production-required; dev falls back to per-instance SHA-256 |
 | `Config.Passwordless` | `[email, phone]` (`AUTH_PASSWORDLESS`) | empty → passwordless routes not registered |
 | `Config.PublicAuthBaseURL` | `…/auth/magic` (`AUTH_PUBLIC_BASE_URL`) | REQUIRED once a link flow is enabled; production requires HTTPS |
+| `Config.OAuthLinkBaseURL` | empty (`AUTH_OAUTH_LINK_URL`) | the OAuth pending-link email's landing URL; empty → bare-token email fallback + one startup WARN (this demo ships no pending-link landing page); non-empty validated (no fragment, HTTPS in production) |
 | `Config.Views` | `authpages.New(bundle)` (branded-Login override of the ui/goth `authgoth.Views`) | nil → API-only (no HTML pages, no templ/`ui/goth` in the graph) |
 | `Config.EmailContentTemplates` | `authpages.EmailOverride()` | empty → bundled LayerCore email bodies |
 | `Repositories.SecurityEvents` | authmem | no audit trail (recording site is a no-op) |
@@ -310,7 +311,8 @@ the JWT/session knobs (`AUTH_JWT_SECRET`, `AUTH_ACCESS_TOKEN_TTL` default 15m,
 `AUTH_REFRESH_TTL` default 7d, `AUTH_TOKEN_ENCRYPTER_KEY`), the four other distinct
 v3 secrets (`AUTH_CHALLENGE_PEPPER`, `AUTH_IDENTIFIER_KEY`,
 `AUTH_DELIVERY_ENCRYPTER_KEY`), the v3 HTML/passwordless/magic-link knobs
-(`AUTH_PUBLIC_BASE_URL`, `AUTH_ALLOWED_ORIGINS`, `AUTH_PASSWORDLESS`),
+(`AUTH_PUBLIC_BASE_URL`, `AUTH_OAUTH_LINK_URL`, `AUTH_ALLOWED_ORIGINS`,
+`AUTH_PASSWORDLESS`),
 `DELIVERY_MODE` (`jobs` default / `in_process` for the ephemeral bounded variant —
 see the Delivery wiring bullet), and
 `AUTH_DEBUG` + `OAUTH_CLIENT_ID/SECRET`. The host boots with **none** of them set:

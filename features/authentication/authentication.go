@@ -943,6 +943,31 @@ type Config struct {
 	// this configured value alone.
 	PasswordResetURL string `env:"AUTH_PASSWORD_RESET_URL"`
 
+	// OAuthLinkBaseURL is the absolute SPA landing URL the anti-takeover OAuth
+	// pending-link email links to, BEFORE the "#token=<token>" fragment is appended
+	// (oauth-pending-link plan D1/D2). It follows the same "separate full-URL field
+	// per link type" precedent as PasswordResetURL, and is deliberately NOT a reuse
+	// of PublicAuthBaseURL: that landing route POSTs magic-link redeem, while this
+	// one POSTs the pending-link verify-link. The host supplies a full landing URL
+	// (no fragment — the token owns the fragment) and wires the SPA route.
+	//
+	// Validation at construction (D5): EMPTY is allowed — the feature degrades to the
+	// historical bare-token email line rather than failing to boot; when OAuth
+	// providers are wired but this field is empty, ONE startup WARN names
+	// AUTH_OAUTH_LINK_URL. A NON-EMPTY value is validated in every mode: it must be an
+	// absolute http(s) URL with a host and NO fragment (a fragment would swallow the
+	// appended "#token="), and HTTPS is REQUIRED in production RuntimeMode
+	// (ErrOAuthLinkURLInsecure) because the link carries a single-use credential.
+	// Existing non-secret query parameters are preserved. Unlike PasswordResetURL this
+	// is never a production boot requirement: it changes presentation, not the
+	// anti-takeover guarantee (the emailed secret remains proof of inbox control).
+	//
+	// The token rides the URL FRAGMENT (mirroring the magic link), so it never
+	// reaches the server on the landing-page GET (verify-link is POST-only) and the
+	// landing page can scrub it from history. Request Host/forwarded headers never
+	// participate: the link is built from this configured value alone.
+	OAuthLinkBaseURL string `env:"AUTH_OAUTH_LINK_URL"`
+
 	// PasswordlessProvisionOnRedeem enables account creation from an EMAIL MAGIC
 	// LINK sent to an address with no account — created only when the link is
 	// successfully CONSUMED, never when it is sent (CHAU-6.1).
@@ -1668,6 +1693,25 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 		}
 	}
 
+	// The OAuth pending-link landing URL (oauth-pending-link plan D1/D5). It is
+	// relevant only when OAuth providers are wired — a host with no providers never
+	// takes the pending-link branch, so it is never asked for it.
+	//
+	// A non-empty value is validated in EVERY mode (shape errors are shape errors);
+	// an EMPTY value degrades to the historical bare-token email line with ONE
+	// startup WARN in every mode. Unlike the reset URL this is never a production
+	// boot requirement: it changes presentation, not the anti-takeover guarantee.
+	if len(cfg.Providers) > 0 {
+		switch {
+		case cfg.OAuthLinkBaseURL != "":
+			if err := validateOAuthLinkBaseURL(cfg.RuntimeMode, cfg.OAuthLinkBaseURL); err != nil {
+				return nil, err
+			}
+		default:
+			transportLog.Warn("auth: Config.OAuthLinkBaseURL is unset; the OAuth pending-link email will print the RAW TOKEN instead of a clickable link. Set AUTH_OAUTH_LINK_URL to the SPA route that reads the fragment token and POSTs verify-link")
+		}
+	}
+
 	// authService is declared here and assigned below (authsvc.NewService), so the
 	// invitation service's accept-time identifier accessor can bind to it: the two
 	// services reference each other (authsvc holds invitationsvc for resolve-on-
@@ -1768,6 +1812,7 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 		Passwordless:         cfg.Passwordless,
 		PublicAuthBaseURL:    cfg.PublicAuthBaseURL,
 		PasswordResetURL:     cfg.PasswordResetURL,
+		OAuthLinkBaseURL:     cfg.OAuthLinkBaseURL,
 		BrowserLoginPath:     cfg.BrowserLoginPath,
 		Logger:               cfg.Logger,
 		IDs:                  cfg.IDs,

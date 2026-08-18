@@ -672,6 +672,7 @@ default, so a host can never inherit the development posture; unknown →
 | `RefreshCookiePath string` | the refresh cookie's `Path` scope (`AUTH_REFRESH_COOKIE_PATH`). Empty → `/auth` (covers `/auth/refresh` AND `/auth/logout`). **A host mounting the feature under a prefix MUST set the FULL prefixed path** — `feature.PrefixRegistrar{Prefix: "/api/v1"}` → `RefreshCookiePath: "/api/v1/auth"` — else the browser never sends the refresh cookie to `/api/v1/auth/refresh` and cookie-driven refresh dies SILENTLY (the registrar exposes registration, not its mount prefix, so the feature cannot derive it). A non-empty value must be a valid absolute cookie path (leading `/`, no query/fragment/control/header-delimiter character, no trailing slash except `/` itself) or construction fails with `ErrRefreshCookiePathInvalid`. The SAME resolved path issues (login, rotation) and deletes (logout) the cookie. Configures ONLY the refresh cookie: the access cookie keeps `SessionCookie.Path` and both keep `SameSite=Lax`. |
 | `Providers []oauth.Provider` | OAuth OFF (deny-by-absence). Non-empty → both oauth repos required. |
 | `PasswordResetURL` | **REQUIRED in production** whenever the forgot/reset rail is wired (`ErrPasswordResetURLRequired`); development permits empty with one startup WARN and keeps the legacy raw-token mail. The absolute public reset landing route BEFORE `?token=` is appended — a **separate** field from `PublicAuthBaseURL` (which is the full passwordless landing URL, not an origin). HTTPS in production; no fragment; no pre-existing `token` parameter; other query parameters preserved. Built in the worker from this value only — request `Host`/forwarded headers never participate. See [Password reset](#password-reset--the-link-rail). |
+| `OAuthLinkBaseURL` (`AUTH_OAUTH_LINK_URL`) | the absolute SPA landing URL the anti-takeover OAuth **pending-link** email links to, BEFORE `#token=<token>` is appended — a **separate** field from `PublicAuthBaseURL` (that route POSTs magic-link redeem; this one POSTs `verify-link`). The token rides the URL **fragment** (mirroring the magic link), so it never reaches the server on the landing GET and the page can scrub it from history. **Never a production boot requirement** — this changes presentation, not the anti-takeover guarantee (the emailed secret stays proof of inbox control): **empty degrades** the mail to its historical bare-token line, and when OAuth providers are wired one startup WARN names `AUTH_OAUTH_LINK_URL`. A non-empty value is validated in every mode — absolute http(s), a host, **no fragment** (`ErrOAuthLinkURLInvalid`), HTTPS in production (`ErrOAuthLinkURLInsecure`); existing non-secret query parameters are preserved. Built from this value only — request `Host`/forwarded headers never participate. On the pending-link branch the callback redirect also carries `?auth=link_sent&provider=<name>` so the SPA can render a "check your email" state. See [OAuth account linking](#oauth-account-linking--two-distinct-flows). |
 | `UserAdminCheck` | **nil → the bundled admin routes are NOT registered**, even when the store supplies `Repositories.UserAdmin` — turning a store capability into an HTTP surface is the host's decision, not the store's. Non-nil → `GET /auth/admin/users`, `GET /auth/admin/users/{id}`, and the deactivate/reactivate POSTs mount, and BOTH `Repositories.UserAdmin` and `Repositories.ActiveSessions` become required (`ErrUserAdminReposRequired`). Authentication never invents a role named `admin` and never imports authorization — see [Account lifecycle](#account-lifecycle--the-operator-directory-and-deactivation). |
 | `TokenEncrypter` (cryptids.Encrypter) | provider tokens NOT persisted (login/linking still work). Wire `cryptids.NewAESGCM` to store them. |
 | `OAuthCallbackBase`, `RedirectAllowlist` | callback origin / exact-match redirect allowlist (open-redirect guard; a non-allowlisted target falls back to `/`). |
@@ -1417,6 +1418,20 @@ The difference in one line: **flow 1 proves account ownership with a session and
 does not mint one; flow 2 proves address ownership with a mailed secret and does
 mint one.** Flow 2 additionally revokes a squatter password/sessions when the
 matched identifier was unverified at flow start (design §5.7/V5).
+
+**Presentation (config-only, security model unchanged).** Set `OAuthLinkBaseURL`
+(`AUTH_OAUTH_LINK_URL`) to a host SPA route and the pending-link email becomes a
+**clickable link** carrying the single-use secret in the URL **fragment**
+(`…#token=<token>`), mirroring the magic link: the token never reaches the server on
+the landing GET, and the SPA reads it client-side and POSTs `verify-link`. Leave it
+empty and the email keeps its historical **bare-token** line (with one startup WARN
+when providers are wired) — the emailed secret is still proof of inbox control
+either way, so this is presentation only, never a boot requirement. On the
+pending-link branch the callback redirect also carries **`?auth=link_sent&provider=<name>`**
+(added through `url.Values`, preserving any existing query/fragment) so the landing
+SPA can render a "check your email" state instead of a dead end. The value is
+validated at construction like `PasswordResetURL` (absolute http(s), a host, **no
+fragment** — the token owns it, HTTPS in production).
 
 ### Inventory and unlink
 

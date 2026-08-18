@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/challenge"
@@ -602,7 +604,7 @@ func (s *Service) startPendingLink(ctx context.Context, matched identifier.Ident
 		Destination:     dest,
 		ResolutionInput: dest,
 		Secret:          st.Token,
-		Data:            map[string]any{"ProviderName": providerName},
+		Data:            map[string]any{"ProviderName": providerName, "Link": s.oauthLinkURL(st.Token)},
 	}); err != nil {
 		if _, cerr := s.oauthStates.Consume(ctx, st.Token); cerr != nil {
 			s.logger.Warn("pending-link rollback failed", "error_kind", errKind(cerr))
@@ -610,6 +612,26 @@ func (s *Service) startPendingLink(ctx context.Context, matched identifier.Ident
 		return err
 	}
 	return nil
+}
+
+// oauthLinkURL builds the anti-takeover pending-link confirmation URL from the
+// configured absolute base only (oauth-pending-link plan D2), mirroring
+// magicLinkURL: the request Host/forwarded headers never participate, so a hostile
+// Host cannot redirect the link elsewhere — the target is exactly the host-
+// configured base. The single-use token rides the URL fragment so it is not sent to
+// the server on the landing-page GET (verify-link is POST-only) and can be scrubbed
+// from browser history by the landing page. Any existing non-secret query on the
+// base is preserved because the fragment is simply appended. It returns the empty
+// string when either the base or the token is empty (the D5 unconfigured-base
+// fallback), which the template reads as "no link" and renders the bare-token line
+// instead. A non-empty base is validated as an absolute http(s) URL with no fragment
+// (HTTPS in production) at construction (validateOAuthLinkBaseURL).
+func (s *Service) oauthLinkURL(token string) string {
+	if s.oauthLinkBase == "" || token == "" {
+		return ""
+	}
+	base := strings.TrimRight(s.oauthLinkBase, "/")
+	return base + "#token=" + url.QueryEscape(token)
 }
 
 // newAccount assembles an OAuthAccount from a provider identity and token,

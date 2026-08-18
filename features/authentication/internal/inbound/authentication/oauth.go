@@ -2,6 +2,7 @@ package authentication
 
 import (
 	"net/http"
+	"net/url"
 
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
 	"github.com/gopernicus/gopernicus/sdk/feature"
@@ -68,7 +69,14 @@ func (h *handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	if res.Action == authsvc.ActionLogin || res.Action == authsvc.ActionRegister {
 		h.svc.SetSessionCookies(w, authsvc.TokenPair{AccessToken: res.Token, RefreshToken: res.RefreshToken})
 	}
-	http.Redirect(w, r, redirectOrDefault(res.RedirectTo), http.StatusFound)
+	target := redirectOrDefault(res.RedirectTo)
+	if res.Action == authsvc.ActionPendingLink {
+		// A pending link mints no session; the callback lands the SPA on the flow's
+		// destination carrying a legible outcome (oauth-pending-link plan D3) so it can
+		// render a "check your email" state instead of a dead end.
+		target = pendingLinkRedirect(res.RedirectTo, web.Param(r, "provider"))
+	}
+	http.Redirect(w, r, target, http.StatusFound)
 }
 
 // oauthVerifyLink completes a pending link from the mailed secret and logs the
@@ -171,4 +179,23 @@ func redirectOrDefault(target string) string {
 		return defaultRedirect
 	}
 	return target
+}
+
+// pendingLinkRedirect augments the pending-link callback destination with the
+// legible outcome the SPA reads (oauth-pending-link plan D3): auth=link_sent plus
+// the provider. It parses the (already-validated, else defaulted) destination and
+// sets the parameters through url.Values so existing query values and any fragment
+// are preserved. An unparseable destination is returned unchanged rather than
+// dropped — the flow already validated it, so this is defensive.
+func pendingLinkRedirect(target, provider string) string {
+	base := redirectOrDefault(target)
+	u, err := url.Parse(base)
+	if err != nil {
+		return base
+	}
+	q := u.Query()
+	q.Set("auth", "link_sent")
+	q.Set("provider", provider)
+	u.RawQuery = q.Encode()
+	return u.String()
 }

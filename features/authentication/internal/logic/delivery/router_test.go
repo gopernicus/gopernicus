@@ -137,6 +137,51 @@ func TestRenderEmailSubjectInterpolation(t *testing.T) {
 	}
 }
 
+// The OAuth pending-link template renders a clickable anchor plus a copy/paste URL
+// (and no standalone token) when a Link is supplied, and falls back to the bare
+// token line (no anchor) when it is absent — oauth-pending-link plan D5.
+func TestRenderOAuthPendingLinkTemplateBranches(t *testing.T) {
+	r := newRouter(t, &stubSender{}, nil)
+	const link = "https://app.example.com/auth/oauth/link#token=tok"
+
+	linked, err := r.Render(context.Background(), Request{
+		Kind:        identity.KindEmail,
+		Purpose:     PurposeOAuthPendingLink,
+		Destination: "user@example.test",
+		Secret:      "tok",
+		Data:        map[string]any{"ProviderName": "GitHub", "Link": link},
+	})
+	if err != nil {
+		t.Fatalf("Render (linked): %v", err)
+	}
+	if !strings.Contains(linked.HTML, `<a href="`+link+`">`) {
+		t.Fatalf("configured render missing anchor for %q: %q", link, linked.HTML)
+	}
+	if !strings.Contains(linked.HTML, link) {
+		t.Fatalf("configured render missing copy/paste URL: %q", linked.HTML)
+	}
+	if strings.Contains(linked.HTML, "<strong>tok</strong>") {
+		t.Fatalf("configured render still showed the bare token: %q", linked.HTML)
+	}
+
+	fallback, err := r.Render(context.Background(), Request{
+		Kind:        identity.KindEmail,
+		Purpose:     PurposeOAuthPendingLink,
+		Destination: "user@example.test",
+		Secret:      "tok",
+		Data:        map[string]any{"ProviderName": "GitHub"}, // no Link
+	})
+	if err != nil {
+		t.Fatalf("Render (fallback): %v", err)
+	}
+	if !strings.Contains(fallback.HTML, "<strong>tok</strong>") {
+		t.Fatalf("fallback render missing bare token: %q", fallback.HTML)
+	}
+	if strings.Contains(fallback.HTML, "<a href=") {
+		t.Fatalf("fallback render should carry no anchor: %q", fallback.HTML)
+	}
+}
+
 // A host LayerApp override wins over the LayerCore default for the same template.
 func TestRenderEmailAppOverride(t *testing.T) {
 	r := newRouter(t, &stubSender{}, nil, TemplateOverride{Namespace: namespace, FS: testoverride.FS})

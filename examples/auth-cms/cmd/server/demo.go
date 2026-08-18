@@ -417,6 +417,19 @@ func passwordResetURL() string {
 	return callbackBase() + "/auth/password/reset"
 }
 
+// oauthLinkBaseURL is the absolute SPA landing URL the anti-takeover OAuth
+// pending-link email links to, BEFORE the "#token=<token>" fragment is appended
+// (oauth-pending-link plan D1). It is a SEPARATE field from publicAuthBaseURL: that
+// one POSTs magic-link redeem, while this one POSTs verify-link. From
+// AUTH_OAUTH_LINK_URL when set. EMPTY by default here: this bundled demo ships no
+// fragment-reading pending-link landing page (that is the host SPA's job — see
+// coordination-hub #162), so an empty value is the honest default and the email
+// degrades to its bare-token line (a startup WARN names AUTH_OAUTH_LINK_URL). A real
+// host sets its own https landing route.
+func oauthLinkBaseURL() string {
+	return environment.GetEnvOrDefault("AUTH_OAUTH_LINK_URL", "")
+}
+
 // allowedOrigins is the exact-match Origin allowlist the browser-safe mutation gate
 // validates cookie-authenticated sensitive mutations (and HTML form posts) against
 // (design §9.1), from a comma-separated AUTH_ALLOWED_ORIGINS; empty defaults to this

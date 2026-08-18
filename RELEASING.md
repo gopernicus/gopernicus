@@ -113,6 +113,30 @@ otherwise), and `Config.PasswordResetURL` is now **required in production**. The
 as-executed record, per-module upgrade notes, and the adopter checklist are in
 the plan directory's `tag-manifest.md` §8 and `adoption-checklist.md`.
 
+**2026-08-18 `features/authentication/v0.3.1` — clickable OAuth pending-link mail.**
+Cut from `main` (which was already at `features/authentication/v0.3.0`) as an
+ordinary patch on the current line, NOT the earlier-considered maintenance-line
+`v0.2.4` off `v0.2.3`: coordination-hub adopts the current line, so no independent
+patch line is maintained. The bump is a **patch** despite adding an exported
+`Config` field — the field is additive with a safe zero value, following the
+owner's `sdk/v0.3.1` precedent that an additive symbol may ship as a patch.
+
+Scope is presentation-only: the anti-takeover OAuth pending-link email becomes a
+clickable link (single-use token in the URL **fragment**, mirroring the magic
+link) when the new `Config.OAuthLinkBaseURL` (`AUTH_OAUTH_LINK_URL`) is set, and
+the pending-link callback redirect carries `auth=link_sent&provider=<name>` so the
+host SPA can render a "check your email" state. The anti-takeover model is
+unchanged — the emailed secret is still proof of inbox control.
+
+Upgrade note (backward-compatible, no new production requirement): `OAuthLinkBaseURL`
+is OPTIONAL. Empty keeps the historical raw-token email line and, when OAuth
+providers are wired, emits one startup WARN naming `AUTH_OAUTH_LINK_URL`. A
+non-empty value is validated at construction — absolute http(s) with a host, no
+fragment (`ErrOAuthLinkURLInvalid`), HTTPS in production (`ErrOAuthLinkURLInsecure`);
+existing non-secret query parameters are preserved. No schema or sibling-module
+change. The host-side landing route that reads the fragment token and POSTs
+`verify-link` is coordination-hub's #162.
+
 ## Tagging scheme
 
 Nested Go modules in a single repo are tagged with the module's directory as a
@@ -174,10 +198,17 @@ go get github.com/gopernicus/gopernicus/features/cms@v0.1.0
 
 Standard Go module semver rules apply per-module:
 
-- **Patch** — bugfix, no exported API change.
-- **Minor** — additive, backward-compatible exported API change (e.g. a new
-  `Config` field with a working zero value, a new optional `Mount` field per
-  C3's evolution policy in `features/README.md`).
+- **Patch** — bugfix, internal behavior, or a narrowly scoped additive change
+  whose zero value preserves the historical behavior and which requires no
+  schema migration, sibling-module bump, or mandatory production configuration.
+  This explicitly includes optional host configuration and presentation changes
+  when they can be adopted independently on a maintenance line. The new field
+  or behavior must still have compatibility tests and an upgrade note.
+- **Minor** — additive, backward-compatible exported API change that materially
+  expands the host contract, requires coordinated adoption, introduces a
+  mandatory production configuration, or otherwise cannot be safely consumed as
+  a maintenance-line patch (for example, a new required `Config` field or a
+  migration-bearing store change).
 - **Major** — breaking exported API change (removed/renamed exported type or
   field, changed method signature). Pre-`v1`, breaking changes are expected
   and do not require a major bump by Go's own pre-release semantics; each

@@ -865,6 +865,11 @@ func buildAuthConfig(log *slog.Logger, granter auth.Granter) (auth.Config, error
 		// config-only: the link is built in the delivery worker from THIS value,
 		// never from a request Host/forwarded header. Production requires it.
 		PasswordResetURL: passwordResetURL(),
+		// The OAuth pending-link landing URL the anti-takeover confirmation mail links
+		// to (oauth-pending-link plan D1), config-only. Empty by default: this demo
+		// ships no fragment-reading pending-link page, so the mail keeps its bare-token
+		// line. A real host sets AUTH_OAUTH_LINK_URL to its own SPA route.
+		OAuthLinkBaseURL: oauthLinkBaseURL(),
 		// The queue is the only send path; affirm run() runs the generic-jobs delivery
 		// runtime (jobs.FencedRuntime) (authv3-delivery-refactor AV3D-0.1).
 		DeliveryJobsAcknowledged: true,

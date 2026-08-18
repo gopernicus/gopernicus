@@ -372,6 +372,13 @@ type Deps struct {
 	// production and warns in development. The link is built from THIS value only —
 	// never from a request header.
 	PasswordResetURL string
+	// OAuthLinkBaseURL is the absolute SPA landing URL the OAuth pending-link email
+	// links to, BEFORE the "#token=<token>" fragment is appended (oauth-pending-link
+	// plan D1/D2). Empty → the legacy bare-token line is rendered instead; package
+	// auth validates a non-empty value (absolute http(s), no fragment, HTTPS in
+	// production) at construction. The link is built from THIS value only — never
+	// from a request header.
+	OAuthLinkBaseURL string
 
 	// BrowserLoginPath is the login destination the browser identity gates
 	// (RequirePrincipalBrowser / RequireLiveSessionBrowser) 303 to on denial (design
@@ -480,6 +487,11 @@ type Service struct {
 	// (Deps.PasswordResetURL, CHAU-5.1). Empty → the legacy raw-token template.
 	// Validated by package auth at construction; never derived from a request.
 	passwordResetURL string
+	// oauthLinkBase is the absolute SPA landing URL the OAuth pending-link email
+	// links to (Deps.OAuthLinkBaseURL, oauth-pending-link plan D1). Empty → the
+	// legacy bare-token line. Validated by package auth at construction; never
+	// derived from a request.
+	oauthLinkBase string
 	// browserLoginPath is the resolved login destination the browser identity gates
 	// 303 to on denial (Deps.BrowserLoginPath; empty defaults to "/auth/login").
 	browserLoginPath string
@@ -595,6 +607,7 @@ func NewService(d Deps) *Service {
 		passwordless:         passwordless,
 		publicBaseURL:        d.PublicAuthBaseURL,
 		passwordResetURL:     d.PasswordResetURL,
+		oauthLinkBase:        d.OAuthLinkBaseURL,
 		browserLoginPath:     browserLoginPath,
 		userAdmin:            d.UserAdmin,
 		userAdminCheck:       d.UserAdminCheck,
