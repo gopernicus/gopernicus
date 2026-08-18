@@ -73,6 +73,7 @@ type fakeProvider struct {
 	providerUserID string
 	email          string
 	emailVerified  bool
+	profileName    string // the person's display name the provider reports, if any
 
 	lastState    string
 	lastNonce    string
@@ -106,11 +107,11 @@ func (p *fakeProvider) ExchangeCode(_ context.Context, _, _, _ string) (*oauth.T
 }
 
 func (p *fakeProvider) GetUserInfo(_ context.Context, _ string) (*oauth.UserInfo, error) {
-	return &oauth.UserInfo{ProviderUserID: p.providerUserID, Email: p.email, EmailVerified: p.emailVerified}, nil
+	return &oauth.UserInfo{ProviderUserID: p.providerUserID, Email: p.email, EmailVerified: p.emailVerified, Name: p.profileName}, nil
 }
 
 func (p *fakeProvider) ValidateIDToken(_ context.Context, _, nonce string) (*oauth.IDTokenClaims, error) {
-	return &oauth.IDTokenClaims{Subject: p.providerUserID, Email: p.email, EmailVerified: p.emailVerified, Nonce: nonce}, nil
+	return &oauth.IDTokenClaims{Subject: p.providerUserID, Email: p.email, EmailVerified: p.emailVerified, Nonce: nonce, Name: p.profileName}, nil
 }
 
 func (p *fakeProvider) RefreshToken(_ context.Context, _ string) (*oauth.TokenResponse, error) {
@@ -373,6 +374,41 @@ func TestOAuthCallbackRegisterAndLink(t *testing.T) {
 	}
 	if _, err := h.accounts.GetByProvider(context.Background(), "google", "g-new"); err != nil {
 		t.Errorf("link not persisted: %v", err)
+	}
+}
+
+// TestOAuthCallbackRegisterCarriesProviderName proves that first-sign-in
+// provisioning seeds the account's display name from the provider's reported
+// name, on BOTH the OIDC id-token lane and the userinfo lane. Without it every
+// OAuth-provisioned account is minted nameless (coordination-hub #152).
+func TestOAuthCallbackRegisterCarriesProviderName(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		oidc bool
+	}{
+		{"oidc id-token lane", true},
+		{"userinfo lane", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &fakeProvider{
+				name: "google", oidc: tc.oidc, trust: true,
+				providerUserID: "g-named", email: "named@example.com", emailVerified: true,
+				profileName: "Ada Lovelace",
+			}
+			h := newOAuthHarness(t, p, nil)
+
+			state := h.startState(t, "")
+			res, err := h.svc.OAuthCallback(context.Background(), "google", "code", state)
+			if err != nil {
+				t.Fatalf("OAuthCallback: %v", err)
+			}
+			if res.Action != ActionRegister {
+				t.Fatalf("Action = %q, want register", res.Action)
+			}
+			if res.User.DisplayName != "Ada Lovelace" {
+				t.Errorf("provisioned display name = %q, want %q", res.User.DisplayName, "Ada Lovelace")
+			}
+		})
 	}
 }
 
