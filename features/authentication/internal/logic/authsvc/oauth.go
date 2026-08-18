@@ -94,6 +94,10 @@ type providerIdentity struct {
 	ProviderUserID string
 	Email          string
 	EmailVerified  bool
+	// Name is the provider's display name for the person, when it sends one. It
+	// seeds the display name of an account provisioned by a first OAuth sign-in;
+	// empty when the provider omits it.
+	Name string
 }
 
 // flowState is the payload of a PurposeFlow oauthstate row: the PKCE verifier and
@@ -457,7 +461,7 @@ func (s *Service) registerAndLink(ctx context.Context, providerName, normEmail s
 	if err != nil {
 		return OAuthResult{}, err
 	}
-	u := user.NewUser(s.ids, "", now)
+	u := user.NewUser(s.ids, ident.Name, now)
 	created, createdIdent, err := s.users.CreateWithPrimaryIdentifier(ctx, u, primary)
 	if err != nil {
 		return OAuthResult{}, err
@@ -648,13 +652,13 @@ func (s *Service) readIdentity(ctx context.Context, p oauth.Provider, tok *oauth
 		if err != nil {
 			return providerIdentity{}, fmt.Errorf("validate id token: %w", err)
 		}
-		return providerIdentity{ProviderUserID: claims.Subject, Email: claims.Email, EmailVerified: claims.EmailVerified}, nil
+		return providerIdentity{ProviderUserID: claims.Subject, Email: claims.Email, EmailVerified: claims.EmailVerified, Name: claims.Name}, nil
 	}
 	info, err := p.GetUserInfo(ctx, tok.AccessToken)
 	if err != nil {
 		return providerIdentity{}, fmt.Errorf("get user info: %w", err)
 	}
-	return providerIdentity{ProviderUserID: info.ProviderUserID, Email: info.Email, EmailVerified: info.EmailVerified}, nil
+	return providerIdentity{ProviderUserID: info.ProviderUserID, Email: info.Email, EmailVerified: info.EmailVerified, Name: info.Name}, nil
 }
 
 // provider returns the wired provider by name, or sdk.ErrNotFound.
