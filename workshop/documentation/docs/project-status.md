@@ -43,6 +43,10 @@ guide, support commitment, or release process yet. If you want to propose a
 change, an issue or pull request is the best place to start; please include the
 problem, the affected package boundaries, and any compatibility concerns.
 
+## AI assistance
+
+Gopernicus is developed with AI tools used as an engineering assistant — for code authoring, review, and documentation, and to generate the site's gopher illustrations. Every change is reviewed and owned by the human maintainers, and the repository's architecture guards and conformance tests apply to all contributions regardless of how they were drafted.
+
 ## Known sharp edges
 
 - Feature route prefixes change registered paths, not links or redirects rendered by a feature. The current CMS views use host-rooted links, so prefixed CMS mounting is not fully transparent.

@@ -137,7 +137,7 @@ const config: Config = {
           ],
         },
       ],
-      copyright: `Copyright © ${new Date().getFullYear()} Gopernicus. Built with Docusaurus.`,
+      copyright: `Copyright © ${new Date().getFullYear()} Gopernicus. Built with Docusaurus.<br/>The <a href="https://go.dev/wiki/Gopher">Go gopher</a> was designed by <a href="https://www.instagram.com/reneefrench/">Renée French</a> and is licensed under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>; these illustrations are modified adaptations.`,
     },
     prism: {
       theme: prismThemes.github,
