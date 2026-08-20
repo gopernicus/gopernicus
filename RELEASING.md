@@ -225,6 +225,61 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
+### features/authentication v0.4.0 + both store modules v0.3.0 (2026-08-20): invitation metadata (minor; store migration REQUIRED)
+
+invitation-metadata (`plans/invitation-metadata.md`). Adds an opt-in, host-defined
+`Metadata map[string]string` that rides an invitation from create to the Granter
+seam — a channel for a host to route its own facts (a firm id, a plan tier) from
+invite-time to grant-time. The feature never interprets it; empty metadata
+preserves today's grant semantics, so this is additive for hosts that do not opt in.
+
+**`features/authentication` — additive public surface:**
+
+- `GrantInput.Metadata`, `InviteCheckRequest.Metadata`, and `CreateInput.Metadata`
+  (all `map[string]string`). Adding a field to the exported `InviteCheckRequest` /
+  `GrantInput` is source-compatible for keyed struct literals and interface
+  implementations; a host using an UNKEYED composite literal of either must switch
+  to keyed literals — no such construction exists in-repo.
+- `invitation.NewWithMetadata`, `invitation.ValidateMetadata`,
+  `invitation.CloneMetadata`, and the `invitation.MetadataMax*` bound constants.
+
+**Contract:**
+
+- Metadata is opaque, host-owned routing data supplied at create, persisted, and
+  echoed into `GrantInput` on accept, direct-add, and resolve-on-registration as a
+  non-nil defensive copy (empty when none). The feature validates only shape/size:
+  32 entries, 64-byte keys, 256-byte values, 4 KiB JSON-encoded total, UTF-8,
+  non-empty keys — each violation wraps `ErrInvalidInput`. Nil/empty persists as `{}`.
+- It is UNTRUSTED inviter input, never an authorization claim by itself:
+  `InviteCheck` receives the same metadata (its OWN defensive clone, so a mutating
+  policy cannot alter the persisted/granted value) to authorize the complete
+  invitation at issuance, and a `Granter` applying any security-sensitive side
+  effect from it MUST revalidate.
+- The create route now bounds its body with the standard strict JSON decoder before
+  decoding the unbounded metadata object.
+
+**`features/authentication/stores/{pgx,turso}` — this tag ships HOST SCHEMA.**
+
+New canonical migration **`0016_invitation_metadata.sql`** in both trees
+(append-only; `0009_invitations.sql` stays byte-identical to its tag):
+
+- `invitations.metadata` — `jsonb` (pgx) / `TEXT` (turso), `NOT NULL DEFAULT '{}'`;
+  existing rows read back as an empty map. The store never writes JSON `null` (which
+  would bypass the column default). Malformed stored JSON fails the read rather than
+  surfacing a silent empty.
+
+Both `Repositories()` constructors gained a **column** probe (`invitations.metadata`)
+beside the existing probes, so a host that copied 0001–0015 and skipped 0016 fails
+at wiring time naming the column rather than mid-request.
+
+**Adopter order: apply 0016 BEFORE deploying a binary built against these tags.**
+
+Live gates closed at authoring time: full `storetest` invitation conformance
+including the new metadata round-trip against the live Turso playground database,
+plus a populated-table upgrade + malformed-stored-JSON integration check. pgx unit,
+migration-inventory, and cross-dialect parity tests pass; live pgx conformance was
+not run this cut (no Postgres DSN available in the release environment).
+
 ### sdk — v0.3.0 (2026-08-14): global middleware is genuinely global + configurable CORS (minor)
 
 coordination-hub-auth-upstream U1 (plan of record `.claude/plans/`

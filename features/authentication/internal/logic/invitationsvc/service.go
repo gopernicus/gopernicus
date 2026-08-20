@@ -116,6 +116,13 @@ type deliveryQueue interface {
 // may ignore it. The remaining fields are the ReBAC tuple: grant
 // SubjectType/SubjectID the Relation on
 // (ResourceType, ResourceID).
+//
+// Metadata is opaque, host-owned routing data the inviter set at create and the
+// feature round-trips verbatim to every grant path (accept, direct-add, resolve).
+// The feature never interprets it. It is a DEFENSIVE COPY and always non-nil (an
+// empty map when there is no metadata), so a Granter may read it freely. It is
+// UNTRUSTED inviter-supplied input, never an authorization claim by itself: a
+// Granter applying any security-sensitive side effect from it must revalidate.
 type GrantInput struct {
 	OperationID  string
 	ResourceType string
@@ -123,6 +130,7 @@ type GrantInput struct {
 	Relation     string
 	SubjectType  string
 	SubjectID    string
+	Metadata     map[string]string
 }
 
 // Granter grants a subject a relation on a resource — the ONE ReBAC-decoupled
@@ -168,6 +176,12 @@ type InviteCheckRequest struct {
 	ResourceType string
 	ResourceID   string
 	Relation     string
+	// Metadata is the parsed, opaque host routing data of a create request (empty
+	// for InviteList). It is UNTRUSTED inviter-supplied input the feature does not
+	// interpret, surfaced here so the host can authorize the COMPLETE invitation —
+	// including fields such as a vendor_org_id it will later act on in its Granter.
+	// It is a defensive copy; empty when the request carried none.
+	Metadata map[string]string
 }
 
 // InviteCheck is the host authorization seam the feature's create/list invitation
@@ -209,6 +223,11 @@ type CreateInput struct {
 	InvitedBy      string
 	AutoAccept     bool
 	Redirect       string
+	// Metadata is opaque, host-owned routing data that rides the invitation from
+	// create to the Granter seam. The feature validates only shape/size (see
+	// invitation.ValidateMetadata) and never interprets it; nil/empty is the
+	// no-metadata case.
+	Metadata map[string]string
 }
 
 // CreateResult reports the outcome of Create. DirectlyAdded is true when a known
@@ -370,6 +389,16 @@ func New(d Deps) *Service {
 // immediate grant with no pending record (MemberCheck may veto a duplicate).
 // Otherwise a pending invitation is minted and its secret delivered.
 func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, error) {
+	// Validate host metadata FIRST — before identifier normalization, user lookup,
+	// or membership checks — so an oversized/invalid map is rejected with no side
+	// effects. The validated defensive copy is what the pending row or direct-add
+	// grant carries downstream.
+	metadata, err := invitation.ValidateMetadata(in.Metadata)
+	if err != nil {
+		return CreateResult{}, err
+	}
+	in.Metadata = metadata
+
 	kind := strings.TrimSpace(in.IdentifierKind)
 	if kind == "" {
 		kind = identity.KindEmail
@@ -439,7 +468,7 @@ func (s *Service) directAdd(ctx context.Context, in CreateInput, subjectID strin
 	// from the unconditional secret generator — NOT the entity Config.IDs strategy,
 	// whose cryptids.Database mode yields an empty ID until an entity is inserted.
 	operationID := mintOperationID()
-	if err := s.grant(ctx, operationID, in.ResourceType, in.ResourceID, in.Relation, subjectTypeUser, subjectID); err != nil {
+	if err := s.grant(ctx, operationID, in.ResourceType, in.ResourceID, in.Relation, subjectTypeUser, subjectID, in.Metadata); err != nil {
 		s.recordGrant(ctx, subjectID, in.ResourceType, in.ResourceID, in.Relation, in.Identifier, securityevent.StatusFailure)
 		return CreateResult{}, fmt.Errorf("grant: %w", err)
 	}
@@ -458,7 +487,7 @@ func (s *Service) createPending(ctx context.Context, in CreateInput, subjectID s
 	if err != nil {
 		return CreateResult{}, err
 	}
-	inv, err := invitation.New(s.ids, in.ResourceType, in.ResourceID, in.Relation, in.Identifier, in.IdentifierKind, in.InvitedBy, tokenHash, in.AutoAccept, s.ttl, s.now())
+	inv, err := invitation.NewWithMetadata(s.ids, in.ResourceType, in.ResourceID, in.Relation, in.Identifier, in.IdentifierKind, in.InvitedBy, tokenHash, in.AutoAccept, s.ttl, s.now(), in.Metadata)
 	if err != nil {
 		return CreateResult{}, err
 	}
@@ -522,7 +551,7 @@ func (s *Service) Accept(ctx context.Context, in AcceptInput) (AcceptResult, err
 	// The persisted invitation row ID is this grant's operation ID (D1): accepting
 	// the same invitation again reuses it, while a later invitation row for the same
 	// tuple carries a different ID and is therefore a distinct host operation.
-	if err := s.grant(ctx, inv.ID, inv.ResourceType, inv.ResourceID, inv.Relation, subjectType, in.SubjectID); err != nil {
+	if err := s.grant(ctx, inv.ID, inv.ResourceType, inv.ResourceID, inv.Relation, subjectType, in.SubjectID, inv.Metadata); err != nil {
 		s.recordGrant(ctx, in.SubjectID, inv.ResourceType, inv.ResourceID, inv.Relation, inv.Identifier, securityevent.StatusFailure)
 		return AcceptResult{}, fmt.Errorf("grant: %w", err)
 	}
@@ -692,7 +721,7 @@ func (s *Service) ResolveInvitations(ctx context.Context, email, subjectType, su
 			}
 			// The persisted invitation row ID is the operation ID (D1), so a resolve
 			// and a later explicit accept of the SAME row present one host operation.
-			if err := s.grant(ctx, inv.ID, inv.ResourceType, inv.ResourceID, inv.Relation, subjectType, subjectID); err != nil {
+			if err := s.grant(ctx, inv.ID, inv.ResourceType, inv.ResourceID, inv.Relation, subjectType, subjectID, inv.Metadata); err != nil {
 				s.recordGrant(ctx, subjectID, inv.ResourceType, inv.ResourceID, inv.Relation, inv.Identifier, securityevent.StatusFailure)
 				continue // best-effort — one failed grant never aborts registration
 			}
@@ -879,7 +908,10 @@ func inviteLink(dest, secret string) string {
 // errEmptyOperationID rather than sent as an unidentified operation. A nil return
 // carries the strengthened success contract (D2): the exact requested relation is
 // effective; any non-applied outcome is a non-nil error the caller propagates.
-func (s *Service) grant(ctx context.Context, operationID, resourceType, resourceID, relation, subjectType, subjectID string) error {
+// metadata is the opaque host routing data for this grant; it is copied defensively
+// onto GrantInput so the Granter cannot mutate persisted/delivered state, and the
+// Granter must treat it as UNTRUSTED and reject invalid or unauthorized routing.
+func (s *Service) grant(ctx context.Context, operationID, resourceType, resourceID, relation, subjectType, subjectID string, metadata map[string]string) error {
 	if operationID == "" {
 		return errEmptyOperationID
 	}
@@ -890,6 +922,9 @@ func (s *Service) grant(ctx context.Context, operationID, resourceType, resource
 		Relation:     relation,
 		SubjectType:  subjectType,
 		SubjectID:    subjectID,
+		// A non-nil defensive copy so the host receives exactly what the inviter set
+		// and cannot mutate persisted or subsequently delivered state (D-metadata).
+		Metadata: invitation.CloneMetadata(metadata),
 	})
 }
 

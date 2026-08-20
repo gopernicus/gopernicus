@@ -47,6 +47,11 @@ type createInvitationRequest struct {
 	Relation       string `json:"relation"`
 	AutoAccept     bool   `json:"auto_accept"`
 	Redirect       string `json:"redirect"`
+	// Metadata is opaque, host-owned routing data that rides the invitation to the
+	// Granter seam. Optional: an omitted object is the no-metadata case. The
+	// service/domain bound its shape and size (invitation.ValidateMetadata); the
+	// route-level MaxBytesReader guards the body before this unbounded map decodes.
+	Metadata map[string]string `json:"metadata"`
 }
 
 type acceptInvitationRequest struct {
@@ -118,7 +123,9 @@ func mountInvitations(r feature.RouteRegistrar, h *handlers, requireLiveSession,
 // mapping BEFORE the service is reached, so a forbidden create never mutates.
 func (h *handlers) createInvitation(w http.ResponseWriter, r *http.Request) {
 	var req createInvitationRequest
-	if !decode(w, r, &req) {
+	// The bounded strict decoder caps the body before decoding the unbounded
+	// metadata object; the service/domain limits remain authoritative for shape.
+	if !strictJSONBody(w, r, &req, maxJSONBodyBytes) {
 		return
 	}
 	invitedBy, ok := h.svc.CurrentUser(r.Context())
@@ -128,12 +135,17 @@ func (h *handlers) createInvitation(w http.ResponseWriter, r *http.Request) {
 	}
 	resourceType := web.Param(r, "resource_type")
 	resourceID := web.Param(r, "resource_id")
+	// The host authorizes the COMPLETE invitation, including the opaque metadata it
+	// will later act on in its Granter, before the service is reached (design §6/D3).
+	// InviteCheck receives its OWN defensive clone: a policy that mutates the map it
+	// is handed can never alter the value the service then persists and grants.
 	if err := h.inviteCheck(r.Context(), invitationsvc.InviteCheckRequest{
 		Principal:    identity.Principal{Type: identity.User, ID: invitedBy},
 		Action:       invitationsvc.InviteCreate,
 		ResourceType: resourceType,
 		ResourceID:   resourceID,
 		Relation:     req.Relation,
+		Metadata:     invitation.CloneMetadata(req.Metadata),
 	}); err != nil {
 		web.RespondJSONDomainError(w, err)
 		return
@@ -147,6 +159,7 @@ func (h *handlers) createInvitation(w http.ResponseWriter, r *http.Request) {
 		InvitedBy:      invitedBy,
 		AutoAccept:     req.AutoAccept,
 		Redirect:       req.Redirect,
+		Metadata:       req.Metadata,
 	})
 	if err != nil {
 		web.RespondJSONDomainError(w, err)

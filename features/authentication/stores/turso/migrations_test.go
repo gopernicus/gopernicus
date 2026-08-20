@@ -31,6 +31,9 @@ var canonicalMigrations = []string{
 	// CHAU-6.1: append-only challenge subject keys. It adds no table; the column
 	// and the replacement unique index are asserted below.
 	"0015_challenge_subject_keys.sql",
+	// invitation-metadata: append-only opaque host metadata column on invitations.
+	// It adds no table; the column is asserted below.
+	"0016_invitation_metadata.sql",
 }
 
 // expectedTables are every CREATE TABLE the canonical set must define.
@@ -78,6 +81,7 @@ var expectedColumns = []string{
 	"status",                 // users (CHAU-1.2)
 	"status_changed_at",      // users (CHAU-1.2)
 	"subject_key",            // challenges (CHAU-6.1)
+	"metadata",               // invitations (invitation-metadata)
 }
 
 func migrationNames(t *testing.T) []string {

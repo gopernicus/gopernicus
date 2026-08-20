@@ -203,7 +203,10 @@ type Granter = invitationsvc.Granter
 // reuses it; a later invitation row for the same tuple gets a different ID) and a
 // freshly minted high-entropy value for direct-add. A host MAY derive its own
 // advanced mutation identity from a fixed purpose, OperationID, and the tuple
-// fields; a baseline state writer may ignore it.
+// fields; a baseline state writer may ignore it. Metadata is the opaque,
+// host-owned routing data the inviter set at create, round-tripped verbatim to
+// every grant path as a non-nil defensive copy — UNTRUSTED input a Granter must
+// revalidate before any security-sensitive side effect.
 // Aliased from invitationsvc per the Granter precedent.
 type GrantInput = invitationsvc.GrantInput
 
@@ -225,9 +228,11 @@ const (
 
 // InviteCheckRequest is the parsed, principal-resolved authorization question the
 // feature poses to a host InviteCheck (design §6/D3): the Principal, the Action,
-// the resource, and — for InviteCreate — the exact validated Relation (empty for
-// InviteList). Aliased from invitationsvc per the CreateInput precedent so a host
-// names one type across the public and internal packages.
+// the resource, — for InviteCreate — the exact validated Relation (empty for
+// InviteList), and the opaque request Metadata so the host can authorize the
+// COMPLETE invitation (including a field it will later act on in its Granter).
+// Aliased from invitationsvc per the CreateInput precedent so a host names one
+// type across the public and internal packages.
 type InviteCheckRequest = invitationsvc.InviteCheckRequest
 
 // InviteCheck is the relation-aware host authorization seam for invitation

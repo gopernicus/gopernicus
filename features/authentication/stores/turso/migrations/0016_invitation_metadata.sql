@@ -1,0 +1,17 @@
+-- Invitation metadata (invitation-metadata plan). APPEND-ONLY: 0009_invitations.sql
+-- is already tagged and immutable, so the metadata channel arrives as an ALTER
+-- here. A host that copied 0001-0015 must copy and apply THIS file before deploying
+-- a binary built against the new store tag.
+--
+-- This is the dialect sibling of the pgx 0016: same filename, same column, same
+-- '{}' default and round-trip. metadata is opaque, host-owned routing data an
+-- invitation carries from create to the Granter seam — the feature never
+-- interprets it. It is bounded routing data (a firm id, a plan tier), NOT a
+-- document store; the domain/service enforce the size limits. It is TEXT NOT NULL
+-- DEFAULT '{}' (the libSQL JSON representation) so every pre-existing row reads
+-- back as an empty map, matching the store's nil/empty → '{}' round-trip. The
+-- store never writes JSON null (which would bypass this default).
+--
+-- SQLite has no ADD COLUMN IF NOT EXISTS; the migration ledger's applied-once
+-- guarantee is what makes this safe, exactly as it is for every CREATE TABLE here.
+ALTER TABLE invitations ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}';

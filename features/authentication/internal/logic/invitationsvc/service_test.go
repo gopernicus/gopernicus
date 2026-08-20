@@ -26,14 +26,16 @@ type grantCall struct {
 
 type fakeGranter struct {
 	calls  []grantCall
-	ops    []string // operation IDs, parallel to calls
-	err    error    // blanket failure
-	failOn string   // fail only when resourceID == failOn
+	ops    []string            // operation IDs, parallel to calls
+	metas  []map[string]string // Metadata received, parallel to calls
+	err    error               // blanket failure
+	failOn string              // fail only when resourceID == failOn
 }
 
 func (g *fakeGranter) Grant(_ context.Context, in GrantInput) error {
 	g.calls = append(g.calls, grantCall{in.ResourceType, in.ResourceID, in.Relation, in.SubjectType, in.SubjectID})
 	g.ops = append(g.ops, in.OperationID)
+	g.metas = append(g.metas, in.Metadata)
 	if g.err != nil {
 		return g.err
 	}

@@ -65,7 +65,7 @@ internal/
 storetest/               executable spec for domain/'s ports + the reference
                          in-memory implementation
 stores/turso/            the outbound tier: per-dialect SQL + canonical
-stores/pgx/              migrations (0001–0015; auth owns no delivery table),
+stores/pgx/              migrations (0001–0016; auth owns no delivery table),
                          each its own module
 views/goth/              the bundled default HTML surface — a SIBLING module
                          (goth.New(bundle), the ui/goth adapter); the feature
@@ -312,6 +312,7 @@ type GrantInput struct {
     Relation     string
     SubjectType  string
     SubjectID    string
+    Metadata     map[string]string // opaque host routing data (see below)
 }
 type Granter interface{ Grant(context.Context, GrantInput) error }
 ```
@@ -329,6 +330,18 @@ type Granter interface{ Grant(context.Context, GrantInput) error }
   naturally idempotent and a later re-grant simply restores current state. The
   field is metadata, not authority and not a mandate to use receipts or a mutation
   repository.
+- **Opaque host metadata.** `Metadata` is small, host-owned routing data the
+  inviter sets at create time (`metadata` on the create body / `CreateInput`),
+  which the feature persists and round-trips VERBATIM to `GrantInput` on every
+  grant path — accept, direct-add, and resolve-on-registration — never
+  interpreting it. It arrives as a non-nil defensive copy (empty when there was
+  none), so a host does not special-case how a person arrived. The feature bounds
+  only shape and size (**32 entries**, **64-byte keys**, **256-byte values**, **4
+  KiB** JSON-encoded total, UTF-8, non-empty keys; each violation wraps
+  `ErrInvalidInput`); nil/empty persists as `{}`. It is **untrusted** inviter
+  input, never an authorization claim by itself: `Config.InviteCheck` receives the
+  same metadata so a host can authorize the complete invitation at issuance, and a
+  `Granter` applying any security-sensitive side effect from it MUST revalidate.
 - **Strengthened success contract.** `Grant` returns nil ONLY when the EXACT
   requested relation was applied or is already exactly present. A different
   existing relation, an invariant refusal, a missing/deleted host resource, and
@@ -1658,9 +1671,9 @@ access-JWT cookie (`Path=/`) and the refresh cookie (`<name>_refresh`,
 `Path=Config.RefreshCookiePath` — `/auth` by default, `/api/v1/auth` on a
 prefixed host; the same path issues and clears it).
 
-## Migrations are host-owned (0001–0015)
+## Migrations are host-owned (0001–0016)
 
-Auth ships **fifteen** canonical migrations per dialect, byte-identical filename
+Auth ships **sixteen** canonical migrations per dialect, byte-identical filename
 sets across pgx and turso:
 
 ```
@@ -1669,9 +1682,10 @@ sets across pgx and turso:
 0003_sessions           0008_security_events      0013_authentication_grants
 0004_oauth_accounts     0009_invitations          0014_user_status
 0005_oauth_states       0010_user_identifiers     0015_challenge_subject_keys
+                                                  0016_invitation_metadata
 ```
 
-Thirteen of those create tables; the last two **add columns** and are
+Thirteen of those create tables; the last three **add columns** and are
 **append-only**, precisely because the tables they touch are already tagged and
 immutable:
 
@@ -1683,6 +1697,10 @@ immutable:
   `(subject_key, purpose)`. Every pre-existing purpose keys on the user id and is
   unchanged; an email magic link gains a stable PII-free key that exists even when
   the address has no account.
+- **`0016_invitation_metadata.sql`** — `invitations.metadata`, the opaque
+  host-owned routing bag (`jsonb`/`TEXT`, `NOT NULL DEFAULT '{}'`). Every
+  pre-existing row reads back as an empty map; the store never writes JSON `null`,
+  which would bypass the default.
 
 **Upgrading from a host that copied an earlier set:** re-export or copy the
 missing files into your migration directory and apply them **before** deploying a
@@ -1846,7 +1864,7 @@ execution record in `RELEASING.md`); not yet applied to a real host.
 The delivery-refactor (2026-07-13) removed authentication's private durable
 delivery queue. Durable delivery is now the generic **jobs** feature reached
 through a host-wired `Config.DeliveryDispatcher`; the bounded ephemeral path is
-`in_process`. Auth owns no delivery table (canonical set is `0001–0015`). See
+`in_process`. Auth owns no delivery table (canonical set is `0001–0016`). See
 "Delivery execution modes" above for the full model; this note is the compatibility
 delta.
 
@@ -1861,7 +1879,7 @@ delta.
   `ErrDeliveryWorkerUnacknowledged`, `ErrInProcessDurableDeliveryRepository`, and
   the delivery-durability construction funcs.
 - The auth `0014` delivery-outbox migration is removed from both dialect trees
-  (canonical set is now `0001–0015`).
+  (the canonical set has no delivery table; it is now `0001–0016`).
 
 **Renames:**
 

@@ -2,6 +2,8 @@ package turso
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/invitation"
@@ -28,7 +30,34 @@ func NewInvitationStore(db *tursodb.DB) *InvitationStore {
 	return &InvitationStore{db: db}
 }
 
-const invitationColumns = "id, resource_type, resource_id, relation, identifier, identifier_kind, resolved_subject_id, invited_by, token_hash, auto_accept, status, expires_at, accepted_at, created_at, updated_at"
+const invitationColumns = "id, resource_type, resource_id, relation, identifier, identifier_kind, resolved_subject_id, invited_by, token_hash, auto_accept, status, expires_at, accepted_at, created_at, updated_at, metadata"
+
+// metadataJSON is a sql.Scanner that reads the stored TEXT JSON metadata bag into
+// a non-nil map through unmarshalMetadata, so a db-tagged row-struct field
+// performs the decode inside rows.Scan — surfacing a malformed-JSON error rather
+// than swallowing it. A NULL or empty column reads back as a non-nil empty map
+// (the uniform round-trip contract).
+type metadataJSON map[string]string
+
+func (m *metadataJSON) Scan(src any) error {
+	var s string
+	switch v := src.(type) {
+	case nil:
+		s = ""
+	case string:
+		s = v
+	case []byte:
+		s = string(v)
+	default:
+		return fmt.Errorf("authentication turso: cannot scan %T into invitation metadata JSON", src)
+	}
+	decoded, err := unmarshalMetadata(s)
+	if err != nil {
+		return err
+	}
+	*m = decoded
+	return nil
+}
 
 // invitationRow is the store-local, db-tagged projection of an invitations row.
 // accepted_at is nullable (turso.NullTime, zero-time when NULL); toDomain maps it.
@@ -48,9 +77,14 @@ type invitationRow struct {
 	AcceptedAt        tursodb.NullTime `db:"accepted_at"`
 	CreatedAt         tursodb.Time     `db:"created_at"`
 	UpdatedAt         tursodb.Time     `db:"updated_at"`
+	Metadata          metadataJSON     `db:"metadata"`
 }
 
 func (r invitationRow) toDomain() invitation.Invitation {
+	metadata := map[string]string(r.Metadata)
+	if metadata == nil {
+		metadata = map[string]string{}
+	}
 	return invitation.Invitation{
 		ID:                r.ID,
 		ResourceType:      r.ResourceType,
@@ -63,6 +97,7 @@ func (r invitationRow) toDomain() invitation.Invitation {
 		TokenHash:         r.TokenHash,
 		AutoAccept:        bool(r.AutoAccept),
 		Status:            r.Status,
+		Metadata:          metadata,
 		ExpiresAt:         r.ExpiresAt.Time,
 		AcceptedAt:        r.AcceptedAt.Time,
 		CreatedAt:         r.CreatedAt.Time,
@@ -73,28 +108,32 @@ func (r invitationRow) toDomain() invitation.Invitation {
 // Create persists a new pending invitation; a pending-tuple collision →
 // sdk.ErrAlreadyExists (the partial unique index).
 func (s *InvitationStore) Create(ctx context.Context, inv invitation.Invitation) (invitation.Invitation, error) {
+	metadata, err := marshalMetadata(inv.Metadata)
+	if err != nil {
+		return invitation.Invitation{}, err
+	}
 	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if inv.ID == "" {
 		const q = `INSERT INTO invitations (resource_type, resource_id, relation, identifier, identifier_kind, resolved_subject_id,
-			invited_by, token_hash, auto_accept, status, expires_at, accepted_at, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`
+			invited_by, token_hash, auto_accept, status, expires_at, accepted_at, created_at, updated_at, metadata)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`
 		if err := s.db.QueryRow(ctx, q,
 			inv.ResourceType, inv.ResourceID, inv.Relation, inv.Identifier, inv.IdentifierKind,
 			inv.ResolvedSubjectID, inv.InvitedBy, inv.TokenHash, tursodb.BoolToInt(inv.AutoAccept),
 			inv.Status, tursodb.FormatTime(inv.ExpiresAt), tursodb.FormatNullTime(inv.AcceptedAt),
-			tursodb.FormatTime(inv.CreatedAt), tursodb.FormatTime(inv.UpdatedAt),
+			tursodb.FormatTime(inv.CreatedAt), tursodb.FormatTime(inv.UpdatedAt), metadata,
 		).Scan(&inv.ID); err != nil {
 			return invitation.Invitation{}, tursodb.MapError(err)
 		}
 		return inv, nil
 	}
-	const q = `INSERT INTO invitations (` + invitationColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	_, err := s.db.Exec(ctx, q,
+	const q = `INSERT INTO invitations (` + invitationColumns + `) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	_, err = s.db.Exec(ctx, q,
 		inv.ID, inv.ResourceType, inv.ResourceID, inv.Relation, inv.Identifier, inv.IdentifierKind,
 		inv.ResolvedSubjectID, inv.InvitedBy, inv.TokenHash, tursodb.BoolToInt(inv.AutoAccept),
 		inv.Status, tursodb.FormatTime(inv.ExpiresAt), tursodb.FormatNullTime(inv.AcceptedAt),
-		tursodb.FormatTime(inv.CreatedAt), tursodb.FormatTime(inv.UpdatedAt),
+		tursodb.FormatTime(inv.CreatedAt), tursodb.FormatTime(inv.UpdatedAt), metadata,
 	)
 	if err != nil {
 		return invitation.Invitation{}, err
@@ -182,4 +221,35 @@ func (s *InvitationStore) UpdateStatus(ctx context.Context, id string, upd invit
 		return invitation.Invitation{}, err
 	}
 	return row.toDomain(), nil
+}
+
+// marshalMetadata renders opaque host invitation metadata as TEXT JSON. A nil or
+// empty map stores '{}' — never JSON null, which would bypass the column DEFAULT —
+// so it reads back as a non-nil empty map (the uniform round-trip contract). The
+// domain has already bounded the map.
+func marshalMetadata(m map[string]string) (string, error) {
+	if len(m) == 0 {
+		return "{}", nil
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// unmarshalMetadata parses stored TEXT JSON into a NON-NIL map: '{}', NULL, and an
+// empty column all yield a non-nil empty map; malformed stored JSON is an error.
+func unmarshalMetadata(s string) (map[string]string, error) {
+	m := map[string]string{}
+	if s == "" || s == "null" {
+		return m, nil
+	}
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		return nil, err
+	}
+	if m == nil {
+		m = map[string]string{}
+	}
+	return m, nil
 }

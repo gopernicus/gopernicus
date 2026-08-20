@@ -112,6 +112,7 @@ var probeColumns = []struct{ table, column, migration string }{
 	{"users", "status", "0014_user_status.sql"},
 	{"users", "status_changed_at", "0014_user_status.sql"},
 	{"challenges", "subject_key", "0015_challenge_subject_keys.sql"},
+	{"invitations", "metadata", "0016_invitation_metadata.sql"},
 }
 
 // probeColumn verifies one ALTER-added column exists, naming the migration that

@@ -23,6 +23,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
 	"sync"
 	"testing"
@@ -242,6 +243,7 @@ func Run(t *testing.T, newRepos func(t *testing.T) auth.Repositories) {
 		t.Run("DBGeneratedIDOnEmpty", func(t *testing.T) { testInvitationsDBGeneratedID(t, newRepos(t)) })
 		t.Run("PartialPendingUniqueness", func(t *testing.T) { testInvitationsUniqueness(t, newRepos(t)) })
 		t.Run("KindRoundTripVerbatim", func(t *testing.T) { testInvitationsKindRoundTrip(t, newRepos(t)) })
+		t.Run("MetadataRoundTrip", func(t *testing.T) { testInvitationsMetadataRoundTrip(t, newRepos(t)) })
 		t.Run("CrossKindCoexistence", func(t *testing.T) { testInvitationsCrossKindCoexistence(t, newRepos(t)) })
 		t.Run("GetByTokenHashUnknown", func(t *testing.T) { testInvitationsTokenUnknown(t, newRepos(t)) })
 		t.Run("GetByTokenHashExpired", func(t *testing.T) { testInvitationsTokenExpired(t, newRepos(t)) })
@@ -1555,6 +1557,53 @@ func testInvitationsKindRoundTrip(t *testing.T, repos auth.Repositories) {
 	byHash, err := repo.GetByTokenHash(ctx, "hash-phone")
 	if err != nil || byHash.IdentifierKind != identity.KindPhone {
 		t.Errorf("GetByTokenHash: kind=%q err=%v", byHash.IdentifierKind, err)
+	}
+}
+
+// testInvitationsMetadataRoundTrip proves the opaque metadata column round-trips:
+// a map persists and reads back verbatim via Get and GetByTokenHash, and an
+// invitation created with no metadata reads back as a non-nil empty map (the '{}'
+// column default — the store never marshals nil as JSON null).
+func testInvitationsMetadataRoundTrip(t *testing.T, repos auth.Repositories) {
+	ctx := context.Background()
+	repo := repos.Invitations
+
+	md := map[string]string{"vendor_org_id": "org-9", "plan": "pro"}
+	inv, err := invitation.NewWithMetadata(ids, "project", "p1", "member", "meta@example.com", "", "inviter-1", "hash-meta", false, time.Hour, time.Now(), md)
+	if err != nil {
+		t.Fatalf("NewWithMetadata: %v", err)
+	}
+	created, err := repo.Create(ctx, inv)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := repo.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !maps.Equal(got.Metadata, md) {
+		t.Errorf("Get metadata = %+v, want %+v", got.Metadata, md)
+	}
+	byHash, err := repo.GetByTokenHash(ctx, "hash-meta")
+	if err != nil {
+		t.Fatalf("GetByTokenHash: %v", err)
+	}
+	if !maps.Equal(byHash.Metadata, md) {
+		t.Errorf("GetByTokenHash metadata = %+v, want %+v", byHash.Metadata, md)
+	}
+
+	// No metadata → reads back as a non-nil empty map (the '{}' column default).
+	bare := mustNewInvitation(t, "project", "p1", "member", "bare@example.com", "inviter-1", "hash-bare", suiteBase)
+	if _, err := repo.Create(ctx, bare); err != nil {
+		t.Fatalf("Create bare: %v", err)
+	}
+	gotBare, err := repo.Get(ctx, bare.ID)
+	if err != nil {
+		t.Fatalf("Get bare: %v", err)
+	}
+	if gotBare.Metadata == nil || len(gotBare.Metadata) != 0 {
+		t.Errorf("bare metadata = %#v, want non-nil empty map", gotBare.Metadata)
 	}
 }
 

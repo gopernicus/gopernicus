@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 	"testing"
@@ -60,14 +61,18 @@ type spyInvitationService struct {
 	cancelCalled bool
 	resendCalled bool
 	createResult invitationsvc.CreateResult
+	// lastCreate is the most recent CreateInput the handler passed, so a test can
+	// assert request fields (e.g. Metadata) reach the service verbatim.
+	lastCreate invitationsvc.CreateInput
 	// listPage / resendResult are the configurable list and resend outcomes the
 	// response-shape tests assert the DTO mapping over.
 	listPage     crud.Page[invitation.Invitation]
 	resendResult invitation.Invitation
 }
 
-func (s *spyInvitationService) Create(context.Context, invitationsvc.CreateInput) (invitationsvc.CreateResult, error) {
+func (s *spyInvitationService) Create(_ context.Context, in invitationsvc.CreateInput) (invitationsvc.CreateResult, error) {
 	s.createCalled = true
+	s.lastCreate = in
 	return s.createResult, nil
 }
 func (s *spyInvitationService) ListByResource(context.Context, string, string, crud.ListRequest) (crud.Page[invitation.Invitation], error) {
@@ -583,6 +588,102 @@ func (s *ownerAwareInvitationService) Resend(_ context.Context, _, currentUserID
 		return invitation.Invitation{}, fmt.Errorf("not the invitation owner: %w", sdk.ErrForbidden)
 	}
 	return invitation.Invitation{ID: "inv-1", InvitedBy: s.owner, Status: "pending"}, nil
+}
+
+// TestInvitationCreateForwardsMetadata proves an optional metadata object on the
+// create body reaches BOTH the host InviteCheck (so it can authorize the complete
+// invitation) and the service CreateInput verbatim, and that the response carries
+// no metadata (it is issuer→host routing, never echoed to a client).
+func TestInvitationCreateForwardsMetadata(t *testing.T) {
+	var checkMeta map[string]string
+	check := func(_ context.Context, req invitationsvc.InviteCheckRequest) error {
+		if req.Action == invitationsvc.InviteCreate {
+			checkMeta = req.Metadata
+		}
+		return nil
+	}
+	f := newInvitationFixture(t, check, nil)
+	f.seedLoginUser("u1", "alice@example.com")
+	cookie := f.login(t, "alice@example.com")
+
+	rec := do(t, f.h, "POST", "/auth/invitations/project/p1",
+		`{"identifier":"bob@example.com","relation":"member","metadata":{"vendor_org_id":"org-1"}}`, cookie)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create = %d, want 201; body=%s", rec.Code, rec.Body)
+	}
+	want := map[string]string{"vendor_org_id": "org-1"}
+	if !maps.Equal(checkMeta, want) {
+		t.Errorf("InviteCheck metadata = %+v, want %+v", checkMeta, want)
+	}
+	if !maps.Equal(f.inv.lastCreate.Metadata, want) {
+		t.Errorf("CreateInput metadata = %+v, want %+v", f.inv.lastCreate.Metadata, want)
+	}
+	if strings.Contains(rec.Body.String(), "metadata") {
+		t.Errorf("create response leaked metadata: %s", rec.Body)
+	}
+}
+
+// TestInvitationCreateInviteCheckCannotTaintCreate proves the create handler hands
+// InviteCheck its OWN clone of the metadata: a policy that mutates the map it
+// receives cannot change the value the service then persists and grants (the
+// authorized value equals the persisted value).
+func TestInvitationCreateInviteCheckCannotTaintCreate(t *testing.T) {
+	tamper := func(_ context.Context, req invitationsvc.InviteCheckRequest) error {
+		if req.Action == invitationsvc.InviteCreate {
+			req.Metadata["vendor_org_id"] = "TAMPERED"
+			req.Metadata["injected"] = "x"
+		}
+		return nil
+	}
+	f := newInvitationFixture(t, tamper, nil)
+	f.seedLoginUser("u1", "alice@example.com")
+	cookie := f.login(t, "alice@example.com")
+
+	rec := do(t, f.h, "POST", "/auth/invitations/project/p1",
+		`{"identifier":"bob@example.com","relation":"member","metadata":{"vendor_org_id":"org-1"}}`, cookie)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create = %d, want 201; body=%s", rec.Code, rec.Body)
+	}
+	want := map[string]string{"vendor_org_id": "org-1"}
+	if !maps.Equal(f.inv.lastCreate.Metadata, want) {
+		t.Fatalf("InviteCheck mutation leaked into CreateInput: %+v, want %+v", f.inv.lastCreate.Metadata, want)
+	}
+}
+
+// TestInvitationCreateMetadataAbsentIsEmpty proves an omitted metadata object is
+// the no-metadata case: CreateInput.Metadata is empty, never a decode failure.
+func TestInvitationCreateMetadataAbsentIsEmpty(t *testing.T) {
+	f := newInvitationFixture(t, allowInviteCheck, nil)
+	f.seedLoginUser("u1", "alice@example.com")
+	cookie := f.login(t, "alice@example.com")
+
+	rec := do(t, f.h, "POST", "/auth/invitations/project/p1",
+		`{"identifier":"bob@example.com","relation":"member"}`, cookie)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create = %d, want 201; body=%s", rec.Code, rec.Body)
+	}
+	if len(f.inv.lastCreate.Metadata) != 0 {
+		t.Errorf("absent metadata = %+v, want empty", f.inv.lastCreate.Metadata)
+	}
+}
+
+// TestInvitationCreateOversizedBodyRejected proves the create route bounds the
+// body before decoding the unbounded metadata object: past the live-session gate,
+// a body over the JSON limit is 413 and never reaches the service.
+func TestInvitationCreateOversizedBodyRejected(t *testing.T) {
+	f := newInvitationFixture(t, allowInviteCheck, nil)
+	f.seedLoginUser("u1", "alice@example.com")
+	cookie := f.login(t, "alice@example.com")
+	big := strings.Repeat("a", (1<<20)+1) // just over maxJSONBodyBytes
+	body := `{"identifier":"bob@example.com","relation":"member","metadata":{"k":"` + big + `"}}`
+
+	rec := do(t, f.h, "POST", "/auth/invitations/project/p1", body, cookie)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized body = %d, want 413; body=%s", rec.Code, rec.Body)
+	}
+	if f.inv.createCalled {
+		t.Fatal("oversized create reached the invitation service")
+	}
 }
 
 // compile-time proof the spy satisfies the consumed InvitationService port.

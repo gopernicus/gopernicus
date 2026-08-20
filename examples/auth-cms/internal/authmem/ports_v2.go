@@ -306,6 +306,9 @@ func (r invitationRepo) Create(_ context.Context, inv invitation.Invitation) (in
 	if inv.ID == "" {
 		inv.ID = ids.MustGenerate()
 	}
+	// Mirror the SQL stores' nil/empty → '{}' round-trip and defensive copy: a
+	// stored row always carries a non-nil metadata map the caller cannot mutate.
+	inv.Metadata = invitation.CloneMetadata(inv.Metadata)
 	r.invitations[inv.ID] = inv
 	return inv, nil
 }

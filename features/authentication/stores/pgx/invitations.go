@@ -2,6 +2,7 @@ package pgx
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -30,29 +31,34 @@ func NewInvitationStore(db *pgxdb.DB) *InvitationStore {
 	return &InvitationStore{db: db}
 }
 
-const invitationColumns = "id, resource_type, resource_id, relation, identifier, identifier_kind, resolved_subject_id, invited_by, token_hash, auto_accept, status, expires_at, accepted_at, created_at, updated_at"
+const invitationColumns = "id, resource_type, resource_id, relation, identifier, identifier_kind, resolved_subject_id, invited_by, token_hash, auto_accept, status, expires_at, accepted_at, created_at, updated_at, metadata"
 
 // invitationRow is the store-local, db-tagged projection of an invitations row.
 // accepted_at is nullable (a pointer, zero-time when NULL); toDomain maps it.
 type invitationRow struct {
-	ID                string     `db:"id"`
-	ResourceType      string     `db:"resource_type"`
-	ResourceID        string     `db:"resource_id"`
-	Relation          string     `db:"relation"`
-	Identifier        string     `db:"identifier"`
-	IdentifierKind    string     `db:"identifier_kind"`
-	ResolvedSubjectID string     `db:"resolved_subject_id"`
-	InvitedBy         string     `db:"invited_by"`
-	TokenHash         string     `db:"token_hash"`
-	AutoAccept        bool       `db:"auto_accept"`
-	Status            string     `db:"status"`
-	ExpiresAt         time.Time  `db:"expires_at"`
-	AcceptedAt        *time.Time `db:"accepted_at"`
-	CreatedAt         time.Time  `db:"created_at"`
-	UpdatedAt         time.Time  `db:"updated_at"`
+	ID                string            `db:"id"`
+	ResourceType      string            `db:"resource_type"`
+	ResourceID        string            `db:"resource_id"`
+	Relation          string            `db:"relation"`
+	Identifier        string            `db:"identifier"`
+	IdentifierKind    string            `db:"identifier_kind"`
+	ResolvedSubjectID string            `db:"resolved_subject_id"`
+	InvitedBy         string            `db:"invited_by"`
+	TokenHash         string            `db:"token_hash"`
+	AutoAccept        bool              `db:"auto_accept"`
+	Status            string            `db:"status"`
+	ExpiresAt         time.Time         `db:"expires_at"`
+	AcceptedAt        *time.Time        `db:"accepted_at"`
+	CreatedAt         time.Time         `db:"created_at"`
+	UpdatedAt         time.Time         `db:"updated_at"`
+	Metadata          map[string]string `db:"metadata"`
 }
 
 func (r invitationRow) toDomain() invitation.Invitation {
+	metadata := r.Metadata
+	if metadata == nil {
+		metadata = map[string]string{}
+	}
 	return invitation.Invitation{
 		ID:                r.ID,
 		ResourceType:      r.ResourceType,
@@ -65,6 +71,7 @@ func (r invitationRow) toDomain() invitation.Invitation {
 		TokenHash:         r.TokenHash,
 		AutoAccept:        r.AutoAccept,
 		Status:            r.Status,
+		Metadata:          metadata,
 		ExpiresAt:         r.ExpiresAt.UTC(),
 		AcceptedAt:        pgxdb.FromNullTime(r.AcceptedAt),
 		CreatedAt:         r.CreatedAt.UTC(),
@@ -75,6 +82,10 @@ func (r invitationRow) toDomain() invitation.Invitation {
 // Create persists a new pending invitation; a pending-tuple collision →
 // sdk.ErrAlreadyExists (the partial unique index).
 func (s *InvitationStore) Create(ctx context.Context, inv invitation.Invitation) (invitation.Invitation, error) {
+	metadata, err := marshalMetadata(inv.Metadata)
+	if err != nil {
+		return invitation.Invitation{}, err
+	}
 	args := pgx.NamedArgs{
 		"resource_type":       inv.ResourceType,
 		"resource_id":         inv.ResourceID,
@@ -90,14 +101,15 @@ func (s *InvitationStore) Create(ctx context.Context, inv invitation.Invitation)
 		"accepted_at":         pgxdb.NullTime(inv.AcceptedAt),
 		"created_at":          inv.CreatedAt.UTC(),
 		"updated_at":          inv.UpdatedAt.UTC(),
+		"metadata":            metadata,
 	}
 	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if inv.ID == "" {
 		const q = `INSERT INTO invitations (resource_type, resource_id, relation, identifier, identifier_kind, resolved_subject_id,
-			invited_by, token_hash, auto_accept, status, expires_at, accepted_at, created_at, updated_at)
+			invited_by, token_hash, auto_accept, status, expires_at, accepted_at, created_at, updated_at, metadata)
 			VALUES (@resource_type, @resource_id, @relation, @identifier, @identifier_kind, @resolved_subject_id,
-				@invited_by, @token_hash, @auto_accept, @status, @expires_at, @accepted_at, @created_at, @updated_at)
+				@invited_by, @token_hash, @auto_accept, @status, @expires_at, @accepted_at, @created_at, @updated_at, @metadata)
 			RETURNING id`
 		if err := s.db.QueryRow(ctx, q, args).Scan(&inv.ID); err != nil {
 			return invitation.Invitation{}, pgxdb.MapError(err)
@@ -106,7 +118,7 @@ func (s *InvitationStore) Create(ctx context.Context, inv invitation.Invitation)
 	}
 	const q = `INSERT INTO invitations (` + invitationColumns + `)
 		VALUES (@id, @resource_type, @resource_id, @relation, @identifier, @identifier_kind, @resolved_subject_id,
-			@invited_by, @token_hash, @auto_accept, @status, @expires_at, @accepted_at, @created_at, @updated_at)`
+			@invited_by, @token_hash, @auto_accept, @status, @expires_at, @accepted_at, @created_at, @updated_at, @metadata)`
 	args["id"] = inv.ID
 	if _, err := s.db.Exec(ctx, q, args); err != nil {
 		return invitation.Invitation{}, err
@@ -201,4 +213,19 @@ func (s *InvitationStore) UpdateStatus(ctx context.Context, id string, upd invit
 		return invitation.Invitation{}, err
 	}
 	return row.toDomain(), nil
+}
+
+// marshalMetadata renders opaque host invitation metadata as JSON text for the
+// jsonb column. A nil or empty map stores '{}' — never JSON null, which would
+// bypass the column DEFAULT — so it reads back as an empty map (the uniform
+// round-trip contract). The domain has already bounded the map.
+func marshalMetadata(m map[string]string) (string, error) {
+	if len(m) == 0 {
+		return "{}", nil
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
