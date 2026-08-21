@@ -1,7 +1,7 @@
 # Invitation metadata — host key/values that ride an invitation to the Grant seam
 
 **Feature:** `features/authentication`
-**Status:** proposal, for owner review (patch-tag vs. batch — see the last section)
+**Status:** EXECUTED and RELEASED — base channel tagged `features/authentication/v0.4.0` + stores `v0.3.0` (2026-08-20); the authorized-operation and projection amendments tagged `features/authentication/v0.4.1` (2026-08-21)
 **Evidence consumer:** coordination-hub firm-aware vendor onboarding (below).
 Its domain is evidence only; the framework surface must remain generic host
 metadata.

@@ -2,8 +2,8 @@
 
 **Feature:** `features/authentication` (proposals 1 and 3), `sdk/foundation/web`
 (proposal 2)
-**Status:** proposal, for owner review — three independent asks, individually
-small; see the platform-validation gate and the last section for tagging.
+**Status:** EXECUTED and RELEASED — owner ruled 2026-08-21; proposals 1 and 3
+tagged `features/authentication/v0.4.1`, proposal 2 tagged `sdk/v0.4.1`.
 **Evidence source:** coordination-hub firm-aware vendor onboarding. Its
 implementation exposed three framework seams, but its firm model and
 `vendor_org_id` are evidence and examples only, not requirements for the

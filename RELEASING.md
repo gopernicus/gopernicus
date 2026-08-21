@@ -225,6 +225,65 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
+### features/authentication — v0.4.1 (2026-08-21): authorized invitation operations with invitee context + owner metadata projection (patch by owner ruling)
+
+invitation-metadata-host-seams proposals 1 and 3 (plan of record
+`plans/invitation-metadata-host-seams.md`, amending `plans/invitation-metadata.md`).
+Cut as a **patch by owner ruling** despite additive exported symbols — the
+`sdk/v0.3.1` / `features/authentication/v0.3.1` precedent: it completes the
+v0.4.0 metadata contract rather than opening new surface. No schema change, no
+store retags, `go.mod` unchanged (still `sdk v0.4.0` — the feature does not
+consume the sdk v0.4.1 wrapper).
+
+- **`InviteCheckRequest` gains the invitee context**: `Identifier` (the
+  feature-normalized invitee identifier), `IdentifierKind`, and
+  `ResolvedSubjectID` (the existing subject the identifier resolves to, or `""`
+  when unknown or the kind is not resolvable). A host can now authorize the
+  complete invitation — metadata against invitee state — before any row exists
+  or grant is attempted. All three are empty for `InviteList`. `UserLookup` is
+  email-kind-only today, so `ResolvedSubjectID == ""` is NEVER proof the invitee
+  is new. **Unkeyed composite literals of `InviteCheckRequest` break**; keyed
+  literals and func implementations are source-compatible.
+- **New authorized service operations**: `CreateAuthorized(ctx, principal, in)`
+  and `ListByResourceAuthorized(ctx, principal, resourceType, resourceID, req)`
+  prepare metadata, normalize the identifier, perform the lookup, pose
+  `InviteCheck`, and only then run the existing side-effect paths. The trusted
+  `Create` / `ListByResource` composition methods remain check-free and
+  behaviorally unchanged. The shipped HTTP create/resource-list handlers now
+  reach the policy through the authorized operations instead of posing the check
+  in the adapter; a nil check reached on an authorized path fails closed (500),
+  never an allow. Practical consequence for hosts: a metadata-dependent refusal
+  now lands on the **inviter at create time** instead of surfacing to the
+  invitee at accept — or silently stalling on the best-effort
+  resolve-on-registration path.
+- **Response projections split.** The resource-owner projection (pending create,
+  resource list, resend) now carries `metadata` (`omitempty`) so an owner can
+  audit the routing they supplied; the recipient-facing `/mine` uses a separate
+  projection with NO metadata field. Invitations without metadata keep
+  byte-identical responses everywhere.
+
+### sdk — v0.4.1 (2026-08-21): web.SafeDomainError — explicit host-facing safe wire errors (patch by owner ruling)
+
+invitation-metadata-host-seams proposal 2 (plan of record
+`plans/invitation-metadata-host-seams.md`). A **patch by owner ruling** (one
+additive type + constructor; the `sdk/v0.3.1` precedent). The sdk tree is
+otherwise byte-identical to `sdk/v0.4.0`; no in-repo module pins move.
+
+- **`web.SafeDomainError`** (`NewSafeDomainError(public *Error, cause error)`)
+  lets a HOST SEAM (an `InviteCheck` or `Granter` refusal) carry a deliberately
+  public sentence to the wire through a vendored feature's handler.
+  `ErrFromDomain` recognizes only this explicit wrapper — via `errors.As`,
+  before its untouched kind switch — and returns the wrapper's `*Error`.
+  `Unwrap` returns the **cause alone**, so `errors.Is`/`errors.As` keep matching
+  the domain sentinel while the public `*Error` stays outside the unwrap chain;
+  a zero-value wrapper falls through to the generic mapping instead of
+  panicking.
+- **Nothing else changes.** Bare sentinels, arbitrary wrapped `*web.Error`
+  values, and feature-internal errors keep today's generic bodies — this is an
+  explicit host-seam affordance, not permission for domain code to place user
+  text on the wire. Example construction:
+  `web.NewSafeDomainError(web.ErrStateConflict("already attached to another account"), sdk.ErrConflict)`.
+
 ### features/authentication v0.4.0 + both store modules v0.3.0 (2026-08-20): invitation metadata (minor; store migration REQUIRED)
 
 invitation-metadata (`plans/invitation-metadata.md`). Adds an opt-in, host-defined
