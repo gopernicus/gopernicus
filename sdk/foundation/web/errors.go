@@ -175,12 +175,86 @@ func ErrInternal(msg string) *Error {
 	return &Error{Status: http.StatusInternalServerError, Message: msg, Code: "internal"}
 }
 
+// ---------------------------------------------------------------------------
+// Host-facing safe errors
+// ---------------------------------------------------------------------------
+
+// SafeDomainError pairs a deliberately public [*Error] with the domain error
+// that caused it, so [ErrFromDomain] emits the public body instead of its
+// generic per-kind message.
+//
+// This is an explicit host-seam affordance: a host authorization or grant seam
+// (an invitation InviteCheck or Granter refusal, say) refuses through a vendored
+// feature's handler, and that handler responds through [ErrFromDomain]. Wrapping
+// is the only way such a refusal can carry a legible sentence to the wire.
+//
+// It is not a general permission for domain code to put user text on the wire.
+// Feature-internal errors must not use this wrapper — a feature cannot know
+// whether its own sentences are safe in a host's product. Bare sentinels and
+// arbitrary errors that merely wrap an [*Error] keep the generic mapping;
+// nothing but this wrapper is recognized.
+//
+// Construction contract: the wrapper's Unwrap returns the cause alone, so
+// errors.Is and errors.As continue to match the domain error — including the
+// kind switch in [ErrFromDomain] if the public error is ever absent. The public
+// [*Error] is deliberately outside the unwrap chain so no other errors.As call
+// can mistake it for the request's own error.
+//
+//	var errAlreadyAttached = web.NewSafeDomainError(
+//	    web.ErrStateConflict("already attached to another account"),
+//	    sdk.ErrConflict,
+//	)
+//
+//	// The seam refuses; the feature's handler responds through ErrFromDomain,
+//	// and the invitee reads the host's sentence instead of "conflict".
+//	// errors.Is(errAlreadyAttached, sdk.ErrConflict) stays true.
+type SafeDomainError struct {
+	public *Error
+	cause  error
+}
+
+// NewSafeDomainError wraps cause with a public HTTP error body. Both arguments
+// are required: public is the exact body [ErrFromDomain] returns, and cause is
+// the domain error callers keep matching with errors.Is.
+func NewSafeDomainError(public *Error, cause error) *SafeDomainError {
+	return &SafeDomainError{public: public, cause: cause}
+}
+
+// HTTPError returns the public error body supplied at construction.
+func (e *SafeDomainError) HTTPError() *Error { return e.public }
+
+// Unwrap returns the domain cause, keeping errors.Is and errors.As matches
+// against it intact.
+func (e *SafeDomainError) Unwrap() error { return e.cause }
+
+func (e *SafeDomainError) Error() string {
+	switch {
+	case e.public != nil && e.cause != nil:
+		return e.public.Message + ": " + e.cause.Error()
+	case e.public != nil:
+		return e.public.Message
+	case e.cause != nil:
+		return e.cause.Error()
+	default:
+		return "safe domain error"
+	}
+}
+
 // ErrFromDomain maps a domain error (wrapping sdk/errs sentinels) to a
 // [*Error] with the appropriate HTTP status code and a generic, safe message.
 //
 // This is a catch-all for errors the delivery layer doesn't handle explicitly.
 // For user-facing messages, handle specific errors before calling this.
+//
+// The one exception to the generic mapping is [SafeDomainError], the explicit
+// host-seam wrapper: its public body is returned as-is. A wrapper carrying no
+// public body falls through to the kind switch below.
 func ErrFromDomain(err error) *Error {
+	var safeErr *SafeDomainError
+	if errors.As(err, &safeErr) && safeErr.HTTPError() != nil {
+		return safeErr.HTTPError()
+	}
+
 	switch {
 	case errors.Is(err, sdk.ErrNotFound):
 		return ErrNotFound("not found")

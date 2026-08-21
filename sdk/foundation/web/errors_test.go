@@ -1,6 +1,7 @@
 package web
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -90,6 +91,88 @@ func TestErrFromDomain_Kinds(t *testing.T) {
 			}
 			if got.Code != tt.code {
 				t.Errorf("code = %q, want %q", got.Code, tt.code)
+			}
+		})
+	}
+}
+
+// TestErrFromDomain_SafeDomainError pins the host-seam exception: the explicit
+// wrapper's public body reaches the wire while errors.Is still matches the
+// domain cause it was constructed with.
+func TestErrFromDomain_SafeDomainError(t *testing.T) {
+	safe := NewSafeDomainError(
+		ErrStateConflict("already attached to another account"),
+		fmt.Errorf("routing: %w", sdk.ErrConflict),
+	)
+
+	got := ErrFromDomain(fmt.Errorf("grant: %w", safe))
+	if got.Status != http.StatusConflict {
+		t.Errorf("status = %d, want 409", got.Status)
+	}
+	if got.Code != "conflict" {
+		t.Errorf("code = %q, want conflict", got.Code)
+	}
+	if got.Message != "already attached to another account" {
+		t.Errorf("message = %q, want the host's sentence", got.Message)
+	}
+	if !errors.Is(safe, sdk.ErrConflict) {
+		t.Error("errors.Is(safe, sdk.ErrConflict) = false, want the cause preserved")
+	}
+	if !errors.Is(fmt.Errorf("grant: %w", safe), sdk.ErrConflict) {
+		t.Error("errors.Is through an outer wrap = false, want the cause preserved")
+	}
+}
+
+// TestErrFromDomain_SafeDomainErrorNoBody covers the defensive branch: a wrapper
+// without a public body falls through to the generic kind switch.
+func TestErrFromDomain_SafeDomainErrorNoBody(t *testing.T) {
+	got := ErrFromDomain(NewSafeDomainError(nil, sdk.ErrConflict))
+	if got.Status != http.StatusConflict || got.Code != "conflict" {
+		t.Errorf("status/code = %d/%q, want 409/conflict", got.Status, got.Code)
+	}
+	if got.Message != "conflict" {
+		t.Errorf("message = %q, want the generic body", got.Message)
+	}
+}
+
+// TestErrFromDomain_GenericBodies proves the wrapper is the only exception:
+// bare sentinels, an arbitrary wrapped *Error, and a feature-internal-style
+// error all keep today's generic body.
+func TestErrFromDomain_GenericBodies(t *testing.T) {
+	errAlreadyMember := fmt.Errorf("authentication: already a member: %w", sdk.ErrConflict)
+
+	tests := []struct {
+		name    string
+		err     error
+		status  int
+		code    string
+		message string
+	}{
+		{"BareSentinel", sdk.ErrConflict, http.StatusConflict, "conflict", "conflict"},
+		{
+			"ArbitraryWrappedError",
+			fmt.Errorf("%w: %w", ErrStateConflict("already attached to another account"), sdk.ErrConflict),
+			http.StatusConflict, "conflict", "conflict",
+		},
+		{"FeatureInternal", errAlreadyMember, http.StatusConflict, "conflict", "conflict"},
+		{
+			"FeatureInternalInvalidReference",
+			fmt.Errorf("routing key is not valid for this resource: %w", sdk.ErrInvalidReference),
+			http.StatusBadRequest, "bad_request", "invalid reference",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ErrFromDomain(tt.err)
+			if got.Status != tt.status {
+				t.Errorf("status = %d, want %d", got.Status, tt.status)
+			}
+			if got.Code != tt.code {
+				t.Errorf("code = %q, want %q", got.Code, tt.code)
+			}
+			if got.Message != tt.message {
+				t.Errorf("message = %q, want %q", got.Message, tt.message)
 			}
 		})
 	}
