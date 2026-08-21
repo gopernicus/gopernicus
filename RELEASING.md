@@ -225,6 +225,25 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
+### features/authentication — v0.4.2 (2026-08-21): authorized invitation operations promoted to the public facade (patch)
+
+Same-day follow-up to v0.4.1 by owner ruling. Purely additive facade surface —
+two delegate methods, no behavior change anywhere else, no schema change, no
+store retags, `go.mod` unchanged (still `sdk v0.4.0`).
+
+- **`Service.CreateAuthorized(ctx, principal, in)`** and
+  **`Service.ListByResourceAuthorized(ctx, principal, resourceType, resourceID, req)`**
+  are now public on the facade `authentication.Service` — the policy-carrying
+  twins of the trusted `Create` / `ListByResource`, for hosts writing their OWN
+  invitation handlers instead of mounting the shipped routes. They guard
+  `ErrInvitationsDisabled` like their trusted siblings, prepare the request
+  (metadata validation, identifier normalization, invitee lookup), pose
+  `Config.InviteCheck` with the complete invitee context, and only then act; a
+  denial leaves no pending row and attempts no grant. `principal` is the
+  resolved caller (the inviter), never the invitee.
+- The trusted `Create` / `ListByResource` remain check-free and unchanged; a
+  host driving them directly still owns the authorization decision itself.
+
 ### features/authentication — v0.4.1 (2026-08-21): authorized invitation operations with invitee context + owner metadata projection (patch by owner ruling)
 
 invitation-metadata-host-seams proposals 1 and 3 (plan of record

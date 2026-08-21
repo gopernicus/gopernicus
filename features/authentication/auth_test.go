@@ -381,6 +381,83 @@ func TestNewServiceInvitationConstructionMatrix(t *testing.T) {
 	}
 }
 
+// TestInvitationAuthorizedFacadeDelegates proves the facade's policy-carrying
+// invitation twins are the AUTHORIZED path, not the trusted one: with invitations
+// off both report ErrInvitationsDisabled, and with the subsystem wired each reaches
+// the host InviteCheck carrying the caller's principal — CreateAuthorized after
+// preparation (the recorded identifier is normalized, the action is InviteCreate)
+// and ListByResourceAuthorized with the empty invitee context. A denial propagates
+// unwrapped, which the check-free Service.Create/ListByResource could never do.
+func TestInvitationAuthorizedFacadeDelegates(t *testing.T) {
+	base := Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment, DeliveryMode: DeliveryModeOff}
+	caller := identity.Principal{Type: "user", ID: "inviter-1"}
+	ctx := context.Background()
+
+	off, err := NewService(Repositories{}, base)
+	if err != nil {
+		t.Fatalf("NewService (invitations off): %v", err)
+	}
+	if _, err := off.CreateAuthorized(ctx, caller, CreateInput{ResourceType: "project", ResourceID: "p1", Relation: "member", Identifier: "invitee@x.com", InvitedBy: "inviter-1"}); !errors.Is(err, ErrInvitationsDisabled) {
+		t.Errorf("CreateAuthorized (invitations off): err=%v, want ErrInvitationsDisabled", err)
+	}
+	if _, err := off.ListByResourceAuthorized(ctx, caller, "project", "p1", crud.ListRequest{}); !errors.Is(err, ErrInvitationsDisabled) {
+		t.Errorf("ListByResourceAuthorized (invitations off): err=%v, want ErrInvitationsDisabled", err)
+	}
+
+	denied := errors.New("host policy refused")
+	var posed []InviteCheckRequest
+	on := base
+	on.Granter = stubGranter{}
+	on.InviteCheck = func(_ context.Context, req InviteCheckRequest) error {
+		posed = append(posed, req)
+		return denied
+	}
+	// Identifiers backs the invitee lookup prepareCreate runs before the policy is
+	// posed; it holds no rows, so every invitee resolves to no existing subject.
+	svc, err := NewService(Repositories{Invitations: stubInvitations{}, Identifiers: &memIdentifierRepo{}}, on)
+	if err != nil {
+		t.Fatalf("NewService (invitations on): %v", err)
+	}
+
+	if _, err := svc.CreateAuthorized(ctx, caller, CreateInput{ResourceType: "project", ResourceID: "p1", Relation: "member", Identifier: "Invitee@X.com", InvitedBy: "inviter-1"}); !errors.Is(err, denied) {
+		t.Fatalf("CreateAuthorized: err=%v, want the host denial", err)
+	}
+	if len(posed) != 1 {
+		t.Fatalf("CreateAuthorized posed InviteCheck %d times, want 1", len(posed))
+	}
+	create := posed[0]
+	if create.Principal != caller {
+		t.Errorf("CreateAuthorized principal = %+v, want %+v", create.Principal, caller)
+	}
+	if create.Action != InviteCreate {
+		t.Errorf("CreateAuthorized action = %v, want InviteCreate", create.Action)
+	}
+	if create.Identifier != "invitee@x.com" {
+		t.Errorf("CreateAuthorized identifier = %q, want the normalized %q", create.Identifier, "invitee@x.com")
+	}
+	if create.Relation != "member" || create.ResourceType != "project" || create.ResourceID != "p1" {
+		t.Errorf("CreateAuthorized resource/relation = %q/%q/%q, want project/p1/member", create.ResourceType, create.ResourceID, create.Relation)
+	}
+
+	posed = nil
+	if _, err := svc.ListByResourceAuthorized(ctx, caller, "project", "p1", crud.ListRequest{}); !errors.Is(err, denied) {
+		t.Fatalf("ListByResourceAuthorized: err=%v, want the host denial", err)
+	}
+	if len(posed) != 1 {
+		t.Fatalf("ListByResourceAuthorized posed InviteCheck %d times, want 1", len(posed))
+	}
+	list := posed[0]
+	if list.Principal != caller {
+		t.Errorf("ListByResourceAuthorized principal = %+v, want %+v", list.Principal, caller)
+	}
+	if list.Action != InviteList {
+		t.Errorf("ListByResourceAuthorized action = %v, want InviteList", list.Action)
+	}
+	if list.Relation != "" || list.Identifier != "" || list.IdentifierKind != "" || list.ResolvedSubjectID != "" || len(list.Metadata) != 0 {
+		t.Errorf("ListByResourceAuthorized carried invitee context: %+v, want it empty", list)
+	}
+}
+
 // TestRegisterMachineDenyByAbsence proves the machine lifecycle routes are absent
 // (404) when no machine repos are wired, at the public Register surface.
 func TestRegisterMachineDenyByAbsence(t *testing.T) {

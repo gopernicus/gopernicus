@@ -381,8 +381,12 @@ type Granter interface{ Grant(context.Context, GrantInput) error }
   normalized invitee context a route wrapper cannot, and can refuse, e.g., an
   editor inviting a co-owner or a routing value that conflicts with the invitee's
   existing state. Host-direct `Service.Create`/`Service.ListByResource` are trusted
-  composition calls that deliberately skip it. Denial (wrap `sdk.ErrForbidden`) or
-  an infrastructure error fails closed.
+  composition calls that deliberately skip it; a host writing its OWN handlers
+  instead calls the policy-carrying twins `Service.CreateAuthorized` /
+  `Service.ListByResourceAuthorized`, which pose `InviteCheck` exactly as the
+  shipped routes do — the principal they take is the resolved caller (the inviter),
+  never the invitee. Denial (wrap `sdk.ErrForbidden`) or an infrastructure error
+  fails closed.
 - **The invitee context on `InviteCheckRequest`.** For `InviteCreate` the request
   carries `Identifier` (the feature-normalized invitee identifier),
   `IdentifierKind` (the normalized kind), and `ResolvedSubjectID` (the existing

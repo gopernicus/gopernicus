@@ -2364,6 +2364,22 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, err
 	return s.inv.Create(ctx, in)
 }
 
+// CreateAuthorized is the POLICY-CARRYING twin of Create; ErrInvitationsDisabled
+// when no Granter is wired. It prepares the request (host-metadata validation,
+// identifier normalization, invitee lookup), poses the Config.InviteCheck host
+// authorization policy (design §6/D3) with the COMPLETE invitee context — the
+// normalized identifier, the normalized kind, and the resolved subject when the
+// lookup found one — and only on a nil check acts, so a denial leaves NO pending
+// row and attempts NO grant. principal is the resolved caller (the inviter),
+// never the invitee. This is the operation the shipped HTTP create route drives;
+// a host writing its own handlers calls it instead of the trusted Create.
+func (s *Service) CreateAuthorized(ctx context.Context, principal identity.Principal, in CreateInput) (CreateResult, error) {
+	if s.inv == nil {
+		return CreateResult{}, ErrInvitationsDisabled
+	}
+	return s.inv.CreateAuthorized(ctx, principal, in)
+}
+
 // ListByResource pages a resource's invitations; ErrInvitationsDisabled when no
 // Granter is wired. This is a TRUSTED composition call: unlike the shipped HTTP
 // list route — which drives the feature's authorized list operation — it does NOT
@@ -2374,6 +2390,22 @@ func (s *Service) ListByResource(ctx context.Context, resourceType, resourceID s
 		return crud.Page[invitation.Invitation]{}, ErrInvitationsDisabled
 	}
 	return s.inv.ListByResource(ctx, resourceType, resourceID, req)
+}
+
+// ListByResourceAuthorized is the POLICY-CARRYING twin of ListByResource;
+// ErrInvitationsDisabled when no Granter is wired. It poses the Config.InviteCheck
+// host authorization policy (design §6/D3) first — an InviteList question carrying
+// the resolved caller and the resource, and, per the seam's contract, an empty
+// Relation, Metadata, Identifier, IdentifierKind, and ResolvedSubjectID (there is
+// no invitee in a list) — and fails closed on a denial before the repository is
+// read. principal is the resolved caller (the inviter), never the invitee. This is
+// the operation the shipped HTTP list route drives; a host writing its own handlers
+// calls it instead of the trusted ListByResource.
+func (s *Service) ListByResourceAuthorized(ctx context.Context, principal identity.Principal, resourceType, resourceID string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
+	if s.inv == nil {
+		return crud.Page[invitation.Invitation]{}, ErrInvitationsDisabled
+	}
+	return s.inv.ListByResourceAuthorized(ctx, principal, resourceType, resourceID, req)
 }
 
 // Mine pages the caller's own invitations by identifier; ErrInvitationsDisabled when no Granter is wired.
