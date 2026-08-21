@@ -1568,7 +1568,7 @@ func testInvitationsMetadataRoundTrip(t *testing.T, repos auth.Repositories) {
 	ctx := context.Background()
 	repo := repos.Invitations
 
-	md := map[string]string{"vendor_org_id": "org-9", "plan": "pro"}
+	md := map[string]string{"routing_key": "org-9", "plan": "pro"}
 	inv, err := invitation.NewWithMetadata(ids, "project", "p1", "member", "meta@example.com", "", "inviter-1", "hash-meta", false, time.Hour, time.Now(), md)
 	if err != nil {
 		t.Fatalf("NewWithMetadata: %v", err)

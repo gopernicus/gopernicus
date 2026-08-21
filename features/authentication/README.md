@@ -265,26 +265,44 @@ authenticated route is `RequireLiveSession`-gated (immediate revocation), only
 decline is public:**
 
 - `POST /auth/invitations/{resource_type}/{resource_id}` — `{identifier,
-  relation, identifier_kind?, auto_accept?}` → 201 pending (or immediate
-  direct-add for a known email invitee). After live-session validation, principal
-  resolution, and parsing, the handler calls the required host `InviteCheck` with
-  the exact requested relation; a denial fails closed before the service runs.
-- `GET /auth/invitations/{resource_type}/{resource_id}` — calls `InviteCheck`
-  with `InviteList` (empty relation) after the same resolution; `GET
-  /auth/invitations/mine`.
+  relation, identifier_kind?, auto_accept?, redirect?, metadata?}` → 201 pending
+  (or immediate direct-add for a known email invitee). After live-session
+  validation and principal resolution, the handler drives the feature's
+  AUTHORIZED create operation: the service validates the metadata, normalizes the
+  invitee identifier, runs the invitee lookup, and only then poses the required
+  host `InviteCheck` — with the exact requested relation AND the normalized
+  invitee context — before any row exists or a grant is attempted. A denial fails
+  closed with no side effect.
+- `GET /auth/invitations/{resource_type}/{resource_id}` — drives the AUTHORIZED
+  list operation, which poses `InviteCheck` with `InviteList` (empty relation, no
+  invitee context) before reading; `GET /auth/invitations/mine`.
 - `POST /auth/invitations/accept` — `{token}` → grant through the Granter.
   Acceptance does NOT re-run inviter authority (issuance-time authority, below).
 - `POST /auth/invitations/{id}/{cancel,resend}` — `InvitedBy == caller` checks.
 - `POST /auth/invitations/{id}/decline` — public, token-authorized, IP-limited
   (the one invitation route with no session gate).
 
-Every response built from an invitation row (pending create, resource/mine list,
-resend) is `{id, resource_type, resource_id, relation, identifier, invited_by,
-status, auto_accept, resolved_subject_id?, expires_at, accepted_at?,
-created_at}`. It carries **no token** — the secret is only ever in the mail.
-`invited_by` is the owning user id, the same value cancel/resend ownership is
-enforced on, so a resource list can hide actions on another admin's rows; it is a
-rendering hint, never authority.
+Every response built from an invitation row is `{id, resource_type, resource_id,
+relation, identifier, invited_by, status, auto_accept, resolved_subject_id?,
+expires_at, accepted_at?, created_at}`. It carries **no token** — the secret is
+only ever in the mail. `invited_by` is the owning user id, the same value
+cancel/resend ownership is enforced on, so a resource list can hide actions on
+another admin's rows; it is a rendering hint, never authority.
+
+There are **two projections**, deliberately separate types rather than one shared
+DTO:
+
+- the **resource-owner** projection — pending create, the resource list, and
+  resend — adds `metadata` (`map[string]string`, **omitted when empty**), so an
+  owner can verify and audit the host routing data they supplied at create time;
+- the **recipient** projection — `GET /auth/invitations/mine` — has **no**
+  `metadata` field at all. Metadata is opaque issuer→host routing that may be
+  sensitive in another host, so the invitee's own view stays conservative and
+  byte-compatible. Keeping the projections distinct is the structural guarantee: a
+  field added for owners cannot leak to recipients.
+
+An invitation that never carried metadata omits the key everywhere, so hosts that
+do not use the channel see byte-identical responses.
 
 **Resolve-on-provisioning.** A pending AUTO-ACCEPT invitation for an address is
 granted the moment an account for that address comes into existence, with no
@@ -340,8 +358,10 @@ type Granter interface{ Grant(context.Context, GrantInput) error }
   KiB** JSON-encoded total, UTF-8, non-empty keys; each violation wraps
   `ErrInvalidInput`); nil/empty persists as `{}`. It is **untrusted** inviter
   input, never an authorization claim by itself: `Config.InviteCheck` receives the
-  same metadata so a host can authorize the complete invitation at issuance, and a
-  `Granter` applying any security-sensitive side effect from it MUST revalidate.
+  same metadata — alongside the normalized invitee context, below — so a host can
+  authorize the complete invitation at issuance, and a `Granter` applying any
+  security-sensitive side effect from it MUST revalidate. The resource-owner
+  response projection echoes it back; the recipient `/mine` projection never does.
 - **Strengthened success contract.** `Grant` returns nil ONLY when the EXACT
   requested relation was applied or is already exactly present. A different
   existing relation, an invariant refusal, a missing/deleted host resource, and
@@ -352,13 +372,28 @@ type Granter interface{ Grant(context.Context, GrantInput) error }
   else → a loud error).
 - **Required `InviteCheck`.** Whenever a `Granter` enables invitations,
   `Config.InviteCheck` is REQUIRED at construction — nil → `ErrInviteCheckRequired`;
-  an `InviteCheck` wired with no `Granter` → `ErrInviteCheckWithoutGranter`. It runs
-  in the feature's own parsed create/list handlers (after live-session validation,
-  principal resolution, and parsing), so the host sees the caller, resource,
-  action, and validated relation a route wrapper cannot — and can refuse, e.g., an
-  editor inviting a co-owner. HTTP create/list call it; host-direct `Service`
-  methods are trusted composition calls that document they skip HTTP policy.
-  Denial (wrap `sdk.ErrForbidden`) or an infrastructure error fails closed.
+  an `InviteCheck` wired with no `Granter` → `ErrInviteCheckWithoutGranter`. It is
+  posed by the feature's own AUTHORIZED invitation operations (which the shipped
+  create/list routes drive) after live-session validation, principal resolution,
+  request parsing, metadata validation, identifier normalization, and the invitee
+  lookup — and always before any invitation row exists or a grant is attempted. The
+  host therefore sees the caller, resource, action, validated relation, and the
+  normalized invitee context a route wrapper cannot, and can refuse, e.g., an
+  editor inviting a co-owner or a routing value that conflicts with the invitee's
+  existing state. Host-direct `Service.Create`/`Service.ListByResource` are trusted
+  composition calls that deliberately skip it. Denial (wrap `sdk.ErrForbidden`) or
+  an infrastructure error fails closed.
+- **The invitee context on `InviteCheckRequest`.** For `InviteCreate` the request
+  carries `Identifier` (the feature-normalized invitee identifier),
+  `IdentifierKind` (the normalized kind), and `ResolvedSubjectID` (the existing
+  subject the identifier resolves to). This is what makes per-subject policy —
+  eligibility, quota/deduplication, account compatibility over `Metadata` —
+  decidable at ISSUANCE rather than at grant time, where the refusal would land on
+  the invitee (or, on the best-effort resolve-on-registration path, be silent). The
+  lookup is **email-kind only**: `ResolvedSubjectID == ""` means unknown OR not
+  resolvable for that kind, and must NEVER be read as proof the invitee is new —
+  `IdentifierKind` is what disambiguates. For `InviteList`, `Relation`, `Metadata`,
+  `Identifier`, `IdentifierKind`, and `ResolvedSubjectID` are all empty.
 - **Issuance-time authority.** An invitation authorized at creation is a durable,
   expiring capability; acceptance does not re-check inviter authority, and a later
   loss of the inviter's host permission does not silently invalidate an already
@@ -1918,3 +1953,29 @@ and is no longer projected. The field is retained for compatibility.
    `RELEASING.md` (stop old workers, drain or re-enqueue the opaque encrypted
    commands WITHOUT decrypting, apply the generic jobs schema + wiring, verify no
    active rows, drop the bespoke table, start the chosen runtime).
+
+## UPGRADE NOTE — invitation authorization gains the invitee context
+
+`InviteCheckRequest` gained three fields — `Identifier`, `IdentifierKind`, and
+`ResolvedSubjectID` — so a host can authorize the complete invitation, including
+per-subject policy, before anything is persisted or granted (see "The Granter
+contract and invitation authority"). No schema, migration, or route changes; the
+canonical migration set is still `0001–0016`.
+
+**Source-compatibility:** keyed struct literals and `InviteCheck` implementations
+are unaffected. An **unkeyed composite literal** of `InviteCheckRequest` no longer
+compiles — switch it to keyed fields. This is the only breaking edge.
+
+**Behavior deltas:**
+
+- The shipped create/list routes now drive the feature's authorized invitation
+  operations, so `InviteCheck` is posed AFTER metadata validation, identifier
+  normalization, and the invitee lookup instead of immediately after parsing. A
+  malformed identifier or invalid metadata is now rejected before the policy is
+  asked, and a refusal still leaves no row and no grant on both the pending and
+  direct-add branches.
+- The trusted `Service.Create` and `Service.ListByResource` composition methods are
+  unchanged and remain check-free.
+- Owner-facing invitation responses (pending create, resource list, resend) now
+  include `metadata` when the invitation carries any; it omits when empty, and
+  `GET /auth/invitations/mine` never includes it.

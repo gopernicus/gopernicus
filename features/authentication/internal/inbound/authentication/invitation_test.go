@@ -19,6 +19,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
@@ -31,10 +32,10 @@ func allowInviteCheck(context.Context, invitationsvc.InviteCheckRequest) error {
 // to prove the routes register when a Granter is wired.
 type stubInvitationService struct{}
 
-func (stubInvitationService) Create(context.Context, invitationsvc.CreateInput) (invitationsvc.CreateResult, error) {
+func (stubInvitationService) CreateAuthorized(context.Context, identity.Principal, invitationsvc.CreateInput) (invitationsvc.CreateResult, error) {
 	return invitationsvc.CreateResult{}, nil
 }
-func (stubInvitationService) ListByResource(context.Context, string, string, crud.ListRequest) (crud.Page[invitation.Invitation], error) {
+func (stubInvitationService) ListByResourceAuthorized(context.Context, identity.Principal, string, string, crud.ListRequest) (crud.Page[invitation.Invitation], error) {
 	return crud.Page[invitation.Invitation]{}, nil
 }
 func (stubInvitationService) Mine(context.Context, string, crud.ListRequest) (crud.Page[invitation.Invitation], error) {
@@ -49,11 +50,17 @@ func (stubInvitationService) Resend(context.Context, string, string, string) (in
 	return invitation.Invitation{}, nil
 }
 
-// spyInvitationService records whether each use-case was reached, so a test can
-// assert the InviteCheck gate ran BEFORE the service (a denied create/list must
-// never touch the service). createResult is the configurable Create outcome the
-// allowed-contract test asserts on.
+// spyInvitationService records whether each use-case was reached and mimics the
+// real service's authorized operations: the host InviteCheck runs FIRST, and the
+// *Called flags mark the side-effect path, so a test asserting "a denied create
+// never touched the service" keeps its meaning now that the check lives in the
+// service (the ordering itself is pinned by the invitationsvc tests).
+// createResult is the configurable Create outcome the allowed-contract test
+// asserts on.
 type spyInvitationService struct {
+	// inviteCheck is the host policy the authorized operations pose, mirroring the
+	// real service. Nil authorizes.
+	inviteCheck  invitationsvc.InviteCheck
 	createCalled bool
 	listCalled   bool
 	mineCalled   bool
@@ -64,18 +71,47 @@ type spyInvitationService struct {
 	// lastCreate is the most recent CreateInput the handler passed, so a test can
 	// assert request fields (e.g. Metadata) reach the service verbatim.
 	lastCreate invitationsvc.CreateInput
+	// lastPrincipal is the most recent principal an authorized operation received,
+	// so a test can assert the handler resolved and forwarded the caller.
+	lastPrincipal identity.Principal
 	// listPage / resendResult are the configurable list and resend outcomes the
 	// response-shape tests assert the DTO mapping over.
 	listPage     crud.Page[invitation.Invitation]
 	resendResult invitation.Invitation
 }
 
-func (s *spyInvitationService) Create(_ context.Context, in invitationsvc.CreateInput) (invitationsvc.CreateResult, error) {
+func (s *spyInvitationService) CreateAuthorized(ctx context.Context, principal identity.Principal, in invitationsvc.CreateInput) (invitationsvc.CreateResult, error) {
+	s.lastPrincipal = principal
+	if s.inviteCheck != nil {
+		if err := s.inviteCheck(ctx, invitationsvc.InviteCheckRequest{
+			Principal:      principal,
+			Action:         invitationsvc.InviteCreate,
+			ResourceType:   in.ResourceType,
+			ResourceID:     in.ResourceID,
+			Relation:       in.Relation,
+			Metadata:       invitation.CloneMetadata(in.Metadata),
+			Identifier:     in.Identifier,
+			IdentifierKind: in.IdentifierKind,
+		}); err != nil {
+			return invitationsvc.CreateResult{}, err
+		}
+	}
 	s.createCalled = true
 	s.lastCreate = in
 	return s.createResult, nil
 }
-func (s *spyInvitationService) ListByResource(context.Context, string, string, crud.ListRequest) (crud.Page[invitation.Invitation], error) {
+func (s *spyInvitationService) ListByResourceAuthorized(ctx context.Context, principal identity.Principal, resourceType, resourceID string, _ crud.ListRequest) (crud.Page[invitation.Invitation], error) {
+	s.lastPrincipal = principal
+	if s.inviteCheck != nil {
+		if err := s.inviteCheck(ctx, invitationsvc.InviteCheckRequest{
+			Principal:    principal,
+			Action:       invitationsvc.InviteList,
+			ResourceType: resourceType,
+			ResourceID:   resourceID,
+		}); err != nil {
+			return crud.Page[invitation.Invitation]{}, err
+		}
+	}
 	s.listCalled = true
 	return s.listPage, nil
 }
@@ -98,8 +134,8 @@ func (s *spyInvitationService) Resend(context.Context, string, string, string) (
 }
 
 // newInvitationTestHandler mounts the routes with a wired InvitationService, so
-// the invitation surface IS registered. The InviteCheck allows every operation —
-// the caller-reachability tests here never exercise the policy.
+// the invitation surface IS registered. The stub authorizes everything — the
+// caller-reachability tests here never exercise the policy.
 func newInvitationTestHandler(t *testing.T, inv InvitationService) http.Handler {
 	t.Helper()
 	users := newMemUsers()
@@ -114,13 +150,15 @@ func newInvitationTestHandler(t *testing.T, inv InvitationService) http.Handler 
 		TokenSigner: newFakeSigner(),
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, inv, allowInviteCheck, crud.StrategyCursor, MutationSecurity{}, nil, nil)
+	Mount(h, svc, inv, crud.StrategyCursor, MutationSecurity{}, nil, nil)
 	return h
 }
 
 // invitationFixture wires a real authsvc.Service over the mem stores with a spy
 // invitation service, a configurable InviteCheck, and a configurable limiter, so a
 // test can log in, revoke the session, and assert the policy/live-session gates.
+// The check is carried by the spy service (as the real service carries it), never
+// by the handlers.
 type invitationFixture struct {
 	h         http.Handler
 	users     *memUsers
@@ -147,7 +185,7 @@ func newInvitationFixtureWith(t *testing.T, inv InvitationService, check invitat
 	idents := newMemIdentifiers(users)
 	passwords := &memPasswords{m: map[string]string{}}
 	sessions := &memSessions{m: map[string]session.Session{}}
-	spy := &spyInvitationService{}
+	spy := &spyInvitationService{inviteCheck: check}
 	if inv == nil {
 		inv = spy
 	}
@@ -162,7 +200,7 @@ func newInvitationFixtureWith(t *testing.T, inv InvitationService, check invitat
 		TokenSigner: newFakeSigner(),
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, inv, check, crud.StrategyCursor, MutationSecurity{}, nil, nil)
+	Mount(h, svc, inv, crud.StrategyCursor, MutationSecurity{}, nil, nil)
 	return invitationFixture{h: h, users: users, idents: idents, passwords: passwords, sessions: sessions, inv: spy}
 }
 
@@ -233,9 +271,10 @@ func TestInvitationRoutesRegisteredWhenWired(t *testing.T) {
 }
 
 // TestInvitationCreateRelationDeniedNeverReachesService proves the create handler
-// runs the host InviteCheck with the EXACT requested relation BEFORE the service:
-// a resource-allowed but relation-denied create (editor forbidden from inviting an
-// owner) maps to 403 and the invitation service is never called (design §6/D3).
+// drives the AUTHORIZED create operation with the EXACT requested relation and
+// maps its refusal: a resource-allowed but relation-denied create (editor
+// forbidden from inviting an owner) is 403 and no invitation is created (design
+// §6/D3; the check-before-side-effect ordering itself is pinned in invitationsvc).
 func TestInvitationCreateRelationDeniedNeverReachesService(t *testing.T) {
 	// The policy authorizes creation but forbids the "owner" relation specifically —
 	// proving it sees the validated payload, not just the route.
@@ -261,7 +300,8 @@ func TestInvitationCreateRelationDeniedNeverReachesService(t *testing.T) {
 
 // TestInvitationCreateRelationAllowedReachesService proves the same policy admits
 // a permitted relation: the exact requested relation the host allows reaches the
-// service and returns the pending-invitation contract (201 + the DTO).
+// authorized create operation — with the SESSION caller as the principal — and
+// returns the pending-invitation contract (201 + the DTO).
 func TestInvitationCreateRelationAllowedReachesService(t *testing.T) {
 	relationAware := func(_ context.Context, req invitationsvc.InviteCheckRequest) error {
 		if req.Action == invitationsvc.InviteCreate && req.Relation == "owner" {
@@ -286,6 +326,9 @@ func TestInvitationCreateRelationAllowedReachesService(t *testing.T) {
 	if !f.inv.createCalled {
 		t.Fatal("allowed create never reached the invitation service")
 	}
+	if want := (identity.Principal{Type: identity.User, ID: "u1"}); f.inv.lastPrincipal != want {
+		t.Errorf("authorized create principal = %+v, want the session caller %+v", f.inv.lastPrincipal, want)
+	}
 	var resp invitationResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v; body=%s", err, rec.Body)
@@ -295,9 +338,9 @@ func TestInvitationCreateRelationAllowedReachesService(t *testing.T) {
 	}
 }
 
-// TestInvitationListDeniedNeverReachesService proves the resource-list handler runs
-// the InviteCheck (Action list, empty relation) before the service: a denied list
-// maps to 403 and never calls ListByResource (design §6/D3).
+// TestInvitationListDeniedNeverReachesService proves the resource-list handler
+// drives the AUTHORIZED list operation and maps its refusal: a denied list is 403
+// and no page is read (design §6/D3).
 func TestInvitationListDeniedNeverReachesService(t *testing.T) {
 	denyList := func(_ context.Context, req invitationsvc.InviteCheckRequest) error {
 		if req.Action == invitationsvc.InviteList {
@@ -322,7 +365,9 @@ func TestInvitationListDeniedNeverReachesService(t *testing.T) {
 }
 
 // TestInvitationListAllowedReachesService proves an authorized list reaches the
-// service and returns 200 (the existing page contract).
+// service and returns 200 (the existing page contract), and that the authorized
+// list operation receives the SESSION caller as its principal — the value the host
+// policy is posed for.
 func TestInvitationListAllowedReachesService(t *testing.T) {
 	f := newInvitationFixture(t, allowInviteCheck, nil)
 	f.seedLoginUser("u1", "alice@example.com")
@@ -335,12 +380,16 @@ func TestInvitationListAllowedReachesService(t *testing.T) {
 	if !f.inv.listCalled {
 		t.Fatal("allowed list never reached the invitation service")
 	}
+	if want := (identity.Principal{Type: identity.User, ID: "u1"}); f.inv.lastPrincipal != want {
+		t.Errorf("authorized list principal = %+v, want the session caller %+v", f.inv.lastPrincipal, want)
+	}
 }
 
-// TestInvitationCreateFailsClosed proves the create handler fails CLOSED on every
-// pre-service failure and never calls the invitation service: a missing principal
-// (no session) is 401, a policy denial is 403, and a policy infrastructure error is
-// 500 (design §6/D3 — an unexpected policy error never falls through to allow).
+// TestInvitationCreateFailsClosed proves the create route fails CLOSED on every
+// pre-create failure and never creates an invitation: a missing principal (no
+// session) is 401 and never reaches the service at all, a policy denial is 403,
+// and a policy infrastructure error is 500 (design §6/D3 — an unexpected policy
+// error never falls through to allow).
 func TestInvitationCreateFailsClosed(t *testing.T) {
 	body := `{"identifier":"bob@example.com","relation":"member"}`
 
@@ -591,62 +640,25 @@ func (s *ownerAwareInvitationService) Resend(_ context.Context, _, currentUserID
 }
 
 // TestInvitationCreateForwardsMetadata proves an optional metadata object on the
-// create body reaches BOTH the host InviteCheck (so it can authorize the complete
-// invitation) and the service CreateInput verbatim, and that the response carries
-// no metadata (it is issuer→host routing, never echoed to a client).
+// create body reaches the authorized create operation's CreateInput verbatim —
+// the service then validates it and shows it to the host policy (pinned in
+// invitationsvc) — and that a created invitation carrying none omits the key.
 func TestInvitationCreateForwardsMetadata(t *testing.T) {
-	var checkMeta map[string]string
-	check := func(_ context.Context, req invitationsvc.InviteCheckRequest) error {
-		if req.Action == invitationsvc.InviteCreate {
-			checkMeta = req.Metadata
-		}
-		return nil
-	}
-	f := newInvitationFixture(t, check, nil)
+	f := newInvitationFixture(t, allowInviteCheck, nil)
 	f.seedLoginUser("u1", "alice@example.com")
 	cookie := f.login(t, "alice@example.com")
 
 	rec := do(t, f.h, "POST", "/auth/invitations/project/p1",
-		`{"identifier":"bob@example.com","relation":"member","metadata":{"vendor_org_id":"org-1"}}`, cookie)
+		`{"identifier":"bob@example.com","relation":"member","metadata":{"routing_key":"org-1"}}`, cookie)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create = %d, want 201; body=%s", rec.Code, rec.Body)
 	}
-	want := map[string]string{"vendor_org_id": "org-1"}
-	if !maps.Equal(checkMeta, want) {
-		t.Errorf("InviteCheck metadata = %+v, want %+v", checkMeta, want)
-	}
+	want := map[string]string{"routing_key": "org-1"}
 	if !maps.Equal(f.inv.lastCreate.Metadata, want) {
 		t.Errorf("CreateInput metadata = %+v, want %+v", f.inv.lastCreate.Metadata, want)
 	}
 	if strings.Contains(rec.Body.String(), "metadata") {
-		t.Errorf("create response leaked metadata: %s", rec.Body)
-	}
-}
-
-// TestInvitationCreateInviteCheckCannotTaintCreate proves the create handler hands
-// InviteCheck its OWN clone of the metadata: a policy that mutates the map it
-// receives cannot change the value the service then persists and grants (the
-// authorized value equals the persisted value).
-func TestInvitationCreateInviteCheckCannotTaintCreate(t *testing.T) {
-	tamper := func(_ context.Context, req invitationsvc.InviteCheckRequest) error {
-		if req.Action == invitationsvc.InviteCreate {
-			req.Metadata["vendor_org_id"] = "TAMPERED"
-			req.Metadata["injected"] = "x"
-		}
-		return nil
-	}
-	f := newInvitationFixture(t, tamper, nil)
-	f.seedLoginUser("u1", "alice@example.com")
-	cookie := f.login(t, "alice@example.com")
-
-	rec := do(t, f.h, "POST", "/auth/invitations/project/p1",
-		`{"identifier":"bob@example.com","relation":"member","metadata":{"vendor_org_id":"org-1"}}`, cookie)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("create = %d, want 201; body=%s", rec.Code, rec.Body)
-	}
-	want := map[string]string{"vendor_org_id": "org-1"}
-	if !maps.Equal(f.inv.lastCreate.Metadata, want) {
-		t.Fatalf("InviteCheck mutation leaked into CreateInput: %+v, want %+v", f.inv.lastCreate.Metadata, want)
+		t.Errorf("an invitation with no metadata still emitted the key: %s", rec.Body)
 	}
 }
 
@@ -684,6 +696,143 @@ func TestInvitationCreateOversizedBodyRejected(t *testing.T) {
 	if f.inv.createCalled {
 		t.Fatal("oversized create reached the invitation service")
 	}
+}
+
+// TestInvitationOwnerResponsesCarryMetadata proves the RESOURCE-OWNER projection
+// round-trips the persisted host metadata on every endpoint an inviting owner
+// drives — pending create, resource list, and resend — so an owner can verify and
+// audit the routing choice they supplied.
+func TestInvitationOwnerResponsesCarryMetadata(t *testing.T) {
+	const owner = "u-owner"
+	want := map[string]string{"routing_key": "route-1"}
+	withMeta := invitation.Invitation{
+		ID: "inv-1", ResourceType: "project", ResourceID: "p1", Relation: "member",
+		Identifier: "bob@example.com", InvitedBy: owner, Status: "pending",
+		ExpiresAt: time.Now().Add(time.Hour), CreatedAt: time.Now(),
+		Metadata: want,
+	}
+
+	t.Run("create", func(t *testing.T) {
+		f := newInvitationFixture(t, allowInviteCheck, nil)
+		f.inv.createResult = invitationsvc.CreateResult{Invitation: withMeta}
+		f.seedLoginUser(owner, "alice@example.com")
+		cookie := f.login(t, "alice@example.com")
+
+		rec := do(t, f.h, "POST", "/auth/invitations/project/p1",
+			`{"identifier":"bob@example.com","relation":"member","metadata":{"routing_key":"route-1"}}`, cookie)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create = %d, want 201; body=%s", rec.Code, rec.Body)
+		}
+		var resp invitationResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v; body=%s", err, rec.Body)
+		}
+		if !maps.Equal(resp.Metadata, want) {
+			t.Errorf("create metadata = %+v, want %+v", resp.Metadata, want)
+		}
+	})
+
+	t.Run("resource list", func(t *testing.T) {
+		f := newInvitationFixture(t, allowInviteCheck, nil)
+		f.inv.listPage = crud.Page[invitation.Invitation]{Items: []invitation.Invitation{withMeta}}
+		f.seedLoginUser(owner, "alice@example.com")
+		cookie := f.login(t, "alice@example.com")
+
+		rec := do(t, f.h, "GET", "/auth/invitations/project/p1", "", cookie)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("list = %d, want 200; body=%s", rec.Code, rec.Body)
+		}
+		var page pageResponse[invitationResponse]
+		if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+			t.Fatalf("decode: %v; body=%s", err, rec.Body)
+		}
+		if len(page.Items) != 1 || !maps.Equal(page.Items[0].Metadata, want) {
+			t.Errorf("list metadata = %+v, want %+v", page.Items, want)
+		}
+	})
+
+	t.Run("resend", func(t *testing.T) {
+		f := newInvitationFixture(t, allowInviteCheck, nil)
+		f.inv.resendResult = withMeta
+		f.seedLoginUser(owner, "alice@example.com")
+		cookie := f.login(t, "alice@example.com")
+
+		rec := do(t, f.h, "POST", "/auth/invitations/inv-1/resend", "", cookie)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("resend = %d, want 200; body=%s", rec.Code, rec.Body)
+		}
+		var resp invitationResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("decode: %v; body=%s", err, rec.Body)
+		}
+		if !maps.Equal(resp.Metadata, want) {
+			t.Errorf("resend metadata = %+v, want %+v", resp.Metadata, want)
+		}
+	})
+}
+
+// TestInvitationMineNeverCarriesMetadata proves the recipient-facing projection is
+// a genuinely separate DTO: /auth/invitations/mine never emits the metadata key,
+// even for a row that carries host metadata — it is issuer→host routing, not
+// something the invitee reads.
+func TestInvitationMineNeverCarriesMetadata(t *testing.T) {
+	f := newInvitationFixtureWith(t, &metadataMineInvitationService{}, allowInviteCheck, nil)
+	f.seedLoginUser("u1", "bob@example.com")
+	cookie := f.login(t, "bob@example.com")
+
+	rec := do(t, f.h, "GET", "/auth/invitations/mine", "", cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mine = %d, want 200; body=%s", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), "metadata") || strings.Contains(rec.Body.String(), "routing_key") {
+		t.Fatalf("/mine leaked host metadata: %s", rec.Body)
+	}
+	var page pageResponse[myInvitationResponse]
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode: %v; body=%s", err, rec.Body)
+	}
+	if len(page.Items) != 1 || page.Items[0].ID != "inv-1" {
+		t.Fatalf("mine items = %+v, want the seeded invitation", page.Items)
+	}
+}
+
+// TestInvitationResponsesOmitEmptyMetadata proves an invitation that never carried
+// metadata keeps a byte-identical response on the owner projection: the key omits
+// rather than serializing null or {}.
+func TestInvitationResponsesOmitEmptyMetadata(t *testing.T) {
+	f := newInvitationFixture(t, allowInviteCheck, nil)
+	f.inv.listPage = crud.Page[invitation.Invitation]{Items: []invitation.Invitation{{
+		ID: "inv-1", ResourceType: "project", ResourceID: "p1", Relation: "member",
+		Identifier: "bob@example.com", InvitedBy: "u-owner", Status: "pending",
+		ExpiresAt: time.Now().Add(time.Hour), CreatedAt: time.Now(),
+		Metadata: map[string]string{},
+	}}}
+	f.seedLoginUser("u-owner", "alice@example.com")
+	cookie := f.login(t, "alice@example.com")
+
+	rec := do(t, f.h, "GET", "/auth/invitations/project/p1", "", cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list = %d, want 200; body=%s", rec.Code, rec.Body)
+	}
+	if strings.Contains(rec.Body.String(), "metadata") {
+		t.Errorf("empty metadata emitted a key: %s", rec.Body)
+	}
+}
+
+// metadataMineInvitationService returns one "my invitation" carrying host
+// metadata, so the /mine projection is exercised against a row that HAS something
+// to leak.
+type metadataMineInvitationService struct {
+	stubInvitationService
+}
+
+func (metadataMineInvitationService) Mine(context.Context, string, crud.ListRequest) (crud.Page[invitation.Invitation], error) {
+	return crud.Page[invitation.Invitation]{Items: []invitation.Invitation{{
+		ID: "inv-1", ResourceType: "project", ResourceID: "p1", Relation: "member",
+		Identifier: "bob@example.com", InvitedBy: "u-owner", Status: "pending",
+		ExpiresAt: time.Now().Add(time.Hour), CreatedAt: time.Now(),
+		Metadata: map[string]string{"routing_key": "route-1"},
+	}}}, nil
 }
 
 // compile-time proof the spy satisfies the consumed InvitationService port.

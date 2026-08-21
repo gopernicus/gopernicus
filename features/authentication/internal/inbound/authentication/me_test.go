@@ -71,7 +71,7 @@ func newMeHandler(t *testing.T, prefix string) meFixture {
 	if prefix != "" {
 		r = feature.PrefixRegistrar{Prefix: prefix, Next: h}
 	}
-	Mount(r, svc, nil, nil, crud.StrategyCursor, MutationSecurity{}, nil, nil)
+	Mount(r, svc, nil, crud.StrategyCursor, MutationSecurity{}, nil, nil)
 	return meFixture{h: h, users: users, idents: idents, passwords: passwords, sessions: sessions}
 }
 

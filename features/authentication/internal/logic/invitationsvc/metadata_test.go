@@ -27,7 +27,7 @@ func TestAcceptDeliversMetadata(t *testing.T) {
 	granter := &fakeGranter{}
 	svc := newSvc(t, repo, granter, Deps{})
 
-	want := map[string]string{"vendor_org_id": "org-42"}
+	want := map[string]string{"routing_key": "org-42"}
 	seedInviteMeta(t, repo, "project", "p1", "member", "invitee@x.com", "secret-a", false, time.Now().Add(time.Hour), want)
 
 	if _, err := svc.Accept(context.Background(), AcceptInput{Token: "secret-a", SubjectType: "user", SubjectID: "user-9", Identifier: "invitee@x.com"}); err != nil {
@@ -66,7 +66,7 @@ func TestResolveDeliversMetadata(t *testing.T) {
 	granter := &fakeGranter{}
 	svc := newSvc(t, repo, granter, Deps{})
 
-	want := map[string]string{"vendor_org_id": "org-7"}
+	want := map[string]string{"routing_key": "org-7"}
 	seedInviteMeta(t, repo, "project", "A", "member", "sub@x.com", "s-a", true, time.Now().Add(time.Hour), want)
 
 	n, err := svc.ResolveInvitations(context.Background(), "sub@x.com", "user", "user-7")

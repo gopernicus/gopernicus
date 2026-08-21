@@ -23,10 +23,13 @@ const declineAttemptsPerMinute = 10
 // *invitationsvc.Service satisfies it. It is separate from authService because
 // the Granter seam is injected into invitationsvc ONLY (design §6): a host with
 // no Granter passes a nil InvitationService and the routes are never registered.
-// Accept interfaces, return structs.
+// Create and list are the AUTHORIZED operations (design §6/D3): the host
+// InviteCheck lives with the service, which poses it over the fully prepared
+// request, so no handler here owns invitation authorization. Accept interfaces,
+// return structs.
 type InvitationService interface {
-	Create(ctx context.Context, in invitationsvc.CreateInput) (invitationsvc.CreateResult, error)
-	ListByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[invitation.Invitation], error)
+	CreateAuthorized(ctx context.Context, principal identity.Principal, in invitationsvc.CreateInput) (invitationsvc.CreateResult, error)
+	ListByResourceAuthorized(ctx context.Context, principal identity.Principal, resourceType, resourceID string, req crud.ListRequest) (crud.Page[invitation.Invitation], error)
 	Mine(ctx context.Context, identifier string, req crud.ListRequest) (crud.Page[invitation.Invitation], error)
 	Accept(ctx context.Context, in invitationsvc.AcceptInput) (invitationsvc.AcceptResult, error)
 	Decline(ctx context.Context, id, token string) error
@@ -62,8 +65,13 @@ type declineInvitationRequest struct {
 	Token string `json:"token"`
 }
 
-// invitationResponse is an invitation WITHOUT its token — the secret is only
-// ever in the mail (design §5.1 WI3).
+// invitationResponse is the RESOURCE-OWNER projection of an invitation, WITHOUT
+// its token — the secret is only ever in the mail (design §5.1 WI3). It serves the
+// endpoints an inviting owner drives (pending create, resource list, resend) and
+// is the ONLY projection carrying the host Metadata. The recipient-facing
+// /auth/invitations/mine surface deliberately uses myInvitationResponse instead:
+// metadata is opaque issuer→host routing that may be sensitive, so it must never
+// reach the invitee by a shared DTO growing a field.
 type invitationResponse struct {
 	ID           string `json:"id"`
 	ResourceType string `json:"resource_type"`
@@ -82,10 +90,57 @@ type invitationResponse struct {
 	ExpiresAt         string `json:"expires_at"`
 	AcceptedAt        string `json:"accepted_at,omitempty"`
 	CreatedAt         string `json:"created_at"`
+	// Metadata is the opaque host routing data the inviter supplied at create time,
+	// echoed so a resource owner can verify and audit the pending invitation's
+	// routing choice. It omits when empty, so an invitation that never carried
+	// metadata keeps a byte-identical response.
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 func newInvitationResponse(inv invitation.Invitation) invitationResponse {
 	return invitationResponse{
+		ID:                inv.ID,
+		ResourceType:      inv.ResourceType,
+		ResourceID:        inv.ResourceID,
+		Relation:          inv.Relation,
+		Identifier:        inv.Identifier,
+		InvitedBy:         inv.InvitedBy,
+		Status:            inv.Status,
+		AutoAccept:        inv.AutoAccept,
+		ResolvedSubjectID: inv.ResolvedSubjectID,
+		ExpiresAt:         inv.ExpiresAt.Format(time.RFC3339),
+		AcceptedAt:        formatOptionalTime(inv.AcceptedAt),
+		CreatedAt:         inv.CreatedAt.Format(time.RFC3339),
+		Metadata:          inv.Metadata,
+	}
+}
+
+// myInvitationResponse is the RECIPIENT-facing projection served by
+// /auth/invitations/mine. It is deliberately a separate type from
+// invitationResponse and has NO Metadata field: host metadata is opaque
+// issuer→host routing that may be sensitive in another host, so the invitee's own
+// view stays conservative by default. Keeping the two projections distinct is the
+// structural guarantee — a field added to the owner projection can never leak here.
+type myInvitationResponse struct {
+	ID           string `json:"id"`
+	ResourceType string `json:"resource_type"`
+	ResourceID   string `json:"resource_id"`
+	Relation     string `json:"relation"`
+	Identifier   string `json:"identifier"`
+	// InvitedBy is the user id that created the invitation — an identifier, never a
+	// token or secret. It is retained here so the /mine payload stays byte-compatible
+	// with the shape recipients already consume.
+	InvitedBy         string `json:"invited_by"`
+	Status            string `json:"status"`
+	AutoAccept        bool   `json:"auto_accept"`
+	ResolvedSubjectID string `json:"resolved_subject_id,omitempty"`
+	ExpiresAt         string `json:"expires_at"`
+	AcceptedAt        string `json:"accepted_at,omitempty"`
+	CreatedAt         string `json:"created_at"`
+}
+
+func newMyInvitationResponse(inv invitation.Invitation) myInvitationResponse {
+	return myInvitationResponse{
 		ID:                inv.ID,
 		ResourceType:      inv.ResourceType,
 		ResourceID:        inv.ResourceID,
@@ -117,10 +172,12 @@ func mountInvitations(r feature.RouteRegistrar, h *handlers, requireLiveSession,
 
 // createInvitation invites an identifier to the path resource (live-session
 // gated). A direct add (known invitee + auto_accept) returns 200; a pending
-// invite 201. After principal resolution and parsing, the host InviteCheck
-// authorizes the EXACT requested relation on the parsed resource (design §6/D3):
-// a denial or infrastructure error fails closed through the normal web/sdk
-// mapping BEFORE the service is reached, so a forbidden create never mutates.
+// invite 201. It calls the AUTHORIZED create operation with the resolved
+// principal: the service prepares the request (metadata validation, identifier
+// normalization, invitee lookup) and poses the host InviteCheck over that complete
+// context before any row exists or a grant is attempted (design §6/D3), so a
+// denial or infrastructure error fails closed through the normal web/sdk mapping
+// and a forbidden create never mutates.
 func (h *handlers) createInvitation(w http.ResponseWriter, r *http.Request) {
 	var req createInvitationRequest
 	// The bounded strict decoder caps the body before decoding the unbounded
@@ -133,26 +190,9 @@ func (h *handlers) createInvitation(w http.ResponseWriter, r *http.Request) {
 		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return
 	}
-	resourceType := web.Param(r, "resource_type")
-	resourceID := web.Param(r, "resource_id")
-	// The host authorizes the COMPLETE invitation, including the opaque metadata it
-	// will later act on in its Granter, before the service is reached (design §6/D3).
-	// InviteCheck receives its OWN defensive clone: a policy that mutates the map it
-	// is handed can never alter the value the service then persists and grants.
-	if err := h.inviteCheck(r.Context(), invitationsvc.InviteCheckRequest{
-		Principal:    identity.Principal{Type: identity.User, ID: invitedBy},
-		Action:       invitationsvc.InviteCreate,
-		ResourceType: resourceType,
-		ResourceID:   resourceID,
-		Relation:     req.Relation,
-		Metadata:     invitation.CloneMetadata(req.Metadata),
-	}); err != nil {
-		web.RespondJSONDomainError(w, err)
-		return
-	}
-	res, err := h.inv.Create(r.Context(), invitationsvc.CreateInput{
-		ResourceType:   resourceType,
-		ResourceID:     resourceID,
+	res, err := h.inv.CreateAuthorized(r.Context(), identity.Principal{Type: identity.User, ID: invitedBy}, invitationsvc.CreateInput{
+		ResourceType:   web.Param(r, "resource_type"),
+		ResourceID:     web.Param(r, "resource_id"),
 		Relation:       req.Relation,
 		Identifier:     req.Identifier,
 		IdentifierKind: req.IdentifierKind,
@@ -175,9 +215,12 @@ func (h *handlers) createInvitation(w http.ResponseWriter, r *http.Request) {
 // listResourceInvitations pages a resource's invitations (live-session gated).
 // It resolves CurrentUser both to keep the surface user-only (a service-account
 // principal that RequireLiveSession admits is rejected here, exactly as
-// RequireUser's JWT-only gate rejected it) and to pose the host InviteCheck:
-// InviteList carries an empty Relation (design §6/D3). A denial or infrastructure
-// error fails closed through the normal web/sdk mapping before the service call.
+// RequireUser's JWT-only gate rejected it) and to hand the AUTHORIZED list
+// operation its principal: the service poses the InviteList question (empty
+// Relation, no invitee context — design §6/D3) before reading. A denial or
+// infrastructure error fails closed through the normal web/sdk mapping. The page
+// carries the RESOURCE-OWNER projection, so an owner sees the host metadata they
+// supplied.
 func (h *handlers) listResourceInvitations(w http.ResponseWriter, r *http.Request) {
 	req, ok := h.parseListRequest(w, r, invitation.OrderFields, invitation.DefaultOrder)
 	if !ok {
@@ -188,18 +231,8 @@ func (h *handlers) listResourceInvitations(w http.ResponseWriter, r *http.Reques
 		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return
 	}
-	resourceType := web.Param(r, "resource_type")
-	resourceID := web.Param(r, "resource_id")
-	if err := h.inviteCheck(r.Context(), invitationsvc.InviteCheckRequest{
-		Principal:    identity.Principal{Type: identity.User, ID: userID},
-		Action:       invitationsvc.InviteList,
-		ResourceType: resourceType,
-		ResourceID:   resourceID,
-	}); err != nil {
-		web.RespondJSONDomainError(w, err)
-		return
-	}
-	page, err := h.inv.ListByResource(r.Context(), resourceType, resourceID, req)
+	page, err := h.inv.ListByResourceAuthorized(r.Context(), identity.Principal{Type: identity.User, ID: userID},
+		web.Param(r, "resource_type"), web.Param(r, "resource_id"), req)
 	if err != nil {
 		web.RespondJSONDomainError(w, err)
 		return
@@ -209,7 +242,8 @@ func (h *handlers) listResourceInvitations(w http.ResponseWriter, r *http.Reques
 
 // listMyInvitations pages the caller's own invitations, keyed on their email
 // (session-gated). The email is resolved from the caller's active verified email
-// identifier so invitationsvc stays decoupled from the identifier store.
+// identifier so invitationsvc stays decoupled from the identifier store. It
+// answers the RECIPIENT projection, which carries no host metadata.
 func (h *handlers) listMyInvitations(w http.ResponseWriter, r *http.Request) {
 	req, ok := h.parseListRequest(w, r, invitation.OrderFields, invitation.DefaultOrder)
 	if !ok {
@@ -230,7 +264,7 @@ func (h *handlers) listMyInvitations(w http.ResponseWriter, r *http.Request) {
 		web.RespondJSONDomainError(w, err)
 		return
 	}
-	web.RespondJSONOK(w, newPageResponse(page, newInvitationResponse))
+	web.RespondJSONOK(w, newPageResponse(page, newMyInvitationResponse))
 }
 
 // acceptInvitation redeems a token for the calling user (session-gated). The

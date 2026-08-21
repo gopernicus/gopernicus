@@ -71,7 +71,7 @@ func newCSRFHandler(t *testing.T) *web.WebHandler {
 		AllowedOrigins: []string{spaOrigin, corsOnlyOrigin},
 		AllowedHeaders: []string{"Accept", "Content-Type", "Authorization", csrfHeaderName},
 	}))
-	Mount(h, svc, nil, nil, "", MutationSecurity{
+	Mount(h, svc, nil, "", MutationSecurity{
 		AllowedOrigins:    []string{spaOrigin},
 		SessionCookieName: svc.SessionCookieName(),
 	}, nil, nil)

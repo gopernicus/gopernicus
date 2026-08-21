@@ -56,7 +56,7 @@ func newRefreshPathHandler(t *testing.T, refreshPath, prefix string) http.Handle
 	if prefix != "" {
 		r = feature.PrefixRegistrar{Prefix: prefix, Next: h}
 	}
-	Mount(r, svc, nil, nil, "", MutationSecurity{}, nil, nil)
+	Mount(r, svc, nil, "", MutationSecurity{}, nil, nil)
 	return h
 }
 

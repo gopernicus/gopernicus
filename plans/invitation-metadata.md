@@ -2,8 +2,9 @@
 
 **Feature:** `features/authentication`
 **Status:** proposal, for owner review (patch-tag vs. batch — see the last section)
-**Motivating consumer:** coordination-hub firm-aware vendor onboarding (below), but
-the framework surface is generic host metadata.
+**Evidence consumer:** coordination-hub firm-aware vendor onboarding (below).
+Its domain is evidence only; the framework surface must remain generic host
+metadata.
 
 ## Problem
 
@@ -14,11 +15,19 @@ invitation can only carry what the feature models: `{ResourceType, ResourceID,
 Relation, Identifier, …}`. A host that needs to route *additional* information from
 invite-time to grant-time has no channel for it.
 
-Concretely (coordination-hub): a vendor person should be attached to their **firm**
-(`vendor_org`) as part of accepting a campaign invitation. Today the host can only
-attach them in a separate admin step *after* they exist and verify, because the
-"which firm" fact cannot ride the invitation to the `Grant` call. The host has a
-seam to *act* on acceptance and nothing to act *with*.
+The evidence consumer needed an additional host-owned routing fact to ride the
+invitation into `Grant`. More generally, hosts may need to carry a small policy
+key, account/routing reference, eligibility marker, or plan selection into the
+grant operation. The feature must provide the channel without interpreting any
+of those application concepts.
+
+### Platform validation
+
+Before treating this as a framework feature, validate the same metadata channel
+against several independent host classes (for example, account compatibility,
+eligibility, quota/deduplication, or routing). The acceptance contract is the
+generic `map[string]string` channel and its defensive/size guarantees—not
+`vendor_org_id`, firms, campaigns, or any other coordination-hub invariant.
 
 ## Proposal
 
@@ -37,17 +46,18 @@ that inspect `GrantInput` or `InviteCheckRequest`.
 ### Design points
 
 - **Opaque and host-owned.** The feature validates only shape/size, never keys or
-  values. It is not a general document store — it is small routing data (a firm id,
-  a plan tier), so bound it. The initial limits are **32 entries**, **64 bytes per
-  key**, **256 bytes per value**, and **4 KiB total encoded metadata**. Limits are
+  values. It is not a general document store — it is small routing data (an
+  account reference, eligibility marker, or plan tier), so bound it. The initial
+  limits are **32 entries**, **64 bytes per key**, **256 bytes per value**, and
+  **4 KiB total encoded metadata**. Limits are
   measured in UTF-8 bytes; empty keys are rejected, values may be empty, and invalid
   UTF-8 is rejected. Every violation wraps `sdk.ErrInvalidInput`.
 - **Untrusted authorization input.** Metadata is supplied by the inviter and is
   never an authorization claim by itself. The create-time `InviteCheck` must receive
-  the parsed metadata so a host can authorize the complete invitation, including
-  fields such as `vendor_org_id`; the `Granter` must validate it again when applying
-  any security-sensitive side effect. The plan therefore adds `Metadata` to
-  `InviteCheckRequest` as well as `GrantInput`.
+  the parsed metadata so a host can authorize the complete invitation; the
+  `Granter` must validate it again when applying any security-sensitive side
+  effect. The plan therefore adds `Metadata` to `InviteCheckRequest` as well as
+  `GrantInput`.
 - **Round-trips unchanged.** What the host set at create is exactly what its
   `Granter` receives logically — no key/value normalization, merging, or ordering
   contract. The feature copies maps at API/domain/store boundaries so callers or
@@ -96,14 +106,22 @@ Traced against `main` @ `8baece8`.
    - Copy metadata before passing it to the host and document that `Granter` must
      treat it as untrusted input and return an error for invalid or unauthorized
      host-side routing.
+   - Factor create preparation so an authorized operation can expose normalized
+     identifier/kind and optional resolved subject to `InviteCheck` after lookup;
+     keep the existing trusted `Create` and `ListByResource` methods check-free.
+     Add principal-aware authorized create/list operations for the HTTP adapter.
 4. **Inbound** — `internal/inbound/authentication/invitation.go`
    - `createInvitationRequest` (line 41) gains an optional `metadata` object
      (`map[string]string`); the `Create` call (line 141) forwards it.
-   - Pass the same metadata to `InviteCheckRequest` before calling the service, so
-     issuance authorization covers the complete request.
+   - Pass the same metadata to the authorized invitation operation, so issuance
+     authorization covers the complete request after the feature has normalized
+     the invitee context. The existing trusted composition methods remain
+     check-free.
    - Use the bounded, strict JSON decoder for this route (or add an equivalent
      route-specific body limit) so an oversized object is rejected before decoding
      an unbounded map. The service/domain limits remain authoritative.
+   - Use separate owner/resource and recipient-facing `/mine` response
+     projections; metadata must not be added to a shared DTO used by `/mine`.
 5. **Facade / docs** — `authentication.go` (the `GrantInput` alias already
    re-exports), `InviteCheckRequest` documentation, the invitation route payload,
    and the `GrantInput` block in `features/authentication/README.md`. Also update
@@ -111,13 +129,15 @@ Traced against `main` @ `8baece8`.
 
 ## Backward compatibility
 
-Every new field is optional; an omitted `metadata` persists `{}` and reaches the
-`Granter` as an empty map. Existing grant behavior is unchanged when the map is
-empty. Adding a field to the public `InviteCheckRequest` is source-compatible for
-keyed struct literals and function implementations, but hosts using unkeyed
-composite literals must switch to keyed literals. The migration is additive with a
-default and applies cleanly to a populated `invitations` table; both dialects must
-ship the migration before a binary that selects the new store code is deployed.
+Every new metadata field is optional; an omitted `metadata` persists `{}` and
+reaches the `Granter` as an empty map. Existing grant behavior is unchanged when
+the map is empty. The authorized invitation operations are additive; existing
+trusted composition methods remain check-free. Adding fields to the public
+`InviteCheckRequest` is source-compatible for keyed struct literals and function
+implementations, but hosts using unkeyed composite literals must switch to keyed
+literals. The migration is additive with a default and applies cleanly to a
+populated `invitations` table; both dialects must ship it before deploying store
+code that selects the new column.
 
 ## Testing
 
@@ -133,20 +153,20 @@ ship the migration before a binary that selects the new store code is deployed.
 - Service: a fake `Granter` asserts it receives the exact logical metadata on each
   of the three paths (accept, direct-add, resolve), receives a defensive copy, and
   sees empty metadata for legacy rows.
-- Authorization: `InviteCheck` receives metadata and can reject an unauthorized
-  routing value before persistence or direct-add.
-- Inbound: a create request with a `metadata` object reaches both `InviteCheck` and
-  `CreateInput`; absent is empty; oversized bodies and oversized metadata are
-  rejected; create/resource-list/mine/resend responses never contain metadata.
+- Authorization: an authorized create receives normalized invitee context and
+  metadata and can reject an unauthorized generic routing value before
+  persistence or direct-add; trusted composition remains unaffected.
+- Inbound: a create request with a `metadata` object reaches the authorized create
+  operation; absent is empty; oversized bodies and oversized metadata are
+  rejected; owner/resource responses contain metadata, while the separate
+  `/mine` projection does not.
 
-## Consumer (coordination-hub, after a tag lands — not part of this repo)
+## Evidence consumer (coordination-hub, after a tag lands — not part of this repo)
 
-- Console "invite a vendor person" sets `metadata: {"vendor_org_id": "<org>"}`.
-- The host's `InviteCheck` first verifies that the inviter may use the selected firm
-  for the campaign. Its invitation `Bridge.Grant` treats the value as untrusted,
-  revalidates the firm/campaign invariant, and if present attaches the firm after
-  applying the campaign relation — idempotent, because the firm assignment moves/
-  no-ops and grants already replay idempotently.
+The consumer may set an application-specific routing key and validate it in its
+authorized invite check and `Granter`. Those key names and invariants are not part
+of this framework plan; the integration is evidence that the generic metadata
+channel reaches the host seams and remains untrusted at grant time.
 
 ## For the owner: patch-tag vs. batch
 

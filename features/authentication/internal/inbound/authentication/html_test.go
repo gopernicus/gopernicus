@@ -98,7 +98,7 @@ func newHTMLTestHandlerWithPolicy(t *testing.T, views Views, policy *HTMLResourc
 		PublicAuthBaseURL: "https://auth.example.com",
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, nil, nil, "", MutationSecurity{}, views, policy)
+	Mount(h, svc, nil, "", MutationSecurity{}, views, policy)
 	return h
 }
 

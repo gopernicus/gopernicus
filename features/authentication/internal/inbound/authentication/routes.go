@@ -10,7 +10,6 @@ import (
 	"net/http"
 
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
-	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/invitationsvc"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
@@ -23,19 +22,15 @@ import (
 const refreshAttemptsPerMinute = 30
 
 // handlers holds the services the route handlers delegate to. inv is nil when no
-// Granter is wired (invitations off); its routes are then never registered.
-// listStrategy is the transport-edge DefaultStrategy the list handlers pass to
-// crud.ParseListRequest (host-configured via authentication.Config.ListStrategy).
+// Granter is wired (invitations off); its routes are then never registered. The
+// host's invitation authorization seam is NOT held here: the create/list handlers
+// call inv's authorized operations, which pose InviteCheck over the fully prepared
+// request (design §6/D3). listStrategy is the transport-edge DefaultStrategy the
+// list handlers pass to crud.ParseListRequest (host-configured via
+// authentication.Config.ListStrategy).
 type handlers struct {
-	svc authService
-	inv InvitationService
-	// inviteCheck is the host's relation-aware invitation authorization seam
-	// (design §6/D3), invoked by the create/list handlers after live-session
-	// validation, principal resolution, and request parsing. It is non-nil exactly
-	// when inv is non-nil: package auth requires it at construction whenever a
-	// Granter enables invitations (ErrInviteCheckRequired), so a mounted invitation
-	// surface always carries a check.
-	inviteCheck  invitationsvc.InviteCheck
+	svc          authService
+	inv          InvitationService
 	listStrategy crud.Strategy
 	// mutation is the browser-safe-mutation policy (design §9.1) applied to
 	// cookie-authenticated sensitive routes (step-up and, in later phase-6 tasks,
@@ -69,9 +64,9 @@ type handlers struct {
 // surface (design §9.2) is registered only when a Views port is wired (views !=
 // nil): mountHTML adds the HTML pages while the JSON contracts stay byte-compatible.
 // A nil views leaves the feature API-only, uniformly.
-func Mount(r feature.RouteRegistrar, svc authService, inv InvitationService, inviteCheck invitationsvc.InviteCheck, listStrategy crud.Strategy, mutation MutationSecurity, views Views, htmlPolicy *HTMLResourcePolicy) {
+func Mount(r feature.RouteRegistrar, svc authService, inv InvitationService, listStrategy crud.Strategy, mutation MutationSecurity, views Views, htmlPolicy *HTMLResourcePolicy) {
 	r = clientInfoRegistrar{inner: r}
-	h := &handlers{svc: svc, inv: inv, inviteCheck: inviteCheck, listStrategy: listStrategy, mutation: mutation, views: views, htmlPolicy: htmlPolicy}
+	h := &handlers{svc: svc, inv: inv, listStrategy: listStrategy, mutation: mutation, views: views, htmlPolicy: htmlPolicy}
 	r.Handle("POST", "/auth/register", h.register)
 	r.Handle("POST", "/auth/login", h.login)
 	r.Handle("POST", "/auth/verify", h.verify)
