@@ -19,6 +19,7 @@ func (stubHTMLViews) ResetPassword(ResetPage) web.Renderer                 { ret
 func (stubHTMLViews) PasswordlessStart(PasswordlessStartPage) web.Renderer { return nil }
 func (stubHTMLViews) PasswordlessCode(PasswordlessCodePage) web.Renderer   { return nil }
 func (stubHTMLViews) MagicLinkLanding(MagicLinkPage) web.Renderer          { return nil }
+func (stubHTMLViews) OAuthLinkLanding(OAuthLinkPage) web.Renderer          { return nil }
 func (stubHTMLViews) CheckDelivery(CheckDeliveryPage) web.Renderer         { return nil }
 func (stubHTMLViews) StepUp(StepUpPage) web.Renderer                       { return nil }
 func (stubHTMLViews) AccountSecurity(AccountSecurityPage) web.Renderer     { return nil }

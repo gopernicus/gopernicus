@@ -510,6 +510,7 @@ enumeration-resistant copy (password/code/token fields are never repopulated).
 | add / confirm / edit identifier | `GET /auth/identifiers/{new,confirm,{id}/edit}` | live session |
 | password set / change / remove | `GET /auth/password/{set,change,remove}` | live session |
 | step-up | `GET /auth/step-up` | live session |
+| OAuth pending-link landing | `GET /auth/oauth/link` | **public** (if enabled) |
 | OAuth unlink | `GET /auth/oauth/{provider}/unlink` | live session (if enabled) |
 | identifier edit form POST | `POST /auth/identifiers/{id}` (`action=remove`\|uses) | live + browser-safe |
 
@@ -1471,6 +1472,15 @@ does not mint one; flow 2 proves address ownership with a mailed secret and does
 mint one.** Flow 2 additionally revokes a squatter password/sessions when the
 matched identifier was unverified at flow start (design §5.7/V5).
 
+**Completing it in a browser.** With `Config.Views` wired, `GET /auth/oauth/link` is
+a **public** landing page that finishes this branch: it reads the mailed secret from
+the URL fragment with the shared `fragment.js` reader, the user confirms, and the
+form POSTs `verify-link` (the form arm of the same dispatch every other page uses),
+which mints the session and 303s to `/auth/account`. It is public by construction —
+the caller holds a mailed secret and no session, and the flow is what mints one.
+Point `OAuthLinkBaseURL` at it (`https://<host>/auth/oauth/link`) or keep your own
+SPA route; the JSON `verify-link` contract is identical either way.
+
 **Presentation (config-only, security model unchanged).** Set `OAuthLinkBaseURL`
 (`AUTH_OAUTH_LINK_URL`) to a host SPA route and the pending-link email becomes a
 **clickable link** carrying the single-use secret in the URL **fragment**
@@ -1490,6 +1500,12 @@ fragment** — the token owns it, HTTPS in production).
 - `GET /auth/methods` (live-session-gated, `no-store`) is the linked-method
   inventory: `{has_password, oauth[], identifiers[]}`. A link shows up on the very
   next read — there is no confirmation step.
+- With `Config.Views` wired, the bundled account page renders the same inventory and
+  offers a **link affordance** for every wired provider the caller has not linked
+  (`AccountSecurityPage.LinkableProviders`), anchored at
+  `/auth/oauth/{provider}/link/start?redirect=/auth/account`. Allowlist
+  `/auth/account` in `Config.RedirectAllowlist` to land back on the inventory; an
+  unlisted destination falls back to the same-origin default `/`.
 - Removing a link is the **code-gated pair**, not a DELETE:
   `POST /auth/oauth/{provider}/unlink/start` (live session + browser-safe
   mutation) mails a provider-bound code to the account's verified recovery

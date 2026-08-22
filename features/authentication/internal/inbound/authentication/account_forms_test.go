@@ -32,11 +32,12 @@ import (
 // capturedModels records the view models the account handlers render, so a test can
 // assert masked/generic output the marker-only stubViews would hide.
 type capturedModels struct {
-	account AccountSecurityPage
-	stepUp  StepUpPage
-	oauth   OAuthUnlinkPage
-	idForm  IdentifierFormPage
-	pwForm  PasswordFormPage
+	account   AccountSecurityPage
+	stepUp    StepUpPage
+	oauth     OAuthUnlinkPage
+	oauthLink OAuthLinkPage
+	idForm    IdentifierFormPage
+	pwForm    PasswordFormPage
 }
 
 // captureViews wraps stubViews, recording the account page models before delegating
@@ -326,6 +327,52 @@ func TestAccountPageMasksActor(t *testing.T) {
 	}
 	if strings.Contains(f.cap.account.Actor, "masked@example.com") {
 		t.Errorf("account actor %q leaked the full address, want it masked", f.cap.account.Actor)
+	}
+}
+
+// TestAccountPageOffersLinkableProviders proves the account page carries the wired
+// providers the caller has NOT linked, so the inventory can offer a link affordance
+// for each. The fixture wires one provider ("google") and the seeded account has no
+// link, so it is offered.
+func TestAccountPageOffersLinkableProviders(t *testing.T) {
+	f := newAccountFormFixture(t)
+	f.seedLoginUser("u-link", "link@example.com")
+	sess := f.login(t, "link@example.com")
+	if rec := do(t, f.h, "GET", "/auth/account", "", sess); rec.Code != http.StatusOK {
+		t.Fatalf("GET /auth/account = %d, want 200; body=%s", rec.Code, rec.Body)
+	}
+	if got := f.cap.account.LinkableProviders; len(got) != 1 || got[0] != "google" {
+		t.Errorf("LinkableProviders = %v, want the one wired, unlinked provider", got)
+	}
+}
+
+// TestLinkableProviders proves the projection: already-linked providers drop out,
+// the wired order is preserved, and OAuth-off (no wired providers) yields nothing —
+// the zero value that renders no affordance at all.
+func TestLinkableProviders(t *testing.T) {
+	tests := []struct {
+		name   string
+		wired  []string
+		linked []OAuthMethod
+		want   []string
+	}{
+		{"oauth off", nil, nil, nil},
+		{"none linked keeps wired order", []string{"google", "github"}, nil, []string{"google", "github"}},
+		{"linked provider drops out", []string{"google", "github"}, []OAuthMethod{{Provider: "google"}}, []string{"github"}},
+		{"all linked yields nothing", []string{"google"}, []OAuthMethod{{Provider: "google"}}, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := linkableProviders(tt.wired, tt.linked)
+			if len(got) != len(tt.want) {
+				t.Fatalf("linkableProviders(%v, %v) = %v, want %v", tt.wired, tt.linked, got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("linkableProviders(%v, %v) = %v, want %v", tt.wired, tt.linked, got, tt.want)
+				}
+			}
+		})
 	}
 }
 

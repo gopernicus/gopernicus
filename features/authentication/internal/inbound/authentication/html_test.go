@@ -47,6 +47,7 @@ func (stubViews) PasswordlessCode(PasswordlessCodePage) web.Renderer {
 	return stubRenderer{"passwordless_code"}
 }
 func (stubViews) MagicLinkLanding(MagicLinkPage) web.Renderer  { return stubRenderer{"magic"} }
+func (stubViews) OAuthLinkLanding(OAuthLinkPage) web.Renderer  { return stubRenderer{"oauth_link"} }
 func (stubViews) CheckDelivery(CheckDeliveryPage) web.Renderer { return stubRenderer{"check"} }
 func (stubViews) StepUp(StepUpPage) web.Renderer               { return stubRenderer{"stepup"} }
 func (stubViews) AccountSecurity(AccountSecurityPage) web.Renderer {
@@ -115,6 +116,9 @@ var htmlPublicPages = []struct{ path, marker string }{
 	{"/auth/passwordless/code", "passwordless_code"},
 	{"/auth/passwordless/check", "check"},
 	{"/auth/magic", "magic"},
+	// The OAuth pending-link landing is public by construction: the caller holds a
+	// mailed secret and no session (the flow is what mints one).
+	{"/auth/oauth/link", "oauth_link"},
 }
 
 // htmlGatedPages are the account-security HTML GET pages: they ride

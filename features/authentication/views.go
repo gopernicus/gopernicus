@@ -38,6 +38,9 @@ type (
 	MagicLinkPage         = inbound.MagicLinkPage
 	CheckDeliveryPage     = inbound.CheckDeliveryPage
 
+	// OAuth pending-link landing page model (the anti-takeover completion page).
+	OAuthLinkPage = inbound.OAuthLinkPage
+
 	// Step-up (recent-authentication) page model.
 	StepUpPage = inbound.StepUpPage
 

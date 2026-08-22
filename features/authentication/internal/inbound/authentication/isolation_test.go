@@ -49,6 +49,7 @@ func newHTMLTemplateViews() htmlTemplateViews {
 		"passwordless_start": `TPL:passwordless_start`,
 		"passwordless_code":  `TPL:passwordless_code`,
 		"magic":              `TPL:magic`,
+		"oauth_link":         `TPL:oauth_link`,
 		"check":              `TPL:check`,
 		"stepup":             `TPL:stepup`,
 		"account":            `TPL:account`,
@@ -82,6 +83,9 @@ func (v htmlTemplateViews) PasswordlessCode(m PasswordlessCodePage) web.Renderer
 }
 func (v htmlTemplateViews) MagicLinkLanding(m MagicLinkPage) web.Renderer {
 	return web.Template(v.t, "magic", m)
+}
+func (v htmlTemplateViews) OAuthLinkLanding(m OAuthLinkPage) web.Renderer {
+	return web.Template(v.t, "oauth_link", m)
 }
 func (v htmlTemplateViews) CheckDelivery(m CheckDeliveryPage) web.Renderer {
 	return web.Template(v.t, "check", m)

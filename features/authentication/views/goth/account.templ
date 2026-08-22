@@ -77,6 +77,20 @@ templ accountSecurityBody(m authentication.AccountSecurityPage) {
 					}
 				</ul>
 			}
+			// The link affordance renders only for wired providers the caller has not
+			// linked; an empty LinkableProviders (OAuth off, or all linked) renders
+			// nothing at all, leaving the section byte-identical to the pre-affordance
+			// output.
+			if len(m.LinkableProviders) > 0 {
+				<h3 id="link-account-heading">Link an account</h3>
+				<ul aria-labelledby="link-account-heading">
+					for _, p := range m.LinkableProviders {
+						<li>
+							<a href={ templ.SafeURL(oauthLinkStartHref(p)) }>Link { displayProviderName(p) }</a>
+						</li>
+					}
+				</ul>
+			}
 		</section>
 	}
 }

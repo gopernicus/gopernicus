@@ -274,6 +274,41 @@ func (h *handlers) resetPasswordForm(w http.ResponseWriter, r *http.Request) {
 	h.prgTo(w, r, "/auth/login")
 }
 
+// oauthVerifyLinkForm is the HTML transport for POST /auth/oauth/verify-link
+// (dispatched by oauthVerifyLink, oauth.go): the form arm of the anti-takeover
+// pending-link completion. The token was read from the mailed link's URL fragment by
+// the landing page, so this POST — not the landing GET — is the first time it reaches
+// the server. It is a credential-establishment endpoint (the mailed secret is the
+// proof and the flow MINTS the session), so it carries the origin policy and no
+// double-submit CSRF gate, exactly like the reset/redeem landings. On success it lands
+// on the account page, where the newly linked provider appears in the masked
+// inventory — the same destination every completed link/unlink mutation PRGs to. On
+// failure it re-renders the landing with generic copy and NO token: the secret is
+// single-use and the attempt consumed it, so there is nothing to retain (unlike the
+// reset form's IX-11 retention, which exists so a corrected password can retry a
+// still-valid token).
+func (h *handlers) oauthVerifyLinkForm(w http.ResponseWriter, r *http.Request) {
+	if !h.formOriginOK(w, r) {
+		return
+	}
+	form, ok := h.parseForm(w, r)
+	if !ok {
+		return
+	}
+	res, err := h.svc.VerifyLink(r.Context(), form.Get("token"))
+	if err != nil {
+		status, msg := formFailure(err, linkErrMsg)
+		pc := h.newPageContext(w)
+		pc.Message = msg
+		h.renderForm(w, r, status, pc.CSPNonce, h.views.OAuthLinkLanding(OAuthLinkPage{
+			PageContext: pc, RedeemPath: verifyLinkPath,
+		}))
+		return
+	}
+	h.svc.SetSessionCookies(w, authsvc.TokenPair{AccessToken: res.Token, RefreshToken: res.RefreshToken})
+	h.prgTo(w, r, accountPath)
+}
+
 // logoutForm is the HTML transport for POST /auth/logout (dispatched by logout,
 // dispatch.go). It resolves the SAME credentials as logoutJSON — the refresh cookie
 // (primary) and the bearer-then-session-cookie access token (fallback) — calls the

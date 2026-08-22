@@ -225,6 +225,52 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
+### features/authentication + views/goth — next tag: OAuth linking completed in the bundled HTML surface (minor floor)
+
+The two browser-side gaps in the OAuth linking story (Segovia flags #15/#16, plan
+of record `.claude/dashboards/04-account-oauth.md` in that repo). Additive only —
+no schema change, no store retags, no `go.mod` change (`features/authentication`
+still pins `sdk v0.4.0`) — but the **`Views` port gains a method**, so it is a
+minor floor for both modules and they are tagged together (the goth module
+implements the new method).
+
+- **`AccountSecurityPage.LinkableProviders []string`** — the wired OAuth providers
+  the caller has NOT linked, in the service's deterministic order. The bundled
+  account page renders a "Link an account" list, one anchor per provider, pointing
+  at the existing `GET /auth/oauth/{provider}/link/start?redirect=/auth/account`;
+  previously the link-start route was unreachable from any shipped page. The field
+  is empty when OAuth is off or every wired provider is already linked, and an
+  empty value renders **byte-identically** to the pre-affordance section (pinned by
+  test). Hosts that want the post-link landing to be the account page must add
+  `/auth/account` to `Config.RedirectAllowlist` — the allowlist is exact-match, and
+  an unlisted destination safely falls back to the same-origin default `/`.
+- **`Views.OAuthLinkLanding(m OAuthLinkPage) web.Renderer`** — a NEW port method
+  (with the re-exported `authentication.OAuthLinkPage` model). A host that embeds
+  the bundled `views/goth` default gets it for free; a host that implements the
+  port **by hand must add it** (the `features/cms/views/goth` `EntriesListContent`
+  precedent).
+- **`GET /auth/oauth/link`** — a PUBLIC HTML landing page completing the
+  anti-takeover pending-link branch, registered only when `Config.Views` is wired
+  AND a provider is configured. It is public by construction: the caller holds the
+  mailed single-use secret and no session (the flow is what mints one). It reuses
+  the existing externalized `fragment.js` reader — the token rides the mailed
+  link's `#token=` fragment, is scrubbed from history client-side, and never
+  reaches the server on the landing GET. Point `Config.OAuthLinkBaseURL`
+  (`AUTH_OAUTH_LINK_URL`) at this route (`https://<host>/auth/oauth/link`) and the
+  clickable pending-link email from v0.3.1 now lands somewhere real; hosts with an
+  SPA landing keep theirs unchanged.
+- **`POST /auth/oauth/verify-link` gains the form arm** of the standard
+  content-type dispatch. The **JSON contract is unchanged** (same body, same user
+  JSON response, same strict decoding); a urlencoded body completes the same
+  `VerifyLink` service method, sets the session cookies, and **303s to
+  `/auth/account`**, where the new link appears in the masked inventory — the
+  destination every completed link/unlink mutation already PRGs to. Like the
+  reset/redeem landings it carries the credential-establishment origin policy and
+  no double-submit CSRF gate (the caller has no session to bootstrap one from). A
+  dead or unknown secret re-renders the landing at the mapped status with generic
+  copy and echoes no token (it is single-use and the attempt consumed it). With a
+  nil `Views` a form body is still 415 — the API-only posture is untouched.
+
 ### features/authentication — v0.4.2 (2026-08-21): authorized invitation operations promoted to the public facade (patch)
 
 Same-day follow-up to v0.4.1 by owner ruling. Purely additive facade surface —

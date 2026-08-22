@@ -20,8 +20,9 @@
 // SECRET DISCIPLINE (design §9.2): no template here renders a password, one-time
 // code, magic-link/reset/verification token, HMAC pepper, unmasked recovery
 // address, or raw provider token. Secret fields are never repopulated after a
-// failure; the reset and magic-link tokens are read from the URL fragment by the
-// externalized fragment-reader script and never appear as a server-rendered value.
+// failure; the reset, magic-link, and OAuth pending-link tokens are read from the URL
+// fragment by the externalized fragment-reader script and never appear as a
+// server-rendered value.
 package goth
 
 import (
@@ -152,6 +153,11 @@ func (v Views) MagicLinkLanding(m authentication.MagicLinkPage) web.Renderer {
 // CheckDelivery renders the post-start delivery confirmation.
 func (v Views) CheckDelivery(m authentication.CheckDeliveryPage) web.Renderer {
 	return v.page("Check your messages", nil, checkDeliveryBody(m))
+}
+
+// OAuthLinkLanding renders the fragment-token OAuth pending-link landing.
+func (v Views) OAuthLinkLanding(m authentication.OAuthLinkPage) web.Renderer {
+	return v.page("Finish linking your account", v.fragmentHead(), oauthLinkBody(m))
 }
 
 // StepUp renders the recent-authentication confirmation page.

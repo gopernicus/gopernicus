@@ -87,6 +87,7 @@ func TestAllPagesRenderZeroModels(t *testing.T) {
 	render(t, v.PasswordlessStart(authentication.PasswordlessStartPage{}))
 	render(t, v.PasswordlessCode(authentication.PasswordlessCodePage{}))
 	render(t, v.MagicLinkLanding(authentication.MagicLinkPage{}))
+	render(t, v.OAuthLinkLanding(authentication.OAuthLinkPage{}))
 	render(t, v.CheckDelivery(authentication.CheckDeliveryPage{}))
 	render(t, v.StepUp(authentication.StepUpPage{}))
 	render(t, v.AccountSecurity(authentication.AccountSecurityPage{}))
@@ -318,6 +319,106 @@ func TestAccountSecurity_MaskedInventory(t *testing.T) {
 		`href="/auth/identifiers/id1/edit"`,
 		`href="/auth/password/change"`,
 		`href="/auth/oauth/github/unlink"`,
+	)
+}
+
+// oauthSection extracts the account page's linked-accounts <section> so a test can pin
+// its exact bytes without depending on the rest of the document chrome.
+func oauthSection(t *testing.T, body string) string {
+	t.Helper()
+	start := strings.Index(body, `<section aria-labelledby="oauth-heading"`)
+	if start < 0 {
+		t.Fatalf("no linked-accounts section in:\n%s", body)
+	}
+	end := strings.Index(body[start:], "</section>")
+	if end < 0 {
+		t.Fatalf("unterminated linked-accounts section in:\n%s", body)
+	}
+	return body[start : start+end+len("</section>")]
+}
+
+// TestAccountSecurity_LinkableProvidersAffordance proves the account page offers one
+// link anchor per LINKABLE provider — the entry point to the session-gated link-start
+// route, carrying the account page as the post-flow destination — and never offers one
+// for a provider that is already linked.
+func TestAccountSecurity_LinkableProvidersAffordance(t *testing.T) {
+	body := render(t, newViews(t).AccountSecurity(authentication.AccountSecurityPage{
+		PageContext:       authentication.PageContext{Actor: "a•••@example.com"},
+		HasPassword:       true,
+		OAuth:             []authentication.OAuthMethod{{Provider: "github", Removable: true}},
+		LinkableProviders: []string{"google", "gitlab"},
+	}))
+	mustContain(t, "AccountSecurity linkable", body,
+		"Link an account",
+		`<a href="/auth/oauth/google/link/start?redirect=/auth/account">Link Google</a>`,
+		`<a href="/auth/oauth/gitlab/link/start?redirect=/auth/account">Link Gitlab</a>`,
+		`href="/auth/oauth/github/unlink"`,
+	)
+	// The already-linked provider gets an unlink, never a link-start.
+	mustNotContain(t, "AccountSecurity linkable", body, "/auth/oauth/github/link/start")
+}
+
+// TestAccountSecurity_ZeroLinkableProvidersUnchanged is the zero-value pin: with no
+// linkable providers (OAuth off, or every wired provider already linked) the
+// linked-accounts section renders BYTE-IDENTICALLY to its pre-affordance output, in
+// both the no-links and the one-link shapes. The goldens were captured from the
+// section before LinkableProviders existed.
+func TestAccountSecurity_ZeroLinkableProvidersUnchanged(t *testing.T) {
+	const (
+		goldenNoLinks = `<section aria-labelledby="oauth-heading" data-slot="account-section"><h2 id="oauth-heading">Linked accounts</h2><p>No linked accounts.</p></section>`
+		goldenLinked  = `<section aria-labelledby="oauth-heading" data-slot="account-section"><h2 id="oauth-heading">Linked accounts</h2><ul><li><span>google</span> <a href="/auth/oauth/google/unlink">Unlink</a></li></ul></section>`
+	)
+	v := newViews(t)
+	pc := authentication.PageContext{Actor: "a•••@example.com"}
+
+	none := oauthSection(t, render(t, v.AccountSecurity(authentication.AccountSecurityPage{PageContext: pc, HasPassword: true})))
+	if none != goldenNoLinks {
+		t.Errorf("no-links section changed:\n got %q\nwant %q", none, goldenNoLinks)
+	}
+
+	linked := oauthSection(t, render(t, v.AccountSecurity(authentication.AccountSecurityPage{
+		PageContext: pc, HasPassword: true,
+		OAuth: []authentication.OAuthMethod{{Provider: "google", Removable: true}},
+	})))
+	if linked != goldenLinked {
+		t.Errorf("linked section changed:\n got %q\nwant %q", linked, goldenLinked)
+	}
+
+	// An explicitly empty (non-nil) slice is the same as the nil zero value.
+	empty := oauthSection(t, render(t, v.AccountSecurity(authentication.AccountSecurityPage{
+		PageContext: pc, HasPassword: true, LinkableProviders: []string{},
+	})))
+	if empty != goldenNoLinks {
+		t.Errorf("empty-slice section = %q, want the zero-value output %q", empty, goldenNoLinks)
+	}
+}
+
+// TestOAuthLinkLanding_FragmentTokenNeverRendered proves the pending-link landing
+// carries no server-rendered token: the hidden field ships EMPTY, the externalized
+// fragment reader is loaded same-origin with the data-* config it keys off, and the
+// user's own submit completes the link (no auto-submit — linking two accounts is
+// deliberate). No token appears in a query string and no script is inline.
+func TestOAuthLinkLanding_FragmentTokenNeverRendered(t *testing.T) {
+	body := render(t, newViews(t).OAuthLinkLanding(authentication.OAuthLinkPage{
+		PageContext: ctx(),
+		RedeemPath:  "/auth/oauth/verify-link",
+	}))
+	mustContain(t, "OAuthLinkLanding", body,
+		`action="/auth/oauth/verify-link"`,
+		`name="token" id="oauth-link-token"`,
+		`data-auth-fragment="token"`,
+		`data-auth-fragment-target="oauth-link-token"`,
+		`src="/assets/auth/fragment.js"`,
+		`name="csrf_token" value="csrf-abc123"`,
+		"Finish linking",
+		"<noscript>",
+	)
+	mustNotContain(t, "OAuthLinkLanding", body,
+		`id="oauth-link-token" value=`,
+		`data-auth-fragment-submit`,
+		"replaceState",
+		"?token=",
+		"&token=",
 	)
 }
 

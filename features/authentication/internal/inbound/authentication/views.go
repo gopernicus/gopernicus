@@ -42,6 +42,12 @@ type Views interface {
 	MagicLinkLanding(m MagicLinkPage) web.Renderer
 	CheckDelivery(m CheckDeliveryPage) web.Renderer
 
+	// OAuthLinkLanding is the anti-takeover pending-link completion page
+	// (unauthenticated: the caller holds a mailed secret, not a session). Like the
+	// magic-link landing it reads the token from the URL fragment client-side and
+	// POSTs it to verify-link; the token is never a server-rendered value.
+	OAuthLinkLanding(m OAuthLinkPage) web.Renderer
+
 	// Step-up (recent-authentication) confirmation page.
 	StepUp(m StepUpPage) web.Renderer
 
@@ -189,6 +195,19 @@ type MagicLinkPage struct {
 	RedeemPath string
 }
 
+// OAuthLinkPage models the anti-takeover pending-link landing reached from the
+// emailed confirmation link (design §5.7). It carries NO token: the mailed link
+// puts the single-use secret in the URL FRAGMENT, so the landing GET never sends it
+// to the server; the page reads it client-side, scrubs it from history, and POSTs it
+// to RedeemPath. A failed completion re-renders with generic copy and no token — the
+// secret is consumed on the attempt, so there is nothing to retain.
+type OAuthLinkPage struct {
+	PageContext
+	// RedeemPath is the POST endpoint the form submits the fragment-read token to
+	// (the verify-link edge the JSON API uses).
+	RedeemPath string
+}
+
 // CheckDeliveryPage models the post-start confirmation ("we sent you a link/code").
 // MaskedDestination is the masked address; the copy stays generic so it never
 // distinguishes an unknown account (design §9.2).
@@ -249,6 +268,11 @@ type AccountSecurityPage struct {
 	HasPassword bool
 	OAuth       []OAuthMethod
 	Identifiers []IdentifierMethod
+	// LinkableProviders are the wired OAuth providers the caller has NOT linked yet,
+	// in the service's deterministic order, so the page can offer a link affordance
+	// for each. It is empty when OAuth is off or every wired provider is already
+	// linked; an empty value renders no affordance at all.
+	LinkableProviders []string
 }
 
 // IdentifierFormPage models the add/edit identifier form. For an edit, MaskedValue

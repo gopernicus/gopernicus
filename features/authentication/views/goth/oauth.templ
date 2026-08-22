@@ -6,6 +6,34 @@ import (
 	"github.com/gopernicus/gopernicus/ui/goth/primitives"
 )
 
+// oauthLinkBody renders the anti-takeover pending-link landing reached from the emailed
+// confirmation link. It carries NO token: the externalized fragment-reader script (keyed
+// off the form's data-auth-fragment attributes) reads the single-use secret from the URL
+// fragment, immediately scrubs it from history, and stashes it in the hidden field the
+// visible confirmation posts — so the token never enters a query string, the initial
+// markup, or the referrer (design §6.4). Linking two accounts is deliberate, so the
+// submit is the user's (no auto-submit, unlike the magic-link landing); on a failed
+// attempt the secret is already consumed, so nothing is repopulated.
+templ oauthLinkBody(m authentication.OAuthLinkPage) {
+	@shell("Finish linking your account", "") {
+		@message(m.PageContext)
+		@errorSummary(m.PageContext)
+		<p>Confirm to finish linking the account you signed in with.</p>
+		<form id="oauth-link-form" method="post" action={ templ.SafeURL(m.RedeemPath) } autocomplete="off" data-auth-fragment="token" data-auth-fragment-target="oauth-link-token">
+			@csrfField(m.PageContext)
+			<input type="hidden" name="token" id="oauth-link-token"/>
+			<noscript>
+				<p>JavaScript is required to finish linking from an email link.</p>
+			</noscript>
+			@forms.FormActions(forms.FormActionsProps{}) {
+				@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit}) {
+					Finish linking
+				}
+			}
+		</form>
+	}
+}
+
 // oauthUnlinkBody renders the provider-bound unlink confirmation. The unlink code is
 // delivered to a masked recovery address and never echoed; the confirmation posts to
 // the same provider it names, so it cannot be replayed against another link.

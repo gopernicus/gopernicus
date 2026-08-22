@@ -33,7 +33,8 @@ import (
 //     forms): GET /auth/account, /auth/identifiers/new, /auth/identifiers/confirm,
 //     /auth/identifiers/{id}/edit, /auth/password/set, /auth/password/change,
 //     /auth/password/remove, /auth/step-up;
-//   - OAuth unlink confirmation (only when OAuthEnabled): GET
+//   - OAuth pages (only when OAuthEnabled): the PUBLIC pending-link landing GET
+//     /auth/oauth/link, and the unlink confirmation GET
 //     /auth/oauth/{provider}/unlink.
 //
 // Every HTML GET path is distinct from its JSON POST twin (method+path), so no route
@@ -77,8 +78,12 @@ func mountHTML(r feature.RouteRegistrar, h *handlers, browserSafe web.Middleware
 	// carrying the live-session + browser-safe (Origin + deferred form-CSRF) gates.
 	r.Handle("POST", "/auth/identifiers/{id}", h.identifierEditForm, h.svc.RequireLiveSession, browserSafe)
 
-	// OAuth unlink confirmation page, only when at least one provider is wired.
+	// OAuth pages, only when at least one provider is wired. The pending-link landing
+	// is PUBLIC by construction (design §5.7): the caller proved inbox control with the
+	// mailed secret and has NO session — the flow is what mints one — so a live-session
+	// gate would make the anti-takeover branch uncompletable in a browser.
 	if h.svc.OAuthEnabled() {
+		r.Handle("GET", "/auth/oauth/link", h.oauthLinkPage)
 		r.Handle("GET", "/auth/oauth/{provider}/unlink", h.oauthUnlinkPage, live)
 	}
 }
@@ -230,6 +235,24 @@ func (h *handlers) magicLinkPage(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
+// OAuth pending-link landing (unauthenticated — the mailed secret is the proof).
+// ---------------------------------------------------------------------------
+
+// oauthLinkPage renders the anti-takeover pending-link completion page (design §5.7).
+// The single-use secret rides the URL fragment of the mailed link, read and scrubbed
+// client-side, so it never reaches the server on this GET and is never a
+// server-rendered value; the form POSTs it to the same verify-link edge the JSON API
+// uses.
+func (h *handlers) oauthLinkPage(w http.ResponseWriter, r *http.Request) {
+	pc := h.newPageContext(w)
+	m := OAuthLinkPage{
+		PageContext: pc,
+		RedeemPath:  verifyLinkPath,
+	}
+	h.renderPage(w, r, pc.CSPNonce, h.views.OAuthLinkLanding(m))
+}
+
+// ---------------------------------------------------------------------------
 // Account-security pages (live-session gated). AV3-8.4 enriches these with the
 // management form POST handlers and recent-auth gating.
 // ---------------------------------------------------------------------------
@@ -276,6 +299,7 @@ func (h *handlers) accountPage(w http.ResponseWriter, r *http.Request) {
 		}
 		m.Identifiers = append(m.Identifiers, entry)
 	}
+	m.LinkableProviders = linkableProviders(h.svc.OAuthProviderNames(), m.OAuth)
 	h.renderPage(w, r, pc.CSPNonce, h.views.AccountSecurity(m))
 }
 
@@ -488,6 +512,33 @@ func (h *handlers) stepUpModel(ctx context.Context, userID string, pc PageContex
 	m.MaskedIdentifier = maskedRecovery(view)
 	m.CodeAvailable = m.MaskedIdentifier != ""
 	return m
+}
+
+// linkableProviders returns the wired providers the caller has not linked yet, in the
+// service's deterministic order, so the account page can offer one link affordance per
+// provider. With OAuth off the wired list is empty and so is the result — the page
+// renders no affordance at all.
+func linkableProviders(wired []string, linked []OAuthMethod) []string {
+	if len(wired) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(wired))
+	for _, name := range wired {
+		already := false
+		for _, o := range linked {
+			if o.Provider == name {
+				already = true
+				break
+			}
+		}
+		if !already {
+			out = append(out, name)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // maskedRecovery returns the masked value of the caller's first verified

@@ -298,7 +298,7 @@ surface is deferred with the AZADM packet.
 | `Config.IdentifierKeyer` | HMAC (`AUTH_IDENTIFIER_KEY` or ephemeral) | production-required; dev falls back to per-instance SHA-256 |
 | `Config.Passwordless` | `[email, phone]` (`AUTH_PASSWORDLESS`) | empty → passwordless routes not registered |
 | `Config.PublicAuthBaseURL` | `…/auth/magic` (`AUTH_PUBLIC_BASE_URL`) | REQUIRED once a link flow is enabled; production requires HTTPS |
-| `Config.OAuthLinkBaseURL` | empty (`AUTH_OAUTH_LINK_URL`) | the OAuth pending-link email's landing URL; empty → bare-token email fallback + one startup WARN (this demo ships no pending-link landing page); non-empty validated (no fragment, HTTPS in production) |
+| `Config.OAuthLinkBaseURL` | empty (`AUTH_OAUTH_LINK_URL`) | the OAuth pending-link email's landing URL; empty → bare-token email fallback + one startup WARN; point it at this host's bundled public landing (`…/auth/oauth/link`, mounted with `Config.Views` + a provider) to make the mailed link work; non-empty validated (no fragment, HTTPS in production) |
 | `Config.Views` | `authpages.New(bundle)` (branded-Login override of the ui/goth `authgoth.Views`) | nil → API-only (no HTML pages, no templ/`ui/goth` in the graph) |
 | `Config.EmailContentTemplates` | `authpages.EmailOverride()` | empty → bundled LayerCore email bodies |
 | `Repositories.SecurityEvents` | authmem | no audit trail (recording site is a no-op) |

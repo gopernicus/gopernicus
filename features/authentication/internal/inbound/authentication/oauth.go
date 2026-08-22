@@ -9,9 +9,20 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
-// defaultRedirect is the same-origin fallback the callback redirects to when a
-// flow carried no validated destination.
-const defaultRedirect = "/"
+const (
+	// defaultRedirect is the same-origin fallback the callback redirects to when a
+	// flow carried no validated destination.
+	defaultRedirect = "/"
+
+	// verifyLinkPath is the pending-link completion edge both transports post to: the
+	// JSON API client and the bundled HTML landing page's form.
+	verifyLinkPath = "/auth/oauth/verify-link"
+
+	// linkErrMsg is the generic re-render copy for a failed pending-link completion.
+	// The secret is single-use and already consumed by the attempt, so the copy points
+	// at starting over rather than retrying; it names no account.
+	linkErrMsg = "That link is no longer valid. Start linking your account again."
+)
 
 // verifyLinkRequest is the body of POST /auth/oauth/verify-link.
 type verifyLinkRequest struct {
@@ -39,7 +50,7 @@ type unlinkRequest struct {
 func mountOAuth(r feature.RouteRegistrar, h *handlers, requireUser, liveSession, browserSafe web.Middleware) {
 	r.Handle("GET", "/auth/oauth/{provider}/start", h.oauthStart)
 	r.Handle("GET", "/auth/oauth/{provider}/callback", h.oauthCallback)
-	r.Handle("POST", "/auth/oauth/verify-link", h.oauthVerifyLink)
+	r.Handle("POST", verifyLinkPath, h.oauthVerifyLink)
 	r.Handle("GET", "/auth/oauth/{provider}/link/start", h.oauthLinkStart, requireUser)
 	r.Handle("POST", "/auth/oauth/{provider}/unlink/start", h.startUnlinkOAuth, liveSession, browserSafe)
 	r.Handle("POST", "/auth/oauth/{provider}/unlink", h.unlinkOAuth, liveSession, browserSafe)
@@ -79,9 +90,17 @@ func (h *handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, target, http.StatusFound)
 }
 
-// oauthVerifyLink completes a pending link from the mailed secret and logs the
-// user in (fresh session cookie).
+// oauthVerifyLink dispatches the pending-link completion by Content-Type: the JSON
+// arm keeps the existing contract, a form body completes the link through the bundled
+// HTML landing page (only when Views is wired). Both arms call the same VerifyLink
+// service method — the anti-takeover model is unchanged by the transport.
 func (h *handlers) oauthVerifyLink(w http.ResponseWriter, r *http.Request) {
+	h.dispatch(w, r, h.oauthVerifyLinkJSON, h.oauthVerifyLinkForm)
+}
+
+// oauthVerifyLinkJSON completes a pending link from the mailed secret and logs the
+// user in (fresh session cookie).
+func (h *handlers) oauthVerifyLinkJSON(w http.ResponseWriter, r *http.Request) {
 	var req verifyLinkRequest
 	if !decode(w, r, &req) {
 		return
