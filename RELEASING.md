@@ -225,7 +225,7 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
-### features/authentication + views/goth — next tag: OAuth linking completed in the bundled HTML surface (minor floor)
+### features/authentication v0.5.0 + views/goth v0.2.0 (2026-08-21): OAuth linking completed in the bundled HTML surface (minor floor)
 
 Closes the two browser-side gaps in the OAuth linking story (Segovia flags
 #15/#16, plan of record `.claude/dashboards/04-account-oauth.md` in that repo),
@@ -234,7 +234,11 @@ paths. Additive only —
 no schema change, no store retags, no `go.mod` change (`features/authentication`
 still pins `sdk v0.4.0`) — but the **`Views` port gains a method**, so it is a
 minor floor for both modules and they are tagged together (the goth module
-implements the new method).
+implements the new method). `views/goth v0.2.0` is the module's first retag
+since the `v0.1.0` first cut, so its pins move with it per the tagging scheme:
+`features/authentication v0.5.0` (the port it implements) + `sdk v0.4.0` (the
+feature's own floor); `ui/goth` stays at `v0.1.0` (zero drift since that tag,
+no retag).
 
 - **`AccountSecurityPage.LinkableProviders []string`** — the wired OAuth providers
   the caller has NOT linked, in the service's deterministic order. The bundled
