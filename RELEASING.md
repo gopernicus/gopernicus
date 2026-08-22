@@ -227,8 +227,10 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ### features/authentication + views/goth — next tag: OAuth linking completed in the bundled HTML surface (minor floor)
 
-The two browser-side gaps in the OAuth linking story (Segovia flags #15/#16, plan
-of record `.claude/dashboards/04-account-oauth.md` in that repo). Additive only —
+Closes the two browser-side gaps in the OAuth linking story (Segovia flags
+#15/#16, plan of record `.claude/dashboards/04-account-oauth.md` in that repo),
+and teaches the browser-lane redirect resolver to honor safe same-origin relative
+paths. Additive only —
 no schema change, no store retags, no `go.mod` change (`features/authentication`
 still pins `sdk v0.4.0`) — but the **`Views` port gains a method**, so it is a
 minor floor for both modules and they are tagged together (the goth module
@@ -241,9 +243,19 @@ implements the new method).
   previously the link-start route was unreachable from any shipped page. The field
   is empty when OAuth is off or every wired provider is already linked, and an
   empty value renders **byte-identically** to the pre-affordance section (pinned by
-  test). Hosts that want the post-link landing to be the account page must add
-  `/auth/account` to `Config.RedirectAllowlist` — the allowlist is exact-match, and
-  an unlisted destination safely falls back to the same-origin default `/`.
+  test). The `/auth/account` destination needs no `Config.RedirectAllowlist` entry
+  — see the relative-path resolver change below.
+- **Browser-lane redirect resolution honors safe same-origin relative paths.**
+  `Service.ResolveRedirect` — shared by the OAuth flow start and the HTML form
+  return-to — now honors any safe root-relative path (the existing
+  `redirect.SafeRelativePath` rule: single leading slash, no `//`, backslash,
+  scheme, or control bytes) WITHOUT an allowlist entry; a relative path is never
+  an off-site open-redirect vector. Absolute targets still require an exact
+  `Config.RedirectAllowlist` match, and anything else still falls back to `/`.
+  Behavior change: a relative `redirect`/`return_to` that previously fell back to
+  `/` in the OAuth lane is now honored (the HTML form lane already honored it).
+  The **invitation lane is unchanged** — its destination is embedded in a mailed
+  link, so it stays exact-match only.
 - **`Views.OAuthLinkLanding(m OAuthLinkPage) web.Renderer`** — a NEW port method
   (with the re-exported `authentication.OAuthLinkPage` model). A host that embeds
   the bundled `views/goth` default gets it for free; a host that implements the

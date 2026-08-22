@@ -34,10 +34,12 @@ import (
 const (
 	// linkProvider is the provider key in the /auth/oauth/{provider}/* routes.
 	linkProvider = "fake"
-	// settingsRedirect is the post-link destination a settings page would send,
-	// added to the host's RedirectAllowlist below.
+	// settingsRedirect is the post-link destination a settings page would send: a
+	// safe same-origin relative path, honored by the feature's redirect resolver
+	// with NO RedirectAllowlist entry.
 	settingsRedirect = "/settings/security"
-	// hostileRedirect is an off-origin destination the allowlist must refuse.
+	// hostileRedirect is an off-origin destination the open-redirect guard must
+	// refuse — absolute targets still require an exact allowlist match.
 	hostileRedirect = "https://evil.example/steal"
 
 	linkPassword = "password123456789"
@@ -57,17 +59,15 @@ type linkHost struct {
 }
 
 // newLinkHost boots the host's real config in in_process delivery mode with a
-// recording mailer, widens the redirect allowlist to the settings destination a
-// real console would use, mounts the feature, and starts the delivery runtime.
+// recording mailer, mounts the feature, and starts the delivery runtime. The
+// host's shipped RedirectAllowlist{"/"} is used as-is: the settings destination
+// is a safe same-origin relative path, which the feature's redirect resolver
+// honors without an allowlist entry.
 func newLinkHost(t *testing.T) *linkHost {
 	t.Helper()
 
 	sender := &recordingSender{}
-	svc := bootInProcess(t, sender, func(cfg *auth.Config) {
-		// The host ships RedirectAllowlist{"/"}; a settings page needs its own
-		// destination allowlisted. Anything not listed falls back to "/".
-		cfg.RedirectAllowlist = []string{"/", settingsRedirect}
-	})
+	svc := bootInProcess(t, sender, nil)
 	router := mountInProcess(t, svc)
 	stop := runDelivery(t, svc)
 	t.Cleanup(stop)
@@ -310,7 +310,7 @@ func TestOAuthExplicitLinkFromSettingsPage(t *testing.T) {
 		t.Fatalf("callback = %d, want 302; body=%s", resp.StatusCode, body)
 	}
 	if got := resp.Header.Get("Location"); got != settingsRedirect {
-		t.Errorf("callback Location = %q, want the allowlisted %q", got, settingsRedirect)
+		t.Errorf("callback Location = %q, want the relative destination %q", got, settingsRedirect)
 	}
 
 	// 4. An explicit link does NOT mint or replace the caller's session: the user
@@ -362,9 +362,11 @@ func TestOAuthLinkStartUnknownProvider(t *testing.T) {
 	}
 }
 
-// TestOAuthLinkRedirectIsAllowlisted proves the open-redirect guard: a
+// TestOAuthLinkRedirectIsAllowlisted proves the open-redirect guard: an ABSOLUTE
 // destination the host did not allowlist falls back to the same-origin default
-// instead of bouncing the browser off-origin after a successful link.
+// instead of bouncing the browser off-origin after a successful link. (A safe
+// same-origin relative destination needs no allowlisting — see
+// TestOAuthExplicitLinkFromSettingsPage.)
 func TestOAuthLinkRedirectIsAllowlisted(t *testing.T) {
 	host := newLinkHost(t)
 	c := host.signUp("redirect-guard@example.com")

@@ -340,6 +340,50 @@ func TestStartOAuthUnknownProvider(t *testing.T) {
 	}
 }
 
+// TestResolveRedirect pins the browser-lane resolver: a safe same-origin relative
+// path is honored WITHOUT an allowlist entry, an absolute target needs an exact
+// allowlist match, and everything else — including the protocol-relative and
+// backslash shapes a browser could normalize off-origin — falls back to "/".
+func TestResolveRedirect(t *testing.T) {
+	h := newOAuthHarness(t, &fakeProvider{name: "google"}, nil) // allowlist: https://app.example.com/welcome
+	tests := []struct {
+		name, target, want string
+	}{
+		{"empty falls back", "", "/"},
+		{"relative path honored unallowlisted", "/auth/account", "/auth/account"},
+		{"relative path with query honored", "/settings/security?tab=links", "/settings/security?tab=links"},
+		{"allowlisted absolute honored", "https://app.example.com/welcome", "https://app.example.com/welcome"},
+		{"unlisted absolute falls back", "https://evil.example.com", "/"},
+		{"protocol-relative falls back", "//evil.example.com", "/"},
+		{"backslash trickery falls back", "/\\evil.example.com", "/"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := h.svc.ResolveRedirect(tt.target); got != tt.want {
+				t.Errorf("ResolveRedirect(%q) = %q, want %q", tt.target, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestOAuthCallbackHonorsRelativeRedirect proves the relative-path rule end-to-end
+// in the OAuth lane: a start carrying a safe same-origin relative redirect (the
+// account page's link affordance shape) lands the callback on that path with no
+// allowlist entry for it.
+func TestOAuthCallbackHonorsRelativeRedirect(t *testing.T) {
+	p := &fakeProvider{name: "google", trust: true, providerUserID: "g-rel", email: "rel@example.com", emailVerified: true}
+	h := newOAuthHarness(t, p, nil)
+
+	state := h.startState(t, "/auth/account")
+	res, err := h.svc.OAuthCallback(context.Background(), "google", "code", state)
+	if err != nil {
+		t.Fatalf("OAuthCallback: %v", err)
+	}
+	if res.RedirectTo != "/auth/account" {
+		t.Errorf("RedirectTo = %q, want the relative path honored without allowlisting", res.RedirectTo)
+	}
+}
+
 // TestOAuthCallbackRegisterAndLink covers branch 3: no user exists → a new
 // password-less user is created (verified per TrustEmailVerification), linked,
 // and a session minted.

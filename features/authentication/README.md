@@ -61,7 +61,8 @@ internal/
   inbound/authentication/ driving adapter: JSON handlers, the content-type
                          dispatcher, the HTML GET/form handlers, the Views port,
                          and the route table
-  redirect/              exact-match open-redirect allowlist matcher
+  redirect/              open-redirect guard: safe-relative-path validator +
+                         exact-match absolute allowlist
 storetest/               executable spec for domain/'s ports + the reference
                          in-memory implementation
 stores/turso/            the outbound tier: per-dialect SQL + canonical
@@ -494,7 +495,8 @@ type (`x-www-form-urlencoded`/`multipart/form-data`) routes to the **form arm**
 (only when Views is wired, else 415); `application/json` OR an **absent**
 Content-Type routes to the **JSON arm** (the lenient pre-v3 JSON client is
 preserved — `Accept` never changes decoding); any other explicit media type is
-415. Form success uses **303 PRG** through the exact-match redirect allowlist;
+415. Form success uses **303 PRG** through the shared redirect resolver (safe
+same-origin relative paths honored; absolute targets exact-allowlisted);
 form failure re-renders the same page at the mapped status with generic,
 enumeration-resistant copy (password/code/token fields are never repopulated).
 
@@ -728,7 +730,7 @@ default, so a host can never inherit the development posture; unknown →
 | `OAuthLinkBaseURL` (`AUTH_OAUTH_LINK_URL`) | the absolute SPA landing URL the anti-takeover OAuth **pending-link** email links to, BEFORE `#token=<token>` is appended — a **separate** field from `PublicAuthBaseURL` (that route POSTs magic-link redeem; this one POSTs `verify-link`). The token rides the URL **fragment** (mirroring the magic link), so it never reaches the server on the landing GET and the page can scrub it from history. **Never a production boot requirement** — this changes presentation, not the anti-takeover guarantee (the emailed secret stays proof of inbox control): **empty degrades** the mail to its historical bare-token line, and when OAuth providers are wired one startup WARN names `AUTH_OAUTH_LINK_URL`. A non-empty value is validated in every mode — absolute http(s), a host, **no fragment** (`ErrOAuthLinkURLInvalid`), HTTPS in production (`ErrOAuthLinkURLInsecure`); existing non-secret query parameters are preserved. Built from this value only — request `Host`/forwarded headers never participate. On the pending-link branch the callback redirect also carries `?auth=link_sent&provider=<name>` so the SPA can render a "check your email" state. See [OAuth account linking](#oauth-account-linking--two-distinct-flows). |
 | `UserAdminCheck` | **nil → the bundled admin routes are NOT registered**, even when the store supplies `Repositories.UserAdmin` — turning a store capability into an HTTP surface is the host's decision, not the store's. Non-nil → `GET /auth/admin/users`, `GET /auth/admin/users/{id}`, and the deactivate/reactivate POSTs mount, and BOTH `Repositories.UserAdmin` and `Repositories.ActiveSessions` become required (`ErrUserAdminReposRequired`). Authentication never invents a role named `admin` and never imports authorization — see [Account lifecycle](#account-lifecycle--the-operator-directory-and-deactivation). |
 | `TokenEncrypter` (cryptids.Encrypter) | provider tokens NOT persisted (login/linking still work). Wire `cryptids.NewAESGCM` to store them. |
-| `OAuthCallbackBase`, `RedirectAllowlist` | callback origin / exact-match redirect allowlist (open-redirect guard; a non-allowlisted target falls back to `/`). |
+| `OAuthCallbackBase`, `RedirectAllowlist` | callback origin / exact-match allowlist for ABSOLUTE redirect targets (open-redirect guard). Safe same-origin relative paths are honored without allowlisting in the browser lanes; any other target falls back to `/`. The invitation lane's mailed-link destination stays exact-match only. |
 | `TokenSigner` (cryptids.JWTSigner) | **REQUIRED.** `sdk/foundation/cryptids.NewHS256` is the stdlib default; `integrations/cryptids/golang-jwt` covers RS256/ES256. **Multi-instance hosts MUST share the signing secret** (§1.6). |
 | `AccessTokenTTL` | 0 → 15m (bounds the stateless revocation window). `AUTH_ACCESS_TOKEN_TTL`. |
 | `RefreshTTL` | 0 → 7d — the FIXED refresh horizon; rotation never extends it. `AUTH_REFRESH_TTL`. |
@@ -1431,10 +1433,11 @@ Properties worth relying on:
 - **A provider identity owned by another user conflicts and does not move.** The
   second claimant's callback fails and the original owner keeps the link.
 - **State is single-use** and expires (10 minutes); a replay is rejected.
-- **The redirect is allowlisted at START.** `redirect` is resolved against
-  `Config.RedirectAllowlist` before it is stored, so a non-allowlisted value is
-  replaced by the same-origin default `/` and the callback can only ever land
-  somewhere the host approved. The provider URL carries no redirect, verifier,
+- **The redirect is validated at START.** `redirect` is resolved before it is
+  stored: a safe same-origin relative path is honored directly, an absolute
+  target must appear verbatim in `Config.RedirectAllowlist`, and anything else is
+  replaced by the same-origin default `/` — so the callback can only ever land
+  same-origin or somewhere the host approved. The provider URL carries no redirect, verifier,
   nonce, or user id — only the opaque state token.
 - **CSRF posture.** Both `link/start` and `callback` are GET redirect initiators,
   not state-changing form posts, so they are not behind the browser-safe-mutation
@@ -1503,9 +1506,10 @@ fragment** — the token owns it, HTTPS in production).
 - With `Config.Views` wired, the bundled account page renders the same inventory and
   offers a **link affordance** for every wired provider the caller has not linked
   (`AccountSecurityPage.LinkableProviders`), anchored at
-  `/auth/oauth/{provider}/link/start?redirect=/auth/account`. Allowlist
-  `/auth/account` in `Config.RedirectAllowlist` to land back on the inventory; an
-  unlisted destination falls back to the same-origin default `/`.
+  `/auth/oauth/{provider}/link/start?redirect=/auth/account`. The destination is a
+  safe same-origin relative path, so the resolver honors it with no
+  `Config.RedirectAllowlist` entry — a completed link lands back on the inventory
+  on an unconfigured host.
 - Removing a link is the **code-gated pair**, not a DELETE:
   `POST /auth/oauth/{provider}/unlink/start` (live session + browser-safe
   mutation) mails a provider-bound code to the account's verified recovery

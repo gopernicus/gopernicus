@@ -19,6 +19,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/delivery"
+	"github.com/gopernicus/gopernicus/features/authentication/internal/redirect"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
 	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
@@ -130,8 +131,9 @@ type pendingLink struct {
 func (s *Service) OAuthEnabled() bool { return len(s.providers) > 0 }
 
 // OAuthProviderNames lists the wired provider names in deterministic
-// (sorted) order. The HTML login page renders its "continue with" links from
-// it; empty means OAuth is off and the page renders none.
+// (sorted) order. The HTML login page renders its "continue with" links from it,
+// and the account page derives its link affordances from it; empty means OAuth is
+// off and the pages render none.
 func (s *Service) OAuthProviderNames() []string {
 	names := make([]string, 0, len(s.providers))
 	for name := range s.providers {
@@ -155,12 +157,20 @@ func (s *Service) StartLink(ctx context.Context, userID, providerName, redirectT
 	return s.start(ctx, providerName, redirectTo, userID)
 }
 
-// ResolveRedirect returns a safe post-flow destination for target: the value
-// itself when it is exactly allowlisted (or the same-origin default "/"),
-// otherwise the same-origin default. The HTML form dispatch (design §9.2) uses it
-// to validate a return-to before a 303 redirect, sharing the OAuth open-redirect
-// guard so a browser sign-in cannot be bounced to an attacker origin (design §6.4).
+// ResolveRedirect returns a safe post-flow destination for target: a safe
+// same-origin relative path is honored directly (redirect.SafeRelativePath — a
+// relative path is never an off-site open-redirect vector, so it needs no
+// allowlisting), an exactly allowlisted absolute target is honored, and anything
+// else falls back to the same-origin default "/". It is the single browser-lane
+// resolver: the OAuth flow start and the HTML form dispatch (design §9.2) both
+// route through it, so a browser sign-in cannot be bounced to an attacker origin
+// (design §6.4). The invitation lane keeps the exact-match-only rule — its
+// destination is embedded in a MAILED link, where a relative path is not a
+// meaningful target.
 func (s *Service) ResolveRedirect(target string) string {
+	if p := redirect.SafeRelativePath(target); p != "" {
+		return p
+	}
 	return s.redirects.Resolve(target)
 }
 
@@ -178,7 +188,7 @@ func (s *Service) start(ctx context.Context, providerName, redirectTo, linkUserI
 	payload, err := json.Marshal(flowState{
 		CodeVerifier: verifier,
 		Nonce:        nonce,
-		RedirectTo:   s.redirects.Resolve(redirectTo),
+		RedirectTo:   s.ResolveRedirect(redirectTo),
 		LinkUserID:   linkUserID,
 	})
 	if err != nil {

@@ -1066,10 +1066,14 @@ type Config struct {
 	// the provider callback URL is built from. Only meaningful when Providers is
 	// set.
 	OAuthCallbackBase string
-	// RedirectAllowlist is the exact-match allowlist of post-flow redirect
-	// destinations (open-redirect guard). The same-origin default ("/") is always
-	// allowed; any other requested target must appear verbatim here or it falls
-	// back to "/".
+	// RedirectAllowlist is the exact-match allowlist of ABSOLUTE post-flow
+	// redirect destinations (open-redirect guard). The same-origin default ("/")
+	// is always allowed, and the browser lanes (OAuth flows and HTML form
+	// return-to) honor any safe same-origin relative path without allowlisting —
+	// a relative path is never an off-site vector. Any other target must appear
+	// verbatim here or it falls back to "/". The invitation lane resolves its
+	// mailed-link destination against this list only (exact match, no relative
+	// pass): a relative path is not a meaningful target inside an email.
 	RedirectAllowlist []string
 
 	// TokenSigner signs and verifies the access JWT — the primary access

@@ -866,21 +866,25 @@ func buildAuthConfig(log *slog.Logger, granter auth.Granter) (auth.Config, error
 		// never from a request Host/forwarded header. Production requires it.
 		PasswordResetURL: passwordResetURL(),
 		// The OAuth pending-link landing URL the anti-takeover confirmation mail links
-		// to (oauth-pending-link plan D1), config-only. Empty by default: this demo
-		// ships no fragment-reading pending-link page, so the mail keeps its bare-token
-		// line. A real host sets AUTH_OAUTH_LINK_URL to its own SPA route.
+		// to (oauth-pending-link plan D1), config-only. Empty by default, keeping the
+		// mail's bare-token line — but this demo DOES serve the feature's bundled
+		// fragment-reading landing (public GET /auth/oauth/link, mounted with Views +
+		// a provider), so http://HOST:PORT/auth/oauth/link is a working value here. A
+		// real host points AUTH_OAUTH_LINK_URL at that route or its own SPA route.
 		OAuthLinkBaseURL: oauthLinkBaseURL(),
 		// The queue is the only send path; affirm run() runs the generic-jobs delivery
 		// runtime (jobs.FencedRuntime) (authv3-delivery-refactor AV3D-0.1).
 		DeliveryJobsAcknowledged: true,
 		Providers:                []oauth.Provider{fakeOAuthProvider{}},
 		OAuthCallbackBase:        callbackBase(),
-		RedirectAllowlist:        []string{"/"},
-		TokenEncrypter:           encrypter,
-		TokenSigner:              signer,
-		AccessTokenTTL:           accessTokenTTL(),
-		RefreshTTL:               refreshTTL(),
-		Granter:                  granter,
+		// Absolute post-flow destinations only; safe same-origin relative paths
+		// (e.g. the account page's ?redirect=/auth/account) need no entry.
+		RedirectAllowlist: []string{"/"},
+		TokenEncrypter:    encrypter,
+		TokenSigner:       signer,
+		AccessTokenTTL:    accessTokenTTL(),
+		RefreshTTL:        refreshTTL(),
+		Granter:           granter,
 		// The phone-kind console notifier makes phone a supported delivery kind
 		// (deny-by-absence; the dev stand-in for SMS — the token lands in the log).
 		Notifiers: []notify.Notifier{notify.NewConsole(identity.KindPhone, log)},

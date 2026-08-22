@@ -62,10 +62,11 @@ type authService interface {
 	// proof state, shaped so /auth/me reports exactly what login reported.
 	CurrentUserView(ctx context.Context, userID string) (authsvc.CurrentUserView, error)
 
-	// ResolveRedirect validates an HTML form's return-to against the exact redirect
-	// allowlist, returning the safe destination or the same-origin default "/" (design
-	// §9.2). The form dispatch calls it before every 303 so a browser flow can never be
-	// bounced to a Host-derived or attacker-controlled URL.
+	// ResolveRedirect resolves a browser flow's requested destination: a safe
+	// same-origin relative path is honored directly, an absolute target must be
+	// exactly allowlisted, and anything else falls back to the same-origin default
+	// "/" (design §9.2). The form dispatch calls it before every 303 so a browser
+	// flow can never be bounced to a Host-derived or attacker-controlled URL.
 	ResolveRedirect(target string) string
 
 	// Methods is the live-session-gated masked method inventory (design §5.1):

@@ -61,16 +61,12 @@ func (h *handlers) safeReturnTo(raw string) string {
 	return ""
 }
 
-// resolveReturnTo returns a safe post-auth destination for a requested value: a
-// safe same-origin relative path is honored directly (a relative path is never an
-// open-redirect vector), an exactly-allowlisted absolute target is honored through
-// the shared OAuth allowlist, and anything else falls back to the same-origin
-// default "/". It is the single return-to resolver both the public and the
-// account HTML lanes route through.
+// resolveReturnTo returns a safe post-auth destination for a requested value. It
+// delegates to the service's ResolveRedirect — the single browser-lane resolver,
+// shared with the OAuth flow — which honors a safe same-origin relative path
+// directly, honors an exactly-allowlisted absolute target, and falls back to the
+// same-origin default "/" for anything else.
 func (h *handlers) resolveReturnTo(raw string) string {
-	if p := safeRelativePath(raw); p != "" {
-		return p
-	}
 	return h.svc.ResolveRedirect(raw)
 }
 

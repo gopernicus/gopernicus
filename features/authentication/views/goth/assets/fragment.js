@@ -1,5 +1,5 @@
-// Externalized fragment-token reader for the authentication reset and magic-link
-// landings (design §6.4; ui-goth GOTH-7.2). It replaces the bespoke inline nonced
+// Externalized fragment-token reader for the authentication reset, magic-link, and
+// OAuth pending-link landings (design §6.4; ui-goth GOTH-7.2). It replaces the bespoke inline nonced
 // page scripts so the auth pages run under a CSP whose script-src is 'self' with no
 // inline script. A single element carries the configuration via data-* attributes:
 //

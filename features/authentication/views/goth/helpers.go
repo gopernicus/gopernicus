@@ -135,9 +135,9 @@ func displayProviderName(provider string) string {
 // oauthLinkStartHref returns the account page's "link this provider" entry point: the
 // session-gated link-start route, carrying the account page as the post-flow
 // destination so a completed link lands back on the inventory that offered it. The
-// destination is honored only when the host allowlists it exactly
-// (Config.RedirectAllowlist); otherwise the feature's open-redirect guard falls back
-// to the same-origin default, so an unconfigured host still links successfully.
+// destination is a safe same-origin relative path, which the feature's redirect
+// resolver honors without any Config.RedirectAllowlist entry — it works on an
+// unconfigured host.
 func oauthLinkStartHref(provider string) string {
 	return "/auth/oauth/" + provider + "/link/start?redirect=/auth/account"
 }
