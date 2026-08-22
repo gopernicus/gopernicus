@@ -9,6 +9,11 @@ import (
 // accountSecurityBody renders the masked method inventory (design §5.1). Every
 // address is masked; no password/code/token appears. It links to the management
 // forms, which drive the same service methods the JSON API uses.
+//
+// Where the credential policy reports a method as non-removable, the row renders
+// nonRemovableNote in place of the suppressed removal control rather than nothing —
+// a suppressed affordance with no explanation reads as a broken one. The hint is
+// advisory; the guardrail stays server-side, re-evaluated on the mutation itself.
 templ accountSecurityBody(m authentication.AccountSecurityPage) {
 	@shell("Account security", "") {
 		@message(m.PageContext)
@@ -72,6 +77,10 @@ templ accountSecurityBody(m authentication.AccountSecurityPage) {
 							<span>{ o.Provider }</span>
 							if o.Removable {
 								<a href={ templ.SafeURL(oauthUnlinkAction(o.Provider)) }>Unlink</a>
+							} else {
+								@primitives.Typography(primitives.TypographyProps{Variant: primitives.TypographyMuted}) {
+									{ nonRemovableNote }
+								}
 							}
 						</li>
 					}

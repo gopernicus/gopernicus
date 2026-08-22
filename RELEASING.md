@@ -225,6 +225,38 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
+### features/authentication/views/goth — v0.2.1 (2026-08-21): a suppressed unlink control now explains itself (patch)
+
+Presentation-only defect fix (Segovia flag #17). When the credential policy reports
+a linked OAuth account as non-removable — the common case being an account whose
+only sign-in method is that link — the bundled account page rendered the row with
+no unlink control **and no text at all**, which reads as a broken affordance. The
+row now carries a muted explanation in place of the suppressed control:
+
+> Removing this would leave your account without a way to sign in. Add another
+> sign-in method first.
+
+It mirrors the generic copy the feature already returns when a removal is refused
+server-side, stated ahead of the attempt and paired with the remedy; it names no
+policy rule, method, or contact value. Rendered with the existing
+`ui/goth` `Typography` muted recipe — **no new kit class, no new asset, and no
+change to the bundle's browser `Requirements`**, so no adopter needs to re-derive
+a CSP header.
+
+A **patch** per the bump rules' presentation clause: no exported Go symbol is
+added or changed (the copy is an unexported const), the `Views` port and every
+view model are untouched, `go.mod` is unchanged (`features/authentication v0.5.0`,
+`sdk v0.4.0`, `ui/goth v0.1.0`), and `features/authentication` does **not** retag —
+the guardrail, the `Removable` computation, and every handler are unchanged. The
+LinkableProviders change in v0.2.0 was a minor only because the port gained a
+method; new rendered copy on its own does not floor a minor.
+
+Adopter notes: a **removable** method's row is byte-identical to v0.2.0 (pinned by
+test), so only the previously-empty non-removable case changes. A host that byte-pins
+the account page's linked-accounts markup, or that translates the shipped copy, should
+re-capture it; a host that overrides `AccountSecurity` renders its own page and is
+unaffected.
+
 ### features/authentication v0.5.0 + views/goth v0.2.0 (2026-08-21): OAuth linking completed in the bundled HTML surface (minor floor)
 
 Closes the two browser-side gaps in the OAuth linking story (Segovia flags

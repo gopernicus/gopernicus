@@ -393,6 +393,45 @@ func TestAccountSecurity_ZeroLinkableProvidersUnchanged(t *testing.T) {
 	}
 }
 
+// TestAccountSecurity_NonRemovableMethodExplained proves a method the credential
+// policy reports as non-removable renders the muted explanation INSTEAD of the
+// suppressed unlink control — never a silently actionless row — and that a removable
+// method renders the unlink control and no explanation. Both section shapes are
+// pinned byte-for-byte; the removable golden is the pre-change output.
+func TestAccountSecurity_NonRemovableMethodExplained(t *testing.T) {
+	const (
+		goldenBlocked   = `<section aria-labelledby="oauth-heading" data-slot="account-section"><h2 id="oauth-heading">Linked accounts</h2><ul><li><span>google</span> <p class="goth-typography" data-slot="typography" data-variant="muted">Removing this would leave your account without a way to sign in. Add another sign-in method first.</p></li></ul></section>`
+		goldenRemovable = `<section aria-labelledby="oauth-heading" data-slot="account-section"><h2 id="oauth-heading">Linked accounts</h2><ul><li><span>google</span> <a href="/auth/oauth/google/unlink">Unlink</a></li></ul></section>`
+	)
+	v := newViews(t)
+	pc := authentication.PageContext{Actor: "a•••@example.com"}
+
+	blocked := render(t, v.AccountSecurity(authentication.AccountSecurityPage{
+		PageContext: pc,
+		OAuth:       []authentication.OAuthMethod{{Provider: "google", Removable: false}},
+	}))
+	if got := oauthSection(t, blocked); got != goldenBlocked {
+		t.Errorf("non-removable section:\n got %q\nwant %q", got, goldenBlocked)
+	}
+	// The explanation replaces the affordance: no unlink target is offered anywhere
+	// on the page for a method the policy refuses to remove.
+	mustNotContain(t, "AccountSecurity non-removable", blocked, "/auth/oauth/google/unlink", ">Unlink<")
+
+	removable := render(t, v.AccountSecurity(authentication.AccountSecurityPage{
+		PageContext: pc, HasPassword: true,
+		OAuth: []authentication.OAuthMethod{{Provider: "google", Removable: true}},
+	}))
+	if got := oauthSection(t, removable); got != goldenRemovable {
+		t.Errorf("removable section:\n got %q\nwant %q", got, goldenRemovable)
+	}
+	// A removable method carries the control alone — the explanation never doubles up.
+	mustNotContain(t, "AccountSecurity removable", removable, nonRemovableNote, `data-variant="muted"`)
+
+	// The zero model (no linked accounts at all) explains nothing.
+	zero := render(t, v.AccountSecurity(authentication.AccountSecurityPage{}))
+	mustNotContain(t, "AccountSecurity zero", zero, nonRemovableNote)
+}
+
 // TestOAuthLinkLanding_FragmentTokenNeverRendered proves the pending-link landing
 // carries no server-rendered token: the hidden field ships EMPTY, the externalized
 // fragment reader is loaded same-origin with the data-* config it keys off, and the

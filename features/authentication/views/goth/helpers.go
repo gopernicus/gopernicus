@@ -13,6 +13,14 @@ import (
 	"github.com/gopernicus/gopernicus/ui/goth/primitives"
 )
 
+// nonRemovableNote is the account page's explanation for a method whose removal
+// affordance the credential policy suppressed (Removable == false). It mirrors the
+// generic copy the feature already returns when a removal is refused server-side
+// ("That change would leave your account without a way to sign in…"), stated ahead
+// of the attempt and paired with the remedy. It names no policy rule, method, or
+// contact value — the hint is advisory and enumeration-safe.
+const nonRemovableNote = "Removing this would leave your account without a way to sign in. Add another sign-in method first."
+
 // identifierLabel returns the field label for a passwordless/identifier input,
 // chosen by kind.
 func identifierLabel(kind string) string {
