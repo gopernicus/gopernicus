@@ -4,7 +4,7 @@ go 1.26.1
 
 require (
 	github.com/a-h/templ v0.3.1020
-	github.com/gopernicus/gopernicus/features/authentication v0.5.0
+	github.com/gopernicus/gopernicus/features/authentication v0.5.1
 	github.com/gopernicus/gopernicus/sdk v0.4.0
 	github.com/gopernicus/gopernicus/ui/goth v0.1.0
 )
