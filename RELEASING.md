@@ -225,6 +225,68 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
+### features/authentication v0.5.1 + views/goth v0.2.2 (2026-08-23): the identifier edit form stops offering a removal the policy refuses (patch pair)
+
+Defect fix one layer deeper than v0.2.1 (Segovia flag #18). The credential policy's
+`Removable` hint reached the account page but never reached the identifier
+**management form**, so `GET /auth/identifiers/{id}/edit` always rendered a live
+"Remove this identifier" button — including for the account's only recovery-capable
+address. The owner clicks, and the mutation refuses with the generic
+`accountPolicyMsg`. The form now offers removal only where the policy would allow it,
+and otherwise renders the same muted explanation v0.2.1 introduced:
+
+> Removing this would leave your account without a way to sign in. Add another
+> sign-in method first.
+
+The **copy const is reused, not duplicated** — the account page's suppressed unlink
+and the form's suppressed remove describe the same policy, and the sentence names no
+method kind, no policy rule, and no contact value.
+
+- **`IdentifierFormPage.Removable bool`** (features/authentication) — an additive
+  exported field carrying the identifier's advisory removable hint to the form. The
+  handler reads it from the seam it already calls, `populateIdentifierEdit`'s
+  `Service.Methods` inventory — the same masked projection the account page renders —
+  so **no policy logic is re-derived in the transport layer** and the page and the
+  guard cannot disagree about what the account has. The server-side refusal in
+  `account_forms.go` is untouched and remains the authoritative backstop; the hint
+  stays advisory (the mutation re-runs the policy under revision serialization).
+- **The account page's identifier row is unchanged.** It renders only "Manage", an
+  edit link — editing an identifier's uses is always allowed — so there is no removal
+  affordance there to gate. The only direct remove control for an identifier lives
+  inside the edit form, which is what this change gates.
+
+**Zero-value semantics — a deliberate flip, stated plainly.** A zero
+`IdentifierFormPage` has `Removable == false`, so the zero model (and any edit model
+the handler could not resolve to an identifier the caller owns) now renders the
+explanation instead of a live remove form. That **changes the bytes of the zero
+model's edit rendering**, and it is the choice we want: never offer a mutation the
+policy might refuse. It is also the honest rendering of an unresolved form — a page
+that cannot name the identifier has no business offering to delete it. Both shapes
+are pinned by test (`TestIdentifierForm_ZeroModelFailsSafe`), as is the **removable**
+rendering, which is byte-identical to v0.2.1 (`TestIdentifierForm_NonRemovableExplained`);
+the add and confirm modes have no removal region and are untouched.
+
+**Patch for both, cut as a pair.** Bugfix arm of the bump rules. For
+`features/authentication`: no port method, no interface, no signature, and no schema
+changes — one additive exported struct field with a fail-safe zero value, following
+the `Config.OAuthLinkBaseURL` (v0.3.1) / `sdk v0.3.1` precedent that an additive
+symbol may ship as a patch. A host that implements the `Views` port **by hand
+compiles unchanged** and keeps its current rendering; only an **unkeyed composite
+literal** of `IdentifierFormPage` would break, and hosts consume that model rather
+than construct it (the `InviteCheckRequest` v0.4.1 precedent for naming this). No
+store retags; `go.mod` unchanged (still `sdk v0.4.0`). For `views/goth`: template and
+copy only, no exported Go symbol, no new kit class, no new asset, and **no change to
+the bundle's browser `Requirements`** — no adopter needs to re-derive a CSP header.
+They tag together only because the views module reads the new field, so its pin moves
+to `features/authentication v0.5.1` at the release commit (`sdk v0.4.0` and
+`ui/goth v0.1.0` unchanged). A pin move to a sibling **patch** does not floor a minor;
+v0.2.0 was a minor because the `Views` port gained a method.
+
+Adopter note: a host that byte-pins the identifier edit form's markup, or that
+translates the shipped copy, should re-capture it. A host that overrides
+`IdentifierForm` renders its own page and is unaffected — though it now has the field
+available and should gate its own remove control on it.
+
 ### features/authentication/views/goth — v0.2.1 (2026-08-21): a suppressed unlink control now explains itself (patch)
 
 Presentation-only defect fix (Segovia flag #17). When the credential policy reports

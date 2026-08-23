@@ -580,7 +580,9 @@ func maskedPrimary(view authsvc.MethodsView) string {
 
 // populateIdentifierEdit fills the edit-identifier form from the caller's masked
 // inventory: the existing address is shown masked and its current uses/primary flag
-// pre-select the controls. An id the caller does not own leaves the form blank.
+// pre-select the controls, and the inventory's advisory removable hint decides
+// whether the form offers a removal control at all. An id the caller does not own
+// leaves the form blank — and therefore non-removable.
 func (h *handlers) populateIdentifierEdit(ctx context.Context, userID, id string, m *IdentifierFormPage) {
 	view, err := h.svc.Methods(ctx, userID)
 	if err != nil {
@@ -596,6 +598,7 @@ func (h *handlers) populateIdentifierEdit(ctx context.Context, userID, id string
 		m.RecoveryEnabled = it.Uses.Recovery
 		m.NotificationEnabled = it.Uses.Notification
 		m.MakePrimary = it.Primary
+		m.Removable = it.Removable
 		return
 	}
 }

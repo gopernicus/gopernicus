@@ -11,6 +11,18 @@ import (
 // ownership-proof flow; on confirm a one-time code proves ownership of the new address
 // (never echoed); on edit the existing address is shown masked and only the role
 // selection is editable (with a remove control). No ownership code is echoed.
+//
+// The edit form offers removal only where the credential policy reports the
+// identifier as removable; otherwise it renders nonRemovableNote in place of the
+// suppressed form, so an owner reads the guardrail instead of clicking a control
+// that would be refused server-side. The hint is advisory — the mutation re-runs the
+// policy under revision serialization — and the false zero value fails safe: a model
+// the handler could not resolve offers no removal at all.
+//
+// The closing brace of that conditional abuts the following <nav> with NO source
+// newline on purpose: templ trims whitespace only around literal block elements, so a
+// newline after a control block would emit a stray space the pre-gate output never
+// had. The removable rendering is pinned byte-for-byte by test; keep them together.
 templ identifierFormBody(m authentication.IdentifierFormPage) {
 	if m.Mode == "edit" {
 		@shell("Manage identifier", "") {
@@ -29,17 +41,22 @@ templ identifierFormBody(m authentication.IdentifierFormPage) {
 					}
 				}
 			</form>
-			<form method="post" action={ templ.SafeURL(identifierEditAction(m.ID)) } autocomplete="off">
-				@csrfField(m.PageContext)
-				<input type="hidden" name="id" value={ m.ID }/>
-				<input type="hidden" name="action" value="remove"/>
-				@forms.FormActions(forms.FormActionsProps{}) {
-					@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit, Variant: primitives.ButtonDestructive}) {
-						Remove this identifier
+			if m.Removable {
+				<form method="post" action={ templ.SafeURL(identifierEditAction(m.ID)) } autocomplete="off">
+					@csrfField(m.PageContext)
+					<input type="hidden" name="id" value={ m.ID }/>
+					<input type="hidden" name="action" value="remove"/>
+					@forms.FormActions(forms.FormActionsProps{}) {
+						@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit, Variant: primitives.ButtonDestructive}) {
+							Remove this identifier
+						}
 					}
+				</form>
+			} else {
+				@primitives.Typography(primitives.TypographyProps{Variant: primitives.TypographyMuted}) {
+					{ nonRemovableNote }
 				}
-			</form>
-			<nav class="goth-auth-links" data-slot="auth-links">
+			}<nav class="goth-auth-links" data-slot="auth-links">
 				<p><a href="/auth/account">Back to account security</a></p>
 			</nav>
 		}

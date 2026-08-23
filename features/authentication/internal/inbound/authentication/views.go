@@ -294,6 +294,14 @@ type IdentifierFormPage struct {
 	RecoveryEnabled     bool
 	NotificationEnabled bool
 	MakePrimary         bool
+	// Removable is the credential policy's advisory hint for retiring this
+	// identifier, carried so the edit form offers a removal control only where the
+	// policy would allow one (the same hint IdentifierMethod publishes on the
+	// account page). It is meaningful on edit only; the zero value is false, so a
+	// form the handler could not resolve to an owned identifier offers no removal —
+	// fail-safe, since the mutation's own guard re-runs the policy under revision
+	// serialization and is authoritative.
+	Removable bool
 }
 
 // PasswordFormPage models the set/change/remove password form. Mode selects the

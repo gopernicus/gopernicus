@@ -13,8 +13,10 @@ import (
 	"github.com/gopernicus/gopernicus/ui/goth/primitives"
 )
 
-// nonRemovableNote is the account page's explanation for a method whose removal
-// affordance the credential policy suppressed (Removable == false). It mirrors the
+// nonRemovableNote is the shared explanation for a method whose removal affordance
+// the credential policy suppressed (Removable == false) — the account page's linked
+// accounts and the identifier edit form both render it, because both describe the
+// same policy and the sentence names neither method kind. It mirrors the
 // generic copy the feature already returns when a removal is refused server-side
 // ("That change would leave your account without a way to sign in…"), stated ahead
 // of the attempt and paired with the remedy. It names no policy rule, method, or

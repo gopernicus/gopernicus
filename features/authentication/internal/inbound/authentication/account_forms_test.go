@@ -346,6 +346,59 @@ func TestAccountPageOffersLinkableProviders(t *testing.T) {
 	}
 }
 
+// TestIdentifierEditPageCarriesRemovableHint proves the edit-identifier page learns an
+// identifier's removability from the same masked inventory the account page reads, so
+// the form can offer a removal control only where the credential policy would allow one
+// (Segovia flag #18). The seeded account's sole recovery-capable address is
+// non-removable; a second verified recovery address makes it advisory-removable.
+func TestIdentifierEditPageCarriesRemovableHint(t *testing.T) {
+	f := newAccountFormFixture(t)
+	f.seedLoginUser("u-rm", "rm@example.com")
+	sess := f.login(t, "rm@example.com")
+
+	if rec := do(t, f.h, "GET", "/auth/identifiers/id-u-rm/edit", "", sess); rec.Code != http.StatusOK {
+		t.Fatalf("GET identifier edit = %d, want 200; body=%s", rec.Code, rec.Body)
+	}
+	if f.cap.idForm.MaskedValue == "" {
+		t.Fatal("edit form resolved no identifier from the inventory")
+	}
+	if f.cap.idForm.Removable {
+		t.Error("sole recovery identifier reported Removable=true on the edit form")
+	}
+
+	now := time.Now().UTC()
+	f.idents.insert(identifier.Identifier{
+		ID: "id-backup", UserID: "u-rm", Kind: identifier.KindEmail, NormalizedValue: "backup@example.com",
+		VerifiedAt: now, LoginEnabled: true, RecoveryEnabled: true, NotificationEnabled: true,
+		CreatedAt: now, UpdatedAt: now,
+	})
+	if rec := do(t, f.h, "GET", "/auth/identifiers/id-u-rm/edit", "", sess); rec.Code != http.StatusOK {
+		t.Fatalf("GET identifier edit (redundant recovery) = %d, want 200; body=%s", rec.Code, rec.Body)
+	}
+	if !f.cap.idForm.Removable {
+		t.Error("with a redundant verified recovery address the identifier should be advisory-removable")
+	}
+}
+
+// TestIdentifierEditPageUnownedIdentifierNotRemovable pins the fail-safe zero value: an
+// id the caller does not own leaves the form blank, and blank means NOT removable — the
+// page never offers a removal for an identifier it could not resolve.
+func TestIdentifierEditPageUnownedIdentifierNotRemovable(t *testing.T) {
+	f := newAccountFormFixture(t)
+	f.seedLoginUser("u-own", "own@example.com")
+	sess := f.login(t, "own@example.com")
+
+	if rec := do(t, f.h, "GET", "/auth/identifiers/id-someone-else/edit", "", sess); rec.Code != http.StatusOK {
+		t.Fatalf("GET identifier edit = %d, want 200; body=%s", rec.Code, rec.Body)
+	}
+	if f.cap.idForm.MaskedValue != "" {
+		t.Errorf("unowned id resolved a masked value %q, want a blank form", f.cap.idForm.MaskedValue)
+	}
+	if f.cap.idForm.Removable {
+		t.Error("unowned identifier reported Removable=true")
+	}
+}
+
 // TestLinkableProviders proves the projection: already-linked providers drop out,
 // the wired order is preserved, and OAuth-off (no wired providers) yields nothing —
 // the zero value that renders no affordance at all.

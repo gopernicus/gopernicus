@@ -502,12 +502,15 @@ func TestIdentifierForm_AddEdit(t *testing.T) {
 		`name="login" value="true" checked`,
 	)
 
+	// Removable is set because the remove control is gated on it; the non-removable
+	// shape is pinned by TestIdentifierForm_NonRemovableExplained.
 	edit := render(t, v.IdentifierForm(authentication.IdentifierFormPage{
 		PageContext: ctx(),
 		Mode:        "edit",
 		Kind:        "email",
 		ID:          "id1",
 		MaskedValue: "u•••@example.com",
+		Removable:   true,
 	}))
 	mustContain(t, "IdentifierForm edit", edit,
 		`action="/auth/identifiers/id1"`,
@@ -516,6 +519,79 @@ func TestIdentifierForm_AddEdit(t *testing.T) {
 		`type="hidden" name="action" value="remove"`,
 	)
 	mustNotContain(t, "IdentifierForm edit", edit, `name="value"`)
+}
+
+// identifierRemovalRegion extracts the edit form's removal region — everything the
+// template renders between the uses form and the back-link nav — so a test can pin its
+// exact bytes without depending on the rest of the document chrome.
+func identifierRemovalRegion(t *testing.T, body string) string {
+	t.Helper()
+	const (
+		opens  = `Save changes</button></div></form>`
+		closes = `<nav class="goth-auth-links"`
+	)
+	start := strings.Index(body, opens)
+	if start < 0 {
+		t.Fatalf("no uses form in:\n%s", body)
+	}
+	start += len(opens)
+	end := strings.Index(body[start:], closes)
+	if end < 0 {
+		t.Fatalf("no back-link nav in:\n%s", body)
+	}
+	return body[start : start+end]
+}
+
+// TestIdentifierForm_NonRemovableExplained proves the edit form offers a removal
+// control only where the credential policy would allow the removal (Segovia flag #18).
+// A non-removable identifier renders the muted explanation and NO remove form anywhere
+// on the page; a removable one renders the remove form and no explanation (the golden
+// is the pre-gate output, byte-for-byte). Both shapes are pinned.
+func TestIdentifierForm_NonRemovableExplained(t *testing.T) {
+	const (
+		goldenBlocked   = `<p class="goth-typography" data-slot="typography" data-variant="muted">Removing this would leave your account without a way to sign in. Add another sign-in method first.</p>`
+		goldenRemovable = `<form method="post" action="/auth/identifiers/id1" autocomplete="off"><input type="hidden" name="csrf_token" value="csrf-abc123"><input type="hidden" name="id" value="id1"> <input type="hidden" name="action" value="remove"><div class="goth-form-actions" data-align="end" data-slot="form-actions"><button class="goth-button" data-size="default" data-slot="button" data-variant="destructive" type="submit">Remove this identifier</button></div></form>`
+	)
+	v := newViews(t)
+	edit := authentication.IdentifierFormPage{
+		PageContext: ctx(), Mode: "edit", Kind: "email", ID: "id1", MaskedValue: "u•••@example.com",
+	}
+
+	blocked := render(t, v.IdentifierForm(edit))
+	if got := identifierRemovalRegion(t, blocked); got != goldenBlocked {
+		t.Errorf("non-removable region:\n got %q\nwant %q", got, goldenBlocked)
+	}
+	// The explanation replaces the affordance: no remove submission is offered at all
+	// for an identifier the policy refuses to retire.
+	mustNotContain(t, "IdentifierForm non-removable", blocked,
+		`name="action" value="remove"`, ">Remove this identifier<")
+
+	edit.Removable = true
+	removable := render(t, v.IdentifierForm(edit))
+	if got := identifierRemovalRegion(t, removable); got != goldenRemovable {
+		t.Errorf("removable region:\n got %q\nwant %q", got, goldenRemovable)
+	}
+	// A removable identifier carries the control alone — the explanation never doubles up.
+	mustNotContain(t, "IdentifierForm removable", removable, nonRemovableNote, `data-variant="muted"`)
+}
+
+// TestIdentifierForm_ZeroModelFailsSafe pins the deliberate zero-value semantics of
+// IdentifierFormPage.Removable: false. An edit model the handler could not resolve to
+// an owned identifier explains rather than offering a removal the policy might refuse —
+// the safe default, and a change from the pre-gate bytes for that model alone. The
+// add/confirm modes have no removal region at all, so they are unaffected.
+func TestIdentifierForm_ZeroModelFailsSafe(t *testing.T) {
+	v := newViews(t)
+
+	zeroEdit := render(t, v.IdentifierForm(authentication.IdentifierFormPage{Mode: "edit", ID: "id1"}))
+	mustContain(t, "IdentifierForm zero edit", zeroEdit, nonRemovableNote)
+	mustNotContain(t, "IdentifierForm zero edit", zeroEdit, `name="action" value="remove"`)
+
+	for _, m := range []authentication.IdentifierFormPage{{}, {Mode: "confirm", Kind: "email"}} {
+		body := render(t, v.IdentifierForm(m))
+		mustNotContain(t, "IdentifierForm zero "+m.Mode, body,
+			nonRemovableNote, `name="action" value="remove"`)
+	}
 }
 
 // TestIdentifierForm_Confirm proves the ownership-proof code form posts the
