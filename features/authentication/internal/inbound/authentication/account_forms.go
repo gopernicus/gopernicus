@@ -26,7 +26,7 @@ import (
 
 const (
 	// accountPath is the masked-inventory landing every completed account mutation
-	// PRGs to.
+	// PRGs to; accountDone appends the completed mutation's outcome code.
 	accountPath = "/auth/account"
 
 	// accountErrMsg is the generic re-render copy for a failed account mutation. It
@@ -45,6 +45,15 @@ const (
 // ---------------------------------------------------------------------------
 // Shared account-form plumbing
 // ---------------------------------------------------------------------------
+
+// accountDone builds the account-page PRG destination for a completed mutation,
+// carrying its outcome code so the landing GET names what happened instead of
+// redirecting silently. The code is a fixed constant from the closed vocabulary
+// accountPage whitelists (html.go) — never a caller value — so no site
+// hand-concatenates a query string and no wire input reaches the destination.
+func accountDone(code string) string {
+	return accountPath + "?auth=" + url.QueryEscape(code)
+}
 
 // accountForm is the wrapper every account-security form handler runs through. It
 // parses a bounded body, performs the double-submit CSRF compare against the body's
@@ -157,7 +166,7 @@ func (h *handlers) changePasswordForm(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.svc.SetSessionCookies(w, pair)
-		h.prgTo(w, r, accountPath)
+		h.prgTo(w, r, accountDone(outcomePasswordChanged))
 	})
 }
 
@@ -177,7 +186,7 @@ func (h *handlers) setPasswordForm(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.svc.SetSessionCookies(w, pair)
-		h.prgTo(w, r, accountPath)
+		h.prgTo(w, r, accountDone(outcomePasswordSet))
 	})
 }
 
@@ -208,7 +217,7 @@ func (h *handlers) removePasswordForm(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.svc.SetSessionCookies(w, pair)
-		h.prgTo(w, r, accountPath)
+		h.prgTo(w, r, accountDone(outcomePasswordRemoved))
 	})
 }
 
@@ -358,7 +367,7 @@ func (h *handlers) confirmIdentifierForm(w http.ResponseWriter, r *http.Request,
 			h.renderIdentifierConfirm(w, r, string(kind), err)
 			return
 		}
-		h.prgTo(w, r, accountPath)
+		h.prgTo(w, r, accountDone(outcomeIdentifierConfirmed))
 	})
 }
 
@@ -386,7 +395,7 @@ func (h *handlers) identifierEditForm(w http.ResponseWriter, r *http.Request) {
 				h.renderIdentifierEdit(w, r, id, err)
 				return
 			}
-			h.prgTo(w, r, accountPath)
+			h.prgTo(w, r, accountDone(outcomeIdentifierRemoved))
 			return
 		}
 		err := h.svc.SetIdentifierUses(r.Context(), authsvc.IdentifierUsesInput{
@@ -401,7 +410,7 @@ func (h *handlers) identifierEditForm(w http.ResponseWriter, r *http.Request) {
 			h.renderIdentifierEdit(w, r, id, err)
 			return
 		}
-		h.prgTo(w, r, accountPath)
+		h.prgTo(w, r, accountDone(outcomeIdentifierUpdated))
 	})
 }
 
@@ -475,7 +484,7 @@ func (h *handlers) unlinkOAuthForm(w http.ResponseWriter, r *http.Request) {
 			h.renderOAuthUnlink(w, r, provider, err)
 			return
 		}
-		h.prgTo(w, r, accountPath)
+		h.prgTo(w, r, accountDone(outcomeProviderUnlinked))
 	})
 }
 

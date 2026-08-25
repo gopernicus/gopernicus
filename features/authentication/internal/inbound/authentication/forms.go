@@ -114,6 +114,13 @@ func (h *handlers) prgRedirect(w http.ResponseWriter, r *http.Request, returnTo 
 	h.prgTo(w, r, h.resolveReturnTo(returnTo))
 }
 
+// loginDone builds the login-page PRG destination for a flow that ends signed out,
+// carrying its outcome code — the login-side twin of accountDone. Same closed posture:
+// the code is a fixed constant loginPage whitelists (html.go), never a caller value.
+func loginDone(code string) string {
+	return "/auth/login?auth=" + url.QueryEscape(code)
+}
+
 // prgTo issues the 303 Post/Redirect/Get to a server-controlled destination (a fixed
 // same-origin path built by the handler — never a client-supplied absolute URL).
 func (h *handlers) prgTo(w http.ResponseWriter, r *http.Request, dest string) {
@@ -266,8 +273,9 @@ func (h *handlers) resetPasswordForm(w http.ResponseWriter, r *http.Request) {
 		}))
 		return
 	}
-	// Reset revokes every session and does not auto-login (design §5.9); land on login.
-	h.prgTo(w, r, "/auth/login")
+	// Reset revokes every session and does not auto-login (design §5.9); land on login,
+	// which names the completed reset so the sign-in prompt is not a dead end.
+	h.prgTo(w, r, loginDone(outcomePasswordReset))
 }
 
 // oauthVerifyLinkForm is the HTML transport for POST /auth/oauth/verify-link
@@ -302,7 +310,7 @@ func (h *handlers) oauthVerifyLinkForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.svc.SetSessionCookies(w, authsvc.TokenPair{AccessToken: res.Token, RefreshToken: res.RefreshToken})
-	h.prgTo(w, r, accountPath)
+	h.prgTo(w, r, accountDone(outcomeProviderLinked))
 }
 
 // logoutForm is the HTML transport for POST /auth/logout (dispatched by logout,
@@ -328,7 +336,7 @@ func (h *handlers) logoutForm(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = h.svc.Logout(r.Context(), refreshToken, accessToken)
 	h.svc.ClearSessionCookies(w)
-	h.prgTo(w, r, "/auth/login")
+	h.prgTo(w, r, loginDone(outcomeSignedOut))
 }
 
 // ---------------------------------------------------------------------------

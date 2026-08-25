@@ -186,8 +186,8 @@ func TestOAuthVerifyLinkFormCompletesToAccountPage(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("verify-link form = %d, want 303; body=%s", rec.Code, rec.Body)
 	}
-	if loc := rec.Header().Get("Location"); loc != accountPath {
-		t.Errorf("verify-link form Location = %q, want %q", loc, accountPath)
+	if want := accountDone(outcomeProviderLinked); rec.Header().Get("Location") != want {
+		t.Errorf("verify-link form Location = %q, want %q", rec.Header().Get("Location"), want)
 	}
 	if sessionCookie(rec) == nil {
 		t.Error("verify-link form set no session cookie")

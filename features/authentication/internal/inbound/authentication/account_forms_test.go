@@ -72,17 +72,31 @@ func (v captureViews) PasswordForm(m PasswordFormPage) web.Renderer {
 // real authsvc.Service over the full mem rail (identifiers, contact-change, credential
 // mutations, step-up grants, OAuth) mounted with a capturing Views.
 type accountFormFixture struct {
-	h         http.Handler
-	users     *memUsers
-	idents    *memIdentifiers
-	passwords *memPasswords
-	sessions  *memSessions
-	grants    *memAuthGrants
-	cap       *capturedModels
+	h          http.Handler
+	svc        *authsvc.Service
+	users      *memUsers
+	idents     *memIdentifiers
+	passwords  *memPasswords
+	sessions   *memSessions
+	grants     *memAuthGrants
+	challenges *memChallenges
+	cap        *capturedModels
 }
 
 func newAccountFormFixture(t *testing.T) accountFormFixture {
 	t.Helper()
+	return newAccountFormFixtureViews(t, nil)
+}
+
+// newAccountFormFixtureViews is newAccountFormFixture with an explicit Views port and
+// optional provider override, so a test can render through a double that exposes what
+// the marker-only capturing port hides, or drive a flow the blank stub identity cannot
+// complete. A nil views keeps the default capturing port; no providers keeps stubProvider.
+func newAccountFormFixtureViews(t *testing.T, views Views, providers ...oauth.Provider) accountFormFixture {
+	t.Helper()
+	if len(providers) == 0 {
+		providers = []oauth.Provider{stubProvider{}}
+	}
 	users := newMemUsers()
 	idents := newMemIdentifiers(users)
 	passwords := &memPasswords{m: map[string]string{}}
@@ -112,17 +126,23 @@ func newAccountFormFixture(t *testing.T) accountFormFixture {
 		TokenSigner:          newFakeSigner(),
 		OAuthAccounts:        &memOAuthAccounts{},
 		OAuthStates:          &memOAuthStates{m: map[string]oauthstate.State{}},
-		Providers:            []oauth.Provider{stubProvider{}},
+		Providers:            providers,
 		OAuthCallbackBase:    "https://app.example.com",
 		PublicAuthBaseURL:    "https://auth.example.com",
 	})
 	cap := &capturedModels{}
+	if views == nil {
+		views = captureViews{c: cap}
+	}
 	h := web.NewWebHandler()
 	Mount(h, svc, nil, "", MutationSecurity{
 		AllowedOrigins:    []string{"https://app.example.com"},
 		SessionCookieName: svc.SessionCookieName(),
-	}, captureViews{c: cap}, nil)
-	return accountFormFixture{h: h, users: users, idents: idents, passwords: passwords, sessions: sessions, grants: grants, cap: cap}
+	}, views, nil)
+	return accountFormFixture{
+		h: h, svc: svc, users: users, idents: idents, passwords: passwords, sessions: sessions,
+		grants: grants, challenges: challenges, cap: cap,
+	}
 }
 
 // ageRecentAuth pushes every session's recorded primary-authentication time far into
@@ -212,8 +232,8 @@ func TestAccountFormChangePasswordPRG(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("form change = %d, want 303; body=%s", rec.Code, rec.Body)
 	}
-	if loc := rec.Header().Get("Location"); loc != accountPath {
-		t.Errorf("form change Location = %q, want %q", loc, accountPath)
+	if want := accountDone(outcomePasswordChanged); rec.Header().Get("Location") != want {
+		t.Errorf("form change Location = %q, want %q", rec.Header().Get("Location"), want)
 	}
 	if sessionCookie(rec) == nil {
 		t.Error("form change set no fresh session cookie")

@@ -32,8 +32,8 @@ func TestFormLogoutClearsCookiesAndRedirects(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("form logout = %d, want 303", rec.Code)
 	}
-	if loc := rec.Header().Get("Location"); loc != "/auth/login" {
-		t.Errorf("form logout Location = %q, want /auth/login", loc)
+	if want := loginDone(outcomeSignedOut); rec.Header().Get("Location") != want {
+		t.Errorf("form logout Location = %q, want %q", rec.Header().Get("Location"), want)
 	}
 	if c := sessionCookie(rec); c == nil || c.MaxAge >= 0 {
 		t.Errorf("form logout did not clear the access cookie: %+v", c)
@@ -72,8 +72,8 @@ func TestFormLogoutExpiredSessionSucceeds(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("same-origin expired-session form logout = %d, want 303; body=%s", rec.Code, rec.Body)
 	}
-	if loc := rec.Header().Get("Location"); loc != "/auth/login" {
-		t.Errorf("form logout Location = %q, want /auth/login", loc)
+	if want := loginDone(outcomeSignedOut); rec.Header().Get("Location") != want {
+		t.Errorf("form logout Location = %q, want %q", rec.Header().Get("Location"), want)
 	}
 	if c := sessionCookie(rec); c == nil || c.MaxAge >= 0 {
 		t.Errorf("form logout did not clear the access cookie: %+v", c)

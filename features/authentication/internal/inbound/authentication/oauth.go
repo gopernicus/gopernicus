@@ -81,11 +81,18 @@ func (h *handlers) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		h.svc.SetSessionCookies(w, authsvc.TokenPair{AccessToken: res.Token, RefreshToken: res.RefreshToken})
 	}
 	target := redirectOrDefault(res.RedirectTo)
-	if res.Action == authsvc.ActionPendingLink {
+	switch res.Action {
+	case authsvc.ActionPendingLink:
 		// A pending link mints no session; the callback lands the SPA on the flow's
 		// destination carrying a legible outcome (oauth-pending-link plan D3) so it can
 		// render a "check your email" state instead of a dead end.
 		target = pendingLinkRedirect(res.RedirectTo, web.Param(r, "provider"))
+	case authsvc.ActionLinked:
+		// A completed explicit link mints no session either, and without a marker it
+		// landed back on the account page silently. It carries the same legible outcome
+		// so the destination can name what happened. ActionLogin/ActionRegister are not
+		// marked: they land on the flow's app destination, not an auth page.
+		target = linkedRedirect(res.RedirectTo)
 	}
 	http.Redirect(w, r, target, http.StatusFound)
 }
@@ -215,6 +222,24 @@ func pendingLinkRedirect(target, provider string) string {
 	q := u.Query()
 	q.Set("auth", "link_sent")
 	q.Set("provider", provider)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// linkedRedirect augments the completed-link callback destination with the outcome
+// code the account page's closed reader whitelists. It mirrors pendingLinkRedirect —
+// url.Values, so existing query values and any fragment survive, and an unparseable
+// destination is returned unchanged — but names NO provider: the destination lists the
+// linked provider in its own masked inventory, so echoing the path parameter would put
+// attacker-authored text on an authenticated page for nothing.
+func linkedRedirect(target string) string {
+	base := redirectOrDefault(target)
+	u, err := url.Parse(base)
+	if err != nil {
+		return base
+	}
+	q := u.Query()
+	q.Set("auth", outcomeProviderLinked)
 	u.RawQuery = q.Encode()
 	return u.String()
 }

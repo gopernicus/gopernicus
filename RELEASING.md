@@ -225,6 +225,73 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
+### features/authentication — next tag v0.5.2 (2026-08-25): completed account mutations stop landing silently (patch; REDIRECT TARGETS AND RENDERED COPY CHANGE)
+
+Defect fix (Segovia flag #19). Every auth page model embeds `PageContext.Message` and
+every bundled page body renders it, and the feature already populates that slot across
+a redirect in four places (`?sent=1` on forgot / password-remove / step-up /
+oauth-unlink). The account page was never wired in: all seven completed account
+mutations 303'd to a bare `/auth/account`, the verify-link completion did the same, and
+the OAuth callback's `ActionLinked` — the successful explicit link — 302'd with no
+marker at all, while `accountPage` read zero query params. A host's user changed their
+password, confirmed an identifier, or linked Google and the destination said **nothing**.
+
+The `?auth=<code>` vocabulary `pendingLinkRedirect` established (`auth=link_sent`) is
+now the one outcome vocabulary for the whole feature, extended rather than duplicated:
+
+| Flow | Destination | Code |
+| --- | --- | --- |
+| password change / set / remove | `/auth/account` | `password_changed` / `password_set` / `password_removed` |
+| identifier confirm / remove / set-uses | `/auth/account` | `identifier_confirmed` / `identifier_removed` / `identifier_updated` |
+| OAuth unlink | `/auth/account` | `provider_unlinked` |
+| pending-link completion (`POST /auth/oauth/verify-link`, form arm) | `/auth/account` | `provider_linked` |
+| OAuth callback, **`ActionLinked` only** | the flow's validated destination | `provider_linked` |
+| form logout | `/auth/login` | `signed_out` |
+| password reset | `/auth/login` | `password_reset` |
+
+Adopter-facing surface:
+
+- **No exported API change.** No new or changed exported type, field, method,
+  constant, or route; no schema; no `go.mod` change (still `sdk v0.4.x`); no store
+  retag. A host implementing `Views` by hand compiles unchanged, and the JSON arm of
+  every one of these endpoints is byte-stable — this is the HTML/browser lane only.
+- **Redirect `Location` values change.** The eight account-destination flows now 303
+  to `/auth/account?auth=<code>`, logout and reset to `/auth/login?auth=<code>`, and
+  the callback's completed-link branch appends `auth=provider_linked` to the target it
+  already redirected to. A host asserting the exact old `Location` string in its own
+  tests must update those assertions; nothing else observes them.
+- **A new query param can arrive at a HOST url.** Only on the callback's `ActionLinked`
+  branch, and only on the destination the link flow already validated — the same shape
+  `auth=link_sent` has taken since the pending-link work. It is additive and ignorable:
+  existing query values and any fragment are preserved, and a host reading `?auth=`
+  through a closed whitelist (the recommended posture) simply does not match the new
+  code. `ActionLogin` / `ActionRegister` are deliberately **unmarked** — they land on
+  the app, not an auth page.
+- **Two pages render new copy.** `accountPage` and `loginPage` now read `?auth=`
+  through **route-specific closed maps**: an account code is unknown on login and a
+  login code is unknown on account, so no destination can be made to show copy for
+  something that could not have happened there. Unknown, empty, malformed and
+  wrong-destination codes render **no notice**, and the wire value is never returned by
+  the mapper and never reaches markup — the same closed-whitelist posture the four
+  `?sent=1` readers already hold. The copy is generic and enumeration-safe and
+  deliberately **names no provider**: "That sign-in provider was linked to your
+  account.", not "Google". The account page lists the linked provider in its own masked
+  inventory two rows below the notice.
+- **The notice slot has no tone.** `PageContext.Message` renders success and failure
+  identically as a polite `<p role="status">`, and the login page now carries both form
+  errors and these outcomes. A host styling `[data-slot="auth-message"]` should keep
+  that treatment neutral. A structured `PageContext.Tone` is a separate, unshipped ask.
+
+**Why a patch.** The bugfix arm, with the same reasoning as v0.5.1: a defect fix with
+no exported-symbol, signature, schema, `go.mod`, or mandatory-configuration change,
+adoptable on a maintenance line with no host action. It is louder than v0.5.1 only in
+that the change is visible in `Location` headers as well as rendered bytes, which is
+why both are stated plainly above rather than left to be discovered.
+
+**`views/goth` does NOT retag.** It already renders the notice slot on every page body
+and its source is untouched by this change; its `features/authentication v0.5.1` pin
+upgrades at the host through MVS.
+
 ### features/authentication v0.5.1 + views/goth v0.2.2 (2026-08-23): the identifier edit form stops offering a removal the policy refuses (patch pair)
 
 Defect fix one layer deeper than v0.2.1 (Segovia flag #18). The credential policy's

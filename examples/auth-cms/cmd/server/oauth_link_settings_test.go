@@ -309,8 +309,10 @@ func TestOAuthExplicitLinkFromSettingsPage(t *testing.T) {
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("callback = %d, want 302; body=%s", resp.StatusCode, body)
 	}
-	if got := resp.Header.Get("Location"); got != settingsRedirect {
-		t.Errorf("callback Location = %q, want the relative destination %q", got, settingsRedirect)
+	// The destination is the one the flow validated, now carrying the completed-link
+	// outcome the account/settings page reads to say what happened.
+	if want := settingsRedirect + "?auth=provider_linked"; resp.Header.Get("Location") != want {
+		t.Errorf("callback Location = %q, want %q", resp.Header.Get("Location"), want)
 	}
 
 	// 4. An explicit link does NOT mint or replace the caller's session: the user
@@ -376,8 +378,8 @@ func TestOAuthLinkRedirectIsAllowlisted(t *testing.T) {
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("callback = %d, want 302; body=%s", resp.StatusCode, body)
 	}
-	if got := resp.Header.Get("Location"); got != "/" {
-		t.Fatalf("callback Location = %q, want the same-origin default %q", got, "/")
+	if want := "/?auth=provider_linked"; resp.Header.Get("Location") != want {
+		t.Fatalf("callback Location = %q, want the same-origin default carrying the outcome (%q)", resp.Header.Get("Location"), want)
 	}
 	if !c.methods().linked(linkProvider) {
 		t.Error("the link itself did not complete; only the redirect should have been refused")

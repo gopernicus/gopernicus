@@ -13,6 +13,48 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
+// Outcome codes: the closed ?auth= vocabulary a completed mutation carries across its
+// PRG redirect so the landing GET can say what happened. It extends the vocabulary
+// pendingLinkRedirect established (auth=link_sent) rather than inventing a second one.
+// Every value is a fixed handler-chosen constant — never a caller value — and a code
+// only ever names a SUCCESS: failures re-render their own form inline.
+const (
+	outcomePasswordChanged     = "password_changed"
+	outcomePasswordSet         = "password_set"
+	outcomePasswordRemoved     = "password_removed"
+	outcomeIdentifierConfirmed = "identifier_confirmed"
+	outcomeIdentifierRemoved   = "identifier_removed"
+	outcomeIdentifierUpdated   = "identifier_updated"
+	outcomeProviderLinked      = "provider_linked"
+	outcomeProviderUnlinked    = "provider_unlinked"
+	outcomeSignedOut           = "signed_out"
+	outcomePasswordReset       = "password_reset"
+)
+
+// accountOutcomes / loginOutcomes are the ROUTE-SPECIFIC closed reader whitelists: an
+// account outcome is unknown on the login page and a login outcome is unknown on the
+// account page, so no destination can be made to display copy for something that could
+// not have happened there. The copy is generic and enumeration-safe — it names the
+// class of change, never a provider, address, or method (the account page lists the
+// masked inventory itself, two inches below the notice).
+var (
+	accountOutcomes = map[string]string{
+		outcomePasswordChanged:     "Your password was changed.",
+		outcomePasswordSet:         "Your password was set.",
+		outcomePasswordRemoved:     "Your password was removed.",
+		outcomeIdentifierConfirmed: "That identifier was confirmed.",
+		outcomeIdentifierRemoved:   "That identifier was removed.",
+		outcomeIdentifierUpdated:   "Your identifier settings were updated.",
+		outcomeProviderLinked:      "That sign-in provider was linked to your account.",
+		outcomeProviderUnlinked:    "That sign-in provider was unlinked from your account.",
+	}
+
+	loginOutcomes = map[string]string{
+		outcomeSignedOut:     "You've been signed out.",
+		outcomePasswordReset: "Your password was reset. Sign in with your new password.",
+	}
+)
+
 // The optional HTML surface (design §9.2, task AV3-8.1). mountHTML is called by
 // Mount ONLY when a Views port is wired (Config.Views != nil); a nil Views leaves
 // the whole HTML GET inventory unregistered while the JSON API stays mounted. This
@@ -123,14 +165,26 @@ func newNonce() string {
 	return base64.RawURLEncoding.EncodeToString(b[:])
 }
 
+// outcomeMessage resolves a wire ?auth= value against ONE destination's closed outcome
+// vocabulary. An absent, unknown, malformed, or wrong-destination code yields the empty
+// string and the page renders no notice; the submitted value is never returned, so a
+// caller-chosen string can never reach the markup.
+func outcomeMessage(vocabulary map[string]string, code string) string {
+	return vocabulary[code]
+}
+
 // ---------------------------------------------------------------------------
 // Public credential pages (unauthenticated). AV3-8.3 enriches these with the
 // dual-transport POST dispatch, PRG, and full page models.
 // ---------------------------------------------------------------------------
 
+// loginPage renders the sign-in form. An ?auth= marker from a flow that ends on login
+// (sign out, password reset) shows that flow's canonical notice; anything else — an
+// unknown code, an account-page code, a hand-typed value — shows nothing.
 func (h *handlers) loginPage(w http.ResponseWriter, r *http.Request) {
 	pc := h.newPageContext(w)
 	pc.ReturnTo = h.validatedReturnTo(r)
+	pc.Message = outcomeMessage(loginOutcomes, r.URL.Query().Get("auth"))
 	m := LoginPage{
 		PageContext:         pc,
 		Email:               r.URL.Query().Get("email"),
@@ -258,7 +312,9 @@ func (h *handlers) oauthLinkPage(w http.ResponseWriter, r *http.Request) {
 // ---------------------------------------------------------------------------
 
 // accountPage renders the masked method inventory (design §5.1). RequireLiveSession
-// has already validated the session and stashed the user id.
+// has already validated the session and stashed the user id. An ?auth= marker from a
+// completed account mutation's PRG shows that mutation's canonical notice; anything
+// else — an unknown code, a login-page code, a hand-typed value — shows nothing.
 func (h *handlers) accountPage(w http.ResponseWriter, r *http.Request) {
 	userID, ok := h.svc.CurrentUser(r.Context())
 	if !ok {
@@ -272,6 +328,7 @@ func (h *handlers) accountPage(w http.ResponseWriter, r *http.Request) {
 	}
 	pc := h.newPageContext(w)
 	pc.Actor = maskedPrimary(view)
+	pc.Message = outcomeMessage(accountOutcomes, r.URL.Query().Get("auth"))
 	m := AccountSecurityPage{
 		PageContext: pc,
 		HasPassword: view.HasPassword,
