@@ -108,6 +108,11 @@ type TokenPair struct {
 // off. Checked with errors.Is.
 var ErrRateLimited = errors.New("too many login attempts")
 
+// ErrPasswordFlowsDisabled is returned by every password entry point when
+// Deps.PasswordFlowsDisabled is set. It wraps sdk.ErrNotFound so a host that
+// reaches a use-case directly gets the same answer the unmounted route gives.
+var ErrPasswordFlowsDisabled = fmt.Errorf("auth: password flows are disabled on this host: %w", sdk.ErrNotFound)
+
 // ErrEmailNotVerified is returned by Login when Config.RequireVerifiedEmail is
 // set and the caller's email is unverified. It wraps sdk.ErrForbidden so the
 // transport maps it to 403 (design §7.1). The public auth package re-exports it
@@ -311,6 +316,12 @@ type Deps struct {
 	// key material, and PKCE/nonce values keep their own unconditional random
 	// generator regardless of this strategy.
 	IDs cryptids.IDGenerator
+	// PasswordFlowsDisabled turns the password credential OFF as a posture: the
+	// registration / password-login / verification / forgot-reset / change-set-
+	// remove entry points refuse with ErrPasswordFlowsDisabled, and the inbound
+	// layer registers none of their routes (deny-by-absence, like machine
+	// identity). For hosts whose only way in is OAuth or passwordless.
+	PasswordFlowsDisabled bool
 	// RequireVerifiedEmail, when true, makes Login refuse an unverified user
 	// with ErrEmailNotVerified (403). Default false (design §7.1, AV8).
 	RequireVerifiedEmail bool
@@ -439,6 +450,7 @@ type Service struct {
 	now                  func() time.Time
 	logger               *slog.Logger
 	requireVerifiedEmail bool
+	passwordFlowsEnabled bool
 	// ids is the app-chosen entity-ID strategy (Deps.IDs); zero value → default
 	// nanoids. Entity keys only, never secrets.
 	ids cryptids.IDGenerator
@@ -589,6 +601,7 @@ func NewService(d Deps) *Service {
 		now:                  clock,
 		logger:               logger,
 		requireVerifiedEmail: d.RequireVerifiedEmail,
+		passwordFlowsEnabled: !d.PasswordFlowsDisabled,
 		ids:                  d.IDs,
 		securityEvents:       d.SecurityEvents,
 		invitations:          d.Invitations,
@@ -628,6 +641,9 @@ func NewService(d Deps) *Service {
 // so the caller knows delivery failed). A duplicate email — a lost authentication
 // claim on the identifier value — surfaces as sdk.ErrAlreadyExists from the store.
 func (s *Service) Register(ctx context.Context, emailAddr, password, displayName string) (user.User, error) {
+	if err := s.requirePasswordFlows(); err != nil {
+		return user.User{}, err
+	}
 	if err := s.validatePassword(ctx, password); err != nil {
 		return user.User{}, err
 	}
@@ -802,6 +818,9 @@ func (s *Service) ActiveVerifiedIdentifier(ctx context.Context, userID, kind str
 // rate-limited attempt is `blocked`, a credential/verification denial is
 // `failure`, and a minted session is `success`.
 func (s *Service) Login(ctx context.Context, emailAddr, password string) (TokenPair, user.User, error) {
+	if err := s.requirePasswordFlows(); err != nil {
+		return TokenPair{}, user.User{}, err
+	}
 	clientIP := clientInfoFromContext(ctx).ip
 	normalized, err := s.normalizeEmail(emailAddr)
 	if err != nil {
@@ -932,6 +951,9 @@ func (s *Service) Logout(ctx context.Context, refreshToken, accessToken string) 
 // failure is RETURNED, never best-effort-logged — the password changed but stale
 // sessions may survive, and that must surface to the operator.
 func (s *Service) ChangePassword(ctx context.Context, userID, currentPassword, newPassword string) (TokenPair, error) {
+	if err := s.requirePasswordFlows(); err != nil {
+		return TokenPair{}, err
+	}
 	hash, err := s.passwords.Get(ctx, userID)
 	if err != nil {
 		return TokenPair{}, err
@@ -974,6 +996,9 @@ func (s *Service) ChangePassword(ctx context.Context, userID, currentPassword, n
 // unknown addresses share one bounded request path with identical repository calls.
 // A malformed address returns nil (uniform). Recovery stays email-only in v3.
 func (s *Service) ForgotPassword(ctx context.Context, emailAddr string) error {
+	if err := s.requirePasswordFlows(); err != nil {
+		return err
+	}
 	normalized, err := s.normalizeEmail(emailAddr)
 	if err != nil {
 		return nil // never reveal validity/existence
@@ -1000,6 +1025,9 @@ func (s *Service) ForgotPassword(ctx context.Context, emailAddr string) error {
 // returns sdk.ErrInvalidInput; an unknown, expired, or already-used token is the
 // single generic ErrPasswordResetInvalid (enumeration/anti-probing).
 func (s *Service) ResetPassword(ctx context.Context, token, newPassword string) error {
+	if err := s.requirePasswordFlows(); err != nil {
+		return err
+	}
 	if err := s.validatePassword(ctx, newPassword); err != nil {
 		return err
 	}
@@ -1395,4 +1423,17 @@ func (s *Service) redirectToBrowserLogin(w http.ResponseWriter, r *http.Request)
 // a rate-limited public route matches the feature's error shape (FS9).
 func writeTooManyRequests(w http.ResponseWriter) {
 	web.RespondJSONError(w, web.NewError(http.StatusTooManyRequests, "too many requests").WithCode("rate_limited"))
+}
+
+// PasswordFlowsEnabled reports whether the password credential is on. The
+// inbound layer registers the password/registration/verification routes only
+// when it is; every password entry point refuses when it is not.
+func (s *Service) PasswordFlowsEnabled() bool { return s.passwordFlowsEnabled }
+
+// requirePasswordFlows is the guard every password entry point runs first.
+func (s *Service) requirePasswordFlows() error {
+	if !s.passwordFlowsEnabled {
+		return ErrPasswordFlowsDisabled
+	}
+	return nil
 }

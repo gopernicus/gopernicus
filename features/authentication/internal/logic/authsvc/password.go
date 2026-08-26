@@ -45,6 +45,9 @@ var (
 // password is refused with ErrPasswordAlreadySet (409) before the grant is spent,
 // so the OAuth-only reset-flow abuse the original allowed is closed.
 func (s *Service) SetPassword(ctx context.Context, sessionID, userID, newPassword string) (TokenPair, error) {
+	if err := s.requirePasswordFlows(); err != nil {
+		return TokenPair{}, err
+	}
 	// Refuse an already-set password before spending the grant (409).
 	if _, err := s.passwords.Get(ctx, userID); err == nil {
 		return TokenPair{}, ErrPasswordAlreadySet
@@ -131,6 +134,9 @@ func (s *Service) StartRemovePassword(ctx context.Context, userID string) (StepU
 // with ErrPasswordNotSet (404); a removal that would leave no direct login method is
 // the pinned cannot_remove_last_method (credential.ErrNoLoginMethod, 409).
 func (s *Service) RemovePassword(ctx context.Context, userID, code string) (TokenPair, error) {
+	if err := s.requirePasswordFlows(); err != nil {
+		return TokenPair{}, err
+	}
 	if s.credentialMutations == nil {
 		return TokenPair{}, ErrCredentialMutationUnavailable
 	}

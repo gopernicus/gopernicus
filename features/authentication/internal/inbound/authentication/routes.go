@@ -67,10 +67,22 @@ type handlers struct {
 func Mount(r feature.RouteRegistrar, svc authService, inv InvitationService, listStrategy crud.Strategy, mutation MutationSecurity, views Views, htmlPolicy *HTMLResourcePolicy) {
 	r = clientInfoRegistrar{inner: r}
 	h := &handlers{svc: svc, inv: inv, listStrategy: listStrategy, mutation: mutation, views: views, htmlPolicy: htmlPolicy}
-	r.Handle("POST", "/auth/register", h.register)
-	r.Handle("POST", "/auth/login", h.login)
-	r.Handle("POST", "/auth/verify", h.verify)
-	r.Handle("POST", "/auth/password/forgot", h.forgotPassword)
+	// The password credential's routes register only when the posture is on
+	// (deny-by-absence, like machine identity and the token endpoint): a
+	// PasswordFlowsDisabled host answers 404 for every one of them.
+	pw := svc.PasswordFlowsEnabled()
+	if pw {
+		r.Handle("POST", "/auth/register", h.register)
+	}
+	if pw {
+		r.Handle("POST", "/auth/login", h.login)
+	}
+	if pw {
+		r.Handle("POST", "/auth/verify", h.verify)
+	}
+	if pw {
+		r.Handle("POST", "/auth/password/forgot", h.forgotPassword)
+	}
 	// The public registration-verification resend (CHAU-2.3) is an UNAUTHENTICATED
 	// credential-establishment endpoint, exactly like the passwordless starts: it
 	// carries the allowlisted-Origin gate but NOT the double-submit CSRF gate,
@@ -78,7 +90,9 @@ func Mount(r feature.RouteRegistrar, svc authService, inv InvitationService, lis
 	// verified — has no session and therefore no __Host-auth_csrf cookie to compare.
 	// The gate is added below with the other origin-gated routes, once the shared
 	// middleware is built.
-	r.Handle("POST", "/auth/password/reset", h.resetPassword)
+	if pw {
+		r.Handle("POST", "/auth/password/reset", h.resetPassword)
+	}
 	// /auth/refresh is rate-limited by IP (the by-session arm is enforced in the
 	// service once the session resolves — §6). It is cookie- or body-driven and
 	// not credential-gated: rotation IS the credential.
@@ -138,10 +152,16 @@ func Mount(r feature.RouteRegistrar, svc authService, inv InvitationService, lis
 	// allowlisted-Origin + double-submit CSRF protection (design §9.1). The handlers
 	// themselves enforce the strict JSON body and set Cache-Control: no-store.
 	browserSafe := requireBrowserSafeMutation(h.mutation.csrf())
-	r.Handle("POST", "/auth/verification/resend", h.resendVerification, requireBrowserSafeOrigin(h.mutation.csrf()))
-	r.Handle("POST", "/auth/password/change", h.changePassword, svc.RequireLiveSession, browserSafe)
+	if pw {
+		r.Handle("POST", "/auth/verification/resend", h.resendVerification, requireBrowserSafeOrigin(h.mutation.csrf()))
+	}
+	if pw {
+		r.Handle("POST", "/auth/password/change", h.changePassword, svc.RequireLiveSession, browserSafe)
+	}
 	r.Handle("POST", "/auth/step-up/begin", h.beginStepUp, svc.RequireLiveSession, browserSafe)
-	r.Handle("POST", "/auth/step-up/password", h.completeStepUpPassword, svc.RequireLiveSession, browserSafe)
+	if pw {
+		r.Handle("POST", "/auth/step-up/password", h.completeStepUpPassword, svc.RequireLiveSession, browserSafe)
+	}
 	r.Handle("POST", "/auth/step-up/code", h.completeStepUpCode, svc.RequireLiveSession, browserSafe)
 
 	// Credential-suite password routes (design §5.2/§5.3). Each is a
@@ -150,9 +170,15 @@ func Mount(r feature.RouteRegistrar, svc authService, inv InvitationService, lis
 	// strict JSON hardening and Cache-Control: no-store. /auth/password/set consumes a
 	// set_password grant; the remove pair delivers a remove_password code to a verified
 	// recovery identifier and completes through the revision-serialized credential rail.
-	r.Handle("POST", "/auth/password/set", h.setPassword, svc.RequireLiveSession, browserSafe)
-	r.Handle("POST", "/auth/password/remove/start", h.startRemovePassword, svc.RequireLiveSession, browserSafe)
-	r.Handle("POST", "/auth/password/remove", h.removePassword, svc.RequireLiveSession, browserSafe)
+	if pw {
+		r.Handle("POST", "/auth/password/set", h.setPassword, svc.RequireLiveSession, browserSafe)
+	}
+	if pw {
+		r.Handle("POST", "/auth/password/remove/start", h.startRemovePassword, svc.RequireLiveSession, browserSafe)
+	}
+	if pw {
+		r.Handle("POST", "/auth/password/remove", h.removePassword, svc.RequireLiveSession, browserSafe)
+	}
 
 	// Identifier-management routes (design §5.5). Each is a cookie-authenticated
 	// sensitive mutation gated by RequireLiveSession (immediate revocation) plus the

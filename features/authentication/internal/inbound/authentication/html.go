@@ -84,10 +84,14 @@ var (
 func mountHTML(r feature.RouteRegistrar, h *handlers, browserSafe web.Middleware) {
 	// Public credential pages.
 	r.Handle("GET", "/auth/login", h.loginPage)
-	r.Handle("GET", "/auth/register", h.registerPage)
-	r.Handle("GET", "/auth/verify", h.verifyPage)
-	r.Handle("GET", "/auth/password/forgot", h.forgotPage)
-	r.Handle("GET", "/auth/password/reset", h.resetPage)
+	// The password credential's pages, only when the posture is on (deny-by-absence).
+	pw := h.svc.PasswordFlowsEnabled()
+	if pw {
+		r.Handle("GET", "/auth/register", h.registerPage)
+		r.Handle("GET", "/auth/verify", h.verifyPage)
+		r.Handle("GET", "/auth/password/forgot", h.forgotPage)
+		r.Handle("GET", "/auth/password/reset", h.resetPage)
+	}
 
 	// Passwordless pages, only when the subsystem is enabled (deny-by-absence).
 	if h.svc.PasswordlessEnabled() {
@@ -108,9 +112,15 @@ func mountHTML(r feature.RouteRegistrar, h *handlers, browserSafe web.Middleware
 	r.Handle("GET", "/auth/identifiers/new", h.identifierNewPage, live)
 	r.Handle("GET", "/auth/identifiers/confirm", h.identifierConfirmPage, live)
 	r.Handle("GET", "/auth/identifiers/{id}/edit", h.identifierEditPage, live)
-	r.Handle("GET", "/auth/password/set", h.passwordSetPage, live)
-	r.Handle("GET", "/auth/password/change", h.passwordChangePage, live)
-	r.Handle("GET", "/auth/password/remove", h.passwordRemovePage, live)
+	if pw {
+		r.Handle("GET", "/auth/password/set", h.passwordSetPage, live)
+	}
+	if pw {
+		r.Handle("GET", "/auth/password/change", h.passwordChangePage, live)
+	}
+	if pw {
+		r.Handle("GET", "/auth/password/remove", h.passwordRemovePage, live)
+	}
 	r.Handle("GET", "/auth/step-up", h.stepUpPage, live)
 
 	// An HTML form cannot emit PATCH/DELETE, so the identifier edit form POSTs

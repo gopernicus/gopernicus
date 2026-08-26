@@ -43,6 +43,9 @@ func (s *Service) TokenEnabled() bool {
 // — the single source of truth for IP (design §5.1 WI4); there is no clientIP
 // parameter. A successful issuance records a token_issued success event.
 func (s *Service) IssueToken(ctx context.Context, emailAddr, password string) (TokenPair, error) {
+	if err := s.requirePasswordFlows(); err != nil {
+		return TokenPair{}, err
+	}
 	clientIP := clientInfoFromContext(ctx).ip
 	normalized, err := s.normalizeEmail(emailAddr)
 	if err != nil {

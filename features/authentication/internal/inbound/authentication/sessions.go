@@ -128,6 +128,10 @@ type authService interface {
 	GetUserSummary(ctx context.Context, id string) (user.Summary, error)
 	SetUserStatus(ctx context.Context, actor authsvc.Principal, id string, status user.Status) (user.Summary, user.StatusChange, error)
 
+	// PasswordFlowsEnabled gates whether the password credential's routes
+	// (register / login / verify / forgot / reset / change / set / remove /
+	// step-up password) are registered at all (deny-by-absence).
+	PasswordFlowsEnabled() bool
 	// Machine identity (design §4.1). MachineEnabled gates whether the lifecycle
 	// routes are registered at all (deny-by-absence).
 	MachineEnabled() bool

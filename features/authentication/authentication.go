@@ -401,6 +401,11 @@ type AcceptResult = invitationsvc.AcceptResult
 // errors.Is(err, auth.ErrEmailNotVerified).
 var ErrEmailNotVerified = authsvc.ErrEmailNotVerified
 
+// ErrPasswordFlowsDisabled is returned by the password use-cases when
+// Config.PasswordFlowsDisabled is set; it wraps sdk.ErrNotFound, matching the
+// 404 the unmounted routes answer.
+var ErrPasswordFlowsDisabled = authsvc.ErrPasswordFlowsDisabled
+
 // Principal is the effective caller resolved from a credential (a session, an
 // API key, or — when Config.TokenSigner is wired — a bearer JWT). AV5
 // pins it as the one value type: actor references are (subject_type, subject_id)
@@ -838,6 +843,14 @@ type Config struct {
 	// with a 403 (ErrEmailNotVerified). Default false (design §7.1, AV8):
 	// flipping it on requires a working Mailer so users can verify.
 	RequireVerifiedEmail bool
+	// PasswordFlowsDisabled turns the password credential OFF as a posture, for a
+	// host whose only way in is OAuth (or passwordless): Register mounts NONE of
+	// the registration / password-login / verification / forgot-reset /
+	// change-set-remove / step-up-password routes (JSON and HTML —
+	// deny-by-absence, like machine identity), and the corresponding Service
+	// use-cases refuse with ErrPasswordFlowsDisabled. Default false keeps every
+	// route. Hasher stays REQUIRED (the feature's credential rail is shared).
+	PasswordFlowsDisabled bool `env:"AUTH_PASSWORD_FLOWS_DISABLED"`
 
 	// RuntimeMode is the REQUIRED fail-closed posture (auth v3 §8). It has no
 	// default: empty → ErrRuntimeModeRequired, unknown → ErrRuntimeModeInvalid,
@@ -1826,6 +1839,7 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 			RefreshPath: cfg.RefreshCookiePath,
 		},
 		RequireVerifiedEmail: cfg.RequireVerifiedEmail,
+		PasswordFlowsDisabled: cfg.PasswordFlowsDisabled,
 		OAuthAccounts:        repos.OAuthAccounts,
 		OAuthStates:          repos.OAuthStates,
 		Providers:            cfg.Providers,

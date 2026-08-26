@@ -143,6 +143,12 @@ ruling** — `crud.MapPageErr` and `pgxdb.ProbeTable` (plan of record
 Both additive, zero-value-preserving, no schema, no sibling pin moves. See the
 two upgrade notes below.
 
+**2026-08-25: `features/authentication` — next tag, patch by owner ruling** —
+`Config.PasswordFlowsDisabled` (plan of record
+`plans/authentication-password-flows-toggle.md`; originating host gps-360-go, a
+Google-only staff host). Additive, zero value keeps every route; no schema, no
+pin moves. See the upgrade note below.
+
 ## Tagging scheme
 
 Nested Go modules in a single repo are tagged with the module's directory as a
@@ -230,6 +236,34 @@ silently would break a host whose CSP no longer covers the kit's assets. Record 
 the module's next-tag upgrade note below and tell hosts to re-derive their CSP header.
 
 ## Upgrade notes (keyed to each module's next tag)
+
+### features/authentication — next tag (2026-08-25): PasswordFlowsDisabled — the password credential as a posture (patch by owner ruling)
+
+authentication-password-flows-toggle (plan of record
+`plans/authentication-password-flows-toggle.md`). A **patch by owner ruling**:
+one additive `Config` bool whose zero value preserves every existing route, no
+schema, no `go.mod` change, no store retags.
+
+- **`Config.PasswordFlowsDisabled bool`** (`env:"AUTH_PASSWORD_FLOWS_DISABLED"`)
+  turns the password credential OFF for a host whose only way in is OAuth or
+  passwordless. `Register` then mounts NONE of the password routes —
+  `/auth/register`, `/auth/login`, `/auth/verify`, `/auth/verification/resend`,
+  `/auth/password/{forgot,reset,change,set,remove,remove/start}`,
+  `/auth/step-up/password`, and the HTML twins of the public ones plus the
+  password account pages — the same deny-by-absence shape machine identity and
+  the token endpoint already use, so a disabled host answers **404**, not 4xx
+  from a live handler. `GET /auth/login` (the HTML page hosting OAuth entry)
+  stays mounted.
+- **Service half:** `Register`, `Login`, `IssueToken`, `ForgotPassword`,
+  `ResetPassword`, `ChangePassword`, `SetPassword`, `RemovePassword` refuse
+  first with **`ErrPasswordFlowsDisabled`** (wraps `sdk.ErrNotFound`, matching
+  the 404) before touching any store — a host reaching the `Service` directly
+  gets the unmounted route's answer. `PasswordFlowsEnabled()` is the accessor
+  the inbound layer reads.
+- **Unchanged:** `Hasher` stays required (the credential rail is shared);
+  OAuth, passwordless, sessions, refresh, logout, step-up-by-code, identifiers,
+  machine identity, and admin routes are untouched. Hosts that previously
+  answered the password routes with their own 404 middleware can delete it.
 
 ### sdk — next tag (2026-08-25): crud.MapPageErr — the fallible row→domain page bridge (patch by owner ruling)
 
