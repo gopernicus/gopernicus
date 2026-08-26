@@ -1,6 +1,6 @@
 # stores/pgx: `WithSchema` — host-chosen schema for every feature pgx store
 
-**Status: RATIFIED 2026-08-26 (in-session; all seven YOUR CALLs at their defaults). S1–S7 EXECUTED 2026-08-26; S8 docs written, pin moves + tags are the owner's — see the execution log and tag manifest at the end of this file.** Origin: gopernicus
+**Status: RATIFIED 2026-08-26 (in-session; all seven YOUR CALLs at their defaults). EXECUTED AND RELEASED 2026-08-26 — six tags cut and pushed on owner dispatch ("do it"); cold-resolution verified; issue #4 closed. See the execution log and the as-executed tag record at the end of this file.** Origin: gopernicus
 issue #4 (gps-360-go shares gps-360's Postgres and today carries a
 `search_path` DSN wrapper it would delete the day this option exists). v2
 folds in the data-integration and lead-backend reviews (both
@@ -571,7 +571,7 @@ from the qualified TRUNCATE). `user_admin.go` picked up a gofmt-only hunk
 (it was not gofmt-clean at HEAD). The `_test.go` catalog filters and every
 fixture behave exactly as before when `POSTGRES_TEST_SCHEMA` is unset.
 
-## Tag manifest — owner cuts
+## Tag manifest — AS EXECUTED 2026-08-26
 
 Working tree is DIRTY and uncommitted: 57 modified + 12 untracked files
 across `integrations/datastores/pgxdb`, the five `features/*/stores/pgx`,
@@ -601,3 +601,26 @@ RELEASING.md adoption snippet and the ledger-relocation preflight pointer,
 then close it. Open owner facts still unanswered (do not block tagging):
 gps-360-go's role privileges, where its ledger rows live today, and whether
 its schema name comes from env.
+
+### As executed — 2026-08-26 (owner dispatch: "do it")
+
+| commit | contents |
+|---|---|
+| `736292c` | the batch (S1–S8 docs; 57 modified + 12 new files) |
+| `2d728c9` | five store `go.mod`/`go.sum` → `pgxdb v0.5.0` (+ `sdk v0.4.0` via MVS for authorization/cms/events/jobs) |
+
+Tags pushed, in dependency order (pgxdb tagged and pushed BEFORE the store
+pins moved, so every store `go.sum` carries real proxy checksums):
+`integrations/datastores/pgxdb/v0.5.0`, `features/authentication/stores/pgx/v0.4.0`,
+`features/authorization/stores/pgx/v0.2.0`, `features/cms/stores/pgx/v0.2.0`,
+`features/events/stores/pgx/v0.2.0`, `features/jobs/stores/pgx/v0.3.0`.
+
+Post-tag verification — PASS: per-module `GOWORK=off go build ./... && go vet
+./...` against the published pgxdb tag; adopter-shaped cold resolution from a
+throwaway module outside the workspace (`GOWORK=off`, no `replace`) resolved
+exactly the six versions above (+ `sdk v0.4.0`, feature cores at their
+existing tags) and `go run` constructed `pgxdb.NewSchema("auth")`, rejected
+`pg_bad`, and built every store's `WithSchema` + `pgxdb.WithSchema`; `make
+check` re-run after the pin edits: all checks passed. Issue #4 commented with
+the adoption snippet + relocation-preflight pointer and closed. The three
+owner-only gps-360-go facts remain open for its adoption runbook.

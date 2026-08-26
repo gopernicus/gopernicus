@@ -156,8 +156,10 @@ moves. Carries a **security caveat** on the bundled lifecycle routes — read th
 upgrade note before exposing them on a multi-user host.
 
 **2026-08-26: `integrations/datastores/pgxdb/v0.5.0` +
-`features/{authentication,authorization,cms,events,jobs}/stores/pgx` — next
-tags, ONE train (minor across all six)** — host-chosen schema for every feature
+`features/authentication/stores/pgx/v0.4.0`,
+`features/{authorization,cms,events}/stores/pgx/v0.2.0`,
+`features/jobs/stores/pgx/v0.3.0` — ONE train, cut and pushed 2026-08-26 (minor
+across all six; cold-resolution verified)** — host-chosen schema for every feature
 pgx store (plan of record `plans/pgx-store-schema-option.md`; gopernicus issue
 #4; originating host gps-360-go). `pgxdb.Schema` + `RunMigrations(...,
 pgxdb.WithSchema(s))`, and `WithSchema(s)` on every store's `Repositories` AND
@@ -256,7 +258,7 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
-### integrations/datastores/pgxdb v0.5.0 + every feature `stores/pgx` — next tags (2026-08-26): WithSchema — host-chosen schema instead of a search_path pin (minor across all six; ONE train)
+### integrations/datastores/pgxdb v0.5.0 + every feature `stores/pgx` — tagged 2026-08-26: WithSchema — host-chosen schema instead of a search_path pin (minor across all six; ONE train)
 
 Plan of record `plans/pgx-store-schema-option.md` (gopernicus issue #4;
 originating host gps-360-go, which shares another app's Postgres and today
