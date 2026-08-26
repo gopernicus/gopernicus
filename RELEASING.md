@@ -139,7 +139,7 @@ change. The host-side landing route that reads the fragment token and POSTs
 
 **2026-08-25: `sdk` + `integrations/datastores/pgxdb` — next tags, patch by owner
 ruling** — `crud.MapPageErr` and `pgxdb.ProbeTable` (plan of record
-`.claude/plans/pgxdb-probe-table-map-page-err.md`; originating host gps-360-go).
+`plans/pgxdb-probe-table-map-page-err.md`; originating host gps-360-go).
 Both additive, zero-value-preserving, no schema, no sibling pin moves. See the
 two upgrade notes below.
 
@@ -234,7 +234,7 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 ### sdk — next tag (2026-08-25): crud.MapPageErr — the fallible row→domain page bridge (patch by owner ruling)
 
 pgxdb-probe-table-map-page-err (plan of record
-`.claude/plans/pgxdb-probe-table-map-page-err.md`). A **patch by owner ruling**
+`plans/pgxdb-probe-table-map-page-err.md`). A **patch by owner ruling**
 (one additive generic function; the `sdk/v0.4.1` precedent). No in-repo module
 pins move.
 
@@ -251,7 +251,7 @@ pins move.
 ### integrations/datastores/pgxdb — next tag (2026-08-25): ProbeTable — the boot-time table probe (patch by owner ruling)
 
 pgxdb-probe-table-map-page-err (plan of record
-`.claude/plans/pgxdb-probe-table-map-page-err.md`). A **patch by owner ruling**
+`plans/pgxdb-probe-table-map-page-err.md`). A **patch by owner ruling**
 (one additive function; no `go.mod` change — still `sdk v0.4.0`).
 
 - **`pgxdb.ProbeTable(ctx, q Querier, table string) error`** is the existence
