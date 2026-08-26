@@ -143,7 +143,7 @@ ruling** — `crud.MapPageErr` and `pgxdb.ProbeTable` (plan of record
 Both additive, zero-value-preserving, no schema, no sibling pin moves. See the
 two upgrade notes below.
 
-**2026-08-25: `features/authentication` — next tag, patch by owner ruling** —
+**2026-08-25: `features/authentication/v0.5.3`** —
 `Config.PasswordFlowsDisabled` (plan of record
 `plans/authentication-password-flows-toggle.md`; originating host gps-360-go, a
 Google-only staff host). Additive, zero value keeps every route; no schema, no
@@ -237,7 +237,7 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
-### features/authentication — next tag (2026-08-25): PasswordFlowsDisabled — the password credential as a posture (patch by owner ruling)
+### features/authentication — v0.5.3 (2026-08-25): PasswordFlowsDisabled — the password credential as a posture (patch by owner ruling)
 
 authentication-password-flows-toggle (plan of record
 `plans/authentication-password-flows-toggle.md`). A **patch by owner ruling**:
