@@ -2,13 +2,16 @@ package pgxdb
 
 import (
 	"context"
+	"errors"
 	"os"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
 
 	jackpgx "github.com/jackc/pgx/v5"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
@@ -349,4 +352,38 @@ func idsOf(rows []scratchRow) []string {
 		out[i] = r.ID
 	}
 	return out
+}
+
+// TestLive_ProbeTable proves ProbeTable against a real database: a present
+// relation (schema-qualified and bare) is nil, an absent one wraps
+// sdk.ErrNotFound naming it, and the probe runs unchanged inside a *Tx.
+func TestLive_ProbeTable(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_TEST_DSN not set — postgres conformance NOT verified")
+	}
+	ctx := context.Background()
+	db, err := Open(Config{DSN: dsn})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.Exec(ctx, "CREATE TABLE IF NOT EXISTS pg_connector_probe_check (id TEXT PRIMARY KEY)"); err != nil {
+		t.Fatalf("create fixture table: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(ctx, "DROP TABLE IF EXISTS pg_connector_probe_check") })
+
+	if err := ProbeTable(ctx, db, "pg_connector_probe_check"); err != nil {
+		t.Errorf("bare present table: %v", err)
+	}
+	if err := ProbeTable(ctx, db, "public.pg_connector_probe_check"); err != nil {
+		t.Errorf("qualified present table: %v", err)
+	}
+	err = ProbeTable(ctx, db, "public.pg_connector_probe_absent")
+	if !errors.Is(err, sdk.ErrNotFound) || !strings.Contains(err.Error(), "public.pg_connector_probe_absent") {
+		t.Errorf("absent table: err=%v, want ErrNotFound naming the relation", err)
+	}
+	if err := db.InTx(ctx, func(tx *Tx) error { return ProbeTable(ctx, tx, "pg_connector_probe_check") }); err != nil {
+		t.Errorf("probe inside a transaction: %v", err)
+	}
 }

@@ -23,6 +23,7 @@ consume this package's `*DB`.
 | `MapError(err) error` | SQLSTATE-based: `23505`→`ErrAlreadyExists`, `23503`→`ErrInvalidReference`, `23514`/`23502`→`ErrInvalidInput`, `pgx.ErrNoRows`→`ErrNotFound`; unknown errors pass through |
 | `RedactDSN(dsn) string` | masks a URL-form DSN's userinfo password for safe logging; unparseable input returns the literal `"REDACTED"` |
 | `StatusCheck(ctx, db)` | 1s-deadline ping |
+| `ProbeTable(ctx, q, table) error` | boot-time existence probe for a store's table (`to_regclass`, name bound as a parameter, bare or schema-qualified): absent → wraps `ErrNotFound` naming the relation; a query failure maps through `MapError` and is never misreported as missing. Run it in a store constructor so a host aimed at the wrong database fails before serving |
 | `RunMigrations(ctx, db, fs, dir)` | host-driven migration runner for one database directory; one transaction, filename order, checksum guard, forward-only. One merged stream per database: call it once, with globally unique filenames that are never renumbered — `dir` is an `fs.FS` subpath, never a ledger namespace (all rows share the `"default"` source) |
 | `NewLimiter(db, opts…) *Limiter` / `WithLimiterKeyPrefix` | a durable `sdk/capabilities/ratelimiter.Limiter` over the caller-owned `*DB` — one atomic statement per `Allow` against the host-owned `ratelimit_windows` table (see below) |
 | `(*Limiter).StatusCheck(ctx) error` | boot probe for that host-owned table; call it before serving, because a missing table makes the sdk middleware fail open and silent |

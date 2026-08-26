@@ -137,6 +137,12 @@ existing non-secret query parameters are preserved. No schema or sibling-module
 change. The host-side landing route that reads the fragment token and POSTs
 `verify-link` is coordination-hub's #162.
 
+**2026-08-25: `sdk` + `integrations/datastores/pgxdb` — next tags, patch by owner
+ruling** — `crud.MapPageErr` and `pgxdb.ProbeTable` (plan of record
+`.claude/plans/pgxdb-probe-table-map-page-err.md`; originating host gps-360-go).
+Both additive, zero-value-preserving, no schema, no sibling pin moves. See the
+two upgrade notes below.
+
 ## Tagging scheme
 
 Nested Go modules in a single repo are tagged with the module's directory as a
@@ -224,6 +230,44 @@ silently would break a host whose CSP no longer covers the kit's assets. Record 
 the module's next-tag upgrade note below and tell hosts to re-derive their CSP header.
 
 ## Upgrade notes (keyed to each module's next tag)
+
+### sdk — next tag (2026-08-25): crud.MapPageErr — the fallible row→domain page bridge (patch by owner ruling)
+
+pgxdb-probe-table-map-page-err (plan of record
+`.claude/plans/pgxdb-probe-table-map-page-err.md`). A **patch by owner ruling**
+(one additive generic function; the `sdk/v0.4.1` precedent). No in-repo module
+pins move.
+
+- **`crud.MapPageErr(p Page[T], fn func(T) (U, error)) (Page[U], error)`** is
+  `MapPage` for a mapper that can fail. A store whose `toDomain` VALIDATES the
+  stored row (a vocabulary outside the domain's contract must fail loud, never
+  enter the domain) previously had to re-implement the page copy by hand around
+  its error loop; now it is `crud.MapPageErr(page, row.toDomain)`. Fail-fast: the
+  first error comes back unwrapped with a zero `Page` (no partial items, no
+  cursors); on success every pagination field is copied unchanged exactly as
+  `MapPage` does, and nil `Items`/`Total` stay nil.
+- **`MapPage` is untouched.** Infallible mappers keep using it.
+
+### integrations/datastores/pgxdb — next tag (2026-08-25): ProbeTable — the boot-time table probe (patch by owner ruling)
+
+pgxdb-probe-table-map-page-err (plan of record
+`.claude/plans/pgxdb-probe-table-map-page-err.md`). A **patch by owner ruling**
+(one additive function; no `go.mod` change — still `sdk v0.4.0`).
+
+- **`pgxdb.ProbeTable(ctx, q Querier, table string) error`** is the existence
+  probe every pgx store constructor already carried privately
+  (`features/{authentication,authorization,events}/stores/pgx`): `SELECT
+  to_regclass($1)::text` with the name bound as a parameter (bare, or
+  schema-qualified like `gps.organizations`). Absent → wraps `sdk.ErrNotFound`
+  naming the relation; a query/infrastructure failure maps through `MapError`
+  and is **never** misreported as a missing table. Accepts a `*DB` or a `*Tx`.
+  Run it in a store constructor so a host aimed at a database without its
+  tables fails at wiring time, naming the table, instead of 500ing on the
+  first query.
+- **The framework's own store copies do not move on this tag.** They adopt
+  (`fmt.Errorf("…: %w", pgxdb.ProbeTable(…))`, keeping their
+  migration-source wording) when each store module next retags and pins this
+  pgxdb version — deliberately not forced here.
 
 ### features/authentication — next tag v0.5.2 (2026-08-25): completed account mutations stop landing silently (patch; REDIRECT TARGETS AND RENDERED COPY CHANGE)
 

@@ -68,6 +68,32 @@ func MapPage[T, U any](p Page[T], fn func(T) U) Page[U] {
 	return out
 }
 
+// MapPageErr is MapPage for a fallible mapper — the row-struct→domain bridge
+// when the conversion VALIDATES (a stored vocabulary outside the domain's
+// contract must fail loud, not enter the domain). It stops at the first error
+// and returns it unwrapped, with a zero Page; on success every pagination
+// field is copied unchanged exactly as MapPage does.
+func MapPageErr[T, U any](p Page[T], fn func(T) (U, error)) (Page[U], error) {
+	out := Page[U]{
+		NextCursor:     p.NextCursor,
+		HasMore:        p.HasMore,
+		HasPrev:        p.HasPrev,
+		PreviousCursor: p.PreviousCursor,
+		Total:          p.Total,
+	}
+	if p.Items != nil {
+		out.Items = make([]U, len(p.Items))
+		for i, item := range p.Items {
+			u, err := fn(item)
+			if err != nil {
+				return Page[U]{}, err
+			}
+			out.Items[i] = u
+		}
+	}
+	return out, nil
+}
+
 // ListParams carries the raw transport-edge page params ParseListRequest folds
 // into a ListRequest. The string fields are the untrusted query values
 // (limit/cursor/offset/count); Limits is the resource's page-size vocabulary,

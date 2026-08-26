@@ -170,6 +170,56 @@ func TestMapPage(t *testing.T) {
 	}
 }
 
+func TestMapPageErr(t *testing.T) {
+	total := int64(7)
+	src := Page[int]{
+		Items:          []int{1, 2, 3},
+		NextCursor:     "next",
+		HasMore:        true,
+		HasPrev:        true,
+		PreviousCursor: "prev",
+		Total:          &total,
+	}
+	got, err := MapPageErr(src, func(n int) (string, error) { return strconv.Itoa(n), nil })
+	if err != nil {
+		t.Fatalf("MapPageErr: %v", err)
+	}
+	want := []string{"1", "2", "3"}
+	if len(got.Items) != len(want) {
+		t.Fatalf("len(Items) = %d, want %d", len(got.Items), len(want))
+	}
+	for i := range want {
+		if got.Items[i] != want[i] {
+			t.Errorf("Items[%d] = %q, want %q", i, got.Items[i], want[i])
+		}
+	}
+	if got.NextCursor != "next" || !got.HasMore || !got.HasPrev || got.PreviousCursor != "prev" || got.Total == nil || *got.Total != total {
+		t.Errorf("pagination fields not copied: %+v", got)
+	}
+
+	// The first failing item stops the mapping: the error comes back unwrapped
+	// and the page is the zero value (no partial Items, no cursors).
+	boom := errors.New("row 2 is not a legal value")
+	failed, err := MapPageErr(src, func(n int) (string, error) {
+		if n == 2 {
+			return "", boom
+		}
+		return strconv.Itoa(n), nil
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want %v", err, boom)
+	}
+	if failed.Items != nil || failed.NextCursor != "" || failed.HasMore || failed.Total != nil {
+		t.Errorf("failed page must be the zero value, got %+v", failed)
+	}
+
+	// nil Items and nil Total are preserved as nil.
+	none, err := MapPageErr(Page[int]{}, func(n int) (string, error) { return strconv.Itoa(n), nil })
+	if err != nil || none.Items != nil || none.Total != nil {
+		t.Errorf("zero page: got %+v err=%v", none, err)
+	}
+}
+
 func TestErrNotFound_AliasesErrs(t *testing.T) {
 	if !errors.Is(ErrNotFound, sdk.ErrNotFound) {
 		t.Error("crud.ErrNotFound must alias sdk.ErrNotFound")
