@@ -65,15 +65,16 @@ var contractualCollatedColumns = []collatedColumn{
 func resetCanonicalSchema(t *testing.T, db *pgxdb.DB) {
 	t.Helper()
 	ctx := context.Background()
+	ensureSchema(t, db)
 	for _, tbl := range []string{"iam_mutations", "iam_scopes", "iam_roles", "iam_relationships"} {
-		if _, err := db.Exec(ctx, "DROP TABLE IF EXISTS "+tbl+" CASCADE"); err != nil {
+		if _, err := db.Exec(ctx, "DROP TABLE IF EXISTS "+qualify(t, tbl)+" CASCADE"); err != nil {
 			t.Fatalf("drop %s: %v", tbl, err)
 		}
 	}
 	for _, v := range canonicalMigrations {
-		_, _ = db.Exec(ctx, "DELETE FROM schema_migrations WHERE source = 'default' AND version = $1", v)
+		_, _ = db.Exec(ctx, "DELETE FROM "+qualify(t, "schema_migrations")+" WHERE source = 'default' AND version = $1", v)
 	}
-	if err := pgxdb.RunMigrations(ctx, db, MigrationsFS, MigrationsDir); err != nil {
+	if err := pgxdb.RunMigrations(ctx, db, MigrationsFS, MigrationsDir, migrateOptions(t)...); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 }
@@ -157,10 +158,18 @@ func TestContractualCollation_Catalog(t *testing.T) {
 	resetCanonicalSchema(t, db)
 
 	ctx := context.Background()
+	// On the schema leg the catalog read must be filtered by table_schema, or a
+	// same-named table in another schema would answer for it.
+	q := `SELECT collation_name FROM information_schema.columns WHERE table_name = $1 AND column_name = $2`
+	args := []any{nil, nil}
+	if s := testSchema(t); !s.IsZero() {
+		q += ` AND table_schema = $3`
+		args = append(args, s.String())
+	}
 	for _, c := range contractualCollatedColumns {
 		var collation *string
-		const q = `SELECT collation_name FROM information_schema.columns WHERE table_name = $1 AND column_name = $2`
-		if err := db.QueryRow(ctx, q, c.Table, c.Column).Scan(&collation); err != nil {
+		args[0], args[1] = c.Table, c.Column
+		if err := db.QueryRow(ctx, q, args...).Scan(&collation); err != nil {
 			t.Fatalf("catalog lookup %s.%s: %v", c.Table, c.Column, err)
 		}
 		if collation == nil || *collation != "C" {
@@ -199,7 +208,7 @@ func TestCollationControlsOrdering_NonC(t *testing.T) {
 
 	resetCanonicalSchema(t, db)
 
-	repos, err := Repositories(db)
+	repos, err := Repositories(db, storeOptions(t)...)
 	if err != nil {
 		t.Fatalf("Repositories: %v", err)
 	}

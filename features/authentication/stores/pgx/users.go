@@ -18,13 +18,14 @@ import (
 // sdk.ErrAlreadyExists via the connector's MapError.
 type UserStore struct {
 	db *pgxdb.DB
+	qualified
 }
 
 var _ user.UserRepository = (*UserStore)(nil)
 
 // NewUserStore returns a UserStore backed by db.
-func NewUserStore(db *pgxdb.DB) *UserStore {
-	return &UserStore{db: db}
+func NewUserStore(db *pgxdb.DB, opts ...Option) *UserStore {
+	return &UserStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
 // userColumns is the users projection. status/status_changed_at (migration 0014)
@@ -76,7 +77,7 @@ func (s *UserStore) CreateWithPrimaryIdentifier(ctx context.Context, u user.User
 			"updated_at":    u.UpdatedAt.UTC(),
 		}
 		if u.ID == "" {
-			const q = `INSERT INTO users (display_name, auth_revision, status, created_at, updated_at)
+			q := `INSERT INTO ` + s.table(usersTable) + ` (display_name, auth_revision, status, created_at, updated_at)
 				VALUES (@display_name, @auth_revision, @status, @created_at, @updated_at)
 				RETURNING id`
 			if err := tx.QueryRow(ctx, q, userArgs).Scan(&u.ID); err != nil {
@@ -84,14 +85,14 @@ func (s *UserStore) CreateWithPrimaryIdentifier(ctx context.Context, u user.User
 			}
 		} else {
 			userArgs["id"] = u.ID
-			const q = `INSERT INTO users (id, display_name, auth_revision, status, created_at, updated_at)
+			q := `INSERT INTO ` + s.table(usersTable) + ` (id, display_name, auth_revision, status, created_at, updated_at)
 				VALUES (@id, @display_name, @auth_revision, @status, @created_at, @updated_at)`
 			if _, err := tx.Exec(ctx, q, userArgs); err != nil {
 				return pgxdb.MapError(err)
 			}
 		}
 		ident.UserID = u.ID
-		created, err := insertIdentifier(ctx, tx, ident)
+		created, err := insertIdentifier(ctx, tx, s.table(identifiersTable), ident)
 		if err != nil {
 			return err
 		}
@@ -106,7 +107,7 @@ func (s *UserStore) CreateWithPrimaryIdentifier(ctx context.Context, u user.User
 
 // Get returns the user with the given id, or sdk.ErrNotFound.
 func (s *UserStore) Get(ctx context.Context, id string) (user.User, error) {
-	const q = `SELECT ` + userColumns + ` FROM users WHERE id = @id`
+	q := `SELECT ` + userColumns + ` FROM ` + s.table(usersTable) + ` WHERE id = @id`
 	row, err := pgxdb.QueryOne[userRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
 	if err != nil {
 		return user.User{}, err
@@ -120,7 +121,7 @@ func (s *UserStore) Get(ctx context.Context, id string) (user.User, error) {
 // go through the atomic AdminRepository.SetStatus, so a profile write can never
 // reactivate a deactivated account as a side effect.
 func (s *UserStore) Update(ctx context.Context, id string, u user.User) (user.User, error) {
-	const q = `UPDATE users
+	q := `UPDATE ` + s.table(usersTable) + `
 		SET display_name = @display_name, updated_at = @updated_at
 		WHERE id = @id`
 	n, err := pgxdb.ExecAffecting(ctx, s.db, q, pgx.NamedArgs{

@@ -20,7 +20,7 @@ import (
 func TestAppendTx(t *testing.T) {
 	dsn := requireDSN(t)
 	db := openAndMigrate(t, dsn)
-	store, err := New(db)
+	store, err := New(db, storeOptions(t)...)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

@@ -12,15 +12,20 @@ import (
 
 // InquiryStore implements messaging.InquiryRepository over a PostgreSQL database.
 type InquiryStore struct {
-	db *pgxdb.DB
+	db     *pgxdb.DB
+	schema pgxdb.Schema
 }
 
 var _ messaging.InquiryRepository = (*InquiryStore)(nil)
 
 // NewInquiryStore returns an InquiryStore backed by db.
-func NewInquiryStore(db *pgxdb.DB) *InquiryStore {
-	return &InquiryStore{db: db}
+func NewInquiryStore(db *pgxdb.DB, opts ...Option) *InquiryStore {
+	return &InquiryStore{db: db, schema: newConfig(opts).schema}
 }
+
+// table renders name under the store's schema — the one chokepoint every
+// statement in this file goes through.
+func (s *InquiryStore) table(name string) string { return s.schema.Table(name) }
 
 const inquiryColumns = "id, name, email, message, created_at"
 
@@ -54,7 +59,7 @@ func (s *InquiryStore) Create(ctx context.Context, in messaging.Inquiry) (messag
 	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if in.ID == "" {
-		const q = `INSERT INTO inquiries (name, email, message, created_at)
+		q := `INSERT INTO ` + s.table(inquiriesTable) + ` (name, email, message, created_at)
 			VALUES (@name, @email, @message, @created_at)
 			RETURNING id`
 		if err := s.db.QueryRow(ctx, q, args).Scan(&in.ID); err != nil {
@@ -62,7 +67,7 @@ func (s *InquiryStore) Create(ctx context.Context, in messaging.Inquiry) (messag
 		}
 		return in, nil
 	}
-	const q = `INSERT INTO inquiries (` + inquiryColumns + `)
+	q := `INSERT INTO ` + s.table(inquiriesTable) + ` (` + inquiryColumns + `)
 		VALUES (@id, @name, @email, @message, @created_at)`
 	args["id"] = in.ID
 	if _, err := s.db.Exec(ctx, q, args); err != nil {
@@ -73,7 +78,7 @@ func (s *InquiryStore) Create(ctx context.Context, in messaging.Inquiry) (messag
 
 // List returns all inquiries, newest first.
 func (s *InquiryStore) List(ctx context.Context) ([]messaging.Inquiry, error) {
-	const q = `SELECT ` + inquiryColumns + ` FROM inquiries ORDER BY created_at DESC, id DESC`
+	q := `SELECT ` + inquiryColumns + ` FROM ` + s.table(inquiriesTable) + ` ORDER BY created_at DESC, id DESC`
 	rows, err := s.db.Query(ctx, q)
 	if err != nil {
 		return nil, pgxdb.MapError(err)

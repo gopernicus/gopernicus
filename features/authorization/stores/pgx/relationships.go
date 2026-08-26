@@ -13,7 +13,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
-// reachableCTE is the relation-aware userset-expansion recursive CTE shared by the
+// reachableCTE renders the relation-aware userset-expansion recursive CTE shared by the
 // check and lookup methods. reachable(atype, aid, arelation) is the set of exact
 // subject references the concrete subject IS transitively: it seeds with the
 // subject itself as a CONCRETE reference (empty arelation), and at each step adds
@@ -29,15 +29,17 @@ import (
 // bound). Re-derived in the PostgreSQL dialect (@subject_type/@subject_id
 // NamedArgs, ::text-cast seed), not ported from the turso SQL — the shared
 // storetest suite is the equivalence proof.
-const reachableCTE = `WITH RECURSIVE reachable(atype, aid, arelation) AS (
+func reachableCTE(schema pgxdb.Schema) string {
+	return `WITH RECURSIVE reachable(atype, aid, arelation) AS (
 	SELECT @subject_type::text, @subject_id::text, ''::text
 	UNION
 	SELECT r.resource_type, r.resource_id, r.relation
-	FROM iam_relationships r
+	FROM ` + schema.Table("iam_relationships") + ` r
 	JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 )`
+}
 
-// boundedReachableCTE is the BUDGETED sibling of reachableCTE used by the two
+// boundedReachableCTE renders the BUDGETED sibling of reachableCTE used by the two
 // CHECK-path methods (CheckRelationWithGroupExpansion, CheckBatchDirect) to bound
 // group-expansion work against the engine's MaxGraphStates (F4). Two mechanisms
 // bound it and together guarantee that work depends on the CONFIGURED budget, not
@@ -59,11 +61,12 @@ const reachableCTE = `WITH RECURSIVE reachable(atype, aid, arelation) AS (
 // which the state_cap overflow catches. A graph that fits within the budget thus
 // yields the SAME bool as the unbounded reachableCTE. UNION dedups on the full
 // (atype, aid, arelation, depth) row, so cycles terminate by the depth bound.
-const boundedReachableCTE = `WITH RECURSIVE reachable(atype, aid, arelation, depth) AS (
+func boundedReachableCTE(schema pgxdb.Schema) string {
+	return `WITH RECURSIVE reachable(atype, aid, arelation, depth) AS (
 	SELECT @subject_type::text, @subject_id::text, ''::text, 0
 	UNION
 	SELECT r.resource_type, r.resource_id, r.relation, reachable.depth + 1
-	FROM iam_relationships r
+	FROM ` + schema.Table("iam_relationships") + ` r
 	JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 	WHERE reachable.depth < @max_depth
 ),
@@ -73,6 +76,7 @@ states AS (
 capped AS (
 	SELECT atype, aid, arelation FROM states LIMIT @state_cap
 )`
+}
 
 // subjectRelationshipRow is the db-tagged projection of a ListRelationshipsBySubject row.
 type subjectRelationshipRow struct {
@@ -114,12 +118,17 @@ func (r resourceRelationshipRow) toDomain() relationship.ResourceRelationship {
 
 // relationshipStore fills relationship.Storer over iam_relationships.
 type relationshipStore struct {
-	db *pgxdb.DB
+	db     *pgxdb.DB
+	schema pgxdb.Schema
 }
 
-func newRelationshipStore(db *pgxdb.DB) *relationshipStore {
-	return &relationshipStore{db: db}
+func newRelationshipStore(db *pgxdb.DB, cfg config) *relationshipStore {
+	return &relationshipStore{db: db, schema: cfg.schema}
 }
+
+// table renders name under the store's schema — the one chokepoint every
+// statement on this store goes through.
+func (s *relationshipStore) table(name string) string { return s.schema.Table(name) }
 
 var _ relationship.Storer = (*relationshipStore)(nil)
 
@@ -130,10 +139,10 @@ var _ relationship.Storer = (*relationshipStore)(nil)
 // a deny. maxExpansionStates <= 0 uses the unbounded reachableCTE.
 func (s *relationshipStore) CheckRelationWithGroupExpansion(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string, maxExpansionStates int) (bool, error) {
 	if maxExpansionStates <= 0 {
-		q := reachableCTE + `
+		q := reachableCTE(s.schema) + `
 SELECT EXISTS (
 	SELECT 1
-	FROM iam_relationships r
+	FROM ` + s.table("iam_relationships") + ` r
 	JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 	WHERE r.resource_type = @resource_type AND r.resource_id = @resource_id AND r.relation = @relation
 )`
@@ -150,12 +159,12 @@ SELECT EXISTS (
 		return ok, nil
 	}
 
-	q := boundedReachableCTE + `
+	q := boundedReachableCTE(s.schema) + `
 SELECT
 	(SELECT count(*) FROM capped) AS state_count,
 	EXISTS (
 		SELECT 1
-		FROM iam_relationships r
+		FROM ` + s.table("iam_relationships") + ` r
 		JOIN capped ON r.subject_type = capped.atype AND r.subject_id = capped.aid AND r.subject_relation = capped.arelation
 		WHERE r.resource_type = @resource_type AND r.resource_id = @resource_id AND r.relation = @relation
 	) AS matched`
@@ -182,7 +191,7 @@ SELECT
 // empty subject_relation reads back as "" (a concrete subject); a non-empty one
 // as the exact userset relation.
 func (s *relationshipStore) GetRelationTargets(ctx context.Context, resourceType, resourceID, relation string) ([]relationship.RelationTarget, error) {
-	const q = `SELECT subject_type, subject_id, subject_relation FROM iam_relationships WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation`
+	q := `SELECT subject_type, subject_id, subject_relation FROM ` + s.table("iam_relationships") + ` WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation`
 	rows, err := s.db.Query(ctx, q, pgx.NamedArgs{"resource_type": resourceType, "resource_id": resourceID, "relation": relation})
 	if err != nil {
 		return nil, pgxdb.MapError(err)
@@ -212,7 +221,7 @@ func (s *relationshipStore) GetRelationTargets(ctx context.Context, resourceType
 // tuple with the same type/id does not satisfy a concrete probe). Used for the
 // platform-admin data-tuple check and last-owner counting.
 func (s *relationshipStore) CheckRelationExists(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) (bool, error) {
-	const q = `SELECT EXISTS (SELECT 1 FROM iam_relationships WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation AND subject_type = @subject_type AND subject_id = @subject_id AND subject_relation = '')`
+	q := `SELECT EXISTS (SELECT 1 FROM ` + s.table("iam_relationships") + ` WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation AND subject_type = @subject_type AND subject_id = @subject_id AND subject_relation = '')`
 	var ok bool
 	if err := s.db.QueryRow(ctx, q, pgx.NamedArgs{
 		"resource_type": resourceType,
@@ -242,9 +251,9 @@ func (s *relationshipStore) CheckBatchDirect(ctx context.Context, resourceType s
 	}
 
 	if maxExpansionStates <= 0 {
-		q := reachableCTE + `
+		q := reachableCTE(s.schema) + `
 SELECT DISTINCT r.resource_id
-FROM iam_relationships r
+FROM ` + s.table("iam_relationships") + ` r
 JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 WHERE r.resource_type = @resource_type AND r.relation = @relation AND r.resource_id = ANY(@resource_ids::text[])`
 		matched, err := s.queryStrings(ctx, q, pgx.NamedArgs{
@@ -265,11 +274,11 @@ WHERE r.resource_type = @resource_type AND r.relation = @relation AND r.resource
 
 	// The distinct-state count rides every result row via the cnt cross-join, so
 	// overflow is detectable even when no resource matches (zero match rows).
-	q := boundedReachableCTE + `,
+	q := boundedReachableCTE(s.schema) + `,
 cnt AS (SELECT count(*) AS n FROM capped),
 matches AS (
 	SELECT DISTINCT r.resource_id AS rid
-	FROM iam_relationships r
+	FROM ` + s.table("iam_relationships") + ` r
 	JOIN capped ON r.subject_type = capped.atype AND r.subject_id = capped.aid AND r.subject_relation = capped.arelation
 	WHERE r.resource_type = @resource_type AND r.relation = @relation AND r.resource_id = ANY(@resource_ids::text[])
 )
@@ -324,10 +333,10 @@ FROM cnt LEFT JOIN matches m ON true`
 // key; an ALL-populated batch includes them; a MIXED batch is a loud store error
 // (the engine mints all-or-none). There is no RETURNING — the port is error-only.
 func (s *relationshipStore) CreateRelationships(ctx context.Context, in []relationship.CreateRelationship) error {
-	return createRelationships(ctx, s.db, in)
+	return createRelationships(ctx, s.db, s.schema, in)
 }
 
-func createRelationships(ctx context.Context, db pgxdb.Querier, in []relationship.CreateRelationship) error {
+func createRelationships(ctx context.Context, db pgxdb.Querier, schema pgxdb.Schema, in []relationship.CreateRelationship) error {
 	if len(in) == 0 {
 		return nil
 	}
@@ -381,13 +390,13 @@ func createRelationships(ctx context.Context, db pgxdb.Querier, in []relationshi
 	var q string
 	if withID {
 		args["relationship_ids"] = ids
-		q = `INSERT INTO iam_relationships (relationship_id, resource_type, resource_id, relation, subject_type, subject_id, subject_relation, created_at)
+		q = `INSERT INTO ` + schema.Table("iam_relationships") + ` (relationship_id, resource_type, resource_id, relation, subject_type, subject_id, subject_relation, created_at)
 SELECT rel_id, rt, rid, rel, st, sid, sr, @created_at::timestamptz
 FROM UNNEST(@relationship_ids::text[], @resource_types::text[], @resource_ids::text[], @relations::text[], @subject_types::text[], @subject_ids::text[], @subject_relations::text[])
 	AS u(rel_id, rt, rid, rel, st, sid, sr)
 ON CONFLICT DO NOTHING`
 	} else {
-		q = `INSERT INTO iam_relationships (resource_type, resource_id, relation, subject_type, subject_id, subject_relation, created_at)
+		q = `INSERT INTO ` + schema.Table("iam_relationships") + ` (resource_type, resource_id, relation, subject_type, subject_id, subject_relation, created_at)
 SELECT rt, rid, rel, st, sid, sr, @created_at::timestamptz
 FROM UNNEST(@resource_types::text[], @resource_ids::text[], @relations::text[], @subject_types::text[], @subject_ids::text[], @subject_relations::text[])
 	AS u(rt, rid, rel, st, sid, sr)
@@ -423,7 +432,7 @@ func (s *relationshipStore) SetRelationTargets(ctx context.Context, resourceType
 		}
 
 		if len(rows) == 0 {
-			_, err := tx.Exec(ctx, `DELETE FROM iam_relationships WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation`, pgx.NamedArgs{
+			_, err := tx.Exec(ctx, `DELETE FROM `+s.table("iam_relationships")+` WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation`, pgx.NamedArgs{
 				"resource_type": resourceType, "resource_id": resourceID, "relation": relationName,
 			})
 			return pgxdb.MapError(err)
@@ -439,8 +448,8 @@ func (s *relationshipStore) SetRelationTargets(ctx context.Context, resourceType
 			"resource_type": resourceType, "resource_id": resourceID, "relation": relationName,
 			"subject_types": subjectTypes, "subject_ids": subjectIDs, "subject_relations": subjectRelations,
 		}
-		const conflictQ = `SELECT EXISTS (
-	SELECT 1 FROM iam_relationships r
+		conflictQ := `SELECT EXISTS (
+	SELECT 1 FROM ` + s.table("iam_relationships") + ` r
 	JOIN UNNEST(@subject_types::text[], @subject_ids::text[], @subject_relations::text[]) AS d(st, sid, sr)
 	  ON r.subject_type = d.st AND r.subject_id = d.sid AND r.subject_relation = d.sr
 	WHERE r.resource_type = @resource_type AND r.resource_id = @resource_id AND r.relation <> @relation
@@ -453,7 +462,7 @@ func (s *relationshipStore) SetRelationTargets(ctx context.Context, resourceType
 			return fmt.Errorf("authorization pgx store: a desired target already holds a different relation on %s:%s: %w", resourceType, resourceID, sdk.ErrConflict)
 		}
 
-		const deleteQ = `DELETE FROM iam_relationships r
+		deleteQ := `DELETE FROM ` + s.table("iam_relationships") + ` r
 WHERE r.resource_type = @resource_type AND r.resource_id = @resource_id AND r.relation = @relation
   AND NOT EXISTS (
 	SELECT 1 FROM UNNEST(@subject_types::text[], @subject_ids::text[], @subject_relations::text[]) AS d(st, sid, sr)
@@ -462,20 +471,20 @@ WHERE r.resource_type = @resource_type AND r.resource_id = @resource_id AND r.re
 		if _, err := tx.Exec(ctx, deleteQ, args); err != nil {
 			return pgxdb.MapError(err)
 		}
-		return createRelationships(ctx, tx, rows)
+		return createRelationships(ctx, tx, s.schema, rows)
 	})
 }
 
 // DeleteResourceRelationships removes every tuple for a resource (idempotent).
 func (s *relationshipStore) DeleteResourceRelationships(ctx context.Context, resourceType, resourceID string) error {
-	const q = `DELETE FROM iam_relationships WHERE resource_type = @resource_type AND resource_id = @resource_id`
+	q := `DELETE FROM ` + s.table("iam_relationships") + ` WHERE resource_type = @resource_type AND resource_id = @resource_id`
 	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{"resource_type": resourceType, "resource_id": resourceID})
 	return err
 }
 
 // DeleteRelationshipTarget removes one exact tuple, including subject_relation.
 func (s *relationshipStore) DeleteRelationshipTarget(ctx context.Context, resourceType, resourceID, relationName string, target relationship.SubjectRef) error {
-	const q = `DELETE FROM iam_relationships WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation AND subject_type = @subject_type AND subject_id = @subject_id AND subject_relation = @subject_relation`
+	q := `DELETE FROM ` + s.table("iam_relationships") + ` WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation AND subject_type = @subject_type AND subject_id = @subject_id AND subject_relation = @subject_relation`
 	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
 		"resource_type": resourceType, "resource_id": resourceID, "relation": relationName,
 		"subject_type": target.Type, "subject_id": target.ID, "subject_relation": target.Relation,
@@ -485,7 +494,7 @@ func (s *relationshipStore) DeleteRelationshipTarget(ctx context.Context, resour
 
 // DeleteRelationship removes one exact tuple (idempotent — absent is nil).
 func (s *relationshipStore) DeleteRelationship(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) error {
-	const q = `DELETE FROM iam_relationships WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation AND subject_type = @subject_type AND subject_id = @subject_id`
+	q := `DELETE FROM ` + s.table("iam_relationships") + ` WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation AND subject_type = @subject_type AND subject_id = @subject_id`
 	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
 		"resource_type": resourceType,
 		"resource_id":   resourceID,
@@ -499,7 +508,7 @@ func (s *relationshipStore) DeleteRelationship(ctx context.Context, resourceType
 // DeleteByResourceAndSubject removes every relation a subject holds on a resource
 // (idempotent).
 func (s *relationshipStore) DeleteByResourceAndSubject(ctx context.Context, resourceType, resourceID, subjectType, subjectID string) error {
-	const q = `DELETE FROM iam_relationships WHERE resource_type = @resource_type AND resource_id = @resource_id AND subject_type = @subject_type AND subject_id = @subject_id`
+	q := `DELETE FROM ` + s.table("iam_relationships") + ` WHERE resource_type = @resource_type AND resource_id = @resource_id AND subject_type = @subject_type AND subject_id = @subject_id`
 	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
 		"resource_type": resourceType,
 		"resource_id":   resourceID,
@@ -512,7 +521,7 @@ func (s *relationshipStore) DeleteByResourceAndSubject(ctx context.Context, reso
 // CountByResourceAndRelation counts DIRECT tuples only — never expanded
 // membership (the §2.5 security pin: last-owner protection depends on it).
 func (s *relationshipStore) CountByResourceAndRelation(ctx context.Context, resourceType, resourceID, relation string) (int, error) {
-	const q = `SELECT COUNT(*) FROM iam_relationships WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation`
+	q := `SELECT COUNT(*) FROM ` + s.table("iam_relationships") + ` WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation`
 	var n int
 	if err := s.db.QueryRow(ctx, q, pgx.NamedArgs{"resource_type": resourceType, "resource_id": resourceID, "relation": relation}).Scan(&n); err != nil {
 		return 0, pgxdb.MapError(err)
@@ -534,7 +543,7 @@ func (s *relationshipStore) ListRelationshipsBySubject(ctx context.Context, subj
 		args["relation"] = *filter.Relation
 	}
 	q := pgxdb.ListQuery[subjectRelationshipRow]{
-		BaseSQL:      `SELECT relationship_id, resource_type, resource_id, relation, created_at FROM iam_relationships` + where,
+		BaseSQL:      `SELECT relationship_id, resource_type, resource_id, relation, created_at FROM ` + s.table("iam_relationships") + where,
 		Args:         args,
 		OrderFields:  relationship.OrderFields,
 		DefaultOrder: relationship.DefaultOrder,
@@ -563,7 +572,7 @@ func (s *relationshipStore) ListRelationshipsByResource(ctx context.Context, res
 		args["relation"] = *filter.Relation
 	}
 	q := pgxdb.ListQuery[resourceRelationshipRow]{
-		BaseSQL:      `SELECT relationship_id, subject_type, subject_id, relation, created_at FROM iam_relationships` + where,
+		BaseSQL:      `SELECT relationship_id, subject_type, subject_id, relation, created_at FROM ` + s.table("iam_relationships") + where,
 		Args:         args,
 		OrderFields:  relationship.OrderFields,
 		DefaultOrder: relationship.DefaultOrder,
@@ -586,9 +595,9 @@ func (s *relationshipStore) LookupResourceIDs(ctx context.Context, resourceType 
 	if len(relations) == 0 {
 		return nil, nil
 	}
-	q := reachableCTE + `
+	q := reachableCTE(s.schema) + `
 SELECT DISTINCT r.resource_id
-FROM iam_relationships r
+FROM ` + s.table("iam_relationships") + ` r
 JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 WHERE r.resource_type = @resource_type AND r.relation = ANY(@relations::text[])
 ORDER BY r.resource_id` + limitClause(limit)
@@ -608,7 +617,7 @@ func (s *relationshipStore) LookupResourceIDsByRelationTarget(ctx context.Contex
 	if len(targetIDs) == 0 {
 		return nil, nil
 	}
-	q := `SELECT DISTINCT resource_id FROM iam_relationships
+	q := `SELECT DISTINCT resource_id FROM ` + s.table("iam_relationships") + `
 WHERE resource_type = @resource_type AND relation = @relation AND subject_type = @target_type AND subject_id = ANY(@target_ids::text[]) AND subject_relation = ''
 ORDER BY resource_id` + limitClause(limit)
 	return s.queryStrings(ctx, q, pgx.NamedArgs{
@@ -630,11 +639,11 @@ func (s *relationshipStore) LookupDescendantResourceIDs(ctx context.Context, res
 	}
 	q := `WITH RECURSIVE descendants(rid) AS (
 	SELECT r.resource_id
-	FROM iam_relationships r
+	FROM ` + s.table("iam_relationships") + ` r
 	WHERE r.resource_type = @resource_type AND r.relation = @relation AND r.subject_type = @subject_type AND r.subject_relation = '' AND r.subject_id = ANY(@root_ids::text[])
 	UNION
 	SELECT r.resource_id
-	FROM iam_relationships r
+	FROM ` + s.table("iam_relationships") + ` r
 	JOIN descendants d ON r.subject_id = d.rid
 	WHERE r.resource_type = @resource_type AND r.relation = @relation AND r.subject_type = @subject_type AND r.subject_relation = ''
 )

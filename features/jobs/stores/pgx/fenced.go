@@ -37,14 +37,20 @@ var (
 // enforce the LeaseID fence, returning sdk.ErrConflict to a reclaimed or
 // superseded holder. Claim is one UPDATE ... FOR UPDATE SKIP LOCKED ... RETURNING.
 type FencedQueue struct {
-	db *pgxdb.DB
+	db     *pgxdb.DB
+	schema pgxdb.Schema
 }
 
-// NewFencedQueueStore returns a FencedQueue backed by db. The claim lease is
-// per-claim (the caller supplies leaseFor to Claim), so there is no store-level
-// lease default to configure.
-func NewFencedQueueStore(db *pgxdb.DB) *FencedQueue {
-	return &FencedQueue{db: db}
+// table renders this store's table name under the configured schema — the single
+// chokepoint every statement in the file qualifies through.
+func (q *FencedQueue) table(name string) string { return q.schema.Table(name) }
+
+// NewFencedQueueStore returns a FencedQueue backed by db, applying opts
+// (WithSchema). The claim lease is per-claim (the caller supplies leaseFor to
+// Claim), so WithLease is accepted and ignored.
+func NewFencedQueueStore(db *pgxdb.DB, opts ...Option) *FencedQueue {
+	cfg := newConfig(opts)
+	return &FencedQueue{db: db, schema: cfg.schema}
 }
 
 // fencedRow is the store-local, db-tagged projection of a fenced_job_queue row
@@ -110,14 +116,14 @@ func (q *FencedQueue) EnqueueOnce(ctx context.Context, in job.Enqueue) (job.Job,
 			return err
 		}
 		if in.LogicalKey != "" {
-			if active, ok, err := activeByKey(ctx, tx, in.LogicalKey); err != nil {
+			if active, ok, err := q.activeByKey(ctx, tx, in.LogicalKey); err != nil {
 				return err
 			} else if ok {
 				out = active
 				return nil
 			}
 		}
-		j, err := insertFenced(ctx, tx, in)
+		j, err := q.insertFenced(ctx, tx, in)
 		out = j
 		return err
 	})
@@ -136,7 +142,7 @@ func (q *FencedQueue) Replace(ctx context.Context, in job.Enqueue) (job.Job, err
 		}
 		if in.LogicalKey != "" {
 			now := time.Now().UTC()
-			const supersede = `UPDATE fenced_job_queue
+			supersede := `UPDATE ` + q.table("fenced_job_queue") + `
 				SET status = 'superseded', terminal_at = @now, lease_id = NULL, leased_until = NULL, updated_at = @now
 				WHERE logical_key = @key
 				  AND status NOT IN ('completed','dead_letter','canceled','superseded')`
@@ -144,7 +150,7 @@ func (q *FencedQueue) Replace(ctx context.Context, in job.Enqueue) (job.Job, err
 				return err
 			}
 		}
-		j, err := insertFenced(ctx, tx, in)
+		j, err := q.insertFenced(ctx, tx, in)
 		out = j
 		return err
 	})
@@ -160,11 +166,11 @@ func (q *FencedQueue) Claim(ctx context.Context, now time.Time, leaseID string, 
 	nowUTC := now.UTC()
 	until := nowUTC.Add(leaseFor)
 
-	const claim = `UPDATE fenced_job_queue
+	claim := `UPDATE ` + q.table("fenced_job_queue") + `
 		SET status = 'running', lease_id = @lease, leased_until = @until, claimed_at = @now,
 		    retry_count = retry_count + 1, updated_at = @now
 		WHERE job_id = (
-			SELECT job_id FROM fenced_job_queue
+			SELECT job_id FROM ` + q.table("fenced_job_queue") + `
 			WHERE (status = 'pending' AND scheduled_for <= @now)
 			   OR (status = 'running' AND leased_until <= @now)
 			ORDER BY priority DESC, created_at, job_id
@@ -188,14 +194,14 @@ func (q *FencedQueue) Claim(ctx context.Context, now time.Time, leaseID string, 
 // lease yields sdk.ErrConflict; an unknown job yields sdk.ErrNotFound.
 func (q *FencedQueue) Checkpoint(ctx context.Context, id, leaseID string, payload json.RawMessage, now time.Time) error {
 	return q.db.InTx(ctx, func(tx *pgxdb.Tx) error {
-		st, err := lockState(ctx, tx, id)
+		st, err := q.lockState(ctx, tx, id)
 		if err != nil {
 			return err
 		}
 		if !st.heldBy(leaseID, now) {
 			return sdk.ErrConflict
 		}
-		const upd = `UPDATE fenced_job_queue SET payload = @payload, updated_at = @now WHERE job_id = @id`
+		upd := `UPDATE ` + q.table("fenced_job_queue") + ` SET payload = @payload, updated_at = @now WHERE job_id = @id`
 		_, err = tx.Exec(ctx, upd, pgx.NamedArgs{"payload": payloadBytes(payload), "now": now.UTC(), "id": id})
 		return err
 	})
@@ -206,7 +212,7 @@ func (q *FencedQueue) Checkpoint(ctx context.Context, id, leaseID string, payloa
 // holder is idempotent nil; an unknown id yields sdk.ErrNotFound.
 func (q *FencedQueue) Complete(ctx context.Context, id, leaseID string, now time.Time) error {
 	return q.db.InTx(ctx, func(tx *pgxdb.Tx) error {
-		st, err := lockState(ctx, tx, id)
+		st, err := q.lockState(ctx, tx, id)
 		if err != nil {
 			return err
 		}
@@ -219,7 +225,7 @@ func (q *FencedQueue) Complete(ctx context.Context, id, leaseID string, now time
 		if !st.heldBy(leaseID, now) {
 			return sdk.ErrConflict
 		}
-		const upd = `UPDATE fenced_job_queue
+		upd := `UPDATE ` + q.table("fenced_job_queue") + `
 			SET status = 'completed', completed_at = @now, terminal_at = @now, updated_at = @now
 			WHERE job_id = @id`
 		_, err = tx.Exec(ctx, upd, pgx.NamedArgs{"now": now.UTC(), "id": id})
@@ -233,14 +239,14 @@ func (q *FencedQueue) Complete(ctx context.Context, id, leaseID string, now time
 // sdk.ErrNotFound.
 func (q *FencedQueue) Reschedule(ctx context.Context, id, leaseID string, availableAt time.Time, reason string, now time.Time) error {
 	return q.db.InTx(ctx, func(tx *pgxdb.Tx) error {
-		st, err := lockState(ctx, tx, id)
+		st, err := q.lockState(ctx, tx, id)
 		if err != nil {
 			return err
 		}
 		if !st.heldBy(leaseID, now) {
 			return sdk.ErrConflict
 		}
-		const upd = `UPDATE fenced_job_queue
+		upd := `UPDATE ` + q.table("fenced_job_queue") + `
 			SET status = 'pending', scheduled_for = @avail, lease_id = NULL, leased_until = NULL,
 			    claimed_at = NULL, failure_reason = @reason, updated_at = @now
 			WHERE job_id = @id`
@@ -255,7 +261,7 @@ func (q *FencedQueue) Reschedule(ctx context.Context, id, leaseID string, availa
 // yields sdk.ErrNotFound.
 func (q *FencedQueue) Fail(ctx context.Context, id, leaseID, reason string, now time.Time) error {
 	return q.db.InTx(ctx, func(tx *pgxdb.Tx) error {
-		st, err := lockState(ctx, tx, id)
+		st, err := q.lockState(ctx, tx, id)
 		if err != nil {
 			return err
 		}
@@ -268,7 +274,7 @@ func (q *FencedQueue) Fail(ctx context.Context, id, leaseID, reason string, now 
 		if !st.heldBy(leaseID, now) {
 			return sdk.ErrConflict
 		}
-		const upd = `UPDATE fenced_job_queue
+		upd := `UPDATE ` + q.table("fenced_job_queue") + `
 			SET status = 'dead_letter', failure_reason = @reason, terminal_at = @now, updated_at = @now
 			WHERE job_id = @id`
 		_, err = tx.Exec(ctx, upd, pgx.NamedArgs{"reason": reason, "now": now.UTC(), "id": id})
@@ -282,7 +288,7 @@ func (q *FencedQueue) Fail(ctx context.Context, id, leaseID, reason string, now 
 // unknown id yields sdk.ErrNotFound.
 func (q *FencedQueue) Cancel(ctx context.Context, id string, now time.Time) error {
 	return q.db.InTx(ctx, func(tx *pgxdb.Tx) error {
-		st, err := lockState(ctx, tx, id)
+		st, err := q.lockState(ctx, tx, id)
 		if err != nil {
 			return err
 		}
@@ -292,7 +298,7 @@ func (q *FencedQueue) Cancel(ctx context.Context, id string, now time.Time) erro
 		if st.terminal() {
 			return sdk.ErrConflict
 		}
-		const upd = `UPDATE fenced_job_queue
+		upd := `UPDATE ` + q.table("fenced_job_queue") + `
 			SET status = 'canceled', terminal_at = @now, lease_id = NULL, leased_until = NULL, updated_at = @now
 			WHERE job_id = @id`
 		_, err = tx.Exec(ctx, upd, pgx.NamedArgs{"now": now.UTC(), "id": id})
@@ -307,9 +313,9 @@ func (q *FencedQueue) PurgeTerminal(ctx context.Context, before time.Time, limit
 	if limit < 0 {
 		limit = math.MaxInt32
 	}
-	const del = `DELETE FROM fenced_job_queue
+	del := `DELETE FROM ` + q.table("fenced_job_queue") + `
 		WHERE job_id IN (
-			SELECT job_id FROM fenced_job_queue
+			SELECT job_id FROM ` + q.table("fenced_job_queue") + `
 			WHERE status IN ('completed','dead_letter','canceled','superseded')
 			  AND terminal_at IS NOT NULL AND terminal_at <= @before
 			ORDER BY terminal_at, job_id
@@ -325,7 +331,7 @@ func (q *FencedQueue) PurgeTerminal(ctx context.Context, before time.Time, limit
 // GetLatestByKey returns the most-recently-created execution holding logicalKey
 // (greatest created_at, job_id DESC tiebreak), or sdk.ErrNotFound.
 func (q *FencedQueue) GetLatestByKey(ctx context.Context, logicalKey string) (job.Job, error) {
-	const query = `SELECT ` + fencedColumns + ` FROM fenced_job_queue
+	query := `SELECT ` + fencedColumns + ` FROM ` + q.table("fenced_job_queue") + `
 		WHERE logical_key = @key ORDER BY created_at DESC, job_id DESC LIMIT 1`
 	row, err := pgxdb.QueryOne[fencedRow](ctx, q.db, query, pgx.NamedArgs{"key": logicalKey})
 	if err != nil {
@@ -336,7 +342,7 @@ func (q *FencedQueue) GetLatestByKey(ctx context.Context, logicalKey string) (jo
 
 // Get returns the job with the given unique execution id, or sdk.ErrNotFound.
 func (q *FencedQueue) Get(ctx context.Context, id string) (job.Job, error) {
-	const query = `SELECT ` + fencedColumns + ` FROM fenced_job_queue WHERE job_id = @id`
+	query := `SELECT ` + fencedColumns + ` FROM ` + q.table("fenced_job_queue") + ` WHERE job_id = @id`
 	row, err := pgxdb.QueryOne[fencedRow](ctx, q.db, query, pgx.NamedArgs{"id": id})
 	if err != nil {
 		return job.Job{}, err
@@ -348,13 +354,13 @@ func (q *FencedQueue) Get(ctx context.Context, id string) (job.Job, error) {
 // row (INSERT ... RETURNING), so the returned job's timestamps carry the column's
 // dialect precision. A duplicate explicit id (or a concurrent active-key insert
 // that lost the unique-index race) yields sdk.ErrAlreadyExists.
-func insertFenced(ctx context.Context, tx *pgxdb.Tx, in job.Enqueue) (job.Job, error) {
+func (q *FencedQueue) insertFenced(ctx context.Context, tx *pgxdb.Tx, in job.Enqueue) (job.Job, error) {
 	id := in.ID
 	if id == "" {
 		id = newID("job")
 	}
 	now := time.Now().UTC()
-	const insert = `INSERT INTO fenced_job_queue (` + fencedColumns + `)
+	insert := `INSERT INTO ` + q.table("fenced_job_queue") + ` (` + fencedColumns + `)
 		VALUES (@job_id, @kind, @tenant_id, @payload, 'pending', @priority, 0, @max_attempts, @logical_key,
 		        NULL, NULL, NULL, NULL, @scheduled_for, NULL, NULL, NULL, @created_at, @updated_at)
 		RETURNING ` + fencedColumns
@@ -378,8 +384,8 @@ func insertFenced(ctx context.Context, tx *pgxdb.Tx, in job.Enqueue) (job.Job, e
 
 // activeByKey returns the single non-terminal (pending|running) job holding
 // logicalKey, locking it FOR UPDATE so the caller's admission decision is atomic.
-func activeByKey(ctx context.Context, tx *pgxdb.Tx, logicalKey string) (job.Job, bool, error) {
-	const query = `SELECT ` + fencedColumns + ` FROM fenced_job_queue
+func (q *FencedQueue) activeByKey(ctx context.Context, tx *pgxdb.Tx, logicalKey string) (job.Job, bool, error) {
+	query := `SELECT ` + fencedColumns + ` FROM ` + q.table("fenced_job_queue") + `
 		WHERE logical_key = @key AND status IN ('pending','running')
 		ORDER BY created_at DESC, job_id DESC LIMIT 1 FOR UPDATE`
 	row, err := pgxdb.QueryOne[fencedRow](ctx, tx, query, pgx.NamedArgs{"key": logicalKey})
@@ -416,8 +422,8 @@ func (s fencedState) terminal() bool {
 
 // lockState reads and row-locks the fenced job's decision state, mapping an
 // absent row to sdk.ErrNotFound.
-func lockState(ctx context.Context, tx *pgxdb.Tx, id string) (fencedState, error) {
-	const query = `SELECT status, COALESCE(lease_id, ''), leased_until FROM fenced_job_queue WHERE job_id = @id FOR UPDATE`
+func (q *FencedQueue) lockState(ctx context.Context, tx *pgxdb.Tx, id string) (fencedState, error) {
+	query := `SELECT status, COALESCE(lease_id, ''), leased_until FROM ` + q.table("fenced_job_queue") + ` WHERE job_id = @id FOR UPDATE`
 	var (
 		st          fencedState
 		leasedUntil *time.Time

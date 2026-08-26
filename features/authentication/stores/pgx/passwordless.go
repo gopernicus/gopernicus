@@ -36,13 +36,14 @@ import (
 // the composite transaction is what makes provisioning unsafe.
 type PasswordlessStore struct {
 	db *pgxdb.DB
+	qualified
 }
 
 var _ passwordless.Repository = (*PasswordlessStore)(nil)
 
 // NewPasswordlessStore returns a PasswordlessStore backed by db.
-func NewPasswordlessStore(db *pgxdb.DB) *PasswordlessStore {
-	return &PasswordlessStore{db: db}
+func NewPasswordlessStore(db *pgxdb.DB, opts ...Option) *PasswordlessStore {
+	return &PasswordlessStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
 // Redeem executes the atomic redemption. See passwordless.Repository for the
@@ -61,7 +62,7 @@ func (s *PasswordlessStore) Redeem(ctx context.Context, in passwordless.RedeemIn
 		//    concurrent redemptions of the same token.
 		var contextBlob *string
 		selErr := tx.QueryRow(ctx,
-			`DELETE FROM challenges
+			`DELETE FROM `+s.table(challengesTable)+`
 				WHERE purpose = @purpose AND secret_digest = @digest AND expires_at > @now
 				RETURNING context`,
 			pgx.NamedArgs{"purpose": in.Purpose, "digest": in.TokenDigest, "now": now}).
@@ -92,8 +93,8 @@ func (s *PasswordlessStore) Redeem(ctx context.Context, in passwordless.RedeemIn
 			verifiedAt   *time.Time
 			loginEnabled bool
 		)
-		const claimQ = `SELECT id, user_id, verified_at, login_enabled
-			FROM user_identifiers
+		claimQ := `SELECT id, user_id, verified_at, login_enabled
+			FROM ` + s.table(identifiersTable) + `
 			WHERE kind = @kind AND normalized_value = @value AND replaced_at IS NULL
 				AND (login_enabled = TRUE OR recovery_enabled = TRUE)
 			FOR UPDATE`
@@ -143,14 +144,14 @@ func (s *PasswordlessStore) provision(ctx context.Context, tx *pgxdb.Tx, in pass
 		"updated_at":    now,
 	}
 	if u.ID == "" {
-		const q = `INSERT INTO users (display_name, auth_revision, status, created_at, updated_at)
+		q := `INSERT INTO ` + s.table(usersTable) + ` (display_name, auth_revision, status, created_at, updated_at)
 			VALUES (@display_name, @auth_revision, @status, @created_at, @updated_at) RETURNING id`
 		if err := tx.QueryRow(ctx, q, userArgs).Scan(&u.ID); err != nil {
 			return pgxdb.MapError(err)
 		}
 	} else {
 		userArgs["id"] = u.ID
-		const q = `INSERT INTO users (id, display_name, auth_revision, status, created_at, updated_at)
+		q := `INSERT INTO ` + s.table(usersTable) + ` (id, display_name, auth_revision, status, created_at, updated_at)
 			VALUES (@id, @display_name, @auth_revision, @status, @created_at, @updated_at)`
 		if _, err := tx.Exec(ctx, q, userArgs); err != nil {
 			return pgxdb.MapError(err)
@@ -164,7 +165,7 @@ func (s *PasswordlessStore) provision(ctx context.Context, tx *pgxdb.Tx, in pass
 	ident.VerifiedAt = now
 	ident.CreatedAt, ident.UpdatedAt = now, now
 
-	created, err := insertIdentifier(ctx, tx, ident)
+	created, err := insertIdentifier(ctx, tx, s.table(identifiersTable), ident)
 	if err != nil {
 		// A lost authentication claim is a stable rejection, not an infrastructure
 		// failure: someone else owns the address now.
@@ -174,7 +175,7 @@ func (s *PasswordlessStore) provision(ctx context.Context, tx *pgxdb.Tx, in pass
 		return err
 	}
 
-	sess, err := insertRedemptionSession(ctx, tx, in.Session, u.ID)
+	sess, err := insertRedemptionSession(ctx, tx, s.table(sessionsTable), in.Session, u.ID)
 	if err != nil {
 		return err
 	}
@@ -192,11 +193,11 @@ func (s *PasswordlessStore) provision(ctx context.Context, tx *pgxdb.Tx, in pass
 func (s *PasswordlessStore) login(ctx context.Context, tx *pgxdb.Tx, in passwordless.RedeemInput,
 	binding passwordless.Binding, identID, userID string, verifiedAt, now time.Time, out *passwordless.RedeemResult) error {
 
-	u, err := lockActiveUser(ctx, tx, userID)
+	u, err := lockActiveUser(ctx, tx, s.table(usersTable), userID)
 	if err != nil {
 		return err
 	}
-	sess, err := insertRedemptionSession(ctx, tx, in.Session, userID)
+	sess, err := insertRedemptionSession(ctx, tx, s.table(sessionsTable), in.Session, userID)
 	if err != nil {
 		return err
 	}
@@ -226,32 +227,32 @@ func (s *PasswordlessStore) login(ctx context.Context, tx *pgxdb.Tx, in password
 func (s *PasswordlessStore) adopt(ctx context.Context, tx *pgxdb.Tx, in passwordless.RedeemInput,
 	binding passwordless.Binding, identID, userID string, now time.Time, out *passwordless.RedeemResult) error {
 
-	u, err := lockActiveUser(ctx, tx, userID)
+	u, err := lockActiveUser(ctx, tx, s.table(usersTable), userID)
 	if err != nil {
 		return err
 	}
 
-	if _, err := tx.Exec(ctx, `DELETE FROM user_passwords WHERE user_id = @user_id`,
+	if _, err := tx.Exec(ctx, `DELETE FROM `+s.table(passwordsTable)+` WHERE user_id = @user_id`,
 		pgx.NamedArgs{"user_id": userID}); err != nil {
 		return pgxdb.MapError(err)
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM authentication_grants WHERE user_id = @user_id`,
+	if _, err := tx.Exec(ctx, `DELETE FROM `+s.table(authGrantsTable)+` WHERE user_id = @user_id`,
 		pgx.NamedArgs{"user_id": userID}); err != nil {
 		return pgxdb.MapError(err)
 	}
-	if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE user_id = @user_id`,
+	if _, err := tx.Exec(ctx, `DELETE FROM `+s.table(sessionsTable)+` WHERE user_id = @user_id`,
 		pgx.NamedArgs{"user_id": userID}); err != nil {
 		return pgxdb.MapError(err)
 	}
 	if len(in.RevokeChallengePurposes) > 0 {
 		if _, err := tx.Exec(ctx,
-			`DELETE FROM challenges WHERE user_id = @user_id AND purpose = ANY(@purposes)`,
+			`DELETE FROM `+s.table(challengesTable)+` WHERE user_id = @user_id AND purpose = ANY(@purposes)`,
 			pgx.NamedArgs{"user_id": userID, "purposes": in.RevokeChallengePurposes}); err != nil {
 			return pgxdb.MapError(err)
 		}
 	}
 
-	const updateIdent = `UPDATE user_identifiers
+	updateIdent := `UPDATE ` + s.table(identifiersTable) + `
 		SET verified_at = @now, login_enabled = @login, recovery_enabled = @recovery,
 			notification_enabled = @notification, updated_at = @now
 		WHERE id = @id`
@@ -267,14 +268,14 @@ func (s *PasswordlessStore) adopt(ctx context.Context, tx *pgxdb.Tx, in password
 
 	// Bump the revision so any in-flight credential mutation loses its CAS.
 	if _, err := tx.Exec(ctx,
-		`UPDATE users SET auth_revision = auth_revision + 1, updated_at = @now WHERE id = @id`,
+		`UPDATE `+s.table(usersTable)+` SET auth_revision = auth_revision + 1, updated_at = @now WHERE id = @id`,
 		pgx.NamedArgs{"now": now, "id": userID}); err != nil {
 		return pgxdb.MapError(err)
 	}
 	u.AuthRevision++
 	u.UpdatedAt = now
 
-	sess, err := insertRedemptionSession(ctx, tx, in.Session, userID)
+	sess, err := insertRedemptionSession(ctx, tx, s.table(sessionsTable), in.Session, userID)
 	if err != nil {
 		return err
 	}
@@ -297,10 +298,11 @@ func (s *PasswordlessStore) adopt(ctx context.Context, tx *pgxdb.Tx, in password
 	return nil
 }
 
-// lockActiveUser reads and row-locks the user, rejecting a missing or deactivated
-// subject. The lock is the same fence ActiveSessionStore takes, so a deactivation
-// racing a redemption cannot interleave with it.
-func lockActiveUser(ctx context.Context, tx *pgxdb.Tx, userID string) (user.User, error) {
+// lockActiveUser reads and row-locks the user in the already-qualified table,
+// rejecting a missing or deactivated subject. The lock is the same fence
+// ActiveSessionStore takes, so a deactivation racing a redemption cannot
+// interleave with it.
+func lockActiveUser(ctx context.Context, tx *pgxdb.Tx, table, userID string) (user.User, error) {
 	var (
 		displayName  string
 		authRevision int64
@@ -308,8 +310,8 @@ func lockActiveUser(ctx context.Context, tx *pgxdb.Tx, userID string) (user.User
 		createdAt    time.Time
 		updatedAt    time.Time
 	)
-	const q = `SELECT display_name, auth_revision, status, created_at, updated_at
-		FROM users WHERE id = @id FOR UPDATE`
+	q := `SELECT display_name, auth_revision, status, created_at, updated_at
+		FROM ` + table + ` WHERE id = @id FOR UPDATE`
 	if err := tx.QueryRow(ctx, q, pgx.NamedArgs{"id": userID}).
 		Scan(&displayName, &authRevision, &status, &createdAt, &updatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -331,15 +333,16 @@ func lockActiveUser(ctx context.Context, tx *pgxdb.Tx, userID string) (user.User
 	return u, nil
 }
 
-// insertRedemptionSession writes the proposed session inside the redemption
-// transaction, applying the ordinary uniqueness contract.
-func insertRedemptionSession(ctx context.Context, tx *pgxdb.Tx, sess session.Session, userID string) (session.Session, error) {
+// insertRedemptionSession writes the proposed session into the already-qualified
+// table inside the redemption transaction, applying the ordinary uniqueness
+// contract.
+func insertRedemptionSession(ctx context.Context, tx *pgxdb.Tx, table string, sess session.Session, userID string) (session.Session, error) {
 	sess.UserID = userID
 	methods, err := encodeMethods(sess.Authentication.Methods)
 	if err != nil {
 		return session.Session{}, err
 	}
-	const q = `INSERT INTO sessions (` + sessionColumns + `)
+	q := `INSERT INTO ` + table + ` (` + sessionColumns + `)
 		VALUES (@id, @user_id, @refresh_token_hash, @previous_refresh_token_hash, @previous_used, @rotation_count, @authenticated_at, @authentication_methods, @assurance_level, @created_at, @expires_at)`
 	if _, err := tx.Exec(ctx, q, pgx.NamedArgs{
 		"id":                          sess.ID,

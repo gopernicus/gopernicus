@@ -20,13 +20,14 @@ import (
 // created_at DESC, id DESC order.
 type SecurityEventStore struct {
 	db *pgxdb.DB
+	qualified
 }
 
 var _ securityevent.SecurityEventRepository = (*SecurityEventStore)(nil)
 
 // NewSecurityEventStore returns a SecurityEventStore backed by db.
-func NewSecurityEventStore(db *pgxdb.DB) *SecurityEventStore {
-	return &SecurityEventStore{db: db}
+func NewSecurityEventStore(db *pgxdb.DB, opts ...Option) *SecurityEventStore {
+	return &SecurityEventStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
 const securityEventColumns = "id, user_id, actor_type, actor_id, event_type, event_status, details, ip_address, user_agent, created_at"
@@ -85,14 +86,14 @@ func (s *SecurityEventStore) Create(ctx context.Context, evt securityevent.Secur
 	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if evt.ID == "" {
-		const q = `INSERT INTO security_events (user_id, actor_type, actor_id, event_type, event_status, details, ip_address, user_agent, created_at)
+		q := `INSERT INTO ` + s.table(securityEventsTable) + ` (user_id, actor_type, actor_id, event_type, event_status, details, ip_address, user_agent, created_at)
 			VALUES (@user_id, @actor_type, @actor_id, @event_type, @event_status, @details, @ip_address, @user_agent, @created_at)
 			RETURNING id`
 		if err := s.db.QueryRow(ctx, q, args).Scan(&evt.ID); err != nil {
 			return securityevent.SecurityEvent{}, pgxdb.MapError(err)
 		}
 	} else {
-		const q = `INSERT INTO security_events (` + securityEventColumns + `)
+		q := `INSERT INTO ` + s.table(securityEventsTable) + ` (` + securityEventColumns + `)
 			VALUES (@id, @user_id, @actor_type, @actor_id, @event_type, @event_status, @details, @ip_address, @user_agent, @created_at)`
 		args["id"] = evt.ID
 		if _, err := s.db.Exec(ctx, q, args); err != nil {
@@ -114,7 +115,7 @@ func (s *SecurityEventStore) Create(ctx context.Context, evt securityevent.Secur
 func (s *SecurityEventStore) List(ctx context.Context, filter securityevent.ListFilter, req crud.ListRequest) (crud.Page[securityevent.SecurityEvent], error) {
 	where, args := securityEventFilter(filter)
 	q := pgxdb.ListQuery[securityEventRow]{
-		BaseSQL:      `SELECT ` + securityEventColumns + ` FROM security_events` + where,
+		BaseSQL:      `SELECT ` + securityEventColumns + ` FROM ` + s.table(securityEventsTable) + where,
 		Args:         args,
 		OrderFields:  securityevent.OrderFields,
 		DefaultOrder: securityevent.DefaultOrder,

@@ -57,6 +57,18 @@ test:
 # Spin a local postgres and run:
 #   docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17
 #   POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' make test-stores
+# pgx-leg runs one pgx store module's live suite twice: once unqualified (the
+# default every existing host runs) and once with POSTGRES_TEST_SCHEMA set, so
+# every statement is proven both bare and schema-qualified
+# (plans/pgx-store-schema-option.md, S7). The pgxdb connector's own live tests
+# carry their schema coverage internally and run once.
+define pgx-leg
+	@echo "== $(1) (live) =="
+	@cd $(1) && go test ./...
+	@echo "== $(1) (live, POSTGRES_TEST_SCHEMA=gopernicus_schema_test) =="
+	@cd $(1) && POSTGRES_TEST_SCHEMA=gopernicus_schema_test go test ./...
+endef
+
 test-stores:
 	@if [ -z "$$POSTGRES_TEST_DSN" ]; then \
 		echo "ERROR: POSTGRES_TEST_DSN not set — postgres store conformance cannot run (make check stays hermetic; this target expects it)"; \
@@ -64,24 +76,21 @@ test-stores:
 		echo "  POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' make test-stores"; \
 		exit 1; \
 	fi
-	@echo "== features/cms/stores/pgx (live) =="
-	@cd features/cms/stores/pgx && go test ./...
-	@echo "== features/authentication/stores/pgx (live) =="
-	@cd features/authentication/stores/pgx && go test ./...
-	@echo "== features/jobs/stores/pgx (live) =="
-	@cd features/jobs/stores/pgx && go test ./...
+	@echo "== integrations/datastores/pgxdb (live) =="
+	@cd integrations/datastores/pgxdb && go test ./...
+	$(call pgx-leg,features/cms/stores/pgx)
+	$(call pgx-leg,features/authentication/stores/pgx)
+	$(call pgx-leg,features/jobs/stores/pgx)
 	@echo "== features/cms/stores/turso (live, -tags=integration) =="
 	@cd features/cms/stores/turso && go test -tags=integration ./...
 	@echo "== features/authentication/stores/turso (live, -tags=integration) =="
 	@cd features/authentication/stores/turso && go test -tags=integration ./...
 	@echo "== features/jobs/stores/turso (live, -tags=integration) =="
 	@cd features/jobs/stores/turso && go test -tags=integration ./...
-	@echo "== features/events/stores/pgx (live) =="
-	@cd features/events/stores/pgx && go test ./...
+	$(call pgx-leg,features/events/stores/pgx)
 	@echo "== features/events/stores/turso (live, -tags=integration) =="
 	@cd features/events/stores/turso && go test -tags=integration ./...
-	@echo "== features/authorization/stores/pgx (live) =="
-	@cd features/authorization/stores/pgx && go test ./...
+	$(call pgx-leg,features/authorization/stores/pgx)
 	@echo "== features/authorization/stores/turso (live, -tags=integration) =="
 	@cd features/authorization/stores/turso && go test -tags=integration ./...
 

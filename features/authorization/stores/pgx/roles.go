@@ -79,13 +79,13 @@ func (r effectiveRoleRow) toDomain() role.EffectiveGrant {
 // NEVER rewritten as a scoped row; its scope stays out of the projection and only
 // its provenance is reported. The outer `WHERE 1 = 1` lets pgxdb.List append its
 // keyset predicate with AND (the inner GROUP BY subquery already carries a WHERE).
-func effectiveRolesBaseSQL(scopedLiteral string) string {
+func effectiveRolesBaseSQL(schema pgxdb.Schema, scopedLiteral string) string {
 	return `SELECT subject_type, subject_id, role, is_direct, is_global, grant_key FROM (
 	SELECT subject_type, subject_id, role,
 		MAX(CASE WHEN resource_type = @resource_type AND resource_id = @resource_id THEN 1 ELSE 0 END) AS is_direct,
 		MAX(CASE WHEN ` + scopedLiteral + ` AND resource_type = '' AND resource_id = '' THEN 1 ELSE 0 END) AS is_global,
 		` + effectiveGrantKeyExpr + ` AS grant_key
-	FROM iam_roles
+	FROM ` + schema.Table("iam_roles") + `
 	WHERE (resource_type = @resource_type AND resource_id = @resource_id)
 	   OR (` + scopedLiteral + ` AND resource_type = '' AND resource_id = '')
 	GROUP BY subject_type, subject_id, role
@@ -96,21 +96,26 @@ func effectiveRolesBaseSQL(scopedLiteral string) string {
 // computed role_key column, so the keyset builder can reference it in the outer
 // WHERE (a WHERE cannot see a same-level SELECT alias) and ORDER BY. The trailing
 // `WHERE 1 = 1` lets pgxdb.List append its keyset predicate with AND.
-func rolesBaseSQL(innerWhere string) string {
+func rolesBaseSQL(schema pgxdb.Schema, innerWhere string) string {
 	return `SELECT subject_type, subject_id, role, resource_type, resource_id, created_at, role_key FROM (
 	SELECT subject_type, subject_id, role, resource_type, resource_id, created_at, ` + roleKeyExpr + ` AS role_key
-	FROM iam_roles` + innerWhere + `
+	FROM ` + schema.Table("iam_roles") + innerWhere + `
 ) AS r WHERE 1 = 1`
 }
 
 // roleStore fills role.Storer over iam_roles.
 type roleStore struct {
-	db *pgxdb.DB
+	db     *pgxdb.DB
+	schema pgxdb.Schema
 }
 
-func newRoleStore(db *pgxdb.DB) *roleStore {
-	return &roleStore{db: db}
+func newRoleStore(db *pgxdb.DB, cfg config) *roleStore {
+	return &roleStore{db: db, schema: cfg.schema}
 }
+
+// table renders name under the store's schema — the one chokepoint every
+// statement on this store goes through.
+func (s *roleStore) table(name string) string { return s.schema.Table(name) }
 
 var _ role.Storer = (*roleStore)(nil)
 
@@ -119,7 +124,7 @@ var _ role.Storer = (*roleStore)(nil)
 // NULL breach still raises). A duplicate is a no-op that retains the original
 // store-stamped created_at.
 func (s *roleStore) Assign(ctx context.Context, a role.Assignment) error {
-	const q = `INSERT INTO iam_roles (subject_type, subject_id, role, resource_type, resource_id, created_at)
+	q := `INSERT INTO ` + s.table("iam_roles") + ` (subject_type, subject_id, role, resource_type, resource_id, created_at)
 VALUES (@subject_type, @subject_id, @role, @resource_type, @resource_id, @created_at)
 ON CONFLICT (subject_type, subject_id, role, resource_type, resource_id) DO NOTHING`
 	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
@@ -135,7 +140,7 @@ ON CONFLICT (subject_type, subject_id, role, resource_type, resource_id) DO NOTH
 
 // Unassign removes an exact assignment (idempotent — zero rows deleted is nil).
 func (s *roleStore) Unassign(ctx context.Context, subjectType, subjectID, roleName, resourceType, resourceID string) error {
-	const q = `DELETE FROM iam_roles WHERE subject_type = @subject_type AND subject_id = @subject_id AND role = @role AND resource_type = @resource_type AND resource_id = @resource_id`
+	q := `DELETE FROM ` + s.table("iam_roles") + ` WHERE subject_type = @subject_type AND subject_id = @subject_id AND role = @role AND resource_type = @resource_type AND resource_id = @resource_id`
 	if _, err := pgxdb.ExecAffecting(ctx, s.db, q, pgx.NamedArgs{
 		"subject_type":  subjectType,
 		"subject_id":    subjectID,
@@ -152,7 +157,7 @@ func (s *roleStore) Unassign(ctx context.Context, subjectType, subjectID, roleNa
 // global-fallback rule (a global grant satisfies a scoped check) is the service's,
 // never the store's.
 func (s *roleStore) HasExactRole(ctx context.Context, subjectType, subjectID, roleName, resourceType, resourceID string) (bool, error) {
-	const q = `SELECT EXISTS (SELECT 1 FROM iam_roles WHERE subject_type = @subject_type AND subject_id = @subject_id AND role = @role AND resource_type = @resource_type AND resource_id = @resource_id)`
+	q := `SELECT EXISTS (SELECT 1 FROM ` + s.table("iam_roles") + ` WHERE subject_type = @subject_type AND subject_id = @subject_id AND role = @role AND resource_type = @resource_type AND resource_id = @resource_id)`
 	var ok bool
 	if err := s.db.QueryRow(ctx, q, pgx.NamedArgs{
 		"subject_type":  subjectType,
@@ -169,7 +174,7 @@ func (s *roleStore) HasExactRole(ctx context.Context, subjectType, subjectID, ro
 // ListBySubject pages a subject's assignments (created_at DESC, 5-tuple DESC).
 func (s *roleStore) ListBySubject(ctx context.Context, subjectType, subjectID string, req crud.ListRequest) (crud.Page[role.Assignment], error) {
 	q := pgxdb.ListQuery[roleRow]{
-		BaseSQL:      rolesBaseSQL(" WHERE subject_type = @subject_type AND subject_id = @subject_id"),
+		BaseSQL:      rolesBaseSQL(s.schema, " WHERE subject_type = @subject_type AND subject_id = @subject_id"),
 		Args:         pgx.NamedArgs{"subject_type": subjectType, "subject_id": subjectID},
 		OrderFields:  role.OrderFields,
 		DefaultOrder: role.DefaultOrder,
@@ -190,7 +195,7 @@ func (s *roleStore) ListBySubject(ctx context.Context, subjectType, subjectID st
 // service's HasRole fallback.
 func (s *roleStore) ListByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[role.Assignment], error) {
 	q := pgxdb.ListQuery[roleRow]{
-		BaseSQL:      rolesBaseSQL(" WHERE resource_type = @resource_type AND resource_id = @resource_id"),
+		BaseSQL:      rolesBaseSQL(s.schema, " WHERE resource_type = @resource_type AND resource_id = @resource_id"),
 		Args:         pgx.NamedArgs{"resource_type": resourceType, "resource_id": resourceID},
 		OrderFields:  role.OrderFields,
 		DefaultOrder: role.DefaultOrder,
@@ -215,7 +220,7 @@ func (s *roleStore) ListEffectiveByResource(ctx context.Context, resourceType, r
 		scopedLiteral = "TRUE"
 	}
 	q := pgxdb.ListQuery[effectiveRoleRow]{
-		BaseSQL:      effectiveRolesBaseSQL(scopedLiteral),
+		BaseSQL:      effectiveRolesBaseSQL(s.schema, scopedLiteral),
 		Args:         pgx.NamedArgs{"resource_type": resourceType, "resource_id": resourceID},
 		OrderFields:  role.EffectiveOrderFields,
 		DefaultOrder: role.DefaultEffectiveOrder,

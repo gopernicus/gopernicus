@@ -20,14 +20,48 @@ identifier atomicity lives in the service transactions, not cascades).
 
 ## Surface
 
-Mirrors the turso store's exported surface (a host switches dialect by one import
-+ one `Open` call):
+Mirrors the turso store's exported surface **plus the Postgres-only `WithSchema`
+option — SQLite has no schemas** (a host switches dialect by one import + one
+`Open` call):
 
 | member | shape |
 |---|---|
-| `Repositories(db *pgxdb.DB) (auth.Repositories, error)` | the 17-port bundle, no migration side effects — **probes all 13 canonical tables first**, then the ALTER-added columns (`users.status`, `users.status_changed_at`, `challenges.subject_key`), and errors (`sdk.ErrNotFound`, naming the table or column + the `authentication` migration source) when one is missing; an infrastructure/query failure is never misreported as a missing table |
+| `Repositories(db *pgxdb.DB, opts ...Option) (auth.Repositories, error)` | the 17-port bundle, no migration side effects — **probes all 13 canonical tables first**, then the ALTER-added columns (`users.status`, `users.status_changed_at`, `challenges.subject_key`), and errors (`sdk.ErrNotFound`, naming the table or column + the `authentication` migration source) when one is missing; an infrastructure/query failure is never misreported as a missing table |
+| `Option` | construction option, accepted by `Repositories` and by every one of the 18 `NewXStore(db, opts ...Option)` constructors, so a host composing its own bundle gets the same seam |
+| `WithSchema(s pgxdb.Schema) Option` | places every table these stores touch in `s`; the zero `Schema` is the default and renders today's unqualified SQL byte-for-byte. It never panics — validation happened in `pgxdb.NewSchema` at the host |
 | `ExportMigrations(dst string) error` | copies the canonical `migrations/*.sql` into the host's dir |
 | `MigrationsFS` / `MigrationsDir` | the embedded canonical migration files |
+
+## Schema
+
+By default every statement names its table unqualified, exactly as it always
+has. A host that wants the auth tables in their own Postgres schema builds the
+name once and passes it to BOTH the runner and the stores:
+
+```go
+s, err := pgxdb.NewSchema(os.Getenv("AUTH_SCHEMA")) // validated here, once
+if err != nil { return err }
+
+// one stream per schema, applied pre-boot, with its own ledger inside s
+if err := pgxdb.RunMigrations(ctx, db, pgxfs, dir, pgxdb.WithSchema(s)); err != nil { return err }
+
+repos, err := pgx.Repositories(db, pgx.WithSchema(s))
+```
+
+Every table reference renders `"<schema>".<table>` through one chokepoint, never
+through a pool-wide `search_path` pin: the host's own unqualified statements are
+untouched. Quoting preserves case (`Auth` ≠ `auth`). A store constructed for a
+schema its migrations never reached fails the boot probe, naming the qualified
+table.
+
+Per-repository DIFFERENT schemas within one bundle are out of scope: the
+constructors mechanically allow it, but the one-stream-per-schema migration model
+gives it no story.
+
+**Known looseness:** without `WithSchema` the ALTER-added column probe
+(`information_schema.columns`) is NOT filtered by `table_schema` — that is the
+query this store has always run, and tightening the default would be a behaviour
+change outside this option. With a schema set the probe IS scoped to it.
 
 ## Migrations
 
@@ -101,6 +135,16 @@ POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:5432/postgres?sslmode=
 Each `newRepos` opens a connection, applies the migrations via the connector's
 `RunMigrations`, and `TRUNCATE ... CASCADE`s the auth tables (up front and via
 `t.Cleanup`) so every leaf subtest starts from a clean, isolated `Repositories`.
+
+The optional `POSTGRES_TEST_SCHEMA` runs the whole live suite — conformance,
+probe, and collation fixtures — inside a named schema, with migrations applied
+through `pgxdb.WithSchema` and every store constructed `WithSchema`. That is the
+behavioral proof for the non-default-schema paths; unset, every fixture behaves
+exactly as it did before the option existed.
+
+```sh
+POSTGRES_TEST_DSN='...' POSTGRES_TEST_SCHEMA=gopernicus_schema_test go test ./...
+```
 
 `make check` stays hermetic (the suite skips); `make test-stores` runs this
 live path expecting `POSTGRES_TEST_DSN`.

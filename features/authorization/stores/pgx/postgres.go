@@ -2,9 +2,10 @@
 // module so a host that brings a different datastore never pulls pgx into its
 // module graph (the load-bearing opt-out property). It owns the SQL; the HOST
 // owns its database lifecycle. It is the dialect sibling of
-// features/authorization/stores/turso: same exported surface, same migration
-// version set (identical filenames), same port semantics — a host switches
-// dialect by one import + one Open call.
+// features/authorization/stores/turso: same surface plus the Postgres-only
+// WithSchema option — SQLite has no schemas — same migration version set
+// (identical filenames), same port semantics — a host switches dialect by one
+// import + one Open call.
 //
 // The adapter fills BOTH kinds' ports — relationship.Storer (over
 // iam_relationships) and role.Storer (over iam_roles) — and Repositories always
@@ -46,7 +47,6 @@ import (
 	"github.com/gopernicus/gopernicus/features/authorization/domain/mutation"
 	"github.com/gopernicus/gopernicus/features/authorization/domain/relationship"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // MigrationsFS holds the embedded canonical schema (migration source
@@ -59,11 +59,21 @@ var MigrationsFS embed.FS
 // MigrationsDir is the directory within MigrationsFS holding the .sql files.
 const MigrationsDir = "migrations"
 
+// migrationSource is the ledger source the canonical files are recorded under —
+// the name the boot probe points a misconfigured host at.
+const migrationSource = "authorization"
+
+// storeTables is the feature's table inventory, probed at construction in this
+// order. Every statement in the package renders these names through a store's
+// table method so a schema-scoped store qualifies them.
+var storeTables = []string{"iam_relationships", "iam_roles", "iam_scopes", "iam_mutations"}
+
 // Option configures the store set at construction.
 type Option func(*config)
 
 type config struct {
 	guardian mutation.GuardianPolicy
+	schema   pgxdb.Schema
 }
 
 // WithGuardianPolicy overrides the default guardian invariant (owner protected on
@@ -76,6 +86,17 @@ func WithGuardianPolicy(p mutation.GuardianPolicy) Option {
 	return func(c *config) { c.guardian = p }
 }
 
+// WithSchema places every table this store touches in s. The zero Schema is the
+// default (unqualified), which renders exactly the SQL this store has always
+// emitted. Build s with pgxdb.NewSchema at the host so a malformed name fails
+// there, before any store is constructed — WithSchema itself never panics. Apply
+// the migrations into the same schema with pgxdb.WithSchema; a store constructed
+// for a schema its migrations never reached fails the boot-time probe. Per-kind
+// schemas are out of scope: one schema holds the whole iam_* set.
+func WithSchema(s pgxdb.Schema) Option {
+	return func(c *config) { c.schema = s }
+}
+
 // Repositories returns the authorization repository set backed by db — ALL THREE
 // ports wired (relationship.Storer, role.Storer, and the atomic
 // mutation.MutationRepository over the shared iam_* tables) — AFTER verifying the
@@ -86,46 +107,49 @@ func WithGuardianPolicy(p mutation.GuardianPolicy) Option {
 // touch migrations: the host owns and applies the schema (see ExportMigrations). db
 // is the connector wrapper (error mapping + Tx), not a raw pool. The mutation
 // repository defaults to the ratified guardian policy unless WithGuardianPolicy
-// overrides it.
+// overrides it. WithSchema qualifies both the probes and every statement the
+// stores run.
 func Repositories(db *pgxdb.DB, opts ...Option) (authorization.Repositories, error) {
 	cfg := config{guardian: mutation.DefaultGuardianPolicy()}
 	for _, o := range opts {
 		o(&cfg)
 	}
 	ctx := context.Background()
-	for _, table := range []string{"iam_relationships", "iam_roles", "iam_scopes", "iam_mutations"} {
-		if err := probeTable(ctx, db, table); err != nil {
+	for _, table := range storeTables {
+		if err := probe(ctx, db, cfg.schema.Table(table)); err != nil {
 			return authorization.Repositories{}, err
 		}
 	}
 	return authorization.Repositories{
-		Relationships: newRelationshipStore(db),
-		Roles:         newRoleStore(db),
-		Mutations:     newMutationStore(db, cfg.guardian),
+		Relationships: newRelationshipStore(db, cfg),
+		Roles:         newRoleStore(db, cfg),
+		Mutations:     newMutationStore(db, cfg),
 	}, nil
 }
 
 // RelationshipRepository returns only the relationship port after probing only
 // iam_relationships. It is the direct constructor for a baseline-only host that
-// intentionally does not wire the advanced mutation repository.
-func RelationshipRepository(db *pgxdb.DB) (relationship.Storer, error) {
-	if err := probeTable(context.Background(), db, "iam_relationships"); err != nil {
+// intentionally does not wire the advanced mutation repository. It takes the same
+// options as Repositories so a host composing its own repository set gets the same
+// WithSchema seam; WithGuardianPolicy is accepted and ignored (no mutation
+// repository is built).
+func RelationshipRepository(db *pgxdb.DB, opts ...Option) (relationship.Storer, error) {
+	var cfg config
+	for _, o := range opts {
+		o(&cfg)
+	}
+	if err := probe(context.Background(), db, cfg.schema.Table("iam_relationships")); err != nil {
 		return nil, err
 	}
-	return newRelationshipStore(db), nil
+	return newRelationshipStore(db, cfg), nil
 }
 
-// probeTable reports whether table exists, mapping its absence to a clear, stable
-// error naming the table and the unapplied "authorization" migration source.
-// to_regclass resolves the relation name to its qualified text, or NULL when no
-// such table is visible on the search_path.
-func probeTable(ctx context.Context, db *pgxdb.DB, table string) error {
-	var reg *string
-	if err := db.QueryRow(ctx, `SELECT to_regclass($1)::text`, table).Scan(&reg); err != nil {
-		return pgxdb.MapError(err)
-	}
-	if reg == nil {
-		return fmt.Errorf("authorization pgx store: %s table missing — apply the %q migration source before boot: %w", table, "authorization", sdk.ErrNotFound)
+// probe reports whether the (already schema-qualified) table exists, wrapping its
+// absence in a stable error naming the table and the unapplied "authorization"
+// migration source. sdk.ErrNotFound stays reachable through errors.Is.
+func probe(ctx context.Context, db *pgxdb.DB, table string) error {
+	if err := pgxdb.ProbeTable(ctx, db, table); err != nil {
+		return fmt.Errorf("authorization pgx store: %s table missing — apply the %q migration source before boot: %w", table, migrationSource, err)
 	}
 	return nil
 }

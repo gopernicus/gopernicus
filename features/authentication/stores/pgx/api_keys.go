@@ -22,13 +22,14 @@ import (
 // id DESC.
 type APIKeyStore struct {
 	db *pgxdb.DB
+	qualified
 }
 
 var _ apikey.APIKeyRepository = (*APIKeyStore)(nil)
 
 // NewAPIKeyStore returns an APIKeyStore backed by db.
-func NewAPIKeyStore(db *pgxdb.DB) *APIKeyStore {
-	return &APIKeyStore{db: db}
+func NewAPIKeyStore(db *pgxdb.DB, opts ...Option) *APIKeyStore {
+	return &APIKeyStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
 const apiKeyColumns = "id, service_account_id, name, key_prefix, key_hash, expires_at, revoked_at, last_used_at, created_at"
@@ -77,7 +78,7 @@ func (s *APIKeyStore) Create(ctx context.Context, k apikey.APIKey) (apikey.APIKe
 	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if k.ID == "" {
-		const q = `INSERT INTO api_keys (service_account_id, name, key_prefix, key_hash, expires_at, revoked_at, last_used_at, created_at)
+		q := `INSERT INTO ` + s.table(apiKeysTable) + ` (service_account_id, name, key_prefix, key_hash, expires_at, revoked_at, last_used_at, created_at)
 			VALUES (@service_account_id, @name, @key_prefix, @key_hash, @expires_at, @revoked_at, @last_used_at, @created_at)
 			RETURNING id`
 		if err := s.db.QueryRow(ctx, q, args).Scan(&k.ID); err != nil {
@@ -85,7 +86,7 @@ func (s *APIKeyStore) Create(ctx context.Context, k apikey.APIKey) (apikey.APIKe
 		}
 		return k, nil
 	}
-	const q = `INSERT INTO api_keys (` + apiKeyColumns + `)
+	q := `INSERT INTO ` + s.table(apiKeysTable) + ` (` + apiKeyColumns + `)
 		VALUES (@id, @service_account_id, @name, @key_prefix, @key_hash, @expires_at, @revoked_at, @last_used_at, @created_at)`
 	args["id"] = k.ID
 	if _, err := s.db.Exec(ctx, q, args); err != nil {
@@ -97,7 +98,7 @@ func (s *APIKeyStore) Create(ctx context.Context, k apikey.APIKey) (apikey.APIKe
 // GetByHash returns the key for keyHash regardless of revocation/expiry; unknown
 // hash → sdk.ErrNotFound. No expiry filter (the pinned contract).
 func (s *APIKeyStore) GetByHash(ctx context.Context, keyHash string) (apikey.APIKey, error) {
-	const q = `SELECT ` + apiKeyColumns + ` FROM api_keys WHERE key_hash = @key_hash`
+	q := `SELECT ` + apiKeyColumns + ` FROM ` + s.table(apiKeysTable) + ` WHERE key_hash = @key_hash`
 	row, err := pgxdb.QueryOne[apiKeyRow](ctx, s.db, q, pgx.NamedArgs{"key_hash": keyHash})
 	if err != nil {
 		return apikey.APIKey{}, err
@@ -109,7 +110,7 @@ func (s *APIKeyStore) GetByHash(ctx context.Context, keyHash string) (apikey.API
 // keys, ordered created_at DESC, id DESC.
 func (s *APIKeyStore) ListByServiceAccount(ctx context.Context, serviceAccountID string, req crud.ListRequest) (crud.Page[apikey.APIKey], error) {
 	q := pgxdb.ListQuery[apiKeyRow]{
-		BaseSQL:      `SELECT ` + apiKeyColumns + ` FROM api_keys WHERE service_account_id = @service_account_id`,
+		BaseSQL:      `SELECT ` + apiKeyColumns + ` FROM ` + s.table(apiKeysTable) + ` WHERE service_account_id = @service_account_id`,
 		Args:         pgx.NamedArgs{"service_account_id": serviceAccountID},
 		OrderFields:  apikey.OrderFields,
 		DefaultOrder: apikey.DefaultOrder,
@@ -127,7 +128,7 @@ func (s *APIKeyStore) ListByServiceAccount(ctx context.Context, serviceAccountID
 
 // Revoke marks the key revoked as of revokedAt; unknown id → sdk.ErrNotFound.
 func (s *APIKeyStore) Revoke(ctx context.Context, id string, revokedAt time.Time) error {
-	n, err := pgxdb.ExecAffecting(ctx, s.db, "UPDATE api_keys SET revoked_at = @revoked_at WHERE id = @id", pgx.NamedArgs{
+	n, err := pgxdb.ExecAffecting(ctx, s.db, "UPDATE "+s.table(apiKeysTable)+" SET revoked_at = @revoked_at WHERE id = @id", pgx.NamedArgs{
 		"revoked_at": revokedAt.UTC(),
 		"id":         id,
 	})
@@ -143,7 +144,7 @@ func (s *APIKeyStore) Revoke(ctx context.Context, id string, revokedAt time.Time
 // TouchLastUsed records that the key authenticated at usedAt; unknown id →
 // sdk.ErrNotFound. It is a plain UPDATE (callers treat it as best-effort).
 func (s *APIKeyStore) TouchLastUsed(ctx context.Context, id string, usedAt time.Time) error {
-	n, err := pgxdb.ExecAffecting(ctx, s.db, "UPDATE api_keys SET last_used_at = @last_used_at WHERE id = @id", pgx.NamedArgs{
+	n, err := pgxdb.ExecAffecting(ctx, s.db, "UPDATE "+s.table(apiKeysTable)+" SET last_used_at = @last_used_at WHERE id = @id", pgx.NamedArgs{
 		"last_used_at": usedAt.UTC(),
 		"id":           id,
 	})

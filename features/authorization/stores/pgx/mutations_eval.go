@@ -55,7 +55,7 @@ func (m *mutationStore) evaluate(ctx context.Context, tx *pgxdb.Tx, cmd mutation
 // invariant-blocked.
 func (m *mutationStore) grant(ctx context.Context, tx *pgxdb.Tx, cmd mutation.Command) (mutation.Outcome, bool, error) {
 	rt, rid := cmd.Scope.Type, cmd.Scope.ID
-	current, err := loadResourceRelationships(ctx, tx, rt, rid)
+	current, err := loadResourceRelationships(ctx, tx, m.schema, rt, rid)
 	if err != nil {
 		return "", false, err
 	}
@@ -78,7 +78,7 @@ func (m *mutationStore) grant(ctx context.Context, tx *pgxdb.Tx, cmd mutation.Co
 		return mutation.OutcomeInvariantBlocked, false, nil
 	}
 	for _, a := range adds {
-		if err := insertRelationship(ctx, tx, rt, rid, a); err != nil {
+		if err := insertRelationship(ctx, tx, m.schema, rt, rid, a); err != nil {
 			return "", false, err
 		}
 	}
@@ -90,7 +90,7 @@ func (m *mutationStore) grant(ctx context.Context, tx *pgxdb.Tx, cmd mutation.Co
 // relation below its guardian minimum is invariant-blocked.
 func (m *mutationStore) revoke(ctx context.Context, tx *pgxdb.Tx, cmd mutation.Command) (mutation.Outcome, bool, error) {
 	rt, rid := cmd.Scope.Type, cmd.Scope.ID
-	current, err := loadResourceRelationships(ctx, tx, rt, rid)
+	current, err := loadResourceRelationships(ctx, tx, m.schema, rt, rid)
 	if err != nil {
 		return "", false, err
 	}
@@ -114,7 +114,7 @@ func (m *mutationStore) revoke(ctx context.Context, tx *pgxdb.Tx, cmd mutation.C
 		return mutation.OutcomeInvariantBlocked, false, nil
 	}
 	for _, row := range cmd.Relationships {
-		if err := deleteRelationship(ctx, tx, rt, rid, row); err != nil {
+		if err := deleteRelationship(ctx, tx, m.schema, rt, rid, row); err != nil {
 			return "", false, err
 		}
 	}
@@ -128,7 +128,7 @@ func (m *mutationStore) revoke(ctx context.Context, tx *pgxdb.Tx, cmd mutation.C
 // invariant-blocked.
 func (m *mutationStore) replace(ctx context.Context, tx *pgxdb.Tx, cmd mutation.Command) (mutation.Outcome, bool, error) {
 	rt, rid := cmd.Scope.Type, cmd.Scope.ID
-	current, err := loadResourceRelationships(ctx, tx, rt, rid)
+	current, err := loadResourceRelationships(ctx, tx, m.schema, rt, rid)
 	if err != nil {
 		return "", false, err
 	}
@@ -154,12 +154,12 @@ func (m *mutationStore) replace(ctx context.Context, tx *pgxdb.Tx, cmd mutation.
 		return mutation.OutcomeInvariantBlocked, false, nil
 	}
 	for _, row := range updates {
-		if err := replaceRelationship(ctx, tx, rt, rid, row); err != nil {
+		if err := replaceRelationship(ctx, tx, m.schema, rt, rid, row); err != nil {
 			return "", false, err
 		}
 	}
 	for _, row := range inserts {
-		if err := insertRelationship(ctx, tx, rt, rid, row); err != nil {
+		if err := insertRelationship(ctx, tx, m.schema, rt, rid, row); err != nil {
 			return "", false, err
 		}
 	}
@@ -173,7 +173,7 @@ func (m *mutationStore) replace(ctx context.Context, tx *pgxdb.Tx, cmd mutation.
 // resource's scoped role assignments.
 func (m *mutationStore) purge(ctx context.Context, tx *pgxdb.Tx, cmd mutation.Command, teardown bool) (mutation.Outcome, bool, error) {
 	rt, rid := cmd.Scope.Type, cmd.Scope.ID
-	current, err := loadResourceRelationships(ctx, tx, rt, rid)
+	current, err := loadResourceRelationships(ctx, tx, m.schema, rt, rid)
 	if err != nil {
 		return "", false, err
 	}
@@ -181,7 +181,7 @@ func (m *mutationStore) purge(ctx context.Context, tx *pgxdb.Tx, cmd mutation.Co
 
 	removedRole := 0
 	if teardown {
-		removedRole, err = countScopedRoles(ctx, tx, rt, rid)
+		removedRole, err = countScopedRoles(ctx, tx, m.schema, rt, rid)
 		if err != nil {
 			return "", false, err
 		}
@@ -199,13 +199,13 @@ func (m *mutationStore) purge(ctx context.Context, tx *pgxdb.Tx, cmd mutation.Co
 		return mutation.OutcomeInvariantBlocked, false, nil
 	}
 	if _, err := tx.Exec(ctx,
-		`DELETE FROM iam_relationships WHERE resource_type = @resource_type AND resource_id = @resource_id`,
+		`DELETE FROM `+m.table("iam_relationships")+` WHERE resource_type = @resource_type AND resource_id = @resource_id`,
 		pgx.NamedArgs{"resource_type": rt, "resource_id": rid}); err != nil {
 		return "", false, mapMutationError(err)
 	}
 	if teardown {
 		if _, err := tx.Exec(ctx,
-			`DELETE FROM iam_roles WHERE resource_type = @resource_type AND resource_id = @resource_id`,
+			`DELETE FROM `+m.table("iam_roles")+` WHERE resource_type = @resource_type AND resource_id = @resource_id`,
 			pgx.NamedArgs{"resource_type": rt, "resource_id": rid}); err != nil {
 			return "", false, mapMutationError(err)
 		}
@@ -220,7 +220,7 @@ func (m *mutationStore) roleAssign(ctx context.Context, tx *pgxdb.Tx, cmd mutati
 	resType, resID := roleScope(cmd.Scope)
 	var adds []mutation.RoleRow
 	for _, row := range cmd.Roles {
-		ok, err := hasExactRole(ctx, tx, row.SubjectType, row.SubjectID, row.Role, resType, resID)
+		ok, err := hasExactRole(ctx, tx, m.schema, row.SubjectType, row.SubjectID, row.Role, resType, resID)
 		if err != nil {
 			return "", false, err
 		}
@@ -235,7 +235,7 @@ func (m *mutationStore) roleAssign(ctx context.Context, tx *pgxdb.Tx, cmd mutati
 	now := time.Now().UTC()
 	for _, a := range adds {
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO iam_roles (subject_type, subject_id, role, resource_type, resource_id, created_at)
+			`INSERT INTO `+m.table("iam_roles")+` (subject_type, subject_id, role, resource_type, resource_id, created_at)
 			 VALUES (@subject_type, @subject_id, @role, @resource_type, @resource_id, @created_at)
 			 ON CONFLICT (subject_type, subject_id, role, resource_type, resource_id) DO NOTHING`,
 			pgx.NamedArgs{
@@ -259,7 +259,7 @@ func (m *mutationStore) roleUnassign(ctx context.Context, tx *pgxdb.Tx, cmd muta
 	matched := int64(0)
 	for _, row := range cmd.Roles {
 		n, err := pgxdb.ExecAffecting(ctx, tx,
-			`DELETE FROM iam_roles WHERE subject_type = @subject_type AND subject_id = @subject_id AND role = @role AND resource_type = @resource_type AND resource_id = @resource_id`,
+			`DELETE FROM `+m.table("iam_roles")+` WHERE subject_type = @subject_type AND subject_id = @subject_id AND role = @role AND resource_type = @resource_type AND resource_id = @resource_id`,
 			pgx.NamedArgs{
 				"subject_type":  row.SubjectType,
 				"subject_id":    row.SubjectID,
@@ -311,9 +311,9 @@ func (m *mutationStore) relationshipInvariantOK(resourceType string, rows []mutR
 // =============================================================================
 
 // loadResourceRelationships loads every relationship row for a resource.
-func loadResourceRelationships(ctx context.Context, tx *pgxdb.Tx, resourceType, resourceID string) ([]mutRelRow, error) {
+func loadResourceRelationships(ctx context.Context, tx *pgxdb.Tx, schema pgxdb.Schema, resourceType, resourceID string) ([]mutRelRow, error) {
 	rows, err := tx.Query(ctx,
-		`SELECT relation, subject_type, subject_id, subject_relation FROM iam_relationships WHERE resource_type = @resource_type AND resource_id = @resource_id`,
+		`SELECT relation, subject_type, subject_id, subject_relation FROM `+schema.Table("iam_relationships")+` WHERE resource_type = @resource_type AND resource_id = @resource_id`,
 		pgx.NamedArgs{"resource_type": resourceType, "resource_id": resourceID})
 	if err != nil {
 		return nil, mapMutationError(err)
@@ -335,9 +335,9 @@ func loadResourceRelationships(ctx context.Context, tx *pgxdb.Tx, resourceType, 
 
 // insertRelationship inserts one relationship row, letting the DDL default mint the
 // relationship_id (the port is error-only, no RETURNING).
-func insertRelationship(ctx context.Context, tx *pgxdb.Tx, resourceType, resourceID string, row mutation.RelationshipRow) error {
+func insertRelationship(ctx context.Context, tx *pgxdb.Tx, schema pgxdb.Schema, resourceType, resourceID string, row mutation.RelationshipRow) error {
 	_, err := tx.Exec(ctx,
-		`INSERT INTO iam_relationships (resource_type, resource_id, relation, subject_type, subject_id, subject_relation, created_at)
+		`INSERT INTO `+schema.Table("iam_relationships")+` (resource_type, resource_id, relation, subject_type, subject_id, subject_relation, created_at)
 		 VALUES (@resource_type, @resource_id, @relation, @subject_type, @subject_id, @subject_relation, @created_at)`,
 		pgx.NamedArgs{
 			"resource_type":    resourceType,
@@ -354,9 +354,9 @@ func insertRelationship(ctx context.Context, tx *pgxdb.Tx, resourceType, resourc
 // replaceRelationship rewrites the relation of the row matching an exact SubjectRef
 // in place — no delete/create visibility gap. The unique-subject index guarantees
 // at most one such row.
-func replaceRelationship(ctx context.Context, tx *pgxdb.Tx, resourceType, resourceID string, row mutation.RelationshipRow) error {
+func replaceRelationship(ctx context.Context, tx *pgxdb.Tx, schema pgxdb.Schema, resourceType, resourceID string, row mutation.RelationshipRow) error {
 	_, err := tx.Exec(ctx,
-		`UPDATE iam_relationships SET relation = @relation
+		`UPDATE `+schema.Table("iam_relationships")+` SET relation = @relation
 		 WHERE resource_type = @resource_type AND resource_id = @resource_id
 		   AND subject_type = @subject_type AND subject_id = @subject_id AND subject_relation = @subject_relation`,
 		pgx.NamedArgs{
@@ -372,9 +372,9 @@ func replaceRelationship(ctx context.Context, tx *pgxdb.Tx, resourceType, resour
 
 // deleteRelationship removes one exact relationship row (the revoke identity: the
 // relation plus the exact SubjectRef).
-func deleteRelationship(ctx context.Context, tx *pgxdb.Tx, resourceType, resourceID string, row mutation.RelationshipRow) error {
+func deleteRelationship(ctx context.Context, tx *pgxdb.Tx, schema pgxdb.Schema, resourceType, resourceID string, row mutation.RelationshipRow) error {
 	_, err := tx.Exec(ctx,
-		`DELETE FROM iam_relationships
+		`DELETE FROM `+schema.Table("iam_relationships")+`
 		 WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation
 		   AND subject_type = @subject_type AND subject_id = @subject_id AND subject_relation = @subject_relation`,
 		pgx.NamedArgs{
@@ -390,10 +390,10 @@ func deleteRelationship(ctx context.Context, tx *pgxdb.Tx, resourceType, resourc
 
 // countScopedRoles counts the role assignments scoped to a resource (teardown's
 // role sweep set).
-func countScopedRoles(ctx context.Context, tx *pgxdb.Tx, resourceType, resourceID string) (int, error) {
+func countScopedRoles(ctx context.Context, tx *pgxdb.Tx, schema pgxdb.Schema, resourceType, resourceID string) (int, error) {
 	var n int
 	if err := tx.QueryRow(ctx,
-		`SELECT COUNT(*) FROM iam_roles WHERE resource_type = @resource_type AND resource_id = @resource_id`,
+		`SELECT COUNT(*) FROM `+schema.Table("iam_roles")+` WHERE resource_type = @resource_type AND resource_id = @resource_id`,
 		pgx.NamedArgs{"resource_type": resourceType, "resource_id": resourceID}).Scan(&n); err != nil {
 		return 0, mapMutationError(err)
 	}
@@ -401,10 +401,10 @@ func countScopedRoles(ctx context.Context, tx *pgxdb.Tx, resourceType, resourceI
 }
 
 // hasExactRole reports whether an assignment exists at the EXACT scope.
-func hasExactRole(ctx context.Context, tx *pgxdb.Tx, subjectType, subjectID, role, resourceType, resourceID string) (bool, error) {
+func hasExactRole(ctx context.Context, tx *pgxdb.Tx, schema pgxdb.Schema, subjectType, subjectID, role, resourceType, resourceID string) (bool, error) {
 	var ok bool
 	if err := tx.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM iam_roles WHERE subject_type = @subject_type AND subject_id = @subject_id AND role = @role AND resource_type = @resource_type AND resource_id = @resource_id)`,
+		`SELECT EXISTS (SELECT 1 FROM `+schema.Table("iam_roles")+` WHERE subject_type = @subject_type AND subject_id = @subject_id AND role = @role AND resource_type = @resource_type AND resource_id = @resource_id)`,
 		pgx.NamedArgs{
 			"subject_type":  subjectType,
 			"subject_id":    subjectID,
@@ -489,15 +489,16 @@ func rowsFromCommand(rows []mutation.RelationshipRow) []mutRelRow {
 // those anchors and re-validate the revisions before commit. Reads run through the
 // transaction (Querier), never through the outer Service.
 type decisionView struct {
-	tx    *pgxdb.Tx
-	deps  map[string]mutation.Dependency
-	order []string
+	tx     *pgxdb.Tx
+	schema pgxdb.Schema
+	deps   map[string]mutation.Dependency
+	order  []string
 }
 
 var _ mutation.DecisionView = (*decisionView)(nil)
 
-func newDecisionView(tx *pgxdb.Tx) *decisionView {
-	return &decisionView{tx: tx, deps: map[string]mutation.Dependency{}}
+func newDecisionView(tx *pgxdb.Tx, schema pgxdb.Schema) *decisionView {
+	return &decisionView{tx: tx, schema: schema, deps: map[string]mutation.Dependency{}}
 }
 
 // CheckRelation reports whether subjectType:subjectID holds relation on the
@@ -510,10 +511,10 @@ func (v *decisionView) CheckRelation(ctx context.Context, scope mutation.ScopeKe
 	if err := v.record(ctx, scope); err != nil {
 		return false, err
 	}
-	q := reachableCTE + `
+	q := reachableCTE(v.schema) + `
 SELECT EXISTS (
 	SELECT 1
-	FROM iam_relationships r
+	FROM ` + v.schema.Table("iam_relationships") + ` r
 	JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 	WHERE r.resource_type = @resource_type AND r.resource_id = @resource_id AND r.relation = @relation
 )`
@@ -543,7 +544,7 @@ SELECT EXISTS (
 // reachable CTE in the same tx. Recording the seed (the subject itself as a
 // resource scope) is a harmless over-record; UNDER-recording is the safety bug.
 func (v *decisionView) recordExpansionScopes(ctx context.Context, subjectType, subjectID string) error {
-	rows, err := v.tx.Query(ctx, reachableCTE+`
+	rows, err := v.tx.Query(ctx, reachableCTE(v.schema)+`
 SELECT DISTINCT atype, aid FROM reachable`, pgx.NamedArgs{
 		"subject_type": subjectType,
 		"subject_id":   subjectID,
@@ -588,7 +589,7 @@ func (v *decisionView) HasRole(ctx context.Context, scope mutation.ScopeKey, rol
 	if scope.Kind == mutation.ScopeResource {
 		resType, resID = scope.Type, scope.ID
 	}
-	ok, err := hasExactRole(ctx, v.tx, subjectType, subjectID, role, resType, resID)
+	ok, err := hasExactRole(ctx, v.tx, v.schema, subjectType, subjectID, role, resType, resID)
 	if err != nil {
 		return false, err
 	}
@@ -603,7 +604,7 @@ func (v *decisionView) HasRole(ctx context.Context, scope mutation.ScopeKey, rol
 		if err := v.record(ctx, mutation.ScopeKey{Kind: mutation.ScopeSubject, Type: subjectType, ID: subjectID}); err != nil {
 			return false, err
 		}
-		return hasExactRole(ctx, v.tx, subjectType, subjectID, role, "", "")
+		return hasExactRole(ctx, v.tx, v.schema, subjectType, subjectID, role, "", "")
 	}
 	return false, nil
 }
@@ -626,7 +627,7 @@ func (v *decisionView) record(ctx context.Context, scope mutation.ScopeKey) erro
 	if _, ok := v.deps[key]; ok {
 		return nil
 	}
-	rev, err := scopeRevision(ctx, v.tx, scope)
+	rev, err := scopeRevision(ctx, v.tx, v.schema, scope)
 	if err != nil {
 		return err
 	}

@@ -17,15 +17,20 @@ import (
 // fields (coerced via kind) + terms; List/ListByTerm query indexed spine
 // columns. One store replaces the former PostStore + PageStore.
 type EntryStore struct {
-	db *pgxdb.DB
+	db     *pgxdb.DB
+	schema pgxdb.Schema
 }
 
 var _ content.EntryRepository = (*EntryStore)(nil)
 
 // NewEntryStore returns an EntryStore backed by db.
-func NewEntryStore(db *pgxdb.DB) *EntryStore {
-	return &EntryStore{db: db}
+func NewEntryStore(db *pgxdb.DB, opts ...Option) *EntryStore {
+	return &EntryStore{db: db, schema: newConfig(opts).schema}
 }
+
+// table renders name under the store's schema — the one chokepoint every
+// statement in this file goes through.
+func (s *EntryStore) table(name string) string { return s.schema.Table(name) }
 
 const entryColumns = "id, type, slug, title, status, body, excerpt, author, template, parent_id, menu_order, published_at, created_at, updated_at"
 
@@ -97,21 +102,21 @@ func (s *EntryStore) Create(ctx context.Context, e content.Entry) (content.Entry
 		// column so the schema default generates the key, read back with RETURNING.
 		// The generated key must be assigned before writeFields writes the child rows.
 		if e.ID == "" {
-			const q = `INSERT INTO entries (type, slug, title, status, body, excerpt, author, template, parent_id, menu_order, published_at, created_at, updated_at)
+			q := `INSERT INTO ` + s.table(entriesTable) + ` (type, slug, title, status, body, excerpt, author, template, parent_id, menu_order, published_at, created_at, updated_at)
 				VALUES (@type, @slug, @title, @status, @body, @excerpt, @author, @template, @parent_id, @menu_order, @published_at, @created_at, @updated_at)
 				RETURNING id`
 			if err := tx.QueryRow(ctx, q, args).Scan(&e.ID); err != nil {
 				return err
 			}
-			return writeFields(ctx, tx, e.ID, e.Fields)
+			return s.writeFields(ctx, tx, e.ID, e.Fields)
 		}
-		const q = `INSERT INTO entries (` + entryColumns + `)
+		q := `INSERT INTO ` + s.table(entriesTable) + ` (` + entryColumns + `)
 			VALUES (@id, @type, @slug, @title, @status, @body, @excerpt, @author, @template, @parent_id, @menu_order, @published_at, @created_at, @updated_at)`
 		args["id"] = e.ID
 		if _, err := tx.Exec(ctx, q, args); err != nil {
 			return err
 		}
-		return writeFields(ctx, tx, e.ID, e.Fields)
+		return s.writeFields(ctx, tx, e.ID, e.Fields)
 	})
 	if err != nil {
 		return content.Entry{}, pgxdb.MapError(err)
@@ -123,7 +128,7 @@ func (s *EntryStore) Create(ctx context.Context, e content.Entry) (content.Entry
 // fields, in one transaction.
 func (s *EntryStore) Update(ctx context.Context, id string, e content.Entry) (content.Entry, error) {
 	err := s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
-		const q = `UPDATE entries
+		q := `UPDATE ` + s.table(entriesTable) + `
 			SET type = @type, slug = @slug, title = @title, status = @status, body = @body,
 				excerpt = @excerpt, author = @author, template = @template, parent_id = @parent_id,
 				menu_order = @menu_order, published_at = @published_at, updated_at = @updated_at
@@ -149,10 +154,10 @@ func (s *EntryStore) Update(ctx context.Context, id string, e content.Entry) (co
 		if n == 0 {
 			return crud.ErrNotFound
 		}
-		if _, err := tx.Exec(ctx, "DELETE FROM entry_fields WHERE entry_id = @entry_id", pgx.NamedArgs{"entry_id": id}); err != nil {
+		if _, err := tx.Exec(ctx, "DELETE FROM "+s.table(entryFieldsTable)+" WHERE entry_id = @entry_id", pgx.NamedArgs{"entry_id": id}); err != nil {
 			return err
 		}
-		return writeFields(ctx, tx, id, e.Fields)
+		return s.writeFields(ctx, tx, id, e.Fields)
 	})
 	if err != nil {
 		return content.Entry{}, pgxdb.MapError(err)
@@ -162,7 +167,7 @@ func (s *EntryStore) Update(ctx context.Context, id string, e content.Entry) (co
 
 // Get returns the entry with the given id — spine, fields, and term IDs.
 func (s *EntryStore) Get(ctx context.Context, id string) (content.Entry, error) {
-	const q = `SELECT ` + entryColumns + ` FROM entries WHERE id = @id`
+	q := `SELECT ` + entryColumns + ` FROM ` + s.table(entriesTable) + ` WHERE id = @id`
 	row, err := pgxdb.QueryOne[entryRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
 	if err != nil {
 		return content.Entry{}, err
@@ -172,7 +177,7 @@ func (s *EntryStore) Get(ctx context.Context, id string) (content.Entry, error) 
 
 // GetBySlug returns the entry of type typ with the given slug.
 func (s *EntryStore) GetBySlug(ctx context.Context, typ, slug string) (content.Entry, error) {
-	const q = `SELECT ` + entryColumns + ` FROM entries WHERE type = @type AND slug = @slug`
+	q := `SELECT ` + entryColumns + ` FROM ` + s.table(entriesTable) + ` WHERE type = @type AND slug = @slug`
 	row, err := pgxdb.QueryOne[entryRow](ctx, s.db, q, pgx.NamedArgs{"type": typ, "slug": slug})
 	if err != nil {
 		return content.Entry{}, err
@@ -182,7 +187,7 @@ func (s *EntryStore) GetBySlug(ctx context.Context, typ, slug string) (content.E
 
 // Delete removes the entry; its fields and terms cascade.
 func (s *EntryStore) Delete(ctx context.Context, id string) error {
-	n, err := pgxdb.ExecAffecting(ctx, s.db, "DELETE FROM entries WHERE id = @id", pgx.NamedArgs{"id": id})
+	n, err := pgxdb.ExecAffecting(ctx, s.db, "DELETE FROM "+s.table(entriesTable)+" WHERE id = @id", pgx.NamedArgs{"id": id})
 	if err != nil {
 		return pgxdb.MapError(err)
 	}
@@ -195,14 +200,14 @@ func (s *EntryStore) Delete(ctx context.Context, id string) error {
 // List returns a page of entries matching q, in the resolved order (default
 // created_at DESC, id DESC).
 func (s *EntryStore) List(ctx context.Context, q content.EntryQuery) (crud.Page[content.Entry], error) {
-	where, args := entryFilter(q, "")
+	where, args := s.entryFilter(q, "")
 	return s.listPage(ctx, where, args, q.ListRequest)
 }
 
 // ListByTerm returns a page of entries matching q that are associated with
 // termID, in the resolved order.
 func (s *EntryStore) ListByTerm(ctx context.Context, termID string, q content.EntryQuery) (crud.Page[content.Entry], error) {
-	where, args := entryFilter(q, termID)
+	where, args := s.entryFilter(q, termID)
 	return s.listPage(ctx, where, args, q.ListRequest)
 }
 
@@ -210,11 +215,11 @@ func (s *EntryStore) ListByTerm(ctx context.Context, termID string, q content.En
 // a parameterized WHERE fragment and its NamedArgs — never string concatenation
 // of values. The list helper's keyset builder appends its predicate with AND;
 // the count wrap reuses the same fragment and args.
-func entryFilter(q content.EntryQuery, termID string) (string, pgx.NamedArgs) {
+func (s *EntryStore) entryFilter(q content.EntryQuery, termID string) (string, pgx.NamedArgs) {
 	where := " WHERE type = @type"
 	args := pgx.NamedArgs{"type": q.Type}
 	if termID != "" {
-		where += " AND id IN (SELECT entry_id FROM entry_terms WHERE term_id = @term_id)"
+		where += " AND id IN (SELECT entry_id FROM " + s.table(entryTermsTable) + " WHERE term_id = @term_id)"
 		args["term_id"] = termID
 	}
 	if q.Status != "" {
@@ -228,7 +233,7 @@ func entryFilter(q content.EntryQuery, termID string) (string, pgx.NamedArgs) {
 // struct, then hydrates fields + terms for the rows on this page only.
 func (s *EntryStore) listPage(ctx context.Context, where string, args pgx.NamedArgs, req crud.ListRequest) (crud.Page[content.Entry], error) {
 	lq := pgxdb.ListQuery[entryRow]{
-		BaseSQL:      `SELECT ` + entryColumns + ` FROM entries` + where,
+		BaseSQL:      `SELECT ` + entryColumns + ` FROM ` + s.table(entriesTable) + where,
 		Args:         args,
 		OrderFields:  content.OrderFields,
 		DefaultOrder: content.DefaultOrder,
@@ -257,13 +262,13 @@ func (s *EntryStore) listPage(ctx context.Context, where string, args pgx.NamedA
 // a DELETE of the prior rows and one UNNEST insert of the new set.
 func (s *EntryStore) SetTerms(ctx context.Context, entryID string, termIDs []string) error {
 	return s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
-		if _, err := tx.Exec(ctx, "DELETE FROM entry_terms WHERE entry_id = @entry_id", pgx.NamedArgs{"entry_id": entryID}); err != nil {
+		if _, err := tx.Exec(ctx, "DELETE FROM "+s.table(entryTermsTable)+" WHERE entry_id = @entry_id", pgx.NamedArgs{"entry_id": entryID}); err != nil {
 			return err
 		}
 		if len(termIDs) == 0 {
 			return nil
 		}
-		const q = `INSERT INTO entry_terms (entry_id, term_id)
+		q := `INSERT INTO ` + s.table(entryTermsTable) + ` (entry_id, term_id)
 			SELECT @entry_id, term_id FROM UNNEST(@term_ids::text[]) AS a(term_id)`
 		_, err := tx.Exec(ctx, q, pgx.NamedArgs{"entry_id": entryID, "term_ids": termIDs})
 		return err
@@ -285,7 +290,7 @@ func (s *EntryStore) hydrate(ctx context.Context, e content.Entry) (content.Entr
 // loadFields returns the custom fields for entryID, tagged with their stored
 // kind. Repeater ordinals are deferred, so flat fields are keyed by key.
 func (s *EntryStore) loadFields(ctx context.Context, entryID string) (content.Fields, error) {
-	const q = `SELECT key, kind, value FROM entry_fields WHERE entry_id = @entry_id ORDER BY key, ordinal`
+	q := `SELECT key, kind, value FROM ` + s.table(entryFieldsTable) + ` WHERE entry_id = @entry_id ORDER BY key, ordinal`
 	rows, err := s.db.Query(ctx, q, pgx.NamedArgs{"entry_id": entryID})
 	if err != nil {
 		return nil, pgxdb.MapError(err)
@@ -303,7 +308,7 @@ func (s *EntryStore) loadFields(ctx context.Context, entryID string) (content.Fi
 
 // loadTermIDs returns the taxonomy term IDs associated with entryID.
 func (s *EntryStore) loadTermIDs(ctx context.Context, entryID string) ([]string, error) {
-	const q = `SELECT term_id FROM entry_terms WHERE entry_id = @entry_id ORDER BY term_id`
+	q := `SELECT term_id FROM ` + s.table(entryTermsTable) + ` WHERE entry_id = @entry_id ORDER BY term_id`
 	rows, err := s.db.Query(ctx, q, pgx.NamedArgs{"entry_id": entryID})
 	if err != nil {
 		return nil, pgxdb.MapError(err)
@@ -318,7 +323,7 @@ func (s *EntryStore) loadTermIDs(ctx context.Context, entryID string) ([]string,
 // writeFields inserts the entry's custom fields as one UNNEST statement. Callers
 // run it inside the same Tx as the spine write (and after deleting prior rows on
 // update). Flat fields use ordinal 0 (repeaters deferred).
-func writeFields(ctx context.Context, tx *pgxdb.Tx, entryID string, fields content.Fields) error {
+func (s *EntryStore) writeFields(ctx context.Context, tx *pgxdb.Tx, entryID string, fields content.Fields) error {
 	if len(fields) == 0 {
 		return nil
 	}
@@ -330,7 +335,7 @@ func writeFields(ctx context.Context, tx *pgxdb.Tx, entryID string, fields conte
 		kinds = append(kinds, string(v.Kind))
 		values = append(values, v.Raw)
 	}
-	const q = `INSERT INTO entry_fields (entry_id, key, kind, value, ordinal)
+	q := `INSERT INTO ` + s.table(entryFieldsTable) + ` (entry_id, key, kind, value, ordinal)
 		SELECT @entry_id, key, kind, value, 0
 		FROM UNNEST(@keys::text[], @kinds::text[], @values::text[]) AS f(key, kind, value)`
 	_, err := tx.Exec(ctx, q, pgx.NamedArgs{

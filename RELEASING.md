@@ -155,6 +155,19 @@ host gps-360-go). Additive, zero value keeps every route; no schema, no pin
 moves. Carries a **security caveat** on the bundled lifecycle routes — read the
 upgrade note before exposing them on a multi-user host.
 
+**2026-08-26: `integrations/datastores/pgxdb/v0.5.0` +
+`features/{authentication,authorization,cms,events,jobs}/stores/pgx` — next
+tags, ONE train (minor across all six)** — host-chosen schema for every feature
+pgx store (plan of record `plans/pgx-store-schema-option.md`; gopernicus issue
+#4; originating host gps-360-go). `pgxdb.Schema` + `RunMigrations(...,
+pgxdb.WithSchema(s))`, and `WithSchema(s)` on every store's `Repositories` AND
+every exported per-repository constructor. Default (no option) SQL is
+byte-for-byte unchanged. **Pin moves: every store pins `pgxdb v0.5.0`, which
+drags `sdk` to v0.4.x for four of them.** Read the combined upgrade note below
+before adopting — it ratifies a change to the migration runner's stream model
+(one stream per schema, per-schema ledgers) and names the jobs `QueueOption`
+compatibility consequence.
+
 ## Tagging scheme
 
 Nested Go modules in a single repo are tagged with the module's directory as a
@@ -242,6 +255,158 @@ silently would break a host whose CSP no longer covers the kit's assets. Record 
 the module's next-tag upgrade note below and tell hosts to re-derive their CSP header.
 
 ## Upgrade notes (keyed to each module's next tag)
+
+### integrations/datastores/pgxdb v0.5.0 + every feature `stores/pgx` — next tags (2026-08-26): WithSchema — host-chosen schema instead of a search_path pin (minor across all six; ONE train)
+
+Plan of record `plans/pgx-store-schema-option.md` (gopernicus issue #4;
+originating host gps-360-go, which shares another app's Postgres and today
+pins `search_path` in its DSN). Everything is additive and the default is
+byte-for-byte unchanged: a host that passes no option gets exactly the SQL,
+probes, and ledger statements it always had. Target tags:
+`integrations/datastores/pgxdb/v0.5.0`,
+`features/authentication/stores/pgx/v0.4.0`,
+`features/{authorization,cms,events}/stores/pgx/v0.2.0`,
+`features/jobs/stores/pgx/v0.3.0`.
+
+**pgxdb — the seam.**
+
+- **`pgxdb.Schema`** — a validated value type. `pgxdb.NewSchema(name)
+  (Schema, error)` accepts a single bare identifier (letter, then
+  letters/digits/underscores; ≤ 63 bytes; not `pg_*`, not
+  `information_schema`; `public` is valid) and wraps `sdk.ErrInvalidInput`
+  otherwise. `(Schema).Table(t)` renders `"<schema>".t`; the **zero `Schema`
+  renders the bare name**, which is what makes the default byte-identical.
+  Quoting preserves case: `Auth` and `auth` are different schemas. Build it
+  once at the host (from env/config) so a malformed name fails there — no
+  store option panics. It is the same seam for a host's own app-local pgx
+  repositories: render your table names through `Schema.Table` and they
+  follow the same option.
+- **`pgxdb.RunMigrations(ctx, db, fs, dir, opts ...MigrateOption)`** gains
+  `pgxdb.WithSchema(s)`. Inside the existing migration transaction it probes
+  the namespace, runs `CREATE SCHEMA IF NOT EXISTS` only when absent, checks
+  the role has `USAGE` and `CREATE` on it, then `SET LOCAL search_path TO
+  "<schema>"` — **strict, no `public` fallback** (with `public` on the path an
+  `ALTER TABLE users` whose `"auth".users` is missing would silently alter the
+  host's `public.users`) — and asserts `current_schema()`. Unqualified DDL in
+  the exported stream therefore lands in the schema; `ExportMigrations` is
+  untouched. The ledger (`schema_migrations`) is **explicitly qualified** and
+  lives in the schema. Grant failures name the missing grant and wrap
+  `sdk.ErrForbidden`: schema creation needs `CREATE ON DATABASE` (a
+  DBA-precreated schema is a real workaround — creation is skipped when the
+  namespace exists); applying needs `USAGE, CREATE ON SCHEMA`.
+- **STREAM MODEL CHANGE (ratified, YOUR CALL 4).** The runner's godoc used to
+  say "one database, one stream … calls `RunMigrations` once per database".
+  It now says **one stream per schema, each with its own ledger in its own
+  schema**. The #4 use case — feature tables in `auth`, host tables in
+  `public` — is two calls over two directories (`migrations/auth/`,
+  `migrations/`). Consequences a host must own: the call order is yours and
+  must be deterministic; **one call is one transaction and two streams are
+  two transactions — there is NO cross-schema atomicity** (if the first
+  commits and the second fails, fix the failing stream and rerun; each
+  committed stream is idempotent by its own ledger); cross-schema FKs/views/
+  functions must be explicitly qualified and applied after the stream they
+  depend on. Filename uniqueness is now per `(schema, source)`.
+- **Ledger relocation for hosts coming off a `search_path` pin.** Under
+  `search_path=auth,public` your ledger rows may live in
+  `public.schema_migrations` while your tables live in `auth`. Adopting
+  `WithSchema("auth")` then sees an empty `"auth".schema_migrations` and
+  **re-runs the stream**. Most files are `IF NOT EXISTS`-safe but
+  authentication `0014_user_status.sql` is a full-table `ALTER COLUMN … TYPE
+  … COLLATE "C"` rewrite under an exclusive lock and `0015` repeats a backfill
+  `UPDATE`. Run the **ledger-relocation preflight** in the pgxdb README
+  (explicit column list, `ON CONFLICT (source, version) DO NOTHING`, a
+  count/checksum assertion before `COMMIT`) BEFORE the first schema-scoped
+  call; the runner then reports every copied file already applied. Skipping
+  it is safe-but-expensive, not recommended.
+- Do **not** merge the rate limiter's `ratelimit_windows` DDL into a
+  schema-scoped stream — the limiter's SQL is unqualified and it would fail at
+  its own probe. A limiter schema option is a separate demand.
+- pgx's default statement cache is 512 entries per connection; a
+  schema-per-tenant host running three-plus store sets on one pool should
+  size `statement_cache_capacity` in the DSN or use one pool per schema.
+
+**Every feature `stores/pgx` — the option.**
+
+- Each package gains `type Option func(*config)` and `WithSchema(s
+  pgxdb.Schema) Option` (authorization's existing `Option` gains it beside
+  `WithGuardianPolicy`). It is accepted by `Repositories(db, opts...)` AND by
+  **every exported per-repository constructor** — authentication's 18
+  `NewXStore(db, opts...)`, cms's five, jobs' three, events' `New(db,
+  opts...) (*Store, error)`, authorization's `RelationshipRepository(db,
+  opts...)` — so a host composing its own repository set from individual
+  stores gets the same seam. Every table reference renders through one
+  unexported `table(name)` chokepoint per store, guarded by a per-package
+  `TestNoBareTableReferences` (go/parser over string literals, table set
+  derived from the embedded migrations).
+- **Boot probes.** authentication/authorization/events replace their private
+  `probeTable` with `pgxdb.ProbeTable` on the qualified name (the adoption the
+  v0.4.1 note deferred to "each store's next tag"); wrapping messages still
+  name the migration source and `errors.Is(err, sdk.ErrNotFound)` holds.
+  authentication's ALTER-column probe filters `information_schema.columns` on
+  `table_schema` **only when a schema is set** — the default probe stays
+  byte-identical (and, as before, unfiltered by schema).
+- **cms and jobs gain an additive `StatusCheck(ctx, db, opts ...Option)
+  error`** that probes their tables under the configured schema. Call it at
+  boot when you configure a schema: those packages have no probe otherwise,
+  and a mismatched schema (migrated into one, constructed with another, or
+  migrated with a schema and constructed without) would silently read and
+  write your own `public.entries` / `public.terms` / `public.assets` /
+  `public.menus` / `public.job_queue`. `Repositories` itself stays
+  probe-less and error-less.
+- **jobs compatibility consequence (YOUR CALL 2).** `QueueOption` is now a
+  type ALIAS of the package `Option` (`func(*config)`, config unexported);
+  `WithLease` returns `Option` and keeps its non-positive-ignored rule;
+  `NewScheduleStore` / `NewFencedQueueStore` accept options and document that
+  lease is ignored. A caller that only passes `WithLease(d)` compiles
+  unchanged. **A caller that constructs, converts, invokes, returns, or wraps
+  its own `QueueOption` as `func(*Queue)` breaks** — accepted at v0.x. The
+  option type is now named three ways across the jobs adapters (memstore
+  `Option`, pgx `Option` + alias, turso `QueueOption`); recorded, not fixed
+  (a turso rename would cost turso retags this train avoids).
+- Advisory locks (`pg_advisory_xact_lock` in authorization and the fenced
+  jobs queue) are database-scoped, not schema-scoped: two hosts sharing one
+  database AND the same lock-key text contend across schemas. Not a
+  regression — true under the `search_path` pin too.
+- Per-repository DIFFERENT schemas within one feature are out of scope: the
+  constructors mechanically allow it, the one-stream-per-schema migration
+  model gives it no story. `stores/turso` is untouched — SQLite has no
+  schemas; the package docs that claimed "same exported surface" as the turso
+  sibling now say "plus the Postgres-only `WithSchema` option".
+
+**Pin moves and the sdk floor.** Every store pins `pgxdb v0.5.0`
+(authentication from v0.4.0; authorization/cms/events/jobs from v0.1.0).
+pgxdb requires `sdk v0.4.0`, so MVS drags `sdk` along — authorization/cms/
+events move from `sdk v0.1.0`, jobs from `v0.2.0`. **Adopting any of these
+four store tags raises your effective `sdk` floor to v0.4.x — read the sdk
+v0.3.0 note (global middleware genuinely global; `HandleRaw` no longer
+bypasses it) before adopting.** Compile-safety of the drag was cold-verified
+(`GOWORK=off` builds of the four feature cores against sdk v0.4.2). No
+feature-core, sdk, or turso module is bumped.
+
+**Adoption (gps-360-go shape).** Delete the `search_path` DSN wrapper, then:
+
+```go
+authSchema, err := pgxdb.NewSchema(os.Getenv("AUTH_DB_SCHEMA")) // "auth"
+if err != nil { log.Fatal(err) }
+
+// Two streams, two calls, host-chosen order; no cross-schema atomicity.
+if err := pgxdb.RunMigrations(ctx, db, hostMigrationsFS, "migrations"); err != nil { … }
+if err := pgxdb.RunMigrations(ctx, db, featureMigrationsFS, "migrations/auth", pgxdb.WithSchema(authSchema)); err != nil { … }
+
+authRepos, err := authenticationpgx.Repositories(db, authenticationpgx.WithSchema(authSchema))
+iamRepos, err := authorizationpgx.Repositories(db, authorizationpgx.WithSchema(authSchema))
+jobRepos := jobspgx.Repositories(db, jobspgx.WithSchema(authSchema))
+if err := jobspgx.StatusCheck(ctx, db, jobspgx.WithSchema(authSchema)); err != nil { … } // cms likewise
+```
+
+If your ledger rows live in `public.schema_migrations`, run the README's
+relocation preflight first. Verification for this train: `make check` green
+(18 guards); `make test-stores` now runs every pgx leg twice (default and
+`POSTGRES_TEST_SCHEMA=gopernicus_schema_test`) plus the pgxdb connector's own
+live suite, and the schema legs of authorization and events were re-run
+against an EMPTY `public` so any unqualified statement would have raised;
+decoy tests in events and authentication prove a `public` twin of the same
+table is neither read nor written when a schema is configured.
 
 ### features/authentication — v0.5.4 (2026-08-25): MachineRoutesDisabled + a caveat on the bundled lifecycle routes (patch by owner ruling)
 

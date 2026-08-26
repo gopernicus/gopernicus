@@ -54,11 +54,16 @@ func receiptSchemaDigest(cmd mutation.Command) string {
 type mutationStore struct {
 	db       *pgxdb.DB
 	guardian mutation.GuardianPolicy
+	schema   pgxdb.Schema
 }
 
-func newMutationStore(db *pgxdb.DB, guardian mutation.GuardianPolicy) *mutationStore {
-	return &mutationStore{db: db, guardian: guardian}
+func newMutationStore(db *pgxdb.DB, cfg config) *mutationStore {
+	return &mutationStore{db: db, guardian: cfg.guardian, schema: cfg.schema}
 }
+
+// table renders name under the store's schema — the one chokepoint every
+// statement on this store goes through.
+func (m *mutationStore) table(name string) string { return m.schema.Table(name) }
 
 var _ mutation.MutationRepository = (*mutationStore)(nil)
 
@@ -112,7 +117,7 @@ func (m *mutationStore) applyTx(ctx context.Context, tx *pgxdb.Tx, cmd mutation.
 	//    scope + observed revision the guard read (an absent anchor records 0).
 	var view *decisionView
 	if guard != nil {
-		view = newDecisionView(tx)
+		view = newDecisionView(tx, m.schema)
 		if err := runGuard(ctx, guard, view); err != nil {
 			return nil, err
 		}
@@ -125,7 +130,7 @@ func (m *mutationStore) applyTx(ctx context.Context, tx *pgxdb.Tx, cmd mutation.
 	//    revision 0 turns a concurrent first writer into a detectable 0→1 change.
 	locked := map[string]mutation.Revision{}
 	for _, sk := range m.lockSet(cmd.Scope, view) {
-		rev, err := anchorLock(ctx, tx, sk)
+		rev, err := anchorLock(ctx, tx, m.schema, sk)
 		if err != nil {
 			return nil, err
 		}
@@ -135,7 +140,7 @@ func (m *mutationStore) applyTx(ctx context.Context, tx *pgxdb.Tx, cmd mutation.
 	// 3. De-duplicate by MutationID under the scope lock. Because every writer to
 	//    this scope holds the same anchor lock, the receipt state is stable: the
 	//    first application commits its receipt, and a serialized retry sees it.
-	existing, found, err := lookupReceipt(ctx, tx, cmd.MutationID)
+	existing, found, err := lookupReceipt(ctx, tx, m.schema, cmd.MutationID)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +189,7 @@ func (m *mutationStore) applyTx(ctx context.Context, tx *pgxdb.Tx, cmd mutation.
 	// 8. Bump the scope revision exactly once on a change; persist the receipt.
 	revision := current
 	if changed {
-		revision, err = bumpRevision(ctx, tx, cmd.Scope)
+		revision, err = bumpRevision(ctx, tx, m.schema, cmd.Scope)
 		if err != nil {
 			return nil, err
 		}
@@ -195,13 +200,13 @@ func (m *mutationStore) applyTx(ctx context.Context, tx *pgxdb.Tx, cmd mutation.
 	// this same transaction, AFTER evaluate removed the scoped rows, so the answer
 	// is consistent with the removal — never a detached post-commit read. It is not
 	// a persisted column, so a later replay returns it false.
-	remains, err := sameRoleGrantRemains(ctx, tx, cmd)
+	remains, err := sameRoleGrantRemains(ctx, tx, m.schema, cmd)
 	if err != nil {
 		return nil, err
 	}
 	rcpt.SameRoleGrantRemains = remains
 	if outcome.Persisted() {
-		if err := insertReceipt(ctx, tx, rcpt); err != nil {
+		if err := insertReceipt(ctx, tx, m.schema, rcpt); err != nil {
 			return nil, err
 		}
 	}
@@ -213,12 +218,12 @@ func (m *mutationStore) applyTx(ctx context.Context, tx *pgxdb.Tx, cmd mutation.
 // exists after the unassign. It reads through the same transaction that removed
 // the scoped rows, so the answer is atomic with the removal — the honest
 // same_role_grant_remains value, not a claim about generic access.
-func sameRoleGrantRemains(ctx context.Context, tx *pgxdb.Tx, cmd mutation.Command) (bool, error) {
+func sameRoleGrantRemains(ctx context.Context, tx *pgxdb.Tx, schema pgxdb.Schema, cmd mutation.Command) (bool, error) {
 	if cmd.Operation != mutation.OpRoleUnassign || cmd.Scope.Kind != mutation.ScopeResource {
 		return false, nil
 	}
 	for _, row := range cmd.Roles {
-		ok, err := hasExactRole(ctx, tx, row.SubjectType, row.SubjectID, row.Role, "", "")
+		ok, err := hasExactRole(ctx, tx, schema, row.SubjectType, row.SubjectID, row.Role, "", "")
 		if err != nil {
 			return false, err
 		}
@@ -310,15 +315,15 @@ func scopeArgs(sk mutation.ScopeKey) pgx.NamedArgs {
 // ... FOR UPDATE then holds the row for the rest of the transaction and reflects
 // any concurrently committed bump (an absent anchor observed as 0 by the guard
 // becomes a detectable 1 here).
-func anchorLock(ctx context.Context, tx *pgxdb.Tx, sk mutation.ScopeKey) (mutation.Revision, error) {
+func anchorLock(ctx context.Context, tx *pgxdb.Tx, schema pgxdb.Schema, sk mutation.ScopeKey) (mutation.Revision, error) {
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO iam_scopes (scope_kind, scope_type, scope_id) VALUES (@scope_kind, @scope_type, @scope_id) ON CONFLICT DO NOTHING`,
+		`INSERT INTO `+schema.Table("iam_scopes")+` (scope_kind, scope_type, scope_id) VALUES (@scope_kind, @scope_type, @scope_id) ON CONFLICT DO NOTHING`,
 		scopeArgs(sk)); err != nil {
 		return 0, mapMutationError(err)
 	}
 	var rev int64
 	if err := tx.QueryRow(ctx,
-		`SELECT revision FROM iam_scopes WHERE scope_kind = @scope_kind AND scope_type = @scope_type AND scope_id = @scope_id FOR UPDATE`,
+		`SELECT revision FROM `+schema.Table("iam_scopes")+` WHERE scope_kind = @scope_kind AND scope_type = @scope_type AND scope_id = @scope_id FOR UPDATE`,
 		scopeArgs(sk)).Scan(&rev); err != nil {
 		return 0, mapMutationError(err)
 	}
@@ -327,10 +332,10 @@ func anchorLock(ctx context.Context, tx *pgxdb.Tx, sk mutation.ScopeKey) (mutati
 
 // scopeRevision reads a scope's current revision WITHOUT locking (an absent anchor
 // reads as 0) — the guard view's read of a dependency revision.
-func scopeRevision(ctx context.Context, tx *pgxdb.Tx, sk mutation.ScopeKey) (mutation.Revision, error) {
+func scopeRevision(ctx context.Context, tx *pgxdb.Tx, schema pgxdb.Schema, sk mutation.ScopeKey) (mutation.Revision, error) {
 	var rev int64
 	err := tx.QueryRow(ctx,
-		`SELECT revision FROM iam_scopes WHERE scope_kind = @scope_kind AND scope_type = @scope_type AND scope_id = @scope_id`,
+		`SELECT revision FROM `+schema.Table("iam_scopes")+` WHERE scope_kind = @scope_kind AND scope_type = @scope_type AND scope_id = @scope_id`,
 		scopeArgs(sk)).Scan(&rev)
 	if errors.Is(pgxdb.MapError(err), sdk.ErrNotFound) {
 		return 0, nil
@@ -343,10 +348,10 @@ func scopeRevision(ctx context.Context, tx *pgxdb.Tx, sk mutation.ScopeKey) (mut
 
 // bumpRevision increments the (already locked) scope anchor by exactly one and
 // returns the new revision.
-func bumpRevision(ctx context.Context, tx *pgxdb.Tx, sk mutation.ScopeKey) (mutation.Revision, error) {
+func bumpRevision(ctx context.Context, tx *pgxdb.Tx, schema pgxdb.Schema, sk mutation.ScopeKey) (mutation.Revision, error) {
 	var rev int64
 	if err := tx.QueryRow(ctx,
-		`UPDATE iam_scopes SET revision = revision + 1 WHERE scope_kind = @scope_kind AND scope_type = @scope_type AND scope_id = @scope_id RETURNING revision`,
+		`UPDATE `+schema.Table("iam_scopes")+` SET revision = revision + 1 WHERE scope_kind = @scope_kind AND scope_type = @scope_type AND scope_id = @scope_id RETURNING revision`,
 		scopeArgs(sk)).Scan(&rev); err != nil {
 		return 0, mapMutationError(err)
 	}
@@ -383,10 +388,10 @@ func (r receiptRow) toReceipt() mutation.Receipt {
 }
 
 // lookupReceipt returns the stored receipt for id, or (zero, false) when none.
-func lookupReceipt(ctx context.Context, tx *pgxdb.Tx, id mutation.MutationID) (mutation.Receipt, bool, error) {
+func lookupReceipt(ctx context.Context, tx *pgxdb.Tx, schema pgxdb.Schema, id mutation.MutationID) (mutation.Receipt, bool, error) {
 	row, err := pgxdb.QueryOne[receiptRow](ctx, tx,
 		`SELECT mutation_id, scope_kind, scope_type, scope_id, operation, payload_encoding, payload_digest, outcome, revision, schema_digest, created_at
-		 FROM iam_mutations WHERE mutation_id = @mutation_id`,
+		 FROM `+schema.Table("iam_mutations")+` WHERE mutation_id = @mutation_id`,
 		pgx.NamedArgs{"mutation_id": string(id)})
 	if errors.Is(err, sdk.ErrNotFound) {
 		return mutation.Receipt{}, false, nil
@@ -400,9 +405,9 @@ func lookupReceipt(ctx context.Context, tx *pgxdb.Tx, id mutation.MutationID) (m
 // insertReceipt persists a committed receipt (permanent retention: expires_at left
 // NULL). A concurrent cross-scope reuse of the same MutationID surfaces as a
 // unique violation, mapped to the stable payload-mismatch command error.
-func insertReceipt(ctx context.Context, tx *pgxdb.Tx, r *mutation.Receipt) error {
+func insertReceipt(ctx context.Context, tx *pgxdb.Tx, schema pgxdb.Schema, r *mutation.Receipt) error {
 	_, err := tx.Exec(ctx,
-		`INSERT INTO iam_mutations (mutation_id, scope_kind, scope_type, scope_id, operation, payload_encoding, payload_digest, outcome, revision, schema_digest, created_at)
+		`INSERT INTO `+schema.Table("iam_mutations")+` (mutation_id, scope_kind, scope_type, scope_id, operation, payload_encoding, payload_digest, outcome, revision, schema_digest, created_at)
 		 VALUES (@mutation_id, @scope_kind, @scope_type, @scope_id, @operation, @payload_encoding, @payload_digest, @outcome, @revision, @schema_digest, @created_at)`,
 		pgx.NamedArgs{
 			"mutation_id":      string(r.MutationID),

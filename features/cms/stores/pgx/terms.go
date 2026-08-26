@@ -13,15 +13,20 @@ import (
 
 // TermStore implements taxonomy.TermRepository over a PostgreSQL database.
 type TermStore struct {
-	db *pgxdb.DB
+	db     *pgxdb.DB
+	schema pgxdb.Schema
 }
 
 var _ taxonomy.TermRepository = (*TermStore)(nil)
 
 // NewTermStore returns a TermStore backed by db.
-func NewTermStore(db *pgxdb.DB) *TermStore {
-	return &TermStore{db: db}
+func NewTermStore(db *pgxdb.DB, opts ...Option) *TermStore {
+	return &TermStore{db: db, schema: newConfig(opts).schema}
 }
+
+// table renders name under the store's schema — the one chokepoint every
+// statement in this file goes through.
+func (s *TermStore) table(name string) string { return s.schema.Table(name) }
 
 const termColumns = "id, kind, slug, name, parent_id, created_at, updated_at"
 
@@ -61,7 +66,7 @@ func (s *TermStore) Create(ctx context.Context, t taxonomy.Term) (taxonomy.Term,
 	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if t.ID == "" {
-		const q = `INSERT INTO terms (kind, slug, name, parent_id, created_at, updated_at)
+		q := `INSERT INTO ` + s.table(termsTable) + ` (kind, slug, name, parent_id, created_at, updated_at)
 			VALUES (@kind, @slug, @name, @parent_id, @created_at, @updated_at)
 			RETURNING id`
 		if err := s.db.QueryRow(ctx, q, args).Scan(&t.ID); err != nil {
@@ -69,7 +74,7 @@ func (s *TermStore) Create(ctx context.Context, t taxonomy.Term) (taxonomy.Term,
 		}
 		return t, nil
 	}
-	const q = `INSERT INTO terms (` + termColumns + `)
+	q := `INSERT INTO ` + s.table(termsTable) + ` (` + termColumns + `)
 		VALUES (@id, @kind, @slug, @name, @parent_id, @created_at, @updated_at)`
 	args["id"] = t.ID
 	if _, err := s.db.Exec(ctx, q, args); err != nil {
@@ -80,7 +85,7 @@ func (s *TermStore) Create(ctx context.Context, t taxonomy.Term) (taxonomy.Term,
 
 // Update persists changes to the term with the given id.
 func (s *TermStore) Update(ctx context.Context, id string, t taxonomy.Term) (taxonomy.Term, error) {
-	const q = `UPDATE terms SET kind = @kind, slug = @slug, name = @name, parent_id = @parent_id, updated_at = @updated_at WHERE id = @id`
+	q := `UPDATE ` + s.table(termsTable) + ` SET kind = @kind, slug = @slug, name = @name, parent_id = @parent_id, updated_at = @updated_at WHERE id = @id`
 	n, err := pgxdb.ExecAffecting(ctx, s.db, q, pgx.NamedArgs{
 		"kind":       string(t.Kind),
 		"slug":       t.Slug,
@@ -100,7 +105,7 @@ func (s *TermStore) Update(ctx context.Context, id string, t taxonomy.Term) (tax
 
 // Get returns the term with the given id, or crud.ErrNotFound.
 func (s *TermStore) Get(ctx context.Context, id string) (taxonomy.Term, error) {
-	const q = `SELECT ` + termColumns + ` FROM terms WHERE id = @id`
+	q := `SELECT ` + termColumns + ` FROM ` + s.table(termsTable) + ` WHERE id = @id`
 	row, err := pgxdb.QueryOne[termRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
 	if err != nil {
 		return taxonomy.Term{}, err
@@ -110,7 +115,7 @@ func (s *TermStore) Get(ctx context.Context, id string) (taxonomy.Term, error) {
 
 // GetBySlug returns the term with the given kind+slug, or crud.ErrNotFound.
 func (s *TermStore) GetBySlug(ctx context.Context, kind taxonomy.Kind, slug string) (taxonomy.Term, error) {
-	const q = `SELECT ` + termColumns + ` FROM terms WHERE kind = @kind AND slug = @slug`
+	q := `SELECT ` + termColumns + ` FROM ` + s.table(termsTable) + ` WHERE kind = @kind AND slug = @slug`
 	row, err := pgxdb.QueryOne[termRow](ctx, s.db, q, pgx.NamedArgs{"kind": string(kind), "slug": slug})
 	if err != nil {
 		return taxonomy.Term{}, err
@@ -120,7 +125,7 @@ func (s *TermStore) GetBySlug(ctx context.Context, kind taxonomy.Kind, slug stri
 
 // ListByKind returns all terms of a kind, ordered by name.
 func (s *TermStore) ListByKind(ctx context.Context, kind taxonomy.Kind) ([]taxonomy.Term, error) {
-	const q = `SELECT ` + termColumns + ` FROM terms WHERE kind = @kind ORDER BY name`
+	q := `SELECT ` + termColumns + ` FROM ` + s.table(termsTable) + ` WHERE kind = @kind ORDER BY name`
 	rows, err := s.db.Query(ctx, q, pgx.NamedArgs{"kind": string(kind)})
 	if err != nil {
 		return nil, pgxdb.MapError(err)
@@ -139,10 +144,10 @@ func (s *TermStore) ListByKind(ctx context.Context, kind taxonomy.Kind) ([]taxon
 // Delete removes the term and its entry associations in a transaction.
 func (s *TermStore) Delete(ctx context.Context, id string) error {
 	return s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
-		if _, err := tx.Exec(ctx, "DELETE FROM entry_terms WHERE term_id = @term_id", pgx.NamedArgs{"term_id": id}); err != nil {
+		if _, err := tx.Exec(ctx, "DELETE FROM "+s.table(entryTermsTable)+" WHERE term_id = @term_id", pgx.NamedArgs{"term_id": id}); err != nil {
 			return err
 		}
-		_, err := tx.Exec(ctx, "DELETE FROM terms WHERE id = @id", pgx.NamedArgs{"id": id})
+		_, err := tx.Exec(ctx, "DELETE FROM "+s.table(termsTable)+" WHERE id = @id", pgx.NamedArgs{"id": id})
 		return err
 	})
 }

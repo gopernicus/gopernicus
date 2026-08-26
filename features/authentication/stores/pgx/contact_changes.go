@@ -20,13 +20,14 @@ import (
 // expired Consume deletes and returns sdk.ErrExpired.
 type ContactChangeStore struct {
 	db *pgxdb.DB
+	qualified
 }
 
 var _ contactchange.Repository = (*ContactChangeStore)(nil)
 
 // NewContactChangeStore returns a ContactChangeStore backed by db.
-func NewContactChangeStore(db *pgxdb.DB) *ContactChangeStore {
-	return &ContactChangeStore{db: db}
+func NewContactChangeStore(db *pgxdb.DB, opts ...Option) *ContactChangeStore {
+	return &ContactChangeStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
 const contactChangeReturning = "id, user_id, kind, new_value, login_enabled, recovery_enabled, notification_enabled, make_primary, replaces_identifier_id, expires_at, created_at"
@@ -56,7 +57,7 @@ func scanContactChange(row pgxdb.Scanner) (contactchange.PendingChange, error) {
 func (s *ContactChangeStore) Create(ctx context.Context, p contactchange.PendingChange) (contactchange.PendingChange, error) {
 	err := s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
 		if _, err := tx.Exec(ctx,
-			`DELETE FROM contact_changes WHERE user_id = @user_id AND kind = @kind`,
+			`DELETE FROM `+s.table(contactChangesTable)+` WHERE user_id = @user_id AND kind = @kind`,
 			pgx.NamedArgs{"user_id": p.UserID, "kind": string(p.Kind)}); err != nil {
 			return err
 		}
@@ -73,7 +74,7 @@ func (s *ContactChangeStore) Create(ctx context.Context, p contactchange.Pending
 			"created_at":             p.CreatedAt.UTC(),
 		}
 		if p.ID == "" {
-			const insert = `INSERT INTO contact_changes
+			insert := `INSERT INTO ` + s.table(contactChangesTable) + `
 				(user_id, kind, new_value, login_enabled, recovery_enabled, notification_enabled, make_primary, replaces_identifier_id, expires_at, created_at)
 				VALUES (@user_id, @kind, @new_value, @login_enabled, @recovery_enabled, @notification_enabled, @make_primary, @replaces_identifier_id, @expires_at, @created_at)
 				RETURNING id`
@@ -83,7 +84,7 @@ func (s *ContactChangeStore) Create(ctx context.Context, p contactchange.Pending
 			return nil
 		}
 		args["id"] = p.ID
-		const insert = `INSERT INTO contact_changes
+		insert := `INSERT INTO ` + s.table(contactChangesTable) + `
 			(id, user_id, kind, new_value, login_enabled, recovery_enabled, notification_enabled, make_primary, replaces_identifier_id, expires_at, created_at)
 			VALUES (@id, @user_id, @kind, @new_value, @login_enabled, @recovery_enabled, @notification_enabled, @make_primary, @replaces_identifier_id, @expires_at, @created_at)`
 		if _, err := tx.Exec(ctx, insert, args); err != nil {
@@ -100,7 +101,7 @@ func (s *ContactChangeStore) Create(ctx context.Context, p contactchange.Pending
 // Consume atomically deletes and returns the (userID, kind) pending change: live →
 // the PendingChange, expired → sdk.ErrExpired (row deleted), missing → sdk.ErrNotFound.
 func (s *ContactChangeStore) Consume(ctx context.Context, userID string, kind identifier.Kind) (contactchange.PendingChange, error) {
-	const q = `DELETE FROM contact_changes WHERE user_id = @user_id AND kind = @kind RETURNING ` + contactChangeReturning
+	q := `DELETE FROM ` + s.table(contactChangesTable) + ` WHERE user_id = @user_id AND kind = @kind RETURNING ` + contactChangeReturning
 	p, err := scanContactChange(s.db.QueryRow(ctx, q, pgx.NamedArgs{"user_id": userID, "kind": string(kind)}))
 	if err != nil {
 		if err == pgx.ErrNoRows {

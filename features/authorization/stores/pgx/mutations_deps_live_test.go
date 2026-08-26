@@ -22,7 +22,7 @@ import (
 func liveReposNoGuardian(t *testing.T) (*pgxdb.DB, authorization.Repositories) {
 	t.Helper()
 	db := openAndMigrate(t, requireDSN(t))
-	repos, err := Repositories(db, WithGuardianPolicy(mutation.GuardianPolicy{}))
+	repos, err := Repositories(db, append(storeOptions(t), WithGuardianPolicy(mutation.GuardianPolicy{}))...)
 	if err != nil {
 		t.Fatalf("Repositories: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestDecisionViewCheckRelationRecordsIntermediateScopesLive(t *testing.T) {
 	var ok bool
 	var deps []mutation.Dependency
 	if err := db.InTx(ctx, func(tx *pgxdb.Tx) error {
-		view := newDecisionView(tx)
+		view := newDecisionView(tx, testSchema(t))
 		var e error
 		ok, e = view.CheckRelation(ctx, mutation.ScopeKey{Kind: mutation.ScopeResource, Type: "doc", ID: "1"}, "editor", "user", "alice")
 		if e != nil {
@@ -109,7 +109,7 @@ func TestDecisionViewHasRoleGlobalFallbackRecordsSubjectScopeLive(t *testing.T) 
 	var ok bool
 	var deps []mutation.Dependency
 	if err := db.InTx(ctx, func(tx *pgxdb.Tx) error {
-		view := newDecisionView(tx)
+		view := newDecisionView(tx, testSchema(t))
 		var e error
 		ok, e = view.HasRole(ctx, mutation.ScopeKey{Kind: mutation.ScopeResource, Type: "doc", ID: "1"}, "auditor", "user", "alice")
 		if e != nil {
@@ -150,7 +150,7 @@ func TestDecisionViewHasRoleExactScopeSkipsSubjectScopeLive(t *testing.T) {
 	var ok bool
 	var deps []mutation.Dependency
 	if err := db.InTx(ctx, func(tx *pgxdb.Tx) error {
-		view := newDecisionView(tx)
+		view := newDecisionView(tx, testSchema(t))
 		var e error
 		ok, e = view.HasRole(ctx, mutation.ScopeKey{Kind: mutation.ScopeResource, Type: "doc", ID: "1"}, "auditor", "user", "alice")
 		if e != nil {

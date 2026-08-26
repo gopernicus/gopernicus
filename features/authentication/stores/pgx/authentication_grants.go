@@ -21,13 +21,14 @@ import (
 // the bulk, idempotent revocation cascade.
 type AuthGrantStore struct {
 	db *pgxdb.DB
+	qualified
 }
 
 var _ authgrant.Repository = (*AuthGrantStore)(nil)
 
 // NewAuthGrantStore returns an AuthGrantStore backed by db.
-func NewAuthGrantStore(db *pgxdb.DB) *AuthGrantStore {
-	return &AuthGrantStore{db: db}
+func NewAuthGrantStore(db *pgxdb.DB, opts ...Option) *AuthGrantStore {
+	return &AuthGrantStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
 const authGrantReturning = "id, session_id, user_id, purpose, context_digest, methods, assurance, authenticated_at, expires_at, created_at, consumed_at"
@@ -105,7 +106,7 @@ func (s *AuthGrantStore) Create(ctx context.Context, g authgrant.Grant) (authgra
 		"consumed_at":      pgxdb.NullTime(g.ConsumedAt),
 	}
 	if g.ID == "" {
-		const insert = `INSERT INTO authentication_grants
+		insert := `INSERT INTO ` + s.table(authGrantsTable) + `
 			(session_id, user_id, purpose, context_digest, methods, assurance, authenticated_at, expires_at, created_at, consumed_at)
 			VALUES (@session_id, @user_id, @purpose, @context_digest, @methods, @assurance, @authenticated_at, @expires_at, @created_at, @consumed_at)
 			RETURNING id`
@@ -115,7 +116,7 @@ func (s *AuthGrantStore) Create(ctx context.Context, g authgrant.Grant) (authgra
 		return g, nil
 	}
 	args["id"] = g.ID
-	const insert = `INSERT INTO authentication_grants
+	insert := `INSERT INTO ` + s.table(authGrantsTable) + `
 		(id, session_id, user_id, purpose, context_digest, methods, assurance, authenticated_at, expires_at, created_at, consumed_at)
 		VALUES (@id, @session_id, @user_id, @purpose, @context_digest, @methods, @assurance, @authenticated_at, @expires_at, @created_at, @consumed_at)`
 	if _, err := s.db.Exec(ctx, insert, args); err != nil {
@@ -127,9 +128,9 @@ func (s *AuthGrantStore) Create(ctx context.Context, g authgrant.Grant) (authgra
 // Consume atomically spends the (sessionID, purpose, contextDigest) grant: live →
 // the Grant; expired → sdk.ErrExpired (consumed); no unconsumed match → sdk.ErrNotFound.
 func (s *AuthGrantStore) Consume(ctx context.Context, sessionID, purpose, contextDigest string, now time.Time) (authgrant.Grant, error) {
-	const q = `UPDATE authentication_grants SET consumed_at = @now
+	q := `UPDATE ` + s.table(authGrantsTable) + ` SET consumed_at = @now
 		WHERE id = (
-			SELECT id FROM authentication_grants
+			SELECT id FROM ` + s.table(authGrantsTable) + `
 			WHERE session_id = @session_id AND purpose = @purpose AND context_digest = @context_digest AND consumed_at IS NULL
 			ORDER BY created_at, id
 			LIMIT 1
@@ -156,7 +157,7 @@ func (s *AuthGrantStore) Consume(ctx context.Context, sessionID, purpose, contex
 
 // DeleteBySession removes every grant for sessionID; bulk and idempotent.
 func (s *AuthGrantStore) DeleteBySession(ctx context.Context, sessionID string) error {
-	if _, err := s.db.Exec(ctx, `DELETE FROM authentication_grants WHERE session_id = @session_id`,
+	if _, err := s.db.Exec(ctx, `DELETE FROM `+s.table(authGrantsTable)+` WHERE session_id = @session_id`,
 		pgx.NamedArgs{"session_id": sessionID}); err != nil {
 		return pgxdb.MapError(err)
 	}

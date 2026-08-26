@@ -154,16 +154,17 @@ func TestUpgradeRunbook(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
+	ensureSchema(t, db)
 	dropAll := func() {
 		for _, tbl := range []string{"iam_mutations", "iam_scopes", "iam_roles", "iam_relationships"} {
-			_, _ = db.Exec(ctx, "DROP TABLE IF EXISTS "+tbl+" CASCADE")
+			_, _ = db.Exec(ctx, "DROP TABLE IF EXISTS "+qualify(t, tbl)+" CASCADE")
 		}
 		// Clear the ledger rows for the canonical versions (the host runner records
 		// them; RunMigrations here uses them) so the test is fully re-runnable: without
 		// this, a second run would see the canonical files already applied and skip
 		// creating iam_scopes/iam_mutations.
 		for _, v := range canonicalMigrations {
-			_, _ = db.Exec(ctx, "DELETE FROM schema_migrations WHERE version = $1", v)
+			_, _ = db.Exec(ctx, "DELETE FROM "+qualify(t, "schema_migrations")+" WHERE version = $1", v)
 		}
 	}
 	dropAll()
@@ -171,12 +172,12 @@ func TestUpgradeRunbook(t *testing.T) {
 
 	// ---- Build the populated v1 fixture ----
 	for _, stmt := range v1BaselineDDL {
-		if _, err := db.Exec(ctx, stmt); err != nil {
+		if _, err := db.Exec(ctx, qualifySQL(t, stmt)); err != nil {
 			t.Fatalf("v1 baseline DDL: %v", err)
 		}
 	}
 	for _, stmt := range v1FixtureRows {
-		if _, err := db.Exec(ctx, stmt); err != nil {
+		if _, err := db.Exec(ctx, qualifySQL(t, stmt)); err != nil {
 			t.Fatalf("v1 fixture row: %v", err)
 		}
 	}
@@ -201,10 +202,10 @@ func TestUpgradeRunbook(t *testing.T) {
 	}
 
 	// ---- Blocking proof: the constraint ALTER fails while malformed rows remain ----
-	if _, err := db.Exec(ctx, dataPreservingConstraints[0]); err == nil {
+	if _, err := db.Exec(ctx, qualifySQL(t, dataPreservingConstraints[0])); err == nil {
 		t.Fatal("ck_iam_relationships_nonempty must not apply while a malformed row remains — the upgrade is not blocked")
 	}
-	if _, err := db.Exec(ctx, dataPreservingConstraints[1]); err == nil {
+	if _, err := db.Exec(ctx, qualifySQL(t, dataPreservingConstraints[1])); err == nil {
 		t.Fatal("ck_iam_roles_nonempty must not apply while a malformed row remains")
 	}
 
@@ -212,10 +213,10 @@ func TestUpgradeRunbook(t *testing.T) {
 	// The ambiguous/meaning-changed rows (dcon concrete-group, dadm #admin, org:o1)
 	// are LEFT AS THEY ARE per operator sign-off: v3 narrows them, and NONE is
 	// silently defaulted to member.
-	if _, err := db.Exec(ctx, `DELETE FROM iam_relationships WHERE resource_type='' OR resource_id='' OR relation='' OR subject_type='' OR subject_id=''`); err != nil {
+	if _, err := db.Exec(ctx, qualifySQL(t, `DELETE FROM iam_relationships WHERE resource_type='' OR resource_id='' OR relation='' OR subject_type='' OR subject_id=''`)); err != nil {
 		t.Fatalf("repair relationships: %v", err)
 	}
-	if _, err := db.Exec(ctx, `DELETE FROM iam_roles WHERE subject_type='' OR subject_id='' OR role='' OR ((resource_type='') <> (resource_id=''))`); err != nil {
+	if _, err := db.Exec(ctx, qualifySQL(t, `DELETE FROM iam_roles WHERE subject_type='' OR subject_id='' OR role='' OR ((resource_type='') <> (resource_id=''))`)); err != nil {
 		t.Fatalf("repair roles: %v", err)
 	}
 	// Re-run 1a/1b — must be clean before the conversion proceeds.
@@ -230,25 +231,25 @@ func TestUpgradeRunbook(t *testing.T) {
 	// (a) the three CHECK constraints the canonical CREATE TABLE IF NOT EXISTS cannot
 	//     add to a pre-existing table — now they apply because the data is clean.
 	for _, stmt := range dataPreservingConstraints {
-		if _, err := db.Exec(ctx, stmt); err != nil {
+		if _, err := db.Exec(ctx, qualifySQL(t, stmt)); err != nil {
 			t.Fatalf("apply constraint after repair: %v", err)
 		}
 	}
 	// (b) the canonical migration source, which creates the new iam_scopes /
 	//     iam_mutations tables (0001/0002 no-op on the existing tables).
-	if err := pgxdb.RunMigrations(ctx, db, MigrationsFS, MigrationsDir); err != nil {
+	if err := pgxdb.RunMigrations(ctx, db, MigrationsFS, MigrationsDir, migrateOptions(t)...); err != nil {
 		t.Fatalf("apply canonical migrations: %v", err)
 	}
 	// (c) seed revision-0 anchors (CONVERSION.md §3).
-	if _, err := db.Exec(ctx, `INSERT INTO iam_scopes (scope_kind, scope_type, scope_id)
+	if _, err := db.Exec(ctx, qualifySQL(t, `INSERT INTO iam_scopes (scope_kind, scope_type, scope_id)
 		SELECT DISTINCT 'resource', resource_type, resource_id FROM iam_relationships
 		UNION SELECT DISTINCT 'resource', resource_type, resource_id FROM iam_roles WHERE resource_type <> ''
-		ON CONFLICT DO NOTHING`); err != nil {
+		ON CONFLICT DO NOTHING`)); err != nil {
 		t.Fatalf("seed resource anchors: %v", err)
 	}
-	if _, err := db.Exec(ctx, `INSERT INTO iam_scopes (scope_kind, scope_type, scope_id)
+	if _, err := db.Exec(ctx, qualifySQL(t, `INSERT INTO iam_scopes (scope_kind, scope_type, scope_id)
 		SELECT DISTINCT 'subject', subject_type, subject_id FROM iam_roles WHERE resource_type = ''
-		ON CONFLICT DO NOTHING`); err != nil {
+		ON CONFLICT DO NOTHING`)); err != nil {
 		t.Fatalf("seed subject anchors: %v", err)
 	}
 	// Every seeded anchor is revision 0, and no receipt is backfilled.
@@ -260,7 +261,7 @@ func TestUpgradeRunbook(t *testing.T) {
 	}
 
 	// ---- Boot a v3-composed service over the converted store ----
-	repos, err := Repositories(db)
+	repos, err := Repositories(db, storeOptions(t)...)
 	if err != nil {
 		t.Fatalf("boot Repositories over converted store: %v", err)
 	}
@@ -327,7 +328,7 @@ func TestUpgradeRunbook(t *testing.T) {
 	// Before any v3 mutation commits: a v1-style write reintroducing a malformed row
 	// is now rejected by the applied constraint — hand-reversing repairs is unsafe,
 	// so restore-from-backup is the rollback mechanism.
-	if _, err := db.Exec(ctx, `INSERT INTO iam_relationships (resource_type,resource_id,relation,subject_type,subject_id,created_at) VALUES ('doc','dx','','user','ux', now())`); err == nil {
+	if _, err := db.Exec(ctx, qualifySQL(t, `INSERT INTO iam_relationships (resource_type,resource_id,relation,subject_type,subject_id,created_at) VALUES ('doc','dx','','user','ux', now())`)); err == nil {
 		t.Fatal("the applied constraint must reject a v1-style malformed reintroduction")
 	}
 	// The first committed v3 mutation is the rollback boundary: after it, a receipt
@@ -349,7 +350,7 @@ func TestUpgradeRunbook(t *testing.T) {
 func countRows(t *testing.T, ctx context.Context, db *pgxdb.DB, query string) int64 {
 	t.Helper()
 	var n int64
-	if err := db.QueryRow(ctx, query).Scan(&n); err != nil {
+	if err := db.QueryRow(ctx, qualifySQL(t, query)).Scan(&n); err != nil {
 		t.Fatalf("query %q: %v", strings.SplitN(query, " WHERE", 2)[0], err)
 	}
 	return n

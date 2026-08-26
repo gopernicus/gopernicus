@@ -8,6 +8,8 @@ package pgx
 import (
 	"context"
 	"testing"
+
+	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 )
 
 // TestSchemaProbe applies the canonical migrations and asserts the new revision /
@@ -19,32 +21,32 @@ func TestSchemaProbe(t *testing.T) {
 	ctx := context.Background()
 
 	for _, tbl := range []string{"iam_scopes", "iam_mutations"} {
-		if err := probeTable(ctx, db, tbl); err != nil {
+		if err := pgxdb.ProbeTable(ctx, db, qualify(t, tbl)); err != nil {
 			t.Fatalf("probe %s: %v", tbl, err)
 		}
 	}
 
 	clean := func() {
-		_, _ = db.Exec(ctx, "DELETE FROM iam_scopes")
-		_, _ = db.Exec(ctx, "DELETE FROM iam_mutations")
+		_, _ = db.Exec(ctx, "DELETE FROM "+qualify(t, "iam_scopes"))
+		_, _ = db.Exec(ctx, "DELETE FROM "+qualify(t, "iam_mutations"))
 	}
 	clean()
 	t.Cleanup(clean)
 
 	// Well-formed rows are accepted.
-	if _, err := db.Exec(ctx,
-		`INSERT INTO iam_scopes (scope_kind, scope_type, scope_id, revision) VALUES ('resource', 'doc', 'd1', 0)`); err != nil {
+	if _, err := db.Exec(ctx, qualifySQL(t,
+		`INSERT INTO iam_scopes (scope_kind, scope_type, scope_id, revision) VALUES ('resource', 'doc', 'd1', 0)`)); err != nil {
 		t.Fatalf("valid iam_scopes insert rejected: %v", err)
 	}
-	if _, err := db.Exec(ctx,
+	if _, err := db.Exec(ctx, qualifySQL(t,
 		`INSERT INTO iam_mutations (mutation_id, scope_kind, scope_type, scope_id, operation, payload_encoding, payload_digest, outcome, revision, schema_digest, created_at)
-		 VALUES ('m0000000000000000000000001', 'resource', 'doc', 'd1', 'grant', 'gopernicus.authorization.mutation/1', 'deadbeef', 'applied', 1, 'cafef00d', NOW())`); err != nil {
+		 VALUES ('m0000000000000000000000001', 'resource', 'doc', 'd1', 'grant', 'gopernicus.authorization.mutation/1', 'deadbeef', 'applied', 1, 'cafef00d', NOW())`)); err != nil {
 		t.Fatalf("valid iam_mutations insert rejected: %v", err)
 	}
 	// A NULL expires_at (permanent retention, the default posture) is accepted.
-	if _, err := db.Exec(ctx,
+	if _, err := db.Exec(ctx, qualifySQL(t,
 		`INSERT INTO iam_mutations (mutation_id, scope_kind, scope_type, scope_id, operation, payload_encoding, payload_digest, outcome, revision, schema_digest, created_at, expires_at)
-		 VALUES ('m0000000000000000000000002', 'subject', 'user', 'u1', 'role_assign', 'gopernicus.authorization.mutation/1', 'beefdead', 'no_change', 0, 'cafef00d', NOW(), NULL)`); err != nil {
+		 VALUES ('m0000000000000000000000002', 'subject', 'user', 'u1', 'role_assign', 'gopernicus.authorization.mutation/1', 'beefdead', 'no_change', 0, 'cafef00d', NOW(), NULL)`)); err != nil {
 		t.Fatalf("permanent-retention iam_mutations insert rejected: %v", err)
 	}
 
@@ -63,7 +65,7 @@ func TestSchemaProbe(t *testing.T) {
 		{"role half-populated scope pair", `INSERT INTO iam_roles (subject_type, subject_id, role, resource_type, resource_id, created_at) VALUES ('user', 'u', 'editor', 'doc', '', NOW())`},
 	}
 	for _, c := range rejects {
-		if _, err := db.Exec(ctx, c.sql); err == nil {
+		if _, err := db.Exec(ctx, qualifySQL(t, c.sql)); err == nil {
 			t.Errorf("%s: expected a constraint violation, got nil", c.name)
 		}
 	}

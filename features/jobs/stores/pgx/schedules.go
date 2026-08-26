@@ -32,8 +32,13 @@ var _ schedule.Repository = (*Schedules)(nil)
 // byte-identical semantics to the turso store — so N runtime instances fire each
 // (schedule, slot) pair exactly once with no leader election.
 type Schedules struct {
-	db *pgxdb.DB
+	db     *pgxdb.DB
+	schema pgxdb.Schema
 }
+
+// table renders one of this store's table names under the configured schema —
+// the single chokepoint every statement in the file qualifies through.
+func (s *Schedules) table(name string) string { return s.schema.Table(name) }
 
 // scheduleRow is the store-local, db-tagged projection of a job_schedules row that
 // pgx.RowToStructByName scans into; toDomain maps it to the domain entity.
@@ -70,9 +75,13 @@ func (r scheduleRow) toDomain() schedule.Schedule {
 	}
 }
 
-// NewScheduleStore returns a Schedules store backed by db.
-func NewScheduleStore(db *pgxdb.DB) *Schedules {
-	return &Schedules{db: db}
+// NewScheduleStore returns a Schedules store backed by db, applying opts
+// (WithSchema). WithLease is accepted and ignored: schedules hold no claim
+// lease, so the option exists here only because Repositories passes one opts set
+// to both stores.
+func NewScheduleStore(db *pgxdb.DB, opts ...Option) *Schedules {
+	cfg := newConfig(opts)
+	return &Schedules{db: db, schema: cfg.schema}
 }
 
 // Ensure upserts by Name in one transaction: it creates the schedule (enabled,
@@ -83,7 +92,7 @@ func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Ti
 	var out schedule.Schedule
 
 	err := s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
-		const sel = `SELECT ` + scheduleRowColumns + ` FROM job_schedules WHERE name = @name`
+		sel := `SELECT ` + scheduleRowColumns + ` FROM ` + s.table("job_schedules") + ` WHERE name = @name`
 		row, err := pgxdb.QueryOne[scheduleRow](ctx, tx, sel, pgx.NamedArgs{"name": in.Name})
 		switch {
 		case err == nil:
@@ -98,7 +107,7 @@ func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Ti
 			}
 			existing.UpdatedAt = now
 			cron, every := specColumns(existing.Spec)
-			const upd = `UPDATE job_schedules SET kind = @kind, tenant_id = @tenant_id, cron_expr = @cron, every_secs = @every, payload = @payload, next_run_at = @next_run_at, updated_at = @updated_at WHERE schedule_id = @id`
+			upd := `UPDATE ` + s.table("job_schedules") + ` SET kind = @kind, tenant_id = @tenant_id, cron_expr = @cron, every_secs = @every, payload = @payload, next_run_at = @next_run_at, updated_at = @updated_at WHERE schedule_id = @id`
 			if _, err := tx.Exec(ctx, upd, pgx.NamedArgs{
 				"kind":        existing.Kind,
 				"tenant_id":   nullString(existing.TenantID),
@@ -127,7 +136,7 @@ func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Ti
 				UpdatedAt: now,
 			}
 			cron, every := specColumns(sch.Spec)
-			const ins = `INSERT INTO job_schedules (` + scheduleColumns + `) VALUES (@id, @name, @kind, @tenant_id, @cron, @every, @payload, TRUE, @next_run_at, NULL, NULL, @created_at, @updated_at)`
+			ins := `INSERT INTO ` + s.table("job_schedules") + ` (` + scheduleColumns + `) VALUES (@id, @name, @kind, @tenant_id, @cron, @every, @payload, TRUE, @next_run_at, NULL, NULL, @created_at, @updated_at)`
 			if _, err := tx.Exec(ctx, ins, pgx.NamedArgs{
 				"id":          sch.ID,
 				"name":        sch.Name,
@@ -158,7 +167,7 @@ func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Ti
 // by (next_run_at, schedule_id) so the batch is deterministic. A non-positive
 // limit returns all due schedules.
 func (s *Schedules) ListDue(ctx context.Context, now time.Time, limit int) ([]schedule.Schedule, error) {
-	const base = `SELECT ` + scheduleRowColumns + ` FROM job_schedules
+	base := `SELECT ` + scheduleRowColumns + ` FROM ` + s.table("job_schedules") + `
 		WHERE enabled = TRUE AND next_run_at <= @now
 		ORDER BY next_run_at, schedule_id `
 
@@ -195,7 +204,7 @@ func (s *Schedules) ListDue(ctx context.Context, now time.Time, limit int) ([]sc
 // its args stay positional rather than risk any observable change from a NamedArgs
 // rewrite.
 func (s *Schedules) ClaimDue(ctx context.Context, id string, prevNextRunAt, newNextRunAt, now time.Time) (bool, error) {
-	const q = `UPDATE job_schedules SET next_run_at = $1, last_run_at = $2, updated_at = $2
+	q := `UPDATE ` + s.table("job_schedules") + ` SET next_run_at = $1, last_run_at = $2, updated_at = $2
 		WHERE schedule_id = $3 AND next_run_at = $4 AND enabled = TRUE`
 	n, err := pgxdb.ExecAffecting(ctx, s.db, q, newNextRunAt.UTC(), now.UTC(), id, prevNextRunAt.UTC())
 	if err != nil {
@@ -207,13 +216,13 @@ func (s *Schedules) ClaimDue(ctx context.Context, id string, prevNextRunAt, newN
 // SetLastJob records the id of the job fired for the most recent slot. A missing
 // id yields sdk.ErrNotFound.
 func (s *Schedules) SetLastJob(ctx context.Context, id, jobID string, now time.Time) error {
-	const q = `UPDATE job_schedules SET last_job_id = @last_job_id, updated_at = @updated_at WHERE schedule_id = @id`
+	q := `UPDATE ` + s.table("job_schedules") + ` SET last_job_id = @last_job_id, updated_at = @updated_at WHERE schedule_id = @id`
 	return s.execAffecting(ctx, q, pgx.NamedArgs{"last_job_id": jobID, "updated_at": now.UTC(), "id": id})
 }
 
 // Get returns the schedule with the given id, or sdk.ErrNotFound.
 func (s *Schedules) Get(ctx context.Context, id string) (schedule.Schedule, error) {
-	const q = `SELECT ` + scheduleRowColumns + ` FROM job_schedules WHERE schedule_id = @id`
+	q := `SELECT ` + scheduleRowColumns + ` FROM ` + s.table("job_schedules") + ` WHERE schedule_id = @id`
 	row, err := pgxdb.QueryOne[scheduleRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
 	if err != nil {
 		return schedule.Schedule{}, err
@@ -225,7 +234,7 @@ func (s *Schedules) Get(ctx context.Context, id string) (schedule.Schedule, erro
 // order (default created_at DESC, schedule_id DESC).
 func (s *Schedules) List(ctx context.Context, req crud.ListRequest) (crud.Page[schedule.Schedule], error) {
 	lq := pgxdb.ListQuery[scheduleRow]{
-		BaseSQL:      `SELECT ` + scheduleRowColumns + ` FROM job_schedules`,
+		BaseSQL:      `SELECT ` + scheduleRowColumns + ` FROM ` + s.table("job_schedules"),
 		OrderFields:  schedule.OrderFields,
 		DefaultOrder: schedule.DefaultOrder,
 		PK:           "schedule_id",
@@ -242,13 +251,13 @@ func (s *Schedules) List(ctx context.Context, req crud.ListRequest) (crud.Page[s
 // SetEnabled toggles a schedule's enabled flag. A missing id yields
 // sdk.ErrNotFound.
 func (s *Schedules) SetEnabled(ctx context.Context, id string, enabled bool, now time.Time) error {
-	const q = `UPDATE job_schedules SET enabled = @enabled, updated_at = @updated_at WHERE schedule_id = @id`
+	q := `UPDATE ` + s.table("job_schedules") + ` SET enabled = @enabled, updated_at = @updated_at WHERE schedule_id = @id`
 	return s.execAffecting(ctx, q, pgx.NamedArgs{"enabled": enabled, "updated_at": now.UTC(), "id": id})
 }
 
 // Delete removes a schedule; a missing id yields sdk.ErrNotFound.
 func (s *Schedules) Delete(ctx context.Context, id string) error {
-	const q = `DELETE FROM job_schedules WHERE schedule_id = @id`
+	q := `DELETE FROM ` + s.table("job_schedules") + ` WHERE schedule_id = @id`
 	return s.execAffecting(ctx, q, pgx.NamedArgs{"id": id})
 }
 

@@ -28,6 +28,17 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
+const (
+	// collationSQL reads one column's catalog collation. Like the store's own
+	// default column probe it is unfiltered by table_schema — the default leg
+	// resolves the column on the search_path, exactly as it always has.
+	collationSQL = `SELECT collation_name FROM information_schema.columns WHERE table_name = $1 AND column_name = $2`
+
+	// collationSchemaSQL scopes that read to the POSTGRES_TEST_SCHEMA leg's
+	// schema, so a same-named table in the default schema cannot answer for it.
+	collationSchemaSQL = `SELECT collation_name FROM information_schema.columns WHERE table_name = $1 AND column_name = $2 AND table_schema = $3`
+)
+
 // collatedColumn names one table column the canonical schema must pin to
 // COLLATE "C" and why it is contractual (opaque ordering key, not display text).
 type collatedColumn struct {
@@ -151,10 +162,14 @@ func TestContractualCollation_Catalog(t *testing.T) {
 	t.Cleanup(func() { probeResetSchema(t, db) })
 
 	ctx := context.Background()
+	schema := testSchema(t)
 	for _, c := range contractualCollatedColumns {
 		var collation *string
-		const q = `SELECT collation_name FROM information_schema.columns WHERE table_name = $1 AND column_name = $2`
-		if err := db.QueryRow(ctx, q, c.Table, c.Column).Scan(&collation); err != nil {
+		q, args := collationSQL, []any{c.Table, c.Column}
+		if !schema.IsZero() {
+			q, args = collationSchemaSQL, []any{c.Table, c.Column, schema.String()}
+		}
+		if err := db.QueryRow(ctx, q, args...).Scan(&collation); err != nil {
 			t.Fatalf("catalog lookup %s.%s: %v", c.Table, c.Column, err)
 		}
 		if collation == nil || *collation != "C" {
@@ -195,7 +210,7 @@ func TestCollationControlsOrdering_NonC(t *testing.T) {
 	probeResetSchema(t, db)
 	t.Cleanup(func() { probeResetSchema(t, db) })
 
-	store := NewServiceAccountStore(db)
+	store := NewServiceAccountStore(db, storeOpts(testSchema(t))...)
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	// 'B' (0x42) sorts before 'a' (0x61) byte-wise; en_US.utf8 sorts 'a' before
 	// 'B'. Same created_at, so the id tiebreak alone decides the order.

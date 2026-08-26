@@ -36,18 +36,15 @@ const jobRowColumns = "job_id, kind, COALESCE(tenant_id, '') AS tenant_id, paylo
 // Compile-time seam: the Queue fills the exact job.QueueRepository port.
 var _ job.QueueRepository = (*Queue)(nil)
 
-// QueueOption configures a Queue.
-type QueueOption func(*Queue)
-
 // WithLease sets the stale-claim recovery window folded into Claim's due
 // predicate: a running job whose claimed_at is older than d becomes claimable
 // again (design §6.3). It is store configuration, never a Claim parameter, so
 // the port signature stays identical to workers.JobStore. Non-positive values
 // are ignored and the default is kept.
-func WithLease(d time.Duration) QueueOption {
-	return func(q *Queue) {
+func WithLease(d time.Duration) Option {
+	return func(c *config) {
 		if d > 0 {
-			q.lease = d
+			c.lease = d
 		}
 	}
 }
@@ -58,9 +55,14 @@ func WithLease(d time.Duration) QueueOption {
 // each lock a different row), and the lease-expiry reclaim arm is folded into the
 // due predicate.
 type Queue struct {
-	db    *pgxdb.DB
-	lease time.Duration
+	db     *pgxdb.DB
+	lease  time.Duration
+	schema pgxdb.Schema
 }
+
+// table renders one of this store's table names under the configured schema —
+// the single chokepoint every statement in the file qualifies through.
+func (q *Queue) table(name string) string { return q.schema.Table(name) }
 
 // jobRow is the store-local, db-tagged projection of a job_queue row that
 // pgx.RowToStructByName scans into; toDomain maps it to the domain entity.
@@ -102,13 +104,11 @@ func (r jobRow) toDomain() job.Job {
 	}
 }
 
-// NewQueueStore returns a Queue backed by db, applying opts (WithLease).
-func NewQueueStore(db *pgxdb.DB, opts ...QueueOption) *Queue {
-	q := &Queue{db: db, lease: DefaultLease}
-	for _, opt := range opts {
-		opt(q)
-	}
-	return q
+// NewQueueStore returns a Queue backed by db, applying opts (WithLease,
+// WithSchema).
+func NewQueueStore(db *pgxdb.DB, opts ...Option) *Queue {
+	cfg := newConfig(opts)
+	return &Queue{db: db, lease: cfg.lease, schema: cfg.schema}
 }
 
 // Enqueue inserts one pending job. A caller-supplied ID that already exists
@@ -135,7 +135,7 @@ func (q *Queue) Enqueue(ctx context.Context, in job.Enqueue) (job.Job, error) {
 		UpdatedAt:    now,
 	}
 
-	const insert = `INSERT INTO job_queue (` + jobColumns + `)
+	insert := `INSERT INTO ` + q.table("job_queue") + ` (` + jobColumns + `)
 		VALUES (@job_id, @kind, @tenant_id, @payload, 'pending', @priority, 0, @max_attempts, NULL, NULL, @scheduled_for, NULL, NULL, @created_at, @updated_at)`
 	if _, err := q.db.Exec(ctx, insert, pgx.NamedArgs{
 		"job_id":        j.JobID,
@@ -169,10 +169,10 @@ func (q *Queue) Claim(ctx context.Context, workerID string, now time.Time) (job.
 	nowUTC := now.UTC()
 	stale := nowUTC.Add(-q.lease)
 
-	const claim = `UPDATE job_queue
+	claim := `UPDATE ` + q.table("job_queue") + `
 		SET status = 'running', worker_name = $1, claimed_at = $2, updated_at = $2
 		WHERE job_id = (
-			SELECT job_id FROM job_queue
+			SELECT job_id FROM ` + q.table("job_queue") + `
 			WHERE (status = 'pending' AND scheduled_for <= $2)
 			   OR (status = 'running' AND claimed_at < $3)
 			ORDER BY priority DESC, created_at, job_id
@@ -193,7 +193,7 @@ func (q *Queue) Claim(ctx context.Context, workerID string, now time.Time) (job.
 
 // Complete marks the job done. A missing id yields sdk.ErrNotFound.
 func (q *Queue) Complete(ctx context.Context, jobID string, now time.Time) error {
-	const q1 = `UPDATE job_queue SET status = 'completed', completed_at = @now, updated_at = @now WHERE job_id = @job_id`
+	q1 := `UPDATE ` + q.table("job_queue") + ` SET status = 'completed', completed_at = @now, updated_at = @now WHERE job_id = @job_id`
 	return q.execAffecting(ctx, q1, pgx.NamedArgs{"now": now.UTC(), "job_id": jobID})
 }
 
@@ -202,7 +202,7 @@ func (q *Queue) Complete(ctx context.Context, jobID string, now time.Time) error
 // or dead-letters it once retry_count + 1 reaches maxAttempts. reason is recorded
 // as the failure cause. A missing id yields sdk.ErrNotFound.
 func (q *Queue) Fail(ctx context.Context, jobID string, now time.Time, reason string, maxAttempts int) error {
-	const fail = `UPDATE job_queue
+	fail := `UPDATE ` + q.table("job_queue") + `
 		SET retry_count = retry_count + 1,
 		    failure_reason = @reason,
 		    updated_at = @now,
@@ -215,7 +215,7 @@ func (q *Queue) Fail(ctx context.Context, jobID string, now time.Time, reason st
 
 // Get returns the job with the given id, or sdk.ErrNotFound.
 func (q *Queue) Get(ctx context.Context, id string) (job.Job, error) {
-	const get = `SELECT ` + jobRowColumns + ` FROM job_queue WHERE job_id = @job_id`
+	get := `SELECT ` + jobRowColumns + ` FROM ` + q.table("job_queue") + ` WHERE job_id = @job_id`
 	row, err := pgxdb.QueryOne[jobRow](ctx, q.db, get, pgx.NamedArgs{"job_id": id})
 	if err != nil {
 		return job.Job{}, err
@@ -229,7 +229,7 @@ func (q *Queue) Get(ctx context.Context, id string) (job.Job, error) {
 func (q *Queue) List(ctx context.Context, f job.ListFilter, req crud.ListRequest) (crud.Page[job.Job], error) {
 	where, args := jobFilter(f)
 	lq := pgxdb.ListQuery[jobRow]{
-		BaseSQL:      `SELECT ` + jobRowColumns + ` FROM job_queue` + where,
+		BaseSQL:      `SELECT ` + jobRowColumns + ` FROM ` + q.table("job_queue") + where,
 		Args:         args,
 		OrderFields:  job.OrderFields,
 		DefaultOrder: job.DefaultOrder,

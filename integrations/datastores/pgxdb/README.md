@@ -24,7 +24,10 @@ consume this package's `*DB`.
 | `RedactDSN(dsn) string` | masks a URL-form DSN's userinfo password for safe logging; unparseable input returns the literal `"REDACTED"` |
 | `StatusCheck(ctx, db)` | 1s-deadline ping |
 | `ProbeTable(ctx, q, table) error` | boot-time existence probe for a store's table (`to_regclass`, name bound as a parameter, bare or schema-qualified): absent → wraps `ErrNotFound` naming the relation; a query failure maps through `MapError` and is never misreported as missing. Run it in a store constructor so a host aimed at the wrong database fails before serving |
-| `RunMigrations(ctx, db, fs, dir)` | host-driven migration runner for one database directory; one transaction, filename order, checksum guard, forward-only. One merged stream per database: call it once, with globally unique filenames that are never renumbered — `dir` is an `fs.FS` subpath, never a ledger namespace (all rows share the `"default"` source) |
+| `RunMigrations(ctx, db, fs, dir, opts…)` | host-driven migration runner for one directory; one transaction, filename order, checksum guard, forward-only. One merged stream per schema: call it once per schema, with filenames unique within the stream that are never renumbered — `dir` is an `fs.FS` subpath, never a ledger namespace (all rows in a stream share the `"default"` source) |
+| `MigrateOption` / `WithSchema(s)` | the only `RunMigrations` option: run this stream inside `s` — create the schema if absent, `SET LOCAL search_path` for the transaction, and keep the stream's `schema_migrations` ledger in `s`. No option = today's unqualified stream, byte-for-byte |
+| `Schema` / `NewSchema(name) (Schema, error)` | validated Postgres schema name; the zero value means "no schema" and renders bare names. Rejection wraps `ErrInvalidInput` (empty, >63 bytes, non-identifier, reserved `pg_` prefix, `information_schema`); `public` is valid |
+| `(Schema).Table(t)` / `IsZero()` / `String()` | `"<schema>".t` for a set schema, bare `t` for the zero value; the one qualifier used by the runner's ledger statements and by every pgx store's `WithSchema` |
 | `NewLimiter(db, opts…) *Limiter` / `WithLimiterKeyPrefix` | a durable `sdk/capabilities/ratelimiter.Limiter` over the caller-owned `*DB` — one atomic statement per `Allow` against the host-owned `ratelimit_windows` table (see below) |
 | `(*Limiter).StatusCheck(ctx) error` | boot probe for that host-owned table; call it before serving, because a missing table makes the sdk middleware fail open and silent |
 | `List[T]` / `ListQuery[T]` | the shared paginated-SELECT helper implementing the `sdk/foundation/crud` list standards (see below) |
@@ -100,6 +103,179 @@ never auto-retries statements.** A method verb does not encode idempotency
 to any `Exec`/`Query`/`QueryRow`. `Config.Retry` is boot connectivity only.
 (database/sql-style bad-conn retry inside the pool is pgx's own, bounded and
 independent of this policy.)
+
+## Schema-scoped migrations — `WithSchema`
+
+`RunMigrations(ctx, db, fs, dir, pgxdb.WithSchema(s))` applies a stream inside a
+host-chosen schema. Build the schema once at the host so a malformed name fails
+before any migration or store is constructed:
+
+```go
+s, err := pgxdb.NewSchema(os.Getenv("DB_SCHEMA")) // "auth"
+if err != nil { return err }
+```
+
+**Quoting preserves case.** `NewSchema("Auth")` and `NewSchema("auth")` are two
+different schemas — every rendering is `"Auth".users` / `"auth".users`.
+
+### One stream per schema
+
+A stream is a directory plus the `schema_migrations` ledger that records it.
+Without `WithSchema` that ledger is the default schema's; with `WithSchema(s)`
+it is `"<s>".schema_migrations`. The ledgers are disjoint, so filename
+uniqueness is per (schema, source) and **cross-schema ordering is not expressed
+by the ledgers**. A host that wants the feature tables in `auth` and its own
+tables in the default schema exports two directories and makes two calls:
+
+```
+migrations/
+  auth/            # every feature's exported stream
+    0001_….sql
+  0001_….sql       # the host's own tables
+```
+
+```go
+if err := pgxdb.RunMigrations(ctx, db, os.DirFS("."), "migrations/auth", pgxdb.WithSchema(s)); err != nil {
+    return err
+}
+if err := pgxdb.RunMigrations(ctx, db, os.DirFS("."), "migrations"); err != nil {
+    return err
+}
+```
+
+**One call is one transaction; two streams are two transactions.** There is no
+cross-schema atomicity: if the first call commits and the second fails, the
+database is partially upgraded and nothing rolls the committed stream back. So:
+
+- fix the call order and keep it deterministic — it is the host's, not the
+  ledgers';
+- on failure, correct the failing stream and rerun. Every committed stream is
+  idempotent by its own ledger, so rerunning replays nothing;
+- schema-qualify cross-schema dependencies (foreign keys, views, functions)
+  explicitly and apply them after the stream they depend on. Boot probes and a
+  store's `StatusCheck` detect an incomplete boot; they cannot roll one back.
+
+Per-repository *different* schemas inside one feature have no migration story
+here: one stream, one schema.
+
+Inside the transaction the runner sets `search_path` to the schema alone —
+**no `public` fallback**, because with `public` on the path an
+`ALTER TABLE users` whose `"auth".users` is missing would silently alter the
+host's `public.users`. `pg_catalog` stays implicitly searched, so
+`gen_random_uuid()`, `hashtext`/`hashtextextended`, and `pg_advisory_xact_lock`
+resolve; **migrations calling extension functions installed in `public` must
+qualify them** (`public.uuid_generate_v4()`).
+
+The four ledger statements are explicitly qualified through `Schema.Table`,
+never left to `search_path`.
+
+### If you run the exported stream with your own runner
+
+`ExportMigrations` is unchanged and the exported SQL is unqualified. Apply it
+either inside a transaction that has run `SET LOCAL search_path TO "<schema>"`,
+or qualify every DDL statement yourself. A pool-wide `search_path` pin in the
+DSN is the thing this option replaces: it is global, hidden, and it relocates
+the host's own unqualified statements too.
+
+**Do NOT include the limiter DDL in a schema-scoped stream.** The
+`ratelimit_windows` reference DDL below is host-schema SQL and the limiter's own
+statements are unqualified; merging it into a schema-scoped stream relocates the
+table away from the limiter, which then fails at `(*Limiter).StatusCheck`.
+
+### Required grants
+
+| situation | grant |
+|---|---|
+| the schema does not exist yet and the runner should create it | `CREATE ON DATABASE` for the migrating role |
+| the schema is pre-created by a DBA | `USAGE, CREATE ON SCHEMA "<schema>"` for the migrating role |
+
+The runner probes `pg_namespace` first and skips `CREATE SCHEMA` when the
+schema already exists, so DBA pre-creation is a real workaround for a role
+without `CREATE ON DATABASE`. Each failure names the missing grant and wraps
+`ErrForbidden`: schema absent and uncreatable (`insufficient_privilege`, 42501),
+missing `USAGE`, missing schema `CREATE`.
+
+### One-time preflight: relocating an existing ledger
+
+If the database was previously migrated under a DSN-level
+`search_path=auth,public` pin, the tables are in `auth` but the ledger rows are
+probably in `public.schema_migrations` (the probe searched the whole path; the
+unqualified `CREATE TABLE`/`INSERT` resolved to the relation it found). Adopting
+`WithSchema` then finds an empty `"auth".schema_migrations` and re-runs the whole
+stream. That re-run is safe — the shipped feature files are `IF NOT EXISTS`-safe
+— but it is **not free**: authentication `0014_user_status.sql` performs an
+`ALTER COLUMN … TYPE TEXT COLLATE "C"` (full table rewrite under an exclusive
+lock) and `0015_challenge_subject_keys.sql` repeats an `UPDATE` backfill.
+
+The recommended path is a one-time ledger copy, run in one explicit transaction
+**before** the first schema-scoped `RunMigrations` call. Verify the target schema
+and the already-migrated tables exist, then:
+
+```sql
+BEGIN;
+CREATE TABLE IF NOT EXISTS "auth".schema_migrations (
+    source TEXT NOT NULL,
+    version TEXT NOT NULL,
+    checksum TEXT NOT NULL,
+    raw_sql TEXT,
+    applied_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (source, version)
+);
+INSERT INTO "auth".schema_migrations
+    (source, version, checksum, raw_sql, applied_at)
+SELECT source, version, checksum, raw_sql, applied_at
+FROM public.schema_migrations
+WHERE source = 'default' AND version IN (<feature files>)
+ON CONFLICT (source, version) DO NOTHING;
+
+-- Assert every manifest file landed exactly once with a matching checksum.
+DO $$
+DECLARE
+    manifest CONSTANT TEXT[] := ARRAY[<feature files>];
+    copied INT;
+    drift INT;
+BEGIN
+    SELECT count(*) INTO copied
+    FROM "auth".schema_migrations
+    WHERE source = 'default' AND version = ANY (manifest);
+    IF copied <> array_length(manifest, 1) THEN
+        RAISE EXCEPTION 'ledger relocation: copied % of % manifest rows',
+            copied, array_length(manifest, 1);
+    END IF;
+
+    SELECT count(*) INTO drift FROM (
+        SELECT source, version, checksum FROM public.schema_migrations
+          WHERE source = 'default' AND version = ANY (manifest)
+        EXCEPT
+        SELECT source, version, checksum FROM "auth".schema_migrations
+          WHERE source = 'default' AND version = ANY (manifest)
+    ) AS d;
+    IF drift <> 0 THEN
+        RAISE EXCEPTION 'ledger relocation: % manifest rows missing or checksum-mismatched', drift;
+    END IF;
+END $$;
+COMMIT;
+```
+
+Notes that matter:
+
+- the column list is explicit — never `SELECT *`;
+- `ON CONFLICT (source, version) DO NOTHING` makes the copy resumable;
+- `<feature files>` is the exact manifest of the files already applied for that
+  schema (`'0001_….sql', '0002_….sql', …`), not every row in `public`;
+- the assertion aborts the transaction on a missing, duplicated, or
+  checksum-mismatched row, so a partial copy never commits;
+- do **not** invoke the runner just to create the target ledger — that
+  invocation immediately starts applying files;
+- only after this transaction commits, call the schema-scoped `RunMigrations`.
+  It must report every copied file already applied.
+
+### Statement cache sizing
+
+pgx's default statement cache is 512 entries per connection, and rendered SQL
+differs per schema. A host running three or more store sets (schema-per-tenant)
+on one pool should size `statement_cache_capacity` in the DSN or use one pool
+per schema.
 
 ## Durable rate limiting — `Limiter`
 
@@ -294,7 +470,11 @@ config validation, migration checksum/error paths) and run with a plain
 `go test ./...` — no database required.
 
 The live tests are gated on `POSTGRES_TEST_DSN`: `Open`/ping + a migrate-apply
-round-trip, the `List` behavior suite, and the limiter legs (the shared
+round-trip, the schema-scoped migration legs (tables and ledger inside the
+schema with `public` untouched, schema-then-default ledger isolation on one
+pool, the non-atomic per-schema transaction boundary, the ledger-relocation
+preflight and the no-copy fallback, and the four-case privilege matrix), the
+`List` behavior suite, and the limiter legs (the shared
 `ratelimitertest.Run` conformance suite, the exact-K concurrency proof — which
 also bounds the returned `RetryAfter`/`Remaining`, the only place a stale
 server clock is reachable — server time, burst, prefix isolation, context
@@ -310,6 +490,9 @@ nothing is the false-green failure mode we guard against.
 **`POSTGRES_TEST_DSN` must point at a throwaway/dedicated database.** The limiter
 legs `CREATE TABLE ratelimit_windows`, create and drop a scratch schema, and run
 an unqualified `DELETE FROM ratelimit_windows` to prove the pruning statement.
+The schema legs create and `DROP SCHEMA … CASCADE` their own disposable schemas
+and `CREATE ROLE`/`DROP ROLE` disposable login roles, and delete only the
+`public.schema_migrations` rows they wrote.
 
 Spin a local database and run the live leg with `-race` — Go-level race hygiene
 for the test's own 40 goroutines; the atomicity proof is the exact-K assertion

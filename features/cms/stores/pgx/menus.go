@@ -13,15 +13,20 @@ import (
 
 // MenuStore implements menus.MenuRepository over a PostgreSQL database.
 type MenuStore struct {
-	db *pgxdb.DB
+	db     *pgxdb.DB
+	schema pgxdb.Schema
 }
 
 var _ menus.MenuRepository = (*MenuStore)(nil)
 
 // NewMenuStore returns a MenuStore backed by db.
-func NewMenuStore(db *pgxdb.DB) *MenuStore {
-	return &MenuStore{db: db}
+func NewMenuStore(db *pgxdb.DB, opts ...Option) *MenuStore {
+	return &MenuStore{db: db, schema: newConfig(opts).schema}
 }
+
+// table renders name under the store's schema — the one chokepoint every
+// statement in this file goes through.
+func (s *MenuStore) table(name string) string { return s.schema.Table(name) }
 
 const menuColumns = "id, name, slug, created_at, updated_at"
 const itemColumns = "id, menu_id, label, url, parent_id, position, created_at, updated_at"
@@ -81,7 +86,7 @@ func (s *MenuStore) CreateMenu(ctx context.Context, m menus.Menu) (menus.Menu, e
 	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if m.ID == "" {
-		const q = `INSERT INTO menus (name, slug, created_at, updated_at)
+		q := `INSERT INTO ` + s.table(menusTable) + ` (name, slug, created_at, updated_at)
 			VALUES (@name, @slug, @created_at, @updated_at)
 			RETURNING id`
 		if err := s.db.QueryRow(ctx, q, args).Scan(&m.ID); err != nil {
@@ -89,7 +94,7 @@ func (s *MenuStore) CreateMenu(ctx context.Context, m menus.Menu) (menus.Menu, e
 		}
 		return m, nil
 	}
-	const q = `INSERT INTO menus (` + menuColumns + `)
+	q := `INSERT INTO ` + s.table(menusTable) + ` (` + menuColumns + `)
 		VALUES (@id, @name, @slug, @created_at, @updated_at)`
 	args["id"] = m.ID
 	if _, err := s.db.Exec(ctx, q, args); err != nil {
@@ -100,7 +105,7 @@ func (s *MenuStore) CreateMenu(ctx context.Context, m menus.Menu) (menus.Menu, e
 
 // GetMenu returns the menu with the given id.
 func (s *MenuStore) GetMenu(ctx context.Context, id string) (menus.Menu, error) {
-	const q = `SELECT ` + menuColumns + ` FROM menus WHERE id = @id`
+	q := `SELECT ` + menuColumns + ` FROM ` + s.table(menusTable) + ` WHERE id = @id`
 	row, err := pgxdb.QueryOne[menuRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
 	if err != nil {
 		return menus.Menu{}, err
@@ -110,7 +115,7 @@ func (s *MenuStore) GetMenu(ctx context.Context, id string) (menus.Menu, error) 
 
 // GetMenuBySlug returns the menu with the given slug.
 func (s *MenuStore) GetMenuBySlug(ctx context.Context, slug string) (menus.Menu, error) {
-	const q = `SELECT ` + menuColumns + ` FROM menus WHERE slug = @slug`
+	q := `SELECT ` + menuColumns + ` FROM ` + s.table(menusTable) + ` WHERE slug = @slug`
 	row, err := pgxdb.QueryOne[menuRow](ctx, s.db, q, pgx.NamedArgs{"slug": slug})
 	if err != nil {
 		return menus.Menu{}, err
@@ -120,7 +125,7 @@ func (s *MenuStore) GetMenuBySlug(ctx context.Context, slug string) (menus.Menu,
 
 // ListMenus returns all menus ordered by name.
 func (s *MenuStore) ListMenus(ctx context.Context) ([]menus.Menu, error) {
-	rows, err := s.db.Query(ctx, `SELECT `+menuColumns+` FROM menus ORDER BY name`)
+	rows, err := s.db.Query(ctx, `SELECT `+menuColumns+` FROM `+s.table(menusTable)+` ORDER BY name`)
 	if err != nil {
 		return nil, pgxdb.MapError(err)
 	}
@@ -137,7 +142,7 @@ func (s *MenuStore) ListMenus(ctx context.Context) ([]menus.Menu, error) {
 
 // ItemsForMenu returns a menu's items ordered by (parent_id, position).
 func (s *MenuStore) ItemsForMenu(ctx context.Context, menuID string) ([]menus.MenuItem, error) {
-	const q = `SELECT ` + itemColumns + ` FROM menu_items WHERE menu_id = @menu_id ORDER BY parent_id, position`
+	q := `SELECT ` + itemColumns + ` FROM ` + s.table(menuItemsTable) + ` WHERE menu_id = @menu_id ORDER BY parent_id, position`
 	rows, err := s.db.Query(ctx, q, pgx.NamedArgs{"menu_id": menuID})
 	if err != nil {
 		return nil, pgxdb.MapError(err)
@@ -167,7 +172,7 @@ func (s *MenuStore) AddItem(ctx context.Context, it menus.MenuItem) (menus.MenuI
 	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if it.ID == "" {
-		const q = `INSERT INTO menu_items (menu_id, label, url, parent_id, position, created_at, updated_at)
+		q := `INSERT INTO ` + s.table(menuItemsTable) + ` (menu_id, label, url, parent_id, position, created_at, updated_at)
 			VALUES (@menu_id, @label, @url, @parent_id, @position, @created_at, @updated_at)
 			RETURNING id`
 		if err := s.db.QueryRow(ctx, q, args).Scan(&it.ID); err != nil {
@@ -175,7 +180,7 @@ func (s *MenuStore) AddItem(ctx context.Context, it menus.MenuItem) (menus.MenuI
 		}
 		return it, nil
 	}
-	const q = `INSERT INTO menu_items (` + itemColumns + `)
+	q := `INSERT INTO ` + s.table(menuItemsTable) + ` (` + itemColumns + `)
 		VALUES (@id, @menu_id, @label, @url, @parent_id, @position, @created_at, @updated_at)`
 	args["id"] = it.ID
 	if _, err := s.db.Exec(ctx, q, args); err != nil {
@@ -186,7 +191,7 @@ func (s *MenuStore) AddItem(ctx context.Context, it menus.MenuItem) (menus.MenuI
 
 // GetItem returns the item with the given id.
 func (s *MenuStore) GetItem(ctx context.Context, id string) (menus.MenuItem, error) {
-	const q = `SELECT ` + itemColumns + ` FROM menu_items WHERE id = @id`
+	q := `SELECT ` + itemColumns + ` FROM ` + s.table(menuItemsTable) + ` WHERE id = @id`
 	row, err := pgxdb.QueryOne[menuItemRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
 	if err != nil {
 		return menus.MenuItem{}, err
@@ -196,7 +201,7 @@ func (s *MenuStore) GetItem(ctx context.Context, id string) (menus.MenuItem, err
 
 // UpdateItem persists changes to an item.
 func (s *MenuStore) UpdateItem(ctx context.Context, id string, it menus.MenuItem) (menus.MenuItem, error) {
-	const q = `UPDATE menu_items SET label = @label, url = @url, parent_id = @parent_id, position = @position, updated_at = @updated_at WHERE id = @id`
+	q := `UPDATE ` + s.table(menuItemsTable) + ` SET label = @label, url = @url, parent_id = @parent_id, position = @position, updated_at = @updated_at WHERE id = @id`
 	n, err := pgxdb.ExecAffecting(ctx, s.db, q, pgx.NamedArgs{
 		"label":      it.Label,
 		"url":        it.URL,
@@ -216,6 +221,6 @@ func (s *MenuStore) UpdateItem(ctx context.Context, id string, it menus.MenuItem
 
 // DeleteItem removes an item by id.
 func (s *MenuStore) DeleteItem(ctx context.Context, id string) error {
-	_, err := s.db.Exec(ctx, `DELETE FROM menu_items WHERE id = @id`, pgx.NamedArgs{"id": id})
+	_, err := s.db.Exec(ctx, `DELETE FROM `+s.table(menuItemsTable)+` WHERE id = @id`, pgx.NamedArgs{"id": id})
 	return err
 }

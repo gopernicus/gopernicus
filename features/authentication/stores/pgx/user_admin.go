@@ -25,41 +25,45 @@ import (
 // loser sees the winner's committed state.
 type UserAdminStore struct {
 	db *pgxdb.DB
+	qualified
 }
 
 var _ user.AdminRepository = (*UserAdminStore)(nil)
 
 // NewUserAdminStore returns a UserAdminStore backed by db.
-func NewUserAdminStore(db *pgxdb.DB) *UserAdminStore {
-	return &UserAdminStore{db: db}
+func NewUserAdminStore(db *pgxdb.DB, opts ...Option) *UserAdminStore {
+	return &UserAdminStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
-// userSummarySelect projects the directory row. The active primary email is
-// resolved by a LEFT JOIN in the SAME query — one statement per page, never one
-// identifier read per user. The join predicate matches the partial unique index
-// idx_user_identifiers_primary (active, primary, per (user, kind)), so at most one
-// identifier row can match and a user with a retired identifier history still
-// appears exactly once. A user with no email identifier at all keeps its row with
-// NULL email, rather than being dropped by an inner join.
+// userSummarySelect renders the directory-row projection under s's schema. The
+// active primary email is resolved by a LEFT JOIN in the SAME query — one
+// statement per page, never one identifier read per user. The join predicate
+// matches the partial unique index idx_user_identifiers_primary (active,
+// primary, per (user, kind)), so at most one identifier row can match and a user
+// with a retired identifier history still appears exactly once. A user with no
+// email identifier at all keeps its row with NULL email, rather than being
+// dropped by an inner join.
 //
 // The join is wrapped in a derived table so the OUTER query sees flat, unambiguous
 // `id` and `created_at` columns. Both tables carry a created_at, so the keyset
 // predicate and the ORDER BY would otherwise be ambiguous references — and the
 // keyset predicate lives in a WHERE clause, where an output-column alias would not
 // resolve.
-const userSummarySelect = `SELECT id, display_name, status, status_changed_at, created_at, updated_at, primary_email, primary_email_verified_at
+func userSummarySelect(s qualified) string {
+	return `SELECT id, display_name, status, status_changed_at, created_at, updated_at, primary_email, primary_email_verified_at
 	FROM (
 		SELECT u.id AS id, u.display_name AS display_name, u.status AS status,
 			u.status_changed_at AS status_changed_at, u.created_at AS created_at,
 			u.updated_at AS updated_at,
 			i.normalized_value AS primary_email, i.verified_at AS primary_email_verified_at
-		FROM users u
-		LEFT JOIN user_identifiers i
+		FROM ` + s.table(usersTable) + ` u
+		LEFT JOIN ` + s.table(identifiersTable) + ` i
 			ON i.user_id = u.id
 			AND i.kind = 'email'
 			AND i.is_primary = TRUE
 			AND i.replaced_at IS NULL
 	) AS directory`
+}
 
 // userSummaryRow is the store-local, db-tagged projection of one directory row.
 // The joined columns are nullable: a user may hold no active primary email, and
@@ -95,10 +99,10 @@ func (r userSummaryRow) toDomain() user.Summary {
 // tiebreak is contractual — see the 0014 collation note).
 func (s *UserAdminStore) List(ctx context.Context, req crud.ListRequest) (crud.Page[user.Summary], error) {
 	q := pgxdb.ListQuery[userSummaryRow]{
-		BaseSQL:      userSummarySelect,
+		BaseSQL:      userSummarySelect(s.qualified),
 		OrderFields:  user.OrderFields,
 		DefaultOrder: user.DefaultOrder,
-		PK: "id",
+		PK:           "id",
 		// .UTC() is load-bearing for CROSS-DIALECT cursor parity: pgx returns a
 		// timestamptz in the session's time zone, so an un-normalized value encodes
 		// as "…T05:10:00-07:00" while the turso and reference stores encode the same
@@ -118,7 +122,7 @@ func (s *UserAdminStore) List(ctx context.Context, req crud.ListRequest) (crud.P
 
 // GetSummary returns one user's directory projection, or sdk.ErrNotFound.
 func (s *UserAdminStore) GetSummary(ctx context.Context, id string) (user.Summary, error) {
-	q := userSummarySelect + ` WHERE id = @id`
+	q := userSummarySelect(s.qualified) + ` WHERE id = @id`
 	row, err := pgxdb.QueryOne[userSummaryRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
 	if err != nil {
 		return user.Summary{}, err
@@ -152,7 +156,7 @@ func (s *UserAdminStore) SetStatus(ctx context.Context, id string, status user.S
 			current   string
 			changedAt *time.Time
 		)
-		const lockQ = `SELECT status, status_changed_at FROM users WHERE id = @id FOR UPDATE`
+		lockQ := `SELECT status, status_changed_at FROM ` + s.table(usersTable) + ` WHERE id = @id FOR UPDATE`
 		if err := tx.QueryRow(ctx, lockQ, pgx.NamedArgs{"id": id}).Scan(&current, &changedAt); err != nil {
 			return pgxdb.MapError(err)
 		}
@@ -162,7 +166,7 @@ func (s *UserAdminStore) SetStatus(ctx context.Context, id string, status user.S
 			return nil
 		}
 
-		const updateQ = `UPDATE users
+		updateQ := `UPDATE ` + s.table(usersTable) + `
 			SET status = @status, status_changed_at = @now, updated_at = @now,
 				auth_revision = auth_revision + 1
 			WHERE id = @id`
@@ -170,13 +174,13 @@ func (s *UserAdminStore) SetStatus(ctx context.Context, id string, status user.S
 			return pgxdb.MapError(err)
 		}
 
-		const grantsQ = `DELETE FROM authentication_grants WHERE user_id = @id
-			OR session_id IN (SELECT id FROM sessions WHERE user_id = @id)`
+		grantsQ := `DELETE FROM ` + s.table(authGrantsTable) + ` WHERE user_id = @id
+			OR session_id IN (SELECT id FROM ` + s.table(sessionsTable) + ` WHERE user_id = @id)`
 		if _, err := tx.Exec(ctx, grantsQ, pgx.NamedArgs{"id": id}); err != nil {
 			return pgxdb.MapError(err)
 		}
 
-		const sessionsQ = `DELETE FROM sessions WHERE user_id = @id`
+		sessionsQ := `DELETE FROM ` + s.table(sessionsTable) + ` WHERE user_id = @id`
 		tag, err := tx.Exec(ctx, sessionsQ, pgx.NamedArgs{"id": id})
 		if err != nil {
 			return pgxdb.MapError(err)
@@ -207,13 +211,14 @@ func (s *UserAdminStore) SetStatus(ctx context.Context, id string, status user.S
 // deletes it, or the transition commits and the mint sees deactivated and refuses.
 type ActiveSessionStore struct {
 	db *pgxdb.DB
+	qualified
 }
 
 var _ session.ActiveUserRepository = (*ActiveSessionStore)(nil)
 
 // NewActiveSessionStore returns an ActiveSessionStore backed by db.
-func NewActiveSessionStore(db *pgxdb.DB) *ActiveSessionStore {
-	return &ActiveSessionStore{db: db}
+func NewActiveSessionStore(db *pgxdb.DB, opts ...Option) *ActiveSessionStore {
+	return &ActiveSessionStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
 // CreateForActiveUser inserts sess only while its owning user is active.
@@ -233,7 +238,7 @@ func (s *ActiveSessionStore) CreateForActiveUser(ctx context.Context, sess sessi
 		// transaction commits. That is exactly the fence — the transition can only
 		// run before this insert (and be seen here) or after it (and revoke it).
 		var status string
-		const lockQ = `SELECT status FROM users WHERE id = @user_id FOR SHARE`
+		lockQ := `SELECT status FROM ` + s.table(usersTable) + ` WHERE id = @user_id FOR SHARE`
 		if err := tx.QueryRow(ctx, lockQ, pgx.NamedArgs{"user_id": sess.UserID}).Scan(&status); err != nil {
 			return pgxdb.MapError(err)
 		}
@@ -241,7 +246,7 @@ func (s *ActiveSessionStore) CreateForActiveUser(ctx context.Context, sess sessi
 			return session.ErrUserNotActive
 		}
 
-		const insertQ = `INSERT INTO sessions (` + sessionColumns + `)
+		insertQ := `INSERT INTO ` + s.table(sessionsTable) + ` (` + sessionColumns + `)
 			VALUES (@id, @user_id, @refresh_token_hash, @previous_refresh_token_hash, @previous_used, @rotation_count, @authenticated_at, @authentication_methods, @assurance_level, @created_at, @expires_at)`
 		if _, err := tx.Exec(ctx, insertQ, pgx.NamedArgs{
 			"id":                          sess.ID,

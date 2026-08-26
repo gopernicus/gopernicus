@@ -11,8 +11,14 @@ import (
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 )
 
-// outboxColumns is the event_outbox projection, matching outboxRow's db tags.
-const outboxColumns = "event_id, event_type, occurred_at, correlation_id, payload, aggregate_type, aggregate_id, tenant_id, created_at, published_at"
+const (
+	// outboxTable is the feature's one table. Every statement renders it through
+	// Store.table so a schema-scoped store qualifies it.
+	outboxTable = "event_outbox"
+
+	// outboxColumns is the event_outbox projection, matching outboxRow's db tags.
+	outboxColumns = "event_id, event_type, occurred_at, correlation_id, payload, aggregate_type, aggregate_id, tenant_id, created_at, published_at"
+)
 
 // Compile-time seam: Store fills the exact outbox.EntryRepository port.
 var _ outbox.EntryRepository = (*Store)(nil)
@@ -23,8 +29,13 @@ var _ outbox.EntryRepository = (*Store)(nil)
 // connector). Construct it via New, which runs the boot-time table probe
 // (design §5).
 type Store struct {
-	db *pgxdb.DB
+	db     *pgxdb.DB
+	schema pgxdb.Schema
 }
+
+// table renders name under the store's schema — the one chokepoint every
+// statement in this package goes through.
+func (s *Store) table(name string) string { return s.schema.Table(name) }
 
 // outboxRow is the store-local, db-tagged projection of an event_outbox row that
 // pgx.RowToStructByName scans into; toDomain maps it to the persistence-free
@@ -70,7 +81,7 @@ func (s *Store) Append(ctx context.Context, recs ...sdkevents.Record) error {
 		return nil
 	}
 	return s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
-		return insertRecords(ctx, tx, recs...)
+		return insertRecords(ctx, tx, s.table(outboxTable), recs...)
 	})
 }
 
@@ -85,7 +96,7 @@ func (s *Store) AppendTx(ctx context.Context, tx *pgxdb.Tx, recs ...sdkevents.Re
 	if len(recs) == 0 {
 		return nil
 	}
-	return insertRecords(ctx, tx, recs...)
+	return insertRecords(ctx, tx, s.table(outboxTable), recs...)
 }
 
 // ListUnpublished returns up to limit unpublished entries (published_at NULL)
@@ -93,7 +104,7 @@ func (s *Store) AppendTx(ctx context.Context, tx *pgxdb.Tx, recs ...sdkevents.Re
 // order — with event_id breaking ties for determinism. A non-positive limit
 // returns all unpublished entries.
 func (s *Store) ListUnpublished(ctx context.Context, limit int) ([]outbox.Entry, error) {
-	const base = `SELECT ` + outboxColumns + ` FROM event_outbox
+	base := `SELECT ` + outboxColumns + ` FROM ` + s.table(outboxTable) + `
 		WHERE published_at IS NULL
 		ORDER BY created_at, event_id `
 
@@ -127,7 +138,7 @@ func (s *Store) ListUnpublished(ctx context.Context, limit int) ([]outbox.Entry,
 // already-published entry a zero-row no-op, and an unknown eventID matches
 // nothing — both return nil, so the poller can retry a mark without a hard error.
 func (s *Store) MarkPublished(ctx context.Context, eventID string) error {
-	const q = `UPDATE event_outbox SET published_at = @published_at WHERE event_id = @event_id AND published_at IS NULL`
+	q := `UPDATE ` + s.table(outboxTable) + ` SET published_at = @published_at WHERE event_id = @event_id AND published_at IS NULL`
 	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{"published_at": time.Now().UTC(), "event_id": eventID})
 	return err
 }
@@ -136,7 +147,7 @@ func (s *Store) MarkPublished(ctx context.Context, eventID string) error {
 // the cutoff and returns the number removed. Unpublished entries are never purged
 // regardless of age.
 func (s *Store) PurgePublished(ctx context.Context, before time.Time) (int, error) {
-	const q = `DELETE FROM event_outbox WHERE published_at IS NOT NULL AND created_at < @before`
+	q := `DELETE FROM ` + s.table(outboxTable) + ` WHERE published_at IS NOT NULL AND created_at < @before`
 	n, err := pgxdb.ExecAffecting(ctx, s.db, q, pgx.NamedArgs{"before": before.UTC()})
 	if err != nil {
 		return 0, err
@@ -145,13 +156,14 @@ func (s *Store) PurgePublished(ctx context.Context, before time.Time) (int, erro
 }
 
 // insertRecords writes the batch as unpublished rows (published_at NULL) in one
-// UNNEST array-param INSERT, stamping every row's created_at with the current
-// time. It runs against a *DB connection or a *Tx (both satisfy Querier), so
+// UNNEST array-param INSERT into table (already rendered through Store.table),
+// stamping every row's created_at with the current time. It runs against a *DB
+// connection or a *Tx (both satisfy Querier), so
 // Append and AppendTx share one statement. The rows all carry the same created_at
 // (event_id is the ListUnpublished tie-break), so array order is not load-bearing
 // for the oldest-first ordering guarantee. A UNIQUE constraint violation on
 // event_id is mapped to sdk.ErrAlreadyExists by the connector's Exec.
-func insertRecords(ctx context.Context, q pgxdb.Querier, recs ...sdkevents.Record) error {
+func insertRecords(ctx context.Context, q pgxdb.Querier, table string, recs ...sdkevents.Record) error {
 	n := len(recs)
 	eventIDs := make([]string, n)
 	types := make([]string, n)
@@ -172,7 +184,7 @@ func insertRecords(ctx context.Context, q pgxdb.Querier, recs ...sdkevents.Recor
 		tenants[i] = rc.TenantID
 	}
 
-	const insert = `INSERT INTO event_outbox (` + outboxColumns + `)
+	insert := `INSERT INTO ` + table + ` (` + outboxColumns + `)
 		SELECT event_id, event_type, occurred_at, correlation_id, payload::json, aggregate_type, aggregate_id, tenant_id, @created_at, NULL
 		FROM UNNEST(@event_ids::text[], @types::text[], @occurred::timestamptz[], @correlations::text[], @payloads::text[], @agg_types::text[], @agg_ids::text[], @tenants::text[])
 			AS r(event_id, event_type, occurred_at, correlation_id, payload, aggregate_type, aggregate_id, tenant_id)`

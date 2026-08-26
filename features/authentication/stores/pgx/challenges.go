@@ -22,13 +22,14 @@ import (
 // ConsumeToken is one atomic DELETE ... RETURNING by (purpose, secret_digest).
 type ChallengeStore struct {
 	db *pgxdb.DB
+	qualified
 }
 
 var _ challenge.Repository = (*ChallengeStore)(nil)
 
 // NewChallengeStore returns a ChallengeStore backed by db.
-func NewChallengeStore(db *pgxdb.DB) *ChallengeStore {
-	return &ChallengeStore{db: db}
+func NewChallengeStore(db *pgxdb.DB, opts ...Option) *ChallengeStore {
+	return &ChallengeStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
 // nullText maps an empty string to a SQL NULL (protector_key_id has no pepper for
@@ -78,7 +79,7 @@ func (s *ChallengeStore) Replace(ctx context.Context, c challenge.Challenge) (ch
 	subjectKey := c.ResolvedSubjectKey()
 	err := s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
 		if _, err := tx.Exec(ctx,
-			`DELETE FROM challenges WHERE subject_key = @subject_key AND purpose = @purpose`,
+			`DELETE FROM `+s.table(challengesTable)+` WHERE subject_key = @subject_key AND purpose = @purpose`,
 			pgx.NamedArgs{"subject_key": subjectKey, "purpose": c.Purpose}); err != nil {
 			return err
 		}
@@ -95,7 +96,7 @@ func (s *ChallengeStore) Replace(ctx context.Context, c challenge.Challenge) (ch
 			"version":          c.Version,
 		}
 		if c.ID == "" {
-			const insert = `INSERT INTO challenges
+			insert := `INSERT INTO ` + s.table(challengesTable) + `
 				(subject_key, user_id, purpose, secret_digest, protector_key_id, context, attempt_count, expires_at, created_at, version)
 				VALUES (@subject_key, @user_id, @purpose, @secret_digest, @protector_key_id, @context, @attempt_count, @expires_at, @created_at, @version)
 				RETURNING id`
@@ -105,7 +106,7 @@ func (s *ChallengeStore) Replace(ctx context.Context, c challenge.Challenge) (ch
 			return nil
 		}
 		args["id"] = c.ID
-		const insert = `INSERT INTO challenges
+		insert := `INSERT INTO ` + s.table(challengesTable) + `
 			(id, subject_key, user_id, purpose, secret_digest, protector_key_id, context, attempt_count, expires_at, created_at, version)
 			VALUES (@id, @subject_key, @user_id, @purpose, @secret_digest, @protector_key_id, @context, @attempt_count, @expires_at, @created_at, @version)`
 		if _, err := tx.Exec(ctx, insert, args); err != nil {
@@ -139,7 +140,7 @@ func (s *ChallengeStore) ConsumeCode(ctx context.Context, userID, purpose string
 		)
 		selErr := tx.QueryRow(ctx,
 			`SELECT id, secret_digest, protector_key_id, context, attempt_count, expires_at
-				FROM challenges WHERE subject_key = @subject_key AND purpose = @purpose FOR UPDATE`,
+				FROM `+s.table(challengesTable)+` WHERE subject_key = @subject_key AND purpose = @purpose FOR UPDATE`,
 			pgx.NamedArgs{"subject_key": userID, "purpose": purpose}).
 			Scan(&id, &secretDigest, &protectorKeyID, &contextText, &attemptCount, &expiresAt)
 		if selErr != nil {
@@ -151,7 +152,7 @@ func (s *ChallengeStore) ConsumeCode(ctx context.Context, userID, purpose string
 		}
 
 		if !now.Before(expiresAt) {
-			if _, err := tx.Exec(ctx, `DELETE FROM challenges WHERE id = @id`, pgx.NamedArgs{"id": id}); err != nil {
+			if _, err := tx.Exec(ctx, `DELETE FROM `+s.table(challengesTable)+` WHERE id = @id`, pgx.NamedArgs{"id": id}); err != nil {
 				return err
 			}
 			outcome = challenge.OutcomeExpired
@@ -169,14 +170,14 @@ func (s *ChallengeStore) ConsumeCode(ctx context.Context, userID, purpose string
 		if !matched {
 			newCount := attemptCount + 1
 			if newCount >= maxAttempts {
-				if _, err := tx.Exec(ctx, `DELETE FROM challenges WHERE id = @id`, pgx.NamedArgs{"id": id}); err != nil {
+				if _, err := tx.Exec(ctx, `DELETE FROM `+s.table(challengesTable)+` WHERE id = @id`, pgx.NamedArgs{"id": id}); err != nil {
 					return err
 				}
 				outcome = challenge.OutcomeLockedOut
 				return nil
 			}
 			if _, err := tx.Exec(ctx,
-				`UPDATE challenges SET attempt_count = @count WHERE id = @id`,
+				`UPDATE `+s.table(challengesTable)+` SET attempt_count = @count WHERE id = @id`,
 				pgx.NamedArgs{"count": newCount, "id": id}); err != nil {
 				return err
 			}
@@ -185,7 +186,7 @@ func (s *ChallengeStore) ConsumeCode(ctx context.Context, userID, purpose string
 		}
 
 		// Correct code — the row is consumed regardless of context (anti-probing).
-		if _, err := tx.Exec(ctx, `DELETE FROM challenges WHERE id = @id`, pgx.NamedArgs{"id": id}); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM `+s.table(challengesTable)+` WHERE id = @id`, pgx.NamedArgs{"id": id}); err != nil {
 			return err
 		}
 		consumed = challenge.Consumed{
@@ -225,7 +226,7 @@ func (s *ChallengeStore) ConsumeToken(ctx context.Context, purpose, presentedDig
 		protectorKeyID *string
 		expiresAt      time.Time
 	)
-	const q = `DELETE FROM challenges WHERE purpose = @purpose AND secret_digest = @digest
+	q := `DELETE FROM ` + s.table(challengesTable) + ` WHERE purpose = @purpose AND secret_digest = @digest
 		RETURNING id, subject_key, user_id, purpose, context, protector_key_id, expires_at`
 	err := s.db.QueryRow(ctx, q, pgx.NamedArgs{"purpose": purpose, "digest": presentedDigest}).
 		Scan(&id, &subjectKey, &userID, &gotPurpose, &contextText, &protectorKeyID, &expiresAt)
@@ -253,10 +254,10 @@ func (s *ChallengeStore) ConsumeToken(ctx context.Context, purpose, presentedDig
 // removed (bounded batching; limit <= 0 is unbounded).
 func (s *ChallengeStore) PurgeExpired(ctx context.Context, before time.Time, limit int) (int, error) {
 	args := pgx.NamedArgs{"before": before.UTC()}
-	q := `DELETE FROM challenges WHERE expires_at <= @before`
+	q := `DELETE FROM ` + s.table(challengesTable) + ` WHERE expires_at <= @before`
 	if limit > 0 {
-		q = `DELETE FROM challenges WHERE id IN (
-			SELECT id FROM challenges WHERE expires_at <= @before ORDER BY expires_at LIMIT @limit)`
+		q = `DELETE FROM ` + s.table(challengesTable) + ` WHERE id IN (
+			SELECT id FROM ` + s.table(challengesTable) + ` WHERE expires_at <= @before ORDER BY expires_at LIMIT @limit)`
 		args["limit"] = limit
 	}
 	n, err := pgxdb.ExecAffecting(ctx, s.db, q, args)

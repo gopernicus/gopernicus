@@ -27,20 +27,23 @@ The outbox table belongs to migration source **`events`**, distinct from
 migrations but not this store's would fail at *runtime*, not boot.
 
 **`New(db)` guards against exactly that:** it probes for the `event_outbox` table
-at construction (`SELECT to_regclass('event_outbox')`) and returns
-`errs.ErrNotFound` if the `events` source has not been applied — the failure
+at construction (`pgxdb.ProbeTable`, qualified by the store's schema) and returns
+`sdk.ErrNotFound` if the `events` source has not been applied — the failure
 surfaces at wiring time, before the host serves traffic (design §5 mitigation b).
 Scaffold this store's migrations with `ExportMigrations` and apply them with your
 host's runner pre-boot, alongside every other feature source you wire.
 
 ## Surface
 
-Mirrors the turso store's exported surface (a host switches dialect by one import
-+ one `Open` call):
+Mirrors the turso store's exported surface plus the Postgres-only `WithSchema`
+option — SQLite has no schemas (a host switches dialect by one import + one `Open`
+call):
 
 | member | shape |
 |---|---|
-| `New(db *pgxdb.DB) (*Store, error)` | the outbox store; errors if `event_outbox` is missing (boot-time probe) |
+| `New(db *pgxdb.DB, opts ...Option) (*Store, error)` | the outbox store; errors if `event_outbox` is missing (boot-time probe) |
+| `Option` | `func(*config)` — construction-time store configuration |
+| `WithSchema(s pgxdb.Schema) Option` | places `event_outbox` in `s`; the zero `Schema` is the default (unqualified) |
 | `(*Store).Append(ctx, recs...) error` | non-transactional convenience append (its own tx) |
 | `(*Store).AppendTx(ctx, tx *pgxdb.Tx, recs...) error` | dialect-typed transactional appender — shares the caller's commit |
 | `(*Store).ListUnpublished` / `MarkPublished` / `PurgePublished` | the poller's drain, idempotent mark, and retention purge |
@@ -59,6 +62,38 @@ vocabulary being `*pgxdb.Tx` from the integration both already require (design
 **unguarded** — no `make guard` target covers the per-store appender glue (design
 §5 cost 1); the abstraction revisit trigger is the third emitting feature.
 
+## Schema
+
+By default every statement names `event_outbox` unqualified — byte-for-byte the
+SQL this store has always emitted. A host that keeps the feature tables in a
+dedicated Postgres schema builds the schema value once and passes it to both the
+runner and the store:
+
+```go
+schema, err := pgxdb.NewSchema(os.Getenv("EVENTS_SCHEMA")) // validated here, at the host
+if err != nil { /* fail boot */ }
+
+// Migrate the "events" stream into the schema — its own call, its own ledger.
+err = pgxdb.RunMigrations(ctx, db, migrationsFS, "migrations/events", pgxdb.WithSchema(schema))
+
+store, err := pgx.New(db, pgx.WithSchema(schema))
+```
+
+`WithSchema` never panics: the name is validated by `pgxdb.NewSchema` at the host,
+before any store is constructed. The store and the migration stream must agree —
+constructing for a schema the migrations never reached fails `New`'s boot-time
+probe, naming the qualified table.
+
+Quoting preserves case: `Auth` and `auth` are different schemas. Per-repository
+*different* schemas within one feature are out of scope — this store has one table
+and one schema, and the one-stream-per-schema migration model gives a split no
+story.
+
+**Advisory locks are database-scoped, not schema-scoped.** This store takes none
+today, but the general rule matters when several schemas share one database: two
+hosts using the same lock key text contend across schemas. Schema separation does
+not partition the lock space.
+
 ## Migrations
 
 `migrations/0001_event_outbox.sql` (source `events`) is the canonical schema. The
@@ -68,7 +103,11 @@ migration stream in its own dir.
 
 ## Testing
 
-`go test ./...` is hermetic: the `ExportMigrations` unit test runs, and the live
+`go test ./...` is hermetic: the `ExportMigrations` unit test runs,
+`TestNoBareTableReferences` parses this package's non-test sources and fails on any
+table name that is not rendered through the store's `table` chokepoint (the table
+list is derived from `MigrationsFS`, so a future migration is covered without a
+hand list), `TestWithSchema` pins the option's two rendering states, and the live
 conformance + appender suites **skip loudly** without a DSN (`POSTGRES_TEST_DSN
 not set — postgres conformance NOT verified`). A silent green that tested nothing
 is the false-green failure mode this gating exists to prevent. Unlike the turso
@@ -90,6 +129,16 @@ Each `newRepo` opens a connection, applies the migrations via the connector's
 exercises the boot-time probe. `TestAppendTx` proves the transactional appender: a
 record written via `AppendTx` inside an `InTx` block is visible after commit and
 leaves no row when the surrounding transaction rolls back.
+
+Set `POSTGRES_TEST_SCHEMA` to run the same live suite inside a non-default schema:
+setup drops the schema, migrates into it with `pgxdb.WithSchema`, constructs the
+store with `WithSchema`, and truncates the qualified table. That leg is the
+behavioral proof of the schema seam for every path conformance executes.
+`TestLive_WithSchema_Decoy` proves the routing in both directions against a bare
+`public.event_outbox` decoy: constructed with `WithSchema` before the schema is
+migrated, `New` fails naming the qualified table; after migrating, a write lands in
+the schema and leaves the decoy untouched; and with no option the same write lands
+in the decoy and leaves the schema untouched.
 
 `make check` stays hermetic (the suite skips); `make test-stores` runs this live
 path expecting `POSTGRES_TEST_DSN`.

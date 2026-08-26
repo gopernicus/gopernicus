@@ -22,13 +22,14 @@ import (
 // compare-and-swap UPDATEs that report a lost CAS as session.ErrRotationConflict.
 type SessionStore struct {
 	db *pgxdb.DB
+	qualified
 }
 
 var _ session.SessionRepository = (*SessionStore)(nil)
 
 // NewSessionStore returns a SessionStore backed by db.
-func NewSessionStore(db *pgxdb.DB) *SessionStore {
-	return &SessionStore{db: db}
+func NewSessionStore(db *pgxdb.DB, opts ...Option) *SessionStore {
+	return &SessionStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
 const sessionColumns = "id, user_id, refresh_token_hash, previous_refresh_token_hash, previous_used, rotation_count, authenticated_at, authentication_methods, assurance_level, created_at, expires_at"
@@ -96,7 +97,7 @@ func (s *SessionStore) Create(ctx context.Context, sess session.Session) (sessio
 	if err != nil {
 		return session.Session{}, err
 	}
-	const q = `INSERT INTO sessions (` + sessionColumns + `)
+	q := `INSERT INTO ` + s.table(sessionsTable) + ` (` + sessionColumns + `)
 		VALUES (@id, @user_id, @refresh_token_hash, @previous_refresh_token_hash, @previous_used, @rotation_count, @authenticated_at, @authentication_methods, @assurance_level, @created_at, @expires_at)`
 	_, err = s.db.Exec(ctx, q, pgx.NamedArgs{
 		"id":                          sess.ID,
@@ -120,7 +121,7 @@ func (s *SessionStore) Create(ctx context.Context, sess session.Session) (sessio
 // Get returns the live session for id: unknown → sdk.ErrNotFound,
 // present-but-expired → sdk.ErrExpired (checked against the read clock).
 func (s *SessionStore) Get(ctx context.Context, id string) (session.Session, error) {
-	const q = `SELECT ` + sessionColumns + ` FROM sessions WHERE id = @id`
+	q := `SELECT ` + sessionColumns + ` FROM ` + s.table(sessionsTable) + ` WHERE id = @id`
 	row, err := pgxdb.QueryOne[sessionRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
 	if err != nil {
 		return session.Session{}, err
@@ -142,7 +143,7 @@ func (s *SessionStore) GetByRefreshHash(ctx context.Context, hash string) (sessi
 	if hash == "" {
 		return session.Session{}, 0, sdk.ErrNotFound
 	}
-	const q = `SELECT ` + sessionColumns + ` FROM sessions
+	q := `SELECT ` + sessionColumns + ` FROM ` + s.table(sessionsTable) + `
 		WHERE refresh_token_hash = @hash OR previous_refresh_token_hash = @hash`
 	row, err := pgxdb.QueryOne[sessionRow](ctx, s.db, q, pgx.NamedArgs{"hash": hash})
 	if err != nil {
@@ -164,7 +165,7 @@ func (s *SessionStore) GetByRefreshHash(ctx context.Context, hash string) (sessi
 // the previous slot, clearing previous_used, and bumping rotation_count — WITHOUT
 // touching expires_at (fixed horizon, D2). Zero rows affected → ErrRotationConflict.
 func (s *SessionStore) Rotate(ctx context.Context, id, expectedCurrentHash, newHash string) error {
-	const q = `UPDATE sessions
+	q := `UPDATE ` + s.table(sessionsTable) + `
 		SET refresh_token_hash = @new_hash, previous_refresh_token_hash = @expected, previous_used = false, rotation_count = rotation_count + 1
 		WHERE id = @id AND refresh_token_hash = @expected`
 	n, err := pgxdb.ExecAffecting(ctx, s.db, q, pgx.NamedArgs{
@@ -185,7 +186,7 @@ func (s *SessionStore) Rotate(ctx context.Context, id, expectedCurrentHash, newH
 // previous_used to true only when previous_refresh_token_hash equals previousHash AND
 // previous_used is still false. Zero rows affected → ErrRotationConflict.
 func (s *SessionStore) ConsumeGrace(ctx context.Context, id, previousHash string) error {
-	const q = `UPDATE sessions
+	q := `UPDATE ` + s.table(sessionsTable) + `
 		SET previous_used = true
 		WHERE id = @id AND previous_refresh_token_hash = @previous_hash AND previous_used = false`
 	n, err := pgxdb.ExecAffecting(ctx, s.db, q, pgx.NamedArgs{
@@ -203,7 +204,7 @@ func (s *SessionStore) ConsumeGrace(ctx context.Context, id, previousHash string
 
 // Delete removes the session for id; unknown → sdk.ErrNotFound.
 func (s *SessionStore) Delete(ctx context.Context, id string) error {
-	n, err := pgxdb.ExecAffecting(ctx, s.db, "DELETE FROM sessions WHERE id = @id", pgx.NamedArgs{"id": id})
+	n, err := pgxdb.ExecAffecting(ctx, s.db, "DELETE FROM "+s.table(sessionsTable)+" WHERE id = @id", pgx.NamedArgs{"id": id})
 	if err != nil {
 		return pgxdb.MapError(err)
 	}
@@ -217,7 +218,7 @@ func (s *SessionStore) Delete(ctx context.Context, id string) error {
 // matching rows returns nil (never sdk.ErrNotFound), so it doubles as the
 // logout-everywhere primitive a password change uses.
 func (s *SessionStore) DeleteByUser(ctx context.Context, userID string) error {
-	if _, err := s.db.Exec(ctx, "DELETE FROM sessions WHERE user_id = @user_id", pgx.NamedArgs{"user_id": userID}); err != nil {
+	if _, err := s.db.Exec(ctx, "DELETE FROM "+s.table(sessionsTable)+" WHERE user_id = @user_id", pgx.NamedArgs{"user_id": userID}); err != nil {
 		return pgxdb.MapError(err)
 	}
 	return nil

@@ -3,7 +3,9 @@
 // loudly — naming the specific missing table and wrapping sdk.ErrNotFound —
 // before the host serves traffic when a canonical migration was not applied,
 // and that the constructor itself never creates schema. Absent a DSN they skip
-// loudly, like the conformance suite.
+// loudly, like the conformance suite. With POSTGRES_TEST_SCHEMA set they run
+// entirely inside that schema — the drops, the migrations, and the probes — so
+// the destructive reset never churns the default schema.
 package pgx
 
 import (
@@ -33,9 +35,16 @@ func probeDial(t *testing.T) *pgxdb.DB {
 }
 
 // probeDropAll drops every canonical table and the migration ledger so the
-// database holds no auth schema at all.
+// database holds no auth schema at all. Under POSTGRES_TEST_SCHEMA it drops the
+// whole schema instead — the ledger lives there too, and the default schema must
+// stay untouched.
 func probeDropAll(t *testing.T, db *pgxdb.DB) {
 	t.Helper()
+	schema := testSchema(t)
+	if !schema.IsZero() {
+		dropSchema(t, db, schema)
+		return
+	}
 	q := "DROP TABLE IF EXISTS " + strings.Join(probeTables, ", ") + ", schema_migrations CASCADE"
 	if _, err := db.Exec(context.Background(), q); err != nil {
 		t.Fatalf("drop schema: %v", err)
@@ -48,7 +57,7 @@ func probeDropAll(t *testing.T, db *pgxdb.DB) {
 func probeResetSchema(t *testing.T, db *pgxdb.DB) {
 	t.Helper()
 	probeDropAll(t, db)
-	if err := pgxdb.RunMigrations(context.Background(), db, MigrationsFS, MigrationsDir); err != nil {
+	if err := pgxdb.RunMigrations(context.Background(), db, MigrationsFS, MigrationsDir, migrateOpts(testSchema(t))...); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 }
@@ -60,7 +69,7 @@ func TestSchemaProbe_FullSchema(t *testing.T) {
 	probeResetSchema(t, db)
 	t.Cleanup(func() { probeResetSchema(t, db) })
 
-	if _, err := Repositories(db); err != nil {
+	if _, err := Repositories(db, storeOpts(testSchema(t))...); err != nil {
 		t.Fatalf("Repositories on full schema: %v", err)
 	}
 }
@@ -70,16 +79,17 @@ func TestSchemaProbe_FullSchema(t *testing.T) {
 // tables (Risk 6: all tables, not just users/sessions).
 func TestSchemaProbe_MissingTable(t *testing.T) {
 	db := probeDial(t)
+	schema := testSchema(t)
 	t.Cleanup(func() { probeResetSchema(t, db) })
 
 	for _, table := range probeTables {
 		t.Run(table, func(t *testing.T) {
 			probeResetSchema(t, db)
-			if _, err := db.Exec(context.Background(), "DROP TABLE IF EXISTS "+table+" CASCADE"); err != nil {
+			if _, err := db.Exec(context.Background(), "DROP TABLE IF EXISTS "+schema.Table(table)+" CASCADE"); err != nil {
 				t.Fatalf("drop %s: %v", table, err)
 			}
 
-			_, err := Repositories(db)
+			_, err := Repositories(db, storeOpts(schema)...)
 			if err == nil {
 				t.Fatalf("Repositories succeeded with %s missing", table)
 			}
@@ -102,7 +112,7 @@ func TestSchemaProbe_InfraFailureNotMisclassified(t *testing.T) {
 	// Close the pool so every subsequent probe query fails at the infra layer.
 	_ = db.Close()
 
-	_, err := Repositories(db)
+	_, err := Repositories(db, storeOpts(testSchema(t))...)
 	if err == nil {
 		t.Fatal("Repositories succeeded against a closed pool")
 	}
@@ -115,16 +125,17 @@ func TestSchemaProbe_InfraFailureNotMisclassified(t *testing.T) {
 // against an empty database it fails and leaves every canonical table absent.
 func TestSchemaProbe_CreatesNoSchema(t *testing.T) {
 	db := probeDial(t)
+	schema := testSchema(t)
 	probeDropAll(t, db)
 	t.Cleanup(func() { probeResetSchema(t, db) })
 
-	if _, err := Repositories(db); err == nil {
+	if _, err := Repositories(db, storeOpts(schema)...); err == nil {
 		t.Fatal("Repositories succeeded against an empty database")
 	}
 
 	for _, table := range probeTables {
 		var reg *string
-		if err := db.QueryRow(context.Background(), `SELECT to_regclass($1)::text`, table).Scan(&reg); err != nil {
+		if err := db.QueryRow(context.Background(), `SELECT to_regclass($1)::text`, schema.Table(table)).Scan(&reg); err != nil {
 			t.Fatalf("inspect %s after construct: %v", table, err)
 		}
 		if reg != nil {

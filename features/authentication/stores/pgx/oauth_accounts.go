@@ -20,13 +20,14 @@ import (
 // encrypter is wired, else empty).
 type OAuthAccountStore struct {
 	db *pgxdb.DB
+	qualified
 }
 
 var _ oauthaccount.OAuthAccountRepository = (*OAuthAccountStore)(nil)
 
 // NewOAuthAccountStore returns an OAuthAccountStore backed by db.
-func NewOAuthAccountStore(db *pgxdb.DB) *OAuthAccountStore {
-	return &OAuthAccountStore{db: db}
+func NewOAuthAccountStore(db *pgxdb.DB, opts ...Option) *OAuthAccountStore {
+	return &OAuthAccountStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
 const oauthAccountColumns = "provider, provider_user_id, user_id, provider_email, provider_email_verified, account_verified, linked_at, access_token, refresh_token, token_expires_at, token_type, scope"
@@ -68,7 +69,7 @@ func (r oauthAccountRow) toDomain() oauthaccount.OAuthAccount {
 // Create persists a new link; a colliding (provider, provider_user_id) →
 // sdk.ErrAlreadyExists (plain INSERT, no ON CONFLICT).
 func (s *OAuthAccountStore) Create(ctx context.Context, a oauthaccount.OAuthAccount) (oauthaccount.OAuthAccount, error) {
-	const q = `INSERT INTO oauth_accounts (` + oauthAccountColumns + `)
+	q := `INSERT INTO ` + s.table(oauthAccountsTable) + ` (` + oauthAccountColumns + `)
 		VALUES (@provider, @provider_user_id, @user_id, @provider_email, @provider_email_verified,
 			@account_verified, @linked_at, @access_token, @refresh_token, @token_expires_at, @token_type, @scope)`
 	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
@@ -93,7 +94,7 @@ func (s *OAuthAccountStore) Create(ctx context.Context, a oauthaccount.OAuthAcco
 
 // GetByProvider returns the link for a provider identity, or sdk.ErrNotFound.
 func (s *OAuthAccountStore) GetByProvider(ctx context.Context, provider, providerUserID string) (oauthaccount.OAuthAccount, error) {
-	const q = `SELECT ` + oauthAccountColumns + ` FROM oauth_accounts WHERE provider = @provider AND provider_user_id = @provider_user_id`
+	q := `SELECT ` + oauthAccountColumns + ` FROM ` + s.table(oauthAccountsTable) + ` WHERE provider = @provider AND provider_user_id = @provider_user_id`
 	row, err := pgxdb.QueryOne[oauthAccountRow](ctx, s.db, q, pgx.NamedArgs{"provider": provider, "provider_user_id": providerUserID})
 	if err != nil {
 		return oauthaccount.OAuthAccount{}, err
@@ -103,7 +104,7 @@ func (s *OAuthAccountStore) GetByProvider(ctx context.Context, provider, provide
 
 // ListByUser returns every link owned by userID (empty slice, nil error when none).
 func (s *OAuthAccountStore) ListByUser(ctx context.Context, userID string) ([]oauthaccount.OAuthAccount, error) {
-	const q = `SELECT ` + oauthAccountColumns + ` FROM oauth_accounts WHERE user_id = @user_id ORDER BY linked_at DESC, provider_user_id DESC`
+	q := `SELECT ` + oauthAccountColumns + ` FROM ` + s.table(oauthAccountsTable) + ` WHERE user_id = @user_id ORDER BY linked_at DESC, provider_user_id DESC`
 	rows, err := s.db.Query(ctx, q, pgx.NamedArgs{"user_id": userID})
 	if err != nil {
 		return nil, err
@@ -121,7 +122,7 @@ func (s *OAuthAccountStore) ListByUser(ctx context.Context, userID string) ([]oa
 
 // Delete removes userID's link to provider; no such link → sdk.ErrNotFound.
 func (s *OAuthAccountStore) Delete(ctx context.Context, userID, provider string) error {
-	n, err := pgxdb.ExecAffecting(ctx, s.db, "DELETE FROM oauth_accounts WHERE user_id = @user_id AND provider = @provider", pgx.NamedArgs{
+	n, err := pgxdb.ExecAffecting(ctx, s.db, "DELETE FROM "+s.table(oauthAccountsTable)+" WHERE user_id = @user_id AND provider = @provider", pgx.NamedArgs{
 		"user_id":  userID,
 		"provider": provider,
 	})

@@ -24,7 +24,7 @@ import (
 func liveRepos(t *testing.T) (*pgxdb.DB, authorization.Repositories) {
 	t.Helper()
 	db := openAndMigrate(t, requireDSN(t))
-	repos, err := Repositories(db)
+	repos, err := Repositories(db, storeOptions(t)...)
 	if err != nil {
 		t.Fatalf("Repositories: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestMutationGuardPanicRollsBack(t *testing.T) {
 	// No revision bump: the P scope anchor stays at revision 1.
 	var rev int64
 	if err := db.QueryRow(ctx,
-		`SELECT revision FROM iam_scopes WHERE scope_kind = 'resource' AND scope_type = 'doc' AND scope_id = 'P'`).Scan(&rev); err != nil {
+		`SELECT revision FROM `+qualify(t, "iam_scopes")+` WHERE scope_kind = 'resource' AND scope_type = 'doc' AND scope_id = 'P'`).Scan(&rev); err != nil {
 		t.Fatalf("read P revision: %v", err)
 	}
 	if rev != 1 {
@@ -138,7 +138,7 @@ func TestMutationGuardPanicRollsBack(t *testing.T) {
 	// No receipt persisted for the mutation id.
 	var n int
 	if err := db.QueryRow(ctx,
-		`SELECT COUNT(*) FROM iam_mutations WHERE mutation_id = $1`, string(id)).Scan(&n); err != nil {
+		`SELECT COUNT(*) FROM `+qualify(t, "iam_mutations")+` WHERE mutation_id = $1`, string(id)).Scan(&n); err != nil {
 		t.Fatalf("count receipts: %v", err)
 	}
 	if n != 0 {
@@ -188,11 +188,11 @@ func TestMutationStormForensics(t *testing.T) {
 	// of committed owner grants.
 	var rev, owners int64
 	if err := db.QueryRow(ctx,
-		`SELECT revision FROM iam_scopes WHERE scope_kind='resource' AND scope_type='doc' AND scope_id='F'`).Scan(&rev); err != nil {
+		`SELECT revision FROM `+qualify(t, "iam_scopes")+` WHERE scope_kind='resource' AND scope_type='doc' AND scope_id='F'`).Scan(&rev); err != nil {
 		t.Fatalf("read anchor: %v", err)
 	}
 	if err := db.QueryRow(ctx,
-		`SELECT COUNT(*) FROM iam_relationships WHERE resource_type='doc' AND resource_id='F' AND relation='owner'`).Scan(&owners); err != nil {
+		`SELECT COUNT(*) FROM `+qualify(t, "iam_relationships")+` WHERE resource_type='doc' AND resource_id='F' AND relation='owner'`).Scan(&owners); err != nil {
 		t.Fatalf("count owners: %v", err)
 	}
 	if rev != n || owners != n {
@@ -203,7 +203,7 @@ func TestMutationStormForensics(t *testing.T) {
 	var total, distinctID, minRev, maxRev int64
 	if err := db.QueryRow(ctx,
 		`SELECT COUNT(*), COUNT(DISTINCT mutation_id), MIN(revision), MAX(revision)
-		   FROM iam_mutations WHERE scope_kind='resource' AND scope_type='doc' AND scope_id='F' AND outcome='applied'`).
+		   FROM `+qualify(t, "iam_mutations")+` WHERE scope_kind='resource' AND scope_type='doc' AND scope_id='F' AND outcome='applied'`).
 		Scan(&total, &distinctID, &minRev, &maxRev); err != nil {
 		t.Fatalf("inspect receipts: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestMutationStormForensics(t *testing.T) {
 	}
 	var distinctRev int64
 	if err := db.QueryRow(ctx,
-		`SELECT COUNT(DISTINCT revision) FROM iam_mutations WHERE scope_kind='resource' AND scope_type='doc' AND scope_id='F' AND outcome='applied'`).
+		`SELECT COUNT(DISTINCT revision) FROM `+qualify(t, "iam_mutations")+` WHERE scope_kind='resource' AND scope_type='doc' AND scope_id='F' AND outcome='applied'`).
 		Scan(&distinctRev); err != nil {
 		t.Fatalf("distinct revisions: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestMutationStormForensics(t *testing.T) {
 	// Permanent retention (default #2): no stored receipt ever grew an expiry.
 	var withExpiry int64
 	if err := db.QueryRow(ctx,
-		`SELECT COUNT(*) FROM iam_mutations WHERE expires_at IS NOT NULL`).Scan(&withExpiry); err != nil {
+		`SELECT COUNT(*) FROM `+qualify(t, "iam_mutations")+` WHERE expires_at IS NOT NULL`).Scan(&withExpiry); err != nil {
 		t.Fatalf("count expiring receipts: %v", err)
 	}
 	if withExpiry != 0 {
@@ -237,7 +237,7 @@ func TestMutationStormForensics(t *testing.T) {
 	// relation (subject_relation stays the empty string).
 	var phantomUsersets int64
 	if err := db.QueryRow(ctx,
-		`SELECT COUNT(*) FROM iam_relationships WHERE resource_type='doc' AND resource_id='F' AND subject_relation <> ''`).
+		`SELECT COUNT(*) FROM `+qualify(t, "iam_relationships")+` WHERE resource_type='doc' AND resource_id='F' AND subject_relation <> ''`).
 		Scan(&phantomUsersets); err != nil {
 		t.Fatalf("scan usersets: %v", err)
 	}

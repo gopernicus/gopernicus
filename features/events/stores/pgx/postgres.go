@@ -2,9 +2,10 @@
 // module so a host that brings a different datastore never pulls pgx into its
 // module graph (the load-bearing opt-out property). It owns the SQL; the HOST
 // owns its database lifecycle. It is the dialect sibling of
-// features/events/stores/turso: same exported surface, same migration version set
-// (identical filenames), same port semantics — a host switches dialect by one
-// import + one Open call.
+// features/events/stores/turso: same surface plus the Postgres-only WithSchema
+// option — SQLite has no schemas — same migration version set (identical
+// filenames), same port semantics — a host switches dialect by one import + one
+// Open call.
 //
 // Migrations follow the scaffold model (matching the auth, cms, and jobs pgx
 // store modules): the canonical *.sql live here under migration source "events",
@@ -26,7 +27,6 @@ import (
 	"fmt"
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
-	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // MigrationsFS holds the embedded canonical schema (migration source "events").
@@ -38,33 +38,41 @@ var MigrationsFS embed.FS
 // MigrationsDir is the directory within MigrationsFS holding the .sql files.
 const MigrationsDir = "migrations"
 
+// Option configures the store at construction.
+type Option func(*config)
+
+type config struct {
+	schema pgxdb.Schema
+}
+
+// WithSchema places every table this store touches in s. The zero Schema is the
+// default (unqualified), which renders exactly the SQL this store has always
+// emitted. Build s with pgxdb.NewSchema at the host so a malformed name fails
+// there, before any store is constructed — WithSchema itself never panics. Apply
+// the migrations into the same schema with pgxdb.WithSchema; a store constructed
+// for a schema its migrations never reached fails New's boot-time probe.
+func WithSchema(s pgxdb.Schema) Option {
+	return func(c *config) { c.schema = s }
+}
+
 // New returns the outbox Store backed by db, AFTER verifying the event_outbox
 // table exists (design §5 mitigation b: the boot-time probe). It errors with
 // sdk.ErrNotFound when the table is absent — the "events" migration source was
 // not applied before boot — so the failure surfaces at wiring time, before the
 // host serves traffic, rather than on the poller's first read. It does NOT touch
 // migrations: the host owns and applies the schema (see ExportMigrations).
-func New(db *pgxdb.DB) (*Store, error) {
-	if err := probeOutboxTable(context.Background(), db); err != nil {
-		return nil, err
+// WithSchema qualifies both the probe and every statement the store runs.
+func New(db *pgxdb.DB, opts ...Option) (*Store, error) {
+	var cfg config
+	for _, o := range opts {
+		o(&cfg)
 	}
-	return &Store{db: db}, nil
-}
-
-// probeOutboxTable reports whether event_outbox exists, mapping its absence to a
-// clear, stable error naming the unapplied "events" migration source. to_regclass
-// resolves the relation name to its qualified text, or NULL when no such table is
-// visible on the search_path.
-func probeOutboxTable(ctx context.Context, db *pgxdb.DB) error {
-	var reg *string
-	err := db.QueryRow(ctx, `SELECT to_regclass('event_outbox')::text`).Scan(&reg)
-	if err != nil {
-		return pgxdb.MapError(err)
+	s := &Store{db: db, schema: cfg.schema}
+	if err := pgxdb.ProbeTable(context.Background(), db, s.table(outboxTable)); err != nil {
+		return nil, fmt.Errorf("events outbox store: %s table missing — apply the %q migration source before boot: %w",
+			s.table(outboxTable), "events", err)
 	}
-	if reg == nil {
-		return fmt.Errorf("events outbox store: event_outbox table missing — apply the %q migration source before boot: %w", "events", sdk.ErrNotFound)
-	}
-	return nil
+	return s, nil
 }
 
 // ExportMigrations copies this store's canonical migration files into dst,

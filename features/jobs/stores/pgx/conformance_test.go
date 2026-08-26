@@ -7,10 +7,18 @@
 // loudly — a silent green here would claim dialect conformance nothing verified.
 // The ConcurrentClaim case is the load-bearing one: FOR UPDATE SKIP LOCKED must
 // make N workers each claim a distinct job with no contention and no double-claim.
+//
+// POSTGRES_TEST_SCHEMA is optional. Set it and the whole suite runs in that
+// schema — migrated with pgxdb.WithSchema, constructed with WithSchema, and
+// truncated by qualified name — which is the behavioral proof that every
+// executed statement is qualified. Unset, the run is identical to the default
+// one it has always been.
 package pgx
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -19,6 +27,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/jobs/domain/schedule"
 	"github.com/gopernicus/gopernicus/features/jobs/storetest"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // jobTables are the feature's tables cleared before each newRepo call so every
@@ -34,8 +43,8 @@ func TestConformance_Queue(t *testing.T) {
 	dsn := requireDSN(t)
 
 	storetest.RunQueue(t, func(t *testing.T) job.QueueRepository {
-		db := openAndMigrate(t, dsn)
-		return NewQueueStore(db, WithLease(storetest.Lease))
+		db, opts := openAndMigrate(t, dsn)
+		return NewQueueStore(db, append(opts, WithLease(storetest.Lease))...)
 	})
 }
 
@@ -51,8 +60,8 @@ func TestConformance_FencedQueue(t *testing.T) {
 	dsn := requireDSN(t)
 
 	storetest.RunFencedQueue(t, func(t *testing.T) job.FencedQueueRepository {
-		db := openAndMigrate(t, dsn)
-		return NewFencedQueueStore(db)
+		db, opts := openAndMigrate(t, dsn)
+		return NewFencedQueueStore(db, opts...)
 	})
 }
 
@@ -62,8 +71,8 @@ func TestConformance_Schedules(t *testing.T) {
 	dsn := requireDSN(t)
 
 	storetest.RunSchedules(t, func(t *testing.T) schedule.Repository {
-		db := openAndMigrate(t, dsn)
-		return NewScheduleStore(db)
+		db, opts := openAndMigrate(t, dsn)
+		return NewScheduleStore(db, opts...)
 	})
 }
 
@@ -77,9 +86,27 @@ func requireDSN(t *testing.T) string {
 	return dsn
 }
 
+// testSchema returns the optional schema the whole live suite runs in, read from
+// POSTGRES_TEST_SCHEMA. The zero Schema (env unset) is the default leg: bare
+// names, byte-identical to the run this suite has always made.
+func testSchema(t *testing.T) pgxdb.Schema {
+	t.Helper()
+	name := os.Getenv("POSTGRES_TEST_SCHEMA")
+	if name == "" {
+		return pgxdb.Schema{}
+	}
+	s, err := pgxdb.NewSchema(name)
+	if err != nil {
+		t.Fatalf("POSTGRES_TEST_SCHEMA=%q is not a valid schema: %v", name, err)
+	}
+	return s
+}
+
 // openAndMigrate opens a live connection, applies the canonical migrations, and
-// truncates the jobs tables so the returned store starts empty and isolated.
-func openAndMigrate(t *testing.T, dsn string) *pgxdb.DB {
+// truncates the jobs tables so the returned store starts empty and isolated. It
+// returns the store options that place the store in the same schema the
+// migrations just reached, so a mismatch is impossible by construction.
+func openAndMigrate(t *testing.T, dsn string) (*pgxdb.DB, []Option) {
 	t.Helper()
 	db, err := pgxdb.Open(pgxdb.Config{DSN: dsn})
 	if err != nil {
@@ -87,19 +114,78 @@ func openAndMigrate(t *testing.T, dsn string) *pgxdb.DB {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	if err := pgxdb.RunMigrations(context.Background(), db, MigrationsFS, MigrationsDir); err != nil {
+	schema := testSchema(t)
+	var (
+		opts        []Option
+		migrateOpts []pgxdb.MigrateOption
+	)
+	if !schema.IsZero() {
+		dropSchema(t, db, schema)
+		opts = append(opts, WithSchema(schema))
+		migrateOpts = append(migrateOpts, pgxdb.WithSchema(schema))
+	}
+
+	if err := pgxdb.RunMigrations(context.Background(), db, MigrationsFS, MigrationsDir, migrateOpts...); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	truncate(t, db)
-	t.Cleanup(func() { truncate(t, db) })
-	return db
+	truncate(t, db, schema)
+	t.Cleanup(func() { truncate(t, db, schema) })
+	return db, opts
 }
 
-// truncate clears every jobs table so a store starts empty.
-func truncate(t *testing.T, db *pgxdb.DB) {
+// dropSchema removes the test schema and everything in it so each run starts
+// from the canonical migrations rather than whatever a previous run left.
+func dropSchema(t *testing.T, db *pgxdb.DB, schema pgxdb.Schema) {
 	t.Helper()
-	q := "TRUNCATE " + strings.Join(jobTables, ", ") + " RESTART IDENTITY CASCADE"
+	q := fmt.Sprintf(`DROP SCHEMA IF EXISTS "%s" CASCADE`, schema)
+	if _, err := db.Exec(context.Background(), q); err != nil {
+		t.Fatalf("drop schema %s: %v", schema, err)
+	}
+}
+
+// truncate clears every jobs table so a store starts empty, by qualified name
+// when the suite runs in a schema.
+func truncate(t *testing.T, db *pgxdb.DB, schema pgxdb.Schema) {
+	t.Helper()
+	qualified := make([]string, len(jobTables))
+	for i, table := range jobTables {
+		qualified[i] = schema.Table(table)
+	}
+	q := "TRUNCATE " + strings.Join(qualified, ", ") + " RESTART IDENTITY CASCADE"
 	if _, err := db.Exec(context.Background(), q); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
+}
+
+// TestLive_StatusCheck pins the boot gate WithSchema exists for: a well-formed
+// schema the migrations never reached must fail with sdk.ErrNotFound naming the
+// QUALIFIED table (not silently fall back to the host's own unqualified tables),
+// and the schema the migrations did reach must pass.
+func TestLive_StatusCheck(t *testing.T) {
+	dsn := requireDSN(t)
+	db, opts := openAndMigrate(t, dsn)
+	ctx := context.Background()
+
+	t.Run("absent schema is not found", func(t *testing.T) {
+		absent, err := pgxdb.NewSchema("jobs_statuscheck_absent")
+		if err != nil {
+			t.Fatalf("NewSchema: %v", err)
+		}
+		err = StatusCheck(ctx, db, WithSchema(absent))
+		if err == nil {
+			t.Fatal("StatusCheck against an unmigrated schema returned nil")
+		}
+		if !errors.Is(err, sdk.ErrNotFound) {
+			t.Errorf("StatusCheck error = %v, want sdk.ErrNotFound", err)
+		}
+		if want := absent.Table("job_queue"); !strings.Contains(err.Error(), want) {
+			t.Errorf("StatusCheck error %q does not name the qualified table %q", err, want)
+		}
+	})
+
+	t.Run("migrated schema passes", func(t *testing.T) {
+		if err := StatusCheck(ctx, db, opts...); err != nil {
+			t.Fatalf("StatusCheck against the migrated schema: %v", err)
+		}
+	})
 }

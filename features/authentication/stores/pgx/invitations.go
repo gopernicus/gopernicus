@@ -22,13 +22,14 @@ import (
 // id DESC order.
 type InvitationStore struct {
 	db *pgxdb.DB
+	qualified
 }
 
 var _ invitation.InvitationRepository = (*InvitationStore)(nil)
 
 // NewInvitationStore returns an InvitationStore backed by db.
-func NewInvitationStore(db *pgxdb.DB) *InvitationStore {
-	return &InvitationStore{db: db}
+func NewInvitationStore(db *pgxdb.DB, opts ...Option) *InvitationStore {
+	return &InvitationStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
 const invitationColumns = "id, resource_type, resource_id, relation, identifier, identifier_kind, resolved_subject_id, invited_by, token_hash, auto_accept, status, expires_at, accepted_at, created_at, updated_at, metadata"
@@ -106,7 +107,7 @@ func (s *InvitationStore) Create(ctx context.Context, inv invitation.Invitation)
 	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if inv.ID == "" {
-		const q = `INSERT INTO invitations (resource_type, resource_id, relation, identifier, identifier_kind, resolved_subject_id,
+		q := `INSERT INTO ` + s.table(invitationsTable) + ` (resource_type, resource_id, relation, identifier, identifier_kind, resolved_subject_id,
 			invited_by, token_hash, auto_accept, status, expires_at, accepted_at, created_at, updated_at, metadata)
 			VALUES (@resource_type, @resource_id, @relation, @identifier, @identifier_kind, @resolved_subject_id,
 				@invited_by, @token_hash, @auto_accept, @status, @expires_at, @accepted_at, @created_at, @updated_at, @metadata)
@@ -116,7 +117,7 @@ func (s *InvitationStore) Create(ctx context.Context, inv invitation.Invitation)
 		}
 		return inv, nil
 	}
-	const q = `INSERT INTO invitations (` + invitationColumns + `)
+	q := `INSERT INTO ` + s.table(invitationsTable) + ` (` + invitationColumns + `)
 		VALUES (@id, @resource_type, @resource_id, @relation, @identifier, @identifier_kind, @resolved_subject_id,
 			@invited_by, @token_hash, @auto_accept, @status, @expires_at, @accepted_at, @created_at, @updated_at, @metadata)`
 	args["id"] = inv.ID
@@ -128,7 +129,7 @@ func (s *InvitationStore) Create(ctx context.Context, inv invitation.Invitation)
 
 // Get returns the invitation for id, or sdk.ErrNotFound.
 func (s *InvitationStore) Get(ctx context.Context, id string) (invitation.Invitation, error) {
-	const q = `SELECT ` + invitationColumns + ` FROM invitations WHERE id = @id`
+	q := `SELECT ` + invitationColumns + ` FROM ` + s.table(invitationsTable) + ` WHERE id = @id`
 	row, err := pgxdb.QueryOne[invitationRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
 	if err != nil {
 		return invitation.Invitation{}, err
@@ -139,7 +140,7 @@ func (s *InvitationStore) Get(ctx context.Context, id string) (invitation.Invita
 // GetByTokenHash returns the invitation for tokenHash; unknown → sdk.ErrNotFound,
 // present-but-past-ExpiresAt → sdk.ErrExpired, else the record.
 func (s *InvitationStore) GetByTokenHash(ctx context.Context, tokenHash string) (invitation.Invitation, error) {
-	const q = `SELECT ` + invitationColumns + ` FROM invitations WHERE token_hash = @token_hash`
+	q := `SELECT ` + invitationColumns + ` FROM ` + s.table(invitationsTable) + ` WHERE token_hash = @token_hash`
 	row, err := pgxdb.QueryOne[invitationRow](ctx, s.db, q, pgx.NamedArgs{"token_hash": tokenHash})
 	if err != nil {
 		return invitation.Invitation{}, err
@@ -155,7 +156,7 @@ func (s *InvitationStore) GetByTokenHash(ctx context.Context, tokenHash string) 
 // ordered created_at DESC, id DESC.
 func (s *InvitationStore) ListByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
 	q := pgxdb.ListQuery[invitationRow]{
-		BaseSQL:      `SELECT ` + invitationColumns + ` FROM invitations WHERE resource_type = @resource_type AND resource_id = @resource_id`,
+		BaseSQL:      `SELECT ` + invitationColumns + ` FROM ` + s.table(invitationsTable) + ` WHERE resource_type = @resource_type AND resource_id = @resource_id`,
 		Args:         pgx.NamedArgs{"resource_type": resourceType, "resource_id": resourceID},
 		OrderFields:  invitation.OrderFields,
 		DefaultOrder: invitation.DefaultOrder,
@@ -176,7 +177,7 @@ func (s *InvitationStore) ListByResource(ctx context.Context, resourceType, reso
 // cross-resolves (design §7 re-key).
 func (s *InvitationStore) ListBySubject(ctx context.Context, kind, identifier string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
 	q := pgxdb.ListQuery[invitationRow]{
-		BaseSQL:      `SELECT ` + invitationColumns + ` FROM invitations WHERE identifier_kind = @kind AND identifier = @identifier`,
+		BaseSQL:      `SELECT ` + invitationColumns + ` FROM ` + s.table(invitationsTable) + ` WHERE identifier_kind = @kind AND identifier = @identifier`,
 		Args:         pgx.NamedArgs{"kind": kind, "identifier": identifier},
 		OrderFields:  invitation.OrderFields,
 		DefaultOrder: invitation.DefaultOrder,
@@ -195,7 +196,7 @@ func (s *InvitationStore) ListBySubject(ctx context.Context, kind, identifier st
 // UPDATE … RETURNING, scanned through the db-tagged row struct; unknown id →
 // sdk.ErrNotFound.
 func (s *InvitationStore) UpdateStatus(ctx context.Context, id string, upd invitation.StatusUpdate) (invitation.Invitation, error) {
-	const q = `UPDATE invitations
+	q := `UPDATE ` + s.table(invitationsTable) + `
 		SET status = @status, token_hash = @token_hash, expires_at = @expires_at,
 			accepted_at = @accepted_at, resolved_subject_id = @resolved_subject_id, updated_at = @updated_at
 		WHERE id = @id

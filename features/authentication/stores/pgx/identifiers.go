@@ -20,13 +20,14 @@ import (
 // user_identifiers table and is proven live in phase 2.
 type IdentifierStore struct {
 	db *pgxdb.DB
+	qualified
 }
 
 var _ identifier.IdentifierRepository = (*IdentifierStore)(nil)
 
 // NewIdentifierStore returns an IdentifierStore backed by db.
-func NewIdentifierStore(db *pgxdb.DB) *IdentifierStore {
-	return &IdentifierStore{db: db}
+func NewIdentifierStore(db *pgxdb.DB, opts ...Option) *IdentifierStore {
+	return &IdentifierStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
 const identifierColumns = "id, user_id, kind, normalized_value, verified_at, login_enabled, recovery_enabled, notification_enabled, is_primary, created_at, updated_at, replaced_at"
@@ -66,10 +67,11 @@ func (r identifierRow) toDomain() identifier.Identifier {
 	}
 }
 
-// insertIdentifier writes one identifier row through q (a *DB or *Tx). An empty
+// insertIdentifier writes one identifier row through q (a *DB or *Tx), into the
+// already-qualified table (the caller renders it through its own schema). An empty
 // ID uses the DB-generated convention (RETURNING id); a lost authentication claim
 // → sdk.ErrAlreadyExists via MapError. It returns the identifier with its ID set.
-func insertIdentifier(ctx context.Context, q pgxdb.Querier, ident identifier.Identifier) (identifier.Identifier, error) {
+func insertIdentifier(ctx context.Context, q pgxdb.Querier, table string, ident identifier.Identifier) (identifier.Identifier, error) {
 	args := pgx.NamedArgs{
 		"user_id":              ident.UserID,
 		"kind":                 string(ident.Kind),
@@ -84,7 +86,7 @@ func insertIdentifier(ctx context.Context, q pgxdb.Querier, ident identifier.Ide
 		"replaced_at":          pgxdb.NullTime(ident.ReplacedAt),
 	}
 	if ident.ID == "" {
-		const insert = `INSERT INTO user_identifiers
+		insert := `INSERT INTO ` + table + `
 			(user_id, kind, normalized_value, verified_at, login_enabled, recovery_enabled, notification_enabled, is_primary, created_at, updated_at, replaced_at)
 			VALUES (@user_id, @kind, @normalized_value, @verified_at, @login_enabled, @recovery_enabled, @notification_enabled, @is_primary, @created_at, @updated_at, @replaced_at)
 			RETURNING id`
@@ -94,7 +96,7 @@ func insertIdentifier(ctx context.Context, q pgxdb.Querier, ident identifier.Ide
 		return ident, nil
 	}
 	args["id"] = ident.ID
-	const insert = `INSERT INTO user_identifiers (` + identifierColumns + `)
+	insert := `INSERT INTO ` + table + ` (` + identifierColumns + `)
 		VALUES (@id, @user_id, @kind, @normalized_value, @verified_at, @login_enabled, @recovery_enabled, @notification_enabled, @is_primary, @created_at, @updated_at, @replaced_at)`
 	if _, err := q.Exec(ctx, insert, args); err != nil {
 		return identifier.Identifier{}, pgxdb.MapError(err)
@@ -105,7 +107,7 @@ func insertIdentifier(ctx context.Context, q pgxdb.Querier, ident identifier.Ide
 // Get returns the identifier with the given id (active or replaced), or
 // sdk.ErrNotFound.
 func (s *IdentifierStore) Get(ctx context.Context, id string) (identifier.Identifier, error) {
-	const q = `SELECT ` + identifierColumns + ` FROM user_identifiers WHERE id = @id`
+	q := `SELECT ` + identifierColumns + ` FROM ` + s.table(identifiersTable) + ` WHERE id = @id`
 	row, err := pgxdb.QueryOne[identifierRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
 	if err != nil {
 		return identifier.Identifier{}, err
@@ -116,7 +118,7 @@ func (s *IdentifierStore) Get(ctx context.Context, id string) (identifier.Identi
 // GetLogin returns the active login-enabled identifier claiming
 // (kind, normalizedValue), or sdk.ErrNotFound.
 func (s *IdentifierStore) GetLogin(ctx context.Context, kind, normalizedValue string) (identifier.Identifier, error) {
-	const q = `SELECT ` + identifierColumns + ` FROM user_identifiers
+	q := `SELECT ` + identifierColumns + ` FROM ` + s.table(identifiersTable) + `
 		WHERE kind = @kind AND normalized_value = @normalized_value AND replaced_at IS NULL AND login_enabled = TRUE`
 	row, err := pgxdb.QueryOne[identifierRow](ctx, s.db, q, pgx.NamedArgs{"kind": kind, "normalized_value": normalizedValue})
 	if err != nil {
@@ -128,7 +130,7 @@ func (s *IdentifierStore) GetLogin(ctx context.Context, kind, normalizedValue st
 // GetRecovery returns the active recovery-enabled identifier claiming
 // (kind, normalizedValue), or sdk.ErrNotFound.
 func (s *IdentifierStore) GetRecovery(ctx context.Context, kind, normalizedValue string) (identifier.Identifier, error) {
-	const q = `SELECT ` + identifierColumns + ` FROM user_identifiers
+	q := `SELECT ` + identifierColumns + ` FROM ` + s.table(identifiersTable) + `
 		WHERE kind = @kind AND normalized_value = @normalized_value AND replaced_at IS NULL AND recovery_enabled = TRUE`
 	row, err := pgxdb.QueryOne[identifierRow](ctx, s.db, q, pgx.NamedArgs{"kind": kind, "normalized_value": normalizedValue})
 	if err != nil {
@@ -139,7 +141,7 @@ func (s *IdentifierStore) GetRecovery(ctx context.Context, kind, normalizedValue
 
 // ListByUser returns the user's active identifiers (replaced rows excluded).
 func (s *IdentifierStore) ListByUser(ctx context.Context, userID string) ([]identifier.Identifier, error) {
-	const q = `SELECT ` + identifierColumns + ` FROM user_identifiers
+	q := `SELECT ` + identifierColumns + ` FROM ` + s.table(identifiersTable) + `
 		WHERE user_id = @user_id AND replaced_at IS NULL ORDER BY created_at, id`
 	rows, err := s.db.Query(ctx, q, pgx.NamedArgs{"user_id": userID})
 	if err != nil {
@@ -164,7 +166,7 @@ func (s *IdentifierStore) ApplyVerifiedChange(ctx context.Context, input identif
 	err := s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
 		// CAS anchor: lock the user row and compare its revision.
 		var current int64
-		row := tx.QueryRow(ctx, `SELECT auth_revision FROM users WHERE id = @id FOR UPDATE`, pgx.NamedArgs{"id": input.UserID})
+		row := tx.QueryRow(ctx, `SELECT auth_revision FROM `+s.table(usersTable)+` WHERE id = @id FOR UPDATE`, pgx.NamedArgs{"id": input.UserID})
 		if err := row.Scan(&current); err != nil {
 			return pgxdb.MapError(err)
 		}
@@ -176,7 +178,7 @@ func (s *IdentifierStore) ApplyVerifiedChange(ctx context.Context, input identif
 		// Retire the explicitly replaced identifier.
 		if input.ReplacesIdentifierID != "" {
 			if _, err := tx.Exec(ctx,
-				`UPDATE user_identifiers SET replaced_at = @now, updated_at = @now WHERE id = @id AND replaced_at IS NULL`,
+				`UPDATE `+s.table(identifiersTable)+` SET replaced_at = @now, updated_at = @now WHERE id = @id AND replaced_at IS NULL`,
 				pgx.NamedArgs{"now": now, "id": input.ReplacesIdentifierID}); err != nil {
 				return pgxdb.MapError(err)
 			}
@@ -184,14 +186,14 @@ func (s *IdentifierStore) ApplyVerifiedChange(ctx context.Context, input identif
 		// Retire any displaced active primary of the same kind.
 		if input.MakePrimary {
 			if _, err := tx.Exec(ctx,
-				`UPDATE user_identifiers SET replaced_at = @now, updated_at = @now
+				`UPDATE `+s.table(identifiersTable)+` SET replaced_at = @now, updated_at = @now
 					WHERE user_id = @user_id AND kind = @kind AND is_primary = TRUE AND replaced_at IS NULL`,
 				pgx.NamedArgs{"now": now, "user_id": input.UserID, "kind": string(input.Kind)}); err != nil {
 				return pgxdb.MapError(err)
 			}
 		}
 
-		created, err := insertIdentifier(ctx, tx, identifier.Identifier{
+		created, err := insertIdentifier(ctx, tx, s.table(identifiersTable), identifier.Identifier{
 			UserID:              input.UserID,
 			Kind:                input.Kind,
 			NormalizedValue:     input.NormalizedValue,
@@ -207,7 +209,7 @@ func (s *IdentifierStore) ApplyVerifiedChange(ctx context.Context, input identif
 			return err
 		}
 		if _, err := tx.Exec(ctx,
-			`UPDATE users SET auth_revision = auth_revision + 1, updated_at = @now WHERE id = @id`,
+			`UPDATE `+s.table(usersTable)+` SET auth_revision = auth_revision + 1, updated_at = @now WHERE id = @id`,
 			pgx.NamedArgs{"now": now, "id": input.UserID}); err != nil {
 			return pgxdb.MapError(err)
 		}

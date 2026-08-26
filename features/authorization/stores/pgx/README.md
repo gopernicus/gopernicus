@@ -70,11 +70,41 @@ structurally (deny-by-absence) at `authorization.NewService`.
 
 | member | shape |
 |---|---|
-| `RelationshipRepository(db *pgxdb.DB) (relationship.Storer, error)` | baseline-only constructor; probes only `iam_relationships`, so the host may wire `Repositories{Relationships: repo}` with `.Mutations == nil` |
+| `RelationshipRepository(db *pgxdb.DB, opts ...Option) (relationship.Storer, error)` | baseline-only constructor; probes only `iam_relationships`, so the host may wire `Repositories{Relationships: repo}` with `.Mutations == nil` |
 | `Repositories(db *pgxdb.DB, opts ...Option) (authorization.Repositories, error)` | all three ports wired (relationships, roles, atomic mutations); errors if any `iam_*` table is missing (boot-time probe, names the missing table) |
 | `WithGuardianPolicy(p mutation.GuardianPolicy) Option` | overrides the mutation repository's guardian invariant (default: owner protected on every type, min one direct anchor) — mirrors the memstore option |
+| `WithSchema(s pgxdb.Schema) Option` | places every `iam_*` table this store touches in `s`; the zero `Schema` (the default) renders today's unqualified SQL byte-for-byte. **Postgres-only** — the turso sibling has no counterpart, SQLite has no schemas |
 | `ExportMigrations(dst string) error` | copies the canonical `migrations/*.sql` into the host's dir |
 | `MigrationsFS` / `MigrationsDir` | the embedded canonical migration files |
+
+## Schema
+
+By default every statement names its table bare, so the tables land wherever the
+host's connection resolves them. `WithSchema` places the whole `iam_*` set in one
+named schema instead:
+
+```go
+s, err := pgxdb.NewSchema("auth") // validated at the host; WithSchema never panics
+if err != nil { ... }
+
+// Migrate that stream into the schema — its own call, its own ledger.
+if err := pgxdb.RunMigrations(ctx, db, authFS, "migrations/auth", pgxdb.WithSchema(s)); err != nil { ... }
+
+repos, err := pgx.Repositories(db, pgx.WithSchema(s))
+```
+
+Both sides must agree: a store constructed for a schema its migrations never
+reached fails the boot-time probe, naming the qualified table. The option is
+per-store-set, not per-repository — **per-repository different schemas are out of
+scope**: the constructors mechanically allow it, but the one-stream-per-schema
+migration model gives it no story, and the four `iam_*` tables are one wholesale
+schema.
+
+The `pg_advisory_xact_lock` that serializes `SetRelationTargets` is **database**-scoped,
+not schema-scoped: two hosts sharing one database and the same
+`resourceType/resourceID/relation` lock key contend across schemas. That is not a
+regression (it is equally true under a `search_path` pin today), and it is a
+serialization point only — never a correctness one.
 
 ## Migrations
 
@@ -123,6 +153,12 @@ docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17
 POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' \
   go test -count=1 ./...
 ```
+
+Setting `POSTGRES_TEST_SCHEMA` additionally runs the whole live suite inside that
+schema — migrations through `pgxdb.WithSchema`, stores through `WithSchema`, and
+every hand-rolled fixture statement qualified — which is the behavioral proof that
+no statement fell back to an unqualified name. Unset, every fixture behaves
+exactly as it always has.
 
 `make check` stays hermetic (the suite skips); `make test-stores` runs this live
 path expecting `POSTGRES_TEST_DSN`.

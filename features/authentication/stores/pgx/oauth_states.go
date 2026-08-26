@@ -18,13 +18,14 @@ import (
 // a BYTEA blob read back verbatim (byte-exact), never JSONB.
 type OAuthStateStore struct {
 	db *pgxdb.DB
+	qualified
 }
 
 var _ oauthstate.StateRepository = (*OAuthStateStore)(nil)
 
 // NewOAuthStateStore returns an OAuthStateStore backed by db.
-func NewOAuthStateStore(db *pgxdb.DB) *OAuthStateStore {
-	return &OAuthStateStore{db: db}
+func NewOAuthStateStore(db *pgxdb.DB, opts ...Option) *OAuthStateStore {
+	return &OAuthStateStore{db: db, qualified: qualified{schema: applyOptions(opts).schema}}
 }
 
 const oauthStateColumns = "token, provider, purpose, payload, expires_at"
@@ -51,7 +52,7 @@ func (r oauthStateRow) toDomain() oauthstate.State {
 
 // Create persists a new flow state.
 func (s *OAuthStateStore) Create(ctx context.Context, st oauthstate.State) (oauthstate.State, error) {
-	const q = `INSERT INTO oauth_states (` + oauthStateColumns + `)
+	q := `INSERT INTO ` + s.table(oauthStatesTable) + ` (` + oauthStateColumns + `)
 		VALUES (@token, @provider, @purpose, @payload, @expires_at)`
 	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
 		"token":      st.Token,
@@ -72,7 +73,7 @@ func (s *OAuthStateStore) Create(ctx context.Context, st oauthstate.State) (oaut
 // the single atomic step (DELETE … RETURNING); the expiry decision is computed in
 // Go from the returned row.
 func (s *OAuthStateStore) Consume(ctx context.Context, token string) (oauthstate.State, error) {
-	const q = `DELETE FROM oauth_states WHERE token = @token RETURNING ` + oauthStateColumns
+	q := `DELETE FROM ` + s.table(oauthStatesTable) + ` WHERE token = @token RETURNING ` + oauthStateColumns
 	row, err := pgxdb.QueryOne[oauthStateRow](ctx, s.db, q, pgx.NamedArgs{"token": token})
 	if err != nil {
 		return oauthstate.State{}, err

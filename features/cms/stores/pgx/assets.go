@@ -13,15 +13,20 @@ import (
 // AssetStore implements media.AssetRepository (metadata) over a PostgreSQL
 // database.
 type AssetStore struct {
-	db *pgxdb.DB
+	db     *pgxdb.DB
+	schema pgxdb.Schema
 }
 
 var _ media.AssetRepository = (*AssetStore)(nil)
 
 // NewAssetStore returns an AssetStore backed by db.
-func NewAssetStore(db *pgxdb.DB) *AssetStore {
-	return &AssetStore{db: db}
+func NewAssetStore(db *pgxdb.DB, opts ...Option) *AssetStore {
+	return &AssetStore{db: db, schema: newConfig(opts).schema}
 }
+
+// table renders name under the store's schema — the one chokepoint every
+// statement in this file goes through.
+func (s *AssetStore) table(name string) string { return s.schema.Table(name) }
 
 const assetColumns = "id, filename, content_type, size, storage_key, alt, created_at"
 
@@ -61,7 +66,7 @@ func (s *AssetStore) Create(ctx context.Context, a media.Asset) (media.Asset, er
 	// Empty ID → the cryptids.Database strategy (amended D10): omit the id
 	// column so the schema default generates the key, read back with RETURNING.
 	if a.ID == "" {
-		const q = `INSERT INTO assets (filename, content_type, size, storage_key, alt, created_at)
+		q := `INSERT INTO ` + s.table(assetsTable) + ` (filename, content_type, size, storage_key, alt, created_at)
 			VALUES (@filename, @content_type, @size, @storage_key, @alt, @created_at)
 			RETURNING id`
 		if err := s.db.QueryRow(ctx, q, args).Scan(&a.ID); err != nil {
@@ -69,7 +74,7 @@ func (s *AssetStore) Create(ctx context.Context, a media.Asset) (media.Asset, er
 		}
 		return a, nil
 	}
-	const q = `INSERT INTO assets (` + assetColumns + `)
+	q := `INSERT INTO ` + s.table(assetsTable) + ` (` + assetColumns + `)
 		VALUES (@id, @filename, @content_type, @size, @storage_key, @alt, @created_at)`
 	args["id"] = a.ID
 	if _, err := s.db.Exec(ctx, q, args); err != nil {
@@ -80,7 +85,7 @@ func (s *AssetStore) Create(ctx context.Context, a media.Asset) (media.Asset, er
 
 // Get returns the asset with the given id, or crud.ErrNotFound.
 func (s *AssetStore) Get(ctx context.Context, id string) (media.Asset, error) {
-	const q = `SELECT ` + assetColumns + ` FROM assets WHERE id = @id`
+	q := `SELECT ` + assetColumns + ` FROM ` + s.table(assetsTable) + ` WHERE id = @id`
 	row, err := pgxdb.QueryOne[assetRow](ctx, s.db, q, pgx.NamedArgs{"id": id})
 	if err != nil {
 		return media.Asset{}, err
@@ -90,7 +95,7 @@ func (s *AssetStore) Get(ctx context.Context, id string) (media.Asset, error) {
 
 // List returns all assets, newest first.
 func (s *AssetStore) List(ctx context.Context) ([]media.Asset, error) {
-	const q = `SELECT ` + assetColumns + ` FROM assets ORDER BY created_at DESC, id DESC`
+	q := `SELECT ` + assetColumns + ` FROM ` + s.table(assetsTable) + ` ORDER BY created_at DESC, id DESC`
 	rows, err := s.db.Query(ctx, q)
 	if err != nil {
 		return nil, pgxdb.MapError(err)
@@ -108,6 +113,6 @@ func (s *AssetStore) List(ctx context.Context) ([]media.Asset, error) {
 
 // Delete removes asset metadata by id.
 func (s *AssetStore) Delete(ctx context.Context, id string) error {
-	_, err := s.db.Exec(ctx, `DELETE FROM assets WHERE id = @id`, pgx.NamedArgs{"id": id})
+	_, err := s.db.Exec(ctx, `DELETE FROM `+s.table(assetsTable)+` WHERE id = @id`, pgx.NamedArgs{"id": id})
 	return err
 }
