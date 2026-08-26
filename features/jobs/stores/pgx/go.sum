@@ -3,10 +3,10 @@ github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/gopernicus/gopernicus/features/jobs v0.2.0 h1:W2jmcJVpKInyP8jGJ+0eRu568+DEzDnZQVAshsqU9TQ=
 github.com/gopernicus/gopernicus/features/jobs v0.2.0/go.mod h1:wUYDGDoNiQQ01dTYuvNpOoLq2WqvbEQOaEw8jCDNZNM=
-github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.1.0 h1:patBLQWE1l63vuu8XffSX/kL8SiYyZ9nTzfOnPeM0+Q=
-github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.1.0/go.mod h1:P7UI+jClnED/HzleVthqMas5yQQeC7MAYUo4Bw3SCpg=
-github.com/gopernicus/gopernicus/sdk v0.2.0 h1:ORtoOs8V6Z3tp5UFrnKrcOP0RWV6wzOhw8p0+Wi9eKk=
-github.com/gopernicus/gopernicus/sdk v0.2.0/go.mod h1:z0bypQiCybwPoxoDfzhYvB1BtH2av549QR84GacngaE=
+github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.5.0 h1:EANhsxvfIFkQ03zPTlhMY/GfbLqMdwaUEr7R8IUfq+8=
+github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.5.0/go.mod h1:56TbLSn2XcHH3ygeNOGchRhmTKQKdgZF3M+WDt/IFIw=
+github.com/gopernicus/gopernicus/sdk v0.4.0 h1:mQyrU+CFlsz6jDALqHl1/Xbi/Rl65EFLybG/MNSxaj4=
+github.com/gopernicus/gopernicus/sdk v0.4.0/go.mod h1:z0bypQiCybwPoxoDfzhYvB1BtH2av549QR84GacngaE=
 github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=
 github.com/jackc/pgpassfile v1.0.0/go.mod h1:CEx0iS5ambNFdcRtxPj5JhEz+xB6uRky5eyVu/W2HEg=
 github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 h1:iCEnooe7UlwOQYpKFhBabPMi4aNAfoODPEFNiAnClxo=

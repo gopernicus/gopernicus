@@ -4,8 +4,8 @@ go 1.26.1
 
 require (
 	github.com/gopernicus/gopernicus/features/events v0.1.0
-	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.1.0
-	github.com/gopernicus/gopernicus/sdk v0.1.0
+	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.5.0
+	github.com/gopernicus/gopernicus/sdk v0.4.0
 	github.com/jackc/pgx/v5 v5.8.0
 )
 
