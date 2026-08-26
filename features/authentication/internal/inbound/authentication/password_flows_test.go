@@ -7,7 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gopernicus/gopernicus/features/authentication/domain/apikey"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/challenge"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/serviceaccount"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/authsvc"
 	"github.com/gopernicus/gopernicus/features/authentication/internal/logic/delivery"
@@ -18,6 +20,13 @@ import (
 // newPasswordFlowsHandler mounts the JSON route table over the in-memory rail
 // with the password posture on or off.
 func newPasswordFlowsHandler(t *testing.T, disabled bool) http.Handler {
+	t.Helper()
+	return newPostureHandler(t, disabled, false)
+}
+
+// newPostureHandler mounts the JSON route table over the in-memory rail with
+// the password and machine-route postures set independently.
+func newPostureHandler(t *testing.T, passwordDisabled, machineRoutesDisabled bool) http.Handler {
 	t.Helper()
 	users := newMemUsers()
 	router, err := delivery.NewRouter(delivery.Deps{Mailer: nopMailer{}, MailFrom: "noreply@example.com"})
@@ -38,7 +47,10 @@ func newPasswordFlowsHandler(t *testing.T, disabled bool) http.Handler {
 		Cookie:                authsvc.CookieConfig{},
 		TokenSigner:           newFakeSigner(),
 		Clock:                 time.Now,
-		PasswordFlowsDisabled: disabled,
+		PasswordFlowsDisabled: passwordDisabled,
+		MachineRoutesDisabled: machineRoutesDisabled,
+		ServiceAccounts:       &memServiceAccounts{m: map[string]serviceaccount.ServiceAccount{}},
+		APIKeys:               &memAPIKeys{m: map[string]apikey.APIKey{}},
 	})
 	h := web.NewWebHandler()
 	Mount(h, svc, nil, "", MutationSecurity{}, nil, nil)
@@ -78,6 +90,32 @@ func TestPasswordFlowsDisabled_RoutesAbsent(t *testing.T) {
 
 	on := newPasswordFlowsHandler(t, false)
 	for _, p := range passwordRoutes {
+		if code := post(on, p); code == http.StatusNotFound {
+			t.Errorf("enabled (default): POST %s must be mounted, got 404", p)
+		}
+	}
+}
+
+// TestMachineRoutesDisabled_RoutesAbsent proves the lifecycle routes are
+// deny-by-absence under MachineRoutesDisabled while the machine subsystem
+// itself stays on (MachineEnabled true — a bearer key still authenticates).
+func TestMachineRoutesDisabled_RoutesAbsent(t *testing.T) {
+	lifecycle := []string{"/auth/service-accounts", "/auth/service-accounts/sa-1/keys", "/auth/api-keys/k-1/revoke"}
+	post := func(h http.Handler, path string) int {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	off := newPostureHandler(t, false, true)
+	for _, p := range lifecycle {
+		if code := post(off, p); code != http.StatusNotFound {
+			t.Errorf("disabled: POST %s = %d, want 404", p, code)
+		}
+	}
+	on := newPostureHandler(t, false, false)
+	for _, p := range lifecycle {
 		if code := post(on, p); code == http.StatusNotFound {
 			t.Errorf("enabled (default): POST %s must be mounted, got 404", p)
 		}

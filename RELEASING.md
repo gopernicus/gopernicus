@@ -149,6 +149,12 @@ two upgrade notes below.
 Google-only staff host). Additive, zero value keeps every route; no schema, no
 pin moves. See the upgrade note below.
 
+**2026-08-25: `features/authentication/v0.5.4`** — `Config.MachineRoutesDisabled`
+(plan of record `plans/authentication-machine-routes-toggle.md`; originating
+host gps-360-go). Additive, zero value keeps every route; no schema, no pin
+moves. Carries a **security caveat** on the bundled lifecycle routes — read the
+upgrade note before exposing them on a multi-user host.
+
 ## Tagging scheme
 
 Nested Go modules in a single repo are tagged with the module's directory as a
@@ -236,6 +242,33 @@ silently would break a host whose CSP no longer covers the kit's assets. Record 
 the module's next-tag upgrade note below and tell hosts to re-derive their CSP header.
 
 ## Upgrade notes (keyed to each module's next tag)
+
+### features/authentication — v0.5.4 (2026-08-25): MachineRoutesDisabled + a caveat on the bundled lifecycle routes (patch by owner ruling)
+
+authentication-machine-routes-toggle (plan of record
+`plans/authentication-machine-routes-toggle.md`). A **patch by owner ruling**:
+one additive `Config` bool whose zero value preserves every route; no schema,
+no `go.mod` change, no store retags.
+
+- **`Config.MachineRoutesDisabled bool`** (`env:"AUTH_MACHINE_ROUTES_DISABLED"`)
+  keeps API-key AUTHENTICATION on (`AuthenticateAPIKey` and the bearer path of
+  `RequirePrincipal` follow `MachineEnabled` as before) but mounts NONE of the
+  bundled lifecycle routes — `/auth/service-accounts`,
+  `/auth/service-accounts/{id}/keys`, `/auth/api-keys/{id}/revoke` — so they
+  answer 404 (deny-by-absence, the `PasswordFlowsDisabled` shape). A host then
+  serves its own gated routes over `CreateServiceAccount` / `MintAPIKey` /
+  `ListServiceAccounts` / `ListAPIKeys` / `RevokeAPIKey`.
+  `Service.MachineRoutesEnabled()` is the accessor the inbound layer reads.
+- **CAVEAT (unchanged behaviour, now documented):** the bundled lifecycle
+  routes are gated on `RequireUser` — ANY authenticated user — and are
+  UNSCOPED: `POST /auth/service-accounts` takes `owner_user_id` from the
+  request body (any user can create an act-as-user account owned by ANY other
+  user and mint its key — impersonation), `GET /auth/service-accounts` lists
+  every account, minting and revocation accept any id. That is acceptable for
+  a single-admin host and is not for a host with several trust levels. Such a
+  host should set `MachineRoutesDisabled` today; binding `owner_user_id` to the
+  caller and scoping list/mint/revoke to the creator is a separate, behaviour-
+  changing fix that needs an owner ruling and is NOT in this tag.
 
 ### features/authentication — v0.5.3 (2026-08-25): PasswordFlowsDisabled — the password credential as a posture (patch by owner ruling)
 

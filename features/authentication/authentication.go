@@ -851,6 +851,15 @@ type Config struct {
 	// use-cases refuse with ErrPasswordFlowsDisabled. Default false keeps every
 	// route. Hasher stays REQUIRED (the feature's credential rail is shared).
 	PasswordFlowsDisabled bool `env:"AUTH_PASSWORD_FLOWS_DISABLED"`
+	// MachineRoutesDisabled keeps API-key AUTHENTICATION on (a bearer key still
+	// resolves a principal) but mounts NONE of the bundled service-account /
+	// API-key lifecycle routes (/auth/service-accounts*, /auth/api-keys/{id}/revoke).
+	// Those routes are gated on any authenticated user and are UNSCOPED —
+	// `owner_user_id` is taken from the request body, listing is global, minting
+	// and revocation take any id — which suits a single-admin host, not one with
+	// several trust levels. Such a host sets this and serves its own gated
+	// lifecycle routes over the Service methods. Default false keeps them.
+	MachineRoutesDisabled bool `env:"AUTH_MACHINE_ROUTES_DISABLED"`
 
 	// RuntimeMode is the REQUIRED fail-closed posture (auth v3 §8). It has no
 	// default: empty → ErrRuntimeModeRequired, unknown → ErrRuntimeModeInvalid,
@@ -1840,6 +1849,7 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 		},
 		RequireVerifiedEmail:  cfg.RequireVerifiedEmail,
 		PasswordFlowsDisabled: cfg.PasswordFlowsDisabled,
+		MachineRoutesDisabled: cfg.MachineRoutesDisabled,
 		OAuthAccounts:         repos.OAuthAccounts,
 		OAuthStates:           repos.OAuthStates,
 		Providers:             cfg.Providers,

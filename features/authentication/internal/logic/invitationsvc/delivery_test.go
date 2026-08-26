@@ -19,8 +19,10 @@ import (
 // payload round-trips for the processor.
 type fakeEncrypter struct{}
 
-func (fakeEncrypter) Encrypt(plaintext string) (string, error)  { return "enc:" + plaintext, nil }
-func (fakeEncrypter) Decrypt(ciphertext string) (string, error) { return strings.TrimPrefix(ciphertext, "enc:"), nil }
+func (fakeEncrypter) Encrypt(plaintext string) (string, error) { return "enc:" + plaintext, nil }
+func (fakeEncrypter) Decrypt(ciphertext string) (string, error) {
+	return strings.TrimPrefix(ciphertext, "enc:"), nil
+}
 
 // Generic job lifecycle states the in-test dispatcher records (declared as literals
 // here since they are unexported in the delivery package).

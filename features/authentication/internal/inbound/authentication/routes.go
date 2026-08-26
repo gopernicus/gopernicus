@@ -214,7 +214,10 @@ func Mount(r feature.RouteRegistrar, svc authService, inv InvitationService, lis
 	// Machine-identity lifecycle routes are registered only when both machine
 	// repositories are wired (deny-by-absence, design §4.1); an unwired host
 	// returns 404 for them.
-	if svc.MachineEnabled() {
+	// A host may keep key authentication on while serving its own gated lifecycle
+	// routes (MachineRoutesDisabled): the bundled ones are gated on ANY
+	// authenticated user and are unscoped.
+	if svc.MachineEnabled() && svc.MachineRoutesEnabled() {
 		mountMachine(r, h, svc.RequireUser)
 	}
 
