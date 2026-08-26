@@ -258,6 +258,30 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
+### features/authorization — v0.2.0 (next tag): RequirePermission in coordinates (minor, additive)
+
+`Service.RequirePermissionOn(resourceType, permission, pathParam)` and
+`Service.RequirePermissionFixed(resourceType, permission, resourceID)` join
+`RequirePermission(permission, resolver)`, which is unchanged. A route line now
+reads as its own authorization question:
+
+```go
+r.GET("/orgs/{orgID}/people", h.people, svc.RequirePermissionOn("org", "view", "orgID"))
+r.POST("/campaigns", h.create, svc.RequirePermissionFixed("platform", "admin", "main"))
+```
+
+The coordinates are **load-bearing and checked at registration** against the
+compiled model: a `(resourceType, permission)` pair the schema does not declare,
+an empty parameter name, or an empty fixed id panics when the route is mounted —
+never a gate that quietly checks something the model never grants. Request
+semantics are `RequirePermission`'s (401 / 403 / 500 / 503, fail closed);
+`PathResource(resourceType, param)` is exported for hosts composing their own
+gates, and an empty path value is a resolver error (500 — the honest answer to a
+parameter name that does not match the route pattern). Same relationship-kind
+precondition as `RequirePermission` (panics at mount on a roles-only host).
+Origin: gps-360-go / coordination-hub's per-route authorizer style (owner
+ruling, 2026-08-26).
+
 ### integrations/datastores/pgxdb v0.5.0 + every feature `stores/pgx` — tagged 2026-08-26: WithSchema — host-chosen schema instead of a search_path pin (minor across all six; ONE train)
 
 Plan of record `plans/pgx-store-schema-option.md` (gopernicus issue #4;

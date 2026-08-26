@@ -119,3 +119,63 @@ func TestRequirePermission(t *testing.T) {
 		})
 	}
 }
+
+// TestRequirePermissionCoordinates: the coordinate forms are RequirePermission
+// over PathResource/FixedResource, and their coordinates are checked at
+// registration — an undeclared pair or a nameless parameter panics when the
+// route is mounted, never at request time.
+func TestRequirePermissionCoordinates(t *testing.T) {
+	ownerTuple := relationship.CreateRelationship{
+		ResourceType: "post", ResourceID: "p1", Relation: "owner", SubjectType: "user", SubjectID: "u1",
+	}
+	svc, err := NewService(&fakeStore{tuples: []relationship.CreateRelationship{ownerTuple}}, testSchema(), Config{})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	call := func(gate func(http.Handler) http.Handler, principal *identity.Principal, pathValue string) (int, bool) {
+		ran := false
+		req := httptest.NewRequest(http.MethodGet, "/gated", nil)
+		if pathValue != "" {
+			req.SetPathValue("postID", pathValue)
+		}
+		if principal != nil {
+			req = req.WithContext(identity.WithPrincipal(req.Context(), *principal))
+		}
+		rec := httptest.NewRecorder()
+		gate(markerHandler(&ran)).ServeHTTP(rec, req)
+		return rec.Code, ran
+	}
+	owner := &identity.Principal{Type: "user", ID: "u1"}
+	stranger := &identity.Principal{Type: "user", ID: "u2"}
+
+	on := svc.RequirePermissionOn("post", "delete", "postID")
+	if code, ran := call(on, owner, "p1"); code != http.StatusOK || !ran {
+		t.Fatalf("owner on p1: %d ran=%v", code, ran)
+	}
+	if code, ran := call(on, stranger, "p1"); code != http.StatusForbidden || ran {
+		t.Fatalf("stranger on p1: %d ran=%v", code, ran)
+	}
+	if code, ran := call(on, owner, ""); code != http.StatusInternalServerError || ran {
+		t.Fatalf("empty path value must fail closed: %d ran=%v", code, ran)
+	}
+	fixed := svc.RequirePermissionFixed("post", "delete", "p1")
+	if code, ran := call(fixed, owner, ""); code != http.StatusOK || !ran {
+		t.Fatalf("fixed owner: %d ran=%v", code, ran)
+	}
+
+	for name, mount := range map[string]func(){
+		"undeclared permission": func() { svc.RequirePermissionOn("post", "fly", "postID") },
+		"undeclared resource":   func() { svc.RequirePermissionOn("comet", "delete", "postID") },
+		"empty parameter":       func() { svc.RequirePermissionOn("post", "delete", "") },
+		"empty fixed id":        func() { svc.RequirePermissionFixed("post", "delete", "") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("must panic at registration")
+				}
+			}()
+			mount()
+		})
+	}
+}

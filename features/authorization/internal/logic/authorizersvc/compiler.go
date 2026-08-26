@@ -190,6 +190,18 @@ func (c *CompiledSchema) permissionChecks(resourceType, permission string) []Per
 	return rt.permissions[permission].checks
 }
 
+// declaresPermission reports whether the compiled model declares permission on
+// resourceType — the registration-time legality check behind the coordinate
+// forms of RequirePermission.
+func (c *CompiledSchema) declaresPermission(resourceType, permission string) bool {
+	rt, ok := c.resourceTypes[resourceType]
+	if !ok {
+		return false
+	}
+	_, ok = rt.permissions[permission]
+	return ok
+}
+
 // relationSubjects returns a relation's compiled allowed subjects. resourceTypeOK
 // reports whether the resource type is declared and relationOK whether the
 // relation exists on it, so a caller can name the exact gap.

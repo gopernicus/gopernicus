@@ -2,6 +2,7 @@ package authorizersvc
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
@@ -18,6 +19,54 @@ type ResourceResolver func(r *http.Request) (Resource, error)
 func FixedResource(resourceType, resourceID string) ResourceResolver {
 	res := Resource{Type: resourceType, ID: resourceID}
 	return func(*http.Request) (Resource, error) { return res, nil }
+}
+
+// PathResource resolves resourceType:<value of the named path parameter>. An
+// empty value is a resolver error — the gate fails closed (500), which is the
+// honest answer to a parameter name that does not match the route pattern.
+func PathResource(resourceType, param string) ResourceResolver {
+	return func(r *http.Request) (Resource, error) {
+		id := web.Param(r, param)
+		if id == "" {
+			return Resource{}, fmt.Errorf("authorization: path parameter %q is empty (does the route pattern name it?)", param)
+		}
+		return Resource{Type: resourceType, ID: id}, nil
+	}
+}
+
+// RequirePermissionOn is RequirePermission in COORDINATES — the route line
+// reads as its own authorization question:
+//
+//	r.GET("/orgs/{orgID}/people", h.people, svc.RequirePermissionOn("org", "view", "orgID"))
+//
+// The coordinates are load-bearing and checked at REGISTRATION against the
+// compiled model: a (resourceType, permission) pair the model does not declare,
+// or an empty parameter name, panics when the route is mounted — never a gate
+// that quietly checks something the model never grants. Request semantics are
+// RequirePermission's over PathResource.
+func (s *Service) RequirePermissionOn(resourceType, permission, pathParam string) web.Middleware {
+	s.mustDeclare(resourceType, permission)
+	if pathParam == "" {
+		panic(fmt.Sprintf("authorization: RequirePermissionOn(%q, %q) needs a path parameter name", resourceType, permission))
+	}
+	return s.RequirePermission(permission, PathResource(resourceType, pathParam))
+}
+
+// RequirePermissionFixed is the coordinate form over one named resource —
+// e.g. RequirePermissionFixed("platform", "admin", "main") — with the same
+// registration-time legality check as RequirePermissionOn.
+func (s *Service) RequirePermissionFixed(resourceType, permission, resourceID string) web.Middleware {
+	s.mustDeclare(resourceType, permission)
+	if resourceID == "" {
+		panic(fmt.Sprintf("authorization: RequirePermissionFixed(%q, %q) needs a resource id", resourceType, permission))
+	}
+	return s.RequirePermission(permission, FixedResource(resourceType, resourceID))
+}
+
+func (s *Service) mustDeclare(resourceType, permission string) {
+	if !s.compiled.declaresPermission(resourceType, permission) {
+		panic(fmt.Sprintf("authorization: the model declares no permission %q on resource type %q — fix the gate or the schema", permission, resourceType))
+	}
 }
 
 // RequirePermission returns web.Middleware gating next on the context Principal

@@ -13,6 +13,10 @@ type ResourceResolver = authorizersvc.ResourceResolver
 // FixedResource always resolves the same resource, ignoring the request.
 var FixedResource = authorizersvc.FixedResource
 
+// PathResource resolves resourceType:<value of the named path parameter>; an
+// empty value fails the gate closed (500).
+var PathResource = authorizersvc.PathResource
+
 // RequirePermission returns web.Middleware gating a route on the context
 // Principal holding permission on the resolved resource. It is a thin
 // re-export of the internal engine implementation — this root package writes NO
@@ -33,4 +37,25 @@ func (s *Service) RequirePermission(permission string, resource ResourceResolver
 		panic("authorization: RequirePermission requires the relationship kind (Repositories.Relationships is nil); a roles-only host must not mount it")
 	}
 	return s.relationships.RequirePermission(permission, resource)
+}
+
+// RequirePermissionOn is RequirePermission in coordinates — (resourceType,
+// permission, pathParam) — so a route line reads as its own authorization
+// question. The pair is checked against the compiled model at REGISTRATION:
+// an undeclared pair or an empty parameter name panics when the route is
+// mounted. Same relationship-kind precondition as RequirePermission.
+func (s *Service) RequirePermissionOn(resourceType, permission, pathParam string) web.Middleware {
+	if s.relationships == nil {
+		panic("authorization: RequirePermissionOn requires the relationship kind (Repositories.Relationships is nil); a roles-only host must not mount it")
+	}
+	return s.relationships.RequirePermissionOn(resourceType, permission, pathParam)
+}
+
+// RequirePermissionFixed is the coordinate form over one named resource, with
+// the same registration-time legality check as RequirePermissionOn.
+func (s *Service) RequirePermissionFixed(resourceType, permission, resourceID string) web.Middleware {
+	if s.relationships == nil {
+		panic("authorization: RequirePermissionFixed requires the relationship kind (Repositories.Relationships is nil); a roles-only host must not mount it")
+	}
+	return s.relationships.RequirePermissionFixed(resourceType, permission, resourceID)
 }
