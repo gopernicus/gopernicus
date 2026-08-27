@@ -1,8 +1,10 @@
 package authentication
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -477,9 +479,10 @@ func TestRegisterMachineDenyByAbsence(t *testing.T) {
 	}
 }
 
-// TestRegisterMachineMountsRoutes proves the machine routes ARE mounted and
-// session-gated (401 without one) when both machine repos are wired.
-func TestRegisterMachineMountsRoutes(t *testing.T) {
+// TestRegisterMachineNoGateDenyByAbsence proves the machine lifecycle routes are
+// absent (404) when the repos are wired but no Config.MachineRoutesGate names a
+// policy: the feature never guesses one, so it mounts nothing (D1).
+func TestRegisterMachineNoGateDenyByAbsence(t *testing.T) {
 	h := web.NewWebHandler()
 	repos := Repositories{ServiceAccounts: stubServiceAccounts{}, APIKeys: stubAPIKeys{}}
 	svc, err := NewService(repos, Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment, DeliveryMode: DeliveryModeOff})
@@ -492,8 +495,80 @@ func TestRegisterMachineMountsRoutes(t *testing.T) {
 	req := httptest.NewRequest("GET", "/auth/service-accounts", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("service-accounts (repos wired, no gate) status = %d, want 404", rec.Code)
+	}
+}
+
+// TestRegisterMachineMountsRoutes proves the machine routes ARE mounted and
+// identity-gated (401 without a credential — the host's gate never runs) when
+// both machine repos are wired AND a gate is named.
+func TestRegisterMachineMountsRoutes(t *testing.T) {
+	h := web.NewWebHandler()
+	repos := Repositories{ServiceAccounts: stubServiceAccounts{}, APIKeys: stubAPIKeys{}}
+	gateRan := false
+	gate := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gateRan = true
+			next.ServeHTTP(w, r)
+		})
+	}
+	svc, err := NewService(repos, Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment, DeliveryMode: DeliveryModeOff, MachineRoutesGate: gate})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	if err := svc.Register(feature.Mount{Router: h}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	req := httptest.NewRequest("GET", "/auth/service-accounts", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("service-accounts status = %d, want 401 (route mounted + gated)", rec.Code)
+	}
+	if gateRan {
+		t.Error("the host gate ran for an unauthenticated request; RequireUser must be outermost")
+	}
+}
+
+// TestNewServiceMachineGateWithoutRepos proves the contradictory wiring fails
+// LOUDLY: a gate with no machine subsystem is a policy that can never run.
+func TestNewServiceMachineGateWithoutRepos(t *testing.T) {
+	gate := func(next http.Handler) http.Handler { return next }
+	_, err := NewService(Repositories{}, Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment, DeliveryMode: DeliveryModeOff, MachineRoutesGate: gate})
+	if !errors.Is(err, ErrMachineRoutesGateWithoutRepos) {
+		t.Fatalf("gate without machine repos: err=%v, want ErrMachineRoutesGateWithoutRepos", err)
+	}
+	// One repository is not enough either — the pair check fires first there, so
+	// pair BOTH with a gate to isolate this error.
+	_, err = NewService(Repositories{ServiceAccounts: stubServiceAccounts{}}, Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment, DeliveryMode: DeliveryModeOff, MachineRoutesGate: gate})
+	if !errors.Is(err, ErrMachineReposRequired) {
+		t.Fatalf("half-wired machine repos: err=%v, want ErrMachineReposRequired", err)
+	}
+}
+
+// TestNewServiceWarnsOnMachineReposWithoutGate proves an upgrading host learns
+// the deny-by-absence posture at BOOT rather than from production 404s.
+func TestNewServiceWarnsOnMachineReposWithoutGate(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	repos := Repositories{ServiceAccounts: stubServiceAccounts{}, APIKeys: stubAPIKeys{}}
+	base := Config{Hasher: stubHasher{}, Mailer: stubMailer{}, TokenSigner: stubSigner{}, RuntimeMode: RuntimeModeDevelopment, DeliveryMode: DeliveryModeOff, Logger: log}
+	if _, err := NewService(repos, base); err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("Config.MachineRoutesGate is unset")) {
+		t.Errorf("expected the machine-gate posture WARN, got: %s", buf.String())
+	}
+
+	buf.Reset()
+	gated := base
+	gated.MachineRoutesGate = func(next http.Handler) http.Handler { return next }
+	if _, err := NewService(repos, gated); err != nil {
+		t.Fatalf("NewService (gated): %v", err)
+	}
+	if bytes.Contains(buf.Bytes(), []byte("Config.MachineRoutesGate is unset")) {
+		t.Errorf("a gated host must not see the posture WARN, got: %s", buf.String())
 	}
 }
 

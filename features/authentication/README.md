@@ -247,12 +247,47 @@ answers `Cache-Control: no-store`. See
 | `POST /auth/admin/users/{id}/verification/resend` | `UserAdminResendVerification` | 202 + secret-free receipt, or a typed 409/404 |
 
 **Machine identity — registered only when `ServiceAccounts` AND `APIKeys` are
-both wired; all session-gated:**
+both wired AND the host names a `Config.MachineRoutesGate`. Every route carries
+the same stack, outermost first: `RequireUser` → `RequireLiveSession` → (on the
+three POSTs) the browser-safe `Origin`/CSRF gate → the host's gate — human,
+live, same-origin, authorized. See
+[Machine identity](#machine-identity--ownership-delegation-and-the-two-seams):**
 
-- `POST /auth/service-accounts`, `GET /auth/service-accounts`
-- `POST /auth/service-accounts/{id}/keys` — plaintext returned EXACTLY ONCE
-  (SHA-256 at rest); `GET /auth/service-accounts/{id}/keys`
-- `POST /auth/api-keys/{id}/revoke`
+- `POST /auth/service-accounts` — `{name, description?, act_as_user?,
+  act_as_user_id?}` → 201 `{id, name, description, created_by, act_as_user,
+  owner_user_id?, created_at, updated_at}`. The **calling human** is
+  `created_by` and, for an act-as-user account, the default `owner_user_id`
+  (act-as-self names no id); `act_as_user_id` delegates ownership to another
+  EXISTING user. `act_as_user_id` without `act_as_user` → 400; an unknown
+  `act_as_user_id` → 400 `invalid reference`; **`owner_user_id` in the body →
+  400 naming the field** (the v0.5.x spelling is refused for one release, then
+  dropped). `Content-Type: application/json` is REQUIRED → 415 otherwise; strict
+  decode — an unknown field or trailing data → 400, a body over 1 MiB → 413.
+- `GET /auth/service-accounts` — the GLOBAL page. Behind the gate there is no
+  second, creator-scoped view (a host that wants one owns the routes).
+- `POST /auth/service-accounts/{id}/keys` — `{name, expires_at?}` → 201
+  `Cache-Control: no-store` with the plaintext `key` returned EXACTLY ONCE
+  (SHA-256 at rest); `application/json` required → 415 otherwise; unknown
+  account → 404. `GET /auth/service-accounts/{id}/keys` pages that account's
+  keys, never a secret.
+- `POST /auth/api-keys/{id}/revoke` — 200 `{"status":"revoked"}`, idempotent;
+  unknown key → 404.
+
+No credential — or an **API-key bearer**, act-as-user or not — is **401** on all
+five: a key never administers machine identities through the bundled routes, so
+a key can never mint another key. A revoked session is 401 within one
+round-trip. A live human the gate refuses gets whatever the gate writes
+(`features/authorization`'s gates write FS9 `permission_denied` 403); the
+bundled handlers write no 403 of their own. **No gate → all five answer 404**
+(deny-by-absence), with a boot WARN when the machine repositories are wired.
+
+**Cookie clients must double-submit the CSRF token on the three POSTs** (since
+v0.6.0), exactly as on `/auth/admin/*`: `GET /auth/csrf`, then echo the
+`__Host-auth_csrf` value in `X-CSRF-Token` from an allowlisted `Origin`. A
+missing or mismatched token is 403 `permission_denied`; a non-allowlisted origin
+is 403 `origin_rejected` — both BEFORE the host's gate runs. Bearer-only callers
+(no session cookie) skip the gate entirely, and the two GETs are body-less reads
+that never carry it.
 
 **Bearer JWT / token endpoint — `Config.TokenSigner` is REQUIRED, so
 `/auth/token` is always registered:**
@@ -617,6 +652,12 @@ subsystems, no shared type.
   must not replay a mutation). They never sniff `Accept` or Fetch Metadata — mount
   them deliberately on HTML routes. The JSON `RequirePrincipal` / `RequireLiveSession`
   keep their byte-stable 401 behavior.
+- `Config.MachineRoutesGate` — the one middleware the feature CONSUMES instead of
+  providing: the host's authorization, applied last in the bundled machine-identity
+  lifecycle stack (`RequireUser` → `RequireLiveSession` → the browser-safe
+  `Origin`/CSRF gate on the three mutations → gate); nil leaves those routes
+  unmounted (404). See
+  [Machine identity](#machine-identity--ownership-delegation-and-the-two-seams).
 - `Service.CurrentUser(ctx)` / `Service.CurrentPrincipal(ctx)` — read the resolved
   identity; `Service.AuthenticateAPIKey(ctx, rawKey)` for non-HTTP callers.
 - `Service.RunDelivery(ctx)` — the host-owned `in_process` delivery runtime loop
@@ -723,7 +764,7 @@ default, so a host can never inherit the development posture; unknown →
 | `EmailBranding` (*email.Branding) | nil → the sdk's unset fallback (`Your Company`, no logo, no tagline, no address). Fills the bundled layout frame's `{{.Brand.*}}` values without touching bodies or routes. All auth mail renders with `email.LayoutTransactional`, which renders **`LogoURL`, `Name`, `Tagline`, and `Address`** — a non-empty `LogoURL` now emits an `<img>` above the brand name, so a logo works **without replacing the whole layout** (fixed in `sdk v0.3.x`; previously the transactional layout silently dropped it). `Name`/`Tagline` stay visible alongside the image because mail clients block external images by default, and the `alt` text is `Name` (falling back to `Your Company`). Use an absolute, publicly fetchable **HTTPS** URL: the sdk renderer never fetches, resolves, or validates it, and `html/template` is the escaping boundary. An `EmailLayouts` override at `LayerApp` still wins — a host replacing `transactional.html` owns its own logo markup. |
 | `RequireVerifiedEmail` | false. true → login AND `/auth/token` refuse an unverified user with 403 (**requires a WORKING Mailer**, else total login lockout). |
 | `PasswordFlowsDisabled` | false (every route mounted). true → the password credential is OFF as a posture: `Register` mounts NONE of `/auth/register`, `/auth/login`, `/auth/verify`, `/auth/verification/resend`, `/auth/password/{forgot,reset,change,set,remove,remove/start}`, `/auth/step-up/password` (JSON and HTML pages — deny-by-absence, 404), and the matching `Service` use-cases refuse with `ErrPasswordFlowsDisabled` (wraps `sdk.ErrNotFound`). For a Google-only / passwordless-only host. `Hasher` stays required. |
-| `MachineRoutesDisabled` | false (lifecycle routes mounted when the machine repositories are wired). true → key AUTHENTICATION stays on but NONE of `/auth/service-accounts*` / `/auth/api-keys/{id}/revoke` are mounted (404). **Why a host wants this:** the bundled lifecycle routes are gated on ANY authenticated user and are unscoped — `owner_user_id` comes from the request body (any user can create an act-as-user account owned by any other user and mint its key), listing is global, minting and revocation take any id. Fine for a single-admin host; a host with several trust levels sets this and serves its own gated routes over `CreateServiceAccount` / `MintAPIKey` / `ListServiceAccounts` / `ListAPIKeys` / `RevokeAPIKey`. |
+| `MachineRoutesGate` (web.Middleware) | **nil → the bundled machine-identity lifecycle routes are NOT mounted** (404, deny-by-absence) even when `ServiceAccounts` + `APIKeys` are wired, and `NewService` WARNs so an upgrading host learns the posture at boot instead of from production 404s. Key AUTHENTICATION is unaffected (`AuthenticateAPIKey`, `RequireServiceAccount`, and the bearer path of `RequirePrincipal` still follow `MachineEnabled`). Non-nil → `POST`/`GET /auth/service-accounts`, `POST`/`GET /auth/service-accounts/{id}/keys` and `POST /auth/api-keys/{id}/revoke` mount, each as `RequireUser` → `RequireLiveSession` → (on the three POSTs) the browser-safe `Origin`/CSRF gate → this gate: human credential only (an API key, act-as-user or not, is 401), immediately revocable, CSRF-safe for cookie clients, then the host's authorization. Typical: `authorizer.RequirePermissionFixed("platform", "steward", "global")`. Set with the machine subsystem unwired (both repositories nil — a half-wired pair fails earlier with `ErrMachineReposRequired`) → `ErrMachineRoutesGateWithoutRepos` (a policy that can never be consulted is contradictory wiring). A **single** middleware, not the `[]web.Middleware` of `cms.Config.AdminMiddleware` / `events.Config.StreamMiddleware`: nil is the unambiguous "no policy", where an empty non-nil slice would mean "mounted, ungated". **Scope behind the gate:** ownership is fixed (the caller is the creator; delegation is the explicit, validated, audited `act_as_user_id`, and `owner_user_id` is refused by name), but **listing is GLOBAL** — a gate holder sees every service account, lists the keys of any account, and mints/revokes by any id. A host that needs a creator-scoped list or per-object authorization leaves the gate nil and serves its own routes over `CreateServiceAccount` / `MintAPIKey` / `ListServiceAccounts` / `ListAPIKeys` / `RevokeAPIKey`. |
 | `RateLimiter` | `ratelimiter.NewMemory()` — an in-process limiter (not "unlimited"). **Production rejects a per-process limiter** (`ErrNonDurableRateLimiter`): a multi-instance host needs a shared/durable one. |
 | `SessionCookie` (CookieConfig) | zero value usable: name `session`, path `/`, browser-session cookie backed by a 7-day server session. `Secure` is a host deployment choice (true behind TLS). |
 | `RefreshCookiePath string` | the refresh cookie's `Path` scope (`AUTH_REFRESH_COOKIE_PATH`). Empty → `/auth` (covers `/auth/refresh` AND `/auth/logout`). **A host mounting the feature under a prefix MUST set the FULL prefixed path** — `feature.PrefixRegistrar{Prefix: "/api/v1"}` → `RefreshCookiePath: "/api/v1/auth"` — else the browser never sends the refresh cookie to `/api/v1/auth/refresh` and cookie-driven refresh dies SILENTLY (the registrar exposes registration, not its mount prefix, so the feature cannot derive it). A non-empty value must be a valid absolute cookie path (leading `/`, no query/fragment/control/header-delimiter character, no trailing slash except `/` itself) or construction fails with `ErrRefreshCookiePathInvalid`. The SAME resolved path issues (login, rotation) and deletes (logout) the cookie. Configures ONLY the refresh cookie: the access cookie keeps `SessionCookie.Path` and both keep `SameSite=Lax`. |
@@ -1385,6 +1426,59 @@ refresh, and hydration → idempotent replay → reactivate → log in again) is
 Migration **`0014_user_status.sql`** is append-only and must be applied before
 deploying a binary built against the new store tag — see the store READMEs.
 
+## Machine identity — ownership, delegation, and the two seams
+
+The bundled lifecycle routes mount **only** when the host names a
+`Config.MachineRoutesGate`. The feature ships no policy of its own: it supplies
+the credential class and the revocation check, the host supplies the
+authorization.
+
+**Who owns an account.** The creator is the **calling human**, never a body
+field — `created_by` is `CurrentUser(ctx)`. An `act_as_user` account defaults to
+that caller as `owner_user_id`, so act-as-self names no id. Naming
+`act_as_user_id` **delegates**: the account's keys then authenticate as that
+other user. That is a real impersonation capability, which is exactly why it
+lives behind the gate — the service validates that the named user EXISTS
+(unknown → `sdk.ErrInvalidReference` → 400 `invalid reference`; an unwired user
+rail → `ErrIdentityUnavailable`, fail closed) and audits the delegation. Before
+v0.6.0 the owner came straight from the body's `owner_user_id`, so any
+authenticated user could own another user's impersonation credential; that field
+is now **refused by name with a 400** for one release, then dropped.
+
+**Why the stack is `RequireUser` → `RequireLiveSession` → gate.** `RequireUser`
+admits the human credential class only, so an API key — including an act-as-user
+key, which resolves to its human owner and is otherwise indistinguishable
+downstream — is 401 on every lifecycle route: a key can never mint another key
+or delegate. `RequireLiveSession` closes the ≤ `AccessTokenTTL` stale-JWT window,
+the invitation precedent (credential issuance is not less sensitive than an
+invitation). The three MUTATIONS then clear the browser-safe `Origin`/CSRF gate,
+so a cookie client's mint or revoke is refused as CSRF before the host's policy
+is ever consulted; bearer-only callers skip it. The gate then answers
+authorization in the host's own vocabulary and writes its own denial.
+
+**Audit.** Each lifecycle op records one security event whose `Actor` is the
+principal in the request context: `service_account_created`, `api_key_minted`
+(prefix and account id only; `UserID` = the act-as owner the key authenticates
+as), `api_key_revoked` — recorded per successful CALL, not per state
+transition, so re-revoking an already-revoked key writes a second row (the
+revoke path holds only the key id; `APIKeyRepository` has no Get-by-id) — see
+[the audit rail](#the-security-event-audit-rail-v3-events).
+
+**The two seams — and the one that does not exist.**
+
+| seam | how |
+|---|---|
+| **Own the routes** | leave `MachineRoutesGate` nil and serve your own transport over the unchanged `Service.CreateServiceAccount` / `ListServiceAccounts` / `MintAPIKey` / `ListAPIKeys` / `RevokeAPIKey`. This is the seam for a creator-scoped list, per-object revoke authorization, a naming policy, or a maximum key TTL. The owner-existence check and the audit rows apply here too — they live in the service, not the handler. |
+| **Own the store** | fill `Repositories.ServiceAccounts` / `.APIKeys` yourself (both or neither, else `ErrMachineReposRequired`). |
+
+There is **no "decorate the service" seam**: `Register` hands the concrete
+service to the bundled routes, so nothing lets a host wrap one method and have
+those routes honour it. Decoration today means owning the routes. A
+`Config.MachineLifecycleDecorator` is deliberately deferred until a host needs
+one — the cited uses (naming policy, max TTL) are reachable through the two
+seams above, and exporting a lifecycle port now would freeze the positional
+`CreateServiceAccount` signature that the v1.0 cut should restructure.
+
 ## OAuth account linking — two distinct flows
 
 There are **two** ways a provider identity ends up attached to a user, and they
@@ -1699,9 +1793,19 @@ identifier events (`email_change_code_sent`/`email_changed`/`email_removed`,
 `phone_change_code_sent`/`phone_changed`/`phone_removed`,
 `identifier_uses_changed`); `passwordless_start` (accepted/blocked) and
 `passwordless_login` (success/failure/blocked); the challenge rail's own
-`challenge_lockout`; and the invitation events. The forgot-password *request*
-records nothing (it must not reveal whether an address exists). There is no HTTP
-read surface — query the table, or see the proof host's dev-only debug route.
+`challenge_lockout`; the invitation events; and the machine-identity lifecycle
+events — `service_account_created` (`UserID` = the act-as owner when the account
+acts as a human; Details `service_account_id`, `act_as_user`, `delegated`),
+`api_key_minted` (`UserID` = the act-as owner when the account acts as a human;
+Details `key_prefix`, `service_account_id` — **never** the raw key or its hash)
+and `api_key_revoked` (Details `key_id`), recorded once per successful revoke
+CALL rather than per state transition — a replayed revoke of the same key writes
+a second row, because the revoke path carries only the key id and
+`APIKeyRepository` has no Get-by-id to read the prior state. Their `Actor` is the
+principal resolved from the request context, never a caller-supplied creator
+string. The forgot-password *request* records nothing (it must not reveal whether
+an address exists). There is no HTTP read surface — query the table, or see the
+proof host's dev-only debug route.
 
 ## Sessions, access JWTs, and refresh rotation (2026-07-11)
 

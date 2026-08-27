@@ -74,10 +74,10 @@ func newStepUpHandler(t *testing.T) (http.Handler, *memAuthGrants) {
 		TokenSigner:          newFakeSigner(),
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, nil, "", MutationSecurity{
+	Mount(h, Deps{Auth: svc, Mutation: MutationSecurity{
 		AllowedOrigins:    []string{"https://app.example.com"},
 		SessionCookieName: svc.SessionCookieName(),
-	}, nil, nil)
+	}})
 	return h, grants
 }
 

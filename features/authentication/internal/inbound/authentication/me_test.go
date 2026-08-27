@@ -71,7 +71,7 @@ func newMeHandler(t *testing.T, prefix string) meFixture {
 	if prefix != "" {
 		r = feature.PrefixRegistrar{Prefix: prefix, Next: h}
 	}
-	Mount(r, svc, nil, crud.StrategyCursor, MutationSecurity{}, nil, nil)
+	Mount(r, Deps{Auth: svc, ListStrategy: crud.StrategyCursor, MachineGate: allowMachineGate})
 	return meFixture{h: h, users: users, idents: idents, passwords: passwords, sessions: sessions}
 }
 
@@ -216,7 +216,7 @@ func TestMeRejectsMachinePrincipal(t *testing.T) {
 	f.seedAccount("u1", "alice@example.com")
 	cookie := f.login(t, "alice@example.com")
 
-	create := do(t, f.h, "POST", "/auth/service-accounts", `{"name":"bot"}`, cookie)
+	create := machinePOST(t, f.h, "/auth/service-accounts", `{"name":"bot"}`, cookie)
 	if create.Code != http.StatusCreated {
 		t.Fatalf("create service account status = %d, want 201; body=%s", create.Code, create.Body)
 	}
@@ -224,7 +224,7 @@ func TestMeRejectsMachinePrincipal(t *testing.T) {
 	if err := json.Unmarshal(create.Body.Bytes(), &sa); err != nil {
 		t.Fatalf("decode service account: %v", err)
 	}
-	mint := do(t, f.h, "POST", "/auth/service-accounts/"+sa["id"].(string)+"/keys", `{"name":"deploy"}`, cookie)
+	mint := machinePOST(t, f.h, "/auth/service-accounts/"+sa["id"].(string)+"/keys", `{"name":"deploy"}`, cookie)
 	if mint.Code != http.StatusCreated {
 		t.Fatalf("mint key status = %d, want 201; body=%s", mint.Code, mint.Body)
 	}

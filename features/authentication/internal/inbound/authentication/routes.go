@@ -49,6 +49,36 @@ type handlers struct {
 	htmlPolicy *HTMLResourcePolicy
 }
 
+// Deps is the struct input Mount takes: the services, the transport-edge
+// policies, and the optional host seams the route table needs. auth.Register is
+// its only production caller — a struct keeps the optional members (invitations,
+// views, the HTML policy, the machine gate) named at the call site instead of
+// growing another positional parameter each release.
+type Deps struct {
+	// Auth is the domain service every handler delegates to. Required.
+	Auth authService
+	// Invitations is the invitation service, a GENUINE nil interface when no
+	// Granter is wired: nil → none of the invitation routes register
+	// (deny-by-absence, design §6).
+	Invitations InvitationService
+	// ListStrategy is the transport-edge DefaultStrategy the list handlers pass
+	// to crud.ParseListRequest (authentication.Config.ListStrategy).
+	ListStrategy crud.Strategy
+	// Mutation is the browser-safe-mutation policy (design §9.1) applied to
+	// cookie-authenticated sensitive routes.
+	Mutation MutationSecurity
+	// Views is the optional HTML rendering port (design §9.2): nil → only the
+	// JSON API mounts.
+	Views Views
+	// HTMLPolicy is the optional HTML resource policy (design §9.2, GOTH-0.4):
+	// nil → the historical asset-free CSP.
+	HTMLPolicy *HTMLResourcePolicy
+	// MachineGate is the host authorization the machine-identity lifecycle
+	// routes run behind (authentication.Config.MachineRoutesGate). Nil → NONE of
+	// them mount (deny-by-absence); key authentication is unaffected.
+	MachineGate web.Middleware
+}
+
 // Mount registers the auth feature's routes on the registrar. The route surface
 // is POST /auth/{register,login,verify,refresh,logout,password/forgot,
 // password/reset} plus the RequireLiveSession-gated POST /auth/password/change.
@@ -64,9 +94,10 @@ type handlers struct {
 // surface (design §9.2) is registered only when a Views port is wired (views !=
 // nil): mountHTML adds the HTML pages while the JSON contracts stay byte-compatible.
 // A nil views leaves the feature API-only, uniformly.
-func Mount(r feature.RouteRegistrar, svc authService, inv InvitationService, listStrategy crud.Strategy, mutation MutationSecurity, views Views, htmlPolicy *HTMLResourcePolicy) {
+func Mount(r feature.RouteRegistrar, d Deps) {
+	svc, inv, views := d.Auth, d.Invitations, d.Views
 	r = clientInfoRegistrar{inner: r}
-	h := &handlers{svc: svc, inv: inv, listStrategy: listStrategy, mutation: mutation, views: views, htmlPolicy: htmlPolicy}
+	h := &handlers{svc: svc, inv: inv, listStrategy: d.ListStrategy, mutation: d.Mutation, views: views, htmlPolicy: d.HTMLPolicy}
 	// The password credential's routes register only when the posture is on
 	// (deny-by-absence, like machine identity and the token endpoint): a
 	// PasswordFlowsDisabled host answers 404 for every one of them.
@@ -212,13 +243,14 @@ func Mount(r feature.RouteRegistrar, svc authService, inv InvitationService, lis
 	}
 
 	// Machine-identity lifecycle routes are registered only when both machine
-	// repositories are wired (deny-by-absence, design §4.1); an unwired host
-	// returns 404 for them.
-	// A host may keep key authentication on while serving its own gated lifecycle
-	// routes (MachineRoutesDisabled): the bundled ones are gated on ANY
-	// authenticated user and are unscoped.
-	if svc.MachineEnabled() && svc.MachineRoutesEnabled() {
-		mountMachine(r, h, svc.RequireUser)
+	// repositories are wired AND the host named an authorization gate
+	// (deny-by-absence, design §4.1 + D1): they issue and revoke credentials, so
+	// the feature never guesses a policy. A nil gate leaves them unmounted (404)
+	// while key AUTHENTICATION keeps working, and auth.NewService WARNs about the
+	// posture at boot. A host that wants its own lifecycle surface leaves the
+	// gate nil and serves it over the Service methods.
+	if svc.MachineEnabled() && d.MachineGate != nil {
+		mountMachine(r, h, svc.RequireUser, svc.RequireLiveSession, browserSafe, d.MachineGate)
 	}
 
 	// The bearer-JWT token endpoint is registered only when a TokenSigner is

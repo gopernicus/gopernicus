@@ -84,7 +84,7 @@ func newPendingLinkFixture(t *testing.T, views Views) pendingLinkFixture {
 		IsPrimary: true, CreatedAt: now, UpdatedAt: now,
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, nil, "", MutationSecurity{AllowedOrigins: []string{"https://app.example.com"}}, views, nil)
+	Mount(h, Deps{Auth: svc, Mutation: MutationSecurity{AllowedOrigins: []string{"https://app.example.com"}}, Views: views})
 	return pendingLinkFixture{h: h, states: states, accounts: accounts}
 }
 
@@ -168,7 +168,7 @@ func TestOAuthLinkLandingDenyByAbsence(t *testing.T) {
 		TokenSigner: newFakeSigner(),
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, nil, "", MutationSecurity{}, stubViews{}, nil)
+	Mount(h, Deps{Auth: svc, Views: stubViews{}})
 	if rec := do(t, h, "GET", "/auth/oauth/link", ""); rec.Code != http.StatusNotFound {
 		t.Errorf("GET /auth/oauth/link with no provider = %d, want 404", rec.Code)
 	}

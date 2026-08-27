@@ -150,7 +150,7 @@ func newInvitationTestHandler(t *testing.T, inv InvitationService) http.Handler 
 		TokenSigner: newFakeSigner(),
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, inv, crud.StrategyCursor, MutationSecurity{}, nil, nil)
+	Mount(h, Deps{Auth: svc, Invitations: inv, ListStrategy: crud.StrategyCursor})
 	return h
 }
 
@@ -200,7 +200,7 @@ func newInvitationFixtureWith(t *testing.T, inv InvitationService, check invitat
 		TokenSigner: newFakeSigner(),
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, inv, crud.StrategyCursor, MutationSecurity{}, nil, nil)
+	Mount(h, Deps{Auth: svc, Invitations: inv, ListStrategy: crud.StrategyCursor})
 	return invitationFixture{h: h, users: users, idents: idents, passwords: passwords, sessions: sessions, inv: spy}
 }
 

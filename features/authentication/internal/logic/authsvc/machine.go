@@ -54,13 +54,54 @@ func (s *Service) MachineEnabled() bool {
 
 // CreateServiceAccount persists a new machine identity created by createdBy. An
 // act-as-user account requires a non-empty ownerUserID (sdk.ErrInvalidInput
-// from construction).
+// from construction) naming an EXISTING user: an act-as-user key authenticates
+// as its owner, so an unknown owner would mint a live principal for a subject
+// nobody can deactivate (userDeactivated reads an unknown id as active). An
+// unknown owner is sdk.ErrInvalidReference; an unwired user rail fails closed
+// with ErrIdentityUnavailable.
+//
+// A created account records a service_account_created audit row attributed to
+// the principal in ctx — never to createdBy, which is a caller-supplied string.
 func (s *Service) CreateServiceAccount(ctx context.Context, createdBy, name, description string, actAsUser bool, ownerUserID string) (serviceaccount.ServiceAccount, error) {
 	sa, err := serviceaccount.New(s.ids, name, description, createdBy, actAsUser, ownerUserID, s.now())
 	if err != nil {
 		return serviceaccount.ServiceAccount{}, err
 	}
-	return s.serviceAccounts.Create(ctx, sa)
+	// The persisted (trimmed) owner is the one validated, audited, and stored, so
+	// the existence check and the row can never disagree about who the owner is.
+	if actAsUser {
+		if s.users == nil {
+			return serviceaccount.ServiceAccount{}, ErrIdentityUnavailable
+		}
+		if _, err := s.users.Get(ctx, sa.OwnerUserID); err != nil {
+			if errors.Is(err, sdk.ErrNotFound) {
+				return serviceaccount.ServiceAccount{}, fmt.Errorf("act-as owner %q: %w", sa.OwnerUserID, sdk.ErrInvalidReference)
+			}
+			return serviceaccount.ServiceAccount{}, err
+		}
+	}
+	created, err := s.serviceAccounts.Create(ctx, sa)
+	if err != nil {
+		return serviceaccount.ServiceAccount{}, err
+	}
+	userID := ""
+	if actAsUser {
+		userID = created.OwnerUserID
+	}
+	s.recordSecurityEvent(ctx, securityEventInput{
+		UserID: userID,
+		Actor:  auditActor(ctx),
+		Type:   securityevent.TypeServiceAccountCreated,
+		Status: securityevent.StatusSuccess,
+		Details: map[string]any{
+			"service_account_id": created.ID,
+			"act_as_user":        actAsUser,
+			// delegated marks an act-as account whose owner is someone other than
+			// its creator — the impersonation-shaped case the gate exists for.
+			"delegated": actAsUser && created.OwnerUserID != created.CreatedBy,
+		},
+	})
+	return created, nil
 }
 
 // ListServiceAccounts returns a cursor-paginated page of service accounts
@@ -73,8 +114,14 @@ func (s *Service) ListServiceAccounts(ctx context.Context, req crud.ListRequest)
 // SHA-256 hash, and returns the created record alongside the plaintext key —
 // which is shown exactly once and never recoverable afterward. A zero expiresAt
 // means the key never expires. An unknown service account → sdk.ErrNotFound.
+//
+// A minted key records an api_key_minted audit row carrying the key PREFIX and
+// the account id only (design §5.1 WI3 — never the raw key or its hash). For an
+// act-as-user account the row's UserID is the human owner the key authenticates
+// as, mirroring service_account_created.
 func (s *Service) MintAPIKey(ctx context.Context, serviceAccountID, name string, expiresAt time.Time) (apikey.APIKey, string, error) {
-	if _, err := s.serviceAccounts.Get(ctx, serviceAccountID); err != nil {
+	sa, err := s.serviceAccounts.Get(ctx, serviceAccountID)
+	if err != nil {
 		return apikey.APIKey{}, "", err
 	}
 	prefix, raw := mintAPIKeySecret()
@@ -90,6 +137,22 @@ func (s *Service) MintAPIKey(ctx context.Context, serviceAccountID, name string,
 	if err != nil {
 		return apikey.APIKey{}, "", err
 	}
+	// An act-as-user key authenticates as a HUMAN, so the row names that human as
+	// its subject — the same UserID convention service_account_created follows.
+	userID := ""
+	if sa.ActAsUser {
+		userID = sa.OwnerUserID
+	}
+	s.recordSecurityEvent(ctx, securityEventInput{
+		UserID: userID,
+		Actor:  auditActor(ctx),
+		Type:   securityevent.TypeAPIKeyMinted,
+		Status: securityevent.StatusSuccess,
+		Details: map[string]any{
+			"key_prefix":         created.KeyPrefix,
+			"service_account_id": serviceAccountID,
+		},
+	})
 	return created, raw, nil
 }
 
@@ -100,9 +163,35 @@ func (s *Service) ListAPIKeys(ctx context.Context, serviceAccountID string, req 
 }
 
 // RevokeAPIKey marks the key revoked as of now. An unknown key →
-// sdk.ErrNotFound.
+// sdk.ErrNotFound. A revoked key records an api_key_revoked audit row carrying
+// the key id (the only coordinate the revoke path holds). The row is written per
+// successful CALL, not per state transition: re-revoking an already-revoked key
+// records a second row, because the revoke path has no Get-by-id with which to
+// read the prior state.
 func (s *Service) RevokeAPIKey(ctx context.Context, keyID string) error {
-	return s.apiKeys.Revoke(ctx, keyID, s.now())
+	if err := s.apiKeys.Revoke(ctx, keyID, s.now()); err != nil {
+		return err
+	}
+	s.recordSecurityEvent(ctx, securityEventInput{
+		Actor:   auditActor(ctx),
+		Type:    securityevent.TypeAPIKeyRevoked,
+		Status:  securityevent.StatusSuccess,
+		Details: map[string]any{"key_id": keyID},
+	})
+	return nil
+}
+
+// auditActor is the audit attribution for the machine-identity lifecycle ops:
+// the principal the transport resolved from the request credential, or the zero
+// Principal when a host calls the service outside a request (a job, a seeder) —
+// which the rail already permits. It is deliberately NOT the createdBy argument,
+// a caller-supplied string whose format varies by host.
+func auditActor(ctx context.Context) securityevent.Principal {
+	p, ok := identity.FromContext(ctx)
+	if !ok {
+		return securityevent.Principal{}
+	}
+	return securityevent.Principal{Type: p.Type, ID: p.ID}
 }
 
 // AuthenticateAPIKey resolves the effective Principal for a raw API key. It

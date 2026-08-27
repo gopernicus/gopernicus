@@ -133,10 +133,9 @@ type authService interface {
 	// step-up password) are registered at all (deny-by-absence).
 	PasswordFlowsEnabled() bool
 	// Machine identity (design §4.1). MachineEnabled gates whether the lifecycle
-	// routes are registered at all (deny-by-absence); MachineRoutesEnabled lets a
-	// host keep key authentication while gating its own lifecycle routes.
+	// routes are registered at all (deny-by-absence); the host's
+	// Deps.MachineGate decides whether they mount and who may reach them.
 	MachineEnabled() bool
-	MachineRoutesEnabled() bool
 	CreateServiceAccount(ctx context.Context, createdBy, name, description string, actAsUser bool, ownerUserID string) (serviceaccount.ServiceAccount, error)
 	ListServiceAccounts(ctx context.Context, req crud.ListRequest) (crud.Page[serviceaccount.ServiceAccount], error)
 	MintAPIKey(ctx context.Context, serviceAccountID, name string, expiresAt time.Time) (apikey.APIKey, string, error)

@@ -19,6 +19,13 @@ type createServiceAccountRequest struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	ActAsUser   bool   `json:"act_as_user"`
+	// ActAsUserID names the human the account acts as. Empty with ActAsUser → the
+	// caller. Non-empty → delegation, allowed only because the route sits behind
+	// MachineRoutesGate; the service validates and audits it. Requires ActAsUser.
+	ActAsUserID string `json:"act_as_user_id"`
+	// OwnerUserID is REFUSED (400 by name) — kept one release so a client sending
+	// the v0.5.x field learns the rename instead of a generic decode error. Dropped
+	// at the next minor, after which strict decode answers 400 for it.
 	OwnerUserID string `json:"owner_user_id"`
 }
 
@@ -111,21 +118,52 @@ func newPageResponse[E any, T any](p crud.Page[E], mapFn func(E) T) pageResponse
 	}
 }
 
-// mountMachine registers the machine-identity lifecycle routes (design §4.1),
-// all session-gated. Called from Mount only when both machine repositories are
-// wired.
-func mountMachine(r feature.RouteRegistrar, h *handlers, requireUser web.Middleware) {
-	r.Handle("POST", "/auth/service-accounts", h.createServiceAccount, requireUser)
-	r.Handle("GET", "/auth/service-accounts", h.listServiceAccounts, requireUser)
-	r.Handle("POST", "/auth/service-accounts/{id}/keys", h.mintAPIKey, requireUser)
-	r.Handle("GET", "/auth/service-accounts/{id}/keys", h.listAPIKeys, requireUser)
-	r.Handle("POST", "/auth/api-keys/{id}/revoke", h.revokeAPIKey, requireUser)
+// mountMachine registers the machine-identity lifecycle routes (design §4.1).
+// Called from Mount only when both machine repositories are wired AND the host
+// named a gate.
+//
+// Every route carries the same identity stack, outermost first (web.Handle
+// applies the list left-to-right as wrappers): requireUser admits the human
+// credential class ONLY — an API key, act-as-user or not, is 401 here, so a key
+// can never mint another key; requireLiveSession revokes within one round-trip
+// instead of RequireUser's ≤AccessTokenTTL stale window (the invitation
+// precedent — credential issuance is not less sensitive); then the host's gate
+// decides authorization and writes its own denial (the bundled handlers write no
+// 403 of their own).
+//
+// The three MUTATIONS carry browserSafe between the live-session check and the
+// gate, exactly like mountUserAdmin: a cookie-authenticated mint or revoke is a
+// browser-driven state change, so it must clear the allowlisted-Origin +
+// double-submit CSRF gate before the host's policy is consulted — a forged
+// cross-site request is refused as CSRF, never merely as unauthorized. Bearer-only
+// callers skip it (requireBrowserSafeMutation short-circuits). The two GETs are
+// body-less reads and stay off the mutation gate.
+func mountMachine(r feature.RouteRegistrar, h *handlers, requireUser, requireLiveSession, browserSafe, gate web.Middleware) {
+	r.Handle("POST", "/auth/service-accounts", h.createServiceAccount, requireUser, requireLiveSession, browserSafe, gate)
+	r.Handle("GET", "/auth/service-accounts", h.listServiceAccounts, requireUser, requireLiveSession, gate)
+	r.Handle("POST", "/auth/service-accounts/{id}/keys", h.mintAPIKey, requireUser, requireLiveSession, browserSafe, gate)
+	r.Handle("GET", "/auth/service-accounts/{id}/keys", h.listAPIKeys, requireUser, requireLiveSession, gate)
+	r.Handle("POST", "/auth/api-keys/{id}/revoke", h.revokeAPIKey, requireUser, requireLiveSession, browserSafe, gate)
 }
 
-// createServiceAccount creates a machine identity owned by the calling user.
+// createServiceAccount creates a machine identity created by the calling human.
+// The caller is the creator and, for an act-as-user account, the default owner;
+// naming act_as_user_id delegates ownership to another EXISTING user, which the
+// service validates and audits. owner_user_id is refused by name.
 func (h *handlers) createServiceAccount(w http.ResponseWriter, r *http.Request) {
+	if !requireJSON(w, r) {
+		return
+	}
 	var req createServiceAccountRequest
-	if !decode(w, r, &req) {
+	if !strictJSONBody(w, r, &req, maxJSONBodyBytes) {
+		return
+	}
+	if req.OwnerUserID != "" {
+		web.RespondJSONError(w, web.ErrBadRequest("owner_user_id is no longer accepted; the caller is the owner, or name act_as_user_id"))
+		return
+	}
+	if !req.ActAsUser && req.ActAsUserID != "" {
+		web.RespondJSONError(w, web.ErrBadRequest("act_as_user_id requires act_as_user"))
 		return
 	}
 	createdBy, ok := h.svc.CurrentUser(r.Context())
@@ -133,7 +171,14 @@ func (h *handlers) createServiceAccount(w http.ResponseWriter, r *http.Request) 
 		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return
 	}
-	sa, err := h.svc.CreateServiceAccount(r.Context(), createdBy, req.Name, req.Description, req.ActAsUser, req.OwnerUserID)
+	ownerUserID := ""
+	if req.ActAsUser {
+		ownerUserID = req.ActAsUserID
+		if ownerUserID == "" {
+			ownerUserID = createdBy
+		}
+	}
+	sa, err := h.svc.CreateServiceAccount(r.Context(), createdBy, req.Name, req.Description, req.ActAsUser, ownerUserID)
 	if err != nil {
 		web.RespondJSONDomainError(w, err)
 		return
@@ -156,9 +201,15 @@ func (h *handlers) listServiceAccounts(w http.ResponseWriter, r *http.Request) {
 }
 
 // mintAPIKey mints a key for the service account and returns the plaintext ONCE.
+// The response carries the only copy of a live credential, so it is no-store like
+// every other secret-bearing handler.
 func (h *handlers) mintAPIKey(w http.ResponseWriter, r *http.Request) {
+	writeNoStore(w)
+	if !requireJSON(w, r) {
+		return
+	}
 	var req mintKeyRequest
-	if !decode(w, r, &req) {
+	if !strictJSONBody(w, r, &req, maxJSONBodyBytes) {
 		return
 	}
 	expiresAt, ok := parseOptionalTime(w, req.ExpiresAt)

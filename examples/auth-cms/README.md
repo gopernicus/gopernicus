@@ -390,16 +390,65 @@ curl -i -c ojar -b ojar http://localhost:8082/auth/oauth/linked  # 200 -> [{"pro
 
 ### Leg 2 — API-key machine call
 
+**Prerequisite — the platform-admin tuple.** The five machine-identity lifecycle
+routes (`/auth/service-accounts…`, `/auth/api-keys/{id}/revoke`) are mounted only
+because this host sets `auth.Config.MachineRoutesGate` (`main.go`, right after
+`buildAuthConfig`) to
+`authorizer.RequirePermissionFixed("platform", "admin", "main")` — the coordinate
+`authzSchema()` already declares. Each route therefore runs
+`RequireUser` → `RequireLiveSession` → (on the three POSTs) the browser-safe
+`Origin`/CSRF gate → that gate: no credential is **401**, an API-key
+bearer is **401** (a key never administers machine identities here), a cookie POST with
+no `X-CSRF-Token` is **403** `{"message":"invalid or missing CSRF token",
+"code":"permission_denied"}`, and a live human
+session without the `platform:main#admin` tuple is **403**
+`{"message":"permission denied","code":"permission_denied"}`. Comment the gate line out
+and the five routes are **404** for everyone, with this WARN at boot (key
+*authentication* is unaffected — a bearer key still resolves on `/demo/whoami`):
+
+```
+level=WARN msg="auth: machine repositories are wired but Config.MachineRoutesGate is
+unset; the bundled lifecycle routes are NOT mounted (404) — set a gate or serve your
+own routes over the Service methods"
+```
+
+The tuple is **data**, and this proof host grants it at boot through the trusted
+`SystemMutator` only — to the synthetic `user:demo-owner`
+(`seedAuthorization`, `authorization.go`), which is *not* a signable-in account: the
+host seeds no real user, and AZ3-4.1 retired the request-time
+`POST /demo/admin/bootstrap` promotion route. So `admin@example.com` from Leg 0 is
+**403** on these routes out of the box, and — every store here being in-memory — it
+cannot be promoted by restarting with its id either. The executable end-to-end proof of
+this leg is therefore the host test `newMachineHost` /
+`TestMachineRoutesGateRefusesANonAdmin` in `cmd/server/apikey_search_test.go`, which
+grants `platform:main#admin` to the signed-up user through the same `SystemMutator` and
+then drives the curls below over real HTTP. To run them by hand, add a grant for your
+registered id beside the seed's and rebuild.
+
 ```sh
-# with the admin session: create a service account, mint a key (plaintext ONCE)
+# a cookie caller mutates through the CSRF double-submit: read the token, echo it.
+CSRF=$(curl -s -c jar -b jar http://localhost:8082/auth/csrf | sed 's/.*"csrf_token":"\([^"]*\)".*/\1/')
+# with an admin session HOLDING platform:main#admin: create a service account,
+# mint a key (plaintext ONCE). `owner_user_id` in the request body is REFUSED by
+# name (400) — act-as-self needs no field, and delegation names act_as_user_id.
 curl -sX POST -c jar -b jar http://localhost:8082/auth/service-accounts \
+  -H "X-CSRF-Token: $CSRF" \
   -H 'Content-Type: application/json' -d '{"name":"ci-bot"}'                 # -> {"id":"<SAID>",...}
+# act-as-user, owned by the caller (the response owner_user_id is your own id)
+curl -sX POST -c jar -b jar http://localhost:8082/auth/service-accounts \
+  -H "X-CSRF-Token: $CSRF" \
+  -H 'Content-Type: application/json' -d '{"name":"ci","act_as_user":true}'  # -> {...,"owner_user_id":"<YOU>"}
+# delegation to another human — gate-protected, validated, audited
+curl -sX POST -c jar -b jar http://localhost:8082/auth/service-accounts \
+  -H "X-CSRF-Token: $CSRF" \
+  -H 'Content-Type: application/json' -d '{"name":"ci","act_as_user":true,"act_as_user_id":"<OTHER>"}'
 curl -sX POST -c jar -b jar http://localhost:8082/auth/service-accounts/<SAID>/keys \
+  -H "X-CSRF-Token: $CSRF" \
   -H 'Content-Type: application/json' -d '{"name":"k1"}'                     # -> {"id":"<KEYID>",...,"key":"<KEY>"}
 # WITHOUT any cookie: the RequirePrincipal-gated demo route accepts the bearer key
 curl -i -H "Authorization: Bearer <KEY>" http://localhost:8082/demo/whoami  # 200 (service_account principal)
-# revoke, then the same call -> 401
-curl -sX POST -c jar -b jar http://localhost:8082/auth/api-keys/<KEYID>/revoke
+# revoke (a cookie mutation, so the token rides along), then the same call -> 401
+curl -sX POST -c jar -b jar -H "X-CSRF-Token: $CSRF" http://localhost:8082/auth/api-keys/<KEYID>/revoke
 curl -i -H "Authorization: Bearer <KEY>" http://localhost:8082/demo/whoami  # 401
 ```
 
@@ -761,7 +810,11 @@ unwired kind (e.g. `slack`) fails 400; email is always-on via the Mailer.
   `GET /auth/delivery/status`; OAuth
   `/auth/oauth/{provider}/{start,callback,link/start,unlink/start,unlink}` +
   `/auth/oauth/verify-link`; machine `/auth/service-accounts…`,
-  `/auth/api-keys/{id}/revoke`; invitations `/auth/invitations/…`. Because
+  `/auth/api-keys/{id}/revoke` (mounted ONLY because this host names a
+  `Config.MachineRoutesGate`; each runs `RequireUser` + `RequireLiveSession` +
+  (POSTs only) the browser-safe `Origin`/CSRF gate +
+  `RequirePermissionFixed("platform","admin","main")` — see Leg 2); invitations
+  `/auth/invitations/…`. Because
   `Config.Views` is wired, the HTML GET pages (`/auth/{login,register,verify,
   password/forgot,password/reset,account,step-up,magic,…}`) mount alongside the
   JSON API — a form POST 303-redirects, a JSON POST keeps its JSON body.

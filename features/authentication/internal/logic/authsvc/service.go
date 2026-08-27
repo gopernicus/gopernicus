@@ -322,11 +322,6 @@ type Deps struct {
 	// layer registers none of their routes (deny-by-absence, like machine
 	// identity). For hosts whose only way in is OAuth or passwordless.
 	PasswordFlowsDisabled bool
-	// MachineRoutesDisabled keeps API-key AUTHENTICATION on but registers none
-	// of the bundled service-account / API-key LIFECYCLE routes, for a host that
-	// gates its own (the bundled ones are gated on any authenticated user and
-	// are unscoped — see the README). Deny-by-absence, like PasswordFlowsDisabled.
-	MachineRoutesDisabled bool
 	// RequireVerifiedEmail, when true, makes Login refuse an unverified user
 	// with ErrEmailNotVerified (403). Default false (design §7.1, AV8).
 	RequireVerifiedEmail bool
@@ -456,7 +451,6 @@ type Service struct {
 	logger               *slog.Logger
 	requireVerifiedEmail bool
 	passwordFlowsEnabled bool
-	machineRoutesEnabled bool
 	// ids is the app-chosen entity-ID strategy (Deps.IDs); zero value → default
 	// nanoids. Entity keys only, never secrets.
 	ids cryptids.IDGenerator
@@ -608,7 +602,6 @@ func NewService(d Deps) *Service {
 		logger:               logger,
 		requireVerifiedEmail: d.RequireVerifiedEmail,
 		passwordFlowsEnabled: !d.PasswordFlowsDisabled,
-		machineRoutesEnabled: !d.MachineRoutesDisabled,
 		ids:                  d.IDs,
 		securityEvents:       d.SecurityEvents,
 		invitations:          d.Invitations,
@@ -1444,9 +1437,3 @@ func (s *Service) requirePasswordFlows() error {
 	}
 	return nil
 }
-
-// MachineRoutesEnabled reports whether the bundled service-account / API-key
-// lifecycle routes are registered. It gates ONLY the routes: key authentication
-// (AuthenticateAPIKey, the bearer path of RequirePrincipal) follows
-// MachineEnabled regardless.
-func (s *Service) MachineRoutesEnabled() bool { return s.machineRoutesEnabled }

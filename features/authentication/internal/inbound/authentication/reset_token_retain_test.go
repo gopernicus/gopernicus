@@ -62,7 +62,7 @@ func newResetRetainFixture(t *testing.T) (http.Handler, *authsvc.Service, *Reset
 	page := &ResetPage{}
 	buf := &bytes.Buffer{}
 	h := web.NewWebHandler(web.WithLogging(slog.New(slog.NewTextHandler(buf, nil))))
-	Mount(h, svc, nil, "", MutationSecurity{}, resetCaptureViews{page: page}, nil)
+	Mount(h, Deps{Auth: svc, Views: resetCaptureViews{page: page}})
 	return h, svc, page, buf
 }
 

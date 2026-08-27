@@ -257,6 +257,15 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// escalate by inviting an owner; a nil InviteCheck here would be ErrInviteCheckRequired
 	// at NewService, never an allow-by-default.
 	authCfg.InviteCheck = hostInviteCheck(authorizer)
+	// The bundled machine-identity lifecycle routes (/auth/service-accounts*,
+	// /auth/api-keys/{id}/revoke) mint and revoke credentials, so the feature refuses to
+	// guess a policy: with MachineRoutesGate nil they are NOT mounted (404) and NewService
+	// WARNs. This host names the platform-admin coordinate already declared in authzSchema
+	// (platform/admin on platform:main), so each route runs RequireUser, RequireLiveSession,
+	// then this gate — human credential, live session, platform admin. Set here rather than
+	// in buildAuthConfig because the gate is a method value on the authorizer, which the
+	// composition seam does not receive (the DeliveryMode post-set precedent below).
+	authCfg.MachineRoutesGate = authorizer.RequirePermissionFixed(platformResourceType, "admin", platformResourceID)
 	// Apply the selected delivery mode to the auth config. buildAuthConfig returns the
 	// jobs-mode posture (in-memory fenced queue on this host); DELIVERY_MODE=in_process flips
 	// it to the bounded EPHEMERAL pool here — and announces that posture LOUDLY. Neither mode

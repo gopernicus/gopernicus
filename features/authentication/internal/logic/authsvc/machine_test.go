@@ -5,15 +5,19 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/gopernicus/gopernicus/features/authentication/domain/apikey"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
 	"github.com/gopernicus/gopernicus/features/authentication/domain/serviceaccount"
+	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 )
 
 // --- compile-time seam assertions ---
@@ -163,6 +167,7 @@ type machineHarness struct {
 	sas    *fakeServiceAccounts
 	keys   *fakeAPIKeys
 	events *spySecurityEvents
+	users  *fakeUsers
 }
 
 func newMachineHarness(t *testing.T) *machineHarness {
@@ -187,7 +192,16 @@ func newMachineHarness(t *testing.T) *machineHarness {
 		TokenSigner:     newFakeSigner(),
 	})
 	wireSyncDelivery(t, svc, &recordingMailer{}, nil)
-	return &machineHarness{svc: svc, sas: sas, keys: keys, events: events}
+	return &machineHarness{svc: svc, sas: sas, keys: keys, events: events, users: users}
+}
+
+// seedUser puts a bare active user in the directory so an act-as-user service
+// account has a real owner to name (CreateServiceAccount refuses an unknown one).
+func (h *machineHarness) seedUser(id string) string {
+	h.users.mu.Lock()
+	defer h.users.mu.Unlock()
+	h.users.byID[id] = user.User{ID: id}
+	return id
 }
 
 // --- AuthenticateAPIKey ---
@@ -247,7 +261,7 @@ func TestMintAPIKeyUnknownServiceAccount(t *testing.T) {
 func TestAuthenticateAPIKeyActAsUserResolvesToOwner(t *testing.T) {
 	h := newMachineHarness(t)
 	ctx := context.Background()
-	sa, err := h.svc.CreateServiceAccount(ctx, "admin", "personal", "", true, "owner-9")
+	sa, err := h.svc.CreateServiceAccount(ctx, "admin", "personal", "", true, h.seedUser("owner-9"))
 	if err != nil {
 		t.Fatalf("CreateServiceAccount: %v", err)
 	}
@@ -478,5 +492,331 @@ func TestCurrentPrincipalAbsent(t *testing.T) {
 	h := newMachineHarness(t)
 	if _, ok := h.svc.CurrentPrincipal(context.Background()); ok {
 		t.Error("CurrentPrincipal reported ok on a bare context")
+	}
+}
+
+// --- CreateServiceAccount: act-as owner validation ---
+
+// errUsers fails Get with an infrastructure error (not sdk.ErrNotFound), so the
+// act-as owner check's propagate-don't-translate lane is exercised.
+type errUsers struct {
+	*fakeUsers
+	err error
+}
+
+func (e errUsers) Get(context.Context, string) (user.User, error) { return user.User{}, e.err }
+
+func TestCreateServiceAccountActAsUserWithoutIdentityRail(t *testing.T) {
+	// No Users repository: an act-as-user account cannot be validated, so it fails
+	// closed rather than minting an unowned impersonation credential.
+	svc := NewService(Deps{
+		Passwords:       newFakePasswords(),
+		Sessions:        newFakeSessions(),
+		Hasher:          &fakeHasher{},
+		Limiter:         ratelimiter.NewMemory(),
+		ServiceAccounts: newFakeServiceAccounts(),
+		APIKeys:         newFakeAPIKeys(),
+	})
+	if _, err := svc.CreateServiceAccount(context.Background(), "admin", "personal", "", true, "owner-1"); !errors.Is(err, ErrIdentityUnavailable) {
+		t.Fatalf("err = %v, want ErrIdentityUnavailable", err)
+	}
+}
+
+func TestCreateServiceAccountActAsUserUnknownOwner(t *testing.T) {
+	h := newMachineHarness(t)
+	_, err := h.svc.CreateServiceAccount(context.Background(), "admin", "personal", "", true, "ghost-7")
+	if !errors.Is(err, sdk.ErrInvalidReference) {
+		t.Fatalf("err = %v, want sdk.ErrInvalidReference", err)
+	}
+	if !strings.Contains(err.Error(), "ghost-7") {
+		t.Errorf("err = %q, want the refused owner id named", err)
+	}
+	if page, _ := h.sas.List(context.Background(), crud.ListRequest{}); len(page.Items) != 0 {
+		t.Errorf("accounts created = %d, want 0 for an unknown owner", len(page.Items))
+	}
+	if h.events.count() != 0 {
+		t.Errorf("audit rows = %d, want 0 for a refused create", h.events.count())
+	}
+}
+
+func TestCreateServiceAccountActAsUserOwnerLookupErrorPropagates(t *testing.T) {
+	boom := errors.New("users db unavailable")
+	svc := NewService(Deps{
+		Users:           errUsers{fakeUsers: newFakeUsers(), err: boom},
+		Passwords:       newFakePasswords(),
+		Sessions:        newFakeSessions(),
+		Hasher:          &fakeHasher{},
+		Limiter:         ratelimiter.NewMemory(),
+		ServiceAccounts: newFakeServiceAccounts(),
+		APIKeys:         newFakeAPIKeys(),
+	})
+	_, err := svc.CreateServiceAccount(context.Background(), "admin", "personal", "", true, "owner-1")
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want the repository error", err)
+	}
+	if errors.Is(err, sdk.ErrInvalidReference) {
+		t.Error("an unreadable directory must not be reported as an invalid reference")
+	}
+}
+
+func TestCreateServiceAccountActAsSelfExistingOwner(t *testing.T) {
+	h := newMachineHarness(t)
+	owner := h.seedUser("owner-1")
+	sa, err := h.svc.CreateServiceAccount(context.Background(), owner, "personal", "", true, owner)
+	if err != nil {
+		t.Fatalf("CreateServiceAccount: %v", err)
+	}
+	if sa.OwnerUserID != owner || !sa.ActAsUser {
+		t.Errorf("account = %+v, want an act-as account owned by %q", sa, owner)
+	}
+}
+
+func TestCreateServiceAccountNonActAsSkipsOwnerCheck(t *testing.T) {
+	// A plain machine account has no human subject: the owner column stays empty
+	// and the directory is never consulted.
+	h := newMachineHarness(t)
+	users := errUsers{fakeUsers: h.users, err: errors.New("must not be called")}
+	h.svc.users = users
+	sa, err := h.svc.CreateServiceAccount(context.Background(), "admin", "bot", "", false, "")
+	if err != nil {
+		t.Fatalf("CreateServiceAccount: %v", err)
+	}
+	if sa.OwnerUserID != "" || sa.ActAsUser {
+		t.Errorf("account = %+v, want a self-acting account with no owner", sa)
+	}
+}
+
+// --- lifecycle audit rail ---
+
+func principalContext(id string) context.Context {
+	return identity.WithPrincipal(context.Background(), Principal{Type: PrincipalUser, ID: id})
+}
+
+func TestSecurityEventServiceAccountCreatedActor(t *testing.T) {
+	h := newMachineHarness(t)
+	// The acting human is the context principal; createdBy is a caller-supplied
+	// string and must never become the actor.
+	ctx := principalContext("admin-1")
+	sa, err := h.svc.CreateServiceAccount(ctx, "created-by-string", "bot", "", false, "")
+	if err != nil {
+		t.Fatalf("CreateServiceAccount: %v", err)
+	}
+	e := requireEvent(t, h.events, securityevent.TypeServiceAccountCreated, securityevent.StatusSuccess)
+	if e.Actor.Type != PrincipalUser || e.Actor.ID != "admin-1" {
+		t.Errorf("actor = %+v, want {user, admin-1}", e.Actor)
+	}
+	if e.UserID != "" {
+		t.Errorf("UserID = %q, want empty for a self-acting account", e.UserID)
+	}
+	if e.Details["service_account_id"] != sa.ID {
+		t.Errorf("Details service_account_id = %v, want %q", e.Details["service_account_id"], sa.ID)
+	}
+	if e.Details["act_as_user"] != false || e.Details["delegated"] != false {
+		t.Errorf("Details = %v, want act_as_user=false delegated=false", e.Details)
+	}
+}
+
+func TestSecurityEventServiceAccountCreatedActAsSelfNotDelegated(t *testing.T) {
+	h := newMachineHarness(t)
+	owner := h.seedUser("admin-1")
+	ctx := principalContext(owner)
+	if _, err := h.svc.CreateServiceAccount(ctx, owner, "personal", "", true, owner); err != nil {
+		t.Fatalf("CreateServiceAccount: %v", err)
+	}
+	e := requireEvent(t, h.events, securityevent.TypeServiceAccountCreated, securityevent.StatusSuccess)
+	if e.UserID != owner {
+		t.Errorf("UserID = %q, want the act-as owner %q", e.UserID, owner)
+	}
+	if e.Details["act_as_user"] != true || e.Details["delegated"] != false {
+		t.Errorf("Details = %v, want act_as_user=true delegated=false for act-as-self", e.Details)
+	}
+}
+
+func TestSecurityEventServiceAccountCreatedDelegated(t *testing.T) {
+	h := newMachineHarness(t)
+	owner := h.seedUser("owner-2")
+	ctx := principalContext("admin-1")
+	if _, err := h.svc.CreateServiceAccount(ctx, "admin-1", "personal", "", true, owner); err != nil {
+		t.Fatalf("CreateServiceAccount: %v", err)
+	}
+	e := requireEvent(t, h.events, securityevent.TypeServiceAccountCreated, securityevent.StatusSuccess)
+	if e.UserID != owner {
+		t.Errorf("UserID = %q, want the act-as owner %q", e.UserID, owner)
+	}
+	if e.Details["delegated"] != true {
+		t.Errorf("Details = %v, want delegated=true when the owner is not the creator", e.Details)
+	}
+}
+
+func TestSecurityEventServiceAccountCreatedAbsentPrincipal(t *testing.T) {
+	// A host calling the service outside a request (a seeder, a job) records an
+	// empty actor — the row is still written.
+	h := newMachineHarness(t)
+	if _, err := h.svc.CreateServiceAccount(context.Background(), "admin", "bot", "", false, ""); err != nil {
+		t.Fatalf("CreateServiceAccount: %v", err)
+	}
+	e := requireEvent(t, h.events, securityevent.TypeServiceAccountCreated, securityevent.StatusSuccess)
+	if e.Actor != (securityevent.Principal{}) {
+		t.Errorf("actor = %+v, want the zero Principal", e.Actor)
+	}
+}
+
+func TestSecurityEventAPIKeyMinted(t *testing.T) {
+	h := newMachineHarness(t)
+	ctx := principalContext("admin-1")
+	sa, err := h.svc.CreateServiceAccount(ctx, "admin-1", "bot", "", false, "")
+	if err != nil {
+		t.Fatalf("CreateServiceAccount: %v", err)
+	}
+	key, raw, err := h.svc.MintAPIKey(ctx, sa.ID, "deploy", time.Time{})
+	if err != nil {
+		t.Fatalf("MintAPIKey: %v", err)
+	}
+	e := requireEvent(t, h.events, securityevent.TypeAPIKeyMinted, securityevent.StatusSuccess)
+	if e.Actor.Type != PrincipalUser || e.Actor.ID != "admin-1" {
+		t.Errorf("actor = %+v, want {user, admin-1}", e.Actor)
+	}
+	if e.UserID != "" {
+		t.Errorf("UserID = %q, want empty for a key on a self-acting account", e.UserID)
+	}
+	if e.Details["key_prefix"] != key.KeyPrefix {
+		t.Errorf("Details key_prefix = %v, want %q", e.Details["key_prefix"], key.KeyPrefix)
+	}
+	if e.Details["service_account_id"] != sa.ID {
+		t.Errorf("Details service_account_id = %v, want %q", e.Details["service_account_id"], sa.ID)
+	}
+	// Content hygiene (design §5.1 WI3): neither the plaintext key nor its stored
+	// hash may appear in ANY Details value.
+	for k, v := range e.Details {
+		got := toString(v)
+		if strings.Contains(got, raw) {
+			t.Errorf("Details[%q] leaks the raw key", k)
+		}
+		if key.KeyHash != "" && strings.Contains(got, key.KeyHash) {
+			t.Errorf("Details[%q] leaks the key hash", k)
+		}
+	}
+}
+
+// TestSecurityEventAPIKeyMintedActAsUserNamesTheOwner pins the subject of an
+// impersonation credential: a key minted on an act-as-user account authenticates
+// as its human owner, so the audit row names that human — the same UserID
+// convention service_account_created follows.
+func TestSecurityEventAPIKeyMintedActAsUserNamesTheOwner(t *testing.T) {
+	h := newMachineHarness(t)
+	owner := h.seedUser("owner-3")
+	ctx := principalContext("admin-1")
+	sa, err := h.svc.CreateServiceAccount(ctx, "admin-1", "personal", "", true, owner)
+	if err != nil {
+		t.Fatalf("CreateServiceAccount: %v", err)
+	}
+	if _, _, err := h.svc.MintAPIKey(ctx, sa.ID, "deploy", time.Time{}); err != nil {
+		t.Fatalf("MintAPIKey: %v", err)
+	}
+	e := requireEvent(t, h.events, securityevent.TypeAPIKeyMinted, securityevent.StatusSuccess)
+	if e.UserID != owner {
+		t.Errorf("UserID = %q, want the act-as owner %q", e.UserID, owner)
+	}
+	if e.Actor.ID != "admin-1" {
+		t.Errorf("actor = %+v, want the minting human {user, admin-1}", e.Actor)
+	}
+}
+
+func TestSecurityEventAPIKeyRevoked(t *testing.T) {
+	h := newMachineHarness(t)
+	ctx := principalContext("admin-1")
+	sa, _ := h.svc.CreateServiceAccount(ctx, "admin-1", "bot", "", false, "")
+	key, _, _ := h.svc.MintAPIKey(ctx, sa.ID, "deploy", time.Time{})
+	if err := h.svc.RevokeAPIKey(ctx, key.ID); err != nil {
+		t.Fatalf("RevokeAPIKey: %v", err)
+	}
+	e := requireEvent(t, h.events, securityevent.TypeAPIKeyRevoked, securityevent.StatusSuccess)
+	if e.Actor.ID != "admin-1" {
+		t.Errorf("actor = %+v, want {user, admin-1}", e.Actor)
+	}
+	if e.Details["key_id"] != key.ID {
+		t.Errorf("Details key_id = %v, want %q", e.Details["key_id"], key.ID)
+	}
+}
+
+// TestSecurityEventAPIKeyRevokedRecordsPerCall documents the decision, not an
+// accident: the revoke path holds only the key id (APIKeyRepository has no
+// Get-by-id), so it cannot tell a first revoke from a replay and records one row
+// per successful CALL. A state-aware event waits on the deferred D4 store train.
+func TestSecurityEventAPIKeyRevokedRecordsPerCall(t *testing.T) {
+	h := newMachineHarness(t)
+	ctx := principalContext("admin-1")
+	sa, _ := h.svc.CreateServiceAccount(ctx, "admin-1", "bot", "", false, "")
+	key, _, _ := h.svc.MintAPIKey(ctx, sa.ID, "deploy", time.Time{})
+	for i := 0; i < 2; i++ {
+		if err := h.svc.RevokeAPIKey(ctx, key.ID); err != nil {
+			t.Fatalf("RevokeAPIKey #%d: %v", i+1, err)
+		}
+	}
+	revocations := 0
+	for _, e := range h.events.recorded() {
+		if e.EventType == securityevent.TypeAPIKeyRevoked {
+			revocations++
+		}
+	}
+	if revocations != 2 {
+		t.Errorf("recorded %d api_key_revoked rows for two revoke calls, want 2 (per call, not per state transition)", revocations)
+	}
+}
+
+func TestSecurityEventAPIKeyRevokeUnknownRecordsNothing(t *testing.T) {
+	h := newMachineHarness(t)
+	if err := h.svc.RevokeAPIKey(context.Background(), "nope"); !errors.Is(err, sdk.ErrNotFound) {
+		t.Fatalf("RevokeAPIKey(unknown): err=%v, want ErrNotFound", err)
+	}
+	for _, e := range h.events.recorded() {
+		if e.EventType == securityevent.TypeAPIKeyRevoked {
+			t.Error("a failed revoke recorded an api_key_revoked row")
+		}
+	}
+}
+
+func TestMachineLifecycleAuditNilRepoIsNoOp(t *testing.T) {
+	users := newFakeUsers()
+	svc := NewService(Deps{
+		Users:           users,
+		Passwords:       newFakePasswords(),
+		Sessions:        newFakeSessions(),
+		Hasher:          &fakeHasher{},
+		Limiter:         ratelimiter.NewMemory(),
+		ServiceAccounts: newFakeServiceAccounts(),
+		APIKeys:         newFakeAPIKeys(),
+	})
+	ctx := principalContext("admin-1")
+	sa, err := svc.CreateServiceAccount(ctx, "admin-1", "bot", "", false, "")
+	if err != nil {
+		t.Fatalf("CreateServiceAccount: %v", err)
+	}
+	key, _, err := svc.MintAPIKey(ctx, sa.ID, "deploy", time.Time{})
+	if err != nil {
+		t.Fatalf("MintAPIKey: %v", err)
+	}
+	if err := svc.RevokeAPIKey(ctx, key.ID); err != nil {
+		t.Fatalf("RevokeAPIKey: %v", err)
+	}
+}
+
+func TestMachineLifecycleAuditFailureNeverFailsOp(t *testing.T) {
+	h := newMachineHarness(t)
+	h.events.createErr = errors.New("audit store unavailable")
+	ctx := principalContext("admin-1")
+	sa, err := h.svc.CreateServiceAccount(ctx, "admin-1", "bot", "", false, "")
+	if err != nil {
+		t.Fatalf("CreateServiceAccount failed on an audit-write error: %v", err)
+	}
+	key, _, err := h.svc.MintAPIKey(ctx, sa.ID, "deploy", time.Time{})
+	if err != nil {
+		t.Fatalf("MintAPIKey failed on an audit-write error: %v", err)
+	}
+	if err := h.svc.RevokeAPIKey(ctx, key.ID); err != nil {
+		t.Fatalf("RevokeAPIKey failed on an audit-write error: %v", err)
+	}
+	if h.events.count() != 0 {
+		t.Errorf("a failing repo recorded %d events, want 0", h.events.count())
 	}
 }

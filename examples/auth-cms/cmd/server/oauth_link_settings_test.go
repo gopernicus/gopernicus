@@ -65,9 +65,17 @@ type linkHost struct {
 // honors without an allowlist entry.
 func newLinkHost(t *testing.T) *linkHost {
 	t.Helper()
+	return newLinkHostTuned(t, nil)
+}
+
+// newLinkHostTuned is newLinkHost with the host's auth.Config open to one
+// tweak before NewService — the seam a test that needs a non-default posture
+// (a machine-routes gate, say) boots through. A nil tune is the shipped config.
+func newLinkHostTuned(t *testing.T, tune func(*auth.Config)) *linkHost {
+	t.Helper()
 
 	sender := &recordingSender{}
-	svc := bootInProcess(t, sender, nil)
+	svc := bootInProcess(t, sender, tune)
 	router := mountInProcess(t, svc)
 	stop := runDelivery(t, svc)
 	t.Cleanup(stop)

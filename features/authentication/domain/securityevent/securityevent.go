@@ -181,6 +181,24 @@ const (
 	// identifier kind and the challenge purpose ONLY — never the identifier value,
 	// code, or token.
 	TypePasswordlessLogin = "passwordless_login"
+
+	// Machine-identity lifecycle vocabulary (the administrative counterpart to
+	// TypeAPIKeyAuth, which records a credential USE). The bundled lifecycle
+	// routes run behind a host authorization gate, so every row here is an
+	// authorized administrator acting: Actor is the principal resolved from the
+	// request context, never a caller-supplied creator string.
+	//
+	// TypeServiceAccountCreated is a minted machine identity. UserID is the
+	// act-as owner when the account acts as a human, empty otherwise. Details
+	// carries the service-account id, act_as_user, and delegated (an act-as
+	// account whose owner is someone other than its creator).
+	TypeServiceAccountCreated = "service_account_created"
+	// TypeAPIKeyMinted is an issued API key. Details carries the key PREFIX and
+	// the owning service-account id — NEVER the raw key or its hash.
+	TypeAPIKeyMinted = "api_key_minted"
+	// TypeAPIKeyRevoked is an API key marked revoked. Details carries the key id
+	// only (the revoke coordinate is the key itself; the port has no read-by-id).
+	TypeAPIKeyRevoked = "api_key_revoked"
 )
 
 // Status vocabulary (design §5.1).

@@ -99,10 +99,10 @@ func newIdentifierFixture(t *testing.T) identifierFixture {
 		TokenSigner:          newFakeSigner(),
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, nil, "", MutationSecurity{
+	Mount(h, Deps{Auth: svc, Mutation: MutationSecurity{
 		AllowedOrigins:    []string{"https://app.example.com"},
 		SessionCookieName: svc.SessionCookieName(),
-	}, nil, nil)
+	}})
 	return identifierFixture{h: h, users: users, idents: idents, passwords: passwords}
 }
 

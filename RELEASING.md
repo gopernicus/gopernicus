@@ -170,6 +170,22 @@ before adopting — it ratifies a change to the migration runner's stream model
 (one stream per schema, per-schema ledgers) and names the jobs `QueueOption`
 compatibility consequence.
 
+**2026-08-26: `features/authentication/v0.6.0` — next tag, MINOR** — the bundled
+machine-identity lifecycle routes come standard **behind a host gate**
+(`Config.MachineRoutesGate`), and the one-day-old `Config.MachineRoutesDisabled`
+is **REMOVED** — a source break (plan of record
+`plans/authentication-machine-routes-gate.md`; gopernicus issue #6; the host
+that had to re-implement these routes is gps-360-go). Ungated routes no longer
+mount at all:
+a v0.5.x host with the machine repositories wired and no gate answers 404 on all
+five and WARNs at boot until it names one. `POST /auth/service-accounts` no
+longer takes `owner_user_id` (400 by name, one release) — the caller is the
+owner, and `act_as_user_id` is the explicit, validated, audited delegation, and
+cookie clients must now double-submit the CSRF token on the three lifecycle
+POSTs (`application/json` required there too). No
+schema, no store retags, no pin moves. Read the upgrade note below before
+adopting.
+
 ## Tagging scheme
 
 Nested Go modules in a single repo are tagged with the module's directory as a
@@ -278,7 +294,7 @@ not retagged.
 
 ### features/authorization — v0.4.0 — tagged 2026-08-26: `Config.RelationshipModel` + `ErrNoDecisionKind` is a 500 (minor; one-release deprecation)
 
-Plan of record `.claude/plans/authorization-roles-model-followups.md` — the two
+Plan of record `plans/authorization-roles-model-followups.md` — the two
 owner calls left open at the v0.3.0 close, released BEFORE gps-360-go adoption so
 the handoff targets the final names.
 
@@ -323,7 +339,7 @@ against the field name it was tagged with.
 
 ### features/authorization — v0.3.0 (next tag): the roles kind's model + one decision surface (minor, predominantly additive)
 
-Plan of record `.claude/plans/authorization-roles-model.md` (gopernicus issue #5;
+Plan of record `plans/authorization-roles-model.md` (gopernicus issue #5;
 originating host gps-360-go, which hand-wrote the entire roles decision half).
 The roles kind gains the model it never had, and the decision surface stops being
 relationship-kind-only. **A host that sets no `Config.RoleModel` is behaviourally
@@ -604,6 +620,141 @@ live suite, and the schema legs of authorization and events were re-run
 against an EMPTY `public` so any unqualified statement would have raised;
 decoy tests in events and authentication prove a `public` twin of the same
 table is neither read nor written when a schema is configured.
+
+### features/authentication — v0.6.0 (next tag): the lifecycle routes come standard behind a host gate (minor; MachineRoutesDisabled REMOVED — a source break; ungated routes no longer mount)
+
+authentication-machine-routes-gate (plan of record
+`plans/authentication-machine-routes-gate.md`, gopernicus issue #6). A **minor**:
+an intended behaviour change — the bundled machine-identity lifecycle routes no
+longer mount without a host authorization gate — plus one removed `Config` field.
+It supersedes the v0.5.4 caveat below, which stays as ledger history.
+
+- **REMOVED: `Config.MachineRoutesDisabled bool`** (and its
+  `authsvc.Deps.MachineRoutesDisabled` / `Service.MachineRoutesEnabled()`
+  plumbing). A **compile break** for any keyed literal that sets it; the one
+  known caller is gps-360-go `cmd/server/authentication.go:50`, a single line it
+  deletes while adopting the gate — nil `MachineRoutesGate` is the same posture.
+  Removed one day after it shipped rather than deprecated: "off even if a gate is
+  set" is a second way to spell nil, and the pre-1.0 rule the owner applied to
+  authorization's `Config.Model` applies here. **`AUTH_MACHINE_ROUTES_DISABLED`
+  becomes an inert environment variable** — a deployment that still sets it is
+  silently ignored (same off-state), so drop it from your manifests.
+- **NEW: `Config.MachineRoutesGate web.Middleware`.** Nil → `/auth/service-accounts`,
+  `/auth/service-accounts/{id}/keys` and `/auth/api-keys/{id}/revoke` are **NOT
+  mounted** (404, deny-by-absence) even with `Repositories.ServiceAccounts` +
+  `APIKeys` wired, and `NewService` logs one WARN naming the field. Key
+  AUTHENTICATION is untouched: `AuthenticateAPIKey`, `RequireServiceAccount` and
+  the bearer path of `RequirePrincipal` still follow `MachineEnabled`. Non-nil →
+  each of the five routes registers as **`RequireUser` → `RequireLiveSession` →
+  (on the three POSTs) the browser-safe `Origin`/CSRF gate → the gate**
+  (outermost first): the human credential class only — an API-key
+  bearer, act-as-user or not, is **401**, so a key can never mint another key —
+  then immediate revocation (a logged-out session is 401 within one round-trip,
+  the invitation precedent), then — for a cookie caller on a mutation — the CSRF
+  rung described below, then the host's policy, which writes its own denial
+  (`features/authorization`'s gates write FS9 `permission_denied` 403; the
+  bundled handlers write no 403 of their own). Typical value:
+  `authorizer.RequirePermissionFixed("platform", "steward", "global")`. Set with
+  the machine subsystem unwired (BOTH repositories nil — a half-wired pair fails
+  earlier with `ErrMachineReposRequired`) → the new
+  **`ErrMachineRoutesGateWithoutRepos`** at construction. Deliberately a
+  SINGULAR `web.Middleware`, not the
+  `[]web.Middleware` of `cms.Config.AdminMiddleware`: nil must mean "no policy,
+  do not mount", where an empty slice would mean "mounted, ungated" — the very
+  bug this field closes.
+- **Request DTO — `POST /auth/service-accounts`.** `owner_user_id` is **refused
+  by name with a 400** ("owner_user_id is no longer accepted; the caller is the
+  owner, or name act_as_user_id"); an EMPTY value is ignored. The field is kept
+  for **one release** so a v0.5.x client learns the rename instead of a generic
+  decode error, then dropped — after which strict decode answers 400 for it
+  anyway. Its replacement is **`act_as_user_id`**: empty with `act_as_user` → the
+  caller owns the account (act-as-self names no id); non-empty → delegation to
+  another user, allowed only because the route sits behind the gate.
+  `act_as_user_id` without `act_as_user` → 400; an unknown `act_as_user_id` → 400
+  `invalid reference` (the service now verifies the act-as owner EXISTS —
+  previously a typo minted a live principal for a subject nobody could
+  deactivate; an unwired user rail fails closed with `ErrIdentityUnavailable`).
+  Create and mint tighten their request hardening. The unknown-field 400 is NOT
+  new (v0.5.x already decoded with `DisallowUnknownFields`); what changes is the
+  **1 MiB body cap (413)**, **trailing data after the JSON value → 400**, and a
+  **required `Content-Type: application/json` → 415** otherwise. **Response DTOs
+  are byte-stable** — `owner_user_id` stays in the response, mint still returns
+  `key` (now with `Cache-Control: no-store`, like every other secret-bearing
+  response), revoke still answers 200 `{"status":"revoked"}`.
+- **CSRF — cookie clients must double-submit on the three POSTs.** Create, mint
+  and revoke now carry the same browser-safe `Origin`/CSRF gate as
+  `/auth/admin/*`: a cookie-authenticated caller reads `GET /auth/csrf` and
+  echoes the `__Host-auth_csrf` value in `X-CSRF-Token`, from an origin in
+  `Config.AllowedOrigins`. A missing or mismatched token is **403
+  `permission_denied`**; a non-allowlisted origin is **403 `origin_rejected`** —
+  both BEFORE the host's gate runs. **Bearer-only clients are unaffected** (the
+  gate short-circuits when there is no session cookie), and the two GETs are
+  body-less reads that never carry it. A cookie-driven admin UI built against
+  v0.5.x must add the bootstrap+echo step or it will see 403s.
+- **Adopter audit — ghost owners written under v0.5.x.** The new act-as owner
+  existence check covers NEW writes only; `userDeactivated` still reads an
+  unknown id as ACTIVE, so any act-as account created with a bogus
+  `owner_user_id` before this tag still mints live principals nobody can
+  deactivate. Before deploying, list them and revoke their keys:
+
+  ```sql
+  SELECT id, owner_user_id FROM service_accounts
+   WHERE act_as_user AND owner_user_id NOT IN (SELECT id FROM users);
+  ```
+- **Three new security-event types** (free strings at rest, no store change):
+  `service_account_created` (`UserID` = the act-as owner; Details
+  `service_account_id`, `act_as_user`, `delegated`), `api_key_minted` (`UserID` =
+  the act-as owner the key authenticates as, else empty; Details `key_prefix`,
+  `service_account_id` — never the raw key or its hash) and `api_key_revoked`
+  (Details `key_id`), emitted **per successful CALL, not per state transition** —
+  a replayed revoke of an already-revoked key writes a second row, because the
+  revoke path holds only the key id and `APIKeyRepository` has no Get-by-id with
+  which to read the prior state (a state-aware event waits on the deferred
+  account-scoped revoke train). `Actor` is the principal resolved from
+  the request context, never the caller-supplied `createdBy` string. Readers that
+  filter by `event_type` are unaffected.
+- **Scope, stated plainly:** behind the gate the list is the GLOBAL one and
+  mint/revoke take any id — this train fixes OWNERSHIP, not per-object
+  authorization. A creator-scoped list or an account-scoped revoke needs a port
+  change (`ServiceAccountRepository.List` has no filter dimension;
+  `APIKeyRepository` has no read-by-id) and a two-store train; a host that needs
+  either leaves the gate nil and serves its own routes over the unchanged
+  `CreateServiceAccount` / `MintAPIKey` / `ListServiceAccounts` / `ListAPIKeys` /
+  `RevokeAPIKey`.
+- **No store retags.** No port method, no DDL, no migration, no `go.mod` change:
+  the new event types are free `TEXT`, and `service_accounts` / `api_keys` keep
+  their columns. `features/authentication/stores/{pgx,turso}` stay at v0.4.0 /
+  v0.3.0.
+- **The standard unkeyed-literal caveat:** `Config` gains one field and loses
+  one, so any UNKEYED `auth.Config{…}` literal breaks. None exists in-repo or in
+  gps-360-go (grep 2026-08-26); keyed literals are unaffected except for the
+  removed field.
+
+**Adoption — gps-360-go.** It builds authentication at `cmd/server/main.go`
+BEFORE authorization, so either move the authorization boot above the
+authentication config or set `MachineRoutesGate` on the config after the
+authorizer exists and before `NewService`. Then replace
+`MachineRoutesDisabled: true` (`cmd/server/authentication.go:50`) with
+`MachineRoutesGate: authorizationComponents.Service.RequirePermissionFixed(...)`
+on its platform/steward coordinate, and delete `features/auth/inbound/machine.go`
++ `machine_test.go` (plus the `machine` field of `inbound.Auth` and the
+`MachineService` parameter of its `New`). Deleting those routes is **four
+client-visible divergences at once**: the path (`/api/v1/service-accounts*` →
+`/auth/service-accounts*`), the mint body (`{"key":{…},"plaintext":…}` → the flat
+`{…,"key":…}`), the revoke status (204 → 200 `{"status":"revoked"}`), and
+`created_by` (`"user:<id>"` → a bare user id, with existing rows keeping the old
+format — one column, two formats, no backfill). Repoint the key-holding clients
+or keep a thin host adapter. gps's blanket `act_as_user ⇒ 400` refusal becomes a
+gate-protected capability; a host that still wants no delegation keeps its own
+create route (own-the-routes) and adopts the bundled ones for the rest.
+
+**Adoption — coordination-hub and any other v0.5.x host.** If the machine
+repositories are wired, the five routes answer 404 and boot logs the WARN until
+`MachineRoutesGate` is named. Once named, run the ghost-owner audit query above
+and repoint any cookie-driven admin UI at the CSRF bootstrap. Nothing else
+moves: key authentication,
+`RequirePrincipal`, `RequireServiceAccount` and `RequireLiveSession` are
+unchanged, and no store or migration is touched.
 
 ### features/authentication — v0.5.4 (2026-08-25): MachineRoutesDisabled + a caveat on the bundled lifecycle routes (patch by owner ruling)
 

@@ -748,6 +748,16 @@ const (
 // construction rather than silently ignoring the dead policy.
 var ErrHTMLPolicyWithoutViews = errors.New("auth: Config.HTMLPolicy set but Config.Views is nil (no HTML surface)")
 
+// ErrMachineRoutesGateWithoutRepos is returned by NewService/Register when
+// Config.MachineRoutesGate is set while the machine subsystem is unwired (BOTH
+// Repositories.ServiceAccounts and APIKeys nil — a half-wired pair fails earlier
+// with ErrMachineReposRequired). The bundled lifecycle routes
+// mount only when the machine subsystem is wired, so a gate without the
+// repositories is an authorization policy that can never be consulted — the
+// contradictory-wiring error (the ErrHTMLPolicyWithoutViews posture), so a dead
+// gate never gives false confidence that machine identities are protected.
+var ErrMachineRoutesGateWithoutRepos = errors.New("auth: Config.MachineRoutesGate set but Repositories.ServiceAccounts/APIKeys are nil (no machine subsystem)")
+
 // ErrBrowserLoginPathInvalid is returned by NewService/Register when a non-empty
 // Config.BrowserLoginPath is not a safe root-relative path (design §9.2): it must
 // start with a single "/", carry no protocol-relative "//" prefix, no scheme, no
@@ -851,15 +861,21 @@ type Config struct {
 	// use-cases refuse with ErrPasswordFlowsDisabled. Default false keeps every
 	// route. Hasher stays REQUIRED (the feature's credential rail is shared).
 	PasswordFlowsDisabled bool `env:"AUTH_PASSWORD_FLOWS_DISABLED"`
-	// MachineRoutesDisabled keeps API-key AUTHENTICATION on (a bearer key still
-	// resolves a principal) but mounts NONE of the bundled service-account /
-	// API-key lifecycle routes (/auth/service-accounts*, /auth/api-keys/{id}/revoke).
-	// Those routes are gated on any authenticated user and are UNSCOPED —
-	// `owner_user_id` is taken from the request body, listing is global, minting
-	// and revocation take any id — which suits a single-admin host, not one with
-	// several trust levels. Such a host sets this and serves its own gated
-	// lifecycle routes over the Service methods. Default false keeps them.
-	MachineRoutesDisabled bool `env:"AUTH_MACHINE_ROUTES_DISABLED"`
+	// MachineRoutesGate is the authorization the bundled machine-identity lifecycle
+	// routes (/auth/service-accounts*, /auth/api-keys/{id}/revoke) run behind. Each
+	// route is RequireUser (human credential only — an API key, act-as-user or not,
+	// never administers machine identities through the bundled routes), then
+	// RequireLiveSession (immediate revocation, the invitation precedent), then —
+	// on the three MUTATIONS — the browser-safe Origin/CSRF gate, then this gate.
+	// The feature never guesses a policy: nil → the routes are NOT mounted
+	// (deny-by-absence, like PasswordFlowsDisabled) and NewService WARNs when the
+	// machine repositories are wired without one; key AUTHENTICATION is unaffected.
+	// Set with Repositories.ServiceAccounts / APIKeys nil → ErrMachineRoutesGateWithoutRepos.
+	// A single middleware, not the []web.Middleware of cms.Config.AdminMiddleware /
+	// events.Config.StreamMiddleware: nil is the unambiguous "no policy" — an empty
+	// non-nil slice would mean "mounted, ungated", the very bug this field closes.
+	// Typical: authorizer.RequirePermissionFixed("platform", "steward", "global").
+	MachineRoutesGate web.Middleware
 
 	// RuntimeMode is the REQUIRED fail-closed posture (auth v3 §8). It has no
 	// default: empty → ErrRuntimeModeRequired, unknown → ErrRuntimeModeInvalid,
@@ -1302,6 +1318,11 @@ type Service struct {
 	// asset-free CSP; non-nil → the fixed protections plus the policy's widening
 	// resource directives. Threaded Register → Mount → handlers.
 	htmlPolicy *inbound.HTMLResourcePolicy
+	// machineRoutesGate is the host authorization the bundled machine-identity
+	// lifecycle routes run behind (Config.MachineRoutesGate). Nil → the shipped
+	// adapter mounts none of them (deny-by-absence); key authentication is
+	// unaffected. Threaded Register → Mount → mountMachine.
+	machineRoutesGate web.Middleware
 }
 
 // DeliveryStatus is the read-only delivery-status projection a session-gated caller
@@ -1430,6 +1451,15 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 	}
 	if (repos.ServiceAccounts == nil) != (repos.APIKeys == nil) {
 		return nil, ErrMachineReposRequired
+	}
+	// The machine-route gate is only ever consulted by the bundled lifecycle
+	// routes, which mount only when both machine repositories are wired (design
+	// §4.1). Setting the gate without them is a policy that can never run — the
+	// contradictory-wiring error (the ErrHTMLPolicyWithoutViews posture). The
+	// reverse is NOT an error: repositories without a gate is the deny-by-absence
+	// posture (no routes, key authentication unaffected) and only WARNs below.
+	if cfg.MachineRoutesGate != nil && (repos.ServiceAccounts == nil || repos.APIKeys == nil) {
+		return nil, ErrMachineRoutesGateWithoutRepos
 	}
 	if cfg.Granter != nil && repos.Invitations == nil {
 		return nil, ErrInvitationRepoRequired
@@ -1755,6 +1785,14 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 		}
 	}
 
+	// The machine subsystem wired without an authorization gate is a SILENT posture
+	// change (D1): key authentication keeps working, but the bundled lifecycle
+	// routes are not mounted and answer 404. An upgrading host learns that at boot
+	// rather than from production 404s. The reverse wiring is the loud error above.
+	if repos.ServiceAccounts != nil && repos.APIKeys != nil && cfg.MachineRoutesGate == nil {
+		transportLog.Warn("auth: machine repositories are wired but Config.MachineRoutesGate is unset; the bundled lifecycle routes are NOT mounted (404) — set a gate or serve your own routes over the Service methods")
+	}
+
 	// authService is declared here and assigned below (authsvc.NewService), so the
 	// invitation service's accept-time identifier accessor can bind to it: the two
 	// services reference each other (authsvc holds invitationsvc for resolve-on-
@@ -1849,7 +1887,6 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 		},
 		RequireVerifiedEmail:  cfg.RequireVerifiedEmail,
 		PasswordFlowsDisabled: cfg.PasswordFlowsDisabled,
-		MachineRoutesDisabled: cfg.MachineRoutesDisabled,
 		OAuthAccounts:         repos.OAuthAccounts,
 		OAuthStates:           repos.OAuthStates,
 		Providers:             cfg.Providers,
@@ -1975,8 +2012,9 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 			AllowedOrigins:    cfg.AllowedOrigins,
 			SessionCookieName: authService.SessionCookieName(),
 		},
-		views:      cfg.Views,
-		htmlPolicy: cfg.HTMLPolicy,
+		views:             cfg.Views,
+		htmlPolicy:        cfg.HTMLPolicy,
+		machineRoutesGate: cfg.MachineRoutesGate,
 	}, nil
 }
 
@@ -2520,6 +2558,14 @@ func (s *Service) Register(m feature.Mount) error {
 	if s.inv != nil {
 		inv = s.inv
 	}
-	inbound.Mount(m.Router, s.svc, inv, s.listStrategy, s.mutationSecurity, s.views, s.htmlPolicy)
+	inbound.Mount(m.Router, inbound.Deps{
+		Auth:         s.svc,
+		Invitations:  inv,
+		ListStrategy: s.listStrategy,
+		Mutation:     s.mutationSecurity,
+		Views:        s.views,
+		HTMLPolicy:   s.htmlPolicy,
+		MachineGate:  s.machineRoutesGate,
+	})
 	return nil
 }

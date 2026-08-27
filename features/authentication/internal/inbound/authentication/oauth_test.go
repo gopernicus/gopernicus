@@ -120,7 +120,7 @@ func newOAuthTestHandler(t *testing.T) http.Handler {
 		TokenSigner:       newFakeSigner(),
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, nil, "", MutationSecurity{}, nil, nil)
+	Mount(h, Deps{Auth: svc})
 	return h
 }
 

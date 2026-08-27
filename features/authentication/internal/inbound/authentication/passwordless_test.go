@@ -52,7 +52,7 @@ func newPasswordlessHandlerWith(t *testing.T, limiter ratelimiter.Limiter, mutat
 		PublicAuthBaseURL: "https://auth.example.com",
 	})
 	h := web.NewWebHandler()
-	Mount(h, svc, nil, "", mutation, nil, nil)
+	Mount(h, Deps{Auth: svc, Mutation: mutation})
 	return h
 }
 
