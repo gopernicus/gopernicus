@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	authorization "github.com/gopernicus/gopernicus/features/authorization"
+	authorization "github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 )

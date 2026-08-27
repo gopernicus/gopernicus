@@ -35,7 +35,7 @@ import (
 	"strings"
 	"sync/atomic"
 
-	auth "github.com/gopernicus/gopernicus/features/authentication"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 )
 

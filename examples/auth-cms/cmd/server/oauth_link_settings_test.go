@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	auth "github.com/gopernicus/gopernicus/features/authentication"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 )
 
 // CHAU-7.2 — the settings-page account-linking proof.

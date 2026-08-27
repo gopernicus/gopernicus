@@ -11,13 +11,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/cms"
-	"github.com/gopernicus/gopernicus/features/cms/domain/content"
-	"github.com/gopernicus/gopernicus/features/cms/domain/media"
-	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
-	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
-	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
-	"github.com/gopernicus/gopernicus/features/cms/storetest"
+	"github.com/gopernicus/gopernicus/pockets/cms"
+	"github.com/gopernicus/gopernicus/pockets/cms/domain/content"
+	"github.com/gopernicus/gopernicus/pockets/cms/domain/media"
+	"github.com/gopernicus/gopernicus/pockets/cms/domain/menus"
+	"github.com/gopernicus/gopernicus/pockets/cms/domain/messaging"
+	"github.com/gopernicus/gopernicus/pockets/cms/domain/taxonomy"
+	"github.com/gopernicus/gopernicus/pockets/cms/storetest"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 

@@ -16,15 +16,15 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/examples/cms/internal/theme"
-	"github.com/gopernicus/gopernicus/features/cms"
-	cmsturso "github.com/gopernicus/gopernicus/features/cms/stores/turso"
+	"github.com/gopernicus/gopernicus/pockets/cms"
+	cmsturso "github.com/gopernicus/gopernicus/pockets/cms/stores/turso"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/integrations/tracing/otel"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/filestorage"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/tracing"
-	"github.com/gopernicus/gopernicus/sdk/feature"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
 	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
@@ -103,7 +103,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// ./workshop/migrations and applied PRE-BOOT by that runner (go run
 	// ./workshop/migrations / make migrate), never by the framework at startup.
 	// So no migration registrar is wired here.
-	mount := feature.Mount{Router: router, Logger: log}
+	mount := pocket.Mount{Router: router, Logger: log}
 
 	// Host infrastructure the feature can't default: blob storage for media and
 	// an email sender for the contact form.

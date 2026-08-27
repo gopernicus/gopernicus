@@ -76,12 +76,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 	router.Use(web.RequestID(), web.Logger(log), web.Panics(log))
 
 	// ── Mount your features here ────────────────────────────────────────────
-	// A gopernicus feature reaches this host only through the narrow feature.Mount
+	// A gopernicus feature reaches this host only through the narrow pocket.Mount
 	// + Register surface (constitution rule 5 — no init(), no service locator).
 	// Add the feature (and, if it persists data, a store adapter) to go.mod, then
 	// wire it in this block following the FS2 shape:
 	//
-	//   mount := feature.Mount{Router: router, Logger: log}
+	//   mount := pocket.Mount{Router: router, Logger: log}
 	//   repos := <store>.Repositories(db)        // or your own in-memory store
 	//   svc, err := <feature>.NewService(repos, <feature>.Config{ /* ... */ })
 	//   if err != nil {

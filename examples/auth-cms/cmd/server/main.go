@@ -57,23 +57,23 @@ import (
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/deliveryhealth"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/memstore"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/outboxmem"
-	auth "github.com/gopernicus/gopernicus/features/authentication"
-	authgoth "github.com/gopernicus/gopernicus/features/authentication/views/goth"
-	authorization "github.com/gopernicus/gopernicus/features/authorization"
-	"github.com/gopernicus/gopernicus/features/cms"
-	"github.com/gopernicus/gopernicus/features/cms/domain/content"
-	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
-	cmsgoth "github.com/gopernicus/gopernicus/features/cms/views/goth"
-	eventsfeature "github.com/gopernicus/gopernicus/features/events"
-	"github.com/gopernicus/gopernicus/features/jobs"
-	jobsmem "github.com/gopernicus/gopernicus/features/jobs/memstore"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	authgoth "github.com/gopernicus/gopernicus/pockets/authentication/views/goth"
+	authorization "github.com/gopernicus/gopernicus/pockets/authorization"
+	"github.com/gopernicus/gopernicus/pockets/cms"
+	"github.com/gopernicus/gopernicus/pockets/cms/domain/content"
+	"github.com/gopernicus/gopernicus/pockets/cms/domain/menus"
+	cmsgoth "github.com/gopernicus/gopernicus/pockets/cms/views/goth"
+	eventspocket "github.com/gopernicus/gopernicus/pockets/events"
+	"github.com/gopernicus/gopernicus/pockets/jobs"
+	jobsmem "github.com/gopernicus/gopernicus/pockets/jobs/memstore"
 	"github.com/gopernicus/gopernicus/integrations/cryptids/bcrypt"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
-	"github.com/gopernicus/gopernicus/sdk/feature"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
 	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
@@ -195,7 +195,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// into cms.Config.Cache) so the host's content-event subscriber can drop it.
 	pageCache := cacher.NewMemory()
 
-	mount := feature.Mount{Router: router, Logger: log, Events: bus}
+	mount := pocket.Mount{Router: router, Logger: log, Events: bus}
 
 	// The authorization feature (authorization-v1 Z4 commit 2 — the FLAGSHIP
 	// posture), now GUARDED (AZ3-4.1): BOTH kinds wired, memstore-backed, so the host
@@ -412,13 +412,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// drains it onto the SAME bus — the durable at-least-once rail. Either way the
 	// gateway is a plain bus consumer; only the emit path in front of the bus
 	// changes.
-	var eventsRepos eventsfeature.Repositories
+	var eventsRepos eventspocket.Repositories
 	var outboxStore *outboxmem.Store
 	if durableOutbox() {
 		outboxStore = outboxmem.New()
-		eventsRepos = eventsfeature.Repositories{Outbox: outboxStore}
+		eventsRepos = eventspocket.Repositories{Outbox: outboxStore}
 	}
-	eventsSvc, err := eventsfeature.NewService(eventsRepos, eventsfeature.Config{
+	eventsSvc, err := eventspocket.NewService(eventsRepos, eventspocket.Config{
 		Bus:              bus,
 		StreamMiddleware: []web.Middleware{authSvc.RequireUser},
 		// Authorize (the FLAGSHIP posture — authorization-v1 Z4 commit 2): the SAME
@@ -457,7 +457,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		poolDone   chan struct{}
 	)
 	if outboxStore != nil {
-		poller := eventsfeature.NewPoller(outboxStore, bus)
+		poller := eventspocket.NewPoller(outboxStore, bus)
 		wake := make(chan struct{}, 1)
 		router.Handle(http.MethodPost, "/outbox-demo", outboxDemoHandler(outboxStore, wake, log))
 

@@ -16,13 +16,13 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/examples/minimal/internal/memstore"
-	"github.com/gopernicus/gopernicus/features/cms"
-	"github.com/gopernicus/gopernicus/features/cms/domain/content"
-	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
-	cmsgoth "github.com/gopernicus/gopernicus/features/cms/views/goth"
+	"github.com/gopernicus/gopernicus/pockets/cms"
+	"github.com/gopernicus/gopernicus/pockets/cms/domain/content"
+	"github.com/gopernicus/gopernicus/pockets/cms/domain/menus"
+	cmsgoth "github.com/gopernicus/gopernicus/pockets/cms/views/goth"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
-	"github.com/gopernicus/gopernicus/sdk/feature"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
 	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
@@ -66,7 +66,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	router := web.NewWebHandler(web.WithLogging(log))
 	router.Use(web.RequestID(), web.Logger(log), web.Panics(log))
 
-	mount := feature.Mount{Router: router, Logger: log}
+	mount := pocket.Mount{Router: router, Logger: log}
 
 	// The ui/goth presentation bundle backs the CMS views; the host serves the
 	// kit's fingerprinted assets (the CMS pages' stylesheet) under the path the

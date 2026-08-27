@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
-	auth "github.com/gopernicus/gopernicus/features/authentication"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 )
 
 // CHAU-6.7 — provision-on-consumption, end to end over real HTTP through exported

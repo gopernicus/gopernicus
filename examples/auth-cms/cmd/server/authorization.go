@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 
-	authorization "github.com/gopernicus/gopernicus/features/authorization"
-	authzmem "github.com/gopernicus/gopernicus/features/authorization/memstore"
+	authorization "github.com/gopernicus/gopernicus/pockets/authorization"
+	authzmem "github.com/gopernicus/gopernicus/pockets/authorization/memstore"
 )
 
 // Host-owned authorization policy vocabulary.

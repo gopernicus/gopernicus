@@ -47,14 +47,14 @@ go mod tidy
 
 ## Wiring a feature
 
-A gopernicus feature reaches this host only through the narrow `feature.Mount` +
+A gopernicus feature reaches this host only through the narrow `pocket.Mount` +
 `Register` surface — no init() registration, no service locator. Add the feature
 module (and its store adapter, if it persists data) to `go.mod` at its tagged
 version, then wire it in the "mount your features here" block in
 `cmd/server/main.go`:
 
 ```go
-mount := feature.Mount{Router: router, Logger: log}
+mount := pocket.Mount{Router: router, Logger: log}
 repos := <store>.Repositories(db)        // or your own in-memory store
 svc, err := <feature>.NewService(repos, <feature>.Config{ /* ... */ })
 if err != nil {

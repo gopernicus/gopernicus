@@ -14,14 +14,14 @@ import (
 	"context"
 	"time"
 
-	auth "github.com/gopernicus/gopernicus/features/authentication"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/authgrant"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/challenge"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/contactchange"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/credential"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/identifier"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/passwordreset"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/authgrant"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/challenge"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/contactchange"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/credential"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/passwordreset"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/session"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 

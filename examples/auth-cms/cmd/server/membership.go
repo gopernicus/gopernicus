@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"sync"
 
-	auth "github.com/gopernicus/gopernicus/features/authentication"
-	authorization "github.com/gopernicus/gopernicus/features/authorization"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	authorization "github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )

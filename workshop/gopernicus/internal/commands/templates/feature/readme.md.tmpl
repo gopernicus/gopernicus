@@ -54,7 +54,7 @@ go mod tidy
 
 ## Wiring this feature into a host
 
-The feature reaches a host through the narrow `feature.Mount` + `Register`
+The feature reaches a host through the narrow `pocket.Mount` + `Register`
 surface — no init() registration, no service locator. In your host's
 composition root:
 
@@ -62,7 +62,7 @@ composition root:
 import (
 	{{.Feature}} "{{.ModulePath}}"
 	"{{.ModulePath}}/memstore"          // or a store adapter's Repositories(db)
-	"github.com/gopernicus/gopernicus/sdk/feature"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 repos := {{.Feature}}.Repositories{ {{.ReposField}}: memstore.New{{.ReposField}}() }
@@ -70,7 +70,7 @@ svc, err := {{.Feature}}.NewService(repos, {{.Feature}}.Config{})
 if err != nil {
 	return err
 }
-svc.Register(feature.Mount{Router: router, Logger: log})
+svc.Register(pocket.Mount{Router: router, Logger: log})
 
 // Register mounts no routes (skeleton). Reach use-cases directly:
 created, err := svc.Create(ctx, "first {{.Agg}}")

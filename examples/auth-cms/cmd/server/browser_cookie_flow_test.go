@@ -11,8 +11,8 @@ import (
 	"testing"
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
-	auth "github.com/gopernicus/gopernicus/features/authentication"
-	"github.com/gopernicus/gopernicus/sdk/feature"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
@@ -84,8 +84,8 @@ func newBrowserFlowHost(t *testing.T) (*httptest.Server, *auth.Service) {
 		AllowedOrigins: []string{browserSPAOrigin},
 		AllowedHeaders: []string{"Accept", "Content-Type", "Authorization", csrfEchoHeader},
 	}))
-	if err := svc.Register(feature.Mount{
-		Router: feature.PrefixRegistrar{Prefix: apiPrefix, Next: router},
+	if err := svc.Register(pocket.Mount{
+		Router: pocket.PrefixRegistrar{Prefix: apiPrefix, Next: router},
 		Logger: quietLog(),
 	}); err != nil {
 		t.Fatalf("authSvc.Register: %v", err)

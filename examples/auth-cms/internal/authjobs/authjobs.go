@@ -30,9 +30,9 @@ import (
 	"encoding/json"
 	"time"
 
-	auth "github.com/gopernicus/gopernicus/features/authentication"
-	"github.com/gopernicus/gopernicus/features/jobs"
-	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	"github.com/gopernicus/gopernicus/pockets/jobs"
+	"github.com/gopernicus/gopernicus/pockets/jobs/domain/job"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/work"
 )
 

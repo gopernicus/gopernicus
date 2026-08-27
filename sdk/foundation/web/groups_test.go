@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-// routeRegistrar mirrors feature.RouteRegistrar structurally. sdk/foundation/web cannot
-// import sdk/feature (feature imports web — importing back would cycle), so the
-// canonical assertion lives in sdk/feature/feature_test.go. This local literal
+// routeRegistrar mirrors pocket.RouteRegistrar structurally. sdk/foundation/web cannot
+// import sdk/pocket (pocket imports web — importing back would cycle), so the
+// canonical assertion lives in sdk/pocket/pocket_test.go. This local literal
 // guards the same seam from the web side: the verb sugar and Group additions
 // must never change *WebHandler's Handle shape.
 type routeRegistrar interface {

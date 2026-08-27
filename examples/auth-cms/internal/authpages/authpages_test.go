@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	auth "github.com/gopernicus/gopernicus/features/authentication"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 	uigoth "github.com/gopernicus/gopernicus/ui/goth"
 )

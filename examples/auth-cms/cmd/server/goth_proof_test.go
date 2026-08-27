@@ -8,13 +8,13 @@ import (
 	"testing"
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
-	auth "github.com/gopernicus/gopernicus/features/authentication"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
-	"github.com/gopernicus/gopernicus/sdk/feature"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 	uigothassets "github.com/gopernicus/gopernicus/ui/goth/assets"
 
-	authgoth "github.com/gopernicus/gopernicus/features/authentication/views/goth"
+	authgoth "github.com/gopernicus/gopernicus/pockets/authentication/views/goth"
 )
 
 // gothProofRouter builds the host's real presentation composition — the ui/goth
@@ -39,7 +39,7 @@ func gothProofRouter(t *testing.T) *web.WebHandler {
 	uigothStatic.AddRoutes(router, authAssetBasePath)
 	router.Handle(http.MethodGet, authgoth.DefaultFragmentScriptPath, authgoth.FragmentScriptHandler().ServeHTTP)
 
-	if err := svc.Register(feature.Mount{Router: router, Logger: quietLog(), Events: sdkevents.NewMemory()}); err != nil {
+	if err := svc.Register(pocket.Mount{Router: router, Logger: quietLog(), Events: sdkevents.NewMemory()}); err != nil {
 		t.Fatalf("auth Register: %v", err)
 	}
 	return router
@@ -191,7 +191,7 @@ func TestGOTHNilViewsAssetFreePosture(t *testing.T) {
 		t.Fatalf("auth.NewService (nil Views): %v", err)
 	}
 	router := web.NewWebHandler(web.WithLogging(quietLog()))
-	if err := svc.Register(feature.Mount{Router: router, Logger: quietLog(), Events: sdkevents.NewMemory()}); err != nil {
+	if err := svc.Register(pocket.Mount{Router: router, Logger: quietLog(), Events: sdkevents.NewMemory()}); err != nil {
 		t.Fatalf("auth Register (nil Views): %v", err)
 	}
 	rec := get(t, router, "/auth/login")

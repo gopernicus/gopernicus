@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
-	jobspgx "github.com/gopernicus/gopernicus/features/jobs/stores/pgx"
+	"github.com/gopernicus/gopernicus/pockets/jobs/domain/job"
+	jobspgx "github.com/gopernicus/gopernicus/pockets/jobs/stores/pgx"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 )
 

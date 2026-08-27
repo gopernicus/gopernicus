@@ -19,7 +19,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/feature"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 // ErrNo{{.AggTitle}}Store is returned by NewService when the {{.Agg}} store is not
@@ -69,7 +69,7 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 
 // Register mounts the feature: it logs one line and registers NO routes (the
 // jobs precedent). It tolerates a zero-value Mount.
-func (s *Service) Register(m feature.Mount) error {
+func (s *Service) Register(m pocket.Mount) error {
 	if m.Logger != nil {
 		m.Logger.Info("registered {{.Feature}} feature")
 	}

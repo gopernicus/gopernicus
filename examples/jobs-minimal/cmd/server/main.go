@@ -22,12 +22,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/jobs"
-	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
-	"github.com/gopernicus/gopernicus/features/jobs/domain/schedule"
-	"github.com/gopernicus/gopernicus/features/jobs/memstore"
+	"github.com/gopernicus/gopernicus/pockets/jobs"
+	"github.com/gopernicus/gopernicus/pockets/jobs/domain/job"
+	"github.com/gopernicus/gopernicus/pockets/jobs/domain/schedule"
+	"github.com/gopernicus/gopernicus/pockets/jobs/memstore"
 	robfigcron "github.com/gopernicus/gopernicus/integrations/scheduling/robfig-cron"
-	"github.com/gopernicus/gopernicus/sdk/feature"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
 	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
@@ -122,7 +122,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 
 	// Register mounts the built Service and logs; it starts nothing — the host
 	// owns the run loop.
-	mount := feature.Mount{Router: router, Logger: log}
+	mount := pocket.Mount{Router: router, Logger: log}
 	if err := svc.Register(mount); err != nil {
 		return err
 	}

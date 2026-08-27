@@ -7,8 +7,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
-	jobsturso "github.com/gopernicus/gopernicus/features/jobs/stores/turso"
+	"github.com/gopernicus/gopernicus/pockets/jobs/domain/job"
+	jobsturso "github.com/gopernicus/gopernicus/pockets/jobs/stores/turso"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 )
 

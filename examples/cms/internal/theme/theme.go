@@ -19,9 +19,9 @@ import (
 	"io"
 	"net/url"
 
-	"github.com/gopernicus/gopernicus/features/cms"
-	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
-	cmsgoth "github.com/gopernicus/gopernicus/features/cms/views/goth"
+	"github.com/gopernicus/gopernicus/pockets/cms"
+	"github.com/gopernicus/gopernicus/pockets/cms/domain/menus"
+	cmsgoth "github.com/gopernicus/gopernicus/pockets/cms/views/goth"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 	uigoth "github.com/gopernicus/gopernicus/ui/goth"
 )

@@ -1,7 +1,7 @@
 // Package goth is the ui/goth presentation bundle: it exposes the immutable
 // Bundle, its Config/profiles, the parsed asset Manifest, the deterministic
 // browser Requirements, and the document composition components. It registers no
-// route, installs no middleware, accepts no feature.Mount, and writes no HTTP
+// route, installs no middleware, accepts no pocket.Mount, and writes no HTTP
 // response header — the host composes assets, routes, and CSP. See README.md for
 // the frozen public contract.
 package goth

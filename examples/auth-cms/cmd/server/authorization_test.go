@@ -10,12 +10,12 @@ import (
 	"strings"
 	"testing"
 
-	auth "github.com/gopernicus/gopernicus/features/authentication"
-	authorization "github.com/gopernicus/gopernicus/features/authorization"
-	authzmem "github.com/gopernicus/gopernicus/features/authorization/memstore"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	authorization "github.com/gopernicus/gopernicus/pockets/authorization"
+	authzmem "github.com/gopernicus/gopernicus/pockets/authorization/memstore"
 	"github.com/gopernicus/gopernicus/sdk"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
-	"github.com/gopernicus/gopernicus/sdk/feature"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
@@ -621,7 +621,7 @@ func newDemoAuditHost(t *testing.T) *demoAuditHost {
 		t.Fatalf("seedAuthorization: %v", err)
 	}
 	router := web.NewWebHandler(web.WithLogging(quietLog()))
-	if err := authSvc.Register(feature.Mount{
+	if err := authSvc.Register(pocket.Mount{
 		Router: router, Logger: quietLog(), Events: sdkevents.NewMemory(sdkevents.WithLogger(quietLog())),
 	}); err != nil {
 		t.Fatalf("auth.Register: %v", err)

@@ -26,8 +26,8 @@ import (
 	"embed"
 	"html/template"
 
-	auth "github.com/gopernicus/gopernicus/features/authentication"
-	authgoth "github.com/gopernicus/gopernicus/features/authentication/views/goth"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	authgoth "github.com/gopernicus/gopernicus/pockets/authentication/views/goth"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 	uigoth "github.com/gopernicus/gopernicus/ui/goth"
 )

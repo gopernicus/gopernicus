@@ -10,11 +10,11 @@ import (
 	"testing"
 
 	"github.com/gopernicus/gopernicus/examples/minimal/internal/memstore"
-	"github.com/gopernicus/gopernicus/features/cms"
-	cmsgoth "github.com/gopernicus/gopernicus/features/cms/views/goth"
+	"github.com/gopernicus/gopernicus/pockets/cms"
+	cmsgoth "github.com/gopernicus/gopernicus/pockets/cms/views/goth"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
-	"github.com/gopernicus/gopernicus/sdk/feature"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 	uigoth "github.com/gopernicus/gopernicus/ui/goth"
 	uigothassets "github.com/gopernicus/gopernicus/ui/goth/assets"
@@ -47,7 +47,7 @@ func htmxProofRouter(t *testing.T) http.Handler {
 	uigothStatic := web.NewStaticFileServer(uigothassets.FS, web.WithAssetPrefix("dist/"))
 	uigothStatic.AddRoutes(router, gothAssetBasePath)
 
-	if err := cms.Register(feature.Mount{Router: router, Logger: log}, repos, cms.Config{
+	if err := cms.Register(pocket.Mount{Router: router, Logger: log}, repos, cms.Config{
 		Views:     views,
 		Cache:     cacher.NewMemory(),
 		Mailer:    email.NewConsole(log),

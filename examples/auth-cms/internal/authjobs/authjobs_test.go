@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	auth "github.com/gopernicus/gopernicus/features/authentication"
-	"github.com/gopernicus/gopernicus/features/jobs"
-	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
-	jobsmem "github.com/gopernicus/gopernicus/features/jobs/memstore"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	"github.com/gopernicus/gopernicus/pockets/jobs"
+	"github.com/gopernicus/gopernicus/pockets/jobs/domain/job"
+	jobsmem "github.com/gopernicus/gopernicus/pockets/jobs/memstore"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/work"
 )
 

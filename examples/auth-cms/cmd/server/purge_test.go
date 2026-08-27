@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	auth "github.com/gopernicus/gopernicus/features/authentication"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 )
 
 // fakePurger stands in for the jobs Service's bounded terminal purge. It removes at most the

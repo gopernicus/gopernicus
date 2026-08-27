@@ -5,7 +5,7 @@
 // Run(t, newHarness) runner so implementations are verified against one shared
 // behavioral contract. Imports stdlib + the sdk root + sdk/capabilities/work
 // only (sdk stays dependency-free per the constitution), never another
-// capability or sdk/feature.
+// capability or sdk/pocket.
 //
 // Return values alone cannot prove a queue admitted no hidden duplicate or that
 // a replacement retired the prior generation, so the suite drives a TEST-ONLY
