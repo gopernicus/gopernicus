@@ -7,12 +7,12 @@ import (
 	"slices"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/authentication/domain/authgrant"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/challenge"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/identifier"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/passwordless"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/authgrant"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/challenge"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/passwordless"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/session"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 

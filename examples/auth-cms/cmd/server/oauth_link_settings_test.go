@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	auth "github.com/gopernicus/gopernicus/features/authentication"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 )
 
 // CHAU-7.2 — the settings-page account-linking proof.
@@ -20,11 +20,11 @@ import (
 // The coordination-hub upstream flag claimed authentication had "no
 // user-initiated OAuth linking". The audit found the opposite: Service.StartLink
 // and the session-gated GET /auth/oauth/{provider}/link/start have shipped since
-// features/authentication/v0.1.0. What was missing was a runnable end-to-end
+// pockets/authentication/v0.1.0. What was missing was a runnable end-to-end
 // recipe, so this file IS that recipe as much as it is a test.
 //
 // It is a HOST test in a separate module: everything below is reachable through
-// exported API and real HTTP. Nothing here imports a feature-internal package, so
+// exported API and real HTTP. Nothing here imports a pocket-internal package, so
 // a reader can copy the request sequence into a settings page directly.
 //
 // The wired provider is the host's own fakeOAuthProvider (oauthfake.go): no
@@ -35,7 +35,7 @@ const (
 	// linkProvider is the provider key in the /auth/oauth/{provider}/* routes.
 	linkProvider = "fake"
 	// settingsRedirect is the post-link destination a settings page would send: a
-	// safe same-origin relative path, honored by the feature's redirect resolver
+	// safe same-origin relative path, honored by the pocket's redirect resolver
 	// with NO RedirectAllowlist entry.
 	settingsRedirect = "/settings/security"
 	// hostileRedirect is an off-origin destination the open-redirect guard must
@@ -59,9 +59,9 @@ type linkHost struct {
 }
 
 // newLinkHost boots the host's real config in in_process delivery mode with a
-// recording mailer, mounts the feature, and starts the delivery runtime. The
+// recording mailer, mounts the pocket, and starts the delivery runtime. The
 // host's shipped RedirectAllowlist{"/"} is used as-is: the settings destination
-// is a safe same-origin relative path, which the feature's redirect resolver
+// is a safe same-origin relative path, which the pocket's redirect resolver
 // honors without an allowlist entry.
 func newLinkHost(t *testing.T) *linkHost {
 	t.Helper()

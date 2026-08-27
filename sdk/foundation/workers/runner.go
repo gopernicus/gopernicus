@@ -124,7 +124,7 @@ func WithClock(fn func() time.Time) RunnerOption {
 // construction. It caps the cumulative in-claim time — processing plus backoff
 // sleeps — so the retry window can never outlive the store's claim lease. This
 // is the lease contract, and it is load-bearing: the store reclaims a running
-// job whose lease has expired (features/jobs memstore reclaims when
+// job whose lease has expired (pockets/jobs memstore reclaims when
 // claimed_at < now - lease; SQL stores do the same), so a retry window that
 // overran the lease would let a second worker re-claim the same job mid-retry
 // and run it concurrently. Set maxElapsed well below the store's lease.

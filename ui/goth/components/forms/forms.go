@@ -3,7 +3,7 @@
 // error field group, a titled section of fields, a top-of-form validation
 // summary, and the submit/cancel action row. Each composes primitives (Field,
 // Alert, ButtonGroup) and reuses the frozen primitives.Base grammar; none imports
-// a feature domain, adds a primitive, or emits a server-rendered style.
+// a pocket domain, adds a primitive, or emits a server-rendered style.
 //
 // ARIA linkage follows the frozen Field contract (README §7): the caller owns the
 // control's id and points its aria-describedby at the description/error ids this

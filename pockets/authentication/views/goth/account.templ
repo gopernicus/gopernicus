@@ -1,0 +1,105 @@
+package goth
+
+import (
+	"github.com/gopernicus/gopernicus/pockets/authentication"
+	"github.com/gopernicus/gopernicus/ui/goth/components/forms"
+	"github.com/gopernicus/gopernicus/ui/goth/primitives"
+)
+
+// accountSecurityBody renders the masked method inventory (design §5.1). Every
+// address is masked; no password/code/token appears. It links to the management
+// forms, which drive the same service methods the JSON API uses.
+//
+// Where the credential policy reports a method as non-removable, the row renders
+// nonRemovableNote in place of the suppressed removal control rather than nothing —
+// a suppressed affordance with no explanation reads as a broken one. The hint is
+// advisory; the guardrail stays server-side, re-evaluated on the mutation itself.
+templ accountSecurityBody(m authentication.AccountSecurityPage) {
+	@shell("Account security", "") {
+		@message(m.PageContext)
+		if m.Actor != "" {
+			<p>Signed in as { m.Actor }.</p>
+		}
+		<section aria-labelledby="password-heading" data-slot="account-section">
+			<h2 id="password-heading">Password</h2>
+			if m.HasPassword {
+				<p>A password is set.</p>
+				<p>
+					<a href="/auth/password/change">Change password</a>
+					· <a href="/auth/password/remove">Remove password</a>
+				</p>
+			} else {
+				<p>No password is set.</p>
+				<p><a href="/auth/password/set">Set a password</a></p>
+			}
+		</section>
+		<section aria-labelledby="identifiers-heading" data-slot="account-section">
+			<h2 id="identifiers-heading">Identifiers</h2>
+			if len(m.Identifiers) == 0 {
+				<p>No identifiers.</p>
+			} else {
+				<ul>
+					for _, it := range m.Identifiers {
+						<li>
+							<span>{ it.Kind }: { it.MaskedValue }</span>
+							if it.Primary {
+								<span> (primary)</span>
+							}
+							<span> — uses: { usesText(it.Uses) }</span>
+							<a href={ templ.SafeURL(identifierEditAction(it.ID) + "/edit") }>Manage</a>
+						</li>
+					}
+				</ul>
+			}
+			<p><a href="/auth/identifiers/new">Add an identifier</a></p>
+		</section>
+		<section aria-labelledby="session-heading" data-slot="account-section">
+			<h2 id="session-heading">Session</h2>
+			// Sign-out posts to /auth/logout, which is origin-only (design §9.1, D2):
+			// unlike every other account mutation form it carries NO @csrfField, mirroring
+			// the route's origin-only middleware so a shared-computer logout is never blocked.
+			<form method="post" action="/auth/logout">
+				@forms.FormActions(forms.FormActionsProps{}) {
+					@primitives.Button(primitives.ButtonProps{Type: primitives.ButtonTypeSubmit, Variant: primitives.ButtonSecondary}) {
+						Sign out
+					}
+				}
+			</form>
+		</section>
+		<section aria-labelledby="oauth-heading" data-slot="account-section">
+			<h2 id="oauth-heading">Linked accounts</h2>
+			if len(m.OAuth) == 0 {
+				<p>No linked accounts.</p>
+			} else {
+				<ul>
+					for _, o := range m.OAuth {
+						<li>
+							<span>{ o.Provider }</span>
+							if o.Removable {
+								<a href={ templ.SafeURL(oauthUnlinkAction(o.Provider)) }>Unlink</a>
+							} else {
+								@primitives.Typography(primitives.TypographyProps{Variant: primitives.TypographyMuted}) {
+									{ nonRemovableNote }
+								}
+							}
+						</li>
+					}
+				</ul>
+			}
+			// The link affordance renders only for wired providers the caller has not
+			// linked; an empty LinkableProviders (OAuth off, or all linked) renders
+			// nothing at all, leaving the section byte-identical to the pre-affordance
+			// output.
+			if len(m.LinkableProviders) > 0 {
+				<h3 id="link-account-heading">Link an account</h3>
+				<ul aria-labelledby="link-account-heading">
+					for _, p := range m.LinkableProviders {
+						<li>
+							<a href={ templ.SafeURL(oauthLinkStartHref(p)) }>Link { displayProviderName(p) }</a>
+						</li>
+					}
+				</ul>
+			}
+		</section>
+	}
+}

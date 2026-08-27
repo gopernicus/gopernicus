@@ -10,7 +10,7 @@ A multi-port Redis connector wrapping exactly one third-party library —
 | `goredis.Cacher` | `cacher.Storer` | TTL cache over GET/MGET/SET/DEL/SCAN |
 | `goredis.Limiter` | `ratelimiter.Limiter` | sliding-window rate limit via an atomic Lua script |
 
-It imports only `sdk` facility ports and go-redis — **no feature, no other
+It imports only `sdk` facility ports and go-redis — **no pocket, no other
 integration**.
 
 ## Why one module, three ports (R-KV1)
@@ -23,8 +23,8 @@ same `require`, `go.sum`, and version-bump surface for no boundary benefit. The
 category is named for the tech family (`kvstores/`) precisely because the wrapped
 library is genuinely multi-port; capability-named categories (`oauth/`,
 `scheduling/`) stay one-port. (A redis session store for auth is a different
-animal — it implements a *feature-owned* port and lives at
-`features/auth/stores/redis`; this module carries **facility** ports only.)
+animal — it implements a *pocket-owned* port and lives at
+`pockets/auth/stores/redis`; this module carries **facility** ports only.)
 
 The `sdk` ports (`events`, `cacher`, `ratelimiter`) already define the port
 vocabulary, so each facility here is one file — no per-port adapter subpackage
@@ -136,7 +136,7 @@ consumers).
 A stream message is **acknowledged unconditionally** — even when it fails to
 parse or a handler errors or panics. One bad message can therefore never block
 the group's pending list. There is deliberately **no in-bus retry**: durable
-retry is the outbox/jobs rail's responsibility (`features/jobs`), not this
+retry is the outbox/jobs rail's responsibility (`pockets/jobs`), not this
 transport's. A handler that must not lose work commits it to that rail.
 
 ### Wildcard (`"*"`) semantics

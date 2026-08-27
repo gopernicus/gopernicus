@@ -1,6 +1,6 @@
 // Package layouts holds the opinionated, domain-neutral page/shell compositions
 // built from ui/goth primitives (GOTH-7.1). A component arranges primitives and
-// selects sensible defaults; it never imports a feature domain, adds a primitive,
+// selects sensible defaults; it never imports a pocket domain, adds a primitive,
 // registers a route, or introduces a new Alpine controller. Every component reuses
 // the frozen primitives.Base grammar (Class appended after the stable class,
 // Attributes funnelled through the shared merge) and emits no server-rendered

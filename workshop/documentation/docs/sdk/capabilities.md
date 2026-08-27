@@ -13,13 +13,13 @@ A capability combines a narrow behavioral contract with shared observable policy
 |---|---|---|---|
 | `cacher` | TTL storage and page-cache middleware | memory | Redis |
 | `email` | message sender, templates/layouts, production transport posture | console, SMTP | SendGrid |
-| `events` | event bus, broadcast/emit contracts, delivery options | memory, noop | Redis; events feature builds on it |
+| `events` | event bus, broadcast/emit contracts, delivery options | memory, noop | Redis; events pocket builds on it |
 | `filestorage` | object storage plus optional signed/resumable capabilities | disk | GCS, S3-compatible |
 | `notify` | address-kind delivery and production posture | console | mailer bridge integration |
 | `oauth` | OAuth/OIDC provider and PKCE vocabulary | none | GitHub, Google |
 | `ratelimiter` | allow/retry semantics and HTTP middleware | memory | Redis, pgx-backed limiter |
 | `tracing` | tracer/span vocabulary and HTTP middleware | noop | OpenTelemetry |
-| `work` | keyed admission, replace, status, and lifecycle vocabulary | none | jobs feature |
+| `work` | keyed admission, replace, status, and lifecycle vocabulary | none | jobs pocket |
 
 ## Defaults keep simple hosts simple
 
@@ -76,7 +76,7 @@ The rule prevents the SDK from turning into a web of facilities whose optional d
 
 The SDK event bus supports in-process and distributed event behavior, but the emit rail is not a transaction or queue. Use it for observation, wake-ups, cache invalidation, and live updates where consumers can re-fetch authoritative state.
 
-For side effects that must survive a crash, use a durable feature-owned outbox or the keyed work protocol implemented by jobs. Never emit an event merely to trigger required work and mistake asynchronous delivery for durability.
+For side effects that must survive a crash, use a durable pocket-owned outbox or the keyed work protocol implemented by jobs. Never emit an event merely to trigger required work and mistake asynchronous delivery for durability.
 
 ## Work is an interoperability protocol
 
@@ -96,7 +96,7 @@ pending → running → completed
 - `Replacer` for atomic replace/supersede;
 - `StatusReader` for deterministic latest status.
 
-The payload is opaque bytes. Executor-side claim, lease, checkpoint, and fencing are deliberately outside this consumer protocol. The jobs feature implements both the SDK-facing protocol and its richer executor domain.
+The payload is opaque bytes. Executor-side claim, lease, checkpoint, and fencing are deliberately outside this consumer protocol. The jobs pocket implements both the SDK-facing protocol and its richer executor domain.
 
 ## Capability middleware stays with its owner
 

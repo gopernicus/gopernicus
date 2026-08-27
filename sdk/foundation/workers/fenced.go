@@ -29,7 +29,7 @@ const defaultLeaseFor = 30 * time.Second
 // execution. WorkerName-style reusable identity cannot fence a reclaim under the
 // same worker; a per-claim lease can.
 //
-// features/jobs' job.FencedQueueRepository is a strict superset of this port (it
+// pockets/jobs' job.FencedQueueRepository is a strict superset of this port (it
 // adds enqueue/checkpoint/keyed/purge surface); the compile assertion lives there
 // so a FencedQueueRepository is directly usable as the store a FencedRunner drives.
 type FencedStore[T Job] interface {
@@ -70,7 +70,7 @@ type FencedRetryFunc func(attempt int) (delay time.Duration, retry bool)
 // NOW, regardless of attempt) or transient (retry-at) rather than deciding by attempt
 // count alone (AV3D-3.4). It returns the delay before the next attempt and true to
 // reschedule at clock()+delay, or false to dead-letter permanently. When set (via
-// WithFencedRetryDecider) it SUPERSEDES FencedRetryFunc; a consuming feature routes a
+// WithFencedRetryDecider) it SUPERSEDES FencedRetryFunc; a consuming pocket routes a
 // processor's explicit retry/permanent verdict onto the runner's reschedule/fail path
 // through it.
 type FencedRetryDecider func(err error, attempt int) (delay time.Duration, retry bool)
@@ -83,7 +83,7 @@ type FencedRetryDecider func(err error, attempt int) (delay time.Duration, retry
 //
 // job is the value as claimed — the runner cannot mutate an arbitrary T — so reason
 // carries the terminal failure reason exactly as Fail durably recorded it;
-// features/jobs' dispatch closure stamps it onto job.Job.FailureReason before the
+// pockets/jobs' dispatch closure stamps it onto job.Job.FailureReason before the
 // per-kind jobs.DeadLetterFunc runs.
 type FencedDeadLetterFunc[T Job] func(ctx context.Context, job T, reason string) error
 

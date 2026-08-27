@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
-	jobspgx "github.com/gopernicus/gopernicus/features/jobs/stores/pgx"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	"github.com/gopernicus/gopernicus/pockets/jobs/domain/job"
+	jobspgx "github.com/gopernicus/gopernicus/pockets/jobs/stores/pgx"
 )
 
 // TestLiveJobsDeliveryPGX runs the AV3D-3.5 live delivery proof list against a live

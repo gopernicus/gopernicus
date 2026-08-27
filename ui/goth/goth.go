@@ -1,7 +1,7 @@
 // Package goth is the ui/goth presentation bundle: it exposes the immutable
 // Bundle, its Config/profiles, the parsed asset Manifest, the deterministic
 // browser Requirements, and the document composition components. It registers no
-// route, installs no middleware, accepts no feature.Mount, and writes no HTTP
+// route, installs no middleware, accepts no pocket.Mount, and writes no HTTP
 // response header — the host composes assets, routes, and CSP. See README.md for
 // the frozen public contract.
 package goth
@@ -411,7 +411,7 @@ const (
 )
 
 // Requirements is the deterministic, minimal set of browser resource needs for a
-// bundle's selected profile. A host/feature maps it into its own CSP policy; the
+// bundle's selected profile. A host/pocket maps it into its own CSP policy; the
 // kit never writes a header. Ordering is stable and duplicate-free.
 type Requirements struct {
 	sources map[Directive][]string

@@ -1,10 +1,10 @@
 // Package googleuuid is an identifier connector wrapping exactly one
 // third-party library, github.com/google/uuid. Its constructors return
 // cryptids.GenerateFunc values, so a host chooses uuid-shaped entity keys the
-// same way it chooses any other ID strategy: once, at wiring, on a feature's
+// same way it chooses any other ID strategy: once, at wiring, on a pocket's
 // Config.IDs.
 //
-// It owns "how to mint a uuid with google/uuid," never any feature's ID
+// It owns "how to mint a uuid with google/uuid," never any pocket's ID
 // policy. Two shapes are offered: V4 (fully random — the interoperable
 // default) and V7 (time-ordered — its text form sorts by creation time, which
 // keeps uuid keys friendly to created-at/id keyset pagination and B-tree

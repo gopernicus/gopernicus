@@ -5,7 +5,7 @@ description: Reusable Gopernicus connectors for third-party libraries and vendor
 
 # Integration catalog
 
-Integrations isolate concrete technology at the edge of the dependency graph. A module wraps one third-party library/family or one external vendor API contract and implements SDK or consumer-declared ports without importing a feature.
+Integrations isolate concrete technology at the edge of the dependency graph. A module wraps one third-party library/family or one external vendor API contract and implements SDK or consumer-declared ports without importing a pocket.
 
 ## Datastores
 
@@ -14,7 +14,7 @@ Integrations isolate concrete technology at the edge of the dependency graph. A 
 | `integrations/datastores/pgxdb` | pgx v5 / PostgreSQL | connection pool, transactions, error mapping, status, migrations, CRUD list toolkit, durable rate limiter |
 | `integrations/datastores/turso` | libSQL / Turso | symmetric database wrapper, transactions, error mapping, status, migrations, CRUD list toolkit |
 
-Datastore integrations own how to talk to a database. They do not own feature tables or SQL; those live in feature `stores/<dialect>` modules.
+Datastore integrations own how to talk to a database. They do not own pocket tables or SQL; those live in pocket `stores/<dialect>` modules.
 
 Both connectors support host-driven migration runners and explicit configuration. They never read environment variables inside `Open`; config structs carry tags so the host may use `environment.ParseEnvTags` or construct them directly.
 
@@ -28,7 +28,7 @@ Query logging is opt-in, logs arguments verbatim, and is development-only.
 | `integrations/cryptids/golang-jwt` | `cryptids.JWTSigner` | HMAC JWTs with method pinning and minimum secret length |
 | `integrations/cryptids/google-uuid` | `cryptids.GenerateFunc` | UUID v4 or time-ordered v7 entity IDs |
 
-Password policy stays in authentication; bcrypt owns hashing mechanics. Entity ID choice is made once in feature config and never controls secret/token generation.
+Password policy stays in authentication; bcrypt owns hashing mechanics. Entity ID choice is made once in pocket config and never controls secret/token generation.
 
 ## Email and notification
 
@@ -94,7 +94,7 @@ The OpenTelemetry connector owns exporter construction and returns an explicit `
 
 ## How to choose or add an integration
 
-Use an existing integration when its generic seam fits. Keep mapping specific to your domain in a feature store or host outbound adapter.
+Use an existing integration when its generic seam fits. Keep mapping specific to your domain in a pocket store or host outbound adapter.
 
 Add a reusable integration when:
 
@@ -104,4 +104,4 @@ Add a reusable integration when:
 - backend errors map to capability/domain error vocabulary where appropriate;
 - construction-time network behavior is documented;
 - hermetic tests and the relevant conformance suite cover observable behavior;
-- it imports no feature, example, or Workshop package.
+- it imports no pocket, example, or Workshop package.

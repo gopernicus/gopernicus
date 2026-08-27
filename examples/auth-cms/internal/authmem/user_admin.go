@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/authentication/domain/identifier"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/session"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/user"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/session"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
@@ -17,7 +17,7 @@ import (
 // mint that closes the deactivate-versus-login race.
 //
 // This host implements them for the same reason it implements every other port:
-// to prove the feature runs against a "bring your own store" adapter with no
+// to prove the pocket runs against a "bring your own store" adapter with no
 // driver in the module graph, and — because these two are the ports whose whole
 // value is atomicity — to give the example host's browser proof something real to
 // drive. The storetest UserDirectory / UserLifecycle / ActiveSessionMint groups

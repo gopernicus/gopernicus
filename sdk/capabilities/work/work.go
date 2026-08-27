@@ -5,8 +5,8 @@
 // Vocabulary + contract only; NO default implementation — the oauth precedent.
 // A keyed queue cannot operate without durable storage and a claim/lease
 // executor, so no honest process-local default exists; the implementation of
-// record is features/jobs, and any other backend supplies its own. Capabilities
-// MAY ship a stdlib default, an integration implementation, or a feature
+// record is pockets/jobs, and any other backend supplies its own. Capabilities
+// MAY ship a stdlib default, an integration implementation, or a pocket
 // implementation of record; this one has the last kind only.
 //
 // Status is the FULL frozen seven-value lifecycle vocabulary, adopted verbatim
@@ -28,7 +28,7 @@
 //
 // Executor-side behavior — claim, lease, checkpoint, fencing, scheduling, retry
 // policy, dead-letter hooks, purge/retention — is out of this protocol; it lives
-// in sdk/foundation/workers and features/jobs.
+// in sdk/foundation/workers and pockets/jobs.
 package work
 
 import "context"

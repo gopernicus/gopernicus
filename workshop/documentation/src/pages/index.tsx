@@ -7,25 +7,25 @@ import styles from './index.module.css';
 
 const principles = [
   ['Stdlib kernel', 'The SDK stays small, portable, and free of third-party dependencies.'],
-  ['Explicit composition', 'The host chooses features, connectors, middleware, and lifecycle.'],
+  ['Explicit composition', 'The host chooses pockets, connectors, middleware, and lifecycle.'],
   ['UI optional', 'Use the API directly, connect a separate web client, or add a Go UI package.'],
-  ['Datastore optional', 'Feature cores depend on ports. Choose PostgreSQL, Turso, memory, or your own store.'],
+  ['Datastore optional', 'Pocket cores depend on ports. Choose PostgreSQL, Turso, memory, or your own store.'],
 ];
 
 const modules = [
   {
     label: '01 · SDK',
     title: 'Contracts and mechanisms',
-    body: 'Kernel errors and context, foundation mechanics, behavioral capabilities, and the feature-mount contract.',
+    body: 'Kernel errors and context, foundation mechanics, behavioral capabilities, and the pocket-mount contract.',
     link: '/docs/sdk/overview',
     linkLabel: 'Read the SDK',
   },
   {
-    label: '02 · Features',
+    label: '02 · Pockets',
     title: 'Reusable domain modules',
     body: 'Authentication, authorization, CMS, events, and jobs expose ports and host seams without selecting a datastore for you.',
-    link: '/docs/features/overview',
-    linkLabel: 'Read feature contracts',
+    link: '/docs/pockets/overview',
+    linkLabel: 'Read pocket contracts',
   },
   {
     label: '03 · Integrations',
@@ -61,7 +61,7 @@ export default function Home(): ReactNode {
   return (
     <Layout
       title="Gopernicus documentation"
-      description="Documentation for Gopernicus: SDK contracts, feature modules, integrations, and optional UI clients."
+      description="Documentation for Gopernicus: SDK contracts, pocket modules, integrations, and optional UI clients."
     >
       <main>
         <section className={styles.hero}>
@@ -74,10 +74,10 @@ export default function Home(): ReactNode {
               </div>
               <Heading as="h1">
                 Explicit composition for Go applications.
-                <span> APIs, features, and optional UI.</span>
+                <span> APIs, pockets, and optional UI.</span>
               </Heading>
               <p className={styles.lead}>
-                Gopernicus provides SDK contracts, reusable feature modules, and
+                Gopernicus provides SDK contracts, reusable pocket modules, and
                 isolated integrations. A host chooses what it needs and owns the
                 composition root.
               </p>
@@ -100,7 +100,7 @@ export default function Home(): ReactNode {
                 src="img/gopernicussimpleicon.png"
                 alt="Gopernicus character holding an orbit model"
               />
-              <span>SDK · features · integrations · hosts</span>
+              <span>SDK · pockets · integrations · hosts</span>
             </div>
           </div>
         </section>
@@ -192,7 +192,7 @@ export default function Home(): ReactNode {
               </div>
               <div className={styles.diffRow}>
                 <strong>API only</strong>
-                <span>SDK web + feature routes + JSON/OpenAPI</span>
+                <span>SDK web + pocket routes + JSON/OpenAPI</span>
               </div>
               <div className={styles.diffRow}>
                 <strong>API + React</strong>
@@ -200,7 +200,7 @@ export default function Home(): ReactNode {
               </div>
               <div className={styles.diffRow}>
                 <strong>API + Go UI</strong>
-                <span>Go API + optional GOTH and feature view adapters</span>
+                <span>Go API + optional GOTH and pocket view adapters</span>
               </div>
               <div className={styles.diffRow}>
                 <strong>Generated code</strong>
@@ -215,7 +215,7 @@ export default function Home(): ReactNode {
             <div>
               <span className={styles.kicker}>Start with the contracts</span>
               <Heading as="h2">Run an example, then choose your UI.</Heading>
-              <p>Read the host composition, feature ports, and client options.</p>
+              <p>Read the host composition, pocket ports, and client options.</p>
             </div>
             <Link className={styles.primaryButton} to="/docs/getting-started/quickstart">
               Open the quickstart <span aria-hidden="true">→</span>

@@ -5,7 +5,7 @@ description: Routing, middleware, request/response helpers, JSON and HTML respon
 
 # Web foundation
 
-`sdk/foundation/web` is a `net/http`-native transport kit. It provides reusable HTTP mechanism and policy without owning application routes, feature schemas, or view technology.
+`sdk/foundation/web` is a `net/http`-native transport kit. It provides reusable HTTP mechanism and policy without owning application routes, pocket schemas, or view technology.
 
 ## Router and middleware
 
@@ -106,7 +106,7 @@ The package offers two related surfaces:
 - `SSEStream` for channels of SSE events with optional heartbeat;
 - `StreamWriter` for incremental data/JSON frames and content-negotiation helpers.
 
-Both preserve flushing through the global middleware wrappers. A feature still owns stream authorization, event filtering, connection age, and domain semantics.
+Both preserve flushing through the global middleware wrappers. A pocket still owns stream authorization, event filtering, connection age, and domain semantics.
 
 ## App-driven OpenAPI
 

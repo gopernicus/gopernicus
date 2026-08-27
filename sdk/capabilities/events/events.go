@@ -4,7 +4,7 @@
 // An Event is a typed value that flows through a Bus in-process. Bus backends
 // (the shipped Memory, the redis-streams integration) satisfy the port; a
 // conformance suite (sdk/capabilities/events/eventstest) pins the common observable
-// contract. The bus knows zero CMS/auth concepts — features emit their own
+// contract. The bus knows zero CMS/auth concepts — pockets emit their own
 // typed events and consumers subscribe by topic.
 //
 // Delivery is deliberately weak. The Memory bus is at-most-once, in-process,
@@ -188,7 +188,7 @@ type Emitter interface {
 	Emit(ctx context.Context, event Event, opts ...EmitOption) error
 }
 
-// Bus is the full port a bus backend satisfies and the events feature consumes.
+// Bus is the full port a bus backend satisfies and the events pocket consumes.
 type Bus interface {
 	Emitter
 

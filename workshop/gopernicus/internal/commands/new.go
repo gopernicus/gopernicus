@@ -17,8 +17,8 @@ func runNew(args []string) int {
 
 	sub, rest := args[0], args[1:]
 	switch sub {
-	case "feature":
-		return runNewFeature(rest)
+	case "pocket":
+		return runNewPocket(rest)
 	case "-h", "--help", "help":
 		newUsage(os.Stdout)
 		return 0
@@ -36,6 +36,6 @@ Usage:
   gopernicus new <subcommand>
 
 Subcommands:
-  feature   Scaffold a feature module tree
+  pocket    Scaffold a pocket module tree
 `)
 }

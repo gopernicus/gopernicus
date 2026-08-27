@@ -13,15 +13,15 @@ import (
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authjobs"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
-	auth "github.com/gopernicus/gopernicus/features/authentication"
-	"github.com/gopernicus/gopernicus/features/jobs"
-	"github.com/gopernicus/gopernicus/features/jobs/domain/job"
-	jobsmem "github.com/gopernicus/gopernicus/features/jobs/memstore"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	"github.com/gopernicus/gopernicus/pockets/jobs"
+	"github.com/gopernicus/gopernicus/pockets/jobs/domain/job"
+	jobsmem "github.com/gopernicus/gopernicus/pockets/jobs/memstore"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
-	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 // This file proves the AV3D-3.2 durable-jobs-mode security properties end to end on
@@ -60,7 +60,7 @@ func stableDeliveryEnv(t *testing.T) {
 
 // sealedEnvelope mirrors the internal command.Envelope JSON shape so a host test can
 // decrypt a persisted payload and read the plaintext it sealed WITHOUT importing the
-// feature-internal command package. The json tags match command.Envelope exactly.
+// pocket-internal command package. The json tags match command.Envelope exactly.
 type sealedEnvelope struct {
 	Version         int    `json:"version"`
 	Kind            string `json:"kind"`
@@ -440,7 +440,7 @@ func drivePasswordlessStart(t *testing.T, svc *auth.Service, identifier string) 
 	t.Helper()
 	router := web.NewWebHandler(web.WithLogging(quietLog()))
 	bus := sdkevents.NewMemory(sdkevents.WithLogger(quietLog()))
-	if err := svc.Register(feature.Mount{Router: router, Logger: quietLog(), Events: bus}); err != nil {
+	if err := svc.Register(pocket.Mount{Router: router, Logger: quietLog(), Events: bus}); err != nil {
 		t.Fatalf("auth.Register: %v", err)
 	}
 	body := `{"identifier_kind":"email","identifier":"` + identifier + `"}`

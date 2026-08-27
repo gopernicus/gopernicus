@@ -36,14 +36,14 @@ Dependency rules (enforced by guard **G17**; see the UI implementation row in
 `ARCHITECTURE.md`):
 
 - a UI implementation may depend on its own presentation libraries;
-- it must **not** import a feature, integration, example, or Workshop package;
-- feature view adapters (`features/<name>/views/goth`) may depend on their
-  feature core, `sdk`, and `ui/goth`;
+- it must **not** import a pocket, integration, example, or Workshop package;
+- pocket view adapters (`pockets/<name>/views/goth`) may depend on their
+  pocket core, `sdk`, and `ui/goth`;
 - a host wires assets and route registration; the UI implementation never
   registers routes, installs middleware, or writes HTTP response headers.
 
 ```text
-feature core  <--- feature views/goth adapter ---> ui/goth ---> templ/runtime
+pocket core  <--- pocket views/goth adapter ---> ui/goth ---> templ/runtime
       ^                       ^                        ^
       |                       |                        |
       +---------------------- host -------------------+
@@ -55,7 +55,7 @@ feature core  <--- feature views/goth adapter ---> ui/goth ---> templ/runtime
 
 `ARCHITECTURE.md` reserves an app-local `internal/inbound/views/` tree as a
 host's private theme/UI root. `ui/` is the **reusable, importable** counterpart:
-a host consumes `ui/goth` (and feature view adapters) rather than growing a
+a host consumes `ui/goth` (and pocket view adapters) rather than growing a
 bespoke kit in `internal/inbound/views/`. The precise wording of how the two
 relate is the ratified UI implementation section of `ARCHITECTURE.md` (settled in
 GOTH-0.2).
@@ -63,13 +63,13 @@ GOTH-0.2).
 ## Adopting a UI implementation
 
 A host adopts `ui/goth` by wiring a bundle, serving its embedded assets, and
-rendering pages through it (directly or through a feature `views/goth` adapter).
+rendering pages through it (directly or through a pocket `views/goth` adapter).
 The complete adopter guide — install/wiring, profiles, the CSP recipe, the
-`components/` layer, custom feature `Views`, the HTMX migration trigger, module
+`components/` layer, custom pocket `Views`, the HTMX migration trigger, module
 tags, the SRI/CDN caveats, and the brand-token override + Segovia/GPS360 handoff —
 is [`goth/README.md`](goth/README.md) §11. The three reference wirings are
-`examples/{cms,minimal,auth-cms}`; the two feature adapters are
-`features/authentication/views/goth` and `features/cms/views/goth`.
+`examples/{cms,minimal,auth-cms}`; the two pocket adapters are
+`pockets/authentication/views/goth` and `pockets/cms/views/goth`.
 
 ## Cross-implementation semantic token vocabulary
 

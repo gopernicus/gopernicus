@@ -83,7 +83,7 @@ func WithLogger(logger *slog.Logger) PoolOption {
 //
 // Lost signals are tolerated: many sends collapse into at most one buffered
 // wake, and the idle/poll interval is the backstop that catches any work a
-// dropped signal missed. A nil channel disables the feature — the pool behaves
+// dropped signal missed. A nil channel disables the pocket — the pool behaves
 // exactly as if the option were not passed. Do not close the wake channel: a
 // closed channel reads ready forever and would spin iterations until ctx is
 // cancelled. Producers tear down without closing it.

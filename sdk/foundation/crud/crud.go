@@ -4,7 +4,7 @@
 // convenience contract, not a base class — nothing is required to implement
 // Reader[T, F]; domains embed, narrow, or ignore it. There is no SQL generation
 // here; providers write their own SQL directly (see integrations/datastores/
-// turso, features/cms/stores/turso).
+// turso, pockets/cms/stores/turso).
 //
 // # Two validation semantics, deliberately
 //
@@ -86,7 +86,7 @@
 // cursor, offset, count, and q map through ParseListRequest;
 // order=field:direction is parsed separately by ParseOrder because the allow-list
 // is per-aggregate. Each paginated aggregate declares its allow-list
-// (map[string]OrderField) plus a default Order in its feature-core domain
+// (map[string]OrderField) plus a default Order in its pocket-core domain
 // package; ParseOrder validates the requested field at the edge, and backends
 // validate again (QuoteIdentifier or allow-list membership) before use — raw
 // request input never reaches SQL.

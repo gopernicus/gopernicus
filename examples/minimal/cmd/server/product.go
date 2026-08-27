@@ -5,8 +5,8 @@ import (
 	"html/template"
 	"io"
 
-	"github.com/gopernicus/gopernicus/features/cms"
-	"github.com/gopernicus/gopernicus/features/cms/domain/content"
+	"github.com/gopernicus/gopernicus/pockets/cms"
+	"github.com/gopernicus/gopernicus/pockets/cms/domain/content"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 

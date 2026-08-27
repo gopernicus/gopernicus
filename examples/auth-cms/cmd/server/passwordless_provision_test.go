@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
-	auth "github.com/gopernicus/gopernicus/features/authentication"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 )
 
 // CHAU-6.7 — provision-on-consumption, end to end over real HTTP through exported
@@ -177,7 +177,7 @@ func TestProvisionOnConsumptionCreatesTheAccountAtRedeem(t *testing.T) {
 		t.Errorf("hydrated email = %q, want %q", hydrated.Email, addr)
 	}
 	if hydrated.DisplayName != "" {
-		t.Errorf("display name = %q, want empty — the feature invents no name", hydrated.DisplayName)
+		t.Errorf("display name = %q, want empty — the pocket invents no name", hydrated.DisplayName)
 	}
 
 	// The link is single-use.

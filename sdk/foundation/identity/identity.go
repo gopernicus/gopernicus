@@ -10,8 +10,8 @@
 //
 // The Resolver port has no default here. Like sdk/capabilities/oauth, its only
 // implementations need a subsystem sdk does not own: identity data (credentials,
-// verification, lifecycle) is feature-owned, so a Resolver lives with the
-// credential owners — features/authentication is the first. The only behavior
+// verification, lifecycle) is pocket-owned, so a Resolver lives with the
+// credential owners — pockets/authentication is the first. The only behavior
 // this package ships is ResolveAll, a strict positional loop over a Resolver.
 //
 // Fails-closed convention: FromContext reports (Principal, false) when the
@@ -22,7 +22,7 @@
 //
 // Scope fence: identity vocabulary and the Resolver port only — middleware and
 // credential resolution live with the credential owners
-// (features/authentication); authorization vocabulary is deliberately absent.
+// (pockets/authentication); authorization vocabulary is deliberately absent.
 package identity
 
 import "context"
@@ -72,7 +72,7 @@ type Address struct {
 
 // Info is the display and contact PROJECTION of a Principal — a name to render
 // and the addresses to reach it out-of-band. It is never the identity record
-// itself: credentials, verification state, and lifecycle stay feature-owned. No
+// itself: credentials, verification state, and lifecycle stay pocket-owned. No
 // User struct enters sdk, ever; a Resolver assembles Info from whatever record
 // it owns.
 type Info struct {
@@ -82,8 +82,8 @@ type Info struct {
 }
 
 // Resolver resolves a Principal to its display and contact Info. Implementations
-// live with the credential owners (features/authentication is the first), never
-// here — identity data is feature-owned.
+// live with the credential owners (pockets/authentication is the first), never
+// here — identity data is pocket-owned.
 //
 // Fail CLOSED: an unknown principal type, a missing record, or an unwired
 // backing subsystem returns an error satisfying sdk.ErrNotFound (checked with
@@ -97,7 +97,7 @@ type Resolver interface {
 }
 
 // WithPrincipal returns a copy of ctx carrying p. The write site is the
-// credential owner's middleware (features/authentication), never this package.
+// credential owner's middleware (pockets/authentication), never this package.
 func WithPrincipal(ctx context.Context, p Principal) context.Context {
 	return context.WithValue(ctx, principalKey, p)
 }

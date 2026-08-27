@@ -8,9 +8,9 @@ import (
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authjobs"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
-	auth "github.com/gopernicus/gopernicus/features/authentication"
-	"github.com/gopernicus/gopernicus/features/jobs"
-	jobsmem "github.com/gopernicus/gopernicus/features/jobs/memstore"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	"github.com/gopernicus/gopernicus/pockets/jobs"
+	jobsmem "github.com/gopernicus/gopernicus/pockets/jobs/memstore"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
 )
 

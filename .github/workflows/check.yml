@@ -1,5 +1,5 @@
 # Required CI gate: `make check` (templ drift in git mode, per-module
-# vet/build/test across every Makefile MODULE, the four layering guards, and
+# vet/build/test across every Makefile MODULE, the twenty layering guards, and
 # the compile-only -tags=integration vet of the turso stores).
 #
 # Triggered on every push and every pull_request (plain push + PR, as the task
@@ -20,7 +20,7 @@
 # check` stays deterministic. Live legs live in live-stores.yml (task-6).
 #
 # templ comes ONLY from `go tool templ`, pinned via the `tool` directive in
-# features/cms/views/goth/go.mod (invoked by `make generate` inside `make check`). CI never
+# pockets/cms/views/goth/go.mod (invoked by `make generate` inside `make check`). CI never
 # `go install`s templ separately — if it did, the drift gate would compare
 # against an unpinned templ and be meaningless.
 name: check

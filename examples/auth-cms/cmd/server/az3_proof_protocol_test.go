@@ -12,8 +12,8 @@ import (
 	"sync"
 	"testing"
 
-	authorization "github.com/gopernicus/gopernicus/features/authorization"
-	authzmem "github.com/gopernicus/gopernicus/features/authorization/memstore"
+	authorization "github.com/gopernicus/gopernicus/pockets/authorization"
+	authzmem "github.com/gopernicus/gopernicus/pockets/authorization/memstore"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )

@@ -1,6 +1,6 @@
 // Package theme is a host-owned custom public-site theme for the cms example. It
 // implements the cms.Views port by EMBEDDING the bundled default from
-// features/cms/views/goth and overriding only the four public-chrome methods
+// pockets/cms/views/goth and overriding only the four public-chrome methods
 // (Home, Archive, Single, Error) with ACME-branded html/template chrome — the
 // blessed partial-override path (FS3). Every non-chrome method (admin pages,
 // contact form, seed templates) falls through to the embedded default. Under the
@@ -19,9 +19,9 @@ import (
 	"io"
 	"net/url"
 
-	"github.com/gopernicus/gopernicus/features/cms"
-	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
-	cmsgoth "github.com/gopernicus/gopernicus/features/cms/views/goth"
+	"github.com/gopernicus/gopernicus/pockets/cms"
+	"github.com/gopernicus/gopernicus/pockets/cms/domain/menus"
+	cmsgoth "github.com/gopernicus/gopernicus/pockets/cms/views/goth"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 	uigoth "github.com/gopernicus/gopernicus/ui/goth"
 )
@@ -47,7 +47,7 @@ var pages = template.Must(template.New("theme").Parse(`
 <main>{{end}}
 
 {{define "footer"}}</main>
-<footer>ACME custom theme · powered by the gopernicus CMS feature module</footer>
+<footer>ACME custom theme · powered by the gopernicus CMS pocket module</footer>
 </body></html>{{end}}
 
 {{define "home"}}{{template "header" .}}
@@ -168,7 +168,7 @@ func (Theme) Error(status int, message string) web.Renderer {
 }
 
 // renderToHTML runs a web.Renderer to a string and marks it safe for embedding
-// in the chrome. The per-entry body is feature-produced (sanitized markdown),
+// in the chrome. The per-entry body is pocket-produced (sanitized markdown),
 // not user-injected raw HTML.
 func renderToHTML(r web.Renderer) template.HTML {
 	var buf bytes.Buffer

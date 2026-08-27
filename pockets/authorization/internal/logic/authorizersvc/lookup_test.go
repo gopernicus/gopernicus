@@ -1,0 +1,79 @@
+package authorizersvc
+
+import (
+	"context"
+	"testing"
+
+	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+)
+
+func TestLookupResourcesDirect(t *testing.T) {
+	store := &fakeStore{}
+	svc := newTestService(t, store, cryptids.IDGenerator{})
+	store.tuples = append(store.tuples,
+		relationship.CreateRelationship{ResourceType: "post", ResourceID: "p1", Relation: "owner", SubjectType: "user", SubjectID: "u1"},
+		relationship.CreateRelationship{ResourceType: "post", ResourceID: "p2", Relation: "owner", SubjectType: "user", SubjectID: "u1"},
+	)
+	res, err := svc.LookupResources(context.Background(), PrincipalRef{Type: "user", ID: "u1"}, "delete", "post")
+	if err != nil {
+		t.Fatalf("LookupResources: %v", err)
+	}
+	if len(res.IDs) != 2 {
+		t.Fatalf("want 2 ids, got %v", res.IDs)
+	}
+}
+
+func TestLookupResourcesEmptyIsNonNil(t *testing.T) {
+	svc := newTestService(t, &fakeStore{}, cryptids.IDGenerator{})
+	res, err := svc.LookupResources(context.Background(), PrincipalRef{Type: "user", ID: "nobody"}, "delete", "post")
+	if err != nil {
+		t.Fatalf("LookupResources: %v", err)
+	}
+	if res.IDs == nil {
+		t.Fatalf("IDs must be non-nil even with no access")
+	}
+	if len(res.IDs) != 0 {
+		t.Fatalf("want empty ids, got %v", res.IDs)
+	}
+}
+
+// TestLookupResourcesPlatformAdminIsNotMagic proves the engine grants a
+// platform-admin tuple holder NO unrestricted enumeration: it is enumerated
+// only for resources it holds real grants on (none here). Admin-sees-everything
+// is host composition, not engine behavior.
+func TestLookupResourcesPlatformAdminIsNotMagic(t *testing.T) {
+	store := &fakeStore{}
+	svc := newTestService(t, store, cryptids.IDGenerator{})
+	store.tuples = append(store.tuples, relationship.CreateRelationship{
+		ResourceType: "platform", ResourceID: "main", Relation: "admin", SubjectType: "user", SubjectID: "admin1",
+	})
+	res, err := svc.LookupResources(context.Background(), PrincipalRef{Type: "user", ID: "admin1"}, "delete", "post")
+	if err != nil {
+		t.Fatalf("LookupResources: %v", err)
+	}
+	if res.IDs == nil {
+		t.Fatalf("IDs must be non-nil")
+	}
+	if len(res.IDs) != 0 {
+		t.Fatalf("platform admin has no post grants → want empty ids, got %v", res.IDs)
+	}
+}
+
+func TestLookupResourcesThrough(t *testing.T) {
+	store := &fakeStore{}
+	svc := newTestService(t, store, cryptids.IDGenerator{})
+	// u1 admins org o1; posts p1,p2 belong to o1 → both surface via Through.
+	store.tuples = append(store.tuples,
+		relationship.CreateRelationship{ResourceType: "org", ResourceID: "o1", Relation: "admin", SubjectType: "user", SubjectID: "u1"},
+		relationship.CreateRelationship{ResourceType: "post", ResourceID: "p1", Relation: "org", SubjectType: "org", SubjectID: "o1"},
+		relationship.CreateRelationship{ResourceType: "post", ResourceID: "p2", Relation: "org", SubjectType: "org", SubjectID: "o1"},
+	)
+	res, err := svc.LookupResources(context.Background(), PrincipalRef{Type: "user", ID: "u1"}, "view", "post")
+	if err != nil {
+		t.Fatalf("LookupResources: %v", err)
+	}
+	if len(res.IDs) != 2 {
+		t.Fatalf("want 2 ids via through, got %v", res.IDs)
+	}
+}

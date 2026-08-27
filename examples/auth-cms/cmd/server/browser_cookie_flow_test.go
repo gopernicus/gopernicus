@@ -11,26 +11,26 @@ import (
 	"testing"
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
-	auth "github.com/gopernicus/gopernicus/features/authentication"
-	"github.com/gopernicus/gopernicus/sdk/feature"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 // U7 cross-module acceptance: the whole same-site cross-origin cookie flow through
-// EXPORTED host seams only. This host is a different module from the feature, so
+// EXPORTED host seams only. This host is a different module from the pocket, so
 // nothing here can reach an internal package — it composes exactly what
 // coordination-hub composes (web router + a globally installed CORS policy that opts
-// in the feature's echo header + the authentication feature mounted under /api/v1
+// in the pocket's echo header + the authentication pocket mounted under /api/v1
 // with a matching RefreshCookiePath), and drives it over a real TLS server and a real
 // cookie jar. The test NEVER reads a cookie value to build a request; like the browser
 // it stands in for, it reads the CSRF token from the JSON body only.
 //
-// The feature-internal siblings (features/authentication/internal/inbound/
+// The pocket-internal siblings (pockets/authentication/internal/inbound/
 // authentication) pin the same seams against fakes; this one pins that a HOST can
-// wire them without the feature's internals.
+// wire them without the pocket's internals.
 
 const (
-	// apiPrefix is the host's feature mount prefix — the PrefixRegistrar path that
+	// apiPrefix is the host's pocket mount prefix — the PrefixRegistrar path that
 	// makes refresh-cookie scoping non-trivial.
 	apiPrefix = "/api/v1"
 
@@ -39,8 +39,8 @@ const (
 	// topology the SameSite=Lax cookie posture supports.
 	browserSPAOrigin = "https://spa.example.com"
 
-	// csrfEchoHeader is the feature's double-submit echo header. The sdk knows no
-	// feature header, so the HOST lists it in its CORS request-header policy.
+	// csrfEchoHeader is the pocket's double-submit echo header. The sdk knows no
+	// pocket header, so the HOST lists it in its CORS request-header policy.
 	csrfEchoHeader = "X-CSRF-Token"
 
 	flowEmail       = "spa-flow@example.com"
@@ -60,7 +60,7 @@ func newBrowserFlowHost(t *testing.T) (*httptest.Server, *auth.Service) {
 	// Prefixed mount: the refresh cookie must carry the FULL prefixed path or the
 	// browser never sends it to /api/v1/auth/refresh (upstream evidence §2).
 	cfg.RefreshCookiePath = apiPrefix + "/auth"
-	// The feature's own exact-match Origin allowlist for cookie-authenticated
+	// The pocket's own exact-match Origin allowlist for cookie-authenticated
 	// mutations, independent of the sdk CORS allowlist below.
 	cfg.AllowedOrigins = []string{browserSPAOrigin}
 	// in_process delivery owns its bounded pool and needs no dispatcher; this flow
@@ -78,14 +78,14 @@ func newBrowserFlowHost(t *testing.T) (*httptest.Server, *auth.Service) {
 
 	router := web.NewWebHandler(web.WithLogging(quietLog()))
 	// Genuinely global CORS: one Use around the whole mux, so it also answers the
-	// preflight to a method-qualified feature route. AllowedHeaders is non-nil, so it
+	// preflight to a method-qualified pocket route. AllowedHeaders is non-nil, so it
 	// REPLACES the default list — the host opts X-CSRF-Token in explicitly.
 	router.Use(web.CORSWithConfig(web.CORSConfig{
 		AllowedOrigins: []string{browserSPAOrigin},
 		AllowedHeaders: []string{"Accept", "Content-Type", "Authorization", csrfEchoHeader},
 	}))
-	if err := svc.Register(feature.Mount{
-		Router: feature.PrefixRegistrar{Prefix: apiPrefix, Next: router},
+	if err := svc.Register(pocket.Mount{
+		Router: pocket.PrefixRegistrar{Prefix: apiPrefix, Next: router},
 		Logger: quietLog(),
 	}); err != nil {
 		t.Fatalf("authSvc.Register: %v", err)

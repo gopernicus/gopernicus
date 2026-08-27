@@ -10,7 +10,7 @@ import (
 
 // TestWarmScaffoldModuleCache makes the hermetic scaffold-compile tests'
 // warm-cache assumption true by construction. Those tests (scaffold_test.go,
-// feature_scaffold_test.go, db_test.go) tidy emitted modules with GOPROXY=off
+// pocket_scaffold_test.go, db_test.go) tidy emitted modules with GOPROXY=off
 // against "the GOMODCACHE `make check` already warmed" — but an emitted
 // module's ISOLATED MVS can select transitive versions LOWER than any repo
 // module ever downloads (golang.org/x/sys, ncruces/go-strftime via the libsql
@@ -37,14 +37,14 @@ func TestWarmScaffoldModuleCache(t *testing.T) {
 	replaceModule(t, initDir, params.ConnectorPath, filepath.Join(root, filepath.FromSlash(params.ConnectorRel)))
 	runGo(t, initDir, warmEnv(), "mod", "tidy")
 
-	// Shape 2 — the feature scaffold's two store modules
-	// (TestScaffoldFeatureStoresCompile tidies both). The sdk-only core and
+	// Shape 2 — the pocket scaffold's two store modules
+	// (TestScaffoldPocketStoresCompile tidies both). The sdk-only core and
 	// --db=memory init shapes need no network (sdk is third-party-free), so
 	// they are not warmed.
-	featDir := t.TempDir()
-	fparams := scaffoldFeatureParams(t)
-	if err := emitFeature(featDir, fparams); err != nil {
-		t.Fatalf("emitFeature: %v", err)
+	pocketDir := t.TempDir()
+	pocketParams := scaffoldPocketParams(t)
+	if err := emitPocket(pocketDir, pocketParams); err != nil {
+		t.Fatalf("emitPocket: %v", err)
 	}
 	stores := []struct {
 		dir     string
@@ -55,7 +55,7 @@ func TestWarmScaffoldModuleCache(t *testing.T) {
 		{"stores/pgx", baseModule + "/integrations/datastores/pgxdb", "integrations/datastores/pgxdb"},
 	}
 	for _, st := range stores {
-		dir := filepath.Join(featDir, filepath.FromSlash(st.dir))
+		dir := filepath.Join(pocketDir, filepath.FromSlash(st.dir))
 		replaceModule(t, dir, baseModule+"/sdk", filepath.Join(root, "sdk"))
 		replaceModule(t, dir, st.connMod, filepath.Join(root, filepath.FromSlash(st.connRel)))
 		runGo(t, dir, warmEnv(), "mod", "tidy")

@@ -3,12 +3,12 @@ module github.com/gopernicus/gopernicus/examples/cms
 go 1.26.1
 
 require (
-	github.com/gopernicus/gopernicus/features/cms v0.1.0
-	github.com/gopernicus/gopernicus/features/cms/stores/turso v0.0.0
-	github.com/gopernicus/gopernicus/features/cms/views/goth v0.0.0
 	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.1.0
 	github.com/gopernicus/gopernicus/integrations/tracing/otel v0.0.0
-	github.com/gopernicus/gopernicus/sdk v0.1.0
+	github.com/gopernicus/gopernicus/pockets/cms v0.2.0
+	github.com/gopernicus/gopernicus/pockets/cms/stores/turso v0.2.0
+	github.com/gopernicus/gopernicus/pockets/cms/views/goth v0.2.0
+	github.com/gopernicus/gopernicus/sdk v0.5.0
 	github.com/gopernicus/gopernicus/ui/goth v0.1.0
 )
 
@@ -33,9 +33,9 @@ require (
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.10.0 // indirect
 	golang.org/x/exp v0.0.0-20240325151524-a685a6edb6d8 // indirect
-	golang.org/x/net v0.55.0 // indirect
-	golang.org/x/sys v0.45.0 // indirect
-	golang.org/x/text v0.37.0 // indirect
+	golang.org/x/net v0.56.0 // indirect
+	golang.org/x/sys v0.46.0 // indirect
+	golang.org/x/text v0.38.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/grpc v1.81.1 // indirect
@@ -48,10 +48,10 @@ replace github.com/gopernicus/gopernicus/integrations/datastores/turso => ../../
 
 replace github.com/gopernicus/gopernicus/integrations/tracing/otel => ../../integrations/tracing/otel
 
-replace github.com/gopernicus/gopernicus/features/cms => ../../features/cms
+replace github.com/gopernicus/gopernicus/pockets/cms => ../../pockets/cms
 
-replace github.com/gopernicus/gopernicus/features/cms/stores/turso => ../../features/cms/stores/turso
+replace github.com/gopernicus/gopernicus/pockets/cms/stores/turso => ../../pockets/cms/stores/turso
 
-replace github.com/gopernicus/gopernicus/features/cms/views/goth => ../../features/cms/views/goth
+replace github.com/gopernicus/gopernicus/pockets/cms/views/goth => ../../pockets/cms/views/goth
 
 replace github.com/gopernicus/gopernicus/ui/goth => ../../ui/goth

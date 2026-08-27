@@ -143,7 +143,7 @@ Flags:
   --dir      target directory (default: the positional arg, else .)
 
 Emits an sdk-only composition root (cmd/server), a host Makefile, .env.example,
-a host-owned migration ledger, and a README. Mounts no features — wire your own
+a host-owned migration ledger, and a README. Mounts no pockets — wire your own
 in cmd/server/main.go. See the emitted README for pre-tag wiring.
 `)
 }

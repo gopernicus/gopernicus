@@ -1,0 +1,439 @@
+package authsvc
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/apikey"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/securityevent"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/serviceaccount"
+	"github.com/gopernicus/gopernicus/sdk"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
+	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
+)
+
+// secrets generates the opaque random values this service mints (API-key
+// prefixes and secrets, OAuth nonces, PKCE segments) with the default nanoid
+// shape. Deliberately NOT the app's entity-ID strategy (Deps.IDs): secret
+// entropy must never follow a wiring choice like cryptids.Database.
+var secrets = cryptids.IDGenerator{}
+
+// Principal subject-type conventions (AV5 — actor references are
+// (subject_type, subject_id) string pairs, never a registry table). They alias
+// the sdk/foundation/identity constants (amendment A-I1), which match the ReBAC Subject
+// vocabulary so a host's authorizer reads them unadapted.
+const (
+	// PrincipalUser is the subject type for a human user, and for a personal
+	// (act-as-user) API key resolved to its human owner.
+	PrincipalUser = identity.User
+	// PrincipalServiceAccount is the subject type for a machine identity.
+	PrincipalServiceAccount = identity.ServiceAccount
+)
+
+// apiKeyPrefixLen is the length of the displayable key prefix (stored plain).
+const apiKeyPrefixLen = 8
+
+// Principal is the effective caller resolved from a credential (session, API
+// key, or — when a TokenSigner is wired — a bearer JWT). It is a type alias for
+// identity.Principal (amendment A-I1): the single value type AV5 pins, which the
+// public auth package re-exports as auth.Principal.
+type Principal = identity.Principal
+
+// MachineEnabled reports whether the API-key / service-account subsystem is
+// wired. The transport registers the machine lifecycle routes only when it is
+// true (deny-by-absence, design §4.1), and the bearer API-key path is inert
+// otherwise.
+func (s *Service) MachineEnabled() bool {
+	return s.apiKeys != nil && s.serviceAccounts != nil
+}
+
+// CreateServiceAccount persists a new machine identity created by createdBy. An
+// act-as-user account requires a non-empty ownerUserID (sdk.ErrInvalidInput
+// from construction) naming an EXISTING user: an act-as-user key authenticates
+// as its owner, so an unknown owner would mint a live principal for a subject
+// nobody can deactivate (userDeactivated reads an unknown id as active). An
+// unknown owner is sdk.ErrInvalidReference; an unwired user rail fails closed
+// with ErrIdentityUnavailable.
+//
+// A created account records a service_account_created audit row attributed to
+// the principal in ctx — never to createdBy, which is a caller-supplied string.
+func (s *Service) CreateServiceAccount(ctx context.Context, createdBy, name, description string, actAsUser bool, ownerUserID string) (serviceaccount.ServiceAccount, error) {
+	sa, err := serviceaccount.New(s.ids, name, description, createdBy, actAsUser, ownerUserID, s.now())
+	if err != nil {
+		return serviceaccount.ServiceAccount{}, err
+	}
+	// The persisted (trimmed) owner is the one validated, audited, and stored, so
+	// the existence check and the row can never disagree about who the owner is.
+	if actAsUser {
+		if s.users == nil {
+			return serviceaccount.ServiceAccount{}, ErrIdentityUnavailable
+		}
+		if _, err := s.users.Get(ctx, sa.OwnerUserID); err != nil {
+			if errors.Is(err, sdk.ErrNotFound) {
+				return serviceaccount.ServiceAccount{}, fmt.Errorf("act-as owner %q: %w", sa.OwnerUserID, sdk.ErrInvalidReference)
+			}
+			return serviceaccount.ServiceAccount{}, err
+		}
+	}
+	created, err := s.serviceAccounts.Create(ctx, sa)
+	if err != nil {
+		return serviceaccount.ServiceAccount{}, err
+	}
+	userID := ""
+	if actAsUser {
+		userID = created.OwnerUserID
+	}
+	s.recordSecurityEvent(ctx, securityEventInput{
+		UserID: userID,
+		Actor:  auditActor(ctx),
+		Type:   securityevent.TypeServiceAccountCreated,
+		Status: securityevent.StatusSuccess,
+		Details: map[string]any{
+			"service_account_id": created.ID,
+			"act_as_user":        actAsUser,
+			// delegated marks an act-as account whose owner is someone other than
+			// its creator — the impersonation-shaped case the gate exists for.
+			"delegated": actAsUser && created.OwnerUserID != created.CreatedBy,
+		},
+	})
+	return created, nil
+}
+
+// ListServiceAccounts returns a cursor-paginated page of service accounts
+// (ordered created_at DESC, id DESC).
+func (s *Service) ListServiceAccounts(ctx context.Context, req crud.ListRequest) (crud.Page[serviceaccount.ServiceAccount], error) {
+	return s.serviceAccounts.List(ctx, req)
+}
+
+// MintAPIKey generates a fresh key for serviceAccountID, persists only its
+// SHA-256 hash, and returns the created record alongside the plaintext key —
+// which is shown exactly once and never recoverable afterward. A zero expiresAt
+// means the key never expires. An unknown service account → sdk.ErrNotFound.
+//
+// A minted key records an api_key_minted audit row carrying the key PREFIX and
+// the account id only (design §5.1 WI3 — never the raw key or its hash). For an
+// act-as-user account the row's UserID is the human owner the key authenticates
+// as, mirroring service_account_created.
+func (s *Service) MintAPIKey(ctx context.Context, serviceAccountID, name string, expiresAt time.Time) (apikey.APIKey, string, error) {
+	sa, err := s.serviceAccounts.Get(ctx, serviceAccountID)
+	if err != nil {
+		return apikey.APIKey{}, "", err
+	}
+	prefix, raw := mintAPIKeySecret()
+	hashed, err := s.hashAPIKey(raw)
+	if err != nil {
+		return apikey.APIKey{}, "", err
+	}
+	k, err := apikey.New(s.ids, serviceAccountID, name, prefix, hashed, expiresAt, s.now())
+	if err != nil {
+		return apikey.APIKey{}, "", err
+	}
+	created, err := s.apiKeys.Create(ctx, k)
+	if err != nil {
+		return apikey.APIKey{}, "", err
+	}
+	// An act-as-user key authenticates as a HUMAN, so the row names that human as
+	// its subject — the same UserID convention service_account_created follows.
+	userID := ""
+	if sa.ActAsUser {
+		userID = sa.OwnerUserID
+	}
+	s.recordSecurityEvent(ctx, securityEventInput{
+		UserID: userID,
+		Actor:  auditActor(ctx),
+		Type:   securityevent.TypeAPIKeyMinted,
+		Status: securityevent.StatusSuccess,
+		Details: map[string]any{
+			"key_prefix":         created.KeyPrefix,
+			"service_account_id": serviceAccountID,
+		},
+	})
+	return created, raw, nil
+}
+
+// ListAPIKeys returns a cursor-paginated page of a service account's keys
+// (ordered created_at DESC, id DESC).
+func (s *Service) ListAPIKeys(ctx context.Context, serviceAccountID string, req crud.ListRequest) (crud.Page[apikey.APIKey], error) {
+	return s.apiKeys.ListByServiceAccount(ctx, serviceAccountID, req)
+}
+
+// RevokeAPIKey marks the key revoked as of now. An unknown key →
+// sdk.ErrNotFound. A revoked key records an api_key_revoked audit row carrying
+// the key id (the only coordinate the revoke path holds). The row is written per
+// successful CALL, not per state transition: re-revoking an already-revoked key
+// records a second row, because the revoke path has no Get-by-id with which to
+// read the prior state.
+func (s *Service) RevokeAPIKey(ctx context.Context, keyID string) error {
+	if err := s.apiKeys.Revoke(ctx, keyID, s.now()); err != nil {
+		return err
+	}
+	s.recordSecurityEvent(ctx, securityEventInput{
+		Actor:   auditActor(ctx),
+		Type:    securityevent.TypeAPIKeyRevoked,
+		Status:  securityevent.StatusSuccess,
+		Details: map[string]any{"key_id": keyID},
+	})
+	return nil
+}
+
+// auditActor is the audit attribution for the machine-identity lifecycle ops:
+// the principal the transport resolved from the request credential, or the zero
+// Principal when a host calls the service outside a request (a job, a seeder) —
+// which the rail already permits. It is deliberately NOT the createdBy argument,
+// a caller-supplied string whose format varies by host.
+func auditActor(ctx context.Context) securityevent.Principal {
+	p, ok := identity.FromContext(ctx)
+	if !ok {
+		return securityevent.Principal{}
+	}
+	return securityevent.Principal{Type: p.Type, ID: p.ID}
+}
+
+// AuthenticateAPIKey resolves the effective Principal for a raw API key. It
+// hashes the key, looks it up by hash ALONE (the pinned GetByHash contract), and
+// then branches in the SERVICE per design §4.1:
+//
+//   - revoked → deny, recording an apikey_auth `blocked` event WITH
+//     service-account attribution (key.ServiceAccountID — exactly why the pinned
+//     GetByHash contract returns revoked rows);
+//   - expired (a set ExpiresAt in the past) → deny, recording an apikey_auth
+//     `failure` event;
+//   - valid → resolve the effective principal (ActAsUser → the human owner, else
+//     the service account itself), record an apikey_auth `success` event, and
+//     best-effort touch LastUsedAt.
+//
+// Every deny returns the same generic sdk.ErrUnauthorized so the response
+// cannot distinguish unknown / revoked / expired. TouchLastUsed failures never
+// fail authentication. The audit rows carry the key PREFIX only, never the raw
+// key (design §5.1 WI3).
+func (s *Service) AuthenticateAPIKey(ctx context.Context, rawKey string) (Principal, error) {
+	if !s.MachineEnabled() {
+		return Principal{}, invalidAPIKey()
+	}
+	hashed, err := s.hashAPIKey(rawKey)
+	if err != nil {
+		// An empty/invalid key never matches a stored hash.
+		return Principal{}, invalidAPIKey()
+	}
+	key, err := s.apiKeys.GetByHash(ctx, hashed)
+	if err != nil {
+		if errors.Is(err, sdk.ErrNotFound) {
+			return Principal{}, invalidAPIKey()
+		}
+		return Principal{}, err
+	}
+
+	now := s.now()
+	switch {
+	case key.Revoked():
+		s.recordAPIKeyAuth(ctx, key, saPrincipal(key.ServiceAccountID), securityevent.StatusBlocked)
+		return Principal{}, invalidAPIKey()
+	case key.Expired(now):
+		s.recordAPIKeyAuth(ctx, key, saPrincipal(key.ServiceAccountID), securityevent.StatusFailure)
+		return Principal{}, invalidAPIKey()
+	}
+
+	sa, err := s.serviceAccounts.Get(ctx, key.ServiceAccountID)
+	if err != nil {
+		return Principal{}, err
+	}
+	p := effectivePrincipal(sa)
+	// An act-as-user key authenticates AS a human subject, so the subject's
+	// lifecycle status governs it exactly as it governs a login (CHAU-1.5).
+	// Without this, deactivating a user would leave every act-as-user key still
+	// acting as them — a live credential the admin console believes it revoked.
+	// A service-account principal has no user subject and is unaffected.
+	if p.Type == PrincipalUser {
+		deactivated, err := s.userDeactivated(ctx, p.ID)
+		if err != nil {
+			// Fail closed: an unreadable subject is not proof of an active one.
+			return Principal{}, err
+		}
+		if deactivated {
+			s.recordAPIKeyAuth(ctx, key, securityevent.Principal{Type: p.Type, ID: p.ID}, securityevent.StatusBlocked)
+			return Principal{}, invalidAPIKey()
+		}
+	}
+	s.recordAPIKeyAuth(ctx, key, securityevent.Principal{Type: p.Type, ID: p.ID}, securityevent.StatusSuccess)
+	// Best-effort: a TouchLastUsed failure must never fail authentication
+	// (design §4.1). Now that the service carries a logger (A5), the previously
+	// silently-swallowed error is logged at WARN with coarse fields only.
+	if err := s.apiKeys.TouchLastUsed(ctx, key.ID, now); err != nil {
+		s.logger.Warn("api key touch-last-used failed", "error_kind", errKind(err))
+	}
+	return p, nil
+}
+
+// recordAPIKeyAuth appends an apikey_auth audit row attributed to actor. Details
+// carries the key PREFIX only (never the raw key or its hash — design §5.1 WI3);
+// for a denied attempt the actor is the owning service account, so a blocked
+// key is traceable even though the credential itself is rejected.
+func (s *Service) recordAPIKeyAuth(ctx context.Context, key apikey.APIKey, actor securityevent.Principal, status string) {
+	s.recordSecurityEvent(ctx, securityEventInput{
+		Actor:   actor,
+		Type:    securityevent.TypeAPIKeyAuth,
+		Status:  status,
+		Details: map[string]any{"key_prefix": key.KeyPrefix},
+	})
+}
+
+// saPrincipal builds the service-account attribution for a key whose owning
+// account was not (or need not be) resolved — the denied-key audit path.
+func saPrincipal(serviceAccountID string) securityevent.Principal {
+	return securityevent.Principal{Type: PrincipalServiceAccount, ID: serviceAccountID}
+}
+
+// CurrentPrincipal returns the effective Principal stashed by
+// RequireServiceAccount / RequirePrincipal, if any. It is the cross-pocket
+// machine-or-human identity port, alongside CurrentUser.
+func (s *Service) CurrentPrincipal(ctx context.Context) (Principal, bool) {
+	return identity.FromContext(ctx)
+}
+
+// RequireServiceAccount gates next on an API-key bearer credential. A missing
+// header, a JWT-shaped bearer (two dots), an inert subsystem, or a bad key all
+// write 401. On success it stashes the resolved Principal (read via
+// CurrentPrincipal) and calls next.
+func (s *Service) RequireServiceAccount(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, ok := bearerToken(r)
+		if !ok || isJWTToken(raw) || !s.MachineEnabled() {
+			writeUnauthorized(w)
+			return
+		}
+		p, err := s.AuthenticateAPIKey(r.Context(), raw)
+		if err != nil {
+			writeUnauthorized(w)
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(identity.WithPrincipal(r.Context(), p)))
+	})
+}
+
+// RequirePrincipal gates next on either credential class and stashes the
+// resolved Principal (read via CurrentPrincipal). A bearer credential is classed
+// by shape: exactly two dots ⇒ the JWT path (active only when a TokenSigner is
+// wired — design §4.4; inert otherwise), otherwise the API-key path (active only
+// when the machine repos are wired). With no bearer header it falls back to the
+// session cookie → a user Principal. Any failure writes 401.
+func (s *Service) RequirePrincipal(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, ok := s.resolvePrincipal(r)
+		if !ok {
+			writeUnauthorized(w)
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(identity.WithPrincipal(r.Context(), p)))
+	})
+}
+
+// RequirePrincipalBrowser is the browser-facing sibling of RequirePrincipal (design
+// §9.2): it resolves the SAME credential classes through resolvePrincipal and stashes
+// the SAME Principal, but on denial it 303s to the configured browser login path
+// instead of writing a JSON 401. A denied GET/HEAD carries a validated return_to
+// (redirectToBrowserLogin). It is mounted deliberately on HTML routes and NEVER sniffs
+// Accept or Fetch Metadata; a valid API-key/bearer/session principal passes exactly as
+// through RequirePrincipal.
+func (s *Service) RequirePrincipalBrowser(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, ok := s.resolvePrincipal(r)
+		if !ok {
+			s.redirectToBrowserLogin(w, r)
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(identity.WithPrincipal(r.Context(), p)))
+	})
+}
+
+// resolvePrincipal classes and resolves the request's credential per the §4.3
+// rules. Each path is active only when its credential class is configured, so an
+// unwired class denies rather than half-resolving.
+func (s *Service) resolvePrincipal(r *http.Request) (Principal, bool) {
+	if raw, ok := bearerToken(r); ok {
+		if isJWTToken(raw) {
+			// The signer is always wired (D3), so a JWT bearer is always parsed;
+			// a wired-but-invalid JWT denies rather than falling through to the
+			// session path.
+			userID, ok := s.verifyBearer(raw)
+			if !ok {
+				return Principal{}, false
+			}
+			return Principal{Type: PrincipalUser, ID: userID}, true
+		}
+		if !s.MachineEnabled() {
+			return Principal{}, false
+		}
+		p, err := s.AuthenticateAPIKey(r.Context(), raw)
+		if err != nil {
+			return Principal{}, false
+		}
+		return p, true
+	}
+	// No bearer credential: fall back to the access-JWT session cookie, verified
+	// statelessly → user principal (§1.2).
+	c, err := r.Cookie(s.cookie.Name)
+	if err != nil {
+		return Principal{}, false
+	}
+	userID, ok := s.verifyBearer(c.Value)
+	if !ok {
+		return Principal{}, false
+	}
+	return Principal{Type: PrincipalUser, ID: userID}, true
+}
+
+// hashAPIKey returns the stored form of a raw API key — its SHA-256 hex digest
+// (cryptids.SHA256Hasher, the same primitive used for session tokens). An empty
+// key is rejected.
+func (s *Service) hashAPIKey(raw string) (string, error) {
+	return s.tokenHasher.Hash(raw)
+}
+
+// effectivePrincipal resolves a service account to its effective caller: an
+// act-as-user account resolves to its human owner, otherwise to the account
+// itself (design §4.1).
+func effectivePrincipal(sa serviceaccount.ServiceAccount) Principal {
+	if sa.ActAsUser {
+		return Principal{Type: PrincipalUser, ID: sa.OwnerUserID}
+	}
+	return Principal{Type: PrincipalServiceAccount, ID: sa.ID}
+}
+
+// mintAPIKeySecret builds a fresh key: a displayable prefix (stored plain) and
+// the full raw key `prefix_secret`. Both halves use sdk/foundation/cryptids' dotless
+// alphabet and are joined with `_`, so a key can NEVER contain two dots and
+// collide with the §4.3 JWT-detection heuristic.
+func mintAPIKeySecret() (prefix, raw string) {
+	prefix = secrets.MustGenerate()[:apiKeyPrefixLen]
+	secret := secrets.MustGenerate() + secrets.MustGenerate()
+	return prefix, prefix + "_" + secret
+}
+
+// invalidAPIKey is the single generic error every API-key denial returns, so the
+// response cannot distinguish unknown / revoked / expired.
+func invalidAPIKey() error {
+	return fmt.Errorf("invalid api key: %w", sdk.ErrUnauthorized)
+}
+
+// bearerToken extracts the token from an `Authorization: Bearer <token>` header.
+func bearerToken(r *http.Request) (string, bool) {
+	const prefix = "Bearer "
+	h := r.Header.Get("Authorization")
+	if len(h) <= len(prefix) || !strings.EqualFold(h[:len(prefix)], prefix) {
+		return "", false
+	}
+	token := strings.TrimSpace(h[len(prefix):])
+	return token, token != ""
+}
+
+// isJWTToken reports whether a bearer token is JWT-shaped: a JWT has exactly two
+// dots (header.payload.signature), and a dotless API key never does (design
+// §4.3's classing heuristic).
+func isJWTToken(token string) bool {
+	return strings.Count(token, ".") == 2
+}

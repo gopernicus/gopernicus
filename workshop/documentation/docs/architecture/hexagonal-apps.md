@@ -5,7 +5,7 @@ description: Organize app-local domains, inbound delivery, outbound adapters, an
 
 # Hexagonal host applications
 
-Not every domain should become a reusable Gopernicus feature. A host's unique business rules belong in its own hexagon, usually under `internal`.
+Not every domain should become a reusable Gopernicus pocket. A host's unique business rules belong in its own hexagon, usually under `internal`.
 
 ```text
 cmd/
@@ -88,7 +88,7 @@ internal/inbound/
     pages/                route-level rendering
 ```
 
-Feature cores use a related but library-safe anatomy: their inbound code remains internal, while third-party view implementations live in sibling modules.
+Pocket cores use a related but library-safe anatomy: their inbound code remains internal, while third-party view implementations live in sibling modules.
 
 ## Outbound owns technology
 
@@ -108,24 +108,24 @@ The composition root should make these choices visible:
 - environment and deployment posture;
 - logger and tracing implementation;
 - database and external clients;
-- app repositories and feature store modules;
+- app repositories and pocket store modules;
 - logic services;
-- feature services and config;
+- pocket services and config;
 - router and middleware ordering;
 - background runtimes;
 - startup probes and shutdown order.
 
 Passing a large global dependency bag into every package hides this graph. Prefer constructors with narrow dependencies and small local builder functions when `main` becomes long.
 
-## When to extract a feature
+## When to extract a pocket
 
-Keep a domain app-local by default. Extract a reusable feature when:
+Keep a domain app-local by default. Extract a reusable pocket when:
 
 - multiple hosts need the whole capability;
 - the public rim can be kept stable and datastore-neutral;
 - hosts need meaningful configure/replace/inject/extend seams;
 - the core can require only SDK;
 - repository behavior can be expressed as a conformance suite;
-- a zero-infrastructure host can prove the feature without a bundled store.
+- a zero-infrastructure host can prove the pocket without a bundled store.
 
-Then follow the stricter [Feature contract](feature-contract.md).
+Then follow the stricter [Pocket contract](pocket-contract.md).

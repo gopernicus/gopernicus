@@ -1,7 +1,11 @@
 go 1.26.1
 
 use (
-	./sdk
+	./examples/auth-cms
+	./examples/cms
+	./examples/goth-showcase
+	./examples/jobs-minimal
+	./examples/minimal
 	./integrations/cryptids/bcrypt
 	./integrations/cryptids/golang-jwt
 	./integrations/cryptids/google-uuid
@@ -16,28 +20,24 @@ use (
 	./integrations/oauth/google
 	./integrations/scheduling/robfig-cron
 	./integrations/tracing/otel
-	./features/authentication
-	./features/authentication/stores/pgx
-	./features/authentication/stores/turso
-	./features/authentication/views/goth
-	./features/authorization
-	./features/authorization/stores/pgx
-	./features/authorization/stores/turso
-	./features/cms
-	./features/cms/stores/pgx
-	./features/cms/stores/turso
-	./features/cms/views/goth
-	./features/events
-	./features/events/stores/pgx
-	./features/events/stores/turso
-	./features/jobs
-	./features/jobs/stores/pgx
-	./features/jobs/stores/turso
+	./pockets/authentication
+	./pockets/authentication/stores/pgx
+	./pockets/authentication/stores/turso
+	./pockets/authentication/views/goth
+	./pockets/authorization
+	./pockets/authorization/stores/pgx
+	./pockets/authorization/stores/turso
+	./pockets/cms
+	./pockets/cms/stores/pgx
+	./pockets/cms/stores/turso
+	./pockets/cms/views/goth
+	./pockets/events
+	./pockets/events/stores/pgx
+	./pockets/events/stores/turso
+	./pockets/jobs
+	./pockets/jobs/stores/pgx
+	./pockets/jobs/stores/turso
+	./sdk
 	./ui/goth
-	./examples/auth-cms
-	./examples/goth-showcase
-	./examples/cms
-	./examples/jobs-minimal
-	./examples/minimal
 	./workshop/gopernicus
 )

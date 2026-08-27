@@ -1,11 +1,11 @@
 // Package authpages is this host's REAL partial override of the authentication
-// feature's HTML surface (design §9.2, AV3-8.9): it embeds the ui/goth
+// pocket's HTML surface (design §9.2, AV3-8.9): it embeds the ui/goth
 // views/goth.Views and overrides exactly ONE page — Login — with a
 // Gopernicus-CMS-branded template rendered through sdk/foundation/web.Template
 // (stdlib html/template, no templ import here). Every other page is served by the
 // promoted ui/goth default, so the override changes presentation ONLY: route
 // security, request decoding, service policy, redirect resolution, and error
-// classification all live in the feature's inbound handlers, never in a Views
+// classification all live in the pocket's inbound handlers, never in a Views
 // method (proven byte-identical in AV3-8.5's isolation tests). Because it embeds
 // authgoth.Views, HTMLPolicy() is promoted too, so the host wires the exact CSP the
 // ui/goth pages need from this same value (ui-goth GOTH-7.2).
@@ -26,8 +26,8 @@ import (
 	"embed"
 	"html/template"
 
-	auth "github.com/gopernicus/gopernicus/features/authentication"
-	authgoth "github.com/gopernicus/gopernicus/features/authentication/views/goth"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	authgoth "github.com/gopernicus/gopernicus/pockets/authentication/views/goth"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 	uigoth "github.com/gopernicus/gopernicus/ui/goth"
 )
@@ -68,14 +68,14 @@ func New(bundle *uigoth.Bundle) (Views, error) {
 
 // Login renders the Gopernicus-CMS-branded sign-in page. It posts to the same
 // canonical /auth/login endpoint the bundled default does, with the same field
-// names (email, password, csrf_token, return_to) so the feature's dispatcher,
+// names (email, password, csrf_token, return_to) so the pocket's dispatcher,
 // CSRF/origin gate, service call, and PRG are unchanged — only the chrome differs.
 func (v Views) Login(m auth.LoginPage) web.Renderer {
 	return web.Template(v.login, loginTemplateName, m)
 }
 
 // EmailOverride is the host's email LayerApp content override (design §6.2): a
-// Gopernicus-CMS-branded verification email body that replaces the feature's
+// Gopernicus-CMS-branded verification email body that replaces the pocket's
 // LayerCore "authentication:verification" template. It still renders {{.Secret}}
 // (the one-time code), so the verification flow is unbroken — only the copy is
 // host-branded. This is the SECOND override system, wired through
@@ -85,7 +85,7 @@ func EmailOverride() auth.EmailContentTemplate {
 }
 
 // loginHTML is the branded sign-in page. It is deliberately plain and asset-free so
-// it renders within the feature's restrictive CSP (default-src 'none', no inline
+// it renders within the pocket's restrictive CSP (default-src 'none', no inline
 // style, no third-party asset); the visible "Gopernicus CMS" branding and the
 // data-brand marker make the override observable in the run-and-look. The password
 // input has no value attribute, so a failed sign-in never repopulates it.

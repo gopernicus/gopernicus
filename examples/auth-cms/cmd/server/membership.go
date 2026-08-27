@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"sync"
 
-	auth "github.com/gopernicus/gopernicus/features/authentication"
-	authorization "github.com/gopernicus/gopernicus/features/authorization"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	authorization "github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
@@ -185,9 +185,9 @@ func (g guardedRelationshipGranter) Grant(ctx context.Context, in auth.GrantInpu
 }
 
 // hostInviteCheck is the relation-aware host authorization policy the authentication
-// feature calls from its parsed create/list invitation handlers (auth.Config.InviteCheck,
+// pocket calls from its parsed create/list invitation handlers (auth.Config.InviteCheck,
 // design D3). It is REQUIRED whenever a Granter enables invitations, and it runs AFTER the
-// feature has resolved the caller principal and parsed the exact requested relation — data a
+// pocket has resolved the caller principal and parsed the exact requested relation — data a
 // route-wrapping middleware could never see. The mapping expresses "may this caller grant
 // relation R on this resource":
 //
@@ -255,13 +255,13 @@ func isPlatformAdmin(ctx context.Context, authorizer *authorization.Service, sub
 
 // requireMembership gates a route on the caller — already resolved by
 // RequirePrincipal into ctx — holding the demo `view` permission on the demo
-// resource. The Check/401/403/500 leg is now the FEATURE's exported builder
+// resource. The Check/401/403/500 leg is now the POCKET's exported builder
 // (authorizer.RequirePermission, whose responses carry the FS9 web.Error shape);
 // platform-admin stays HOST composition, run FIRST in this closure via the
 // isPlatformAdmin recipe (the engine grants no bypass). The gate is built once
 // at registration — a roles-only wiring would panic here at boot, not per
 // request. Per request it reads the principal ONCE through the exported
-// auth.Service.CurrentPrincipal port (zero import into feature internals): a
+// auth.Service.CurrentPrincipal port (zero import into pocket internals): a
 // present admin passes straight to next; every other case — non-admin principal
 // or none at all — falls through to the builder-gated handler (its 403/500 or
 // 401 legs respectively).

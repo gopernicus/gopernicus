@@ -16,7 +16,7 @@ gopernicus init \
   ./myapp
 ```
 
-`--db none` creates an SDK-only host. `init` mounts no features and therefore makes no product decisions for you.
+`--db none` creates an SDK-only host. `init` mounts no pockets and therefore makes no product decisions for you.
 
 ## 2. Load posture and create cancellation
 
@@ -45,9 +45,9 @@ Build concrete clients before repositories and services:
 ```text
 database / Redis / cloud clients
         ↓
-feature stores + host outbound adapters
+pocket stores + host outbound adapters
         ↓
-feature services + app logic
+pocket services + app logic
         ↓
 HTTP handlers and background runtimes
 ```
@@ -65,7 +65,7 @@ router.Use(
     web.Panics(log),
 )
 
-mount := feature.Mount{
+mount := pocket.Mount{
     Router: router,
     Logger: log,
     Events: bus,
@@ -74,9 +74,9 @@ mount := feature.Mount{
 
 Add CORS/default security headers according to the host's browser/API posture. If client IP affects auditing or rate limits, wire `TrustProxies` with the exact number of trusted proxy hops.
 
-## 5. Construct features in dependency order
+## 5. Construct pockets in dependency order
 
-Features cannot import one another, but services may still need host wiring. Build providers first, then bridge their public seams.
+Pockets cannot import one another, but services may still need host wiring. Build providers first, then bridge their public seams.
 
 ```go
 authSvc, err := authentication.NewService(authRepos, authConfig)
@@ -99,7 +99,7 @@ if err := cms.Register(mount, cmsRepos, cms.Config{
 }
 ```
 
-When service signatures do not structurally match, write a small adapter in `cmd` or host `internal` code. Do not solve the mismatch by making feature cores import one another.
+When service signatures do not structurally match, write a small adapter in `cmd` or host `internal` code. Do not solve the mismatch by making pocket cores import one another.
 
 ## 6. Start host-owned runtimes
 
@@ -112,7 +112,7 @@ go func() {
 }()
 ```
 
-Production code may use `errgroup` or a host supervisor. The invariant is ownership: a feature constructor or `Register` call should not hide a goroutine you cannot stop.
+Production code may use `errgroup` or a host supervisor. The invariant is ownership: a pocket constructor or `Register` call should not hide a goroutine you cannot stop.
 
 ## 7. Add host health routes
 

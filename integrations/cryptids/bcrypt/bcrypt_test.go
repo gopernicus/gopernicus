@@ -12,7 +12,7 @@ import (
 // testCost keeps hashing fast; production cost is higher.
 const testCost = 4
 
-// passwordHasher mirrors auth.PasswordHasher in the auth feature module. The
+// passwordHasher mirrors auth.PasswordHasher in the auth pocket module. The
 // port lives with its consumer, so this integration cannot import it; instead
 // the interface literal is copied here and the assertion below proves Hasher
 // satisfies the port's method set structurally.

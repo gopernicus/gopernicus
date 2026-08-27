@@ -35,28 +35,28 @@ The command emits:
 - a datastore-specific migration runner when `--db` is not `none`;
 - a README with pre-tag dependency instructions.
 
-It mounts no feature. Add only the modules your host needs.
+It mounts no pocket. Add only the modules your host needs.
 
-## `new feature`
+## `new pocket`
 
 ```bash
-gopernicus new feature notes \
+gopernicus new pocket notes \
   --module github.com/acme \
   --aggregate note \
-  --dir ./features/notes
+  --dir ./pockets/notes
 ```
 
 Flags:
 
 | Flag | Meaning | Default |
 |---|---|---|
-| `--module` | module-path root; feature name is appended; required | — |
+| `--module` | module-path root; pocket name is appended; required | — |
 | `--aggregate` | first aggregate/package identifier | `item` |
-| `--dir` | target | `./<feature>` |
+| `--dir` | target | `./<pocket>` |
 
 Names must be lowercase Go identifiers starting with a letter.
 
-The emitted feature contains:
+The emitted pocket contains:
 
 - SDK-only core module and public socket;
 - domain entity, ordering allow-list, and repository port;
@@ -66,9 +66,9 @@ The emitted feature contains:
 - pgx and Turso sibling modules;
 - migration, boot probe, exports, and live conformance hooks for both dialects.
 
-It registers no HTTP routes. Delivery is a separate adapter you design for the real feature.
+It registers no HTTP routes. Delivery is a separate adapter you design for the real pocket.
 
-When the target is inside a `go.work` monorepo, Workshop prints a manual checklist for workspace, Makefile, live-store tests, and the hardcoded feature-core guard. It does not silently edit those shared files.
+When the target is inside a `go.work` monorepo, Workshop prints a manual checklist for workspace, Makefile, live-store tests, and the hardcoded pocket-core guard. It does not silently edit those shared files.
 
 ## `db create`
 
@@ -93,7 +93,7 @@ Runs the host-owned migration package:
 go run ./workshop/migrations
 ```
 
-The CLI does not know a DSN, database driver, or feature migration source. Missing runners and runner exit failures are reported to the caller.
+The CLI does not know a DSN, database driver, or pocket migration source. Missing runners and runner exit failures are reported to the caller.
 
 ## `db status`
 

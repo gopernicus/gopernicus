@@ -1,7 +1,7 @@
 # examples/jobs-minimal
 
-The zero-infra proof host for `features/jobs` (design §8). It mounts the jobs
-feature backed by the in-core `features/jobs/memstore` — no datastore driver, no
+The zero-infra proof host for `pockets/jobs` (design §8). It mounts the jobs
+pocket backed by the in-core `pockets/jobs/memstore` — no datastore driver, no
 migrations, no external infrastructure — and runs the jobs `Runtime` in-process
 next to an HTTP server. Boot it with `go run ./cmd/server` and drive it with
 `curl`.
@@ -23,7 +23,7 @@ next to an HTTP server. Boot it with `go run ./cmd/server` and drive it with
 
 ## Module graph — zero datastore drivers
 
-Its `go.mod` requires exactly `github.com/gopernicus/gopernicus/sdk`, `github.com/gopernicus/gopernicus/features/jobs`, and
+Its `go.mod` requires exactly `github.com/gopernicus/gopernicus/sdk`, `github.com/gopernicus/gopernicus/pockets/jobs`, and
 `github.com/gopernicus/gopernicus/integrations/scheduling/robfig-cron` (a CPU-only library — the bcrypt
 zero-infra precedent). No libsql, no pgx:
 

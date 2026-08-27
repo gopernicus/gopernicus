@@ -1,10 +1,10 @@
 // Package robfigcron is a cron-scheduling connector wrapping exactly one
 // third-party library, github.com/robfig/cron/v3. Its Parser structurally
-// satisfies the cron-parsing port declared by the jobs feature (its CronParser
+// satisfies the cron-parsing port declared by the jobs pocket (its CronParser
 // and CronSchedule ports) with zero import in either direction: the ports live
 // with their consumer, this integration knows only robfig cron.
 //
-// It owns "how to parse and evaluate a cron expression," never any feature's
+// It owns "how to parse and evaluate a cron expression," never any pocket's
 // scheduling policy. The robfig parser is configured with the standard five
 // fields (minute, hour, day-of-month, month, day-of-week) plus @descriptor
 // aliases, and every schedule is evaluated in UTC — v1 has no timezone support,
@@ -31,7 +31,7 @@ const parseOptions = cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow 
 
 // CronSchedule is the shape Parse returns: a parsed expression that yields its
 // next fire time. It is a type alias to an interface literal — not a defined
-// type — so it is the identical type to the jobs feature's consumer-declared
+// type — so it is the identical type to the jobs pocket's consumer-declared
 // CronSchedule port, satisfying it structurally with zero import in either
 // direction.
 type CronSchedule = interface {

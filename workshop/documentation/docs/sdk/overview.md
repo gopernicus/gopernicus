@@ -7,7 +7,7 @@ description: The stdlib-only Gopernicus kernel and its internal layering law.
 
 `github.com/gopernicus/gopernicus/sdk` is the dependency-free kernel used by the package collection. Its `go.mod` has no `require` block, so the standard-library boundary is structural rather than conventional.
 
-The SDK is not an interfaces-only abstraction layer. It owns reusable vocabulary, mechanism, and observable policy. Interfaces are the seams that let concrete integrations and feature adapters plug into that policy.
+The SDK is not an interfaces-only abstraction layer. It owns reusable vocabulary, mechanism, and observable policy. Interfaces are the seams that let concrete integrations and pocket adapters plug into that policy.
 
 ## Four physical tiers
 
@@ -17,7 +17,7 @@ sdk/                       kernel
 ├── errors.go              transport-agnostic error classes
 ├── foundation/            pure mechanism and data vocabulary
 ├── capabilities/          behavioral ports and shared policy
-└── feature/               host↔feature composition
+└── pocket/               host↔pocket composition
 ```
 
 | Tier | Meaning | Import rule |
@@ -25,7 +25,7 @@ sdk/                       kernel
 | kernel | vocabulary every tier may need | standard library only; no SDK subpackage |
 | foundation | pure mechanism, no service semantics | kernel only; no foundation siblings |
 | capabilities | behavioral ports + observable policy | kernel + foundation; no capability siblings |
-| feature | explicit package composition contract | sanctioned composer |
+| pocket | explicit package composition contract | sanctioned composer |
 
 Cross-capability composition leaves the SDK. For example, adapting email delivery into notifications belongs in `integrations/notify/mailer`, not in either capability package.
 
@@ -63,7 +63,7 @@ A capability is defined by contract and policy, not by whether SDK can implement
 
 - cache, email, events, file storage, notification, rate limiting, and tracing ship useful defaults;
 - OAuth has no vendor-neutral default;
-- keyed work has no in-SDK implementation—the jobs feature is its implementation of record;
+- keyed work has no in-SDK implementation—the jobs pocket is its implementation of record;
 - identity resolution is foundation vocabulary plus a port; authentication is the first real implementation.
 
 See [Foundation](foundation.md) and [Capabilities](capabilities.md) for the package catalogs.
@@ -72,16 +72,16 @@ See [Foundation](foundation.md) and [Capabilities](capabilities.md) for the pack
 
 Capabilities with interchangeable implementations publish conformance suites, including cache, events, file storage, rate limiting, and work. Integrations run these suites so behavior is pinned above driver-specific unit tests.
 
-The same pattern repeats at feature scale: a feature's `storetest` package is the executable specification for every datastore implementation.
+The same pattern repeats at pocket scale: a pocket's `storetest` package is the executable specification for every datastore implementation.
 
 ## What the SDK does not own
 
 - application routes or page designs;
 - concrete database/cloud clients;
-- feature aggregates and schemas;
+- pocket aggregates and schemas;
 - a global dependency container;
-- feature-to-feature orchestration;
+- pocket-to-pocket orchestration;
 - migrations or process startup;
 - an interface over every concrete type.
 
-Those responsibilities remain in features, integrations, or the host where their policy is visible.
+Those responsibilities remain in pockets, integrations, or the host where their policy is visible.

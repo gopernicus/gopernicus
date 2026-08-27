@@ -3,7 +3,7 @@
 // facility ports over a single caller-supplied *redis.Client. The module unit
 // is the library, not the port (ruling R-KV1): one go-redis dependency, one
 // client, three facilities. It depends only on sdk facility ports and go-redis;
-// it imports no features and no other integration.
+// it imports no pockets and no other integration.
 //
 //   - events.Bus + events.Broadcaster — Bus (bus.go, broadcast.go): a durable
 //     competing-consumer rail on Redis Streams plus a best-effort fan-out rail

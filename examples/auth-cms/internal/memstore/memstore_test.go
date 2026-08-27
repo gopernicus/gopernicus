@@ -1,7 +1,7 @@
 // Tests for memstore's port-semantics: each repository's Create/Get/List/
 // Delete happy path plus the sdk/errs sentinel contract each port's doc
 // comment promises, including the uniqueness rules the turso store enforces
-// in SQL (features/cms/stores/turso/migrations) — entry (type,slug), term
+// in SQL (pockets/cms/stores/turso/migrations) — entry (type,slug), term
 // (kind,slug), and menu slug collisions all return sdk.ErrAlreadyExists.
 //
 // Copied verbatim from examples/minimal/internal/memstore alongside the store
@@ -14,13 +14,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/features/cms"
-	"github.com/gopernicus/gopernicus/features/cms/domain/content"
-	"github.com/gopernicus/gopernicus/features/cms/domain/media"
-	"github.com/gopernicus/gopernicus/features/cms/domain/menus"
-	"github.com/gopernicus/gopernicus/features/cms/domain/messaging"
-	"github.com/gopernicus/gopernicus/features/cms/domain/taxonomy"
-	"github.com/gopernicus/gopernicus/features/cms/storetest"
+	"github.com/gopernicus/gopernicus/pockets/cms"
+	"github.com/gopernicus/gopernicus/pockets/cms/domain/content"
+	"github.com/gopernicus/gopernicus/pockets/cms/domain/media"
+	"github.com/gopernicus/gopernicus/pockets/cms/domain/menus"
+	"github.com/gopernicus/gopernicus/pockets/cms/domain/messaging"
+	"github.com/gopernicus/gopernicus/pockets/cms/domain/taxonomy"
+	"github.com/gopernicus/gopernicus/pockets/cms/storetest"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -89,7 +89,7 @@ func TestEntryRepo_DeleteUnknown(t *testing.T) {
 }
 
 // TestEntryRepo_DuplicateTypeSlugCollision mirrors the turso store's
-// UNIQUE(type, slug) constraint (features/cms/stores/turso/migrations/
+// UNIQUE(type, slug) constraint (pockets/cms/stores/turso/migrations/
 // 0018_entries.sql) — memstore enforces the same rule in Create.
 func TestEntryRepo_DuplicateTypeSlugCollision(t *testing.T) {
 	ctx := context.Background()

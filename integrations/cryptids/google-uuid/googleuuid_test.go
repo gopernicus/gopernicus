@@ -61,7 +61,7 @@ func TestUniqueness(t *testing.T) {
 }
 
 // TestWiresAsIDGenerator proves the decided-once wiring shape a host uses:
-// cryptids.NewGenerator(googleuuid.V7()) on a feature's Config.IDs.
+// cryptids.NewGenerator(googleuuid.V7()) on a pocket's Config.IDs.
 func TestWiresAsIDGenerator(t *testing.T) {
 	gen := cryptids.NewGenerator(V7())
 	s := gen.MustGenerate()

@@ -3,7 +3,7 @@ package web
 import "net/http"
 
 // Verb-sugar helpers delegate to Handle with a concrete HTTP method. They live
-// only on the concrete *WebHandler and *RouteGroup — the feature.RouteRegistrar
+// only on the concrete *WebHandler and *RouteGroup — the pocket.RouteRegistrar
 // port stays a single Handle method, so hosts' minimal routers are unaffected.
 
 func (h *WebHandler) GET(path string, handler http.HandlerFunc, middleware ...Middleware) {

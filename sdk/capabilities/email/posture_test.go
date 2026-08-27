@@ -186,7 +186,7 @@ func TestCheckSenderErrorIsCapabilityOwned(t *testing.T) {
 	}
 	for _, forbidden := range []string{"auth", "RuntimeMode", "Config."} {
 		if strings.Contains(err.Error(), forbidden) {
-			t.Errorf("capability error %q leaks feature vocabulary %q", err.Error(), forbidden)
+			t.Errorf("capability error %q leaks pocket vocabulary %q", err.Error(), forbidden)
 		}
 	}
 	if !strings.Contains(err.Error(), "email:") {

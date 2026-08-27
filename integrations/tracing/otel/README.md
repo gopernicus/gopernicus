@@ -8,7 +8,7 @@ and ships just the `Noop` default; this module isolates the OpenTelemetry
 dependency so a host wires real span export by importing it and passing the
 resulting `*otel.Tracer` wherever an `sdk/capabilities/tracing.Tracer` is accepted.
 
-It imports only `sdk` and the OpenTelemetry family — **no feature, no other
+It imports only `sdk` and the OpenTelemetry family — **no pocket, no other
 integration**.
 
 ## Why one module for the whole family (R-KV1)

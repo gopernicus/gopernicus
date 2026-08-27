@@ -11,8 +11,8 @@ package authmem
 import (
 	"testing"
 
-	auth "github.com/gopernicus/gopernicus/features/authentication"
-	"github.com/gopernicus/gopernicus/features/authentication/storetest"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	"github.com/gopernicus/gopernicus/pockets/authentication/storetest"
 )
 
 // TestConformance runs the auth storetest suite against authmem.

@@ -1,7 +1,7 @@
 // Package deliveryhealth is the host-owned, secret-free operational health surface for
 // authentication's outbound delivery (authv3-delivery-refactor AV3D-5.3). It is HOST
-// code: the recommended architecture is host-COMPOSED health over the two features'
-// existing narrow seams, not a new feature route. It observes three points, all bounded
+// code: the recommended architecture is host-COMPOSED health over the two pockets'
+// existing narrow seams, not a new pocket route. It observes three points, all bounded
 // and secret-free:
 //
 //   - Runtime lifecycle — the host owns the delivery goroutine, so MarkStarted/MarkStopped
@@ -35,12 +35,12 @@ import (
 	"strings"
 	"sync/atomic"
 
-	auth "github.com/gopernicus/gopernicus/features/authentication"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 )
 
 // transitionPrefix namespaces every delivery lifecycle event type the observer emits
-// (mirrors the feature's EventObserver). The classifier reads only the bounded suffix.
+// (mirrors the pocket's EventObserver). The classifier reads only the bounded suffix.
 const transitionPrefix = "authentication.delivery."
 
 // runtime-state enums for the health projection. Bounded, secret-free.
@@ -107,7 +107,7 @@ func (h *Health) Dispatcher(next auth.DeliveryDispatcher) auth.DeliveryDispatche
 
 // Emitter wraps a delivery lifecycle emitter so each bounded transition is counted and a
 // forward failure is recorded as observer_failures. It forwards to next unchanged and
-// returns next's error verbatim, so the feature's best-effort observer semantics are
+// returns next's error verbatim, so the pocket's best-effort observer semantics are
 // preserved. A nil next defaults to a no-op emitter that only counts transitions.
 func (h *Health) Emitter(next sdkevents.Emitter) sdkevents.Emitter {
 	if next == nil {
@@ -156,7 +156,7 @@ var _ sdkevents.Emitter = countingEmitter{}
 
 // Emit classifies the event's bounded type suffix into a counter, then forwards to the
 // wrapped emitter. A forward failure increments observer_failures and is returned verbatim
-// so the feature's observer logs it exactly as before. Only ev.Type() is read; no other
+// so the pocket's observer logs it exactly as before. Only ev.Type() is read; no other
 // field of the event is inspected or stored.
 func (e countingEmitter) Emit(ctx context.Context, ev sdkevents.Event, opts ...sdkevents.EmitOption) error {
 	e.h.classify(ev.Type())

@@ -5,7 +5,7 @@
 // Run(t, newHarness) runner so implementations are verified against one shared
 // behavioral contract. Imports stdlib + the sdk root + sdk/capabilities/work
 // only (sdk stays dependency-free per the constitution), never another
-// capability or sdk/feature.
+// capability or sdk/pocket.
 //
 // Return values alone cannot prove a queue admitted no hidden duplicate or that
 // a replacement retired the prior generation, so the suite drives a TEST-ONLY
@@ -13,7 +13,7 @@
 // vocabulary for conformance testing ONLY: it must NEVER be promoted into the
 // production work package or used by production consumers, which see lifecycle
 // status by key and nothing else. Executor behavior under claim/lease races is
-// out of this consumer protocol and stays in features/jobs/storetest.
+// out of this consumer protocol and stays in pockets/jobs/storetest.
 package worktest
 
 import (

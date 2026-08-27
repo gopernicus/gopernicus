@@ -8,7 +8,7 @@ import (
 )
 
 // cronSchedule and cronParser mirror the cron ports declared by the jobs
-// feature (its CronSchedule and CronParser ports). The ports live with their
+// pocket (its CronSchedule and CronParser ports). The ports live with their
 // consumer, so this integration cannot import them; instead the interface
 // shapes are copied here and the assertions below prove Parser satisfies them
 // structurally with zero import in either direction.

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	auth "github.com/gopernicus/gopernicus/features/authentication"
-	authorization "github.com/gopernicus/gopernicus/features/authorization"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	authorization "github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
@@ -297,8 +297,8 @@ func TestAPIKeySearchDoesNotLeakCredentialMaterial(t *testing.T) {
 }
 
 // TestMachineRoutesGateRefusesANonAdmin is the reason this proof lives in the host and
-// not in features/authentication: the feature cannot import features/authorization
-// (guard-feature-no-cross-feature), so its own tests gate on a stub. Here the gate is the
+// not in pockets/authentication: the pocket cannot import pockets/authorization
+// (guard-pocket-no-cross-pocket), so its own tests gate on a stub. Here the gate is the
 // REAL authorization middleware, and the 403 body is the real FS9 one — a signed-up user
 // without the platform:main#admin tuple is refused with code `permission_denied`.
 func TestMachineRoutesGateRefusesANonAdmin(t *testing.T) {

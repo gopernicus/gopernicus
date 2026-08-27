@@ -1,7 +1,7 @@
 # Gopernicus documentation
 
 This Docusaurus site documents the repository as it exists on `main`. Its
-content is organized around the package dependency direction: SDK, feature
+content is organized around the package dependency direction: SDK, pocket
 cores, sibling adapters, integrations, UI, and host-owned composition.
 
 Gopernicus is open source under the [MIT License](../../LICENSE). It is very

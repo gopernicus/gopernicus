@@ -1,10 +1,10 @@
 // Package bcrypt is a password-hashing connector wrapping exactly one
 // third-party library, golang.org/x/crypto/bcrypt. Its Hasher structurally
-// satisfies the feature-owned PasswordHasher port (mirrors auth.PasswordHasher
-// in the auth feature module) with zero import in either direction: the port
+// satisfies the pocket-owned PasswordHasher port (mirrors auth.PasswordHasher
+// in the auth pocket module) with zero import in either direction: the port
 // lives with its consumer, this integration knows only bcrypt.
 //
-// It owns "how to hash with bcrypt," never any feature's policy. Cost is
+// It owns "how to hash with bcrypt," never any pocket's policy. Cost is
 // configurable via New's options; a different algorithm (argon2, scrypt) would
 // be a sibling connector, swapped at the composition root.
 //

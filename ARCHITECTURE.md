@@ -9,7 +9,7 @@ worked example `examples/cms`.
 ```
 <repo>/
   go.work                                # ties the modules together for local dev (dev-only)
-  sdk/                    module github.com/gopernicus/gopernicus/sdk                         — stdlib-only, LAYERED (sdk-layering 2026-07-10): the root package is the KERNEL (errors.go, context.go); foundation/ = agnostic mechanism/vocabulary (imports the root only, flat); capabilities/ = behavioral ports + policy, defaults optional (import root+foundation, never each other); feature/ = the one sanctioned composer
+  sdk/                    module github.com/gopernicus/gopernicus/sdk                         — stdlib-only, LAYERED (sdk-layering 2026-07-10): the root package is the KERNEL (errors.go, context.go); foundation/ = agnostic mechanism/vocabulary (imports the root only, flat); capabilities/ = behavioral ports + policy, defaults optional (import root+foundation, never each other); pocket/ = the one sanctioned composer
   integrations/
     cryptids/bcrypt/      module …/integrations/cryptids/bcrypt         — a connector (x/crypto bcrypt)
     cryptids/golang-jwt/  module …/integrations/cryptids/golang-jwt     — a connector (golang-jwt/jwt v5)
@@ -25,50 +25,50 @@ worked example `examples/cms`.
     oauth/google/         module …/integrations/oauth/google            — a connector (coreos/go-oidc v3)
     scheduling/robfig-cron/ module …/integrations/scheduling/robfig-cron — a connector (robfig/cron v3)
     tracing/otel/         module …/integrations/tracing/otel            — a connector (OpenTelemetry family; stdout/OTLP exporters, R-KV1)
-  features/                                                             — each: domain/ (public ports+entities) + internal/logic (+ internal/inbound where the feature registers routes — jobs v1 has none) + storetest/ + per-concern sibling modules (stores/<pkg>; views/<pkg> where the feature has HTML — FS3)
-    authentication/       module github.com/gopernicus/gopernicus/features/authentication               — session-auth hexagon (datastore-free)
-      stores/pgx/         module …/features/authentication/stores/pgx             — auth's pgx store adapter
-      stores/turso/       module …/features/authentication/stores/turso           — auth's Turso store adapter
-    authorization/        module github.com/gopernicus/gopernicus/features/authorization              — IAM hexagon: independently wireable kinds (relationships/ReBAC + roles; datastore-free; public memstore/)
-      stores/pgx/         module …/features/authorization/stores/pgx            — authorization's pgx store adapter
-      stores/turso/       module …/features/authorization/stores/turso          — authorization's Turso store adapter
-    cms/                  module github.com/gopernicus/gopernicus/features/cms                — the CMS hexagon (datastore-free)
-      stores/pgx/         module …/features/cms/stores/pgx              — the CMS feature's pgx store adapter
-      stores/turso/       module …/features/cms/stores/turso            — the CMS feature's Turso store adapter
-      views/goth/         module …/features/cms/views/goth              — cms's bundled default views (ui/goth; FS3 sibling)
-    events/               module github.com/gopernicus/gopernicus/features/events             — durable outbox + SSE gateway hexagon (datastore-free)
-      stores/pgx/         module …/features/events/stores/pgx           — events' pgx store adapter
-      stores/turso/       module …/features/events/stores/turso         — events' Turso store adapter
-    jobs/                 module github.com/gopernicus/gopernicus/features/jobs               — durable queue + schedules hexagon (datastore-free; public memstore/)
-      stores/pgx/         module …/features/jobs/stores/pgx             — jobs' pgx store adapter
-      stores/turso/       module …/features/jobs/stores/turso           — jobs' Turso store adapter
+  pockets/                                                             — each: domain/ (public ports+entities) + internal/logic (+ internal/inbound where the pocket registers routes — jobs v1 has none) + storetest/ + per-concern sibling modules (stores/<pkg>; views/<pkg> where the pocket has HTML — FS3)
+    authentication/       module github.com/gopernicus/gopernicus/pockets/authentication               — session-auth hexagon (datastore-free)
+      stores/pgx/         module …/pockets/authentication/stores/pgx             — auth's pgx store adapter
+      stores/turso/       module …/pockets/authentication/stores/turso           — auth's Turso store adapter
+    authorization/        module github.com/gopernicus/gopernicus/pockets/authorization              — IAM hexagon: independently wireable kinds (relationships/ReBAC + roles; datastore-free; public memstore/)
+      stores/pgx/         module …/pockets/authorization/stores/pgx            — authorization's pgx store adapter
+      stores/turso/       module …/pockets/authorization/stores/turso          — authorization's Turso store adapter
+    cms/                  module github.com/gopernicus/gopernicus/pockets/cms                — the CMS hexagon (datastore-free)
+      stores/pgx/         module …/pockets/cms/stores/pgx              — the CMS pocket's pgx store adapter
+      stores/turso/       module …/pockets/cms/stores/turso            — the CMS pocket's Turso store adapter
+      views/goth/         module …/pockets/cms/views/goth              — cms's bundled default views (ui/goth; FS3 sibling)
+    events/               module github.com/gopernicus/gopernicus/pockets/events             — durable outbox + SSE gateway hexagon (datastore-free)
+      stores/pgx/         module …/pockets/events/stores/pgx           — events' pgx store adapter
+      stores/turso/       module …/pockets/events/stores/turso         — events' Turso store adapter
+    jobs/                 module github.com/gopernicus/gopernicus/pockets/jobs               — durable queue + schedules hexagon (datastore-free; public memstore/)
+      stores/pgx/         module …/pockets/jobs/stores/pgx             — jobs' pgx store adapter
+      stores/turso/       module …/pockets/jobs/stores/turso           — jobs' Turso store adapter
   workshop/
-    gopernicus/           module github.com/gopernicus/gopernicus/workshop/gopernicus       — the scaffolding CLI (init / new feature / db verbs; stdlib-only; emits the anatomies below, never links them — guard G11)
+    gopernicus/           module github.com/gopernicus/gopernicus/workshop/gopernicus       — the scaffolding CLI (init / new pocket / db verbs; stdlib-only; emits the anatomies below, never links them — guard G11)
   examples/
-    cms/                  module github.com/gopernicus/gopernicus/examples/cms                — a host app: features/cms on Turso
+    cms/                  module github.com/gopernicus/gopernicus/examples/cms                — a host app: pockets/cms on Turso
       cmd/  internal/theme  workshop/migrations
-    minimal/               module github.com/gopernicus/gopernicus/examples/minimal           — a host app: features/cms on an in-memory store
+    minimal/               module github.com/gopernicus/gopernicus/examples/minimal           — a host app: pockets/cms on an in-memory store
       cmd/  internal/memstore
     auth-cms/              module github.com/gopernicus/gopernicus/examples/auth-cms          — a host app: auth + cms + events + the authorization flagship composed, in-memory (rule 6, live)
       cmd/  internal/authmem  internal/memstore
-    jobs-minimal/          module github.com/gopernicus/gopernicus/examples/jobs-minimal      — a host app: features/jobs on its memstore, zero drivers
+    jobs-minimal/          module github.com/gopernicus/gopernicus/examples/jobs-minimal      — a host app: pockets/jobs on its memstore, zero drivers
       cmd/
 ```
 
 **Thirty-six modules today.** `sdk` is the kernel; `integrations/*` are reusable
 third-party connectors (one external dependency each, each its own module);
-`features/<name>` is a datastore-free feature core with its store adapters as
+`pockets/<name>` is a datastore-free pocket core with its store adapters as
 sibling modules — one per supported store implementation; `examples/*` are host apps that
 consume them — `examples/cms` (Turso), `examples/minimal` (in-memory, zero
 libsql in its module graph), and `examples/auth-cms` (auth + cms + events +
 the authorization flagship composed, all in-memory;
-constitution rule 6 demonstrated live). Features wear the app hexagon's
+constitution rule 6 demonstrated live). Pockets wear the app hexagon's
 names (trio layout, 2026-07-02): `domain/<domain>` is the public rim
 (entities + ports — public by necessity, since hosts and store modules
 import them across module boundaries), `internal/{logic,inbound}` is the
 sealed interior, `stores/` is the outbound tier module-ized; the full
-app↔feature mapping table lives in `features/README.md` §2. See the
-**Features** section below for the mount contract. `go.work` resolves the
+app↔pocket mapping table lives in `pockets/README.md` §2. See the
+**Pockets** section below for the mount contract. `go.work` resolves the
 modules locally for development; real consumers would pin tagged versions, not
 the workspace. Module paths are rooted at `github.com/gopernicus/gopernicus`.
 
@@ -94,7 +94,7 @@ sdk/                      ROOT package sdk — the KERNEL (errors.go,
                           work — oauth and work ship no default). May
                           import root + foundation — NEVER another
                           capability.
-  feature/                the ONE sanctioned composition package (the
+  pocket/                the ONE sanctioned composition package (the
                           mount contract composes by definition).
 ```
 
@@ -107,19 +107,19 @@ law over production code (tests exempt, the G6 precedent — two
 deliberate env round-trip tests are why); G13 keeps integrations
 pointing outward-only.
 
-## Protocols and feature relationships (sdk-work-protocol, 2026-07-13)
+## Protocols and pocket relationships (sdk-work-protocol, 2026-07-13)
 
 sdk owns the **interoperability grammar** — vocabulary, narrow contracts, and
-conformance semantics; features either IMPLEMENT that grammar or BUILD ON it
+conformance semantics; pockets either IMPLEMENT that grammar or BUILD ON it
 while retaining their own aggregates, schema, lifecycle, and routes. The
 relationship is not uniform:
 
-| sdk contract | feature | relationship |
+| sdk contract | pocket | relationship |
 |---|---|---|
-| `sdk/foundation/identity.Resolver` | `features/authentication` | IMPLEMENTS the Resolver; users/credentials stay feature-owned |
-| `sdk/capabilities/events.Bus` | `features/events` | BUILDS ON the Bus (durable outbox + SSE gateway); is not the Bus implementation |
-| `sdk/capabilities/work` — the keyed-work submission protocol | `features/jobs` | IMPLEMENTS the protocol as the **implementation of record** — a capability with NO default (the oauth precedent); the durable `Job` aggregate and fenced runtime stay feature-owned |
-| authorization check/decision vocabulary | `features/authorization` | **deferred** — stays consumer-declared (fails graduation criterion 2 of `features/README.md` §5 today; trigger: authorizationv3 settles its semantics) |
+| `sdk/foundation/identity.Resolver` | `pockets/authentication` | IMPLEMENTS the Resolver; users/credentials stay pocket-owned |
+| `sdk/capabilities/events.Bus` | `pockets/events` | BUILDS ON the Bus (durable outbox + SSE gateway); is not the Bus implementation |
+| `sdk/capabilities/work` — the keyed-work submission protocol | `pockets/jobs` | IMPLEMENTS the protocol as the **implementation of record** — a capability with NO default (the oauth precedent); the durable `Job` aggregate and fenced runtime stay pocket-owned |
+| authorization check/decision vocabulary | `pockets/authorization` | **deferred** — stays consumer-declared (fails graduation criterion 2 of `pockets/README.md` §5 today; trigger: authorizationv3 settles its semantics) |
 
 Placement within sdk is determined by what the package MEANS and may depend
 on, never by where a current implementation happens to live: pure
@@ -129,15 +129,15 @@ default (`oauth`, `work`). This keeps the tier predictive if an implementation
 later moves or another implementation appears. Executor-side mechanics
 (claim/lease/checkpoint/fencing) are not part of the work protocol: the
 mechanism stays `sdk/foundation/workers`, the domain contract stays
-`features/jobs/domain/job.FencedQueueRepository`. The work protocol's lifecycle
+`pockets/jobs/domain/job.FencedQueueRepository`. The work protocol's lifecycle
 vocabulary is the frozen seven-value set — `pending` / `running` / `completed`
 / `failed` (non-terminal) / `dead_letter` / `canceled` / `superseded` — locked
 to its persisted strings by the sdk package's own literal test.
 
-A shape graduates from a feature-declared port into an sdk protocol only by
+A shape graduates from a pocket-declared port into an sdk protocol only by
 passing **all three gates**: `sdk/README.md`'s admission policy, the
 five-point sdk-vs-logic test below, and the five graduation criteria of
-`features/README.md` §5 — the criteria are conjunctive with, never a
+`pockets/README.md` §5 — the criteria are conjunctive with, never a
 substitute for, the other two gates.
 
 ## Where middleware lives (middleware-consolidation, 2026-07-11)
@@ -149,8 +149,8 @@ HTTP middleware sorts onto the same three tiers, ratified so nobody
 |---|---|---|
 | **foundation — pure HTTP mechanism** | `sdk/foundation/web` | `Panics`, `Logger`, `RequestID`, `TrustProxies`, `CORSMiddleware`/`CORSWithConfig`, `DefaultHeadersMiddleware` — no capability port behind them, stdlib only, FLAT. `CORSMiddleware`/`DefaultHeadersMiddleware` are AVAILABLE host middleware, kept deliberately (owner call, 2026-07-11): expected wiring for any API-serving or browser-facing host, NOT prune candidates even though no example wires them yet. |
 | **capability×foundation composition** | the capability that owns the semantics | `cacher.Pages`, `tracing.Middleware`, `ratelimiter.Middleware` — a capability producing a `web.Middleware`; web stays agnostic of the capability, the capability legally depends on web (capability → foundation). |
-| **identity/authorization gate** | the owning feature, as a root-package re-export of an `internal/` implementation | `authentication.RequireUser`, `authorization.RequirePermission` — the root package writes NO HTTP (the handler bodies live in `internal/logic/…svc`), so this REINFORCES the "services and HTTP are `internal/`" anatomy rather than amending it. Hosts inject them through config seams — `[]web.Middleware` (`cms.Config.AdminMiddleware`, `events.Config.StreamMiddleware`) or a SINGULAR `web.Middleware` (`authentication.Config.MachineRoutesGate`) — or at route registration. Singular vs slice is a deliberate posture choice, not drift: with a slice, nil and an empty slice both mean "mounted, ungated", which is fine for a surface that mounts regardless; the singular seam is for a surface whose routes should NOT mount without a policy — nil is the unambiguous "no policy" (the machine lifecycle routes stay unmounted), where an empty slice would have meant "mounted, ungated". |
-| **host recipe** | a host closure | platform-admin/self-access short-circuits (auth-cms's `isPlatformAdmin`, composed by its `requireMembership` gate) — each authorization engine evaluates only what its own model declares; bypasses are host composition, run first in the host's own closure, and fail closed. The roles kind's model does not change this: a globally held role is DATA that grants exactly the role-owned permissions whose model entries name it, never relationship-owned or later-added ones, so a universal admin bypass stays a host recipe and the feature ships no `Superuser` primitive. |
+| **identity/authorization gate** | the owning pocket, as a root-package re-export of an `internal/` implementation | `authentication.RequireUser`, `authorization.RequirePermission` — the root package writes NO HTTP (the handler bodies live in `internal/logic/…svc`), so this REINFORCES the "services and HTTP are `internal/`" anatomy rather than amending it. Hosts inject them through config seams — `[]web.Middleware` (`cms.Config.AdminMiddleware`, `events.Config.StreamMiddleware`) or a SINGULAR `web.Middleware` (`authentication.Config.MachineRoutesGate`) — or at route registration. Singular vs slice is a deliberate posture choice, not drift: with a slice, nil and an empty slice both mean "mounted, ungated", which is fine for a surface that mounts regardless; the singular seam is for a surface whose routes should NOT mount without a policy — nil is the unambiguous "no policy" (the machine lifecycle routes stay unmounted), where an empty slice would have meant "mounted, ungated". |
+| **host recipe** | a host closure | platform-admin/self-access short-circuits (auth-cms's `isPlatformAdmin`, composed by its `requireMembership` gate) — each authorization engine evaluates only what its own model declares; bypasses are host composition, run first in the host's own closure, and fail closed. The roles kind's model does not change this: a globally held role is DATA that grants exactly the role-owned permissions whose model entries name it, never relationship-owned or later-added ones, so a universal admin bypass stays a host recipe and the pocket ships no `Superuser` primitive. |
 
 **Deliberately opposite fail postures (D-D).** `ratelimiter.Middleware` fails
 OPEN — availability of a public route beats a limiter outage — and does so
@@ -199,7 +199,7 @@ consumer:
   legacy-browser hosts.
 - The `Origin` fallback cannot distinguish an old-browser HTTP→HTTPS scheme
   transition (`Request.Host` has no scheme); HSTS — owned at the host/edge,
-  never by a feature — is the mitigation.
+  never by a pocket — is the mitigation.
 - Session-cookie delivery is the other layer: auth access/refresh cookies are
   `SameSite=Lax`, so an ordinary cross-site unsafe request on an
   authenticated host route generally arrives without the session cookie.
@@ -209,11 +209,11 @@ consumer:
   access to declared origins; it is not, and never substitutes for,
   cross-origin mutation protection.
 
-**What features do (D2).** The authentication feature keeps its own split,
+**What pockets do (D2).** The authentication pocket keeps its own split,
 unchanged by this ratification: credential-establishment endpoints and logout
 are origin-only (`browserOriginAllowed`); authenticated account mutations
-carry origin + the feature's own plain double-submit token. Feature-owned
-forms may carry tokens when their owning feature requires them; removing
+carry origin + the pocket's own plain double-submit token. Pocket-owned
+forms may carry tokens when their owning pocket requires them; removing
 auth's tokens would be a separate security change with its own review.
 
 **No mechanical convergence (D3).** Do not replace auth's
@@ -236,28 +236,28 @@ ui-goth GOTH-0.2, adding the UI-implementation row):
 
 | kind | definition | examples | swap unit |
 |---|---|---|---|
-| **sdk facility** | a capability **port** + a conformance suite, usually with a first-party stdlib default — defaults are OPTIONAL (sdk-work-protocol, 2026-07-13): the implementation of record may instead be an integration (`oauth`) or a feature (`work` → `features/jobs`); its state is opaque to the host (no host-owned schema, no migrations, no routes) | `cacher`+`Memory`, `email`+`Console`/`SMTP`, `notify`+`Console`/`MailerBridge`, `ratelimiter`+`Memory`, `filestorage`+`Disk`, `workers` (pool + `Runner[T]`), `work` (no default) | a config value — the swap is invisible outside the process |
-| **integration** | a third-party backend for a port; isolates exactly one external dependency — a third-party library or an external vendor's live API contract — **or implements one sdk capability port by composing other sdk packages** (zero external deps, never importing features/, examples/, or another integration; guard G13; `notify/mailer`, 2026-07-10); one module | `datastores/turso`, `datastores/pgxdb`, `kvstores/goredis` | a module import in the host's `main` |
-| **feature** | a mountable domain module: own entities, **own durable schema + migrations**, and/or **own route surface**; its core module requires **sdk only** (FS1, 2026-07-07) | `cms`, `auth`, `jobs`; next: `events` | `NewService` + a `svc.Register` call |
-| **store module** | a feature's store implementation — SQL + migrations written against one driver package's API (`stores/<package>`) | `cms/stores/turso`, `cms/stores/pgx` | a module import + one `Open` call |
-| **views module** | a feature's bundled presentation default — the implementation of the core's `Views` port, written against one view package's API (`views/<package>`; FS3, 2026-07-07 — amends R6's four-kind table). Nil `Config.Views` → the feature's HTML surface is not registered, uniformly | `cms/views/goth` (landed at feature-standard B2, 2026-07-07; migrated templ→ui/goth at ui-goth GOTH-7.3, 2026-07-18) | a module import + one `Config` field |
-| **workshop tool** | a developer-time tool that EMITS the other kinds' anatomies and never links them (guard G11: nothing imports `workshop/`, workshop imports no feature/example); its output is verified by scaffold-compile tests inside `make check`, not by runtime coupling | `workshop/gopernicus` (the scaffolding CLI: `init` / `new feature` / `db` verbs; workshop-v2-scaffolding, 2026-07-09) | a `go install` — never a runtime dependency |
-| **UI implementation** | a reusable presentation system for ONE rendering/runtime family (ui-goth GOTH-0.2, 2026-07-17): it owns view-library dependencies, semantic tokens, primitives/components, interaction controllers, and distributable assets, and owns NO domain schema and NO routes. Its `go.mod` may require its own view/runtime libraries (templ and its pinned inputs) plus `sdk`; it never imports a feature, integration, example, or workshop package (guard G17). A feature reaches a UI implementation only through that feature's own `views/<pkg>` adapter module — never the reverse; the UI implementation never registers routes, installs middleware, or writes HTTP response headers (the host composes assets + route registration) | `ui/goth` (templ + plain CSS + Alpine + optional HTMX); later `ui/react`, `ui/vue` | a host/view-adapter import plus theme/bundle configuration |
+| **sdk facility** | a capability **port** + a conformance suite, usually with a first-party stdlib default — defaults are OPTIONAL (sdk-work-protocol, 2026-07-13): the implementation of record may instead be an integration (`oauth`) or a pocket (`work` → `pockets/jobs`); its state is opaque to the host (no host-owned schema, no migrations, no routes) | `cacher`+`Memory`, `email`+`Console`/`SMTP`, `notify`+`Console`/`MailerBridge`, `ratelimiter`+`Memory`, `filestorage`+`Disk`, `workers` (pool + `Runner[T]`), `work` (no default) | a config value — the swap is invisible outside the process |
+| **integration** | a third-party backend for a port; isolates exactly one external dependency — a third-party library or an external vendor's live API contract — **or implements one sdk capability port by composing other sdk packages** (zero external deps, never importing pockets/, examples/, or another integration; guard G13; `notify/mailer`, 2026-07-10); one module | `datastores/turso`, `datastores/pgxdb`, `kvstores/goredis` | a module import in the host's `main` |
+| **pocket** | a mountable domain module: own entities, **own durable schema + migrations**, and/or **own route surface**; its core module requires **sdk only** (FS1, 2026-07-07) | `cms`, `auth`, `jobs`; next: `events` | `NewService` + a `svc.Register` call |
+| **store module** | a pocket's store implementation — SQL + migrations written against one driver package's API (`stores/<package>`) | `cms/stores/turso`, `cms/stores/pgx` | a module import + one `Open` call |
+| **views module** | a pocket's bundled presentation default — the implementation of the core's `Views` port, written against one view package's API (`views/<package>`; FS3, 2026-07-07 — amends R6's four-kind table). Nil `Config.Views` → the pocket's HTML surface is not registered, uniformly | `cms/views/goth` (landed at feature-standard B2, 2026-07-07; migrated templ→ui/goth at ui-goth GOTH-7.3, 2026-07-18) | a module import + one `Config` field |
+| **workshop tool** | a developer-time tool that EMITS the other kinds' anatomies and never links them (guard G11: nothing imports `workshop/`, workshop imports no pocket/example); its output is verified by scaffold-compile tests inside `make check`, not by runtime coupling | `workshop/gopernicus` (the scaffolding CLI: `init` / `new pocket` / `db` verbs; workshop-v2-scaffolding, 2026-07-09) | a `go install` — never a runtime dependency |
+| **UI implementation** | a reusable presentation system for ONE rendering/runtime family (ui-goth GOTH-0.2, 2026-07-17): it owns view-library dependencies, semantic tokens, primitives/components, interaction controllers, and distributable assets, and owns NO domain schema and NO routes. Its `go.mod` may require its own view/runtime libraries (templ and its pinned inputs) plus `sdk`; it never imports a pocket, integration, example, or workshop package (guard G17). A pocket reaches a UI implementation only through that pocket's own `views/<pkg>` adapter module — never the reverse; the UI implementation never registers routes, installs middleware, or writes HTTP response headers (the host composes assets + route registration) | `ui/goth` (templ + plain CSS + Alpine + optional HTMX); later `ui/react`, `ui/vue` | a host/view-adapter import plus theme/bundle configuration |
 
 The two litmus tests: **if swapping the adapter changes what the host must
 migrate, it's a store module per implementation; if the swap is invisible outside
 the process boundary, it's one port with swappable backends.** And: **needs
-its own migrations or routes → feature; pure behavior a consumer calls →
-sdk facility.** Features never fork into variants — optional capability is a
+its own migrations or routes → pocket; pure behavior a consumer calls →
+sdk facility.** Pockets never fork into variants — optional capability is a
 nil-safe port field, wired (or not) in the host's `main`.
 
 **UI-implementation dependency arrows (ui-goth GOTH-0.2, 2026-07-17).** The
-seventh kind sits at the top-level `ui/` family — neither a feature nor an
+seventh kind sits at the top-level `ui/` family — neither a pocket nor an
 integration — because it is a reusable presentation system that owns no domain
 schema and no routes. The arrows only ever point outward-and-down:
 
 ```
-feature core  <--- feature views/<pkg> adapter ---> ui/goth ---> templ/runtime
+pocket core  <--- pocket views/<pkg> adapter ---> ui/goth ---> templ/runtime
       ^                       ^                        ^
       |                       |                        |
       +---------------------- host -------------------+
@@ -266,23 +266,23 @@ feature core  <--- feature views/<pkg> adapter ---> ui/goth ---> templ/runtime
 ```
 
 - a UI implementation → its own view/runtime libraries (templ + pinned inputs)
-  and `sdk`, never a feature/integration/example/workshop (guard G17);
-- a feature's `views/<pkg>` adapter → its feature core + `sdk` + `ui/goth`;
-- a host → selected features, selected view adapters, `ui/goth`, and `sdk`;
+  and `sdk`, never a pocket/integration/example/workshop (guard G17);
+- a pocket's `views/<pkg>` adapter → its pocket core + `sdk` + `ui/goth`;
+- a host → selected pockets, selected view adapters, `ui/goth`, and `sdk`;
 - only the host registers an asset route and chooses the public asset base URL,
-  and only the host/owning feature writes HTTP response/security headers — the
+  and only the host/owning pocket writes HTTP response/security headers — the
   UI implementation exposes assets, renderers, and requirements, never routes. A
   host maps the bundle's deterministic `Requirements` into its own CSP header; a
-  security-sensitive feature (authentication) instead has its `views/goth` adapter
-  map `Requirements` into the feature's technology-neutral resource policy
-  (`HTMLPolicy()`), so the feature core stays view-technology-free. See
+  security-sensitive pocket (authentication) instead has its `views/goth` adapter
+  map `Requirements` into the pocket's technology-neutral resource policy
+  (`HTMLPolicy()`), so the pocket core stays view-technology-free. See
   `ui/goth/README.md` §11 for the adopter recipes.
 
 **`ui/` versus app-local `internal/inbound/views/`.** The Inbound anatomy below
 reserves `internal/inbound/views/` as a host's PRIVATE presentation tree — its
 shared `Shell`/layouts and its own bespoke kit, sealed by Go's `internal/`. The
 top-level `ui/` family is the REUSABLE, importable counterpart: a host that wants
-the shared kit imports `ui/goth` (and the relevant feature `views/goth` adapters)
+the shared kit imports `ui/goth` (and the relevant pocket `views/goth` adapters)
 instead of growing a private kit under `internal/inbound/views/`. The two are not
 in tension — a host may consume `ui/goth` and still keep app-local overrides in
 `internal/inbound/views/` — but the importable theme root is `ui/`, and the
@@ -300,7 +300,7 @@ app-local tree is the escape hatch, not the framework's shared UI kit.
   (slog-style): `cacher.Memory`, `filestorage.Disk`, `email.SMTP` +
   `email.Console`. Defaults are optional, not definitional: `oauth` and
   `work` ship none (their implementations of record live in
-  `integrations/oauth/*` and `features/jobs` respectively).
+  `integrations/oauth/*` and `pockets/jobs` respectively).
   Its `go.mod` has **no `require` block** — "imports only the standard library" is
   enforced by the module boundary, not just a grep.
 - **`integrations/<category>/<tech>` — connectors.** Each isolates exactly **one
@@ -330,87 +330,87 @@ cacher, and the ratelimiter from one go-redis client; the module unit is the
 capability category by default (`oauth/`, `scheduling/`, `cryptids/`),
 tech-family category (`kvstores/`) when the library is genuinely multi-port.
 
-## Features
+## Pockets
 
-A **feature** (`features/<name>`) is a datastore-free core module plus one
+A **pocket** (`pockets/<name>`) is a datastore-free core module plus one
 store-adapter module per supported implementation — the pluggability unit that lets
 hosts with different datastores (`examples/cms` on Turso, `examples/minimal`
 in-memory, any Postgres host) mount the same domain logic. The supported
 store-implementation set is **{turso, pgx}**, shipped out of the box at each
-feature's v1 with behavioral parity proven by the feature's `storetest`
+pocket's v1 with behavioral parity proven by the pocket's `storetest`
 conformance suite rather than asserted (ratified DP1 — the charter's §3 has
-the full rule). `features/cms` demonstrates it: content, taxonomy, menus,
+the full rule). `pockets/cms` demonstrates it: content, taxonomy, menus,
 media, and messaging, with ports and entities public, services + HTTP
-internal (`features/cms/internal/*`), and both store implementations passing one
+internal (`pockets/cms/internal/*`), and both store implementations passing one
 suite.
 
-**The contract (`sdk/feature`).** A feature reaches its host only through a
+**The contract (`sdk/pocket`).** A pocket reaches its host only through a
 narrow route mount plus explicit dependencies — no service locator, no `init()`
 registration:
 
 ```go
-// RouteRegistrar is the inbound mount point a feature uses to register its HTTP
+// RouteRegistrar is the inbound mount point a pocket uses to register its HTTP
 // routes. web.WebHandler satisfies it implicitly, so the host passes its router
-// without the feature importing the concrete handler.
+// without the pocket importing the concrete handler.
 type RouteRegistrar interface {
 	Handle(method, path string, handler http.HandlerFunc, middleware ...web.Middleware)
 }
 
-// Mount is the narrow, typed context handed to a feature's Register.
+// Mount is the narrow, typed context handed to a pocket's Register.
 type Mount struct {
 	Router RouteRegistrar
 	Logger *slog.Logger
 }
 ```
 
-(quoted from `sdk/feature/feature.go`)
+(quoted from `sdk/pocket/pocket.go`)
 
-**Feature anatomy.** A feature module (`features/<name>`) requires **sdk
+**Pocket anatomy.** A pocket module (`pockets/<name>`) requires **sdk
 only** in its `go.mod` (FS1, ratified 2026-07-07 — the same structural move
 as sdk's empty go.mod, machine-checked in `make check`) and never imports
 `integrations/`, `examples/`, or its own `stores/`/`views/`; its public
 packages are ports + entities, its services and HTTP are `internal/`.
 Anything carrying a third-party dependency ships as a per-concern sibling
 module: persistence defaults in `stores/<package>`, presentation defaults in
-`views/<package>` (FS3/FS4 — a feature has a `views/` only if it has HTML;
+`views/<package>` (FS3/FS4 — a pocket has a `views/` only if it has HTML;
 nil `Config.Views` → the HTML surface is not registered). The host supplies
 a `Repositories` struct (a store adapter module or its own implementation —
 see `examples/minimal`'s `internal/memstore`) and a `Config` struct for
 view/infrastructure overrides, then builds and mounts per FS2 (ratified
 2026-07-07, superseding the earlier single-`Register(mount, repos, cfg)`
 contract): `svc, err := name.NewService(repos, cfg)` — the public `Service`
-is the feature's **driving surface**, its use-cases promoted by thin
+is the pocket's **driving surface**, its use-cases promoted by thin
 delegation — and `svc.Register(mount)` mounts the shipped HTTP layer, an
 optional convenience adapter a host may skip entirely in favor of its own
 handlers over the Service.
 
-**Migrations (D4: scaffold-and-own).** A feature store's SQL is scaffolded
+**Migrations (D4: scaffold-and-own).** A pocket store's SQL is scaffolded
 into the host's own migration tree (e.g. `examples/cms/workshop/migrations`)
 and applied by the host's own runner, pre-boot — never by the framework at
 startup. The host owns the merged, ordered migration stream for each database
 directory, following the original `workshop/migrations/{db}` model.
 
-`examples/minimal` is the standing proof that a host can adopt a feature with
+`examples/minimal` is the standing proof that a host can adopt a pocket with
 **no datastore driver in its module graph at all** — its `Repositories` are
 backed by an in-memory store.
 
-**The full contract, ratified.** [`features/README.md`](features/README.md) is
-the charter: feature anatomy, the authoring checklist for the next feature, and
+**The full contract, ratified.** [`pockets/README.md`](pockets/README.md) is
+the charter: pocket anatomy, the authoring checklist for the next pocket, and
 the four contract decisions closed in phase 3 — route namespacing
-(`feature.PrefixRegistrar` lets a host relocate a feature under a prefix;
-verified working for a feature that owns its whole route surface, with a
-documented limitation where a feature's own views hardcode absolute links),
-cross-feature dependencies (never import another feature — declare a port,
+(`pocket.PrefixRegistrar` lets a host relocate a pocket under a prefix;
+verified working for a pocket that owns its whole route surface, with a
+documented limitation where a pocket's own views hardcode absolute links),
+cross-pocket dependencies (never import another pocket — declare a port,
 the host wires an implementation), `Mount`'s compatible-growth policy (narrow
 ports only, named candidates, never a service locator), and the nested-module
 release/tagging procedure (see [`RELEASING.md`](RELEASING.md)).
 
 ## The app pattern (hexagonal) — for a host's own app-local domains
 
-Not every domain belongs in a reusable feature module — a host may have
+Not every domain belongs in a reusable pocket module — a host may have
 app-local domains of its own, built the same hexagonal way. (No host in this
 repo currently has one; both `examples/cms` and `examples/minimal` are thin
-hosts around the `features/cms` feature. This section documents the pattern
+hosts around the `pockets/cms` pocket. This section documents the pattern
 for when one appears.) Within an app, dependencies point **inward** to the
 hexagon (`internal/logic`); everything ultimately stands on `sdk`. This
 `internal/logic` is a **pure hexagon that imports only `sdk`** — distinct from
@@ -434,7 +434,7 @@ directly (the ambiguity this design fixes structurally via module boundaries).
 | `internal/outbound/` | **app-specific** driven adapters implementing domain ports: `repositories/`, … | driven / secondary | `internal/logic`, `sdk`, `integrations` |
 
 Go's `internal/` keeps the app's hexagon and adapters private to the app; the
-framework modules (`sdk`, `integrations/*`, `features/*`) never reach into them.
+framework modules (`sdk`, `integrations/*`, `pockets/*`) never reach into them.
 
 ### Inbound anatomy — inside `internal/inbound/` (ratified 2026-07-08)
 
@@ -491,22 +491,22 @@ internal/inbound/
 - **The maximal flatten** (a gopernicus-side clarification of the Segovia
   text): a single-resource, single-transport domain with a small handler
   set may keep its handlers in `routes.go` itself —
-  `features/events/internal/inbound/events/routes.go` is the blessed
+  `pockets/events/internal/inbound/events/routes.go` is the blessed
   example. The never-split rule constrains the route *table*, not the
   co-residence of a few handlers.
-- **Features mirror the file anatomy, not the tree** (D1, ratified
-  2026-07-08). A feature is its one domain, so the `domains/` level
-  flattens to `internal/inbound/<feature>/`
-  (`features/cms/internal/inbound/cms/`), carrying the same file anatomy
+- **Pockets mirror the file anatomy, not the tree** (D1, ratified
+  2026-07-08). A pocket is its one domain, so the `domains/` level
+  flattens to `internal/inbound/<pocket>/`
+  (`pockets/cms/internal/inbound/cms/`), carrying the same file anatomy
   with a `Mount` dispatcher in `routes.go` and per-resource
   deny-by-absence `mountX` helpers living in their resource files. `http/`
-  keeps one meaning on both sides of the line — plumbing — and a feature
+  keeps one meaning on both sides of the line — plumbing — and a pocket
   has no `http/` until real plumbing appears. The global views tree and
-  co-located `templates/` are **app-only**: a feature core requires sdk
+  co-located `templates/` are **app-only**: a pocket core requires sdk
   only (FS1), so its render port lives in the core and its bundled default
-  is the `views/<pkg>` sibling module (FS3); the feature theming seam is
+  is the `views/<pkg>` sibling module (FS3); the pocket theming seam is
   embed-the-sibling-default (live override: `examples/cms/internal/theme/`).
-  See `features/README.md` §2.
+  See `pockets/README.md` §2.
 
 **`internal/outbound` vs `integrations`.** An `integration` is the *reusable*
 connection/client to an external system (the turso connector). `internal/outbound`
@@ -515,15 +515,15 @@ repository's SQL + schema). A connector that fully implements an `sdk` facility
 port (e.g. a gcs filestore → `sdk/capabilities/filestorage`) needs **no** `internal/outbound`
 code — the app just wires it in `cmd`.
 
-**Repositories: app-specific vs feature store adapter.** A repository is either
+**Repositories: app-specific vs pocket store adapter.** A repository is either
 *app-specific* (its SQL belongs to one app → `internal/outbound`) **or** a
-*feature store adapter* for a reusable domain (its SQL belongs to the feature →
-`features/<name>/stores/<package>`, its own module). The moment a domain becomes a
-reusable feature module, its store is **not** host-app code — it is a feature
+*pocket store adapter* for a reusable domain (its SQL belongs to the pocket →
+`pockets/<name>/stores/<package>`, its own module). The moment a domain becomes a
+reusable pocket module, its store is **not** host-app code — it is a pocket
 store adapter module, so a host that brings a different datastore never pulls the
-feature's driver into its module graph. The CMS feature demonstrates this: the
-datastore-free `features/cms` core depends on its repository ports, and
-`features/cms/stores/turso` is the separate module that supplies the libSQL
+pocket's driver into its module graph. The CMS pocket demonstrates this: the
+datastore-free `pockets/cms` core depends on its repository ports, and
+`pockets/cms/stores/turso` is the separate module that supplies the libSQL
 implementation + migrations.
 
 ## The one rule
@@ -540,15 +540,15 @@ makes that structural.
 | the port is… | defined in… | default impl | external impl |
 |---|---|---|---|
 | framework facility (cache, file storage, email, …) | `sdk/<concern>` | `sdk/<concern>` (stdlib default — `cacher.Memory`, `filestorage.Disk`, `email.SMTP`/`Console`) | `integrations/<category>/<tech>` (own module, e.g. gcs/redis/SaaS) |
-| app contract (post repository, asset store with CMS rules) | `internal/logic/domains/<domain>` | — | `internal/outbound/<kind>/<tech>` (app-specific) **or** `features/<name>/stores/<package>` (feature store adapter module, for a reusable domain) |
+| app contract (post repository, asset store with CMS rules) | `internal/logic/domains/<domain>` | — | `internal/outbound/<kind>/<tech>` (app-specific) **or** `pockets/<name>/stores/<package>` (pocket store adapter module, for a reusable domain) |
 
 The contract lives with the code that **consumes** it, never with the code that
 implements it — as the DEFAULT. The one exception is a **ratified platform
 protocol** (sdk-work-protocol, 2026-07-13): a shape that passes all three
 graduation gates (`sdk/README.md` admission, the five-point test below, and
-`features/README.md` §5's five criteria) moves into sdk as canonical
-vocabulary + contract, and a feature may be its implementation of record —
-`sdk/capabilities/work` implemented by `features/jobs` is the exemplar.
+`pockets/README.md` §5's five criteria) moves into sdk as canonical
+vocabulary + contract, and a pocket may be its implementation of record —
+`sdk/capabilities/work` implemented by `pockets/jobs` is the exemplar.
 
 ## sdk vs internal/logic — the test
 
@@ -562,7 +562,7 @@ domain port):
 5. It stays useful without knowing CMS-specific domain concepts.
 
 This five-point test is one of the three conjunctive graduation gates for a
-shape leaving a feature-declared port (see "Protocols and feature
+shape leaving a pocket-declared port (see "Protocols and pocket
 relationships" above); passing it alone never admits a contract into sdk.
 
 `sdk` is meant to be **opinionated** about platform semantics and defaults
@@ -595,7 +595,7 @@ internal/logic/
 ### Content vs. structured data — the Registry model
 
 CMS **content** does not follow the typed-aggregate shape above. It uses the
-**Registry model** (see `features/cms`, plan `cms-content-engine`): all content —
+**Registry model** (see `pockets/cms`, plan `cms-content-engine`): all content —
 Articles, Pages, and host-registered custom types — is one dynamic
 `content.Entry` on a frozen spine (`entries`) plus EAV custom fields
 (`entry_fields`). Content **types** are registered as data in Go (`Article` and
@@ -608,7 +608,7 @@ the `content.Registry`.
 The rule: **content rides the shared Entry/EAV rail; genuinely structured,
 queryable data (real columns, indexes, FKs) is a normal typed app domain** built
 the hexagonal way shown above (`internal/logic/domains/<domain>` + `internal/outbound`
-+ its own migrations), *outside* the CMS feature. If a custom field needs to be
++ its own migrations), *outside* the CMS pocket. If a custom field needs to be
 filtered/sorted in SQL, it has outgrown EAV — promote it to a spine concern or
 build it as a real app domain. Taxonomy/menus/media/messaging stay typed.
 
@@ -647,7 +647,7 @@ reused by more than one inbound adapter.
   (`pgx`, `goredis`, `robfig-cron`, future `sqlx`), never the generic protocol
   (`postgres`) — a store or connector is written against one package's custom
   API, and that API is why the package was chosen (R-KV2/R-KV3, 2026-07-06).
-  Implementation-independence lives in the feature's **ports**, never in
+  Implementation-independence lives in the pocket's **ports**, never in
   adapter naming: a future sqlx-based store is a new `stores/sqlx` module, not
   an in-place rewrite of `stores/pgx`.
 

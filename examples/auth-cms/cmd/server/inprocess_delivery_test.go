@@ -11,11 +11,11 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
-	auth "github.com/gopernicus/gopernicus/features/authentication"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
-	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 // This file is the AV3D-4.5 REAL-INTERACTION proof for DeliveryMode "in_process": it
@@ -99,7 +99,7 @@ func mountInProcess(t *testing.T, svc *auth.Service) http.Handler {
 	t.Helper()
 	router := web.NewWebHandler(web.WithLogging(quietLog()))
 	bus := sdkevents.NewMemory(sdkevents.WithLogger(quietLog()))
-	if err := svc.Register(feature.Mount{Router: router, Logger: quietLog(), Events: bus}); err != nil {
+	if err := svc.Register(pocket.Mount{Router: router, Logger: quietLog(), Events: bus}); err != nil {
 		t.Fatalf("auth.Register: %v", err)
 	}
 	return router

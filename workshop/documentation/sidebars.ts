@@ -29,7 +29,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'architecture/repository-layout',
         'architecture/hexagonal-apps',
-        'architecture/feature-contract',
+        'architecture/pocket-contract',
       ],
     },
 
@@ -46,14 +46,14 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
-      label: 'Feature modules',
-      link: {type: 'doc', id: 'features/overview'},
+      label: 'Pockets',
+      link: {type: 'doc', id: 'pockets/overview'},
       items: [
-        'features/authentication',
-        'features/authorization',
-        'features/cms',
-        'features/events',
-        'features/jobs',
+        'pockets/authentication',
+        'pockets/authorization',
+        'pockets/cms',
+        'pockets/events',
+        'pockets/jobs',
       ],
     },
     'integrations/catalog',
@@ -77,7 +77,7 @@ const sidebars: SidebarsConfig = {
       link: {type: 'generated-index', title: 'Guides'},
       items: [
         'guides/compose-host',
-        'guides/create-feature',
+        'guides/create-pocket',
         'guides/persistence',
         'guides/testing',
       ],

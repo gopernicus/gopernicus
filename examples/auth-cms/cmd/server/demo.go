@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	auth "github.com/gopernicus/gopernicus/features/authentication"
-	"github.com/gopernicus/gopernicus/features/authentication/domain/securityevent"
-	authorization "github.com/gopernicus/gopernicus/features/authorization"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/securityevent"
+	authorization "github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
@@ -20,7 +20,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
-// registerDemoRoutes mounts the host-local demo routes (host code, NOT feature
+// registerDemoRoutes mounts the host-local demo routes (host code, NOT pocket
 // surface). Every route is READ-ONLY: AZ3-4.1 removed the session-only
 // authorization-mutation routes (POST /demo/roles/{assign,unassign}, POST
 // /demo/admin/bootstrap), because a shipped HTTP route must never mutate authorization
@@ -40,7 +40,7 @@ import (
 //   - GET /demo/my-projects — RequirePrincipal-gated: the relationship kind's
 //     LookupResources enumeration (demonstration (b)); {admin, ids} (admin flag
 //     is the host-composed platform-admin recipe, not an engine bypass).
-//   - GET /demo/audit — RequirePrincipal + ROLE-MODEL gated: the feature's
+//   - GET /demo/audit — RequirePrincipal + ROLE-MODEL gated: the pocket's
 //     coordinate gate asks `audit` on project/demo, a pair the RoleModel owns
 //     (the `auditor` role grants it), so the host writes no role check of its own.
 //     200 with a driven ListRoleAssignmentsByResource read-back, 403 without a
@@ -365,7 +365,7 @@ func refreshTTL() time.Duration {
 	return durationEnv("AUTH_REFRESH_TTL")
 }
 
-// durationEnv parses env as a Go duration, returning 0 (defer to the feature's
+// durationEnv parses env as a Go duration, returning 0 (defer to the pocket's
 // Config default) when unset, unparseable, or non-positive.
 func durationEnv(env string) time.Duration {
 	v := environment.GetEnvOrDefault(env, "")
