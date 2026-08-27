@@ -105,7 +105,11 @@ composition leaves sdk entirely (a composing integration —
 `integrations/notify/mailer` is the exemplar). Guard G12 enforces the
 law over production and test code alike; tests use root/stdlib fakes or
 package-local contract checks rather than importing a peer tier. G13 keeps
-integrations pointing outward-only.
+integrations pointing outward-only. G21 (web-crud-list-request, 2026-08-27)
+pins one stdlib edge the module-path greps cannot see: `foundation/crud` may
+import `net/url` (its list-query parser reads `url.Values`) but never
+`net/http`, because every store adapter imports `crud` and carries whatever
+it imports.
 
 ## Protocols and pocket relationships (sdk-work-protocol, 2026-07-13)
 
