@@ -17,6 +17,8 @@ Every example is a real host module, not documentation-only pseudocode. Together
 
 The repository does not currently include a React host module. The [React and TanStack guide](ui/react.md) shows the corresponding API boundary and client code.
 
+`examples/cms`, `examples/minimal`, and `examples/jobs-minimal` are the conforming worked examples: once their host-pocket moves land they are the hosts held to the [Host contract](architecture/host-contract.md) by this repository's own guards, and they are the layouts to copy. `examples/auth-cms` and `examples/goth-showcase` are named, dated exemptions — read them for what they prove, not for how they are arranged.
+
 ## Minimal CMS
 
 Start here. `examples/minimal` gives the CMS pocket a host-local memory store and registers a custom Product content type without a migration. It also demonstrates embedded GOTH asset serving.
@@ -55,6 +57,10 @@ This example needs Turso credentials. Copy the repository `.env.example`, fill t
 - host adapters bridge seams that intentionally remain consumer-declared.
 
 Use this example when you need exact ordering for service construction, middleware, event subscriptions, worker pools, and shutdown.
+
+**It is the authentication conformance harness, not a layout reference** (ratified 2026-08-27). It exists to prove the authentication and authorization surface end to end — OAuth, machine identity, JWT bearer, security-event audit, ReBAC-decoupled invitations, the identity/challenge rail, two delivery modes — with zero infrastructure, and it is the most heavily tested host in the repository.
+
+Do not read it for layout. Its composition root carries provider behavior that the [Host contract](architecture/host-contract.md) places in a host pocket or an outbound adapter, and it grows several ad-hoc packages directly under `internal/` that H0 makes findings. That is known, dated debt with a named follow-up plan, not a pattern to copy: the shape to copy is the contract's layout section, and the worked examples are `cms`, `minimal`, and `jobs-minimal`.
 
 ## Jobs in memory
 

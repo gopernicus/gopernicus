@@ -27,6 +27,8 @@ Directory names are guidance; the dependency direction is the contract.
 
 ## Logic has two tiers
 
+The two tiers and the rules between them (H2 and H3) are normative for a host in the [Host contract](host-contract.md).
+
 ### Domain logic
 
 `internal/logic/domains/<domain>` owns the language and invariants of one domain:
@@ -102,6 +104,8 @@ internal/outbound/providers/stripe/
 Use a reusable Gopernicus integration where its generic seam fits. Keep app-specific mapping in the host. A database connector may own transactions and error mapping; an order repository still owns order SQL.
 
 ## Composition belongs in `cmd`
+
+H10 of the [Host contract](host-contract.md) holds the composition root to wiring only.
 
 The composition root should make these choices visible:
 

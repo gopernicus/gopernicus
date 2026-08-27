@@ -93,6 +93,11 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full detail, including the
 pocket contract (`sdk/pocket`), the app-hexagon pattern (`internal/logic`),
 and the Registry content model.
 
+The host side of that boundary has its own charter:
+[examples/README.md](examples/README.md) is **the host contract** — rules
+H0–H10 for a host's layout, imports, host pockets, and composition root, the
+sibling of [pockets/README.md](pockets/README.md).
+
 ## Quickstart
 
 Zero external infrastructure — an in-memory store, no libsql in the build:
