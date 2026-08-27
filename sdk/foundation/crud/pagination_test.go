@@ -1,6 +1,7 @@
 package crud
 
 import (
+	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
@@ -334,5 +335,74 @@ func TestParseListRequest_CursorAndOffsetRejected(t *testing.T) {
 	}
 	if !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Errorf("err = %v, want wrapping sdk.ErrInvalidInput", err)
+	}
+}
+
+// TestNilItemsNormalized pins D4: every SDK page constructor and bridge turns a
+// nil item slice into an empty one, so an empty page can never marshal
+// "items":null.
+func TestNilItemsNormalized(t *testing.T) {
+	if got := Items[string](nil).Items; got == nil || len(got) != 0 {
+		t.Errorf("Items(nil).Items = %#v, want empty non-nil", got)
+	}
+
+	if got := MapItems[int, string](nil, strconv.Itoa).Items; got == nil || len(got) != 0 {
+		t.Errorf("MapItems(nil).Items = %#v, want empty non-nil", got)
+	}
+
+	trimmed, err := TrimPage[string](nil, 10, encTest)
+	if err != nil {
+		t.Fatalf("TrimPage: %v", err)
+	}
+	if trimmed.Items == nil || len(trimmed.Items) != 0 {
+		t.Errorf("TrimPage(nil).Items = %#v, want empty non-nil", trimmed.Items)
+	}
+
+	if got := MapPage(Page[int]{}, strconv.Itoa).Items; got == nil || len(got) != 0 {
+		t.Errorf("MapPage(zero).Items = %#v, want empty non-nil", got)
+	}
+
+	mapped, err := MapPageErr(Page[int]{}, func(n int) (string, error) { return strconv.Itoa(n), nil })
+	if err != nil {
+		t.Fatalf("MapPageErr: %v", err)
+	}
+	if mapped.Items == nil || len(mapped.Items) != 0 {
+		t.Errorf("MapPageErr(zero).Items = %#v, want empty non-nil", mapped.Items)
+	}
+}
+
+// TestPageWireShape proves the bounded page on the wire: only "items", and an
+// empty one is [] — no has_more, no next_cursor, no total.
+func TestPageWireShape(t *testing.T) {
+	trimmed, err := TrimPage[string](nil, 10, encTest)
+	if err != nil {
+		t.Fatalf("TrimPage: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		page any
+		want string
+	}{
+		{"items_nil", Items[string](nil), `{"items":[]}`},
+		{"map_items", MapItems([]int{1, 2}, strconv.Itoa), `{"items":["1","2"]}`},
+		{"trim_page_nil", trimmed, `{"items":[]}`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b, err := json.Marshal(tc.page)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			if got := string(b); got != tc.want {
+				t.Fatalf("json = %s, want %s", got, tc.want)
+			}
+			for _, key := range []string{"has_more", "next_cursor", "previous_cursor", "has_prev", "total"} {
+				if strings.Contains(string(b), key) {
+					t.Errorf("json = %s, must not carry %q", b, key)
+				}
+			}
+		})
 	}
 }

@@ -283,6 +283,10 @@ func (r ListRequest) NormalizedLimit(l Limits) int {
 // {"items":[…]}. Clients must read an absent has_more/next_cursor as
 // false/empty — absence is the normal end-of-list signal, not an error.
 type Page[T any] struct {
+	// Items is nil-normalized by the SDK constructors and bridges — build a page
+	// with Items, MapItems, TrimPage, MapPage, or MapPageErr and an empty page
+	// marshals "items":[]. A directly constructed Page[T]{} is caller-owned and
+	// still marshals "items":null.
 	Items          []T    `json:"items"`
 	NextCursor     string `json:"next_cursor,omitempty"`
 	HasMore        bool   `json:"has_more,omitempty"`

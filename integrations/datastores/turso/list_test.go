@@ -2,6 +2,7 @@ package turso
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -442,5 +443,31 @@ func TestList_RejectsRawExpressionPKOnFirstPage(t *testing.T) {
 
 	if _, err := List(ctx, db, q, crud.ListRequest{Limit: 2}); !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Fatalf("raw-expression PK err = %v, want ErrInvalidInput", err)
+	}
+}
+
+// TestList_EmptyPageItemsNonNil: a list whose filter matches nothing comes back
+// with a non-nil Items slice. The connector accumulates rows into a `var items
+// []T` that stays nil when there are none; crud.TrimPage normalizes it, so an
+// empty page marshals "items":[] and never "items":null.
+func TestList_EmptyPageItemsNonNil(t *testing.T) {
+	db := newMemDB(t)
+	seedListItems(t, db)
+	ctx := context.Background()
+
+	p, err := List(ctx, db, listQueryFor("no-such-kind"), crud.ListRequest{Limit: 10})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if p.Items == nil || len(p.Items) != 0 {
+		t.Fatalf("Items = %#v, want empty non-nil", p.Items)
+	}
+
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(b), `"items":[]`) {
+		t.Fatalf("json = %s, want it to carry \"items\":[]", b)
 	}
 }
