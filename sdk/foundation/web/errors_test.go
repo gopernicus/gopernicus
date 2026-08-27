@@ -203,3 +203,35 @@ func TestErrSentinels(t *testing.T) {
 		})
 	}
 }
+
+// A crud parse rejection reaches web as a plain error wrapping the root
+// sdk.ErrInvalidInput sentinel: ErrFromDomain classifies it 400 with the
+// generic body, and ErrValidation is the path that carries its sentence.
+func TestParseRejection_StatusAndMessagePaths(t *testing.T) {
+	err := fmt.Errorf("rows value too large, must be at most 100: %w", sdk.ErrInvalidInput)
+
+	domain := ErrFromDomain(err)
+	if domain.Status != http.StatusBadRequest {
+		t.Errorf("ErrFromDomain status = %d, want 400", domain.Status)
+	}
+	if domain.Code != "bad_request" {
+		t.Errorf("ErrFromDomain code = %q, want bad_request", domain.Code)
+	}
+	if domain.Message != "invalid input" {
+		t.Errorf("ErrFromDomain message = %q, want the generic %q", domain.Message, "invalid input")
+	}
+
+	validation := ErrValidation(err)
+	if validation.Status != http.StatusBadRequest {
+		t.Errorf("ErrValidation status = %d, want 400", validation.Status)
+	}
+	if validation.Code != "bad_request" {
+		t.Errorf("ErrValidation code = %q, want bad_request", validation.Code)
+	}
+	if want := "rows value too large, must be at most 100: invalid input"; validation.Message != want {
+		t.Errorf("ErrValidation message = %q, want %q", validation.Message, want)
+	}
+	if !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Error("the synthetic error must keep matching sdk.ErrInvalidInput")
+	}
+}
