@@ -260,29 +260,28 @@ guard-workshop-boundary:
 	@! grep -rn --include='*.go' --exclude-dir=workshop '"github.com/gopernicus/gopernicus/workshop' . || { echo "ERROR (W1): a non-workshop module imports the scaffolding CLI — workshop/ emits hosts, it is never a runtime dependency"; exit 1; }
 	@! grep -rn --include='*.go' -E '"github.com/gopernicus/gopernicus/(pockets|examples)' workshop/ || { echo "ERROR (W1): workshop/ imports a pocket core or an example — the CLI templates them, it never links them"; exit 1; }
 
-# G12 (sdk-layering, 2026-07-10): the intra-sdk import law. Kernel = the root
+# G12 (sdk-layering, 2026-07-10; tests included 2026-08-27): the intra-sdk
+# import law. Kernel = the root
 # package (cycle-enforced against every subpackage that imports it; the grep
 # below is the primary enforcement for the rest). foundation/* may import the
 # ROOT only — FLAT, no foundation->foundation edges. capabilities/* may import
 # root + foundation — NEVER another capability. sdk/pocket is the ONE
-# sanctioned composer (unconstrained). Production code only: *_test.go is
-# exempt (the G6 precedent) — the deliberate env round-trip tests
-# (foundation/logging/logging_env_test.go, foundation/web/server_env_test.go)
-# are WHY the exemption exists.
+# sanctioned composer (unconstrained). The law applies to production and test
+# code alike: a test proves its package contract without coupling peer tiers.
 guard-sdk-layering:
 	@echo "== guard: sdk layering (kernel <- foundation <- capabilities <- pocket) =="
 	@! grep -n --include='*.go' '"github.com/gopernicus/gopernicus/sdk/' sdk/*.go 2>/dev/null || { echo "ERROR (G12a): the kernel (root package sdk) imports a subpackage"; exit 1; }
 	@fail=0; for d in sdk/foundation/*/; do \
 		x=$$(basename $$d); \
-		hits=$$(grep -rn --include='*.go' --exclude='*_test.go' -E '"github.com/gopernicus/gopernicus/sdk/(foundation|capabilities|pocket)' $$d \
+		hits=$$(grep -rn --include='*.go' -E '"github.com/gopernicus/gopernicus/sdk/(foundation|capabilities|pocket)' $$d \
 			| grep -vE '"github.com/gopernicus/gopernicus/sdk/foundation/'"$$x"'([\"/])' || true); \
-		if [ -n "$$hits" ]; then echo "ERROR (G12b): foundation/$$x imports a sibling tier or upward — foundation imports the root only:"; echo "$$hits"; fail=1; fi; \
+		if [ -n "$$hits" ]; then echo "ERROR (G12b): foundation/$$x imports a sibling tier or upward — foundation imports the root only, including in tests:"; echo "$$hits"; fail=1; fi; \
 	done; exit $$fail
 	@fail=0; for d in sdk/capabilities/*/; do \
 		x=$$(basename $$d); \
-		hits=$$(grep -rn --include='*.go' --exclude='*_test.go' -E '"github.com/gopernicus/gopernicus/sdk/(capabilities|pocket)' $$d \
+		hits=$$(grep -rn --include='*.go' -E '"github.com/gopernicus/gopernicus/sdk/(capabilities|pocket)' $$d \
 			| grep -vE '"github.com/gopernicus/gopernicus/sdk/capabilities/'"$$x"'([\"/])' || true); \
-		if [ -n "$$hits" ]; then echo "ERROR (G12c): capabilities/$$x imports another capability or sdk/pocket — cross-capability composition leaves sdk (integrations)"; echo "$$hits"; fail=1; fi; \
+		if [ -n "$$hits" ]; then echo "ERROR (G12c): capabilities/$$x imports another capability or sdk/pocket — including in tests, cross-capability composition leaves sdk (integrations)"; echo "$$hits"; fail=1; fi; \
 	done; exit $$fail
 
 # G13 (sdk-layering, 2026-07-10, folded steward finding): integrations never

@@ -3,13 +3,16 @@ package web
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
 )
+
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
 
 // mark returns middleware that appends its name to order and stamps a response
 // header, so a test can assert both that the middleware ran and where.
@@ -106,7 +109,7 @@ func TestWebHandler_GlobalMiddlewareWrapsHandleRaw(t *testing.T) {
 // registers a raw handler/pattern, not a bypass of host policy.
 func TestWebHandler_PanicsRecoversRawHandler(t *testing.T) {
 	h := NewWebHandler()
-	h.Use(Panics(logging.NewNoop()))
+	h.Use(Panics(discardLogger()))
 	h.HandleRaw("GET /openapi.json", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		panic("boom")
 	}))
@@ -202,7 +205,7 @@ func TestWebHandler_UseAfterRegistration(t *testing.T) {
 // through the global stack's wrappers.
 func TestWebHandler_FlushThroughGlobalMiddleware(t *testing.T) {
 	h := NewWebHandler()
-	h.Use(RequestID(), Logger(logging.NewNoop()), Panics(logging.NewNoop()))
+	h.Use(RequestID(), Logger(discardLogger()), Panics(discardLogger()))
 
 	var sendErr error
 	h.GET("/stream", func(w http.ResponseWriter, r *http.Request) {
@@ -228,7 +231,7 @@ func TestWebHandler_FlushThroughGlobalMiddleware(t *testing.T) {
 // reaches the real writer through the global stack.
 func TestWebHandler_HijackThroughGlobalMiddleware(t *testing.T) {
 	h := NewWebHandler()
-	h.Use(RequestID(), Logger(logging.NewNoop()), Panics(logging.NewNoop()))
+	h.Use(RequestID(), Logger(discardLogger()), Panics(discardLogger()))
 
 	var hijackErr error
 	h.GET("/hijack", func(w http.ResponseWriter, r *http.Request) {
