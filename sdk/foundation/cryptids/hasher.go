@@ -13,7 +13,7 @@ import (
 // hashing API keys for a constant-time lookup, for example.
 //
 // It is deliberately NOT for passwords: password hashing needs a slow, salted
-// algorithm. That belongs to the auth feature's PasswordHasher port and its
+// algorithm. That belongs to the auth pocket's PasswordHasher port and its
 // bcrypt integration (integrations/cryptids/bcrypt), not here.
 type SHA256Hasher struct{}
 

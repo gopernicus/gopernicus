@@ -1,5 +1,5 @@
 // Package menussvc holds the menus use-case service, kept internal so it is not
-// part of the feature's public SemVer surface (plan §5/B3). The public domain
+// part of the pocket's public SemVer surface (plan §5/B3). The public domain
 // types and MenuRepository interface stay in package menus.
 package menussvc
 

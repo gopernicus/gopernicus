@@ -1,7 +1,7 @@
-# features/jobs/stores/pgx
+# pockets/jobs/stores/pgx
 
-The jobs feature's **PostgreSQL** store adapter — the dialect sibling of
-`features/jobs/stores/turso`. Its own module so a host that brings a different
+The jobs pocket's **PostgreSQL** store adapter — the dialect sibling of
+`pockets/jobs/stores/turso`. Its own module so a host that brings a different
 datastore never pulls `pgx` into its module graph. It owns the SQL and the
 canonical migration files; the host owns its database lifecycle.
 

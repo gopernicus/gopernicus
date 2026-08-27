@@ -1,19 +1,19 @@
 # examples/cms
 
-A hand-written server-side-rendered CMS host, built on the `features/cms`
-feature module over the `sdk` framework kernel, persisted in Turso/libSQL,
+A hand-written server-side-rendered CMS host, built on the `pockets/cms`
+pocket module over the `sdk` framework kernel, persisted in Turso/libSQL,
 rendered through the [`ui/goth`](../../ui/goth/README.md) kit (templ + plain CSS)
-via the `features/cms/views/goth` adapter.
+via the `pockets/cms/views/goth` adapter.
 
 The host builds a `ui/goth` bundle (`uigoth.New(uigoth.Config{AssetBasePath:
 "/assets/goth"})`), serves its embedded fingerprinted assets under that path with
 `web.NewStaticFileServer(uigothassets.FS, web.WithAssetPrefix("dist/"))`, and passes
 the bundle to `cmsViews`. The admin CRUD pages render through the GOTH default; the
-public site is this host's custom theme (`internal/theme`, the feature's
+public site is this host's custom theme (`internal/theme`, the pocket's
 view-override seam) composing the same bundle. See `ui/goth/README.md` §11 for the
 full adopter guide.
 
-**Domains (from `features/cms`):** `content` (posts, hierarchical pages, and
+**Domains (from `pockets/cms`):** `content` (posts, hierarchical pages, and
 host-registered custom types via the Registry model), `taxonomy` (categories +
 tags), `menus` (nested nav), `media` (uploads), `messaging` (contact
 inquiries). **Surfaces:** an admin CRUD area and a themed public site
@@ -24,20 +24,20 @@ See [ARCHITECTURE.md](../../ARCHITECTURE.md) for the layering rule and
 
 ## Layout
 
-This app is a thin host: the CMS hexagon itself lives in the `features/cms`
+This app is a thin host: the CMS hexagon itself lives in the `pockets/cms`
 module, not here.
 
 ```
 cmd/server                 composition root — wires everything; the only place that names concrete adapters
-internal/theme             this host's custom public-site theme (the feature's view-override seam)
-workshop/migrations        host-owned migration runner — applies features/cms/stores/turso's scaffolded SQL pre-boot
-features/cms (module)      the hexagon — content, taxonomy, menus, media, messaging (services + ports); datastore-free
-features/cms/stores/turso  the Turso/libSQL store adapter module for features/cms (SQL + migrations)
+internal/theme             this host's custom public-site theme (the pocket's view-override seam)
+workshop/migrations        host-owned migration runner — applies pockets/cms/stores/turso's scaffolded SQL pre-boot
+pockets/cms (module)      the hexagon — content, taxonomy, menus, media, messaging (services + ports); datastore-free
+pockets/cms/stores/turso  the Turso/libSQL store adapter module for pockets/cms (SQL + migrations)
 integrations/              reusable third-party connectors — datastores/turso today
-sdk/                       stdlib-only kernel — config, logging, errs, web, repository, id, slug, filestorage, email, cacher, feature
+sdk/                       stdlib-only kernel — config, logging, errs, web, repository, id, slug, filestorage, email, cacher, pocket
 ```
 
-Dependencies point inward: `cmd` wires concrete adapters, the feature module
+Dependencies point inward: `cmd` wires concrete adapters, the pocket module
 never imports this app or `integrations/`, and everything ultimately stands on
 `sdk`. See the root [README.md](../../README.md) for the full 6-module map.
 
@@ -51,7 +51,7 @@ never imports this app or `integrations/`, and everything ultimately stands on
 
 - Go 1.26+
 - A Turso / libSQL database (remote). `templ` is pinned via the `tool`
-  directive in `features/cms/views/goth/go.mod` (where the `.templ` sources live
+  directive in `pockets/cms/views/goth/go.mod` (where the `.templ` sources live
   since the GOTH migration); `go tool templ` needs no global install.
 
 ## Environment
@@ -80,38 +80,38 @@ Run from the repo root (the `Makefile` covers all 6 modules):
 | `make run` | generate + migrate + `go run ./cmd/server` (this app) |
 | `make migrate` | applies `workshop/migrations` pre-boot (host-owned, separate from `run`'s server boot) |
 | `make test` | `go test ./...` per module |
-| `make check` | generate (fail on drift) + vet + build + test per module + the four layering guards |
+| `make check` | generate (fail on drift) + vet + build + test per module + the twenty layering guards |
 
 Migrations are scaffolded into `workshop/migrations/primary` from
-`features/cms/stores/turso` (D4: scaffold-and-own) and applied by this host's
+`pockets/cms/stores/turso` (D4: scaffold-and-own) and applied by this host's
 own runner — never by the framework at server boot.
 
 ## Integration tests
 
-The live-Turso integration test lives in the feature's store adapter module
+The live-Turso integration test lives in the pocket's store adapter module
 and is build-tagged, skipping without credentials:
 
 ```
-cd ../../features/cms/stores/turso && go test -tags=integration ./...   # needs TURSO_* env / .env
+cd ../../pockets/cms/stores/turso && go test -tags=integration ./...   # needs TURSO_* env / .env
 ```
 
 ## Layering guards
 
-Run from the repo root (`make guard` runs all four; each must print nothing):
+Run from the repo root (`make guard` runs all twenty; each must print nothing):
 
 ```
 grep -rn --include='*.go' -E '"gopernicus/' .                                         # no legacy import path
-grep -rn --include='*.go' -E '"github.com/gopernicus/gopernicus/(integrations|examples|features/cms/stores)' features/cms --exclude-dir=stores   # feature core stays adapter-free
+grep -rn --include='*.go' -E '"github.com/gopernicus/gopernicus/(integrations|examples|pockets/cms/stores)' pockets/cms --exclude-dir=stores   # pocket core stays adapter-free
 grep -rn --include='*.go' '"github.com/' sdk/ | grep -v '"github.com/gopernicus/gopernicus/sdk'          # sdk allows only internal sdk imports from github.com
 grep -rnE '"(cloud\.google\.com|golang\.org/x|gopkg\.in)/' --include='*.go' sdk/                        # sdk is stdlib-only
-grep -rn --include='*.go' -E '"github.com/gopernicus/gopernicus/(features|integrations|examples)' sdk/                        # sdk never imports outward
+grep -rn --include='*.go' -E '"github.com/gopernicus/gopernicus/(pockets|integrations|examples)' sdk/                        # sdk never imports outward
 ```
 
 `sdk` is the adapter between the standard library and the application: it
 imports **only** the standard library (and other `sdk` packages). Concrete
 third-party drivers live in **`integrations/`** (reusable connectors, one
-external lib each). The `features/cms` hexagon is datastore-free — its store
-SQL lives in the separate `features/cms/stores/turso` module, which this host
+external lib each). The `pockets/cms` hexagon is datastore-free — its store
+SQL lives in the separate `pockets/cms/stores/turso` module, which this host
 depends on. The `templ` render seam in `sdk/foundation/web` takes a local `Renderer`
 interface that `templ.Component` satisfies implicitly, so `sdk` never imports
 `templ`.

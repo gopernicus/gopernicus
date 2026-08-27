@@ -17,7 +17,7 @@ import (
 )
 
 // defaultMigrationSource is the internal source name used for the host-owned
-// migration stream. The connector carries no feature/domain name.
+// migration stream. The connector carries no pocket/domain name.
 const defaultMigrationSource = "default"
 
 // legacySource is the placeholder source assigned to rows migrated from the old
@@ -36,7 +36,7 @@ type migrationSource struct {
 // Migrations are applied in filename order, in one transaction, and recorded in
 // schema_migrations with a checksum guard. Files prefixed with "_" are skipped.
 //
-// One database, one stream: a host exports every feature's migrations into a
+// One database, one stream: a host exports every pocket's migrations into a
 // single merged, filename-ordered directory and calls RunMigrations once per
 // database. All rows share one ledger source ("default"), so filenames must be
 // globally unique across the merged stream and are never renumbered — the

@@ -8,7 +8,7 @@ during that run. See [`UPGRADE.md` — Executed evidence](UPGRADE.md#executed-ev
 This is the *detection-and-repair protocol* the data-preserving adopter path is
 built from. It is intentionally
 NOT a file in the canonical migration tree — the canonical `0001`–`0004` are the
-greenfield final schema (folded clean because no `features/authorization` tag
+greenfield final schema (folded clean because no `pockets/authorization` tag
 exists). The full host upgrade runbook (backup, maintenance window, binary
 swap, migration export/apply order, rollback boundary, and the gain/lose/retain
 access assessment) is [`UPGRADE.md`](UPGRADE.md), which builds directly on this

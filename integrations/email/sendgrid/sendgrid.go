@@ -5,7 +5,7 @@
 // because it speaks one vendor's live API contract, which churns on SendGrid's
 // schedule, not sdk's; sdk defaults (Console, SMTP) must stay vendor-neutral.
 // It imports sdk/capabilities/email for the Sender vocabulary and sdk/errs for stable error
-// kinds — no feature and no other integration.
+// kinds — no pocket and no other integration.
 package sendgrid
 
 import (

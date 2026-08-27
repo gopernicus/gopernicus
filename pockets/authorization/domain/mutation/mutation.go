@@ -1,6 +1,6 @@
-// Package mutation is the public rim of the authorization feature's WRITE
+// Package mutation is the public rim of the authorization pocket's WRITE
 // contract — the atomic, idempotent, revisioned command vocabulary every store
-// adapter (features/authorization/stores/{turso,pgx}, the in-core memstore) and
+// adapter (pockets/authorization/stores/{turso,pgx}, the in-core memstore) and
 // the mutation service compose to. It is the security kernel of authorization
 // v3's write path: the doc comments here are NORMATIVE, and a store that
 // implements [MutationRepository] as detached read/check/write calls violates

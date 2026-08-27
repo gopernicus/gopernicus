@@ -1,11 +1,11 @@
-# features/events/stores/pgx
+# pockets/events/stores/pgx
 
-The events feature's **PostgreSQL** transactional-outbox store adapter — the
-dialect sibling of `features/events/stores/turso`. Its own module so a host that
+The events pocket's **PostgreSQL** transactional-outbox store adapter — the
+dialect sibling of `pockets/events/stores/turso`. Its own module so a host that
 brings a different datastore never pulls `pgx` into its module graph. It owns the
 SQL and the canonical migration files; the host owns its database lifecycle.
 
-It fills the events feature's one outbound port, `outbox.EntryRepository`, over
+It fills the events pocket's one outbound port, `outbox.EntryRepository`, over
 the `integrations/datastores/pgxdb` connector — `TIMESTAMPTZ` timestamps (postgres
 orders them natively; no lexicographic-`TEXT` convention needed), `JSON` payload,
 `event_id` as the primary key and the at-least-once de-dupe key (a duplicate
@@ -16,14 +16,14 @@ structure and port semantics do not.
 operators or indexes), and `JSON` preserves the caller's exact bytes while `JSONB`
 re-canonicalizes whitespace/key order. The shared `storetest` suite asserts a
 byte-exact payload round-trip, which only `JSON` satisfies — same decision and
-rationale as `features/jobs/stores/pgx` (jobs-v1 precedent), and a deliberate
+rationale as `pockets/jobs/stores/pgx` (jobs-v1 precedent), and a deliberate
 deviation from the design's illustrative `JSONB`.
 
 ## ⚠️ Prerequisite: apply the `events` migration source before wiring an appender
 
 The outbox table belongs to migration source **`events`**, distinct from
 `cms`/`auth`/`jobs`. The shared `(source, version)` migration ledger expresses
-**no ordering between sources**, so a host that scaffolds another feature's
+**no ordering between sources**, so a host that scaffolds another pocket's
 migrations but not this store's would fail at *runtime*, not boot.
 
 **`New(db)` guards against exactly that:** it probes for the `event_outbox` table
@@ -31,7 +31,7 @@ at construction (`pgxdb.ProbeTable`, qualified by the store's schema) and return
 `sdk.ErrNotFound` if the `events` source has not been applied — the failure
 surfaces at wiring time, before the host serves traffic (design §5 mitigation b).
 Scaffold this store's migrations with `ExportMigrations` and apply them with your
-host's runner pre-boot, alongside every other feature source you wire.
+host's runner pre-boot, alongside every other pocket source you wire.
 
 ## Surface
 
@@ -52,20 +52,20 @@ call):
 
 ### `AppendTx` — the transactional outbox seam
 
-`AppendTx` takes the integration's `*pgxdb.Tx` so an emitting feature's store can
+`AppendTx` takes the integration's `*pgxdb.Tx` so an emitting pocket's store can
 write its domain rows and the outbox rows in **one commit** (true outbox
-atomicity). No feature core ever sees the driver type: a future emitting store
+atomicity). No pocket core ever sees the driver type: a future emitting store
 consumer-declares a matching one-method port that `*Store` satisfies
 *structurally* — zero import edge between the two store modules, the only shared
 vocabulary being `*pgxdb.Tx` from the integration both already require (design
 §5). In events v1 nothing wires it; it ships tested but unconsumed. This seam is
 **unguarded** — no `make guard` target covers the per-store appender glue (design
-§5 cost 1); the abstraction revisit trigger is the third emitting feature.
+§5 cost 1); the abstraction revisit trigger is the third emitting pocket.
 
 ## Schema
 
 By default every statement names `event_outbox` unqualified — byte-for-byte the
-SQL this store has always emitted. A host that keeps the feature tables in a
+SQL this store has always emitted. A host that keeps the pocket tables in a
 dedicated Postgres schema builds the schema value once and passes it to both the
 runner and the store:
 
@@ -85,7 +85,7 @@ constructing for a schema the migrations never reached fails `New`'s boot-time
 probe, naming the qualified table.
 
 Quoting preserves case: `Auth` and `auth` are different schemas. Per-repository
-*different* schemas within one feature are out of scope — this store has one table
+*different* schemas within one pocket are out of scope — this store has one table
 and one schema, and the one-stream-per-schema migration model gives a split no
 story.
 

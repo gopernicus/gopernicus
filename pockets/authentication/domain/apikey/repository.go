@@ -7,8 +7,8 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
-// APIKeyRepository persists hashed machine credentials. Implemented by feature
-// store adapters (features/authentication/stores/turso) or any host-provided
+// APIKeyRepository persists hashed machine credentials. Implemented by pocket
+// store adapters (pockets/authentication/stores/turso) or any host-provided
 // implementation (see the storetest reference).
 //
 // THE PINNED GetByHash CONTRACT (design §4.1, plan-cut amendment): the store

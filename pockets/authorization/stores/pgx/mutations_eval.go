@@ -7,9 +7,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/mutation"
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
-	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 )
 
 // mutRelRow is the loaded relationship-row projection the per-operation evaluators

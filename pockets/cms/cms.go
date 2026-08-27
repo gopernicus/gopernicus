@@ -1,9 +1,9 @@
-// Package cms is the public surface of the CMS feature module: the registration
+// Package cms is the public surface of the CMS pocket module: the registration
 // entry point (Register), the host-filled ports (Repositories), and the
 // customization config (Config). Implementation lives in internal/; the domain
 // type and repository-interface packages (content, menus, taxonomy, media,
 // messaging) are public because hosts reference them, but the service concretes
-// and handlers stay internal. The feature is datastore-free: it depends on its
+// and handlers stay internal. The pocket is datastore-free: it depends on its
 // repository ports, never on a concrete store.
 //
 // Content follows the Registry model (plan: cms-content-engine): all content is
@@ -26,13 +26,13 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/cms/internal/logic/taxonomysvc"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
-// Repositories is the set of outbound ports the feature needs. A store adapter
-// (e.g. features/cms/stores/turso) fills it; the feature stays dialect-blind.
+// Repositories is the set of outbound ports the pocket needs. A store adapter
+// (e.g. pockets/cms/stores/turso) fills it; the pocket stays dialect-blind.
 // All content rides the single Entries port (the Registry model); Terms/Menus/
 // Media/Inquiries stay typed.
 type Repositories struct {
@@ -53,7 +53,7 @@ type TemplateBinding = content.TemplateBinding
 // unregistered (FS3 — only GET /media/{id}/file mounts), a nil Cache disables
 // public-page caching. Types/Templates let a host register custom content types
 // and their renderers on top of the Article/Page seeds. Blobs and Mailer are
-// host infrastructure the feature cannot default.
+// host infrastructure the pocket cannot default.
 type Config struct {
 	Views     Views                 // HTML rendering port; nil → HTML surface not registered (FS3)
 	Types     []content.ContentType // host-registered custom types
@@ -72,20 +72,20 @@ type Config struct {
 	// google-uuid) chooses another shape.
 	IDs cryptids.IDGenerator
 
-	// AdminMiddleware wraps every admin route the feature mounts (the CRUD/
+	// AdminMiddleware wraps every admin route the pocket mounts (the CRUD/
 	// management surface); public routes (site pages, asset serving, the contact
 	// form) are never wrapped. Nil disables gating, preserving current behavior.
-	// This is the cross-feature wiring seam of features/README.md §5 (C2): a host
-	// passes another feature's middleware here — e.g. auth's RequireUser — so cms
+	// This is the cross-pocket wiring seam of pockets/README.md §5 (C2): a host
+	// passes another pocket's middleware here — e.g. auth's RequireUser — so cms
 	// gates its admin surface without importing auth. Structural typing means auth
 	// need not know cms exists and cms never imports auth.
 	AdminMiddleware []web.Middleware
 }
 
-// Register wires the CMS feature onto the host's mount: it builds the content
+// Register wires the CMS pocket onto the host's mount: it builds the content
 // Registry (seed types + host types + their templates), builds the domain
-// services from the supplied repositories, and registers the feature's routes.
-// Migrations are registered by the store adapter (see features/cms/stores/turso),
+// services from the supplied repositories, and registers the pocket's routes.
+// Migrations are registered by the store adapter (see pockets/cms/stores/turso),
 // not here — the core is dialect-blind.
 func Register(m pocket.Mount, repos Repositories, cfg Config) error {
 	registry := content.NewRegistry()

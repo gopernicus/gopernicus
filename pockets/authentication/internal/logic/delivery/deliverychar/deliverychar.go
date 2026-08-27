@@ -1,5 +1,5 @@
 // Package deliverychar is the TRANSPORT-NEUTRAL characterization suite for the
-// auth feature's outbound delivery runtime (design §6.1.1; plan
+// auth pocket's outbound delivery runtime (design §6.1.1; plan
 // authv3-delivery-refactor AV3D-0.2). It freezes the OBSERVABLE guarantees of the
 // current bespoke worker/queue as black-box cases so a later runtime — the durable
 // generic-jobs mode (phase 3) or the bounded in-process mode (phase 4) — can be

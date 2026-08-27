@@ -6,9 +6,9 @@ import (
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/domain/apikey"
 	"github.com/gopernicus/gopernicus/pockets/authentication/domain/serviceaccount"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 // ---------------------------------------------------------------------------
@@ -264,7 +264,7 @@ func (h *handlers) parseListRequest(w http.ResponseWriter, r *http.Request, orde
 		Count:  q.Get("count"),
 		// `q` is the canonical v3 search key (crud-search-upstream D3). A legacy
 		// edge migrating v1 clients may fall back to `s` at ITS OWN transport, with
-		// a documented removal milestone; this feature accepts `q` only.
+		// a documented removal milestone; this pocket accepts `q` only.
 		Search:          q.Get("q"),
 		DefaultStrategy: h.listStrategy,
 	})

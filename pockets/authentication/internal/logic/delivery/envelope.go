@@ -1,4 +1,4 @@
-// Package delivery holds the auth feature's shared outbound-delivery logic
+// Package delivery holds the auth pocket's shared outbound-delivery logic
 // (design §6.1): the kind-aware renderer/router, the transport-neutral dispatcher
 // seam, the versioned encrypted command envelope and its reusable processor (the
 // command subpackage), and the two host-owned execution runtimes — the durable

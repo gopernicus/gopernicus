@@ -22,12 +22,12 @@ import (
 	"strings"
 	"testing"
 
+	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/events/domain/outbox"
 	"github.com/gopernicus/gopernicus/pockets/events/storetest"
-	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 )
 
-// outboxTables are the feature's tables cleared before each newRepo call so every
+// outboxTables are the pocket's tables cleared before each newRepo call so every
 // leaf subtest starts from a clean, isolated store.
 var outboxTables = []string{outboxTable}
 

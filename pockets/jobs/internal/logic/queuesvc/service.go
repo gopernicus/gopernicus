@@ -1,6 +1,6 @@
-// Package queuesvc holds the jobs feature's enqueue use cases: input validation,
+// Package queuesvc holds the jobs pocket's enqueue use cases: input validation,
 // default application, and the load-bearing wake signal. It is internal so it is
-// not part of the feature's public SemVer surface; the host-facing surface is
+// not part of the pocket's public SemVer surface; the host-facing surface is
 // package jobs (jobs.go).
 //
 // The Service owns the buffered cap-1 wake channel: every successful enqueue
@@ -48,8 +48,8 @@ func NewService(repo job.QueueRepository, maxAttempts int, clock func() time.Tim
 func (s *Service) Wake() <-chan struct{} { return s.wake }
 
 // Enqueue is the primitive-typed entry point (stdlib types only), so a consuming
-// feature's own narrow enqueuer port matches it structurally with zero import of
-// features/jobs.
+// pocket's own narrow enqueuer port matches it structurally with zero import of
+// pockets/jobs.
 func (s *Service) Enqueue(ctx context.Context, kind string, payload json.RawMessage) (string, error) {
 	j, err := s.EnqueueJob(ctx, job.Enqueue{Kind: kind, Payload: payload})
 	if err != nil {

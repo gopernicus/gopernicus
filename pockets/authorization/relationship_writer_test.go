@@ -9,9 +9,9 @@ import (
 	"testing"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/memstore"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 func baselineModel() Schema {

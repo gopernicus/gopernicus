@@ -17,12 +17,12 @@ import (
 	"os"
 	"testing"
 
+	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/events/domain/outbox"
 	"github.com/gopernicus/gopernicus/pockets/events/storetest"
-	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 )
 
-// outboxTables are the feature's tables cleared before each newRepo call so every
+// outboxTables are the pocket's tables cleared before each newRepo call so every
 // leaf subtest starts from a clean, isolated store.
 var outboxTables = []string{"event_outbox"}
 

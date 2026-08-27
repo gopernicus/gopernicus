@@ -3,7 +3,7 @@ package oauthstate
 import "context"
 
 // StateRepository persists one-time OAuth flow secrets keyed by token.
-// Implemented by feature store adapters (features/authentication/stores/turso) or any
+// Implemented by pocket store adapters (pockets/authentication/stores/turso) or any
 // host-provided implementation (see the storetest reference).
 //
 // Consume contract (pinned, design §3 — the storetest conformance suite

@@ -1,11 +1,11 @@
 ---
 title: Zero-infrastructure quickstart
-description: Run a complete Gopernicus feature host with an in-memory store.
+description: Run a complete Gopernicus pocket host with an in-memory store.
 ---
 
 # Zero-infrastructure quickstart
 
-The `examples/minimal` host uses the CMS feature with in-memory repositories. It includes HTTP endpoints, optional HTML views, custom content types, caching, console email, and embedded GOTH assets without a database or container. CMS is one feature; the same host pattern applies to the other feature modules and to app-local routes.
+The `examples/minimal` host uses the CMS pocket with in-memory repositories. It includes HTTP endpoints, optional HTML views, custom content types, caching, console email, and embedded GOTH assets without a database or container. CMS is one pocket; the same host pattern applies to the other pocket modules and to app-local routes.
 
 ## Requirements
 
@@ -31,7 +31,7 @@ The useful file is `examples/minimal/cmd/server/main.go`. Its `run` function per
 
 1. construct an in-memory implementation of `cms.Repositories`;
 2. construct the host's `web.WebHandler` and middleware stack;
-3. create a `feature.Mount`;
+3. create a `pocket.Mount`;
 4. build a `ui/goth` bundle and serve its embedded assets;
 5. create the CMS view adapter;
 6. call `cms.Register` with repositories and host-selected capabilities;
@@ -47,7 +47,7 @@ repos := store.Repositories()
 router := web.NewWebHandler(web.WithLogging(log))
 router.Use(web.RequestID(), web.Logger(log), web.Panics(log))
 
-mount := feature.Mount{Router: router, Logger: log}
+mount := pocket.Mount{Router: router, Logger: log}
 
 bundle, err := uigoth.New(uigoth.Config{
     AssetBasePath: "/assets/goth",
@@ -74,7 +74,7 @@ The real example also serves the bundle assets, registers custom content and tem
 
 ## What this proves
 
-Inspect `examples/minimal/go.mod`. The host does not require libSQL, pgx, Redis, OpenTelemetry, or a cloud SDK. The CMS feature is datastore-free because the host satisfies its repository ports directly.
+Inspect `examples/minimal/go.mod`. The host does not require libSQL, pgx, Redis, OpenTelemetry, or a cloud SDK. The CMS pocket is datastore-free because the host satisfies its repository ports directly.
 
 That is Gopernicus' opt-in dependency promise in concrete form: **unused adapters do not enter the module graph**.
 

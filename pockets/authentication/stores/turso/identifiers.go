@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 

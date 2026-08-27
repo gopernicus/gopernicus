@@ -1,4 +1,4 @@
-// Package turso is the events feature's Turso/libSQL outbox store adapter — its
+// Package turso is the events pocket's Turso/libSQL outbox store adapter — its
 // own module so a host that brings a different datastore never pulls libsql into
 // its module graph (the load-bearing opt-out property). It owns the SQL; the
 // HOST owns its database lifecycle.
@@ -11,7 +11,7 @@
 //
 // Cross-source ordering hazard (design §5, risk 2): the shared ledger keyed
 // (source, version) expresses NO ordering between sources, so a host that
-// scaffolds another feature's migrations but not "events" would fail at runtime,
+// scaffolds another pocket's migrations but not "events" would fail at runtime,
 // not boot. Mitigation (b): New probes the outbox table at construction and
 // errors before the host serves traffic; the README documents the prerequisite
 // (mitigation a).

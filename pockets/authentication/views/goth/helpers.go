@@ -17,7 +17,7 @@ import (
 // the credential policy suppressed (Removable == false) — the account page's linked
 // accounts and the identifier edit form both render it, because both describe the
 // same policy and the sentence names neither method kind. It mirrors the
-// generic copy the feature already returns when a removal is refused server-side
+// generic copy the pocket already returns when a removal is refused server-side
 // ("That change would leave your account without a way to sign in…"), stated ahead
 // of the attempt and paired with the remedy. It names no policy rule, method, or
 // contact value — the hint is advisory and enumeration-safe.
@@ -145,7 +145,7 @@ func displayProviderName(provider string) string {
 // oauthLinkStartHref returns the account page's "link this provider" entry point: the
 // session-gated link-start route, carrying the account page as the post-flow
 // destination so a completed link lands back on the inventory that offered it. The
-// destination is a safe same-origin relative path, which the feature's redirect
+// destination is a safe same-origin relative path, which the pocket's redirect
 // resolver honors without any Config.RedirectAllowlist entry — it works on an
 // unconfigured host.
 func oauthLinkStartHref(provider string) string {

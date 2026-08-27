@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/gopernicus/gopernicus/pockets/events/domain/outbox"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	"github.com/gopernicus/gopernicus/pockets/events/domain/outbox"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 )
 
@@ -73,8 +73,8 @@ func (s *Store) Append(ctx context.Context, recs ...sdkevents.Record) error {
 
 // AppendTx persists records inside the caller's transaction tx — the
 // dialect-typed transactional appender (design §5). It shares the emitting
-// feature store's commit, so the domain rows and the outbox rows land atomically
-// (true outbox semantics). No feature core ever sees *tursodb.Tx; a future
+// pocket store's commit, so the domain rows and the outbox rows land atomically
+// (true outbox semantics). No pocket core ever sees *tursodb.Tx; a future
 // emitting store consumer-declares a matching port that Store satisfies
 // structurally. A duplicate event_id returns sdk.ErrAlreadyExists and (because
 // the caller's tx rolls back) commits nothing. Appending zero records is a no-op.

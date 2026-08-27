@@ -6,8 +6,8 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
-// ServiceAccountRepository persists machine identities. Implemented by feature
-// store adapters (features/authentication/stores/turso) or any host-provided
+// ServiceAccountRepository persists machine identities. Implemented by pocket
+// store adapters (pockets/authentication/stores/turso) or any host-provided
 // implementation (see the storetest reference).
 //
 // Sentinel contract (the storetest conformance suite executes these):

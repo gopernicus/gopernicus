@@ -11,10 +11,10 @@ import (
 	"context"
 	"testing"
 
+	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/mutation"
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
-	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 )
 
 // liveReposNoGuardian builds repositories with an empty guardian policy so

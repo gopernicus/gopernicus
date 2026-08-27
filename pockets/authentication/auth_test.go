@@ -18,10 +18,10 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 // --- compile-time seam assertions ---
@@ -481,7 +481,7 @@ func TestRegisterMachineDenyByAbsence(t *testing.T) {
 
 // TestRegisterMachineNoGateDenyByAbsence proves the machine lifecycle routes are
 // absent (404) when the repos are wired but no Config.MachineRoutesGate names a
-// policy: the feature never guesses one, so it mounts nothing (D1).
+// policy: the pocket never guesses one, so it mounts nothing (D1).
 func TestRegisterMachineNoGateDenyByAbsence(t *testing.T) {
 	h := web.NewWebHandler()
 	repos := Repositories{ServiceAccounts: stubServiceAccounts{}, APIKeys: stubAPIKeys{}}

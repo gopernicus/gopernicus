@@ -17,7 +17,7 @@ import (
 // mint that closes the deactivate-versus-login race.
 //
 // This host implements them for the same reason it implements every other port:
-// to prove the feature runs against a "bring your own store" adapter with no
+// to prove the pocket runs against a "bring your own store" adapter with no
 // driver in the module graph, and — because these two are the ports whose whole
 // value is atomicity — to give the example host's browser proof something real to
 // drive. The storetest UserDirectory / UserLifecycle / ActiveSessionMint groups

@@ -10,15 +10,15 @@ import "context"
 // which graduated that vocabulary to sdk/foundation/identity. RequireUser / RequirePrincipal
 // now stash identity.Principal via identity.WithPrincipal, and CurrentUser /
 // CurrentPrincipal read it via identity.FromContext. Only clientInfo — client
-// attribution for audit rows, behavior not identity — remains feature-private.
+// attribution for audit rows, behavior not identity — remains pocket-private.
 type contextKey int
 
 const (
 	clientInfoKey contextKey = iota
 	// sessionIDKey carries the live session's app-minted id stashed by
 	// RequireLiveSession so a sensitive-mutation handler can bind a step-up grant or
-	// its consume to that exact session (design §5.0). Feature-private, like
-	// clientInfo: session id is request-scoped behavior, not cross-feature identity.
+	// its consume to that exact session (design §5.0). Pocket-private, like
+	// clientInfo: session id is request-scoped behavior, not cross-pocket identity.
 	sessionIDKey
 )
 
@@ -41,7 +41,7 @@ func (s *Service) CurrentSessionID(ctx context.Context) (string, bool) {
 
 // clientInfo is the request's client attribution — the remote IP and User-Agent.
 // It is the single source of truth for both login's rate-limit IP key and the
-// security-event audit rows (design §5.1 WI4): written ONCE by the feature's
+// security-event audit rows (design §5.1 WI4): written ONCE by the pocket's
 // HTTP middleware via WithClientInfo, read wherever the service needs it.
 type clientInfo struct {
 	ip string
@@ -50,7 +50,7 @@ type clientInfo struct {
 
 // WithClientInfo returns a copy of ctx carrying the request's client IP and
 // User-Agent. It is EXPORTED because the write site lives OUTSIDE authsvc — the
-// feature's HTTP middleware (internal/inbound/authentication) sets it over ALL routes,
+// pocket's HTTP middleware (internal/inbound/authentication) sets it over ALL routes,
 // unauthenticated ones included, so failed logins, registrations, and OAuth
 // callbacks all produce attributed audit rows. It is the ONE write point: login
 // and token issuance read their rate-limit IP from the same carrier, and the

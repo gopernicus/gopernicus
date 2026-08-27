@@ -3,8 +3,8 @@ package turso
 import (
 	"context"
 
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/serviceaccount"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/serviceaccount"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )

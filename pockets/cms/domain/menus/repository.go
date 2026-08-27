@@ -3,7 +3,7 @@ package menus
 import "context"
 
 // MenuRepository is the app port for persisting menus and their items.
-// Implemented by feature store adapters (features/cms/stores/turso) or any
+// Implemented by pocket store adapters (pockets/cms/stores/turso) or any
 // host-provided implementation (see examples/minimal's memstore).
 type MenuRepository interface {
 	// CreateMenu persists a new menu; slug collision → sdk.ErrAlreadyExists.

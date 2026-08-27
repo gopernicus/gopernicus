@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/internal/logic/authsvc"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 // Outcome codes: the closed ?auth= vocabulary a completed mutation carries across its

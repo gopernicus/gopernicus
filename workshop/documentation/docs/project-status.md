@@ -5,20 +5,20 @@ description: What Gopernicus ships today, what is deferred, and how to read stab
 
 # Project status & scope
 
-Gopernicus is an open-source, actively developed multi-module repository released under the [MIT License](https://github.com/gopernicus/gopernicus/blob/main/LICENSE). The current `go.work` composes 39 modules across the SDK, integrations, feature cores and adapters, UI, examples, and Workshop CLI. The code has extensive boundary guards and conformance tests, but the public distribution and documentation should still be treated as pre-stable until module tags establish a release line.
+Gopernicus is an open-source, actively developed multi-module repository released under the [MIT License](https://github.com/gopernicus/gopernicus/blob/main/LICENSE). The current `go.work` composes 39 modules across the SDK, integrations, pocket cores and adapters, UI, examples, and Workshop CLI. The code has extensive boundary guards and conformance tests, but the public distribution and documentation should still be treated as pre-stable until module tags establish a release line.
 
 ## Available today
 
-- stdlib-only layered SDK: kernel, foundation, capabilities, and feature mount;
+- stdlib-only layered SDK: kernel, foundation, capabilities, and pocket mount;
 - web server/router helpers, middleware, JSON and HTML responses, SSE, static files, streaming, and OpenAPI construction;
 - reusable capabilities for cache, email, events, file storage, notification, OAuth, rate limiting, tracing, and work submission;
-- authentication, authorization, CMS, events, and jobs feature cores;
-- PostgreSQL and Turso store modules for every shipped durable feature;
+- authentication, authorization, CMS, events, and jobs pocket cores;
+- PostgreSQL and Turso store modules for every shipped durable pocket;
 - reusable integrations for databases, cryptography/IDs, email, object storage, Redis, OAuth, scheduling, and OpenTelemetry;
-- complete `ui/goth` component system and feature view adapters;
+- complete `ui/goth` component system and pocket view adapters;
 - an API-only host shape and a React/TanStack client integration guide;
 - zero-infrastructure and datastore-backed example hosts;
-- Workshop host/feature scaffolding and migration-ledger commands;
+- Workshop host/pocket scaffolding and migration-ledger commands;
 - repository-wide architecture guards and hermetic tests.
 
 ## Deliberately not available yet
@@ -49,7 +49,7 @@ Gopernicus is developed with AI tools used as an engineering assistant — for c
 
 ## Known sharp edges
 
-- Feature route prefixes change registered paths, not links or redirects rendered by a feature. The current CMS views use host-rooted links, so prefixed CMS mounting is not fully transparent.
+- Pocket route prefixes change registered paths, not links or redirects rendered by a pocket. The current CMS views use host-rooted links, so prefixed CMS mounting is not fully transparent.
 - The events outbox poller is single-instance today; it does not lease batches.
 - Jobs handlers are at-least-once and should be idempotent where possible.
 - Query logging in the datastore connectors includes arguments and is development-only.
@@ -62,7 +62,7 @@ When documentation and code disagree, use this order while the public surface is
 
 1. public Go types and doc comments;
 2. conformance tests and executable examples;
-3. `ARCHITECTURE.md`, `features/README.md`, and `sdk/README.md`;
+3. `ARCHITECTURE.md`, `pockets/README.md`, and `sdk/README.md`;
 4. this site;
 5. historical plans and decision notes.
 

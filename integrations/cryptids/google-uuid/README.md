@@ -3,9 +3,9 @@
 An identifier connector wrapping exactly one third-party library —
 `github.com/google/uuid`. Its constructors return `cryptids.GenerateFunc`
 values, so a host chooses uuid-shaped entity keys the same way it chooses any
-other ID strategy: once, at wiring, on a feature's `Config.IDs`.
+other ID strategy: once, at wiring, on a pocket's `Config.IDs`.
 
-It owns "how to mint a uuid with google/uuid," never any feature's ID policy.
+It owns "how to mint a uuid with google/uuid," never any pocket's ID policy.
 A different ID shape (the sdk's stdlib nanoid, a database-generated key via
 `cryptids.Database`) is swapped at the composition root, not here.
 

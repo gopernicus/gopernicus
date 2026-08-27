@@ -11,7 +11,7 @@ import (
 
 // TestConformanceQueue runs the shared queue conformance suite against the
 // in-core memstore reference from the memstore package itself — the hermetic leg
-// of make check for this feature's paginated semantics (the dialect stores prove
+// of make check for this pocket's paginated semantics (the dialect stores prove
 // the same suite live). Each newRepo call returns a fresh, empty queue built with
 // the exported Lease so the lease-expiry case is honored identically here and in
 // the dialect stores.

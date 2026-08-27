@@ -1,4 +1,4 @@
-// Package hub is the events feature's SSE fan-out core: one per process, it
+// Package hub is the events pocket's SSE fan-out core: one per process, it
 // subscribes to the bus once at construction and fans every event into
 // per-connection buffered channels the HTTP layer drains onto Server-Sent-Event
 // streams (design §6). It is a logic package — it holds no transport type, only

@@ -14,7 +14,7 @@ import (
 
 // stubViews is a package-local marker implementation of the Views port for the
 // handler tests. Its renderers emit just the data/markers each handler test
-// asserts — the real bundled chrome is tested in features/cms/views/goth. It is
+// asserts — the real bundled chrome is tested in pockets/cms/views/goth. It is
 // the seam a host would fill; embedding it and overriding one method is the
 // blessed partial-override path (see TestViews_HostOverridesHome).
 type stubViews struct{}

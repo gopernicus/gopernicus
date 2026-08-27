@@ -1,8 +1,8 @@
-// Package pgx is the events feature's PostgreSQL outbox store adapter — its own
+// Package pgx is the events pocket's PostgreSQL outbox store adapter — its own
 // module so a host that brings a different datastore never pulls pgx into its
 // module graph (the load-bearing opt-out property). It owns the SQL; the HOST
 // owns its database lifecycle. It is the dialect sibling of
-// features/events/stores/turso: same surface plus the Postgres-only WithSchema
+// pockets/events/stores/turso: same surface plus the Postgres-only WithSchema
 // option — SQLite has no schemas — same migration version set (identical
 // filenames), same port semantics — a host switches dialect by one import + one
 // Open call.
@@ -15,7 +15,7 @@
 //
 // Cross-source ordering hazard (design §5, risk 2): the shared ledger keyed
 // (source, version) expresses NO ordering between sources, so a host that
-// scaffolds another feature's migrations but not "events" would fail at runtime,
+// scaffolds another pocket's migrations but not "events" would fail at runtime,
 // not boot. Mitigation (b): New probes the outbox table at construction and
 // errors before the host serves traffic; the README documents the prerequisite
 // (mitigation a).

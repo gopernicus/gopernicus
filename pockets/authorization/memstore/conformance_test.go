@@ -9,7 +9,7 @@ import (
 )
 
 // TestConformance runs the shared two-kind conformance suite against the in-core
-// memstore reference — the hermetic leg of make check for this feature (the
+// memstore reference — the hermetic leg of make check for this pocket (the
 // dialect stores prove the same suite live). Each newRepos call returns a fresh,
 // empty pair wiring BOTH kinds.
 func TestConformance(t *testing.T) {

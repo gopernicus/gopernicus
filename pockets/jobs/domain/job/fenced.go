@@ -18,9 +18,9 @@ var _ workers.FencedStore[Job] = (FencedQueueRepository)(nil)
 // FencedQueueRepository is the FROZEN (AV3D-0.3) extension port that hardens the
 // durable queue into an at-least-once, lease-fenced, logical-key outbox — the
 // generic-jobs delivery surface authentication runs its encrypted delivery work on
-// in jobs mode (constitution rule 6) instead of a bespoke feature-local queue. It
+// in jobs mode (constitution rule 6) instead of a bespoke pocket-local queue. It
 // is domain
-// -rich; the consumer-facing keyed-work protocol a consuming feature depends on
+// -rich; the consumer-facing keyed-work protocol a consuming pocket depends on
 // without importing this package is sdk/capabilities/work (Enqueuer, Replacer,
 // StatusReader), which the jobs Service implements.
 //

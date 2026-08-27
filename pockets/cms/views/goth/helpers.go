@@ -33,7 +33,7 @@ type componentFunc func(context.Context, io.Writer) error
 
 func (f componentFunc) Render(ctx context.Context, w io.Writer) error { return f(ctx, w) }
 
-// rendererComponent adapts a feature-produced web.Renderer (a registered per-entry
+// rendererComponent adapts a pocket-produced web.Renderer (a registered per-entry
 // body) to a templ.Component so the public chrome can wrap it. web.Renderer and
 // templ.Component share the same Render(ctx, io.Writer) error signature.
 func rendererComponent(r web.Renderer) templ.Component {

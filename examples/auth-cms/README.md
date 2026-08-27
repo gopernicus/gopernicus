@@ -1,7 +1,7 @@
-# examples/auth-cms — the multi-feature proof host (auth-v2 A9 + auth-v3)
+# examples/auth-cms — the multi-pocket proof host (auth-v2 A9 + auth-v3)
 
-This host mounts **real feature modules** — `features/cms`,
-`features/authentication`, `features/authorization`, and `features/events` — onto
+This host mounts **real pocket modules** — `pockets/cms`,
+`pockets/authentication`, `pockets/authorization`, and `pockets/events` — onto
 one host router, with in-memory stores and no datastore driver, and wires auth's
 identity middleware into cms's admin surface. It is both the auth-v2 milestone's
 **A9 proof host** (OAuth, machine identity, JWT bearer, security-event audit, and
@@ -26,16 +26,16 @@ hermetically.
 
 ## What it proves
 
-- **Constitution rule 6 (features never import other features), with THREE real
-  features.** `features/cms`, `features/authentication`, and
-  `features/authorization` never import one another. Only this host's
-  `cmd/server/main.go` imports all three. The cross-feature connections are made
+- **Constitution rule 6 (pockets never import other pockets), with THREE real
+  pockets.** `pockets/cms`, `pockets/authentication`, and
+  `pockets/authorization` never import one another. Only this host's
+  `cmd/server/main.go` imports all three. The cross-pocket connections are made
   entirely in the composition root (`auth.Service.RequireUser` →
   `cms.Config.AdminMiddleware`; the engine `relationshipGranter` →
   `auth.Config.Granter`; `authorizer.Check` → `events.Config.Authorize`) — over
-  sdk-shaped seams, with zero import edges between the features.
+  sdk-shaped seams, with zero import edges between the pockets.
 
-- **The feature-module opt-out holds for a second feature — no libsql in the
+- **The pocket-module opt-out holds for a second pocket — no libsql in the
   module graph:**
 
   ```sh
@@ -53,7 +53,7 @@ hermetically.
   host-local fake OAuth provider, API-key machine calls, JWT access tokens +
   rotating store-backed refresh tokens (host-signed by the sdk stdlib HS256
   default, `sdk/foundation/cryptids`), security-event audit rows,
-  and invitations that grant through the **`features/authorization` engine's
+  and invitations that grant through the **`pockets/authorization` engine's
   `relationshipGranter`** — ordinary member invitation-accept writes a real ReBAC
   tuple via the trusted application-side `RelationshipWriter` (the memstore-backed
   engine keeps the host **driver-free** — no libsql in the graph). The A9 milestone
@@ -65,16 +65,16 @@ hermetically.
 
 Authorization is "supported, never required": a host runs with no checks, with a
 **host-authored Check closure** (the middle posture), or with the mounted
-`features/authorization` IAM domain (the flagship). This host now demonstrates the
+`pockets/authorization` IAM domain (the flagship). This host now demonstrates the
 **flagship** — and the middle posture stays a permanent, recorded artifact in git
 history:
 
 - **Middle posture (commit 1, `2e1e5eb`):** `events.Config.Authorize` was
   satisfied by a plain ownership closure over a toy membership map, with **no
-  `features/authorization` in the module graph** (`GOWORK=off go list -m all |
+  `pockets/authorization` in the module graph** (`GOWORK=off go list -m all |
   grep -c authorization` → `0`) — a Check seam met entirely by host code, no IAM
   module required. Retained as a git artifact, not the current wiring.
-- **Flagship posture (current):** the host mounts `features/authorization`, **both
+- **Flagship posture (current):** the host mounts `pockets/authorization`, **both
   kinds** wired and **memstore-backed** (so the graph stays driver-free —
   `GOWORK=off go list -m all | grep -i libsql` is still empty). The SAME
   `events.Config.Authorize` seam now delegates to `authorizer.Check`, and the
@@ -125,7 +125,7 @@ entanglement. Assignment rims stay **opaque strings**; with a model wired, assig
 an undeclared `(type, role)` is refused with `ErrInvalidRoleModel` instead of storing
 a silent no-grant. Demo routes:
 
-- `GET /demo/audit` — gated through the feature's coordinate gate
+- `GET /demo/audit` — gated through the pocket's coordinate gate
   `authorizer.RequirePermissionFixed("project", "audit", "demo")`: 403 without a
   granting role, 200 with one. The host writes **no** role check of its own — the
   role model decides, and the pair is checked for legality at route registration.
@@ -152,8 +152,8 @@ surface is deferred with the AZADM packet.
   service-account/api-key/security-event/invitation ports, and the v3 identity +
   atomic-security rails (identifier, challenge, password-reset, contact-change,
   authentication-grant, credential-mutation — see `ports_v3.go`; delivery owns no
-  auth port — durable delivery runs on the generic jobs feature). It honors the
-  contracts the shared `features/authentication/storetest`
+  auth port — durable delivery runs on the generic jobs pocket). It honors the
+  contracts the shared `pockets/authentication/storetest`
   suite proves (uniqueness, sentinels, expired-at-read, the pinned GetByHash and
   partial-pending-uniqueness contracts, atomic single-use consume + revision-CAS,
   and the created_at DESC, id DESC paging), and projects the masked credential
@@ -180,12 +180,12 @@ surface is deferred with the AZADM packet.
   it derives a MutationID from `OperationID`, calls `SystemMutator`, and inspects
   receipts. The host can select either posture per resource type/relation.
 - **InviteCheck** (`hostInviteCheck`, `cmd/server/membership.go`) — the required
-  relation-aware host authorization policy the feature calls from its parsed
+  relation-aware host authorization policy the pocket calls from its parsed
   create/list invitation handlers (`auth.Config.InviteCheck`): a platform admin may
   invite any relation, owner-granting is otherwise reserved to platform admins (the
   editor→owner escalation guard), and every other create/list requires `manage_access`
   on the resource. Denials fail closed (`sdk.ErrForbidden` → 403).
-- **authorization**: `features/authorization` (`cmd/server/main.go`) — BOTH kinds
+- **authorization**: `pockets/authorization` (`cmd/server/main.go`) — BOTH kinds
   (relationships + roles), memstore-backed (no driver in the graph). Backs
   `auth.Config.Granter`, `events.Config.Authorize` (`authorizer.Check`), and the
   host demo routes.
@@ -225,16 +225,16 @@ surface is deferred with the AZADM packet.
   - **`DELIVERY_MODE=jobs` (default — jobs-mode wiring over an IN-MEMORY fenced
     queue):** `DeliveryMode: jobs` + `DeliveryEncrypter` (AES-GCM) +
     `DeliveryJobsAcknowledged: true`; the host wires `Config.DeliveryDispatcher` over
-    the generic **jobs** feature and runs the jobs `FencedRuntime` (bound to
+    the generic **jobs** pocket and runs the jobs `FencedRuntime` (bound to
     `authSvc.DeliveryJobRuntime()`) in a **supervised** goroutine (see the shutdown
     section: an unexpected runtime exit brings the host down rather than serving with a
     dead delivery runtime). This demonstrates the exemplary jobs-mode composition
-    (`internal/authjobs` is the ONE adapter importing both features), but **this proof
+    (`internal/authjobs` is the ONE adapter importing both pockets), but **this proof
     host backs the fenced queue with `jobsmem.NewFencedQueue` — an in-memory store**. So
     on THIS host jobs mode is **NOT durable**: accepted work is **lost on restart** and
     there is **no cross-instance coordination** (the same development posture as
     `in_process`, just via the jobs wiring). Durability is a store swap a real host makes
-    — a durable `FencedQueue` adapter (`features/jobs/stores/{pgx,turso}` + its
+    — a durable `FencedQueue` adapter (`pockets/jobs/stores/{pgx,turso}` + its
     `0003_fenced_job_queue` migration) — which this in-memory demo deliberately does not
     wire. In jobs mode the host also runs a **scheduled terminal-purge loop** (a
     host-owned goroutine on its own context, stopped in shutdown order) that removes at
@@ -266,7 +266,7 @@ surface is deferred with the AZADM packet.
   the **authoritative** backlog), **provider retry + dead-letter activity** (counted from
   the wrapped secret-free `authentication.delivery.*` lifecycle events), and
   **observer failure** (`observer_failures` increments when the events emitter errors).
-  It is host-composed over existing/narrow-additive seams — NOT a new feature route.
+  It is host-composed over existing/narrow-additive seams — NOT a new pocket route.
 - **Passwordless**: `Passwordless: [email, phone]` (`AUTH_PASSWORDLESS`) — email
   via the console Mailer, phone via the console Notifier;
   `POST /auth/passwordless/{start,verify,redeem}` and the bundled magic-link
@@ -580,9 +580,9 @@ curl -i http://localhost:8082/debug/security-events                             
 curl -i -c jar -b jar http://localhost:8082/debug/security-events                # 404
 ```
 
-### Leg 6 — the events SSE stream (`features/events`, best-effort)
+### Leg 6 — the events SSE stream (`pockets/events`, best-effort)
 
-The host mounts the events feature's SSE gateway on the same root router (no
+The host mounts the events pocket's SSE gateway on the same root router (no
 prefix), so the subject stream lands at **`GET /events`**. It is wrapped by
 `authSvc.RequireUser` (`Config.StreamMiddleware`): the handler reads the stashed
 `identity.Principal` and **fails closed with 401 when no session/bearer is
@@ -792,14 +792,14 @@ unwired kind (e.g. `slack`) fails 400; email is always-on via the Mailer.
 
 ## Route surface
 
-- **events** (SSE, `features/events`): `GET /events` — the authenticated
+- **events** (SSE, `pockets/events`): `GET /events` — the authenticated
   subject's stream (best-effort `content.*` fan-out), gated by `RequireUser`
   (401 when absent). `GET /events/{resource_type}/{resource_id}` — the
   resource-scoped stream, registered because `Config.Authorize` is wired through
   the authorization engine (`authorizer.Check`, the flagship posture): member →
   stream, resolved non-member → 403. Under `EVENTS_OUTBOX=memory` the host also
-  mounts `POST /outbox-demo` (host-owned durable-rail trigger, not feature surface).
-- **auth** (JSON + HTML, `features/authentication`): core
+  mounts `POST /outbox-demo` (host-owned durable-rail trigger, not pocket surface).
+- **auth** (JSON + HTML, `pockets/authentication`): core
   `POST /auth/{register,login,logout,verify,refresh,password/forgot,password/reset,
   password/change,token}`; the v3 credential/identifier suite
   `GET /auth/methods`, `POST /auth/step-up/{begin,password,code}`,
@@ -821,7 +821,7 @@ unwired kind (e.g. `slack`) fails 400; email is always-on via the Mailer.
 - **cms**: public site (`GET /`, published singles, contact) ungated; admin CRUD
   (`/articles`, `/pages`, `/terms`, `/menus`, `/media`, …) gated by
   `AdminMiddleware` (auth's `RequireUser`).
-- **host-local demo/debug** (host code, not feature surface):
+- **host-local demo/debug** (host code, not pocket surface):
   `GET /demo/whoami` (RequirePrincipal-gated: any credential class → 200),
   `GET /demo/members-only` (RequirePrincipal + engine-Check gated: member/owner →
   200, resolved non-member → 403), `GET /demo/my-projects` (the relationship
@@ -831,7 +831,7 @@ unwired kind (e.g. `slack`) fails 400; email is always-on via the Mailer.
   (`AUTH_DEBUG=1` + `RequireUser`). The demo routes are READ-ONLY: AZ3-4.1 removed the
   session-only `POST /demo/roles/{assign,unassign}` and `POST /demo/admin/bootstrap`
   mutation routes. See "Authorization postures" for the flagship demo flow.
-- **host-local health** (host code, not feature surface): `GET /healthz` —
+- **host-local health** (host code, not pocket surface): `GET /healthz` —
   unauthenticated liveness probe. Both stores are memory-backed, so there is no
   DB to probe: reaching the handler returns `200`. `GET /healthz/delivery` —
   unauthenticated, secret-free delivery operational health (bounded counters/gauges/

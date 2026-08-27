@@ -45,7 +45,7 @@ func viewsForProfile(t *testing.T, p uigoth.Profile) Views {
 
 // TestHTMLPolicy_ScriptSrcCarriesNonce is the Gate C C5 contract test: the adapter's
 // produced policy MUST carry a script-src directive with Nonce:true (and 'self' for
-// the externalized fragment reader). A non-nil policy REPLACES the feature's default
+// the externalized fragment reader). A non-nil policy REPLACES the pocket's default
 // script-src tail entirely, so a policy omitting script-src (or its nonce) fails
 // closed and the fragment readers never run. Proven across every profile — the
 // script-src is the adapter's own surface, not the bundle's.
@@ -66,7 +66,7 @@ func TestHTMLPolicy_ScriptSrcCarriesNonce(t *testing.T) {
 }
 
 // TestHTMLPolicy_StyleSrcSelf proves the mapped policy widens style-src to 'self' so
-// the ui/goth stylesheet loads under the feature's default-src 'none' CSP.
+// the ui/goth stylesheet loads under the pocket's default-src 'none' CSP.
 func TestHTMLPolicy_StyleSrcSelf(t *testing.T) {
 	dirs := viewsForProfile(t, uigoth.StylesOnly).resourceDirectives()
 	style, ok := findDirective(dirs, authentication.HTMLStyleSrc)
@@ -91,7 +91,7 @@ func TestHTMLPolicy_Deterministic(t *testing.T) {
 }
 
 // TestHTMLPolicy_Constructs proves HTMLPolicy returns a usable, non-nil policy the
-// feature accepts (the construction never fails for a valid bundle).
+// pocket accepts (the construction never fails for a valid bundle).
 func TestHTMLPolicy_Constructs(t *testing.T) {
 	v := viewsForProfile(t, uigoth.StylesOnly)
 	if p := v.HTMLPolicy(); p == nil {
@@ -139,7 +139,7 @@ func TestWithFragmentScriptPath(t *testing.T) {
 // TestHTMLPolicy_ImgAndFontSrcSelf proves the mapped policy widens img-src and
 // font-src to 'self' across every profile: the host theme stylesheet's
 // @font-face files and a WithBrand component's logo imagery are same-origin
-// surfaces of the ADAPTER, not the bundle, and must load under the feature's
+// surfaces of the ADAPTER, not the bundle, and must load under the pocket's
 // default-src 'none'.
 func TestHTMLPolicy_ImgAndFontSrcSelf(t *testing.T) {
 	for _, p := range []uigoth.Profile{uigoth.StylesOnly, uigoth.Interactive, uigoth.Full} {

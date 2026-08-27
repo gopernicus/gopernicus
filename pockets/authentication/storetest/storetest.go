@@ -1,12 +1,12 @@
-// Package storetest is the conformance suite for the auth feature's repository
+// Package storetest is the conformance suite for the auth pocket's repository
 // ports: every store that fills an auth.Repositories — the in-package reference
-// implementation, a host memstore, and each dialect adapter (features/authentication/
+// implementation, a host memstore, and each dialect adapter (pockets/authentication/
 // stores/turso, .../postgres) — should pass Run against a freshly wired,
 // isolated Repositories. The port doc comments are the spec; this suite is their
 // executable form.
 //
-// It imports stdlib + sdk + the auth feature's own packages only (guard G2
-// forbids a driver import here), so features/authentication's own `go test ./...` runs it
+// It imports stdlib + sdk + the auth pocket's own packages only (guard G2
+// forbids a driver import here), so pockets/authentication's own `go test ./...` runs it
 // against the reference implementation (see reference_test.go).
 //
 // The machine-identity ports (serviceaccount, apikey) are the first paged ports
@@ -51,7 +51,7 @@ import (
 )
 
 // ids is the suite's entity-ID generator: the default nanoid strategy, matching
-// the feature's zero-value Config.IDs.
+// the pocket's zero-value Config.IDs.
 var ids = cryptids.IDGenerator{}
 
 // dbIDs is the cryptids.Database strategy: entities reach Create with an empty
@@ -105,7 +105,7 @@ func Run(t *testing.T, newRepos func(t *testing.T) auth.Repositories) {
 	// verified. See useradmin.go.
 	runUserAdmin(t, newRepos)
 
-	// List search (crud-search-upstream T4): API-key `name` is the feature's first
+	// List search (crud-search-upstream T4): API-key `name` is the pocket's first
 	// searchable field, and this group is the cross-dialect oracle — a store that
 	// escapes wildcards differently, folds case differently, or forgets to apply
 	// the predicate to the COUNT fails here rather than in production.

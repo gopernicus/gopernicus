@@ -1,8 +1,8 @@
-// Package turso is the auth feature's Turso/libSQL store adapter — its own module
+// Package turso is the auth pocket's Turso/libSQL store adapter — its own module
 // so a host that brings a different datastore never pulls libsql into its module
 // graph (the load-bearing opt-out property). It owns the SQL; the HOST owns its database lifecycle.
 //
-// Migrations follow the scaffold model (matching features/cms/stores/turso): the
+// Migrations follow the scaffold model (matching pockets/cms/stores/turso): the
 // canonical *.sql live here, but the recommended path is to ExportMigrations into
 // the host's own migrations dir and let the host's runner apply them pre-boot,
 // alongside the host's other migrations, through one app-owned ledger. The
@@ -15,8 +15,8 @@ import (
 	"errors"
 	"fmt"
 
-	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 

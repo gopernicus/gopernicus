@@ -1,19 +1,19 @@
-# features/authorization — the IAM domain: independently wireable kinds
+# pockets/authorization — the IAM domain: independently wireable kinds
 
-A pluggable, datastore-free authorization feature: an IAM domain offering
+A pluggable, datastore-free authorization pocket: an IAM domain offering
 multiple KINDS of authorization — **relationships** (a hardened ReBAC engine:
 schema-driven permission checks, exact-userset group expansion,
 through-traversal) and **roles** (opaque-string role assignments, scoped or
 global, with an optional permission model) — plus a named, deferred **policy**
 seam. Both models feed ONE decision surface, dispatched by pair ownership. ReBAC is one kind, not the
-feature's identity. This is the **v3 correctness kernel**: exact userset
+pocket's identity. This is the **v3 correctness kernel**: exact userset
 semantics, an immutable compiled schema, bounded/cancellation-aware evaluation,
 and a repository-atomic, guarded, idempotent mutation lifecycle. Design of
-record: `.claude/plans/roadmap/auth-v2-feature-design.md` (as amended by the
+record: `.claude/plans/roadmap/auth-v2-pocket-design.md` (as amended by the
 2026-07-08 multi-kind owner direction), executed via `.claude/plans/authorization-v1/`
 then hardened via `.claude/plans/authorizationv3/`.
 
-**A host can wire this feature safely from this README alone** — it does not
+**A host can wire this pocket safely from this README alone** — it does not
 need to read `internal/` code or the plan. If a claim here disagrees with the
 code, the code wins; report the mismatch.
 
@@ -27,15 +27,15 @@ host knows its row:
 |---|---|---|---|
 | **1 — none** | No authorization checks. Consumer seams stay nil (deny-by-absence closes the gated surfaces). | none | none |
 | **2 — host-authored** (the middle posture) | Satisfies any Check-shaped seam (`events.Config.Authorize`, `auth.Config.Granter`, its own gates) with a **plain closure over its own data**. | none — no IAM module in the graph | none |
-| **3 — flagship** | Mounts `features/authorization` with any combination of its kinds wired. | this module (+ one `stores/*` module in production; `memstore` for zero-infra hosts) | source `"authorization"`, wholesale |
+| **3 — flagship** | Mounts `pockets/authorization` with any combination of its kinds wired. | this module (+ one `stores/*` module in production; `memstore` for zero-infra hosts) | source `"authorization"`, wholesale |
 
-**Consumer seams are Check-only (AV2).** The seams other features expose
+**Consumer seams are Check-only (AV2).** The seams other pockets expose
 (`func(ctx, principal, resourceType, resourceID) (bool, error)` and
 kin) accept ANY implementation — that is what makes posture 2 real.
 Everything on `Service` beyond boolean checks (enumeration, the guarded
 mutation lifecycle, role listings, the model DSL) is **flagship-specific API,
-never a cross-feature seam**. Graduation trigger (recorded, not cashed): the
-day two features need the identical authorize vocabulary, an `sdk` port is
+never a cross-pocket seam**. Graduation trigger (recorded, not cashed): the
+day two pockets need the identical authorize vocabulary, an `sdk` port is
 designed; until then there is deliberately no `sdk/authorization` — and the
 ARCHITECTURE.md protocol table records authorization's check/decision
 vocabulary as *deferred* from sdk graduation (fails criterion 2), even after
@@ -94,11 +94,11 @@ Rules of the kinds:
   roles-only bundle with no model. Zero kinds is a loud
   `ErrNoKindConfigured` at construction.
 - **Port-optional, schema-wholesale** (the §2.1 bounding rule applied
-  intra-feature): an adopting host scaffolds ALL `iam_*` tables
+  intra-pocket): an adopting host scaffolds ALL `iam_*` tables
   inert-but-present regardless of which kinds it wires. **A roles-only
   host still applies the FULL `"authorization"` migration source** (all four
   files, `iam_relationships` included), and both store boot probes expect all
-  four tables. Source-level schema optionality is the feature boundary's job,
+  four tables. Source-level schema optionality is the pocket boundary's job,
   never a kind's.
 - **One decision surface, DISPATCHED — never merged.** One decision surface
   dispatches each `(resource type, permission)` pair to the model that declares
@@ -110,7 +110,7 @@ Rules of the kinds:
   genuinely spans kinds — a universal admin bypass, a union of two answers —
   remains the host's own closure around the surface.
 - **Terminology:** a KIND is a nil-safe port family WITHIN this one
-  feature module — never a module, and unrelated to ARCHITECTURE.md's
+  pocket module — never a module, and unrelated to ARCHITECTURE.md's
   R6 "Kinds of module" taxonomy vocabulary.
 
 ## Exact userset semantics — the v3 correctness core (member vs admin)
@@ -578,7 +578,7 @@ that would orphan a protected resource is `OutcomeInvariantBlocked`).
 Authorization does **not** call a foreign resource repository from inside its
 transaction; a host deleting a resource orders its own teardown, and the
 ordering + ID-reuse hazard is documented on the method rather than misrepresented
-as cross-feature database atomicity.
+as cross-pocket database atomicity.
 
 ### Compatibility and best-effort audit
 
@@ -622,7 +622,7 @@ remains (a host may compose access from other role/ReBAC rules).
 cms admin gating stays **coarse**: `AdminMiddleware` is session-level
 (`RequireUser`) and this milestone does not change it. Fine-grained cms
 authorization (per-entry, per-type) is future demand-gated work; when it
-comes, it arrives as host-wired closures over this feature's kinds —
+comes, it arrives as host-wired closures over this pocket's kinds —
 never as a cms→authorization import (rule 6).
 
 ## Anatomy + socket
@@ -632,7 +632,7 @@ authorization.go         the socket: Repositories, Config, Service,
                          NewService (→ Components{Service, RelationshipWriter, SystemMutator}),
                          Register; root aliases for the engine, role-model, and
                          mutation vocabulary; the errs vars
-codes.go                 stable Reason codes + feature error sentinels + the
+codes.go                 stable Reason codes + pocket error sentinels + the
                          web.Error mapper seam
 mutation_service.go      Actor, MutationGuard, AuditSink, SystemMutator,
                          Components, the generic guarded ApplyMutation seam
@@ -668,7 +668,7 @@ The socket is the FS2-shaped build plus the ratified `Components` bundle:
 `comps, err := authorization.NewService(repos, cfg)` then
 `comps.Service.Register(mount)`. `Register` logs one line, captures the logger
 for best-effort audit warnings, and mounts **no routes** — `/authorization/*`
-is this feature's claimed-but-unregistered namespace (charter C1), reserved for
+is this pocket's claimed-but-unregistered namespace (charter C1), reserved for
 a future admin surface (the deferred AZADM packet).
 
 ## Wiring semantics — nil vs required
@@ -715,12 +715,12 @@ no permission added to the model later, until that permission's grantor list say
 so. A host wanting one flag to bypass every present and future decision —
 gps-360-go's steward catch-all, auth-cms's `isPlatformAdmin` — keeps it in
 APPLICATION composition, run before the decision surface, and owns the widening;
-the feature ships no `Superuser` primitive. D-D is unchanged either way: every
+the pocket ships no `Superuser` primitive. D-D is unchanged either way: every
 one of these paths fails closed on an error.
 
 ### The `RequirePermission` middleware gate (middleware-consolidation, 2026-07-11)
 
-The feature exports an HTTP middleware builder that gates a route on the context
+The pocket exports an HTTP middleware builder that gates a route on the context
 `Principal` holding a permission on a resolved resource — the
 `RequireUser`-shaped sibling of the recipes above.
 
@@ -758,7 +758,7 @@ responses use `web.RespondJSONError` (the FS9 `web.Error` shape) — an adopter
 replacing a hand-rolled gate with this builder changes its response *body*
 contract to the FS9 shape (status codes unchanged).
 
-**Consumer-side nil semantics** (in the CONSUMING features): a nil Check-shaped
+**Consumer-side nil semantics** (in the CONSUMING pockets): a nil Check-shaped
 seam is deny-by-absence — auth's `Granter` (nil = no grant on invitation accept)
 and events' `Authorize` (nil = the resource-scoped stream route never registers)
 are the live examples.
@@ -858,16 +858,16 @@ self-contained and can sit anywhere in a host's ordered stream relative to
 
 ```sh
 # pgx — plain env-gate; pgx test DBs must be C-collation
-cd features/authorization/stores/pgx && \
+cd pockets/authorization/stores/pgx && \
   POSTGRES_TEST_DSN='postgres://…?sslmode=disable' go test -race -count=1 ./...
 
 # turso — build-tag gated
-cd features/authorization/stores/turso && \
+cd pockets/authorization/stores/turso && \
   TURSO_DATABASE_URL='libsql://…' TURSO_AUTH_TOKEN='…' \
   go test -tags=integration -race -count=1 -timeout 20m ./...   # full suite ≈ 12 min against the remote playground (Mutations ≈ 7 min); Go's default 10m panics
 
 # the memory reference + shared suite (hermetic, race + high-contention)
-cd features/authorization && go test -race ./...
+cd pockets/authorization && go test -race ./...
 ```
 
 ## Wiring page — the code
@@ -1005,7 +1005,7 @@ ok, err := authorizer.HasRole(ctx, authorization.PrincipalFrom(p), "auditor", "p
 **The store-module swap** (memstore → production turso; pgx is symmetric):
 
 ```go
-import authzstore "github.com/gopernicus/gopernicus/features/authorization/stores/turso"
+import authzstore "github.com/gopernicus/gopernicus/pockets/authorization/stores/turso"
 
 repos, err := authzstore.Repositories(db,
     authzstore.WithGuardianPolicy(authorization.DefaultGuardianPolicy())) // boot-probes all four iam_* tables
@@ -1035,7 +1035,7 @@ comps, err := authorization.NewService(authorization.Repositories{
 
 **The composed-kinds closure — kept as a BEFORE/AFTER.** Until v0.3.0 the roles
 kind answered nothing on the decision surface, so every role-derived permission
-was a hand-written `HasRole` branch in the host — the host, not the feature,
+was a hand-written `HasRole` branch in the host — the host, not the pocket,
 held the role → permission mapping:
 
 ```go
@@ -1066,7 +1066,7 @@ res, err := authorizer.Check(ctx, authorization.CheckRequest{
 ```
 
 A closure of the BEFORE shape is still exactly right when a host genuinely wants
-a UNION of two DIFFERENT permissions, or a bypass that spans kinds: the feature
+a UNION of two DIFFERENT permissions, or a bypass that spans kinds: the pocket
 dispatches each pair to one model and never merges two answers. What it is no
 longer is how a host expresses "this role grants this permission".
 
@@ -1155,14 +1155,14 @@ v3 completion gate:
   handler, or at-most-once best effort) — domain mutation idempotency alone
   cannot prove a procedural side effect was not duplicated. Durable mode requires
   a same-transaction events outbox, never an authorization-specific jobs table,
-  and must consume the shared `sdk/capabilities/work` + `features/jobs`
+  and must consume the shared `sdk/capabilities/work` + `pockets/jobs`
   vocabulary.
 - **Generic admin surface**
   (`.claude/plans/authorizationv3/06-admin-and-proof-host.md`). API-only, and
   **blocked indefinitely** — it may not execute until authentication exports a
   host-facing sensitive-operation protector covering live session, origin/CSRF,
   and operation-bound recent-auth consumption. **That seam does not exist**: the
-  current authentication feature does not export a public recent-auth consume /
+  current authentication pocket does not export a public recent-auth consume /
   browser-safe mutation gate, and no ratified authentication follow-up creates
   one, so a generic authorization admin adapter that claims auth-v3 step-up
   composition is a **missing prerequisite**, not a satisfied v3 premise.

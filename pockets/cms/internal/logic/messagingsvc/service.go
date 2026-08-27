@@ -1,5 +1,5 @@
 // Package messagingsvc holds the contact-inquiry use-case service, kept internal
-// so it is not part of the feature's public SemVer surface (plan §5/B3). The
+// so it is not part of the pocket's public SemVer surface (plan §5/B3). The
 // public domain types and InquiryRepository interface stay in package messaging.
 package messagingsvc
 

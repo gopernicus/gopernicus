@@ -14,7 +14,7 @@ import (
 )
 
 // OAuthAccount links a local user to one external provider identity. The token
-// fields hold CIPHERTEXT when the auth feature is wired with a
+// fields hold CIPHERTEXT when the auth pocket is wired with a
 // Config.TokenEncrypter, and are empty when it is not (design §3): a host
 // without an encrypter can still log in and link, it just persists no provider
 // tokens (no offline API access). Uniqueness is on (Provider, ProviderUserID) —

@@ -3,7 +3,7 @@
 // panels a list/detail page swaps between, plus the destructive-confirmation
 // workflow. EmptyPanel/LoadingPanel/ErrorPanel share one bordered surface and
 // compose primitives.Empty/Spinner; ConfirmDialog composes the gothDialog-backed
-// primitives.AlertDialog family with NO new controller. None imports a feature
+// primitives.AlertDialog family with NO new controller. None imports a pocket
 // domain, adds a primitive, or emits a server-rendered style.
 package feedback
 

@@ -3,8 +3,8 @@ package turso
 import (
 	"context"
 
-	"github.com/gopernicus/gopernicus/pockets/cms/domain/messaging"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	"github.com/gopernicus/gopernicus/pockets/cms/domain/messaging"
 )
 
 // InquiryStore implements messaging.InquiryRepository over a libSQL database.

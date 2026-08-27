@@ -28,7 +28,7 @@ func TestOverrideSystemsAreDistinct(t *testing.T) {
 	if len(cfg.EmailContentTemplates) == 0 {
 		t.Fatal("Config.EmailContentTemplates empty: the host email override is not wired")
 	}
-	// The email override targets the feature's email namespace, not any page facility.
+	// The email override targets the pocket's email namespace, not any page facility.
 	if got := cfg.EmailContentTemplates[0].Namespace; got != auth.EmailContentNamespace {
 		t.Fatalf("email override Namespace = %q, want %q", got, auth.EmailContentNamespace)
 	}
@@ -59,7 +59,7 @@ func (c *captureSender) latest() (email.Message, bool) {
 
 // TestEmailLayerAppOverrideWins drives a real register → durable-worker → send cycle
 // on the host wiring (dev posture, the branded email override in place, a capturing
-// mailer) and proves the host's LayerApp verification template WON over the feature's
+// mailer) and proves the host's LayerApp verification template WON over the pocket's
 // LayerCore default: the rendered body carries the Gopernicus-CMS brand copy and not
 // the bundled default copy. This is the host-level demonstration that the email
 // override system actually takes effect, distinct from the page Views override.

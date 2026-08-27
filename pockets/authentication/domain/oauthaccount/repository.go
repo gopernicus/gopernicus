@@ -2,8 +2,8 @@ package oauthaccount
 
 import "context"
 
-// OAuthAccountRepository persists user↔provider links. Implemented by feature
-// store adapters (features/authentication/stores/turso) or any host-provided
+// OAuthAccountRepository persists user↔provider links. Implemented by pocket
+// store adapters (pockets/authentication/stores/turso) or any host-provided
 // implementation (see the storetest reference).
 //
 // Sentinel contract (the storetest conformance suite executes these):

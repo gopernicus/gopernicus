@@ -3,7 +3,7 @@
 // opens with. It composes primitives.DataTableToolbar + primitives.Input + a
 // no-JS submit Button inside a form GET, so filtering has a shareable URL and
 // works with no JavaScript; a host enhances it with explicit hx-* through
-// SearchAttributes. It never imports a feature domain, adds a primitive, or emits
+// SearchAttributes. It never imports a pocket domain, adds a primitive, or emits
 // a server-rendered style.
 package data
 

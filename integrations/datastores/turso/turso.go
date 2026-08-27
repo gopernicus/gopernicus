@@ -49,7 +49,7 @@ type Config struct {
 	// database is not yet reachable. Opting into Retry therefore opts into eager
 	// boot validation — the remote libSQL driver's Ping is lazy, so retrying a
 	// plain ping that cannot fail would be vacuous. The zero value keeps Open's
-	// lazy ping exactly (today's behavior): boot-time table probes in the feature
+	// lazy ping exactly (today's behavior): boot-time table probes in the pocket
 	// stores remain the validator.
 	//
 	// This governs ONLY the boot connectivity check. No statement is ever

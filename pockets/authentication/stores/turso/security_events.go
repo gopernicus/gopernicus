@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/securityevent"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/securityevent"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 

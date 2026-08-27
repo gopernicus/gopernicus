@@ -3,7 +3,7 @@ package messaging
 import "context"
 
 // InquiryRepository is the app port for persisting inquiries. Implemented by
-// feature store adapters (features/cms/stores/turso) or any host-provided
+// pocket store adapters (pockets/cms/stores/turso) or any host-provided
 // implementation (see examples/minimal's memstore).
 type InquiryRepository interface {
 	// Create persists a new inquiry.

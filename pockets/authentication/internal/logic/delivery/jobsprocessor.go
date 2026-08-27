@@ -19,8 +19,8 @@ import (
 //
 // The seams are stdlib-typed on purpose: the authentication public surface re-exports
 // Handle/Discard as plain funcs so the composition adapter (which imports both
-// features) wires them onto the jobs runtime without the authentication core ever
-// importing the jobs feature.
+// pockets) wires them onto the jobs runtime without the authentication core ever
+// importing the jobs pocket.
 type JobsProcessor struct {
 	engine   *deliverycmd.Engine
 	enc      cryptids.Encrypter
@@ -70,7 +70,7 @@ func NewJobsProcessor(d JobsProcessorDeps) (*JobsProcessor, error) {
 // jobFailure carries the Engine's explicit retry/permanent verdict across the
 // stdlib-typed handler seam as an error, so a composition adapter maps it onto the
 // generic jobs runtime's retry-at / dead-letter policy without the authentication core
-// importing the jobs feature. Its Error() is the coarse, secret-free reason.
+// importing the jobs pocket. Its Error() is the coarse, secret-free reason.
 type jobFailure struct {
 	reason    string
 	permanent bool

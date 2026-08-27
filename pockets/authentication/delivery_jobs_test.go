@@ -7,15 +7,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 // ---------------------------------------------------------------------------
 // AV3D-3.1 — jobs-mode composition seam (DeliveryDispatcher + DeliveryJobRuntime)
 //
 // A jobs-mode host wires a stdlib-typed DeliveryDispatcher (a composition adapter
-// over the generic jobs feature) and reads the DeliveryJobRuntime seam to register
+// over the generic jobs pocket) and reads the DeliveryJobRuntime seam to register
 // the delivery processor on the jobs runtime. These tests prove the seam is exposed
 // exactly when the dispatcher is wired, that construction/registration start no work
 // on the transport, and that producers submit versioned, sealed command envelopes

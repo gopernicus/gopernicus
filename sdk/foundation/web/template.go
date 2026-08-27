@@ -7,7 +7,7 @@ import (
 )
 
 // Template adapts a parsed html/template.Template to the Renderer interface, so
-// a host that prefers stdlib templates over templ can satisfy a feature's Views
+// a host that prefers stdlib templates over templ can satisfy a pocket's Views
 // port in three lines. This is FS3's promise made concrete: the view seam
 // (Renderer) is tech-neutral by design — templ is our default, never the
 // contract — and because html/template is standard library, the adapter for it

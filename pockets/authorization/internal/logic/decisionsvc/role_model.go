@@ -1,4 +1,4 @@
-// Package decisionsvc is the authorization feature's COMPOSITIONS tier: the
+// Package decisionsvc is the authorization pocket's COMPOSITIONS tier: the
 // roles kind's permission model + decision engine, and the composite decider
 // that owns the ONE decision surface across kinds. It depends downward on the
 // relationship engine (authorizersvc — which also owns the shared decision

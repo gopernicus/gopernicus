@@ -23,8 +23,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/role"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	"github.com/gopernicus/gopernicus/pockets/authorization/domain/role"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 

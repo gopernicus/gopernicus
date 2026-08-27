@@ -13,9 +13,9 @@ import (
 
 	events "github.com/gopernicus/gopernicus/pockets/events"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 // recordingRouter records the (method, path) of every registered route so a test
@@ -77,7 +77,7 @@ func readSSE(body io.Reader, out chan<- sseFrame) {
 	}
 }
 
-// newTestServer builds a host router, mounts the events feature over it with the
+// newTestServer builds a host router, mounts the events pocket over it with the
 // given middleware and Authorize, and returns the running server and its bus.
 func newTestServer(t *testing.T, mw []web.Middleware, authorize events.AuthorizeStream) (*httptest.Server, sdkevents.Bus) {
 	t.Helper()

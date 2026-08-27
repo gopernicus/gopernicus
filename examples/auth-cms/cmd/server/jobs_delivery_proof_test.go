@@ -19,9 +19,9 @@ import (
 	jobsmem "github.com/gopernicus/gopernicus/pockets/jobs/memstore"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 // This file proves the AV3D-3.2 durable-jobs-mode security properties end to end on
@@ -60,7 +60,7 @@ func stableDeliveryEnv(t *testing.T) {
 
 // sealedEnvelope mirrors the internal command.Envelope JSON shape so a host test can
 // decrypt a persisted payload and read the plaintext it sealed WITHOUT importing the
-// feature-internal command package. The json tags match command.Envelope exactly.
+// pocket-internal command package. The json tags match command.Envelope exactly.
 type sealedEnvelope struct {
 	Version         int    `json:"version"`
 	Kind            string `json:"kind"`

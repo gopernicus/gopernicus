@@ -26,7 +26,7 @@ func (s stringRenderer) Render(_ context.Context, w io.Writer) error {
 }
 
 // newTestRegistry returns a registry with the Article + Page seed types and
-// their default renderers, mirroring the feature default so handler tests
+// their default renderers, mirroring the pocket default so handler tests
 // exercise real registry-driven routing.
 func newTestRegistry() *content.Registry {
 	r := content.NewRegistry()

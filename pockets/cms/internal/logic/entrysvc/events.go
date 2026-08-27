@@ -5,7 +5,7 @@ import (
 )
 
 // Content event type names — the three ratified names emitted from entrysvc.
-// They are cms-internal: no shared struct crosses the feature boundary (design
+// They are cms-internal: no shared struct crosses the pocket boundary (design
 // §4 rule-6 note), consumers subscribe by topic and project metadata only.
 const (
 	typeContentPublished = "content.published"

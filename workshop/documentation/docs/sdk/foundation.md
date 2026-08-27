@@ -94,14 +94,14 @@ dbIDs := cryptids.Database             // empty ID delegates to the store
 uuidIDs := cryptids.NewGenerator(googleuuid.V7())
 ```
 
-`SHA256Hasher` is appropriate for high-entropy API keys, not human passwords. Password hashing belongs behind a feature-owned port and an integration such as bcrypt.
+`SHA256Hasher` is appropriate for high-entropy API keys, not human passwords. Password hashing belongs behind a pocket-owned port and an integration such as bcrypt.
 
 ## Workers versus jobs
 
 `foundation/workers` owns execution mechanics: polling, bounded concurrency, wake channels, panic recovery, middleware, claim/process/complete/fail sequencing, and graceful drain.
 
-It does not own a durable job aggregate, queue schema, cron scheduling, or HTTP surface. Those belong to the [jobs feature](../features/jobs.md). Mechanism remains reusable; domain lifecycle remains feature-owned.
+It does not own a durable job aggregate, queue schema, cron scheduling, or HTTP surface. Those belong to the [jobs pocket](../pockets/jobs.md). Mechanism remains reusable; domain lifecycle remains pocket-owned.
 
 ## Foundation is not a miscellaneous drawer
 
-To belong here, a package must be service-agnostic and stay flat. A helper that depends on another foundation package, owns a behavioral provider port, or encodes application policy likely belongs in a capability, feature, integration, or host instead.
+To belong here, a package must be service-agnostic and stay flat. A helper that depends on another foundation package, owns a behavioral provider port, or encodes application policy likely belongs in a capability, pocket, integration, or host instead.

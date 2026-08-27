@@ -1,7 +1,7 @@
-// Package memstore is an in-memory implementation of the CMS feature's
-// repositories. It exists to prove the load-bearing property of the feature
-// module split (plan §2): a host can run features/cms with a store of its own
-// choosing, so this module's graph pulls NO libsql — only features/cms (+ its
+// Package memstore is an in-memory implementation of the CMS pocket's
+// repositories. It exists to prove the load-bearing property of the pocket
+// module split (plan §2): a host can run pockets/cms with a store of its own
+// choosing, so this module's graph pulls NO libsql — only pockets/cms (+ its
 // theme deps) and sdk. It is a reference "bring your own store", not a
 // production datastore: data lives in maps and is lost on exit.
 //
@@ -50,7 +50,7 @@ type data struct {
 }
 
 // Store is an in-memory CMS datastore. Its Repositories method yields the port
-// set features/cms needs.
+// set pockets/cms needs.
 type Store struct{ d *data }
 
 // New returns an empty Store.
@@ -66,7 +66,7 @@ func New() *Store {
 	}}
 }
 
-// Repositories bundles the per-port views as the feature's repository set.
+// Repositories bundles the per-port views as the pocket's repository set.
 func (s *Store) Repositories() cms.Repositories {
 	return cms.Repositories{
 		Entries:   entryRepo{s.d},

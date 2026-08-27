@@ -40,8 +40,8 @@ const JobKind = "authentication.delivery"
 // three operations every producer needs — submit-once, replace, and latest status —
 // over STDLIB TYPES only, so:
 //
-//   - the authentication feature core imports no jobs (or any sibling) feature; and
-//   - a phase-3 composition adapter that lives OUTSIDE both features can implement
+//   - the authentication pocket core imports no jobs (or any sibling) pocket; and
+//   - a phase-3 composition adapter that lives OUTSIDE both pockets can implement
 //     it and bridge each call to the sdk keyed-work protocol
 //     (work.Enqueuer/work.Replacer/work.StatusReader in sdk/capabilities/work)
 //     (dropping the rail/purpose params, which a generic-jobs payload already carries

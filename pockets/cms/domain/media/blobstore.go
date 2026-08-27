@@ -6,7 +6,7 @@ import (
 )
 
 // BlobStore is the narrow binary-storage surface MediaService needs.
-// *filestorage.FileStore satisfies it. It is part of the feature's public
+// *filestorage.FileStore satisfies it. It is part of the pocket's public
 // surface because a host supplies the concrete blob store via cms.Config.
 type BlobStore interface {
 	Upload(ctx context.Context, path string, reader io.Reader) error

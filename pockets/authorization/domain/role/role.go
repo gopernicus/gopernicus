@@ -1,4 +1,4 @@
-// Package role is the public rim of the authorization feature's ROLES kind —
+// Package role is the public rim of the authorization pocket's ROLES kind —
 // a deliberately minimal role-assignment contract, independent of the
 // relationship (ReBAC) kind. The backing table is `iam_roles`.
 //

@@ -1,6 +1,6 @@
-// Package goth is the ui/goth implementation of the CMS feature's HTML rendering
-// port (cms.Views). It is a sibling module of features/cms (FS3/FS4 — presentation
-// defaults ship as views/<pkg>), so the feature core stays sdk-only and never
+// Package goth is the ui/goth implementation of the CMS pocket's HTML rendering
+// port (cms.Views). It is a sibling module of pockets/cms (FS3/FS4 — presentation
+// defaults ship as views/<pkg>), so the pocket core stays sdk-only and never
 // imports templ or ui/goth. This adapter owns the domain-to-GOTH translation: it
 // renders every CMS page — the public site chrome AND the admin management pages —
 // through the ui/goth Bundle (its self-hosted fingerprinted assets, primitives, and

@@ -13,13 +13,13 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/internal/logic/authsvc"
 	"github.com/gopernicus/gopernicus/pockets/authentication/internal/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 // Refresh-cookie path transport tests (upstream evidence §2). The resolved refresh
 // path is the SINGLE scope used to issue (login, rotation) and delete (logout) the
-// refresh cookie, so a host mounting the feature under a prefix keeps cookie-driven
+// refresh cookie, so a host mounting the pocket under a prefix keeps cookie-driven
 // refresh alive.
 
 // newRefreshPathHandler mounts the routes over the in-memory fakes with an explicit

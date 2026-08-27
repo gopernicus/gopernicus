@@ -1,13 +1,13 @@
-# features/jobs — durable background jobs + cron/interval schedules
+# pockets/jobs — durable background jobs + cron/interval schedules
 
-A pluggable, datastore-free jobs feature: a durable queue (enqueue with
+A pluggable, datastore-free jobs pocket: a durable queue (enqueue with
 idempotency, atomic lease-based claim, retry, dead-letter) and recurring
 schedules (cron or fixed interval) fired exactly once per slot across any
 number of runtime instances — no leader election, just a value-CAS and a
 deterministic idempotency key. Built on `sdk/foundation/workers` (the pool/runner
-facility). Design of record: `.claude/plans/roadmap/jobs-feature-design.md`.
+facility). Design of record: `.claude/plans/roadmap/jobs-pocket-design.md`.
 
-## Layout (the trio — see `features/README.md` §2 for the contract)
+## Layout (the trio — see `pockets/README.md` §2 for the contract)
 
 ```
 jobs.go                  the socket: Repositories, Config, CronParser/
@@ -88,13 +88,13 @@ and persist.
 
 `Service.Enqueue(ctx, kind string, payload json.RawMessage) (string, error)`
 is deliberately **stdlib-typed** — a compatibility contract so another
-feature's own narrow enqueuer port matches it structurally with zero
+pocket's own narrow enqueuer port matches it structurally with zero
 imports of this module (constitution rule 6).
 
 ## The fenced delivery surface — the hardened queue (AV3D)
 
 A second, opt-in queue substrate (`Repositories.FencedQueue`) hardens the basic
-queue for a consuming feature that needs durable, at-least-once, replaceable work
+queue for a consuming pocket that needs durable, at-least-once, replaceable work
 with a claim-fenced payload checkpoint — authentication's durable delivery is the
 first consumer. It adds what the basic queue could not safely provide:
 
@@ -118,8 +118,8 @@ The consumer-facing seam is the **canonical keyed-work protocol**
 (`sdk/capabilities/work`): the jobs `Service` is its **implementation of record**,
 satisfying `work.Enqueuer` (`EnqueueOnce`), `work.Replacer` (`Replace`), and
 `work.StatusReader` (`LatestStatusByKey` — lifecycle status only, never
-payload/secret) by compile-time assertion. A consuming feature depends on the sdk
-`work` ports, never on this module, so features never import features. Payload is
+payload/secret) by compile-time assertion. A consuming pocket depends on the sdk
+`work` ports, never on this module, so pockets never import pockets. Payload is
 opaque `[]byte`, and the Service deep-copies it with a central `bytes.Clone` at the
 protocol boundary — so an admitted unit's bytes are a store-independent snapshot
 (a later caller mutation cannot alter admitted work, for every backing store, by
@@ -127,7 +127,7 @@ construction; `worktest` pins it under `-race`). The executor-side
 `Service.Checkpoint` is out of the protocol (D3):
 a consuming processor redeclares it structurally. The domain-rich
 `job.FencedQueueRepository` and the host-registered `DeadLetterFunc`/`FencedRuntime`
-handlers carry `job.Job` because they are host-side wiring, not the cross-feature
+handlers carry `job.Job` because they are host-side wiring, not the cross-pocket
 seam.
 
 `jobs.NewFencedRuntime(svc, FencedRuntimeConfig{...})` builds the lease-fenced pool
@@ -143,7 +143,7 @@ recorded in NOTES.md: turso against the playground incl. the
 concurrent-claim case; postgres on docker where `FOR UPDATE SKIP LOCKED`
 makes contention trivial). The canonical migration set is three files per
 dialect with identical filename sets: `0001_job_queue`, `0002_job_schedules`,
-and `0003_fenced_job_queue` (the fenced delivery surface above). A host may instead use `features/jobs/memstore`
+and `0003_fenced_job_queue` (the fenced delivery surface above). A host may instead use `pockets/jobs/memstore`
 (public, in-core — `examples/jobs-minimal` is the zero-infra proof) or
 implement the two ports itself. Postgres conformance:
 `docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17`

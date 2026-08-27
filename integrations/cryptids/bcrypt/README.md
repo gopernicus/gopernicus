@@ -2,11 +2,11 @@
 
 A password-hashing connector wrapping exactly one third-party library —
 `golang.org/x/crypto/bcrypt`. Its `Hasher` structurally satisfies the
-feature-owned `PasswordHasher` port (mirrors `auth.PasswordHasher` in the auth
-feature module) with zero import in either direction: the port lives with its
+pocket-owned `PasswordHasher` port (mirrors `auth.PasswordHasher` in the auth
+pocket module) with zero import in either direction: the port lives with its
 consumer, this integration knows only bcrypt.
 
-It owns "how to hash with bcrypt," never any feature's policy. A different
+It owns "how to hash with bcrypt," never any pocket's policy. A different
 algorithm (argon2, scrypt) would be a sibling connector, swapped at the
 composition root.
 
@@ -37,4 +37,4 @@ this module takes no `sdk` dependency.
 Unit tests are hermetic and run with a plain `go test ./...` — roundtrip, wrong
 password, salt uniqueness, cost option, the 72-byte boundary, and a compile-time
 structural-satisfaction assertion against a locally-mirrored copy of the port
-interface (no import of the auth feature).
+interface (no import of the auth pocket).

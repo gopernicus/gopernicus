@@ -23,14 +23,14 @@ import (
 	"strings"
 	"testing"
 
+	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/jobs/domain/job"
 	"github.com/gopernicus/gopernicus/pockets/jobs/domain/schedule"
 	"github.com/gopernicus/gopernicus/pockets/jobs/storetest"
-	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-// jobTables are the feature's tables cleared before each newRepo call so every
+// jobTables are the pocket's tables cleared before each newRepo call so every
 // leaf subtest starts from a clean, isolated store.
 var jobTables = []string{"job_queue", "job_schedules", "fenced_job_queue"}
 

@@ -3,8 +3,8 @@ package taxonomy
 import "context"
 
 // TermRepository is the app port for persisting terms. Slug uniqueness is
-// per-kind (a category and a tag may share a slug). Implemented by feature
-// store adapters (features/cms/stores/turso) or any host-provided
+// per-kind (a category and a tag may share a slug). Implemented by pocket
+// store adapters (pockets/cms/stores/turso) or any host-provided
 // implementation (see examples/minimal's memstore).
 type TermRepository interface {
 	// Get returns the term with the given id, or sdk.ErrNotFound.

@@ -15,9 +15,9 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/internal/logic/authsvc"
 	"github.com/gopernicus/gopernicus/pockets/authentication/internal/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 // GET /auth/me transport tests (ruling 6). The route is session HYDRATION: it

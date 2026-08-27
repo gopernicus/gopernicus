@@ -39,7 +39,7 @@ the gain/lose/retain verdicts hold. The executed evidence — commands, detectio
 outputs, repair statements, post-boot access comparison, and rollback
 demonstration — is recorded in [Executed evidence](#executed-evidence-az3-51-2026-07-14)
 below. The post-conversion boot + access comparison is also a repeatable,
-env-gated live test: `features/authorization/stores/pgx` `TestUpgradeRunbook`.
+env-gated live test: `pockets/authorization/stores/pgx` `TestUpgradeRunbook`.
 
 **Correction landed during execution (§7).** The canonical `0001`/`0002` files use
 `CREATE TABLE IF NOT EXISTS`, which is a **no-op against a pre-existing v1 table**
@@ -61,14 +61,14 @@ Two disjoint paths follow, and a host takes exactly one:
 ## 1. Before you start — is this an upgrade at all?
 
 Re-confirm the pre-tag posture. The canonical `0001`–`0004` migrations are the
-v3 **greenfield** schema, folded clean because no `features/authorization` (or
+v3 **greenfield** schema, folded clean because no `pockets/authorization` (or
 store) tag exists. An adopter on live v1 tables therefore **converts data with
 this runbook**, not by applying shipped `ALTER` files — none ship. If a relevant
 tag now exists, stop: the migration strategy switches to append-only and this
 draft no longer applies.
 
 ```sh
-git -C <this repo> tag --list 'features/authorization*'   # expect: empty
+git -C <this repo> tag --list 'pockets/authorization*'   # expect: empty
 ```
 
 ## 2. The access-change assessment (run this first)
@@ -302,16 +302,16 @@ from `cms`/`auth`/`jobs`/`events`. The shared `(source, version)` ledger
 (`schema_migrations`, `version` = the full filename) expresses **no ordering
 between sources**, so the host decides where the `authorization` source sits in
 its own pre-boot stream. The source is **self-contained**: its four files create
-and constrain only the `iam_*` tables and reference no other feature's schema, so
+and constrain only the `iam_*` tables and reference no other pocket's schema, so
 it can sit anywhere in the host's ordered stream today — before or after
 `cms`/`auth`/`jobs`/`events`.
 
 What is fixed is the **intra-source** order: the four files apply as a
 contiguous group in filename order (`0001`→`0004`), because `0003`/`0004` are the
 write path over the tables `0001`/`0002` create, and the boot probe requires all
-four present before wiring. A host merging every feature into a single ledger
+four present before wiring. A host merging every pocket into a single ledger
 directory (the `examples/cms` `primary/` pattern) keeps the four together in
-filename order; a host applying each feature's embedded `MigrationsFS` with its
+filename order; a host applying each pocket's embedded `MigrationsFS` with its
 own `RunMigrations` call (the `auth-cms` per-source pattern) applies the
 `authorization` source as one call. Either way, **hosts never renumber the
 scaffolded files** — the filenames are the ledger keys and the pgx/turso siblings
@@ -353,7 +353,7 @@ This runbook was executed end to end against a populated v1 fixture on both
 dialects. The PostgreSQL leg additionally **booted** a v3-composed
 `authorization.Service` over the converted store and compared access. The
 repeatable form of the boot + access comparison is
-`features/authorization/stores/pgx` `TestUpgradeRunbook` (env-gated on
+`pockets/authorization/stores/pgx` `TestUpgradeRunbook` (env-gated on
 `POSTGRES_TEST_DSN`, hermetic-skippable, fully re-runnable — it owns and drops the
 `iam_*` tables around its run).
 

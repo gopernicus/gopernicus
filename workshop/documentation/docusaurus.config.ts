@@ -80,10 +80,10 @@ const config: Config = {
           activeBaseRegex: '/docs/sdk(?:/|$)',
         },
         {
-          to: '/docs/features/overview',
-          label: 'Features',
+          to: '/docs/pockets/overview',
+          label: 'Pockets',
           position: 'left',
-          activeBaseRegex: '/docs/features(?:/|$)',
+          activeBaseRegex: '/docs/pockets(?:/|$)',
         },
         {
           to: '/docs/workshop/overview',
@@ -118,7 +118,7 @@ const config: Config = {
           title: 'Build',
           items: [
             {label: 'SDK', to: '/docs/sdk/overview'},
-            {label: 'Features', to: '/docs/features/overview'},
+            {label: 'Pockets', to: '/docs/pockets/overview'},
             {label: 'Workshop CLI', to: '/docs/workshop/commands'},
           ],
         },

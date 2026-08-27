@@ -6,8 +6,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/oauthstate"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/oauthstate"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 

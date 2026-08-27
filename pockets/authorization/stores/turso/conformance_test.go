@@ -18,12 +18,12 @@ import (
 	"os"
 	"testing"
 
+	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/storetest"
-	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 )
 
-// authorizationTables are the feature's tables cleared before each newRepos call
+// authorizationTables are the pocket's tables cleared before each newRepos call
 // so every leaf subtest starts from a clean, isolated store — including the v3
 // write-path tables (iam_scopes revision anchors, iam_mutations receipts) so the
 // Mutations conformance suite starts from revision 0 with no consumed MutationIDs.

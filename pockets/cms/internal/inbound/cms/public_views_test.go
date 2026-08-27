@@ -28,7 +28,7 @@ func (overrideViews) Home(_ []menus.MenuItem, _ []ListItem) web.Renderer {
 }
 
 // TestViews_HostOverridesHome proves a host can replace the Home page by passing
-// a Views that embeds the default and overrides Home, and that the feature's own
+// a Views that embeds the default and overrides Home, and that the pocket's own
 // handler renders the override (it calls through the interface).
 func TestViews_HostOverridesHome(t *testing.T) {
 	entries := &fakeEntrySvc{listFn: func(ctx context.Context, q content.EntryQuery) (crud.Page[content.Entry], error) {

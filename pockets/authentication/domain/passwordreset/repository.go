@@ -3,9 +3,9 @@ package passwordreset
 import "context"
 
 // Repository performs the atomic password-reset composition (design §5.9).
-// Implemented by feature store adapters (features/authentication/stores/turso,
+// Implemented by pocket store adapters (pockets/authentication/stores/turso,
 // .../pgx) or any host-provided implementation (see the storetest reference); the
-// port is public because those adapters live outside the feature module. The port
+// port is public because those adapters live outside the pocket module. The port
 // doc comments are the spec; the storetest conformance suite is their executable
 // form.
 //

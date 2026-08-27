@@ -23,10 +23,10 @@ import (
 	"strings"
 	"testing"
 
+	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/mutation"
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
-	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 )
 
 // v1BaselineDDL is the pre-v3 schema reconstructed verbatim from git d11c7a2

@@ -6,8 +6,8 @@ import (
 )
 
 // Repository persists recent-authentication grants with an atomic single-use
-// consume (design §5.0). Implemented by feature store adapters
-// (features/authentication/stores/turso, .../pgx) or any host-provided
+// consume (design §5.0). Implemented by pocket store adapters
+// (pockets/authentication/stores/turso, .../pgx) or any host-provided
 // implementation (see the storetest reference). The port doc comments are the
 // spec; the storetest conformance suite is their executable form.
 //

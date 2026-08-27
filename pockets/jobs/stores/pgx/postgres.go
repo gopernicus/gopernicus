@@ -1,7 +1,7 @@
-// Package pgx is the jobs feature's PostgreSQL store adapter — its own
+// Package pgx is the jobs pocket's PostgreSQL store adapter — its own
 // module so a host that brings a different datastore never pulls pgx into its
 // module graph (the load-bearing opt-out property). It owns the SQL; the HOST owns its database
-// lifecycle. It is the dialect sibling of features/jobs/stores/turso: same
+// lifecycle. It is the dialect sibling of pockets/jobs/stores/turso: same
 // surface plus the Postgres-only WithSchema option — SQLite has no schemas —
 // same migration version set (identical filenames), same port semantics — a host
 // switches dialect by one import + one Open call.
@@ -11,13 +11,13 @@
 // Option with QueueOption kept as an alias, and stores/turso still names it
 // QueueOption. Renaming turso's would cost a retag this train exists to avoid.
 //
-// Migrations follow the scaffold model (matching features/jobs/stores/turso):
+// Migrations follow the scaffold model (matching pockets/jobs/stores/turso):
 // the canonical *.sql live here, but the recommended path is to ExportMigrations
 // into the host's own migrations dir and let the host's runner apply them
 // pre-boot, alongside the host's other migrations, through one app-owned ledger.
 // The framework never applies migrations behind the host's back.
 //
-// The two stores implement the feature's ports over the connector's DB/InTx/
+// The two stores implement the pocket's ports over the connector's DB/InTx/
 // MapError: Queue's Claim is one UPDATE ... WHERE job_id=(SELECT ... FOR UPDATE
 // SKIP LOCKED) ... RETURNING statement (contention-free concurrent claiming, N
 // workers each locking a different row; the lease-expiry reclaim arm is folded
@@ -30,8 +30,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/gopernicus/gopernicus/pockets/jobs"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	"github.com/gopernicus/gopernicus/pockets/jobs"
 )
 
 // probeTables is the inventory of relations this package's stores read and

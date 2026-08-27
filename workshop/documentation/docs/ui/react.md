@@ -7,7 +7,7 @@ description: Use a Gopernicus host as an API for a React application.
 
 Gopernicus does not require the Go process to render the user interface. A host can expose JSON and OpenAPI endpoints while a separate React application owns pages, browser state, routing, and assets.
 
-The repository does not currently contain a `ui/react` Go module. This page describes the integration boundary for React clients today and the likely responsibility of a future sibling UI module: reusable client-side components and conventions, not feature schemas or Go routes.
+The repository does not currently contain a `ui/react` Go module. This page describes the integration boundary for React clients today and the likely responsibility of a future sibling UI module: reusable client-side components and conventions, not pocket schemas or Go routes.
 
 ## The boundary
 
@@ -21,7 +21,7 @@ React application
             ▼
 Gopernicus host
   ├── sdk/foundation/web    router, middleware, responses
-  ├── features/*            domain services and feature routes
+  ├── pockets/*            domain services and pocket routes
   ├── integrations/*        database, identity, mail, storage, tracing
   └── host code              composition, lifecycle, app-local routes
 ```
@@ -30,16 +30,16 @@ The Go host still owns authentication policy, authorization checks, persistence,
 
 ## API-only host shape
 
-Leave feature view configuration empty when the host only needs an API. Register JSON routes with the SDK web foundation and document the public surface explicitly:
+Leave pocket view configuration empty when the host only needs an API. Register JSON routes with the SDK web foundation and document the public surface explicitly:
 
 ```go
 router := web.NewWebHandler(web.WithLogging(log))
 router.Use(web.RequestID(), web.Logger(log), web.Panics(log))
 
-mount := feature.Mount{Router: router, Logger: log}
+mount := pocket.Mount{Router: router, Logger: log}
 
-// Construct the feature service and its repositories in the host.
-// Register feature routes on mount, then add app-local API routes.
+// Construct the pocket service and its repositories in the host.
+// Register pocket routes on mount, then add app-local API routes.
 router.GET("/api/projects", listProjects)
 router.POST("/api/projects", createProject)
 
@@ -50,7 +50,7 @@ router.ServeOpenAPI(
 )
 ```
 
-The exact feature construction depends on the feature and store modules selected by the host. The important part is that no GOTH or other UI dependency enters the API host's module graph just because a feature has an optional view adapter.
+The exact pocket construction depends on the pocket and store modules selected by the host. The important part is that no GOTH or other UI dependency enters the API host's module graph just because a pocket has an optional view adapter.
 
 ## A small client wrapper
 
@@ -133,6 +133,6 @@ The Go host can still expose `/api/projects/{id}` while the browser route is `/p
 
 ## Shared UI work
 
-A future `ui/react` module can hold client-side primitives, tokens, and patterns shared by multiple React applications. It should remain independent of feature persistence and Go route registration. Feature-specific API hooks and screens belong in the consuming React application or in a separate client package that depends on the API contract.
+A future `ui/react` module can hold client-side primitives, tokens, and patterns shared by multiple React applications. It should remain independent of pocket persistence and Go route registration. Pocket-specific API hooks and screens belong in the consuming React application or in a separate client package that depends on the API contract.
 
-See [Web foundation](../sdk/web.md), [Feature modules](../features/overview.md), and [Compose a host](../guides/compose-host.md) for the Go side of this boundary.
+See [Web foundation](../sdk/web.md), [Pocket modules](../pockets/overview.md), and [Compose a host](../guides/compose-host.md) for the Go side of this boundary.

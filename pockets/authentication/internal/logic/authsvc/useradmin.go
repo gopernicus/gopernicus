@@ -34,11 +34,11 @@ const (
 )
 
 // UserAdminCheckRequest is the parsed, principal-resolved authorization question
-// the feature poses to a host UserAdminCheck. TargetUserID is empty for
+// the pocket poses to a host UserAdminCheck. TargetUserID is empty for
 // UserAdminList and set for every other action.
 //
 // The Principal reaches the policy VERBATIM — including a machine principal from
-// an API key. The feature does not pre-decide whether a service account may
+// an API key. The pocket does not pre-decide whether a service account may
 // administer users; that is exactly the decision the host owns.
 type UserAdminCheckRequest struct {
 	Principal    identity.Principal
@@ -47,17 +47,17 @@ type UserAdminCheckRequest struct {
 }
 
 // UserAdminCheck is the host authorization seam for user administration. It is
-// the InviteCheck precedent applied to the user directory: the feature owns
+// the InviteCheck precedent applied to the user directory: the pocket owns
 // session validation, principal resolution, and request parsing, then asks the
 // host one question it can answer with its own roles, tenancy, or policy engine.
 //
 // Authentication NEVER invents a role named "admin" and never interprets a role
-// string. It does not import features/authorization. A host that has an
-// authorization feature wires a closure over it; a host with a hard-coded
+// string. It does not import pockets/authorization. A host that has an
+// authorization pocket wires a closure over it; a host with a hard-coded
 // operator list wires that instead.
 //
 // A nil return authorizes. A denial (wrap sdk.ErrForbidden) or an infrastructure
-// error BOTH fail closed — the feature never distinguishes "policy said no" from
+// error BOTH fail closed — the pocket never distinguishes "policy said no" from
 // "policy could not answer" by proceeding.
 //
 // Wiring a nil UserAdminCheck leaves the bundled admin routes UNMOUNTED even when

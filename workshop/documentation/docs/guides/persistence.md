@@ -1,6 +1,6 @@
 ---
 title: Persistence & migrations
-description: Choose a connector, wire feature stores, own migrations, and prove datastore parity.
+description: Choose a connector, wire pocket stores, own migrations, and prove datastore parity.
 ---
 
 # Persistence & migrations
@@ -8,7 +8,7 @@ description: Choose a connector, wire feature stores, own migrations, and prove 
 Gopernicus separates three responsibilities:
 
 1. a datastore **connector** owns database mechanics;
-2. a feature **store module** owns feature SQL and repository implementations;
+2. a pocket **store module** owns pocket SQL and repository implementations;
 3. the **host** owns the final migration ledger and when it is applied.
 
 ## Choose a connector
@@ -42,13 +42,13 @@ A host may implement the public repositories instead. That is the escape hatch f
 
 ## Export canonical migrations once
 
-Feature store modules expose:
+Pocket store modules expose:
 
 - `MigrationsFS`;
 - `MigrationsDir`;
 - `ExportMigrations(dst string)`.
 
-Scaffold chosen feature sources into one host-owned ordered directory:
+Scaffold chosen pocket sources into one host-owned ordered directory:
 
 ```go
 if err := authpgx.ExportMigrations("workshop/migrations/primary"); err != nil {
@@ -103,7 +103,7 @@ The application server does not migrate automatically. This prevents replicas fr
 
 ## Transactions stay behind ports
 
-Use SDK `crud.Transactor` or feature-declared atomic repository methods when a use case spans several writes. Do not pull a connector's raw underlying handle into logic as a service-locator shortcut.
+Use SDK `crud.Transactor` or pocket-declared atomic repository methods when a use case spans several writes. Do not pull a connector's raw underlying handle into logic as a service-locator shortcut.
 
 An atomic domain operation should be one port method when all implementations must guarantee the same invariant—for example authentication's user + primary identifier creation or authorization's guarded mutation apply.
 

@@ -25,12 +25,12 @@ import (
 	"sync"
 	"testing"
 
+	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/storetest"
-	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 )
 
-// authorizationTables are the feature's tables cleared before each newRepos call
+// authorizationTables are the pocket's tables cleared before each newRepos call
 // so every leaf subtest starts from a clean, isolated store — including the v3
 // write-path tables (iam_scopes revision anchors, iam_mutations receipts) so the
 // Mutations conformance suite starts from revision 0 with no consumed MutationIDs.
@@ -38,7 +38,7 @@ import (
 var authorizationTables = []string{"iam_relationships", "iam_roles", "iam_scopes", "iam_mutations"}
 
 // fixtureTables are the relation names a hand-rolled fixture statement may name:
-// the feature's own tables plus the migration ledger the destructive fixtures
+// the pocket's own tables plus the migration ledger the destructive fixtures
 // clear. qualifySQL rewrites exactly these under the test schema.
 var fixtureTables = append(append([]string(nil), authorizationTables...), "schema_migrations")
 
@@ -115,7 +115,7 @@ func qualify(t *testing.T, name string) string {
 	return testSchema(t).Table(name)
 }
 
-// qualifySQL rewrites every bare feature/ledger table name in a hand-rolled
+// qualifySQL rewrites every bare pocket/ledger table name in a hand-rolled
 // fixture statement under the configured leg's schema. It is a TEST-only helper:
 // the store's own SQL is qualified at its source, never rewritten.
 func qualifySQL(t *testing.T, sql string) string {

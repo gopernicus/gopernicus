@@ -12,8 +12,8 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/role"
 	"github.com/gopernicus/gopernicus/pockets/authorization/memstore"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 // relFake is a trivial relationship.Storer for socket wiring/delegation tests.

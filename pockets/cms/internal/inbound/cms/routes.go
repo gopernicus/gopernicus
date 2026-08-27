@@ -7,15 +7,15 @@ import (
 
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/content"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 // publicPageTTL is how long rendered public pages stay cached.
 const publicPageTTL = 60 * time.Second
 
 // RouterOption customizes router construction. It is a convenience for the
-// standalone BuildRouter helper (used by tests); the feature's own Register
+// standalone BuildRouter helper (used by tests); the pocket's own Register
 // path passes overrides through cms.Config instead.
 type RouterOption func(*routerConfig)
 

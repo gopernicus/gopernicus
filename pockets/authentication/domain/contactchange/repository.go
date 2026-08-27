@@ -7,7 +7,7 @@ import (
 )
 
 // Repository persists the pending-value flow state of an identifier add/change
-// (design §2.4). Implemented by feature store adapters (features/authentication/
+// (design §2.4). Implemented by pocket store adapters (pockets/authentication/
 // stores/turso, .../pgx) or any host-provided implementation (see the storetest
 // reference). The port doc comments are the spec; the storetest conformance suite
 // is their executable form.

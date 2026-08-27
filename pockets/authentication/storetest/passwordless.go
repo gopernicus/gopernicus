@@ -134,7 +134,7 @@ func testRedeemProvision(t *testing.T, repos auth.Repositories) {
 		t.Fatal("no user was created")
 	}
 	if res.User.DisplayName != "" {
-		t.Errorf("display name = %q, want empty — the feature invents no name", res.User.DisplayName)
+		t.Errorf("display name = %q, want empty — the pocket invents no name", res.User.DisplayName)
 	}
 	if !res.User.Active() {
 		t.Error("the provisioned user is not active")

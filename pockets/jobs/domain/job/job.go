@@ -1,10 +1,10 @@
-// Package job is the durable job-queue domain of the jobs feature: the Job
+// Package job is the durable job-queue domain of the jobs pocket: the Job
 // entity, the Enqueue input, and the QueueRepository outbound port a store
-// adapter (features/jobs/stores/turso, the in-core memstore) or a host fills.
+// adapter (pockets/jobs/stores/turso, the in-core memstore) or a host fills.
 //
 // The Job entity satisfies sdk/foundation/workers.Job and QueueRepository is a strict
 // superset of sdk/foundation/workers.JobStore[Job] — both asserted at compile time below,
-// so the feature's runtime drives the store through the exact kernel contract
+// so the pocket's runtime drives the store through the exact kernel contract
 // with no adapter layer.
 package job
 
@@ -19,7 +19,7 @@ import (
 )
 
 // Status is the lifecycle state of a queued job. It is a source-compatible ALIAS
-// of the canonical keyed-work vocabulary (sdk/capabilities/work): the jobs feature
+// of the canonical keyed-work vocabulary (sdk/capabilities/work): the jobs pocket
 // is the implementation of record for that protocol, so the lifecycle type has one
 // source of truth rather than a duplicate definition guarded by a drift test. The
 // persisted strings are byte-identical by construction.
@@ -71,7 +71,7 @@ type Job struct {
 	JobID string
 	Kind  string
 	// TenantID is the OPTIONAL host-defined boundary the job was enqueued under.
-	// It is vocabulary only: the feature attaches no semantics to it, never
+	// It is vocabulary only: the pocket attaches no semantics to it, never
 	// filters or authorizes by it, and never derives it — a host sets it or does
 	// not. Empty = no tenant, and stores map "" to NULL (the same empty-zero
 	// convention as WorkerName/FailureReason). Its consumer is operator SQL.
@@ -170,8 +170,8 @@ type ListFilter struct {
 }
 
 // QueueRepository is the durable queue outbound port. A store adapter
-// (features/jobs/stores/turso, the in-core memstore) or a host fills it; the
-// feature core stays dialect-blind. It is a strict superset of
+// (pockets/jobs/stores/turso, the in-core memstore) or a host fills it; the
+// pocket core stays dialect-blind. It is a strict superset of
 // sdk/foundation/workers.JobStore[Job]: Claim/Complete/Fail share the kernel's exact
 // signatures so a QueueRepository is the store a workers.Runner drives directly.
 type QueueRepository interface {

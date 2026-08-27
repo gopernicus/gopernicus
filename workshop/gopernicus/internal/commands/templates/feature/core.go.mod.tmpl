@@ -1,7 +1,0 @@
-module {{.ModulePath}}
-
-go {{.GoVersion}}
-
-// FS1: a feature core requires EXACTLY sdk — nothing else. Persistence lives in
-// the stores/{turso,pgx} sibling modules; views (if any) in a views/ sibling.
-require github.com/gopernicus/gopernicus/sdk v0.5.0

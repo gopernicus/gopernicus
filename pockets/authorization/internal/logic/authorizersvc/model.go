@@ -1,8 +1,8 @@
 // Package authorizersvc is the sealed evaluation engine of the authorization
-// feature's RELATIONSHIP kind: the registered-data permission model (schema
+// pocket's RELATIONSHIP kind: the registered-data permission model (schema
 // DSL + validator) and the Check/Lookup engine that evaluates it against a
 // relationship.Storer. The roots re-export the model types and DSL; the engine
-// methods are promoted onto the feature Service. The package also owns the
+// methods are promoted onto the pocket Service. The package also owns the
 // kind-agnostic decision VOCABULARY (CheckRequest, CheckResult, Reason,
 // LookupResult, Explanation, EvaluationLimits) and the ONE HTTP gate body
 // (Gates over Checker/Declarer): those are shared contracts every

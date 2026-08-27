@@ -31,7 +31,7 @@ type TemplateBinding struct {
 // Registry holds the registered content types and their per-(type, template)
 // render funcs (plan §3). It is the WordPress "post type" table built as code,
 // not data: adding a type is a registration, never a migration. Construct one
-// with NewRegistry, populate it during feature/host registration, then treat it
+// with NewRegistry, populate it during pocket/host registration, then treat it
 // as read-only while serving.
 type Registry struct {
 	types     map[string]ContentType

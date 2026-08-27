@@ -1,6 +1,6 @@
-// Package schedulesvc holds the jobs feature's schedule use cases: EnsureSchedule
+// Package schedulesvc holds the jobs pocket's schedule use cases: EnsureSchedule
 // validation/upsert and the fire engine. It is internal so it is not part of the
-// feature's public SemVer surface; the host-facing surface is package jobs.
+// pocket's public SemVer surface; the host-facing surface is package jobs.
 //
 // The fire engine, per tick:
 //

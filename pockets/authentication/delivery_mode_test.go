@@ -9,8 +9,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/internal/logic/delivery"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 // ---------------------------------------------------------------------------
@@ -222,7 +222,7 @@ func TestNewServiceDeliveryModeMatrix(t *testing.T) {
 			wantErr: ErrInsecureDeliveryTransport,
 		},
 		{
-			// in_process builds a feature-internal bounded delivery queue (the ephemeral
+			// in_process builds a pocket-internal bounded delivery queue (the ephemeral
 			// runtime, AV3D-4.1) whose payload is always sealed, so the encrypter is
 			// REQUIRED even without a wired collaborator — the same fail-closed posture as
 			// the jobs-mode queue.
@@ -421,7 +421,7 @@ func TestNewServiceDeliveryModeCheckedAfterRuntimeMode(t *testing.T) {
 // countingDispatcher records whether any dispatcher method was invoked. It backs the
 // "Register starts no worker" proof: if Register (or NewService) ran a delivery
 // runtime or drove the transport, it would call the dispatcher, incrementing the
-// counter. In jobs mode the feature builds the processor but starts NOTHING — the host
+// counter. In jobs mode the pocket builds the processor but starts NOTHING — the host
 // runs the generic jobs runtime and only request-time producers submit — so after
 // Register the counter stays zero.
 type countingDispatcher struct{ calls *int64 }

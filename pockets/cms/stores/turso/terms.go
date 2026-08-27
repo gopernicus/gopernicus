@@ -3,8 +3,8 @@ package turso
 import (
 	"context"
 
-	"github.com/gopernicus/gopernicus/pockets/cms/domain/taxonomy"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	"github.com/gopernicus/gopernicus/pockets/cms/domain/taxonomy"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 

@@ -3,8 +3,8 @@ package turso
 import (
 	"context"
 
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/oauthaccount"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/oauthaccount"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 

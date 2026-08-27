@@ -1,12 +1,12 @@
-// Package storetest is the exported conformance suite for the events feature's
+// Package storetest is the exported conformance suite for the events pocket's
 // one outbound port: Run exercises an outbox.EntryRepository. Every store that
 // fills it — the test-scoped in-memory reference (reference_test.go), the
-// dialect adapters (features/events/stores/turso, .../postgres) — runs the same
+// dialect adapters (pockets/events/stores/turso, .../postgres) — runs the same
 // suite, so the port doc comments have one executable definition.
 //
 // The outbox.EntryRepository doc comments are the spec; this suite is their
-// executable form (design §8). It imports stdlib + sdk + the events feature's
-// own packages only (guard G2 forbids a driver import here), so features/events's
+// executable form (design §8). It imports stdlib + sdk + the events pocket's
+// own packages only (guard G2 forbids a driver import here), so pockets/events's
 // own `go test ./...` runs it against the reference on every `make check`.
 //
 // The dialect-typed transactional appender (AppendTx) is deliberately NOT in

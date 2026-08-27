@@ -289,7 +289,7 @@ func saPrincipal(serviceAccountID string) securityevent.Principal {
 }
 
 // CurrentPrincipal returns the effective Principal stashed by
-// RequireServiceAccount / RequirePrincipal, if any. It is the cross-feature
+// RequireServiceAccount / RequirePrincipal, if any. It is the cross-pocket
 // machine-or-human identity port, alongside CurrentUser.
 func (s *Service) CurrentPrincipal(ctx context.Context) (Principal, bool) {
 	return identity.FromContext(ctx)

@@ -6,7 +6,7 @@ Connect. It wraps exactly one third-party library —
 verification (OIDC discovery, JWKS fetch/cache, RS256 signature validation).
 The authorization-code, token-exchange, refresh, and userinfo flows are
 hand-rolled on `net/http`; there is **no `golang.org/x/oauth2` dependency**. It
-imports `sdk/capabilities/oauth` for the port vocabulary and no feature or other integration.
+imports `sdk/capabilities/oauth` for the port vocabulary and no pocket or other integration.
 
 ## Construction fetches the network (fail-fast)
 

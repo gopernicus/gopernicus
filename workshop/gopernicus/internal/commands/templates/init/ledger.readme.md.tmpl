@@ -1,14 +1,14 @@
 # workshop/migrations/{{.LedgerDir}} — the host-owned migration ledger
 
 This directory is the host's own ordered migration stream. Gopernicus scaffolds
-feature SQL into it (a store adapter's `ExportMigrations`), and from that moment
+pocket SQL into it (a store adapter's `ExportMigrations`), and from that moment
 the files are **yours**: the framework never migrates at startup — the host
 runner (`workshop/migrations`, `make migrate`) applies them pre-boot.
 
 ## Rules
 
 - **Scaffold-and-own.** Once a migration lands here it is host-owned; edit and
-  extend it as the host requires. Re-scaffolding a feature appends new files; it
+  extend it as the host requires. Re-scaffolding a pocket appends new files; it
   never rewrites files you already applied.
 - **Never renumber.** Files apply in filename order under a 4-digit zero-padded
   prefix (`0001_...`, `0002_...`). The next migration is `max + 1`. Renumbering

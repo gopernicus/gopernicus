@@ -102,7 +102,7 @@ type MutationAttempt struct {
 // MutationGuard is the host-supplied authorization policy for actor-facing
 // writes. AuthorizeMutation returns nil to ALLOW the attempt or a stable
 // denial/error (typically wrapping sdk.ErrForbidden / sdk.ErrUnauthorized) to
-// reject it. The feature supplies NO default allow policy: the absence of a
+// reject it. The pocket supplies NO default allow policy: the absence of a
 // guard is the read-only posture (ErrMutationsNotConfigured), never an implicit
 // allow.
 //
@@ -159,7 +159,7 @@ const (
 // headers, display strings, or unbounded payload.
 //
 // A sink implementation must NOT turn Scope.ID or Actor.ID into unbounded metric
-// labels; those are opaque high-cardinality identifiers. The feature's own
+// labels; those are opaque high-cardinality identifiers. The pocket's own
 // best-effort warning on sink failure logs only coarse, bounded fields
 // (mutation_id, decision, operation, scope_kind, reason) and never the raw
 // resource/subject IDs.
@@ -323,7 +323,7 @@ type TeardownAuthorizationScopeCommand struct {
 // unchanged. A teardown is actor-free, so its AuditEvent has a zero Actor.
 //
 // Host ordering and ID-reuse hazards (documented honestly, NOT misrepresented as
-// cross-feature atomicity): authorization does NOT call the foreign resource
+// cross-pocket atomicity): authorization does NOT call the foreign resource
 // repository from inside its transaction, so tearing down the authorization scope and
 // deleting the resource itself are TWO operations in the HOST's chosen order. Tear
 // down authorization AFTER the resource is gone (or logically deleted) so no window

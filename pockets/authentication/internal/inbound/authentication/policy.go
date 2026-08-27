@@ -11,10 +11,10 @@ import (
 
 // The technology-neutral HTML resource-policy seam (design §9.2, GOTH-0.4). A host
 // (or a view adapter such as the future ui/goth authentication adapter) may hand the
-// feature a validated set of ADDITIONAL Content-Security-Policy resource directives so
+// pocket a validated set of ADDITIONAL Content-Security-Policy resource directives so
 // a selected HTML view can load the styles, scripts, fonts, and images it needs. The
 // seam is deliberately technology-neutral: it names CSP resource classes and source
-// strings only, never templ, Alpine, HTMX, or ui/goth, so the feature core
+// strings only, never templ, Alpine, HTMX, or ui/goth, so the pocket core
 // keeps importing none of them.
 //
 // The policy WIDENS resource loading; it can never REMOVE the fixed protections
@@ -121,7 +121,7 @@ type HTMLResourcePolicy struct {
 }
 
 // NewHTMLResourcePolicy validates the requested directives and returns an immutable
-// policy. Validation is LOUD at construction (the feature's Config posture), never a
+// policy. Validation is LOUD at construction (the pocket's Config posture), never a
 // silently emitted attacker-controlled header: an unknown/fixed directive key, a
 // directive with neither a source nor a nonce, an empty source, or a source carrying a
 // control character, whitespace, ';', or ',' each returns an error wrapping
@@ -191,7 +191,7 @@ func (p *HTMLResourcePolicy) render(nonce string) string {
 
 // validateSource rejects any CSP source that could split a directive or inject a
 // second header. It permits keyword and origin/scheme forms ('self', 'unsafe-inline',
-// https://cdn.example.com, data:, https:) — the feature stays neutral about how wide a
+// https://cdn.example.com, data:, https:) — the pocket stays neutral about how wide a
 // host chooses to open resource loading — but forbids control characters, whitespace,
 // ';', and ',', which are the only tokens that carry structural meaning in a CSP header.
 func validateSource(s string) error {

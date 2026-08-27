@@ -19,12 +19,12 @@ import (
 	"strings"
 	"testing"
 
+	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/storetest"
-	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 )
 
-// authTables are the feature's tables in child-before-parent order, so a
+// authTables are the pocket's tables in child-before-parent order, so a
 // truncation pass respects any conventional user_id references: api_keys before
 // service_accounts, and the oauth/audit/invitation tables before users. A single
 // TRUNCATE clears them so a Repositories starts empty (no enforced FKs, matching
@@ -93,7 +93,7 @@ func dropSchema(t *testing.T, db *pgxdb.DB, s pgxdb.Schema) {
 
 // TestConformance_Postgres runs the shared auth storetest suite against a live
 // PostgreSQL database. Each newRepos call opens a connection, applies the
-// canonical migrations, and truncates the feature's tables so every leaf subtest
+// canonical migrations, and truncates the pocket's tables so every leaf subtest
 // starts from a clean, isolated Repositories (the SQL harness half of the
 // newRepos contract).
 func TestConformance_Postgres(t *testing.T) {

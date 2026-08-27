@@ -1,4 +1,4 @@
-// Package events is the events feature's SSE transport: the /events route surface
+// Package events is the events pocket's SSE transport: the /events route surface
 // over the internal hub. It reads the effective caller from sdk/foundation/identity (absent
 // → 401, fails closed — A-I1 E1), enforces MaxConnAge and heartbeats via the
 // sdk/foundation/web SSE primitives, and registers the resource-scoped route only when a
@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/events/internal/logic/hub"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 // Config carries the already-resolved collaborators the route handlers need. The
@@ -45,7 +45,7 @@ type gateway struct {
 	maxConnAge time.Duration
 }
 
-// Mount registers the events feature's SSE routes on the registrar:
+// Mount registers the events pocket's SSE routes on the registrar:
 //
 //   - GET /events — the authenticated subject's stream (?types=a,b exact-match
 //     allow-list).

@@ -177,7 +177,7 @@ func TestProvisionOnConsumptionCreatesTheAccountAtRedeem(t *testing.T) {
 		t.Errorf("hydrated email = %q, want %q", hydrated.Email, addr)
 	}
 	if hydrated.DisplayName != "" {
-		t.Errorf("display name = %q, want empty — the feature invents no name", hydrated.DisplayName)
+		t.Errorf("display name = %q, want empty — the pocket invents no name", hydrated.DisplayName)
 	}
 
 	// The link is single-use.

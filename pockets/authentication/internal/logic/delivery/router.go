@@ -14,7 +14,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 )
 
-// coreTemplates are the feature's default email content templates, registered at
+// coreTemplates are the pocket's default email content templates, registered at
 // email.LayerCore. Hosts override individual templates at email.LayerApp through
 // Deps.AppTemplates (design §6.2). The registry walks the "templates" subdirectory
 // and exposes each file as "<namespace>:<name>".
@@ -22,7 +22,7 @@ import (
 //go:embed templates/*.html
 var coreTemplates embed.FS
 
-// Namespace is the email TemplateRegistry namespace the feature registers its
+// Namespace is the email TemplateRegistry namespace the pocket registers its
 // content templates under; a rendered template is addressed as
 // "authentication:<name>". It is exported so a host can build a LayerApp
 // TemplateOverride that targets a bundled core template by that name (design
@@ -175,9 +175,9 @@ type Deps struct {
 }
 
 // TemplateOverride registers a host's email content templates at email.LayerApp so
-// a host can override any LayerCore default without editing the feature (design
+// a host can override any LayerCore default without editing the pocket (design
 // §6.2). The embed.FS is walked from its "templates" subdirectory, exactly like
-// the feature's own core set.
+// the pocket's own core set.
 type TemplateOverride struct {
 	Namespace string
 	FS        embed.FS
@@ -217,7 +217,7 @@ type Router struct {
 }
 
 // NewRouter builds a Router. A nil Mailer is ErrMailerRequired. It registers the
-// feature's LayerCore email templates plus any host LayerApp content and layout
+// pocket's LayerCore email templates plus any host LayerApp content and layout
 // overrides, and parses the in-core subject and SMS body templates once.
 func NewRouter(d Deps) (*Router, error) {
 	if d.Mailer == nil {

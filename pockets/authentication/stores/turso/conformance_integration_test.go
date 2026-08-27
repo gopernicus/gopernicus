@@ -14,12 +14,12 @@ import (
 	"os"
 	"testing"
 
+	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/storetest"
-	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 )
 
-// authTables are the feature's tables in child-before-parent order, so a
+// authTables are the pocket's tables in child-before-parent order, so a
 // truncation pass respects any conventional user_id references: api_keys before
 // service_accounts, and the oauth/audit/invitation tables before users.
 var authTables = []string{
@@ -40,7 +40,7 @@ var authTables = []string{
 
 // TestConformance_Turso runs the shared auth storetest suite against a live
 // Turso/libSQL database. Each newRepos call opens a connection, applies the
-// canonical migrations, and truncates the feature's tables so every leaf subtest
+// canonical migrations, and truncates the pocket's tables so every leaf subtest
 // starts from a clean, isolated Repositories (the SQL harness half of the
 // newRepos contract).
 func TestConformance_Turso(t *testing.T) {

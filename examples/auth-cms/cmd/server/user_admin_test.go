@@ -17,7 +17,7 @@ import (
 
 // CHAU-1.7 — the account-lifecycle proof, driven through EXPORTED host seams over
 // real HTTP. It is a HOST test in a separate module, so nothing here reaches a
-// feature-internal package: a reader can copy the wiring and the request sequence
+// pocket-internal package: a reader can copy the wiring and the request sequence
 // into an admin console directly.
 //
 // It walks the definition of done: list the directory, deactivate a user, prove
@@ -32,7 +32,7 @@ const (
 // adminHost is a running host whose Config.UserAdminCheck authorizes exactly the
 // user ids added to allow. That closure IS the seam under test: authentication
 // asks the host a question and the host answers with its own policy — no role
-// string, no authorization import inside the feature.
+// string, no authorization import inside the pocket.
 type adminHost struct {
 	*linkHost
 	mu    sync.Mutex
@@ -55,7 +55,7 @@ func newAdminHost(t *testing.T) *adminHost {
 			allowed := h.allow[req.Principal.ID]
 			h.mu.Unlock()
 			if !allowed {
-				// A denial wraps sdk.ErrForbidden; the feature maps it to 403 and
+				// A denial wraps sdk.ErrForbidden; the pocket maps it to 403 and
 				// never proceeds to resolve the target.
 				return sdk.ErrForbidden
 			}

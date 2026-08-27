@@ -1,8 +1,8 @@
 // Command server is the zero-infra jobs proof host (design §8): it wires
-// features/jobs to the in-core memstore (no datastore driver in its module
+// pockets/jobs to the in-core memstore (no datastore driver in its module
 // graph), registers a handful of demo handlers plus an interval and a cron
 // schedule, and runs the jobs Runtime in-process next to an HTTP server whose
-// only route is a host-owned POST /enqueue (v1 claims no feature routes).
+// only route is a host-owned POST /enqueue (v1 claims no pocket routes).
 //
 // It proves the whole jobs surface with no external infrastructure: the
 // enqueue->wake latency coupling (a fresh job runs sub-second, not at the next
@@ -22,15 +22,15 @@ import (
 	"syscall"
 	"time"
 
+	robfigcron "github.com/gopernicus/gopernicus/integrations/scheduling/robfig-cron"
 	"github.com/gopernicus/gopernicus/pockets/jobs"
 	"github.com/gopernicus/gopernicus/pockets/jobs/domain/job"
 	"github.com/gopernicus/gopernicus/pockets/jobs/domain/schedule"
 	"github.com/gopernicus/gopernicus/pockets/jobs/memstore"
-	robfigcron "github.com/gopernicus/gopernicus/integrations/scheduling/robfig-cron"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
 	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 func main() {
@@ -111,11 +111,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 
 	// Host-owned router. The only route is the host's own POST /enqueue — jobs v1
-	// registers no feature routes.
+	// registers no pocket routes.
 	router := web.NewWebHandler(web.WithLogging(log))
 	router.Use(web.RequestID(), web.Logger(log), web.Panics(log))
 	router.Handle(http.MethodPost, "/enqueue", enqueueHandler(svc, log))
-	// Host-local liveness probe (host route, not feature surface). Mounted on
+	// Host-local liveness probe (host route, not pocket surface). Mounted on
 	// the root router with no middleware — unauthenticated by design, since a
 	// readiness probe can't log in.
 	router.Handle(http.MethodGet, "/healthz", healthzHandler())
@@ -201,7 +201,7 @@ type enqueueRequest struct {
 	MaxAttempts int             `json:"max_attempts,omitempty"`
 }
 
-// enqueueHandler is the host's own enqueue route (deliberately not a feature
+// enqueueHandler is the host's own enqueue route (deliberately not a pocket
 // route — jobs v1 claims none). It calls svc.Enqueue for the primitive-typed
 // path, or svc.EnqueueJob when any full-fidelity field is present.
 func enqueueHandler(svc *jobs.Service, log *slog.Logger) http.HandlerFunc {

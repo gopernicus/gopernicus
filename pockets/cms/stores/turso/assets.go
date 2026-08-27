@@ -3,8 +3,8 @@ package turso
 import (
 	"context"
 
-	"github.com/gopernicus/gopernicus/pockets/cms/domain/media"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	"github.com/gopernicus/gopernicus/pockets/cms/domain/media"
 )
 
 // AssetStore implements media.AssetRepository (metadata) over a libSQL database.

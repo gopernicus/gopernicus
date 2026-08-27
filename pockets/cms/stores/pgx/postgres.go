@@ -1,7 +1,7 @@
-// Package pgx is the CMS feature's PostgreSQL store adapter — its own module
+// Package pgx is the CMS pocket's PostgreSQL store adapter — its own module
 // so a host that brings a different datastore never pulls pgx into its module
 // graph (the load-bearing opt-out property, plan §2). It owns the SQL; the HOST owns its database lifecycle. It is the
-// dialect sibling of features/cms/stores/turso: same surface plus the
+// dialect sibling of pockets/cms/stores/turso: same surface plus the
 // Postgres-only WithSchema option — SQLite has no schemas — same migration
 // version set (0009–0021, gaps at 0011/0012 reproduced), same port
 // semantics — a host switches dialect by one import + one Open call.
@@ -17,11 +17,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/gopernicus/gopernicus/pockets/cms"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	"github.com/gopernicus/gopernicus/pockets/cms"
 )
 
-// The feature's table names. Every statement in this package renders one of
+// The pocket's table names. Every statement in this package renders one of
 // these through a store's table method, so a schema-scoped store qualifies it.
 const (
 	entriesTable     = "entries"

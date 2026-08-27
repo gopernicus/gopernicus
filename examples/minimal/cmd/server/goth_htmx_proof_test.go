@@ -14,14 +14,14 @@ import (
 	cmsgoth "github.com/gopernicus/gopernicus/pockets/cms/views/goth"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 	uigoth "github.com/gopernicus/gopernicus/ui/goth"
 	uigothassets "github.com/gopernicus/gopernicus/ui/goth/assets"
 )
 
 // htmxProofRouter composes this host's real presentation graph — the ui/goth asset
-// route and the CMS feature mounted with the ui/goth Views over a bundle — exactly
+// route and the CMS pocket mounted with the ui/goth Views over a bundle — exactly
 // as run() wires it (minus web.Run), so the HTTP-level HTMX proofs below drive the
 // shipped surface with the memstore-seeded content, not a stub.
 func htmxProofRouter(t *testing.T) http.Handler {

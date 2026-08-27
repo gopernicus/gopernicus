@@ -19,7 +19,7 @@ import (
 )
 
 // TestReference runs the conformance suite against the in-package reference
-// implementation. This is what lets features/cms self-verify under guard G2
+// implementation. This is what lets pockets/cms self-verify under guard G2
 // (the core cannot import a driver or a host store, so without an in-package
 // implementation the suite would compile but never execute). newRepos returns a
 // fresh, empty Store per call — the memory harness's clean-isolation contract.
@@ -30,7 +30,7 @@ func TestReference(t *testing.T) {
 }
 
 // reference is a stdlib-only, test-scoped in-memory Repositories. It exists to
-// give the feature module something to run the suite against; it deliberately
+// give the pocket module something to run the suite against; it deliberately
 // hand-enforces the uniqueness, referential, and cascade semantics that SQL
 // gives a dialect store for free, because those are exactly the invariants the
 // suite is proving and the class of drift a naive memory store silently loses.

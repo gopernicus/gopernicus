@@ -75,7 +75,7 @@ type Invitation struct {
 	AutoAccept        bool
 	Status            string
 	// Metadata is opaque, host-owned routing data supplied at create, persisted,
-	// and echoed into the Granter seam on every grant path. The feature never
+	// and echoed into the Granter seam on every grant path. The pocket never
 	// interprets it (validating only shape/size); a nil or empty map is the
 	// no-metadata case. See NewWithMetadata / ValidateMetadata for the bounds.
 	Metadata   map[string]string

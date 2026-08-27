@@ -30,8 +30,8 @@ const (
 )
 
 // Compile-time seams: the Service implements the canonical keyed-work submission
-// protocol (sdk/capabilities/work) — the jobs feature is its implementation of
-// record. A consuming feature depends on the sdk ports, never on this package
+// protocol (sdk/capabilities/work) — the jobs pocket is its implementation of
+// record. A consuming pocket depends on the sdk ports, never on this package
 // (constitution rule 6). The protocol methods are backed by the lease-fenced queue
 // (Repositories.FencedQueue).
 var (
@@ -41,7 +41,7 @@ var (
 )
 
 // EnqueueOnceInput is the full-fidelity input for EnqueueOnceIn: the work
-// protocol's vocabulary plus the feature's optional TenantID slot. It is the
+// protocol's vocabulary plus the pocket's optional TenantID slot. It is the
 // struct-input sibling of the frozen positional EnqueueOnce, matching the
 // EnqueueJob/EnsureSchedule convention so a later optional field costs no
 // signature change.
@@ -67,8 +67,8 @@ type ReplaceInput struct {
 
 // EnqueueOnceIn admits in.Payload under in.LogicalKey exactly once (idempotent
 // while an active execution holds the key), returning the unique execution ID. It
-// is EnqueueOnce with the feature's tenant slot: the work protocol's vocabulary is
-// unchanged, so a consuming feature that depends on work.Enqueuer keeps using the
+// is EnqueueOnce with the pocket's tenant slot: the work protocol's vocabulary is
+// unchanged, so a consuming pocket that depends on work.Enqueuer keeps using the
 // positional form. Payload is opaque bytes the queue never interprets; the Service
 // deep-copies it so a later caller mutation cannot alter the admitted work.
 func (s *Service) EnqueueOnceIn(ctx context.Context, in EnqueueOnceInput) (string, error) {
@@ -89,7 +89,7 @@ func (s *Service) EnqueueOnceIn(ctx context.Context, in EnqueueOnceInput) (strin
 
 // ReplaceIn supersedes every active execution holding in.LogicalKey and inserts
 // one fresh execution, returning its ID — the user-requested resend with the
-// feature's tenant slot. See EnqueueOnceIn for the payload-copy note.
+// pocket's tenant slot. See EnqueueOnceIn for the payload-copy note.
 func (s *Service) ReplaceIn(ctx context.Context, in ReplaceInput) (string, error) {
 	if s.fencedQueue == nil {
 		return "", ErrFencedQueueRequired
@@ -173,7 +173,7 @@ func (s *Service) PurgeTerminal(ctx context.Context, before time.Time, limit int
 func Permanent(reason string) error { return &dispositionError{reason: reason, permanent: true} }
 
 // dispositionError carries a handler's explicit retry/permanent verdict as an error so
-// it crosses the stdlib-typed FencedHandlerFunc seam. A consuming feature need not
+// it crosses the stdlib-typed FencedHandlerFunc seam. A consuming pocket need not
 // import this package to signal permanence — it returns any error and lets the host's
 // composition adapter re-wrap it via Permanent — but the fenced runtime recognizes this
 // concrete type via errors.As.
@@ -194,7 +194,7 @@ func isPermanent(err error) bool {
 }
 
 // FencedClaim is one claimed fenced job handed to a FencedHandlerFunc. It is
-// stdlib-typed so a consuming feature's handler matches it structurally with no
+// stdlib-typed so a consuming pocket's handler matches it structurally with no
 // import of the jobs domain. Checkpoint persists a fresh payload under the current
 // claim's fence (execution + lease); a stale/superseded claim's checkpoint fails
 // and the handler MUST NOT perform its side effect.
@@ -215,7 +215,7 @@ type FencedClaim struct {
 // FencedHandlerFunc processes one claimed fenced job of a registered kind.
 // Returning nil COMPLETES the job (a delivered message or a non-failed skip); a
 // non-nil error triggers the runtime's retry/dead-letter policy. It is
-// stdlib-typed so a consuming feature's delivery handler plugs in without importing
+// stdlib-typed so a consuming pocket's delivery handler plugs in without importing
 // the jobs domain.
 type FencedHandlerFunc func(ctx context.Context, claim FencedClaim) error
 
@@ -229,7 +229,7 @@ type FencedHandlerFunc func(ctx context.Context, claim FencedClaim) error
 // stamps it onto j before the per-kind hook runs — that closure is the adapter
 // between the two shapes, which intentionally differ since the reason threading.
 // It carries the domain job.Job because it is a host-registered hook, not a
-// cross-feature structural seam.
+// cross-pocket structural seam.
 type DeadLetterFunc func(ctx context.Context, j job.Job) error
 
 // FencedRuntimeConfig configures the FencedRuntime. Handlers is required non-empty;
@@ -265,7 +265,7 @@ type FencedRuntimeConfig struct {
 	Logger *slog.Logger
 }
 
-// FencedRuntime runs the lease-fenced pool that drives a consuming feature's
+// FencedRuntime runs the lease-fenced pool that drives a consuming pocket's
 // durable delivery on the FencedQueue: it claims due jobs, hands each registered
 // handler a checkpoint-capable FencedClaim, and applies retry-at / dead-letter
 // policy with the per-kind terminal hook. It is built from a constructed Service

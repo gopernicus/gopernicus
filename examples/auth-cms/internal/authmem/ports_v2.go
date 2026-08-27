@@ -18,7 +18,7 @@ import (
 
 // orderField is the keyset order column every paginated auth port pages by; it
 // must match the cursor's order field so a stale cursor from a different sort is
-// ignored (the store precedent — features/authentication/stores/turso uses "created_at").
+// ignored (the store precedent — pockets/authentication/stores/turso uses "created_at").
 const orderField = "created_at"
 
 // Compile-time proof that each thin view fills its exact port.

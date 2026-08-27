@@ -1,4 +1,4 @@
-// Package runtime assembles the jobs feature's worker pools: a queue pool (a
+// Package runtime assembles the jobs pocket's worker pools: a queue pool (a
 // workers.Runner over the QueueRepository, dispatching each job by Kind to a
 // host handler) and an optional single-worker scheduler pool. It is internal;
 // the host-facing surface is package jobs (jobs.Runtime wraps this).

@@ -9,11 +9,11 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/menus"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/messaging"
 	"github.com/gopernicus/gopernicus/pockets/cms/domain/taxonomy"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
-// recordingRegistrar captures the routes a feature mounts, standing in for the
+// recordingRegistrar captures the routes a pocket mounts, standing in for the
 // host's real router. It implements pocket.RouteRegistrar.
 type recordingRegistrar struct{ routes map[string]bool }
 
@@ -54,7 +54,7 @@ func (stubViews) AdminError(int, string) web.Renderer                     { retu
 func (stubViews) SeedTemplates() []content.TemplateBinding                { return nil }
 
 // TestRegister_MountsRouteSet verifies the public composition path: cms.Register
-// wires services from repositories and mounts the feature's full route set on the
+// wires services from repositories and mounts the pocket's full route set on the
 // host's RouteRegistrar. Repositories are nil because no handler is invoked here
 // — services are constructed (passthrough) but never called, so this exercises
 // the Register→Mount wiring without a datastore.
@@ -66,7 +66,7 @@ func TestRegister_MountsRouteSet(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	// A representative slice across the feature's surfaces: registry-driven content
+	// A representative slice across the pocket's surfaces: registry-driven content
 	// routes (Article + Page seed types), public site, admin, and the folded-in
 	// contact form (decision 1 — messaging is part of CMS).
 	want := []string{

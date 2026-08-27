@@ -8,10 +8,10 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/domain/invitation"
 	"github.com/gopernicus/gopernicus/pockets/authentication/internal/logic/authsvc"
 	"github.com/gopernicus/gopernicus/pockets/authentication/internal/logic/invitationsvc"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 // declineAttemptsPerMinute caps invitation-decline attempts per client IP: the

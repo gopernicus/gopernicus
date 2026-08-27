@@ -1,7 +1,7 @@
 // Command migrations is the host-owned, pre-boot migration runner for the cms
-// example. It mirrors how gopernicus init scaffolds a feature's migrations into
-// the app and lets the APP apply them: the CMS feature's SQL was scaffolded into
-// ./primary (via features/cms/stores/turso.ExportMigrations), and from here on
+// example. It mirrors how gopernicus init scaffolds a pocket's migrations into
+// the app and lets the APP apply them: the CMS pocket's SQL was scaffolded into
+// ./primary (via pockets/cms/stores/turso.ExportMigrations), and from here on
 // these files are the host's — applied by this runner, extended with the host's
 // own migrations in the same directory, under one app-owned schema_migrations
 // ledger. The framework never applies migrations; the server does NOT migrate at
@@ -20,7 +20,7 @@ import (
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 )
 
-// migrationsFS embeds the host's own copy of the migrations (feature-scaffolded
+// migrationsFS embeds the host's own copy of the migrations (pocket-scaffolded
 // plus any app-authored ones), applied in filename order.
 //
 //go:embed primary/[0-9]*.sql

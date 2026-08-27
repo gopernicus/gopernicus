@@ -1,4 +1,4 @@
-// Package command is the transport-neutral core of the authentication feature's
+// Package command is the transport-neutral core of the authentication pocket's
 // outbound-delivery runtime (plan authv3-delivery-refactor phase 2). It freezes
 // ONE versioned, encrypted delivery command envelope and the reusable processor
 // contract that opens, initializes, checkpoints, delivers, and classifies that
@@ -8,7 +8,7 @@
 // Placement rationale (AV3D-2.1): this is delivery POLICY and its encrypted wire
 // format, not a driving/driven adapter, so it lives under internal/logic/delivery
 // alongside the router and the (soon-superseded) worker — sdk-only, never
-// importing inbound/outbound/integrations or any sibling feature. It is a focused
+// importing inbound/outbound/integrations or any sibling pocket. It is a focused
 // subpackage rather than new symbols in the delivery package so the versioned
 // Envelope and the Processor contract carry their own, non-colliding names
 // (delivery.Envelope / delivery.Command are the bespoke-worker types this
@@ -16,7 +16,7 @@
 // composition adapter never reaches this internal package directly: authentication
 // exposes a public delivery seam (AV3D-2.3 / phase 3) that wraps the processor, so
 // both the jobs-mode adapter and the bounded runtime consume it through that
-// exported boundary while the feature core still imports no sibling feature.
+// exported boundary while the pocket core still imports no sibling pocket.
 //
 // The Envelope is the plaintext a delivery command must carry but must NEVER
 // persist, log, or surface in the clear: the resolved destination, the rendered

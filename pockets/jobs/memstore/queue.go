@@ -1,7 +1,7 @@
-// Package memstore is the jobs feature's in-core reference store: stdlib-only,
-// mutex-backed implementations of both feature ports (job.QueueRepository and
+// Package memstore is the jobs pocket's in-core reference store: stdlib-only,
+// mutex-backed implementations of both pocket ports (job.QueueRepository and
 // schedule.Repository) that back the storetest conformance suite and the proof
-// host. It is a PUBLIC package inside the feature core (ratified R3) — the named
+// host. It is a PUBLIC package inside the pocket core (ratified R3) — the named
 // exception to the test-scoped-default rule, because a lease-respecting
 // concurrent queue is too substantial to duplicate example-locally.
 //

@@ -2,14 +2,14 @@
 
 The datastore connector for PostgreSQL. It wraps exactly one third-party
 library — `github.com/jackc/pgx/v5` (pool via `pgxpool`, same module) — and
-gives feature store modules a connector symmetric with
+gives pocket store modules a connector symmetric with
 `integrations/datastores/turso`: `Config` / `Open` / `DB` / `MapError` /
 `StatusCheck` / `RunMigrations`.
 
-It owns "how to talk to Postgres," never any feature's SQL. No ORM and no
+It owns "how to talk to Postgres," never any pocket's SQL. No ORM and no
 general query builder — the one shared query surface is the list toolkit
 below, which owns pagination mechanics (ordering, keyset cursors, offset,
-counts) while every store keeps writing its own SQL. App/feature repositories
+counts) while every store keeps writing its own SQL. App/pocket repositories
 consume this package's `*DB`.
 
 ## Surface
@@ -60,7 +60,7 @@ wrap `BaseSQL` in a `COUNT(*)` subquery so the filter WHERE is reused by
 construction.
 
 Store conventions that ride the toolkit (set by the authentication store,
-`features/authentication/stores/pgx`, the pattern-setter):
+`pockets/authentication/stores/pgx`, the pattern-setter):
 
 - **Row structs, not domain tags.** `T` is a store-local db-tagged row struct
   with a `toDomain` converter; pages bridge through `crud.MapPage`. Domain
@@ -124,12 +124,12 @@ A stream is a directory plus the `schema_migrations` ledger that records it.
 Without `WithSchema` that ledger is the default schema's; with `WithSchema(s)`
 it is `"<s>".schema_migrations`. The ledgers are disjoint, so filename
 uniqueness is per (schema, source) and **cross-schema ordering is not expressed
-by the ledgers**. A host that wants the feature tables in `auth` and its own
+by the ledgers**. A host that wants the pocket tables in `auth` and its own
 tables in the default schema exports two directories and makes two calls:
 
 ```
 migrations/
-  auth/            # every feature's exported stream
+  auth/            # every pocket's exported stream
     0001_….sql
   0001_….sql       # the host's own tables
 ```
@@ -155,7 +155,7 @@ database is partially upgraded and nothing rolls the committed stream back. So:
   explicitly and apply them after the stream they depend on. Boot probes and a
   store's `StatusCheck` detect an incomplete boot; they cannot roll one back.
 
-Per-repository *different* schemas inside one feature have no migration story
+Per-repository *different* schemas inside one pocket have no migration story
 here: one stream, one schema.
 
 Inside the transaction the runner sets `search_path` to the schema alone —
@@ -202,7 +202,7 @@ If the database was previously migrated under a DSN-level
 probably in `public.schema_migrations` (the probe searched the whole path; the
 unqualified `CREATE TABLE`/`INSERT` resolved to the relation it found). Adopting
 `WithSchema` then finds an empty `"auth".schema_migrations` and re-runs the whole
-stream. That re-run is safe — the shipped feature files are `IF NOT EXISTS`-safe
+stream. That re-run is safe — the shipped pocket files are `IF NOT EXISTS`-safe
 — but it is **not free**: authentication `0014_user_status.sql` performs an
 `ALTER COLUMN … TYPE TEXT COLLATE "C"` (full table rewrite under an exclusive
 lock) and `0015_challenge_subject_keys.sql` repeats an `UPDATE` backfill.
@@ -225,13 +225,13 @@ INSERT INTO "auth".schema_migrations
     (source, version, checksum, raw_sql, applied_at)
 SELECT source, version, checksum, raw_sql, applied_at
 FROM public.schema_migrations
-WHERE source = 'default' AND version IN (<feature files>)
+WHERE source = 'default' AND version IN (<pocket files>)
 ON CONFLICT (source, version) DO NOTHING;
 
 -- Assert every manifest file landed exactly once with a matching checksum.
 DO $$
 DECLARE
-    manifest CONSTANT TEXT[] := ARRAY[<feature files>];
+    manifest CONSTANT TEXT[] := ARRAY[<pocket files>];
     copied INT;
     drift INT;
 BEGIN
@@ -261,7 +261,7 @@ Notes that matter:
 
 - the column list is explicit — never `SELECT *`;
 - `ON CONFLICT (source, version) DO NOTHING` makes the copy resumable;
-- `<feature files>` is the exact manifest of the files already applied for that
+- `<pocket files>` is the exact manifest of the files already applied for that
   schema (`'0001_….sql', '0002_….sql', …`), not every row in `public`;
 - the assertion aborts the transaction on a missing, duplicated, or
   checksum-mismatched row, so a partial copy never commits;
@@ -327,7 +327,7 @@ Give the request context a deadline you are willing to serve.
 What the host does with that error is the host's decision, and today's callers
 genuinely differ: `sdk/capabilities/ratelimiter.Middleware` fails **open** (a
 limiter error is swallowed and the request proceeds unthrottled), while the
-authentication feature's login and passwordless call sites fail **closed** (the
+authentication pocket's login and passwordless call sites fail **closed** (the
 error propagates and the attempt is rejected — its refresh path fails open).
 Neither is wrong; they are different tradeoffs between "let traffic through
 during a database outage" and "never admit unmetered credential attempts."
@@ -342,7 +342,7 @@ noise.
 ### Reference DDL — host-owned
 
 **The connector creates and migrates nothing.** Copy this into your own migration
-ledger (the same scaffold-and-own rule every feature store follows); the table
+ledger (the same scaffold-and-own rule every pocket store follows); the table
 name is fixed, and keys are always bound parameters, never concatenated SQL.
 
 **If this table is absent, the limiter fails OPEN and SILENT.** Every `Allow`
@@ -419,7 +419,7 @@ database, its bloat is autovacuum-bound rather than volume-bound, and the
 storage parameters commented into the DDL above exist for exactly that reason.
 Monitor write volume and dead-tuple counts against your login/attempt traffic.
 
-**Schedule** the pruning statement (cron, `features/jobs`, or pg_cron — the
+**Schedule** the pruning statement (cron, `pockets/jobs`, or pg_cron — the
 connector never runs it):
 
 ```sql
@@ -432,7 +432,7 @@ is what keeps that sweep cheap.
 
 **Pruning is a data-retention control, not just capacity hygiene.** The `key`
 column persists whatever the host puts in its keys, verbatim. With the
-authentication feature wired, that includes **client IP addresses** and **user
+authentication pocket wired, that includes **client IP addresses** and **user
 identifiers** (user IDs raw; email/phone values as digests — a host writing its
 own keys may not digest anything). That means this table lands in your base
 backups, your WAL archive, and any replica, and it inherits the retention of all
@@ -450,7 +450,7 @@ more widely than this table.
 
 This connector mirrors the turso connector member-for-member **by convention**.
 No `make guard` row proves the two surfaces or their sentinel coverage stay
-aligned; a feature's `storetest` conformance suite is the only parity net, and
+aligned; a pocket's `storetest` conformance suite is the only parity net, and
 it sees only port-reachable behavior. Do not over-trust the symmetry.
 
 Query logging is symmetric across both connectors: each carries an opt-in

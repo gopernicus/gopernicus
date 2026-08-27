@@ -136,7 +136,7 @@ func TestErrFromDomain_SafeDomainErrorNoBody(t *testing.T) {
 }
 
 // TestErrFromDomain_GenericBodies proves the wrapper is the only exception:
-// bare sentinels, an arbitrary wrapped *Error, and a feature-internal-style
+// bare sentinels, an arbitrary wrapped *Error, and a pocket-internal-style
 // error all keep today's generic body.
 func TestErrFromDomain_GenericBodies(t *testing.T) {
 	errAlreadyMember := fmt.Errorf("authentication: already a member: %w", sdk.ErrConflict)

@@ -57,7 +57,7 @@ type Composite struct {
 //
 // Invariant: callers must never pass a TYPED-NIL roles probe. model != nil is
 // the real gate on the roles kind joining the surface; the roles != nil check
-// below cannot see through an interface holding a nil pointer. The feature
+// below cannot see through an interface holding a nil pointer. The pocket
 // guarantees this by requiring Repositories.Roles whenever Config.RoleModel is
 // set (ErrRoleModelWithoutRoles), so a compiled model always comes with a usable
 // probe.

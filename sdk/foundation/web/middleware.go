@@ -103,7 +103,7 @@ func RequestID() Middleware {
 }
 
 // CORSConfig is the CORS policy a host declares. It carries only mechanism: the
-// sdk knows no feature's headers, so a host that needs a feature-specific
+// sdk knows no pocket's headers, so a host that needs a pocket-specific
 // request header (a CSRF echo header, say) lists it in AllowedHeaders itself.
 type CORSConfig struct {
 	// AllowedOrigins is the origin allowlist. A "*" entry matches any origin.

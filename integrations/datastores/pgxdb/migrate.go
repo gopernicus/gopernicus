@@ -60,7 +60,7 @@ func WithSchema(s Schema) MigrateOption {
 // schema_migrations with a checksum guard. Files prefixed with "_" are skipped.
 //
 // One stream per schema. Without WithSchema the stream is the database's
-// default-schema stream: a host exports every feature's migrations into a
+// default-schema stream: a host exports every pocket's migrations into a
 // single merged, filename-ordered directory and calls RunMigrations once. All
 // rows in a stream share one ledger source ("default"), so filenames must be
 // unique within the stream and are never renumbered — the (source,
@@ -70,7 +70,7 @@ func WithSchema(s Schema) MigrateOption {
 // namespace.
 //
 // With WithSchema(s) the stream lives in s and keeps its OWN
-// schema_migrations ledger in s. A host that wants feature tables in "auth"
+// schema_migrations ledger in s. A host that wants pocket tables in "auth"
 // and its own tables in the default schema therefore makes two calls over two
 // directories (migrations/auth/, migrations/). The ledgers are disjoint:
 // filename uniqueness is per (schema, source) and cross-schema ordering is

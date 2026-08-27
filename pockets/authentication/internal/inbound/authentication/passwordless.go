@@ -5,8 +5,8 @@ import (
 	"net/http"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/internal/logic/authsvc"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 // passwordlessStartRequest is the strict POST /auth/passwordless/start body

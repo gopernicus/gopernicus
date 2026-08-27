@@ -6,8 +6,8 @@
 // UNION dedup alone), unique-tuple enforcement is genuine, and counts are
 // direct-only.
 //
-// It exists because the feature's zero-infra consumer proof (examples) and the
-// conformance suite (storetest) run on it — the features/jobs/memstore
+// It exists because the pocket's zero-infra consumer proof (examples) and the
+// conformance suite (storetest) run on it — the pockets/jobs/memstore
 // precedent. It is never a stores/memory module.
 package memstore
 

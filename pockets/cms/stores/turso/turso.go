@@ -1,4 +1,4 @@
-// Package turso is the CMS feature's Turso/libSQL store adapter — its own module
+// Package turso is the CMS pocket's Turso/libSQL store adapter — its own module
 // so a host that brings a different datastore never pulls libsql into its module
 // graph (the load-bearing opt-out property, plan §2). It owns the SQL; the HOST owns its database lifecycle.
 //
@@ -10,8 +10,8 @@
 package turso
 
 import (
-	"github.com/gopernicus/gopernicus/pockets/cms"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	"github.com/gopernicus/gopernicus/pockets/cms"
 )
 
 // Repositories returns the CMS repository set backed by db, WITHOUT touching

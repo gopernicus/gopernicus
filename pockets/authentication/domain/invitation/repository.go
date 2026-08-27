@@ -22,8 +22,8 @@ type StatusUpdate struct {
 	UpdatedAt         time.Time
 }
 
-// InvitationRepository persists resource invitations. Implemented by feature
-// store adapters (features/authentication/stores/turso) or any host-provided
+// InvitationRepository persists resource invitations. Implemented by pocket
+// store adapters (pockets/authentication/stores/turso) or any host-provided
 // implementation (see the storetest reference).
 //
 // THE PINNED UNIQUENESS CONTRACT (design §6, plan-cut amendment): at most ONE

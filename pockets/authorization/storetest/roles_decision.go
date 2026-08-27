@@ -57,7 +57,7 @@ func composedRoleModel() authorization.RoleModel {
 	}}
 }
 
-// newRoleModelService builds the feature Service over the stores under test with
+// newRoleModelService builds the pocket Service over the stores under test with
 // a role model configured, so the decision surface is answered by the ROLES kind
 // on whichever dialect is running. cfg carries the model(s); the budget is the
 // oracle's generous one so no assertion is masked by exhaustion.

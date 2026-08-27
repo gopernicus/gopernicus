@@ -1,11 +1,11 @@
-// Package authmem is an in-memory implementation of the auth feature's full
+// Package authmem is an in-memory implementation of the auth pocket's full
 // repository set: the v1 ports (user.UserRepository, user.PasswordRepository,
 // session.SessionRepository) plus the auth-v2 ports the A9 proof protocol
 // exercises — oauthaccount.OAuthAccountRepository, oauthstate.StateRepository,
 // serviceaccount.ServiceAccountRepository, apikey.APIKeyRepository,
 // securityevent.SecurityEventRepository, and invitation.InvitationRepository.
 // It is the auth-side sibling of this host's cms memstore: a "bring your own
-// store" proof that features/authentication runs with no datastore driver in its module
+// store" proof that pockets/authentication runs with no datastore driver in its module
 // graph — data lives in maps and is lost on exit.
 //
 // It mirrors the honesty the port doc comments promise (and the storetest
@@ -81,7 +81,7 @@ type data struct {
 }
 
 // Store is an in-memory auth datastore. Its Repositories method yields the port
-// set features/authentication needs.
+// set pockets/authentication needs.
 type Store struct{ d *data }
 
 // New returns an empty Store.
@@ -102,7 +102,7 @@ func New() *Store {
 	}}
 }
 
-// Repositories bundles the per-port views as the feature's repository set. Every
+// Repositories bundles the per-port views as the pocket's repository set. Every
 // port is wired: the A9 proof host needs the v2 ports (OAuth, machine identity,
 // security events, invitations) live, not nil, and AV3-1.4 wires the v3 atomic
 // rails (challenges, contact changes, step-up grants, credential mutations) so the

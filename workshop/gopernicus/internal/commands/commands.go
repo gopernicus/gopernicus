@@ -55,7 +55,7 @@ Usage:
 
 Commands:
   init      Scaffold a new host application
-  new       Scaffold a new feature
+  new       Scaffold a new pocket
   db        Migrate, check status, or create migrations
   version   Print the CLI version and module path
 

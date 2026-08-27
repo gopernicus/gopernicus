@@ -86,7 +86,7 @@ func TestDocSnippet_AssetReachabilitySelfCheck(t *testing.T) {
 		t.Errorf("wired host failed the asset self-check: %v", err)
 	}
 
-	// A router with the CMS feature mounted but the asset route NOT mounted fails the
+	// A router with the CMS pocket mounted but the asset route NOT mounted fails the
 	// self-check — the exact "forgot to mount the asset route" mistake, caught at boot.
 	bare := web.NewWebHandler()
 	serveBare := func(path string) int { return do(t, bare, http.MethodGet, path, nil).Code }

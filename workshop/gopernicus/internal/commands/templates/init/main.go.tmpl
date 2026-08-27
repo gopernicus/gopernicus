@@ -1,7 +1,7 @@
 // Command server is the composition root for {{.ModulePath}} — a host scaffolded
 // by `gopernicus init`. It builds a logger, a host-owned HTTP router with the
 // standard middleware, a liveness probe, and graceful shutdown. It mounts no
-// features yet; wire your own in the "mount your features here" block below.
+// pockets yet; wire your own in the "mount your pockets here" block below.
 //
 // cmd is the only place that names concrete adapters (constitution rule 5): no
 // init() registration, no service locator.
@@ -70,30 +70,30 @@ func run(ctx context.Context, log *slog.Logger) error {
 	defer db.Close()
 {{- end}}
 
-	// Host-owned HTTP router + middleware stack. Features mount their routes onto
+	// Host-owned HTTP router + middleware stack. Pockets mount their routes onto
 	// this via the narrow RouteRegistrar; the host never sees a concrete handler.
 	router := web.NewWebHandler(web.WithLogging(log))
 	router.Use(web.RequestID(), web.Logger(log), web.Panics(log))
 
-	// ── Mount your features here ────────────────────────────────────────────
-	// A gopernicus feature reaches this host only through the narrow pocket.Mount
+	// ── Mount your pockets here ─────────────────────────────────────────────
+	// A gopernicus pocket reaches this host only through the narrow pocket.Mount
 	// + Register surface (constitution rule 5 — no init(), no service locator).
-	// Add the feature (and, if it persists data, a store adapter) to go.mod, then
+	// Add the pocket (and, if it persists data, a store adapter) to go.mod, then
 	// wire it in this block following the FS2 shape:
 	//
 	//   mount := pocket.Mount{Router: router, Logger: log}
 	//   repos := <store>.Repositories(db)        // or your own in-memory store
-	//   svc, err := <feature>.NewService(repos, <feature>.Config{ /* ... */ })
+	//   svc, err := <pocket>.NewService(repos, <pocket>.Config{ /* ... */ })
 	//   if err != nil {
 	//       return err
 	//   }
 	//   svc.Register(mount)
 	//
-	// See README.md ("Wiring a feature") for the full walkthrough. Nothing is
+	// See README.md ("Wiring a pocket") for the full walkthrough. Nothing is
 	// mounted by default — an sdk-only host is the hermetic baseline.
 	// ─────────────────────────────────────────────────────────────────────────
 
-	// Host-local liveness probe (host route, not feature surface). Mounted on the
+	// Host-local liveness probe (host route, not pocket surface). Mounted on the
 	// root router with no middleware, unauthenticated by design — a readiness
 	// probe can't log in.
 	router.Handle(http.MethodGet, "/healthz", healthzHandler({{if .HasDB}}db{{end}}))

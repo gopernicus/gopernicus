@@ -34,7 +34,7 @@ import (
 )
 
 // TestReference runs the conformance suite against the in-package reference
-// implementation. This is what lets features/authentication self-verify under guard G2
+// implementation. This is what lets pockets/authentication self-verify under guard G2
 // (the core cannot import a driver or a host store, so without an in-package
 // implementation the suite would compile but never execute). newRepos returns a
 // fresh, empty store per call — the memory harness's clean-isolation contract.

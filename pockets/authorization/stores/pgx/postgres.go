@@ -1,8 +1,8 @@
-// Package pgx is the authorization feature's PostgreSQL store adapter — its own
+// Package pgx is the authorization pocket's PostgreSQL store adapter — its own
 // module so a host that brings a different datastore never pulls pgx into its
 // module graph (the load-bearing opt-out property). It owns the SQL; the HOST
 // owns its database lifecycle. It is the dialect sibling of
-// features/authorization/stores/turso: same surface plus the Postgres-only
+// pockets/authorization/stores/turso: same surface plus the Postgres-only
 // WithSchema option — SQLite has no schemas — same migration version set
 // (identical filenames), same port semantics — a host switches dialect by one
 // import + one Open call.
@@ -13,7 +13,7 @@
 // wanting a single kind zeroes the other field after construction (or wires its
 // own single-kind authorization.Repositories). The schema is NOT per-kind: both
 // iam_* tables scaffold wholesale into every adopting host regardless of which
-// kinds it wires (the §2.1 bounding rule applied intra-feature).
+// kinds it wires (the §2.1 bounding rule applied intra-pocket).
 //
 // Group expansion (CheckRelationWithGroupExpansion) and descendant lookup
 // (LookupDescendantResourceIDs) are recursive CTEs, cycle-safe by construction
@@ -31,7 +31,7 @@
 //
 // Cross-source ordering hazard: the shared ledger keyed (source, version)
 // expresses NO ordering between sources, so a host that scaffolds another
-// feature's migrations but not "authorization" would fail at runtime, not boot.
+// pocket's migrations but not "authorization" would fail at runtime, not boot.
 // Mitigation: Repositories probes all four tables at construction and errors —
 // naming the specific missing table — before the host serves traffic; the README
 // documents the prerequisite (including the roles-only adopter, which still
@@ -43,10 +43,10 @@ import (
 	"embed"
 	"fmt"
 
+	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/mutation"
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
-	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 )
 
 // MigrationsFS holds the embedded canonical schema (migration source
@@ -63,7 +63,7 @@ const MigrationsDir = "migrations"
 // the name the boot probe points a misconfigured host at.
 const migrationSource = "authorization"
 
-// storeTables is the feature's table inventory, probed at construction in this
+// storeTables is the pocket's table inventory, probed at construction in this
 // order. Every statement in the package renders these names through a store's
 // table method so a schema-scoped store qualifies them.
 var storeTables = []string{"iam_relationships", "iam_roles", "iam_scopes", "iam_mutations"}

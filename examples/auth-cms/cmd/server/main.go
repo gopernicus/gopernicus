@@ -1,14 +1,14 @@
 // Command server is the auth-v2 A9 / events-v1 proof host: it mounts
-// features/cms, features/authentication, AND features/events onto one host
+// pockets/cms, pockets/authentication, AND pockets/events onto one host
 // router, with in-memory stores and no datastore driver in its module graph
 // (verify: `GOWORK=off go list -m all | grep -i libsql` is empty). The host is
-// the only party that imports the features — no feature imports another
-// (constitution rule 6); the cross-feature flow rides sdk vocabulary
+// the only party that imports the pockets — no pocket imports another
+// (constitution rule 6); the cross-pocket flow rides sdk vocabulary
 // (sdk/foundation/web.Middleware, sdk/foundation/identity, sdk/capabilities/events) the host wires between them.
 //
-// The cross-feature wiring is the point: cms's admin surface (the CRUD routes)
+// The cross-pocket wiring is the point: cms's admin surface (the CRUD routes)
 // is gated by auth's identity middleware via cms.Config.AdminMiddleware ←
-// authSvc.RequireUser. Neither feature imports the other; structural typing on
+// authSvc.RequireUser. Neither pocket imports the other; structural typing on
 // sdk/foundation/web.Middleware and the auth Service is what lets the host connect them.
 // Public cms routes (the home page, published singles) stay ungated.
 //
@@ -26,7 +26,7 @@
 // demo routes (demo.go) are gated variously on a resolved principal, an engine
 // Check, a LookupResources enumeration, and a roles-kind HasRole check.
 //
-// features/events adds the SSE gateway at GET /events (authenticated via
+// pockets/events adds the SSE gateway at GET /events (authenticated via
 // authSvc.RequireUser on StreamMiddleware): a cms edit fans out as a
 // content.updated frame to any open stream. Two rails prove out here. The
 // DEFAULT variant is direct-emit/best-effort — cms emits straight onto the bus
@@ -57,6 +57,7 @@ import (
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/deliveryhealth"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/memstore"
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/outboxmem"
+	"github.com/gopernicus/gopernicus/integrations/cryptids/bcrypt"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	authgoth "github.com/gopernicus/gopernicus/pockets/authentication/views/goth"
 	authorization "github.com/gopernicus/gopernicus/pockets/authorization"
@@ -67,19 +68,18 @@ import (
 	eventspocket "github.com/gopernicus/gopernicus/pockets/events"
 	"github.com/gopernicus/gopernicus/pockets/jobs"
 	jobsmem "github.com/gopernicus/gopernicus/pockets/jobs/memstore"
-	"github.com/gopernicus/gopernicus/integrations/cryptids/bcrypt"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
 	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 	"github.com/gopernicus/gopernicus/sdk/foundation/workers"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 	uigoth "github.com/gopernicus/gopernicus/ui/goth"
 	uigothassets "github.com/gopernicus/gopernicus/ui/goth/assets"
 )
@@ -131,7 +131,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// the host's outbound-delivery composition: the generic-jobs-mode wiring (default) or the
 	// bounded in-process mode. On THIS proof host BOTH are non-durable — jobs mode backs its
 	// fenced queue with jobsmem.NewFencedQueue (in-memory), so a real durable posture is a
-	// store swap a production host makes (features/jobs/stores/{pgx,turso}). The bounded mode
+	// store swap a production host makes (pockets/jobs/stores/{pgx,turso}). The bounded mode
 	// is never hidden — it announces its crash-loss + per-process posture LOUDLY at startup
 	// (see the WARN below where the config is flipped).
 	mode := deliveryMode()
@@ -144,14 +144,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// a recipient, payload, or logical key. The host mounts it at GET /healthz/delivery.
 	health := deliveryhealth.New(string(mode))
 
-	// Outbound delivery on the generic jobs feature (authv3-delivery-refactor
+	// Outbound delivery on the generic jobs pocket (authv3-delivery-refactor
 	// AV3D-3.1), wired ONLY in jobs mode: authentication submits encrypted
 	// delivery commands to a generic jobs fenced queue, and the host runs the jobs
 	// FencedRuntime that invokes auth's delivery processor. The in-memory fenced queue
 	// (jobsmem.NewFencedQueue) is the zero-infra stand-in, so jobs mode is NON-DURABLE here —
 	// queued work is lost on restart with no cross-instance coordination; a durable posture is
 	// a pgx/turso FencedQueue store swap a real host makes. The composition adapter
-	// (internal/authjobs) is the ONE place that imports BOTH features; neither feature core
+	// (internal/authjobs) is the ONE place that imports BOTH pockets; neither pocket core
 	// imports the other (constitution rule 6).
 	var (
 		deliveryJobs       *jobs.Service
@@ -166,10 +166,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 		deliveryDispatcher = authjobs.NewDispatcher(dj)
 	}
 
-	// Host-owned router + middleware. Both features and the host demo routes mount
+	// Host-owned router + middleware. Both pockets and the host demo routes mount
 	// onto this.
 	router := web.NewWebHandler(web.WithLogging(log))
-	// TrustProxies runs OUTER of every feature mount so auth's inbound reads the
+	// TrustProxies runs OUTER of every pocket mount so auth's inbound reads the
 	// host-resolved client IP (web.ClientIP) instead of the spoofable leftmost
 	// X-Forwarded-For hop. TRUSTED_PROXY_COUNT=0 (default) trusts only RemoteAddr,
 	// so a forged X-Forwarded-For can no longer rotate rate-limit keys or poison
@@ -197,7 +197,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 
 	mount := pocket.Mount{Router: router, Logger: log, Events: bus}
 
-	// The authorization feature (authorization-v1 Z4 commit 2 — the FLAGSHIP
+	// The authorization pocket (authorization-v1 Z4 commit 2 — the FLAGSHIP
 	// posture), now GUARDED (AZ3-4.1): BOTH kinds wired, memstore-backed, so the host
 	// stays zero-infra (no driver in the graph — GOWORK=off go list -m all still has no
 	// libsql). newAuthorization composes the schema (manage_access declared), the
@@ -251,14 +251,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	// A Granter enables invitations, so the feature REQUIRES a relation-aware host
+	// A Granter enables invitations, so the pocket REQUIRES a relation-aware host
 	// authorization policy (auth.Config.InviteCheck, design D3) — the two are wired
 	// together. hostInviteCheck consults the authorizer so a member-capable manager cannot
 	// escalate by inviting an owner; a nil InviteCheck here would be ErrInviteCheckRequired
 	// at NewService, never an allow-by-default.
 	authCfg.InviteCheck = hostInviteCheck(authorizer)
 	// The bundled machine-identity lifecycle routes (/auth/service-accounts*,
-	// /auth/api-keys/{id}/revoke) mint and revoke credentials, so the feature refuses to
+	// /auth/api-keys/{id}/revoke) mint and revoke credentials, so the pocket refuses to
 	// guess a policy: with MachineRoutesGate nil they are NOT mounted (404) and NewService
 	// WARNs. This host names the platform-admin coordinate already declared in authzSchema
 	// (platform/admin on platform:main), so each route runs RequireUser, RequireLiveSession,
@@ -295,9 +295,9 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// failure surfaces on the health endpoint as observer_failures.
 	authCfg.DeliveryEventsEmitter = health.Emitter(bus)
 
-	// authSvc is the auth feature's driving surface (FS2): its RequireUser method
+	// authSvc is the auth pocket's driving surface (FS2): its RequireUser method
 	// value is the middleware cms gates its admin routes on, and RequirePrincipal/
-	// CurrentPrincipal back the host demo routes. The feature's own HTTP routes are
+	// CurrentPrincipal back the host demo routes. The pocket's own HTTP routes are
 	// the optional adapter over that surface — built once here, mounted once via
 	// authSvc.Register(mount).
 	authSvc, err := auth.NewService(authRepos, authCfg)
@@ -346,7 +346,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		// Bind the bounded terminal-purge pass over the SAME jobs Service. Each pass removes
 		// at most Batch terminal delivery rows older than the retention window and emits the
 		// purged lifecycle observation (which the health surface counts). The host owns the
-		// schedule/lifecycle below; the feature purges nothing on its own.
+		// schedule/lifecycle below; the pocket purges nothing on its own.
 		purgeCfg := deliveryPurgeConfigFromEnv(log)
 		deliveryPurge = newDeliveryPurge(deliveryJobs, deliveryRuntime, purgeCfg, time.Now)
 		deliveryPurgeInterval = purgeCfg.Interval
@@ -394,7 +394,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return err
 	}
 
-	// The events feature's SSE gateway, best-effort/direct-emit (design §6 wiring
+	// The events pocket's SSE gateway, best-effort/direct-emit (design §6 wiring
 	// note): the SAME bus instance flows to both Mount.Events (cms is the emitter)
 	// and events.Config.Bus (the gateway is the consumer) — one fan-out, no second
 	// bus. A content.* frame fans out to any open stream the moment cms emits. The
@@ -445,7 +445,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 
 	// Durable-outbox variant plumbing (EVENTS_OUTBOX=memory): the host owns the
-	// poller lifecycle (the feature owns no goroutines — D4). The poller runs on
+	// poller lifecycle (the pocket owns no goroutines — D4). The poller runs on
 	// an sdk/foundation/workers pool woken by the canonical append-then-signal pattern
 	// (gate edit 2): a dedicated cap-1 wake channel the POST /outbox-demo handler
 	// signals right after Append, so a fresh record drains sub-second instead of
@@ -477,7 +477,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 			"outbox", "in-memory (internal/outboxmem)", "trigger", "POST /outbox-demo")
 	}
 
-	// Host-local demo + debug routes (host code, not feature surface). The demo routes
+	// Host-local demo + debug routes (host code, not pocket surface). The demo routes
 	// are READ-ONLY (AZ3-4.1): the session-only authorization-mutation routes
 	// (POST /demo/roles/{assign,unassign}, POST /demo/admin/bootstrap) were REMOVED — no
 	// shipped HTTP route mutates authorization with session presence alone. Trusted
@@ -487,7 +487,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	registerDemoRoutes(router, authSvc, authorizer)
 	registerDebugRoutes(router, authSvc, authRepos, log)
 
-	// Host-local liveness probe (host route, not feature surface). Mounted on
+	// Host-local liveness probe (host route, not pocket surface). Mounted on
 	// the root router with no middleware, outside every gated group and
 	// unwrapped by RequireUser — unauthenticated by design, since a readiness
 	// probe can't log in.
@@ -501,7 +501,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	router.Handle(http.MethodGet, "/healthz/delivery", health.Handler())
 
 	// The selected delivery runtime drains the auth delivery queue off the request path —
-	// the host owns its lifecycle (the feature starts no goroutine). Jobs mode runs the
+	// the host owns its lifecycle (the pocket starts no goroutine). Jobs mode runs the
 	// generic-jobs FencedRuntime (AV3D-3.1); in_process mode runs authSvc.RunDelivery (the
 	// bounded ephemeral pool, AV3D-4.1). It runs on its OWN Background-derived context (never
 	// the parent ctx) so shutdown stops it AFTER HTTP has drained, mirroring the poller order
@@ -654,7 +654,7 @@ func trustedProxyCount() int {
 // the example-local outbox, then wakes the poller with the canonical
 // append-then-signal pattern (gate edit 2) so the drain runs promptly instead of
 // waiting out the pool's idle interval. cms itself never touches the outbox (O2)
-// — this is a host route, not feature surface. The frame that reaches the open
+// — this is a host route, not pocket surface. The frame that reaches the open
 // stream carries the durable outbox EventID as its SSE id: (the poller's
 // rehydrated event surfaces it), distinct in provenance from the direct-emit
 // rail's CorrelationID.
@@ -681,7 +681,7 @@ func outboxDemoHandler(store *outboxmem.Store, wake chan<- struct{}, log *slog.L
 	}
 }
 
-// healthzHandler is this host's liveness probe. Both feature stores are
+// healthzHandler is this host's liveness probe. Both pocket stores are
 // memory-backed, so there is no DB to probe — reaching the handler is itself
 // the liveness signal.
 func healthzHandler() http.HandlerFunc {
@@ -719,8 +719,8 @@ func seed(ctx context.Context, repos cms.Repositories) error {
 	// Content is the Registry model: Articles and the About Page are content.Entry
 	// rows on the shared spine, distinguished by Type — no per-type tables.
 	articles := []struct{ title, excerpt, body string }{
-		{"Two features, one host", "auth gates cms's admin surface with zero cross-import.", "features/cms never imports features/authentication; only this host's main imports both — constitution rule 6, proved with two real feature modules."},
-		{"Bring your own stores", "Both features run on in-memory stores; no libsql in the graph.", "Swap datastores without forking a feature — the whole point of the module split."},
+		{"Two pockets, one host", "auth gates cms's admin surface with zero cross-import.", "pockets/cms never imports pockets/authentication; only this host's main imports both — constitution rule 6, proved with two real pocket modules."},
+		{"Bring your own stores", "Both pockets run on in-memory stores; no libsql in the graph.", "Swap datastores without forking a pocket — the whole point of the module split."},
 	}
 	for _, a := range articles {
 		e, err := content.NewEntry(ids, "article", a.title, a.excerpt, a.body, "demo", content.StatusPublished, "", now)
@@ -755,7 +755,7 @@ func seed(ctx context.Context, repos cms.Repositories) error {
 	return nil
 }
 
-// buildAuthConfig assembles the authentication feature's Config for this proof host
+// buildAuthConfig assembles the authentication pocket's Config for this proof host
 // (the AV3-8.6 composition seam, factored out so startup/production-negative tests
 // share the exact wiring run() uses). It wires:
 //
@@ -777,7 +777,7 @@ func seed(ctx context.Context, repos cms.Repositories) error {
 //   - the magic-link base URL (design §6.4), built ONLY from configuration — request
 //     Host/forwarded headers never participate;
 //   - DeliveryMode "jobs" + DeliveryJobsAcknowledged: the queue is the only send path
-//     (AV3-4.3), so the feature is told run() actually runs the generic-jobs delivery
+//     (AV3-4.3), so the pocket is told run() actually runs the generic-jobs delivery
 //     runtime (jobs.FencedRuntime, below); and
 //   - every development secret (JWT signer, challenge pepper, delivery + identifier +
 //     token-encryption keys) from a DISTINCT env var, never a committed constant, and
@@ -817,7 +817,7 @@ func buildAuthConfig(log *slog.Logger, granter auth.Granter) (auth.Config, error
 	// partial override (authpages.New) which embeds the ui/goth Views and overrides
 	// only Login with Gopernicus-CMS branding. The embedded Views promotes HTMLPolicy(),
 	// which maps the bundle's browser Requirements (+ the fragment-reader script-src)
-	// into the feature's CSP so the auth pages load their assets under default-src
+	// into the pocket's CSP so the auth pages load their assets under default-src
 	// 'none' — the host never hand-writes that CSP (ui-goth GOTH-7.2).
 	bundle, err := newAuthBundle()
 	if err != nil {
@@ -852,9 +852,9 @@ func buildAuthConfig(log *slog.Logger, granter auth.Granter) (auth.Config, error
 		// default rendered from the fingerprinted assets under authAssetBasePath.
 		Views: authViews,
 		// The resource policy the ui/goth adapter derives from the bundle: it widens the
-		// feature's strict CSP exactly far enough to load the GOTH stylesheet and the
+		// pocket's strict CSP exactly far enough to load the GOTH stylesheet and the
 		// same-origin fragment-reader script (script-src 'self' + the per-render nonce),
-		// and can never remove the feature-owned fixed protections (ui-goth GOTH-7.2).
+		// and can never remove the pocket-owned fixed protections (ui-goth GOTH-7.2).
 		HTMLPolicy: authViews.HTMLPolicy(),
 		// The DISTINCT second override system (design §6.2): a host email LayerApp
 		// content override that rebrands the verification email body. It swaps an EMAIL,
@@ -876,7 +876,7 @@ func buildAuthConfig(log *slog.Logger, granter auth.Granter) (auth.Config, error
 		PasswordResetURL: passwordResetURL(),
 		// The OAuth pending-link landing URL the anti-takeover confirmation mail links
 		// to (oauth-pending-link plan D1), config-only. Empty by default, keeping the
-		// mail's bare-token line — but this demo DOES serve the feature's bundled
+		// mail's bare-token line — but this demo DOES serve the pocket's bundled
 		// fragment-reading landing (public GET /auth/oauth/link, mounted with Views +
 		// a provider), so http://HOST:PORT/auth/oauth/link is a working value here. A
 		// real host points AUTH_OAUTH_LINK_URL at that route or its own SPA route.

@@ -185,11 +185,11 @@ func ErrInternal(msg string) *Error {
 //
 // This is an explicit host-seam affordance: a host authorization or grant seam
 // (an invitation InviteCheck or Granter refusal, say) refuses through a vendored
-// feature's handler, and that handler responds through [ErrFromDomain]. Wrapping
+// pocket's handler, and that handler responds through [ErrFromDomain]. Wrapping
 // is the only way such a refusal can carry a legible sentence to the wire.
 //
 // It is not a general permission for domain code to put user text on the wire.
-// Feature-internal errors must not use this wrapper — a feature cannot know
+// Pocket-internal errors must not use this wrapper — a pocket cannot know
 // whether its own sentences are safe in a host's product. Bare sentinels and
 // arbitrary errors that merely wrap an [*Error] keep the generic mapping;
 // nothing but this wrapper is recognized.
@@ -205,7 +205,7 @@ func ErrInternal(msg string) *Error {
 //	    sdk.ErrConflict,
 //	)
 //
-//	// The seam refuses; the feature's handler responds through ErrFromDomain,
+//	// The seam refuses; the pocket's handler responds through ErrFromDomain,
 //	// and the invitee reads the host's sentence instead of "conflict".
 //	// errors.Is(errAlreadyAttached, sdk.ErrConflict) stays true.
 type SafeDomainError struct {

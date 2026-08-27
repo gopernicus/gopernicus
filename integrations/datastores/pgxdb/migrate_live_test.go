@@ -301,7 +301,7 @@ func adoptionFS(table string) (fstest.MapFS, []string) {
 }
 
 // TestLive_RunMigrations_AdoptPublicLedger executes the documented
-// ledger-relocation preflight against a database whose feature tables already
+// ledger-relocation preflight against a database whose pocket tables already
 // live in the schema while its ledger rows live in public, then proves the
 // schema-scoped runner skips every copied file.
 func TestLive_RunMigrations_AdoptPublicLedger(t *testing.T) {

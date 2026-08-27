@@ -85,7 +85,7 @@ func (h *EntryHandlers) List(w http.ResponseWriter, r *http.Request, ct content.
 	// ONLY the swappable content region; a non-HTMX request (or no-JS) gets the full
 	// document. Both render the same server-owned content, so the HTMX path degrades
 	// to a full-document reload. The HX-Request header is a presentation hint read
-	// directly here — the feature core takes no dependency on any HTMX/UI package,
+	// directly here — the pocket core takes no dependency on any HTMX/UI package,
 	// and no identity/CSRF/authorization is ever derived from it.
 	if isHTMX(r) {
 		web.Render(r.Context(), w, http.StatusOK, h.views.EntriesListContent(ct.Plural, base+"/new", base, items, pager))
@@ -110,7 +110,7 @@ func parseEntryStatus(r *http.Request) content.Status {
 
 // isHTMX reports whether r is an HTMX-issued request. It reads the HX-Request
 // header as a presentation hint only (never an identity/CSRF/authorization
-// signal), so the feature core needs no dependency on the UI/HTMX package.
+// signal), so the pocket core needs no dependency on the UI/HTMX package.
 func isHTMX(r *http.Request) bool {
 	return r.Header.Get("HX-Request") == "true"
 }

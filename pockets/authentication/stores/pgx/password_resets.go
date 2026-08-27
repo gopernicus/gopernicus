@@ -5,8 +5,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/passwordreset"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/passwordreset"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 

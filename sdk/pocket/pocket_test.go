@@ -26,7 +26,7 @@ func (r *recordingRegistrar) Handle(method, path string, _ http.HandlerFunc, _ .
 	r.calls = append(r.calls, method+" "+path)
 }
 
-// registerThroughMount is the shape a feature's Register function takes: it
+// registerThroughMount is the shape a pocket's Register function takes: it
 // reaches only the Mount's narrow ports, never a service locator.
 func registerThroughMount(m Mount) error {
 	m.Router.Handle(http.MethodGet, "/widgets", func(w http.ResponseWriter, r *http.Request) {})
@@ -48,7 +48,7 @@ func TestMount_RegisterHitsRouter(t *testing.T) {
 
 func TestMount_ZeroValueFieldsAreNilable(t *testing.T) {
 	// A Mount with only a router must be constructible; Logger and Events are
-	// optional (a nil Events means the feature emits nothing).
+	// optional (a nil Events means the pocket emits nothing).
 	m := Mount{Router: &recordingRegistrar{}, Logger: slog.Default()}
 	if m.Router == nil {
 		t.Fatal("Router should be set")

@@ -1,7 +1,7 @@
 // Tests for memstore's port-semantics: each repository's Create/Get/List/
 // Delete happy path plus the sdk/errs sentinel contract each port's doc
 // comment promises, including the uniqueness rules the turso store enforces
-// in SQL (features/cms/stores/turso/migrations) — entry (type,slug), term
+// in SQL (pockets/cms/stores/turso/migrations) — entry (type,slug), term
 // (kind,slug), and menu slug collisions all return sdk.ErrAlreadyExists.
 package memstore
 
@@ -86,7 +86,7 @@ func TestEntryRepo_DeleteUnknown(t *testing.T) {
 }
 
 // TestEntryRepo_DuplicateTypeSlugCollision mirrors the turso store's
-// UNIQUE(type, slug) constraint (features/cms/stores/turso/migrations/
+// UNIQUE(type, slug) constraint (pockets/cms/stores/turso/migrations/
 // 0018_entries.sql) — memstore enforces the same rule in Create.
 func TestEntryRepo_DuplicateTypeSlugCollision(t *testing.T) {
 	ctx := context.Background()

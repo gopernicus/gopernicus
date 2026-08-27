@@ -1,27 +1,27 @@
-// Package authentication is the public surface of the authentication feature module: the
-// registration entry point (Register), the cross-feature identity capability
+// Package authentication is the public surface of the authentication pocket module: the
+// registration entry point (Register), the cross-pocket identity capability
 // (Service / NewService / RequireUser / CurrentUser), the host-filled ports
-// (Repositories), the feature-owned PasswordHasher port, and the customization
+// (Repositories), the pocket-owned PasswordHasher port, and the customization
 // config (Config). Implementation lives in internal/; the domain type and
 // repository-interface packages (user, session, verification) are public
 // because hosts and store adapters reference them, but the services and
 // handlers stay internal.
 //
-// The feature is datastore-free and view-free: it depends on its repository
+// The pocket is datastore-free and view-free: it depends on its repository
 // ports and sdk facilities only, never on a concrete store, an integration, or
 // a view library. v1 is JSON-API only (see internal/http).
 //
-// Host-facing surface, all in this file per the feature charter's "<name>.go is
-// the feature's entire host-facing surface" rule:
+// Host-facing surface, all in this file per the pocket charter's "<name>.go is
+// the pocket's entire host-facing surface" rule:
 //
 //   - Repositories — the five outbound ports a store adapter or host fills.
-//   - PasswordHasher — the feature-owned hashing port (integrations/cryptids/
+//   - PasswordHasher — the pocket-owned hashing port (integrations/cryptids/
 //     bcrypt satisfies it structurally).
 //   - Config — required Hasher + Mailer (nil errors at construction), optional
 //     RateLimiter (nil → in-memory), MailFrom, SessionCookie.
 //   - NewService / Service.RequireUser / Service.CurrentUser — the surface a
-//     host wires into another feature (e.g. cms admin gating).
-//   - Register — mounts the feature's own HTTP routes.
+//     host wires into another pocket (e.g. cms admin gating).
+//   - Register — mounts the pocket's own HTTP routes.
 package authentication
 
 import (
@@ -58,16 +58,16 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 // ErrHasherRequired and ErrMailerRequired are returned by NewService/Register
 // when the corresponding required Config field is nil. Unlike cms's safe
-// silent defaults (nil Cache disables caching), a password feature with no
+// silent defaults (nil Cache disables caching), a password pocket with no
 // hasher, or one that silently drops verification/reset mail, is a security
 // foot-gun — so these degrade loudly at construction, never silently.
 var (
@@ -192,7 +192,7 @@ var ErrKindNotSupported = invitationsvc.ErrKindNotSupported
 // to sdk.ErrNotFound). Infrastructure/command failures propagate. The grant must
 // be idempotent for the exact tuple (a duplicate accept of the SAME relation must
 // not error), but the Granter must NOT implicitly replace, upgrade, or downgrade
-// an existing relation — the feature cannot decide that an invitation may change a
+// an existing relation — the pocket cannot decide that an invitation may change a
 // standing membership. Aliased from invitationsvc so the sibling service can call
 // it without an import cycle.
 type Granter = invitationsvc.Granter
@@ -218,7 +218,7 @@ type MemberCheck = invitationsvc.MemberCheck
 // about (design §6/D3): InviteCreate or InviteList. Aliased from invitationsvc.
 type InviteAction = invitationsvc.InviteAction
 
-// InviteCreate and InviteList are the two InviteAction values the feature's
+// InviteCreate and InviteList are the two InviteAction values the pocket's
 // create/list invitation handlers pass to InviteCheck (design §6/D3). InviteCreate
 // carries the exact requested relation; InviteList carries an empty relation.
 const (
@@ -227,9 +227,9 @@ const (
 )
 
 // InviteCheckRequest is the parsed, principal-resolved authorization question the
-// feature poses to a host InviteCheck (design §6/D3): the Principal, the Action,
+// pocket poses to a host InviteCheck (design §6/D3): the Principal, the Action,
 // the resource, — for InviteCreate — the exact validated Relation (empty for
-// InviteList), the opaque request Metadata, and the invitee context the feature
+// InviteList), the opaque request Metadata, and the invitee context the pocket
 // itself derived: the normalized Identifier, its IdentifierKind, and the
 // ResolvedSubjectID an existing account resolves to (empty when unknown or the
 // kind is not resolvable — the lookup is email-kind only, so an empty value is
@@ -246,7 +246,7 @@ const (
 type InviteCheckRequest = invitationsvc.InviteCheckRequest
 
 // InviteCheck is the relation-aware host authorization seam for invitation
-// create/list (design §6/D3). It runs inside the feature's own authorized
+// create/list (design §6/D3). It runs inside the pocket's own authorized
 // invitation operations — after live-session validation, principal resolution,
 // request parsing, metadata validation, identifier normalization, and the invitee
 // lookup, and always before any invitation row exists or a grant is attempted — so
@@ -356,19 +356,19 @@ const (
 )
 
 // UserAdminCheckRequest is the parsed, principal-resolved authorization question
-// the feature poses to a host UserAdminCheck: the resolved Principal, the Action,
+// the pocket poses to a host UserAdminCheck: the resolved Principal, the Action,
 // and the TargetUserID (empty for UserAdminList). Aliased from authsvc.
 type UserAdminCheckRequest = authsvc.UserAdminCheckRequest
 
 // UserAdminCheck is the host authorization seam for user administration
 // (CHAU-1.1) — the InviteCheck precedent applied to the user directory. The
-// feature owns live-session validation, principal resolution, and request
+// pocket owns live-session validation, principal resolution, and request
 // parsing, then asks the host one question it answers with its OWN roles,
 // tenancy, or policy engine.
 //
 // Authentication never invents a role named "admin", never interprets a role
-// string, and never imports features/authorization. A host with an authorization
-// feature wires a closure over it:
+// string, and never imports pockets/authorization. A host with an authorization
+// pocket wires a closure over it:
 //
 //	cfg.UserAdminCheck = func(ctx context.Context, req auth.UserAdminCheckRequest) error {
 //		return authorization.Check(ctx, req.Principal, "platform:main", "admin")
@@ -427,7 +427,7 @@ type OAuthResult = authsvc.OAuthResult
 // Aliased from authsvc per the Principal precedent.
 type TokenPair = authsvc.TokenPair
 
-// PasswordHasher hashes and verifies passwords. It is feature-owned (not an sdk
+// PasswordHasher hashes and verifies passwords. It is pocket-owned (not an sdk
 // facility) because it has one consumer today and none genuinely foreseen
 // elsewhere. integrations/cryptids/bcrypt satisfies it structurally, with zero
 // import in either direction.
@@ -441,7 +441,7 @@ type PasswordHasher interface {
 
 // CompromisedPasswordChecker reports whether a candidate password is known to be
 // compromised — present in a breach corpus or a host blocklist (design §5.9). It
-// is OPTIONAL and host-injected (Config.CompromisedPasswordChecker); the feature
+// is OPTIONAL and host-injected (Config.CompromisedPasswordChecker); the pocket
 // core ships none and adds NO network dependency, so a local blocklist and a
 // future remote breach-check integration both satisfy it. When wired, every
 // password entry point (register, set, change, reset) consults it identically.
@@ -454,17 +454,17 @@ type CompromisedPasswordChecker interface {
 
 // DeliveryDispatcher is the transport-neutral outbound-delivery seam for
 // DeliveryMode "jobs" (authv3-delivery-refactor AV3D-3.1). A host composes an
-// adapter over the generic jobs feature and wires it here (Config.DeliveryDispatcher)
+// adapter over the generic jobs pocket and wires it here (Config.DeliveryDispatcher)
 // so authentication runs its encrypted delivery work on durable generic jobs while
-// the authentication core imports NO sibling feature (constitution rule 6): every
+// the authentication core imports NO sibling pocket (constitution rule 6): every
 // method is STDLIB-TYPED, so the adapter — which lives in a composition boundary that
-// imports both features — satisfies it structurally.
+// imports both pockets — satisfies it structurally.
 //
 // payload is the opaque sealed command.Envelope the queue stores and never
 // interprets; kind and purpose are the secret-free routing metadata; logicalKey is
 // the PII-free receipt key that makes a duplicate Submit idempotent and lets Replace
 // supersede exactly the prior active generation. LatestStatus returns a generic job
-// lifecycle string; the feature normalizes it into the stable, secret-free
+// lifecycle string; the pocket normalizes it into the stable, secret-free
 // DeliveryStatus projection. Submit admits work under logicalKey exactly once; Replace
 // supersedes every active generation and admits a fresh one.
 //
@@ -492,7 +492,7 @@ const DeliveryJobKind = delivery.JobKind
 // DeliveryClaim is one claimed delivery job a jobs-mode transport hands the
 // authentication processor (AV3D-3.1). It is stdlib-typed so a composition adapter
 // builds it from a generic job without the authentication core importing the jobs
-// feature. Payload is the sealed command envelope; Attempt is the number of process
+// pocket. Payload is the sealed command envelope; Attempt is the number of process
 // attempts already spent; Checkpoint persists a freshly rendered sealed payload under
 // the current claim fence before any provider send.
 type DeliveryClaim struct {
@@ -528,8 +528,8 @@ type DeliveryJobRuntime struct {
 // false and is retried with capped exponential backoff.
 func DeliveryErrorPermanent(err error) bool { return delivery.HandleErrorPermanent(err) }
 
-// Repositories is the set of outbound ports the feature needs. A store adapter
-// (e.g. features/authentication/stores/turso) or a host fills it; the feature stays
+// Repositories is the set of outbound ports the pocket needs. A store adapter
+// (e.g. pockets/authentication/stores/turso) or a host fills it; the pocket stays
 // dialect-blind. Passwords is split from Users on purpose — credential material
 // is stored and access-controlled independently of general user reads.
 type Repositories struct {
@@ -557,7 +557,7 @@ type Repositories struct {
 	APIKeys         apikey.APIKeyRepository
 	// SecurityEvents backs the append-only audit rail (design §5.1). It is
 	// OPTIONAL (ratified AV9), independently of every other port: nil → the
-	// feature keeps NO audit trail (the synchronous recording site is a no-op),
+	// pocket keeps NO audit trail (the synchronous recording site is a no-op),
 	// and no construction error is raised. When wired, every sensitive op records
 	// a security event synchronously and a write failure is logged at WARN,
 	// never failing the auth flow.
@@ -701,7 +701,7 @@ type InProcessDeliveryConfig struct {
 }
 
 // HTMLResourcePolicy is the technology-neutral, validated HTML resource policy a host
-// hands the feature through Config.HTMLPolicy (design §9.2, GOTH-0.4). It carries a
+// hands the pocket through Config.HTMLPolicy (design §9.2, GOTH-0.4). It carries a
 // deterministically ordered set of ADDITIONAL Content-Security-Policy resource
 // directives (script, style, image, font, connect, media, worker) so a selected HTML
 // view can load the assets it needs. It WIDENS resource loading and can never remove
@@ -709,7 +709,7 @@ type InProcessDeliveryConfig struct {
 // no-referrer, X-Frame-Options: DENY, X-Content-Type-Options: nosniff, and the CSP
 // default-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
 // prefix). A nil *HTMLResourcePolicy selects the historical asset-free CSP exactly.
-// The feature core never imports templ or ui/goth: this is a plain, feature-owned
+// The pocket core never imports templ or ui/goth: this is a plain, pocket-owned
 // value the future ui/goth authentication adapter constructs from
 // goth.Bundle.Requirements(). Aliased from the internal inbound package (the
 // MutationSecurity precedent) so a host names one type across the public and internal
@@ -781,7 +781,7 @@ var ErrRefreshCookiePathInvalid = errors.New(`auth: Config.RefreshCookiePath mus
 // immutable HTMLResourcePolicy, or an error wrapping sdk.ErrInvalidInput for an
 // unknown/fixed directive key, a directive with neither a source nor a nonce, an empty
 // source, or a source carrying a control character, whitespace, ';', or ',' (the
-// header-injection guard). It is the feature-owned constructor a host or the ui/goth
+// header-injection guard). It is the pocket-owned constructor a host or the ui/goth
 // authentication adapter calls to build Config.HTMLPolicy. It re-exports the internal
 // inbound constructor so a host never imports internal.
 func NewHTMLResourcePolicy(directives ...HTMLResourceDirective) (*HTMLResourcePolicy, error) {
@@ -797,7 +797,7 @@ type Config struct {
 	// CompromisedPasswordChecker is the OPTIONAL breach/blocklist checker consulted
 	// by the shared password policy (design §5.9). Nil → no breach check (the
 	// length policy still applies). When wired, register/set/change/reset all
-	// consult it identically; the feature core ships none, so wiring it never adds
+	// consult it identically; the pocket core ships none, so wiring it never adds
 	// a network dependency to the core.
 	CompromisedPasswordChecker CompromisedPasswordChecker
 	// CompromisedPasswordFailOpen selects the policy when a wired
@@ -819,12 +819,12 @@ type Config struct {
 	// SessionCookie configures the session cookie; the zero value is usable.
 	SessionCookie CookieConfig
 	// RefreshCookiePath scopes the refresh cookie. Empty (default) → "/auth", which
-	// covers /auth/refresh AND /auth/logout on a host that mounts the feature at the
-	// root. A host that mounts the feature under a path prefix (pocket.PrefixRegistrar,
+	// covers /auth/refresh AND /auth/logout on a host that mounts the pocket at the
+	// root. A host that mounts the pocket under a path prefix (pocket.PrefixRegistrar,
 	// e.g. "/api/v1") MUST set the FULL prefixed path — "/api/v1/auth" — or the browser
 	// never sends the refresh cookie to the endpoints that need it and cookie-driven
 	// refresh silently dies. The registrar deliberately exposes registration, not its
-	// mount prefix, so the feature cannot derive this.
+	// mount prefix, so the pocket cannot derive this.
 	//
 	// A non-empty value must be a valid absolute cookie path (leading "/", no query,
 	// fragment, control, or header-delimiter character, no trailing slash except "/"
@@ -859,7 +859,7 @@ type Config struct {
 	// change-set-remove / step-up-password routes (JSON and HTML —
 	// deny-by-absence, like machine identity), and the corresponding Service
 	// use-cases refuse with ErrPasswordFlowsDisabled. Default false keeps every
-	// route. Hasher stays REQUIRED (the feature's credential rail is shared).
+	// route. Hasher stays REQUIRED (the pocket's credential rail is shared).
 	PasswordFlowsDisabled bool `env:"AUTH_PASSWORD_FLOWS_DISABLED"`
 	// MachineRoutesGate is the authorization the bundled machine-identity lifecycle
 	// routes (/auth/service-accounts*, /auth/api-keys/{id}/revoke) run behind. Each
@@ -867,7 +867,7 @@ type Config struct {
 	// never administers machine identities through the bundled routes), then
 	// RequireLiveSession (immediate revocation, the invitation precedent), then —
 	// on the three MUTATIONS — the browser-safe Origin/CSRF gate, then this gate.
-	// The feature never guesses a policy: nil → the routes are NOT mounted
+	// The pocket never guesses a policy: nil → the routes are NOT mounted
 	// (deny-by-absence, like PasswordFlowsDisabled) and NewService WARNs when the
 	// machine repositories are wired without one; key AUTHENTICATION is unaffected.
 	// Set with Repositories.ServiceAccounts / APIKeys nil → ErrMachineRoutesGateWithoutRepos.
@@ -944,7 +944,7 @@ type Config struct {
 	// runtime in its process lifecycle (authv3-delivery-refactor AV3D-0.1). It is
 	// meaningful only for DeliveryMode "jobs". The queue is the ONLY send path, so a
 	// jobs-mode host that enqueues without running the runtime silently swallows every
-	// verification, reset, and magic-link message. The feature cannot observe the host
+	// verification, reset, and magic-link message. The pocket cannot observe the host
 	// lifecycle, so production REQUIRES this explicit acknowledgment
 	// (ErrDeliveryJobsUnacknowledged) rather than failing open on a stalled queue.
 	// Development tolerates the zero value (a test or manual drain may run the runtime).
@@ -953,7 +953,7 @@ type Config struct {
 	// DeliveryEphemeralAcknowledged affirms that the host accepts the crash-loss
 	// guarantee of DeliveryMode "in_process" (authv3-delivery-refactor AV3D-0.1). The
 	// in-process pool is process-local: accepted, in-flight delivery work is lost on a
-	// crash. The feature cannot make an ephemeral send path durable, so production
+	// crash. The pocket cannot make an ephemeral send path durable, so production
 	// REFUSES in_process without this explicit acknowledgment
 	// (ErrDeliveryEphemeralUnacknowledged) — the recommended production posture is
 	// "jobs". Development tolerates the zero value. It is a wiring assertion set in the
@@ -1009,7 +1009,7 @@ type Config struct {
 	// one POSTs the pending-link verify-link. The host supplies a full landing URL
 	// (no fragment — the token owns the fragment) and wires the SPA route.
 	//
-	// Validation at construction (D5): EMPTY is allowed — the feature degrades to the
+	// Validation at construction (D5): EMPTY is allowed — the pocket degrades to the
 	// historical bare-token email line rather than failing to boot; when OAuth
 	// providers are wired but this field is empty, ONE startup WARN names
 	// AUTH_OAUTH_LINK_URL. A NON-EMPTY value is validated in every mode: it must be an
@@ -1079,13 +1079,13 @@ type Config struct {
 	// unconditional high-entropy generator regardless of this strategy.
 	IDs cryptids.IDGenerator
 
-	// ListStrategy is the DEFAULT pagination strategy the feature's JSON list
+	// ListStrategy is the DEFAULT pagination strategy the pocket's JSON list
 	// endpoints (service accounts, API keys, invitations) apply when a request
 	// names neither a cursor nor an offset param (sdk/foundation/crud ParseListRequest).
 	// "cursor" (the default) or "offset"; empty is treated as "cursor". A host
 	// populates it from an env-tagged config field
 	// (`env:"AUTH_LIST_STRATEGY" default:"cursor"` via sdk/config ParseEnvTags),
-	// never from os.Getenv inside the feature. Any other value is
+	// never from os.Getenv inside the pocket. Any other value is
 	// ErrInvalidListStrategy at construction (the loud-Config posture).
 	ListStrategy string `env:"AUTH_LIST_STRATEGY" default:"cursor"`
 
@@ -1144,7 +1144,7 @@ type Config struct {
 	// Non-nil → Repositories.Invitations is required (ErrInvitationRepoRequired),
 	// and Register/verify resolve pending auto-accept invitations for the invitee.
 	Granter Granter
-	// InviteCheck is the relation-aware host authorization seam the feature's
+	// InviteCheck is the relation-aware host authorization seam the pocket's
 	// AUTHORIZED invitation operations pose — the ones the shipped create/list routes
 	// drive — after live-session validation, principal resolution, request parsing,
 	// metadata validation, identifier normalization, and the invitee lookup, and
@@ -1176,7 +1176,7 @@ type Config struct {
 	//
 	// A denial or an infrastructure error both fail closed. The resolved Principal
 	// reaches the check verbatim, including a machine principal: whether a service
-	// account may administer users is the host's decision, not the feature's.
+	// account may administer users is the host's decision, not the pocket's.
 	UserAdminCheck UserAdminCheck
 	// MemberCheck is the optional duplicate-membership predicate for the direct-add
 	// path (known invitee + AutoAccept). Nil → no dup check (idempotent grants
@@ -1195,13 +1195,13 @@ type Config struct {
 
 	// Views is the OPTIONAL HTML rendering port (design §9.2, R12/V16). Nil (default)
 	// → the HTML surface is absent: the HTML GET pages and form decoding are NOT
-	// registered and the shared POST routes accept JSON only, so the feature is
+	// registered and the shared POST routes accept JSON only, so the pocket is
 	// API-only with no view technology in the host's module graph. Non-nil → the
 	// bundled/overridden HTML GET pages mount alongside the UNCHANGED JSON API (the
 	// JSON DTO/status/body/cookie contracts are byte-compatible either way). The
-	// feature core never imports templ: this is a technology-neutral web.Renderer
+	// pocket core never imports templ: this is a technology-neutral web.Renderer
 	// port. The bundled default lives in the sibling module
-	// features/authentication/views/templ (authtempl.New()); the blessed override
+	// pockets/authentication/views/templ (authtempl.New()); the blessed override
 	// path is embedding that default and overriding individual methods. A host may
 	// instead satisfy the port with html/template via sdk/foundation/web.Template.
 	Views Views
@@ -1219,11 +1219,11 @@ type Config struct {
 	// authentication adapter maps goth.Bundle.Requirements() into one. Setting
 	// HTMLPolicy while Views is nil is ErrHTMLPolicyWithoutViews at construction — a
 	// policy for an absent HTML surface is contradictory wiring, never a silent no-op.
-	// The feature core never imports templ or ui/goth: HTMLResourcePolicy is a plain
-	// feature-owned value.
+	// The pocket core never imports templ or ui/goth: HTMLResourcePolicy is a plain
+	// pocket-owned value.
 	HTMLPolicy *HTMLResourcePolicy
 
-	// EmailContentTemplates registers host overrides of the feature's default email
+	// EmailContentTemplates registers host overrides of the pocket's default email
 	// content at email.LayerApp (design §6.2) — the DISTINCT second override system
 	// alongside Views (which overrides HTML pages). Empty (default) → the bundled
 	// LayerCore templates render unchanged. Each entry's Namespace must be
@@ -1272,10 +1272,10 @@ type Config struct {
 	Logger *slog.Logger
 }
 
-// Service is the auth feature's driving surface — every use-case as a method
+// Service is the auth pocket's driving surface — every use-case as a method
 // (session lifecycle, passwords, OAuth, machine identity, tokens, invitations),
-// plus the cross-feature identity seams (RequireUser middleware, CurrentUser
-// port) a host wires into another feature. It holds no mutable state beyond the
+// plus the cross-pocket identity seams (RequireUser middleware, CurrentUser
+// port) a host wires into another pocket. It holds no mutable state beyond the
 // shared Repositories/Config values. The shipped HTTP layer is an optional
 // adapter over exactly this surface (FS2): a host may mount it (Register), mount
 // part of it (subsystem deny-by-absence), or skip it and call these methods from
@@ -1289,11 +1289,11 @@ type Service struct {
 	// jobsProcessor is the jobs-mode delivery processor (AV3D-3.1), non-nil only when
 	// DeliveryMode is "jobs" and Config.DeliveryDispatcher is wired. The host reaches
 	// it through DeliveryJobRuntime() to register the handler on the generic jobs
-	// runtime; the feature starts no goroutine.
+	// runtime; the pocket starts no goroutine.
 	jobsProcessor *delivery.JobsProcessor
 	// inProcessRuntime is the bounded, EPHEMERAL in-process delivery runtime (AV3D-4.1),
 	// non-nil only when DeliveryMode is "in_process". It owns a fixed worker pool that
-	// drains a finite admission queue; the host runs it via RunDelivery. The feature
+	// drains a finite admission queue; the host runs it via RunDelivery. The pocket
 	// starts no goroutine at construction. Accepted, in-flight work is LOST on a crash
 	// or restart — this mode is process-local and never claims durability or
 	// cross-instance coordination.
@@ -1331,7 +1331,7 @@ type Service struct {
 // internal delivery package per the Principal precedent.
 type DeliveryStatus = delivery.Status
 
-// EmailContentTemplate is a host override of the feature's default email CONTENT,
+// EmailContentTemplate is a host override of the pocket's default email CONTENT,
 // registered at email.LayerApp (design §6.2). It is the second, DISTINCT
 // customization system alongside Config.Views: Views overrides HTML pages rendered
 // to the browser, while EmailContentTemplate overrides the transactional email
@@ -1342,7 +1342,7 @@ type DeliveryStatus = delivery.Status
 // delivery package per the DeliveryStatus precedent.
 type EmailContentTemplate = delivery.TemplateOverride
 
-// EmailContentNamespace is the namespace the feature registers its default email
+// EmailContentNamespace is the namespace the pocket registers its default email
 // content templates under; a host LayerApp override targets a core template as
 // EmailContentNamespace + ":" + name (e.g. "authentication:verification").
 const EmailContentNamespace = delivery.Namespace
@@ -1549,7 +1549,7 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 	// wherever delivery can happen (retryable work temporarily carries a rendered
 	// secret/destination), so a wired jobs dispatcher REQUIRES a DeliveryEncrypter;
 	// checked first so a missing encrypter is reported before the mode-specific
-	// acknowledgment posture. in_process additionally builds a feature-internal bounded
+	// acknowledgment posture. in_process additionally builds a pocket-internal bounded
 	// delivery queue (the ephemeral runtime, AV3D-4.1), which also seals its payload —
 	// so it requires the encrypter even without a wired collaborator.
 	deliveryWired := cfg.DeliveryDispatcher != nil
@@ -1678,7 +1678,7 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 	var inProcessQueue *delivery.InProcessQueue
 	switch {
 	case cfg.DeliveryMode == DeliveryModeInProcess:
-		// in_process mode (AV3D-4.1): build the feature-internal bounded admission queue.
+		// in_process mode (AV3D-4.1): build the pocket-internal bounded admission queue.
 		// It is the ephemeral runtime's Dispatcher — a fixed worker pool drains it, built
 		// after authService below and run by the host via RunDelivery. Accepted work is
 		// process-local and does NOT survive a restart.
@@ -1942,7 +1942,7 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 
 	// The outbound delivery executor is built AFTER authService so its Initializer —
 	// the auth service itself, which resolves accounts and issues challenges for opaque
-	// start jobs — is fully attached before any handler can run. The feature starts no
+	// start jobs — is fully attached before any handler can run. The pocket starts no
 	// goroutine at construction; the host runs the selected runtime.
 	//
 	//   - jobs mode over generic jobs (AV3D-3.1): build the transport-neutral
@@ -1960,7 +1960,7 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 		// built above. The processor is the SAME one jobs mode runs, so the bounded pool
 		// applies the identical provider timeout, error classification, attempt cap,
 		// context-cancellable backoff, observer transitions, and terminal challenge discard.
-		// The feature starts no goroutine — the host runs RunDelivery.
+		// The pocket starts no goroutine — the host runs RunDelivery.
 		inProcDeps := delivery.JobsProcessorDeps{
 			Encrypter:   cfg.DeliveryEncrypter,
 			Router:      deliveryRouter,
@@ -2052,14 +2052,14 @@ func userLookup(idents identifier.IdentifierRepository, norm identifier.Normaliz
 
 // RequireUser is HTTP middleware gating a route on a valid session. It satisfies
 // sdk/foundation/web.Middleware via the method value authSvc.RequireUser, so a host passes
-// it to another feature (e.g. cms.Config.AdminMiddleware) without either feature
+// it to another pocket (e.g. cms.Config.AdminMiddleware) without either pocket
 // importing the other.
 func (s *Service) RequireUser(next http.Handler) http.Handler {
 	return s.svc.RequireUser(next)
 }
 
 // CurrentUser returns the authenticated user id on ctx, if any. It structurally
-// satisfies a consuming feature's identity port (features/README.md §5's
+// satisfies a consuming pocket's identity port (pockets/README.md §5's
 // CurrentUser) with zero import in either direction.
 func (s *Service) CurrentUser(ctx context.Context) (userID string, ok bool) {
 	return s.svc.CurrentUser(ctx)
@@ -2121,12 +2121,12 @@ func (s *Service) AuthenticateAPIKey(ctx context.Context, rawKey string) (Princi
 
 // CurrentPrincipal returns the effective Principal stashed by
 // RequireServiceAccount / RequirePrincipal, if any — the machine-or-human
-// identity port a consuming feature reads alongside CurrentUser.
+// identity port a consuming pocket reads alongside CurrentUser.
 func (s *Service) CurrentPrincipal(ctx context.Context) (Principal, bool) {
 	return s.svc.CurrentPrincipal(ctx)
 }
 
-// resolverAssertion is the compile-time proof that the auth feature satisfies the
+// resolverAssertion is the compile-time proof that the auth pocket satisfies the
 // generic sdk/foundation/identity Resolver port: a host wires this Service anywhere a
 // Resolver is expected, unadapted.
 var _ identity.Resolver = (*Service)(nil)
@@ -2420,7 +2420,7 @@ func (s *Service) IssueToken(ctx context.Context, email, password string) (pair 
 
 // Create invites an identifier to a resource; ErrInvitationsDisabled when no
 // Granter is wired. This is a TRUSTED composition call: unlike the shipped HTTP
-// create route — which drives the feature's authorized create operation — it does
+// create route — which drives the pocket's authorized create operation — it does
 // NOT apply the Config.InviteCheck host authorization policy (design §6/D3): a
 // host driving the Service directly owns that decision.
 func (s *Service) Create(ctx context.Context, in CreateInput) (CreateResult, error) {
@@ -2448,7 +2448,7 @@ func (s *Service) CreateAuthorized(ctx context.Context, principal identity.Princ
 
 // ListByResource pages a resource's invitations; ErrInvitationsDisabled when no
 // Granter is wired. This is a TRUSTED composition call: unlike the shipped HTTP
-// list route — which drives the feature's authorized list operation — it does NOT
+// list route — which drives the pocket's authorized list operation — it does NOT
 // apply the Config.InviteCheck host authorization policy (design §6/D3): a host
 // driving the Service directly owns that decision.
 func (s *Service) ListByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[invitation.Invitation], error) {
@@ -2541,13 +2541,13 @@ func (s *Service) RateLimitByIP(keyPrefix string, perMinute int) web.Middleware 
 	return s.svc.RateLimitByIP(keyPrefix, perMinute)
 }
 
-// Register mounts the auth feature's shipped HTTP adapter — the /auth/* route
+// Register mounts the auth pocket's shipped HTTP adapter — the /auth/* route
 // surface — onto the host's Mount, over this already-built Service (FS2: build
 // once via NewService, mount once). It is the optional convenience adapter over
 // the Service's use-case methods: subsystems the Service was built without
 // register no routes (deny-by-absence), and a host may skip Register entirely
 // and drive the methods from its own handlers. Migrations are registered by the
-// store adapter (features/authentication/stores/turso), not here — the core is
+// store adapter (pockets/authentication/stores/turso), not here — the core is
 // dialect-blind. The audit rail's best-effort WARN sink (Config.Logger) is
 // captured at NewService time; set it there — it defaults to slog.Default() when
 // unset, no longer to the Mount logger, since the Service is built before Mount.

@@ -24,7 +24,7 @@ import (
 var _ cryptids.JWTSigner = (*fakeSigner)(nil)
 
 // fakeSigner is an honest in-package cryptids.JWTSigner (cut refinement 10 keeps
-// golang-jwt out of the feature core; the real integration is exercised
+// golang-jwt out of the pocket core; the real integration is exercised
 // host-side in A9). It genuinely verifies: it HMAC-SHA256s a base64url JSON
 // claims payload (with the expiry encoded) under a test secret, and Verify
 // rejects expired tokens (encoded exp checked against the clock) AND

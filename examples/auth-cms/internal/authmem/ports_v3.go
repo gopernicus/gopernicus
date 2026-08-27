@@ -4,7 +4,7 @@
 // delivery-job outbox. Each is a thin view over the one shared *data holder and
 // its single mutex, so every promised atomic operation runs inside ONE mutex-held
 // critical section — no fake cross-repository transaction. The behavior mirrors
-// the storetest reference (features/authentication/storetest/reference_test.go),
+// the storetest reference (pockets/authentication/storetest/reference_test.go),
 // which the exported conformance suite proves against this store; authmem's one
 // intentional divergence is that auth_revision rides the user row (its
 // single-anchor model) rather than a separate revision map.

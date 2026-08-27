@@ -3,7 +3,7 @@
 A gopernicus host application, scaffolded by `gopernicus init`. It is an
 sdk-only composition root: a logger, an HTTP router with the standard
 middleware, a `GET /healthz` liveness probe, and graceful shutdown. It mounts no
-features yet — that is your first edit.
+pockets yet — that is your first edit.
 
 ## What was scaffolded
 
@@ -21,7 +21,7 @@ host-owned ledger before boot.
 {{else}}
 This host wires **no datastore** (`--db=none`): the store you supply — a real
 connector or an in-memory implementation — is your choice when you mount a
-feature.
+pocket.
 {{end}}
 ## Resolving the framework
 
@@ -45,18 +45,18 @@ go mod edit -replace {{.ConnectorPath}}=/abs/path/to/gopernicus/{{.ConnectorRel}
 go mod tidy
 ```
 
-## Wiring a feature
+## Wiring a pocket
 
-A gopernicus feature reaches this host only through the narrow `pocket.Mount` +
-`Register` surface — no init() registration, no service locator. Add the feature
+A gopernicus pocket reaches this host only through the narrow `pocket.Mount` +
+`Register` surface — no init() registration, no service locator. Add the pocket
 module (and its store adapter, if it persists data) to `go.mod` at its tagged
-version, then wire it in the "mount your features here" block in
+version, then wire it in the "mount your pockets here" block in
 `cmd/server/main.go`:
 
 ```go
 mount := pocket.Mount{Router: router, Logger: log}
 repos := <store>.Repositories(db)        // or your own in-memory store
-svc, err := <feature>.NewService(repos, <feature>.Config{ /* ... */ })
+svc, err := <pocket>.NewService(repos, <pocket>.Config{ /* ... */ })
 if err != nil {
 	return err
 }

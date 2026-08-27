@@ -1,7 +1,7 @@
-# features/authentication/stores/pgx
+# pockets/authentication/stores/pgx
 
-The auth feature's **PostgreSQL** store adapter — the dialect sibling of
-`features/authentication/stores/turso`. Its own module so a host that brings a different
+The auth pocket's **PostgreSQL** store adapter — the dialect sibling of
+`pockets/authentication/stores/turso`. Its own module so a host that brings a different
 datastore never pulls `pgx` into its module graph. It owns the SQL and the
 canonical migration files; the host owns its database lifecycle.
 

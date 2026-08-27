@@ -1,18 +1,18 @@
-# features/events — the durable outbox + SSE gateway
+# pockets/events — the durable outbox + SSE gateway
 
-A pluggable, datastore-free events feature: a transactional-outbox domain
+A pluggable, datastore-free events pocket: a transactional-outbox domain
 (append in the same commit as your domain rows, publish later), a host-driven
 poller that drains it onto the shared `sdk/capabilities/events` bus, and an SSE gateway
 that fans bus events out to authenticated browser streams. Built on
 `sdk/capabilities/events` (the bus vocabulary), `sdk/foundation/identity` (connect-time identity),
 `sdk/foundation/web` (SSE primitives + responders), and `sdk/foundation/workers` (the poller's
-pool). Design of record: `.claude/plans/roadmap/events-feature-design.md`,
+pool). Design of record: `.claude/plans/roadmap/events-pocket-design.md`,
 executed via `.claude/plans/events-v1/plan.md`.
 
 Package-name note (O5): this package is `events` and so is `sdk/capabilities/events` —
 this module and its hosts alias the sdk one as `sdkevents`.
 
-## Layout (the trio — see `features/README.md` §2 for the contract)
+## Layout (the trio — see `pockets/README.md` §2 for the contract)
 
 ```
 events.go                the socket: Repositories, Config, AuthorizeStream,
@@ -34,7 +34,7 @@ stores/pgx/              (source "events"), each its own module
 
 ## Route surface
 
-`/events/*` is this feature's claimed namespace (charter C1):
+`/events/*` is this pocket's claimed namespace (charter C1):
 
 | route | when registered | what |
 |---|---|---|
@@ -42,7 +42,7 @@ stores/pgx/              (source "events"), each its own module
 | `GET /events/{resource_type}/{resource_id}` | only when `Config.Authorize` is set (deny-by-absence) | a resource-scoped stream filtered to one aggregate |
 
 The routes are JSON/SSE only — no HTML, no links — so a host may mount the
-feature behind any prefix (`feature.PrefixRegistrar`) without breaking
+pocket behind any prefix (`pocket.PrefixRegistrar`) without breaking
 anything the payloads carry.
 
 ## Config — nil semantics (charter item 12)
@@ -62,8 +62,8 @@ anything the payloads carry.
 **StreamMiddleware is load-bearing (A-I1 E5).** The gateway reads
 connect-time identity from `sdk/foundation/identity` and **fails closed**: a request
 whose context carries no `identity.Principal` gets a 401, uniformly, on every
-stream. The feature ships no identity resolution of its own — a host MUST
-pass its identity-stashing middleware (the authentication feature's
+stream. The pocket ships no identity resolution of its own — a host MUST
+pass its identity-stashing middleware (the authentication pocket's
 `RequireUser` stashes the Principal) on `Config.StreamMiddleware`, or every
 stream will 401. That failure mode is deliberate: misconfiguration surfaces
 as deny, never as an anonymous-allowed stream.
@@ -75,8 +75,8 @@ wanting effectively-unlimited sets an explicitly large value (e.g. `8760h`).
 
 ## Two emit paths — the guarantee table (design §3, load-bearing)
 
-There are two ways an event leaves a feature, and they carry **different
-guarantees**. Every feature author must pick deliberately; the biggest
+There are two ways an event leaves a pocket, and they carry **different
+guarantees**. Every pocket author must pick deliberately; the biggest
 coherence risk in this design is someone assuming `Emit` is transactional.
 
 | path | API | guarantee | when to use |
@@ -102,16 +102,16 @@ Per-rail delivery, as it reaches an SSE client (gate edit 1):
 
 ### Events observe work; they never queue it (the auth-delivery decision)
 
-A corollary a feature author must internalize: **never put an event in front of
+A corollary a pocket author must internalize: **never put an event in front of
 durable work.** The bus is not a queue — asynchronous mode may drop events and
 synchronous mode is only as durable as its handlers, so emitting an event to
 *trigger* a side effect adds a failure boundary without adding durability. The
 authentication delivery refactor (2026-07-13) settled this: authentication submits
-delivery work directly to the generic **jobs** feature (durable) and treats events
+delivery work directly to the generic **jobs** pocket (durable) and treats events
 as **optional observation only** — a secret-free lifecycle observer whose failure
 changes nothing about the already-recorded job state, and which is never required
-for delivery to happen. Durable side effects ride a feature's own `Repositories`
-(this feature's outbox, or the jobs queue); the event bus reports what happened.
+for delivery to happen. Durable side effects ride a pocket's own `Repositories`
+(this pocket's outbox, or the jobs queue); the event bus reports what happened.
 A future auth-domain transactional outbox for state-plus-event commits stays valid
 and separate — it must never be simulated with best-effort emit-after-commit.
 
@@ -186,7 +186,7 @@ detail is elided at the marked lines.
 func run(ctx context.Context, log *slog.Logger) error {
 	// [elided: in-memory cms + auth stores, seeding — host detail]
 
-	// Host-owned router + middleware. Both features and the host demo routes mount
+	// Host-owned router + middleware. Both pockets and the host demo routes mount
 	// onto this.
 	router := web.NewWebHandler(web.WithLogging(log))
 	router.Use(web.RequestID(), web.Logger(log), web.Panics(log))
@@ -197,7 +197,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	pageCache := cacher.NewMemory()
 
 	// —— stop 2: the emit-only Mount field — cms publishes content.* through it.
-	mount := feature.Mount{Router: router, Logger: log, Events: bus}
+	mount := pocket.Mount{Router: router, Logger: log, Events: bus}
 
 	// [elided: auth Service build + authSvc.Register(mount) — see the twin]
 
@@ -222,17 +222,17 @@ func run(ctx context.Context, log *slog.Logger) error {
 
 	// —— stop 4 (the substitution point): the outbox repository. Here the
 	// example-local in-memory twin; the store-module swap is the snippet below.
-	var eventsRepos eventsfeature.Repositories
+	var eventsRepos eventspocket.Repositories
 	var outboxStore *outboxmem.Store
 	if durableOutbox() {
 		outboxStore = outboxmem.New()
-		eventsRepos = eventsfeature.Repositories{Outbox: outboxStore}
+		eventsRepos = eventspocket.Repositories{Outbox: outboxStore}
 	}
 
 	// —— stop 3: the gateway. ONE bus flows to both Mount.Events (emitter side)
 	// and Config.Bus (consumer side). RequireUser stashes the identity.Principal
 	// the stream handlers read; absent identity fails closed (401).
-	eventsSvc, err := eventsfeature.NewService(eventsRepos, eventsfeature.Config{
+	eventsSvc, err := eventspocket.NewService(eventsRepos, eventspocket.Config{
 		Bus:              bus,
 		StreamMiddleware: []web.Middleware{authSvc.RequireUser},
 	})
@@ -243,7 +243,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return err
 	}
 
-	// —— stop 5: the host owns the poller lifecycle (the feature owns no
+	// —— stop 5: the host owns the poller lifecycle (the pocket owns no
 	// goroutines). The pool is woken by the canonical append-then-signal pattern:
 	// a dedicated cap-1 wake channel the appending handler signals right after
 	// Append. The pool runs on its OWN Background-derived context (NOT the
@@ -253,7 +253,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		poolDone   chan struct{}
 	)
 	if outboxStore != nil {
-		poller := eventsfeature.NewPoller(outboxStore, bus)
+		poller := eventspocket.NewPoller(outboxStore, bus)
 		wake := make(chan struct{}, 1)
 		router.Handle(http.MethodPost, "/outbox-demo", outboxDemoHandler(outboxStore, wake, log))
 
@@ -307,11 +307,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 `outboxmem` above is an example-local twin of the same
 `outbox.EntryRepository` port. A production host swaps in a store module —
 constructor plus the scaffold-and-own migration step (see
-`features/events/stores/turso/README.md`):
+`pockets/events/stores/turso/README.md`):
 
 ```go
 import (
-	eventsturso "github.com/gopernicus/gopernicus/features/events/stores/turso"
+	eventsturso "github.com/gopernicus/gopernicus/pockets/events/stores/turso"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 )
 
@@ -325,7 +325,7 @@ import (
 	defer db.Close()
 
 	// One-time scaffold: copy the canonical migrations into the dir your host's
-	// runner owns, and apply them pre-boot alongside your other feature sources.
+	// runner owns, and apply them pre-boot alongside your other pocket sources.
 	//   eventsturso.ExportMigrations("workshop/migrations/events")
 	// New probes for the event_outbox table and errors at wiring time if the
 	// "events" migration source has not been applied.
@@ -333,7 +333,7 @@ import (
 	if err != nil {
 		return err
 	}
-	eventsRepos := eventsfeature.Repositories{Outbox: outboxStore}
+	eventsRepos := eventspocket.Repositories{Outbox: outboxStore}
 ```
 
 Everything downstream — `NewService`, the poller, the pool, the shutdown
@@ -343,9 +343,9 @@ migration step. That is the point of the port.
 ## The unguarded appender seam (know it exists)
 
 Each store module ships a dialect-typed `AppendTx(ctx, tx, recs...)` so a
-future emitting feature's store can write domain rows and outbox rows in one
+future emitting pocket's store can write domain rows and outbox rows in one
 commit. A consuming store declares its own one-method port and the outbox
 store satisfies it structurally — zero import edge between store modules.
 In v1 **nothing consumes it, and no `make guard` target covers that glue**
 (design §5 cost 1): the seam is tested per-store but unguarded. The
-abstraction revisit trigger is the third emitting feature.
+abstraction revisit trigger is the third emitting pocket.

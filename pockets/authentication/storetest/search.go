@@ -11,7 +11,7 @@ import (
 )
 
 // The list-search conformance cases (crud-search-upstream T4). API-key `name` is
-// the feature's first searchable field, so this group is where a dialect that
+// the pocket's first searchable field, so this group is where a dialect that
 // escapes wildcards differently, folds case differently, or forgets to apply the
 // predicate to the COUNT is caught.
 //

@@ -8,11 +8,11 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
 	"github.com/gopernicus/gopernicus/pockets/authentication/domain/passwordless"
 	"github.com/gopernicus/gopernicus/pockets/authentication/domain/session"
 	"github.com/gopernicus/gopernicus/pockets/authentication/domain/user"
-	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 

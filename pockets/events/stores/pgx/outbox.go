@@ -6,13 +6,13 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/gopernicus/gopernicus/pockets/events/domain/outbox"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	"github.com/gopernicus/gopernicus/pockets/events/domain/outbox"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
 )
 
 const (
-	// outboxTable is the feature's one table. Every statement renders it through
+	// outboxTable is the pocket's one table. Every statement renders it through
 	// Store.table so a schema-scoped store qualifies it.
 	outboxTable = "event_outbox"
 
@@ -87,8 +87,8 @@ func (s *Store) Append(ctx context.Context, recs ...sdkevents.Record) error {
 
 // AppendTx persists records inside the caller's transaction tx — the
 // dialect-typed transactional appender (design §5). It shares the emitting
-// feature store's commit, so the domain rows and the outbox rows land atomically
-// (true outbox semantics). No feature core ever sees *pgxdb.Tx; a future emitting
+// pocket store's commit, so the domain rows and the outbox rows land atomically
+// (true outbox semantics). No pocket core ever sees *pgxdb.Tx; a future emitting
 // store consumer-declares a matching port that Store satisfies structurally. A
 // duplicate event_id returns sdk.ErrAlreadyExists and (because the caller's tx
 // rolls back) commits nothing. Appending zero records is a no-op.

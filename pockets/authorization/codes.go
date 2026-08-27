@@ -63,7 +63,7 @@ const (
 	ReasonInfrastructure = authorizersvc.ReasonInfrastructure
 )
 
-// Stable feature sentinels. Each wraps the sdk taxonomy kind that fixes its
+// Stable pocket sentinels. Each wraps the sdk taxonomy kind that fixes its
 // transport mapping (post-AV3-9.8): saturation/limit exhaustion wraps
 // sdk.ErrUnavailable — never a new kind, never sdk.ErrConflict (default #9). The
 // mutation/revision sentinels are the frozen vocabulary the later mutation
@@ -146,8 +146,8 @@ var (
 )
 
 // ReasonFor classifies err into its stable [Reason], returning ok=false for an
-// error the feature does not own (the caller then treats it as infrastructure).
-// It recognizes the feature sentinels above and the last-owner invariant; it is
+// error the pocket does not own (the caller then treats it as infrastructure).
+// It recognizes the pocket sentinels above and the last-owner invariant; it is
 // the shared classifier for logging, audit, and the HTTP seam.
 func ReasonFor(err error) (Reason, bool) {
 	switch {
@@ -172,8 +172,8 @@ func ReasonFor(err error) (Reason, bool) {
 	}
 }
 
-// errorResponse maps a feature sentinel to a *web.Error carrying its named
-// machine [Reason] code, following auth v3's feature-local mapper precedent. It
+// errorResponse maps a pocket sentinel to a *web.Error carrying its named
+// machine [Reason] code, following auth v3's pocket-local mapper precedent. It
 // returns ok=false for anything else so the caller falls back to the generic
 // sdk-kind mapping. The sdk mapper (web.ErrFromDomain) is untouched.
 func errorResponse(err error) (*web.Error, bool) {
@@ -195,7 +195,7 @@ func errorResponse(err error) (*web.Error, bool) {
 	}
 }
 
-// RespondError writes err as a JSON error, emitting the feature's stable machine
+// RespondError writes err as a JSON error, emitting the pocket's stable machine
 // code when err is an authorization sentinel and otherwise falling back to the
 // generic sdk-kind mapping (web.RespondJSONDomainError). It is the one seam a
 // future authorization inbound surface writes decision/mutation errors through,

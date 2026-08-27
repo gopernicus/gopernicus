@@ -30,7 +30,7 @@ const (
 	// spaOrigin is the allowlisted, same-site-but-cross-origin SPA.
 	spaOrigin = "https://spa.example.com"
 
-	// corsOnlyOrigin is allowed by CORS but NOT by the feature's mutation
+	// corsOnlyOrigin is allowed by CORS but NOT by the pocket's mutation
 	// allowlist — the misconfiguration origin_rejected exists to diagnose.
 	corsOnlyOrigin = "https://other.example.com"
 )
@@ -38,8 +38,8 @@ const (
 // newCSRFHandler mounts the routes over the in-memory fakes with spaOrigin
 // allowlisted for browser mutations, and installs the sdk CORS middleware
 // globally the way a cross-origin host wires it: the HOST opts X-CSRF-Token into
-// the request-header policy (the sdk knows no feature header). corsOnlyOrigin is
-// CORS-allowed so a browser can actually read the feature's own origin denial.
+// the request-header policy (the sdk knows no pocket header). corsOnlyOrigin is
+// CORS-allowed so a browser can actually read the pocket's own origin denial.
 func newCSRFHandler(t *testing.T) *web.WebHandler {
 	t.Helper()
 	users := newMemUsers()
@@ -285,7 +285,7 @@ func TestCSRFBootstrapReusesExistingToken(t *testing.T) {
 		}
 	}
 
-	// A foreign, wrong-shape cookie value is never echoed back as if the feature
+	// A foreign, wrong-shape cookie value is never echoed back as if the pocket
 	// had minted it.
 	fresh := serve(h, spaRequest("GET", "/auth/csrf", "", spaOrigin, sess, &http.Cookie{Name: csrfCookieName, Value: "attacker-chosen"}))
 	if got := bootstrapToken(t, fresh.Body.Bytes()); got == "attacker-chosen" {
@@ -296,7 +296,7 @@ func TestCSRFBootstrapReusesExistingToken(t *testing.T) {
 // TestCSRFBootstrapReusesForeignWellFormedToken PINS the accepted residual the
 // sibling malformed-cookie case above does NOT cover: the shape check is not a
 // provenance check. A well-formed 32-byte base64url __Host-auth_csrf cookie the
-// feature never minted IS reused and echoed in the body.
+// pocket never minted IS reused and echoed in the body.
 //
 // Provenance is the cookie NAME's job, not this check's: the __Host- prefix makes
 // a browser refuse a Domain-scoped Set-Cookie for this name, so a sibling host
@@ -363,7 +363,7 @@ func TestCSRFBootstrapRequiresLiveSession(t *testing.T) {
 }
 
 // TestCSRFBootstrapRejectsDisallowedOrigin is the §4 diagnosability proof: an
-// origin CORS allows but the feature's allowlist does not gets a 403 the browser
+// origin CORS allows but the pocket's allowlist does not gets a 403 the browser
 // can actually READ, carrying the stable origin_rejected code rather than the
 // permission_denied an authorization denial uses.
 func TestCSRFBootstrapRejectsDisallowedOrigin(t *testing.T) {

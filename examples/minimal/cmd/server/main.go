@@ -1,8 +1,8 @@
-// Command server is a second CMS host that proves the feature-module opt-out
-// (plan §1.5): it mounts features/cms backed by an in-memory store, so its
-// module graph contains NO libsql — only features/cms, its bundled views module
-// features/cms/views/goth, ui/goth, and sdk.
-// Compare its go.mod to examples/cms: same feature, different datastore, and the
+// Command server is a second CMS host that proves the pocket-module opt-out
+// (plan §1.5): it mounts pockets/cms backed by an in-memory store, so its
+// module graph contains NO libsql — only pockets/cms, its bundled views module
+// pockets/cms/views/goth, ui/goth, and sdk.
+// Compare its go.mod to examples/cms: same pocket, different datastore, and the
 // driver a host doesn't use never enters its build.
 package main
 
@@ -62,7 +62,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return err
 	}
 
-	// Host-owned router + middleware. The feature mounts its routes onto this.
+	// Host-owned router + middleware. The pocket mounts its routes onto this.
 	router := web.NewWebHandler(web.WithLogging(log))
 	router.Use(web.RequestID(), web.Logger(log), web.Panics(log))
 
@@ -94,7 +94,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return err
 	}
 
-	// Host-local liveness probe (host route, not feature surface). Mounted on
+	// Host-local liveness probe (host route, not pocket surface). Mounted on
 	// the root router with no middleware, outside any gated group —
 	// unauthenticated by design, since a readiness probe can't log in.
 	router.Handle(http.MethodGet, "/healthz", healthzHandler())
@@ -138,8 +138,8 @@ func seed(ctx context.Context, repos cms.Repositories) error {
 	// Content is the Registry model: Articles and the About Page are content.Entry
 	// rows on the shared spine, distinguished by Type — no per-type tables.
 	articles := []struct{ title, excerpt, body string }{
-		{"Running CMS without a database", "This host uses an in-memory store.", "The features/cms module is datastore-free; this host supplies its own store, so no libsql is in its module graph."},
-		{"Bring your own store", "Implement the repository ports, mount the feature.", "Swap the datastore without forking the feature — that is the whole point of the module split."},
+		{"Running CMS without a database", "This host uses an in-memory store.", "The pockets/cms module is datastore-free; this host supplies its own store, so no libsql is in its module graph."},
+		{"Bring your own store", "Implement the repository ports, mount the pocket.", "Swap the datastore without forking the pocket — that is the whole point of the module split."},
 	}
 	for _, a := range articles {
 		e, err := content.NewEntry(ids, "article", a.title, a.excerpt, a.body, "demo", content.StatusPublished, "", now)

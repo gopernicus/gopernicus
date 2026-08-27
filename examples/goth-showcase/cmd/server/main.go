@@ -2,7 +2,7 @@
 // serves the embedded, fingerprinted ui/goth assets and one page per specimen
 // (every bundle profile, theme axis, and HTMX fixture) under a strict CSP mapped
 // from goth.Bundle.Requirements(). It owns no database, no migration, and no
-// feature — the Playwright + axe three-engine harness in ../../e2e drives it.
+// pocket — the Playwright + axe three-engine harness in ../../e2e drives it.
 package main
 
 import (

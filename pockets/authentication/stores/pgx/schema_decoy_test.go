@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
+	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
 	"github.com/gopernicus/gopernicus/pockets/authentication/domain/user"
-	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 

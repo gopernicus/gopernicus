@@ -20,7 +20,7 @@ import (
 // Suspension, deletion, anonymization, lock-until, and arbitrary host-defined
 // statuses are deliberately OUT of scope: each needs its own semantics on every
 // credential path, and an open string would let a host invent a posture the
-// feature has no rules for. Adding a third value is a design decision, not a
+// pocket has no rules for. Adding a third value is a design decision, not a
 // constant.
 //
 // Status is NOT verification. Whether an address is proven is identifier state
@@ -124,7 +124,7 @@ var OrderFields = map[string]crud.OrderField{
 
 // DefaultOrder is the sort applied when a ListRequest carries a zero-value Order:
 // created_at DESC (with the store's id DESC tiebreak), matching every other
-// paged auth port so cursor collation is uniform across the feature.
+// paged auth port so cursor collation is uniform across the pocket.
 var DefaultOrder = crud.NewOrder("created_at", crud.DESC)
 
 // StatusChange is the outcome of an AdminRepository.SetStatus call.

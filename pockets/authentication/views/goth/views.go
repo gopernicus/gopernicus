@@ -1,11 +1,11 @@
-// Package goth is the ui/goth implementation of the authentication feature's HTML
+// Package goth is the ui/goth implementation of the authentication pocket's HTML
 // rendering port (authentication.Views, design §9.2). It is a sibling module of
-// features/authentication (FS3/FS4 — presentation defaults ship as views/<pkg>),
-// so the feature core stays sdk-only and never imports templ or ui/goth. This
+// pockets/authentication (FS3/FS4 — presentation defaults ship as views/<pkg>),
+// so the pocket core stays sdk-only and never imports templ or ui/goth. This
 // adapter owns the domain-to-GOTH translation: it renders every auth page through
 // the ui/goth Bundle (its self-hosted fingerprinted assets, primitives, and the
 // forms/layouts components) and maps the bundle's browser Requirements into the
-// feature's technology-neutral HTMLResourcePolicy.
+// pocket's technology-neutral HTMLResourcePolicy.
 //
 // Hosts wire it as:
 //
@@ -34,7 +34,7 @@ import (
 )
 
 // _ pins Views to the authentication.Views port at compile time (mirrors the
-// stubViews assertion in the feature's inbound html_test.go).
+// stubViews assertion in the pocket's inbound html_test.go).
 var _ authentication.Views = Views{}
 
 // Views is the ui/goth-backed renderer. It holds the immutable presentation Bundle

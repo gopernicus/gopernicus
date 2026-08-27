@@ -2,7 +2,7 @@ package work
 
 import "testing"
 
-// The Status strings are the persisted wire vocabulary: features/jobs writes
+// The Status strings are the persisted wire vocabulary: pockets/jobs writes
 // them to a status column and the auth bridge folds them verbatim. Their literal
 // values are locked here so this sdk package self-guards its wire vocabulary
 // independent of any implementation — the identity_test.go:TestConstantValues

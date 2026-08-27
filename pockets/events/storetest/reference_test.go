@@ -14,7 +14,7 @@ import (
 )
 
 // TestReference runs the outbox conformance suite against the in-package
-// reference implementation. This is what lets features/events self-verify under
+// reference implementation. This is what lets pockets/events self-verify under
 // guard G2 (the core cannot import a driver, so without an in-package
 // implementation the suite would compile but never execute). newRef returns a
 // fresh, empty repository per call — the clean-isolation contract Run documents.
@@ -25,7 +25,7 @@ func TestReference(t *testing.T) {
 }
 
 // reference is a stdlib-only, test-scoped in-memory outbox.EntryRepository. It
-// exists to give the feature module something to run the suite against, and it
+// exists to give the pocket module something to run the suite against, and it
 // deliberately HAND-ENFORCES the EventID uniqueness a SQL store gets from a
 // primary key — that is exactly the invariant the suite is proving, and a naive
 // memory store that silently overwrote (or blindly appended) a duplicate would

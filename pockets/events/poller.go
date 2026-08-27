@@ -108,7 +108,7 @@ func (p *Poller) Poll(ctx context.Context) error {
 	return nil
 }
 
-// outboxEvent is the feature-local rehydrated event the poller emits for a
+// outboxEvent is the pocket-local rehydrated event the poller emits for a
 // persisted Record (gate edit 1: sdkevents.RemoteEvent carries no EventID and
 // its CorrelationID is not unique per event, and sdk/capabilities/events stays frozen). It
 // embeds a RemoteEvent so it satisfies sdkevents.Event, sdkevents.Metadata, and

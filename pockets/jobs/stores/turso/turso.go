@@ -1,4 +1,4 @@
-// Package turso is the jobs feature's Turso/libSQL store adapter — its own module
+// Package turso is the jobs pocket's Turso/libSQL store adapter — its own module
 // so a host that brings a different datastore never pulls libsql into its module
 // graph (the load-bearing opt-out property). It owns the SQL; the HOST owns its database lifecycle.
 //
@@ -8,7 +8,7 @@
 // host's runner apply them pre-boot through one app-owned ledger. The framework
 // never applies migrations behind the host's back.
 //
-// The two stores implement the feature's ports over the connector's DB/MapError:
+// The two stores implement the pocket's ports over the connector's DB/MapError:
 // Queue's Claim is one UPDATE ... WHERE job_id=(SELECT ... LIMIT 1) ... RETURNING
 // statement (SQLite's single-writer model makes double-claim impossible; the
 // lease-expiry reclaim arm is folded in), and Schedules' ClaimDue is a pure value
@@ -17,8 +17,8 @@
 package turso
 
 import (
-	"github.com/gopernicus/gopernicus/pockets/jobs"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	"github.com/gopernicus/gopernicus/pockets/jobs"
 )
 
 // Repositories returns the jobs repository set backed by db, WITHOUT touching

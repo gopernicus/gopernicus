@@ -26,7 +26,7 @@ type templateFile struct {
 // emit renders each file against params and writes it under targetDir, creating
 // parent directories. It refuses to clobber: if any target path already exists,
 // nothing is written. This is the shared render engine every scaffold command
-// reuses (init here; new feature in W3).
+// reuses (init here; new pocket in W3).
 func emit(tmpls fs.FS, targetDir string, files []templateFile, params any) error {
 	for _, f := range files {
 		if _, err := os.Stat(filepath.Join(targetDir, f.Out)); err == nil {

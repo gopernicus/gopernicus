@@ -1,5 +1,5 @@
 // Package taxonomysvc holds the taxonomy use-case service, kept internal so it is
-// not part of the feature's public SemVer surface (plan §5/B3). The public
+// not part of the pocket's public SemVer surface (plan §5/B3). The public
 // domain types and TermRepository interface stay in package taxonomy.
 package taxonomysvc
 

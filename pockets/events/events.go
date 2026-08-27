@@ -1,15 +1,15 @@
-// Package events is the public surface of the events feature module: the SSE
+// Package events is the public surface of the events pocket module: the SSE
 // gateway (a bus consumer that fans events out to browser streams) plus the
 // host-facing socket for wiring it. The transactional-outbox domain and the
 // host-driven poller (poller.go, logic/outbox) ride alongside it; this file
-// carries the host-facing constructors per the feature charter's "<name>.go is
-// the feature's entire host-facing surface" rule.
+// carries the host-facing constructors per the pocket charter's "<name>.go is
+// the pocket's entire host-facing surface" rule.
 //
-// The feature is datastore-free and view-free: it depends on its outbox port and
+// The pocket is datastore-free and view-free: it depends on its outbox port and
 // sdk facilities only, never on a concrete store, an integration, or another
-// feature. The gateway's connect-time identity is read from sdk/foundation/identity (a host
+// pocket. The gateway's connect-time identity is read from sdk/foundation/identity (a host
 // stashes it via authentication.RequireUser on Config.StreamMiddleware); the
-// feature imports no other feature.
+// pocket imports no other pocket.
 //
 // Package-name collision (O5): this package is events and so is sdk/capabilities/events; this
 // file and hosts alias the sdk one as sdkevents.
@@ -35,9 +35,9 @@ import (
 	inbound "github.com/gopernicus/gopernicus/pockets/events/internal/inbound/events"
 	"github.com/gopernicus/gopernicus/pockets/events/internal/logic/hub"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 const (
@@ -61,7 +61,7 @@ const (
 var ErrBusRequired = errors.New("events: Config.Bus is required")
 
 // AuthorizeStream is the host-supplied coarse ownership check for resource-scoped
-// streams. It is consumer-declared (the feature imports no authorizer): a host
+// streams. It is consumer-declared (the pocket imports no authorizer): a host
 // adapts it to whatever ownership rule it runs. v1's whole stream-authorization
 // model is a valid identity plus this check — no ReBAC. It receives the effective
 // caller as an identity.Principal (the authorizer reads the Principal unadapted).
@@ -73,7 +73,7 @@ type AuthorizeStream func(ctx context.Context, principal identity.Principal, res
 // forwarded unless a Projector opts in.
 type Projector func(sdkevents.Event) any
 
-// Repositories is the set of outbound ports the feature needs. Outbox is the
+// Repositories is the set of outbound ports the pocket needs. Outbox is the
 // durable rail's port; a nil Outbox is direct-emit mode — the gateway still fans
 // best-effort emits out over SSE, but there is no durable outbox and the host
 // runs no poller. When Outbox is wired, the host constructs and drives a Poller
@@ -110,7 +110,7 @@ type Config struct {
 	MaxConnsPerSubject int
 }
 
-// Service is the events feature's gateway surface. NewService builds it and
+// Service is the events pocket's gateway surface. NewService builds it and
 // subscribes the hub to the bus (FS2 build-once: fan-out starts at construction);
 // Register only mounts the HTTP routes over the already-built hub.
 type Service struct {
@@ -159,12 +159,12 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 	}, nil
 }
 
-// Register mounts the events feature's SSE routes onto the host's Mount, over the
+// Register mounts the events pocket's SSE routes onto the host's Mount, over the
 // already-built hub (FS2: build once via NewService, mount once). The
 // resource-scoped route is registered only when Config.Authorize was wired
 // (deny-by-absence). It starts no goroutines — the hub subscribed at NewService,
 // and streams live for the duration of their request. Migrations are the store
-// adapter's concern, not this feature core's.
+// adapter's concern, not this pocket core's.
 func (s *Service) Register(m pocket.Mount) error {
 	inbound.Mount(m.Router, inbound.Config{
 		Hub:        s.hub,
@@ -174,7 +174,7 @@ func (s *Service) Register(m pocket.Mount) error {
 		MaxConnAge: s.maxConnAge,
 	})
 	if m.Logger != nil {
-		m.Logger.Info("registered events feature",
+		m.Logger.Info("registered events pocket",
 			"resource_streams", s.authorize != nil,
 			"durable_outbox", s.repos.Outbox != nil,
 		)

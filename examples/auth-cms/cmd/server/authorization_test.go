@@ -15,9 +15,9 @@ import (
 	authzmem "github.com/gopernicus/gopernicus/pockets/authorization/memstore"
 	"github.com/gopernicus/gopernicus/sdk"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 // AZ3-4.1 host proof suite. Every case runs over the REAL guarded composition
@@ -423,8 +423,8 @@ func TestInvitationGrantDeletedResourceNotFound(t *testing.T) {
 // hostInviteCheck (auth.Config.InviteCheck) lets a member-capable manager invite a member but
 // NOT an owner (the editor→owner escalation guard), reserves owner-granting to platform
 // admins, and requires manage_access for both non-owner create and list. Denials wrap
-// sdk.ErrForbidden (the feature maps that to 403 before the invitation service is reached —
-// proven in the authentication feature's handler tests).
+// sdk.ErrForbidden (the pocket maps that to 403 before the invitation service is reached —
+// proven in the authentication pocket's handler tests).
 func TestHostInviteCheckPermissionMapping(t *testing.T) {
 	comps := hostAuthz(t)
 	svc, sm := comps.Service, comps.SystemMutator
@@ -603,7 +603,7 @@ func TestHostModelsSplitOneTypeByPermission(t *testing.T) {
 	}
 }
 
-// demoAuditHost is one RUNNING host composition — the real authentication feature,
+// demoAuditHost is one RUNNING host composition — the real authentication pocket,
 // the real guarded authorization components (both models), and the real
 // registerDemoRoutes registration — so /demo/audit is driven over HTTP with real
 // credentials, through the real RequirePrincipal + role-model gate chain.

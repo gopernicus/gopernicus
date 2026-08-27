@@ -1,7 +1,7 @@
-# features/cms/stores/pgx
+# pockets/cms/stores/pgx
 
-The CMS feature's **PostgreSQL** store adapter — the dialect sibling of
-`features/cms/stores/turso`. Its own module so a host that brings a different
+The CMS pocket's **PostgreSQL** store adapter — the dialect sibling of
+`pockets/cms/stores/turso`. Its own module so a host that brings a different
 datastore never pulls `pgx` into its module graph. It owns the SQL and the
 canonical migration files; the host owns its database lifecycle.
 
@@ -56,7 +56,7 @@ without) would otherwise read and write the host's own tables silently.
 naming the qualified one that is missing.
 
 Quoting preserves case: `"CMS"` and `"cms"` are different schemas. Per-repository
-DIFFERENT schemas within one feature are out of scope — the constructors
+DIFFERENT schemas within one pocket are out of scope — the constructors
 mechanically allow it, but one migration stream per schema gives it no story.
 
 ## Migrations

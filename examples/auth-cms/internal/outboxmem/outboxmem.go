@@ -2,8 +2,8 @@
 // auth-cms host wires when EVENTS_OUTBOX=memory selects the durable second
 // variant (design §8's zero-infra proof: memory bus + in-memory outbox + poller
 // + SSE over `go run`, no datastore driver in the graph). It is the runnable
-// twin of the test-scoped reference in features/events/storetest — R3/S6 keeps
-// the runnable in-memory store example-local, so features/events ships no
+// twin of the test-scoped reference in pockets/events/storetest — R3/S6 keeps
+// the runnable in-memory store example-local, so pockets/events ships no
 // stores/memory module.
 //
 // Like that reference, Store deliberately HAND-ENFORCES the EventID uniqueness a

@@ -9,13 +9,13 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
-// Views is the CMS feature's HTML rendering port (FS3): the whole HTML surface —
+// Views is the CMS pocket's HTML rendering port (FS3): the whole HTML surface —
 // public site chrome AND the admin management pages — renders through it, so a
 // host can swap presentation without the handlers binding to concrete templates.
 // Every method returns a web.Renderer over domain types and the port's own view
 // models; per-entry bodies ride the content.Registry via SeedTemplates.
 //
-// The bundled default lives in the sibling module features/cms/views/goth. The
+// The bundled default lives in the sibling module pockets/cms/views/goth. The
 // blessed way to customize is partial override: embed that concrete default and
 // override individual methods (e.g. only the four chrome methods). Implementing
 // all methods from scratch (e.g. over sdk/foundation/web.Template) is possible but not the

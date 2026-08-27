@@ -23,8 +23,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/pockets/authentication/domain/serviceaccount"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/serviceaccount"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 

@@ -1,6 +1,6 @@
 ---
 title: GOTH UI
-description: An optional templ and plain-CSS presentation system for Gopernicus hosts and features.
+description: An optional templ and plain-CSS presentation system for Gopernicus hosts and pockets.
 ---
 
 # GOTH UI
@@ -20,7 +20,7 @@ The stack is **templ + plain CSS + Alpine CSP + optional HTMX**. Tailwind is not
 | `ui/goth/theme` | semantic token names and document helpers |
 | `ui/goth/assets` | embedded fingerprinted CSS/JS plus manifest |
 
-Feature adapters such as `features/cms/views/goth` and `features/authentication/views/goth` translate feature view ports into GOTH renderers.
+Pocket adapters such as `pockets/cms/views/goth` and `pockets/authentication/views/goth` translate pocket view ports into GOTH renderers.
 
 ## Bundle profiles
 
@@ -67,7 +67,7 @@ static.AddRoutes(router, bundle.AssetBasePath())
 
 The default self-hosted bundle needs only `'self'` for styles and, for interactive profiles, scripts. It emits no inline style or script and needs neither `unsafe-inline` nor `unsafe-eval`.
 
-When GOTH backs authentication views, the feature adapter converts bundle requirements into authentication's technology-neutral HTML resource policy while preserving the feature's fixed no-store, frame, base, and form protections.
+When GOTH backs authentication views, the pocket adapter converts bundle requirements into authentication's technology-neutral HTML resource policy while preserving the pocket's fixed no-store, frame, base, and form protections.
 
 ## Themes use semantic roles
 
@@ -93,8 +93,8 @@ GOTH's 64-entry primitive baseline follows a frozen Shadcn catalog for recogniza
 
 Use `examples/goth-showcase` to inspect the catalog. Its Playwright suite runs Chromium, Firefox, WebKit, and accessibility checks.
 
-## Custom feature views
+## Custom pocket views
 
-For a small change, embed a feature's bundled GOTH view implementation and override selected methods. For a completely different presentation stack, implement the feature's public `Views` interface with anything satisfying `web.Renderer`.
+For a small change, embed a pocket's bundled GOTH view implementation and override selected methods. For a completely different presentation stack, implement the pocket's public `Views` interface with anything satisfying `web.Renderer`.
 
-The core never imports GOTH. A host can remain API-only by leaving `Views` nil, and no templ/UI dependency enters its feature-core graph.
+The core never imports GOTH. A host can remain API-only by leaving `Views` nil, and no templ/UI dependency enters its pocket-core graph.

@@ -20,7 +20,7 @@
 // persistence, lookup, invitations, rate-limit keys, and audit details. The
 // bundled DefaultNormalizer is strict addr-spec-only email and strict naive
 // E.164 phone; a host may inject a custom Normalizer (e.g. one that performs full
-// IDNA ToASCII, which the stdlib-only feature core cannot).
+// IDNA ToASCII, which the stdlib-only pocket core cannot).
 package identifier
 
 import (

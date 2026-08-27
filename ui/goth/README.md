@@ -62,14 +62,14 @@ Rules frozen here:
   acquire 64 tiny packages. Compound parts use the Shadcn-style prefix
   (`Dialog`, `DialogTrigger`, `DialogContent`, `DialogTitle`).
 - `goth`, `theme`, `primitives`, `htmx`, `icons`, `assets` depend only on templ
-  plus their pinned runtime inputs; they never import a feature, integration,
+  plus their pinned runtime inputs; they never import a pocket, integration,
   example, or workshop package (guard G17). **The frozen surface below imports no
   `sdk` package.** The module taxonomy (ARCHITECTURE.md, guard G17) *permits* a
   UI implementation to require `sdk`, but the frozen GOTH-0.3 grammar does not,
   and any later `sdk`-importing addition is new public surface that reopens
   GOTH-0.3 and re-enters Gate B.
 - Nothing in `ui/goth` calls `http.Handle`, registers a route, installs
-  middleware, accepts a `feature.Mount`, or writes an HTTP response header. It
+  middleware, accepts a `pocket.Mount`, or writes an HTTP response header. It
   exposes assets, renderers, and requirements; the host composes them.
 
 ---
@@ -272,7 +272,7 @@ const (
 )
 
 // Requirements is the deterministic, minimal set of browser resource needs for
-// a bundle's selected profile. A host/feature maps it into its own CSP policy;
+// a bundle's selected profile. A host/pocket maps it into its own CSP policy;
 // the kit never writes a header. Ordering is stable and duplicate-free.
 type Requirements struct { /* unexported */ }
 
@@ -765,7 +765,7 @@ func MergeAttributes(caller templ.Attributes, owned templ.Attributes) templ.Attr
   public emitted surface alongside `data-slot`/`data-state`/`data-variant`.
 - Controllers discover their parts through the stable `data-slot` / `data-state`
   attributes and dispatch **documented custom events** (`goth:open`,
-  `goth:close`, `goth:select`, `goth:change`). Feature-specific event names are
+  `goth:close`, `goth:select`, `goth:change`). Pocket-specific event names are
   forbidden.
 - Shared controller **families** own the hard mechanics — focus restore/trap,
   escape/outside-click, typeahead, roving tabindex, live regions — so individual
@@ -956,11 +956,11 @@ Frozen HTMX contract (mirrors the plan's HTMX-4-forward rules):
 - **Host owns:** the asset route + public base URL, HTTP response headers/CSP
   (mapping `Requirements` in), the theme stylesheet it serves + its
   `ThemeStylesheetPath`, appearance/direction selection, and profile choice.
-- **Feature core owns:** page models and the technology-neutral `Views` port
+- **Pocket core owns:** page models and the technology-neutral `Views` port
   returning `web.Renderer`; it never imports `ui/goth`, templ, Alpine, or HTMX. A
   nil `Views` remains "no HTML surface, no view/runtime dependency".
-- **Feature `views/goth` adapter owns:** translating feature page models into
-  GOTH primitives/components and implementing the feature's `Views` port. Domain
+- **Pocket `views/goth` adapter owns:** translating pocket page models into
+  GOTH primitives/components and implementing the pocket's `Views` port. Domain
   knowledge lives here, not in `ui/goth`.
 - **`ui/goth` owns:** semantic tokens + neutral defaults, primitives/components,
   named controllers, typed HTMX helpers, embedded fingerprinted assets, the
@@ -1012,7 +1012,7 @@ Standing invariants carried from the plan: server ownership of authoritative
 state; a progressive no-JS baseline; no implicit HTTP mutation; no remote runtime
 dependency; no `unsafe-eval`; no server-rendered `style` attribute or inline
 `<style>` element (controller-owned CSSOM writes excepted); HTMX optional;
-technology-neutral feature cores; host-overridable theme via a host stylesheet;
+technology-neutral pocket cores; host-overridable theme via a host stylesheet;
 checked generated artifacts; accessibility as tested release behavior; honest
 third-party provenance.
 
@@ -1025,7 +1025,7 @@ Changes to any name/shape above reopen GOTH-0.3 and re-enter Gate B.
 ## 11. Adoption, theming, security, and handoff recipes
 
 §1–§10 are the frozen contract. This section is the adopter guide: how a host wires
-the kit, how a feature ships a `views/goth` adapter, the CSP recipe, the component
+the kit, how a pocket ships a `views/goth` adapter, the CSP recipe, the component
 layer, the HTMX migration trigger, and the Segovia/GPS360 handoff. Every Go snippet
 here is proven against the real API by executed tests — the host wiring and HTMX
 grammar by `examples/minimal/cmd/server/goth_htmx_proof_test.go` and
@@ -1064,8 +1064,8 @@ static := web.NewStaticFileServer(uigothassets.FS, web.WithAssetPrefix("dist/"))
 static.AddRoutes(router, gothAssetBasePath)
 ```
 
-The feature `views/goth` adapter (§11.6) then renders pages through `bundle`, and the
-host wires it into the feature's `Config.Views`. `examples/cms` (Turso),
+The pocket `views/goth` adapter (§11.6) then renders pages through `bundle`, and the
+host wires it into the pocket's `Config.Views`. `examples/cms` (Turso),
 `examples/minimal` (memstore), and `examples/auth-cms` (auth + CMS on one router) are
 the three reference wirings.
 
@@ -1115,9 +1115,9 @@ func cspHeader(req uigoth.Requirements) string {
 
 A host writes `cspHeader(bundle.Requirements())` into its own
 `Content-Security-Policy` (typically alongside its other fixed protections). The
-authentication feature does not use this raw recipe — it consumes a
+authentication pocket does not use this raw recipe — it consumes a
 technology-neutral `HTMLResourcePolicy` the `views/goth` adapter derives from the same
-`Requirements` (§11.6), so the feature's fixed protections stay feature-owned.
+`Requirements` (§11.6), so the pocket's fixed protections stay pocket-owned.
 
 > **Deferred (owner decision).** Gate B product #4 asked whether the kit should ship a
 > first-class `Requirements`→CSP-directive-string helper. It is NOT added here: a new
@@ -1131,7 +1131,7 @@ Above the 64 primitives, the kit ships fourteen opinionated, domain-neutral
 compositions under `ui/goth/components/{layouts,forms,feedback,data}` (GOTH-7.1). Each
 takes a single `…Props` value (embedding no domain type), composes primitives only,
 emits zero server-rendered `style=`, and inherits its no-JS baseline from those
-primitives. They are the shapes proven repeatedly by the feature adapters, promoted so
+primitives. They are the shapes proven repeatedly by the pocket adapters, promoted so
 adopters do not re-derive them:
 
 | package | compositions | signature shape |
@@ -1181,22 +1181,22 @@ func assertAssetsReachable(bundle *uigoth.Bundle, serve func(path string) int) e
 `serve` is a host-supplied closure (an `httptest`-style in-process GET against the
 composed router). The check catches the mistake before the first real request.
 
-### 11.6 Custom feature `Views` — the `views/goth` adapter recipe
+### 11.6 Custom pocket `Views` — the `views/goth` adapter recipe
 
-A feature core exposes a technology-neutral `Views` port returning
+A pocket core exposes a technology-neutral `Views` port returning
 `sdk/foundation/web.Renderer` and never imports `ui/goth`, templ, Alpine, or HTMX (a
-nil `Views` keeps the feature HTML-free). The GOTH rendering ships as a **sibling
-module** `features/<name>/views/goth` that implements that port over a `*goth.Bundle`.
-The two reference adapters are `features/authentication/views/goth` and
-`features/cms/views/goth`. The shape:
+nil `Views` keeps the pocket HTML-free). The GOTH rendering ships as a **sibling
+module** `pockets/<name>/views/goth` that implements that port over a `*goth.Bundle`.
+The two reference adapters are `pockets/authentication/views/goth` and
+`pockets/cms/views/goth`. The shape:
 
 ```go
-package goth // features/<name>/views/goth
+package goth // pockets/<name>/views/goth
 
-// Views implements <feature>.Views over the immutable presentation bundle.
+// Views implements <pocket>.Views over the immutable presentation bundle.
 type Views struct{ bundle *goth.Bundle }
 
-var _ <feature>.Views = Views{}
+var _ <pocket>.Views = Views{}
 
 // New fails loudly on a nil bundle rather than nil-panicking at first render.
 func New(bundle *goth.Bundle) (Views, error) {
@@ -1207,16 +1207,16 @@ func New(bundle *goth.Bundle) (Views, error) {
 }
 ```
 
-A host wires it as `views, _ := featuregoth.New(bundle)` →
-`feature.Config{Views: views}`, and serves the bundle assets (§11.1). **Partial
+A host wires it as `views, _ := pocketgoth.New(bundle)` →
+`pocket.Config{Views: views}`, and serves the bundle assets (§11.1). **Partial
 override** is the blessed customization: embed the default `Views` in a host type and
 override only the methods you rebrand (`examples/auth-cms/internal/authpages` overrides
 just `Login`; `examples/cms/internal/theme` overrides the public chrome and falls
 through to the GOTH admin pages).
 
-**Security-sensitive features map `Requirements` into their own policy, not a raw
+**Security-sensitive pockets map `Requirements` into their own policy, not a raw
 header.** Authentication's adapter carries an `HTMLPolicy()` that maps
-`bundle.Requirements()` into the feature's `authentication.HTMLResourcePolicy` through
+`bundle.Requirements()` into the pocket's `authentication.HTMLResourcePolicy` through
 an explicit `goth.Directive → HTMLResourceKind` table, owning deterministic source
 ordering:
 
@@ -1224,16 +1224,16 @@ ordering:
 authViews, _ := authgoth.New(bundle)
 cfg := authentication.Config{
 	Views:      authViews,
-	HTMLPolicy: authViews.HTMLPolicy(), // widens the feature CSP exactly enough
+	HTMLPolicy: authViews.HTMLPolicy(), // widens the pocket CSP exactly enough
 }
 ```
 
 The adapter appends `script-src 'self'` with `Nonce: true` so the externalized
 fragment-reader script (below) and any per-render inline script run — a non-nil policy
-REPLACES the feature's default `script-src` tail, so a policy omitting it fails closed
-(the C5 contract test guards this). The feature's fixed protections (`default-src
+REPLACES the pocket's default `script-src` tail, so a policy omitting it fails closed
+(the C5 contract test guards this). The pocket's fixed protections (`default-src
 'none'`, `base-uri 'none'`, `form-action 'self'`, `frame-ancestors 'none'`, and the
-no-store/no-referrer/frame/content-type headers) stay feature-owned and unremovable.
+no-store/no-referrer/frame/content-type headers) stay pocket-owned and unremovable.
 
 **Externalized inline scripts.** Where a page needs a tiny script (auth's reset and
 magic-link landings read the token from the URL fragment), it ships as an embedded,
@@ -1261,7 +1261,7 @@ The frozen grammar and the typed `htmx.Attrs` builder are §9. Two adopter rules
   ratified web posture (`ARCHITECTURE.md`, "Host HTML cross-origin posture"): the
   recommended modern-browser posture is origin-only — `http.CrossOriginProtection`
   mounted on the host's HTML groups — with no kit-mandated hidden-field mechanism.
-  Feature-owned forms may still carry tokens when their owning feature requires them
+  Pocket-owned forms may still carry tokens when their owning pocket requires them
   (auth's account mutations do). Either way there is no `hx-headers` CSRF seam, and
   handlers derive no identity/CSRF/authorization from any HTMX header — those are
   presentation hints only (§9).
@@ -1269,12 +1269,12 @@ The frozen grammar and the typed `htmx.Attrs` builder are §9. Two adopter rules
 ### 11.8 Module tags and the `views/templ` → `views/goth` rename
 
 At the untagged repository posture (confirmed empty `git tag --list` at preflight), the
-feature view modules were **renamed in place** `features/<name>/views/{templ → goth}`
+pocket view modules were **renamed in place** `pockets/<name>/views/{templ → goth}`
 (GOTH-7.2/7.3): the module path and package changed, `go.work` + `Makefile` + consuming
 host `go.mod`s were repointed, and no compatibility shim was added. If a relevant tag
 ever exists when a future view module migrates, the additive fallback applies instead:
 add a new `views/goth` module and retain the old path as a compatibility module rather
-than renaming. Adopters pin `features/<name>/views/goth`.
+than renaming. Adopters pin `pockets/<name>/views/goth`.
 
 ### 11.9 SRI and the CDN-relocation caveat
 
@@ -1350,7 +1350,7 @@ convenience; the kit never ships or recompiles Tailwind.
 by: (1) `go get`-ing the module and wiring a host per §11.1; (2) choosing a profile
 (§11.2); (3) mapping `Requirements` into its CSP (§11.3) and running the boot-time
 self-check (§11.5); (4) shipping a brand stylesheet redeclaring the token names above;
-(5) consuming the primitives/`components/` layer and any feature `views/goth` adapters
+(5) consuming the primitives/`components/` layer and any pocket `views/goth` adapters
 it mounts, overriding only the pages it rebrands (§11.6). No kit source, brand value, or
 downstream product code crosses into this repository — the handoff is the stable public
 surface (`.goth-*` classes, `--token` names, the Go API in §1–§10) only.

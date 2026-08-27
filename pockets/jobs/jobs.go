@@ -1,24 +1,24 @@
-// Package jobs is the public surface of the jobs feature module: a durable job
+// Package jobs is the public surface of the jobs pocket module: a durable job
 // queue (enqueue with idempotency, atomic claim, retry, dead-letter, stale-claim
 // recovery) and cron/interval recurring schedules, plus the runtime the host
 // runs to process them.
 //
-// The feature is datastore-free and view-free: it depends on its repository
+// The pocket is datastore-free and view-free: it depends on its repository
 // ports (logic/job, logic/schedule) and sdk facilities only, never on a concrete
 // store, an integration, or a view library. Cron parsing lives behind the
 // CronParser port (integrations/scheduling/robfig-cron satisfies it); the
 // stdlib-only Spec.Every path needs no parser at all.
 //
-// Host-facing surface, all in this file per the feature charter:
+// Host-facing surface, all in this file per the pocket charter:
 //
 //   - Repositories — the outbound ports a store adapter or host fills (Schedules
 //     nil = a queue-only host; the Runtime then skips the scheduler).
 //   - HandlerFunc — a host-supplied per-kind job handler.
-//   - CronParser / CronSchedule — the feature-owned cron ports (UTC by contract).
+//   - CronParser / CronSchedule — the pocket-owned cron ports (UTC by contract).
 //   - Config — Handlers (required non-empty to build a Runtime), optional Cron,
 //     and sizing/cadence with safe defaults.
 //   - NewService / Service.Enqueue / EnqueueJob / EnsureSchedule — the enqueue
-//     and scheduling surface, including the cross-feature primitive-typed
+//     and scheduling surface, including the cross-pocket primitive-typed
 //     Enqueue.
 //   - NewRuntime(svc) / Runtime.Run — the runtime the host explicitly runs.
 //   - Service.Register — validates the built Service carries handlers and logs;
@@ -63,7 +63,7 @@ var (
 	// (EnqueueOnce/Replace/LatestStatusByKey/Checkpoint) and NewFencedRuntime when
 	// Repositories.FencedQueue is nil.
 	ErrFencedQueueRequired = errors.New("jobs: Repositories.FencedQueue is required for the fenced delivery surface")
-	// ErrHandlersRequired is returned when a Runtime is built (or the feature is
+	// ErrHandlersRequired is returned when a Runtime is built (or the pocket is
 	// registered) with no handlers — a jobs runtime with nothing to run.
 	ErrHandlersRequired = errors.New("jobs: Config.Handlers must be non-empty")
 	// ErrInvalidHandler is returned when Config.Handlers has an empty kind key or
@@ -94,7 +94,7 @@ type CronSchedule = interface {
 	Next(after time.Time) time.Time
 }
 
-// CronParser parses cron expressions into schedules. It is feature-owned and
+// CronParser parses cron expressions into schedules. It is pocket-owned and
 // consumer-declared; integrations/scheduling/robfig-cron satisfies it
 // structurally with zero import in either direction.
 type CronParser interface {
@@ -106,11 +106,11 @@ type CronParser interface {
 
 // HandlerFunc executes one job of a registered kind. Handlers are host-supplied
 // data: closures over whatever services the host built (including other
-// features' services), wired at the composition root with zero ports.
+// pockets' services), wired at the composition root with zero ports.
 type HandlerFunc func(ctx context.Context, j job.Job) error
 
-// Repositories is the set of outbound ports the feature needs. A store adapter
-// (features/jobs/stores/turso, the in-core memstore) or a host fills it.
+// Repositories is the set of outbound ports the pocket needs. A store adapter
+// (pockets/jobs/stores/turso, the in-core memstore) or a host fills it.
 type Repositories struct {
 	// Queue is the unfenced durable queue backing Enqueue/EnqueueJob and the cron
 	// Runtime. Required unless FencedQueue is wired (at least one of the two must be
@@ -121,7 +121,7 @@ type Repositories struct {
 	Schedules schedule.Repository
 	// FencedQueue is the OPTIONAL lease-fenced, logical-key queue (AV3D-1.x) backing
 	// the fenced primitive surface (EnqueueOnce/Replace/LatestStatusByKey/Checkpoint)
-	// and the checkpointed FencedRuntime a consuming feature's durable delivery runs
+	// and the checkpointed FencedRuntime a consuming pocket's durable delivery runs
 	// on (AV3D-3.1). Nil = the fenced surface is off. A host may wire FencedQueue
 	// alone (a delivery-only host with no cron/unfenced queue), Queue alone (the
 	// existing cron/queue host), or both.
@@ -167,7 +167,7 @@ type resolvedConfig struct {
 	logger       *slog.Logger // nil → the seams fall back to slog.Default()
 }
 
-// Service is the jobs feature's enqueue + scheduling capability, minus the run
+// Service is the jobs pocket's enqueue + scheduling capability, minus the run
 // loop. It owns the wake channel (through the internal queue service); NewRuntime
 // shares that channel with the queue pool by construction.
 type Service struct {
@@ -236,8 +236,8 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 
 // Enqueue is the primitive-typed entry point. Its signature is a HARD
 // compatibility contract: stdlib types only (string, json.RawMessage), so a
-// consuming feature's own narrow enqueuer port matches it structurally with zero
-// import of features/jobs (constitution rule 6). Do not widen it.
+// consuming pocket's own narrow enqueuer port matches it structurally with zero
+// import of pockets/jobs (constitution rule 6). Do not widen it.
 func (s *Service) Enqueue(ctx context.Context, kind string, payload json.RawMessage) (string, error) {
 	if s.queue == nil {
 		return "", ErrQueueRequired
@@ -322,13 +322,13 @@ func (r *Runtime) wakeChan() <-chan struct{} { return r.wake }
 // NO routes (the /jobs/* namespace is a documentation reservation until the v2
 // admin surface) and starts NO goroutines: the host owns the run loop and calls
 // Runtime.Run explicitly. Migrations are the store adapter's concern, not this
-// feature core's.
+// pocket core's.
 func (s *Service) Register(m pocket.Mount) error {
 	if len(s.handlers) == 0 {
 		return ErrHandlersRequired
 	}
 	if m.Logger != nil {
-		m.Logger.Info("registered jobs feature",
+		m.Logger.Info("registered jobs pocket",
 			"handlers", len(s.handlers),
 			"scheduler", s.repos.Schedules != nil,
 		)

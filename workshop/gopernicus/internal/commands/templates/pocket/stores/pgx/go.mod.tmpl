@@ -1,0 +1,26 @@
+module {{.ModulePath}}/stores/pgx
+
+go {{.GoVersion}}
+
+require (
+	{{.ModulePath}} v0.0.0
+	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.5.0
+	github.com/gopernicus/gopernicus/sdk v0.5.0
+	github.com/jackc/pgx/v5 {{.PgxVersion}}
+)
+
+// The pocket core is a sibling in this standalone tree; go.work or this replace
+// resolves it.
+replace {{.ModulePath}} => ../..
+
+// ── RESOLUTION ──────────────────────────────────────────────────────────────
+// sdk and the pgx connector are pinned to published gopernicus tags, so
+// `go mod tidy` resolves them the normal Go way. The sibling core carries
+// v0.0.0 and resolves through the replace above until you tag the pocket
+// yourself.
+//
+// Developing against a local gopernicus checkout instead of the tags?
+//
+//   go mod edit -replace github.com/gopernicus/gopernicus/sdk=/abs/path/to/gopernicus/sdk
+//   go mod edit -replace github.com/gopernicus/gopernicus/integrations/datastores/pgxdb=/abs/path/to/gopernicus/integrations/datastores/pgxdb
+//   go mod tidy

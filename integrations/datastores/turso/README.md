@@ -7,7 +7,7 @@ driver behind the same connector shape as
 surface (`Querier`, `Scanner`, `ExecAffecting`, the timestamp helpers, and
 `List`).
 
-It owns "how to talk to libSQL," never any feature's SQL. App/feature
+It owns "how to talk to libSQL," never any pocket's SQL. App/pocket
 repositories consume this package's `*DB`.
 
 ## The list helper — `List[T]`, the pgxdb semantic twin
@@ -22,7 +22,7 @@ offset flow appends `LIMIT/OFFSET`, derives HasMore from its own over-fetch, and
 emits no cursors. Like the pgxdb twin, `ListQuery[T]` carries an optional
 `Limits` (`crud.Limits` — the resource's page-size default/max, passed to
 `req.NormalizedLimit`; the zero value keeps `crud`'s `DefaultLimit`/`MaxLimit`).
-The per-feature `storetest` conformance suites are the parity proof.
+The per-pocket `storetest` conformance suites are the parity proof.
 
 The twin is *semantic*, deliberately not idiomatic: it binds `?` placeholders
 from an `Args []any` slice (no named-args emulation), scans through a
@@ -78,6 +78,6 @@ to any `Exec`/`Query`/`QueryRow`. `Config.Retry` is boot connectivity only.
 Unit tests are hermetic and run with a plain `go test ./...` — the `List`
 behavior tests run against in-memory SQLite through the real driver.
 
-Live conformance runs are per-feature (the `stores/turso` modules), gated on
+Live conformance runs are per-pocket (the `stores/turso` modules), gated on
 `-tags=integration` + `TURSO_DATABASE_URL`/`TURSO_AUTH_TOKEN`, and only ever
 against the authorized playground database. Unset, they skip loudly.

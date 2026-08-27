@@ -1,7 +1,7 @@
-// Package pgx is the auth feature's PostgreSQL store adapter — its own
+// Package pgx is the auth pocket's PostgreSQL store adapter — its own
 // module so a host that brings a different datastore never pulls pgx into its
 // module graph (the load-bearing opt-out property). It owns the SQL; the HOST owns its database lifecycle. It is the
-// dialect sibling of features/authentication/stores/turso: same surface plus the
+// dialect sibling of pockets/authentication/stores/turso: same surface plus the
 // Postgres-only WithSchema option — SQLite has no schemas — same migration version
 // set (0001–0014, thirteen tables backing the 17-port bundle; 0014 adds the
 // account-lifecycle columns to users rather than a table, and auth owns no
@@ -12,7 +12,7 @@
 // (see Repositories); the contractual keyset id columns carry per-column
 // COLLATE "C" for byte-order pagination parity (see the migrations).
 //
-// Migrations follow the scaffold model (matching features/authentication/stores/turso):
+// Migrations follow the scaffold model (matching pockets/authentication/stores/turso):
 // the canonical *.sql live here, but the recommended path is to ExportMigrations
 // into the host's own migrations dir and let the host's runner apply them
 // pre-boot, alongside the host's other migrations, through one app-owned ledger.
@@ -24,8 +24,8 @@ import (
 	"errors"
 	"fmt"
 
-	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 

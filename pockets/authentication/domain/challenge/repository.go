@@ -6,7 +6,7 @@ import (
 )
 
 // Repository persists challenges with atomic replace and consume operations
-// (design §3.2). Implemented by feature store adapters (features/authentication/
+// (design §3.2). Implemented by pocket store adapters (pockets/authentication/
 // stores/turso, .../pgx) or any host-provided implementation (see the storetest
 // reference). The port doc comments are the spec; the storetest conformance suite
 // is their executable form.

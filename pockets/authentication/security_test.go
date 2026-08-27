@@ -345,7 +345,7 @@ func prodLimiterConfig() Config {
 }
 
 // TestNewServiceProductionRejectsDefaultMemoryLimiter proves production rejects a
-// nil RateLimiter (design §4.4/§8): the feature defaults it to the in-process
+// nil RateLimiter (design §4.4/§8): the pocket defaults it to the in-process
 // ratelimiter.Memory, whose budget is per-process and would be N× across instances.
 func TestNewServiceProductionRejectsDefaultMemoryLimiter(t *testing.T) {
 	cfg := prodLimiterConfig() // RateLimiter left nil → in-process memory default

@@ -39,7 +39,7 @@ func (prodNotifier) Capabilities() notify.Capabilities {
 
 // durableLimiter is a rate-limiter double that positively declares itself
 // shared/durable, so the production non-durable-limiter gate accepts it (unlike the
-// in-process ratelimiter.Memory the feature defaults a nil RateLimiter to).
+// in-process ratelimiter.Memory the pocket defaults a nil RateLimiter to).
 type durableLimiter struct{}
 
 func (durableLimiter) Allow(context.Context, string, ratelimiter.Limit) (ratelimiter.Result, error) {

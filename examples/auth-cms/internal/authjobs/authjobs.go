@@ -1,8 +1,8 @@
 // Package authjobs is the host-owned composition adapter (authv3-delivery-refactor
 // AV3D-3.1) that runs authentication's encrypted outbound delivery on the generic
-// jobs feature. It is the ONE place that imports BOTH features/authentication and
-// features/jobs; neither feature core imports the other (constitution rule 6), and
-// the composition happens here, in the host, over the two features' stdlib-typed
+// jobs pocket. It is the ONE place that imports BOTH pockets/authentication and
+// pockets/jobs; neither pocket core imports the other (constitution rule 6), and
+// the composition happens here, in the host, over the two pockets' stdlib-typed
 // seams:
 //
 //   - Dispatcher maps authentication's DeliveryDispatcher (Submit/Replace/
@@ -22,7 +22,7 @@
 // Service from the Dispatcher; only AFTER the auth Service is fully built does the
 // host read DeliveryJobRuntime() and hand it here to build the jobs FencedRuntime — so
 // no handler can run against a half-built auth Service, and the host starts the
-// runtime explicitly (the features start no goroutine).
+// runtime explicitly (the pockets start no goroutine).
 package authjobs
 
 import (
@@ -47,7 +47,7 @@ type Enqueuer interface {
 }
 
 // Compile-time proof the adapter satisfies authentication's stdlib-typed delivery
-// transport seam without either feature importing the other.
+// transport seam without either pocket importing the other.
 var _ auth.DeliveryDispatcher = (*Dispatcher)(nil)
 
 // Dispatcher bridges auth.DeliveryDispatcher to the generic jobs fenced primitives.
@@ -76,7 +76,7 @@ func (d *Dispatcher) Replace(ctx context.Context, kind, purpose, logicalKey stri
 }
 
 // LatestStatus returns the generic job lifecycle string for the latest generation
-// holding logicalKey; the authentication feature normalizes it into its stable status.
+// holding logicalKey; the authentication pocket normalizes it into its stable status.
 func (d *Dispatcher) LatestStatus(ctx context.Context, logicalKey string) (string, error) {
 	st, err := d.jobs.LatestStatusByKey(ctx, logicalKey)
 	return string(st), err

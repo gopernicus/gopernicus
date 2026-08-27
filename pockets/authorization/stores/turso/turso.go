@@ -1,4 +1,4 @@
-// Package turso is the authorization feature's Turso/libSQL store adapter — its
+// Package turso is the authorization pocket's Turso/libSQL store adapter — its
 // own module so a host that brings a different datastore never pulls libsql into
 // its module graph (the load-bearing opt-out property). It owns the SQL; the HOST
 // owns its database lifecycle.
@@ -9,7 +9,7 @@
 // wanting a single kind zeroes the other field after construction (or wires its
 // own single-kind authorization.Repositories). The schema is NOT per-kind: both
 // iam_* tables scaffold wholesale into every adopting host regardless of which
-// kinds it wires (the §2.1 bounding rule applied intra-feature).
+// kinds it wires (the §2.1 bounding rule applied intra-pocket).
 //
 // Group expansion (CheckRelationWithGroupExpansion) and descendant lookup
 // (LookupDescendantResourceIDs) are recursive CTEs, cycle-safe by construction
@@ -27,7 +27,7 @@
 //
 // Cross-source ordering hazard: the shared ledger keyed (source, version)
 // expresses NO ordering between sources, so a host that scaffolds another
-// feature's migrations but not "authorization" would fail at runtime, not boot.
+// pocket's migrations but not "authorization" would fail at runtime, not boot.
 // Mitigation: Repositories probes all four tables at construction and errors —
 // naming the specific missing table — before the host serves traffic; the README
 // documents the prerequisite (including the roles-only adopter, which still
@@ -42,10 +42,10 @@ import (
 	"fmt"
 	"strings"
 
+	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/mutation"
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
-	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 

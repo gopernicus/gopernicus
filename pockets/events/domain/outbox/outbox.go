@@ -1,6 +1,6 @@
-// Package outbox is the transactional-outbox domain of the events feature: the
+// Package outbox is the transactional-outbox domain of the events pocket: the
 // persisted Entry row and the EntryRepository outbound port a store adapter
-// (features/events/stores/turso, features/events/stores/postgres, an in-memory
+// (pockets/events/stores/turso, pockets/events/stores/postgres, an in-memory
 // store) fills. The poller reads unpublished entries through this port, emits
 // them onto the bus, then marks them published — the at-least-once durable
 // rail (design §5). The port stays dialect-blind; each store implements it and
@@ -26,14 +26,14 @@ type Entry struct {
 }
 
 // EntryRepository is the poller's outbound port for the durable rail
-// (constitution rule 3: the port lives with its consumer, the events feature).
-// A store adapter or an in-memory store fills it; the feature core stays
+// (constitution rule 3: the port lives with its consumer, the events pocket).
+// A store adapter or an in-memory store fills it; the pocket core stays
 // dialect-blind. The doc comments below are the contract the storetest
 // conformance suite executes against every implementation.
 type EntryRepository interface {
 	// Append persists records in their own transaction — the non-transactional
 	// convenience path (the transactional appender that shares the emitting
-	// feature's commit is a store-level concern, not this port). Appending a
+	// pocket's commit is a store-level concern, not this port). Appending a
 	// record whose EventID already exists returns sdk.ErrAlreadyExists; the
 	// EventID is the row's primary key and the de-dupe key. Appending zero
 	// records is a no-op that returns nil.

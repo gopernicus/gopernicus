@@ -16,11 +16,11 @@ var e164Pattern = regexp.MustCompile(`^\+[1-9][0-9]{1,14}$`)
 
 // Normalizer produces the single canonical form of an identifier value used for
 // persistence, lookup, invitations, rate-limit keys, and audit details (design
-// §2.2). Its method set matches the feature's authentication.IdentifierNormalizer
+// §2.2). Its method set matches the pocket's authentication.IdentifierNormalizer
 // so one injected value satisfies both the domain constructors and the public
 // config seam. The bundled DefaultNormalizer is the strict default; a host may
 // inject a custom policy (for example one performing full IDNA ToASCII, which the
-// stdlib-only feature core cannot).
+// stdlib-only pocket core cannot).
 type Normalizer interface {
 	Normalize(kind, value string) (string, error)
 }
@@ -36,7 +36,7 @@ type Normalizer interface {
 //
 // Documented domain/IDNA policy: the domain is canonicalized by Unicode-aware
 // case folding (strings.ToLower) only. Punycode/IDNA mapping (ToASCII) is NOT
-// applied — Go's standard library has no IDNA implementation, and the feature
+// applied — Go's standard library has no IDNA implementation, and the pocket
 // core is stdlib-only (it may not import golang.org/x/net/idna). A host needing
 // full IDNA canonicalization injects a custom Normalizer. Two Unicode domains
 // that differ only by a mapping this policy does not perform are treated as

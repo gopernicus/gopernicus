@@ -7,7 +7,7 @@ package testoverride
 
 import "embed"
 
-// FS carries a single "templates/verification.html" that overrides the feature's
+// FS carries a single "templates/verification.html" that overrides the pocket's
 // LayerCore verification template when passed as a delivery.TemplateOverride.
 //
 //go:embed templates/*.html

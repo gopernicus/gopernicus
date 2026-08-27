@@ -108,7 +108,7 @@ func TestCreateAuthorizedPreparesInviteeContextBeforeCheck(t *testing.T) {
 // TestCreateAuthorizedResolvedSubjectCases: the check sees the resolved subject
 // for a KNOWN email invitee, an empty one for an UNKNOWN email invitee, and an
 // empty one for a NON-EMAIL identifier — which the kind field disambiguates,
-// because the feature's lookup is email-kind only and never asks for other kinds.
+// because the pocket's lookup is email-kind only and never asks for other kinds.
 func TestCreateAuthorizedResolvedSubjectCases(t *testing.T) {
 	lookup := func(_ context.Context, email string) (string, bool, error) {
 		if email == "known@x.com" {

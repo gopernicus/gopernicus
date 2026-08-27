@@ -11,7 +11,7 @@
 // comparison, attempt counting, lockout, and consumption all happen inside one
 // atomic operation so exactly one correct concurrent request can win. This
 // package holds only the entity, the value types the port returns, and the
-// vocabulary constants; the HMAC protection itself lives in the feature's public
+// vocabulary constants; the HMAC protection itself lives in the pocket's public
 // ChallengeProtector (a candidate digest per accepted key ID flows in through
 // DigestCandidate).
 package challenge
@@ -109,7 +109,7 @@ func (o ConsumeOutcome) String() string {
 // candidate per accepted key ID, and ConsumeCode selects the candidate whose
 // KeyID matches the row's ProtectorKeyID before comparing digests (design §3.3),
 // so an unexpired challenge issued under an old key stays verifiable. The
-// feature's public authentication.DigestCandidate is an alias of this type so the
+// pocket's public authentication.DigestCandidate is an alias of this type so the
 // protector and the repository speak one type.
 type DigestCandidate struct {
 	KeyID  string

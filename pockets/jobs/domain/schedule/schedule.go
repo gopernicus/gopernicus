@@ -1,4 +1,4 @@
-// Package schedule is the recurring-schedule domain of the jobs feature: the
+// Package schedule is the recurring-schedule domain of the jobs pocket: the
 // Schedule entity, its Spec (cron or fixed interval), the Ensure input, and the
 // Repository outbound port a store adapter or host fills.
 //
@@ -29,7 +29,7 @@ type Schedule struct {
 	Name string // unique; the Ensure upsert key
 	Kind string // job kind fired into the queue
 	// TenantID is the OPTIONAL host-defined boundary the schedule belongs to. It
-	// is vocabulary only — the feature attaches no semantics to it, but it IS
+	// is vocabulary only — the pocket attaches no semantics to it, but it IS
 	// copied onto each job the schedule fires so tenant-scoped ops queries see
 	// fired work; stores map "" to NULL.
 	TenantID  string
@@ -55,7 +55,7 @@ type Ensure struct {
 }
 
 // Repository is the schedule store outbound port. A store adapter or host fills
-// it; the feature core stays dialect-blind.
+// it; the pocket core stays dialect-blind.
 type Repository interface {
 	// Ensure upserts by Name: it creates the schedule or updates its kind, spec,
 	// and payload, setting NextRunAt = next on create and on a spec change.

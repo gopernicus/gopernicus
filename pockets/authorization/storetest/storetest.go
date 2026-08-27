@@ -1,7 +1,7 @@
 // Package storetest is the exported conformance suite for the authorization
-// feature's two kinds. Run drives BOTH a relationship.Storer and a role.Storer
+// pocket's two kinds. Run drives BOTH a relationship.Storer and a role.Storer
 // (bundled in an authorization.Repositories) so every backend — the in-core
-// memstore, the dialect adapters (features/authorization/stores/{turso,pgx}) —
+// memstore, the dialect adapters (pockets/authorization/stores/{turso,pgx}) —
 // runs the SAME suite and authorizes identically.
 //
 // Two layers: (a) the port contracts directly against each Storer, and (b) the
@@ -11,8 +11,8 @@
 // loud t.Skip (deny-by-absence extended to conformance), so a single-kind host
 // store can still prove conformance.
 //
-// The suite imports stdlib + sdk + this feature only (guards G2/FS1 keep drivers
-// out), so features/authorization's own `go test ./...` runs it against the
+// The suite imports stdlib + sdk + this pocket only (guards G2/FS1 keep drivers
+// out), so pockets/authorization's own `go test ./...` runs it against the
 // memstore reference hermetically.
 package storetest
 

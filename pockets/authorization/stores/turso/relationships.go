@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
+	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )

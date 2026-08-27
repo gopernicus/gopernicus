@@ -6,8 +6,8 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
 )
 
-// UserRepository persists user aggregates. Implemented by feature store adapters
-// (features/authentication/stores/turso) or any host-provided implementation (see the
+// UserRepository persists user aggregates. Implemented by pocket store adapters
+// (pockets/authentication/stores/turso) or any host-provided implementation (see the
 // storetest reference).
 //
 // Sentinel contract (the storetest conformance suite executes these):

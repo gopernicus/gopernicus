@@ -9,7 +9,7 @@ import (
 )
 
 // Delivery lifecycle event vocabulary. One type per bounded transition, namespaced
-// under the feature so a subscriber filters by exact topic (e.g. subscribe only to
+// under the pocket so a subscriber filters by exact topic (e.g. subscribe only to
 // authentication.delivery.dead_lettered). The transition token is the bounded
 // cmd.Transition string, so the type set is fixed and secret-free.
 const (

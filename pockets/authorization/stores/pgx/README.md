@@ -1,7 +1,7 @@
-# features/authorization/stores/pgx
+# pockets/authorization/stores/pgx
 
-The authorization feature's **PostgreSQL** store adapter — the dialect sibling of
-`features/authorization/stores/turso`. Its own module so a host that brings a
+The authorization pocket's **PostgreSQL** store adapter — the dialect sibling of
+`pockets/authorization/stores/turso`. Its own module so a host that brings a
 different datastore never pulls `pgx` into its module graph. It owns the SQL and
 the canonical migration files; the host owns its database lifecycle.
 
@@ -33,7 +33,7 @@ and port semantics do not.
 Both tables belong to migration source **`authorization`**, distinct from
 `cms`/`auth`/`jobs`/`events`. The shared `(source, version)` migration ledger
 expresses **no ordering between sources**, so a host that scaffolds another
-feature's migrations but not this store's would fail at *runtime*, not boot.
+pocket's migrations but not this store's would fail at *runtime*, not boot.
 
 **`Repositories(db)` guards against exactly that:** it probes for **all four**
 `iam_relationships`, `iam_roles`, `iam_scopes`, and `iam_mutations` tables at
@@ -41,7 +41,7 @@ construction (`SELECT to_regclass($1)`) and returns `errs.ErrNotFound` — namin
 specific missing table — if the `authorization` source has not been applied. The
 failure surfaces at wiring time, before the host serves traffic. Scaffold this
 store's migrations with `ExportMigrations` and apply them with your host's runner
-pre-boot, alongside every other feature source you wire.
+pre-boot, alongside every other pocket source you wire.
 
 A deliberately baseline-only host may call `RelationshipRepository(db)` instead;
 it probes only `iam_relationships` and returns no mutation repository. Applying
@@ -56,7 +56,7 @@ set (same filename == same logical schema step; content is per-dialect).
 The two kinds (relationships, roles) are independently wireable at the
 **port/behavior level** — but the **schema is NOT per-kind**. Both `iam_*` tables
 scaffold into every adopting host regardless of which kinds it wires (the §2.1
-bounding rule applied intra-feature). A **roles-only** adopter still applies the
+bounding rule applied intra-pocket). A **roles-only** adopter still applies the
 FULL `authorization` source, `iam_relationships` included, and both boot probes
 expect both tables.
 

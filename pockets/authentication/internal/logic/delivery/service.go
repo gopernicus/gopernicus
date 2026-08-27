@@ -16,7 +16,7 @@ var (
 	// ErrDispatcherRequired is returned by NewService when no Dispatcher is supplied:
 	// the delivery queue cannot submit work without a transport. Every mode that can
 	// deliver wires one — jobs mode the host-composed generic-jobs dispatcher,
-	// in_process mode the feature-internal bounded queue.
+	// in_process mode the pocket-internal bounded queue.
 	ErrDispatcherRequired = fmt.Errorf("delivery: dispatcher is required: %w", sdk.ErrInvalidInput)
 	// ErrEncrypterRequired is returned by NewService when no DeliveryEncrypter is
 	// supplied: the payload envelope is always sealed at rest (design §6.1.1), so the

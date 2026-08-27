@@ -1,4 +1,4 @@
-// Package authorization is the public surface of the authorization feature
+// Package authorization is the public surface of the authorization pocket
 // module: an IAM domain with two INDEPENDENTLY-WIREABLE KINDS.
 //
 //   - the RELATIONSHIP kind — the ReBAC engine (schema-driven permission checks,
@@ -9,7 +9,7 @@
 //     Config.RoleModel declaring which roles grant which permissions. With a
 //     model the kind decides; without one it is lookup-only.
 //
-// ReBAC is ONE kind, not the feature's identity. A host wires either kind, both,
+// ReBAC is ONE kind, not the pocket's identity. A host wires either kind, both,
 // or neither of a given kind's methods matter to it: a nil Repositories field
 // turns that kind OFF structurally (deny-by-absence), and calling an unwired
 // kind's methods returns a loud per-kind sentinel — never a silent allow.
@@ -24,9 +24,9 @@
 // deliberately NOT built is a cross-kind UNION or a universal-role bypass, which
 // a host that needs one still composes in its own closure. Consumer seams are
 // Check-ONLY; everything on Service beyond the boolean checks is
-// flagship-specific API, never a cross-feature seam (the AV2 split).
+// flagship-specific API, never a cross-pocket seam (the AV2 split).
 //
-// The feature is datastore-free and view-free (FS1): it depends on its
+// The pocket is datastore-free and view-free (FS1): it depends on its
 // relationship.Storer / role.Storer ports and sdk facilities only. Register
 // mounts NO routes — the /authorization/* namespace is reserved for a future
 // admin surface. It does export the RequirePermission/RequirePermissionOn/
@@ -47,17 +47,17 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/internal/logic/authorizersvc"
 	"github.com/gopernicus/gopernicus/pockets/authorization/internal/logic/decisionsvc"
 	"github.com/gopernicus/gopernicus/pockets/authorization/internal/logic/rolesvc"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 // Construction and per-kind sentinel errors. A misconfigured host fails at
 // NewService; calling an unwired kind fails closed at the call site.
 var (
 	// ErrNoKindConfigured is returned by NewService when neither kind is wired
-	// (both Repositories fields nil) — an authorization feature that does nothing.
+	// (both Repositories fields nil) — an authorization pocket that does nothing.
 	ErrNoKindConfigured = errors.New("authorization: no kind configured (Repositories.Relationships and Repositories.Roles are both nil)")
 
 	// ErrModelRequired is returned by NewService for a partial relationship-kind
@@ -215,7 +215,7 @@ type (
 	// The sanctioned configuration seam is STORE CONSTRUCTION, not this Config: the
 	// invariant is a repository-atomic post-state rule, so it must be known where the
 	// atomic lock lives (memstore.WithGuardianPolicy, stores/pgx.WithGuardianPolicy,
-	// stores/turso.WithGuardianPolicy). Config cannot carry it — the feature core does
+	// stores/turso.WithGuardianPolicy). Config cannot carry it — the pocket core does
 	// not construct the store and could not push a policy into an already-built
 	// MutationRepository without a detached, non-atomic seam. These aliases only make
 	// the vocabulary reachable (authorization.GuardianPolicy) so a host names it
@@ -282,7 +282,7 @@ var (
 	Remove            = authorizersvc.Remove
 )
 
-// Repositories is the set of outbound ports the feature needs. Each kind is
+// Repositories is the set of outbound ports the pocket needs. Each kind is
 // nil-safe: a nil field turns that kind OFF structurally.
 type Repositories struct {
 	// Relationships backs the ReBAC kind; nil = the relationship kind is off.
@@ -347,14 +347,14 @@ type Config struct {
 	Audit AuditSink
 }
 
-// Service is the authorization feature's host-facing surface. Each kind's method
+// Service is the authorization pocket's host-facing surface. Each kind's method
 // family is present unconditionally; an unwired kind's methods fail closed with
 // that kind's sentinel. The decision surface (Check, CheckBatch, CheckExplain,
 // FilterAuthorized, LookupResources and the RequirePermission gates) is ONE
 // facade over the composite decider, which dispatches each (resource type,
 // permission) pair to the model that declares it — the relationship Schema or the
 // RoleModel, never both. A host still composes any bypass or cross-kind policy of
-// its own in its own closure; the feature merges no kinds.
+// its own in its own closure; the pocket merges no kinds.
 type Service struct {
 	relationships *authorizersvc.Service         // nil = relationship kind off
 	roles         *rolesvc.Service               // nil = roles kind off
@@ -480,13 +480,13 @@ func NewService(repos Repositories, cfg Config) (Components, error) {
 	}, nil
 }
 
-// Register mounts the feature: it logs one line, captures the Mount logger for
+// Register mounts the pocket: it logs one line, captures the Mount logger for
 // best-effort audit warnings, and registers NO routes (the /authorization/*
 // namespace is reserved). It tolerates a zero-value Mount.
 func (s *Service) Register(m pocket.Mount) error {
 	if m.Logger != nil {
 		s.log = m.Logger
-		m.Logger.Info("registered authorization feature",
+		m.Logger.Info("registered authorization pocket",
 			"relationships", s.relationships != nil,
 			"roles", s.roles != nil,
 			"role_model", s.roleModel != nil,

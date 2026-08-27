@@ -32,15 +32,15 @@ Each directory with a `go.mod` is independently testable:
 cd sdk
 go test ./...
 
-cd features/jobs
+cd pockets/jobs
 go test -race ./...
 ```
 
 Use `GOWORK=off` when validating that a module's declared requirements—not workspace convenience—are sufficient.
 
-## Feature store conformance
+## Pocket store conformance
 
-Feature cores export test suites:
+Pocket cores export test suites:
 
 ```go
 func TestStore(t *testing.T) {
@@ -68,12 +68,12 @@ Turso legs need `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` and compile with `-t
 `make guard` enforces boundaries including:
 
 - SDK standard-library-only and internal tiering;
-- feature core SDK-only requirements;
-- no feature-to-feature imports;
-- no feature core imports of stores, views, UI, integrations, or examples;
-- no integration imports inward to features/hosts/Workshop;
+- pocket core SDK-only requirements;
+- no pocket-to-pocket imports;
+- no pocket core imports of stores, views, UI, integrations, or examples;
+- no integration imports inward to pockets/hosts/Workshop;
 - transport responders use SDK web primitives;
-- store modules do not reach foreign features;
+- store modules do not reach foreign pockets;
 - Workshop isolation;
 - UI dependency whitelist;
 - security-specific negative boundaries for authentication/authorization delivery.
@@ -82,7 +82,7 @@ If a guard fails, fix the dependency direction. Do not weaken a regex to make an
 
 ## Scaffold compile proofs
 
-Workshop templates are not Go files and therefore evade many whole-tree scans. Dedicated tests emit a host and feature into temporary directories, rewrite local pre-tag replacements, disable workspace resolution, build, and run memory conformance.
+Workshop templates are not Go files and therefore evade many whole-tree scans. Dedicated tests emit a host and pocket into temporary directories, rewrite local pre-tag replacements, disable workspace resolution, build, and run memory conformance.
 
 Update these proofs whenever a template changes its module requirements or emitted anatomy.
 

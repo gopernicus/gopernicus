@@ -9,7 +9,7 @@ them, the two optional capability interfaces `ResumableUploader` and
 
 It owns "how to talk to GCS," never any app's storage policy. A different vendor
 (`s3`, …) is a sibling connector, swapped at the composition root. A host that
-mounts a feature needing file storage wires this in `cmd` and never sees the
+mounts a pocket needing file storage wires this in `cmd` and never sees the
 vendor elsewhere.
 
 ## Surface

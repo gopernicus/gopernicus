@@ -12,7 +12,7 @@ import (
 )
 
 // Presentation-isolation proofs (AV3-8.5). Two claims are proven here, both without
-// importing the bundled templ module (the feature core is sdk-only, FS1):
+// importing the bundled templ module (the pocket core is sdk-only, FS1):
 //
 //  1. The Views port is view-technology-neutral: a full implementation can render
 //     every method through ONE reusable sdk/foundation/web.Template over a single
@@ -108,7 +108,7 @@ func (v htmlTemplateViews) Error(m ErrorPage) web.Renderer   { return web.Templa
 
 // overrideViews embeds a base Views and overrides only Login and AccountSecurity —
 // the same partial-override shape a host uses over the bundled templ.Views, expressed
-// here against the port so the feature core need not import templ. Method promotion
+// here against the port so the pocket core need not import templ. Method promotion
 // supplies every other method from the embedded base.
 type overrideViews struct{ Views }
 

@@ -7,9 +7,9 @@ import (
 	"os"
 	"testing"
 
+	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/jobs/domain/job"
 	jobsturso "github.com/gopernicus/gopernicus/pockets/jobs/stores/turso"
-	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 )
 
 // TestLiveJobsDeliveryTurso runs the AV3D-3.5 live delivery proof list against a live

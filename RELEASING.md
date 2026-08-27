@@ -4,14 +4,14 @@ This repo is a multi-module workspace (`go.work`, dev-only) with thirty-seven
 modules today: `sdk`; `integrations/{cryptids/bcrypt, cryptids/golang-jwt, cryptids/google-uuid,
 datastores/pgxdb, datastores/turso, email/sendgrid, filestorage/gcs,
 filestorage/s3, kvstores/goredis, oauth/github, oauth/google,
-notify/mailer, scheduling/robfig-cron, tracing/otel}`; `features/authentication`
+notify/mailer, scheduling/robfig-cron, tracing/otel}`; `pockets/authentication`
 (+ `views/goth`, its bundled default views module — auth-v3 AV3-8.2, 2026-07-13;
 renamed from `views/templ` and re-implemented on `ui/goth` in ui-goth GOTH-7.2,
-2026-07-18), `features/authorization` (authorization-v1, 2026-07-09), `features/cms`
+2026-07-18), `pockets/authorization` (authorization-v1, 2026-07-09), `pockets/cms`
 (+ `views/goth`, its bundled default views module — feature-standard B2, 2026-07-07;
 renamed from `views/templ` and re-implemented on `ui/goth` in ui-goth GOTH-7.3,
-2026-07-18), `features/events` (events-v1, 2026-07-08), `features/jobs`
-(each feature + `stores/{turso,pgx}`); `examples/{cms,
+2026-07-18), `pockets/events` (events-v1, 2026-07-08), `pockets/jobs`
+(each pocket + `stores/{turso,pgx}`); `examples/{cms,
 minimal, auth-cms, jobs-minimal}`; `workshop/gopernicus` (the scaffolding
 CLI — a `go install`-able tool, tagged like any importable module). Each importable module (everything except the four
 `examples/*` hosts, which are demonstrations, not libraries) is tagged and
@@ -194,12 +194,12 @@ prefix, per the standard Go module convention for multi-module repos:
 ```
 sdk/v0.1.0
 integrations/datastores/turso/v0.1.0
-features/cms/v0.1.0
-features/cms/stores/turso/v0.1.0
+pockets/cms/v0.1.0
+pockets/cms/stores/turso/v0.1.0
 ui/goth/v0.1.0
 ```
 
-Each module's own `go.mod` `require` versions (e.g. `features/cms/stores/turso`
+Each module's own `go.mod` `require` versions (e.g. `pockets/cms/stores/turso`
 requiring `sdk`) are bumped and tagged independently — a patch release of
 `sdk` does not force a release of every module that depends on it, only the
 ones whose `go.mod` is updated to require the new version.
@@ -208,9 +208,9 @@ ones whose `go.mod` is updated to require the new version.
 kind — a UI implementation under the top-level `ui/` family — tags the same
 nested way and is versioned independently (`ui/goth/v0.1.0`). Unlike the four
 `examples/*` hosts it is an **importable** module, so it IS tagged; its `go.mod`
-requires its own view/runtime libraries and `sdk`, never a feature/integration/
-example/workshop (guard G17). A feature's `views/goth` adapter module (when it
-lands) tags independently and requires its feature core + `sdk` + the pinned
+requires its own view/runtime libraries and `sdk`, never a pocket/integration/
+example/workshop (guard G17). A pocket's `views/goth` adapter module (when it
+lands) tags independently and requires its pocket core + `sdk` + the pinned
 `ui/goth` tag. The `ui/goth` module itself is created at GOTH-1.1; no `ui/*` tag
 is cut this milestone.
 
@@ -221,8 +221,8 @@ is cut this milestone.
 2. **`replace` directives are dropped or pinned.** `go.work` itself is
    dev-only and is never part of what a downstream consumer sees. The nested
    modules that reference sibling modules by relative path in their own
-   `go.mod` (e.g. `features/cms/stores/turso`'s `replace` of `sdk` and
-   `features/cms` to `../../../../sdk` and `../../..`) must have those
+   `go.mod` (e.g. `pockets/cms/stores/turso`'s `replace` of `sdk` and
+   `pockets/cms` to `../../../../sdk` and `../../..`) must have those
    `replace` lines removed and replaced with ordinary `require` entries
    pinned to the sibling module's tagged version, so `go build` works for a
    consumer who does not have this repo checked out as a workspace.
@@ -233,14 +233,14 @@ is cut this milestone.
 For each module being released, from the repo root:
 
 ```sh
-git tag features/cms/v0.1.0 -m "features/cms v0.1.0"
-git push origin features/cms/v0.1.0
+git tag pockets/cms/v0.1.0 -m "pockets/cms v0.1.0"
+git push origin pockets/cms/v0.1.0
 ```
 
 A consumer depends on it the normal Go way:
 
 ```sh
-go get github.com/gopernicus/gopernicus/features/cms@v0.1.0
+go get github.com/gopernicus/gopernicus/pockets/cms@v0.1.0
 ```
 
 ## Version bumps
@@ -273,6 +273,80 @@ silently would break a host whose CSP no longer covers the kit's assets. Record 
 the module's next-tag upgrade note below and tell hosts to re-derive their CSP header.
 
 ## Upgrade notes (keyed to each module's next tag)
+
+### 2026-08-27: the `features/` tier is `pockets/` (module-path rename; ONE train of 19 tags)
+
+Plan of record `plans/rename-features-to-pockets.md`. The third tier is renamed
+so a host app's own *feature* ("invite a teammate") stops colliding with the
+framework's word for the unit it composes. This is a **module-path rename** —
+an identity change for seventeen modules — plus the composer package move. No
+behavior, schema, route, config, or wire change anywhere; no migration.
+
+**The composer moved:** `github.com/gopernicus/gopernicus/sdk/feature` is now
+`github.com/gopernicus/gopernicus/sdk/pocket`. Type and function names are
+unchanged (`pocket.Mount`, `pocket.Group`, `pocket.PrefixRegistrar`,
+`pocket.RouteRegistrar`). There is **no alias shim** — `sdk/feature` is gone.
+
+Every module keeps its own version lineage and takes a minor bump on the new
+path, so `git tag -l` reads as one continuous story per module:
+
+| Module (new path) | Last tag on old path | First tag on new path |
+|---|---|---|
+| `sdk` | v0.4.2 | **v0.5.0** |
+| `pockets/authentication` | v0.6.0 | **v0.7.0** |
+| `pockets/authentication/stores/pgx` | v0.4.0 | **v0.5.0** |
+| `pockets/authentication/stores/turso` | v0.3.0 | **v0.4.0** |
+| `pockets/authentication/views/goth` | v0.2.2 | **v0.3.0** |
+| `pockets/authorization` | v0.5.0 | **v0.6.0** |
+| `pockets/authorization/stores/pgx` | v0.2.0 | **v0.3.0** |
+| `pockets/authorization/stores/turso` | v0.1.0 | **v0.2.0** |
+| `pockets/cms` | v0.1.0 | **v0.2.0** |
+| `pockets/cms/stores/pgx` | v0.2.0 | **v0.3.0** |
+| `pockets/cms/stores/turso` | v0.1.0 | **v0.2.0** |
+| `pockets/cms/views/goth` | v0.1.0 | **v0.2.0** |
+| `pockets/events` | v0.1.0 | **v0.2.0** |
+| `pockets/events/stores/pgx` | v0.2.0 | **v0.3.0** |
+| `pockets/events/stores/turso` | v0.1.0 | **v0.2.0** |
+| `pockets/jobs` | v0.2.0 | **v0.3.0** |
+| `pockets/jobs/stores/pgx` | v0.3.0 | **v0.4.0** |
+| `pockets/jobs/stores/turso` | v0.2.0 | **v0.3.0** |
+| `workshop/gopernicus` | v0.1.0 | **v0.2.0** |
+
+`ui/goth` and every `integrations/*` module are **not** retagged: their module
+paths and runtime behavior do not change. `workshop/gopernicus` does join the
+train — its CLI removes `gopernicus new feature`, adds `gopernicus new pocket`,
+and embeds renamed templates, so `go install …/workshop/gopernicus@latest` would
+otherwise keep distributing the retired verb.
+
+Old tags stay. They are immutable history and still resolve at the old path
+(the proxy serves `features/cms@v0.1.0` from the commit its tag points at). No
+consumer is force-moved by this train — a consumer moves when it repins.
+
+**Adopter action (source-breaking at the moment you repin).** Consumers that
+use a local `replace` to this checkout break the instant `features/` moves on
+disk, regardless of tags — the path edit below is not optional for them. Run
+the sequence in every `go.mod` of the consumer:
+
+```sh
+# 1. module/import paths (tracked Go + templ sources)
+sed -i '' -e 's#gopernicus/gopernicus/features/#gopernicus/gopernicus/pockets/#g' \
+          -e 's#gopernicus/gopernicus/sdk/feature"#gopernicus/gopernicus/sdk/pocket"#g' \
+          go.mod $(git ls-files '*.go' '*.templ')
+
+# 2. local replace RHS paths — step 1 changes the module/LHS but deliberately
+# does NOT match /abs/.../gopernicus/features/... or ../gopernicus/features/...
+sed -i '' -e 's#/features/#/pockets/#g' go.mod
+
+# 3. `feature.` → `pocket.` at composer call sites; rename tier-derived aliases
+# such as eventsfeature too (compile does not catch a still-valid old alias).
+# 4. versions per the table above, then tidy/resolve.
+go mod edit -json
+go mod tidy
+go list -m -json all
+```
+
+Acceptance for a local-replace consumer: neither a replacement `Path`/RHS nor
+any resolved module `Dir` contains `/features/`.
 
 ### features/authorization — v0.5.0 (next tag): `Config.Model` removed (breaking, pre-1.0)
 

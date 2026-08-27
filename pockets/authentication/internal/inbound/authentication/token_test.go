@@ -23,7 +23,7 @@ import (
 var _ cryptids.JWTSigner = (*fakeSigner)(nil)
 
 // fakeSigner is an honest in-package cryptids.JWTSigner (golang-jwt stays out of
-// the feature core — cut refinement 10). It HMAC-SHA256s a base64url JSON claims
+// the pocket core — cut refinement 10). It HMAC-SHA256s a base64url JSON claims
 // payload with the expiry encoded, verifies the MAC in constant time, and
 // rejects expired tokens. Two-dot shaped so isJWTToken classes it as a JWT.
 type fakeSigner struct {

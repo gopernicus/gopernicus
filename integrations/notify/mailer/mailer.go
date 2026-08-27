@@ -3,7 +3,7 @@
 //
 // This is a COMPOSING integration (taxonomy amended at sdk-layering P5, 2026-07-10):
 // it implements one sdk capability port (notify.Notifier) by composing other sdk
-// packages, carries zero external dependencies, and never imports features/,
+// packages, carries zero external dependencies, and never imports pockets/,
 // examples/, or another integration. It cannot live in sdk itself — a
 // capability→capability import (notify→email) is forbidden by the sdk layering
 // law; cross-capability composition leaves sdk, and this module is its home.

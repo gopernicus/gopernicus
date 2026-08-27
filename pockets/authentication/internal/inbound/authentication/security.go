@@ -64,10 +64,10 @@ type csrfConfig struct {
 	sessionCookieName string
 }
 
-// MutationSecurity is the host-facing browser-safe-mutation policy the feature's
+// MutationSecurity is the host-facing browser-safe-mutation policy the pocket's
 // Register threads into Mount (design §9.1): the exact-match Origin allowlist and
 // the session cookie name marking a request browser-driven. It is exported so the
-// feature package can build it from Config.AllowedOrigins and the resolved cookie
+// pocket package can build it from Config.AllowedOrigins and the resolved cookie
 // name without exposing the unexported csrfConfig.
 type MutationSecurity struct {
 	AllowedOrigins    []string
@@ -206,7 +206,7 @@ func setCSRFCookie(w http.ResponseWriter, token string) {
 // base64url entropy). Reuse is what keeps a second tab's in-flight token valid
 // across a bootstrap.
 //
-// The shape check rejects a MALFORMED cookie only. It does NOT prove the feature
+// The shape check rejects a MALFORMED cookie only. It does NOT prove the pocket
 // minted the value: any well-formed 32-byte base64url string passes and IS reused
 // and echoed. Provenance is enforced by the cookie NAME instead — the __Host-
 // prefix makes a browser refuse a Set-Cookie for this name that carries a Domain
@@ -381,7 +381,7 @@ const fixedCSPPrefix = "default-src 'none'; base-uri 'none'; form-action 'self';
 // redirect carries (design §9.1/§9.2): no-store so a shared cache never retains a
 // form or inventory, no-referrer so a fragment token never leaks downstream, frame
 // and content-type protections, and a Content-Security-Policy built by buildCSP. These
-// four headers plus the fixedCSPPrefix are FEATURE-OWNED and unremovable: a policy or a
+// four headers plus the fixedCSPPrefix are POCKET-OWNED and unremovable: a policy or a
 // view adapter can widen resource loading but can never turn them off.
 func writeHTMLSecurity(w http.ResponseWriter, policy *HTMLResourcePolicy, nonce string) {
 	h := w.Header()

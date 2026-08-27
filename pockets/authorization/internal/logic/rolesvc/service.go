@@ -1,4 +1,4 @@
-// Package rolesvc is the sealed service of the authorization feature's ROLES
+// Package rolesvc is the sealed service of the authorization pocket's ROLES
 // kind — a deliberately thin layer over role.Storer. It takes plain
 // (subjectType, subjectID) pair arguments throughout and NEVER imports the
 // relationship engine (authorizersvc): the root socket alone adapts an engine

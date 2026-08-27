@@ -54,7 +54,7 @@ func classifyContent(r *http.Request) contentKind {
 
 // dispatch routes a shared mutation endpoint by Content-Type. A JSON body keeps the
 // existing API contract; a form body renders/redirects through the HTML surface but
-// only when Views is wired (a nil Views leaves the feature API-only, so a form body
+// only when Views is wired (a nil Views leaves the pocket API-only, so a form body
 // is 415, not a page). Any other content type is 415. This is the single transport
 // seam — the JSON and form branches call the same service methods.
 func (h *handlers) dispatch(w http.ResponseWriter, r *http.Request, jsonHandler, formHandler http.HandlerFunc) {

@@ -83,7 +83,7 @@ func Permanent(reason string) Result { return Result{Outcome: OutcomePermanent, 
 // the send. It is deliberately claim-scoped and stdlib-typed — a LOCAL structural
 // interface this package declares, not an imported seam — so a jobs-mode adapter can
 // satisfy it by closing over the durable claim's fenced checkpoint without this
-// package importing the jobs feature. Checkpointing is executor-side and out of the
+// package importing the jobs pocket. Checkpointing is executor-side and out of the
 // consumer-facing sdk/capabilities/work protocol, so it stays a local declaration
 // here rather than a promoted sdk contract.
 type Checkpointer interface {

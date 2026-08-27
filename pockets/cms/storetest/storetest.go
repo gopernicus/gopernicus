@@ -1,15 +1,15 @@
-// Package storetest is the conformance suite for the CMS feature's repository
+// Package storetest is the conformance suite for the CMS pocket's repository
 // ports: every store that fills a cms.Repositories — the in-package reference
 // implementation, a host memstore (examples/minimal), and each dialect adapter
-// (features/cms/stores/turso, .../postgres) — should pass Run against a freshly
+// (pockets/cms/stores/turso, .../postgres) — should pass Run against a freshly
 // wired, isolated Repositories. Modeled on sdk/capabilities/cacher/cachertest's
 // Run(t, newImpl) pattern, scaled to a repository set so cross-table behavior
 // (entry↔term association, cascade on entry delete) is exercised, not ports in
 // isolation.
 //
 // The port doc comments are the spec; this suite is their executable form. It
-// imports stdlib + sdk + the cms feature's own packages only (guard G2 forbids
-// a driver import here), so features/cms's own `go test ./...` runs it against
+// imports stdlib + sdk + the cms pocket's own packages only (guard G2 forbids
+// a driver import here), so pockets/cms's own `go test ./...` runs it against
 // the reference implementation (see reference_test.go).
 package storetest
 
@@ -32,7 +32,7 @@ import (
 )
 
 // ids is the suite's entity-ID generator: the default nanoid strategy, matching
-// the feature's zero-value Config.IDs.
+// the pocket's zero-value Config.IDs.
 var ids = cryptids.IDGenerator{}
 
 // dbIDs is the cryptids.Database strategy: entities reach Create with an empty

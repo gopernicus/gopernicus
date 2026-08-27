@@ -23,7 +23,7 @@ import (
 //     that accepts a body-leaking console transport is a real disclosure risk.
 //     Adding a third value would create a posture nobody has defined the rules
 //     for.
-//   - a delivery or execution model. features/authentication's DeliveryMode
+//   - a delivery or execution model. pockets/authentication's DeliveryMode
 //     ("off"/"in_process"/"jobs") selects an execution strategy and is orthogonal:
 //     a host picks a Mode and a DeliveryMode independently.
 //

@@ -21,8 +21,8 @@ type ListFilter struct {
 
 // SecurityEventRepository persists and reads the append-only audit rail
 // (design §5.1). It is APPEND-ONLY BY CONSTRUCTION: there is no Update or Delete
-// method, so no adapter can offer a rewrite path. Implemented by feature store
-// adapters (features/authentication/stores/turso) or any host-provided implementation
+// method, so no adapter can offer a rewrite path. Implemented by pocket store
+// adapters (pockets/authentication/stores/turso) or any host-provided implementation
 // (see the storetest reference).
 //
 // Optionality (ratified AV9): the whole port is optional. A host that leaves

@@ -6,7 +6,7 @@ import (
 )
 
 // Rendering stored bodies is a view concern, so it lives in the inbound layer
-// (never in the feature's services). Per FS10 (feature-standard charter) content
+// (never in the pocket's services). Per FS10 (feature-standard charter) content
 // is plain text for now: no markdown, no embedded markup. A future rich-text
 // pipeline enters through its own port and decision.
 

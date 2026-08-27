@@ -20,9 +20,9 @@ import (
 	"strings"
 	"testing"
 
+	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/cms"
 	"github.com/gopernicus/gopernicus/pockets/cms/storetest"
-	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -30,7 +30,7 @@ import (
 // public.entries — a name no conformance fixture generates.
 const decoyEntryID = "cms-pgx-schema-decoy"
 
-// cmsTables are the feature's tables; a single TRUNCATE ... CASCADE clears them
+// cmsTables are the pocket's tables; a single TRUNCATE ... CASCADE clears them
 // and their foreign-key children in one statement, so a Repositories starts
 // empty regardless of row order.
 var cmsTables = []string{
@@ -46,7 +46,7 @@ var cmsTables = []string{
 
 // TestConformance_Postgres runs the shared cms storetest suite against a live
 // PostgreSQL database. Each newRepos call opens a connection, applies the
-// canonical migrations, and truncates the feature's tables so every leaf subtest
+// canonical migrations, and truncates the pocket's tables so every leaf subtest
 // starts from a clean, isolated Repositories (the SQL harness half of the
 // newRepos contract). With POSTGRES_TEST_SCHEMA set, all three happen inside
 // that schema.

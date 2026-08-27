@@ -30,7 +30,7 @@ type Allower interface {
 //
 // A limiter ERROR fails OPEN — the request proceeds; reject fires ONLY on
 // err == nil && !res.Allowed. Availability of the guarded route beats a limiter
-// outage, and this mirrors the exact posture the authentication feature relied
+// outage, and this mirrors the exact posture the authentication pocket relied
 // on before it delegated here. (This is the deliberate opposite of an
 // authorization gate, which fails closed.)
 //

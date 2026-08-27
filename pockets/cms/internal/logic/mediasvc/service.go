@@ -1,5 +1,5 @@
 // Package mediasvc holds the media use-case service, kept internal so it is not
-// part of the feature's public SemVer surface (plan §5/B3). The public domain
+// part of the pocket's public SemVer surface (plan §5/B3). The public domain
 // types, AssetRepository, and BlobStore port stay in package media.
 package mediasvc
 

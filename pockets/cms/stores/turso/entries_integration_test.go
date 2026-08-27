@@ -14,12 +14,12 @@ import (
 	"os"
 	"testing"
 
+	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/pockets/cms"
 	"github.com/gopernicus/gopernicus/pockets/cms/storetest"
-	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 )
 
-// cmsTables are the feature's tables in child-before-parent order, so a
+// cmsTables are the pocket's tables in child-before-parent order, so a
 // truncation pass respects the foreign keys.
 var cmsTables = []string{
 	"entry_terms",
@@ -34,7 +34,7 @@ var cmsTables = []string{
 
 // TestConformance_Turso runs the shared cms storetest suite against a live
 // Turso/libSQL database. Each newRepos call opens a connection, applies the
-// canonical migrations, and truncates the feature's tables so every leaf subtest
+// canonical migrations, and truncates the pocket's tables so every leaf subtest
 // starts from a clean, isolated Repositories (the SQL harness half of the
 // newRepos contract).
 func TestConformance_Turso(t *testing.T) {

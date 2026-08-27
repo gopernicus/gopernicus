@@ -5,7 +5,7 @@ A stateless-token connector wrapping exactly one third-party library —
 sdk-owned `cryptids.JWTSigner` port, signing and verifying HMAC-SHA JSON Web
 Tokens from a shared secret.
 
-It owns "how to sign a token with golang-jwt," never any feature's
+It owns "how to sign a token with golang-jwt," never any pocket's
 authentication policy. A different token scheme (asymmetric RS/ES, PASETO)
 would be a sibling connector, swapped at the composition root.
 

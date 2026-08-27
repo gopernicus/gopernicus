@@ -13,7 +13,7 @@ import (
 
 // CHAU-7.1 — characterization for the EXISTING session-gated account-linking
 // flow. The coordination-hub upstream flag claimed the capability was missing; it
-// has shipped since features/authentication/v0.1.0. These tests pin the contract
+// has shipped since pockets/authentication/v0.1.0. These tests pin the contract
 // so the flow cannot regress into the shape the flag described, and they document
 // what the server-side state actually binds.
 //
@@ -279,7 +279,7 @@ func TestLinkStateIsSingleUse(t *testing.T) {
 //
 // This asserts ListLinked rather than Methods: this package's shared
 // fakeCredentialMutations.Snapshot reports only password state, so a Methods
-// assertion here would test the fixture, not the feature. The end-to-end proof
+// assertion here would test the fixture, not the pocket. The end-to-end proof
 // that GET /auth/methods shows the provider against REAL repositories is
 // examples/auth-cms/cmd/server/oauth_link_settings_test.go's
 // TestOAuthExplicitLinkFromSettingsPage.

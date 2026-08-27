@@ -23,7 +23,7 @@ import (
 //
 // This is the "no producer calls a provider directly / bypasses the dispatcher
 // seam" tripwire. A Makefile grep would be disproportionate (it belongs to one
-// feature's internal layering), so it lives as a Go test beside the seam it guards.
+// pocket's internal layering), so it lives as a Go test beside the seam it guards.
 // It scans every sibling package of delivery under internal/logic (authsvc,
 // invitationsvc, and any future producer) so a newly added producer is covered
 // automatically — the enumeration is by directory, not a hand-maintained list.

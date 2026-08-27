@@ -20,8 +20,8 @@ import (
 // with NO authentication import at all — lives in the sdk itself
 // (sdk/capabilities/email/posture_test.go and
 // sdk/capabilities/notify/posture_test.go). Those packages cannot import a
-// feature, which is exactly the guarantee coordination-hub's generic
-// internal/integrations/mailer needs: it drops its features/authentication
+// pocket, which is exactly the guarantee coordination-hub's generic
+// internal/integrations/mailer needs: it drops its pockets/authentication
 // import and names environment.Mode + email.CheckSender instead.
 
 // hostRuntimeConfig is an old-style host's configuration struct: it declares the
@@ -44,14 +44,14 @@ func (compatSigner) Sign(map[string]any, time.Time) (string, error) { return "to
 func (compatSigner) Verify(string) (map[string]any, error)          { return map[string]any{}, nil }
 
 // appWideMailer stands in for a host's general-purpose mailer package: it names
-// ONLY sdk vocabulary and would not compile if it needed the feature.
+// ONLY sdk vocabulary and would not compile if it needed the pocket.
 type appWideMailer struct {
 	mode   environment.Mode
 	sender email.Sender
 }
 
 // requireProductionCapable is the app-wide equivalent of what authentication
-// does internally, written with no feature import.
+// does internally, written with no pocket import.
 func (m appWideMailer) requireProductionCapable() error {
 	_, err := email.CheckSender(m.mode, m.sender)
 	return err

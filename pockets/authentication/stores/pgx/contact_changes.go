@@ -6,9 +6,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authentication/domain/contactchange"
 	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
-	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 

@@ -1,7 +1,7 @@
-// Package authsvc holds the auth feature's domain services: registration, email
+// Package authsvc holds the auth pocket's domain services: registration, email
 // verification, login (rate-limited), logout, password change, password
 // forgot/reset, and session validation — business rules over the repository
-// ports, with no SQL. It is internal so it is not part of the feature's public
+// ports, with no SQL. It is internal so it is not part of the pocket's public
 // SemVer surface; the host-facing surface is package auth (auth.go).
 //
 // Secret hygiene: passwords are only ever compared through the Hasher (bcrypt's
@@ -66,7 +66,7 @@ const (
 	maxPasswordInputBytes = 256
 	// defaultRefreshCookiePath scopes the refresh cookie to /auth (D4) when
 	// CookieConfig.RefreshPath is unset: it covers /auth/refresh AND /auth/logout,
-	// never riding on unrelated requests. A host mounting the feature under a path
+	// never riding on unrelated requests. A host mounting the pocket under a path
 	// prefix supplies the full prefixed path (auth.Config.RefreshCookiePath, e.g.
 	// "/api/v1/auth"), which package auth validates before it reaches here.
 	defaultRefreshCookiePath = "/auth"
@@ -162,7 +162,7 @@ type Hasher interface {
 // (present in a breach corpus or a host blocklist, design §5.9). It is the
 // internal structural twin of auth.CompromisedPasswordChecker, declared here so
 // the service carries no import cycle with its host-facing package. It is
-// OPTIONAL — nil disables the breach check — and the feature core ships none, so
+// OPTIONAL — nil disables the breach check — and the pocket core ships none, so
 // the core adds no network dependency; a local blocklist or a future remote
 // breach-check adapter both satisfy it.
 type compromisedChecker interface {
@@ -783,7 +783,7 @@ func (s *Service) resolvePendingInvitations(ctx context.Context, email, userID s
 // replaced the EmailForUser/VerifiedPhoneForUser proliferation: the invitation
 // HTTP handlers key "mine" and the accept-time identifier match on it, and the
 // accept-time phone match resolves the caller's verified phone through it, so
-// invitationsvc stays decoupled from the identifier store (the auth feature owns
+// invitationsvc stays decoupled from the identifier store (the auth pocket owns
 // user identity). No active verified identifier of that kind → sdk.ErrNotFound.
 func (s *Service) ActiveVerifiedIdentifier(ctx context.Context, userID, kind string) (string, error) {
 	addresses, err := s.projectAddresses(ctx, userID)
@@ -813,7 +813,7 @@ func (s *Service) ActiveVerifiedIdentifier(ctx context.Context, userID, kind str
 // verified/unverified signal to an unauthenticated attacker. Default off (design §7.1).
 //
 // The rate-limit IP is read from the request's client-info carrier (WithClientInfo,
-// set by the feature middleware) — the single source of truth for IP (design §5.1
+// set by the pocket middleware) — the single source of truth for IP (design §5.1
 // WI4); there is no clientIP parameter. Every exit records a security event: a
 // rate-limited attempt is `blocked`, a credential/verification denial is
 // `failure`, and a minted session is `success`.
@@ -1112,8 +1112,8 @@ func (s *Service) resolveUserID(r *http.Request) (string, bool) {
 }
 
 // CurrentUser returns the authenticated user id stashed by RequireUser, if any.
-// It is the cross-feature identity port other features consume structurally
-// (features/README.md §5's CurrentUser).
+// It is the cross-pocket identity port other pockets consume structurally
+// (pockets/README.md §5's CurrentUser).
 func (s *Service) CurrentUser(ctx context.Context) (string, bool) {
 	p, ok := identity.FromContext(ctx)
 	if !ok || p.Type != identity.User {
@@ -1376,7 +1376,7 @@ func (s *Service) validatePassword(ctx context.Context, pw string) error {
 
 // RateLimitByIP returns middleware that throttles a PUBLIC route on the client
 // IP, refusing with a 429 once the per-minute budget is spent. It reuses the
-// feature's configured RateLimiter (the one Login uses) and reads the IP from
+// pocket's configured RateLimiter (the one Login uses) and reads the IP from
 // the client-info carrier, so an unauthenticated route (invitation decline, the
 // design §6 case) is protected with no new plumbing. A limiter error fails OPEN
 // (the request proceeds) — the in-memory default never errors, and a public
@@ -1392,7 +1392,7 @@ func (s *Service) RateLimitByIP(keyPrefix string, perMinute int) web.Middleware 
 }
 
 // writeUnauthorized writes a 401 JSON error via the shared sdk responder, so
-// RequireUser's rejection matches the feature's other error responses (FS9).
+// RequireUser's rejection matches the pocket's other error responses (FS9).
 func writeUnauthorized(w http.ResponseWriter) {
 	web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 }
@@ -1420,7 +1420,7 @@ func (s *Service) redirectToBrowserLogin(w http.ResponseWriter, r *http.Request)
 }
 
 // writeTooManyRequests writes a 429 JSON error via the shared sdk responder, so
-// a rate-limited public route matches the feature's error shape (FS9).
+// a rate-limited public route matches the pocket's error shape (FS9).
 func writeTooManyRequests(w http.ResponseWriter) {
 	web.RespondJSONError(w, web.NewError(http.StatusTooManyRequests, "too many requests").WithCode("rate_limited"))
 }

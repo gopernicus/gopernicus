@@ -95,7 +95,7 @@ func (s *Service) redeemPasswordlessAtomic(ctx context.Context, token string) (T
 		Purpose:     challenge.PurposeLoginMagicLink,
 		TokenDigest: s.protector.DigestToken(token),
 		Session:     proposed,
-		// A provisioned account starts with an EMPTY display name: the feature has
+		// A provisioned account starts with an EMPTY display name: the pocket has
 		// no name to invent, and asking for one would defeat the point of a link
 		// sign-in. The host's profile flow fills it in later.
 		NewUser: user.NewUser(s.ids, "", now),

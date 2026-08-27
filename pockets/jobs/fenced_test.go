@@ -41,7 +41,7 @@ func newFencedService(t *testing.T) (*Service, *memstore.FencedQueue) {
 	return svc, fq
 }
 
-// TestFencedPrimitives proves the stdlib-typed fenced seams a consuming feature
+// TestFencedPrimitives proves the stdlib-typed fenced seams a consuming pocket
 // matches structurally: submit-once idempotency, replace supersession, and
 // latest-by-key status.
 func TestFencedPrimitives(t *testing.T) {

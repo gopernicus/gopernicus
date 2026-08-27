@@ -2,7 +2,7 @@ package authentication
 
 import "github.com/gopernicus/gopernicus/sdk/foundation/web"
 
-// Views is the authentication feature's HTML rendering port (FS3, design §9.2): the
+// Views is the authentication pocket's HTML rendering port (FS3, design §9.2): the
 // optional server-rendered surface — the public credential pages and the
 // account-security management pages — renders through it, so a host can swap
 // presentation without the handlers binding to concrete templates. Every method
@@ -10,10 +10,10 @@ import "github.com/gopernicus/gopernicus/sdk/foundation/web"
 // only display-safe values.
 //
 // The bundled default lives in the sibling module
-// features/authentication/views/templ. The blessed way to customize is partial
+// pockets/authentication/views/templ. The blessed way to customize is partial
 // override: embed that concrete default and override individual methods.
 // Implementing every method from scratch (e.g. over sdk/foundation/web.Template) is
-// possible but not the sold path. The feature core never imports templ.
+// possible but not the sold path. The pocket core never imports templ.
 //
 // A nil Config.Views means the HTML surface is not registered: the HTML GET pages
 // and form decoding are absent while the unchanged JSON API routes remain mounted

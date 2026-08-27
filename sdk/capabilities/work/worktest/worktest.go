@@ -13,7 +13,7 @@
 // vocabulary for conformance testing ONLY: it must NEVER be promoted into the
 // production work package or used by production consumers, which see lifecycle
 // status by key and nothing else. Executor behavior under claim/lease races is
-// out of this consumer protocol and stays in features/jobs/storetest.
+// out of this consumer protocol and stays in pockets/jobs/storetest.
 package worktest
 
 import (

@@ -53,7 +53,7 @@ type GenerateFunc func() (string, error)
 // Database is the explicit delegate-to-the-database strategy: it yields ""
 // so the store sees an empty ID, omits the id column on insert, and the
 // database generates the key (see the package doc for the convention). The
-// bundled feature stores implement this — their id_defaults migrations supply
+// bundled pocket stores implement this — their id_defaults migrations supply
 // the schema defaults, and their conformance suites prove the round-trip. A
 // host-owned store must honor the empty-ID convention before Database is
 // wired, or inserts will carry an empty key.

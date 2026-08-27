@@ -4,7 +4,7 @@
 // shape of its token, user, and email endpoints — which churns on GitHub's
 // release schedule, not sdk's. sdk defaults must be vendor-neutral, so a GitHub
 // connector is never an sdk default even though it is stdlib-implementable. It
-// imports sdk/capabilities/oauth for the port vocabulary and no feature or other integration.
+// imports sdk/capabilities/oauth for the port vocabulary and no pocket or other integration.
 //
 // GitHub does not support OpenID Connect for user login (no ID tokens), so
 // SupportsOIDC reports false and ValidateIDToken always returns an error;

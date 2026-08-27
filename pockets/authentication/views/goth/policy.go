@@ -15,9 +15,9 @@ var errNilBundle = errors.New("authentication views/goth: New requires a non-nil
 // from the host's own origin.
 const selfSource = "'self'"
 
-// directiveKind maps a ui/goth CSP Directive to the authentication feature's
+// directiveKind maps a ui/goth CSP Directive to the authentication pocket's
 // HTMLResourceKind. Both are the literal CSP directive name, but the mapping is
-// explicit so a directive ui/goth requires that is NOT a member of the feature's
+// explicit so a directive ui/goth requires that is NOT a member of the pocket's
 // frozen widenable allowlist is skipped rather than smuggled into a header.
 var directiveKind = map[goth.Directive]authentication.HTMLResourceKind{
 	goth.DirectiveScript:  authentication.HTMLScriptSrc,
@@ -29,18 +29,18 @@ var directiveKind = map[goth.Directive]authentication.HTMLResourceKind{
 	goth.DirectiveWorker:  authentication.HTMLWorkerSrc,
 }
 
-// HTMLPolicy maps the bundle's deterministic browser Requirements into the feature's
+// HTMLPolicy maps the bundle's deterministic browser Requirements into the pocket's
 // technology-neutral HTMLResourcePolicy, plus the script-src the externalized
 // fragment-reader landings need. It is the value a host hands to
 // authentication.Config.HTMLPolicy so the auth CSP widens exactly far enough to load
 // the GOTH stylesheet (and, on Interactive/Full profiles, the runtime), the
 // same-origin fragment-reader script, and any per-render nonced inline script — and
-// no further. The feature's fixed protections (default-src 'none', base-uri 'none',
+// no further. The pocket's fixed protections (default-src 'none', base-uri 'none',
 // form-action 'self', frame-ancestors 'none', and the no-store/no-referrer/frame/
-// content-type headers) remain feature-owned and unremovable.
+// content-type headers) remain pocket-owned and unremovable.
 //
-// A non-nil policy REPLACES the feature's default script-src tail entirely (see the
-// feature's buildCSP), so this policy always carries an explicit script-src: the
+// A non-nil policy REPLACES the pocket's default script-src tail entirely (see the
+// pocket's buildCSP), so this policy always carries an explicit script-src: the
 // externalized fragment readers are same-origin ('self'), and Nonce:true keeps the
 // per-render CSP nonce available for those readers and any host-added inline script
 // (Gate C C5). Omitting either would leave scripts governed by default-src 'none' and
@@ -121,7 +121,7 @@ func (v Views) resourceDirectives() []authentication.HTMLResourceDirective {
 	// bundle's: the host's theme stylesheet (goth.Config.ThemeStylesheetPath)
 	// may declare @font-face over self-hosted files, and a WithBrand component
 	// renders self-hosted logo imagery. Widen exactly to 'self' — never a
-	// remote origin — so those load under the feature's default-src 'none'.
+	// remote origin — so those load under the pocket's default-src 'none'.
 	if !imgSeen {
 		out = append(out, authentication.HTMLResourceDirective{
 			Kind:    authentication.HTMLImgSrc,

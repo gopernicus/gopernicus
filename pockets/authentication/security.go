@@ -18,7 +18,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 )
 
-// RuntimeMode selects the feature's fail-closed posture (design §8). It is a
+// RuntimeMode selects the pocket's fail-closed posture (design §8). It is a
 // REQUIRED enum: an empty value is ErrRuntimeModeRequired and an unknown value
 // is ErrRuntimeModeInvalid, so a host can never accidentally inherit the
 // development posture. "production" rejects development-only delivery transports
@@ -27,13 +27,13 @@ import (
 //
 // Deployment posture is APPLICATION vocabulary, not authentication vocabulary:
 // a host's general mailer, notifier composition, or any other capability needs
-// the same development/production switch without importing this feature. The
+// the same development/production switch without importing this pocket. The
 // canonical type therefore lives in sdk/foundation/environment, and RuntimeMode
 // is a TYPE ALIAS of environment.Mode
 // (coordination-hub-auth-upstream CHAU-3.3). The alias keeps every existing
 // host source-compatible — struct literals, env-tag parsing, and variables
 // typed RuntimeMode all still compile — while new app-wide code names
-// environment.Mode directly and imports no feature. The two are the same type,
+// environment.Mode directly and imports no pocket. The two are the same type,
 // so values pass between them with no conversion.
 //
 // RuntimeMode is distinct from DeliveryMode: the former is the security
@@ -93,7 +93,7 @@ const (
 
 // Runtime-mode and delivery-transport construction errors. These fire NOW, at
 // NewService/Register, because RuntimeMode and the delivery transports are core
-// collaborators the feature already carries.
+// collaborators the pocket already carries.
 var (
 	// ErrRuntimeModeRequired is returned when Config.RuntimeMode is empty. The
 	// mode has no default so a host cannot accidentally ship the dev posture. It
@@ -113,7 +113,7 @@ var (
 	//
 	// The verdict itself is made by the capability that owns the port —
 	// email.CheckSender and notify.CheckNotifier (CHAU-3.2) — so an app-wide
-	// mailer enforces the identical rule without importing this feature. The
+	// mailer enforces the identical rule without importing this pocket. The
 	// returned error wraps BOTH this sentinel and the capability's
 	// email.ErrInsecureTransport / notify.ErrInsecureTransport, so existing
 	// errors.Is checks keep matching and new sdk-only code can match the
@@ -139,7 +139,7 @@ var (
 	// ErrDeliveryJobsUnacknowledged is returned in production RuntimeMode when
 	// Config.DeliveryMode is "jobs" but Config.DeliveryJobsAcknowledged is false. The
 	// outbox is the only send path, so a production host that enqueues without running
-	// the durable jobs delivery runtime would silently never deliver. The feature
+	// the durable jobs delivery runtime would silently never deliver. The pocket
 	// cannot observe the host's process lifecycle, so it requires an explicit
 	// affirmation that the runtime is run rather than failing open on a stalled queue.
 	ErrDeliveryJobsUnacknowledged = errors.New(`auth: production RuntimeMode with DeliveryMode "jobs" requires Config.DeliveryJobsAcknowledged (the host must run the durable jobs delivery runtime)`)
@@ -175,10 +175,10 @@ type LimiterDurability struct {
 // RateLimiterDurabilityReporter is the optional interface a ratelimiter.Limiter
 // may implement to declare whether it is shared/durable across instances (design
 // §8). The bundled in-process ratelimiter.Memory is detected structurally — it is
-// sdk-only and cannot import this feature to declare metadata — while a host's
+// sdk-only and cannot import this pocket to declare metadata — while a host's
 // custom in-process limiter implements this to be rejected in production, and a
 // durable host limiter may implement it to positively declare safety. It is defined
-// feature-side because the Limiter port lives in sdk.
+// pocket-side because the Limiter port lives in sdk.
 type RateLimiterDurabilityReporter interface {
 	RateLimiterDurability() LimiterDurability
 }
@@ -310,7 +310,7 @@ type ChallengeProtector interface {
 
 // IdentifierNormalizer produces the single canonical form of an identifier value
 // used for persistence, lookup, invitations, rate-limit keys, and audit details
-// (design §2.2). One injected policy is shared across the feature. Nil selects
+// (design §2.2). One injected policy is shared across the pocket. Nil selects
 // the bundled strict default (AV3-1.1).
 type IdentifierNormalizer interface {
 	Normalize(kind, value string) (string, error)
@@ -365,7 +365,7 @@ func validateDeliveryMode(m DeliveryMode) error {
 // transport; each wired Notifier is checked too.
 //
 // The production VERDICT is delegated to the capability that owns each port —
-// email.CheckSender and notify.CheckNotifier (CHAU-3.2) — so this feature and a
+// email.CheckSender and notify.CheckNotifier (CHAU-3.2) — so this pocket and a
 // host's app-wide mailer enforce one rule from one place. What stays here is
 // auth's own vocabulary (ErrInsecureDeliveryTransport, the per-transport label)
 // and auth's development WARN wording, because message text and log routing are
@@ -410,7 +410,7 @@ func asInsecureTransport(capErr error, declared bool, label string) error {
 // warnDevelopmentOnlyTransport emits auth's startup WARN for a transport that
 // DECLARED itself development-only while running in development. A metadata-less
 // transport is deliberately not warned about here — it is rejected in production
-// and silent in development, which is the behavior this feature already shipped.
+// and silent in development, which is the behavior this pocket already shipped.
 func warnDevelopmentOnlyTransport(mode RuntimeMode, declared, developmentOnly bool, label string, log *slog.Logger) {
 	if mode == RuntimeModeDevelopment && declared && developmentOnly {
 		log.Warn("auth: development-only delivery transport wired; never use in production (leaks message bodies to logs)", "transport", label)
@@ -423,7 +423,7 @@ func warnDevelopmentOnlyTransport(mode RuntimeMode, declared, developmentOnly bo
 // budget (N× the intended limit). In production an in-process-only limiter is
 // ErrNonDurableRateLimiter; in development it is permitted with a startup WARN. A
 // limiter that does not identify as in-process-only is tolerated in both modes.
-// cfgLimiter is the HOST-supplied limiter: nil means the feature defaulted a nil
+// cfgLimiter is the HOST-supplied limiter: nil means the pocket defaulted a nil
 // RateLimiter to the in-process ratelimiter.Memory.
 func validateRateLimiter(mode RuntimeMode, cfgLimiter ratelimiter.Limiter, log *slog.Logger) error {
 	if !limiterInProcessOnly(cfgLimiter) {
@@ -440,12 +440,12 @@ func validateRateLimiter(mode RuntimeMode, cfgLimiter ratelimiter.Limiter, log *
 
 // limiterInProcessOnly reports whether limiter is in-process-only: the bundled
 // ratelimiter.Memory (nil default or the concrete type — it is sdk-only and cannot
-// declare feature metadata), or a limiter positively declaring InProcessOnly
+// declare pocket metadata), or a limiter positively declaring InProcessOnly
 // through RateLimiterDurabilityReporter. Any other limiter is presumed
 // shared/durable (a negative it need not prove).
 func limiterInProcessOnly(limiter ratelimiter.Limiter) bool {
 	if limiter == nil {
-		return true // the feature defaults a nil RateLimiter to the in-process ratelimiter.Memory
+		return true // the pocket defaults a nil RateLimiter to the in-process ratelimiter.Memory
 	}
 	if r, ok := limiter.(RateLimiterDurabilityReporter); ok {
 		return r.RateLimiterDurability().InProcessOnly
@@ -457,7 +457,7 @@ func limiterInProcessOnly(limiter ratelimiter.Limiter) bool {
 }
 
 // PasswordResetTokenParam is the query parameter the password-reset landing URL
-// receives (CHAU-5.2). It is exported so a host's SPA route and this feature's
+// receives (CHAU-5.2). It is exported so a host's SPA route and this pocket's
 // validator agree on one name instead of two string literals. It is an alias of
 // the internal builder's constant, so the validator and the builder can never
 // disagree about what they reject and what they append.

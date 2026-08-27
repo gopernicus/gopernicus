@@ -1,7 +1,7 @@
-// Package relationship is the public rim of the authorization feature's
+// Package relationship is the public rim of the authorization pocket's
 // RELATIONSHIP kind — the ReBAC tuple contract. It defines the persisted tuple
 // shape, the create input, the listing projections, and the [Storer] port that
-// a store adapter (features/authorization/stores/{turso,pgx}), the in-core
+// a store adapter (pockets/authorization/stores/{turso,pgx}), the in-core
 // memstore, or any host implementation fills. The backing table is
 // `iam_relationships` (owner direction, 2026-07-08 — the original `rebac_`
 // name does not survive).
@@ -16,10 +16,10 @@
 // # Identity (Q6, 2026-07-09)
 //
 // relationship_id is a surrogate key MINTED AT THE ENGINE SEAM, not in this
-// rim: authorizersvc holds a cryptids.IDGenerator (from the feature Config.IDs)
+// rim: authorizersvc holds a cryptids.IDGenerator (from the pocket Config.IDs)
 // and stamps [CreateRelationship.RelationshipID] on each tuple before calling
 // [Storer.CreateRelationships]. There is deliberately no NewRelationship(ids,…)
-// constructor — minting is a service concern for this feature (the item-14
+// constructor — minting is a service concern for this pocket (the item-14
 // entity-ID obligation carries this recorded exception). Hosts leave
 // RelationshipID zero; under a cryptids.Database generator every id is "" and
 // the store omits the id column so the DDL DEFAULT fills it. The mint is

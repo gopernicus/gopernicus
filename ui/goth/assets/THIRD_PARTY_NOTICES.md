@@ -68,7 +68,7 @@ Authoring/verification tools. They are never shipped to a Go consumer.
 
 | tool | role | license (SPDX) | version posture |
 |---|---|---|---|
-| a-h/templ | templ codegen + runtime | MIT | pinned `v0.3.1020` (matches existing `features/*/views/goth`) |
+| a-h/templ | templ codegen + runtime | MIT | pinned `v0.3.1020` (matches existing `pockets/*/views/goth`) |
 | esbuild | JS bundler (`runtime.js` IIFE) + CSS bundler/minifier (`theme.css`, GOTH-A.1) | MIT | exact `0.28.1` |
 | Node.js | build runtime, pinned via `tools/.nvmrc` + `package.json` engines | MIT | `24.0.1` (npm `11.3.0`) |
 | Playwright | three-engine browser harness (Chromium/Firefox/WebKit) | Apache-2.0 | deferred to GOTH-1.5 harness (separate package) |
@@ -163,9 +163,8 @@ two builds on the pinned toolchain are byte-identical. Regenerate with
 
 No module in this repository is tagged as of 2026-07-18 (`git tag --list` empty;
 confirmed at GOTH-0.1 preflight and re-confirmed at GOTH-7.2/7.3). Because the
-feature view modules were untagged, the plan's tag-sensitive rename path was applied:
-`features/authentication/views/templ` and `features/cms/views/templ` were **renamed
-in place** to `features/authentication/views/goth` and `features/cms/views/goth`
-(GOTH-7.2/7.3, 2026-07-18), with no compatibility module. If a relevant tag ever
+view modules were untagged, the plan's tag-sensitive rename path was applied: the
+authentication and cms `views/templ` modules were **renamed in place** to
+`views/goth` (GOTH-7.2/7.3, 2026-07-18), with no compatibility module. If a relevant tag ever
 appears before a future view-module migration, the additive-`views/goth` fallback
 (retain the old path as a compatibility module) applies instead.

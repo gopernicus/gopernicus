@@ -1,4 +1,4 @@
-// Package invitationsvc holds the auth feature's invitation use cases (design
+// Package invitationsvc holds the auth pocket's invitation use cases (design
 // §6): create, accept, decline, cancel, resend, list, and resolve-on-
 // registration. It is a SIBLING of authsvc, not a part of it: the ReBAC-
 // decoupled Granter seam is injected HERE only (authsvc never holds it), and
@@ -117,15 +117,15 @@ type deliveryQueue interface {
 // resolve-on-registration (a retry of the same invitation reuses the same ID; a
 // later invitation row for the same tuple gets a different ID), and a freshly
 // minted high-entropy value for direct-add (no invitation row exists). It is not
-// authority and the feature does not dictate how the host uses it: guarded
+// authority and the pocket does not dictate how the host uses it: guarded
 // adapters may derive durable mutation idempotency while baseline state adapters
 // may ignore it. The remaining fields are the ReBAC tuple: grant
 // SubjectType/SubjectID the Relation on
 // (ResourceType, ResourceID).
 //
 // Metadata is opaque, host-owned routing data the inviter set at create and the
-// feature round-trips verbatim to every grant path (accept, direct-add, resolve).
-// The feature never interprets it. It is a DEFENSIVE COPY and always non-nil (an
+// pocket round-trips verbatim to every grant path (accept, direct-add, resolve).
+// The pocket never interprets it. It is a DEFENSIVE COPY and always non-nil (an
 // empty map when there is no metadata), so a Granter may read it freely. It is
 // UNTRUSTED inviter-supplied input, never an authorization claim by itself: a
 // Granter applying any security-sensitive side effect from it must revalidate.
@@ -173,7 +173,7 @@ const (
 
 // InviteCheckRequest is the parsed, principal-resolved authorization question the
 // authorized invitation operations pose to the host policy (design §6/D3).
-// Relation is set for InviteCreate and empty for InviteList. The feature owns
+// Relation is set for InviteCreate and empty for InviteList. The pocket owns
 // parsing, normalization, and the invitee lookup, so the host sees the caller,
 // resource, action, and — for create — the exact validated relation and the
 // complete invitee context, which a RouteRegistrar decorator cannot.
@@ -184,20 +184,20 @@ type InviteCheckRequest struct {
 	ResourceID   string
 	Relation     string
 	// Metadata is the parsed, opaque host routing data of a create request (empty
-	// for InviteList). It is UNTRUSTED inviter-supplied input the feature does not
+	// for InviteList). It is UNTRUSTED inviter-supplied input the pocket does not
 	// interpret, surfaced here so the host can authorize the COMPLETE invitation —
 	// including a routing key it will later act on in its Granter. It is a defensive
 	// copy; empty when the request carried none.
 	Metadata map[string]string
-	// Identifier is the feature-normalized invitee identifier. It is empty for
+	// Identifier is the pocket-normalized invitee identifier. It is empty for
 	// InviteList.
 	Identifier string
 	// IdentifierKind is the normalized identifier kind. It is empty for InviteList
-	// and makes an empty ResolvedSubjectID unambiguous for kinds the feature cannot
+	// and makes an empty ResolvedSubjectID unambiguous for kinds the pocket cannot
 	// resolve today.
 	IdentifierKind string
 	// ResolvedSubjectID is the existing subject the identifier resolves to, or ""
-	// when it is unknown or the kind is not resolvable. The feature's lookup is
+	// when it is unknown or the kind is not resolvable. The pocket's lookup is
 	// EMAIL-KIND ONLY today, so an empty value must never be read as proof that the
 	// invitee is new.
 	ResolvedSubjectID string
@@ -235,7 +235,7 @@ type IdentifierLookup func(ctx context.Context, userID, kind string) (string, er
 // CreateInput is the input to Create. Identifier is the invitee address (the
 // service normalizes it kind-aware). IdentifierKind is the address kind; empty
 // defaults to identity.KindEmail. Redirect is the requested post-accept
-// destination, guarded by the feature's redirect allowlist before delivery.
+// destination, guarded by the pocket's redirect allowlist before delivery.
 type CreateInput struct {
 	ResourceType   string
 	ResourceID     string
@@ -246,7 +246,7 @@ type CreateInput struct {
 	AutoAccept     bool
 	Redirect       string
 	// Metadata is opaque, host-owned routing data that rides the invitation from
-	// create to the Granter seam. The feature validates only shape/size (see
+	// create to the Granter seam. The pocket validates only shape/size (see
 	// invitation.ValidateMetadata) and never interprets it; nil/empty is the
 	// no-metadata case.
 	Metadata map[string]string
@@ -264,7 +264,7 @@ type CreateResult struct {
 // CreateInput and the subject the invitee identifier resolved to ("" when unknown
 // or the kind is not resolvable). It is what the authorization seam is shown and
 // what the side-effect path consumes, so the host authorizes exactly the
-// invitation the feature would then act on.
+// invitation the pocket would then act on.
 type preparedCreate struct {
 	input     CreateInput
 	subjectID string
@@ -938,7 +938,7 @@ func (s *Service) record(ctx context.Context, userID, eventType, status string, 
 // sendInviteSent renders the invitation secret through the shared kind-aware router
 // and enqueues the sealed message on the durable outbox (design §6.1.1): the worker
 // delivers it off the request path, through the email/notify kind fork the router
-// owns. The requested redirect destination is passed through the feature's allowlist
+// owns. The requested redirect destination is passed through the pocket's allowlist
 // first (design §3's open-redirect guard), and the accept token rides the rendered
 // link. A user-requested resend supersedes the prior pending job (Replace) so an
 // invitee never receives two live secrets; a fresh invite enqueues idempotently by

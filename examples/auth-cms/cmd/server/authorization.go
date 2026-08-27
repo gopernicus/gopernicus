@@ -92,7 +92,7 @@ func authzGuardianPolicy() authorization.GuardianPolicy {
 	}
 }
 
-// newAuthorization composes the guarded authorization feature this host runs — the
+// newAuthorization composes the guarded authorization pocket this host runs — the
 // testable composition seam run() and the guarded-composition tests share (the
 // buildAuthConfig precedent). BOTH kinds ride one shared-state memstore bundle (so the
 // trusted SystemMutator writes and the read side observe the same state), and BOTH

@@ -10,15 +10,15 @@ import (
 	"github.com/gopernicus/gopernicus/examples/auth-cms/internal/authmem"
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 	uigothassets "github.com/gopernicus/gopernicus/ui/goth/assets"
 
 	authgoth "github.com/gopernicus/gopernicus/pockets/authentication/views/goth"
 )
 
 // gothProofRouter builds the host's real presentation composition — the ui/goth
-// asset routes, the externalized fragment-reader script route, and the auth feature
+// asset routes, the externalized fragment-reader script route, and the auth pocket
 // mounted with the ui/goth Views + the adapter-derived HTMLPolicy — exactly as run()
 // wires them, so the HTTP-level proofs below drive the shipped surface, not a stub.
 func gothProofRouter(t *testing.T) *web.WebHandler {
@@ -55,7 +55,7 @@ func get(t *testing.T, router http.Handler, path string) *httptest.ResponseRecor
 var stylesheetHref = regexp.MustCompile(`<link rel="stylesheet" href="([^"]+)"`)
 
 // mappedCSP is the set of directives the auth CSP must carry under the adapter's
-// HTMLPolicy: the feature-owned fixed protections plus the widened style/script-src.
+// HTMLPolicy: the pocket-owned fixed protections plus the widened style/script-src.
 var mappedCSP = []string{
 	"default-src 'none'",
 	"base-uri 'none'",
@@ -68,7 +68,7 @@ var mappedCSP = []string{
 
 // TestGOTHRegisterRendersStyledUnderMappedCSP proves a GOTH-rendered page (register)
 // loads its ui/goth fingerprinted stylesheet from the host origin under the CSP the
-// adapter's HTMLPolicy widens the feature default into, and that the referenced asset
+// adapter's HTMLPolicy widens the pocket default into, and that the referenced asset
 // actually serves — the migration's load-bearing browser property, driven over the
 // real composed router. (Login is this host's asset-free branded override; every other
 // page renders through ui/goth.)
@@ -108,7 +108,7 @@ func TestGOTHRegisterRendersStyledUnderMappedCSP(t *testing.T) {
 
 // TestGOTHMappedCSPAppliesToHostOverride proves the adapter-derived HTMLPolicy governs
 // EVERY auth page, including this host's asset-free Login override: the mapped CSP is
-// feature-applied per render, so a view can never weaken it.
+// pocket-applied per render, so a view can never weaken it.
 func TestGOTHMappedCSPAppliesToHostOverride(t *testing.T) {
 	rec := get(t, gothProofRouter(t), "/auth/login")
 	if rec.Code != http.StatusOK {

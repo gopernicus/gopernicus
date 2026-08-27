@@ -3,8 +3,8 @@ package media
 import "context"
 
 // AssetRepository is the app port for persisting asset metadata. Binary content
-// is handled separately by a BlobStore. Implemented by feature store adapters
-// (features/cms/stores/turso) or any host-provided implementation (see
+// is handled separately by a BlobStore. Implemented by pocket store adapters
+// (pockets/cms/stores/turso) or any host-provided implementation (see
 // examples/minimal's memstore).
 type AssetRepository interface {
 	// Create persists asset metadata.

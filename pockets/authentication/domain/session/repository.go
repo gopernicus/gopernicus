@@ -15,8 +15,8 @@ import (
 var ErrRotationConflict = errors.New("session: refresh rotation conflict")
 
 // SessionRepository persists revocable session anchors keyed by their app-minted
-// ID, with compare-and-swap refresh-token rotation. Implemented by feature store
-// adapters (features/authentication/stores/turso, .../pgx) or any host-provided
+// ID, with compare-and-swap refresh-token rotation. Implemented by pocket store
+// adapters (pockets/authentication/stores/turso, .../pgx) or any host-provided
 // implementation (see the storetest reference). The service hashes every refresh
 // token (SHA-256) before it reaches this port, so the hashes the store persists
 // and matches on are opaque to it; the store does no hashing itself.

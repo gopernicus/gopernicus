@@ -9,7 +9,7 @@ import (
 )
 
 // TestReferenceQueue runs the queue conformance suite against the in-core
-// memstore reference. This is what lets features/jobs self-verify under guard G2
+// memstore reference. This is what lets pockets/jobs self-verify under guard G2
 // (the core cannot import a driver, so without an in-core implementation the
 // suite would compile but never execute). The queue is constructed with the
 // exported Lease so the lease-expiry case is honored identically here and in the

@@ -36,7 +36,7 @@ func newViews(t *testing.T) Views {
 }
 
 // TestLoginOverrideRendersBrandedForm proves the host's Login override renders the
-// Gopernicus-CMS-branded page while preserving every field the feature's dispatcher,
+// Gopernicus-CMS-branded page while preserving every field the pocket's dispatcher,
 // CSRF gate, and service call require: the canonical /auth/login action, the
 // csrf_token and return_to hidden fields, the echoed email, and the correctly
 // autocompleted email/password inputs. The password input never carries a value, so
@@ -89,7 +89,7 @@ func TestPromotedDefaultsServeOtherPages(t *testing.T) {
 }
 
 // TestEmailOverrideTargetsFeatureNamespace proves the host email override targets the
-// feature's email namespace (so it overrides a bundled LayerCore template) and is a
+// pocket's email namespace (so it overrides a bundled LayerCore template) and is a
 // distinct facility from the page Views above.
 func TestEmailOverrideTargetsFeatureNamespace(t *testing.T) {
 	o := EmailOverride()

@@ -15,7 +15,7 @@ import (
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 )
 
-// createTableRE lifts the feature's table names out of the embedded migration
+// createTableRE lifts the pocket's table names out of the embedded migration
 // DDL, so a table added by a future migration is covered here without a
 // hand-maintained list.
 var createTableRE = regexp.MustCompile(`(?i)CREATE TABLE (?:IF NOT EXISTS )?(\w+)`)

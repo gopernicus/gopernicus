@@ -6,8 +6,8 @@ import (
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/domain/user"
 	"github.com/gopernicus/gopernicus/pockets/authentication/internal/logic/authsvc"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 // The user-administration surface (CHAU-1.6). Registered by Mount ONLY when the
@@ -91,7 +91,7 @@ func mountUserAdmin(r pocket.RouteRegistrar, h *handlers, liveSession, browserSa
 // ok=false on any refusal, so a handler's remaining body runs only for an
 // authorized caller.
 //
-// A machine principal reaches the policy as a real principal: the feature does
+// A machine principal reaches the policy as a real principal: the pocket does
 // not pre-decide whether a service account may administer users.
 func (h *handlers) adminPrincipal(w http.ResponseWriter, r *http.Request, action authsvc.UserAdminAction, targetUserID string) (authsvc.Principal, bool) {
 	principal, ok := h.svc.CurrentPrincipal(r.Context())

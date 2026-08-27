@@ -1,12 +1,12 @@
-// Package storetest is the exported conformance suite for the jobs feature's two
+// Package storetest is the exported conformance suite for the jobs pocket's two
 // outbound ports: RunQueue exercises a job.QueueRepository and RunSchedules a
 // schedule.Repository. Every store that fills them — the in-core memstore, the
-// dialect adapters (features/jobs/stores/turso, .../postgres) — runs the same
+// dialect adapters (pockets/jobs/stores/turso, .../postgres) — runs the same
 // suite, so the port doc comments have one executable definition.
 //
 // The port doc comments are the spec; this suite is their executable form. It
-// imports stdlib + sdk + the jobs feature's own packages only (guard G2 forbids
-// a driver import here), so features/jobs's own `go test ./...` runs it against
+// imports stdlib + sdk + the jobs pocket's own packages only (guard G2 forbids
+// a driver import here), so pockets/jobs's own `go test ./...` runs it against
 // the memstore reference (see reference_test.go).
 //
 // Honesty note (design §6.5): against the mutex-backed memstore the

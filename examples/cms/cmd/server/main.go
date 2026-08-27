@@ -1,7 +1,7 @@
 // Command server is the cms composition root: it loads config, builds the
-// logger and database, mounts the CMS feature module (store adapter + feature),
+// logger and database, mounts the CMS pocket module (store adapter + pocket),
 // runs migrations, and serves with graceful shutdown. cmd is the only place that
-// names concrete providers; the feature is reached only through its narrow
+// names concrete providers; the pocket is reached only through its narrow
 // Mount + Register surface.
 package main
 
@@ -16,18 +16,18 @@ import (
 	"time"
 
 	"github.com/gopernicus/gopernicus/examples/cms/internal/theme"
-	"github.com/gopernicus/gopernicus/pockets/cms"
-	cmsturso "github.com/gopernicus/gopernicus/pockets/cms/stores/turso"
 	tursodb "github.com/gopernicus/gopernicus/integrations/datastores/turso"
 	"github.com/gopernicus/gopernicus/integrations/tracing/otel"
+	"github.com/gopernicus/gopernicus/pockets/cms"
+	cmsturso "github.com/gopernicus/gopernicus/pockets/cms/stores/turso"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/cacher"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/filestorage"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/tracing"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
 	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 	uigoth "github.com/gopernicus/gopernicus/ui/goth"
 	uigothassets "github.com/gopernicus/gopernicus/ui/goth/assets"
 )
@@ -58,7 +58,7 @@ func main() {
 
 func run(ctx context.Context, log *slog.Logger) error {
 	// Database. The Turso datastore connector owns the driver, DSN, and dialect
-	// error mapping; the feature store adapter owns the CMS schema + repositories.
+	// error mapping; the pocket store adapter owns the CMS schema + repositories.
 	db, err := tursodb.Open(tursodb.Config{
 		URL:             os.Getenv("TURSO_DATABASE_URL"),
 		AuthToken:       os.Getenv("TURSO_AUTH_TOKEN"),
@@ -91,7 +91,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		}
 	}()
 
-	// Host-owned HTTP router + middleware stack. The feature mounts its routes
+	// Host-owned HTTP router + middleware stack. The pocket mounts its routes
 	// onto this via the narrow RouteRegistrar; it never sees the concrete handler.
 	// Tracing sits OUTER of Logger so the traced context (and its trace_id/span_id)
 	// is on the request when Logger emits its access line, and so web.RecordError's
@@ -105,7 +105,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// So no migration registrar is wired here.
 	mount := pocket.Mount{Router: router, Logger: log}
 
-	// Host infrastructure the feature can't default: blob storage for media and
+	// Host infrastructure the pocket can't default: blob storage for media and
 	// an email sender for the contact form.
 	diskStore, err := filestorage.NewDisk(environment.GetEnvOrDefault("MEDIA_DIR", "media-data"))
 	if err != nil {
@@ -141,8 +141,8 @@ func run(ctx context.Context, log *slog.Logger) error {
 	uigothStatic := web.NewStaticFileServer(uigothassets.FS, web.WithAssetPrefix("dist/"))
 	uigothStatic.AddRoutes(router, gothAssetBasePath)
 
-	// Mount the CMS feature: the store adapter supplies the repositories (the
-	// schema was applied pre-boot by the host's migration runner); the feature
+	// Mount the CMS pocket: the store adapter supplies the repositories (the
+	// schema was applied pre-boot by the host's migration runner); the pocket
 	// wires its services + routes.
 	repos := cmsturso.Repositories(db)
 	if err := cms.Register(mount, repos, cms.Config{
@@ -156,7 +156,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return err
 	}
 
-	// Host-local liveness+readiness probe (host route, not feature surface).
+	// Host-local liveness+readiness probe (host route, not pocket surface).
 	// Mounted on the root router with no middleware, outside any gated group —
 	// unauthenticated by design, since a readiness probe can't log in.
 	router.Handle(http.MethodGet, "/healthz", healthzHandler(db))

@@ -1,4 +1,4 @@
-// Package authentication is the auth feature's JSON transport: request/response DTOs, the
+// Package authentication is the auth pocket's JSON transport: request/response DTOs, the
 // handlers over the domain service, and the route table. v1 is JSON-API only
 // (no server-rendered views), so a host that wants login pages renders its own
 // form and calls these endpoints, exactly as a SPA or mobile client would.
@@ -10,9 +10,9 @@ import (
 	"net/http"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/internal/logic/authsvc"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 // refreshAttemptsPerMinute caps POST /auth/refresh attempts per client IP (the
@@ -79,7 +79,7 @@ type Deps struct {
 	MachineGate web.Middleware
 }
 
-// Mount registers the auth feature's routes on the registrar. The route surface
+// Mount registers the auth pocket's routes on the registrar. The route surface
 // is POST /auth/{register,login,verify,refresh,logout,password/forgot,
 // password/reset} plus the RequireLiveSession-gated POST /auth/password/change.
 // /auth/refresh and /auth/logout are credential-driven, not middleware-gated
@@ -93,7 +93,7 @@ type Deps struct {
 // The JSON API route surface is registered unconditionally. The optional HTML GET
 // surface (design §9.2) is registered only when a Views port is wired (views !=
 // nil): mountHTML adds the HTML pages while the JSON contracts stay byte-compatible.
-// A nil views leaves the feature API-only, uniformly.
+// A nil views leaves the pocket API-only, uniformly.
 func Mount(r pocket.RouteRegistrar, d Deps) {
 	svc, inv, views := d.Auth, d.Invitations, d.Views
 	r = clientInfoRegistrar{inner: r}
@@ -245,7 +245,7 @@ func Mount(r pocket.RouteRegistrar, d Deps) {
 	// Machine-identity lifecycle routes are registered only when both machine
 	// repositories are wired AND the host named an authorization gate
 	// (deny-by-absence, design §4.1 + D1): they issue and revoke credentials, so
-	// the feature never guesses a policy. A nil gate leaves them unmounted (404)
+	// the pocket never guesses a policy. A nil gate leaves them unmounted (404)
 	// while key AUTHENTICATION keeps working, and auth.NewService WARNs about the
 	// posture at boot. A host that wants its own lifecycle surface leaves the
 	// gate nil and serves it over the Service methods.
@@ -280,7 +280,7 @@ func Mount(r pocket.RouteRegistrar, d Deps) {
 	}
 
 	// The optional HTML GET surface is registered only when a Views port is wired
-	// (design §9.2): with a nil Views the feature is API-only and every HTML page
+	// (design §9.2): with a nil Views the pocket is API-only and every HTML page
 	// path 404s, while the JSON API above stays fully mounted. Account-security HTML
 	// pages ride RequireLiveSession, exactly like their JSON twins.
 	if views != nil {
@@ -303,7 +303,7 @@ func (c clientInfoRegistrar) Handle(method, path string, handler http.HandlerFun
 }
 
 // clientInfoMiddleware stamps the request IP and User-Agent onto the context via
-// the feature's exported carrier (authsvc.WithClientInfo). It is the ONE write
+// the pocket's exported carrier (authsvc.WithClientInfo). It is the ONE write
 // point; login/token read the IP from it and the audit rail reads IP + UA.
 func clientInfoMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

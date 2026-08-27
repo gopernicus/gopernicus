@@ -2,7 +2,7 @@
 // one generic service over content.EntryRepository, driven by a *content.Registry
 // for field validation. It replaces the per-type contentsvc (post + page) — all
 // content types share this one service. Kept internal so it is NOT part of the
-// feature's public SemVer surface (plan §5/B3); hosts compose through
+// pocket's public SemVer surface (plan §5/B3); hosts compose through
 // cms.Register, not by importing the service.
 package entrysvc
 

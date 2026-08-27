@@ -53,7 +53,7 @@ func fixtureSchema() authorization.Schema {
 	})
 }
 
-// newServiceFor builds the feature Service over the stores under test, supplying
+// newServiceFor builds the pocket Service over the stores under test, supplying
 // the fixture Model only when the relationship kind is wired (so a roles-only
 // backend still constructs).
 func newServiceFor(t *testing.T, repos authorization.Repositories) *authorization.Service {

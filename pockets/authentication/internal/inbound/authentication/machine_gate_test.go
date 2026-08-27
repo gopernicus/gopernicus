@@ -41,7 +41,7 @@ var (
 )
 
 // allowMachineGate is the stub host gate that authorizes every caller. The
-// feature cannot import features/authorization (guard-feature-no-cross-feature),
+// pocket cannot import pockets/authorization (guard-pocket-no-cross-pocket),
 // so the real permission gate's 403 body is proven in examples/auth-cms; here a
 // stub stands for "the host said yes".
 func allowMachineGate(next http.Handler) http.Handler { return next }
@@ -241,7 +241,7 @@ func crossOriginPOST(t *testing.T, h http.Handler, path, body, origin string, c 
 // a cookie-authenticated mint or revoke must clear the browser-safe gate BEFORE
 // the host's policy is consulted, so a missing double-submit token and a
 // non-allowlisted Origin are both 403 on all three mutations — under an
-// ALLOW-ALL gate, which proves the refusal is the feature's, not the host's. The
+// ALLOW-ALL gate, which proves the refusal is the pocket's, not the host's. The
 // two body-less GETs are not state changes and still serve.
 func TestMachineRoutesRefuseUnsafeBrowserMutation(t *testing.T) {
 	fx := newMachineFixture(t, allowMachineGate)
@@ -276,7 +276,7 @@ func TestMachineRoutesRefuseUnsafeBrowserMutation(t *testing.T) {
 
 // TestMachineRoutesGateStackOrder pins the registration order web.Handle
 // applies outermost-first: RequireUser, then RequireLiveSession, then the gate.
-// A credential-less request must be answered 401 by the feature WITHOUT the
+// A credential-less request must be answered 401 by the pocket WITHOUT the
 // host's gate ever running — a gate placed outermost would have to answer for
 // unauthenticated traffic it knows nothing about.
 func TestMachineRoutesGateStackOrder(t *testing.T) {
