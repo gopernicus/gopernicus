@@ -24,6 +24,21 @@ hermetically.
 > `-H 'Content-Type: application/json'` (an absent header still decodes as JSON, the
 > lenient path). Where a leg shows a JSON body, assume the JSON header is set.
 
+**Role: the authentication conformance harness, not a layout reference**
+(ratified 2026-08-27, host-layout-contract). Read this host for what the
+authentication and authorization pockets can do and for how their seams are
+wired together — it is the most heavily tested host in the repo, and every
+leg below is a live proof. It is NOT the host to copy a layout from.
+
+Its composition root carries provider behavior that the host contract places
+in a host pocket or an outbound adapter, and it grows several ad-hoc packages
+directly under `internal/` that H0 makes findings. That is known, dated debt
+with a named follow-up plan, and this host is a NAMED EXEMPTION from the
+repo's host-contract guard until that plan lands. For layout, read
+[`examples/README.md`](../README.md) — the host contract — and the conforming
+worked examples `examples/cms`, `examples/minimal`, and
+`examples/jobs-minimal`.
+
 ## What it proves
 
 - **Constitution rule 6 (pockets never import other pockets), with THREE real

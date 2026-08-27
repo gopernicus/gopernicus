@@ -95,7 +95,8 @@ ratified 2026-07-02 — `.claude/plans/roadmap/pocket-trio-relayout.md`):
 | `views/<pkg>` (per-concern, only if the pocket has HTML) | a **separate module** — the bundled default implementation of the pocket core's `Views` port, named for the package it's built on (`views/goth`, the ui/goth adapter; R-KV2). The core defines the port (domain-typed params, `web.Renderer` returns) and registers its HTML surface only when `Config.Views` is non-nil — uniform nil → HTML off (FS3). A host wires the default with one import + one Config field, implements the port itself (`html/template` via `web.Template` works in three lines), or wires nothing and runs API-only with zero view tech in its graph. cms's in-core `theme/` (`PublicViews` + `Default()`) was the reference implementation that proved the shape; it migrated to `views/templ` at feature-standard B2 (2026-07-07; the in-core `theme/` is now deleted) | public API, never imported by the pocket core |
 
 **How a pocket maps onto the app hexagon** (`internal/{inbound,logic,
-outbound}` — ARCHITECTURE.md's app pattern). A pocket is the same hexagon,
+outbound}` — ARCHITECTURE.md's app pattern, contracted for hosts in
+`examples/README.md`). A pocket is the same hexagon,
 library-shaped: everted at the port layer, with outbound pushed out of the
 module entirely.
 
@@ -103,7 +104,7 @@ module entirely.
 |---|---|---|
 | `cmd/` (composition root) | the HOST's `main` + `<name>.go`'s socket | pockets are composed *by* hosts; `Register` is the wiring point |
 | `internal/logic/domains/<d>` (entities + ports + services together) | split by visibility: entities + ports → public `domain/<domain>/`; services → `internal/logic/<domain>svc/` | store modules and hosts must import the ports; services stay sealed so the API surface is exactly the rim |
-| `internal/inbound/domains/<domain>/` (+ `inbound/http/` plumbing, `inbound/views/` global tree — ARCHITECTURE.md §Inbound anatomy) | `internal/inbound/<pocket>/` — the one domain, flattened out of `domains/` | same role, same privacy. The deliberate deltas (FS1/FS3): pocket templates never co-locate (templ is third-party, the core is sdk-only) — the render port lives in the core and the bundled default is the `views/<pkg>` sibling module; and there is no pocket `inbound/views/` tree — the pocket theming seam is embed-the-sibling-default (live override: `examples/cms/internal/theme/`) |
+| `internal/inbound/domains/<domain>/` (+ `inbound/http/` plumbing, `inbound/views/` global tree — `examples/README.md` §4, the Inbound anatomy) | `internal/inbound/<pocket>/` — the one domain, flattened out of `domains/` | same role, same privacy. The deliberate deltas (FS1/FS3): pocket templates never co-locate (templ is third-party, the core is sdk-only) — the render port lives in the core and the bundled default is the `views/<pkg>` sibling module; and there is no pocket `inbound/views/` tree — the pocket theming seam is embed-the-sibling-default (live override: `examples/cms/internal/theme/`) |
 | `internal/outbound` | `stores/<package>/` — separate modules | stronger than a directory split: drivers stay out of the core's go.mod entirely (guard G2) |
 
 Reading rule: **`domain/` is what outsiders implement, `internal/` is the

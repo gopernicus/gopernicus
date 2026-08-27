@@ -278,8 +278,8 @@ pocket core  <--- pocket views/<pkg> adapter ---> ui/goth ---> templ/runtime
   (`HTMLPolicy()`), so the pocket core stays view-technology-free. See
   `ui/goth/README.md` §11 for the adopter recipes.
 
-**`ui/` versus app-local `internal/inbound/views/`.** The Inbound anatomy below
-reserves `internal/inbound/views/` as a host's PRIVATE presentation tree — its
+**`ui/` versus app-local `internal/inbound/views/`.** The Inbound anatomy
+(`examples/README.md` §4) reserves `internal/inbound/views/` as a host's PRIVATE presentation tree — its
 shared `Shell`/layouts and its own bespoke kit, sealed by Go's `internal/`. The
 top-level `ui/` family is the REUSABLE, importable counterpart: a host that wants
 the shared kit imports `ui/goth` (and the relevant pocket `views/goth` adapters)
@@ -408,14 +408,12 @@ release/tagging procedure (see [`RELEASING.md`](RELEASING.md)).
 ## The app pattern (hexagonal) — for a host's own app-local domains
 
 Not every domain belongs in a reusable pocket module — a host may have
-app-local domains of its own, built the same hexagonal way. (No host in this
-repo currently has one; both `examples/cms` and `examples/minimal` are thin
-hosts around the `pockets/cms` pocket. This section documents the pattern
-for when one appears.) Within an app, dependencies point **inward** to the
-hexagon (`internal/logic`); everything ultimately stands on `sdk`. This
-`internal/logic` is a **pure hexagon that imports only `sdk`** — distinct from
-the *original* gopernicus repo's `core/` layer, which embedded adapters
-directly (the ambiguity this design fixes structurally via module boundaries).
+app-local domains of its own, built the same hexagonal way. Within an app,
+dependencies point **inward** to the hexagon (`internal/logic`); everything
+ultimately stands on `sdk`. This `internal/logic` is a **pure hexagon that
+imports only `sdk`** — distinct from the *original* gopernicus repo's `core/`
+layer, which embedded adapters directly (the ambiguity this design fixes
+structurally via module boundaries).
 
 ```
    internal/inbound ──►  internal/logic  ◄── internal/outbound ──► integrations
@@ -426,107 +424,44 @@ directly (the ambiguity this design fixes structurally via module boundaries).
    cmd ──► wires the chosen implementations together (dependency injection lives here)
 ```
 
-| dir (within the app) | role | hexagonal name | imports |
+The import law, as the host rules H1–H8 state it (host-relative paths;
+"framework" = `sdk`, `integrations/*`, `pockets/*`, `ui/*`; production files
+unless a row says otherwise):
+
+| id | package family | may import | never imports |
 |---|---|---|---|
-| `cmd/` | composition root — `main`, wiring; the only place that names concrete adapters | — | everything |
-| `internal/inbound/` | driving adapters: HTTP (admin + public), CLI, cron, queue consumers | driving / primary | `internal/logic`, `sdk` |
-| `internal/logic/` | the hexagon — `domains/` (services + ports) + `compositions/` (cross-domain orchestration) | the center | `sdk` |
-| `internal/outbound/` | **app-specific** driven adapters implementing domain ports: `repositories/`, … | driven / secondary | `internal/logic`, `sdk`, `integrations` |
+| **H1** | `internal/logic/**` | stdlib, `sdk/...`, `<module>/internal/logic/...` | anything else — an allow-list, with no escape valve |
+| **H2** | `internal/logic/domains/<d>` | as H1 | `internal/logic/compositions/*`; another domain's package |
+| **H3** | `internal/logic/compositions/<c>` | as H1 | a repository port, a storage import, or a transaction handle |
+| **H4** | `internal/inbound/**` | `internal/logic`, `sdk`, framework pocket cores + `views/<pkg>`, `ui/*`, host `pockets/*/{logic,inbound}`, view technology | `internal/outbound/**`, `internal/integrations/**` (`_test.go` exempt), host `pockets/*/outbound` |
+| **H5** | `internal/outbound/domains/<d>` | among host packages: `internal/logic/domains/<d>`, `internal/integrations/*`, host `pockets/*`; framework freely | `internal/inbound/**`; any other `internal/logic/domains/<x>` (`_test.go`, `workshop/**` exempt) |
+| **H5** | `internal/integrations/<tech>` | stdlib, `sdk`, third-party, framework `integrations/*` | `internal/logic`, `internal/inbound`, `internal/outbound`, host `pockets/*`, framework `pockets/*` |
+| **H6** | `<host-module>/pockets/<n>/*` | stdlib, `sdk`, framework pocket rims, its own host pocket | `internal/*`, another host pocket; at least one framework-pocket rim import is required |
+| **H7** | everything except `cmd/**`, `internal/outbound/**`, `internal/integrations/**`, host `pockets/*/outbound/**`, `workshop/**` | — | framework `pockets/*/stores/*`, framework `integrations/...`, database drivers |
+| **H8** | directories | — | an inbound/outbound directory with no `internal/logic` counterpart (one-directional) |
 
-Go's `internal/` keeps the app's hexagon and adapters private to the app; the
-framework modules (`sdk`, `integrations/*`, `pockets/*`) never reach into them.
+`cmd/` is the composition root and the only place that names concrete
+adapters (**H10**); `workshop/` is the host's developer-time tool tree, exempt
+from H5/H7. Go's `internal/` keeps the app's hexagon and adapters private to
+the app; the framework modules (`sdk`, `integrations/*`, `pockets/*`) never
+reach into them.
 
-### Inbound anatomy — inside `internal/inbound/` (ratified 2026-07-08)
+**The full host contract is [`examples/README.md`](examples/README.md)** — the
+sibling of [`pockets/README.md`](pockets/README.md): the layout tree, H0–H10
+in full with the normative wording of the table above, the Inbound anatomy,
+host pockets (`<host-module>/pockets/<name>`), `cmd`/`workshop`/
+`internal/integrations`, and the retrofit recipe. This section is the
+framework-side summary; that page is normative for hosts, and
+`gopernicus guard` is its executable floor.
 
-Adopted from Segovia v2 (segovia-lessons flag #1, 2026-07-08) — the host
-app built in tandem with this framework and the living reference
-implementation; no host in this repo has app-local domains yet, and the
-future `gopernicus new domain` scaffold (workshop-v2) should emit this
-shape. Until that scaffold exists, adoption is by hand: read this
-subsection, apply it, use Segovia v2 as the worked example.
+### Inbound anatomy
 
-```
-internal/inbound/
-  domains/<domain>/     # one package per app-local domain
-    routes.go           #   the ONE readable route table — never split
-    api.go              #   JSON handlers (single-resource degenerate form)
-    html.go             #   HTML page handlers (fragments.go when htmx lands)
-    views.go            #   the render PORT — methods return web.Renderer
-    templates/          #   bundled default implementation (templ), co-located
-  http/                 # transport plumbing only (middleware) — never handlers
-  views/                # the GLOBAL presentation tree: shared Shell/layouts,
-                        #   the host's PRIVATE kit — the app-local theme root
-                        #   (the reusable, importable kit is top-level ui/)
-```
+MOVED 2026-08-27 to [`examples/README.md`](examples/README.md) §4, verbatim
+and with its 2026-07-08 ratification intact — along with the "`internal/outbound`
+vs `integrations`" and "repositories: app-specific vs pocket store adapter"
+notes that closed it.
 
-- **The render port (FS3 scaled to app-local).** `views.go` defines the
-  domain's presentation port; methods return `web.Renderer`. templ is the
-  default, never the contract: `templates/` is the bundled implementation,
-  implements the port structurally, and never imports the transport.
-  View-tech dependencies ride the app module's go.mod and touch only
-  `internal/inbound` — `internal/logic` stays sdk-only (the one rule).
-- **The theming seam.** `internal/inbound/views/` holds the shared
-  `Shell`/layouts and the host's private kit, consumed by every domain's
-  templates; the reusable, importable counterpart is the top-level `ui/`
-  family (`ui/goth`), which a host imports instead of growing a bespoke
-  kit here (the UI-implementation module kind, GOTH-0.2). A themed kit is
-  a new implementation of the ports plus one
-  `cmd` wiring change. **Partial override via embedding:** the default is
-  a concrete exported struct, so a host (or a single binary —
-  `cmd/<binary>/views/`) embeds it and overrides individual port methods;
-  method promotion supplies the rest. Override granularity is the port
-  method (the page), deliberately — reuse comes from exported building
-  blocks (Shell, kit primitives), never exported page internals.
-- **The growth rule (multi-resource domains).** The file axis flips from
-  transport to RESOURCE at resource #2: `grants.go` holds that resource's
-  api+html (`grants_api.go`/`grants_html.go`/`grants_fragments.go` only
-  when one grows heavy); `routes.go` stays singular — one domain, one
-  readable route table. Transport-named `api.go`/`html.go` are the
-  single-resource degenerate form. **Never `/api`, `/html`, or `/htmx`
-  subdirectories** — a subdirectory means a new contract (own
-  schema/vocabulary) or a swappable implementation behind a port
-  (`templates/`), never mere file count; a domain wanting its own package
-  tree is two domains. The same axis mirrors in `logic/domains/<domain>/`
-  and `templates/{resource}.templ`.
-- **The maximal flatten** (a gopernicus-side clarification of the Segovia
-  text): a single-resource, single-transport domain with a small handler
-  set may keep its handlers in `routes.go` itself —
-  `pockets/events/internal/inbound/events/routes.go` is the blessed
-  example. The never-split rule constrains the route *table*, not the
-  co-residence of a few handlers.
-- **Pockets mirror the file anatomy, not the tree** (D1, ratified
-  2026-07-08). A pocket is its one domain, so the `domains/` level
-  flattens to `internal/inbound/<pocket>/`
-  (`pockets/cms/internal/inbound/cms/`), carrying the same file anatomy
-  with a `Mount` dispatcher in `routes.go` and per-resource
-  deny-by-absence `mountX` helpers living in their resource files. `http/`
-  keeps one meaning on both sides of the line — plumbing — and a pocket
-  has no `http/` until real plumbing appears. The global views tree and
-  co-located `templates/` are **app-only**: a pocket core requires sdk
-  only (FS1), so its render port lives in the core and its bundled default
-  is the `views/<pkg>` sibling module (FS3); the pocket theming seam is
-  embed-the-sibling-default (live override: `examples/cms/internal/theme/`).
-  See `pockets/README.md` §2.
-
-**`internal/outbound` vs `integrations`.** An `integration` is the *reusable*
-connection/client to an external system (the turso connector). `internal/outbound`
-is the *app-specific* code that implements a domain port using one (the post
-repository's SQL + schema). A connector that fully implements an `sdk` facility
-port (e.g. a gcs filestore → `sdk/capabilities/filestorage`) needs **no** `internal/outbound`
-code — the app just wires it in `cmd`.
-
-**Repositories: app-specific vs pocket store adapter.** A repository is either
-*app-specific* (its SQL belongs to one app → `internal/outbound`) **or** a
-*pocket store adapter* for a reusable domain (its SQL belongs to the pocket →
-`pockets/<name>/stores/<package>`, its own module). The moment a domain becomes a
-reusable pocket module, its store is **not** host-app code — it is a pocket
-store adapter module, so a host that brings a different datastore never pulls the
-pocket's driver into its module graph. The CMS pocket demonstrates this: the
-datastore-free `pockets/cms` core depends on its repository ports, and
-`pockets/cms/stores/turso` is the separate module that supplies the libSQL
-implementation + migrations.
-
-## The one rule
+## The one rule (host id: H1)
 
 `internal/logic/` (the hexagon) and `sdk/` (the kernel) **never** import
 `internal/inbound/`, `internal/outbound/`, or `integrations/`. Ports are defined
@@ -535,7 +470,7 @@ architecture is broken — a one-line `grep` (in `make check`) catches it. `sdk`
 goes further: it imports **only** the standard library — and its empty `go.mod`
 makes that structural.
 
-## Where a port lives
+## Where a port lives (host ids: H1, H5)
 
 | the port is… | defined in… | default impl | external impl |
 |---|---|---|---|
@@ -550,7 +485,7 @@ graduation gates (`sdk/README.md` admission, the five-point test below, and
 vocabulary + contract, and a pocket may be its implementation of record —
 `sdk/capabilities/work` implemented by `pockets/jobs` is the exemplar.
 
-## sdk vs internal/logic — the test
+## sdk vs internal/logic — the test (host id: H1)
 
 Put a contract in `sdk` only if **all** hold (otherwise it's an `internal/logic`
 domain port):
@@ -572,7 +507,7 @@ and to **ship working stdlib defaults** so an app boots with zero external
 infrastructure. It is **not** meant to decide every app's domain shape — CRUD is
 a convenience, never a tax. Domains embed, narrow, or ignore it.
 
-## Inside internal/logic/ — two tiers
+## Inside internal/logic/ — two tiers (host ids: H2, H3)
 
 `internal/logic` splits into the bounded contexts and the orchestrations that
 compose them:
@@ -614,15 +549,19 @@ build it as a real app domain. Taxonomy/menus/media/messaging stay typed.
 
 ### The tier rules
 
-- **Domains are independent peers.** A domain never imports another domain
-  (or only a narrow read-port / by ID). Coordination never flows sideways.
-- **Compositions depend downward** on multiple domains and own the cross-domain
-  workflow, transaction boundary, and sequencing. Domains stay ignorant of each
-  other; a composition is the only place that knows the seam.
+- **Domains are independent peers (H2).** A domain never imports another domain
+  (or only a narrow read-port / by ID). Coordination never flows sideways. The
+  parenthesized allowance is for POCKET interiors: for a HOST, H2 is absolute —
+  a domain never imports another domain at all (`examples/README.md` §3).
+- **Compositions depend downward (H3)** on domains and own the cross-domain
+  workflow, its invariant, and sequencing — never a repository port, a storage
+  import, or a transaction handle; a workflow that needs an atomic write across
+  two domains is the signal those aggregates belong in one domain. Domains stay
+  ignorant of each other; a composition is the only place that knows the seam.
 - **Repository per aggregate root**, not per table. Default to one service per
   domain; split by responsibility only when it grows. Never one-service-per-entity.
 
-### Where a "doesn't fit one domain" thing goes
+### Where a "doesn't fit one domain" thing goes (host id: H3)
 
 1. **No domain knowledge** (pure algorithm: diff, slug codec, cursor encode) →
    `sdk` if framework-generic (e.g. `sdk/foundation/slug`), else a small `internal/` util.
