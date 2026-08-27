@@ -4,14 +4,20 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // TrimPage trims an over-fetched result set to the requested limit and builds a
 // Page. Callers fetch limit+1 records; when the set exceeds the limit, the
 // extra record proves a next page exists, so the records are trimmed, HasMore
 // is set, and NextCursor is encoded from the last record actually returned.
-// encode must use the same order field the query ordered by.
+// encode must use the same order field the query ordered by. A nil records
+// slice becomes an empty one, so an empty page marshals "items":[], never null.
 func TrimPage[T any](records []T, limit int, encode func(T) (string, error)) (Page[T], error) {
+	if records == nil {
+		records = []T{}
+	}
 	page := Page[T]{Items: records}
 
 	if limit > 0 && len(records) > limit {
@@ -50,7 +56,8 @@ func MarkPrevPage[T any](p *Page[T], prevRecords []T, limit int, encode func(T) 
 // every pagination field (NextCursor, HasMore, HasPrev, PreviousCursor, Total)
 // unchanged. This is the row-struct→domain bridge: a store gets a
 // Page[rowStruct] from the connector helper and returns crud.MapPage(p,
-// toDomain).
+// toDomain). Items is always allocated, so an empty page marshals "items":[],
+// never null.
 func MapPage[T, U any](p Page[T], fn func(T) U) Page[U] {
 	out := Page[U]{
 		NextCursor:     p.NextCursor,
@@ -59,11 +66,9 @@ func MapPage[T, U any](p Page[T], fn func(T) U) Page[U] {
 		PreviousCursor: p.PreviousCursor,
 		Total:          p.Total,
 	}
-	if p.Items != nil {
-		out.Items = make([]U, len(p.Items))
-		for i, item := range p.Items {
-			out.Items[i] = fn(item)
-		}
+	out.Items = make([]U, len(p.Items))
+	for i, item := range p.Items {
+		out.Items[i] = fn(item)
 	}
 	return out
 }
@@ -72,7 +77,8 @@ func MapPage[T, U any](p Page[T], fn func(T) U) Page[U] {
 // when the conversion VALIDATES (a stored vocabulary outside the domain's
 // contract must fail loud, not enter the domain). It stops at the first error
 // and returns it unwrapped, with a zero Page; on success every pagination
-// field is copied unchanged exactly as MapPage does.
+// field is copied unchanged and Items is always allocated, exactly as MapPage
+// does.
 func MapPageErr[T, U any](p Page[T], fn func(T) (U, error)) (Page[U], error) {
 	out := Page[U]{
 		NextCursor:     p.NextCursor,
@@ -81,17 +87,31 @@ func MapPageErr[T, U any](p Page[T], fn func(T) (U, error)) (Page[U], error) {
 		PreviousCursor: p.PreviousCursor,
 		Total:          p.Total,
 	}
-	if p.Items != nil {
-		out.Items = make([]U, len(p.Items))
-		for i, item := range p.Items {
-			u, err := fn(item)
-			if err != nil {
-				return Page[U]{}, err
-			}
-			out.Items[i] = u
+	out.Items = make([]U, len(p.Items))
+	for i, item := range p.Items {
+		u, err := fn(item)
+		if err != nil {
+			return Page[U]{}, err
 		}
+		out.Items[i] = u
 	}
 	return out, nil
+}
+
+// Items is the bounded-page constructor: a parent-scoped, uncursored list is a
+// Page holding only Items — the omitempty tags make {"items":[…]} the wire
+// shape. A nil slice becomes an empty one so the wire says [] and never null.
+func Items[T any](items []T) Page[T] {
+	if items == nil {
+		items = []T{}
+	}
+	return Page[T]{Items: items}
+}
+
+// MapItems is MapPage(Items(items), fn) — the row/domain→DTO bridge for the
+// bounded case. Defined that way so nil-normalization has one site.
+func MapItems[T, U any](items []T, fn func(T) U) Page[U] {
+	return MapPage(Items(items), fn)
 }
 
 // ListParams carries the raw transport-edge page params ParseListRequest folds
@@ -151,20 +171,20 @@ func ParseListRequest(p ListParams) (ListRequest, error) {
 		var err error
 		limit, err = strconv.Atoi(p.Limit)
 		if err != nil {
-			return ListRequest{}, fmt.Errorf("page limit conversion: %w", err)
+			return ListRequest{}, fmt.Errorf("page limit conversion: %w: %w", err, sdk.ErrInvalidInput)
 		}
 	}
 
 	if limit <= 0 {
-		return ListRequest{}, fmt.Errorf("rows value too small, must be larger than 0")
+		return ListRequest{}, fmt.Errorf("rows value too small, must be larger than 0: %w", sdk.ErrInvalidInput)
 	}
 
 	if limit > maxLimit {
-		return ListRequest{}, fmt.Errorf("rows value too large, must be at most %d", maxLimit)
+		return ListRequest{}, fmt.Errorf("rows value too large, must be at most %d: %w", maxLimit, sdk.ErrInvalidInput)
 	}
 
 	if p.Cursor != "" && p.Offset != "" {
-		return ListRequest{}, fmt.Errorf("cursor and offset are mutually exclusive")
+		return ListRequest{}, fmt.Errorf("cursor and offset are mutually exclusive: %w", sdk.ErrInvalidInput)
 	}
 
 	strategy := p.DefaultStrategy
@@ -183,10 +203,10 @@ func ParseListRequest(p ListParams) (ListRequest, error) {
 		var err error
 		offset, err = strconv.Atoi(p.Offset)
 		if err != nil {
-			return ListRequest{}, fmt.Errorf("page offset conversion: %w", err)
+			return ListRequest{}, fmt.Errorf("page offset conversion: %w: %w", err, sdk.ErrInvalidInput)
 		}
 		if offset < 0 {
-			return ListRequest{}, fmt.Errorf("offset value too small, must not be negative")
+			return ListRequest{}, fmt.Errorf("offset value too small, must not be negative: %w", sdk.ErrInvalidInput)
 		}
 	}
 
@@ -195,7 +215,7 @@ func ParseListRequest(p ListParams) (ListRequest, error) {
 		var err error
 		withCount, err = strconv.ParseBool(p.Count)
 		if err != nil {
-			return ListRequest{}, fmt.Errorf("page count conversion: %w", err)
+			return ListRequest{}, fmt.Errorf("page count conversion: %w: %w", err, sdk.ErrInvalidInput)
 		}
 	}
 

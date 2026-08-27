@@ -203,6 +203,27 @@ func DefaultHeadersMiddleware(headers map[string]string) Middleware {
 	}
 }
 
+// NoStore is a preset of DefaultHeadersMiddleware that writes
+// Cache-Control: no-store before the handler runs (a handler may still override
+// on its own writer). Mount it on route groups whose responses are derived from
+// a per-request grant — an authenticated API surface, where every answer must
+// reflect a revocation on the very next request and nothing may be retained by
+// a browser or a shared cache:
+//
+//	v1 := router.Group("/api/v1", requirePrincipal, web.NoStore())
+//
+// It is a header policy the host applies, not an identity gate and not a
+// guarantee: whatever gate the host mounts beside it is what makes the group
+// authenticated. Only Cache-Control is written — Pragma and Expires are HTTP/1.0
+// relics no-store supersedes, and this is the exact header the authentication
+// pocket's own no-store surfaces write. (The SPA index served by web's static
+// handler says "no-cache, no-store, must-revalidate" instead: that is the
+// index-document posture for caches that revalidate; API answers are simply
+// never stored.)
+func NoStore() Middleware {
+	return DefaultHeadersMiddleware(map[string]string{"Cache-Control": "no-store"})
+}
+
 // matchOrigin resolves the Access-Control-Allow-Origin value for origin against
 // the allowlist, reporting whether the match came from a "*" entry. An empty
 // return means no configured origin matched.

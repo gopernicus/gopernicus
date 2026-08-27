@@ -1,5 +1,5 @@
 # Required CI gate: `make check` (templ drift in git mode, per-module
-# vet/build/test across every Makefile MODULE, the twenty layering guards, and
+# vet/build/test across every Makefile MODULE, the twenty-one layering guards, and
 # the compile-only -tags=integration vet of the turso stores).
 #
 # Triggered on every push and every pull_request (plain push + PR, as the task

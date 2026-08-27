@@ -1,8 +1,13 @@
 package crud
 
 import (
+	"encoding/json"
+	"errors"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 func encTest(s string) (string, error) { return "enc_" + s, nil }
@@ -130,6 +135,37 @@ func TestParseListRequest_NeverClamps(t *testing.T) {
 		if !strings.Contains(err.Error(), tt.wantErr) {
 			t.Errorf("ParseListRequest(%q) err = %q, want containing %q", tt.input, err.Error(), tt.wantErr)
 		}
+		if !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Errorf("ParseListRequest(%q) err = %v, want wrapping sdk.ErrInvalidInput", tt.input, err)
+		}
+	}
+}
+
+// TestParseListRequest_RejectionsPreserveStrconvCause proves the three strconv
+// rejections keep their cause in the chain alongside the sentinel: a host can
+// still reach the *strconv.NumError while web.ErrFromDomain classifies the 400.
+func TestParseListRequest_RejectionsPreserveStrconvCause(t *testing.T) {
+	tests := []struct {
+		name   string
+		params ListParams
+	}{
+		{"limit", ListParams{Limit: "zero"}},
+		{"offset", ListParams{Offset: "here"}},
+		{"count", ListParams{Count: "yes-please"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseListRequest(tt.params)
+			if err == nil {
+				t.Fatal("err = nil, want error")
+			}
+			if !errors.Is(err, sdk.ErrInvalidInput) {
+				t.Errorf("err = %v, want wrapping sdk.ErrInvalidInput", err)
+			}
+			if !errors.As(err, new(*strconv.NumError)) {
+				t.Errorf("err = %v, want wrapping *strconv.NumError", err)
+			}
+		})
 	}
 }
 
@@ -217,6 +253,9 @@ func TestParseListRequest_Offset(t *testing.T) {
 				if !strings.Contains(err.Error(), tt.wantErr) {
 					t.Errorf("err = %q, want containing %q", err.Error(), tt.wantErr)
 				}
+				if !errors.Is(err, sdk.ErrInvalidInput) {
+					t.Errorf("err = %v, want wrapping sdk.ErrInvalidInput", err)
+				}
 				return
 			}
 			if err != nil {
@@ -255,6 +294,9 @@ func TestParseListRequest_Count(t *testing.T) {
 				if !strings.Contains(err.Error(), tt.wantErr) {
 					t.Errorf("err = %q, want containing %q", err.Error(), tt.wantErr)
 				}
+				if !errors.Is(err, sdk.ErrInvalidInput) {
+					t.Errorf("err = %v, want wrapping sdk.ErrInvalidInput", err)
+				}
 				return
 			}
 			if err != nil {
@@ -278,6 +320,9 @@ func TestParseListRequest_CursorAndOffsetRejected(t *testing.T) {
 	if !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Errorf("err = %q, want containing %q", err.Error(), "mutually exclusive")
 	}
+	if !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Errorf("err = %v, want wrapping sdk.ErrInvalidInput", err)
+	}
 
 	// An offset param of "0" alongside a cursor is now also rejected: an offset
 	// param present at all means offset strategy, which excludes a cursor.
@@ -287,5 +332,77 @@ func TestParseListRequest_CursorAndOffsetRejected(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Errorf("err = %q, want containing %q", err.Error(), "mutually exclusive")
+	}
+	if !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Errorf("err = %v, want wrapping sdk.ErrInvalidInput", err)
+	}
+}
+
+// TestNilItemsNormalized pins D4: every SDK page constructor and bridge turns a
+// nil item slice into an empty one, so an empty page can never marshal
+// "items":null.
+func TestNilItemsNormalized(t *testing.T) {
+	if got := Items[string](nil).Items; got == nil || len(got) != 0 {
+		t.Errorf("Items(nil).Items = %#v, want empty non-nil", got)
+	}
+
+	if got := MapItems[int, string](nil, strconv.Itoa).Items; got == nil || len(got) != 0 {
+		t.Errorf("MapItems(nil).Items = %#v, want empty non-nil", got)
+	}
+
+	trimmed, err := TrimPage[string](nil, 10, encTest)
+	if err != nil {
+		t.Fatalf("TrimPage: %v", err)
+	}
+	if trimmed.Items == nil || len(trimmed.Items) != 0 {
+		t.Errorf("TrimPage(nil).Items = %#v, want empty non-nil", trimmed.Items)
+	}
+
+	if got := MapPage(Page[int]{}, strconv.Itoa).Items; got == nil || len(got) != 0 {
+		t.Errorf("MapPage(zero).Items = %#v, want empty non-nil", got)
+	}
+
+	mapped, err := MapPageErr(Page[int]{}, func(n int) (string, error) { return strconv.Itoa(n), nil })
+	if err != nil {
+		t.Fatalf("MapPageErr: %v", err)
+	}
+	if mapped.Items == nil || len(mapped.Items) != 0 {
+		t.Errorf("MapPageErr(zero).Items = %#v, want empty non-nil", mapped.Items)
+	}
+}
+
+// TestPageWireShape proves the bounded page on the wire: only "items", and an
+// empty one is [] — no has_more, no next_cursor, no total.
+func TestPageWireShape(t *testing.T) {
+	trimmed, err := TrimPage[string](nil, 10, encTest)
+	if err != nil {
+		t.Fatalf("TrimPage: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		page any
+		want string
+	}{
+		{"items_nil", Items[string](nil), `{"items":[]}`},
+		{"map_items", MapItems([]int{1, 2}, strconv.Itoa), `{"items":["1","2"]}`},
+		{"trim_page_nil", trimmed, `{"items":[]}`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b, err := json.Marshal(tc.page)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			if got := string(b); got != tc.want {
+				t.Fatalf("json = %s, want %s", got, tc.want)
+			}
+			for _, key := range []string{"has_more", "next_cursor", "previous_cursor", "has_prev", "total"} {
+				if strings.Contains(string(b), key) {
+					t.Errorf("json = %s, must not carry %q", b, key)
+				}
+			}
+		})
 	}
 }

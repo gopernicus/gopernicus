@@ -105,7 +105,11 @@ composition leaves sdk entirely (a composing integration —
 `integrations/notify/mailer` is the exemplar). Guard G12 enforces the
 law over production and test code alike; tests use root/stdlib fakes or
 package-local contract checks rather than importing a peer tier. G13 keeps
-integrations pointing outward-only.
+integrations pointing outward-only. G21 (web-crud-list-request, 2026-08-27)
+pins one stdlib edge the module-path greps cannot see: `foundation/crud` may
+import `net/url` (its list-query parser reads `url.Values`) but never
+`net/http`, because every store adapter imports `crud` and carries whatever
+it imports.
 
 ## Protocols and pocket relationships (sdk-work-protocol, 2026-07-13)
 
@@ -147,7 +151,7 @@ HTTP middleware sorts onto the same three tiers, ratified so nobody
 
 | middleware | lives in | why |
 |---|---|---|
-| **foundation — pure HTTP mechanism** | `sdk/foundation/web` | `Panics`, `Logger`, `RequestID`, `TrustProxies`, `CORSMiddleware`/`CORSWithConfig`, `DefaultHeadersMiddleware` — no capability port behind them, stdlib only, FLAT. `CORSMiddleware`/`DefaultHeadersMiddleware` are AVAILABLE host middleware, kept deliberately (owner call, 2026-07-11): expected wiring for any API-serving or browser-facing host, NOT prune candidates even though no example wires them yet. |
+| **foundation — pure HTTP mechanism** | `sdk/foundation/web` | `Panics`, `Logger`, `RequestID`, `TrustProxies`, `CORSMiddleware`/`CORSWithConfig`, `DefaultHeadersMiddleware`, `NoStore` — no capability port behind them, stdlib only, FLAT. `CORSMiddleware`/`DefaultHeadersMiddleware` are AVAILABLE host middleware, kept deliberately (owner call, 2026-07-11): expected wiring for any API-serving or browser-facing host, NOT prune candidates even though no example wires them yet. |
 | **capability×foundation composition** | the capability that owns the semantics | `cacher.Pages`, `tracing.Middleware`, `ratelimiter.Middleware` — a capability producing a `web.Middleware`; web stays agnostic of the capability, the capability legally depends on web (capability → foundation). |
 | **identity/authorization gate** | the owning pocket, as a root-package re-export of an `internal/` implementation | `authentication.RequireUser`, `authorization.RequirePermission` — the root package writes NO HTTP (the handler bodies live in `internal/logic/…svc`), so this REINFORCES the "services and HTTP are `internal/`" anatomy rather than amending it. Hosts inject them through config seams — `[]web.Middleware` (`cms.Config.AdminMiddleware`, `events.Config.StreamMiddleware`) or a SINGULAR `web.Middleware` (`authentication.Config.MachineRoutesGate`) — or at route registration. Singular vs slice is a deliberate posture choice, not drift: with a slice, nil and an empty slice both mean "mounted, ungated", which is fine for a surface that mounts regardless; the singular seam is for a surface whose routes should NOT mount without a policy — nil is the unambiguous "no policy" (the machine lifecycle routes stay unmounted), where an empty slice would have meant "mounted, ungated". |
 | **host recipe** | a host closure | platform-admin/self-access short-circuits (auth-cms's `isPlatformAdmin`, composed by its `requireMembership` gate) — each authorization engine evaluates only what its own model declares; bypasses are host composition, run first in the host's own closure, and fail closed. The roles kind's model does not change this: a globally held role is DATA that grants exactly the role-owned permissions whose model entries name it, never relationship-owned or later-added ones, so a universal admin bypass stays a host recipe and the pocket ships no `Superuser` primitive. |

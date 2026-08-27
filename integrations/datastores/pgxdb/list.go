@@ -204,15 +204,7 @@ func (q ListQuery[T]) listOffset(ctx context.Context, db Querier, req crud.ListR
 
 // collect runs sql with args and scans every row into T via RowToStructByName.
 func (q ListQuery[T]) collect(ctx context.Context, db Querier, sql string, args pgx.NamedArgs) ([]T, error) {
-	rows, err := db.Query(ctx, sql, args)
-	if err != nil {
-		return nil, MapError(err)
-	}
-	items, err := pgx.CollectRows(rows, pgx.RowToStructByName[T])
-	if err != nil {
-		return nil, MapError(err)
-	}
-	return items, nil
+	return Collect[T](ctx, db, sql, args)
 }
 
 // resolveOrder maps the request Order (or DefaultOrder when zero) to a vetted

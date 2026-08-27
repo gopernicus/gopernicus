@@ -28,3 +28,19 @@ func ProbeTable(ctx context.Context, db Querier, table string) error {
 	}
 	return nil
 }
+
+// ProbeTables is ProbeTable over the relations one store owns — the boot-time
+// check a repository spanning several tables runs in its constructor, instead
+// of looping ProbeTable and re-wrapping the error itself. Probing stops at the
+// FIRST failure and returns it unchanged: an absent relation already wraps
+// sdk.ErrNotFound naming it, and a query or infrastructure failure is not about
+// any one table, so neither is renamed here. No tables is a nil error. db may
+// be a *DB pool or a *Tx.
+func ProbeTables(ctx context.Context, db Querier, tables ...string) error {
+	for _, table := range tables {
+		if err := ProbeTable(ctx, db, table); err != nil {
+			return err
+		}
+	}
+	return nil
+}

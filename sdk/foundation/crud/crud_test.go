@@ -213,9 +213,10 @@ func TestMapPageErr(t *testing.T) {
 		t.Errorf("failed page must be the zero value, got %+v", failed)
 	}
 
-	// nil Items and nil Total are preserved as nil.
+	// nil Items is normalized to an empty slice (so an empty page marshals
+	// "items":[], never null); nil Total is still preserved as nil.
 	none, err := MapPageErr(Page[int]{}, func(n int) (string, error) { return strconv.Itoa(n), nil })
-	if err != nil || none.Items != nil || none.Total != nil {
+	if err != nil || none.Items == nil || len(none.Items) != 0 || none.Total != nil {
 		t.Errorf("zero page: got %+v err=%v", none, err)
 	}
 }

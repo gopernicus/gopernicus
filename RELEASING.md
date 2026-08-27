@@ -186,6 +186,25 @@ POSTs (`application/json` required there too). No
 schema, no store retags, no pin moves. Read the upgrade note below before
 adopting.
 
+**2026-08-27: `sdk/v0.6.0`, `integrations/datastores/pgxdb/v0.6.0`,
+`pockets/authentication/v0.8.0` — next tags, ONE train, MINOR across all
+three** — the list contract reaches the request (plan of record
+`plans/web-crud-list-request.md`; gopernicus issues #11 and #9, bundled by
+owner ruling; originating host gps-360-go). `crud.ParseListQuery` over
+`url.Values` with every `ParseListRequest`/`ParseOrder` rejection wrapping
+`sdk.ErrInvalidInput`; `crud.Items`/`MapItems` and nil-page normalization;
+`web.NoStore()`; pgxdb registers a UTC `TimestamptzCodec` on every connection
+and defaults the session `timezone` to `UTC` when the host names none; plus
+the #9 helpers `Collect[T]`, `ProbeTables`, and `MapError` 22P02. **Pin move:
+`pockets/authentication` → `sdk v0.6.0`**; pgxdb stays on `sdk v0.4.0`; no
+store module retags (their pins upgrade at the host via MVS). Three observable
+changes ride this train — read the notes below before adopting: parser errors
+now classify as 400 through `ErrFromDomain` (a host that special-cased the 500
+can delete the special case), SDK-constructed empty pages marshal `"items":[]`
+instead of `null` (visible on turso-backed hosts), and every scanned
+`timestamptz` is UTC-located while zone-dependent SQL on a zone-less DSN now
+evaluates in UTC.
+
 ## Tagging scheme
 
 Nested Go modules in a single repo are tagged with the module's directory as a
@@ -289,6 +308,181 @@ silently would break a host whose CSP no longer covers the kit's assets. Record 
 the module's next-tag upgrade note below and tell hosts to re-derive their CSP header.
 
 ## Upgrade notes (keyed to each module's next tag)
+
+### sdk — v0.6.0 (next tag, 2026-08-27): the list contract reaches the request (minor)
+
+Plan of record `plans/web-crud-list-request.md` (gopernicus #11). A **minor**
+rather than the additive-as-patch precedent (`v0.3.1`, `v0.4.1`) by owner
+ruling, because two things change observably alongside the additions.
+
+**Additions.**
+
+- **`crud.ParseListQuery(q url.Values, opts crud.ListQueryOptions) (crud.ListRequest, error)`**
+  — `ParseListRequest` over the canonical query keys `limit` / `cursor` /
+  `offset` / `count` / `q` (exported as `crud.QueryKeyLimit` … `QueryKeySearch`;
+  `crud.QueryKeyOrder` names `order` for callers). `ListQueryOptions{Limits,
+  DefaultStrategy}` is the resource-side policy; the zero value is sdk's
+  defaults. It builds a `ListParams` and delegates, so there is one parser, not
+  two. It lives in `crud`, not `web`: foundation packages import the root only
+  (G12b), and every store adapter imports `crud`, so `crud` carries `net/url`
+  and never `net/http` (guard **G21**, `guard-crud-no-nethttp`).
+- **`order` is deliberately NOT folded in.** Parse it beside the call with
+  `crud.ParseOrder(fields, q.Get(crud.QueryKeyOrder), defaultOrder)` — reject
+  (JSON edges) or fall back to the default order (SSR, the cms admin posture)
+  is a per-aggregate choice a combined parser cannot express.
+- **`crud.Items[T](items []T) Page[T]`** and **`crud.MapItems[T,U](items []T,
+  fn func(T) U) Page[U]`** — the bounded-page constructors for a
+  parent-scoped, uncursored list: a `Page` holding only `Items`, so the wire
+  shape is `{"items":[…]}`. `MapItems` is defined as `MapPage(Items(x), fn)`.
+- **`web.NoStore() web.Middleware`** — a named preset of
+  `DefaultHeadersMiddleware` writing exactly `Cache-Control: no-store` (no
+  `Pragma`, no `Expires`) before the handler runs; a handler may still
+  override on its own writer. Mount it on route groups whose answers derive
+  from a per-request grant. It is a header policy the host applies, not an
+  identity gate and not a guarantee — whatever gate is mounted beside it is
+  what makes the group authenticated.
+
+**Observable change 1 — parser rejections now classify.** Every rejection
+from `ParseListRequest` (seven) and `ParseOrder` (two) wraps
+`sdk.ErrInvalidInput`, sentence first, sentinel last
+(`"rows value too small, must be larger than 0: invalid input"`); the
+`strconv` cause stays in the chain for the three conversion errors. The
+existing sentences survive verbatim as the prefix — a host matching the raw
+strings keeps working. Consequences: `web.ErrFromDomain(err)` answers the
+**generic** `400 bad_request "invalid input"` where it answered 500 (its
+generic mapping is deliberate — `SafeDomainError` posture unchanged), and
+`web.ErrValidation(err)` puts the sentence on the wire:
+`{"message":"page limit conversion: strconv.Atoi: parsing \"zero\": invalid syntax: invalid input","code":"bad_request"}`.
+That is the contract: `ErrFromDomain` for the status, `ErrValidation` for the
+sentence — the path `DecodeJSON` failures already take. Cursor-decode errors
+are NOT wrapped: a stale or bad cursor token is a first page by rule, never a
+400. A host that special-cased the old 500 (gps-360-go `wire.ListRequest`)
+can delete the special case; the helper collapses to
+`crud.ParseListQuery(r.URL.Query(), crud.ListQueryOptions{Limits: limits})` +
+`web.RespondJSONError(w, web.ErrValidation(err))`.
+
+**Observable change 2 — SDK-built empty pages say `[]`, never `null`.**
+`Items`, `MapItems`, `TrimPage`, `MapPage`, and `MapPageErr` all normalize a
+nil item slice to an empty one. pgx pages never carried nil (`CollectRows`
+starts non-nil); the turso connector's `List` did, so a **turso-backed host's
+empty page changes from `"items":null` to `"items":[]`** on this tag —
+bug-fix class, but a wire change. A directly constructed `Page[T]{}` is
+caller-owned and still marshals `null`; there is no `Page.MarshalJSON`.
+
+Not on this tag: `web/openapi.go` still documents only `limit`/`cursor`/`order`
+(pre-existing drift, left as found); a civil-date type; folding `order` into the
+parser.
+
+### integrations/datastores/pgxdb — v0.6.0 (next tag, 2026-08-27): UTC-located `timestamptz` on every connection, session `timezone=UTC` by default, `Collect`/`ProbeTables`/22P02 (minor; connect-time behaviour change)
+
+Plan of record `plans/web-crud-list-request.md` (gopernicus #11 D6, and #9
+bundled by owner ruling). Pin stays `sdk v0.4.0` — no new sdk symbol is used.
+No `Config` field is added: the scan location is always UTC, and the DSN is
+the session-zone escape hatch.
+
+**Why (the cause is NOT the session zone).** In the pinned pgx v5.8.0 the
+default extended protocol decodes `timestamptz` in **binary** — microseconds
+since epoch, no zone — via `time.Unix(...)`, which yields a `time.Local`
+-located value; the session `TimeZone` only shapes the **text** decoder's
+input. So a scanned `timestamptz` marshalled as `2026-08-27T11:58:03-07:00`
+on a laptop and `Z` in a `TZ`-less container, and `SET TIME ZONE 'UTC'`
+alone would not have changed that. `pgtype.TimestamptzCodec{ScanLocation}`
+("does not change the instant") is the seam both decoders honour.
+
+**D6a — the scan location (unconditional).** `Open` now sets
+`pgxpool.Config.AfterConnect` to register, on every connection's type map, a
+`timestamptz` type whose codec is `TimestamptzCodec{ScanLocation: time.UTC}`
+and a `_timestamptz` array type built over that new element. The array
+registration is the strictly-safe form: pgx's default array codec captured a
+pointer to the default element type at init (`pgtype_default.go:169`), and
+while a `[]time.Time` destination already re-plans through the map (the
+element codec declines a `*time.Time`, so scalar-only registration suffices
+there — measured), a `pgtype.Timestamptz` element destination would still
+reach the stale codec. `tstzrange`/`tstzmultirange` are out of scope (same
+captured-pointer shape; no in-repo store scans them). `timestamp` (without
+zone) already decoded to UTC — untouched. **What changes:** every scanned
+`timestamptz`, scalar or array, in `Scan`, `QueryOne[T]`, `List`, and under
+`QueryExecModeSimpleProtocol` alike, is UTC-located — `Equal`/`Before`/`Sub`
+are unchanged; `String()`/`Format` and `encoding/json` output switch from the
+local offset to `Z`. Hosts already on `timestamps.go`'s `From*` helpers see
+nothing new. Hosts carrying a `wire.Time`/`TimePtr`-style presentation helper
+(gps-360-go: 55 sites) can delete it — DTO fields become `time.Time` /
+`*time.Time`, byte-identical output for scanned instants. **Audit first:** an
+instant minted in-process (`time.Now()` in a domain constructor) still carries
+`time.Local` unless the container runs `TZ=UTC` — normalize those at the
+domain edge with `.UTC()`. **`AfterConnect` is owned by the connector** for
+its codecs; a future `Config.AfterConnect` seam will chain after the
+connector's registration, never replace it (recorded on `Config`).
+
+**D6b — the session zone (owner-ruled IN).** `Open` sets the startup
+parameter `timezone=UTC` **unless** the host already named one: a `timezone`
+key in the DSN (any case; pgconn also maps `PGTZ` onto it) or an `options=`
+value containing `timezone=` (e.g. `-c TimeZone=Europe/Oslo`, also
+`PGOPTIONS`). A startup parameter costs no round-trip, is idempotent under
+pgx's reconnects, and — unlike an `AfterConnect: SET TIME ZONE` — survives
+PgBouncer transaction-mode server reuse because `timezone` is in the pooler's
+tracked startup set. The DSN string itself is never rewritten. **What it
+changes, honestly:** nothing about scans (D6a covers those). It changes
+server-side, zone-dependent SQL for hosts that never set a zone: `now()::text`,
+`to_char(tstz, …)`, `date_trunc('day', tstz)`, `tstz::date`, `EXTRACT(hour
+FROM tstz)`, `timestamptz → timestamp` casts, and — the sharp one — a bare
+`'2026-01-01 00:00'` literal bound to a `timestamptz`, which is interpreted in
+the session zone. Bound `time.Time` arguments are unaffected (pgx binds an
+instant). Today those expressions differ silently between a laptop and a
+`TZ`-less container; after this tag they evaluate identically. **Escape
+hatches:** `AT TIME ZONE '…'` in the SQL that needs local bucketing, or pin
+`timezone=` in the DSN. Adopter check before repinning: grep the host for
+`date_trunc|::date|to_char|AT TIME ZONE|EXTRACT` (gps-360-go: zero hits;
+coordination-hub: the owner's to run).
+
+**#9 — the small helpers (additive).**
+
+- **`Collect[T any](ctx, db Querier, sql string, args ...any) ([]T, error)`**
+  — the exported twin of `List`'s row collection: strict
+  `RowToStructByName`, `MapError` on both the query and the collect error,
+  empty non-nil `[]T` on no rows. Parent-bounded, unpaginated reads; not a
+  paging primitive — that is `List`. Pairs with `crud.MapItems` on the wire.
+- **`ProbeTables(ctx, db Querier, tables ...string) error`** — `ProbeTable` in
+  a loop, stopping at and returning the first failure (already naming the
+  relation when it is an absence; a `MapError`'d infrastructure failure is not
+  re-wrapped as "about" a table).
+- **`MapError`: SQLSTATE `22P02` (`invalid_text_representation`)** →
+  `fmt.Errorf("%s: %w", pgErr.Message, sdk.ErrInvalidInput)` — the one case
+  that keeps the server's message (`invalid input syntax for type uuid:
+  "not-a-uuid"`), because that sentence is what a host's **log** loses today.
+  It never reaches a client: `web.ErrFromDomain` is generic by design. The
+  existing four cases keep returning bare sentinels.
+
+Proof: hermetic tests on the extracted `poolConfig` (codec identity, decoding
+through `pgtype.NewMap()`, the `timezone`/`PGTZ`/`PGOPTIONS`/`options=`
+precedence with the libpq env cleared) and `TestLive_ScanUTC` /
+`TestLive_Collect` against a throwaway Postgres 17 run under
+`TZ=America/Los_Angeles` — every scan `+0000 UTC`, the `+05:00` literal equal
+to `2025-12-31T19:00:00Z`, `SHOW TimeZone` = `UTC` by default and
+`Europe/Oslo` when the DSN says so.
+
+### pockets/authentication — v0.8.0 (next tag, 2026-08-27): list routes answer the parser's sentence; pin → `sdk v0.6.0` (minor)
+
+Plan of record `plans/web-crud-list-request.md` (D3). A **minor**: the pin
+moves to a sibling minor (`sdk v0.5.0 → v0.6.0`), and one wire body changes.
+No schema, no store retags (`stores/{pgx,turso}` keep their `authentication
+v0.7.0` / `sdk v0.5.0` pins and upgrade at the host via MVS).
+
+- **Wire-body change on the five list routes** (`GET /auth/admin/users`,
+  `/auth/service-accounts`, `/auth/service-accounts/{id}/keys`,
+  `/auth/invitations/mine`, and the resource-scoped invitation list): a
+  malformed `limit` / `cursor` / `offset` / `count` / `order` still answers
+  **400 `bad_request`**, but the `message` is now the parser's own sentence —
+  `"rows value too small, must be larger than 0: invalid input"`,
+  `"cursor and offset are mutually exclusive: invalid input"`,
+  `"unknown order field: nope: invalid input"` — instead of the fixed
+  `"invalid page parameters"` / `"invalid order parameter"`. Status and
+  `code` are unchanged; a client matching those two fixed strings must stop.
+- Internally the pocket's `parseListRequest` is now the two framework calls
+  (`crud.ParseListQuery` with `Config.ListStrategy` as `DefaultStrategy`, then
+  `crud.ParseOrder`) + `web.ErrValidation` — de-duplication, and the pocket
+  stops being the one caller that discarded the sentence. Only `q` is read for
+  search (no legacy `s`), as before.
 
 ### 2026-08-27: the `features/` tier is `pockets/` (module-path rename; ONE train of 19 tags)
 

@@ -282,3 +282,33 @@ func TestDefaultHeadersMiddleware_HandlerCanOverride(t *testing.T) {
 		t.Errorf("X-Frame-Options = %q, want default preserved when handler does not set it", got)
 	}
 }
+
+func TestNoStore_WritesCacheControl(t *testing.T) {
+	h := NoStore()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+	if got := rec.Header().Get("Pragma"); got != "" {
+		t.Errorf("Pragma = %q, want no Pragma header", got)
+	}
+	if got := rec.Header().Get("Expires"); got != "" {
+		t.Errorf("Expires = %q, want no Expires header", got)
+	}
+}
+
+func TestNoStore_HandlerCanOverride(t *testing.T) {
+	h := NoStore()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=60")
+	}))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if got := rec.Header().Get("Cache-Control"); got != "public, max-age=60" {
+		t.Errorf("Cache-Control = %q, want handler override to win", got)
+	}
+}

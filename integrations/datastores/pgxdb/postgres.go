@@ -20,22 +20,42 @@ import (
 	"log/slog"
 	"net"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
 
 	jackpgx "github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // PostgreSQL error codes MapError recognizes.
 // See: https://www.postgresql.org/docs/current/errcodes-appendix.html
 const (
-	uniqueViolation     = "23505" // unique_violation
-	foreignKeyViolation = "23503" // foreign_key_violation
-	checkViolation      = "23514" // check_violation
-	notNullViolation    = "23502" // not_null_violation
+	uniqueViolation           = "23505" // unique_violation
+	foreignKeyViolation       = "23503" // foreign_key_violation
+	checkViolation            = "23514" // check_violation
+	notNullViolation          = "23502" // not_null_violation
+	invalidTextRepresentation = "22P02" // invalid_text_representation
+)
+
+// Startup-packet parameters the connector defaults. pgconn folds every
+// non-connection DSN key into ConnConfig.RuntimeParams (pgconn/config.go:351-356)
+// and maps PGTZ onto "timezone" / PGOPTIONS onto "options" (:466-469), so the
+// host's own choice — DSN key, PGTZ, or an "-c TimeZone=…" options value — is
+// visible in that map and is never overridden.
+const (
+	runtimeParamTimeZone = "timezone"
+	runtimeParamOptions  = "options"
+
+	// timeZoneOptionMarker matches "-c timezone=…" / "-c TimeZone=…" inside an
+	// options value; the comparison is case-folded.
+	timeZoneOptionMarker = "timezone="
+
+	// defaultTimeZone is the session zone applied when the host named none.
+	defaultTimeZone = "UTC"
 )
 
 // Config holds the PostgreSQL connection settings. Hosts populate it directly
@@ -52,6 +72,11 @@ const (
 // through its DB/Tx wrapper because database/sql exposes no tracer hook. Tracer
 // has no turso analogue: it composes an external pgx.QueryTracer (e.g.
 // OpenTelemetry) into that native seam, which SQLite's driver does not expose.
+//
+// The connector owns pgxpool.Config.AfterConnect: it registers the UTC-located
+// timestamptz codecs there on every connection (see the "Time zone" section of
+// the module README). Config exposes no AfterConnect field today; should one be
+// added, it will CHAIN after the connector's registration, never replace it.
 type Config struct {
 	DSN      string `env:"DB_URL"`
 	Host     string `env:"DB_HOST"`
@@ -170,18 +195,64 @@ func (cfg Config) queryTracer() jackpgx.QueryTracer {
 	return NewMultiQueryTracer(tracer, loggingTracer)
 }
 
-// Open connects to a PostgreSQL database via a pgxpool and verifies it with a
-// ping. Pool sizes are applied only when non-zero, leaving pgx's own defaults
-// in place otherwise.
-func Open(cfg Config) (*DB, error) {
-	dsn, err := cfg.connectionString()
-	if err != nil {
-		return nil, err
+// registerUTCTimestamptz registers UTC-located timestamptz codecs on one
+// connection's type map, so a scanned timestamptz (and timestamptz[]) is a
+// time.Time located in UTC rather than time.Local. It changes presentation, not
+// the instant: pgx's binary decoder builds the value with time.Unix and its text
+// decoder parses the session-zone offset, and both then apply the codec's
+// ScanLocation (pgtype/timestamptz.go:272-278, :326-328).
+//
+// The array type is registered explicitly over the NEW element type. pgx's
+// default "_timestamptz" ArrayCodec captured a pointer to the DEFAULT (that is,
+// time.Local-scanning) element type at init — pgtype_default.go:169 registers it
+// as ArrayCodec{ElementType: defaultMap.oidToType[TimestamptzOID]} — and the
+// array decoders consult that captured codec first when planning the per-element
+// scan, falling back to the map only when it declines (array_codec.go:268, :306).
+// A plain []time.Time element is one the captured codec declines, so the map
+// would win there anyway; a pgtype.Timestamptz element would not. Registering the
+// array type keeps every element destination on the UTC codec.
+//
+// tstzrange / tstzmultirange are deliberately out of scope: they capture the
+// same default element pointer (pgtype_default.go:119, :127) and no store in
+// this repo scans them.
+func registerUTCTimestamptz(m *pgtype.Map) {
+	tz := &pgtype.Type{
+		Name:  "timestamptz",
+		OID:   pgtype.TimestamptzOID,
+		Codec: &pgtype.TimestamptzCodec{ScanLocation: time.UTC},
 	}
-	if cfg.ConnectTimeout == 0 {
-		cfg.ConnectTimeout = 10 * time.Second
-	}
+	m.RegisterType(tz)
+	m.RegisterType(&pgtype.Type{
+		Name:  "_timestamptz",
+		OID:   pgtype.TimestamptzArrayOID,
+		Codec: &pgtype.ArrayCodec{ElementType: tz},
+	})
+}
 
+// hasSessionTimeZone reports whether the host already named a session time zone
+// — a "timezone" runtime parameter (from the DSN or PGTZ) or a "timezone=" entry
+// inside an options value (from the DSN or PGOPTIONS). Parameter names are
+// case-insensitive to the server, so the key comparison is case-folded too:
+// writing a second, differently-cased key would put two competing time-zone
+// parameters in the startup packet.
+func hasSessionTimeZone(params map[string]string) bool {
+	for k, v := range params {
+		if strings.EqualFold(k, runtimeParamTimeZone) {
+			return true
+		}
+		if strings.EqualFold(k, runtimeParamOptions) && strings.Contains(strings.ToLower(v), timeZoneOptionMarker) {
+			return true
+		}
+	}
+	return false
+}
+
+// poolConfig builds the pgxpool configuration Open connects with: pgx's own
+// parse of the DSN, then this Config's pool sizes and tracer, the connector's
+// AfterConnect codec registration, and the default session time zone. The DSN
+// string itself is never rewritten — pgconn has already parsed it into
+// ConnConfig, so the parsed form is what gets adjusted.
+func (cfg Config) poolConfig(dsn string) (*pgxpool.Config, error) {
 	poolConfig, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parsing connection string: %w", err)
@@ -199,6 +270,39 @@ func Open(cfg Config) (*DB, error) {
 	}
 	if tracer := cfg.queryTracer(); tracer != nil {
 		poolConfig.ConnConfig.Tracer = tracer
+	}
+
+	poolConfig.AfterConnect = func(_ context.Context, conn *jackpgx.Conn) error {
+		registerUTCTimestamptz(conn.TypeMap())
+		return nil
+	}
+
+	if poolConfig.ConnConfig.RuntimeParams == nil {
+		poolConfig.ConnConfig.RuntimeParams = map[string]string{}
+	}
+	if !hasSessionTimeZone(poolConfig.ConnConfig.RuntimeParams) {
+		poolConfig.ConnConfig.RuntimeParams[runtimeParamTimeZone] = defaultTimeZone
+	}
+
+	return poolConfig, nil
+}
+
+// Open connects to a PostgreSQL database via a pgxpool and verifies it with a
+// ping. Pool sizes are applied only when non-zero, leaving pgx's own defaults
+// in place otherwise. Every connection scans timestamptz in UTC and, unless the
+// host named a zone, runs with a UTC session time zone (see poolConfig).
+func Open(cfg Config) (*DB, error) {
+	dsn, err := cfg.connectionString()
+	if err != nil {
+		return nil, err
+	}
+	if cfg.ConnectTimeout == 0 {
+		cfg.ConnectTimeout = 10 * time.Second
+	}
+
+	poolConfig, err := cfg.poolConfig(dsn)
+	if err != nil {
+		return nil, err
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.ConnectTimeout)
@@ -235,6 +339,13 @@ func Open(cfg Config) (*DB, error) {
 // Detection is by SQLSTATE code via pgconn.PgError (vs turso's substring match
 // on SQLite messages). Unrecognized errors pass through unchanged. Callers map
 // both query errors and Scan errors (jackpgx.ErrNoRows → ErrNotFound) through this.
+//
+// 22P02 (invalid_text_representation — a malformed uuid or integer literal
+// reaching Postgres, typically an unvalidated path parameter) is the one code
+// whose server message is kept, as the sentence before the sentinel, because it
+// names the offending value and a host that dropped it lost that from its log.
+// web.ErrFromDomain answers the generic 400, so the message never reaches a
+// client. The other codes return the bare sentinel.
 func MapError(err error) error {
 	if err == nil {
 		return nil
@@ -252,6 +363,8 @@ func MapError(err error) error {
 			return sdk.ErrInvalidReference
 		case checkViolation, notNullViolation:
 			return sdk.ErrInvalidInput
+		case invalidTextRepresentation:
+			return fmt.Errorf("%s: %w", pgErr.Message, sdk.ErrInvalidInput)
 		}
 	}
 	return err

@@ -17,19 +17,21 @@ consume this package's `*DB`.
 | member | shape |
 |---|---|
 | `Config` | `DSN` or split `Host`/`Port`/`User`/`Password`/`Database`/`SSLMode`, plus pool settings, `LogQueries`, `Logger`, `Tracer`, and `Retry`; env tags are provided for host parsers, but `Open` never reads environment itself |
-| `Open(cfg) (*DB, error)` | opens a `pgxpool` and pings |
+| `Open(cfg) (*DB, error)` | opens a `pgxpool` and pings; every connection scans `timestamptz` in UTC and, unless the host named a zone, runs with session `timezone=UTC` (see below) |
 | `DB` | `Exec` / `Query` / `QueryRow` / `InTx` / `Begin` / `Close` / `Ping` / `Underlying() *pgxpool.Pool` |
 | `Querier` | interface intersection of `*DB` and `*Tx` (`Exec`/`Query`/`QueryRow`) — lets a store accept pool-or-tx |
-| `MapError(err) error` | SQLSTATE-based: `23505`→`ErrAlreadyExists`, `23503`→`ErrInvalidReference`, `23514`/`23502`→`ErrInvalidInput`, `pgx.ErrNoRows`→`ErrNotFound`; unknown errors pass through |
+| `MapError(err) error` | SQLSTATE-based: `23505`→`ErrAlreadyExists`, `23503`→`ErrInvalidReference`, `23514`/`23502`→`ErrInvalidInput`, `22P02` (malformed uuid/integer literal)→`ErrInvalidInput` keeping the server message as the sentence before the sentinel, `pgx.ErrNoRows`→`ErrNotFound`; unknown errors pass through |
 | `RedactDSN(dsn) string` | masks a URL-form DSN's userinfo password for safe logging; unparseable input returns the literal `"REDACTED"` |
 | `StatusCheck(ctx, db)` | 1s-deadline ping |
 | `ProbeTable(ctx, q, table) error` | boot-time existence probe for a store's table (`to_regclass`, name bound as a parameter, bare or schema-qualified): absent → wraps `ErrNotFound` naming the relation; a query failure maps through `MapError` and is never misreported as missing. Run it in a store constructor so a host aimed at the wrong database fails before serving |
+| `ProbeTables(ctx, q, tables…) error` | `ProbeTable` over every relation a store owns; probing stops at the first failure and returns it unchanged — the absent-relation error already names the table, and a query failure is about none of them. No tables is nil |
 | `RunMigrations(ctx, db, fs, dir, opts…)` | host-driven migration runner for one directory; one transaction, filename order, checksum guard, forward-only. One merged stream per schema: call it once per schema, with filenames unique within the stream that are never renumbered — `dir` is an `fs.FS` subpath, never a ledger namespace (all rows in a stream share the `"default"` source) |
 | `MigrateOption` / `WithSchema(s)` | the only `RunMigrations` option: run this stream inside `s` — create the schema if absent, `SET LOCAL search_path` for the transaction, and keep the stream's `schema_migrations` ledger in `s`. No option = today's unqualified stream, byte-for-byte |
 | `Schema` / `NewSchema(name) (Schema, error)` | validated Postgres schema name; the zero value means "no schema" and renders bare names. Rejection wraps `ErrInvalidInput` (empty, >63 bytes, non-identifier, reserved `pg_` prefix, `information_schema`); `public` is valid |
 | `(Schema).Table(t)` / `IsZero()` / `String()` | `"<schema>".t` for a set schema, bare `t` for the zero value; the one qualifier used by the runner's ledger statements and by every pgx store's `WithSchema` |
 | `NewLimiter(db, opts…) *Limiter` / `WithLimiterKeyPrefix` | a durable `sdk/capabilities/ratelimiter.Limiter` over the caller-owned `*DB` — one atomic statement per `Allow` against the host-owned `ratelimit_windows` table (see below) |
 | `(*Limiter).StatusCheck(ctx) error` | boot probe for that host-owned table; call it before serving, because a missing table makes the sdk middleware fail open and silent |
+| `Collect[T](ctx, q, sql, args…) ([]T, error)` | parent-bounded, unpaginated read: every row scanned into a db-tagged `T` via strict `RowToStructByName`, both the query and the collect error through `MapError`, and no rows as an empty NON-NIL `[]T` so the caller marshals `[]` and never `null`. Not a paging primitive — an unbounded result set belongs on `List` |
 | `List[T]` / `ListQuery[T]` | the shared paginated-SELECT helper implementing the `sdk/foundation/crud` list standards (see below) |
 | `QuoteIdentifier(ident) (string, error)` | regex allow-list + per-segment double-quoting for dynamic identifiers (order columns); rejection wraps `ErrInvalidInput` |
 | `ApplyCursorPagination` / `AddOrderByClause` / `AddLimitClause` | NamedArgs SQL builders under `List`: tuple-comparison keyset predicate (direction × forPrevious operator table), ORDER BY with PK tiebreaker + optional `LOWER()`, `LIMIT @limit` |
@@ -446,6 +448,75 @@ logs SQL args verbatim, so every `Allow` writes the full key — IPs included �
 into your application logs, which are typically retained far longer and read far
 more widely than this table.
 
+## Time zone — UTC-located scans on every connection
+
+`Open` owns `pgxpool.Config.AfterConnect` and registers UTC-located
+`timestamptz` codecs on each new connection's type map. `Config` exposes no
+`AfterConnect` field; should one be added, it will **chain after** the
+connector's registration, never replace it.
+
+**The contract.** A scanned `timestamptz` — scalar or `timestamptz[]` — is a
+`time.Time` located in `time.UTC`, under both the extended (binary) and simple
+(text) protocols, for row scans and `RowToStructByName` struct scans alike. The
+instant is unchanged: `Equal`/`Before`/`Sub` behave exactly as before. What
+changes is presentation — `String()`/`Format` and `encoding/json` now render `Z`
+instead of the process's local offset. There is no `Config` knob: a
+`time.Time`'s location is presentation, not data, so a host that wants a local
+rendering calls `.In(loc)` at its own edge.
+
+**Why it was needed.** pgx's default `timestamptz` decoder for the extended
+protocol reads microseconds since 2000-01-01 with no zone and builds the value
+with `time.Unix`, which yields a `time.Local`-located `time.Time`
+(`pgtype/timestamptz.go:272-278`). The session `TimeZone` feeds only the *text*
+decoder's input (`:305-331`), so `SET TIME ZONE 'UTC'` alone would not have
+changed a scanned value. `pgtype.TimestamptzCodec.ScanLocation` is the seam both
+decoders honour (`:276-278`, `:326-328`), and that is what the connector sets.
+
+**`tstzrange` / `tstzmultirange` are out of scope.** pgx's default range codecs
+captured a pointer to the default `timestamptz` element type at init
+(`pgtype/pgtype_default.go:119`, `:127`, the same pattern as `_timestamptz` at
+`:169`), so they would each need explicit re-registration. No store in this repo
+scans a timestamp range; a host that does can register its own on top.
+
+### The session zone defaults to UTC
+
+Unless the host named a time zone, `Open` sets the startup parameter
+`timezone=UTC` (`ConnConfig.RuntimeParams`, not a DSN rewrite — pgconn has
+already parsed the DSN, and a startup parameter costs no extra round-trip and
+survives PgBouncer's transaction-mode connection reuse, which a `SET` does not).
+
+**The host wins whenever it named a zone**, in any of the forms pgconn folds
+into `RuntimeParams` (`pgconn/config.go:351-356`, `:466-469`):
+
+- a `timezone=` key in the DSN (`…?sslmode=disable&timezone=Europe/Oslo`, or
+  `timezone=Europe/Oslo` in `key=value` form),
+- the `PGTZ` environment variable (pgconn maps it onto `timezone`),
+- a `timezone=` entry inside an `options` value — DSN `options=-c timezone=…` or
+  `PGOPTIONS='-c TimeZone=…'` (matched case-insensitively).
+
+`Open` still never reads the process environment itself; `PGTZ`/`PGOPTIONS` are
+pgconn's own handling, honoured here as "the host named a zone".
+
+**What the default changes, for a host that named none.** Nothing about scans —
+those are covered above and are unconditional. It changes *server-side*,
+zone-dependent SQL, which previously evaluated in whatever zone the server
+defaulted to:
+
+- `now()::text` and any `timestamptz → text` rendering,
+- `to_char(tstz, …)`,
+- `date_trunc('day', tstz)` and other bucketing,
+- `tstz::date`,
+- `EXTRACT(hour FROM tstz)`,
+- `timestamptz → timestamp` casts,
+- a bare literal such as `'2026-01-01 00:00'` bound to a `timestamptz`, which is
+  interpreted in the session zone (the sharp one).
+
+Bound `time.Time` arguments are unaffected — pgx binds an instant. The escape
+hatches are `AT TIME ZONE '…'` per expression, or pinning a session zone with
+`timezone=` in the DSN / `PGTZ` / `options=-c timezone=…` as above. Grep a host
+for `date_trunc|::date|to_char|AT TIME ZONE` before adopting if it relied on a
+server-local zone.
+
 ## Symmetry is convention, not a guarantee
 
 This connector mirrors the turso connector member-for-member **by convention**.
@@ -466,15 +537,24 @@ then, hosts opt in by setting `Config.LogQueries` or `Config.Tracer`.
 ## Testing
 
 Unit tests are hermetic (`MapError` over constructed `pgconn.PgError` values,
-config validation, migration checksum/error paths) and run with a plain
-`go test ./...` — no database required.
+`Collect` and `ProbeTables` over in-memory `Querier` stubs, config validation,
+migration checksum/error paths, `poolConfig`'s
+`AfterConnect`/session-zone defaulting, and the codec registration driven through
+a bare `pgtype.Map` in both wire formats) and run with a plain `go test ./...` —
+no database required. The time-zone default cases clear `PGTZ`, `PGOPTIONS`,
+`PGSERVICE`, and `PGSERVICEFILE` first, so ambient libpq configuration cannot
+decide the result.
 
 The live tests are gated on `POSTGRES_TEST_DSN`: `Open`/ping + a migrate-apply
 round-trip, the schema-scoped migration legs (tables and ledger inside the
 schema with `public` untouched, schema-then-default ledger isolation on one
 pool, the non-atomic per-schema transaction boundary, the ledger-relocation
 preflight and the no-copy fallback, and the four-case privilege matrix), the
-`List` behavior suite, and the limiter legs (the shared
+`List` behavior suite, `TestLive_Collect` (parent-bounded rows, an empty non-nil
+result, a collect inside a transaction, and `22P02`/unknown-relation error
+mapping), `TestLive_ScanUTC` (UTC-located scalar, array, struct-scan
+and simple-protocol reads, `SHOW TimeZone` = `UTC`, and the DSN override keeping
+its own session zone while scans stay UTC), and the limiter legs (the shared
 `ratelimitertest.Run` conformance suite, the exact-K concurrency proof — which
 also bounds the returned `RetryAfter`/`Remaining`, the only place a stale
 server clock is reachable — server time, burst, prefix isolation, context

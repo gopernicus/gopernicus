@@ -18,7 +18,7 @@ STORE_MODULES = pockets/cms/stores/pgx pockets/cms/stores/turso pockets/authenti
 	guard-workshop-boundary guard-sdk-layering guard-integration-no-inward \
 	guard-auth-no-delivery-repo guard-auth-no-request-time-provider \
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
-	guard-no-legacy-features-path
+	guard-no-legacy-features-path guard-crud-no-nethttp
 
 # Regenerate *_templ.go from .templ sources. Each bundled views/templ module pins
 # its own templ tool; generation runs inside each so the tool version is
@@ -134,14 +134,14 @@ tidy:
 # Layering guards — each enforces one architectural boundary from the
 # constitution (00-overview.md) or the feature-standard charter (FS rules,
 # 2026-07-07); every target must print nothing and exit 0 on a clean tree.
-# `make guard` runs all twenty.
+# `make guard` runs all twenty-one.
 guard: guard-sdk-stdlib guard-pocket-isolation guard-sdk-no-outward guard-no-legacy-path \
 	guard-pocket-core-sdk-only guard-pocket-transport-sdk-web guard-pocket-no-cross-pocket \
 	guard-store-no-foreign-pocket guard-no-underlying guard-no-lax-scan \
 	guard-workshop-boundary guard-sdk-layering guard-integration-no-inward \
 	guard-auth-no-delivery-repo guard-auth-no-request-time-provider \
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
-	guard-no-legacy-features-path
+	guard-no-legacy-features-path guard-crud-no-nethttp
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -283,6 +283,18 @@ guard-sdk-layering:
 			| grep -vE '"github.com/gopernicus/gopernicus/sdk/capabilities/'"$$x"'([\"/])' || true); \
 		if [ -n "$$hits" ]; then echo "ERROR (G12c): capabilities/$$x imports another capability or sdk/pocket — including in tests, cross-capability composition leaves sdk (integrations)"; echo "$$hits"; fail=1; fi; \
 	done; exit $$fail
+
+# G21 (web-crud-list-request, 2026-08-27): sdk/foundation/crud may import
+# net/url (its ParseListQuery reads url.Values — transport vocabulary), never
+# net/http. The reason is dependency weight, not taste: every store adapter
+# (integrations/datastores/pgxdb, turso, each pocket's stores/*) imports crud,
+# so whatever crud imports, every adapter carries. G12b greps gopernicus
+# module paths only and cannot see a stdlib edge; this one-liner can.
+# Production files only — a crud test may drive an httptest server if it ever
+# needs to; the adapters do not link tests.
+guard-crud-no-nethttp:
+	@echo "== guard: sdk/foundation/crud never imports net/http (G21) =="
+	@! grep -rln --include='*.go' --exclude='*_test.go' '"net/http"' sdk/foundation/crud/ || { echo "ERROR (G21): sdk/foundation/crud imports net/http — crud is transport vocabulary over url.Values and every store adapter carries its imports"; exit 1; }
 
 # G13 (sdk-layering, 2026-07-10, folded steward finding): integrations never
 # import inward — no pockets/, examples/, or workshop/. Load-bearing now that
@@ -441,7 +453,7 @@ guard-no-legacy-features-path:
 # <<< LEGACY-PATTERNS
 
 # CI-style gate: templ generation must be a no-op (no drift), then per-module
-# vet/build/test across all MODULES, then the twenty layering guards. Drift
+# vet/build/test across all MODULES, then the twenty-one layering guards. Drift
 # is checked via `git diff` when this tree is a git repo; this repo IS a git
 # repo (as of phase 2), so that branch runs. The before/after checksum branch
 # remains as a fallback for gitless checkouts of *_templ.go.

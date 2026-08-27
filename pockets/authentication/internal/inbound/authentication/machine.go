@@ -253,31 +253,21 @@ func (h *handlers) revokeAPIKey(w http.ResponseWriter, r *http.Request) {
 // orderFields is the aggregate's allow-list and defaultOrder its default sort;
 // the order field is validated against the allow-list. The host-configured
 // DefaultStrategy (h.listStrategy) applies when a request names neither a cursor
-// nor an offset param. On any bad param it writes a 400 (the existing
-// web.ErrBadRequest pattern) and returns ok=false.
+// nor an offset param. On any bad param it writes a 400 carrying the parser's
+// own sentence (web.ErrValidation) and returns ok=false.
 func (h *handlers) parseListRequest(w http.ResponseWriter, r *http.Request, orderFields map[string]crud.OrderField, defaultOrder crud.Order) (crud.ListRequest, bool) {
 	q := r.URL.Query()
-	req, err := crud.ParseListRequest(crud.ListParams{
-		Limit:  q.Get("limit"),
-		Cursor: q.Get("cursor"),
-		Offset: q.Get("offset"),
-		Count:  q.Get("count"),
-		// `q` is the canonical v3 search key (crud-search-upstream D3). A legacy
-		// edge migrating v1 clients may fall back to `s` at ITS OWN transport, with
-		// a documented removal milestone; this pocket accepts `q` only.
-		Search:          q.Get("q"),
-		DefaultStrategy: h.listStrategy,
-	})
+	// `q` is the canonical v3 search key (crud-search-upstream D3). A legacy edge
+	// migrating v1 clients may fall back to `s` at ITS OWN transport, with a
+	// documented removal milestone; this pocket accepts `q` only.
+	req, err := crud.ParseListQuery(q, crud.ListQueryOptions{DefaultStrategy: h.listStrategy})
+	if err == nil {
+		req.Order, err = crud.ParseOrder(orderFields, q.Get(crud.QueryKeyOrder), defaultOrder)
+	}
 	if err != nil {
-		web.RespondJSONError(w, web.ErrBadRequest("invalid page parameters"))
+		web.RespondJSONError(w, web.ErrValidation(err))
 		return crud.ListRequest{}, false
 	}
-	order, err := crud.ParseOrder(orderFields, q.Get("order"), defaultOrder)
-	if err != nil {
-		web.RespondJSONError(w, web.ErrBadRequest("invalid order parameter"))
-		return crud.ListRequest{}, false
-	}
-	req.Order = order
 	return req, true
 }
 
