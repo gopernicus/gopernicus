@@ -206,6 +206,44 @@ func TestListServiceAccountsRequiresSession(t *testing.T) {
 	}
 }
 
+// --- transport-edge page params (crud.ParseListQuery / crud.ParseOrder) ---
+
+// TestListServiceAccountsRejectsBadPageParams pins the wire contract of the
+// shared parseListRequest helper on a real list route: a bad page or order param
+// answers 400 bad_request carrying the framework parser's own sentence, sentinel
+// last, instead of a fixed message that discards which param was wrong.
+func TestListServiceAccountsRejectsBadPageParams(t *testing.T) {
+	h := newMachineHandler(t)
+	c := sessionFor(t, h, "pageparams@example.com")
+
+	for _, tc := range []struct{ name, query, message string }{
+		{"limit not a number", "?limit=zero", `page limit conversion: strconv.Atoi: parsing "zero": invalid syntax: invalid input`},
+		{"limit too small", "?limit=0", "rows value too small, must be larger than 0: invalid input"},
+		{"cursor with offset", "?cursor=x&offset=1", "cursor and offset are mutually exclusive: invalid input"},
+		{"unknown order field", "?order=nope:asc", "unknown order field: nope: invalid input"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := do(t, h, "GET", "/auth/service-accounts"+tc.query, "", c)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("GET %s status = %d, want 400; body=%s", tc.query, rec.Code, rec.Body)
+			}
+			var body struct {
+				Message string `json:"message"`
+				Code    string `json:"code"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode error body %q: %v", rec.Body.String(), err)
+			}
+			if body.Code != "bad_request" {
+				t.Errorf("code = %q, want bad_request", body.Code)
+			}
+			if body.Message != tc.message {
+				t.Errorf("message = %q, want %q", body.Message, tc.message)
+			}
+		})
+	}
+}
+
 func TestCreateServiceAccountStrictDecode(t *testing.T) {
 	h := newMachineHandler(t)
 	c := sessionFor(t, h, "sd@example.com")

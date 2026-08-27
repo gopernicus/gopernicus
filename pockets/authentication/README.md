@@ -240,7 +240,7 @@ answers `Cache-Control: no-store`. See
 
 | route | check action | result |
 |---|---|---|
-| `GET /auth/admin/users` | `UserAdminList` (no target) | `crud.Page[user summary]`, ordered `created_at DESC, id DESC`, with the usual `limit`/`cursor`/`offset`/`count` params |
+| `GET /auth/admin/users` | `UserAdminList` (no target) | `crud.Page[user summary]`, ordered `created_at DESC, id DESC`, with the usual `limit`/`cursor`/`offset`/`count` params. A malformed `limit`/`cursor`/`offset`/`count`/`order` answers 400 `bad_request` carrying the parser's own sentence (e.g. `cursor and offset are mutually exclusive: invalid input`), on this and every other list route |
 | `GET /auth/admin/users/{id}` | `UserAdminRead` | one summary |
 | `POST /auth/admin/users/{id}/deactivate` | `UserAdminDeactivate` | `{user, changed}` — `changed:false` on an idempotent replay |
 | `POST /auth/admin/users/{id}/reactivate` | `UserAdminReactivate` | `{user, changed}` |
