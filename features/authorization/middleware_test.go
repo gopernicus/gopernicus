@@ -30,15 +30,15 @@ func TestRequirePermissionPanicsWithoutAModelBearingKind(t *testing.T) {
 	}{
 		"RequirePermission": {
 			func() { _ = svc.RequirePermission("delete", FixedResource("post", "p1")) },
-			"authorization: RequirePermission requires a decision-capable kind (Config.Model or Config.RoleModel); a roles-only host without a role model must not mount it",
+			"authorization: RequirePermission requires a decision-capable kind (Config.RelationshipModel or Config.RoleModel); a roles-only host without a role model must not mount it",
 		},
 		"RequirePermissionOn": {
 			func() { _ = svc.RequirePermissionOn("post", "delete", "postID") },
-			"authorization: RequirePermissionOn requires a decision-capable kind (Config.Model or Config.RoleModel); a roles-only host without a role model must not mount it",
+			"authorization: RequirePermissionOn requires a decision-capable kind (Config.RelationshipModel or Config.RoleModel); a roles-only host without a role model must not mount it",
 		},
 		"RequirePermissionFixed": {
 			func() { _ = svc.RequirePermissionFixed("post", "delete", "p1") },
-			"authorization: RequirePermissionFixed requires a decision-capable kind (Config.Model or Config.RoleModel); a roles-only host without a role model must not mount it",
+			"authorization: RequirePermissionFixed requires a decision-capable kind (Config.RelationshipModel or Config.RoleModel); a roles-only host without a role model must not mount it",
 		},
 	}
 	for name, tc := range mounts {
@@ -167,7 +167,7 @@ func TestGatesOnARolesOnlyModelHost(t *testing.T) {
 // implementation: no principal → 401, a principal without a grant → 403 (relFake
 // denies every Check).
 func TestRequirePermissionDelegates(t *testing.T) {
-	comps, err := NewService(Repositories{Relationships: &relFake{}}, Config{Model: validModel()})
+	comps, err := NewService(Repositories{Relationships: &relFake{}}, Config{RelationshipModel: validModel()})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

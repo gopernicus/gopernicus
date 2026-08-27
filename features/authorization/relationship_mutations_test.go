@@ -62,7 +62,7 @@ func newGuardedLifecycle(t *testing.T, guard MutationGuard, limits EvaluationLim
 		Relationships: st.Relationships(),
 		Roles:         st.Roles(),
 		Mutations:     st.Mutations(),
-	}, Config{Model: lifecycleModel(), Guard: guard, Limits: limits})
+	}, Config{RelationshipModel: lifecycleModel(), Guard: guard, Limits: limits})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -290,7 +290,7 @@ func TestGrantReadOnlyPosture(t *testing.T) {
 	st := memstore.New(memstore.WithGuardianPolicy(mutation.GuardianPolicy{}))
 	comps, err := NewService(Repositories{
 		Relationships: st.Relationships(), Roles: st.Roles(), Mutations: st.Mutations(),
-	}, Config{Model: lifecycleModel()}) // no Guard → read-only posture
+	}, Config{RelationshipModel: lifecycleModel()}) // no Guard → read-only posture
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -344,7 +344,7 @@ func TestGrantReplaySurvivesSchemaChange(t *testing.T) {
 
 	svcOld, err := NewService(Repositories{
 		Relationships: st.Relationships(), Roles: st.Roles(), Mutations: st.Mutations(),
-	}, Config{Model: lifecycleModel(), Guard: &opGuard{}})
+	}, Config{RelationshipModel: lifecycleModel(), Guard: &opGuard{}})
 	if err != nil {
 		t.Fatalf("NewService old: %v", err)
 	}
@@ -365,7 +365,7 @@ func TestGrantReplaySurvivesSchemaChange(t *testing.T) {
 	}})
 	svcNew, err := NewService(Repositories{
 		Relationships: st.Relationships(), Roles: st.Roles(), Mutations: st.Mutations(),
-	}, Config{Model: newerModel, Guard: &opGuard{}})
+	}, Config{RelationshipModel: newerModel, Guard: &opGuard{}})
 	if err != nil {
 		t.Fatalf("NewService newer: %v", err)
 	}

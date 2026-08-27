@@ -28,7 +28,7 @@ func newTrustedComponents(t *testing.T) Components {
 		Relationships: st.Relationships(),
 		Roles:         st.Roles(),
 		Mutations:     st.Mutations(),
-	}, Config{Model: lifecycleModel()})
+	}, Config{RelationshipModel: lifecycleModel()})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

@@ -69,20 +69,24 @@ func TestVocabularyReasonFor(t *testing.T) {
 }
 
 // TestNoDecisionKindIsAWiringFaultNotADeny pins the sentinel's taxonomy and its
-// transport mapping. ErrNoDecisionKind is a stable PRECONDITION refusal — the
-// ErrMutationsNotConfigured precedent — so it wraps sdk.ErrInvalidInput and NEVER
-// sdk.ErrForbidden: a host that wired no model must not be told "denied", which
-// would imply some other principal could succeed. Through the feature's web.Error
-// seam it therefore surfaces as the same 400 the mutations-not-configured
-// sentinel does, never a 403.
+// transport mapping. ErrNoDecisionKind reports a SERVER-SIDE WIRING FAULT — a
+// deployment whose decision surface bears no model — so it wraps no sdk taxonomy
+// kind and surfaces as a 500, consistent with the RequirePermission gates that
+// panic at mount for the same wiring. It is never a 403: a host that wired no
+// model must not be told "denied", which would imply some other principal could
+// succeed. It deliberately DIFFERS from ErrMutationsNotConfigured (400), the
+// precondition an actor can observe on a correctly deployed host.
 func TestNoDecisionKindIsAWiringFaultNotADeny(t *testing.T) {
-	if !errors.Is(ErrNoDecisionKind, sdk.ErrInvalidInput) {
-		t.Fatalf("ErrNoDecisionKind must wrap sdk.ErrInvalidInput")
+	if errors.Is(ErrNoDecisionKind, sdk.ErrInvalidInput) {
+		t.Fatalf("ErrNoDecisionKind must not wrap sdk.ErrInvalidInput — it is a wiring fault, not bad input")
 	}
 	for _, kind := range []error{sdk.ErrForbidden, sdk.ErrUnauthorized, sdk.ErrUnavailable, sdk.ErrConflict} {
 		if errors.Is(ErrNoDecisionKind, kind) {
 			t.Fatalf("ErrNoDecisionKind must not wrap %v", kind)
 		}
+	}
+	if sdk.IsExpected(ErrNoDecisionKind) {
+		t.Fatalf("ErrNoDecisionKind must not be an expected sdk kind")
 	}
 	// It is a distinct identity: it does NOT wrap the relationship-kind sentinel,
 	// so a host branching on ErrRelationshipsNotConfigured cannot silently catch it.
@@ -95,13 +99,23 @@ func TestNoDecisionKindIsAWiringFaultNotADeny(t *testing.T) {
 	if rec.Code == http.StatusForbidden {
 		t.Fatalf("a wiring fault must never surface as a deny (403)")
 	}
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("ErrNoDecisionKind maps to %d, want %d — sdk.ErrInvalidInput's status", rec.Code, http.StatusBadRequest)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("ErrNoDecisionKind maps to %d, want %d — an unclassified server-side fault", rec.Code, http.StatusInternalServerError)
 	}
+	// ReasonFor does not own it: a wiring fault carries no decision reason and the
+	// caller treats it as infrastructure.
+	if reason, ok := ReasonFor(ErrNoDecisionKind); ok {
+		t.Fatalf("ReasonFor(ErrNoDecisionKind) = (%q, true), want ok=false", reason)
+	}
+	// The actor-observable precondition refusal keeps its 400: the two "not
+	// configured" sentinels answer DIFFERENT statuses by design.
 	mutations := httptest.NewRecorder()
 	RespondError(mutations, ErrMutationsNotConfigured)
-	if rec.Code != mutations.Code {
-		t.Fatalf("ErrNoDecisionKind maps to %d; its precedent ErrMutationsNotConfigured maps to %d — the two precondition refusals must agree",
+	if mutations.Code != http.StatusBadRequest {
+		t.Fatalf("ErrMutationsNotConfigured maps to %d, want %d", mutations.Code, http.StatusBadRequest)
+	}
+	if rec.Code == mutations.Code {
+		t.Fatalf("the wiring fault (%d) and the actor-observable precondition (%d) must not share a status",
 			rec.Code, mutations.Code)
 	}
 }

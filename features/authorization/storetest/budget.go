@@ -48,7 +48,7 @@ func budgetSchema() authorization.Schema {
 
 func newBudgetService(t *testing.T, repos authorization.Repositories, limits authorization.EvaluationLimits) *authorization.Service {
 	t.Helper()
-	comps, err := authorization.NewService(repos, authorization.Config{Model: budgetSchema(), Limits: limits})
+	comps, err := authorization.NewService(repos, authorization.Config{RelationshipModel: budgetSchema(), Limits: limits})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

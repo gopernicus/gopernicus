@@ -212,7 +212,7 @@ func mustComponents(t *testing.T, repos Repositories, cfg Config) Components {
 // TestConstructionReturnsComponents proves NewService returns the bundle: a
 // host-facing Service and a separately held SystemMutator, both non-nil.
 func TestConstructionReturnsComponents(t *testing.T) {
-	comps := mustComponents(t, Repositories{Relationships: &relFake{}, Roles: &roleFake{}}, Config{Model: validModel()})
+	comps := mustComponents(t, Repositories{Relationships: &relFake{}, Roles: &roleFake{}}, Config{RelationshipModel: validModel()})
 	if comps.Service == nil {
 		t.Fatalf("Components.Service is nil")
 	}
@@ -524,7 +524,7 @@ func TestServiceExposesNoActorTeardownMethod(t *testing.T) {
 func TestActorPurgeBoundNormalizedToMaxBatchSize(t *testing.T) {
 	repo := &stubMutationRepo{view: &stubDecisionView{}, receipt: &Receipt{Outcome: OutcomeApplied}}
 	comps := mustComponents(t, Repositories{Relationships: &relFake{}, Mutations: repo}, Config{
-		Model: validModel(), Guard: &stubGuard{}, Limits: EvaluationLimits{MaxBatchSize: 5},
+		RelationshipModel: validModel(), Guard: &stubGuard{}, Limits: EvaluationLimits{MaxBatchSize: 5},
 	})
 	ctx := context.Background()
 

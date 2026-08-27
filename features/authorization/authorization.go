@@ -63,9 +63,18 @@ var (
 	ErrNoKindConfigured = errors.New("authorization: no kind configured (Repositories.Relationships and Repositories.Roles are both nil)")
 
 	// ErrModelRequired is returned by NewService for a partial relationship-kind
-	// wiring: Repositories.Relationships is set without Config.Model, or Config.Model
-	// is set without the repository. The relationship kind needs both.
-	ErrModelRequired = errors.New("authorization: Repositories.Relationships and Config.Model must be wired together (both or neither)")
+	// wiring: Repositories.Relationships is set without Config.RelationshipModel, or
+	// Config.RelationshipModel is set without the repository. The relationship kind
+	// needs both.
+	ErrModelRequired = errors.New("authorization: Repositories.Relationships and Config.RelationshipModel must be wired together (both or neither)")
+
+	// ErrConfigConflict is returned by NewService when BOTH Config.RelationshipModel
+	// and the deprecated Config.Model carry a model. The two name the same setting,
+	// so a host that sets both has stated two policies and the feature refuses to
+	// guess which one governs. It wraps sdk.ErrInvalidInput (a construction-time
+	// precondition). Setting only one — either one — is valid until Config.Model is
+	// removed at the v1.0 config cut.
+	ErrConfigConflict = fmt.Errorf("authorization: Config.RelationshipModel and the deprecated Config.Model are both set (set exactly one): %w", sdk.ErrInvalidInput)
 
 	// ErrRoleModelWithoutRoles is returned by NewService when Config.RoleModel is
 	// set without Repositories.Roles. The asymmetry with ErrModelRequired is
@@ -75,12 +84,16 @@ var (
 
 	// ErrNoDecisionKind is returned by every decision method (Check, CheckBatch,
 	// CheckExplain, FilterAuthorized, LookupResources) on a host where NO kind
-	// bears a model — a roles-only wiring with no Config.RoleModel. Like
-	// ErrMutationsNotConfigured it is a stable PRECONDITION refusal (retrying it
-	// unchanged cannot help until the host wires a model), so it wraps
-	// sdk.ErrInvalidInput — never sdk.ErrForbidden, which would falsely present a
-	// wiring gap as a deny.
-	ErrNoDecisionKind = fmt.Errorf("authorization: no decision-capable kind is configured (set Config.Model for the relationship kind or Config.RoleModel for the roles kind): %w", sdk.ErrInvalidInput)
+	// bears a model — a roles-only wiring with no Config.RoleModel. It is a
+	// SERVER-SIDE WIRING FAULT on the decision surface, not anything the caller
+	// said: it wraps no sdk taxonomy kind, so ReasonFor reports no decision reason
+	// and web.ErrFromDomain's default lands it at HTTP 500 — consistent with the
+	// RequirePermission gates, which panic at mount for exactly this wiring. It is
+	// deliberately UNLIKE ErrMutationsNotConfigured (400): that one is a
+	// precondition an actor can observe and act on, this one is a deployment the
+	// operator must fix. It never wraps sdk.ErrForbidden, which would falsely
+	// present a wiring gap as a deny.
+	ErrNoDecisionKind = errors.New("authorization: no decision-capable kind is configured (set Config.RelationshipModel for the relationship kind or Config.RoleModel for the roles kind)")
 
 	// ErrRelationshipsNotConfigured is returned by every relationship-kind method
 	// when that kind is off (Repositories.Relationships was nil).
@@ -134,6 +147,11 @@ type (
 	// share a resource TYPE but never a (type, permission) PAIR.
 	RoleModel   = decisionsvc.RoleModel
 	RoleTypeDef = decisionsvc.RoleTypeDef
+
+	// RelationshipModel is the RELATIONSHIP kind's permission model — the ReBAC
+	// schema Config.RelationshipModel carries. It is an alias of Schema, named for
+	// symmetry with RoleModel so the two kinds read alike at the wiring site.
+	RelationshipModel = Schema
 )
 
 // Explain step kinds — the coarse shape an ExplainStep records.
@@ -288,15 +306,22 @@ type Repositories struct {
 	Mutations mutation.MutationRepository
 }
 
-// Config carries each kind's model plus the settings shared across them. Model
-// and IDs are relationship-kind-scoped; RoleModel is roles-kind-scoped; Limits is
-// the decision-surface budget charged by whichever kind bears a model; Guard and
-// Audit configure the actor-facing mutation posture. A setting orphaned by an
+// Config carries each kind's model plus the settings shared across them.
+// RelationshipModel and IDs are relationship-kind-scoped; RoleModel is
+// roles-kind-scoped; Limits is the decision-surface budget charged by whichever
+// kind bears a model; Guard and Audit configure the actor-facing mutation posture. A setting orphaned by an
 // unwired kind is ignored with no error (the auth MailFrom precedent) — so
 // negative Limits are only rejected once some model-bearing kind is wired.
 type Config struct {
-	// Model is the ReBAC schema. Required when Relationships is wired, forbidden
-	// otherwise (ErrModelRequired).
+	// RelationshipModel is the relationship kind's model — the ReBAC schema.
+	// Required when Repositories.Relationships is wired, forbidden otherwise
+	// (ErrModelRequired).
+	RelationshipModel Schema
+	// Model is the former name of RelationshipModel.
+	//
+	// Deprecated: use RelationshipModel. Honoured for one release as a
+	// pass-through; setting both is ErrConfigConflict. Removed at the v1.0 config
+	// cut.
 	Model Schema
 	// Limits is the resolved semantic evaluation budget (Through depth, graph
 	// states, relation fan-out, batch size, lookup results). Each zero field
@@ -361,9 +386,10 @@ type Service struct {
 // NewService validates the (repos, cfg) pair, builds the wired kinds, and returns
 // the Components bundle: the host-facing Service plus separately held baseline
 // and high-integrity write capabilities. Zero kinds is ErrNoKindConfigured; a
-// relationship kind wired without its Model (or vice versa) is ErrModelRequired;
-// an invalid Model is the schema validator's loud error. A roles-only wiring
-// succeeds with no Model.
+// relationship kind wired without its RelationshipModel (or vice versa) is
+// ErrModelRequired; an invalid model is the schema validator's loud error; a
+// model given under BOTH RelationshipModel and the deprecated Model is
+// ErrConfigConflict. A roles-only wiring succeeds with no relationship model.
 //
 // Model construction matrix: Config.RoleModel without Repositories.Roles is
 // ErrRoleModelWithoutRoles; a structurally invalid RoleModel is
@@ -384,7 +410,18 @@ func NewService(repos Repositories, cfg Config) (Components, error) {
 		return Components{}, ErrNoKindConfigured
 	}
 
-	modelSet := len(cfg.Model.ResourceTypes) > 0
+	// The deprecated Config.Model is a pass-through for one release: exactly one of
+	// the two fields may carry a model, and the resolved one drives everything
+	// below.
+	model := cfg.RelationshipModel
+	if len(cfg.Model.ResourceTypes) > 0 {
+		if len(model.ResourceTypes) > 0 {
+			return Components{}, ErrConfigConflict
+		}
+		model = cfg.Model
+	}
+
+	modelSet := len(model.ResourceTypes) > 0
 	if hasRel != modelSet {
 		return Components{}, ErrModelRequired
 	}
@@ -407,7 +444,7 @@ func NewService(repos Repositories, cfg Config) (Components, error) {
 		audit:     cfg.Audit,
 	}
 	if hasRel {
-		eng, err := authorizersvc.NewService(repos.Relationships, cfg.Model, authorizersvc.Config{
+		eng, err := authorizersvc.NewService(repos.Relationships, model, authorizersvc.Config{
 			Limits: cfg.Limits,
 			IDs:    cfg.IDs,
 		})
@@ -420,7 +457,7 @@ func NewService(repos Repositories, cfg Config) (Components, error) {
 	// kind's: it is resolved (and a negative field rejected) as soon as any
 	// model-bearing kind is wired. Under a roles-only wiring with no role model
 	// nothing consumes it and it stays silently orphaned. It is resolved AFTER
-	// the relationship engine is built so an invalid Model still reports
+	// the relationship engine is built so an invalid model still reports
 	// ErrInvalidSchema first, exactly as it did before the decision surface
 	// gained a second model-bearing kind.
 	var limits EvaluationLimits

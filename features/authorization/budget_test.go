@@ -15,7 +15,7 @@ import (
 func budgetService(t *testing.T, model Schema, limits EvaluationLimits) (*Service, *memstore.Relationships) {
 	t.Helper()
 	store := memstore.NewRelationships()
-	comps, err := NewService(Repositories{Relationships: store}, Config{Model: model, Limits: limits})
+	comps, err := NewService(Repositories{Relationships: store}, Config{RelationshipModel: model, Limits: limits})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

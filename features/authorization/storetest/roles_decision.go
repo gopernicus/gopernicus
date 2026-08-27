@@ -306,8 +306,8 @@ func runComposed(t *testing.T, newRepos func(t *testing.T) authorization.Reposit
 	t.Run("PairOwnershipDispatch", func(t *testing.T) {
 		repos := newRepos(t)
 		comps := newRoleModelService(t, repos, authorization.Config{
-			Model:     composedSchema(),
-			RoleModel: composedRoleModel(),
+			RelationshipModel: composedSchema(),
+			RoleModel:         composedRoleModel(),
 		})
 		svc := comps.Service
 

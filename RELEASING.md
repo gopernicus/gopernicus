@@ -258,6 +258,52 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
+### features/authorization — v0.4.0 (next tag): `Config.RelationshipModel` + `ErrNoDecisionKind` is a 500 (minor; one-release deprecation)
+
+Plan of record `.claude/plans/authorization-roles-model-followups.md` — the two
+owner calls left open at the v0.3.0 close, released BEFORE gps-360-go adoption so
+the handoff targets the final names.
+
+**1. `Config.Model` → `Config.RelationshipModel`.** The relationship kind's model
+now says so, symmetrically with `Config.RoleModel`; `RelationshipModel` is also a
+type alias of `Schema` so the two kinds read alike at the wiring site. `Config.Model`
+STAYS as a deprecated pass-through and still wires the relationship kind exactly as
+before. Setting BOTH (each with a non-empty `ResourceTypes`) is the new
+`ErrConfigConflict` (wrapping `sdk.ErrInvalidInput`) — the feature refuses to guess
+which policy governs rather than letting one silently win. Construction check order
+is pinned: zero kinds (`ErrNoKindConfigured`) → `ErrConfigConflict` →
+`ErrModelRequired`. The `RequirePermission*` mount panics keep their shape and name
+`Config.RelationshipModel` in the message.
+
+**Deprecation window — exact.** `Config.Model` is deprecated as of **v0.4.0**,
+honoured as a pass-through for the rest of the `v0.x` line, and **removed at the
+v1.0 config cut** — never silently in an intervening minor. Adopters rename the
+field at their leisure; the compiler flags nothing until v1.0.
+
+**2. `ErrNoDecisionKind` answers 500, not 400.** It no longer wraps
+`sdk.ErrInvalidInput`: a decision surface with NO model-bearing kind is a
+SERVER-SIDE WIRING FAULT, not something the caller said, so it wraps no sdk
+taxonomy kind and lands on `web.ErrFromDomain`'s default — HTTP **500** with the
+generic internal body — consistent with the three gates, which panic at mount for
+exactly this wiring. It is deliberately UNLIKE `ErrMutationsNotConfigured`, which
+stays **400**: that one is a precondition an actor can observe on a correctly
+deployed host. Consequences: `ReasonFor(ErrNoDecisionKind)` now returns
+`ok=false` (no decision reason — the caller treats it as infrastructure), and
+`errors.Is(err, sdk.ErrInvalidInput)` no longer matches it. The error identity and
+message are otherwise unchanged (it still does NOT wrap
+`ErrRelationshipsNotConfigured`), and it is still never a 403.
+
+**Compatibility (v0.3.0 → v0.4.0).** Additive `Config.RelationshipModel` +
+`RelationshipModel` alias + `ErrConfigConflict`; `Config.Model` deprecated (still
+honoured); `ErrNoDecisionKind` no longer satisfies `errors.Is(err,
+sdk.ErrInvalidInput)` and answers 500 (only roles-only-without-model hosts see it
+at all). No store change.
+
+**No store change.** No port, DDL, migration, or store-tag movement:
+`features/authorization/stores/{pgx,turso}` are **NOT retagged**. Their pinned
+`features/authorization` requirement is untouched, so a store module still builds
+against the field name it was tagged with.
+
 ### features/authorization — v0.3.0 (next tag): the roles kind's model + one decision surface (minor, predominantly additive)
 
 Plan of record `.claude/plans/authorization-roles-model.md` (gopernicus issue #5;
@@ -306,7 +352,9 @@ roles-kind methods still return `ErrRolesNotConfigured`. The new sentinel is a
 clean identity (it does NOT wrap `ErrRelationshipsNotConfigured`) and wraps
 `sdk.ErrInvalidInput`, so like its `ErrMutationsNotConfigured` precedent it is a
 stable precondition refusal that maps to **HTTP 400** through the `web.Error`
-seam — never a deny, never 403, never `ErrUnavailable`. A host branching on
+seam — never a deny, never 403, never `ErrUnavailable`. *(Changed to 500 in
+v0.4.0: the sentinel dropped its `sdk.ErrInvalidInput` wrap and is now classed as
+a server-side wiring fault — see that entry above.)* A host branching on
 `errors.Is(err, ErrRelationshipsNotConfigured)` for those five calls must add the
 new sentinel; no host in `examples/` or gps-360-go did (grep, 2026-08-26). The
 three gates still panic at mount on that wiring, with a **new message**:
@@ -315,6 +363,8 @@ three gates still panic at mount on that wiring, with a **new message**:
 authorization: RequirePermission… requires a decision-capable kind (Config.Model
 or Config.RoleModel); a roles-only host without a role model must not mount it
 ```
+
+*(In v0.4.0 the message names `Config.RelationshipModel` instead of `Config.Model`.)*
 
 **No cross-kind universal bypass — deliberately.** The feature declares no
 `Superuser`/`IsSuperuser` primitive and performs no cross-kind union. A globally

@@ -87,7 +87,7 @@ func newProofComponents(t *testing.T, guard MutationGuard, sink AuditSink) Compo
 		Relationships: st.Relationships(),
 		Roles:         st.Roles(),
 		Mutations:     st.Mutations(),
-	}, Config{Model: lifecycleModel(), Guard: guard, Audit: sink})
+	}, Config{RelationshipModel: lifecycleModel(), Guard: guard, Audit: sink})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -788,7 +788,7 @@ func newDefaultGuardianComponents(t *testing.T) Components {
 		Relationships: st.Relationships(),
 		Roles:         st.Roles(),
 		Mutations:     st.Mutations(),
-	}, Config{Model: lifecycleModel()})
+	}, Config{RelationshipModel: lifecycleModel()})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

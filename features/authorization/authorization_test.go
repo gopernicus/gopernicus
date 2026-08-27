@@ -12,6 +12,7 @@ import (
 	"github.com/gopernicus/gopernicus/features/authorization/domain/relationship"
 	"github.com/gopernicus/gopernicus/features/authorization/domain/role"
 	"github.com/gopernicus/gopernicus/features/authorization/memstore"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
@@ -106,7 +107,7 @@ func validModel() Schema {
 // and returns a coarse Explanation whose Decision matches the CheckResult's stable
 // ReasonCode; an unwired relationship kind fails closed with the kind sentinel.
 func TestExplainPublicSurface(t *testing.T) {
-	comps, err := NewService(Repositories{Relationships: &relFake{}}, Config{Model: validModel()})
+	comps, err := NewService(Repositories{Relationships: &relFake{}}, Config{RelationshipModel: validModel()})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -151,8 +152,52 @@ func TestNewServicePartialWiring(t *testing.T) {
 		t.Fatalf("rel-without-model: want ErrModelRequired, got %v", err)
 	}
 	// Model without Relationships.
-	if _, err := NewService(Repositories{Roles: &roleFake{}}, Config{Model: validModel()}); !errors.Is(err, ErrModelRequired) {
+	if _, err := NewService(Repositories{Roles: &roleFake{}}, Config{RelationshipModel: validModel()}); !errors.Is(err, ErrModelRequired) {
 		t.Fatalf("model-without-rel: want ErrModelRequired, got %v", err)
+	}
+}
+
+// TestConfigModelDeprecatedPassThrough pins the one-release deprecation window:
+// the old Config.Model still wires the relationship kind exactly as
+// Config.RelationshipModel does, and a host that sets BOTH is refused with
+// ErrConfigConflict rather than having one silently win. It also pins the
+// construction check ORDER — zero kinds first, then the config conflict, then the
+// partial-wiring error — so a misconfigured host reads the most structural fault.
+func TestConfigModelDeprecatedPassThrough(t *testing.T) {
+	deprecated, err := NewService(Repositories{Relationships: &relFake{}}, Config{Model: validModel()})
+	if err != nil {
+		t.Fatalf("deprecated Config.Model must still wire the relationship kind: %v", err)
+	}
+	current, err := NewService(Repositories{Relationships: &relFake{}}, Config{RelationshipModel: validModel()})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	wantDigest, err := current.Service.SchemaDigest()
+	if err != nil {
+		t.Fatalf("SchemaDigest: %v", err)
+	}
+	gotDigest, err := deprecated.Service.SchemaDigest()
+	if err != nil {
+		t.Fatalf("SchemaDigest: %v", err)
+	}
+	if gotDigest != wantDigest {
+		t.Fatalf("deprecated Config.Model compiled a different schema: %q != %q", gotDigest, wantDigest)
+	}
+
+	both := Config{Model: validModel(), RelationshipModel: validModel()}
+	if _, err := NewService(Repositories{Relationships: &relFake{}}, both); !errors.Is(err, ErrConfigConflict) {
+		t.Fatalf("both models set: want ErrConfigConflict, got %v", err)
+	}
+	if !errors.Is(ErrConfigConflict, sdk.ErrInvalidInput) {
+		t.Fatalf("ErrConfigConflict must wrap sdk.ErrInvalidInput")
+	}
+	// Zero kinds outranks the conflict...
+	if _, err := NewService(Repositories{}, both); !errors.Is(err, ErrNoKindConfigured) {
+		t.Fatalf("zero kinds with both models: want ErrNoKindConfigured, got %v", err)
+	}
+	// ...and the conflict outranks the partial wiring it would otherwise report.
+	if _, err := NewService(Repositories{Roles: &roleFake{}}, both); !errors.Is(err, ErrConfigConflict) {
+		t.Fatalf("both models on a roles-only wiring: want ErrConfigConflict, got %v", err)
 	}
 }
 
@@ -164,7 +209,7 @@ func TestNewServiceInvalidModel(t *testing.T) {
 			Permissions: map[string]PermissionRule{"delete": AnyOf(Direct("nonexistent"))},
 		},
 	}})
-	_, err := NewService(Repositories{Relationships: &relFake{}}, Config{Model: bad})
+	_, err := NewService(Repositories{Relationships: &relFake{}}, Config{RelationshipModel: bad})
 	if err == nil || !strings.Contains(err.Error(), "schema") {
 		t.Fatalf("want a schema validation error, got %v", err)
 	}
@@ -183,7 +228,7 @@ func TestNewServiceInvalidModelIsReportedBeforeInvalidLimits(t *testing.T) {
 			Permissions: map[string]PermissionRule{"delete": AnyOf(Direct("nonexistent"))},
 		},
 	}})
-	cfg := Config{Model: bad, Limits: EvaluationLimits{MaxBatchSize: -1}}
+	cfg := Config{RelationshipModel: bad, Limits: EvaluationLimits{MaxBatchSize: -1}}
 	_, err := NewService(Repositories{Relationships: &relFake{}}, cfg)
 	if err == nil || !strings.Contains(err.Error(), "schema") {
 		t.Fatalf("want a schema validation error, got %v", err)
@@ -200,7 +245,7 @@ func TestNewServiceRolesOnlySucceeds(t *testing.T) {
 }
 
 func TestNewServiceRelationshipsOnlySucceeds(t *testing.T) {
-	if _, err := NewService(Repositories{Relationships: &relFake{}}, Config{Model: validModel()}); err != nil {
+	if _, err := NewService(Repositories{Relationships: &relFake{}}, Config{RelationshipModel: validModel()}); err != nil {
 		t.Fatalf("relationships-only wiring should succeed: %v", err)
 	}
 }
@@ -226,7 +271,7 @@ func TestUnwiredRelationshipSentinel(t *testing.T) {
 }
 
 func TestUnwiredRolesSentinel(t *testing.T) {
-	comps, err := NewService(Repositories{Relationships: &relFake{}}, Config{Model: validModel()})
+	comps, err := NewService(Repositories{Relationships: &relFake{}}, Config{RelationshipModel: validModel()})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -242,7 +287,7 @@ func TestUnwiredRolesSentinel(t *testing.T) {
 func TestDelegationSmokeBothKinds(t *testing.T) {
 	rel := &relFake{}
 	roles := &roleFake{}
-	comps, err := NewService(Repositories{Relationships: rel, Roles: roles}, Config{Model: validModel()})
+	comps, err := NewService(Repositories{Relationships: rel, Roles: roles}, Config{RelationshipModel: validModel()})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -270,7 +315,7 @@ func TestDelegationSmokeBothKinds(t *testing.T) {
 // TestConstructionDefaultLimits proves a relationships wiring with a zero
 // Config.Limits succeeds: every budget field resolves to its safe default.
 func TestConstructionDefaultLimits(t *testing.T) {
-	if _, err := NewService(Repositories{Relationships: &relFake{}}, Config{Model: validModel()}); err != nil {
+	if _, err := NewService(Repositories{Relationships: &relFake{}}, Config{RelationshipModel: validModel()}); err != nil {
 		t.Fatalf("zero Limits should resolve to defaults, got %v", err)
 	}
 }
@@ -279,7 +324,7 @@ func TestConstructionDefaultLimits(t *testing.T) {
 // is accepted.
 func TestConstructionExplicitLimits(t *testing.T) {
 	cfg := Config{
-		Model: validModel(),
+		RelationshipModel: validModel(),
 		Limits: EvaluationLimits{
 			MaxThroughDepth:    5,
 			MaxGraphStates:     500,
@@ -305,7 +350,7 @@ func TestConstructionNegativeLimitRejected(t *testing.T) {
 	}
 	for name, limits := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, err := NewService(Repositories{Relationships: &relFake{}}, Config{Model: validModel(), Limits: limits})
+			_, err := NewService(Repositories{Relationships: &relFake{}}, Config{RelationshipModel: validModel(), Limits: limits})
 			if !errors.Is(err, ErrInvalidLimits) {
 				t.Fatalf("negative %s: want ErrInvalidLimits, got %v", name, err)
 			}
@@ -384,7 +429,7 @@ func projectRequest(subjectID, permission, projectID string) CheckRequest {
 // boot — while a roles repository with NO model stays the valid opaque posture
 // (TestNewServiceRolesOnlySucceeds).
 func TestConstructionRoleModelWithoutRolesRepo(t *testing.T) {
-	_, err := NewService(Repositories{Relationships: &relFake{}}, Config{Model: validModel(), RoleModel: projectRoleModel()})
+	_, err := NewService(Repositories{Relationships: &relFake{}}, Config{RelationshipModel: validModel(), RoleModel: projectRoleModel()})
 	if !errors.Is(err, ErrRoleModelWithoutRoles) {
 		t.Fatalf("want ErrRoleModelWithoutRoles, got %v", err)
 	}
@@ -413,7 +458,7 @@ func TestConstructionModelConflict(t *testing.T) {
 		"post": {Roles: []string{"auditor"}, Permissions: map[string][]string{"delete": {"auditor"}}},
 	}}
 	_, err := NewService(Repositories{Relationships: &relFake{}, Roles: &roleFake{}},
-		Config{Model: validModel(), RoleModel: conflicting})
+		Config{RelationshipModel: validModel(), RoleModel: conflicting})
 	if !errors.Is(err, ErrModelConflict) {
 		t.Fatalf("want ErrModelConflict, got %v", err)
 	}
@@ -423,7 +468,7 @@ func TestConstructionModelConflict(t *testing.T) {
 		"post": {Roles: []string{"auditor"}, Permissions: map[string][]string{"audit": {"auditor"}}},
 	}}
 	if _, err := NewService(Repositories{Relationships: &relFake{}, Roles: &roleFake{}},
-		Config{Model: validModel(), RoleModel: split}); err != nil {
+		Config{RelationshipModel: validModel(), RoleModel: split}); err != nil {
 		t.Fatalf("a type shared by both models with distinct permissions must construct: %v", err)
 	}
 }

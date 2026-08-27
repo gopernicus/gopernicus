@@ -10,7 +10,7 @@ import (
 // deep read-only snapshot (mutating it cannot reach the runtime policy) and that
 // SchemaDigest is a stable identifier for equivalent schemas.
 func TestGetSchemaReturnsSnapshotAndDigest(t *testing.T) {
-	comps, err := NewService(Repositories{Relationships: memstore.NewRelationships()}, Config{Model: validModel()})
+	comps, err := NewService(Repositories{Relationships: memstore.NewRelationships()}, Config{RelationshipModel: validModel()})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestGetSchemaReturnsSnapshotAndDigest(t *testing.T) {
 
 	// An independently constructed service over an equivalent schema reports the
 	// same digest.
-	other, err := NewService(Repositories{Relationships: memstore.NewRelationships()}, Config{Model: validModel()})
+	other, err := NewService(Repositories{Relationships: memstore.NewRelationships()}, Config{RelationshipModel: validModel()})
 	if err != nil {
 		t.Fatalf("NewService (other): %v", err)
 	}

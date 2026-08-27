@@ -158,9 +158,9 @@ func proofComposition(t *testing.T, schema authorization.Schema, audit authoriza
 		Roles:         store.Roles(),
 		Mutations:     store.Mutations(),
 	}, authorization.Config{
-		Model: schema,
-		Guard: hostMutationGuard{},
-		Audit: audit,
+		RelationshipModel: schema,
+		Guard:             hostMutationGuard{},
+		Audit:             audit,
 	})
 	if err != nil {
 		t.Fatalf("proofComposition: %v", err)
@@ -502,7 +502,7 @@ func proofPoint05(t *testing.T, tr *proofTranscript) {
 		Relationships: store.Relationships(),
 		Roles:         store.Roles(),
 		Mutations:     store.Mutations(),
-	}, authorization.Config{Model: bad, Guard: hostMutationGuard{}})
+	}, authorization.Config{RelationshipModel: bad, Guard: hostMutationGuard{}})
 	if err == nil {
 		t.Fatal("a Through relation allowing a userset target must fail schema compile")
 	}

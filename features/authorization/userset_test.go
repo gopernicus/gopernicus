@@ -46,7 +46,7 @@ func usersetSchema() Schema {
 func usersetService(t *testing.T) (*Service, *memstore.Relationships) {
 	t.Helper()
 	store := memstore.NewRelationships()
-	comps, err := NewService(Repositories{Relationships: store}, Config{Model: usersetSchema()})
+	comps, err := NewService(Repositories{Relationships: store}, Config{RelationshipModel: usersetSchema()})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

@@ -34,7 +34,7 @@ func baselineModel() Schema {
 func newBaseline(t *testing.T) (Components, *memstore.Relationships) {
 	t.Helper()
 	rels := memstore.NewRelationships()
-	comps, err := NewService(Repositories{Relationships: rels}, Config{Model: baselineModel()})
+	comps, err := NewService(Repositories{Relationships: rels}, Config{RelationshipModel: baselineModel()})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

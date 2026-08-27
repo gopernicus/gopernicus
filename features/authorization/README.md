@@ -62,8 +62,9 @@ and the three `RequirePermission*` gates are not a per-kind family: each
 the relationship `Schema` or the `RoleModel`, never both (`ErrModelConflict`
 forbids the overlap at construction). A pair neither model declares denies with
 `"no rules defined"`. On a host where NO kind bears a model (a roles-only wiring
-with no `RoleModel`), all five methods fail closed with `ErrNoDecisionKind` and
-the gates panic at mount.
+with no `RoleModel`), all five methods fail closed with `ErrNoDecisionKind` — a
+server-side wiring fault that answers HTTP 500, not a deny — and the gates panic
+at mount.
 
 **Relationship-kind `Service` methods.** Reads: `ValidateRelation(s)`,
 `GetSchema`, `SchemaDigest`, `GetPermissionsForRelation`,
@@ -251,7 +252,7 @@ the offending symbol** (`ErrInvalidRoleModel` / `ErrModelConflict`, both wrappin
    grants at least one of that type's permissions (an unused role is a typo until
    proven otherwise).
 4. **Pair ownership** (`ErrModelConflict`) — a `(resource type, permission)` pair
-   declared by BOTH `Config.Model` and `Config.RoleModel`. A resource TYPE may
+   declared by BOTH `Config.RelationshipModel` and `Config.RoleModel`. A resource TYPE may
    appear in both (auth-cms's `project`: `view` from relationships, `audit` from
    roles) — only a PAIR may not. This rule is what makes the decision surface a
    dispatch rather than a merge.
@@ -338,7 +339,7 @@ Rules:
   with `ErrInvalidLimits` (a construction error wrapping `sdk.ErrInvalidInput`).
   Zero never means unlimited; there is no unlimited mode. The budget is resolved
   — and a negative field rejected — whenever ANY model-bearing kind is wired
-  (`Config.Model` or `Config.RoleModel`); on a roles-only wiring with no role
+  (`Config.RelationshipModel` or `Config.RoleModel`); on a roles-only wiring with no role
   model nothing consumes it and it stays an orphaned, ignored setting. The
   `Through`/fan-out dimensions are simply inert on a roles-only host.
 - **Exhaustion is indeterminate, never a deny or a truncated list.** Any budget
@@ -451,7 +452,8 @@ Construction matrix (all loud at `NewService`):
 | condition | result |
 |---|---|
 | both `Repositories` kind fields nil | `ErrNoKindConfigured` |
-| `Relationships` set XOR `Config.Model` set | `ErrModelRequired` |
+| `Relationships` set XOR `Config.RelationshipModel` set | `ErrModelRequired` |
+| both `Config.RelationshipModel` and the deprecated `Config.Model` set | `ErrConfigConflict` |
 | `Config.Guard` set, `Repositories.Mutations` nil | `ErrGuardWithoutMutations` (a guard has no atomic write path) |
 | `Config.Audit` set, `Config.Guard` nil | `ErrAuditWithoutGuard` (nothing to observe) |
 | nil `Config.Guard` | construction succeeds; every actor-facing guarded mutation fails closed with `ErrMutationsNotConfigured`; decision/list APIs and `RelationshipWriter` remain available, and `SystemMutator` is callable only if `.Mutations` is wired |
@@ -674,20 +676,21 @@ a future admin surface (the deferred AZADM packet).
 
 | field | semantics |
 |---|---|
-| `Repositories.Relationships` | nil = relationship kind off. Wired ⇔ `Config.Model` set — either without the other is a loud `ErrModelRequired`. |
+| `Repositories.Relationships` | nil = relationship kind off. Wired ⇔ `Config.RelationshipModel` set — either without the other is a loud `ErrModelRequired`. |
 | `Repositories.Roles` | nil = roles kind off. Needs no Config at all — `Config.RoleModel` is optional and adds the decision half. |
 | `Repositories.Mutations` | optional high-integrity command path (`mutation.MutationRepository`). Required only when `Config.Guard` is set or `SystemMutator` is used. Baseline relationship writes do not depend on it. |
 | both kind fields nil | loud `ErrNoKindConfigured` at `NewService`. |
 | an unwired kind's methods | fail closed with that kind's sentinel (`ErrRelationshipsNotConfigured` / `ErrRolesNotConfigured`). |
-| the decision surface with NO model-bearing kind | `Check`/`CheckBatch`/`CheckExplain`/`FilterAuthorized`/`LookupResources` fail closed with `ErrNoDecisionKind`, and every `RequirePermission*` gate panics at mount. |
-| `Config.Model` | REQUIRED with `Relationships`, forbidden without it; compiled + schema-validated at `NewService` (see validation-failures list). |
-| `Config.RoleModel` | optional; the ROLES kind's model. Set ⇒ `Repositories.Roles` (one direction — `ErrRoleModelWithoutRoles`; a roles repo with no model is the valid opaque posture). Compiled + validated at `NewService`: structurally invalid → `ErrInvalidRoleModel`; a `(resource type, permission)` pair also declared by `Config.Model` → `ErrModelConflict`. |
-| `Config.Limits` | optional `EvaluationLimits`; zero fields → safe defaults, negative → `ErrInvalidLimits`. The decision surface's budget: resolved whenever ANY model-bearing kind is wired (`Model` or `RoleModel`); ignored-with-note under a roles-only wiring with no model. |
+| the decision surface with NO model-bearing kind | `Check`/`CheckBatch`/`CheckExplain`/`FilterAuthorized`/`LookupResources` fail closed with `ErrNoDecisionKind` (a server-side WIRING FAULT: it wraps no sdk kind and answers **HTTP 500**, unlike the actor-observable `ErrMutationsNotConfigured` at 400), and every `RequirePermission*` gate panics at mount. |
+| `Config.RelationshipModel` | REQUIRED with `Relationships`, forbidden without it; compiled + schema-validated at `NewService` (see validation-failures list). |
+| `Config.Model` | DEPRECATED alias of `Config.RelationshipModel`, honoured through v0.x and removed at the v1.0 config cut. Setting both is `ErrConfigConflict`. |
+| `Config.RoleModel` | optional; the ROLES kind's model. Set ⇒ `Repositories.Roles` (one direction — `ErrRoleModelWithoutRoles`; a roles repo with no model is the valid opaque posture). Compiled + validated at `NewService`: structurally invalid → `ErrInvalidRoleModel`; a `(resource type, permission)` pair also declared by `Config.RelationshipModel` → `ErrModelConflict`. |
+| `Config.Limits` | optional `EvaluationLimits`; zero fields → safe defaults, negative → `ErrInvalidLimits`. The decision surface's budget: resolved whenever ANY model-bearing kind is wired (`RelationshipModel` or `RoleModel`); ignored-with-note under a roles-only wiring with no model. |
 | `Config.IDs` | optional (`cryptids.IDGenerator`); zero value ⇒ the nanoid default; `cryptids.Database` defers to the store's DDL DEFAULT. Relationship-kind-scoped. |
 | `Config.Guard` | nil = actor-facing guarded mutations fail closed with `ErrMutationsNotConfigured`; decisions/lists and baseline `RelationshipWriter` still work. Non-nil requires `Repositories.Mutations`. No default-allow policy. |
 | `Config.Audit` | optional best-effort `AuditSink`; requires `Config.Guard` (`ErrAuditWithoutGuard`). |
 
-The nil-Guard/nil-Model asymmetry is deliberate: an orphaned `Model` errors
+The nil-Guard/nil-model asymmetry is deliberate: an orphaned `RelationshipModel` errors
 loudly (capability-defining), while an orphaned `Limits`/`IDs` is
 ignored-with-note (a tuning knob, the auth `MailFrom` precedent).
 
@@ -724,13 +727,14 @@ The feature exports an HTTP middleware builder that gates a route on the context
 `RequireUser`-shaped sibling of the recipes above.
 
 **Requires a MODEL-BEARING kind; a roles-only host with no role model must not
-mount it.** `RequirePermission` panics when neither `Config.Model` nor
+mount it.** `RequirePermission` panics when neither `Config.RelationshipModel` nor
 `Config.RoleModel` is wired, at REGISTRATION/BOOT time (build the gate once when
 wiring routes, never inside the per-request path):
 
 ```
-authorization: RequirePermission requires a decision-capable kind (Config.Model
-or Config.RoleModel); a roles-only host without a role model must not mount it
+authorization: RequirePermission requires a decision-capable kind
+(Config.RelationshipModel or Config.RoleModel); a roles-only host without a role
+model must not mount it
 ```
 
 The coordinate forms `RequirePermissionOn`/`RequirePermissionFixed` additionally
@@ -909,7 +913,7 @@ comps, err := authorization.NewService(authorization.Repositories{
     Roles:         store.Roles(),
     Mutations:     store.Mutations(),
 }, authorization.Config{
-    Model: model,
+    RelationshipModel: model,
     // The ROLES kind's model. It shares the `project` TYPE with the schema above
     // but never a PAIR: `view`/`manage_access` are relationship-owned, `audit` is
     // role-owned. A pair in both would be ErrModelConflict at construction.
@@ -1010,7 +1014,7 @@ repos, err := authzstore.Repositories(db,
 if err != nil {
     return err // errors BEFORE serving traffic, naming the missing table
 }
-comps, err := authorization.NewService(repos, authorization.Config{Model: model, Guard: hostGuard{}})
+comps, err := authorization.NewService(repos, authorization.Config{RelationshipModel: model, Guard: hostGuard{}})
 ```
 
 plus the migration step: `authzstore.ExportMigrations(dst)` scaffolds the four
@@ -1020,8 +1024,8 @@ renumber.
 **Roles-only wiring** (kind independence — no relationship model, no ReBAC
 engine; still applies the full four-file source). Adding `Config.RoleModel` to
 this same wiring is what puts a roles-only host ON the decision surface; without
-it the five decision methods return `ErrNoDecisionKind` and the gates panic at
-mount:
+it the five decision methods return `ErrNoDecisionKind` (HTTP 500 — a wiring
+fault) and the gates panic at mount:
 
 ```go
 store := authzmem.New()

@@ -60,7 +60,7 @@ func newServiceFor(t *testing.T, repos authorization.Repositories) *authorizatio
 	t.Helper()
 	cfg := authorization.Config{}
 	if repos.Relationships != nil {
-		cfg.Model = fixtureSchema()
+		cfg.RelationshipModel = fixtureSchema()
 	}
 	comps, err := authorization.NewService(repos, cfg)
 	if err != nil {

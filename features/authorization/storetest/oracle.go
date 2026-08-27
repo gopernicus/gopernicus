@@ -272,7 +272,7 @@ func assertCheckLookupParity(t *testing.T, ctx context.Context, svc *authorizati
 
 func newOracleService(t *testing.T, repos authorization.Repositories, limits authorization.EvaluationLimits) *authorization.Service {
 	t.Helper()
-	comps, err := authorization.NewService(repos, authorization.Config{Model: oracleSchema(), Limits: limits})
+	comps, err := authorization.NewService(repos, authorization.Config{RelationshipModel: oracleSchema(), Limits: limits})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

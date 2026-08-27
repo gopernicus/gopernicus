@@ -33,7 +33,7 @@ func hierarchySchema() Schema {
 func hierarchyService(t *testing.T, model Schema) (*Service, *memstore.Relationships) {
 	t.Helper()
 	store := memstore.NewRelationships()
-	comps, err := NewService(Repositories{Relationships: store}, Config{Model: model})
+	comps, err := NewService(Repositories{Relationships: store}, Config{RelationshipModel: model})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

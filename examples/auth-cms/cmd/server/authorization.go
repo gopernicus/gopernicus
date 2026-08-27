@@ -108,9 +108,9 @@ func newAuthorization() (authorization.Components, error) {
 		Roles:         store.Roles(),
 		Mutations:     store.Mutations(),
 	}, authorization.Config{
-		Model:     authzSchema(),
-		RoleModel: authzRoleModel(),
-		Guard:     hostMutationGuard{},
+		RelationshipModel: authzSchema(),
+		RoleModel:         authzRoleModel(),
+		Guard:             hostMutationGuard{},
 	})
 }
 

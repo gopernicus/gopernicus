@@ -28,7 +28,7 @@ var PathResource = authorizersvc.PathResource
 // isPlatformAdmin is the flagship demonstration). D-D: it fails CLOSED (Check
 // error → 500), the deliberate opposite of ratelimiter.Middleware's fail-open.
 //
-// RequirePermission needs a MODEL-BEARING kind — Config.Model for the
+// RequirePermission needs a MODEL-BEARING kind — Config.RelationshipModel for the
 // relationship kind or Config.RoleModel for the roles kind — and panics when
 // neither is wired. The panic fires at REGISTRATION/BOOT time — when the host
 // mounts the builder at route registration, before serving traffic — so a
@@ -36,7 +36,7 @@ var PathResource = authorizersvc.PathResource
 // gated request. Mount it at registration, not lazily.
 func (s *Service) RequirePermission(permission string, resource ResourceResolver) web.Middleware {
 	if s.decider == nil {
-		panic("authorization: RequirePermission requires a decision-capable kind (Config.Model or Config.RoleModel); a roles-only host without a role model must not mount it")
+		panic("authorization: RequirePermission requires a decision-capable kind (Config.RelationshipModel or Config.RoleModel); a roles-only host without a role model must not mount it")
 	}
 	return s.decider.RequirePermission(permission, resource)
 }
@@ -48,7 +48,7 @@ func (s *Service) RequirePermission(permission string, resource ResourceResolver
 // mounted. Same model-bearing-kind precondition as RequirePermission.
 func (s *Service) RequirePermissionOn(resourceType, permission, pathParam string) web.Middleware {
 	if s.decider == nil {
-		panic("authorization: RequirePermissionOn requires a decision-capable kind (Config.Model or Config.RoleModel); a roles-only host without a role model must not mount it")
+		panic("authorization: RequirePermissionOn requires a decision-capable kind (Config.RelationshipModel or Config.RoleModel); a roles-only host without a role model must not mount it")
 	}
 	return s.decider.RequirePermissionOn(resourceType, permission, pathParam)
 }
@@ -57,7 +57,7 @@ func (s *Service) RequirePermissionOn(resourceType, permission, pathParam string
 // the same registration-time legality check as RequirePermissionOn.
 func (s *Service) RequirePermissionFixed(resourceType, permission, resourceID string) web.Middleware {
 	if s.decider == nil {
-		panic("authorization: RequirePermissionFixed requires a decision-capable kind (Config.Model or Config.RoleModel); a roles-only host without a role model must not mount it")
+		panic("authorization: RequirePermissionFixed requires a decision-capable kind (Config.RelationshipModel or Config.RoleModel); a roles-only host without a role model must not mount it")
 	}
 	return s.decider.RequirePermissionFixed(resourceType, permission, resourceID)
 }

@@ -241,7 +241,7 @@ func demoGrant(operationID, relation, subjectID string) auth.GrantInput {
 // tuple because the adapter does not consume it as a permanent replay identity.
 func TestBaselineInvitationGranterNeedsNoMutationLifecycle(t *testing.T) {
 	rels := authzmem.NewRelationships()
-	comps, err := authorization.NewService(authorization.Repositories{Relationships: rels}, authorization.Config{Model: authzSchema()})
+	comps, err := authorization.NewService(authorization.Repositories{Relationships: rels}, authorization.Config{RelationshipModel: authzSchema()})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -593,9 +593,9 @@ func TestHostModelsSplitOneTypeByPermission(t *testing.T) {
 		Roles:         store.Roles(),
 		Mutations:     store.Mutations(),
 	}, authorization.Config{
-		Model:     authzSchema(),
-		RoleModel: conflicting,
-		Guard:     hostMutationGuard{},
+		RelationshipModel: authzSchema(),
+		RoleModel:         conflicting,
+		Guard:             hostMutationGuard{},
 	})
 	if !errors.Is(err, authorization.ErrModelConflict) {
 		t.Fatalf("RoleModel claiming the relationship-owned pair (%s, %s): want ErrModelConflict, got %v",

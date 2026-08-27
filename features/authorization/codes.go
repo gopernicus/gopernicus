@@ -102,9 +102,9 @@ var (
 	ErrInvalidRoleModel = decisionsvc.ErrInvalidRoleModel
 
 	// ErrModelConflict reports a (resource type, permission) pair declared by BOTH
-	// Config.Model and Config.RoleModel at NewService. A resource TYPE may appear
-	// in both models — only a PAIR may not, because pair ownership is what lets
-	// the one decision surface dispatch rather than merge. It wraps
+	// Config.RelationshipModel and Config.RoleModel at NewService. A resource TYPE
+	// may appear in both models — only a PAIR may not, because pair ownership is
+	// what lets the one decision surface dispatch rather than merge. It wraps
 	// sdk.ErrInvalidInput.
 	ErrModelConflict = decisionsvc.ErrModelConflict
 
@@ -137,6 +137,11 @@ var (
 	// succeed against the same deployment. There is deliberately no default allow
 	// guard: the absence of a guard closes the actor-facing write path, it does not
 	// open it.
+	//
+	// It is deliberately UNLIKE ErrNoDecisionKind, the other "not configured"
+	// refusal: this one is a precondition an ACTOR can observe on a correctly
+	// deployed host, so it answers 400; a decision surface with no model-bearing
+	// kind is an operator wiring fault and answers 500.
 	ErrMutationsNotConfigured = fmt.Errorf("authorization: actor-facing mutations are not configured (no MutationGuard): %w", sdk.ErrInvalidInput)
 )
 

@@ -265,7 +265,7 @@ func TestRoleGuardedReadOnlyPosture(t *testing.T) {
 	st := memstore.New(memstore.WithGuardianPolicy(mutation.GuardianPolicy{}))
 	comps, err := NewService(Repositories{
 		Relationships: st.Relationships(), Roles: st.Roles(), Mutations: st.Mutations(),
-	}, Config{Model: lifecycleModel()}) // no Guard → read-only posture
+	}, Config{RelationshipModel: lifecycleModel()}) // no Guard → read-only posture
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -282,7 +282,7 @@ func TestRoleGuardedUnwiredKind(t *testing.T) {
 	st := memstore.New(memstore.WithGuardianPolicy(mutation.GuardianPolicy{}))
 	comps, err := NewService(Repositories{
 		Relationships: st.Relationships(), Mutations: st.Mutations(), // no Roles
-	}, Config{Model: lifecycleModel(), Guard: &roleScopeGuard{}})
+	}, Config{RelationshipModel: lifecycleModel(), Guard: &roleScopeGuard{}})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
@@ -343,7 +343,7 @@ func newRoleModelComponents(t *testing.T, st *memstore.Store, model RoleModel) C
 		Relationships: st.Relationships(),
 		Roles:         st.Roles(),
 		Mutations:     st.Mutations(),
-	}, Config{Model: lifecycleModel(), Guard: &roleScopeGuard{}, RoleModel: model})
+	}, Config{RelationshipModel: lifecycleModel(), Guard: &roleScopeGuard{}, RoleModel: model})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
