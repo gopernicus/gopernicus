@@ -1,8 +1,12 @@
 package crud
 
 import (
+	"errors"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 func encTest(s string) (string, error) { return "enc_" + s, nil }
@@ -130,6 +134,37 @@ func TestParseListRequest_NeverClamps(t *testing.T) {
 		if !strings.Contains(err.Error(), tt.wantErr) {
 			t.Errorf("ParseListRequest(%q) err = %q, want containing %q", tt.input, err.Error(), tt.wantErr)
 		}
+		if !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Errorf("ParseListRequest(%q) err = %v, want wrapping sdk.ErrInvalidInput", tt.input, err)
+		}
+	}
+}
+
+// TestParseListRequest_RejectionsPreserveStrconvCause proves the three strconv
+// rejections keep their cause in the chain alongside the sentinel: a host can
+// still reach the *strconv.NumError while web.ErrFromDomain classifies the 400.
+func TestParseListRequest_RejectionsPreserveStrconvCause(t *testing.T) {
+	tests := []struct {
+		name   string
+		params ListParams
+	}{
+		{"limit", ListParams{Limit: "zero"}},
+		{"offset", ListParams{Offset: "here"}},
+		{"count", ListParams{Count: "yes-please"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseListRequest(tt.params)
+			if err == nil {
+				t.Fatal("err = nil, want error")
+			}
+			if !errors.Is(err, sdk.ErrInvalidInput) {
+				t.Errorf("err = %v, want wrapping sdk.ErrInvalidInput", err)
+			}
+			if !errors.As(err, new(*strconv.NumError)) {
+				t.Errorf("err = %v, want wrapping *strconv.NumError", err)
+			}
+		})
 	}
 }
 
@@ -217,6 +252,9 @@ func TestParseListRequest_Offset(t *testing.T) {
 				if !strings.Contains(err.Error(), tt.wantErr) {
 					t.Errorf("err = %q, want containing %q", err.Error(), tt.wantErr)
 				}
+				if !errors.Is(err, sdk.ErrInvalidInput) {
+					t.Errorf("err = %v, want wrapping sdk.ErrInvalidInput", err)
+				}
 				return
 			}
 			if err != nil {
@@ -255,6 +293,9 @@ func TestParseListRequest_Count(t *testing.T) {
 				if !strings.Contains(err.Error(), tt.wantErr) {
 					t.Errorf("err = %q, want containing %q", err.Error(), tt.wantErr)
 				}
+				if !errors.Is(err, sdk.ErrInvalidInput) {
+					t.Errorf("err = %v, want wrapping sdk.ErrInvalidInput", err)
+				}
 				return
 			}
 			if err != nil {
@@ -278,6 +319,9 @@ func TestParseListRequest_CursorAndOffsetRejected(t *testing.T) {
 	if !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Errorf("err = %q, want containing %q", err.Error(), "mutually exclusive")
 	}
+	if !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Errorf("err = %v, want wrapping sdk.ErrInvalidInput", err)
+	}
 
 	// An offset param of "0" alongside a cursor is now also rejected: an offset
 	// param present at all means offset strategy, which excludes a cursor.
@@ -287,5 +331,8 @@ func TestParseListRequest_CursorAndOffsetRejected(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Errorf("err = %q, want containing %q", err.Error(), "mutually exclusive")
+	}
+	if !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Errorf("err = %v, want wrapping sdk.ErrInvalidInput", err)
 	}
 }

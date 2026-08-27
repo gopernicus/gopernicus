@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // TrimPage trims an over-fetched result set to the requested limit and builds a
@@ -151,20 +153,20 @@ func ParseListRequest(p ListParams) (ListRequest, error) {
 		var err error
 		limit, err = strconv.Atoi(p.Limit)
 		if err != nil {
-			return ListRequest{}, fmt.Errorf("page limit conversion: %w", err)
+			return ListRequest{}, fmt.Errorf("page limit conversion: %w: %w", err, sdk.ErrInvalidInput)
 		}
 	}
 
 	if limit <= 0 {
-		return ListRequest{}, fmt.Errorf("rows value too small, must be larger than 0")
+		return ListRequest{}, fmt.Errorf("rows value too small, must be larger than 0: %w", sdk.ErrInvalidInput)
 	}
 
 	if limit > maxLimit {
-		return ListRequest{}, fmt.Errorf("rows value too large, must be at most %d", maxLimit)
+		return ListRequest{}, fmt.Errorf("rows value too large, must be at most %d: %w", maxLimit, sdk.ErrInvalidInput)
 	}
 
 	if p.Cursor != "" && p.Offset != "" {
-		return ListRequest{}, fmt.Errorf("cursor and offset are mutually exclusive")
+		return ListRequest{}, fmt.Errorf("cursor and offset are mutually exclusive: %w", sdk.ErrInvalidInput)
 	}
 
 	strategy := p.DefaultStrategy
@@ -183,10 +185,10 @@ func ParseListRequest(p ListParams) (ListRequest, error) {
 		var err error
 		offset, err = strconv.Atoi(p.Offset)
 		if err != nil {
-			return ListRequest{}, fmt.Errorf("page offset conversion: %w", err)
+			return ListRequest{}, fmt.Errorf("page offset conversion: %w: %w", err, sdk.ErrInvalidInput)
 		}
 		if offset < 0 {
-			return ListRequest{}, fmt.Errorf("offset value too small, must not be negative")
+			return ListRequest{}, fmt.Errorf("offset value too small, must not be negative: %w", sdk.ErrInvalidInput)
 		}
 	}
 
@@ -195,7 +197,7 @@ func ParseListRequest(p ListParams) (ListRequest, error) {
 		var err error
 		withCount, err = strconv.ParseBool(p.Count)
 		if err != nil {
-			return ListRequest{}, fmt.Errorf("page count conversion: %w", err)
+			return ListRequest{}, fmt.Errorf("page count conversion: %w: %w", err, sdk.ErrInvalidInput)
 		}
 	}
 

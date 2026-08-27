@@ -3,6 +3,8 @@ package crud
 import (
 	"fmt"
 	"strings"
+
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 const (
@@ -49,13 +51,13 @@ func ParseOrder(fields map[string]OrderField, orderBy string, defaultOrder Order
 		if dirStr == ASC || dirStr == DESC {
 			direction = dirStr
 		} else {
-			return Order{}, fmt.Errorf("unknown direction: %s", dirStr)
+			return Order{}, fmt.Errorf("unknown direction: %s: %w", dirStr, sdk.ErrInvalidInput)
 		}
 	}
 
 	of, ok := fields[fieldName]
 	if !ok {
-		return Order{}, fmt.Errorf("unknown order field: %s", fieldName)
+		return Order{}, fmt.Errorf("unknown order field: %s: %w", fieldName, sdk.ErrInvalidInput)
 	}
 
 	return NewOrder(of.Column, direction), nil

@@ -83,9 +83,17 @@
 // # Query-param vocabulary
 //
 // Transport edges parse a standard vocabulary into a ListRequest: limit,
-// cursor, offset, count, and q map through ParseListRequest;
-// order=field:direction is parsed separately by ParseOrder because the allow-list
-// is per-aggregate. Each paginated aggregate declares its allow-list
+// cursor, offset, count, and q map through ParseListQuery, the parser over
+// url.Values that delegates to ParseListRequest. The keys are exported as
+// QueryKeyLimit, QueryKeyCursor, QueryKeyOffset, QueryKeyCount and
+// QueryKeySearch so an edge or an OpenAPI document names them without
+// literals, and every rejection from either parser wraps sdk.ErrInvalidInput
+// with its sentence preserved as the prefix.
+//
+// order=field:direction (QueryKeyOrder) is parsed separately by ParseOrder and
+// is never read by ParseListQuery, because the allow-list is per-aggregate and
+// an edge chooses its own posture — reject a bad field (JSON) or fall back to
+// the default order (SSR). Each paginated aggregate declares its allow-list
 // (map[string]OrderField) plus a default Order in its pocket-core domain
 // package; ParseOrder validates the requested field at the edge, and backends
 // validate again (QuoteIdentifier or allow-list membership) before use — raw

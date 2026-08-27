@@ -1,8 +1,11 @@
 package crud
 
 import (
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 func TestNewOrder_ValidDirection(t *testing.T) {
@@ -85,6 +88,9 @@ func TestParseOrder_UnknownField(t *testing.T) {
 	if !strings.Contains(err.Error(), "unknown order field") {
 		t.Errorf("err = %q, want containing %q", err.Error(), "unknown order field")
 	}
+	if !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Errorf("err = %v, want wrapping sdk.ErrInvalidInput", err)
+	}
 }
 
 func TestParseOrder_UnknownDirection(t *testing.T) {
@@ -95,6 +101,9 @@ func TestParseOrder_UnknownDirection(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unknown direction") {
 		t.Errorf("err = %q, want containing %q", err.Error(), "unknown direction")
+	}
+	if !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Errorf("err = %v, want wrapping sdk.ErrInvalidInput", err)
 	}
 }
 
