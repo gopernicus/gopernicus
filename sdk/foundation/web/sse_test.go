@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
 )
 
 func TestSSEStream_BasicEvents(t *testing.T) {
@@ -139,7 +137,7 @@ func TestSSEStream_ThroughLoggerMiddleware(t *testing.T) {
 	events <- SSEEvent{Event: "update", Data: "world"}
 	close(events)
 
-	handler := Logger(logging.NewNoop())(NewSSEStream(events))
+	handler := Logger(discardLogger())(NewSSEStream(events))
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 

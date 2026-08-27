@@ -73,7 +73,7 @@ modules locally for development; real consumers would pin tagged versions, not
 the workspace. Module paths are rooted at `github.com/gopernicus/gopernicus`.
 
 
-## The sdk layering law (sdk-layering, 2026-07-10)
+## The sdk layering law (sdk-layering, 2026-07-10; tests included 2026-08-27)
 
 ```
 sdk/                      ROOT package sdk — the KERNEL (errors.go,
@@ -103,9 +103,9 @@ composition lives in the capability that owns the semantics (the cache
 middleware is `capabilities/cacher`'s, not web's); capability×capability
 composition leaves sdk entirely (a composing integration —
 `integrations/notify/mailer` is the exemplar). Guard G12 enforces the
-law over production code (tests exempt, the G6 precedent — two
-deliberate env round-trip tests are why); G13 keeps integrations
-pointing outward-only.
+law over production and test code alike; tests use root/stdlib fakes or
+package-local contract checks rather than importing a peer tier. G13 keeps
+integrations pointing outward-only.
 
 ## Protocols and pocket relationships (sdk-work-protocol, 2026-07-13)
 

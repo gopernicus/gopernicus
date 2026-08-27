@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/gopernicus/gopernicus/sdk"
-	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
 )
 
 // componentFunc is a local Renderer for tests — no templ import, proving the
@@ -70,7 +69,7 @@ func TestRequestID_ReusesInbound(t *testing.T) {
 }
 
 func TestPanics_Returns500HTML(t *testing.T) {
-	h := Panics(logging.NewNoop())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := Panics(discardLogger())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		panic("boom")
 	}))
 	rec := httptest.NewRecorder()

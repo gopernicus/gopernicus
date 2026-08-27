@@ -3,12 +3,12 @@ package web_test
 import (
 	"context"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"testing"
 	"time"
 
-	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
@@ -39,7 +39,8 @@ func TestRun_GracefulShutdown(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	runErr := make(chan error, 1)
-	go func() { runErr <- web.Run(ctx, handler, cfg, logging.NewNoop()) }()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	go func() { runErr <- web.Run(ctx, handler, cfg, log) }()
 
 	// Give ListenAndServe a moment, then fire an in-flight request.
 	time.Sleep(150 * time.Millisecond)
