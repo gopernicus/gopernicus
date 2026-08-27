@@ -49,17 +49,44 @@ func Run(t *testing.T, newRepos func(t *testing.T) authorization.Repositories) {
 		}
 		runBudget(t, newRepos)
 	})
+	// The Parity oracle has one arm per model-bearing kind; each arm is gated on
+	// its own kind so a single-kind backend still runs the arm it can.
+	//
+	// The naming asymmetry below is deliberate: the "Relationships"/"Roles"
+	// subtests exist ONLY as loud SKIP stubs when a kind is unwired, so an
+	// unwired kind is reported rather than silent. A WIRED arm mounts its cases
+	// FLAT under Parity (Parity/CheckLookupOracle; Parity/RolesCheckLookupOracle,
+	// Parity/RolesMultiPageWalk), so -run 'Parity/Roles' on a wired backend
+	// selects the Roles* cases by prefix. Renaming shipped subtest paths to make
+	// this symmetric is not worth breaking existing -run invocations.
 	t.Run("Parity", func(t *testing.T) {
-		if newRepos(t).Relationships == nil {
-			t.Skip("relationship kind not wired")
+		repos := newRepos(t)
+		if repos.Relationships == nil {
+			t.Run("Relationships", func(t *testing.T) { t.Skip("relationship kind not wired") })
+		} else {
+			runParity(t, newRepos)
 		}
-		runParity(t, newRepos)
+		if repos.Roles == nil {
+			t.Run("Roles", func(t *testing.T) { t.Skip("roles kind not wired") })
+		} else {
+			runRolesParity(t, newRepos)
+		}
 	})
 	t.Run("Roles", func(t *testing.T) {
 		if newRepos(t).Roles == nil {
 			t.Skip("roles kind not wired")
 		}
 		runRoles(t, newRepos)
+		t.Run("Decision", func(t *testing.T) {
+			runRolesDecision(t, newRepos)
+		})
+	})
+	t.Run("Composed", func(t *testing.T) {
+		repos := newRepos(t)
+		if repos.Relationships == nil || repos.Roles == nil {
+			t.Skip("pair-ownership dispatch needs BOTH kinds wired")
+		}
+		runComposed(t, newRepos)
 	})
 	t.Run("Mutations", func(t *testing.T) {
 		if newRepos(t).Mutations == nil {

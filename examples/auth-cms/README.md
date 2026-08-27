@@ -90,8 +90,9 @@ writes pass a host `MutationGuard` (`guard.go`) that reads `manage_access` (its 
 repository's dependency-tracking `DecisionView`**, and the ownable `project` type
 carries the ratified guardian minimum (`owner`, min-1). At boot the host seeds
 `project:demo#owner@user:demo-owner` (establishing the guardian minimum FIRST) and the
-**platform-admin data tuple** `platform:main#admin@user:demo-owner` through the
-**trusted `SystemMutator`** (`seedAuthorization`) — platform-admin is DATA (a tuple over
+**platform-admin data tuple** `platform:main#admin@user:demo-owner`, plus the
+roles-kind `auditor` assignment on `project:demo`, through the **trusted
+`SystemMutator`** (`seedAuthorization`) — platform-admin is DATA (a tuple over
 a `platform` resource type), never a Config field, and establishing the first owner is
 inherently trusted. **`Check` is pure schema evaluation**: the engine grants no bypass,
 so the host runs the platform-admin recipe itself — an `admin` permission `Check` on
@@ -113,17 +114,29 @@ removed the session-only mutation routes — see below); the guarded actor path 
   API** — enumeration is NEVER a consumer seam (§2.4); consumer seams are Check-only.
 
 **The roles kind** is **independently wireable** — a roles-only host would wire
-`authorization.Repositories{Roles: …}` alone and never construct a model. Here it
-rides alongside the relationship kind (two kinds, two checks, no entanglement).
-Roles are **opaque strings** the host interprets. Demo routes:
+`authorization.Repositories{Roles: …}` alone, with or without a model. Here it
+rides alongside the relationship kind and **bears its own model**
+(`Config.RoleModel`, `authzRoleModel()`): on the SAME `project` type the `auditor`
+role grants `audit`. The two models share the TYPE but never a (type, permission)
+**pair** — `view`/`manage_access` are relationship-owned, `audit` is role-owned — so
+the ONE decision surface **dispatches** each pair to its owning model (a pair in both
+would fail construction with `ErrModelConflict`). Two kinds, one surface, no
+entanglement. Assignment rims stay **opaque strings**; with a model wired, assigning
+an undeclared `(type, role)` is refused with `ErrInvalidRoleModel` instead of storing
+a silent no-grant. Demo routes:
 
-- `GET /demo/audit` — gated through `authorizer.HasRole(..., "auditor",
-  "project", "demo")`: 403 without the role, 200 with it. On success it drives a
-  `ListRoleAssignmentsByResource` read-back. The engine's `HasRole` honors the
-  **global fallback** (a GLOBAL `auditor` grant satisfies the scoped check), but
-  the listing is **direct-scope only** — so a subject allowed via a global grant is
-  allowed yet does NOT appear in the read-back (the documented v1
-  enumeration-vs-decision divergence, visible in the JSON).
+- `GET /demo/audit` — gated through the feature's coordinate gate
+  `authorizer.RequirePermissionFixed("project", "audit", "demo")`: 403 without a
+  granting role, 200 with one. The host writes **no** role check of its own — the
+  role model decides, and the pair is checked for legality at route registration.
+  On success the handler drives a `ListRoleAssignmentsByResource` read-back. The
+  gate keeps the roles kind's **global fallback** (a GLOBAL `auditor` grant
+  satisfies the scoped check), but the listing is **direct-scope only** — so a
+  subject allowed via a global grant is allowed yet does NOT appear in the read-back
+  (the documented v1 enumeration-vs-decision divergence, visible in the JSON).
+  A globally assigned role grants only the role-owned pairs its model entry names:
+  it is not a bypass, and `isPlatformAdmin` remains the host recipe for
+  admin-sees-everything on the relationship-owned routes.
 Role assignment has **no shipped HTTP surface** on this host: AZ3-4.1 removed the
 session-only `POST /demo/roles/{assign,unassign}` and `POST /demo/admin/bootstrap`
 routes (a shipped route must never mutate authorization with session presence alone,
@@ -591,8 +604,9 @@ the ordered stop above) takes the quiet path and is never treated as a failure.
 
 ### Leg 7 — the authorization flagship (guarded, AZ3-4.1)
 
-The `project:demo` owner and the `platform:main#admin` data tuple are **boot-seeded
-for `user:demo-owner`** through the trusted `SystemMutator` (`seedAuthorization`) — the
+The `project:demo` owner, the `platform:main#admin` data tuple, and the `auditor` role
+on `project:demo` are **boot-seeded for `user:demo-owner`** through the trusted
+`SystemMutator` (`seedAuthorization`) — the
 host no longer self-bootstraps the caller through a session-only route. The READ demos
 below still drive live off invitation-granted membership; `<BID>`/`<CID>` are B/C's
 principal ids from `GET /demo/whoami`.
@@ -605,8 +619,9 @@ curl -s -b cjar http://localhost:8082/demo/my-projects                          
 curl -N --max-time 2 -b bjar http://localhost:8082/events/project/demo            # 200 (member)
 curl -N --max-time 2 -b cjar http://localhost:8082/events/project/demo            # 403 (non-member)
 
-# roles kind — /demo/audit gates on HasRole (global fallback + direct-scope read-back):
-curl -i -b bjar http://localhost:8082/demo/audit                                  # 403 (no role)
+# roles kind — /demo/audit gates on the ROLE MODEL (RequirePermissionFixed on the
+# role-owned project/audit pair; global fallback + direct-scope read-back):
+curl -i -b bjar http://localhost:8082/demo/audit                                  # 403 (no granting role)
 ```
 
 **Role assignment has no HTTP surface** (AZ3-4.1): the session-only `POST
@@ -758,8 +773,8 @@ unwired kind (e.g. `slack`) fails 400; email is always-on via the Mailer.
   `GET /demo/members-only` (RequirePrincipal + engine-Check gated: member/owner →
   200, resolved non-member → 403), `GET /demo/my-projects` (the relationship
   kind's `LookupResources` enumeration → `{admin, ids}`), `GET /demo/audit`
-  (the roles kind's `HasRole` gate + a direct-scope `ListRoleAssignmentsByResource`
-  read-back), and `GET /debug/security-events`
+  (the roles kind's ROLE-MODEL gate, `RequirePermissionFixed("project", "audit",
+  "demo")`, + a direct-scope `ListRoleAssignmentsByResource` read-back), and `GET /debug/security-events`
   (`AUTH_DEBUG=1` + `RequireUser`). The demo routes are READ-ONLY: AZ3-4.1 removed the
   session-only `POST /demo/roles/{assign,unassign}` and `POST /demo/admin/bootstrap`
   mutation routes. See "Authorization postures" for the flagship demo flow.

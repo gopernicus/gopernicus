@@ -65,17 +65,35 @@ func (s *Service) UnassignRole(ctx context.Context, subjectType, subjectID, role
 // the global ("", "") grant is checked as a fallback. A global assignment thus
 // satisfies a scoped check, but a scoped assignment never satisfies a different
 // scope. Fail-closed: any store error returns (false, err).
+//
+// It delegates to [Service.HasRoleWhere] and drops the provenance, so the scope
+// rule lives in exactly one place.
 func (s *Service) HasRole(ctx context.Context, subjectType, subjectID, roleName, resourceType, resourceID string) (bool, error) {
+	held, _, err := s.HasRoleWhere(ctx, subjectType, subjectID, roleName, resourceType, resourceID)
+	return held, err
+}
+
+// HasRoleWhere is HasRole with PROVENANCE: the same Q5 scope rule (exact scope,
+// then the global fallback for a scoped query), additionally reporting WHERE the
+// grant was found — role.ProvenanceDirect when the exact-scope row matched,
+// role.ProvenanceGlobal when the ("", "") fallback did, "" when not held. A role
+// held at BOTH scopes reports direct (the more specific), so callers are
+// deterministic regardless of row order. An UNSCOPED query's exact row IS the
+// global assignment, so it reports direct — matching the effective listing,
+// which has no fallback at global scope.
+//
+// Fail-closed: any store error returns (false, "", err).
+func (s *Service) HasRoleWhere(ctx context.Context, subjectType, subjectID, roleName, resourceType, resourceID string) (held bool, provenance string, err error) {
 	if err := validateAssignment(subjectType, subjectID, roleName, resourceType, resourceID); err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	ok, err := s.store.HasExactRole(ctx, subjectType, subjectID, roleName, resourceType, resourceID)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	if ok {
-		return true, nil
+		return true, role.ProvenanceDirect, nil
 	}
 
 	// Global fallback only when the query was scoped (an unscoped query already
@@ -83,12 +101,14 @@ func (s *Service) HasRole(ctx context.Context, subjectType, subjectID, roleName,
 	if resourceType != "" || resourceID != "" {
 		ok, err := s.store.HasExactRole(ctx, subjectType, subjectID, roleName, "", "")
 		if err != nil {
-			return false, err
+			return false, "", err
 		}
-		return ok, nil
+		if ok {
+			return true, role.ProvenanceGlobal, nil
+		}
 	}
 
-	return false, nil
+	return false, "", nil
 }
 
 // ListRoleAssignmentsBySubject pages a subject's assignments. The subject fields

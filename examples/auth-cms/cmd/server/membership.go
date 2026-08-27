@@ -238,6 +238,12 @@ func hostInviteCheck(authorizer *authorization.Service) auth.InviteCheck {
 // host declares in its model (see main.go). It fails CLOSED: any error or a
 // missing tuple yields false. A host that wants admin-sees-everything runs this
 // FIRST in its own closure, before the resource-specific check.
+//
+// It stays host policy even now that the roles kind bears a model: a globally
+// assigned role can grant only the role-OWNED permissions whose RoleModel entry
+// explicitly lists it (here, `auditor` → project/audit), never a
+// relationship-owned permission and never a permission added later. Universal
+// bypass is therefore this closure's job, not the model's.
 func isPlatformAdmin(ctx context.Context, authorizer *authorization.Service, subjectType, subjectID string) bool {
 	res, err := authorizer.Check(ctx, authorization.CheckRequest{
 		Principal:  authorization.PrincipalRef{Type: subjectType, ID: subjectID},

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gopernicus/gopernicus/features/authorization/internal/logic/authorizersvc"
+	"github.com/gopernicus/gopernicus/features/authorization/internal/logic/decisionsvc"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -205,9 +206,10 @@ type AuditSink interface {
 // (bootstrap/invitation/…) mature in AZ3-3.4.
 type SystemMutator struct {
 	mutations     MutationRepository
-	audit         AuditSink              // nil = no structured teardown audit sink (logger still records)
-	log           *slog.Logger           // nil = slog.Default()
-	relationships *authorizersvc.Service // nil = relationship kind off (no digest stamping / semantic validation)
+	audit         AuditSink                      // nil = no structured teardown audit sink (logger still records)
+	log           *slog.Logger                   // nil = slog.Default()
+	relationships *authorizersvc.Service         // nil = relationship kind off (no digest stamping / semantic validation)
+	roleModel     *decisionsvc.CompiledRoleModel // nil = no role model (role assignments stay opaque)
 }
 
 // Apply runs a trusted (unguarded) atomic mutation. It bypasses only the
@@ -233,7 +235,7 @@ func (m *SystemMutator) Apply(ctx context.Context, cmd Command) (*Receipt, error
 	if err := cmd.Validate(); err != nil {
 		return nil, err
 	}
-	return m.mutations.Apply(ctx, cmd, schemaValidatorFor(m.relationships))
+	return m.mutations.Apply(ctx, cmd, semanticValidatorFor(m.relationships, m.roleModel))
 }
 
 // GrantRelationship runs a TRUSTED single-relation grant — the invitation-acceptance
@@ -347,7 +349,7 @@ func (m *SystemMutator) TeardownAuthorizationScope(ctx context.Context, cmd Tear
 	if err := command.Validate(); err != nil {
 		return nil, err
 	}
-	receipt, err := m.mutations.Apply(ctx, command, schemaValidatorFor(m.relationships))
+	receipt, err := m.mutations.Apply(ctx, command, semanticValidatorFor(m.relationships, m.roleModel))
 	m.recordTeardown(ctx, command, reason, receipt, err)
 	return receipt, err
 }
@@ -473,7 +475,7 @@ func (s *Service) applyMutation(ctx context.Context, actor Actor, cmd Command) (
 		return nil, err
 	}
 	guard := composeGuard(actor, s.guard, cmd)
-	receipt, err := s.mutations.ApplyGuarded(ctx, cmd, guard, schemaValidatorFor(s.relationships))
+	receipt, err := s.mutations.ApplyGuarded(ctx, cmd, guard, semanticValidatorFor(s.relationships, s.roleModel))
 	s.recordMutationAudit(ctx, actor, cmd, receipt, err)
 	return receipt, err
 }
@@ -515,6 +517,68 @@ func schemaValidatorFor(eng *authorizersvc.Service) SemanticValidator {
 			}
 		}
 		return nil
+	}
+}
+
+// roleModelValidatorFor returns the receipt-absent ROLE-MODEL validator (D8), or
+// nil when the host configured no model — in which case role assignments stay
+// fully opaque, as they were. It validates only OpRoleAssign: a SCOPED assignment
+// (ScopeResource) needs the role declared in that resource type's Roles, and a
+// GLOBAL one (ScopeSubject) needs the role declared by some resource type, since
+// global scope is assignment data rather than a second namespace.
+//
+// Unassign and every read path stay opaque, so a stored row the current model
+// cannot express remains removable and listable; and because Apply invokes the
+// validator only when NO receipt exists, an exact replay still returns its stored
+// receipt after a later model change dropped the role. Running here — inside the
+// repository's boundary — rather than as a preflight is what makes
+// Service.AssignRole, SystemMutator.AssignRole, and the generic
+// SystemMutator.Apply(OpRoleAssign) unable to disagree or bypass it.
+func roleModelValidatorFor(model *decisionsvc.CompiledRoleModel) SemanticValidator {
+	if model == nil {
+		return nil
+	}
+	return func(cmd Command) error {
+		if cmd.Operation != OpRoleAssign {
+			return nil
+		}
+		resourceType := ""
+		if cmd.Scope.Kind == ScopeResource {
+			resourceType = cmd.Scope.Type
+		}
+		for _, row := range cmd.Roles {
+			if model.DeclaresRole(resourceType, row.Role) {
+				continue
+			}
+			if resourceType == "" {
+				return fmt.Errorf("%w: role %q is declared by no resource type, so it cannot be assigned globally", ErrInvalidRoleModel, row.Role)
+			}
+			return fmt.Errorf("%w: role %q is not declared on resource type %q", ErrInvalidRoleModel, row.Role, resourceType)
+		}
+		return nil
+	}
+}
+
+// semanticValidatorFor composes the wired receipt-absent validators — the
+// current-schema relationship validator and the role-model assignment validator —
+// into the ONE SemanticValidator every write path passes to the repository. It is
+// nil when neither applies, so a host with no models keeps the untouched
+// no-validator path. The validators run in order and the first failure wins; each
+// only inspects the operations it owns, so they never both fire for one command.
+func semanticValidatorFor(eng *authorizersvc.Service, model *decisionsvc.CompiledRoleModel) SemanticValidator {
+	schema := schemaValidatorFor(eng)
+	roles := roleModelValidatorFor(model)
+	switch {
+	case schema == nil:
+		return roles
+	case roles == nil:
+		return schema
+	}
+	return func(cmd Command) error {
+		if err := schema(cmd); err != nil {
+			return err
+		}
+		return roles(cmd)
 	}
 }
 

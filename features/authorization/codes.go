@@ -7,6 +7,7 @@ import (
 
 	"github.com/gopernicus/gopernicus/features/authorization/domain/mutation"
 	"github.com/gopernicus/gopernicus/features/authorization/internal/logic/authorizersvc"
+	"github.com/gopernicus/gopernicus/features/authorization/internal/logic/decisionsvc"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
@@ -85,6 +86,27 @@ var (
 	// runtime ErrEvaluationLimit above. Zero fields are valid: they select the
 	// safe defaults.
 	ErrInvalidLimits = authorizersvc.ErrInvalidLimits
+
+	// ErrInvalidRoleModel reports a Config.RoleModel violation. It wraps
+	// sdk.ErrInvalidInput and is returned at two points:
+	//
+	//   - at NewService, for a STRUCTURALLY invalid model — a malformed resource
+	//     type / role / permission name, a duplicate role, an empty grantor list,
+	//     a grantor the type does not declare, or a declared role that grants
+	//     nothing. This is the roles-kind counterpart of the relationship kind's
+	//     schema rejection.
+	//   - at ROLE-ASSIGN time (D8), while a model is set, for a (resource type,
+	//     role) pair the model does not declare: a scoped assignment needs the
+	//     role in that type's Roles, a global one needs it declared in some type.
+	//     Hosts with no model are unaffected and every read path stays opaque.
+	ErrInvalidRoleModel = decisionsvc.ErrInvalidRoleModel
+
+	// ErrModelConflict reports a (resource type, permission) pair declared by BOTH
+	// Config.Model and Config.RoleModel at NewService. A resource TYPE may appear
+	// in both models — only a PAIR may not, because pair ownership is what lets
+	// the one decision surface dispatch rather than merge. It wraps
+	// sdk.ErrInvalidInput.
+	ErrModelConflict = decisionsvc.ErrModelConflict
 
 	// ErrStaleRevision reports an expected scope revision that no longer matched.
 	// It is the shared contract sentinel (mutation.ErrStaleRevision) re-exported so

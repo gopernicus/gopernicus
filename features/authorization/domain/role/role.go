@@ -2,12 +2,21 @@
 // a deliberately minimal role-assignment contract, independent of the
 // relationship (ReBAC) kind. The backing table is `iam_roles`.
 //
-// A role assignment grants a subject an opaque role, optionally scoped to a
-// resource. Roles are OPAQUE STRINGS the host interprets (the invitation
-// Relation opacity precedent): v1 has no role registry or vocabulary — a role
-// model is policy-seam-adjacent and deferred. This kind does plain lookups
-// only; it has NO schema, NO graph walk, and never imports the relationship
-// engine.
+// A role assignment grants a subject a role, optionally scoped to a resource.
+// At THIS rim roles stay OPAQUE STRINGS the host interprets (the invitation
+// Relation opacity precedent): there is no role registry, catalog, or implication
+// hierarchy here, and every read path — HasRole, the raw and effective listings —
+// answers the stored fact without consulting any model.
+//
+// A role MODEL does exist, one tier up: the host-passed
+// authorization.RoleModel, compiled and evaluated in internal/logic/decisionsvc,
+// maps each resource type's roles to the permissions they grant so the kind can
+// answer the decision surface. It never reaches this rim. Its only write-side
+// effect is ASSIGN-TIME: with a model configured, assigning an undeclared
+// (resource type, role) pair is refused, while unassign and every read stay
+// opaque, so stored rows the current model cannot express remain listable and
+// removable. This package still does plain lookups only: NO schema, NO graph
+// walk, and it never imports either engine.
 //
 // # Scope
 //
@@ -82,17 +91,31 @@ type EffectiveGrant struct {
 	Global      bool
 }
 
-// Provenance returns the grant's provenance label — "direct", "global", or
-// "both". A grant always has at least one source, so the zero label never
-// occurs on a value returned by the store.
+// Provenance labels — WHERE a role grant was found. They are the kind's ONE
+// provenance vocabulary: [EffectiveGrant.Provenance] returns them, and the
+// service's provenance-reporting probe reports ProvenanceDirect/ProvenanceGlobal.
+const (
+	// ProvenanceDirect — an assignment stored EXACTLY at the requested scope.
+	ProvenanceDirect = "direct"
+	// ProvenanceGlobal — a global ("","") assignment satisfying a scoped query.
+	ProvenanceGlobal = "global"
+	// ProvenanceBoth — the same grant is held directly AND globally. It is an
+	// enumeration-only label: a decision probe reports the more specific
+	// ProvenanceDirect.
+	ProvenanceBoth = "both"
+)
+
+// Provenance returns the grant's provenance label — ProvenanceDirect,
+// ProvenanceGlobal, or ProvenanceBoth. A grant always has at least one source,
+// so the zero label never occurs on a value returned by the store.
 func (g EffectiveGrant) Provenance() string {
 	switch {
 	case g.Direct && g.Global:
-		return "both"
+		return ProvenanceBoth
 	case g.Global:
-		return "global"
+		return ProvenanceGlobal
 	default:
-		return "direct"
+		return ProvenanceDirect
 	}
 }
 

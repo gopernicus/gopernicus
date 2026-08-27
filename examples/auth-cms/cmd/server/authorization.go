@@ -53,6 +53,28 @@ func authzSchema() authorization.Schema {
 	})
 }
 
+// authzRoleModel builds the host's ROLES-kind permission model — the second
+// model-bearing kind this host wires. On the SAME `project` resource type the
+// relationship schema owns, the opaque `auditor` role grants the `audit`
+// permission (the /demo/audit gate).
+//
+// The two models share the resource TYPE but never a (type, permission) PAIR:
+// `project/view` and `project/manage_access` stay relationship-owned, `project/audit`
+// is role-owned. That split is exactly what NewService's pair-ownership rule permits
+// — a pair declared by both models would fail construction with ErrModelConflict —
+// and it is what makes each decision dispatch to exactly one model, so the two
+// recipes stay demonstrable side by side without entangling.
+func authzRoleModel() authorization.RoleModel {
+	return authorization.RoleModel{
+		ResourceTypes: map[string]authorization.RoleTypeDef{
+			demoResourceType: {
+				Roles:       []string{demoRole},
+				Permissions: map[string][]string{demoAuditPermission: {demoRole}},
+			},
+		},
+	}
+}
+
 // authzGuardianPolicy is the host's guardian invariant: the ratified owner minimum
 // (DefaultGuardianPolicy's owner, min-1 direct anchor) applied to the ownable `project`
 // resource type. It deliberately does NOT extend to `platform` — the honest documented
@@ -73,8 +95,10 @@ func authzGuardianPolicy() authorization.GuardianPolicy {
 // newAuthorization composes the guarded authorization feature this host runs — the
 // testable composition seam run() and the guarded-composition tests share (the
 // buildAuthConfig precedent). BOTH kinds ride one shared-state memstore bundle (so the
-// trusted SystemMutator writes and the read side observe the same state), under the
-// project-scoped guardian minimum, with the host MutationGuard wired into Config.Guard.
+// trusted SystemMutator writes and the read side observe the same state), and BOTH
+// bear a model — the relationship Schema and the RoleModel — so the ONE decision
+// surface dispatches each (type, permission) pair to its owning model. It runs under
+// the project-scoped guardian minimum, with the host MutationGuard wired into Config.Guard.
 // The returned Components hold the actor-facing Service and the separately held trusted
 // SystemMutator apart, by construction.
 func newAuthorization() (authorization.Components, error) {
@@ -84,8 +108,9 @@ func newAuthorization() (authorization.Components, error) {
 		Roles:         store.Roles(),
 		Mutations:     store.Mutations(),
 	}, authorization.Config{
-		Model: authzSchema(),
-		Guard: hostMutationGuard{},
+		Model:     authzSchema(),
+		RoleModel: authzRoleModel(),
+		Guard:     hostMutationGuard{},
 	})
 }
 
@@ -114,6 +139,22 @@ func seedAuthorization(ctx context.Context, system *authorization.SystemMutator)
 		if _, err := system.GrantRelationship(ctx, g); err != nil {
 			return err
 		}
+	}
+	// The ROLES-kind seed, on the same trusted seam and the same derived-MutationID
+	// replay rule: the demo owner also holds `auditor` on project:demo, so the
+	// role-model gate on /demo/audit is answerable at boot. The (project, auditor)
+	// pair must be declared by authzRoleModel — with a model wired, an undeclared
+	// pair is refused with ErrInvalidRoleModel rather than stored as a silent
+	// no-grant.
+	if _, err := system.AssignRole(ctx, authorization.AssignRoleCommand{
+		MutationID: authorization.DeriveMutationID("auth-cms/bootstrap-role",
+			demoResourceType, demoResourceID, demoRole, seedOwnerSubject.Type, seedOwnerSubject.ID),
+		Subject:      authorization.PrincipalRef{Type: seedOwnerSubject.Type, ID: seedOwnerSubject.ID},
+		Role:         demoRole,
+		ResourceType: demoResourceType,
+		ResourceID:   demoResourceID,
+	}); err != nil {
+		return err
 	}
 	return nil
 }

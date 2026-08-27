@@ -2,10 +2,17 @@
 // feature's RELATIONSHIP kind: the registered-data permission model (schema
 // DSL + validator) and the Check/Lookup engine that evaluates it against a
 // relationship.Storer. The roots re-export the model types and DSL; the engine
-// methods are promoted onto the feature Service.
+// methods are promoted onto the feature Service. The package also owns the
+// kind-agnostic decision VOCABULARY (CheckRequest, CheckResult, Reason,
+// LookupResult, Explanation, EvaluationLimits) and the ONE HTTP gate body
+// (Gates over Checker/Declarer): those are shared contracts every
+// decision-capable kind speaks, not relationship semantics. The trigger to
+// extract them into a neutral package is a third kind (the policy seam).
 //
-// The model governs the RELATIONSHIP kind ONLY — the roles kind has no schema
-// (opaque strings, package role). Adding a resource type is a code change with
+// The schema governs the RELATIONSHIP kind ONLY. The roles kind has its own,
+// separate model — decisionsvc.RoleModel, in the compositions tier that also
+// owns the composite decider — and the two never declare the same (resource
+// type, permission) pair. Adding a resource type here is a code change with
 // ZERO migration: relations and permissions are registered data, not columns
 // (the EAV-spine philosophy applied to permissions).
 package authorizersvc
@@ -84,15 +91,22 @@ type CheckResult struct {
 // LookupResult
 // =============================================================================
 
-// LookupResult is returned by the engine's LookupResources — pure schema/tuple
-// enumeration.
+// LookupResult is the enumeration result of LookupResources.
 //
-// Contract: IDs is ALWAYS a non-nil slice. An empty slice means the subject has
-// access to no resource of that type. There is no admin/unrestricted bypass in
-// the engine: a host that wants admin-sees-everything checks for it in its own
-// closure BEFORE calling LookupResources and then skips ID filtering.
+// Contract: IDs is ALWAYS a non-nil slice. Unrestricted reports that the
+// principal may access EVERY resource of the type because a role that grants
+// the permission is held GLOBALLY — in which case IDs is empty and the host
+// must skip ID filtering entirely rather than treat the empty slice as "none".
+// Only the roles kind produces Unrestricted; the relationship kind is pure
+// tuple enumeration and never does.
+//
+// An empty IDs with Unrestricted false means the subject has access to no
+// resource of that type. There is no admin/unrestricted bypass in the
+// relationship engine: a host that wants admin-sees-everything checks for it in
+// its own closure BEFORE calling LookupResources and then skips ID filtering.
 type LookupResult struct {
-	IDs []string
+	IDs          []string
+	Unrestricted bool
 }
 
 // =============================================================================

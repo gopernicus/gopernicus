@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,7 +14,10 @@ import (
 	authorization "github.com/gopernicus/gopernicus/features/authorization"
 	authzmem "github.com/gopernicus/gopernicus/features/authorization/memstore"
 	"github.com/gopernicus/gopernicus/sdk"
+	sdkevents "github.com/gopernicus/gopernicus/sdk/capabilities/events"
+	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // AZ3-4.1 host proof suite. Every case runs over the REAL guarded composition
@@ -557,5 +563,206 @@ func TestAuthorizationPosturesDemonstrable(t *testing.T) {
 	}
 	if allowed(t, svc, "u-outsider", demoPermission, "pflag") {
 		t.Fatal("flagship engine: outsider has view")
+	}
+}
+
+// =============================================================================
+// The composed both-kinds proof (roles-model T5b): ONE resource type, two models,
+// one decision surface.
+// =============================================================================
+
+// TestHostModelsSplitOneTypeByPermission proves the host's two models are legal
+// together and that the split is what makes them legal: `project` appears in BOTH
+// the relationship Schema and the RoleModel, but no (type, permission) PAIR does —
+// `view`/`manage_access` are relationship-owned, `audit` is role-owned. Declaring a
+// relationship-owned pair in the RoleModel is a construction error, so the pair
+// ownership this host relies on cannot rot silently.
+func TestHostModelsSplitOneTypeByPermission(t *testing.T) {
+	if _, err := newAuthorization(); err != nil {
+		t.Fatalf("production wiring (Schema + RoleModel over one resource type): %v", err)
+	}
+
+	store := authzmem.New(authzmem.WithGuardianPolicy(authzGuardianPolicy()))
+	conflicting := authzRoleModel()
+	conflicting.ResourceTypes[demoResourceType] = authorization.RoleTypeDef{
+		Roles:       []string{demoRole},
+		Permissions: map[string][]string{demoPermission: {demoRole}}, // relationship-owned pair
+	}
+	_, err := authorization.NewService(authorization.Repositories{
+		Relationships: store.Relationships(),
+		Roles:         store.Roles(),
+		Mutations:     store.Mutations(),
+	}, authorization.Config{
+		Model:     authzSchema(),
+		RoleModel: conflicting,
+		Guard:     hostMutationGuard{},
+	})
+	if !errors.Is(err, authorization.ErrModelConflict) {
+		t.Fatalf("RoleModel claiming the relationship-owned pair (%s, %s): want ErrModelConflict, got %v",
+			demoResourceType, demoPermission, err)
+	}
+}
+
+// demoAuditHost is one RUNNING host composition — the real authentication feature,
+// the real guarded authorization components (both models), and the real
+// registerDemoRoutes registration — so /demo/audit is driven over HTTP with real
+// credentials, through the real RequirePrincipal + role-model gate chain.
+type demoAuditHost struct {
+	*linkHost
+	comps authorization.Components
+}
+
+func newDemoAuditHost(t *testing.T) *demoAuditHost {
+	t.Helper()
+	sender := &recordingSender{}
+	authSvc := bootInProcess(t, sender, nil)
+	comps := hostAuthz(t)
+	if err := seedAuthorization(context.Background(), comps.SystemMutator); err != nil {
+		t.Fatalf("seedAuthorization: %v", err)
+	}
+	router := web.NewWebHandler(web.WithLogging(quietLog()))
+	if err := authSvc.Register(feature.Mount{
+		Router: router, Logger: quietLog(), Events: sdkevents.NewMemory(sdkevents.WithLogger(quietLog())),
+	}); err != nil {
+		t.Fatalf("auth.Register: %v", err)
+	}
+	registerDemoRoutes(router, authSvc, comps.Service)
+	t.Cleanup(runDelivery(t, authSvc))
+	srv := httptest.NewServer(router)
+	t.Cleanup(srv.Close)
+	origins := allowedOrigins()
+	if len(origins) == 0 {
+		t.Fatal("host has no allowed origins; the browser-safe mutation gate cannot pass")
+	}
+	return &demoAuditHost{
+		linkHost: &linkHost{t: t, srv: srv, svc: authSvc, sender: sender, origin: origins[0]},
+		comps:    comps,
+	}
+}
+
+// principalID reads the signed-up client's resolved principal id off /demo/whoami.
+func (h *demoAuditHost) principalID(c *linkClient) string {
+	h.t.Helper()
+	resp, body := c.do("GET", "/demo/whoami", "", nil)
+	if resp.StatusCode != http.StatusOK {
+		h.t.Fatalf("GET /demo/whoami = %d, want 200; body=%s", resp.StatusCode, body)
+	}
+	var out struct {
+		PrincipalID string `json:"principal_id"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil || out.PrincipalID == "" {
+		h.t.Fatalf("decode whoami %q: %v", body, err)
+	}
+	return out.PrincipalID
+}
+
+// assignAuditor grants the modeled `auditor` role at the given scope through the
+// TRUSTED SystemMutator (an empty scope pair is a global assignment) — the only
+// role-assignment seam this host ships.
+func (h *demoAuditHost) assignAuditor(userID, resourceType, resourceID string) {
+	h.t.Helper()
+	if _, err := h.comps.SystemMutator.AssignRole(context.Background(), authorization.AssignRoleCommand{
+		MutationID:   mustMutationID(h.t),
+		Subject:      authorization.PrincipalRef{Type: "user", ID: userID},
+		Role:         demoRole,
+		ResourceType: resourceType,
+		ResourceID:   resourceID,
+	}); err != nil {
+		h.t.Fatalf("AssignRole(%s, %s, %s/%s): %v", userID, demoRole, resourceType, resourceID, err)
+	}
+}
+
+// status drives one authenticated GET and returns its status code and body.
+func (h *demoAuditHost) get(c *linkClient, path string) (int, []byte) {
+	h.t.Helper()
+	resp, body := c.do("GET", path, "", nil)
+	return resp.StatusCode, body
+}
+
+// TestDemoAuditRouteIsGatedByTheRoleModel is the composed both-kinds assertion: the
+// /demo/audit route is gated by the ROLE MODEL (RequirePermissionFixed on the
+// role-owned project/audit pair — the host writes no HasRole gate of its own),
+// while the relationship-owned project/view routes are unaffected. It proves the
+// dispatch has no cross-kind widening in either direction:
+//
+//   - an `auditor` with NO relationship tuple passes /demo/audit and is still 403 on
+//     the relationship-owned /demo/members-only;
+//   - a project/view tuple-holder WITHOUT the role passes /demo/members-only and is
+//     403 on /demo/audit;
+//   - a GLOBALLY assigned `auditor` passes the scoped role-owned gate (the roles
+//     kind's global fallback) yet is NOT a platform admin — isPlatformAdmin stays
+//     false and the relationship-owned gate still refuses it. Universal bypass
+//     remains the host recipe, never a consequence of the role model.
+func TestDemoAuditRouteIsGatedByTheRoleModel(t *testing.T) {
+	h := newDemoAuditHost(t)
+
+	// No credential at all: the route's RequirePrincipal answers before any decision.
+	anon := h.newClient()
+	if code, body := h.get(anon, "/demo/audit"); code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated GET /demo/audit = %d, want 401; body=%s", code, body)
+	}
+
+	// (1) The role-owned pair: an auditor with no relationship tuple is allowed.
+	auditor := h.signUp("role-model-auditor@example.com")
+	auditorID := h.principalID(auditor)
+	if code, body := h.get(auditor, "/demo/audit"); code != http.StatusForbidden {
+		t.Fatalf("GET /demo/audit before the role = %d, want 403; body=%s", code, body)
+	}
+	h.assignAuditor(auditorID, demoResourceType, demoResourceID)
+	code, body := h.get(auditor, "/demo/audit")
+	if code != http.StatusOK {
+		t.Fatalf("GET /demo/audit as a scoped auditor = %d, want 200; body=%s", code, body)
+	}
+	if !strings.Contains(string(body), auditorID) {
+		t.Fatalf("scoped auditor %s missing from the direct-scope read-back: %s", auditorID, body)
+	}
+	// The role grants ONLY its modeled pair: project/view is the other model's.
+	if code, body := h.get(auditor, "/demo/members-only"); code != http.StatusForbidden {
+		t.Fatalf("GET /demo/members-only as an auditor with no tuple = %d, want 403; body=%s", code, body)
+	}
+
+	// (2) The relationship-owned pair: a member without the role is refused by the
+	// role model, and still passes the relationship-owned gate.
+	member := h.signUp("role-model-member@example.com")
+	memberID := h.principalID(member)
+	if _, err := h.comps.SystemMutator.GrantRelationship(context.Background(), authorization.GrantRelationshipCommand{
+		MutationID:   mustMutationID(t),
+		ResourceType: demoResourceType,
+		ResourceID:   demoResourceID,
+		Relation:     demoRelation,
+		Subject:      authorization.SubjectRef{Type: "user", ID: memberID},
+	}); err != nil {
+		t.Fatalf("grant %s member on %s/%s: %v", memberID, demoResourceType, demoResourceID, err)
+	}
+	if code, body := h.get(member, "/demo/members-only"); code != http.StatusOK {
+		t.Fatalf("GET /demo/members-only as a member = %d, want 200; body=%s", code, body)
+	}
+	if code, body := h.get(member, "/demo/audit"); code != http.StatusForbidden {
+		t.Fatalf("GET /demo/audit as a project/view holder without the role = %d, want 403; body=%s", code, body)
+	}
+
+	// (3) A GLOBAL auditor: allowed on the role-owned pair through the global
+	// fallback, absent from the DIRECT-scope read-back, and NOT a platform admin.
+	global := h.signUp("role-model-global@example.com")
+	globalID := h.principalID(global)
+	h.assignAuditor(globalID, "", "")
+	code, body = h.get(global, "/demo/audit")
+	if code != http.StatusOK {
+		t.Fatalf("GET /demo/audit as a global auditor = %d, want 200; body=%s", code, body)
+	}
+	if strings.Contains(string(body), globalID) {
+		t.Fatalf("global auditor %s must not appear in the DIRECT-scope read-back: %s", globalID, body)
+	}
+	if isPlatformAdmin(context.Background(), h.comps.Service, "user", globalID) {
+		t.Fatal("a globally assigned role must not make its holder a platform admin")
+	}
+	if code, body := h.get(global, "/demo/members-only"); code != http.StatusForbidden {
+		t.Fatalf("GET /demo/members-only as a global auditor = %d, want 403; body=%s", code, body)
+	}
+
+	// The platform-admin recipe is unchanged and still host-composed over the
+	// relationship kind's platform:main#admin tuple.
+	if !isPlatformAdmin(context.Background(), h.comps.Service, "user", seedOwnerSubject.ID) {
+		t.Fatal("the seeded platform admin recipe stopped governing the relationship-owned kind")
 	}
 }

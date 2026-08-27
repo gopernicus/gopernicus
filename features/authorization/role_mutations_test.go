@@ -314,3 +314,222 @@ func TestRoleCommandRejectsUsersetSubjectsStructurally(t *testing.T) {
 		t.Fatalf("AssignRoleCommand.Subject must be a concrete PrincipalRef")
 	}
 }
+
+// -----------------------------------------------------------------------------
+// Assign-time role-model validation (D8)
+//
+// The model check runs as part of the receipt-ABSENT SemanticValidator inside the
+// repository's atomic boundary, composed with the relationship schema validator —
+// not as a preflight in the typed methods. So every write path enforces it
+// identically, and an exact replay still returns its stored receipt after the
+// configured model drops the role.
+// -----------------------------------------------------------------------------
+
+// docRoleModel is the roles half of the lifecycle fixture: it shares the "doc"
+// resource type with lifecycleModel but owns a DIFFERENT permission, the pair
+// split construction permits.
+func docRoleModel() RoleModel {
+	return RoleModel{ResourceTypes: map[string]RoleTypeDef{
+		"doc": {Roles: []string{"auditor"}, Permissions: map[string][]string{"audit": {"auditor"}}},
+	}}
+}
+
+// newRoleModelComponents builds the full lifecycle bundle (guarded Service +
+// trusted SystemMutator) over ONE memstore state with the given role model, so
+// the three write paths can be compared on the same fixture.
+func newRoleModelComponents(t *testing.T, st *memstore.Store, model RoleModel) Components {
+	t.Helper()
+	comps, err := NewService(Repositories{
+		Relationships: st.Relationships(),
+		Roles:         st.Roles(),
+		Mutations:     st.Mutations(),
+	}, Config{Model: lifecycleModel(), Guard: &roleScopeGuard{}, RoleModel: model})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	return comps
+}
+
+func newRoleModelStore() *memstore.Store {
+	return memstore.New(memstore.WithGuardianPolicy(mutation.GuardianPolicy{}))
+}
+
+// TestAssignRoleValidatesAgainstTheRoleModel proves the D8 matrix: a scoped
+// assignment needs the role on THAT type, a global one needs it on ANY type, and
+// an undeclared pair is refused with ErrInvalidRoleModel naming the symbols —
+// before any row is written.
+func TestAssignRoleValidatesAgainstTheRoleModel(t *testing.T) {
+	comps := newRoleModelComponents(t, newRoleModelStore(), docRoleModel())
+	svc := comps.Service
+	ctx := context.Background()
+
+	if _, err := svc.AssignRole(ctx, actorU1(), AssignRoleCommand{
+		MutationID: mustID(t), Subject: prinU("u2"), Role: "auditor", ResourceType: "doc", ResourceID: "d1",
+	}); err != nil {
+		t.Fatalf("declared scoped assignment: %v", err)
+	}
+	if _, err := svc.AssignRole(ctx, actorU1(), AssignRoleCommand{
+		MutationID: mustID(t), Subject: prinU("u2"), Role: "auditor", // global
+	}); err != nil {
+		t.Fatalf("declared global assignment: %v", err)
+	}
+
+	cases := map[string]struct {
+		cmd       AssignRoleCommand
+		wantNamed []string
+	}{
+		"typo'd role on a modeled type": {
+			AssignRoleCommand{Subject: prinU("u3"), Role: "audtor", ResourceType: "doc", ResourceID: "d1"},
+			[]string{"audtor", "doc"},
+		},
+		"declared role on an unmodeled type": {
+			AssignRoleCommand{Subject: prinU("u3"), Role: "auditor", ResourceType: "project", ResourceID: "p1"},
+			[]string{"auditor", "project"},
+		},
+		"typo'd role assigned globally": {
+			AssignRoleCommand{Subject: prinU("u3"), Role: "audtor"},
+			[]string{"audtor"},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			cmd := tc.cmd
+			cmd.MutationID = mustID(t)
+			_, err := svc.AssignRole(ctx, actorU1(), cmd)
+			if !errors.Is(err, ErrInvalidRoleModel) {
+				t.Fatalf("want ErrInvalidRoleModel, got %v", err)
+			}
+			for _, symbol := range tc.wantNamed {
+				if !strings.Contains(err.Error(), symbol) {
+					t.Fatalf("message must name %q, got %v", symbol, err)
+				}
+			}
+			if ok, err := svc.HasRole(ctx, cmd.Subject, cmd.Role, cmd.ResourceType, cmd.ResourceID); err != nil || ok {
+				t.Fatalf("a refused assignment must write nothing: ok=%v err=%v", ok, err)
+			}
+		})
+	}
+}
+
+// TestAssignRoleModelValidationParity proves the check cannot be bypassed by
+// choosing a different write path: the guarded typed method, the trusted typed
+// method, and the generic trusted Apply all refuse the same undeclared pair,
+// because the rule lives in the validator the repository runs.
+func TestAssignRoleModelValidationParity(t *testing.T) {
+	comps := newRoleModelComponents(t, newRoleModelStore(), docRoleModel())
+	ctx := context.Background()
+
+	paths := map[string]func() error{
+		"Service.AssignRole (guarded)": func() error {
+			_, err := comps.Service.AssignRole(ctx, actorU1(), AssignRoleCommand{
+				MutationID: mustID(t), Subject: prinU("u2"), Role: "audtor", ResourceType: "doc", ResourceID: "d1",
+			})
+			return err
+		},
+		"SystemMutator.AssignRole (trusted)": func() error {
+			_, err := comps.SystemMutator.AssignRole(ctx, AssignRoleCommand{
+				MutationID: mustID(t), Subject: prinU("u2"), Role: "audtor", ResourceType: "doc", ResourceID: "d1",
+			})
+			return err
+		},
+		"SystemMutator.Apply (generic)": func() error {
+			_, err := comps.SystemMutator.Apply(ctx, Command{
+				MutationID: mustID(t),
+				Scope:      ScopeKey{Kind: ScopeResource, Type: "doc", ID: "d1"},
+				Operation:  OpRoleAssign,
+				Roles:      []RoleRow{{SubjectType: "user", SubjectID: "u2", Role: "audtor"}},
+			})
+			return err
+		},
+	}
+	for name, run := range paths {
+		t.Run(name, func(t *testing.T) {
+			if err := run(); !errors.Is(err, ErrInvalidRoleModel) {
+				t.Fatalf("want ErrInvalidRoleModel, got %v", err)
+			}
+		})
+	}
+	if ok, err := comps.Service.HasRole(ctx, prinU("u2"), "audtor", "doc", "d1"); err != nil || ok {
+		t.Fatalf("no write path may have applied the undeclared role: ok=%v err=%v", ok, err)
+	}
+}
+
+// TestAssignRoleWithoutARoleModelStaysOpaque proves hosts with no model are
+// untouched: role names remain opaque strings the core does not judge.
+func TestAssignRoleWithoutARoleModelStaysOpaque(t *testing.T) {
+	comps := newRoleModelComponents(t, newRoleModelStore(), RoleModel{})
+	ctx := context.Background()
+	if _, err := comps.Service.AssignRole(ctx, actorU1(), AssignRoleCommand{
+		MutationID: mustID(t), Subject: prinU("u2"), Role: "anything-goes", ResourceType: "doc", ResourceID: "d1",
+	}); err != nil {
+		t.Fatalf("with no model every role stays assignable: %v", err)
+	}
+}
+
+// TestUnassignRoleStaysOpaqueUnderARoleModel proves the asymmetry: a stored row
+// the current model cannot express is still REMOVABLE and still readable — only
+// assignment is judged, so no historical row needs a migration.
+func TestUnassignRoleStaysOpaqueUnderARoleModel(t *testing.T) {
+	st := newRoleModelStore()
+	ctx := context.Background()
+	// A row from before the model (or from a model that has since dropped it).
+	if err := st.Roles().Assign(ctx, Assignment{
+		SubjectType: "user", SubjectID: "u2", Role: "legacy", ResourceType: "doc", ResourceID: "d1",
+	}); err != nil {
+		t.Fatalf("seed legacy row: %v", err)
+	}
+	comps := newRoleModelComponents(t, st, docRoleModel())
+
+	if ok, err := comps.Service.HasRole(ctx, prinU("u2"), "legacy", "doc", "d1"); err != nil || !ok {
+		t.Fatalf("reads stay opaque: ok=%v err=%v", ok, err)
+	}
+	if _, err := comps.SystemMutator.UnassignRole(ctx, UnassignRoleCommand{
+		MutationID: mustID(t), Subject: prinU("u2"), Role: "legacy", ResourceType: "doc", ResourceID: "d1",
+	}); err != nil {
+		t.Fatalf("an undeclared role must stay removable: %v", err)
+	}
+	if ok, err := comps.Service.HasRole(ctx, prinU("u2"), "legacy", "doc", "d1"); err != nil || ok {
+		t.Fatalf("legacy row was not removed: ok=%v err=%v", ok, err)
+	}
+}
+
+// TestAssignRoleReplaySurvivesTheModelDroppingTheRole proves the validator runs
+// receipt-ABSENT: an exact replay of an already-applied assignment returns its
+// stored receipt even after the host reconfigured a model that no longer declares
+// the role — while a FIRST application of that same role is now refused.
+func TestAssignRoleReplaySurvivesTheModelDroppingTheRole(t *testing.T) {
+	st := newRoleModelStore()
+	ctx := context.Background()
+	id := mustID(t)
+	cmd := AssignRoleCommand{
+		MutationID: id, Subject: prinU("u2"), Role: "auditor", ResourceType: "doc", ResourceID: "d1",
+	}
+
+	before := newRoleModelComponents(t, st, docRoleModel())
+	first, err := before.SystemMutator.AssignRole(ctx, cmd)
+	if err != nil || first.Outcome != OutcomeApplied || first.Replayed {
+		t.Fatalf("first application: got %+v err=%v", first, err)
+	}
+
+	// The host narrows the model: "auditor" is gone.
+	narrowed := RoleModel{ResourceTypes: map[string]RoleTypeDef{
+		"doc": {Roles: []string{"reviewer"}, Permissions: map[string][]string{"audit": {"reviewer"}}},
+	}}
+	after := newRoleModelComponents(t, st, narrowed)
+
+	replay, err := after.SystemMutator.AssignRole(ctx, cmd)
+	if err != nil {
+		t.Fatalf("exact replay must return the stored receipt, got %v", err)
+	}
+	if !replay.Replayed || replay.PayloadDigest != first.PayloadDigest {
+		t.Fatalf("replay: got %+v, want the stored receipt of %+v", replay, first)
+	}
+
+	// A NEW assignment of the dropped role is refused under the narrowed model.
+	fresh := cmd
+	fresh.MutationID = mustID(t)
+	fresh.Subject = prinU("u3")
+	if _, err := after.SystemMutator.AssignRole(ctx, fresh); !errors.Is(err, ErrInvalidRoleModel) {
+		t.Fatalf("first application under the narrowed model: want ErrInvalidRoleModel, got %v", err)
+	}
+}

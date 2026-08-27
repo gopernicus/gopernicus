@@ -258,7 +258,111 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
-### features/authorization — v0.2.0 (next tag): RequirePermission in coordinates (minor, additive)
+### features/authorization — v0.3.0 (next tag): the roles kind's model + one decision surface (minor, predominantly additive)
+
+Plan of record `.claude/plans/authorization-roles-model.md` (gopernicus issue #5;
+originating host gps-360-go, which hand-wrote the entire roles decision half).
+The roles kind gains the model it never had, and the decision surface stops being
+relationship-kind-only. **A host that sets no `Config.RoleModel` is behaviourally
+unchanged** — same decisions, reasons, traces, and zero-length values.
+
+**The seam.**
+
+- **`Config.RoleModel`** — one new field, `RoleModel{ResourceTypes map[string]RoleTypeDef}`
+  with `RoleTypeDef{Roles []string; Permissions map[string][]string}` (permission →
+  the roles that grant it). Registered data, no migration, validated at
+  `NewService`: `ErrRoleModelWithoutRoles` when set without `Repositories.Roles`,
+  `ErrInvalidRoleModel` when structurally invalid, `ErrModelConflict` when a
+  `(resource type, permission)` pair is declared by BOTH `Config.Model` and
+  `Config.RoleModel`.
+- **One decision surface, dispatched by pair ownership.** `Check`, `CheckBatch`,
+  `CheckExplain`, `FilterAuthorized`, `LookupResources` and
+  `RequirePermission`/`RequirePermissionOn`/`RequirePermissionFixed` now route each
+  pair to the model that DECLARES it. `Config.Limits` is that surface's budget: it
+  is resolved (and a negative field rejected with `ErrInvalidLimits`) whenever any
+  model-bearing kind is wired, `MaxBatchSize`/`MaxLookupResults` are charged on a
+  roles+model host too, and `MaxGraphStates` additionally bounds the role-assignment
+  walk so an adversarial assignment count is `ErrEvaluationLimit`, never an
+  open-ended store walk.
+- **New exported symbols:** `RoleModel`, `RoleTypeDef`, `Config.RoleModel`,
+  `LookupResult.Unrestricted`, `ExplainStep.Role`/`.Scope`, `ExplainKindRole`,
+  `ExplainScopeDirect`, `ExplainScopeGlobal`, `ErrInvalidRoleModel`,
+  `ErrModelConflict`, `ErrRoleModelWithoutRoles`, `ErrNoDecisionKind`.
+- **`LookupResult.Unrestricted`** reports that a granting role is held GLOBALLY, so
+  the principal reaches every resource of the type and `IDs` is empty. Only the
+  roles kind ever sets it. It is additive because it is fail-closed under
+  ignorance: a caller reading only `IDs` shows an unrestricted principal an EMPTY
+  page — restrictive, never permissive. `IDs` stays ALWAYS non-nil.
+- **`Register`'s log line** gains `role_model=<bool>` — a bool only, never
+  resource-type or role names; policy vocabulary stays out of logs.
+
+**The one error-identity change — `ErrNoDecisionKind`.** On a host where NO kind
+bears a model (a roles-only wiring with no `Config.RoleModel` — gps-360-go today),
+these five calls return the new `ErrNoDecisionKind` where they previously returned
+`ErrRelationshipsNotConfigured`: **`Check`, `CheckBatch`, `CheckExplain`,
+`FilterAuthorized`, `LookupResources`.** Nothing else moves — every other
+relationship-kind method still returns `ErrRelationshipsNotConfigured`, and the
+roles-kind methods still return `ErrRolesNotConfigured`. The new sentinel is a
+clean identity (it does NOT wrap `ErrRelationshipsNotConfigured`) and wraps
+`sdk.ErrInvalidInput`, so like its `ErrMutationsNotConfigured` precedent it is a
+stable precondition refusal that maps to **HTTP 400** through the `web.Error`
+seam — never a deny, never 403, never `ErrUnavailable`. A host branching on
+`errors.Is(err, ErrRelationshipsNotConfigured)` for those five calls must add the
+new sentinel; no host in `examples/` or gps-360-go did (grep, 2026-08-26). The
+three gates still panic at mount on that wiring, with a **new message**:
+
+```
+authorization: RequirePermission… requires a decision-capable kind (Config.Model
+or Config.RoleModel); a roles-only host without a role model must not mount it
+```
+
+**No cross-kind universal bypass — deliberately.** The feature declares no
+`Superuser`/`IsSuperuser` primitive and performs no cross-kind union. A globally
+assigned role grants exactly the role-owned pairs whose grantor lists EXPLICITLY
+name it, and acquires neither relationship-owned permissions nor permissions added
+to the model later. An application flag that must bypass every present and future
+decision (gps-360-go's `ManageAuthorization`, auth-cms's `isPlatformAdmin`) stays
+in host composition, run before the surface, and owns the widening. A host
+transcribing an existing steward/admin role must therefore list it on every
+permission it should grant.
+
+**Assign-time model validation (new, model-gated).** With a `RoleModel`
+configured, assigning a `(resource type, role)` pair the model does not declare is
+refused with `ErrInvalidRoleModel` (wrapping `sdk.ErrInvalidInput`) — a scoped
+assignment needs the role in that type's `Roles`, a global one needs it declared by
+some type. It runs inside the mutation repository's boundary as part of the
+receipt-absent semantic validator, so `Service.AssignRole`,
+`SystemMutator.AssignRole`, and generic `SystemMutator.Apply(OpRoleAssign)` cannot
+disagree or bypass it, while an exact replay still returns its stored receipt after
+a later model change dropped the role. **`UnassignRole` and every read path stay
+opaque**: existing rows need no migration and remain listable and removable. Hosts
+with no model are untouched. The typo that used to be a permanently silent no-grant
+is now loud at assign time.
+
+**Source-compatibility caveat.** `Config`, `ExplainStep`, and `LookupResult` gain
+exported fields. Keyed literals are unaffected and no unkeyed literal of any of the
+three exists in-repo or in gps-360-go (grep 2026-08-26; `go vet` checks composites
+in the verify set) — but, as with any exported Go struct field addition, an unknown
+downstream **unkeyed** literal of those three types must become keyed.
+
+**No store change.** The engine runs on the EXISTING `role.Storer`
+(`HasExactRole` + the paged `ListBySubject` walk): no port, DDL, migration, or
+store tag change, so a host adopts the model by bumping ONE module.
+`features/authorization/stores/{pgx,turso}` are NOT retagged. **Follow-up (D6,
+recorded not built):** store-side `RolesHeld(subject, type, id)` and
+`ListBySubjectForResourceType` probes, a `storetest` contract for them, and a
+store train. Trigger: `ErrEvaluationLimit` from the assignment walk in a real
+host, or measured gate latency.
+
+**`storetest`** gains `Roles/Decision`, a `Parity/Roles` arm, and a `Composed`
+family (skipped unless both kinds are wired) — all in the core module, no store
+module bump needed to run them. Both live dialect legs ran for this train
+(pgx on a throwaway `postgres:17` container; turso on the authorized playground —
+the turso suite is now ≈12 min end to end, so pass `-timeout 20m`). The next
+`stores/{pgx,turso}` repin onto v0.3.0 runs the three new families against the
+live dialects automatically.
+
+### features/authorization — v0.2.0 — tagged 2026-08-26: RequirePermission in coordinates (minor, additive)
 
 `Service.RequirePermissionOn(resourceType, permission, pathParam)` and
 `Service.RequirePermissionFixed(resourceType, permission, resourceID)` join

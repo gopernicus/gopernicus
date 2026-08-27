@@ -3,8 +3,9 @@
 A pluggable, datastore-free authorization feature: an IAM domain offering
 multiple KINDS of authorization — **relationships** (a hardened ReBAC engine:
 schema-driven permission checks, exact-userset group expansion,
-through-traversal) and **roles** (minimal opaque-string role assignments, scoped
-or global) — plus a named, deferred **policy** seam. ReBAC is one kind, not the
+through-traversal) and **roles** (opaque-string role assignments, scoped or
+global, with an optional permission model) — plus a named, deferred **policy**
+seam. Both models feed ONE decision surface, dispatched by pair ownership. ReBAC is one kind, not the
 feature's identity. This is the **v3 correctness kernel**: exact userset
 semantics, an immutable compiled schema, bounded/cancellation-aware evaluation,
 and a repository-atomic, guarded, idempotent mutation lifecycle. Design of
@@ -51,12 +52,21 @@ mutations and sensitive invitation tests use the v3 lifecycle.
 | kind | expresses | `Repositories` field | table | nil semantics |
 |---|---|---|---|---|
 | **relationships** | ReBAC tuples + a schema: who relates to what, and which permissions those relations grant (exact-userset group expansion, `Through` traversal; `Check` is pure schema evaluation — platform-admin/self-access are host recipes) | `.Relationships`; optional `.Mutations` only for guarded writes | `iam_relationships` | nil ⇒ kind OFF structurally; every read method returns `ErrRelationshipsNotConfigured` |
-| **roles** | opaque-string role grants — `(subject, role)` pairs, resource-scoped or global | `.Roles` (+ `.Mutations` for writes) | `iam_roles` | nil ⇒ kind OFF; every method returns `ErrRolesNotConfigured` |
+| **roles** | opaque-string role grants — `(subject, role)` pairs, resource-scoped or global — plus an OPTIONAL `Config.RoleModel` (per resource type: the roles that exist and the permissions they grant). With a model the kind ANSWERS the decision surface for the pairs the model declares; without one it stays lookup-only, exactly as before | `.Roles` (+ `.Mutations` for writes) | `iam_roles` | nil ⇒ kind OFF; every method returns `ErrRolesNotConfigured` |
 | **policy** (deferred) | attribute/condition-shaped rules | (future) `.Policies` | (future) `iam_policies` | a designed, named seam — see "The policy seam" below |
 
-**Relationship-kind `Service` methods.** Reads/enumeration: `Check`,
-`CheckExplain`, `CheckBatch`, `FilterAuthorized`, `LookupResources`,
-`ValidateRelation(s)`, `GetSchema`, `SchemaDigest`, `GetPermissionsForRelation`,
+**The decision surface — ONE facade, shared by the model-bearing kinds.**
+`Check`, `CheckExplain`, `CheckBatch`, `FilterAuthorized`, `LookupResources`
+and the three `RequirePermission*` gates are not a per-kind family: each
+`(resource type, permission)` pair is answered by the model that DECLARES it —
+the relationship `Schema` or the `RoleModel`, never both (`ErrModelConflict`
+forbids the overlap at construction). A pair neither model declares denies with
+`"no rules defined"`. On a host where NO kind bears a model (a roles-only wiring
+with no `RoleModel`), all five methods fail closed with `ErrNoDecisionKind` and
+the gates panic at mount.
+
+**Relationship-kind `Service` methods.** Reads: `ValidateRelation(s)`,
+`GetSchema`, `SchemaDigest`, `GetPermissionsForRelation`,
 `GetRelationTargets`, `ListRelationshipsBySubject`/`ByResource`. Guarded
 actor-facing writes (require `Config.Guard` + `Repositories.Mutations`):
 `GrantRelationship`, `RevokeRelationship`, `ReplaceRelationship`,
@@ -65,7 +75,9 @@ actor-facing writes (require `Config.Guard` + `Repositories.Mutations`):
 **Roles-kind `Service` methods.** Reads: `HasRole`,
 `ListRoleAssignmentsBySubject`, `ListRoleAssignmentsByResource` (raw),
 `ListEffectiveRoleGrantsByResource` (effective). Guarded actor-facing writes:
-`AssignRole`, `UnassignRole`.
+`AssignRole`, `UnassignRole`. These stay OPAQUE whether or not a model is
+configured; the model adds the decision half (and, at assign time only, the
+`ErrInvalidRoleModel` typo gate — see "The role model").
 
 **Baseline writes are held apart from `Service`.** `Components.RelationshipWriter`
 exposes schema-validated `CreateRelationships`, exact/idempotent
@@ -87,10 +99,15 @@ Rules of the kinds:
   files, `iam_relationships` included), and both store boot probes expect all
   four tables. Source-level schema optionality is the feature boundary's job,
   never a kind's.
-- **No composed Check facade.** A unified check consulting multiple
-  kinds is exactly the speculative unification this feature avoids — a
-  host composes kinds in its own closure (see the labeled snippet in the
-  wiring page).
+- **One decision surface, DISPATCHED — never merged.** One decision surface
+  dispatches each `(resource type, permission)` pair to the model that declares
+  it; cross-kind union and universal-role bypass are not built (2026-08-26:
+  gps-360-go hand-wrote the whole roles decision half and auth-cms splits one
+  type across kinds by permission — demand for a roles engine and one surface,
+  not for merging kinds). A pair declared by BOTH models is `ErrModelConflict`
+  at construction, which is what keeps the surface a dispatch. Any policy that
+  genuinely spans kinds — a universal admin bypass, a union of two answers —
+  remains the host's own closure around the surface.
 - **Terminology:** a KIND is a nil-safe port family WITHIN this one
   feature module — never a module, and unrelated to ARCHITECTURE.md's
   R6 "Kinds of module" taxonomy vocabulary.
@@ -191,25 +208,139 @@ types, relations with `AllowedSubjects`, permissions built from
 
 An accepted schema is a fixed policy artifact identified by one stable digest.
 
+## The role model — the roles kind's decision half
+
+`Config.RoleModel` is the roles kind's counterpart of the relationship `Schema`:
+registered data, zero migrations, hand-typed in `main`. It is OPTIONAL — the
+zero value is "no model" and leaves the kind exactly as it was (assignments,
+`HasRole`, the listings, and no part in the decision surface).
+
+```go
+type RoleModel struct {
+    ResourceTypes map[string]RoleTypeDef
+}
+
+type RoleTypeDef struct {
+    Roles       []string            // roles assignable at (type, id)
+    Permissions map[string][]string // permission → the roles that grant it
+}
+```
+
+```go
+Config{
+    RoleModel: authorization.RoleModel{ResourceTypes: map[string]authorization.RoleTypeDef{
+        "project": {Roles: []string{"auditor"}, Permissions: map[string][]string{"audit": {"auditor"}}},
+    }},
+}
+```
+
+**Presence.** The model is SET when `ResourceTypes` is non-empty. Set requires
+`Repositories.Roles` (`ErrRoleModelWithoutRoles`); a roles repository with NO
+model stays valid — the asymmetry with `ErrModelRequired` is deliberate.
+
+**Validation — all loud at `NewService`, first failure wins, the message names
+the offending symbol** (`ErrInvalidRoleModel` / `ErrModelConflict`, both wrapping
+`sdk.ErrInvalidInput`):
+
+1. **Presence** — an unset model is never compiled (and never validated).
+2. **Names** — every resource type, role, and permission name passes the same
+   ref-field rule the check path applies to request fields (non-empty, bounded,
+   UTF-8, no control characters).
+3. **Structure** — no duplicate role within a type; every permission's grantor
+   list is non-empty and names only roles that type declares; every declared role
+   grants at least one of that type's permissions (an unused role is a typo until
+   proven otherwise).
+4. **Pair ownership** (`ErrModelConflict`) — a `(resource type, permission)` pair
+   declared by BOTH `Config.Model` and `Config.RoleModel`. A resource TYPE may
+   appear in both (auth-cms's `project`: `view` from relationships, `audit` from
+   roles) — only a PAIR may not. This rule is what makes the decision surface a
+   dispatch rather than a merge.
+
+The model is deep-copied at construction and grantor lists are stored **sorted**,
+so a host mutating its maps afterwards cannot alter a live decision and probe
+order — and therefore the debug `Reason` and the explain trace — is
+deterministic. (Known tradeoff: a host cannot express probe priority; the deny
+path pays all `|grantors|` probes. A priority-ordered model is a follow-up if a
+measured host needs it.)
+
+**How a role-owned `Check` decides.** The pair's sorted grantor roles are probed
+at the request's scope with the roles kind's own scope rule (exact scope, then
+the global `("", "")` fallback); the first held role grants. Cost is bounded by
+the model — at most `2·|grantors|` store probes, short-circuiting. Debug
+`Reason` strings (never wire codes; `ReasonGranted`/`ReasonDenied` remain the
+codes to switch on):
+
+| situation | `Reason` |
+|---|---|
+| a grantor role is held | `role:<role>@direct` or `role:<role>@global` |
+| the pair is declared, no grantor held | `no matching role` |
+| the model declares no such pair | `no rules defined` (the relationship engine's wording) |
+
+Any store error returns the error — never an allow.
+
+**Explain.** `CheckExplain` records one step per grantor probe, in the model's
+sorted order, up to and including the granting one. Role steps use
+`ExplainKindRole` and set two additive fields — `ExplainStep.Role` (the role
+probed) and `ExplainStep.Scope` (`ExplainScopeDirect` / `ExplainScopeGlobal`, or
+`""` when not held); both are empty on relationship steps. A role step sits at
+the request's own coordinates: `Depth: 0`, `Relation: ""`.
+
+**`LookupResult.Unrestricted`.** `LookupResources` for a role-owned pair walks the
+principal's assignments. A granting role held GLOBALLY means the principal
+reaches EVERY resource of the type, which no ID list can express, so the result is
+`{IDs: []string{}, Unrestricted: true}` — **the host must skip ID filtering
+entirely rather than read the empty slice as "none"**. `IDs` remains ALWAYS
+non-nil; only the roles kind ever sets `Unrestricted` (the relationship kind is
+pure tuple enumeration). The field is additive because it is fail-closed under
+ignorance: a caller that reads only `IDs` shows an unrestricted principal an
+empty page — restrictive, never permissive.
+
+**Assign-time validation (only).** With a model configured, a role assignment
+whose `(resource type, role)` pair the model does not declare is rejected with
+`ErrInvalidRoleModel` — a scoped assignment needs the role in that exact type's
+`Roles`; a global one needs it declared by SOME type, because global scope is
+assignment DATA, not a second permission namespace. The check runs inside the
+mutation repository's boundary as part of the receipt-absent semantic validator,
+so `Service.AssignRole`, `SystemMutator.AssignRole`, and the generic
+`SystemMutator.Apply(OpRoleAssign)` cannot disagree or bypass it, while an exact
+replay still returns its stored receipt after a later model change dropped the
+role. `UnassignRole` and EVERY read path stay opaque: existing rows need no
+migration, remain listable, and remain removable. A stored role the model cannot
+express is simply never a grantor. Hosts with no model are untouched.
+
+**Store-probe follow-up (recorded, not built).** The engine runs on the EXISTING
+`role.Storer` — `HasExactRole` probes for `Check`, a paged `ListBySubject` walk
+for `LookupResources` — so a host adopts the model by bumping ONE module, with no
+store port, DDL, migration, or store tag change. The walk is budgeted
+(`MaxGraphStates`, below), so the missing store-side probes
+(`RolesHeld(subject, type, id)`, `ListBySubjectForResourceType`) are a
+PERFORMANCE follow-up, not a correctness gap. **Trigger:** `ErrEvaluationLimit`
+from the assignment walk in a real host, or measured gate latency.
+
 ## Evaluation limits, indeterminate errors, and fail-closed guidance
 
-`Config.Limits` is a resolved semantic `EvaluationLimits` budget, charged per
-decision/enumeration and shared across nested checks. Fields and their
-zero-value defaults (re-exported as `authorization.DefaultMax*` consts):
+`Config.Limits` is a resolved semantic `EvaluationLimits` budget — the DECISION
+SURFACE's, not one kind's — charged per decision/enumeration and shared across
+nested checks. Fields and their zero-value defaults (re-exported as
+`authorization.DefaultMax*` consts):
 
 | field | bounds | default |
 |---|---|---|
-| `MaxThroughDepth` | navigational `Through` recursion (Through hops from 0; `depth > MaxThroughDepth` exhausts) | 10 |
-| `MaxGraphStates` | distinct `(resource, permission)` states expanded (diamond-deduped) | 10000 |
-| `MaxRelationTargets` | per-hop relation fan-out / expanded targets | 1000 |
-| `MaxBatchSize` | checks accepted in one `CheckBatch`/`FilterAuthorized` (also bounds a purge's affected rows) | 1000 |
-| `MaxLookupResults` | resource IDs one `LookupResources` returns (the store fetches max+1 so overflow is distinguishable) | 1000 |
+| `MaxThroughDepth` | navigational `Through` recursion (Through hops from 0; `depth > MaxThroughDepth` exhausts) — relationship kind only | 10 |
+| `MaxGraphStates` | distinct `(resource, permission)` states expanded (diamond-deduped) — **and** every role-assignment row a roles-kind `LookupResources` walk scans, so an adversarial assignment count is bounded work, never an open-ended store walk | 10000 |
+| `MaxRelationTargets` | per-hop relation fan-out / expanded targets — relationship kind only | 1000 |
+| `MaxBatchSize` | checks accepted in one `CheckBatch`/`FilterAuthorized`, charged ONCE for the whole batch by the decision surface whichever kinds own its pairs (also bounds a purge's affected rows) | 1000 |
+| `MaxLookupResults` | resource IDs one `LookupResources` returns, on either kind (the relationship store fetches max+1 so overflow is distinguishable; the roles walk charges its running distinct count) | 1000 |
 
 Rules:
 
 - A **zero** field selects the default; a **negative** field fails `NewService`
   with `ErrInvalidLimits` (a construction error wrapping `sdk.ErrInvalidInput`).
-  Zero never means unlimited; there is no unlimited mode.
+  Zero never means unlimited; there is no unlimited mode. The budget is resolved
+  — and a negative field rejected — whenever ANY model-bearing kind is wired
+  (`Config.Model` or `Config.RoleModel`); on a roles-only wiring with no role
+  model nothing consumes it and it stays an orphaned, ignored setting. The
+  `Through`/fan-out dimensions are simply inert on a roles-only host.
 - **Exhaustion is indeterminate, never a deny or a truncated list.** Any budget
   dimension hitting its ceiling returns `ErrEvaluationLimit` (wrapping
   `sdk.ErrUnavailable`, HTTP 503 — never a new error kind, never `ErrConflict`).
@@ -498,15 +629,15 @@ never as a cms→authorization import (rule 6).
 ```
 authorization.go         the socket: Repositories, Config, Service,
                          NewService (→ Components{Service, RelationshipWriter, SystemMutator}),
-                         Register; root aliases for the engine + mutation
-                         vocabulary; the errs vars
+                         Register; root aliases for the engine, role-model, and
+                         mutation vocabulary; the errs vars
 codes.go                 stable Reason codes + feature error sentinels + the
                          web.Error mapper seam
 mutation_service.go      Actor, MutationGuard, AuditSink, SystemMutator,
                          Components, the generic guarded ApplyMutation seam
 relationship_mutations.go  typed guarded relationship commands
 role_mutations.go        typed guarded role commands + UnassignRoleResult
-middleware.go            RequirePermission (root re-export; bodies internal)
+middleware.go            RequirePermission* (root delegation; bodies internal)
 domain/                  the hexagon's public rim — tuple types + ports
   relationship/          SubjectRef, CreateRelationship, projections, the Storer
   role/                  Assignment, EffectiveGrant, the Storer
@@ -517,12 +648,17 @@ internal/logic/
   authorizersvc/         the sealed ReBAC engine (schema DSL, compiler,
                          immutable snapshot, bounded check/lookup, budget,
                          reasons/explain, EvaluationLimits)
-  rolesvc/               the roles service (the Q5 global-fallback rule)
+  rolesvc/               the roles service (the Q5 global-fallback rule; never
+                         imports either engine — a make guard pins it)
+  decisionsvc/           the compositions tier: RoleModel + its validation and
+                         immutable compilation, the roles decision engine, the
+                         pair-dispatching Composite, and the composite's gates
 memstore/                public in-core reference implementation, all three
                          ports over ONE shared-state bundle (real graph-walk
                          expansion + atomic Apply) — hosts may wire it
 storetest/               executable spec: Run(t, newRepos) — Adversarial,
-                         Roles/*, Mutations (22 cases), the Parity oracle, Budget
+                         Roles/* (+ Roles/Decision), Composed, Mutations
+                         (22 cases), the Parity oracle (one arm per kind), Budget
 stores/turso/            the outbound tier: per-dialect SQL + migrations
 stores/pgx/              (source "authorization"), each its own module
 ```
@@ -539,12 +675,14 @@ a future admin surface (the deferred AZADM packet).
 | field | semantics |
 |---|---|
 | `Repositories.Relationships` | nil = relationship kind off. Wired ⇔ `Config.Model` set — either without the other is a loud `ErrModelRequired`. |
-| `Repositories.Roles` | nil = roles kind off. Needs no Config at all. |
+| `Repositories.Roles` | nil = roles kind off. Needs no Config at all — `Config.RoleModel` is optional and adds the decision half. |
 | `Repositories.Mutations` | optional high-integrity command path (`mutation.MutationRepository`). Required only when `Config.Guard` is set or `SystemMutator` is used. Baseline relationship writes do not depend on it. |
 | both kind fields nil | loud `ErrNoKindConfigured` at `NewService`. |
 | an unwired kind's methods | fail closed with that kind's sentinel (`ErrRelationshipsNotConfigured` / `ErrRolesNotConfigured`). |
+| the decision surface with NO model-bearing kind | `Check`/`CheckBatch`/`CheckExplain`/`FilterAuthorized`/`LookupResources` fail closed with `ErrNoDecisionKind`, and every `RequirePermission*` gate panics at mount. |
 | `Config.Model` | REQUIRED with `Relationships`, forbidden without it; compiled + schema-validated at `NewService` (see validation-failures list). |
-| `Config.Limits` | optional `EvaluationLimits`; zero fields → safe defaults, negative → `ErrInvalidLimits`. Relationship-kind-scoped; ignored-with-note under roles-only wiring. |
+| `Config.RoleModel` | optional; the ROLES kind's model. Set ⇒ `Repositories.Roles` (one direction — `ErrRoleModelWithoutRoles`; a roles repo with no model is the valid opaque posture). Compiled + validated at `NewService`: structurally invalid → `ErrInvalidRoleModel`; a `(resource type, permission)` pair also declared by `Config.Model` → `ErrModelConflict`. |
+| `Config.Limits` | optional `EvaluationLimits`; zero fields → safe defaults, negative → `ErrInvalidLimits`. The decision surface's budget: resolved whenever ANY model-bearing kind is wired (`Model` or `RoleModel`); ignored-with-note under a roles-only wiring with no model. |
 | `Config.IDs` | optional (`cryptids.IDGenerator`); zero value ⇒ the nanoid default; `cryptids.Database` defers to the store's DDL DEFAULT. Relationship-kind-scoped. |
 | `Config.Guard` | nil = actor-facing guarded mutations fail closed with `ErrMutationsNotConfigured`; decisions/lists and baseline `RelationshipWriter` still work. Non-nil requires `Repositories.Mutations`. No default-allow policy. |
 | `Config.Audit` | optional best-effort `AuditSink`; requires `Config.Guard` (`ErrAuditWithoutGuard`). |
@@ -553,10 +691,10 @@ The nil-Guard/nil-Model asymmetry is deliberate: an orphaned `Model` errors
 loudly (capability-defining), while an orphaned `Limits`/`IDs` is
 ignored-with-note (a tuning knob, the auth `MailFrom` precedent).
 
-**`Check` evaluates the schema; policy short-circuits are host composition.**
-The engine is a pure schema evaluator — it grants no platform-admin or
-self-access bypass. Both are HOST recipes a host runs first in its own Check
-closure, and both fail **closed**:
+**`Check` evaluates the models; policy short-circuits are host composition.**
+Each engine evaluates only what its model declares — neither grants a
+platform-admin or self-access bypass. Both are HOST recipes a host runs first in
+its own Check closure, and both fail **closed**:
 
 - **Platform admin (host recipe).** Declare a `platform` resource type with an
   `admin` *permission* (not just a relation), create a
@@ -568,18 +706,39 @@ closure, and both fail **closed**:
   an ID-equality check in its own closure; a host that doesn't simply never
   carries the rule.
 
+**The roles kind does not change that — a globally held role is DATA, not a
+bypass.** A `("", "")` role assignment grants exactly the role-owned permissions
+whose `RoleModel` entries EXPLICITLY name that role (and makes their
+`LookupResources` `Unrestricted`). It grants no relationship-owned permission, and
+no permission added to the model later, until that permission's grantor list says
+so. A host wanting one flag to bypass every present and future decision —
+gps-360-go's steward catch-all, auth-cms's `isPlatformAdmin` — keeps it in
+APPLICATION composition, run before the decision surface, and owns the widening;
+the feature ships no `Superuser` primitive. D-D is unchanged either way: every
+one of these paths fails closed on an error.
+
 ### The `RequirePermission` middleware gate (middleware-consolidation, 2026-07-11)
 
 The feature exports an HTTP middleware builder that gates a route on the context
 `Principal` holding a permission on a resolved resource — the
 `RequireUser`-shaped sibling of the recipes above.
 
-**Requires the relationship kind wired; a roles-only host must not mount it.**
-`RequirePermission` panics if `Repositories.Relationships` is nil, at
-REGISTRATION/BOOT time (build the gate once when wiring routes, never inside the
-per-request path), naming the missing kind. The shape (root re-export of the
-internal engine implementation — the root package writes NO HTTP; the
-401/403/500/503 responses live in `authorizersvc`):
+**Requires a MODEL-BEARING kind; a roles-only host with no role model must not
+mount it.** `RequirePermission` panics when neither `Config.Model` nor
+`Config.RoleModel` is wired, at REGISTRATION/BOOT time (build the gate once when
+wiring routes, never inside the per-request path):
+
+```
+authorization: RequirePermission requires a decision-capable kind (Config.Model
+or Config.RoleModel); a roles-only host without a role model must not mount it
+```
+
+The coordinate forms `RequirePermissionOn`/`RequirePermissionFixed` additionally
+check the `(resource type, permission)` pair at registration against BOTH
+compiled models — a pair NEITHER declares panics at mount. The shape (root
+delegation to the composite decision surface — the root package writes NO HTTP;
+the 401/403/500/503 responses live in the one shared gate body in
+`authorizersvc`):
 
 ```go
 type ResourceResolver func(r *http.Request) (Resource, error)
@@ -649,12 +808,24 @@ The suite's named families are acceptance criteria, not nice-to-haves:
   `ConcurrentReceiptRevisionForensics`, `CrossScopeBatchRejectedNoStateChange`,
   `ContextCancellationNoStateChange`, replay/stale-writer/mixed-kind storms.
 - The `Parity/*` oracle — bidirectional Check/Lookup completeness+soundness over
-  a finite fixture universe + `LimitExhaustionIsError`.
+  a finite fixture universe + `LimitExhaustionIsError`. It has ONE ARM PER
+  MODEL-BEARING KIND, each gated on its own kind: the relationship arm, and
+  `Parity/Roles` (added v0.3.0 — `RolesCheckLookupOracle`, plus
+  `RolesMultiPageWalk`, which pins cursor behaviour across a multi-page
+  `ListBySubject` walk per dialect).
 - The `Budget/*` family — depth-boundary, fan-out, lookup-result-cap, and
   sibling-Through parity across dialects.
 - The `Roles/*` family — assign/unassign idempotence, exact-scope isolation, the
   Q5 global fallback, `EffectiveEnumerationAgreesWithHasRole`,
   `ScopedRevokeGlobalRoleRemains`, `EffectivePagination`.
+- The `Roles/Decision` family (added v0.3.0) — the same three backends run the
+  role engine over a `Config.RoleModel`: `DirectGrantAllows`,
+  `GlobalGrantSatisfiesScopedCheck`, `UndeclaredPairDenies`,
+  `GlobalRoleIsUnrestrictedOnlyForItsDeclaredPairs`.
+- The `Composed/*` family (added v0.3.0; skipped unless BOTH kinds are wired) —
+  `PairOwnershipDispatch` over a fixture whose one resource type is split across
+  the two models by permission, so the dispatch is proved per dialect and not
+  only in unit tests.
 
 **Migrations:** source `"authorization"` — the identical four-file set in both
 store modules (dialect-specific DDL inside):
@@ -691,7 +862,7 @@ cd features/authorization/stores/pgx && \
 # turso — build-tag gated
 cd features/authorization/stores/turso && \
   TURSO_DATABASE_URL='libsql://…' TURSO_AUTH_TOKEN='…' \
-  go test -tags=integration -race -count=1 ./...
+  go test -tags=integration -race -count=1 -timeout 20m ./...   # full suite ≈ 12 min against the remote playground (Mutations ≈ 7 min); Go's default 10m panics
 
 # the memory reference + shared suite (hermetic, race + high-contention)
 cd features/authorization && go test -race ./...
@@ -703,7 +874,8 @@ One complete `main.go` wiring, the executable twin of
 `examples/auth-cms/cmd/server/` (read that host for the full running program):
 
 ```go
-// The model is registered data — no migration. Relationship kind only.
+// Both models are registered data — no migration. This one is the RELATIONSHIP
+// kind's schema; the roles kind's RoleModel follows it.
 model := authorization.NewSchema([]authorization.ResourceSchema{
     {Name: "project", Def: authorization.ResourceTypeDef{
         Relations: map[string]authorization.RelationDef{
@@ -738,6 +910,12 @@ comps, err := authorization.NewService(authorization.Repositories{
     Mutations:     store.Mutations(),
 }, authorization.Config{
     Model: model,
+    // The ROLES kind's model. It shares the `project` TYPE with the schema above
+    // but never a PAIR: `view`/`manage_access` are relationship-owned, `audit` is
+    // role-owned. A pair in both would be ErrModelConflict at construction.
+    RoleModel: authorization.RoleModel{ResourceTypes: map[string]authorization.RoleTypeDef{
+        "project": {Roles: []string{"auditor"}, Permissions: map[string][]string{"audit": {"auditor"}}},
+    }},
     Guard: hostGuard{}, // the host MutationGuard reading manage_access via the DecisionView
 })
 if err != nil {
@@ -805,10 +983,20 @@ eventsCfg.Authorize = func(ctx context.Context, p identity.Principal, resourceTy
 
 // Stop 3 — enumeration (flagship-only API, never a seam):
 result, err := authorizer.LookupResources(ctx, authorization.PrincipalFrom(p), "view", "project")
-// pure enumeration: result.IDs sorted, each once (empty = no access). For
-// admin-sees-everything, run the platform-admin Check first and skip filtering.
+// The pair's owning model enumerates: result.IDs sorted, each exactly once. A
+// role-owned pair whose granting role is held GLOBALLY answers
+// result.Unrestricted with an EMPTY IDs — check it before treating empty as
+// "no access". For admin-sees-everything, run the platform-admin Check first
+// and skip filtering.
 
-// Stop 4 — a role-gated host route (the roles kind; opaque role string):
+// Stop 4 — a role-gated host route. `audit` is declared by the RoleModel, so the
+// SAME coordinate gate the relationship kind uses answers it: the surface
+// dispatches on the PAIR, never on the kind, and the host writes no gate code.
+router.Handle("GET", "/demo/audit", demoAudit(authorizer),
+    authorizer.RequirePermissionFixed("project", "audit", "demo")) // auth-cms's live line
+
+// The opaque probe stays for the raw role FACT — a capability flag, an admin
+// listing — as opposed to a decision:
 ok, err := authorizer.HasRole(ctx, authorization.PrincipalFrom(p), "auditor", "project", "demo")
 ```
 
@@ -829,8 +1017,11 @@ plus the migration step: `authzstore.ExportMigrations(dst)` scaffolds the four
 `authorization`-source files into the host's ledger — apply before boot, never
 renumber.
 
-**Roles-only wiring** (kind independence — no model, no engine; still applies the
-full four-file source):
+**Roles-only wiring** (kind independence — no relationship model, no ReBAC
+engine; still applies the full four-file source). Adding `Config.RoleModel` to
+this same wiring is what puts a roles-only host ON the decision surface; without
+it the five decision methods return `ErrNoDecisionKind` and the gates panic at
+mount:
 
 ```go
 store := authzmem.New()
@@ -840,10 +1031,13 @@ comps, err := authorization.NewService(authorization.Repositories{
 }, authorization.Config{Guard: hostGuard{}}) // no Model — a roles-only host never constructs one
 ```
 
-**The composed-kinds closure** (there is no built-in facade; the host owns the
-composition):
+**The composed-kinds closure — kept as a BEFORE/AFTER.** Until v0.3.0 the roles
+kind answered nothing on the decision surface, so every role-derived permission
+was a hand-written `HasRole` branch in the host — the host, not the feature,
+held the role → permission mapping:
 
 ```go
+// BEFORE (v0.2.0): the host derives the permission from the role itself.
 authorize := func(ctx context.Context, p identity.Principal, rt, rid string) (bool, error) {
     principal := authorization.PrincipalFrom(p)
     res, err := authorizer.Check(ctx, authorization.CheckRequest{
@@ -859,6 +1053,21 @@ authorize := func(ctx context.Context, p identity.Principal, rt, rid string) (bo
 }
 ```
 
+```go
+// AFTER (v0.3.0): the mapping lives in Config.RoleModel, so the role-owned pair
+// is an ordinary Check — the surface dispatches it to the RoleModel.
+res, err := authorizer.Check(ctx, authorization.CheckRequest{
+    Principal:  authorization.PrincipalFrom(p),
+    Permission: "audit",
+    Resource:   authorization.Resource{Type: "project", ID: rid},
+})
+```
+
+A closure of the BEFORE shape is still exactly right when a host genuinely wants
+a UNION of two DIFFERENT permissions, or a bypass that spans kinds: the feature
+dispatches each pair to one model and never merges two answers. What it is no
+longer is how a host expresses "this role grants this permission".
+
 ## The proof host — examples/auth-cms
 
 `examples/auth-cms` is the living posture-3 composition (all in-memory, rule 6
@@ -867,9 +1076,11 @@ demonstrated). It proves the guarded and trusted paths in host code and tests:
 - `cmd/server/authorization.go` — `authzSchema` (adds `manage_access =
   AnyOf(Direct(owner))`), `authzGuardianPolicy` (owner/min-1 narrowed to the
   ownable `project` type — the sanctioned host-narrowing path, since `platform`
-  is a flat admin-list type with no owner relation), `newAuthorization` (wires
-  `Config.Guard`), `seedAuthorization` (boot-seeds `project:demo#owner` then
-  `platform:main#admin` via `SystemMutator` + `DeriveMutationID`).
+  is a flat admin-list type with no owner relation), `authzRoleModel` (the roles kind's `project/audit ← auditor`, sharing the
+  `project` TYPE with the schema but no PAIR), `newAuthorization` (wires
+  `Config.Guard` and BOTH models, so one host proves pair-ownership dispatch),
+  `seedAuthorization` (boot-seeds `project:demo#owner` then `platform:main#admin`,
+  and the `auditor` role assignment, via `SystemMutator` + `DeriveMutationID`).
 - `cmd/server/guard.go` — `hostMutationGuard`: a platform-admin short-circuit
   (`view.CheckRelation(platform:main#admin)`), global (subject-scoped) mutations
   refused (trusted-only blast radius), else the `manage_access`-backing relation
@@ -892,15 +1103,32 @@ deferred AZADM packet.
 
 - **No ABAC policy kind in v3** — the attribute/condition policy kind stays a
   named, deferred seam (the policy-seam section is its ledger).
-- **No role implication / role catalog / role vocabulary** — roles are opaque
-  strings; any known-role or allowed-assignment catalog is host/admin policy, not
-  the core role kind.
+- **No role IMPLICATION hierarchy, no role catalog API** — `Config.RoleModel`
+  (v0.3.0) declares which roles grant which permissions, but a role never implies
+  another role: a permission lists every role that grants it, explicitly. Roles
+  stay opaque strings at the `domain/role` rim and on every read path; the model
+  is consulted at DECISION time and, when configured, at ASSIGN time only
+  (`ErrInvalidRoleModel` on an undeclared `(type, role)` pair — existing rows are
+  never re-validated and stay removable). There is no `GetRoleModel`, no model
+  digest on receipts, and no "what can role X do" listing — those return with the
+  deferred admin packet.
 - **No decision cache** — correctness and bounded evaluation land first. Mutation
   revisions/events make a future cache possible without inventing invalidation
   now.
 - **No templ/HTML UI, no routes** — `Register` logs only; `/authorization/*`
   stays claimed-unregistered. A view module is demand-gated.
-- **No composed Check facade** — hosts compose kinds in their own closures.
+- **No cross-kind UNION and no universal-role bypass** — one decision surface
+  dispatches each pair to the model that declares it; cross-kind union and
+  universal-role bypass are not built (2026-08-26: gps-360-go hand-wrote the whole
+  roles decision half and auth-cms splits one type across kinds by permission —
+  demand for a roles engine and one surface, not for merging kinds). A pair
+  declared by both models is `ErrModelConflict` at construction. There is no
+  `Superuser` primitive: a globally held role grants only the role-owned
+  permissions that name it, and a true bypass of relationship-owned or future
+  permissions stays a host closure around the surface. Trigger for the union: the
+  first host that must declare one pair in both models. Trigger for an override
+  seam: a second host needing the same bypass shape that cannot express it as
+  explicit grants.
 - **No `sdk/authorization` port** — authorization's check/decision vocabulary
   stays consumer-declared (fails the sdk graduation criteria today); identity
   rides `sdk/foundation/identity`.

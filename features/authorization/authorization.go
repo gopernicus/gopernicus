@@ -4,8 +4,10 @@
 //   - the RELATIONSHIP kind — the ReBAC engine (schema-driven permission checks,
 //     group expansion, through-traversal, platform-admin data-tuple bypass,
 //     relationship CRUD) over the `iam_relationships` table.
-//   - the ROLES kind — minimal opaque-string role assignments (assign/unassign,
-//     scoped-or-global HasRole) over the `iam_roles` table.
+//   - the ROLES kind — opaque-string role assignments (assign/unassign,
+//     scoped-or-global HasRole) over the `iam_roles` table, plus an OPTIONAL
+//     Config.RoleModel declaring which roles grant which permissions. With a
+//     model the kind decides; without one it is lookup-only.
 //
 // ReBAC is ONE kind, not the feature's identity. A host wires either kind, both,
 // or neither of a given kind's methods matter to it: a nil Repositories field
@@ -15,31 +17,38 @@
 // # Postures
 //
 // Authorization is "supported, never required": a host may run with no checks
-// (posture 1), enforce at its own call sites by composing this feature's kinds
-// in its own closure (posture 2 — there is deliberately NO composed Check facade
-// here), or adopt a fuller policy surface later (posture 3, the deferred policy
-// seam). Consumer seams are Check-ONLY; everything on Service beyond the boolean
-// checks is flagship-specific API, never a cross-feature seam (the AV2 split).
+// (posture 1), enforce at its own call sites with a plain closure over its own
+// data (posture 2 — no IAM module in the graph), or adopt a fuller policy
+// surface later (posture 3, the deferred policy seam). Within posture 3 the
+// wired kinds share ONE decision surface, dispatched by pair ownership; what is
+// deliberately NOT built is a cross-kind UNION or a universal-role bypass, which
+// a host that needs one still composes in its own closure. Consumer seams are
+// Check-ONLY; everything on Service beyond the boolean checks is
+// flagship-specific API, never a cross-feature seam (the AV2 split).
 //
 // The feature is datastore-free and view-free (FS1): it depends on its
 // relationship.Storer / role.Storer ports and sdk facilities only. Register
 // mounts NO routes — the /authorization/* namespace is reserved for a future
-// admin surface. It does export one HTTP middleware builder, RequirePermission
-// (a root re-export of the internal engine implementation in middleware.go),
-// so hosts can gate routes on a Check; that builder writes its responses only
-// through sdk/foundation/web, never at this root package.
+// admin surface. It does export the RequirePermission/RequirePermissionOn/
+// RequirePermissionFixed middleware builders (root delegations to the internal
+// implementation in middleware.go), so hosts can gate routes on a Check; those
+// builders write their responses only through sdk/foundation/web, never at this
+// root package.
 package authorization
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/gopernicus/gopernicus/features/authorization/domain/mutation"
 	"github.com/gopernicus/gopernicus/features/authorization/domain/relationship"
 	"github.com/gopernicus/gopernicus/features/authorization/domain/role"
 	"github.com/gopernicus/gopernicus/features/authorization/internal/logic/authorizersvc"
+	"github.com/gopernicus/gopernicus/features/authorization/internal/logic/decisionsvc"
 	"github.com/gopernicus/gopernicus/features/authorization/internal/logic/rolesvc"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
@@ -57,6 +66,21 @@ var (
 	// wiring: Repositories.Relationships is set without Config.Model, or Config.Model
 	// is set without the repository. The relationship kind needs both.
 	ErrModelRequired = errors.New("authorization: Repositories.Relationships and Config.Model must be wired together (both or neither)")
+
+	// ErrRoleModelWithoutRoles is returned by NewService when Config.RoleModel is
+	// set without Repositories.Roles. The asymmetry with ErrModelRequired is
+	// deliberate: a roles repository with NO model is the valid opaque posture,
+	// but a model with no repository could never decide anything.
+	ErrRoleModelWithoutRoles = errors.New("authorization: Config.RoleModel requires Repositories.Roles (a role model with no roles kind decides nothing)")
+
+	// ErrNoDecisionKind is returned by every decision method (Check, CheckBatch,
+	// CheckExplain, FilterAuthorized, LookupResources) on a host where NO kind
+	// bears a model — a roles-only wiring with no Config.RoleModel. Like
+	// ErrMutationsNotConfigured it is a stable PRECONDITION refusal (retrying it
+	// unchanged cannot help until the host wires a model), so it wraps
+	// sdk.ErrInvalidInput — never sdk.ErrForbidden, which would falsely present a
+	// wiring gap as a deny.
+	ErrNoDecisionKind = fmt.Errorf("authorization: no decision-capable kind is configured (set Config.Model for the relationship kind or Config.RoleModel for the roles kind): %w", sdk.ErrInvalidInput)
 
 	// ErrRelationshipsNotConfigured is returned by every relationship-kind method
 	// when that kind is off (Repositories.Relationships was nil).
@@ -103,12 +127,26 @@ type (
 	// lookup results). Zero fields resolve to safe defaults; negatives fail
 	// construction.
 	EvaluationLimits = authorizersvc.EvaluationLimits
+
+	// RoleModel is the ROLES kind's permission model — which roles exist on each
+	// resource type and which permissions they grant. Its Schema counterpart for
+	// the relationship kind is Schema/ResourceTypeDef above; the two models may
+	// share a resource TYPE but never a (type, permission) PAIR.
+	RoleModel   = decisionsvc.RoleModel
+	RoleTypeDef = decisionsvc.RoleTypeDef
 )
 
 // Explain step kinds — the coarse shape an ExplainStep records.
 const (
 	ExplainKindDirect  = authorizersvc.ExplainKindDirect
 	ExplainKindThrough = authorizersvc.ExplainKindThrough
+	ExplainKindRole    = authorizersvc.ExplainKindRole
+)
+
+// Explain step scopes — where an ExplainKindRole step's grant was found.
+const (
+	ExplainScopeDirect = authorizersvc.ExplainScopeDirect
+	ExplainScopeGlobal = authorizersvc.ExplainScopeGlobal
 )
 
 // Resolved evaluation-budget defaults (each is the value a zero Config.Limits
@@ -250,10 +288,12 @@ type Repositories struct {
 	Mutations mutation.MutationRepository
 }
 
-// Config carries the relationship kind's settings. All three fields are
-// relationship-kind-scoped; under a roles-only wiring they are ignored with no
-// error (an orphaned tuning field is silent, the auth MailFrom precedent) — so
-// negative Limits are only rejected when the relationship kind is actually wired.
+// Config carries each kind's model plus the settings shared across them. Model
+// and IDs are relationship-kind-scoped; RoleModel is roles-kind-scoped; Limits is
+// the decision-surface budget charged by whichever kind bears a model; Guard and
+// Audit configure the actor-facing mutation posture. A setting orphaned by an
+// unwired kind is ignored with no error (the auth MailFrom precedent) — so
+// negative Limits are only rejected once some model-bearing kind is wired.
 type Config struct {
 	// Model is the ReBAC schema. Required when Relationships is wired, forbidden
 	// otherwise (ErrModelRequired).
@@ -270,6 +310,17 @@ type Config struct {
 	// IDs mints each relationship_id at CreateRelationships. The zero value is the
 	// nanoid default; a cryptids.Database generator defers to the DDL DEFAULT.
 	IDs cryptids.IDGenerator
+
+	// RoleModel is the roles kind's permission model. Unset (no ResourceTypes)
+	// = no model: the roles kind answers HasRole and the listings only
+	// (today's behaviour) and takes no part in the decision
+	// surface. Set requires Repositories.Roles (ErrRoleModelWithoutRoles); it is
+	// validated at NewService (ErrInvalidRoleModel for a structurally invalid
+	// model, ErrModelConflict for a pair declared by both models). While it is
+	// set it ALSO governs role assignment: a (resource type, role) pair the model
+	// does not declare is rejected with ErrInvalidRoleModel at assign time (D8),
+	// on every high-integrity path. Unassignment and every read path stay opaque.
+	RoleModel RoleModel
 
 	// Guard is the host authorization policy for actor-facing writes (AZ3-0.5). A
 	// nil Guard is the READ-ONLY posture: decision/list APIs and the separately held
@@ -289,16 +340,22 @@ type Config struct {
 
 // Service is the authorization feature's host-facing surface. Each kind's method
 // family is present unconditionally; an unwired kind's methods fail closed with
-// that kind's sentinel. There is no composed Check facade — a host composes the
-// kinds in its own closure.
+// that kind's sentinel. The decision surface (Check, CheckBatch, CheckExplain,
+// FilterAuthorized, LookupResources and the RequirePermission gates) is ONE
+// facade over the composite decider, which dispatches each (resource type,
+// permission) pair to the model that declares it — the relationship Schema or the
+// RoleModel, never both. A host still composes any bypass or cross-kind policy of
+// its own in its own closure; the feature merges no kinds.
 type Service struct {
-	relationships *authorizersvc.Service      // nil = relationship kind off
-	roles         *rolesvc.Service            // nil = roles kind off
-	guard         MutationGuard               // nil = read-only actor-mutation posture
-	mutations     mutation.MutationRepository // nil = no atomic write path
-	audit         AuditSink                   // nil = no actor-mutation auditing
-	maxBatchSize  int                         // resolved EvaluationLimits.MaxBatchSize (0 = relationship kind off)
-	log           *slog.Logger                // set at Register; falls back to slog.Default()
+	relationships *authorizersvc.Service         // nil = relationship kind off
+	roles         *rolesvc.Service               // nil = roles kind off
+	roleModel     *decisionsvc.CompiledRoleModel // nil = the roles kind carries no model
+	decider       *decisionsvc.Composite         // nil = no model-bearing kind (ErrNoDecisionKind)
+	guard         MutationGuard                  // nil = read-only actor-mutation posture
+	mutations     mutation.MutationRepository    // nil = no atomic write path
+	audit         AuditSink                      // nil = no actor-mutation auditing
+	maxBatchSize  int                            // resolved EvaluationLimits.MaxBatchSize (0 = no model-bearing kind)
+	log           *slog.Logger                   // set at Register; falls back to slog.Default()
 }
 
 // NewService validates the (repos, cfg) pair, builds the wired kinds, and returns
@@ -307,6 +364,13 @@ type Service struct {
 // relationship kind wired without its Model (or vice versa) is ErrModelRequired;
 // an invalid Model is the schema validator's loud error. A roles-only wiring
 // succeeds with no Model.
+//
+// Model construction matrix: Config.RoleModel without Repositories.Roles is
+// ErrRoleModelWithoutRoles; a structurally invalid RoleModel is
+// ErrInvalidRoleModel; a (resource type, permission) pair declared by BOTH models
+// is ErrModelConflict. Config.Limits is resolved — and a negative field rejected
+// with ErrInvalidLimits — whenever ANY model-bearing kind is wired; on a
+// roles-only wiring with no RoleModel it stays an orphaned, ignored setting.
 //
 // Actor-mutation construction matrix (AZ3-0.5): a nil Config.Guard is the
 // read-only posture (actor-facing mutations fail closed with
@@ -323,6 +387,11 @@ func NewService(repos Repositories, cfg Config) (Components, error) {
 	modelSet := len(cfg.Model.ResourceTypes) > 0
 	if hasRel != modelSet {
 		return Components{}, ErrModelRequired
+	}
+
+	roleModelSet := cfg.RoleModel.IsSet()
+	if roleModelSet && !hasRoles {
+		return Components{}, ErrRoleModelWithoutRoles
 	}
 
 	if cfg.Guard != nil && repos.Mutations == nil {
@@ -346,14 +415,44 @@ func NewService(repos Repositories, cfg Config) (Components, error) {
 			return Components{}, err
 		}
 		svc.relationships = eng
-		// The engine build above already validated the limits, so Resolve cannot
-		// fail here; capture the resolved batch ceiling for the actor-facing
-		// mutation blast-radius bounds.
-		resolved, _ := cfg.Limits.Resolve()
-		svc.maxBatchSize = resolved.MaxBatchSize
+	}
+	// The evaluation budget is the DECISION SURFACE's, not the relationship
+	// kind's: it is resolved (and a negative field rejected) as soon as any
+	// model-bearing kind is wired. Under a roles-only wiring with no role model
+	// nothing consumes it and it stays silently orphaned. It is resolved AFTER
+	// the relationship engine is built so an invalid Model still reports
+	// ErrInvalidSchema first, exactly as it did before the decision surface
+	// gained a second model-bearing kind.
+	var limits EvaluationLimits
+	if hasRel || roleModelSet {
+		resolved, err := cfg.Limits.Resolve()
+		if err != nil {
+			return Components{}, err
+		}
+		limits = resolved
 	}
 	if hasRoles {
 		svc.roles = rolesvc.NewService(repos.Roles)
+	}
+	if roleModelSet {
+		// Pair ownership (D1 rule 4) is checked against the relationship schema
+		// when that kind is wired; a roles-only host has none to conflict with.
+		var declared decisionsvc.Declarer
+		if svc.relationships != nil {
+			declared = svc.relationships
+		}
+		compiled, err := decisionsvc.CompileRoleModel(cfg.RoleModel, declared)
+		if err != nil {
+			return Components{}, err
+		}
+		svc.roleModel = compiled
+	}
+	if hasRel || roleModelSet {
+		// The composite and the relationship engine share ONE resolved budget, so
+		// the MaxBatchSize gate is not doubled in effect. maxBatchSize is captured
+		// for the actor-facing mutation blast-radius bound.
+		svc.decider = decisionsvc.NewComposite(svc.relationships, svc.roles, svc.roleModel, limits)
+		svc.maxBatchSize = limits.MaxBatchSize
 	}
 	var writer *RelationshipWriter
 	if svc.relationships != nil {
@@ -367,7 +466,7 @@ func NewService(repos Repositories, cfg Config) (Components, error) {
 		// the same relationship engine so its trusted calls stamp the governing schema
 		// digest and run the current-schema semantic validator exactly as the guarded
 		// seam does — it bypasses only the host MutationGuard, never the atomic contract.
-		SystemMutator: &SystemMutator{mutations: repos.Mutations, audit: cfg.Audit, relationships: svc.relationships},
+		SystemMutator: &SystemMutator{mutations: repos.Mutations, audit: cfg.Audit, relationships: svc.relationships, roleModel: svc.roleModel},
 	}, nil
 }
 
@@ -380,6 +479,7 @@ func (s *Service) Register(m feature.Mount) error {
 		m.Logger.Info("registered authorization feature",
 			"relationships", s.relationships != nil,
 			"roles", s.roles != nil,
+			"role_model", s.roleModel != nil,
 			"baseline_relationship_writes", s.relationships != nil,
 			"actor_mutations", s.guard != nil,
 		)
@@ -388,59 +488,76 @@ func (s *Service) Register(m feature.Mount) error {
 }
 
 // =============================================================================
-// Relationship kind (fails closed with ErrRelationshipsNotConfigured when off)
+// Decision surface (fails closed with ErrNoDecisionKind when NO kind bears a
+// model)
+//
+// One facade, dispatched by pair ownership: each (resource type, permission) is
+// answered by the model that declares it — the relationship Schema or the
+// RoleModel, never both (ErrModelConflict forbids the overlap at construction).
+// A pair neither model declares denies with "no rules defined". These five
+// methods are the ONLY ones that report ErrNoDecisionKind; every other
+// relationship-kind method below keeps ErrRelationshipsNotConfigured.
 // =============================================================================
 
-// Check evaluates a permission check.
+// Check evaluates a permission check on the model that declares the pair.
 func (s *Service) Check(ctx context.Context, req CheckRequest) (CheckResult, error) {
-	if s.relationships == nil {
-		return CheckResult{}, ErrRelationshipsNotConfigured
+	if s.decider == nil {
+		return CheckResult{}, ErrNoDecisionKind
 	}
-	return s.relationships.Check(ctx, req)
+	return s.decider.Check(ctx, req)
 }
 
 // CheckExplain evaluates a permission check and returns a bounded Explanation of
-// the rule/path decisions taken. It rides the SAME evaluation path and work
-// budget as Check — an explain request cannot create a separate, more permissive
-// evaluator, cannot change the decision, and fails with the same limit class. The
-// trace excludes raw infrastructure errors and is not logged automatically.
+// the rule/path decisions the OWNING model took. It rides the SAME evaluation
+// path and work budget as Check — an explain request cannot create a separate,
+// more permissive evaluator, cannot change the decision, and fails with the same
+// limit class. The trace excludes raw infrastructure errors and is not logged
+// automatically.
 func (s *Service) CheckExplain(ctx context.Context, req CheckRequest) (CheckResult, Explanation, error) {
-	if s.relationships == nil {
-		return CheckResult{}, Explanation{}, ErrRelationshipsNotConfigured
+	if s.decider == nil {
+		return CheckResult{}, Explanation{}, ErrNoDecisionKind
 	}
-	return s.relationships.CheckExplain(ctx, req)
+	return s.decider.CheckExplain(ctx, req)
 }
 
-// CheckBatch evaluates multiple permission checks.
+// CheckBatch evaluates multiple permission checks, each on its owning model. The
+// MaxBatchSize ceiling is charged once for the whole batch.
 func (s *Service) CheckBatch(ctx context.Context, reqs []CheckRequest) ([]CheckResult, error) {
-	if s.relationships == nil {
-		return nil, ErrRelationshipsNotConfigured
+	if s.decider == nil {
+		return nil, ErrNoDecisionKind
 	}
-	return s.relationships.CheckBatch(ctx, reqs)
+	return s.decider.CheckBatch(ctx, reqs)
 }
 
 // FilterAuthorized returns only the resource IDs the principal can access.
 func (s *Service) FilterAuthorized(ctx context.Context, principal PrincipalRef, permission, resourceType string, resourceIDs []string) ([]string, error) {
-	if s.relationships == nil {
-		return nil, ErrRelationshipsNotConfigured
+	if s.decider == nil {
+		return nil, ErrNoDecisionKind
 	}
-	return s.relationships.FilterAuthorized(ctx, principal, permission, resourceType, resourceIDs)
+	return s.decider.FilterAuthorized(ctx, principal, permission, resourceType, resourceIDs)
 }
 
-// LookupResources returns the resource IDs of a type the subject can access.
+// LookupResources returns the resource IDs of a type the subject can access,
+// enumerated by the model that declares the pair.
 //
 // Check/Lookup parity (D1(c) closed, AZ3-1.4): every resource a Check allows for
 // a supported finite query is enumerated here. A self-referential Through
 // hierarchy seeds its descendant walk from EVERY root the permission grants —
 // direct grants AND roots derived through a non-self Through — so a grandchild
 // Check honors is no longer omitted. IDs are returned sorted, each exactly once;
-// limit exhaustion is ErrEvaluationLimit, never a partial list.
+// limit exhaustion is ErrEvaluationLimit, never a partial list. A role-owned pair
+// whose granting role is held GLOBALLY reports LookupResult.Unrestricted with an
+// empty IDs — the host must then skip ID filtering entirely.
 func (s *Service) LookupResources(ctx context.Context, principal PrincipalRef, permission, resourceType string) (LookupResult, error) {
-	if s.relationships == nil {
-		return LookupResult{}, ErrRelationshipsNotConfigured
+	if s.decider == nil {
+		return LookupResult{}, ErrNoDecisionKind
 	}
-	return s.relationships.LookupResources(ctx, principal, permission, resourceType)
+	return s.decider.LookupResources(ctx, principal, permission, resourceType)
 }
+
+// =============================================================================
+// Relationship kind (fails closed with ErrRelationshipsNotConfigured when off)
+// =============================================================================
 
 // ValidateRelation reports whether a relationship is allowed by the schema,
 // matching the full (subject type, subject relation) pair. subjectRelation is ""

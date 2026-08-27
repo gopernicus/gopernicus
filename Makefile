@@ -17,7 +17,7 @@ STORE_MODULES = features/cms/stores/pgx features/cms/stores/turso features/authe
 	guard-store-no-foreign-feature guard-no-underlying guard-no-lax-scan \
 	guard-workshop-boundary guard-sdk-layering guard-integration-no-inward \
 	guard-auth-no-delivery-repo guard-auth-no-request-time-provider \
-	guard-authorization-no-delivery-repo guard-ui-no-inward guard-ui-require-whitelist
+	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist
 
 # Regenerate *_templ.go from .templ sources. Each bundled views/templ module pins
 # its own templ tool; generation runs inside each so the tool version is
@@ -133,13 +133,13 @@ tidy:
 # Layering guards — each enforces one architectural boundary from the
 # constitution (00-overview.md) or the feature-standard charter (FS rules,
 # 2026-07-07); every target must print nothing and exit 0 on a clean tree.
-# `make guard` runs all eighteen.
+# `make guard` runs all nineteen.
 guard: guard-sdk-stdlib guard-feature-isolation guard-sdk-no-outward guard-no-legacy-path \
 	guard-feature-core-sdk-only guard-feature-transport-sdk-web guard-feature-no-cross-feature \
 	guard-store-no-foreign-feature guard-no-underlying guard-no-lax-scan \
 	guard-workshop-boundary guard-sdk-layering guard-integration-no-inward \
 	guard-auth-no-delivery-repo guard-auth-no-request-time-provider \
-	guard-authorization-no-delivery-repo guard-ui-no-inward guard-ui-require-whitelist
+	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -333,6 +333,15 @@ guard-authorization-no-delivery-repo:
 	@echo "== guard: authorization owns no bespoke jobs/delivery table/repository (AZ3-5.3) =="
 	@! grep -rnE 'delivery_jobs|fenced_job_queue|job_queue|job_schedules' features/authorization || { echo "ERROR (AZ3-5.3): an authorization-specific jobs/delivery table returned to authorization — the v3 kernel emits no effects; durable delivery would be the generic jobs feature reached via a same-transaction events outbox, never an authorization-owned queue"; exit 1; }
 	@! grep -rnE 'domain/deliveryjob|package deliveryjob' --include='*.go' features/authorization || { echo "ERROR (AZ3-5.3): a bespoke deliveryjob domain package appeared in authorization — the v3 kernel ships no effects/delivery domain"; exit 1; }
+
+# G19 (authorization-roles-model, 2026-08-26): the roles domain service
+# (rolesvc) NEVER imports the relationship engine (authorizersvc) or the
+# composite decider (decisionsvc). The decision surface composes DOWNWARD onto
+# rolesvc; the dependency must not point back up, or the sealed roles kind
+# becomes a second home for decision logic.
+guard-authorization-rolesvc-no-engine:
+	@echo "== guard: authorization rolesvc imports neither authorizersvc nor decisionsvc (G19) =="
+	@! grep -rnE 'internal/logic/(authorizersvc|decisionsvc)["`]' --include='*.go' features/authorization/internal/logic/rolesvc || { echo "ERROR (G19): rolesvc imports the relationship engine or the composite decider — the roles kind is a leaf; decisionsvc composes onto it, never the reverse"; exit 1; }
 
 # G17 (ui-goth GOTH-0.2, 2026-07-17): the seventh module kind — a UI
 # implementation (a reusable presentation system for one rendering/runtime

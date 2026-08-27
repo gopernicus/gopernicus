@@ -8,6 +8,18 @@ const (
 	ExplainKindDirect = "direct"
 	// ExplainKindThrough is a Through traversal of a relation to another resource.
 	ExplainKindThrough = "through"
+	// ExplainKindRole is a roles-kind grantor probe at the request's scope.
+	ExplainKindRole = "role"
+)
+
+// Explain step scopes — WHERE a role step's grant was found. The values are the
+// provenance vocabulary the roles kind already ships (role.EffectiveGrant's
+// direct/global labels), not a second vocabulary.
+const (
+	// ExplainScopeDirect — the role was found at the exact resource scope.
+	ExplainScopeDirect = "direct"
+	// ExplainScopeGlobal — the role was found as the ("", "") global assignment.
+	ExplainScopeGlobal = "global"
 )
 
 // ExplainStep is one coarse rule/path decision recorded during a traced Check. It
@@ -31,6 +43,11 @@ type ExplainStep struct {
 	// Outcome is the stable coarse result of this check: ReasonGranted or
 	// ReasonDenied.
 	Outcome Reason
+	// Role and Scope are set for ExplainKindRole steps:
+	// the role probed and where it was found (ExplainScopeDirect/Global; "" when
+	// not held). Empty for relationship steps.
+	Role  string
+	Scope string
 }
 
 // Explanation is the opt-in, bounded trace returned beside a CheckExplain

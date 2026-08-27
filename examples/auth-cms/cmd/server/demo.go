@@ -40,19 +40,29 @@ import (
 //   - GET /demo/my-projects — RequirePrincipal-gated: the relationship kind's
 //     LookupResources enumeration (demonstration (b)); {admin, ids} (admin flag
 //     is the host-composed platform-admin recipe, not an engine bypass).
-//   - GET /demo/audit — RequirePrincipal + roles-kind HasRole gated: 200 with a
-//     driven ListRoleAssignmentsByResource read-back, 403 without the role.
+//   - GET /demo/audit — RequirePrincipal + ROLE-MODEL gated: the feature's
+//     coordinate gate asks `audit` on project/demo, a pair the RoleModel owns
+//     (the `auditor` role grants it), so the host writes no role check of its own.
+//     200 with a driven ListRoleAssignmentsByResource read-back, 403 without a
+//     granting role.
 func registerDemoRoutes(router *web.WebHandler, authSvc *auth.Service, authorizer *authorization.Service) {
 	router.Handle("GET", "/demo/whoami", demoWhoami(authSvc), authSvc.RequirePrincipal)
 	router.Handle("GET", "/demo/members-only", demoMembersOnly(authSvc),
 		authSvc.RequirePrincipal, requireMembership(authSvc, authorizer))
 	router.Handle("GET", "/demo/my-projects", demoMyProjects(authSvc, authorizer), authSvc.RequirePrincipal)
-	router.Handle("GET", "/demo/audit", demoAudit(authSvc, authorizer), authSvc.RequirePrincipal)
+	router.Handle("GET", "/demo/audit", demoAudit(authorizer),
+		authSvc.RequirePrincipal, authorizer.RequirePermissionFixed(demoResourceType, demoAuditPermission, demoResourceID))
 }
 
-// demoRole is the opaque role the audit route gates on (roles are host-interpreted
-// strings — no registry).
-const demoRole = "auditor"
+// The audit route's role-model vocabulary: `auditor` is the role the host declares
+// on the `project` type in authzRoleModel, and `audit` is the permission it grants —
+// the role-OWNED pair (project, audit), disjoint from the relationship-owned
+// (project, view). The rim stays opaque: a stored role the model cannot express is
+// simply never a grantor.
+const (
+	demoRole            = "auditor"
+	demoAuditPermission = "audit"
+)
 
 // demoMyProjects (authorization-v1 Z4, demonstration (b)) exercises the
 // relationship kind's ENUMERATION API — flagship-specific, NEVER a consumer seam.
@@ -84,29 +94,18 @@ func demoMyProjects(authSvc *auth.Service, authorizer *authorization.Service) ht
 	}
 }
 
-// demoAudit (authorization-v1 Z4, the roles-kind leg) gates on the roles kind:
-// authorizer.HasRole (with the Q5 GLOBAL fallback — a global auditor grant
-// satisfies the scoped check) decides 200 vs 403, and on success the response
-// carries a DRIVEN ListRoleAssignmentsByResource read-back. That listing is
-// DIRECT-SCOPE ONLY: a subject who passes the gate via a GLOBAL grant is allowed
-// yet never appears in the resource's listing — the documented v1
-// enumeration-vs-decision divergence, visible right here.
-func demoAudit(authSvc *auth.Service, authorizer *authorization.Service) http.HandlerFunc {
+// demoAudit (authorization-v1 Z4, the roles-kind leg) is reached only when the
+// RequirePermissionFixed("project", "audit", "demo") gate mounted on the route has
+// already allowed: the ROLE MODEL decides, so this handler writes no role check —
+// there is no host-side HasRole gate to drift from the model. The gate keeps the
+// roles kind's GLOBAL fallback (a global `auditor` grant satisfies the scoped
+// check), and on success the response carries a DRIVEN
+// ListRoleAssignmentsByResource read-back. That listing is DIRECT-SCOPE ONLY: a
+// subject who passes the gate via a GLOBAL grant is allowed yet never appears in
+// the resource's listing — the documented v1 enumeration-vs-decision divergence,
+// visible right here.
+func demoAudit(authorizer *authorization.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		p, ok := authSvc.CurrentPrincipal(r.Context())
-		if !ok {
-			writeHostJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
-			return
-		}
-		allowed, err := authorizer.HasRole(r.Context(), authorization.PrincipalRef{Type: p.Type, ID: p.ID}, demoRole, demoResourceType, demoResourceID)
-		if err != nil {
-			writeHostJSON(w, http.StatusInternalServerError, map[string]string{"error": "role check failed"})
-			return
-		}
-		if !allowed {
-			writeHostJSON(w, http.StatusForbidden, map[string]string{"error": "missing role", "role": demoRole})
-			return
-		}
 		page, err := authorizer.ListRoleAssignmentsByResource(r.Context(), demoResourceType, demoResourceID, crud.ListRequest{})
 		if err != nil {
 			writeHostJSON(w, http.StatusInternalServerError, map[string]string{"error": "list assignments failed"})

@@ -73,6 +73,13 @@ func NewService(store relationship.Storer, schema Schema, cfg Config) (*Service,
 	}, nil
 }
 
+// DeclaresPermission reports whether the compiled relationship schema declares
+// permission on resourceType — the Declarer half of the coordinate gates'
+// registration-time legality check.
+func (s *Service) DeclaresPermission(resourceType, permission string) bool {
+	return s.compiled.declaresPermission(resourceType, permission)
+}
+
 // =============================================================================
 // Permission checks
 // =============================================================================

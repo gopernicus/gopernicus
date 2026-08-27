@@ -239,3 +239,82 @@ func TestHasRoleFailClosedOnStoreError(t *testing.T) {
 		t.Fatalf("store error must propagate, got %v", err)
 	}
 }
+
+func TestHasRoleWhereProvenance(t *testing.T) {
+	ctx := context.Background()
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("assign: %v", err)
+		}
+	}
+
+	store := &fakeRoleStore{}
+	svc := NewService(store)
+
+	// u1: global only. u2: scoped only. u3: BOTH.
+	must(svc.AssignRole(ctx, "user", "u1", "editor", "", ""))
+	must(svc.AssignRole(ctx, "user", "u2", "editor", "doc", "d1"))
+	must(svc.AssignRole(ctx, "user", "u3", "editor", "", ""))
+	must(svc.AssignRole(ctx, "user", "u3", "editor", "doc", "d1"))
+
+	tests := []struct {
+		name           string
+		subjectID      string
+		resourceType   string
+		resourceID     string
+		wantHeld       bool
+		wantProvenance string
+	}{
+		{"scoped row matches exactly", "u2", "doc", "d1", true, role.ProvenanceDirect},
+		{"global fallback satisfies a scoped query", "u1", "doc", "d1", true, role.ProvenanceGlobal},
+		{"held at both scopes reports direct", "u3", "doc", "d1", true, role.ProvenanceDirect},
+		{"a scoped row never satisfies another scope", "u2", "doc", "d2", false, ""},
+		{"an unscoped query's exact row is the global one", "u1", "", "", true, role.ProvenanceDirect},
+		{"a scoped grant is invisible to an unscoped query", "u2", "", "", false, ""},
+		{"a miss reports no provenance", "nobody", "doc", "d1", false, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			held, provenance, err := svc.HasRoleWhere(ctx, "user", tt.subjectID, "editor", tt.resourceType, tt.resourceID)
+			if err != nil {
+				t.Fatalf("HasRoleWhere: %v", err)
+			}
+			if held != tt.wantHeld || provenance != tt.wantProvenance {
+				t.Fatalf("HasRoleWhere = (%v, %q), want (%v, %q)", held, provenance, tt.wantHeld, tt.wantProvenance)
+			}
+			// HasRole is HasRoleWhere with the provenance dropped: one scope rule.
+			ok, err := svc.HasRole(ctx, "user", tt.subjectID, "editor", tt.resourceType, tt.resourceID)
+			if err != nil || ok != tt.wantHeld {
+				t.Fatalf("HasRole = (%v, %v), want (%v, nil)", ok, err, tt.wantHeld)
+			}
+		})
+	}
+}
+
+func TestHasRoleWhereValidatesLikeHasRole(t *testing.T) {
+	svc := NewService(&fakeRoleStore{})
+	ctx := context.Background()
+
+	if _, _, err := svc.HasRoleWhere(ctx, "user", "", "editor", "doc", "d1"); !errors.Is(err, ErrInvalidRoleAssignment) {
+		t.Fatalf("want ErrInvalidRoleAssignment, got %v", err)
+	}
+	if _, _, err := svc.HasRoleWhere(ctx, "user", "u1", "", "doc", "d1"); !errors.Is(err, ErrInvalidRoleAssignment) {
+		t.Fatalf("want ErrInvalidRoleAssignment, got %v", err)
+	}
+	if _, _, err := svc.HasRoleWhere(ctx, "user", "u1", "editor", "doc", ""); !errors.Is(err, ErrHalfScopedAssignment) {
+		t.Fatalf("want ErrHalfScopedAssignment, got %v", err)
+	}
+}
+
+func TestHasRoleWhereFailClosedOnStoreError(t *testing.T) {
+	boom := errors.New("store down")
+	svc := NewService(&fakeRoleStore{err: boom})
+	held, provenance, err := svc.HasRoleWhere(context.Background(), "user", "u1", "editor", "doc", "d1")
+	if held || provenance != "" {
+		t.Fatalf("a store error must not grant access, got (%v, %q)", held, provenance)
+	}
+	if !errors.Is(err, boom) {
+		t.Fatalf("store error must propagate, got %v", err)
+	}
+}
