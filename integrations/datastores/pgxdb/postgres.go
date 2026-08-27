@@ -34,10 +34,11 @@ import (
 // PostgreSQL error codes MapError recognizes.
 // See: https://www.postgresql.org/docs/current/errcodes-appendix.html
 const (
-	uniqueViolation     = "23505" // unique_violation
-	foreignKeyViolation = "23503" // foreign_key_violation
-	checkViolation      = "23514" // check_violation
-	notNullViolation    = "23502" // not_null_violation
+	uniqueViolation           = "23505" // unique_violation
+	foreignKeyViolation       = "23503" // foreign_key_violation
+	checkViolation            = "23514" // check_violation
+	notNullViolation          = "23502" // not_null_violation
+	invalidTextRepresentation = "22P02" // invalid_text_representation
 )
 
 // Startup-packet parameters the connector defaults. pgconn folds every
@@ -338,6 +339,13 @@ func Open(cfg Config) (*DB, error) {
 // Detection is by SQLSTATE code via pgconn.PgError (vs turso's substring match
 // on SQLite messages). Unrecognized errors pass through unchanged. Callers map
 // both query errors and Scan errors (jackpgx.ErrNoRows → ErrNotFound) through this.
+//
+// 22P02 (invalid_text_representation — a malformed uuid or integer literal
+// reaching Postgres, typically an unvalidated path parameter) is the one code
+// whose server message is kept, as the sentence before the sentinel, because it
+// names the offending value and a host that dropped it lost that from its log.
+// web.ErrFromDomain answers the generic 400, so the message never reaches a
+// client. The other codes return the bare sentinel.
 func MapError(err error) error {
 	if err == nil {
 		return nil
@@ -355,6 +363,8 @@ func MapError(err error) error {
 			return sdk.ErrInvalidReference
 		case checkViolation, notNullViolation:
 			return sdk.ErrInvalidInput
+		case invalidTextRepresentation:
+			return fmt.Errorf("%s: %w", pgErr.Message, sdk.ErrInvalidInput)
 		}
 	}
 	return err

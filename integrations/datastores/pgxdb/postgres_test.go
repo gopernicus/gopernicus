@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,7 +27,7 @@ const (
 	microsecFromUnixEpochToY2K = 946684800 * 1_000_000
 )
 
-// TestMapError covers the four SQLSTATE codes plus jackpgx.ErrNoRows and the
+// TestMapError covers the five SQLSTATE codes plus jackpgx.ErrNoRows and the
 // nil/passthrough cases — the connector's entire error taxonomy, hermetically.
 func TestMapError(t *testing.T) {
 	cases := []struct {
@@ -39,6 +40,7 @@ func TestMapError(t *testing.T) {
 		{"foreign_key_violation", &pgconn.PgError{Code: "23503"}, sdk.ErrInvalidReference},
 		{"check_violation", &pgconn.PgError{Code: "23514"}, sdk.ErrInvalidInput},
 		{"not_null_violation", &pgconn.PgError{Code: "23502"}, sdk.ErrInvalidInput},
+		{"invalid_text_representation", &pgconn.PgError{Code: "22P02"}, sdk.ErrInvalidInput},
 		{"no_rows", jackpgx.ErrNoRows, sdk.ErrNotFound},
 		{"wrapped_unique", fmt.Errorf("insert: %w", &pgconn.PgError{Code: "23505"}), sdk.ErrAlreadyExists},
 		{"wrapped_no_rows", fmt.Errorf("scan: %w", jackpgx.ErrNoRows), sdk.ErrNotFound},
@@ -56,6 +58,26 @@ func TestMapError(t *testing.T) {
 				t.Fatalf("MapError(%v) = %v, want %v", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestMapError_InvalidTextRepresentationKeepsMessage: 22P02 is the one mapped
+// code whose server message survives, as the sentence before the sentinel, so a
+// host's log still names the malformed value; the neighbouring codes stay bare.
+func TestMapError_InvalidTextRepresentationKeepsMessage(t *testing.T) {
+	pgErr := &pgconn.PgError{Code: "22P02", Message: `invalid input syntax for type uuid: "not-a-uuid"`}
+
+	got := MapError(fmt.Errorf("select plan: %w", pgErr))
+	if !errors.Is(got, sdk.ErrInvalidInput) {
+		t.Fatalf("MapError(22P02) = %v, want ErrInvalidInput", got)
+	}
+	if !strings.HasPrefix(got.Error(), pgErr.Message+": ") {
+		t.Fatalf("MapError(22P02) = %q, want the server message as the sentence before the sentinel", got)
+	}
+
+	// The existing codes are unchanged: a bare sentinel, no message.
+	if got := MapError(&pgconn.PgError{Code: "23502", Message: "null value in column"}); got != sdk.ErrInvalidInput {
+		t.Fatalf("MapError(23502) = %v, want the bare sdk.ErrInvalidInput", got)
 	}
 }
 

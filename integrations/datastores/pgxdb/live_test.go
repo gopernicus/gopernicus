@@ -387,3 +387,120 @@ func TestLive_ProbeTable(t *testing.T) {
 		t.Errorf("probe inside a transaction: %v", err)
 	}
 }
+
+// collectScratchRow is the child-row struct TestLive_Collect scans into.
+type collectScratchRow struct {
+	ID       string `db:"id"`
+	ParentID string `db:"parent_id"`
+	Name     string `db:"name"`
+}
+
+// TestLive_Collect proves Collect against a real database: a parent-bounded
+// query scans every child row in order, a parent with no children is an empty
+// NON-NIL slice (so the caller's JSON says [] and never null), and a failing
+// query comes back through MapError — a malformed uuid literal (SQLSTATE 22P02)
+// as sdk.ErrInvalidInput keeping the server's message, an unknown relation
+// unchanged. Gated on POSTGRES_TEST_DSN; skips loudly when unset.
+func TestLive_Collect(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("POSTGRES_TEST_DSN not set — postgres Collect behavior NOT verified")
+	}
+
+	ctx := context.Background()
+	db, err := Open(Config{DSN: dsn})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if _, err := db.Exec(ctx, "DROP TABLE IF EXISTS collect_scratch"); err != nil {
+		t.Fatalf("drop scratch: %v", err)
+	}
+	if _, err := db.Exec(ctx, `CREATE TABLE collect_scratch (
+		id TEXT PRIMARY KEY,
+		parent_id TEXT NOT NULL,
+		name TEXT NOT NULL
+	)`); err != nil {
+		t.Fatalf("create scratch: %v", err)
+	}
+	t.Cleanup(func() { _, _ = db.Exec(context.Background(), "DROP TABLE IF EXISTS collect_scratch") })
+
+	seed := []collectScratchRow{
+		{ID: "c1", ParentID: "p1", Name: "alpha"},
+		{ID: "c2", ParentID: "p1", Name: "bravo"},
+		{ID: "c3", ParentID: "p2", Name: "charlie"},
+	}
+	for _, r := range seed {
+		if _, err := db.Exec(ctx,
+			"INSERT INTO collect_scratch (id, parent_id, name) VALUES (@id, @parent_id, @name)",
+			jackpgx.NamedArgs{"id": r.ID, "parent_id": r.ParentID, "name": r.Name}); err != nil {
+			t.Fatalf("seed %s: %v", r.ID, err)
+		}
+	}
+
+	const childSQL = "SELECT id, parent_id, name FROM collect_scratch WHERE parent_id = @parent ORDER BY id"
+
+	t.Run("parent_bounded_rows", func(t *testing.T) {
+		got, err := Collect[collectScratchRow](ctx, db, childSQL, jackpgx.NamedArgs{"parent": "p1"})
+		if err != nil {
+			t.Fatalf("Collect: %v", err)
+		}
+		if len(got) != 2 || got[0].ID != "c1" || got[1].ID != "c2" || got[0].Name != "alpha" {
+			t.Fatalf("rows = %#v, want c1/alpha then c2/bravo", got)
+		}
+	})
+
+	t.Run("no_children_is_empty_not_nil", func(t *testing.T) {
+		got, err := Collect[collectScratchRow](ctx, db, childSQL, jackpgx.NamedArgs{"parent": "absent"})
+		if err != nil {
+			t.Fatalf("Collect: %v", err)
+		}
+		if got == nil {
+			t.Fatal("no rows returned a nil slice, want an empty non-nil []T")
+		}
+		if len(got) != 0 {
+			t.Fatalf("rows = %#v, want empty", got)
+		}
+	})
+
+	t.Run("inside_a_transaction", func(t *testing.T) {
+		if err := db.InTx(ctx, func(tx *Tx) error {
+			got, err := Collect[collectScratchRow](ctx, tx, childSQL, jackpgx.NamedArgs{"parent": "p2"})
+			if err != nil {
+				return err
+			}
+			if len(got) != 1 || got[0].ID != "c3" {
+				t.Fatalf("rows = %#v, want just c3", got)
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("Collect inside a transaction: %v", err)
+		}
+	})
+
+	t.Run("malformed_uuid_maps_to_invalid_input", func(t *testing.T) {
+		got, err := Collect[collectScratchRow](ctx,
+			db, "SELECT @id::uuid::text AS id, 'p' AS parent_id, 'n' AS name",
+			jackpgx.NamedArgs{"id": "not-a-uuid"})
+		if !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("err = %v, want ErrInvalidInput through MapError (SQLSTATE 22P02)", err)
+		}
+		if !strings.Contains(err.Error(), "not-a-uuid") {
+			t.Fatalf("err = %v, want the server message naming the malformed value", err)
+		}
+		if got != nil {
+			t.Fatalf("rows = %#v, want nil on error", got)
+		}
+	})
+
+	t.Run("unknown_relation_passes_through", func(t *testing.T) {
+		_, err := Collect[collectScratchRow](ctx, db, "SELECT id, parent_id, name FROM collect_scratch_absent", nil)
+		if err == nil {
+			t.Fatal("Collect over an absent relation = nil error")
+		}
+		if sdk.IsExpected(err) {
+			t.Fatalf("err = %v, want an unmapped SQLSTATE to pass through", err)
+		}
+	})
+}

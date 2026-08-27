@@ -20,16 +20,18 @@ consume this package's `*DB`.
 | `Open(cfg) (*DB, error)` | opens a `pgxpool` and pings; every connection scans `timestamptz` in UTC and, unless the host named a zone, runs with session `timezone=UTC` (see below) |
 | `DB` | `Exec` / `Query` / `QueryRow` / `InTx` / `Begin` / `Close` / `Ping` / `Underlying() *pgxpool.Pool` |
 | `Querier` | interface intersection of `*DB` and `*Tx` (`Exec`/`Query`/`QueryRow`) — lets a store accept pool-or-tx |
-| `MapError(err) error` | SQLSTATE-based: `23505`→`ErrAlreadyExists`, `23503`→`ErrInvalidReference`, `23514`/`23502`→`ErrInvalidInput`, `pgx.ErrNoRows`→`ErrNotFound`; unknown errors pass through |
+| `MapError(err) error` | SQLSTATE-based: `23505`→`ErrAlreadyExists`, `23503`→`ErrInvalidReference`, `23514`/`23502`→`ErrInvalidInput`, `22P02` (malformed uuid/integer literal)→`ErrInvalidInput` keeping the server message as the sentence before the sentinel, `pgx.ErrNoRows`→`ErrNotFound`; unknown errors pass through |
 | `RedactDSN(dsn) string` | masks a URL-form DSN's userinfo password for safe logging; unparseable input returns the literal `"REDACTED"` |
 | `StatusCheck(ctx, db)` | 1s-deadline ping |
 | `ProbeTable(ctx, q, table) error` | boot-time existence probe for a store's table (`to_regclass`, name bound as a parameter, bare or schema-qualified): absent → wraps `ErrNotFound` naming the relation; a query failure maps through `MapError` and is never misreported as missing. Run it in a store constructor so a host aimed at the wrong database fails before serving |
+| `ProbeTables(ctx, q, tables…) error` | `ProbeTable` over every relation a store owns; probing stops at the first failure and returns it unchanged — the absent-relation error already names the table, and a query failure is about none of them. No tables is nil |
 | `RunMigrations(ctx, db, fs, dir, opts…)` | host-driven migration runner for one directory; one transaction, filename order, checksum guard, forward-only. One merged stream per schema: call it once per schema, with filenames unique within the stream that are never renumbered — `dir` is an `fs.FS` subpath, never a ledger namespace (all rows in a stream share the `"default"` source) |
 | `MigrateOption` / `WithSchema(s)` | the only `RunMigrations` option: run this stream inside `s` — create the schema if absent, `SET LOCAL search_path` for the transaction, and keep the stream's `schema_migrations` ledger in `s`. No option = today's unqualified stream, byte-for-byte |
 | `Schema` / `NewSchema(name) (Schema, error)` | validated Postgres schema name; the zero value means "no schema" and renders bare names. Rejection wraps `ErrInvalidInput` (empty, >63 bytes, non-identifier, reserved `pg_` prefix, `information_schema`); `public` is valid |
 | `(Schema).Table(t)` / `IsZero()` / `String()` | `"<schema>".t` for a set schema, bare `t` for the zero value; the one qualifier used by the runner's ledger statements and by every pgx store's `WithSchema` |
 | `NewLimiter(db, opts…) *Limiter` / `WithLimiterKeyPrefix` | a durable `sdk/capabilities/ratelimiter.Limiter` over the caller-owned `*DB` — one atomic statement per `Allow` against the host-owned `ratelimit_windows` table (see below) |
 | `(*Limiter).StatusCheck(ctx) error` | boot probe for that host-owned table; call it before serving, because a missing table makes the sdk middleware fail open and silent |
+| `Collect[T](ctx, q, sql, args…) ([]T, error)` | parent-bounded, unpaginated read: every row scanned into a db-tagged `T` via strict `RowToStructByName`, both the query and the collect error through `MapError`, and no rows as an empty NON-NIL `[]T` so the caller marshals `[]` and never `null`. Not a paging primitive — an unbounded result set belongs on `List` |
 | `List[T]` / `ListQuery[T]` | the shared paginated-SELECT helper implementing the `sdk/foundation/crud` list standards (see below) |
 | `QuoteIdentifier(ident) (string, error)` | regex allow-list + per-segment double-quoting for dynamic identifiers (order columns); rejection wraps `ErrInvalidInput` |
 | `ApplyCursorPagination` / `AddOrderByClause` / `AddLimitClause` | NamedArgs SQL builders under `List`: tuple-comparison keyset predicate (direction × forPrevious operator table), ORDER BY with PK tiebreaker + optional `LOWER()`, `LIMIT @limit` |
@@ -535,7 +537,8 @@ then, hosts opt in by setting `Config.LogQueries` or `Config.Tracer`.
 ## Testing
 
 Unit tests are hermetic (`MapError` over constructed `pgconn.PgError` values,
-config validation, migration checksum/error paths, `poolConfig`'s
+`Collect` and `ProbeTables` over in-memory `Querier` stubs, config validation,
+migration checksum/error paths, `poolConfig`'s
 `AfterConnect`/session-zone defaulting, and the codec registration driven through
 a bare `pgtype.Map` in both wire formats) and run with a plain `go test ./...` —
 no database required. The time-zone default cases clear `PGTZ`, `PGOPTIONS`,
@@ -547,7 +550,9 @@ round-trip, the schema-scoped migration legs (tables and ledger inside the
 schema with `public` untouched, schema-then-default ledger isolation on one
 pool, the non-atomic per-schema transaction boundary, the ledger-relocation
 preflight and the no-copy fallback, and the four-case privilege matrix), the
-`List` behavior suite, `TestLive_ScanUTC` (UTC-located scalar, array, struct-scan
+`List` behavior suite, `TestLive_Collect` (parent-bounded rows, an empty non-nil
+result, a collect inside a transaction, and `22P02`/unknown-relation error
+mapping), `TestLive_ScanUTC` (UTC-located scalar, array, struct-scan
 and simple-protocol reads, `SHOW TimeZone` = `UTC`, and the DSN override keeping
 its own session zone while scans stay UTC), and the limiter legs (the shared
 `ratelimitertest.Run` conformance suite, the exact-K concurrency proof — which
