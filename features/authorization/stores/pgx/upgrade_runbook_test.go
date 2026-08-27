@@ -265,7 +265,7 @@ func TestUpgradeRunbook(t *testing.T) {
 	if err != nil {
 		t.Fatalf("boot Repositories over converted store: %v", err)
 	}
-	comps, err := authorization.NewService(repos, authorization.Config{Model: upgradeSchema()})
+	comps, err := authorization.NewService(repos, authorization.Config{RelationshipModel: upgradeSchema()})
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}

@@ -453,7 +453,6 @@ Construction matrix (all loud at `NewService`):
 |---|---|
 | both `Repositories` kind fields nil | `ErrNoKindConfigured` |
 | `Relationships` set XOR `Config.RelationshipModel` set | `ErrModelRequired` |
-| both `Config.RelationshipModel` and the deprecated `Config.Model` set | `ErrConfigConflict` |
 | `Config.Guard` set, `Repositories.Mutations` nil | `ErrGuardWithoutMutations` (a guard has no atomic write path) |
 | `Config.Audit` set, `Config.Guard` nil | `ErrAuditWithoutGuard` (nothing to observe) |
 | nil `Config.Guard` | construction succeeds; every actor-facing guarded mutation fails closed with `ErrMutationsNotConfigured`; decision/list APIs and `RelationshipWriter` remain available, and `SystemMutator` is callable only if `.Mutations` is wired |
@@ -683,7 +682,6 @@ a future admin surface (the deferred AZADM packet).
 | an unwired kind's methods | fail closed with that kind's sentinel (`ErrRelationshipsNotConfigured` / `ErrRolesNotConfigured`). |
 | the decision surface with NO model-bearing kind | `Check`/`CheckBatch`/`CheckExplain`/`FilterAuthorized`/`LookupResources` fail closed with `ErrNoDecisionKind` (a server-side WIRING FAULT: it wraps no sdk kind and answers **HTTP 500**, unlike the actor-observable `ErrMutationsNotConfigured` at 400), and every `RequirePermission*` gate panics at mount. |
 | `Config.RelationshipModel` | REQUIRED with `Relationships`, forbidden without it; compiled + schema-validated at `NewService` (see validation-failures list). |
-| `Config.Model` | DEPRECATED alias of `Config.RelationshipModel`, honoured through v0.x and removed at the v1.0 config cut. Setting both is `ErrConfigConflict`. |
 | `Config.RoleModel` | optional; the ROLES kind's model. Set ⇒ `Repositories.Roles` (one direction — `ErrRoleModelWithoutRoles`; a roles repo with no model is the valid opaque posture). Compiled + validated at `NewService`: structurally invalid → `ErrInvalidRoleModel`; a `(resource type, permission)` pair also declared by `Config.RelationshipModel` → `ErrModelConflict`. |
 | `Config.Limits` | optional `EvaluationLimits`; zero fields → safe defaults, negative → `ErrInvalidLimits`. The decision surface's budget: resolved whenever ANY model-bearing kind is wired (`RelationshipModel` or `RoleModel`); ignored-with-note under a roles-only wiring with no model. |
 | `Config.IDs` | optional (`cryptids.IDGenerator`); zero value ⇒ the nanoid default; `cryptids.Database` defers to the store's DDL DEFAULT. Relationship-kind-scoped. |

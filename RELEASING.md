@@ -258,7 +258,25 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
-### features/authorization — v0.4.0 (next tag): `Config.RelationshipModel` + `ErrNoDecisionKind` is a 500 (minor; one-release deprecation)
+### features/authorization — v0.5.0 (next tag): `Config.Model` removed (breaking, pre-1.0)
+
+Owner ruling 2026-08-26, minutes after v0.4.0: "drop config.model now — let's just
+make it correct now." The one-release pass-through is withdrawn: `Config.Model` is
+GONE, `Config.RelationshipModel` is the only name, and `ErrConfigConflict` (which
+existed solely to referee the two) is removed with it. Construction order is back to
+zero kinds (`ErrNoKindConfigured`) → `ErrModelRequired`. Nothing else changes —
+`RelationshipModel` alias, `ErrNoDecisionKind` at 500, and every v0.4.0 behaviour
+stand. The `stores/pgx` upgrade-runbook test literal moved to `RelationshipModel`
+(in-workspace only; the store's own pin is unchanged and adopters never compile a
+store's tests).
+
+**Adopter action (breaking):** rename `Model:` → `RelationshipModel:` in every
+`authorization.Config` literal; remove any `errors.Is(err, authorization.ErrConfigConflict)`
+branch. The compiler finds both. Known hosts: `examples/auth-cms` (done in-repo),
+coordination-hub and gps-360-go (owner-updated downstream). No store change; stores
+not retagged.
+
+### features/authorization — v0.4.0 — tagged 2026-08-26: `Config.RelationshipModel` + `ErrNoDecisionKind` is a 500 (minor; one-release deprecation)
 
 Plan of record `.claude/plans/authorization-roles-model-followups.md` — the two
 owner calls left open at the v0.3.0 close, released BEFORE gps-360-go adoption so
@@ -275,10 +293,9 @@ is pinned: zero kinds (`ErrNoKindConfigured`) → `ErrConfigConflict` →
 `ErrModelRequired`. The `RequirePermission*` mount panics keep their shape and name
 `Config.RelationshipModel` in the message.
 
-**Deprecation window — exact.** `Config.Model` is deprecated as of **v0.4.0**,
-honoured as a pass-through for the rest of the `v0.x` line, and **removed at the
-v1.0 config cut** — never silently in an intervening minor. Adopters rename the
-field at their leisure; the compiler flags nothing until v1.0.
+**Deprecation window — as tagged.** `Config.Model` was deprecated as of **v0.4.0**
+with a v1.0 removal promised; that window was withdrawn by owner ruling the same
+day — v0.5.0 removes it (see the entry above).
 
 **2. `ErrNoDecisionKind` answers 500, not 400.** It no longer wraps
 `sdk.ErrInvalidInput`: a decision surface with NO model-bearing kind is a

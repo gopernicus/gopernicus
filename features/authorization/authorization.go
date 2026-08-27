@@ -39,7 +39,6 @@ package authorization
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 
 	"github.com/gopernicus/gopernicus/features/authorization/domain/mutation"
@@ -48,7 +47,6 @@ import (
 	"github.com/gopernicus/gopernicus/features/authorization/internal/logic/authorizersvc"
 	"github.com/gopernicus/gopernicus/features/authorization/internal/logic/decisionsvc"
 	"github.com/gopernicus/gopernicus/features/authorization/internal/logic/rolesvc"
-	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
@@ -67,14 +65,6 @@ var (
 	// Config.RelationshipModel is set without the repository. The relationship kind
 	// needs both.
 	ErrModelRequired = errors.New("authorization: Repositories.Relationships and Config.RelationshipModel must be wired together (both or neither)")
-
-	// ErrConfigConflict is returned by NewService when BOTH Config.RelationshipModel
-	// and the deprecated Config.Model carry a model. The two name the same setting,
-	// so a host that sets both has stated two policies and the feature refuses to
-	// guess which one governs. It wraps sdk.ErrInvalidInput (a construction-time
-	// precondition). Setting only one — either one — is valid until Config.Model is
-	// removed at the v1.0 config cut.
-	ErrConfigConflict = fmt.Errorf("authorization: Config.RelationshipModel and the deprecated Config.Model are both set (set exactly one): %w", sdk.ErrInvalidInput)
 
 	// ErrRoleModelWithoutRoles is returned by NewService when Config.RoleModel is
 	// set without Repositories.Roles. The asymmetry with ErrModelRequired is
@@ -317,12 +307,6 @@ type Config struct {
 	// Required when Repositories.Relationships is wired, forbidden otherwise
 	// (ErrModelRequired).
 	RelationshipModel Schema
-	// Model is the former name of RelationshipModel.
-	//
-	// Deprecated: use RelationshipModel. Honoured for one release as a
-	// pass-through; setting both is ErrConfigConflict. Removed at the v1.0 config
-	// cut.
-	Model Schema
 	// Limits is the resolved semantic evaluation budget (Through depth, graph
 	// states, relation fan-out, batch size, lookup results). Each zero field
 	// resolves to a safe nonzero default; a negative field fails NewService with
@@ -387,9 +371,8 @@ type Service struct {
 // the Components bundle: the host-facing Service plus separately held baseline
 // and high-integrity write capabilities. Zero kinds is ErrNoKindConfigured; a
 // relationship kind wired without its RelationshipModel (or vice versa) is
-// ErrModelRequired; an invalid model is the schema validator's loud error; a
-// model given under BOTH RelationshipModel and the deprecated Model is
-// ErrConfigConflict. A roles-only wiring succeeds with no relationship model.
+// ErrModelRequired; an invalid model is the schema validator's loud error. A
+// roles-only wiring succeeds with no relationship model.
 //
 // Model construction matrix: Config.RoleModel without Repositories.Roles is
 // ErrRoleModelWithoutRoles; a structurally invalid RoleModel is
@@ -410,17 +393,7 @@ func NewService(repos Repositories, cfg Config) (Components, error) {
 		return Components{}, ErrNoKindConfigured
 	}
 
-	// The deprecated Config.Model is a pass-through for one release: exactly one of
-	// the two fields may carry a model, and the resolved one drives everything
-	// below.
 	model := cfg.RelationshipModel
-	if len(cfg.Model.ResourceTypes) > 0 {
-		if len(model.ResourceTypes) > 0 {
-			return Components{}, ErrConfigConflict
-		}
-		model = cfg.Model
-	}
-
 	modelSet := len(model.ResourceTypes) > 0
 	if hasRel != modelSet {
 		return Components{}, ErrModelRequired

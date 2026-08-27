@@ -12,7 +12,6 @@ import (
 	"github.com/gopernicus/gopernicus/features/authorization/domain/relationship"
 	"github.com/gopernicus/gopernicus/features/authorization/domain/role"
 	"github.com/gopernicus/gopernicus/features/authorization/memstore"
-	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/feature"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
@@ -154,50 +153,6 @@ func TestNewServicePartialWiring(t *testing.T) {
 	// Model without Relationships.
 	if _, err := NewService(Repositories{Roles: &roleFake{}}, Config{RelationshipModel: validModel()}); !errors.Is(err, ErrModelRequired) {
 		t.Fatalf("model-without-rel: want ErrModelRequired, got %v", err)
-	}
-}
-
-// TestConfigModelDeprecatedPassThrough pins the one-release deprecation window:
-// the old Config.Model still wires the relationship kind exactly as
-// Config.RelationshipModel does, and a host that sets BOTH is refused with
-// ErrConfigConflict rather than having one silently win. It also pins the
-// construction check ORDER — zero kinds first, then the config conflict, then the
-// partial-wiring error — so a misconfigured host reads the most structural fault.
-func TestConfigModelDeprecatedPassThrough(t *testing.T) {
-	deprecated, err := NewService(Repositories{Relationships: &relFake{}}, Config{Model: validModel()})
-	if err != nil {
-		t.Fatalf("deprecated Config.Model must still wire the relationship kind: %v", err)
-	}
-	current, err := NewService(Repositories{Relationships: &relFake{}}, Config{RelationshipModel: validModel()})
-	if err != nil {
-		t.Fatalf("NewService: %v", err)
-	}
-	wantDigest, err := current.Service.SchemaDigest()
-	if err != nil {
-		t.Fatalf("SchemaDigest: %v", err)
-	}
-	gotDigest, err := deprecated.Service.SchemaDigest()
-	if err != nil {
-		t.Fatalf("SchemaDigest: %v", err)
-	}
-	if gotDigest != wantDigest {
-		t.Fatalf("deprecated Config.Model compiled a different schema: %q != %q", gotDigest, wantDigest)
-	}
-
-	both := Config{Model: validModel(), RelationshipModel: validModel()}
-	if _, err := NewService(Repositories{Relationships: &relFake{}}, both); !errors.Is(err, ErrConfigConflict) {
-		t.Fatalf("both models set: want ErrConfigConflict, got %v", err)
-	}
-	if !errors.Is(ErrConfigConflict, sdk.ErrInvalidInput) {
-		t.Fatalf("ErrConfigConflict must wrap sdk.ErrInvalidInput")
-	}
-	// Zero kinds outranks the conflict...
-	if _, err := NewService(Repositories{}, both); !errors.Is(err, ErrNoKindConfigured) {
-		t.Fatalf("zero kinds with both models: want ErrNoKindConfigured, got %v", err)
-	}
-	// ...and the conflict outranks the partial wiring it would otherwise report.
-	if _, err := NewService(Repositories{Roles: &roleFake{}}, both); !errors.Is(err, ErrConfigConflict) {
-		t.Fatalf("both models on a roles-only wiring: want ErrConfigConflict, got %v", err)
 	}
 }
 
