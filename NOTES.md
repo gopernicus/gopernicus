@@ -2721,3 +2721,56 @@ snippets; the rest is docs.
   remote/nonce/unsafe; asset-reachability self-check passes wired, fails when the asset
   route is unmounted). The host-wiring + HTMX + HTMLPolicy snippets are proven by the
   existing GOTH-7.2/7.3 proof tests.
+
+## 2026-08-27 — host-layout-contract RATIFIED: `examples/README.md` is the host contract (H0–H10)
+
+A host application's layout had no ratified contract with an executable floor.
+`ARCHITECTURE.md` still said "no host in this repo currently has one" while
+three real hosts had built it and diverged — three different `guard-one-rule`
+regexes, three readings of where a composition lives, a `features/`-era grep
+that had been dead since the rename. That is now closed on the doc side.
+
+- **The contract is `examples/README.md`** — "Hosts — the gopernicus host
+  contract", the sibling of `pockets/README.md` in shape and tone, sitting
+  where the things it governs sit. Rules are the **H series, H0–H10**: the
+  layout, the one rule as an allow-list, the two logic tiers, the composition
+  rule, host-pocket isolation, who may name an adapter, the mirror, hygiene,
+  and what a composition root may do. Each rule has exactly one canonical
+  sentence; those eleven sentences are what `gopernicus guard --list` will
+  print, so the binary and the page cannot drift.
+- **gps-360-go is THE reference host** (owner ruling). The rules generalize
+  from its layout; where the contract and the reference disagree, that is a
+  finding to settle, not a style choice.
+- **A composition takes only domain SERVICES** (owner ruling). `Dependencies`
+  is made of `*Service` interfaces the composition declares itself — no
+  repository port, no storage import, no transaction handle, at least one
+  domain import. Consequence recorded in `ARCHITECTURE.md` §"The tier rules":
+  the old "transaction boundary" phrasing is gone, because a composition that
+  owns no storage owns no transaction; a workflow needing an atomic write
+  across two domains is the signal those aggregates belong in one domain.
+  `internal/outbound/compositions/` therefore does not exist.
+- **Altering or extending a pocket happens at the host root as its own
+  three-layer hexagon** (owner ruling): `pockets/<name>/{logic,inbound,outbound}`,
+  any non-empty subset. A **host pocket** and a **framework pocket** are told
+  apart by module path, not by reviving a second tier noun — the retired one
+  is never active vocabulary again, and G20 stays strict and unchanged. A thin
+  host has no local `pockets/` at all.
+- **ARCHITECTURE surgery.** §"The app pattern (hexagonal)" is now a diagram,
+  the H1–H8 allow-list summary, and a pointer; §"Inbound anatomy" MOVED
+  verbatim into the contract with its 2026-07-08 ratification intact, leaving
+  a two-line pointer, because summarize-and-restate is guaranteed drift.
+- **`examples/auth-cms` is re-described as the authentication conformance
+  harness, not a layout reference** — in the contract, in its own README, and
+  on the docs site — so the flagship stops teaching the anti-pattern the day
+  the ratification lands, before any of its code moves. `examples/cms`,
+  `examples/minimal`, and `examples/jobs-minimal` are the conforming worked
+  examples once their host-pocket moves land.
+- **Executable floor, next PR:** a stdlib-only `gopernicus guard` verb in
+  `workshop/gopernicus` (`go/ast`, no grep, no shell), pinned by hosts through
+  a `go.mod` `tool` directive so a guard update is a version bump and never a
+  Makefile copy; `gopernicus init` emits the skeleton; a new G21 runs it over
+  the three conforming examples, with auth-cms and goth-showcase as named,
+  dated exemptions. Tag: `workshop/gopernicus` v0.3.0, nothing else.
+
+Plan of record `.claude/plans/host-layout-contract.md`. No Go code changed in
+this half; no sdk, pocket, integration, or ui symbol moves at all.

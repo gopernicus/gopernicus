@@ -30,6 +30,7 @@ const sidebars: SidebarsConfig = {
         'architecture/repository-layout',
         'architecture/hexagonal-apps',
         'architecture/pocket-contract',
+        'architecture/host-contract',
       ],
     },
 

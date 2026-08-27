@@ -214,6 +214,22 @@ lands) tags independently and requires its pocket core + `sdk` + the pinned
 `ui/goth` tag. The `ui/goth` module itself is created at GOTH-1.1; no `ui/*` tag
 is cut this milestone.
 
+**The `workshop/gopernicus` CLI as a host `tool` pin (host-layout-contract,
+2026-08-27) — LIVING.** The scaffolding CLI is tagged like any other importable
+module, but from **v0.3.0** it is also something a host depends on: it carries
+the `guard` verb that checks a host against the H0–H10 rules of
+`examples/README.md`, and a host pins it with a `go.mod` `tool` directive plus
+the matching `require` — a developer-time dependency, never a runtime import.
+That makes the rule-set versioned with the binary: **new H-rules ship in a minor
+version of `workshop/gopernicus`, and a host adopts them by bumping its pin**
+(`go get -tool github.com/gopernicus/gopernicus/workshop/gopernicus@<next>`),
+never by copying Makefile text. A host that stays on an older pin keeps the
+older rule-set and is unaffected until it bumps; a rule whose wording changes
+is a change to `examples/README.md` and to the CLI's `--list` output in the same
+tag. This repo's own `examples/*` never carry the `tool` directive (it would put
+the workshop module in an example's graph, against G11) — they are guarded with
+`go run` from the Makefile instead.
+
 ## Preconditions before the first tag
 
 1. **Module paths are final.** Every `go.mod` module line and internal import
