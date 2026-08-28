@@ -187,3 +187,102 @@ func TestList_UnknownOrderRejected(t *testing.T) {
 		t.Fatalf("query built despite unknown order: %q", cq.query)
 	}
 }
+
+// newFixedOrderQuery is a store whose order is the product's, not the caller's:
+// no OrderFields, a composite FixedOrder with NULLS LAST and the pk tiebreak
+// included by the store itself.
+func newFixedOrderQuery() ListQuery[listRow] {
+	return ListQuery[listRow]{
+		BaseSQL:    "SELECT id, created_at FROM widgets WHERE kind = @kind",
+		Args:       jackpgx.NamedArgs{"kind": "gadget"},
+		FixedOrder: "closing_date DESC NULLS LAST, name ASC, id ASC",
+		PK:         "id",
+		PKOf:       func(r listRow) string { return r.ID },
+	}
+}
+
+// TestList_FixedOrderSQL: under the offset strategy a FixedOrder is written
+// verbatim as the ORDER BY — no quoting, no appended pk tiebreak — and the
+// offset flow is otherwise unchanged: LIMIT n+1 OFFSET off.
+func TestList_FixedOrderSQL(t *testing.T) {
+	cq := &listCapture{}
+	_, err := List(context.Background(), cq, newFixedOrderQuery(), crud.ListRequest{Limit: 2, Offset: 4, Strategy: crud.StrategyOffset})
+	if !errors.Is(err, errCapture) {
+		t.Fatalf("err = %v, want errCapture", err)
+	}
+	want := `SELECT id, created_at FROM widgets WHERE kind = @kind ORDER BY closing_date DESC NULLS LAST, name ASC, id ASC LIMIT @limit OFFSET @offset`
+	if cq.query != want {
+		t.Fatalf("query =\n  %q\nwant\n  %q", cq.query, want)
+	}
+	if cq.args["kind"] != "gadget" || cq.args["offset"] != 4 || cq.args["limit"] != 3 {
+		t.Fatalf("args = %#v, want kind=gadget offset=4 limit=3", cq.args)
+	}
+}
+
+// TestList_FixedOrderSearchFolded: the search predicate is folded into the base
+// BEFORE the fixed ORDER BY, exactly as on the OrderFields path.
+func TestList_FixedOrderSearchFolded(t *testing.T) {
+	q := newFixedOrderQuery()
+	q.SearchFields = []crud.SearchField{{Column: "name"}}
+
+	cq := &listCapture{}
+	_, err := List(context.Background(), cq, q, crud.ListRequest{Limit: 2, Strategy: crud.StrategyOffset, Search: "gizmo"})
+	if !errors.Is(err, errCapture) {
+		t.Fatalf("err = %v, want errCapture", err)
+	}
+	want := `SELECT id, created_at FROM widgets WHERE kind = @kind AND (("name" COLLATE "C") ILIKE @list_search ESCAPE '\') ` +
+		`ORDER BY closing_date DESC NULLS LAST, name ASC, id ASC LIMIT @limit OFFSET @offset`
+	if cq.query != want {
+		t.Fatalf("query =\n  %q\nwant\n  %q", cq.query, want)
+	}
+	if cq.args["list_search"] != "%gizmo%" {
+		t.Fatalf("list_search arg = %v, want %%gizmo%%", cq.args["list_search"])
+	}
+}
+
+// TestList_FixedOrderRefusals: each FixedOrder rule is enforced before any SQL
+// is built, and every refusal wraps sdk.ErrInvalidInput — a request Order (the
+// order is not the caller's), the cursor strategy (default or explicit, and a
+// cursor token), and OrderFields set alongside FixedOrder (a programming error).
+func TestList_FixedOrderRefusals(t *testing.T) {
+	both := newFixedOrderQuery()
+	both.OrderFields = listOrderFields
+
+	cases := []struct {
+		name string
+		q    ListQuery[listRow]
+		req  crud.ListRequest
+	}{
+		{"request order", newFixedOrderQuery(), crud.ListRequest{Limit: 2, Strategy: crud.StrategyOffset, Order: crud.NewOrder("id", crud.ASC)}},
+		{"default (cursor) strategy", newFixedOrderQuery(), crud.ListRequest{Limit: 2}},
+		{"explicit cursor strategy", newFixedOrderQuery(), crud.ListRequest{Limit: 2, Strategy: crud.StrategyCursor}},
+		{"cursor token", newFixedOrderQuery(), crud.ListRequest{Limit: 2, Cursor: "abc"}},
+		{"OrderFields alongside FixedOrder", both, crud.ListRequest{Limit: 2, Strategy: crud.StrategyOffset}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cq := &listCapture{}
+			_, err := List(context.Background(), cq, tc.q, tc.req)
+			if !errors.Is(err, sdk.ErrInvalidInput) {
+				t.Fatalf("err = %v, want ErrInvalidInput", err)
+			}
+			if cq.query != "" {
+				t.Fatalf("query built despite refusal: %q", cq.query)
+			}
+		})
+	}
+}
+
+// TestList_FixedOrderZeroValueKeepsOrderFields: a query without FixedOrder is
+// byte-identical to before — the OrderFields path and DefaultOrder still apply.
+func TestList_FixedOrderZeroValueKeepsOrderFields(t *testing.T) {
+	cq := &listCapture{}
+	_, err := List(context.Background(), cq, newListQuery(), crud.ListRequest{Limit: 2, Strategy: crud.StrategyOffset})
+	if !errors.Is(err, errCapture) {
+		t.Fatalf("err = %v, want errCapture", err)
+	}
+	want := `SELECT id, created_at FROM widgets WHERE kind = @kind ORDER BY "created_at" DESC, "id" DESC LIMIT @limit OFFSET @offset`
+	if cq.query != want {
+		t.Fatalf("query =\n  %q\nwant\n  %q", cq.query, want)
+	}
+}

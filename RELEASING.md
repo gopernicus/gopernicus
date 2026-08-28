@@ -223,6 +223,13 @@ keeps `sdk v0.6.0`. Same public contract, safety rules, and tests on both;
 adapted commits, not one cherry-pick (the module/paths were renamed between
 them). Read the upgrade note below.
 
+**2026-08-28: `integrations/datastores/pgxdb` — next tag, patch-scoped by the
+rule below (owner ruling on patch vs minor pending, as with `ProbeTable`)** —
+`ListQuery.FixedOrder`, a store-fixed composite `ORDER BY` for the offset
+strategy (plan of record `plans/pgxdb-list-fixed-order.md`; gopernicus issue
+#15; originating host gps-360-go). Additive, zero-value-preserving, no schema,
+no pin moves (still `sdk v0.4.0`), no store retags. See the upgrade note below.
+
 ## Tagging scheme
 
 Nested Go modules in a single repo are tagged with the module's directory as a
@@ -478,6 +485,43 @@ precedence with the libpq env cleared) and `TestLive_ScanUTC` /
 `TZ=America/Los_Angeles` — every scan `+0000 UTC`, the `+05:00` literal equal
 to `2025-12-31T19:00:00Z`, `SHOW TimeZone` = `UTC` by default and
 `Europe/Oslo` when the DSN says so.
+
+### integrations/datastores/pgxdb — next tag (2026-08-28): `ListQuery.FixedOrder`, a store-fixed composite ORDER BY for the offset strategy (patch-scoped; additive)
+
+Plan of record `plans/pgxdb-list-fixed-order.md` (gopernicus #15; originating
+host gps-360-go, which carried an `OffsetPage[R, D]` helper in nine stores
+because `pgxdb.List` could not express `closing_date DESC NULLS LAST, name
+ASC, id ASC`). Pin stays `sdk v0.4.0`; no schema; no sibling bumps.
+
+**What.** One additive field, `ListQuery.FixedOrder string` — a store-authored
+`ORDER BY` expression (without the keyword), trusted store text like
+`BaseSQL`, written verbatim by the offset flow. The store includes its own pk
+tiebreak; `List` appends nothing. When set:
+
+- `OrderFields`/`DefaultOrder` are not consulted; `OrderFields` also set is a
+  programming error → `sdk.ErrInvalidInput` on first call.
+- A request carrying an `Order` → `sdk.ErrInvalidInput` (the order is not the
+  caller's).
+- The list is **offset-only**: the cursor strategy (default or explicit, or a
+  cursor token) → `sdk.ErrInvalidInput` — no keyset predicate is derivable
+  from an arbitrary expression.
+- The offset flow is otherwise unchanged: `LIMIT n+1` → `HasMore`, `HasPrev`
+  from the offset, `WithCount` → `Total` via the `COUNT(*)` wrap, the search
+  clause folded before the strategy switch, `MapError`.
+
+**Zero value.** A `ListQuery` without `FixedOrder` builds byte-identical SQL
+to `v0.6.0` (pinned by test).
+
+**Adopting (gps-360-go).** Replace each local `offsetPage` helper with
+`pgxdb.List` + `FixedOrder` carrying the same expression, then delete
+`rows.go`'s `offsetPage`. Same SQL shape, same page fields. Hosts serving
+these lists over `web.ParseListQuery` should note a client-supplied `order`
+now answers 400 through `ErrFromDomain` rather than being ignored.
+
+Proof: hermetic SQL-capture tests (`TestList_FixedOrder*`) and the live
+`TestLive_ListBehavior/fixed_order_offset` against a throwaway Postgres 17 —
+`NULLS LAST` + name tiebreak traversal over three offset pages with
+`HasMore`/`HasPrev`/`Total` asserted and the cursor strategy refused.
 
 ### pockets/authentication — v0.8.1 + features/authentication — v0.4.3 — tagged 2026-08-28 (maintenance line off v0.4.2): host-owned mail data, subjects, and SMS bodies (patch; additive)
 
