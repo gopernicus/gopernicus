@@ -1,8 +1,8 @@
 # pgxdb.List: a store-fixed composite ORDER BY for the offset strategy
 
 **Status: EXECUTED 2026-08-28 — gopernicus/gopernicus#15** (owner asked to
-work through the issue the same day; owner rules patch vs minor and cuts the
-tag). Executed as written: `FixedOrder` on `ListQuery`, `checkFixedOrder`
+work through the issue the same day). **RELEASED same day: PR #16 squash @
+`098241f`, `integrations/datastores/pgxdb/v0.6.1` (patch by owner ruling).** Executed as written: `FixedOrder` on `ListQuery`, `checkFixedOrder`
 refusals, verbatim `ORDER BY` in the offset flow, hermetic + live tests, README
 convention bullet, RELEASING entry. Origin (Josh: "i'd like to write a plan
 for the OffsetPage in gopernicus"). Origin: gps-360-go, which carried a host helper

@@ -223,8 +223,8 @@ keeps `sdk v0.6.0`. Same public contract, safety rules, and tests on both;
 adapted commits, not one cherry-pick (the module/paths were renamed between
 them). Read the upgrade note below.
 
-**2026-08-28: `integrations/datastores/pgxdb` — next tag, patch-scoped by the
-rule below (owner ruling on patch vs minor pending, as with `ProbeTable`)** —
+**2026-08-28: `integrations/datastores/pgxdb/v0.6.1` — TAGGED @ `098241f`
+(#16 squash), a patch by owner ruling, as with `ProbeTable`** —
 `ListQuery.FixedOrder`, a store-fixed composite `ORDER BY` for the offset
 strategy (plan of record `plans/pgxdb-list-fixed-order.md`; gopernicus issue
 #15; originating host gps-360-go). Additive, zero-value-preserving, no schema,
@@ -486,7 +486,7 @@ precedence with the libpq env cleared) and `TestLive_ScanUTC` /
 to `2025-12-31T19:00:00Z`, `SHOW TimeZone` = `UTC` by default and
 `Europe/Oslo` when the DSN says so.
 
-### integrations/datastores/pgxdb — next tag (2026-08-28): `ListQuery.FixedOrder`, a store-fixed composite ORDER BY for the offset strategy (patch-scoped; additive)
+### integrations/datastores/pgxdb — v0.6.1 — tagged 2026-08-28: `ListQuery.FixedOrder`, a store-fixed composite ORDER BY for the offset strategy (patch; additive)
 
 Plan of record `plans/pgxdb-list-fixed-order.md` (gopernicus #15; originating
 host gps-360-go, which carried an `OffsetPage[R, D]` helper in nine stores
