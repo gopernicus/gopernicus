@@ -205,7 +205,7 @@ instead of `null` (visible on turso-backed hosts), and every scanned
 `timestamptz` is UTC-located while zone-dependent SQL on a zone-less DSN now
 evaluates in UTC.
 
-**2026-08-28: `features/authentication/v0.4.3` (maintenance line off the
+**2026-08-28: `features/authentication/v0.4.3` — TAGGED (maintenance line off the
 immutable `v0.4.2` tag) + `pockets/authentication/v0.8.1` (next tag on main) —
 host-owned mail DATA and SUBJECTS, not only bodies** (plan of record
 `plans/auth-mail-host-data-and-subjects.md`; consumer ruling 2026-08-28,
@@ -479,7 +479,7 @@ precedence with the libpq env cleared) and `TestLive_ScanUTC` /
 to `2025-12-31T19:00:00Z`, `SHOW TimeZone` = `UTC` by default and
 `Europe/Oslo` when the DSN says so.
 
-### pockets/authentication — v0.8.1 (next tag, 2026-08-28) + features/authentication — v0.4.3 (maintenance line off v0.4.2): host-owned mail data, subjects, and SMS bodies (patch; additive)
+### pockets/authentication — v0.8.1 + features/authentication — v0.4.3 — tagged 2026-08-28 (maintenance line off v0.4.2): host-owned mail data, subjects, and SMS bodies (patch; additive)
 
 Plan of record `plans/auth-mail-host-data-and-subjects.md`. A **patch on both
 lines** by plan ruling: every symbol is additive, the zero value of every new
