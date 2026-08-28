@@ -580,7 +580,12 @@ func (s *Service) directAdd(ctx context.Context, in CreateInput, subjectID strin
 		return CreateResult{}, fmt.Errorf("grant: %w", err)
 	}
 	s.recordGrant(ctx, subjectID, in.ResourceType, in.ResourceID, in.Relation, in.Identifier, securityevent.StatusSuccess)
-	s.sendMemberAdded(ctx, in.IdentifierKind, in.Identifier, in.ResourceType, in.ResourceID, in.Relation, in.Redirect, "member_added:"+mintSecret())
+	s.sendMemberAdded(ctx, memberAdded{
+		kind: in.IdentifierKind, identifier: in.Identifier,
+		resourceType: in.ResourceType, resourceID: in.ResourceID, relation: in.Relation,
+		invitedBy: in.InvitedBy, operationID: operationID, metadata: in.Metadata,
+		redirectTo: in.Redirect, key: "member_added:" + mintSecret(),
+	})
 	return CreateResult{DirectlyAdded: true}, nil
 }
 
@@ -675,7 +680,12 @@ func (s *Service) Accept(ctx context.Context, in AcceptInput) (AcceptResult, err
 	}); err != nil {
 		return AcceptResult{}, err
 	}
-	s.sendMemberAdded(ctx, inv.IdentifierKind, inv.Identifier, inv.ResourceType, inv.ResourceID, inv.Relation, "", "member_added:"+inv.ID)
+	s.sendMemberAdded(ctx, memberAdded{
+		kind: inv.IdentifierKind, identifier: inv.Identifier,
+		resourceType: inv.ResourceType, resourceID: inv.ResourceID, relation: inv.Relation,
+		invitedBy: inv.InvitedBy, invitationID: inv.ID, operationID: inv.ID, metadata: inv.Metadata,
+		key: "member_added:" + inv.ID,
+	})
 	return AcceptResult{ResourceType: inv.ResourceType, ResourceID: inv.ResourceID, Relation: inv.Relation}, nil
 }
 
@@ -953,12 +963,7 @@ func (s *Service) sendInviteSent(ctx context.Context, inv invitation.Invitation,
 		Purpose:     delivery.PurposeInvitation,
 		Destination: inv.Identifier,
 		Secret:      secret,
-		Data: map[string]any{
-			"ResourceType": inv.ResourceType,
-			"ResourceID":   inv.ResourceID,
-			"Relation":     inv.Relation,
-			"Link":         inviteLink(dest, secret),
-		},
+		Data:        deliveryData(inv.ID, inv.ID, inv.ResourceType, inv.ResourceID, inv.Relation, inv.InvitedBy, inv.Metadata, inviteLink(dest, secret)),
 	})
 	if err != nil {
 		return fmt.Errorf("render invitation notification: %w", err)
@@ -980,38 +985,70 @@ func (s *Service) sendInviteSent(ctx context.Context, inv invitation.Invitation,
 	return nil
 }
 
+// memberAdded is the context sendMemberAdded renders from: the delivery address,
+// the granted tuple, and the grant's provenance. invitationID is the persisted
+// invitation row for an accepted invitation and EMPTY for a direct add (no row
+// exists); operationID is the grant's operation ID either way (the row ID for an
+// accept, the freshly minted ID for a direct add). key deduplicates the notice.
+type memberAdded struct {
+	kind, identifier                     string
+	resourceType, resourceID, relation   string
+	invitedBy, invitationID, operationID string
+	metadata                             map[string]string
+	redirectTo, key                      string
+}
+
 // sendMemberAdded renders and enqueues the you-were-added notice through the durable
 // outbox. It is best-effort — the grant has already happened, so a render/enqueue
-// failure is logged, never surfaced. key deduplicates the notice; callers pass the
-// invitation ID (Accept) or a fresh unique key (direct add).
-func (s *Service) sendMemberAdded(ctx context.Context, kind, identifier, resourceType, resourceID, relation, redirectTo, key string) {
+// failure (a host DeliveryData hook error included) is logged, never surfaced.
+// m.key deduplicates the notice; callers pass the invitation ID (Accept) or a
+// fresh unique key (direct add).
+func (s *Service) sendMemberAdded(ctx context.Context, m memberAdded) {
 	if s.deliverer == nil || s.queue == nil {
 		s.logger.Warn("member-added notification skipped: delivery outbox not wired")
 		return
 	}
-	dest := s.redirects.Resolve(redirectTo)
+	dest := s.redirects.Resolve(m.redirectTo)
 	env, err := s.deliverer.Render(ctx, delivery.Request{
-		Kind:        kind,
+		Kind:        m.kind,
 		Purpose:     delivery.PurposeMemberAdded,
-		Destination: identifier,
-		Data: map[string]any{
-			"ResourceType": resourceType,
-			"ResourceID":   resourceID,
-			"Relation":     relation,
-			"Link":         dest,
-		},
+		Destination: m.identifier,
+		Data:        deliveryData(m.invitationID, m.operationID, m.resourceType, m.resourceID, m.relation, m.invitedBy, m.metadata, dest),
 	})
 	if err != nil {
 		s.logger.Warn("member-added notification failed", "error_kind", errKind(err))
 		return
 	}
 	if _, err := s.queue.Enqueue(ctx, delivery.Command{
-		Kind:           kind,
+		Kind:           m.kind,
 		Purpose:        delivery.PurposeMemberAdded,
-		IdempotencyKey: key,
+		IdempotencyKey: m.key,
 		Envelope:       env,
 	}); err != nil {
 		s.logger.Warn("member-added notification failed", "error_kind", errKind(err))
+	}
+}
+
+// deliveryData builds the secret-free template data for an invitation or
+// member-added render — the per-purpose contract the README documents and a
+// host DeliveryData hook receives. ResourceName, ResourceKind, RelationLabel, and
+// InviterName default to empty: the pocket has no source for them, and the
+// bundled bodies render {{or .ResourceName .ResourceID}} so a hook that supplies
+// only a name is immediately useful. Metadata is a defensive copy (non-nil).
+func deliveryData(invitationID, operationID, resourceType, resourceID, relation, invitedBy string, metadata map[string]string, link string) map[string]any {
+	return map[string]any{
+		"InvitationID":  invitationID,
+		"OperationID":   operationID,
+		"ResourceType":  resourceType,
+		"ResourceID":    resourceID,
+		"ResourceName":  "",
+		"ResourceKind":  "",
+		"Relation":      relation,
+		"RelationLabel": "",
+		"InvitedBy":     invitedBy,
+		"InviterName":   "",
+		"Metadata":      invitation.CloneMetadata(metadata),
+		"Link":          link,
 	}
 }
 
