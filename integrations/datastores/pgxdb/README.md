@@ -73,6 +73,22 @@ Store conventions that ride the toolkit (set by the authentication store,
 - **UNNEST for multi-row writes.** Bulk inserts are single
   `INSERT … SELECT … FROM UNNEST(@col::type[], …)` statements (the cms
   `entry_fields`/`entry_terms` and events outbox writes), never Exec loops.
+- **A list whose order is the product's, not the caller's — `FixedOrder`.**
+  Some lists are not user-sortable: the store defines a composite order the
+  allow-list cannot express (`closing_date DESC NULLS LAST, name ASC, id ASC`;
+  a `NULLS LAST`, a second sort column, a computed key). Such a store sets
+  `ListQuery.FixedOrder` — trusted store text like `BaseSQL`, written
+  verbatim as the `ORDER BY`, with the store's own pk tiebreak included —
+  and leaves `OrderFields`/`DefaultOrder` empty (both set is
+  `sdk.ErrInvalidInput`, the same posture as an order field outside the
+  allow-list). The list is then **offset-only**: a request carrying an
+  `Order` or the cursor strategy is `sdk.ErrInvalidInput`, because no keyset
+  predicate is derivable from an arbitrary expression. Everything else about
+  the offset flow — `LIMIT n+1` for `HasMore`, `HasPrev` from the offset,
+  `WithCount` → `Total`, the folded search clause, `MapError` — is unchanged,
+  which is the point: the store stops hand-rolling `LIMIT/OFFSET` plus its own
+  `COUNT(*)` wrap to get a fixed order. The zero value keeps the allow-list
+  path byte-for-byte.
 
 ## The `Querier` surface stays Exec/Query/QueryRow — no `SendBatch`
 

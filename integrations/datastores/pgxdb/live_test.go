@@ -3,6 +3,7 @@ package pgxdb
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -342,6 +343,65 @@ func TestLive_ListBehavior(t *testing.T) {
 		eqIDs(t, idsOf(p.Items), []string{"e5", "e4"}, "stale cursor first page")
 		if p.HasPrev {
 			t.Error("stale-cursor first page HasPrev = true, want false")
+		}
+	})
+
+	t.Run("fixed_order_offset", func(t *testing.T) {
+		// A store-fixed composite order with NULLS LAST over a nullable column
+		// the allow-list path cannot express: closing_at DESC NULLS LAST, then
+		// name ASC, then the pk. e2/e4 share the latest closing_at (name breaks
+		// the tie), e5 closes earlier, e1/e3 never close and sort last by name.
+		if _, err := db.Exec(ctx, "ALTER TABLE list_scratch ADD COLUMN closing_at TIMESTAMPTZ"); err != nil {
+			t.Fatalf("add closing_at: %v", err)
+		}
+		for id, at := range map[string]time.Time{
+			"e2": base.Add(72 * time.Hour),
+			"e4": base.Add(72 * time.Hour),
+			"e5": base.Add(24 * time.Hour),
+		} {
+			if _, err := db.Exec(ctx, "UPDATE list_scratch SET closing_at = @at WHERE id = @id", jackpgx.NamedArgs{"at": at, "id": id}); err != nil {
+				t.Fatalf("close %s: %v", id, err)
+			}
+		}
+
+		fq := ListQuery[scratchRow]{
+			BaseSQL:    "SELECT id, created_at, name, n FROM list_scratch WHERE kind = @kind",
+			Args:       jackpgx.NamedArgs{"kind": "a"},
+			FixedOrder: "closing_at DESC NULLS LAST, name ASC, id ASC",
+			PK:         "id",
+			PKOf:       func(r scratchRow) string { return r.ID },
+		}
+
+		var got []string
+		for i, want := range []struct {
+			ids     []string
+			hasMore bool
+			hasPrev bool
+		}{
+			{[]string{"e2", "e4"}, true, false},
+			{[]string{"e5", "e1"}, true, true},
+			{[]string{"e3"}, false, true},
+		} {
+			p, err := List(ctx, db, fq, crud.ListRequest{Limit: 2, Offset: i * 2, Strategy: crud.StrategyOffset, WithCount: true})
+			if err != nil {
+				t.Fatalf("page %d: %v", i+1, err)
+			}
+			eqIDs(t, idsOf(p.Items), want.ids, fmt.Sprintf("fixed order page %d", i+1))
+			if p.HasMore != want.hasMore || p.HasPrev != want.hasPrev {
+				t.Errorf("page %d HasMore/HasPrev = %v/%v, want %v/%v", i+1, p.HasMore, p.HasPrev, want.hasMore, want.hasPrev)
+			}
+			if p.Total == nil || *p.Total != 5 {
+				t.Errorf("page %d Total = %v, want 5", i+1, p.Total)
+			}
+			if p.NextCursor != "" || p.PreviousCursor != "" {
+				t.Errorf("page %d emitted cursors under the offset strategy", i+1)
+			}
+			got = append(got, idsOf(p.Items)...)
+		}
+		eqIDs(t, got, []string{"e2", "e4", "e5", "e1", "e3"}, "fixed order traversal")
+
+		if _, err := List(ctx, db, fq, crud.ListRequest{Limit: 2}); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Errorf("cursor strategy under FixedOrder err = %v, want ErrInvalidInput", err)
 		}
 	})
 }

@@ -32,6 +32,18 @@ type ListQuery[T any] struct {
 	// searchable: a blank ListRequest.Search still works, and a NON-blank one is
 	// sdk.ErrInvalidInput rather than a silently unfiltered page.
 	SearchFields []crud.SearchField
+	// FixedOrder is a store-authored ORDER BY expression (without the keyword)
+	// for a list whose order is not the caller's to choose: composite columns,
+	// NULLS LAST, computed sort keys — "closing_date DESC NULLS LAST, name ASC,
+	// id ASC". It is trusted store text, like BaseSQL, never request data, and
+	// is written verbatim; the store includes its own PK tiebreak in it — List
+	// does not append one. When set, OrderFields/DefaultOrder are not consulted
+	// (OrderFields also set is a programming error reported as
+	// sdk.ErrInvalidInput), a request carrying an Order is sdk.ErrInvalidInput,
+	// and the list is offset-only — a cursor-strategy request is
+	// sdk.ErrInvalidInput, because a keyset predicate over an arbitrary
+	// expression is not derivable. The zero value keeps the OrderFields path.
+	FixedOrder   string
 	PK           string
 	Limits       crud.Limits
 	OrderValueOf func(row T, field string) any
@@ -48,14 +60,29 @@ type ListQuery[T any] struct {
 // When req.WithCount is set, Total is the full filtered row count from a
 // COUNT(*) wrap of BaseSQL. A stale cursor (order field changed) decodes to the
 // first page. Errors pass through MapError.
+//
+// A ListQuery with FixedOrder takes the offset flow only, with its ORDER BY
+// written verbatim; see the field doc for what it refuses.
 func List[T any](ctx context.Context, db Querier, q ListQuery[T], req crud.ListRequest) (crud.Page[T], error) {
 	if err := req.Validate(); err != nil {
 		return crud.Page[T]{}, err
 	}
 
-	orderCol, castLower, direction, err := q.resolveOrder(req.Order)
-	if err != nil {
-		return crud.Page[T]{}, err
+	var (
+		orderCol  string
+		castLower bool
+		direction string
+	)
+	if q.FixedOrder != "" {
+		if err := q.checkFixedOrder(req); err != nil {
+			return crud.Page[T]{}, err
+		}
+	} else {
+		var err error
+		orderCol, castLower, direction, err = q.resolveOrder(req.Order)
+		if err != nil {
+			return crud.Page[T]{}, err
+		}
 	}
 
 	// The search predicate is folded into BaseSQL BEFORE the strategy switch, so
@@ -164,7 +191,8 @@ func (q ListQuery[T]) listCursor(ctx context.Context, db Querier, req crud.ListR
 // listOffset is the LIMIT/OFFSET flow: same ORDER BY, LIMIT n+1 OFFSET off. It
 // derives HasMore from its own over-fetch and sets HasPrev from Offset; it never
 // encodes a cursor — NextCursor/PreviousCursor stay empty, and the caller does
-// the offset arithmetic (see the crud strategy matrix).
+// the offset arithmetic (see the crud strategy matrix). Under FixedOrder the
+// ORDER BY is the store's expression verbatim (orderCol/direction are unused).
 func (q ListQuery[T]) listOffset(ctx context.Context, db Querier, req crud.ListRequest, orderCol string, castLower bool, direction string) (crud.Page[T], error) {
 	limit := req.NormalizedLimit(q.Limits)
 
@@ -172,7 +200,9 @@ func (q ListQuery[T]) listOffset(ctx context.Context, db Querier, req crud.ListR
 	buf.WriteString(q.BaseSQL)
 	args := cloneArgs(q.Args)
 
-	if err := AddOrderByClause(&buf, orderCol, q.PK, direction, false, castLower); err != nil {
+	if q.FixedOrder != "" {
+		buf.WriteString(" ORDER BY " + q.FixedOrder)
+	} else if err := AddOrderByClause(&buf, orderCol, q.PK, direction, false, castLower); err != nil {
 		return crud.Page[T]{}, err
 	}
 	AddLimitClause(&buf, args, limit+1)
@@ -205,6 +235,26 @@ func (q ListQuery[T]) listOffset(ctx context.Context, db Querier, req crud.ListR
 // collect runs sql with args and scans every row into T via RowToStructByName.
 func (q ListQuery[T]) collect(ctx context.Context, db Querier, sql string, args pgx.NamedArgs) ([]T, error) {
 	return Collect[T](ctx, db, sql, args)
+}
+
+// checkFixedOrder enforces the FixedOrder rules before any SQL is built: the
+// query must not also carry OrderFields (the two are mutually exclusive — a
+// programming error, reported with the same posture as an order field absent
+// from the allow-list), the request must not choose an Order, and the resolved
+// strategy must be offset — a keyset predicate cannot be derived from an
+// arbitrary ORDER BY expression, so the cursor flow is refused outright. Every
+// refusal wraps sdk.ErrInvalidInput.
+func (q ListQuery[T]) checkFixedOrder(req crud.ListRequest) error {
+	if len(q.OrderFields) > 0 {
+		return fmt.Errorf("FixedOrder and OrderFields are mutually exclusive: %w", sdk.ErrInvalidInput)
+	}
+	if req.Order.Field != "" {
+		return fmt.Errorf("order field %q: the list order is fixed by the store: %w", req.Order.Field, sdk.ErrInvalidInput)
+	}
+	if req.ResolvedStrategy() != crud.StrategyOffset {
+		return fmt.Errorf("cursor strategy: a FixedOrder list is offset-only (no keyset predicate over a fixed ORDER BY expression): %w", sdk.ErrInvalidInput)
+	}
+	return nil
 }
 
 // resolveOrder maps the request Order (or DefaultOrder when zero) to a vetted
