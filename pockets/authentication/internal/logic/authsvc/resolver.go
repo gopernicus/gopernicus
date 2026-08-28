@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
 	"github.com/gopernicus/gopernicus/sdk"
@@ -16,19 +15,24 @@ import (
 var _ identity.Resolver = (*Service)(nil)
 
 // Resolve turns a Principal into its display and contact Info (the sdk/foundation/identity
-// Resolver port). It fails CLOSED per the port contract: an unknown principal
-// type, a missing record, or an unwired backing subsystem returns an error
-// satisfying sdk.ErrNotFound (checked with errors.Is), and it never fabricates
-// an Info or panics.
+// Resolver port). It is PRINCIPAL-EXACT: the record is looked up by the
+// principal's stored ID and only that record's stored display name is
+// projected — a blank display name is projected blank, never synthesized from
+// an email local part, another identifier, or the principal ID. Matching an
+// identifier value belongs to a pre-principal admission/linking flow
+// (invitation acceptance, OAuth link), never here. It fails CLOSED per the port
+// contract: an unknown principal type, a missing record, or an unwired backing
+// subsystem returns an error satisfying sdk.ErrNotFound (checked with
+// errors.Is), and it never fabricates an Info or panics.
 //
-//   - user → the User's DisplayName, or the primary email local part when the
-//     display name is empty; Addresses carries every active VERIFIED identifier
-//     (design §7), primary-first, so a Resolver consumer routes to any proven
-//     address, not just the legacy email column. A nil Users repository or a
+//   - user → the User's stored DisplayName, exactly as stored (blank stays
+//     blank); Addresses carries every active VERIFIED identifier (design §7),
+//     primary-first, so a Resolver consumer routes to any proven address, not
+//     just the legacy email column. A nil Users repository or a missing row →
+//     the not-found class.
+//   - service_account → the ServiceAccount's stored Name, exactly as stored. A
+//     nil ServiceAccounts repository (the machine subsystem is off) or a
 //     missing row → the not-found class.
-//   - service_account → the ServiceAccount's Name. A nil ServiceAccounts
-//     repository (the machine subsystem is off) or a missing row → the not-found
-//     class.
 //   - any other type → the not-found class.
 func (s *Service) Resolve(ctx context.Context, p identity.Principal) (identity.Info, error) {
 	switch p.Type {
@@ -44,13 +48,9 @@ func (s *Service) Resolve(ctx context.Context, p identity.Principal) (identity.I
 		if err != nil {
 			return identity.Info{}, err
 		}
-		display := u.DisplayName
-		if display == "" {
-			display = firstEmailLocalPart(addresses)
-		}
 		return identity.Info{
 			Principal:   p,
-			DisplayName: display,
+			DisplayName: u.DisplayName,
 			Addresses:   addresses,
 		}, nil
 	case identity.ServiceAccount:
@@ -110,24 +110,4 @@ func (s *Service) projectAddresses(ctx context.Context, userID string) ([]identi
 		addresses = append(addresses, identity.Address{Kind: string(it.Kind), Value: it.NormalizedValue})
 	}
 	return addresses, nil
-}
-
-// firstEmailLocalPart returns the local part of the first email address in a
-// primary-first projection — the display fallback for a user with no name.
-func firstEmailLocalPart(addresses []identity.Address) string {
-	for _, a := range addresses {
-		if a.Kind == identity.KindEmail {
-			return emailLocalPart(a.Value)
-		}
-	}
-	return ""
-}
-
-// emailLocalPart returns the part of email before the first '@', or the whole
-// string when there is none.
-func emailLocalPart(email string) string {
-	if i := strings.IndexByte(email, '@'); i >= 0 {
-		return email[:i]
-	}
-	return email
 }

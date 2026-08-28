@@ -2243,12 +2243,15 @@ func (s *Service) CurrentPrincipal(ctx context.Context) (Principal, bool) {
 var _ identity.Resolver = (*Service)(nil)
 
 // Resolve implements identity.Resolver: it turns a Principal into its display and
-// contact Info. A user principal resolves to its DisplayName (else the primary
-// email local part) carrying every active verified identifier as an Address,
-// primary-first (design §7); a service-account principal resolves to its Name. An
-// unknown principal type, a missing record, or an off machine subsystem (nil
-// ServiceAccounts) returns an error satisfying sdk.ErrNotFound — fail-closed,
-// nil-guarded, never a panic.
+// contact Info. It is principal-exact: a user principal is looked up by its
+// stored ID and resolves to its stored DisplayName exactly (a blank name stays
+// blank — never synthesized from an email local part, another identifier, or
+// the ID), carrying every active verified identifier as an Address,
+// primary-first (design §7); a service-account principal resolves to its stored
+// Name. Identifier matching (an email value → a user) is an admission/linking
+// flow, never Resolve. An unknown principal type, a missing record, or an off
+// machine subsystem (nil ServiceAccounts) returns an error satisfying
+// sdk.ErrNotFound — fail-closed, nil-guarded, never a panic.
 func (s *Service) Resolve(ctx context.Context, p identity.Principal) (identity.Info, error) {
 	return s.svc.Resolve(ctx, p)
 }

@@ -48,9 +48,13 @@ func TestResolveUserWithDisplayName(t *testing.T) {
 	}
 }
 
-// TestResolveUserDisplayNameFallsBackToEmailLocalPart: a user with no display
-// name resolves to the primary email local part.
-func TestResolveUserDisplayNameFallsBackToEmailLocalPart(t *testing.T) {
+// TestResolveUserBlankDisplayNameStaysBlank: a registered user with no display
+// name resolves with DisplayName "" and its verified email still projected —
+// the Resolver is principal-exact and never synthesizes a name from an email
+// local part, another identifier, or the principal ID. A consumer that needs a
+// name decides what a blank one means (a host may refuse); it is never guessed
+// here.
+func TestResolveUserBlankDisplayNameStaysBlank(t *testing.T) {
 	svc, users, idents := resolverFixture()
 	users.byID["u2"] = user.User{ID: "u2"}
 	idents.byID["i2"] = identifier.Identifier{
@@ -62,8 +66,32 @@ func TestResolveUserDisplayNameFallsBackToEmailLocalPart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if info.DisplayName != "bob" {
-		t.Errorf("DisplayName = %q, want bob (email local part)", info.DisplayName)
+	if info.DisplayName != "" {
+		t.Errorf("DisplayName = %q, want blank (never synthesized from bob@example.com or u2)", info.DisplayName)
+	}
+	if len(info.Addresses) != 1 || info.Addresses[0].Value != "bob@example.com" {
+		t.Errorf("Addresses = %+v, want the verified email projected exactly", info.Addresses)
+	}
+}
+
+// TestResolveUserIsPrincipalExact: the lookup is by the principal's stored ID
+// only — a principal whose ID happens to equal another user's email address (or
+// any other identifier value) does not resolve to that user. Identifier
+// matching is an admission/linking concern, not principal resolution.
+func TestResolveUserIsPrincipalExact(t *testing.T) {
+	svc, users, idents := resolverFixture()
+	users.byID["u1"] = user.User{ID: "u1", DisplayName: "Alice"}
+	idents.byID["i1"] = identifier.Identifier{
+		ID: "i1", UserID: "u1", Kind: identifier.KindEmail, NormalizedValue: "alice@example.com",
+		VerifiedAt: time.Now(), LoginEnabled: true, IsPrimary: true,
+	}
+
+	info, err := svc.Resolve(context.Background(), identity.Principal{Type: identity.User, ID: "alice@example.com"})
+	if !errors.Is(err, sdk.ErrNotFound) {
+		t.Errorf("Resolve by an email value: err=%v, want ErrNotFound (no identifier matching in Resolve)", err)
+	}
+	if info.DisplayName != "" || len(info.Addresses) != 0 {
+		t.Errorf("Resolve by an email value fabricated an Info: %+v", info)
 	}
 }
 

@@ -223,6 +223,18 @@ keeps `sdk v0.6.0`. Same public contract, safety rules, and tests on both;
 adapted commits, not one cherry-pick (the module/paths were renamed between
 them). Read the upgrade note below.
 
+**2026-08-28: `pockets/authentication/v0.8.2` (next tag on main, branch
+`identity-resolver-principal-exact`) — `identity.Resolver` is principal-exact**
+(plan of record `plans/identity-resolver-principal-exact.md`; originating host
+gps-360-go plans/32). `Resolve` no longer synthesizes a user's display name
+from the primary email local part when the stored `DisplayName` is blank — a
+blank name is projected blank, exactly as stored; the port doc's "never
+fabricates an Info" now holds for every field. Service accounts unchanged.
+Patch by plan ruling: no port change, no schema, no Config, no pin moves. One
+observable change for a host that rendered `Info.DisplayName` unguarded: a
+name-less user now shows "" where it showed `bob` — choose the fallback at the
+render site. See the upgrade note below.
+
 **2026-08-28: `integrations/datastores/pgxdb/v0.6.1` — TAGGED @ `098241f`
 (#16 squash), a patch by owner ruling, as with `ProbeTable`** —
 `ListQuery.FixedOrder`, a store-fixed composite `ORDER BY` for the offset
@@ -522,6 +534,20 @@ Proof: hermetic SQL-capture tests (`TestList_FixedOrder*`) and the live
 `TestLive_ListBehavior/fixed_order_offset` against a throwaway Postgres 17 —
 `NULLS LAST` + name tiebreak traversal over three offset pages with
 `HasMore`/`HasPrev`/`Total` asserted and the cursor strategy refused.
+
+### pockets/authentication — v0.8.2 (next tag on main): identity.Resolver is principal-exact (patch)
+
+Plan of record `plans/identity-resolver-principal-exact.md`. `Resolve` for a
+`user` principal projects the stored `DisplayName` exactly — blank stays blank;
+the email-local-part fallback and its helpers are gone. Identifier matching (an
+email value → a user) never enters `Resolve` (`TestResolveUserIsPrincipalExact`).
+No symbol added or removed from the public surface; no schema; no pin moves.
+
+**Upgrade note.** If your host renders `Info.DisplayName` without a guard, a
+user with a blank stored name now renders "" instead of the email local part.
+Decide at the render site: refuse (a host stamping the name into a durable
+record should 403), show an address, or show nothing. Do not re-add a guess
+in a shared Resolver decorator.
 
 ### pockets/authentication — v0.8.1 + features/authentication — v0.4.3 — tagged 2026-08-28 (maintenance line off v0.4.2): host-owned mail data, subjects, and SMS bodies (patch; additive)
 
