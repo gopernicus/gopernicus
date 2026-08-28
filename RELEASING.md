@@ -205,6 +205,24 @@ instead of `null` (visible on turso-backed hosts), and every scanned
 `timestamptz` is UTC-located while zone-dependent SQL on a zone-less DSN now
 evaluates in UTC.
 
+**2026-08-28: `features/authentication/v0.4.3` (maintenance line off the
+immutable `v0.4.2` tag) + `pockets/authentication/v0.8.1` (next tag on main) —
+host-owned mail DATA and SUBJECTS, not only bodies** (plan of record
+`plans/auth-mail-host-data-and-subjects.md`; consumer ruling 2026-08-28,
+originating host coordination-hub, pinned to `features/authentication v0.4.2`
++ `sdk v0.4.1`). `Config.DeliveryData` (a per-render data hook with reserved
+`Secret`/`Link`/`Subject`), `Config.EmailSubjects` + `Config.SMSBodies`
+(per-purpose overrides, missing-key errors on), the ten `Purpose*` constants
+exported, and enriched invitation/member-added data (`ResourceName`,
+`RelationLabel`, `InviterName`, `InvitedBy`, `Metadata`, `InvitationID`,
+`OperationID`, …). Nil hook + empty maps render byte-for-byte today's output
+(pinned by golden). **Patch on both lines by plan ruling** — additive only, no
+schema, no store retags, **no pin moves**: the `v0.4.3` maintenance commit keeps
+`sdk v0.4.0` in `go.mod` (the hub's `sdk v0.4.1` pin stays), and `v0.8.1`
+keeps `sdk v0.6.0`. Same public contract, safety rules, and tests on both;
+adapted commits, not one cherry-pick (the module/paths were renamed between
+them). Read the upgrade note below.
+
 ## Tagging scheme
 
 Nested Go modules in a single repo are tagged with the module's directory as a
@@ -460,6 +478,55 @@ precedence with the libpq env cleared) and `TestLive_ScanUTC` /
 `TZ=America/Los_Angeles` — every scan `+0000 UTC`, the `+05:00` literal equal
 to `2025-12-31T19:00:00Z`, `SHOW TimeZone` = `UTC` by default and
 `Europe/Oslo` when the DSN says so.
+
+### pockets/authentication — v0.8.1 (next tag, 2026-08-28) + features/authentication — v0.4.3 (maintenance line off v0.4.2): host-owned mail data, subjects, and SMS bodies (patch; additive)
+
+Plan of record `plans/auth-mail-host-data-and-subjects.md`. A **patch on both
+lines** by plan ruling: every symbol is additive, the zero value of every new
+`Config` field renders today's output byte-for-byte (pinned by golden test
+against the pre-release render), no schema, no store retags, and **no pin
+moves** — the `v0.4.3` maintenance commit is the `v0.4.2` tree plus this change
+(still `sdk v0.4.0` in its `go.mod`, so a host on `sdk v0.4.1` +
+`stores/pgx v0.3.0` upgrades exactly one requirement), and `v0.8.1` stays on
+`sdk v0.6.0`.
+
+- **`Config.DeliveryData DeliveryDataHook`** — `func(ctx, purpose, data)
+  (additions, error)`, run once per render for every purpose on both rails,
+  before the subject/body/SMS templates. Input is a fresh, secret-free copy
+  (nested `Metadata` copied); the return merges before `Secret`/`Subject` are
+  inserted. **Reserved:** returning `Secret`, `Link`, or `Subject` is
+  `ErrDeliveryDataReserved` (wraps `sdk.ErrInvalidInput`) and no envelope is
+  built. Error surfacing is per flow (README "Mail content"): invitation
+  create/resend return it (create with the already-persisted record), the
+  member-added notice logs it (grant already committed), opaque starts follow
+  the worker's bounded retry → dead-letter and never report it to the caller.
+- **`Config.EmailSubjects` / `Config.SMSBodies map[string]string`** — purpose →
+  `text/template` source, parsed at construction with `missingkey=error`.
+  `ErrDeliveryOverrideInvalid` at `NewService`/`Register` for an unknown
+  purpose, empty source, parse failure, or an SMS entry for an email-only
+  purpose. `ErrDeliverySubjectInvalid` at render for an empty or CR/LF-carrying
+  subject, before anything is queued.
+- **`Purpose*` constants exported** from the public package (ten, aliasing the
+  internal delivery set) — key the maps and switch in the hook without string
+  literals.
+- **Invitation / member-added data enriched** — `InvitationID`, `OperationID`,
+  `ResourceType`, `ResourceID`, `ResourceName` (`""`), `ResourceKind` (`""`),
+  `Relation`, `RelationLabel` (`""`), `InvitedBy`, `InviterName` (`""`),
+  `Metadata` (non-nil copy), `Link`. Direct add: `InvitationID` empty,
+  `OperationID` = the minted grant operation ID; accept/pending: both = the row
+  ID. The bundled bodies and SMS bodies now render
+  `{{or .ResourceName .ResourceID}}` — identical output while the name is
+  empty, so a hook that sets only `ResourceName` is immediately useful.
+- **One internal render-order change, no observable output change:** the
+  subject template now executes on the email rail only (an SMS render never
+  ran one to any effect), and a caller-supplied `Data["Secret"]` no longer
+  shadows `Request.Secret` (no caller ever did).
+
+**Adopting (coordination-hub):** bump `features/authentication v0.4.2 →
+v0.4.3` only; set `cfg.DeliveryData` to look up the campaign name and return
+`{"ResourceName": name}` for `auth.PurposeInvitation` / `auth.PurposeMemberAdded`;
+optionally `cfg.EmailSubjects[auth.PurposeInvitation]`. No template override is
+needed for the name to appear.
 
 ### pockets/authentication — v0.8.0 (next tag, 2026-08-27): list routes answer the parser's sentence; pin → `sdk v0.6.0` (minor)
 
