@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"text/template"
 
@@ -88,7 +89,47 @@ var (
 	// the requested kind (e.g. an email-only purpose rendered for SMS), and by
 	// Deliver when no transport is wired for a non-email kind (deny-by-absence).
 	ErrKindUnsupported = fmt.Errorf("delivery: kind not supported: %w", sdk.ErrInvalidInput)
+	// ErrOverrideInvalid is returned by NewRouter when a Deps.Subjects or
+	// Deps.SMSBodies entry cannot be honored: an unknown purpose key, an
+	// empty/whitespace-only source, an SMS override for a purpose whose core spec has
+	// no SMS rail (an override customizes an existing rail; it never enables a new
+	// kind), or a source that fails to parse. The wrapped message names which.
+	ErrOverrideInvalid = fmt.Errorf("delivery: invalid subject/sms override: %w", sdk.ErrInvalidInput)
+	// ErrDataHookReserved is returned by Render when the host DataHook returns a
+	// framework-owned reserved field (Secret, Link, or Subject). The render aborts
+	// before any envelope is built, so no host-supplied value can ever replace the
+	// rendered credential, the accept link, or the subject.
+	ErrDataHookReserved = fmt.Errorf("delivery: data hook returned a reserved field: %w", sdk.ErrInvalidInput)
+	// ErrSubjectInvalid is returned by Render when the rendered email subject is
+	// empty (after trimming whitespace) or contains a CR or LF — a header-injection
+	// hazard. It is checked before an envelope is built.
+	ErrSubjectInvalid = fmt.Errorf("delivery: rendered email subject is empty or contains a line break: %w", sdk.ErrInvalidInput)
 )
+
+// Reserved template data fields. They are framework-owned: the renderer inserts
+// Secret and Subject only after a DataHook succeeds, Link is caller-built, and a
+// DataHook may neither add nor replace any of them (ErrDataHookReserved).
+const (
+	fieldSecret  = "Secret"
+	fieldLink    = "Link"
+	fieldSubject = "Subject"
+)
+
+// DataHook enriches the caller-built, secret-free data for one delivery render.
+// purpose is the delivery purpose (Purpose*). data is a fresh defensive copy of
+// the caller's fields (a nested map[string]string such as the invitation
+// Metadata is copied too); it never contains Secret or Subject, and may contain
+// Link for read-only context. The returned map holds additions and replacements
+// that are merged BEFORE Secret and Subject are inserted; Secret, Link, and
+// Subject are reserved and rejected if returned (ErrDataHookReserved). A nil
+// return adds nothing.
+//
+// The hook may be called concurrently and must not retain or mutate its input
+// after returning. An error aborts the render before any envelope is built; how
+// that surfaces depends on the caller that renders — see the auth package's
+// Config.DeliveryData godoc for the synchronous, best-effort, and worker-side
+// cases.
+type DataHook func(ctx context.Context, purpose string, data map[string]any) (map[string]any, error)
 
 // DeliveryError tags a transport failure with the delivery kind so a host's
 // worker diagnostics can classify the failure by kind without parsing strings. It
@@ -132,8 +173,8 @@ var specs = map[string]spec{
 	PurposeSensitiveCode:            {template: "sensitive_code", subject: "Your verification code", sms: "Your verification code is {{.Secret}}", layout: email.LayoutTransactional},
 	PurposeIdentifierChangeProof:    {template: "identifier_change_proof", subject: "Confirm your {{.IdentifierKind}}", sms: "Your confirmation code is {{.Secret}}", layout: email.LayoutTransactional},
 	PurposeIdentifierChangeNotice:   {template: "identifier_change_notice", subject: "Your {{.IdentifierKind}} was changed", sms: "The {{.IdentifierKind}} on your account was changed. If this was not you, secure your account.", layout: email.LayoutTransactional},
-	PurposeInvitation:               {template: "invitation", subject: "You have an invitation", sms: "You were invited to {{.ResourceType}} {{.ResourceID}} as {{.Relation}}: {{.Link}}", layout: email.LayoutTransactional},
-	PurposeMemberAdded:              {template: "member_added", subject: "You were added", sms: "You were added to {{.ResourceType}} {{.ResourceID}} as {{.Relation}}: {{.Link}}", layout: email.LayoutTransactional},
+	PurposeInvitation:               {template: "invitation", subject: "You have an invitation", sms: "You were invited to {{.ResourceType}} {{or .ResourceName .ResourceID}} as {{.Relation}}: {{.Link}}", layout: email.LayoutTransactional},
+	PurposeMemberAdded:              {template: "member_added", subject: "You were added", sms: "You were added to {{.ResourceType}} {{or .ResourceName .ResourceID}} as {{.Relation}}: {{.Link}}", layout: email.LayoutTransactional},
 }
 
 // Request is a single delivery instruction handed to Render. Kind is the address
@@ -171,7 +212,22 @@ type Deps struct {
 	// Branding fills the shared email layouts' {{.Brand.*}} values; nil keeps
 	// the layouts' own fallback ("Your Company").
 	Branding *email.Branding
-	Logger   *slog.Logger
+	// DataHook is the host's per-render data enrichment (nil → the caller-built
+	// data renders as-is). It runs once per Render, for every purpose and kind,
+	// before the subject, body, and SMS templates execute.
+	DataHook DataHook
+	// Subjects overrides the in-core email subject template per purpose (key =
+	// Purpose*, value = text/template source). Parsed at construction with
+	// missing-key errors enabled, so a data-contract mistake fails the render
+	// rather than shipping "<no value>". Unknown purpose keys and empty sources
+	// are ErrOverrideInvalid.
+	Subjects map[string]string
+	// SMSBodies overrides the in-core body-only SMS template per purpose, with the
+	// same parsing rules as Subjects. A purpose whose core spec has no SMS rail
+	// cannot be given one here (ErrOverrideInvalid): an override customizes an
+	// existing rail, it never enables a new kind.
+	SMSBodies map[string]string
+	Logger    *slog.Logger
 }
 
 // TemplateOverride registers a host's email content templates at email.LayerApp so
@@ -211,8 +267,13 @@ type Router struct {
 	mailer    email.Sender
 	mailFrom  string
 	notifiers map[string]notify.Notifier
-	subjects  *template.Template
-	smsBodies *template.Template
+	// subjects and smsBodies hold one parsed template per purpose — the host
+	// override when Deps supplied one, else the in-core spec. Each is a standalone
+	// template so an override's missingkey=error option never leaks onto the core
+	// set, whose rendered output stays byte-for-byte what it was.
+	subjects  map[string]*template.Template
+	smsBodies map[string]*template.Template
+	dataHook  DataHook
 	logger    *slog.Logger
 }
 
@@ -247,17 +308,38 @@ func NewRouter(d Deps) (*Router, error) {
 		return nil, fmt.Errorf("delivery: build emailer: %w", err)
 	}
 
-	subjects := template.New("subjects")
-	smsBodies := template.New("sms")
+	subjects := make(map[string]*template.Template, len(specs))
+	smsBodies := make(map[string]*template.Template, len(specs))
 	for purpose, sp := range specs {
-		if _, err := subjects.New("subject_" + purpose).Parse(sp.subject); err != nil {
+		t, err := template.New("subject_" + purpose).Parse(sp.subject)
+		if err != nil {
 			return nil, fmt.Errorf("delivery: parse subject template %q: %w", purpose, err)
 		}
+		subjects[purpose] = t
 		if sp.sms != "" {
-			if _, err := smsBodies.New("sms_" + purpose).Parse(sp.sms); err != nil {
+			t, err := template.New("sms_" + purpose).Parse(sp.sms)
+			if err != nil {
 				return nil, fmt.Errorf("delivery: parse sms template %q: %w", purpose, err)
 			}
+			smsBodies[purpose] = t
 		}
+	}
+	for purpose, src := range d.Subjects {
+		t, err := parseOverride("subject", purpose, src)
+		if err != nil {
+			return nil, err
+		}
+		subjects[purpose] = t
+	}
+	for purpose, src := range d.SMSBodies {
+		if sp, ok := specs[purpose]; ok && sp.sms == "" {
+			return nil, fmt.Errorf("%w: sms override for %q, an email-only purpose", ErrOverrideInvalid, purpose)
+		}
+		t, err := parseOverride("sms", purpose, src)
+		if err != nil {
+			return nil, err
+		}
+		smsBodies[purpose] = t
 	}
 
 	return &Router{
@@ -267,8 +349,28 @@ func NewRouter(d Deps) (*Router, error) {
 		notifiers: d.Notifiers,
 		subjects:  subjects,
 		smsBodies: smsBodies,
+		dataHook:  d.DataHook,
 		logger:    logger,
 	}, nil
+}
+
+// parseOverride validates and parses one host subject/SMS override source for
+// purpose: the purpose must be a known delivery purpose, the source must not be
+// empty or whitespace-only, and it must parse. Missing-key errors are enabled so
+// a data-contract mistake fails the render loudly instead of shipping "<no
+// value>". Every rejection is ErrOverrideInvalid with a message naming the cause.
+func parseOverride(rail, purpose, src string) (*template.Template, error) {
+	if _, ok := specs[purpose]; !ok {
+		return nil, fmt.Errorf("%w: %s override for unknown purpose %q", ErrOverrideInvalid, rail, purpose)
+	}
+	if strings.TrimSpace(src) == "" {
+		return nil, fmt.Errorf("%w: %s override for %q is empty", ErrOverrideInvalid, rail, purpose)
+	}
+	t, err := template.New(rail + "_" + purpose).Option("missingkey=error").Parse(src)
+	if err != nil {
+		return nil, fmt.Errorf("%w: parse %s override for %q: %v", ErrOverrideInvalid, rail, purpose, err)
+	}
+	return t, nil
 }
 
 // Render renders req into the plaintext Envelope a delivery job seals into its
@@ -286,17 +388,34 @@ func (r *Router) Render(ctx context.Context, req Request) (Envelope, error) {
 		return Envelope{}, fmt.Errorf("%w: %q", ErrUnknownPurpose, req.Purpose)
 	}
 
-	data := make(map[string]any, len(req.Data)+1)
+	// The working map starts as the caller's fields minus the reserved Secret and
+	// Subject: those are framework-owned and inserted below, AFTER the host hook,
+	// so the rendered credential is always the one the sealed Envelope carries.
+	data := make(map[string]any, len(req.Data)+2)
 	for k, v := range req.Data {
+		if k == fieldSecret || k == fieldSubject {
+			continue
+		}
 		data[k] = v
 	}
-	if _, exists := data["Secret"]; !exists && req.Secret != "" {
-		data["Secret"] = req.Secret
+	if r.dataHook != nil {
+		// The hook sees its own defensive copy (nested string maps included) so a
+		// mutation of the input can neither reach this render nor a concurrent one;
+		// only the RETURNED additions/replacements merge, and Link survives because
+		// the hook can only ever return a non-reserved field.
+		extra, err := r.dataHook(ctx, req.Purpose, cloneData(data))
+		if err != nil {
+			return Envelope{}, fmt.Errorf("delivery: data hook %q: %w", req.Purpose, err)
+		}
+		for k, v := range extra {
+			if k == fieldSecret || k == fieldLink || k == fieldSubject {
+				return Envelope{}, fmt.Errorf("%w: %q for purpose %q", ErrDataHookReserved, k, req.Purpose)
+			}
+			data[k] = v
+		}
 	}
-
-	subject, err := r.renderNamed(r.subjects, "subject_"+req.Purpose, data)
-	if err != nil {
-		return Envelope{}, fmt.Errorf("delivery: render subject %q: %w", req.Purpose, err)
+	if req.Secret != "" {
+		data[fieldSecret] = req.Secret
 	}
 
 	env := Envelope{
@@ -306,7 +425,14 @@ func (r *Router) Render(ctx context.Context, req Request) (Envelope, error) {
 	}
 
 	if req.Kind == identity.KindEmail {
-		data["Subject"] = subject
+		subject, err := renderTemplate(r.subjects[req.Purpose], data)
+		if err != nil {
+			return Envelope{}, fmt.Errorf("delivery: render subject %q: %w", req.Purpose, err)
+		}
+		if strings.TrimSpace(subject) == "" || strings.ContainsAny(subject, "\r\n") {
+			return Envelope{}, fmt.Errorf("%w: purpose %q", ErrSubjectInvalid, req.Purpose)
+		}
+		data[fieldSubject] = subject
 		html, text, err := r.emailer.Render(namespace+":"+sp.template, data, email.WithLayout(sp.layout))
 		if err != nil {
 			return Envelope{}, fmt.Errorf("delivery: render email %q: %w", req.Purpose, err)
@@ -319,15 +445,30 @@ func (r *Router) Render(ctx context.Context, req Request) (Envelope, error) {
 
 	// Non-email kinds ride the body-only rail (design §6.3): no HTML layout, and no
 	// subject — an SMS has none, and the Envelope leaves Subject empty for it.
-	if sp.sms == "" {
+	smsTmpl, ok := r.smsBodies[req.Purpose]
+	if !ok {
 		return Envelope{}, fmt.Errorf("%w: purpose %q has no %s template", ErrKindUnsupported, req.Purpose, req.Kind)
 	}
-	body, err := r.renderNamed(r.smsBodies, "sms_"+req.Purpose, data)
+	body, err := renderTemplate(smsTmpl, data)
 	if err != nil {
 		return Envelope{}, fmt.Errorf("delivery: render sms %q: %w", req.Purpose, err)
 	}
 	env.Body = body
 	return env, nil
+}
+
+// cloneData is the defensive copy handed to the DataHook: a fresh top-level map,
+// with any nested map[string]string (the invitation Metadata) copied as well so
+// the hook cannot reach the caller's or this render's state through it.
+func cloneData(data map[string]any) map[string]any {
+	out := make(map[string]any, len(data))
+	for k, v := range data {
+		if m, ok := v.(map[string]string); ok {
+			v = maps.Clone(m)
+		}
+		out[k] = v
+	}
+	return out
 }
 
 // Supports reports whether a transport is wired for kind (design §6.3,
@@ -389,10 +530,10 @@ func (r *Router) notify(ctx context.Context, n notify.Notifier, kind string, env
 	return nil
 }
 
-// renderNamed executes one named subtemplate of root against data.
-func (r *Router) renderNamed(root *template.Template, name string, data map[string]any) (string, error) {
+// renderTemplate executes one parsed subject/SMS template against data.
+func renderTemplate(t *template.Template, data map[string]any) (string, error) {
 	var buf strings.Builder
-	if err := root.ExecuteTemplate(&buf, name, data); err != nil {
+	if err := t.Execute(&buf, data); err != nil {
 		return "", err
 	}
 	return buf.String(), nil

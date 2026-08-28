@@ -718,6 +718,9 @@ default, so a host can never inherit the development posture; unknown →
 | `EmailContentTemplates` | empty → the bundled `LayerCore` email bodies render unchanged. Each entry overrides a bundled template at `email.LayerApp` (Namespace must be `EmailContentNamespace`). Changes email BODIES only — a **distinct** override system from `Views`. |
 | `EmailLayouts` | empty → the sdk's bundled email layouts render unchanged. Each entry registers a host layout at `email.LayerApp` — the highest layer wins, so it resolves ahead of the sdk default. Every delivery purpose renders with `email.LayoutTransactional`, so ONE entry shipping `layouts/transactional.html` (+ optional `.txt`) re-frames ALL auth mail: `EmailLayouts: []auth.EmailLayoutOverride{{FS: layoutsFS}}`. `FS` is walked from `Dir` (empty → `"layouts"`); a file's base name is the layout type it replaces, and the file names itself with `{{define "layout:<name>"}}` (`.text` for the `.txt` half) like the sdk's bundled layouts. Changes the email FRAME only — bodies stay with `EmailContentTemplates`, brand values with `EmailBranding`. |
 | `EmailBranding` (*email.Branding) | nil → the sdk's unset fallback (`Your Company`, no logo, no tagline, no address). Fills the bundled layout frame's `{{.Brand.*}}` values without touching bodies or routes. All auth mail renders with `email.LayoutTransactional`, which renders **`LogoURL`, `Name`, `Tagline`, and `Address`** — a non-empty `LogoURL` now emits an `<img>` above the brand name, so a logo works **without replacing the whole layout** (fixed in `sdk v0.3.x`; previously the transactional layout silently dropped it). `Name`/`Tagline` stay visible alongside the image because mail clients block external images by default, and the `alt` text is `Name` (falling back to `Your Company`). Use an absolute, publicly fetchable **HTTPS** URL: the sdk renderer never fetches, resolves, or validates it, and `html/template` is the escaping boundary. An `EmailLayouts` override at `LayerApp` still wins — a host replacing `transactional.html` owns its own logo markup. |
+| `DeliveryData` (DeliveryDataHook) | nil → the feature-built template data renders as-is (today's output, byte-for-byte). Wired → runs once per render for every purpose and both rails, receiving the public `Purpose*` and a fresh, secret-free copy of the data, returning additions/replacements (a resource NAME, a relation label, an inviter name). `Secret`, `Link`, `Subject` are reserved — returning one is `ErrDeliveryDataReserved`. See [Mail content](#mail-content--host-owned-data-subjects-and-sms-bodies). |
+| `EmailSubjects` (map purpose → template) | empty → the bundled subjects. Each entry replaces the email SUBJECT for one `Purpose*`, rendered against the same (hook-enriched) data as the body with missing-key errors on. Unknown purpose / empty source / parse failure → `ErrDeliveryOverrideInvalid` at construction; an empty or CR/LF-carrying rendered subject → `ErrDeliverySubjectInvalid` at render, before anything is queued. |
+| `SMSBodies` (map purpose → template) | empty → the bundled SMS bodies. Same rules as `EmailSubjects` for the body-only rail; an entry for an email-only purpose (registration verification, password reset, OAuth pending link) is `ErrDeliveryOverrideInvalid` — an override customizes an existing rail, it never enables a new kind. |
 | `RequireVerifiedEmail` | false. true → login AND `/auth/token` refuse an unverified user with 403 (**requires a WORKING Mailer**, else total login lockout). |
 | `RateLimiter` | `ratelimiter.NewMemory()` — an in-process limiter (not "unlimited"). **Production rejects a per-process limiter** (`ErrNonDurableRateLimiter`): a multi-instance host needs a shared/durable one. |
 | `SessionCookie` (CookieConfig) | zero value usable: name `session`, path `/`, browser-session cookie backed by a 7-day server session. `Secure` is a host deployment choice (true behind TLS). |
@@ -783,6 +786,133 @@ outstanding password/reset grants and challenges — so a completed reset
 **rejects every prior session** and a live reset cannot restore a removed
 password. The shared password policy (length + optional breach check) applies
 identically at register/set/change/reset.
+
+## Mail content — host-owned data, subjects, and SMS bodies
+
+`EmailContentTemplates` and `EmailLayouts` replace the **markup** of every
+delivery purpose, but the **data** those templates render is built by the
+feature's own callers — and the feature has no source for a resource's name, a
+relation's label, or an inviter's display name. Without a data seam a host can
+restyle "You were invited to project p1" but never say *which* project. Three
+`Config` seams close that gap. All three are validated at `NewService`/`Register`
+and all default off: nil hook + empty maps render **today's output
+byte-for-byte** (pinned by test against pre-release goldens).
+
+- **`Config.DeliveryData`** (`DeliveryDataHook`) — per-render data enrichment.
+- **`Config.EmailSubjects`** — per-purpose email subject overrides.
+- **`Config.SMSBodies`** — per-purpose SMS body overrides.
+
+Purposes are exported constants, so nothing is keyed by a string literal:
+`PurposeRegistrationVerification`, `PurposePasswordReset`,
+`PurposeOAuthPendingLink`, `PurposeMagicLink`, `PurposeLoginCode`,
+`PurposeSensitiveCode`, `PurposeIdentifierChangeProof`,
+`PurposeIdentifierChangeNotice`, `PurposeInvitation`, `PurposeMemberAdded`.
+
+### The hook
+
+```go
+type DeliveryDataHook func(ctx context.Context, purpose string, data map[string]any) (map[string]any, error)
+```
+
+It runs **once per render, for every purpose, on both rails** (email and
+body-only SMS), *before* the subject, body, and SMS templates execute.
+
+- **Input is a fresh defensive copy** of the feature-built fields — the nested
+  invitation `Metadata` is copied too. It never contains `Secret` or `Subject`;
+  it may contain `Link` for read-only context. Mutating the input changes
+  nothing (neither this render nor the caller's state).
+- **Return only your additions and replacements** (`nil` = none). They merge
+  into the render data *before* the feature inserts `Secret` and `Subject`.
+- **Reserved fields.** `Secret`, `Link`, and `Subject` are framework-owned.
+  Returning any of them fails the render with `ErrDeliveryDataReserved` (wraps
+  `sdk.ErrInvalidInput`) before an envelope exists — so the rendered credential
+  is always the one the sealed envelope carries, the accept link is always the
+  feature's, and a secret can never enter a subject line.
+- **Concurrency.** The hook may be called concurrently (the delivery worker is
+  parallel). Do not retain or mutate the input after returning.
+
+**Errors — what the caller sees depends on which flow renders.** A hook error
+always aborts *that* render before anything is queued; nothing else is
+universal:
+
+| flow | on a hook error |
+|---|---|
+| invitation create (pending) | the invitation is **already persisted**; `Create` returns the error *with* the record so the owner can `Resend` once the hook recovers |
+| invitation resend | the error is returned; the row stays pending; retry when the hook recovers |
+| member-added notice (direct add, accept) | the grant has **already committed** → best-effort: WARN-logged, never surfaced, no notice sent |
+| opaque starts (password reset, magic link, login code, registration-verification resend) | the request was **already accepted and queued** with a uniform response; the worker-side render error follows the delivery runtime's bounded retry, then dead-letters (`Discard` voids the minted challenge). The original caller never sees it |
+
+### Per-purpose data
+
+The fields the feature builds (and the hook receives). `Secret` is added by the
+renderer afterwards for every purpose that carries one; `Subject` is added on
+the email rail only.
+
+| purpose | fields |
+|---|---|
+| `PurposeRegistrationVerification` | — (code only) |
+| `PurposePasswordReset` | `Link` (when `PasswordResetURL` is configured) |
+| `PurposeOAuthPendingLink` | `ProviderName`, `Link` |
+| `PurposeMagicLink` | `Link` |
+| `PurposeLoginCode`, `PurposeSensitiveCode` | — (code only) |
+| `PurposeIdentifierChangeProof` | `IdentifierKind` |
+| `PurposeIdentifierChangeNotice` | `IdentifierKind`, `ChangedAt`, `ClientIP` |
+| `PurposeInvitation`, `PurposeMemberAdded` | `InvitationID`, `OperationID`, `ResourceType`, `ResourceID`, `ResourceName` (`""`), `ResourceKind` (`""`), `Relation`, `RelationLabel` (`""`), `InvitedBy`, `InviterName` (`""`), `Metadata` (`map[string]string`, a non-nil copy), `Link` |
+
+For the invitation family the IDs follow the grant's provenance (design D1):
+
+- **pending invitation** — `InvitationID` and `OperationID` are both the
+  persisted invitation row ID; `Link` carries the accept token.
+- **accepted invitation → member-added** — the same two IDs.
+- **direct add → member-added** — there is no invitation row, so `InvitationID`
+  is empty and `OperationID` is the freshly minted grant operation ID (exactly
+  what the `Granter` received).
+
+The bundled invitation/member-added bodies and SMS bodies render
+`{{or .ResourceName .ResourceID}}`, so a hook that sets **only** `ResourceName`
+already turns "You were invited to project p1 as member." into "You were
+invited to project Apollo as member." The empty-string defaults for the
+name-like fields are what make that fallback work.
+
+### Subjects and SMS bodies
+
+`EmailSubjects` and `SMSBodies` map a `Purpose*` to Go `text/template` source,
+rendered against the same data as the body — hook enrichment included — and
+parsed once at construction with **missing-key errors on**, so a template that
+names a field the purpose does not carry fails that render loudly rather than
+shipping `<no value>`. Rejected at `NewService`/`Register` with
+`ErrDeliveryOverrideInvalid` (the message names the cause): an unknown purpose
+key, an empty/whitespace-only source, a parse failure, and an `SMSBodies` entry
+for a purpose that has no SMS rail (`PurposeRegistrationVerification`,
+`PurposePasswordReset`, `PurposeOAuthPendingLink`). A rendered email subject must
+be non-empty and contain no CR/LF — `ErrDeliverySubjectInvalid`, checked before
+an envelope is queued. The subject template belongs to the email rail: an SMS
+render never executes it.
+
+### Example — a neutral name lookup
+
+```go
+cfg.DeliveryData = func(ctx context.Context, purpose string, data map[string]any) (map[string]any, error) {
+	switch purpose {
+	case auth.PurposeInvitation, auth.PurposeMemberAdded:
+		rt, _ := data["ResourceType"].(string)
+		id, _ := data["ResourceID"].(string)
+		name, err := names.Lookup(ctx, rt, id) // the host's own read model
+		if err != nil {
+			return nil, err // create/resend surface it; member-added logs it
+		}
+		return map[string]any{"ResourceName": name}, nil
+	}
+	return nil, nil
+}
+cfg.EmailSubjects = map[string]string{
+	auth.PurposeInvitation: "You're invited to {{or .ResourceName .ResourceID}}",
+}
+```
+
+With only that, the bundled bodies, the SMS bodies, and the overridden subject
+all name the resource; `EmailContentTemplates`/`EmailLayouts` still own the
+markup and compose unchanged.
 
 ## Delivery execution modes (design §6.1.1)
 

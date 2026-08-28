@@ -1224,6 +1224,55 @@ type Config struct {
 	// its own logo markup — the override replaces the bundled block.
 	EmailBranding *email.Branding
 
+	// DeliveryData is the host's per-render DATA enrichment for every delivery
+	// purpose — the third mail customization seam alongside EmailContentTemplates
+	// (bodies) and EmailLayouts (the frame). The feature builds the data a template
+	// renders (for an invitation: the resource tuple, relation, inviter, metadata,
+	// link — see the README's per-purpose table) but has no source for a resource's
+	// NAME or a relation's label; the hook is where a host looks those up. It
+	// receives the public purpose (Purpose*) and a fresh, secret-free defensive
+	// copy of the data, and returns additions/replacements that are merged before
+	// the subject and bodies render. Secret, Link, and Subject are reserved:
+	// returning any of them fails the render with an invalid-input error, so a
+	// hook can never alter the delivered credential or push a secret into a
+	// subject. Nil (default) → the feature-built data renders as-is, byte-for-byte
+	// today's output. The bundled invitation/member-added bodies and SMS bodies
+	// render {{or .ResourceName .ResourceID}}, so a hook that sets ResourceName
+	// alone already changes "invited to project p1" into "invited to project
+	// Apollo".
+	//
+	// The hook may run concurrently and must not retain or mutate its input after
+	// returning. A hook error aborts that render before anything is queued; what
+	// the CALLER sees depends on the flow: invitation create/resend return the
+	// error (create may already have persisted the invitation, so a resend can
+	// recover); the member-added notice is best-effort after an already-committed
+	// grant, so the error is logged and never surfaced; and the opaque
+	// password-reset/passwordless/verification starts were already accepted and
+	// queued, so a worker-side hook error follows the delivery runtime's bounded
+	// retry/dead-letter policy and is never reported to the original caller.
+	DeliveryData DeliveryDataHook
+
+	// EmailSubjects overrides the bundled email SUBJECT per delivery purpose
+	// (key = a Purpose* constant, value = Go text/template source rendered against
+	// the same data as the body, DeliveryData enrichment included). Validated at
+	// NewService/Register: an unknown purpose key or an empty/whitespace-only
+	// source is ErrDeliveryOverrideInvalid, as is a source that fails to parse.
+	// Overrides parse with missing-key errors enabled, so a template naming a
+	// field the purpose's data does not carry fails that render loudly instead of
+	// shipping "<no value>". A rendered subject must be non-empty and free of CR/LF
+	// (ErrDeliverySubjectInvalid) — the feature rejects it before any envelope is
+	// queued. Empty (default) → the bundled subjects.
+	EmailSubjects map[string]string
+
+	// SMSBodies overrides the bundled body-only SMS text per delivery purpose,
+	// with the same keys, data, validation, and missing-key rules as EmailSubjects.
+	// Only a purpose that already has an SMS rail can be overridden: an entry for
+	// an email-only purpose (registration verification, password reset, OAuth
+	// pending link) is ErrDeliveryOverrideInvalid — an override customizes an
+	// existing rail, it never enables a new kind. Empty (default) → the bundled
+	// SMS bodies.
+	SMSBodies map[string]string
+
 	// Logger receives the best-effort WARN line when a security-event audit write
 	// fails (design §5.1 — audit-write failures never fail the auth flow). Nil →
 	// slog.Default(); Register defaults it to the Mount's logger when unset.
@@ -1310,6 +1359,65 @@ const EmailContentNamespace = delivery.Namespace
 // bundled layouts. Aliased from the internal delivery package per the
 // EmailContentTemplate precedent.
 type EmailLayoutOverride = delivery.LayoutOverride
+
+// DeliveryDataHook is the host's per-render data enrichment for auth mail and
+// SMS (Config.DeliveryData): func(ctx, purpose, data) (additions, error). purpose
+// is one of the Purpose* constants; data is a fresh, secret-free defensive copy
+// of the feature-built fields (Link included for context); the returned map is
+// merged before Secret and Subject are inserted, and may not contain Secret,
+// Link, or Subject (ErrDeliveryDataReserved). A nil return adds nothing. Aliased
+// from the internal delivery package per the EmailContentTemplate precedent.
+type DeliveryDataHook = delivery.DataHook
+
+// Delivery purposes — the template selector a DeliveryDataHook switches on and
+// the keys Config.EmailSubjects / Config.SMSBodies are addressed by. Each aliases
+// the internal delivery package's constant, so a host never spells a purpose as
+// a string literal.
+const (
+	// PurposeRegistrationVerification carries the registration email-verification
+	// code. Email-only.
+	PurposeRegistrationVerification = delivery.PurposeRegistrationVerification
+	// PurposePasswordReset carries the password-reset link/token. Email-only.
+	PurposePasswordReset = delivery.PurposePasswordReset
+	// PurposeOAuthPendingLink carries the pending-OAuth-link confirmation link.
+	// Email-only.
+	PurposeOAuthPendingLink = delivery.PurposeOAuthPendingLink
+	// PurposeMagicLink carries a single-use passwordless sign-in link.
+	PurposeMagicLink = delivery.PurposeMagicLink
+	// PurposeLoginCode carries a passwordless one-time sign-in code.
+	PurposeLoginCode = delivery.PurposeLoginCode
+	// PurposeSensitiveCode carries a step-up / sensitive-operation confirmation
+	// code.
+	PurposeSensitiveCode = delivery.PurposeSensitiveCode
+	// PurposeIdentifierChangeProof carries the ownership-proof code for adding or
+	// changing an identifier.
+	PurposeIdentifierChangeProof = delivery.PurposeIdentifierChangeProof
+	// PurposeIdentifierChangeNotice carries the old-address security notice sent
+	// when an identifier is changed (no secret).
+	PurposeIdentifierChangeNotice = delivery.PurposeIdentifierChangeNotice
+	// PurposeInvitation carries a resource-invitation link.
+	PurposeInvitation = delivery.PurposeInvitation
+	// PurposeMemberAdded carries the you-were-added notice for a direct add or an
+	// accepted invitation.
+	PurposeMemberAdded = delivery.PurposeMemberAdded
+)
+
+// Delivery customization errors. Each wraps sdk.ErrInvalidInput; match with
+// errors.Is.
+var (
+	// ErrDeliveryOverrideInvalid is returned by NewService/Register when a
+	// Config.EmailSubjects or Config.SMSBodies entry cannot be honored (unknown
+	// purpose, empty source, SMS override for an email-only purpose, or a parse
+	// failure); the message names which.
+	ErrDeliveryOverrideInvalid = delivery.ErrOverrideInvalid
+	// ErrDeliveryDataReserved is the render failure when a DeliveryDataHook
+	// returns Secret, Link, or Subject. It surfaces from invitation create/resend;
+	// other flows log or dead-letter it (see Config.DeliveryData).
+	ErrDeliveryDataReserved = delivery.ErrDataHookReserved
+	// ErrDeliverySubjectInvalid is the render failure when a rendered email subject
+	// is empty or contains a line break. Same surfacing as ErrDeliveryDataReserved.
+	ErrDeliverySubjectInvalid = delivery.ErrSubjectInvalid
+)
 
 // resolveListStrategy validates Config.ListStrategy and maps it to a
 // crud.Strategy. Empty (the zero value of a literally-built Config) resolves to
@@ -1604,6 +1712,9 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 		AppTemplates: cfg.EmailContentTemplates,
 		AppLayouts:   cfg.EmailLayouts,
 		Branding:     cfg.EmailBranding,
+		DataHook:     cfg.DeliveryData,
+		Subjects:     cfg.EmailSubjects,
+		SMSBodies:    cfg.SMSBodies,
 		Logger:       cfg.Logger,
 	})
 	if err != nil {

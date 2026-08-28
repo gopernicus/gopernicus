@@ -19,8 +19,10 @@ import (
 // payload round-trips for the processor.
 type fakeEncrypter struct{}
 
-func (fakeEncrypter) Encrypt(plaintext string) (string, error)  { return "enc:" + plaintext, nil }
-func (fakeEncrypter) Decrypt(ciphertext string) (string, error) { return strings.TrimPrefix(ciphertext, "enc:"), nil }
+func (fakeEncrypter) Encrypt(plaintext string) (string, error) { return "enc:" + plaintext, nil }
+func (fakeEncrypter) Decrypt(ciphertext string) (string, error) {
+	return strings.TrimPrefix(ciphertext, "enc:"), nil
+}
 
 // Generic job lifecycle states the in-test dispatcher records (declared as literals
 // here since they are unexported in the delivery package).
@@ -179,8 +181,15 @@ func (d *drainingQueue) Replace(ctx context.Context, cmd delivery.Command) (deli
 // wired transports within the call.
 func wireSyncDelivery(t *testing.T, svc *Service, mailer email.Sender, notifiers map[string]notify.Notifier) {
 	t.Helper()
+	wireSyncDeliveryHook(t, svc, mailer, notifiers, nil)
+}
+
+// wireSyncDeliveryHook is wireSyncDelivery with a host DataHook on the router, so
+// the data each send site builds can be observed and enriched.
+func wireSyncDeliveryHook(t *testing.T, svc *Service, mailer email.Sender, notifiers map[string]notify.Notifier, hook delivery.DataHook) {
+	t.Helper()
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
-	router, err := delivery.NewRouter(delivery.Deps{Mailer: mailer, MailFrom: "noreply@example.com", Notifiers: notifiers, Logger: quiet})
+	router, err := delivery.NewRouter(delivery.Deps{Mailer: mailer, MailFrom: "noreply@example.com", Notifiers: notifiers, DataHook: hook, Logger: quiet})
 	if err != nil {
 		t.Fatalf("delivery.NewRouter: %v", err)
 	}
