@@ -223,8 +223,8 @@ keeps `sdk v0.6.0`. Same public contract, safety rules, and tests on both;
 adapted commits, not one cherry-pick (the module/paths were renamed between
 them). Read the upgrade note below.
 
-**2026-08-28: `pockets/authentication/v0.8.2` (next tag on main, branch
-`identity-resolver-principal-exact`) — `identity.Resolver` is principal-exact**
+**2026-08-28: `pockets/authentication/v0.8.2` — TAGGED @ `c016423` (#17
+squash) — `identity.Resolver` is principal-exact**
 (plan of record `plans/identity-resolver-principal-exact.md`; originating host
 gps-360-go plans/32). `Resolve` no longer synthesizes a user's display name
 from the primary email local part when the stored `DisplayName` is blank — a
@@ -535,7 +535,7 @@ Proof: hermetic SQL-capture tests (`TestList_FixedOrder*`) and the live
 `NULLS LAST` + name tiebreak traversal over three offset pages with
 `HasMore`/`HasPrev`/`Total` asserted and the cursor strategy refused.
 
-### pockets/authentication — v0.8.2 (next tag on main): identity.Resolver is principal-exact (patch)
+### pockets/authentication — v0.8.2 — tagged 2026-08-28: identity.Resolver is principal-exact (patch)
 
 Plan of record `plans/identity-resolver-principal-exact.md`. `Resolve` for a
 `user` principal projects the stored `DisplayName` exactly — blank stays blank;

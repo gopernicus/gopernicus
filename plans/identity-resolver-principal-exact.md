@@ -1,8 +1,9 @@
 # identity.Resolver is principal-exact: no display-name synthesis
 
 **Module:** `pockets/authentication` (next tag `v0.8.2`, patch)
-**Status:** EXECUTED 2026-08-28 (branch `identity-resolver-principal-exact`,
-awaiting owner PR/tag). Origin: gps-360-go plans/32 (the data-requests slice),
+**Status:** RELEASED 2026-08-28 — PR #17 squash @ `c016423`,
+`pockets/authentication/v0.8.2` (patch by plan ruling); host repin/replace
+drop is the owner's, in gps-360-go. Origin: gps-360-go plans/32 (the data-requests slice),
 whose `requester_name` / `fulfilled_by` / `added_by` columns are stamped from
 `identity.Info.DisplayName`; its owner ruled the same day that "identity
 resolution is principal-exact: an existing `user:<id>` or
