@@ -148,7 +148,7 @@ func TestTokenRouteIssuesSessionBackedPair(t *testing.T) {
 func TestTokenRouteBearerExpired(t *testing.T) {
 	signer := newFakeSigner()
 	h := newTokenHandler(t, signer, false, nil)
-	// /auth/password/change is RequireLiveSession-gated; an expired bearer denies.
+	// /auth/password/change rides the CredentialManagement authenticator; an expired bearer denies.
 	expired, _ := signer.Sign(map[string]any{"user_id": "u1", "session_id": "s1"}, time.Now().Add(-time.Minute))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, bearerReq("POST", "/auth/password/change", expired))

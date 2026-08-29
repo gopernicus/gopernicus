@@ -13,7 +13,7 @@ import (
 )
 
 // Identifier-management transport (design §5.5). Every route here is a
-// cookie-authenticated sensitive mutation: RequireLiveSession has proven the caller's
+// cookie-authenticated sensitive mutation: the CredentialManagement authenticator has proven the caller's
 // session and stamped its id, and the browser-safe-mutation gate has applied the
 // allowlisted-Origin + CSRF check (design §9.1). The body-carrying handlers add the
 // strict JSON hardening; every handler sets Cache-Control: no-store.

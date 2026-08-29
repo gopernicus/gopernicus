@@ -157,16 +157,17 @@ func newMyInvitationResponse(inv invitation.Invitation) myInvitationResponse {
 }
 
 // mountInvitations registers the invitation route surface (design §6). Called
-// from Mount only when a Granter is wired. Every authenticated route rides
-// requireLiveSession (design §6/D3), so a revoked session's outstanding access
-// JWT is denied within one round-trip; decline is public and IP-rate-limited.
-func mountInvitations(r pocket.RouteRegistrar, h *handlers, requireLiveSession, declineLimit web.Middleware) {
-	r.Handle("POST", "/auth/invitations/{resource_type}/{resource_id}", h.createInvitation, requireLiveSession)
-	r.Handle("GET", "/auth/invitations/{resource_type}/{resource_id}", h.listResourceInvitations, requireLiveSession)
-	r.Handle("GET", "/auth/invitations/mine", h.listMyInvitations, requireLiveSession)
-	r.Handle("POST", "/auth/invitations/accept", h.acceptInvitation, requireLiveSession)
-	r.Handle("POST", "/auth/invitations/{id}/cancel", h.cancelInvitation, requireLiveSession)
-	r.Handle("POST", "/auth/invitations/{id}/resend", h.resendInvitation, requireLiveSession)
+// from Mount only when a Granter is wired. Every authenticated route rides the
+// Invitations authenticator (design §6/D3), so a revoked session's outstanding
+// access JWT is denied within one round-trip; decline is public and
+// IP-rate-limited.
+func mountInvitations(r pocket.RouteRegistrar, h *handlers, invitations, declineLimit web.Middleware) {
+	r.Handle("POST", "/auth/invitations/{resource_type}/{resource_id}", h.createInvitation, invitations)
+	r.Handle("GET", "/auth/invitations/{resource_type}/{resource_id}", h.listResourceInvitations, invitations)
+	r.Handle("GET", "/auth/invitations/mine", h.listMyInvitations, invitations)
+	r.Handle("POST", "/auth/invitations/accept", h.acceptInvitation, invitations)
+	r.Handle("POST", "/auth/invitations/{id}/cancel", h.cancelInvitation, invitations)
+	r.Handle("POST", "/auth/invitations/{id}/resend", h.resendInvitation, invitations)
 	r.Handle("POST", "/auth/invitations/{id}/decline", h.declineInvitation, declineLimit)
 }
 
@@ -214,8 +215,8 @@ func (h *handlers) createInvitation(w http.ResponseWriter, r *http.Request) {
 
 // listResourceInvitations pages a resource's invitations (live-session gated).
 // It resolves CurrentUser both to keep the surface user-only (a service-account
-// principal that RequireLiveSession admits is rejected here, exactly as
-// RequireUser's JWT-only gate rejected it) and to hand the AUTHORIZED list
+// principal that the Invitations authenticator admits is rejected here) and to
+// hand the AUTHORIZED list
 // operation its principal: the service poses the InviteList question (empty
 // Relation, no invitee context — design §6/D3) before reading. A denial or
 // infrastructure error fails closed through the normal web/sdk mapping. The page

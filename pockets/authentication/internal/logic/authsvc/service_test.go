@@ -439,6 +439,9 @@ type fakeSessions struct {
 	mu     sync.Mutex
 	m      map[string]session.Session
 	getErr error // non-nil → Get returns it (drives the fail-closed path)
+	// gets counts Get calls — the Live() tier asserts one lookup per request even
+	// when a nested Live() authenticator sits under an outer one.
+	gets int
 }
 
 func newFakeSessions() *fakeSessions { return &fakeSessions{m: map[string]session.Session{}} }
@@ -458,6 +461,7 @@ func (f *fakeSessions) Create(_ context.Context, s session.Session) (session.Ses
 func (f *fakeSessions) Get(_ context.Context, id string) (session.Session, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.gets++
 	if f.getErr != nil {
 		return session.Session{}, f.getErr
 	}
@@ -814,8 +818,8 @@ func TestLogin(t *testing.T) {
 		t.Errorf("access token is not JWT-shaped: %q", pair.AccessToken)
 	}
 	// The access JWT resolves to the same user identity.
-	if id, ok := h.svc.verifyBearer(pair.AccessToken); !ok || id != u.ID {
-		t.Errorf("verifyBearer(access) = (%q, %v), want (%q, true)", id, ok, u.ID)
+	if id, _, ok := h.svc.verifyBearerClaims(pair.AccessToken); !ok || id != u.ID {
+		t.Errorf("verifyBearerClaims(access) = (%q, %v), want (%q, true)", id, ok, u.ID)
 	}
 	if h.sess.count() != 1 {
 		t.Errorf("session count = %d, want 1", h.sess.count())
@@ -1214,7 +1218,7 @@ func TestResetPasswordExpiredToken(t *testing.T) {
 	}
 }
 
-func TestRequireUserValidSession(t *testing.T) {
+func TestRequireAccessTokenValidSession(t *testing.T) {
 	h := newHarness(t, nil)
 	h.mustRegister(t, "ru@example.com", "password123456789")
 	pair, u, _ := h.svc.Login(context.Background(), "ru@example.com", "password123456789")
@@ -1223,7 +1227,7 @@ func TestRequireUserValidSession(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id, ok := h.svc.CurrentUser(r.Context())
 		if !ok {
-			t.Error("CurrentUser not set inside RequireUser")
+			t.Error("CurrentUser not set inside RequireAccessToken()")
 		}
 		gotUserID = id
 		w.WriteHeader(http.StatusNoContent)
@@ -1233,7 +1237,7 @@ func TestRequireUserValidSession(t *testing.T) {
 	req := httptest.NewRequest("GET", "/x", nil)
 	req.AddCookie(&http.Cookie{Name: h.svc.SessionCookieName(), Value: pair.AccessToken})
 	rec := httptest.NewRecorder()
-	h.svc.RequireUser(next).ServeHTTP(rec, req)
+	h.svc.RequireAccessToken()(next).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNoContent {
 		t.Errorf("status = %d, want 204", rec.Code)
@@ -1243,13 +1247,13 @@ func TestRequireUserValidSession(t *testing.T) {
 	}
 }
 
-func TestRequireUserNoCookie(t *testing.T) {
+func TestRequireAccessTokenNoCookie(t *testing.T) {
 	h := newHarness(t, nil)
 	called := false
 	next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true })
 	req := httptest.NewRequest("GET", "/x", nil)
 	rec := httptest.NewRecorder()
-	h.svc.RequireUser(next).ServeHTTP(rec, req)
+	h.svc.RequireAccessToken()(next).ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rec.Code)
 	}
@@ -1258,7 +1262,7 @@ func TestRequireUserNoCookie(t *testing.T) {
 	}
 }
 
-func TestRequireUserExpiredSession(t *testing.T) {
+func TestRequireAccessTokenExpiredSession(t *testing.T) {
 	h := newHarness(t, nil)
 	// An expired access JWT in the session cookie is rejected statelessly (§1.2).
 	expired, err := h.signer.Sign(map[string]any{tokenClaimUserID: "u1"}, time.Now().Add(-time.Hour))
@@ -1269,7 +1273,7 @@ func TestRequireUserExpiredSession(t *testing.T) {
 	req := httptest.NewRequest("GET", "/x", nil)
 	req.AddCookie(&http.Cookie{Name: h.svc.SessionCookieName(), Value: expired})
 	rec := httptest.NewRecorder()
-	h.svc.RequireUser(next).ServeHTTP(rec, req)
+	h.svc.RequireAccessToken()(next).ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rec.Code)
 	}

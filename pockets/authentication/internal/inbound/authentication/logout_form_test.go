@@ -42,7 +42,7 @@ func TestFormLogoutClearsCookiesAndRedirects(t *testing.T) {
 		t.Errorf("form logout did not clear the refresh cookie: %+v", c)
 	}
 
-	// The session was deleted: a RequireLiveSession route now rejects the same access
+	// The session was deleted: a Live()-gated route now rejects the same access
 	// cookie even though the stateless access JWT is still within its TTL.
 	stale := do(t, h, "POST", "/auth/password/change",
 		`{"current_password":"password123456789","new_password":"newpassword456789"}`,

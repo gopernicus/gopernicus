@@ -20,7 +20,7 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// stashIdentity mimics authentication.RequireUser: it puts a fixed Principal on
+// stashIdentity mimics authentication.RequireAccessToken: it puts a fixed Principal on
 // the request context.
 func stashIdentity(p identity.Principal) web.Middleware {
 	return func(next http.Handler) http.Handler {

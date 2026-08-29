@@ -30,28 +30,29 @@ import (
 // sensitive-operation protector (the AZADM packet), so the guarded actor-mutation path
 // is proven by authorization_test.go, not a browser flow.
 //
-//   - GET /demo/whoami — RequirePrincipal-gated: 200 for ANY valid credential
+//   - GET /demo/whoami — RequireAccessTokenOrAPIKey-gated: 200 for ANY valid credential
 //     class (session cookie, API-key bearer, or bearer JWT), echoing the resolved
 //     principal. A missing/invalid/expired/revoked credential → 401.
-//   - GET /demo/members-only — RequirePrincipal + engine-Check gated (the flagship
+//   - GET /demo/members-only — RequireAccessTokenOrAPIKey + engine-Check gated (the flagship
 //     posture): 200 only when the resolved principal holds `view` on project/demo
 //     through the authorization engine. A member (granted on invitation accept) → 200;
 //     an ungranted user → 403.
-//   - GET /demo/my-projects — RequirePrincipal-gated: the relationship kind's
+//   - GET /demo/my-projects — RequireAccessTokenOrAPIKey-gated: the relationship kind's
 //     LookupResources enumeration (demonstration (b)); {admin, ids} (admin flag
 //     is the host-composed platform-admin recipe, not an engine bypass).
-//   - GET /demo/audit — RequirePrincipal + ROLE-MODEL gated: the pocket's
+//   - GET /demo/audit — RequireAccessTokenOrAPIKey + ROLE-MODEL gated: the pocket's
 //     coordinate gate asks `audit` on project/demo, a pair the RoleModel owns
 //     (the `auditor` role grants it), so the host writes no role check of its own.
 //     200 with a driven ListRoleAssignmentsByResource read-back, 403 without a
 //     granting role.
 func registerDemoRoutes(router *web.WebHandler, authSvc *auth.Service, authorizer *authorization.Service) {
-	router.Handle("GET", "/demo/whoami", demoWhoami(authSvc), authSvc.RequirePrincipal)
+	principal := authSvc.RequireAccessTokenOrAPIKey()
+	router.Handle("GET", "/demo/whoami", demoWhoami(authSvc), principal)
 	router.Handle("GET", "/demo/members-only", demoMembersOnly(authSvc),
-		authSvc.RequirePrincipal, requireMembership(authSvc, authorizer))
-	router.Handle("GET", "/demo/my-projects", demoMyProjects(authSvc, authorizer), authSvc.RequirePrincipal)
+		principal, requireMembership(authSvc, authorizer))
+	router.Handle("GET", "/demo/my-projects", demoMyProjects(authSvc, authorizer), principal)
 	router.Handle("GET", "/demo/audit", demoAudit(authorizer),
-		authSvc.RequirePrincipal, authorizer.RequirePermissionFixed(demoResourceType, demoAuditPermission, demoResourceID))
+		principal, authorizer.RequirePermissionFixed(demoResourceType, demoAuditPermission, demoResourceID))
 }
 
 // The audit route's role-model vocabulary: `auditor` is the role the host declares
@@ -123,7 +124,7 @@ func demoAudit(authorizer *authorization.Service) http.HandlerFunc {
 	}
 }
 
-// demoWhoami echoes the resolved principal (RequirePrincipal ran first).
+// demoWhoami echoes the resolved principal (the authenticator ran first).
 func demoWhoami(authSvc *auth.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p, ok := authSvc.CurrentPrincipal(r.Context())
@@ -138,7 +139,7 @@ func demoWhoami(authSvc *auth.Service) http.HandlerFunc {
 	}
 }
 
-// demoMembersOnly is reached only when both RequirePrincipal and the membership
+// demoMembersOnly is reached only when both the authenticator and the membership
 // gate pass, so it just confirms access.
 func demoMembersOnly(authSvc *auth.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -154,7 +155,7 @@ func demoMembersOnly(authSvc *auth.Service) http.HandlerFunc {
 
 // registerDebugRoutes mounts GET /debug/security-events ONLY when AUTH_DEBUG=1
 // (plan-cut amendment, SRE — DEFAULT-OFF because it dumps IP/UA/emails and this
-// host is public). It is additionally session-gated (RequireUser): with no
+// host is public). It is additionally session-gated (RequireAccessToken): with no
 // AUTH_DEBUG the route is never registered (404), and with no session it is 401.
 func registerDebugRoutes(router *web.WebHandler, authSvc *auth.Service, repos auth.Repositories, log *slog.Logger) {
 	if environment.GetEnvOrDefault("AUTH_DEBUG", "") != "1" {
@@ -162,7 +163,7 @@ func registerDebugRoutes(router *web.WebHandler, authSvc *auth.Service, repos au
 		return
 	}
 	log.Warn("debug security-events route ENABLED (AUTH_DEBUG=1) — dumps IP/UA/emails; do not enable in production")
-	router.Handle("GET", "/debug/security-events", debugSecurityEvents(repos.SecurityEvents), authSvc.RequireUser)
+	router.Handle("GET", "/debug/security-events", debugSecurityEvents(repos.SecurityEvents), authSvc.RequireAccessToken())
 }
 
 // debugEventResponse is the trimmed audit-row shape the debug dump returns.

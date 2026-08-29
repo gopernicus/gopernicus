@@ -37,7 +37,7 @@ func (r *recordingRouter) has(route string) bool {
 	return false
 }
 
-// stashIdentity is a test stand-in for authentication.RequireUser: it stashes a
+// stashIdentity is a test stand-in for authentication.RequireAccessToken: it stashes a
 // fixed Principal on the request context (the middleware side of A-I1).
 func stashIdentity(p identity.Principal) web.Middleware {
 	return func(next http.Handler) http.Handler {

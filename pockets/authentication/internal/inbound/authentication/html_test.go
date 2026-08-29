@@ -122,7 +122,8 @@ var htmlPublicPages = []struct{ path, marker string }{
 }
 
 // htmlGatedPages are the account-security HTML GET pages: they ride
-// RequireLiveSession, so without a session they are MOUNTED but denied (never 404).
+// the BrowserAccount authenticator, so without a session they are MOUNTED but
+// denied (never 404).
 var htmlGatedPages = []string{
 	"/auth/account",
 	"/auth/identifiers/new",

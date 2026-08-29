@@ -84,8 +84,11 @@ type authService interface {
 	ClearSessionCookies(w http.ResponseWriter)
 	SessionCookieName() string
 	RefreshCookieName() string
-	RequireUser(next http.Handler) http.Handler
-	RequireLiveSession(next http.Handler) http.Handler
+	// RequirePrincipal is THE authenticator (design §4.3). Mount resolves the
+	// bundled route groups' authentication posture through it — the audited
+	// default for any group the host did not override in
+	// authentication.Config.BundledRouteAuth.
+	RequirePrincipal(opts ...authsvc.PrincipalOption) web.Middleware
 	RateLimitByIP(keyPrefix string, perMinute int) web.Middleware
 
 	// OAuth flow (design §3). OAuthEnabled gates whether the OAuth routes are
@@ -430,7 +433,7 @@ func (h *handlers) resetPasswordJSON(w http.ResponseWriter, r *http.Request) {
 // deliveryStatus is the live-session-gated delivery-status read (design §6.1.1). A
 // session-gated caller polls the durable outbox with the receipt key it was handed
 // to learn whether delivery is still pending, succeeded, or failed — without holding
-// the original start request open. RequireLiveSession has already validated the
+// the original start request open. The authenticator has already validated the
 // caller; possession of the opaque, PII-free receipt is the rest of the
 // authorization (it names no account and reveals only that caller's own delivery
 // state). An unknown receipt is 404; the outbox being off is 403.
@@ -460,7 +463,7 @@ func (h *handlers) changePassword(w http.ResponseWriter, r *http.Request) {
 	h.dispatch(w, r, h.changePasswordJSON, h.changePasswordForm)
 }
 
-// changePasswordJSON is session-gated (RequireLiveSession has already validated the
+// changePasswordJSON is session-gated (the authenticator has already validated the
 // caller and stashed the user id). It verifies the current password, sets the new
 // one, revokes ALL the user's sessions, and sets a fresh session cookie for the
 // caller (design §7.2). A wrong current password surfaces as 401.

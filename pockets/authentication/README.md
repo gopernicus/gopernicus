@@ -2,7 +2,7 @@
 
 A pluggable, datastore-free identity pocket. v1 shipped password + session
 authentication — registration, email verification, login/logout, password
-reset — and the `RequireUser` middleware other pockets gate on. v2 grew the
+reset — and the `RequireAccessToken` middleware other pockets gate on. v2 grew the
 rest of the identity capability: password change, OAuth login/linking, machine
 identity (service accounts + API keys), bearer JWTs, a synchronous
 security-event audit rail, and ReBAC-decoupled resource invitations. The
@@ -110,7 +110,8 @@ e.g. `/api/v1/auth`, or the browser never sends the refresh cookie to
 JSON bodies are strictly decoded (unknown fields → 400). Optional subsystems are
 **deny-by-absence**: leave the enabling collaborator nil and the routes are NOT
 registered (404) — never a half-registered state. Every sensitive credential/
-identifier mutation is `RequireLiveSession`-gated, carries the **browser-safe
+identifier mutation is `CredentialManagement`-gated (`RequireAccessTokenLive()`
+by default), carries the **browser-safe
 gate** (allowlisted `Origin` + double-submit CSRF for cookie callers; bearer-only
 API callers skip it), and sets `Cache-Control: no-store`.
 
@@ -152,9 +153,9 @@ API callers skip it), and sets `Cache-Control: no-store`.
   `userResponse` body login and register return: `{id, email, display_name,
   email_verified}` with the **unmasked** active email (`/auth/methods` is the
   masked inventory; this is the signed-in identity). `Cache-Control: no-store`.
-  Hydration deliberately pays one revocation lookup (`RequireLiveSession`, not
-  `RequireUser`), matching `/auth/methods`: a revoked access JWT is denied within
-  one round-trip. Bearer-safe (no body → no double-submit gate); both the session
+  Hydration deliberately pays one revocation lookup
+  (`SessionHydration`'s default `RequireAccessTokenOrAPIKeyLive()`, not a
+  stateless gate): a revoked access JWT is denied within one round-trip. Bearer-safe (no body → no double-submit gate); both the session
   cookie and a bearer access JWT hydrate. `email_verified` is `false` — with the
   address still present — for an allowed-but-unverified account. A **machine
   principal is not a current user**: a service-account API key is a valid live
@@ -248,9 +249,9 @@ answers `Cache-Control: no-store`. See
 
 **Machine identity — registered only when `ServiceAccounts` AND `APIKeys` are
 both wired AND the host names a `Config.MachineRoutesGate`. Every route carries
-the same stack, outermost first: `RequireUser` → `RequireLiveSession` → (on the
-three POSTs) the browser-safe `Origin`/CSRF gate → the host's gate — human,
-live, same-origin, authorized. See
+the same stack, outermost first: `BundledRouteAuth.MachineLifecycle` —
+`RequireAccessTokenLive()` by default — → (on the three POSTs) the browser-safe
+`Origin`/CSRF gate → the host's gate — human, live, same-origin, authorized. See
 [Machine identity](#machine-identity--ownership-delegation-and-the-two-seams):**
 
 - `POST /auth/service-accounts` — `{name, description?, act_as_user?,
@@ -297,8 +298,8 @@ that never carry it.
   rate limit and verified-email gating; clients rotate via `/auth/refresh`.
 
 **Invitations — registered only when `Config.Granter` is wired; every
-authenticated route is `RequireLiveSession`-gated (immediate revocation), only
-decline is public:**
+authenticated route is `Invitations`-gated (`RequireAccessTokenOrAPIKeyLive()`
+by default, immediate revocation), only decline is public:**
 
 - `POST /auth/invitations/{resource_type}/{resource_id}` — `{identifier,
   relation, identifier_kind?, auto_accept?, redirect?, metadata?}` → 201 pending
@@ -543,13 +544,13 @@ enumeration-resistant copy (password/code/token fields are never repopulated).
 | forgot / reset | `GET /auth/password/{forgot,reset}` | public |
 | passwordless start / code / check | `GET /auth/passwordless{,/code,/check}` | public (if enabled) |
 | magic-link landing | `GET /auth/magic` | public (if enabled) |
-| account-security hub | `GET /auth/account` | live session |
-| add / confirm / edit identifier | `GET /auth/identifiers/{new,confirm,{id}/edit}` | live session |
-| password set / change / remove | `GET /auth/password/{set,change,remove}` | live session |
-| step-up | `GET /auth/step-up` | live session |
+| account-security hub | `GET /auth/account` | `BrowserAccount` |
+| add / confirm / edit identifier | `GET /auth/identifiers/{new,confirm,{id}/edit}` | `BrowserAccount` |
+| password set / change / remove | `GET /auth/password/{set,change,remove}` | `BrowserAccount` |
+| step-up | `GET /auth/step-up` | `BrowserAccount` |
 | OAuth pending-link landing | `GET /auth/oauth/link` | **public** (if enabled) |
-| OAuth unlink | `GET /auth/oauth/{provider}/unlink` | live session (if enabled) |
-| identifier edit form POST | `POST /auth/identifiers/{id}` (`action=remove`\|uses) | live + browser-safe |
+| OAuth unlink | `GET /auth/oauth/{provider}/unlink` | `BrowserAccount` (if enabled) |
+| identifier edit form POST | `POST /auth/identifiers/{id}` (`action=remove`\|uses) | `BrowserAccount` + browser-safe |
 
 **Credential-establishment endpoints** (login/register/verify/forgot/reset,
 passwordless start/verify/redeem) apply the phase-7 **origin policy** — an
@@ -632,36 +633,154 @@ subsystems, no shared type.
 
 ## The middleware surface (what other pockets and host routes gate on)
 
-- `Service.RequireUser` — the stateless tier: access-JWT cookie OR
-  `Authorization: Bearer <jwt>` → user identity by **signature + expiry only,
-  ZERO DB**. Revocation honored within ≤ `AccessTokenTTL`.
-- `Service.RequireLiveSession` — the immediate-revocation tier (D1): verify, then
-  **one PK lookup** (`sessions.Get`). Deleted/expired → deny at once; an **API key
-  passes** (already DB-checked); a **repository error DENIES (fails CLOSED)**. It
-  also stamps the live session id so a step-up grant binds to the proven session.
-  Every sensitive credential/identifier route ships gated on it.
-- `Service.RequireServiceAccount` — API-key bearer only.
-- `Service.RequirePrincipal` — any configured credential class; stashes the
-  resolved `auth.Principal{Type, ID}`.
-- `Service.RequirePrincipalBrowser` / `Service.RequireLiveSessionBrowser` — the
-  browser-facing siblings for HTML routes (design §9.2). They resolve the SAME
-  credentials and stash the SAME principal/session context as the JSON gates, but on
-  an authentication denial they **303 to `Config.BrowserLoginPath`** (default
-  `/auth/login`) instead of writing a JSON 401. A denied GET/HEAD carries a validated
-  `return_to` of the original path+query; an unsafe method carries none (a later GET
-  must not replay a mutation). They never sniff `Accept` or Fetch Metadata — mount
-  them deliberately on HTML routes. The JSON `RequirePrincipal` / `RequireLiveSession`
-  keep their byte-stable 401 behavior.
+`Service.RequirePrincipal(opts ...PrincipalOption)` is the ONE authenticator.
+Every other gate — the six named helpers and every bundled route — is a
+pre-composition of it.
+
+**The three axes.** A request authenticates along three independent axes:
+
+| axis | values | fact |
+|---|---|---|
+| credential | `CredentialAccessToken` (the session-backed JWT: claims `user_id` + `session_id`) · `CredentialAPIKey` | **the cookie's value IS the access JWT** — one credential, two transports |
+| transport | `TransportHeader` (`Authorization: Bearer <token>`) · `TransportCookie` | header is authoritative: a bearer, once consulted, means the cookie is never read |
+| liveness | stateless verify · `Live()` (`+ sessions.Get(session_id)`) | meaningful for `access_token` only; an API key is already DB-checked at resolution |
+
+**The primitive and its options:**
+
+```go
+func Accept(kinds ...CredentialKind) PrincipalOption // OR-set of credentials; default: every wired kind
+func Transports(ts ...Transport) PrincipalOption    // OR-set of transports;  default: header + cookie
+func Live() PrincipalOption                          // access_token ⇒ the session row must exist; api_key ⇒ pass
+func Browser() PrincipalOption                       // on denial 303 to Config.BrowserLoginPath (validated return_to) instead of a JSON 401
+
+func (s *Service) RequirePrincipal(opts ...PrincipalOption) web.Middleware
+```
+
+With zero options `RequirePrincipal()` admits every wired credential over both
+transports, header authoritative, stateless, denying with a JSON 401.
+`Accept()` / `Transports()` called with **zero arguments panics at
+construction** — a set that admits nothing is a programming error, not a
+posture, so the mistake surfaces at wiring time, not on a request.
+
+**A credential arriving on a transport outside the set is IGNORED, never
+denied** — the set says what the surface reads, so a header at a
+cookie-only gate (or a cookie at a header-only one) is not a bypass, it is
+simply not read.
+
+**Nesting.** An inner `RequirePrincipal` mounted under an outer one **narrows**:
+it reads the `Credential` the outer gate already stashed and checks it against
+its own set — it never re-resolves the request. A `Live()` inner runs the
+session lookup once; a second nested `Live()` reads the already-proven
+`CurrentSessionID` and passes. A nested denial answers a JSON 401 **unless the
+INNER gate itself carries `Browser()`** — a plain helper nested under a
+browser-facing outer gate still answers JSON; none of the six named helpers
+below carry `Browser()`. This nesting trusts the credential stash written
+earlier in the SAME chain: the supported wiring invariant is **one
+authentication `Service` per chain** — composing middleware from independently
+configured `Service` instances on one chain is a host wiring error the pocket
+does not defend against.
+
+**The six helpers** are one-line pre-compositions, exported so the common
+postures read as vocabulary at the call site:
+
+| helper | is literally |
+|---|---|
+| `RequireAccessTokenOrAPIKey()` | `RequirePrincipal()` |
+| `RequireAccessTokenOrAPIKeyLive()` | `RequirePrincipal(Live())` |
+| `RequireAccessToken()` | `RequirePrincipal(Accept(CredentialAccessToken))` |
+| `RequireAccessTokenLive()` | `RequirePrincipal(Accept(CredentialAccessToken), Live())` |
+| `RequireAccessTokenCookie()` | `RequirePrincipal(Accept(CredentialAccessToken), Transports(TransportCookie))` |
+| `RequireAPIKey()` | `RequirePrincipal(Accept(CredentialAPIKey))` |
+
+- `Service.CurrentUser(ctx)` / `Service.CurrentPrincipal(ctx)` — read the
+  resolved identity.
+- `Service.CurrentCredential(ctx) (Credential, bool)` — read what authenticated
+  the request: kind, transport, and the proof's coordinates (`SessionID` once
+  proven by `Live()`; `APIKeyID` / `ServiceAccountID` / `ActAsUser` for a key).
+  It is the read that tells an act-as-user API key from a person's session,
+  which `CurrentPrincipal` alone cannot.
+- `Service.CurrentSessionID(ctx)` — the live session id stashed by a `Live()`
+  gate; absent for a stateless gate or a machine credential.
 - `Config.MachineRoutesGate` — the one middleware the pocket CONSUMES instead of
-  providing: the host's authorization, applied last in the bundled machine-identity
-  lifecycle stack (`RequireUser` → `RequireLiveSession` → the browser-safe
-  `Origin`/CSRF gate on the three mutations → gate); nil leaves those routes
-  unmounted (404). See
+  providing: the host's authorization, applied last in the bundled
+  machine-identity lifecycle stack (`BundledRouteAuth.MachineLifecycle` —
+  `RequireAccessTokenLive()` by default → the browser-safe `Origin`/CSRF gate on
+  the three mutations → gate); nil leaves those routes unmounted (404). See
   [Machine identity](#machine-identity--ownership-delegation-and-the-two-seams).
-- `Service.CurrentUser(ctx)` / `Service.CurrentPrincipal(ctx)` — read the resolved
-  identity; `Service.AuthenticateAPIKey(ctx, rawKey)` for non-HTTP callers.
 - `Service.RunDelivery(ctx)` — the host-owned `in_process` delivery runtime loop
   (below); in `jobs` mode the host runs the generic jobs runtime instead.
+
+### Migration from the pre-`v0.9.0` fixed middleware names
+
+`RequireUser`, `RequireServiceAccount`, `RequireLiveSession`,
+`RequirePrincipalBrowser`, `RequireLiveSessionBrowser`, and
+`AuthenticateAPIKey` are REMOVED:
+
+| removed | replacement | note |
+|---|---|---|
+| `RequirePrincipal` (method value, `func(http.Handler) http.Handler`) | `RequirePrincipal()` / `RequireAccessTokenOrAPIKey()` | every `web.Middleware` call site gains `()` |
+| `RequireUser` | `RequireAccessToken()` | **correction (security tightening):** a non-JWT bearer no longer falls through to the cookie — a key plus a valid cookie is now 401, where it previously passed as the cookie's user |
+| `RequireServiceAccount` | `RequireAPIKey()` or `RequirePrincipal(Accept(CredentialAPIKey), Transports(TransportHeader))` | identical behavior with the transport spelled |
+| `RequireLiveSession` | `RequireAccessTokenOrAPIKeyLive()` | identical |
+| `RequirePrincipalBrowser` | `RequirePrincipal(Browser())` | identical |
+| `RequireLiveSessionBrowser` | `RequirePrincipal(Live(), Browser())` | identical |
+| `AuthenticateAPIKey(ctx, rawKey)` | no direct replacement | raw credential verification is not an application-service entry point; it moves behind `RequirePrincipal` — read the result with `CurrentPrincipal` / `CurrentCredential` |
+
+### `Config.BundledRouteAuth` — overriding one bundled surface's authentication
+
+Each bundled route group runs behind ONE named authentication posture, resolved
+once at construction from the audited default below or a host override —
+never per-route, because the posture is a property of what the surface does:
+
+| `Config.BundledRouteAuth` slot | routes | default |
+|---|---|---|
+| `OAuthLinkStart` | `GET /auth/oauth/{provider}/link/start` | `RequireAccessToken()` |
+| `SessionSecurityReads` | `GET /auth/delivery/status`, `/auth/methods`, `/auth/csrf` | `RequireAccessTokenLive()` |
+| `SessionHydration` | `GET /auth/me` | `RequireAccessTokenOrAPIKeyLive()` |
+| `CredentialManagement` | password change/set/remove, step-up begin/completion, identifier add/confirm/update/delete, OAuth unlink start/completion | `RequireAccessTokenLive()` |
+| `MachineLifecycle` | create/list service accounts; mint/list/revoke keys | `RequireAccessTokenLive()` |
+| `UserAdministration` | all `/auth/admin/users…` reads and mutations | `RequireAccessTokenOrAPIKeyLive()` |
+| `Invitations` | authenticated create/list/mine/accept/cancel/resend routes | `RequireAccessTokenOrAPIKeyLive()` |
+| `BrowserAccount` | HTML account, identifier/password/step-up, OAuth-unlink GETs; HTML-only identifier edit POST | `RequirePrincipal(Accept(CredentialAccessToken), Transports(TransportCookie), Live(), Browser())` |
+
+This tightens the routes classified as established-session or human-credential
+surfaces — for example an API key no longer reaches `/auth/delivery/status`,
+`/auth/methods`, `/auth/csrf`, or any credential mutation — while preserving
+today's documented API-key access to user administration, invitations, and
+`/auth/me` (an act-as-user key still acts as its effective human principal
+there; a self-acting service account still fails those handlers' `CurrentUser`
+requirement).
+
+Override one semantic surface without restating the others:
+
+```go
+Config{
+	BundledRouteAuth: BundledRouteAuthentication{
+		Invitations: PrincipalStrategy(
+			Accept(CredentialAccessToken),
+			Live(),
+		),
+	},
+}
+```
+
+`PrincipalStrategy()` called with **no arguments is an explicit choice of the
+primitive's defaults** — every wired credential, both transports, stateless —
+**not** "leave the audited default in place"; leave the field zero for that.
+
+An override configures AUTHENTICATION only. It cannot unmount the
+authenticator from a protected bundled surface, and it never substitutes for
+the separate host authorization seams (`MachineRoutesGate`, `UserAdminCheck`,
+`InviteCheck`) — those stay exactly as configured regardless of which
+`RoutePrincipalStrategy` gates the surface in front of them.
+
+An override also owns the inbound context contract for that surface. Some
+handlers read `CurrentUser`; the session-bound step-up and credential handlers
+additionally read `CurrentSessionID`. Configuring an API-key or stateless
+strategy can authenticate a caller but cannot manufacture the live session id
+those handlers require — they still fail closed at the inbound handler
+boundary rather than treating "credential accepted" as "credential can satisfy
+the route's application input."
 
 ## Repositories (the ports a host or store adapter satisfies)
 
@@ -756,7 +875,7 @@ default, so a host can never inherit the development posture; unknown →
 | `Passwordless []string` | empty → passwordless OFF (routes not registered). Allowed v3 kinds are `"email"`/`"phone"` (`ErrPasswordlessKindInvalid`); each needs a wired delivery channel (`ErrPasswordlessKindUnsupported`), the challenge rail + durable outbox, and a valid `PublicAuthBaseURL`. Provisioning is OFF by default and opt-in per `PasswordlessProvisionOnRedeem` (email links only — see [Provision-on-consumption](#provision-on-consumption--magic-links-for-addresses-with-no-account)); NEVER enables phone+password (phone stays passwordless-only). |
 | `PasswordlessProvisionOnRedeem` | **false (default) → an email magic link sent to an address with no account delivers nothing and creates nothing** — the historical login-only behavior. true → the link is delivered, and the account is created **only when the link is successfully CONSUMED**, never when it is sent. Email links ONLY; never phone, OTP, OAuth, or another identifier kind. Requires the email passwordless kind, the challenge rail + `ChallengeProtector`, an `IdentifierKeyer`, a delivery runtime, a valid `PublicAuthBaseURL`, `Repositories.Passwordless`, and `Repositories.ActiveSessions` — anything missing is `ErrPasswordlessProvisionWiring` at construction. Read the [threat model](#provision-on-consumption--magic-links-for-addresses-with-no-account) before enabling. |
 | `AllowedOrigins []string` | the exact-match `Origin` allowlist for cookie-authenticated sensitive mutations and HTML form posts (design §9.1). `"*"` never authorizes a credentialed cross-origin mutation; empty rejects every cross-site cookie mutation. Bearer-only callers skip the gate. |
-| `BrowserLoginPath string` | the login destination the browser identity gates (`RequirePrincipalBrowser` / `RequireLiveSessionBrowser`) 303 to on denial (`AUTH_BROWSER_LOGIN_PATH`). Empty → `/auth/login`. A non-empty value MUST be a safe root-relative path (leading `/`, no `//` prefix, scheme, backslash, or control character) or construction fails with `ErrBrowserLoginPathInvalid`. Configures ONLY the browser gates; the JSON middleware is unaffected. |
+| `BrowserLoginPath string` | the login destination any `RequirePrincipal(Browser())` gate 303s to on denial (`AUTH_BROWSER_LOGIN_PATH`). Empty → `/auth/login`. A non-empty value MUST be a safe root-relative path (leading `/`, no `//` prefix, scheme, backslash, or control character) or construction fails with `ErrBrowserLoginPathInvalid`. Configures ONLY the `Browser()` denial mode; a gate without it keeps its byte-stable JSON 401. |
 | `Views` | **nil → API-only** (no HTML routes, JSON-only POSTs, no templ in the graph). Non-nil → HTML pages mount alongside the unchanged JSON API. The blessed default is the ui/goth adapter `authgoth.New(bundle)` (`pockets/authentication/views/goth`); the override path is embedding its `Views`. |
 | `HTMLPolicy` (*HTMLResourcePolicy) | **nil → the historical asset-free CSP** (script-src nonce-only, no external origins). Non-nil → the same fixed protections plus the policy's validated widening resource directives (script/style/image/font/connect/media/worker), so a selected HTML view can load its assets. Only WIDENS — a policy can never remove a fixed protection. Build with `NewHTMLResourcePolicy` (validates loudly). Set with a nil `Views` → `ErrHTMLPolicyWithoutViews` at construction (contradictory wiring). Technology-neutral — the core imports no templ/`ui/goth`. |
 | `EmailContentTemplates` | empty → the bundled `LayerCore` email bodies render unchanged. Each entry overrides a bundled template at `email.LayerApp` (Namespace must be `EmailContentNamespace`). Changes email BODIES only — a **distinct** override system from `Views`. |
@@ -767,7 +886,8 @@ default, so a host can never inherit the development posture; unknown →
 | `SMSBodies` (map purpose → template) | empty → the bundled SMS bodies. Same rules as `EmailSubjects` for the body-only rail; an entry for an email-only purpose (registration verification, password reset, OAuth pending link) is `ErrDeliveryOverrideInvalid` — an override customizes an existing rail, it never enables a new kind. |
 | `RequireVerifiedEmail` | false. true → login AND `/auth/token` refuse an unverified user with 403 (**requires a WORKING Mailer**, else total login lockout). |
 | `PasswordFlowsDisabled` | false (every route mounted). true → the password credential is OFF as a posture: `Register` mounts NONE of `/auth/register`, `/auth/login`, `/auth/verify`, `/auth/verification/resend`, `/auth/password/{forgot,reset,change,set,remove,remove/start}`, `/auth/step-up/password` (JSON and HTML pages — deny-by-absence, 404), and the matching `Service` use-cases refuse with `ErrPasswordFlowsDisabled` (wraps `sdk.ErrNotFound`). For a Google-only / passwordless-only host. `Hasher` stays required. |
-| `MachineRoutesGate` (web.Middleware) | **nil → the bundled machine-identity lifecycle routes are NOT mounted** (404, deny-by-absence) even when `ServiceAccounts` + `APIKeys` are wired, and `NewService` WARNs so an upgrading host learns the posture at boot instead of from production 404s. Key AUTHENTICATION is unaffected (`AuthenticateAPIKey`, `RequireServiceAccount`, and the bearer path of `RequirePrincipal` still follow `MachineEnabled`). Non-nil → `POST`/`GET /auth/service-accounts`, `POST`/`GET /auth/service-accounts/{id}/keys` and `POST /auth/api-keys/{id}/revoke` mount, each as `RequireUser` → `RequireLiveSession` → (on the three POSTs) the browser-safe `Origin`/CSRF gate → this gate: human credential only (an API key, act-as-user or not, is 401), immediately revocable, CSRF-safe for cookie clients, then the host's authorization. Typical: `authorizer.RequirePermissionFixed("platform", "steward", "global")`. Set with the machine subsystem unwired (both repositories nil — a half-wired pair fails earlier with `ErrMachineReposRequired`) → `ErrMachineRoutesGateWithoutRepos` (a policy that can never be consulted is contradictory wiring). A **single** middleware, not the `[]web.Middleware` of `cms.Config.AdminMiddleware` / `events.Config.StreamMiddleware`: nil is the unambiguous "no policy", where an empty non-nil slice would mean "mounted, ungated". **Scope behind the gate:** ownership is fixed (the caller is the creator; delegation is the explicit, validated, audited `act_as_user_id`, and `owner_user_id` is refused by name), but **listing is GLOBAL** — a gate holder sees every service account, lists the keys of any account, and mints/revokes by any id. A host that needs a creator-scoped list or per-object authorization leaves the gate nil and serves its own routes over `CreateServiceAccount` / `MintAPIKey` / `ListServiceAccounts` / `ListAPIKeys` / `RevokeAPIKey`. |
+| `MachineRoutesGate` (web.Middleware) | **nil → the bundled machine-identity lifecycle routes are NOT mounted** (404, deny-by-absence) even when `ServiceAccounts` + `APIKeys` are wired, and `NewService` WARNs so an upgrading host learns the posture at boot instead of from production 404s. Key AUTHENTICATION is unaffected (`RequireAPIKey()` and the bearer path of `RequirePrincipal` still follow `MachineEnabled`). Non-nil → `POST`/`GET /auth/service-accounts`, `POST`/`GET /auth/service-accounts/{id}/keys` and `POST /auth/api-keys/{id}/revoke` mount, each as `BundledRouteAuth.MachineLifecycle` (`RequireAccessTokenLive()` by default) → (on the three POSTs) the browser-safe `Origin`/CSRF gate → this gate: human credential only by default (an API key, act-as-user or not, is 401), immediately revocable, CSRF-safe for cookie clients, then the host's authorization. Typical: `authorizer.RequirePermissionFixed("platform", "steward", "global")`. Set with the machine subsystem unwired (both repositories nil — a half-wired pair fails earlier with `ErrMachineReposRequired`) → `ErrMachineRoutesGateWithoutRepos` (a policy that can never be consulted is contradictory wiring). A **single** middleware, not the `[]web.Middleware` of `cms.Config.AdminMiddleware` / `events.Config.StreamMiddleware`: nil is the unambiguous "no policy", where an empty non-nil slice would mean "mounted, ungated". **Scope behind the gate:** ownership is fixed (the caller is the creator; delegation is the explicit, validated, audited `act_as_user_id`, and `owner_user_id` is refused by name), but **listing is GLOBAL** — a gate holder sees every service account, lists the keys of any account, and mints/revokes by any id. A host that needs a creator-scoped list or per-object authorization leaves the gate nil and serves its own routes over `CreateServiceAccount` / `MintAPIKey` / `ListServiceAccounts` / `ListAPIKeys` / `RevokeAPIKey`. |
+| `BundledRouteAuth` (BundledRouteAuthentication) | every field zero → the audited default authenticator for that bundled route group (see [The middleware surface](#the-middleware-surface-what-other-pockets-and-host-routes-gate-on)). A non-zero field, built with `PrincipalStrategy(opts...)`, replaces ONLY that group's authentication; it configures authentication alone and never substitutes for `MachineRoutesGate` / `UserAdminCheck` / `InviteCheck`. Resolved once at `NewService` into concrete middleware and held immutable for the process's life. |
 | `RateLimiter` | `ratelimiter.NewMemory()` — an in-process limiter (not "unlimited"). **Production rejects a per-process limiter** (`ErrNonDurableRateLimiter`): a multi-instance host needs a shared/durable one. |
 | `SessionCookie` (CookieConfig) | zero value usable: name `session`, path `/`, browser-session cookie backed by a 7-day server session. `Secure` is a host deployment choice (true behind TLS). |
 | `RefreshCookiePath string` | the refresh cookie's `Path` scope (`AUTH_REFRESH_COOKIE_PATH`). Empty → `/auth` (covers `/auth/refresh` AND `/auth/logout`). **A host mounting the pocket under a prefix MUST set the FULL prefixed path** — `pocket.PrefixRegistrar{Prefix: "/api/v1"}` → `RefreshCookiePath: "/api/v1/auth"` — else the browser never sends the refresh cookie to `/api/v1/auth/refresh` and cookie-driven refresh dies SILENTLY (the registrar exposes registration, not its mount prefix, so the pocket cannot derive it). A non-empty value must be a valid absolute cookie path (leading `/`, no query/fragment/control/header-delimiter character, no trailing slash except `/` itself) or construction fails with `ErrRefreshCookiePathInvalid`. The SAME resolved path issues (login, rotation) and deletes (logout) the cookie. Configures ONLY the refresh cookie: the access cookie keeps `SessionCookie.Path` and both keep `SameSite=Lax`. |
@@ -1488,21 +1608,22 @@ there has already been authorized to see it.
 
 ### Revocation timing: live sessions vs stateless JWTs
 
-Deactivation deletes the sessions, so anything gated on **`RequireLiveSession`**
+Deactivation deletes the sessions, so anything gated on **`Live()`**
 (`/auth/me`, `/auth/methods`, `/auth/csrf`, every credential mutation, the admin
 routes themselves) denies on the very next request. Refresh fails for the same
 reason: the row is gone.
 
-The **`RequireUser`** tier is stateless — it validates the access JWT's signature
-and expiry without a session lookup — so an access token issued *before* the
-transition stays acceptable on those routes for at most `Config.AccessTokenTTL`
-(default 15 minutes). This is the same bounded asymmetry logout has always had,
-and it is bounded by design rather than unnoticed. Two consequences worth
-knowing:
+The stateless tier (`RequireAccessToken()`, no `Live()`) validates the access
+JWT's signature and expiry without a session lookup — so an access token issued
+*before* the transition stays acceptable on those routes for at most
+`Config.AccessTokenTTL` (default 15 minutes). This is the same bounded asymmetry
+logout has always had, and it is bounded by design rather than unnoticed. Two
+consequences worth knowing:
 
-- put anything that must revoke instantly behind `RequireLiveSession`; and
-- note that `GET /auth/oauth/{provider}/link/start` currently uses `RequireUser`,
-  so it carries that window (see the OAuth section below).
+- put anything that must revoke instantly behind `Live()`; and
+- note that `GET /auth/oauth/{provider}/link/start` currently uses
+  `RequireAccessToken()` with no `Live()`, so it carries that window (see the
+  OAuth section below).
 
 ### Wiring it
 
@@ -1575,16 +1696,17 @@ v0.6.0 the owner came straight from the body's `owner_user_id`, so any
 authenticated user could own another user's impersonation credential; that field
 is now **refused by name with a 400** for one release, then dropped.
 
-**Why the stack is `RequireUser` → `RequireLiveSession` → gate.** `RequireUser`
+**Why the default `MachineLifecycle` posture is `RequireAccessTokenLive()`.** It
 admits the human credential class only, so an API key — including an act-as-user
 key, which resolves to its human owner and is otherwise indistinguishable
-downstream — is 401 on every lifecycle route: a key can never mint another key
-or delegate. `RequireLiveSession` closes the ≤ `AccessTokenTTL` stale-JWT window,
-the invitation precedent (credential issuance is not less sensitive than an
-invitation). The three MUTATIONS then clear the browser-safe `Origin`/CSRF gate,
-so a cookie client's mint or revoke is refused as CSRF before the host's policy
-is ever consulted; bearer-only callers skip it. The gate then answers
-authorization in the host's own vocabulary and writes its own denial.
+downstream — is 401 on every lifecycle route: **a key never mints a key**. Its
+`Live()` tier closes the ≤ `AccessTokenTTL` stale-JWT window, the invitation
+precedent (credential issuance is not less sensitive than an invitation). The
+three MUTATIONS then clear the browser-safe `Origin`/CSRF gate, so a cookie
+client's mint or revoke is refused as CSRF before the host's policy is ever
+consulted; bearer-only callers skip it. The gate then answers authorization in
+the host's own vocabulary and writes its own denial. A host that needs a
+different posture overrides `Config.BundledRouteAuth.MachineLifecycle`.
 
 **Audit.** Each lifecycle op records one security event whose `Actor` is the
 principal in the request context: `service_account_created`, `api_key_minted`
@@ -1671,14 +1793,15 @@ Properties worth relying on:
   server-side `state` (the OAuth login-CSRF defense) plus the session gate on
   `link/start`. A settings page navigates to `link/start` — it must not fetch it
   with XHR and follow the redirect itself.
-- **Gate tier.** `link/start` uses the stateless `RequireUser` tier, so an
-  already-issued access JWT stays usable until `AccessTokenTTL` even after the
-  session is revoked. That bound is deliberate and documented rather than
-  silently changed here; whether this route should move to `RequireLiveSession`
-  is an open question for the lifecycle work (see
+- **Gate tier.** `link/start` (`BundledRouteAuth.OAuthLinkStart`) uses the
+  stateless `RequireAccessToken()` tier, so an already-issued access JWT stays
+  usable until `AccessTokenTTL` even after the session is revoked. That bound is
+  deliberate and documented rather than silently changed here; whether this
+  route should move to a `Live()` posture is an open question for the lifecycle
+  work (see
   `.claude/plans/coordination-hub-auth-upstream/01-user-directory-and-lifecycle.md`).
-  The *sensitive* half of the pair — the unlink routes — already uses
-  `RequireLiveSession`.
+  The *sensitive* half of the pair — the unlink routes — already run behind
+  `CredentialManagement`'s `RequireAccessTokenLive()`.
 
 ### Flow 2 — collision / pending link, initiated by an unauthenticated sign-in
 
@@ -1951,10 +2074,10 @@ passwordless verify/redeem) routes through the one `mintSession` path, producing
 - an **opaque refresh token** — SHA-256-hashed into the session row, TTL
   `RefreshTTL` (a FIXED horizon).
 
-Verification is a route seam: `RequireUser` is JWT signature + expiry only (zero
-DB; revocation honored within ≤ `AccessTokenTTL`); `RequireLiveSession` is one PK
-lookup (deleted/expired → deny immediately; API keys pass; fails CLOSED on
-repository error).
+Verification is a route seam: `RequireAccessToken()` (no `Live()`) is JWT
+signature + expiry only (zero DB; revocation honored within ≤ `AccessTokenTTL`);
+adding `Live()` is one PK lookup (deleted/expired → deny immediately; an API key
+passes; fails CLOSED on repository error).
 
 **Refresh rotation** (`POST /auth/refresh`) is compare-and-swap, never blind:
 `H = hash(token)` resolves once via `GetByRefreshHash`, then rotate (current) →

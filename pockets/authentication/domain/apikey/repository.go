@@ -16,7 +16,7 @@ import (
 // revoked and expired rows INCLUDED; a zero/NULL ExpiresAt means never-expires.
 // sdk.ErrNotFound is returned ONLY for a genuinely-unknown hash. There is NO
 // ErrExpired port sentinel: revocation and expiry are SERVICE-layer branches in
-// AuthenticateAPIKey, because the service needs the record to attribute the
+// the service's API-key credential resolver, because it needs the record to attribute the
 // blocked/failure audit event to its service account.
 //
 // Sentinel contract (the storetest conformance suite executes these):

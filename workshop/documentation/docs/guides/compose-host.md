@@ -91,7 +91,7 @@ if err := authSvc.Register(mount); err != nil {
 if err := cms.Register(mount, cmsRepos, cms.Config{
     Views: cmsViews,
     AdminMiddleware: []web.Middleware{
-        authSvc.RequireUser,
+        authSvc.RequireAccessToken(),
         requireCMSAdmin,
     },
 }); err != nil {

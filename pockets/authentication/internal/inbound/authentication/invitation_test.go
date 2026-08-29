@@ -438,7 +438,7 @@ func TestInvitationCreateFailsClosed(t *testing.T) {
 }
 
 // TestInvitationRoutesRejectRevokedSession proves every authenticated invitation
-// route rides RequireLiveSession: a revoked (deleted) session presenting an
+// route rides the Invitations authenticator: a revoked (deleted) session presenting an
 // otherwise-unexpired access JWT is denied within one round-trip, and the
 // invitation service is never reached (design §6/D3, §1.4).
 func TestInvitationRoutesRejectRevokedSession(t *testing.T) {

@@ -89,8 +89,8 @@ The host owns either runtime. In jobs mode, authentication exposes delivery call
 
 ## Middleware and revocation
 
-- `RequireUser` validates the access credential and stores a principal in context. Stateless routes can honor a revoked access JWT until its short TTL expires.
-- `RequireLiveSession` also checks the session anchor and is used on sensitive routes for immediate revocation.
+- `Service.RequirePrincipal(opts ...PrincipalOption)` is the one authenticator; `Accept`/`Transports` narrow which credential kinds and transports it admits, and named helpers like `RequireAccessToken()` and `RequireAPIKey()` are one-line pre-compositions of it.
+- Without `Live()`, verification is stateless (signature + expiry only), so a revoked access JWT stays acceptable until its short TTL expires; `Live()` also checks the session anchor for immediate revocation on sensitive routes.
 - browser-sensitive mutations apply an allowlisted Origin check and double-submit CSRF protection;
 - API bearer callers do not need a browser CSRF cookie.
 

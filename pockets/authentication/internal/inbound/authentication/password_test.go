@@ -102,7 +102,7 @@ func (f passwordFixture) bearerFor(t *testing.T, email string) string {
 	return resp.AccessToken
 }
 
-func TestPasswordRoutesRequireLiveSession(t *testing.T) {
+func TestPasswordRoutesRequireAccessTokenLive(t *testing.T) {
 	f := newPasswordFixture(t)
 	for _, path := range []string{"/auth/password/set", "/auth/password/remove/start", "/auth/password/remove"} {
 		r := httptest.NewRequest("POST", path, strings.NewReader(`{}`))

@@ -70,7 +70,7 @@ func TestBrowserLoginPathOverrideReachesGate(t *testing.T) {
 
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	rec := httptest.NewRecorder()
-	svc.RequirePrincipalBrowser(next).ServeHTTP(rec, httptest.NewRequest("GET", "/admin", nil))
+	svc.RequirePrincipal(Browser())(next).ServeHTTP(rec, httptest.NewRequest("GET", "/admin", nil))
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("denied browser GET = %d, want 303", rec.Code)
 	}

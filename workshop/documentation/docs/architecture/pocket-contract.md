@@ -82,7 +82,7 @@ Pass middleware or another narrow host-owned collaborator.
 
 ```go
 cms.Config{
-    AdminMiddleware: []web.Middleware{authService.RequireUser},
+    AdminMiddleware: []web.Middleware{authService.RequireAccessToken()},
 }
 ```
 

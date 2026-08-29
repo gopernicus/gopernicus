@@ -4,13 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 
 	"github.com/gopernicus/gopernicus/pockets/authentication/domain/securityevent"
 	"github.com/gopernicus/gopernicus/pockets/authentication/domain/session"
 	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/ratelimiter"
-	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 )
 
 // ErrInvalidRefreshToken is the single generic error every refresh denial returns
@@ -194,97 +192,6 @@ func (s *Service) recordRefreshReuse(ctx context.Context, sess session.Session) 
 
 // refreshSessionKey derives the per-session rate-limit key for refresh.
 func refreshSessionKey(sessionID string) string { return "refresh:" + sessionID }
-
-// RequireLiveSession gates next on a live session, one PK lookup per request
-// (§1.2/§1.4). It is the immediate-revocation tier for sensitive routes: unlike
-// RequireUser (stateless JWT), a deleted or expired session denies here within
-// one round-trip. Per-principal matrix (§1.4):
-//
-//   - user JWT (bearer or access cookie): verify JWT, then sessions.Get(session_id);
-//     a missing/expired row denies.
-//   - API key: already DB-checked at resolution; pass (no session row exists, so a
-//     naive lookup would wrongly reject every machine caller).
-//   - no/invalid credential: deny.
-//   - repository error: deny — fails CLOSED (never harmonized toward the limiter's
-//     fail-open, D1).
-//
-// On success it stashes the resolved Principal (read via CurrentPrincipal /
-// CurrentUser) and calls next; otherwise it writes a 401.
-func (s *Service) RequireLiveSession(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p, sessionID, ok := s.resolveLiveSession(r)
-		if !ok {
-			writeUnauthorized(w)
-			return
-		}
-		ctx := identity.WithPrincipal(r.Context(), p)
-		// A user session stamps its id so a sensitive-mutation handler binds its
-		// step-up grant to the exact live session (design §5.0). A machine (API-key)
-		// caller has no session row, so sessionID stays empty and CurrentSessionID
-		// reports absent.
-		if sessionID != "" {
-			ctx = withSessionID(ctx, sessionID)
-		}
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
-}
-
-// RequireLiveSessionBrowser is the browser-facing sibling of RequireLiveSession
-// (design §9.2): it enforces the SAME §1.4 live-session matrix through
-// resolveLiveSession and stashes the SAME Principal (and, on the user path, the live
-// session id), but on denial it 303s to the configured browser login path instead of
-// writing a JSON 401. A denied GET/HEAD carries a validated return_to
-// (redirectToBrowserLogin). It is mounted deliberately on HTML routes and NEVER sniffs
-// Accept or Fetch Metadata; a statelessly-valid but revoked user session that passes
-// RequirePrincipalBrowser is denied here.
-func (s *Service) RequireLiveSessionBrowser(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p, sessionID, ok := s.resolveLiveSession(r)
-		if !ok {
-			s.redirectToBrowserLogin(w, r)
-			return
-		}
-		ctx := identity.WithPrincipal(r.Context(), p)
-		if sessionID != "" {
-			ctx = withSessionID(ctx, sessionID)
-		}
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
-}
-
-// resolveLiveSession classes the credential and enforces the §1.4 matrix. It
-// returns the resolved principal and, for a user session, the live session id (empty
-// for a session-less machine caller).
-func (s *Service) resolveLiveSession(r *http.Request) (Principal, string, bool) {
-	if raw, ok := bearerToken(r); ok {
-		if isJWTToken(raw) {
-			userID, sessionID, ok := s.verifyBearerClaims(raw)
-			if !ok || !s.sessionLive(r.Context(), sessionID) {
-				return Principal{}, "", false
-			}
-			return Principal{Type: PrincipalUser, ID: userID}, sessionID, true
-		}
-		// API key: already DB-checked by resolution; no session row exists, pass.
-		if !s.MachineEnabled() {
-			return Principal{}, "", false
-		}
-		p, err := s.AuthenticateAPIKey(r.Context(), raw)
-		if err != nil {
-			return Principal{}, "", false
-		}
-		return p, "", true
-	}
-	// No bearer: the access-JWT session cookie.
-	c, err := r.Cookie(s.cookie.Name)
-	if err != nil {
-		return Principal{}, "", false
-	}
-	userID, sessionID, ok := s.verifyBearerClaims(c.Value)
-	if !ok || !s.sessionLive(r.Context(), sessionID) {
-		return Principal{}, "", false
-	}
-	return Principal{Type: PrincipalUser, ID: userID}, sessionID, true
-}
 
 // sessionLive reports whether sessionID resolves to a live (present, unexpired)
 // session. A blank id, a missing/expired row, OR any repository error all return

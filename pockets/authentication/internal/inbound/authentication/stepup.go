@@ -9,7 +9,7 @@ import (
 )
 
 // Step-up (recent-authentication grant) transport (design §5.0). Every route here
-// is a cookie-authenticated sensitive mutation: RequireLiveSession has proven the
+// is a cookie-authenticated sensitive mutation: the CredentialManagement authenticator has proven the
 // caller's session and stamped its id, and the browser-safe-mutation gate has
 // applied the allowlisted-Origin + CSRF check (design §9.1). Each handler adds the
 // strict JSON body hardening and sets Cache-Control: no-store, since the responses
@@ -156,7 +156,7 @@ func (h *handlers) completeStepUpCodeJSON(w http.ResponseWriter, r *http.Request
 }
 
 // stepUpPrincipal resolves the caller's user id and live session id that
-// RequireLiveSession stamped. A step-up grant is always bound to the session the
+// the authenticator stamped. A step-up grant is always bound to the session the
 // caller proved, never to a body field, so a missing session id denies.
 func (h *handlers) stepUpPrincipal(w http.ResponseWriter, r *http.Request) (userID, sessionID string, ok bool) {
 	userID, uok := h.svc.CurrentUser(r.Context())

@@ -71,8 +71,9 @@ var (
 //   - passwordless pages (only when PasswordlessEnabled — deny-by-absence mirrors the
 //     JSON routes): GET /auth/passwordless, /auth/passwordless/code,
 //     /auth/passwordless/check, /auth/magic;
-//   - account-security pages (RequireLiveSession — masked inventory + management
-//     forms): GET /auth/account, /auth/identifiers/new, /auth/identifiers/confirm,
+//   - account-security pages (the BrowserAccount authenticator — masked
+//     inventory and management forms): GET /auth/account, /auth/identifiers/new,
+//     /auth/identifiers/confirm,
 //     /auth/identifiers/{id}/edit, /auth/password/set, /auth/password/change,
 //     /auth/password/remove, /auth/step-up;
 //   - OAuth pages (only when OAuthEnabled): the PUBLIC pending-link landing GET
@@ -81,7 +82,7 @@ var (
 //
 // Every HTML GET path is distinct from its JSON POST twin (method+path), so no route
 // collides — the POST endpoints keep their single JSON registration.
-func mountHTML(r pocket.RouteRegistrar, h *handlers, browserSafe web.Middleware) {
+func mountHTML(r pocket.RouteRegistrar, h *handlers, browserAccount, browserSafe web.Middleware) {
 	// Public credential pages.
 	r.Handle("GET", "/auth/login", h.loginPage)
 	// The password credential's pages, only when the posture is on (deny-by-absence).
@@ -101,13 +102,14 @@ func mountHTML(r pocket.RouteRegistrar, h *handlers, browserSafe web.Middleware)
 		r.Handle("GET", "/auth/magic", h.magicLinkPage)
 	}
 
-	// Account-security GET pages are live-session gated (immediate revocation), like
-	// their JSON twins — but a browser denial redirects to login (htmlLiveSession)
-	// rather than leaking a JSON 401 (design §9.2). The management form POSTs keep
-	// their JSON route registrations (routes.go / oauth.go) and the dispatcher there
-	// selects the form arm; only the HTML-form-exclusive identifier edit needs a new
-	// POST route below.
-	live := h.htmlLiveSession
+	// Account-security GET pages ride the BrowserAccount authenticator: cookie-only
+	// (a bundled browser page never reads a header credential), live (immediate
+	// revocation, like their JSON twins), and redirecting to the configured login
+	// path on denial rather than leaking a JSON 401 (design §9.2). The management
+	// form POSTs keep their JSON route registrations (routes.go / oauth.go) and the
+	// dispatcher there selects the form arm; only the HTML-form-exclusive identifier
+	// edit needs a new POST route below.
+	live := htmlSecured(h.htmlPolicy, browserAccount)
 	r.Handle("GET", "/auth/account", h.accountPage, live)
 	r.Handle("GET", "/auth/identifiers/new", h.identifierNewPage, live)
 	r.Handle("GET", "/auth/identifiers/confirm", h.identifierConfirmPage, live)
@@ -127,8 +129,10 @@ func mountHTML(r pocket.RouteRegistrar, h *handlers, browserSafe web.Middleware)
 	// /auth/identifiers/{id} with an action field; the handler routes it to the same
 	// SetIdentifierUses / RemoveIdentifier service methods the JSON PATCH/DELETE edges
 	// use. This POST path is form-only (no JSON twin), so it is a single registration
-	// carrying the live-session + browser-safe (Origin + deferred form-CSRF) gates.
-	r.Handle("POST", "/auth/identifiers/{id}", h.identifierEditForm, h.svc.RequireLiveSession, browserSafe)
+	// carrying the BrowserAccount authenticator + the browser-safe (Origin +
+	// deferred form-CSRF) gate. A denied POST redirects WITHOUT a return_to, so a
+	// later GET can never replay the mutation.
+	r.Handle("POST", "/auth/identifiers/{id}", h.identifierEditForm, live, browserSafe)
 
 	// OAuth pages, only when at least one provider is wired. The pending-link landing
 	// is PUBLIC by construction (design §5.7): the caller proved inbox control with the
@@ -321,7 +325,7 @@ func (h *handlers) oauthLinkPage(w http.ResponseWriter, r *http.Request) {
 // management form POST handlers and recent-auth gating.
 // ---------------------------------------------------------------------------
 
-// accountPage renders the masked method inventory (design §5.1). RequireLiveSession
+// accountPage renders the masked method inventory (design §5.1). The BrowserAccount authenticator
 // has already validated the session and stashed the user id. An ?auth= marker from a
 // completed account mutation's PRG shows that mutation's canonical notice; anything
 // else — an unknown code, a login-page code, a hand-typed value — shows nothing.
@@ -468,57 +472,8 @@ func (h *handlers) oauthUnlinkPage(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------------------
-// Live-session HTML gate + account-page model helpers
+// Account-page model helpers
 // ---------------------------------------------------------------------------
-
-// htmlGate buffers a would-be denial write from the JSON RequireLiveSession gate so
-// an HTML account page can convert it into a login redirect instead of leaking a JSON
-// 401 body. Once the page handler runs (reached), writes pass straight through to the
-// underlying writer.
-type htmlGate struct {
-	http.ResponseWriter
-	reached bool
-	denied  bool
-}
-
-func (g *htmlGate) WriteHeader(status int) {
-	if !g.reached {
-		g.denied = true
-		return
-	}
-	g.ResponseWriter.WriteHeader(status)
-}
-
-func (g *htmlGate) Write(b []byte) (int, error) {
-	if !g.reached {
-		g.denied = true
-		return len(b), nil
-	}
-	return g.ResponseWriter.Write(b)
-}
-
-// htmlLiveSession gates an HTML account page on a live session. Unlike the JSON
-// RequireLiveSession (which writes a 401), a denied browser is redirected to the login
-// page after validating a safe relative return-to (design §9.2). It wraps the service
-// gate so revocation/liveness stays the service's decision; only the denial
-// presentation changes — a stale or revoked session lands on login, never on a JSON
-// error page.
-func (h *handlers) htmlLiveSession(next http.Handler) http.Handler {
-	marked := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if g, ok := w.(*htmlGate); ok {
-			g.reached = true
-		}
-		next.ServeHTTP(w, r)
-	})
-	guarded := h.svc.RequireLiveSession(marked)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		g := &htmlGate{ResponseWriter: w}
-		guarded.ServeHTTP(g, r)
-		if g.denied {
-			h.redirectToLogin(w, r)
-		}
-	})
-}
 
 // stepUpParams is the operation binding a step-up page carries between the sensitive
 // action, the step-up page, and its completion (design §5.0). All fields are non-secret
@@ -680,4 +635,20 @@ func (h *handlers) renderError(w http.ResponseWriter, r *http.Request, status in
 		Status:      status,
 		Message:     message,
 	}))
+}
+
+// htmlSecured wraps an HTML-page authenticator so its denial carries the same
+// fixed HTML security headers (Cache-Control: no-store, Referrer-Policy, framing,
+// nosniff, the asset-free CSP) every rendered page and form redirect carries: the
+// gate's 303 to login is an HTML response and must never be cached or leak a
+// referrer. The headers are written BEFORE the gate runs, so a passing request's
+// handler simply overwrites them through writeHTMLSecurity with its nonce'd CSP.
+func htmlSecured(policy *HTMLResourcePolicy, gate web.Middleware) web.Middleware {
+	return func(next http.Handler) http.Handler {
+		guarded := gate(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			writeHTMLSecurity(w, policy, "")
+			guarded.ServeHTTP(w, r)
+		})
+	}
 }

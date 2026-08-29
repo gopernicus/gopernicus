@@ -72,7 +72,7 @@ For relationship-backed hosts, `Service.RequirePermission` creates SDK web middl
 router.GET(
     "/projects/{id}",
     showProject,
-    authSvc.RequireUser,
+    authSvc.RequireAccessToken(),
     authorizationSvc.RequirePermission(
         "view",
         authorization.FixedResource("project", "main"),

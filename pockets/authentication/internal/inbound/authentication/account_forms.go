@@ -90,7 +90,7 @@ func (h *handlers) formCSRFOK(w http.ResponseWriter, r *http.Request, form url.V
 }
 
 // formPrincipal resolves the caller's user id and live session id that
-// RequireLiveSession stamped (the same binding the JSON stepUpPrincipal uses). A
+// the authenticator stamped (the same binding the JSON stepUpPrincipal uses). A
 // step-up grant is always bound to the proven session, never a body field; a missing
 // principal redirects to login rather than leaking a JSON 401 onto an HTML page.
 func (h *handlers) formPrincipal(w http.ResponseWriter, r *http.Request) (userID, sessionID string, ok bool) {

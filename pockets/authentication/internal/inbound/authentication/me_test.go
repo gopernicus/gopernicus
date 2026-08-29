@@ -94,7 +94,7 @@ func meBody(t *testing.T, rec *httptest.ResponseRecorder) userResponse {
 
 // TestMeRequiresLiveSession proves both denials: no credential, and a session
 // revoked after the access JWT was minted (the immediate-revocation tier, ruling
-// 6 — not RequireUser's stale window).
+// 6 — not a stateless authenticator's stale window).
 func TestMeRequiresLiveSession(t *testing.T) {
 	f := newMeHandler(t, "")
 	if rec := do(t, f.h, "GET", "/auth/me", ""); rec.Code != http.StatusUnauthorized {
@@ -207,10 +207,12 @@ func TestMeHydratesAllowedUnverifiedAccount(t *testing.T) {
 	}
 }
 
-// TestMeRejectsMachinePrincipal proves the human-only gate: RequireLiveSession
-// admits a valid API key (a machine caller has no session row), so /auth/me must
-// deny it itself. The delivery-status control proves the very same key IS a live
-// credential — it gets a 400 there, not a 401.
+// TestMeRejectsMachinePrincipal proves the human-only gate: the SessionHydration
+// authenticator admits a valid API key (a machine caller has no session row), so
+// /auth/me must deny a SELF-ACTING service account itself. The delivery-status
+// control pins the other half of the route audit: that same valid key is refused
+// at the authenticator on a session-security read, 401 and never reaching the
+// handler's own 400 for a missing receipt.
 func TestMeRejectsMachinePrincipal(t *testing.T) {
 	f := newMeHandler(t, "")
 	f.seedAccount("u1", "alice@example.com")
@@ -237,8 +239,8 @@ func TestMeRejectsMachinePrincipal(t *testing.T) {
 		t.Fatal("mint returned no plaintext key")
 	}
 
-	if rec := serve(f.h, bearerRequest("/auth/delivery/status", key)); rec.Code != http.StatusBadRequest {
-		t.Fatalf("api-key delivery-status = %d, want 400 (the key must be a LIVE credential); body=%s", rec.Code, rec.Body)
+	if rec := serve(f.h, bearerRequest("/auth/delivery/status", key)); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("api-key delivery-status = %d, want 401 (a session-security read refuses every API key); body=%s", rec.Code, rec.Body)
 	}
 
 	rec := serve(f.h, bearerRequest("/auth/me", key))

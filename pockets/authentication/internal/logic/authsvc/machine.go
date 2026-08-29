@@ -15,6 +15,7 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // secrets generates the opaque random values this service mints (API-key
@@ -194,9 +195,10 @@ func auditActor(ctx context.Context) securityevent.Principal {
 	return securityevent.Principal{Type: p.Type, ID: p.ID}
 }
 
-// AuthenticateAPIKey resolves the effective Principal for a raw API key. It
-// hashes the key, looks it up by hash ALONE (the pinned GetByHash contract), and
-// then branches in the SERVICE per design §4.1:
+// resolveAPIKeyCredential resolves a raw API key to its effective Principal and
+// the Credential describing it. It hashes the key, looks it up by hash ALONE
+// (the pinned GetByHash contract), and then branches in the SERVICE per design
+// §4.1:
 //
 //   - revoked → deny, recording an apikey_auth `blocked` event WITH
 //     service-account attribution (key.ServiceAccountID — exactly why the pinned
@@ -207,40 +209,37 @@ func auditActor(ctx context.Context) securityevent.Principal {
 //     the service account itself), record an apikey_auth `success` event, and
 //     best-effort touch LastUsedAt.
 //
-// Every deny returns the same generic sdk.ErrUnauthorized so the response
-// cannot distinguish unknown / revoked / expired. TouchLastUsed failures never
-// fail authentication. The audit rows carry the key PREFIX only, never the raw
-// key (design §5.1 WI3).
-func (s *Service) AuthenticateAPIKey(ctx context.Context, rawKey string) (Principal, error) {
-	if !s.MachineEnabled() {
-		return Principal{}, invalidAPIKey()
-	}
+// Every denial is the same opaque false, so a response can never distinguish
+// unknown / revoked / expired, and a repository error denies rather than
+// admitting. TouchLastUsed failures never fail authentication. The audit rows
+// carry the key PREFIX only, never the raw key (design §5.1 WI3). It is the
+// pocket's ONLY raw-key verification path: raw credential verification is not an
+// application-service entry point, so it is reached exclusively through
+// RequirePrincipal.
+func (s *Service) resolveAPIKeyCredential(ctx context.Context, rawKey string) (Principal, Credential, bool) {
 	hashed, err := s.hashAPIKey(rawKey)
 	if err != nil {
 		// An empty/invalid key never matches a stored hash.
-		return Principal{}, invalidAPIKey()
+		return Principal{}, Credential{}, false
 	}
 	key, err := s.apiKeys.GetByHash(ctx, hashed)
 	if err != nil {
-		if errors.Is(err, sdk.ErrNotFound) {
-			return Principal{}, invalidAPIKey()
-		}
-		return Principal{}, err
+		return Principal{}, Credential{}, false
 	}
 
 	now := s.now()
 	switch {
 	case key.Revoked():
 		s.recordAPIKeyAuth(ctx, key, saPrincipal(key.ServiceAccountID), securityevent.StatusBlocked)
-		return Principal{}, invalidAPIKey()
+		return Principal{}, Credential{}, false
 	case key.Expired(now):
 		s.recordAPIKeyAuth(ctx, key, saPrincipal(key.ServiceAccountID), securityevent.StatusFailure)
-		return Principal{}, invalidAPIKey()
+		return Principal{}, Credential{}, false
 	}
 
 	sa, err := s.serviceAccounts.Get(ctx, key.ServiceAccountID)
 	if err != nil {
-		return Principal{}, err
+		return Principal{}, Credential{}, false
 	}
 	p := effectivePrincipal(sa)
 	// An act-as-user key authenticates AS a human subject, so the subject's
@@ -252,11 +251,11 @@ func (s *Service) AuthenticateAPIKey(ctx context.Context, rawKey string) (Princi
 		deactivated, err := s.userDeactivated(ctx, p.ID)
 		if err != nil {
 			// Fail closed: an unreadable subject is not proof of an active one.
-			return Principal{}, err
+			return Principal{}, Credential{}, false
 		}
 		if deactivated {
 			s.recordAPIKeyAuth(ctx, key, securityevent.Principal{Type: p.Type, ID: p.ID}, securityevent.StatusBlocked)
-			return Principal{}, invalidAPIKey()
+			return Principal{}, Credential{}, false
 		}
 	}
 	s.recordAPIKeyAuth(ctx, key, securityevent.Principal{Type: p.Type, ID: p.ID}, securityevent.StatusSuccess)
@@ -266,7 +265,13 @@ func (s *Service) AuthenticateAPIKey(ctx context.Context, rawKey string) (Princi
 	if err := s.apiKeys.TouchLastUsed(ctx, key.ID, now); err != nil {
 		s.logger.Warn("api key touch-last-used failed", "error_kind", errKind(err))
 	}
-	return p, nil
+	return p, Credential{
+		Kind:             CredentialAPIKey,
+		Transport:        TransportHeader,
+		APIKeyID:         key.ID,
+		ServiceAccountID: sa.ID,
+		ActAsUser:        sa.ActAsUser,
+	}, true
 }
 
 // recordAPIKeyAuth appends an apikey_auth audit row attributed to actor. Details
@@ -288,103 +293,147 @@ func saPrincipal(serviceAccountID string) securityevent.Principal {
 	return securityevent.Principal{Type: PrincipalServiceAccount, ID: serviceAccountID}
 }
 
-// CurrentPrincipal returns the effective Principal stashed by
-// RequireServiceAccount / RequirePrincipal, if any. It is the cross-pocket
-// machine-or-human identity port, alongside CurrentUser.
+// CurrentPrincipal returns the effective Principal stashed by RequirePrincipal,
+// if any. It is the cross-pocket machine-or-human identity port, alongside
+// CurrentUser and CurrentCredential.
 func (s *Service) CurrentPrincipal(ctx context.Context) (Principal, bool) {
 	return identity.FromContext(ctx)
 }
 
-// RequireServiceAccount gates next on an API-key bearer credential. A missing
-// header, a JWT-shaped bearer (two dots), an inert subsystem, or a bad key all
-// write 401. On success it stashes the resolved Principal (read via
-// CurrentPrincipal) and calls next.
-func (s *Service) RequireServiceAccount(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		raw, ok := bearerToken(r)
-		if !ok || isJWTToken(raw) || !s.MachineEnabled() {
-			writeUnauthorized(w)
-			return
-		}
-		p, err := s.AuthenticateAPIKey(r.Context(), raw)
-		if err != nil {
-			writeUnauthorized(w)
-			return
-		}
-		next.ServeHTTP(w, r.WithContext(identity.WithPrincipal(r.Context(), p)))
-	})
-}
-
-// RequirePrincipal gates next on either credential class and stashes the
-// resolved Principal (read via CurrentPrincipal). A bearer credential is classed
-// by shape: exactly two dots ⇒ the JWT path (active only when a TokenSigner is
-// wired — design §4.4; inert otherwise), otherwise the API-key path (active only
-// when the machine repos are wired). With no bearer header it falls back to the
-// session cookie → a user Principal. Any failure writes 401.
-func (s *Service) RequirePrincipal(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p, ok := s.resolvePrincipal(r)
-		if !ok {
-			writeUnauthorized(w)
-			return
-		}
-		next.ServeHTTP(w, r.WithContext(identity.WithPrincipal(r.Context(), p)))
-	})
-}
-
-// RequirePrincipalBrowser is the browser-facing sibling of RequirePrincipal (design
-// §9.2): it resolves the SAME credential classes through resolvePrincipal and stashes
-// the SAME Principal, but on denial it 303s to the configured browser login path
-// instead of writing a JSON 401. A denied GET/HEAD carries a validated return_to
-// (redirectToBrowserLogin). It is mounted deliberately on HTML routes and NEVER sniffs
-// Accept or Fetch Metadata; a valid API-key/bearer/session principal passes exactly as
-// through RequirePrincipal.
-func (s *Service) RequirePrincipalBrowser(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p, ok := s.resolvePrincipal(r)
-		if !ok {
-			s.redirectToBrowserLogin(w, r)
-			return
-		}
-		next.ServeHTTP(w, r.WithContext(identity.WithPrincipal(r.Context(), p)))
-	})
-}
-
-// resolvePrincipal classes and resolves the request's credential per the §4.3
-// rules. Each path is active only when its credential class is configured, so an
-// unwired class denies rather than half-resolving.
-func (s *Service) resolvePrincipal(r *http.Request) (Principal, bool) {
-	if raw, ok := bearerToken(r); ok {
-		if isJWTToken(raw) {
-			// The signer is always wired (D3), so a JWT bearer is always parsed;
-			// a wired-but-invalid JWT denies rather than falling through to the
-			// session path.
-			userID, ok := s.verifyBearer(raw)
-			if !ok {
-				return Principal{}, false
+// RequirePrincipal is THE authenticator. Its options are OR-sets over credential
+// kinds (Accept) and transports (Transports) plus a liveness tier (Live) and a
+// browser denial mode (Browser); with no options it admits every wired
+// credential over both transports, statelessly, denying with a JSON 401.
+//
+// At the OUTERMOST position it resolves the request's credential within its set
+// (resolveCredential) and stashes the Principal (read via CurrentPrincipal /
+// CurrentUser) plus the Credential (read via CurrentCredential). NESTED under an
+// outer RequirePrincipal it never re-resolves: it narrows, checking the stashed
+// Credential against its own set and denying when it falls outside. A Live()
+// gate runs the session lookup once — a nested Live() under an outer one reads
+// the proven CurrentSessionID and passes.
+//
+// The set is resolved at CONSTRUCTION, so an empty Accept()/Transports() panics
+// at wiring time. Nested narrowing trusts the stash written earlier in the same
+// chain: the supported wiring invariant is ONE authentication Service per chain.
+func (s *Service) RequirePrincipal(opts ...PrincipalOption) web.Middleware {
+	set := s.resolveSet(opts)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx := r.Context()
+			cred, nested := currentCredential(ctx)
+			if nested {
+				if !set.admits(cred.Kind, cred.Transport) {
+					s.denyPrincipal(w, r, set)
+					return
+				}
+			} else {
+				p, resolved, ok := s.resolveCredential(r, set)
+				if !ok {
+					s.denyPrincipal(w, r, set)
+					return
+				}
+				cred = resolved
+				ctx = withCredential(identity.WithPrincipal(ctx, p), cred)
 			}
-			return Principal{Type: PrincipalUser, ID: userID}, true
-		}
-		if !s.MachineEnabled() {
-			return Principal{}, false
-		}
-		p, err := s.AuthenticateAPIKey(r.Context(), raw)
-		if err != nil {
-			return Principal{}, false
-		}
-		return p, true
+			if set.live {
+				live, ok := s.enforceLive(ctx, cred)
+				if !ok {
+					s.denyPrincipal(w, r, set)
+					return
+				}
+				ctx = live
+			}
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
 	}
-	// No bearer credential: fall back to the access-JWT session cookie, verified
-	// statelessly → user principal (§1.2).
-	c, err := r.Cookie(s.cookie.Name)
-	if err != nil {
-		return Principal{}, false
+}
+
+// resolveCredential resolves the request's credential WITHIN set — the one
+// resolver, at the outermost position (design §4.3):
+//
+//   - a bearer header, when the header transport is in the set, is AUTHORITATIVE:
+//     it is classed by shape (isJWTToken — exactly two dots ⇒ access token, else
+//     ⇒ API key) and a failure denies; the cookie is never read after one;
+//   - otherwise the access-JWT session cookie, when the cookie transport is in
+//     the set;
+//   - otherwise no credential at all.
+//
+// A credential arriving on a transport OUTSIDE the set is ignored, not denied:
+// the set says what the surface reads, so a never-consulted header is not a
+// bypass. A credential whose KIND is outside the set denies.
+func (s *Service) resolveCredential(r *http.Request, set principalSet) (Principal, Credential, bool) {
+	if set.header {
+		if raw, ok := bearerToken(r); ok {
+			if isJWTToken(raw) {
+				return s.resolveAccessToken(raw, TransportHeader, set)
+			}
+			// The API-key path is active only when the machine subsystem is wired
+			// (deny-by-absence) and the surface admits keys.
+			if !set.apiKey || !s.MachineEnabled() {
+				return Principal{}, Credential{}, false
+			}
+			return s.resolveAPIKeyCredential(r.Context(), raw)
+		}
 	}
-	userID, ok := s.verifyBearer(c.Value)
+	if set.cookie {
+		if c, err := r.Cookie(s.cookie.Name); err == nil {
+			return s.resolveAccessToken(c.Value, TransportCookie, set)
+		}
+	}
+	return Principal{}, Credential{}, false
+}
+
+// resolveAccessToken verifies an access JWT presented over transport and builds
+// its Principal + Credential. The signer is always wired (D3), so verification
+// covers signature + expiry; the session_id claim rides along unproven until a
+// Live() gate looks it up.
+func (s *Service) resolveAccessToken(raw string, transport Transport, set principalSet) (Principal, Credential, bool) {
+	if !set.accessToken {
+		return Principal{}, Credential{}, false
+	}
+	userID, sessionID, ok := s.verifyBearerClaims(raw)
 	if !ok {
-		return Principal{}, false
+		return Principal{}, Credential{}, false
 	}
-	return Principal{Type: PrincipalUser, ID: userID}, true
+	return Principal{Type: PrincipalUser, ID: userID},
+		Credential{Kind: CredentialAccessToken, Transport: transport, SessionID: sessionID},
+		true
+}
+
+// enforceLive applies the Live() tier to an already-resolved credential and
+// returns the context a passing request continues with (§1.4):
+//
+//   - access token: one PK lookup on the session row, stamping the proven id so a
+//     sensitive-mutation handler binds its step-up grant to that exact session; a
+//     missing, expired, or unreadable row denies — fails CLOSED (D1);
+//   - API key: already DB-checked at resolution and owning no session row, it
+//     passes without another lookup;
+//   - a session id already proven by an OUTER Live() passes without a second
+//     lookup.
+func (s *Service) enforceLive(ctx context.Context, cred Credential) (context.Context, bool) {
+	if cred.Kind != CredentialAccessToken {
+		return ctx, true
+	}
+	if _, proven := s.CurrentSessionID(ctx); proven {
+		return ctx, true
+	}
+	if !s.sessionLive(ctx, cred.SessionID) {
+		return ctx, false
+	}
+	return withSessionID(ctx, cred.SessionID), true
+}
+
+// denyPrincipal writes an authenticator's denial: the byte-stable JSON 401, or —
+// for a Browser() set — the 303 to the configured browser login path carrying a
+// validated return_to on GET/HEAD (design §9.2). A nested authenticator denies in
+// its OWN mode, so a plain helper nested under a browser gate answers JSON.
+func (s *Service) denyPrincipal(w http.ResponseWriter, r *http.Request, set principalSet) {
+	if set.browser {
+		s.redirectToBrowserLogin(w, r)
+		return
+	}
+	writeUnauthorized(w)
 }
 
 // hashAPIKey returns the stored form of a raw API key — its SHA-256 hex digest
@@ -412,12 +461,6 @@ func mintAPIKeySecret() (prefix, raw string) {
 	prefix = secrets.MustGenerate()[:apiKeyPrefixLen]
 	secret := secrets.MustGenerate() + secrets.MustGenerate()
 	return prefix, prefix + "_" + secret
-}
-
-// invalidAPIKey is the single generic error every API-key denial returns, so the
-// response cannot distinguish unknown / revoked / expired.
-func invalidAPIKey() error {
-	return fmt.Errorf("invalid api key: %w", sdk.ErrUnauthorized)
 }
 
 // bearerToken extracts the token from an `Authorization: Bearer <token>` header.

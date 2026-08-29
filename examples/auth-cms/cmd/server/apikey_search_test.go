@@ -333,8 +333,9 @@ func TestMachineRoutesGateRefusesANonAdmin(t *testing.T) {
 }
 
 // TestMachineRoutesRequireACredential pins the outermost rung of the gate stack:
-// RequireUser runs BEFORE the host gate, so an unauthenticated request is 401, never the
-// authorization 403 (which would leak that the route exists to anyone).
+// the MachineLifecycle authenticator runs BEFORE the host gate, so an unauthenticated
+// request is 401, never the authorization 403 (which would leak that the route exists
+// to anyone).
 func TestMachineRoutesRequireACredential(t *testing.T) {
 	host := newMachineHost(t)
 	c := host.newClient() // a cookie jar that never signed in

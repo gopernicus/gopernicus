@@ -8,7 +8,7 @@
 //
 // The cross-pocket wiring is the point: cms's admin surface (the CRUD routes)
 // is gated by auth's identity middleware via cms.Config.AdminMiddleware ←
-// authSvc.RequireUser. Neither pocket imports the other; structural typing on
+// authSvc.RequireAccessToken(). Neither pocket imports the other; structural typing on
 // sdk/foundation/web.Middleware and the auth Service is what lets the host connect them.
 // Public cms routes (the home page, published singles) stay ungated.
 //
@@ -27,7 +27,7 @@
 // Check, a LookupResources enumeration, and a roles-kind HasRole check.
 //
 // pockets/events adds the SSE gateway at GET /events (authenticated via
-// authSvc.RequireUser on StreamMiddleware): a cms edit fans out as a
+// authSvc.RequireAccessToken() on StreamMiddleware): a cms edit fans out as a
 // content.updated frame to any open stream. Two rails prove out here. The
 // DEFAULT variant is direct-emit/best-effort — cms emits straight onto the bus
 // (SSE id: = CorrelationID). The DURABLE variant (EVENTS_OUTBOX=memory) routes a
@@ -261,8 +261,9 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// /auth/api-keys/{id}/revoke) mint and revoke credentials, so the pocket refuses to
 	// guess a policy: with MachineRoutesGate nil they are NOT mounted (404) and NewService
 	// WARNs. This host names the platform-admin coordinate already declared in authzSchema
-	// (platform/admin on platform:main), so each route runs RequireUser, RequireLiveSession,
-	// then this gate — human credential, live session, platform admin. Set here rather than
+	// (platform/admin on platform:main), so each route runs the pocket's
+	// MachineLifecycle authenticator, then this gate — human credential, live
+	// session, platform admin. Set here rather than
 	// in buildAuthConfig because the gate is a method value on the authorizer, which the
 	// composition seam does not receive (the DeliveryMode post-set precedent below).
 	authCfg.MachineRoutesGate = authorizer.RequirePermissionFixed(platformResourceType, "admin", platformResourceID)
@@ -295,9 +296,9 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// failure surfaces on the health endpoint as observer_failures.
 	authCfg.DeliveryEventsEmitter = health.Emitter(bus)
 
-	// authSvc is the auth pocket's driving surface (FS2): its RequireUser method
-	// value is the middleware cms gates its admin routes on, and RequirePrincipal/
-	// CurrentPrincipal back the host demo routes. The pocket's own HTTP routes are
+	// authSvc is the auth pocket's driving surface (FS2): its RequireAccessToken()
+	// middleware is what cms gates its admin routes on, and
+	// RequireAccessTokenOrAPIKey() / CurrentPrincipal back the host demo routes. The pocket's own HTTP routes are
 	// the optional adapter over that surface — built once here, mounted once via
 	// authSvc.Register(mount).
 	authSvc, err := auth.NewService(authRepos, authCfg)
@@ -354,7 +355,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 
 	// The CMS pages render through the same ui/goth bundle as auth (assets already
 	// served under authAssetBasePath above). The admin entries list is HTMX-enhanced
-	// (ui-goth GOTH-7.3); auth's RequireUser gates that admin surface below.
+	// (ui-goth GOTH-7.3); auth's RequireAccessToken() gates that admin surface below.
 	cmsBundle, err := newAuthBundle()
 	if err != nil {
 		return err
@@ -372,7 +373,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		Mailer:          email.NewConsole(log),
 		MailFrom:        "cms@localhost",
 		ContactTo:       "ops@localhost",
-		AdminMiddleware: []web.Middleware{authSvc.RequireUser}, // auth gates cms's admin surface
+		AdminMiddleware: []web.Middleware{authSvc.RequireAccessToken()}, // auth gates cms's admin surface
 	}); err != nil {
 		return err
 	}
@@ -399,7 +400,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// and events.Config.Bus (the gateway is the consumer) — one fan-out, no second
 	// bus. A content.* frame fans out to any open stream the moment cms emits. The
 	// gateway reads connect-time identity from sdk/foundation/identity, stashed by
-	// authSvc.RequireUser on StreamMiddleware (A-I1 E2: no Identity field — absent
+	// authSvc.RequireAccessToken() on StreamMiddleware (A-I1 E2: no Identity field — absent
 	// principal fails closed with 401). Repositories.Outbox nil ⇒ direct-emit mode
 	// (no durable rail, no poller). Authorize is wired below through the
 	// authorization ENGINE (the flagship posture — authorization-v1 Z4 commit 2),
@@ -420,7 +421,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 	eventsSvc, err := eventspocket.NewService(eventsRepos, eventspocket.Config{
 		Bus:              bus,
-		StreamMiddleware: []web.Middleware{authSvc.RequireUser},
+		StreamMiddleware: []web.Middleware{authSvc.RequireAccessToken()},
 		// Authorize (the FLAGSHIP posture — authorization-v1 Z4 commit 2): the SAME
 		// events Check seam, now backed by the authorization ENGINE instead of the
 		// retired toy map (commit 1). The host stays zero-infra (the authorizer is
@@ -489,7 +490,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 
 	// Host-local liveness probe (host route, not pocket surface). Mounted on
 	// the root router with no middleware, outside every gated group and
-	// unwrapped by RequireUser — unauthenticated by design, since a readiness
+	// unwrapped by any authenticator — unauthenticated by design, since a readiness
 	// probe can't log in.
 	router.Handle(http.MethodGet, "/healthz", healthzHandler())
 

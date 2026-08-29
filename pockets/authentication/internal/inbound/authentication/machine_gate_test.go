@@ -162,8 +162,8 @@ func TestMachineRoutesGateSet_NoCredentialUnauthorized(t *testing.T) {
 
 // TestMachineRoutesRefuseAPIKeyBearer pins the human-only rule: an act-as-user
 // API key resolves to its owner everywhere else (proven here on /auth/me), yet
-// RequireUser refuses it on every lifecycle route — a key can never mint or
-// revoke another key through the bundled surface.
+// the MachineLifecycle authenticator refuses it on every lifecycle route — a
+// key can never mint or revoke another key through the bundled surface.
 func TestMachineRoutesRefuseAPIKeyBearer(t *testing.T) {
 	fx := newMachineFixture(t, allowMachineGate)
 	userID, _ := userIDFor(t, fx.h, "actas@example.com")
@@ -179,7 +179,7 @@ func TestMachineRoutesRefuseAPIKeyBearer(t *testing.T) {
 	}
 }
 
-// TestMachineRoutesRefuseRevokedSession proves RequireLiveSession's place in the
+// TestMachineRoutesRefuseRevokedSession proves the Live() tier's place in the
 // stack: a logged-out session's outstanding access JWT is refused within one
 // round-trip instead of surviving for AccessTokenTTL.
 func TestMachineRoutesRefuseRevokedSession(t *testing.T) {
@@ -275,7 +275,8 @@ func TestMachineRoutesRefuseUnsafeBrowserMutation(t *testing.T) {
 }
 
 // TestMachineRoutesGateStackOrder pins the registration order web.Handle
-// applies outermost-first: RequireUser, then RequireLiveSession, then the gate.
+// applies outermost-first: the MachineLifecycle authenticator, then browserSafe,
+// then the gate.
 // A credential-less request must be answered 401 by the pocket WITHOUT the
 // host's gate ever running — a gate placed outermost would have to answer for
 // unauthenticated traffic it knows nothing about.
