@@ -86,7 +86,7 @@ const (
 	// arm of the §6 refresh rate limit); the by-IP arm is a route middleware.
 	refreshAttemptsPerMinute = 30
 	// defaultBrowserLoginPath is the destination the browser identity gates
-	// (RequirePrincipalBrowser / RequireLiveSessionBrowser) 303 to on denial when
+	// (any authenticator carrying Browser()) 303 to on denial when
 	// Deps.BrowserLoginPath is unset (design §9.2). The public auth package validates
 	// a host override as a safe root-relative path before it reaches here.
 	defaultBrowserLoginPath = "/auth/login"
@@ -392,7 +392,7 @@ type Deps struct {
 	OAuthLinkBaseURL string
 
 	// BrowserLoginPath is the login destination the browser identity gates
-	// (RequirePrincipalBrowser / RequireLiveSessionBrowser) 303 to on denial (design
+	// (any authenticator carrying Browser()) 303 to on denial (design
 	// §9.2). Empty → defaultBrowserLoginPath ("/auth/login"). Package auth validates a
 	// host override as a safe root-relative path before it reaches here, so it never
 	// carries a scheme, protocol-relative prefix, backslash, or control character.
@@ -1064,7 +1064,7 @@ func (s *Service) ResetPassword(ctx context.Context, token, newPassword string) 
 	return nil
 }
 
-// ValidateSession returns the live session for sessionID — the RequireLiveSession
+// ValidateSession returns the live session for sessionID — the Live() tier's
 // lookup (§1.4). A blank id returns sdk.ErrUnauthorized; unknown/expired sessions
 // surface sdk.ErrNotFound / sdk.ErrExpired from the store (Get is keyed by the
 // app-minted id now, so no hashing is involved).
@@ -1075,43 +1075,7 @@ func (s *Service) ValidateSession(ctx context.Context, sessionID string) (sessio
 	return s.sessions.Get(ctx, sessionID)
 }
 
-// RequireUser is HTTP middleware that gates next on a valid user credential. On
-// a missing/invalid/expired credential it writes a 401 JSON error; on success it
-// stashes the user id on the request context (read via CurrentUser) and calls
-// next. It satisfies web.Middleware via the method value s.RequireUser.
-//
-// It verifies the access JWT statelessly — signature + expiry only, zero DB
-// (§1.2). The credential is either an Authorization: Bearer JWT (API flows) or
-// the access-JWT session cookie (browser flows); both resolve to the same user
-// identity. Revocation is honored within ≤ AccessTokenTTL on this tier; route
-// RequireLiveSession for immediate revocation.
-func (s *Service) RequireUser(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		userID, ok := s.resolveUserID(r)
-		if !ok {
-			writeUnauthorized(w)
-			return
-		}
-		next.ServeHTTP(w, r.WithContext(identity.WithPrincipal(r.Context(), identity.Principal{Type: identity.User, ID: userID})))
-	})
-}
-
-// resolveUserID resolves the request's user identity for RequireUser, stateless
-// and DB-free (§1.2). A JWT-shaped bearer is authoritative (a bad one denies,
-// never falling through to the cookie); otherwise the access-JWT session cookie
-// is verified. Both paths verify signature + expiry only.
-func (s *Service) resolveUserID(r *http.Request) (string, bool) {
-	if raw, ok := bearerToken(r); ok && isJWTToken(raw) {
-		return s.verifyBearer(raw)
-	}
-	c, err := r.Cookie(s.cookie.Name)
-	if err != nil {
-		return "", false
-	}
-	return s.verifyBearer(c.Value)
-}
-
-// CurrentUser returns the authenticated user id stashed by RequireUser, if any.
+// CurrentUser returns the authenticated user id stashed by RequirePrincipal, if any.
 // It is the cross-pocket identity port other pockets consume structurally
 // (pockets/README.md §5's CurrentUser).
 func (s *Service) CurrentUser(ctx context.Context) (string, bool) {
@@ -1258,8 +1222,8 @@ func (s *Service) primaryAuthentication(kind session.MethodKind) session.Authent
 
 // signAccessToken signs an access JWT carrying {user_id, session_id} at
 // AccessTokenTTL (§1.1). The signer stamps exp (from the returned expiry) and
-// iat; this call sets the identity claims. session_id backs RequireLiveSession
-// and the logout fallback.
+// iat; this call sets the identity claims. session_id backs the Live() tier and
+// the logout fallback.
 func (s *Service) signAccessToken(userID, sessionID string) (string, time.Time, error) {
 	expiresAt := s.now().Add(s.accessTTL)
 	token, err := s.tokenSigner.Sign(map[string]any{
@@ -1391,14 +1355,14 @@ func (s *Service) RateLimitByIP(keyPrefix string, perMinute int) web.Middleware 
 	return ratelimiter.Middleware(s.limiter, ratelimiter.PerMinute(perMinute), keyFunc, rejectFunc)
 }
 
-// writeUnauthorized writes a 401 JSON error via the shared sdk responder, so
-// RequireUser's rejection matches the pocket's other error responses (FS9).
+// writeUnauthorized writes a 401 JSON error via the shared sdk responder, so an
+// authenticator's rejection matches the pocket's other error responses (FS9).
 func writeUnauthorized(w http.ResponseWriter) {
 	web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 }
 
 // redirectToBrowserLogin issues the 303 See Other a browser identity gate
-// (RequirePrincipalBrowser / RequireLiveSessionBrowser) sends on denial — no JSON
+// (an authenticator carrying Browser()) sends on denial — no JSON
 // body, no response-writer interception (design §9.2). For a GET or HEAD it appends
 // ?return_to=<escaped original path+query> when the original target validates as a
 // safe root-relative path (redirect.SafeRelativePath, the same rule the form lane

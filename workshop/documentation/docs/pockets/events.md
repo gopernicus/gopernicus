@@ -25,7 +25,7 @@ eventsSvc, err := events.NewService(events.Repositories{
     Outbox: outboxRepo, // nil selects direct-only mode
 }, events.Config{
     Bus:              bus,
-    StreamMiddleware: []web.Middleware{authSvc.RequireUser},
+    StreamMiddleware: []web.Middleware{authSvc.RequireAccessToken()},
     Authorize:         authorizeStream,
 })
 if err != nil {

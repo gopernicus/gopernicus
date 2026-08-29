@@ -25,7 +25,7 @@ var ErrRotationConflict = errors.New("session: refresh rotation conflict")
 //   - Get for an unknown id → sdk.ErrNotFound; for a present row whose ExpiresAt
 //     is at or before the read time → sdk.ErrExpired (expired-at-read: the store
 //     reports expiry rather than returning a dead session; it MAY delete the row).
-//     Get backs RequireLiveSession.
+//     Get backs the authenticator's Live() tier.
 //   - GetByRefreshHash is ONE current-or-previous scan
 //     (WHERE refresh_token_hash = ? OR previous_refresh_token_hash = ?): it
 //     returns the row VERBATIM — it applies NO expiry filter (expiry is a service

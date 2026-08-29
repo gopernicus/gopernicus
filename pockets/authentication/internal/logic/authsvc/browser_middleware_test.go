@@ -11,7 +11,8 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 )
 
-// Browser identity-gate tests (#12). RequirePrincipalBrowser / RequireLiveSessionBrowser
+// Browser identity-gate tests (#12). RequirePrincipal(Browser()) /
+// RequirePrincipal(Live(), Browser())
 // resolve the SAME credentials and stash the SAME context as their JSON siblings, but
 // on denial they 303 to the configured login path instead of writing a JSON 401 — a
 // GET/HEAD carrying a validated return_to, an unsafe method none. The existing JSON
@@ -102,8 +103,8 @@ func TestBrowserGatesRedirectMissingCredential(t *testing.T) {
 		name string
 		mw   func(http.Handler) http.Handler
 	}{
-		{"principal", bh.svc.RequirePrincipalBrowser},
-		{"live-session", bh.svc.RequireLiveSessionBrowser},
+		{"principal", bh.svc.RequirePrincipal(Browser())},
+		{"live-session", bh.svc.RequirePrincipal(Live(), Browser())},
 	} {
 		rec := httptest.NewRecorder()
 		gate.mw(noContent()).ServeHTTP(rec, httptest.NewRequest("GET", "/admin", nil))
@@ -117,7 +118,7 @@ func TestBrowserGatesRedirectMissingCredential(t *testing.T) {
 func TestBrowserGatesRedirectMalformedBearer(t *testing.T) {
 	bh := newBrowserHarness(t)
 	for _, gate := range []func(http.Handler) http.Handler{
-		bh.svc.RequirePrincipalBrowser, bh.svc.RequireLiveSessionBrowser,
+		bh.svc.RequirePrincipal(Browser()), bh.svc.RequirePrincipal(Live(), Browser()),
 	} {
 		req := httptest.NewRequest("GET", "/admin", nil)
 		req.Header.Set("Authorization", "Bearer aaa.bbb.ccc") // JWT-shaped garbage
@@ -134,7 +135,7 @@ func TestBrowserGatesRedirectExpiredJWT(t *testing.T) {
 		t.Fatalf("Sign: %v", err)
 	}
 	for _, gate := range []func(http.Handler) http.Handler{
-		bh.svc.RequirePrincipalBrowser, bh.svc.RequireLiveSessionBrowser,
+		bh.svc.RequirePrincipal(Browser()), bh.svc.RequirePrincipal(Live(), Browser()),
 	} {
 		req := httptest.NewRequest("GET", "/admin", nil)
 		req.AddCookie(&http.Cookie{Name: bh.svc.SessionCookieName(), Value: expired})
@@ -158,16 +159,16 @@ func TestBrowserRevokedSessionPassesPrincipalRedirectsLiveSession(t *testing.T) 
 	reqP := httptest.NewRequest("GET", "/admin", nil)
 	reqP.AddCookie(&http.Cookie{Name: bh.svc.SessionCookieName(), Value: pair.AccessToken})
 	recP := httptest.NewRecorder()
-	bh.svc.RequirePrincipalBrowser(noContent()).ServeHTTP(recP, reqP)
+	bh.svc.RequirePrincipal(Browser())(noContent()).ServeHTTP(recP, reqP)
 	if recP.Code != http.StatusNoContent {
-		t.Fatalf("RequirePrincipalBrowser on revoked session = %d, want 204 (stateless pass)", recP.Code)
+		t.Fatalf("RequirePrincipal(Browser()) on revoked session = %d, want 204 (stateless pass)", recP.Code)
 	}
 
 	// The live-session gate denies immediately and redirects.
 	reqL := httptest.NewRequest("GET", "/admin", nil)
 	reqL.AddCookie(&http.Cookie{Name: bh.svc.SessionCookieName(), Value: pair.AccessToken})
 	recL := httptest.NewRecorder()
-	bh.svc.RequireLiveSessionBrowser(noContent()).ServeHTTP(recL, reqL)
+	bh.svc.RequirePrincipal(Live(), Browser())(noContent()).ServeHTTP(recL, reqL)
 	assertLoginRedirect(t, recL, "/auth/login?return_to=%2Fadmin")
 }
 
@@ -187,20 +188,20 @@ func TestBrowserGatesPreserveContextStash(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	// User session cookie through RequirePrincipalBrowser: user principal, no session id.
+	// User session cookie through RequirePrincipal(Browser()): user principal, no session id.
 	reqCookie := httptest.NewRequest("GET", "/admin", nil)
 	reqCookie.AddCookie(&http.Cookie{Name: bh.svc.SessionCookieName(), Value: pair.AccessToken})
 	recCookie := httptest.NewRecorder()
-	bh.svc.RequirePrincipalBrowser(capture).ServeHTTP(recCookie, reqCookie)
+	bh.svc.RequirePrincipal(Browser())(capture).ServeHTTP(recCookie, reqCookie)
 	if recCookie.Code != http.StatusNoContent || gotP.Type != PrincipalUser {
 		t.Fatalf("principal (cookie) = %+v status=%d, want a user principal 204", gotP, recCookie.Code)
 	}
 
-	// Bearer JWT through RequireLiveSessionBrowser: user principal AND the live session id.
+	// Bearer JWT through RequirePrincipal(Live(), Browser()): user principal AND the live session id.
 	reqBearer := httptest.NewRequest("GET", "/admin", nil)
 	reqBearer.Header.Set("Authorization", "Bearer "+pair.AccessToken)
 	recBearer := httptest.NewRecorder()
-	bh.svc.RequireLiveSessionBrowser(capture).ServeHTTP(recBearer, reqBearer)
+	bh.svc.RequirePrincipal(Live(), Browser())(capture).ServeHTTP(recBearer, reqBearer)
 	if recBearer.Code != http.StatusNoContent || gotP.Type != PrincipalUser {
 		t.Fatalf("principal (bearer) = %+v status=%d, want a user principal 204", gotP, recBearer.Code)
 	}
@@ -221,7 +222,7 @@ func TestBrowserGatesPreserveContextStash(t *testing.T) {
 	reqKey := httptest.NewRequest("GET", "/admin", nil)
 	reqKey.Header.Set("Authorization", "Bearer "+rawKey)
 	recKey := httptest.NewRecorder()
-	bh.svc.RequireLiveSessionBrowser(capture).ServeHTTP(recKey, reqKey)
+	bh.svc.RequirePrincipal(Live(), Browser())(capture).ServeHTTP(recKey, reqKey)
 	if recKey.Code != http.StatusNoContent || gotP.Type != PrincipalServiceAccount || gotP.ID != sa.ID {
 		t.Fatalf("api-key principal = %+v status=%d, want {service_account, %s} 204", gotP, recKey.Code, sa.ID)
 	}
@@ -247,7 +248,7 @@ func TestBrowserGateReturnToMethodPolicy(t *testing.T) {
 	for _, c := range cases {
 		req := httptest.NewRequest(c.method, "/admin/users?page=2", nil)
 		rec := httptest.NewRecorder()
-		bh.svc.RequirePrincipalBrowser(noContent()).ServeHTTP(rec, req)
+		bh.svc.RequirePrincipal(Browser())(noContent()).ServeHTTP(rec, req)
 		assertLoginRedirect(t, rec, c.want)
 	}
 }
@@ -263,7 +264,48 @@ func TestBrowserGateOmitsUnsafeReturnTo(t *testing.T) {
 		req.URL.Path = target
 		req.URL.RawQuery = ""
 		rec := httptest.NewRecorder()
-		bh.svc.RequirePrincipalBrowser(noContent()).ServeHTTP(rec, req)
+		bh.svc.RequirePrincipal(Browser())(noContent()).ServeHTTP(rec, req)
 		assertLoginRedirect(t, rec, "/auth/login")
 	}
+}
+
+// --- nesting: each authenticator denies in its OWN mode ---
+
+// TestNestedDenialUsesTheInnerMode pins rule 3's second half: a denial is written
+// by the authenticator that refused, in that authenticator's mode. A plain helper
+// nested under a Browser() gate answers the JSON 401 (the helpers never redirect),
+// and a Browser() inner under a plain outer 303s.
+func TestNestedDenialUsesTheInnerMode(t *testing.T) {
+	bh := newBrowserHarness(t)
+	pair := bh.loginPair(t, "nested@example.com", "password123456789")
+
+	sa, err := bh.svc.CreateServiceAccount(context.Background(), "admin", "bot", "", false, "")
+	if err != nil {
+		t.Fatalf("CreateServiceAccount: %v", err)
+	}
+	_, rawKey, err := bh.svc.MintAPIKey(context.Background(), sa.ID, "k", time.Time{})
+	if err != nil {
+		t.Fatalf("MintAPIKey: %v", err)
+	}
+
+	// A non-Browser helper refusing inside a Browser() gate: JSON 401, no redirect.
+	reqJSON := httptest.NewRequest("GET", "/admin", nil)
+	reqJSON.AddCookie(&http.Cookie{Name: bh.svc.SessionCookieName(), Value: pair.AccessToken})
+	recJSON := httptest.NewRecorder()
+	browserOuter := bh.svc.RequirePrincipal(Browser())
+	browserOuter(bh.svc.RequireAPIKey()(noContent())).ServeHTTP(recJSON, reqJSON)
+	if recJSON.Code != http.StatusUnauthorized {
+		t.Fatalf("nested helper denial = %d, want 401 (the helpers never redirect)", recJSON.Code)
+	}
+	if loc := recJSON.Header().Get("Location"); loc != "" {
+		t.Errorf("nested helper denial set Location = %q, want none", loc)
+	}
+
+	// A Browser() inner refusing under a plain outer: the 303, with return_to.
+	reqRedirect := httptest.NewRequest("GET", "/admin", nil)
+	reqRedirect.Header.Set("Authorization", "Bearer "+rawKey)
+	recRedirect := httptest.NewRecorder()
+	plainOuter := bh.svc.RequirePrincipal()
+	plainOuter(bh.svc.RequirePrincipal(Accept(CredentialAccessToken), Browser())(noContent())).ServeHTTP(recRedirect, reqRedirect)
+	assertLoginRedirect(t, recRedirect, "/auth/login?return_to=%2Fadmin")
 }

@@ -169,11 +169,12 @@ func TestOAuthStartUnknownProvider404(t *testing.T) {
 	}
 }
 
-// TestOAuthSessionGatedRoutesRequireSession proves the link-start route (RequireUser)
-// and the code-gated unlink pair (RequireLiveSession, design §5.4) are session-gated:
-// 401 without a session. The old plain DELETE /auth/oauth/{provider}/link is gone
-// (pre-tag route break) — its method/path no longer routes.
-func TestOAuthSessionGatedRoutesRequireSession(t *testing.T) {
+// TestOAuthAuthenticatedRoutesRequireAccessToken proves the link-start route
+// (OAuthLinkStart) and the code-gated unlink pair (CredentialManagement, design §5.4)
+// both refuse an unauthenticated caller: 401 without a credential. The old plain
+// DELETE /auth/oauth/{provider}/link is gone (pre-tag route break) — its
+// method/path no longer routes.
+func TestOAuthAuthenticatedRoutesRequireAccessToken(t *testing.T) {
 	h := newOAuthTestHandler(t)
 	cases := []struct {
 		method, path string

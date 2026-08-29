@@ -74,7 +74,7 @@ CMS declares no authentication or authorization dependency. The host injects mid
 ```go
 cms.Config{
     AdminMiddleware: []web.Middleware{
-        authSvc.RequireUser,
+        authSvc.RequireAccessToken(),
         requireCMSAdmin,
     },
 }

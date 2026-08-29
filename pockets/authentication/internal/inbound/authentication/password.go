@@ -10,7 +10,7 @@ import (
 )
 
 // Credential-suite password transport (design §5.2/§5.3). Every route here is a
-// cookie-authenticated sensitive mutation: RequireLiveSession has proven the
+// cookie-authenticated sensitive mutation: the CredentialManagement authenticator has proven the
 // caller's session and stamped its id, and the browser-safe-mutation gate has
 // applied the allowlisted-Origin + CSRF check (design §9.1). Each handler adds the
 // strict JSON body hardening and sets Cache-Control: no-store.

@@ -8,7 +8,7 @@ import (
 
 // GET /auth/me — session hydration (ruling 6). A SPA that authenticates over
 // cookies cannot read its own session, so it hydrates the signed-in user from
-// this route. It is live-session-gated (RequireLiveSession), deliberately paying
+// this route. It rides the SessionHydration authenticator, deliberately paying
 // one revocation lookup so a revoked access JWT is denied within one round-trip —
 // the same posture as GET /auth/methods. It is a bearer-safe GET with no request
 // body, so it skips the browser-safe-mutation CSRF gate, and the handler sets
@@ -18,7 +18,7 @@ import (
 // login and register return, built through the same constructor so the three
 // paths cannot drift.
 //
-// A machine principal is NOT a current user: RequireLiveSession admits a valid
+// A machine principal is NOT a current user: the authenticator admits a valid
 // API key (no session row exists for one), so the CurrentUser gate below is what
 // keeps the route human-only — a service-account principal gets the same 401 as
 // an absent credential rather than a fabricated profile. An act-as-user service

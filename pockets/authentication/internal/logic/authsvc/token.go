@@ -14,10 +14,10 @@ import (
 
 const (
 	// tokenClaimUserID is the access-JWT claim carrying the authenticated user's
-	// id (§1.1); RequireUser reads it.
+	// id (§1.1); every access-token resolution reads it.
 	tokenClaimUserID = "user_id"
 	// tokenClaimSessionID is the access-JWT claim carrying the backing session's
-	// app-minted id (§1.1); RequireLiveSession and the logout fallback read it.
+	// app-minted id (§1.1); the Live() tier and the logout fallback read it.
 	tokenClaimSessionID = "session_id"
 )
 
@@ -92,27 +92,13 @@ func (s *Service) IssueToken(ctx context.Context, emailAddr, password string) (T
 	return pair, nil
 }
 
-// verifyBearer verifies an access JWT and extracts its user id — the stateless
-// RequireUser check (§1.2). A signer error (bad signature, expired, malformed) or
-// a missing/blank user_id claim denies. It stays user_id-only; the session_id
-// reader below serves RequireLiveSession and the logout fallback.
-func (s *Service) verifyBearer(raw string) (string, bool) {
-	claims, err := s.tokenSigner.Verify(raw)
-	if err != nil {
-		return "", false
-	}
-	userID, ok := claims[tokenClaimUserID].(string)
-	if !ok || userID == "" {
-		return "", false
-	}
-	return userID, true
-}
-
 // verifyBearerClaims verifies an access JWT and extracts both the user id and the
-// session id (§1.4). RequireLiveSession uses it: the verified session_id is then
-// looked up live. A signer error or a missing/blank user_id claim denies (ok
-// false); a present token with no session_id yields ok true and an empty
-// sessionID (the caller's live lookup then fails closed).
+// session id (§1.2/§1.4) — the ONE stateless access-token check. RequirePrincipal
+// resolves every access-token credential through it, so a Credential always
+// carries the claimed session_id; a Live() gate then looks that id up. A signer
+// error (bad signature, expired, malformed) or a missing/blank user_id claim
+// denies (ok false); a present token with no session_id yields ok true and an
+// empty sessionID (the caller's live lookup then fails closed).
 func (s *Service) verifyBearerClaims(raw string) (userID, sessionID string, ok bool) {
 	claims, err := s.tokenSigner.Verify(raw)
 	if err != nil {

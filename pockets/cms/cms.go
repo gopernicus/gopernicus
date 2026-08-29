@@ -76,7 +76,7 @@ type Config struct {
 	// management surface); public routes (site pages, asset serving, the contact
 	// form) are never wrapped. Nil disables gating, preserving current behavior.
 	// This is the cross-pocket wiring seam of pockets/README.md §5 (C2): a host
-	// passes another pocket's middleware here — e.g. auth's RequireUser — so cms
+	// passes another pocket's middleware here — e.g. auth's RequireAccessToken() — so cms
 	// gates its admin surface without importing auth. Structural typing means auth
 	// need not know cms exists and cms never imports auth.
 	AdminMiddleware []web.Middleware

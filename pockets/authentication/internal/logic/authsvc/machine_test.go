@@ -93,6 +93,9 @@ type fakeAPIKeys struct {
 	m        map[string]apikey.APIKey // by ID
 	touchErr error                    // when set, TouchLastUsed fails (best-effort test)
 	touched  int
+	// lookups counts GetByHash calls — the credential matrix asserts a nested
+	// authenticator NARROWS off the stash instead of resolving the key twice.
+	lookups int
 }
 
 func newFakeAPIKeys() *fakeAPIKeys { return &fakeAPIKeys{m: map[string]apikey.APIKey{}} }
@@ -112,6 +115,7 @@ func (f *fakeAPIKeys) Create(_ context.Context, k apikey.APIKey) (apikey.APIKey,
 func (f *fakeAPIKeys) GetByHash(_ context.Context, keyHash string) (apikey.APIKey, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.lookups++
 	for _, k := range f.m {
 		if k.KeyHash == keyHash {
 			return k, nil
@@ -204,9 +208,9 @@ func (h *machineHarness) seedUser(id string) string {
 	return id
 }
 
-// --- AuthenticateAPIKey ---
+// --- the private API-key credential resolver ---
 
-func TestAuthenticateAPIKeyRoundTrip(t *testing.T) {
+func TestResolveAPIKeyCredentialRoundTrip(t *testing.T) {
 	h := newMachineHarness(t)
 	ctx := context.Background()
 	sa, err := h.svc.CreateServiceAccount(ctx, "admin", "bot", "", false, "")
@@ -218,9 +222,9 @@ func TestAuthenticateAPIKeyRoundTrip(t *testing.T) {
 		t.Fatalf("MintAPIKey: %v", err)
 	}
 
-	p, err := h.svc.AuthenticateAPIKey(ctx, raw)
-	if err != nil {
-		t.Fatalf("AuthenticateAPIKey: %v", err)
+	p, _, ok := h.svc.resolveAPIKeyCredential(ctx, raw)
+	if !ok {
+		t.Fatal("resolveAPIKeyCredential denied a valid key")
 	}
 	if p.Type != PrincipalServiceAccount || p.ID != sa.ID {
 		t.Errorf("principal = %+v, want {service_account, %s}", p, sa.ID)
@@ -258,7 +262,7 @@ func TestMintAPIKeyUnknownServiceAccount(t *testing.T) {
 	}
 }
 
-func TestAuthenticateAPIKeyActAsUserResolvesToOwner(t *testing.T) {
+func TestResolveAPIKeyCredentialActAsUserResolvesToOwner(t *testing.T) {
 	h := newMachineHarness(t)
 	ctx := context.Background()
 	sa, err := h.svc.CreateServiceAccount(ctx, "admin", "personal", "", true, h.seedUser("owner-9"))
@@ -269,16 +273,16 @@ func TestAuthenticateAPIKeyActAsUserResolvesToOwner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MintAPIKey: %v", err)
 	}
-	p, err := h.svc.AuthenticateAPIKey(ctx, raw)
-	if err != nil {
-		t.Fatalf("AuthenticateAPIKey: %v", err)
+	p, _, ok := h.svc.resolveAPIKeyCredential(ctx, raw)
+	if !ok {
+		t.Fatal("resolveAPIKeyCredential denied a valid act-as-user key")
 	}
 	if p.Type != PrincipalUser || p.ID != "owner-9" {
 		t.Errorf("act-as-user principal = %+v, want {user, owner-9}", p)
 	}
 }
 
-func TestAuthenticateAPIKeyRevokedDenies(t *testing.T) {
+func TestResolveAPIKeyCredentialRevokedDenies(t *testing.T) {
 	h := newMachineHarness(t)
 	ctx := context.Background()
 	sa, _ := h.svc.CreateServiceAccount(ctx, "admin", "bot", "", false, "")
@@ -286,53 +290,54 @@ func TestAuthenticateAPIKeyRevokedDenies(t *testing.T) {
 	if err := h.svc.RevokeAPIKey(ctx, key.ID); err != nil {
 		t.Fatalf("RevokeAPIKey: %v", err)
 	}
-	if _, err := h.svc.AuthenticateAPIKey(ctx, raw); !errors.Is(err, sdk.ErrUnauthorized) {
-		t.Errorf("revoked key: err=%v, want ErrUnauthorized", err)
+	if _, _, ok := h.svc.resolveAPIKeyCredential(ctx, raw); ok {
+		t.Error("revoked key resolved; want denied")
 	}
 }
 
-func TestAuthenticateAPIKeyExpiredDenies(t *testing.T) {
+func TestResolveAPIKeyCredentialExpiredDenies(t *testing.T) {
 	h := newMachineHarness(t)
 	ctx := context.Background()
 	sa, _ := h.svc.CreateServiceAccount(ctx, "admin", "bot", "", false, "")
 	_, raw, _ := h.svc.MintAPIKey(ctx, sa.ID, "k", time.Now().Add(-time.Hour))
-	if _, err := h.svc.AuthenticateAPIKey(ctx, raw); !errors.Is(err, sdk.ErrUnauthorized) {
-		t.Errorf("expired key: err=%v, want ErrUnauthorized", err)
+	if _, _, ok := h.svc.resolveAPIKeyCredential(ctx, raw); ok {
+		t.Error("expired key resolved; want denied")
 	}
 }
 
-func TestAuthenticateAPIKeyValidNeverExpires(t *testing.T) {
+func TestResolveAPIKeyCredentialValidNeverExpires(t *testing.T) {
 	h := newMachineHarness(t)
 	ctx := context.Background()
 	sa, _ := h.svc.CreateServiceAccount(ctx, "admin", "bot", "", false, "")
 	// A zero ExpiresAt means never-expires — a far-future clock still authenticates.
 	_, raw, _ := h.svc.MintAPIKey(ctx, sa.ID, "k", time.Time{})
-	if _, err := h.svc.AuthenticateAPIKey(ctx, raw); err != nil {
-		t.Errorf("never-expiring key: err=%v, want nil", err)
+	if _, _, ok := h.svc.resolveAPIKeyCredential(ctx, raw); !ok {
+		t.Error("never-expiring key denied; want resolved")
 	}
 }
 
-func TestAuthenticateAPIKeyUnknownDenies(t *testing.T) {
+func TestResolveAPIKeyCredentialUnknownDenies(t *testing.T) {
 	h := newMachineHarness(t)
-	if _, err := h.svc.AuthenticateAPIKey(context.Background(), "prefix_deadbeef"); !errors.Is(err, sdk.ErrUnauthorized) {
-		t.Errorf("unknown key: err=%v, want ErrUnauthorized", err)
+	if _, _, ok := h.svc.resolveAPIKeyCredential(context.Background(), "prefix_deadbeef"); ok {
+		t.Error("unknown key resolved; want denied")
 	}
 }
 
-func TestAuthenticateAPIKeyTouchLastUsedBestEffort(t *testing.T) {
+func TestResolveAPIKeyCredentialTouchLastUsedBestEffort(t *testing.T) {
 	h := newMachineHarness(t)
 	ctx := context.Background()
 	h.keys.touchErr = errors.New("touch boom")
 	sa, _ := h.svc.CreateServiceAccount(ctx, "admin", "bot", "", false, "")
 	_, raw, _ := h.svc.MintAPIKey(ctx, sa.ID, "k", time.Time{})
 	// A failing TouchLastUsed must NOT fail authentication.
-	if _, err := h.svc.AuthenticateAPIKey(ctx, raw); err != nil {
-		t.Errorf("auth failed on a TouchLastUsed error: %v", err)
+	if _, _, ok := h.svc.resolveAPIKeyCredential(ctx, raw); !ok {
+		t.Error("authentication failed on a TouchLastUsed error")
 	}
 }
 
-func TestAuthenticateAPIKeySubsystemOff(t *testing.T) {
-	// No machine repos wired → the subsystem is off; auth denies without a lookup.
+func TestAPIKeyCredentialSubsystemOff(t *testing.T) {
+	// No machine repos wired → the subsystem is off; the default set drops the
+	// api_key kind entirely, so a key bearer denies without a lookup.
 	svc := NewService(Deps{
 		Users:     newFakeUsers(),
 		Passwords: newFakePasswords(),
@@ -343,8 +348,11 @@ func TestAuthenticateAPIKeySubsystemOff(t *testing.T) {
 	if svc.MachineEnabled() {
 		t.Fatal("MachineEnabled reported true with no machine repos")
 	}
-	if _, err := svc.AuthenticateAPIKey(context.Background(), "prefix_x"); !errors.Is(err, sdk.ErrUnauthorized) {
-		t.Errorf("auth with subsystem off: err=%v, want ErrUnauthorized", err)
+	rec := httptest.NewRecorder()
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	svc.RequirePrincipal()(next).ServeHTTP(rec, bearerRequest("prefix_x"))
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("api key with subsystem off: status = %d, want 401", rec.Code)
 	}
 }
 
@@ -358,7 +366,7 @@ func bearerRequest(token string) *http.Request {
 	return r
 }
 
-func TestRequireServiceAccountValidKey(t *testing.T) {
+func TestRequireAPIKeyValidKey(t *testing.T) {
 	h := newMachineHarness(t)
 	ctx := context.Background()
 	sa, _ := h.svc.CreateServiceAccount(ctx, "admin", "bot", "", false, "")
@@ -368,13 +376,13 @@ func TestRequireServiceAccountValidKey(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, ok := h.svc.CurrentPrincipal(r.Context())
 		if !ok {
-			t.Error("CurrentPrincipal not set inside RequireServiceAccount")
+			t.Error("CurrentPrincipal not set inside RequireAPIKey")
 		}
 		got = p
 		w.WriteHeader(http.StatusNoContent)
 	})
 	rec := httptest.NewRecorder()
-	h.svc.RequireServiceAccount(next).ServeHTTP(rec, bearerRequest(raw))
+	h.svc.RequireAPIKey()(next).ServeHTTP(rec, bearerRequest(raw))
 
 	if rec.Code != http.StatusNoContent {
 		t.Errorf("status = %d, want 204", rec.Code)
@@ -384,30 +392,31 @@ func TestRequireServiceAccountValidKey(t *testing.T) {
 	}
 }
 
-func TestRequireServiceAccountNoHeader(t *testing.T) {
+func TestRequireAPIKeyNoHeader(t *testing.T) {
 	h := newMachineHarness(t)
 	rec := httptest.NewRecorder()
 	called := false
 	next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true })
-	h.svc.RequireServiceAccount(next).ServeHTTP(rec, bearerRequest(""))
+	h.svc.RequireAPIKey()(next).ServeHTTP(rec, bearerRequest(""))
 	if rec.Code != http.StatusUnauthorized || called {
 		t.Errorf("no header: status=%d called=%v, want 401 not-called", rec.Code, called)
 	}
 }
 
-func TestRequireServiceAccountJWTShapedDenied(t *testing.T) {
-	// A two-dot bearer is classed as a JWT; the JWT path is inert in A3, so the
-	// API-key middleware denies rather than treating it as a key.
+func TestRequireAPIKeyJWTShapedDenied(t *testing.T) {
+	// A two-dot bearer is classed as a JWT; RequireAPIKey admits only api_key, so
+	// the access-token kind falls outside its set and denies rather than being
+	// hashed as a key.
 	h := newMachineHarness(t)
 	rec := httptest.NewRecorder()
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	h.svc.RequireServiceAccount(next).ServeHTTP(rec, bearerRequest("aaa.bbb.ccc"))
+	h.svc.RequireAPIKey()(next).ServeHTTP(rec, bearerRequest("aaa.bbb.ccc"))
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("jwt-shaped bearer: status = %d, want 401", rec.Code)
 	}
 }
 
-func TestRequireServiceAccountSubsystemOff(t *testing.T) {
+func TestRequireAPIKeySubsystemOff(t *testing.T) {
 	svc := NewService(Deps{
 		Users: newFakeUsers(), Passwords: newFakePasswords(), Sessions: newFakeSessions(),
 		Hasher:  &fakeHasher{},
@@ -415,7 +424,7 @@ func TestRequireServiceAccountSubsystemOff(t *testing.T) {
 	})
 	rec := httptest.NewRecorder()
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	svc.RequireServiceAccount(next).ServeHTTP(rec, bearerRequest("prefix_x"))
+	svc.RequireAPIKey()(next).ServeHTTP(rec, bearerRequest("prefix_x"))
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("api-key path with subsystem off: status = %d, want 401", rec.Code)
 	}
@@ -433,7 +442,7 @@ func TestRequirePrincipalAPIKey(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	rec := httptest.NewRecorder()
-	h.svc.RequirePrincipal(next).ServeHTTP(rec, bearerRequest(raw))
+	h.svc.RequirePrincipal()(next).ServeHTTP(rec, bearerRequest(raw))
 	if rec.Code != http.StatusNoContent || got.Type != PrincipalServiceAccount || got.ID != sa.ID {
 		t.Errorf("api-key principal: status=%d principal=%+v", rec.Code, got)
 	}
@@ -459,7 +468,7 @@ func TestRequirePrincipalSession(t *testing.T) {
 	req := httptest.NewRequest("GET", "/x", nil)
 	req.AddCookie(&http.Cookie{Name: h.svc.SessionCookieName(), Value: pair.AccessToken})
 	rec := httptest.NewRecorder()
-	h.svc.RequirePrincipal(next).ServeHTTP(rec, req)
+	h.svc.RequirePrincipal()(next).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNoContent || got.Type != PrincipalUser || got.ID != u.ID {
 		t.Errorf("session principal: status=%d principal=%+v, want {user, %s}", rec.Code, got, u.ID)
@@ -472,7 +481,7 @@ func TestRequirePrincipalJWTShapedGarbageDenied(t *testing.T) {
 	h := newMachineHarness(t)
 	rec := httptest.NewRecorder()
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	h.svc.RequirePrincipal(next).ServeHTTP(rec, bearerRequest("aaa.bbb.ccc"))
+	h.svc.RequirePrincipal()(next).ServeHTTP(rec, bearerRequest("aaa.bbb.ccc"))
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("jwt-shaped bearer: status = %d, want 401", rec.Code)
 	}
@@ -482,7 +491,7 @@ func TestRequirePrincipalNoCredential(t *testing.T) {
 	h := newMachineHarness(t)
 	rec := httptest.NewRecorder()
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	h.svc.RequirePrincipal(next).ServeHTTP(rec, httptest.NewRequest("GET", "/x", nil))
+	h.svc.RequirePrincipal()(next).ServeHTTP(rec, httptest.NewRequest("GET", "/x", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("no credential: status = %d, want 401", rec.Code)
 	}

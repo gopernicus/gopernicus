@@ -254,7 +254,7 @@ func isPlatformAdmin(ctx context.Context, authorizer *authorization.Service, sub
 }
 
 // requireMembership gates a route on the caller — already resolved by
-// RequirePrincipal into ctx — holding the demo `view` permission on the demo
+// the route authenticator into ctx — holding the demo `view` permission on the demo
 // resource. The Check/401/403/500 leg is now the POCKET's exported builder
 // (authorizer.RequirePermission, whose responses carry the FS9 web.Error shape);
 // platform-admin stays HOST composition, run FIRST in this closure via the

@@ -1,6 +1,6 @@
 // Package authentication is the public surface of the authentication pocket module: the
 // registration entry point (Register), the cross-pocket identity capability
-// (Service / NewService / RequireUser / CurrentUser), the host-filled ports
+// (Service / NewService / RequirePrincipal / CurrentUser), the host-filled ports
 // (Repositories), the pocket-owned PasswordHasher port, and the customization
 // config (Config). Implementation lives in internal/; the domain type and
 // repository-interface packages (user, session, verification) are public
@@ -19,7 +19,7 @@
 //     bcrypt satisfies it structurally).
 //   - Config — required Hasher + Mailer (nil errors at construction), optional
 //     RateLimiter (nil → in-memory), MailFrom, SessionCookie.
-//   - NewService / Service.RequireUser / Service.CurrentUser — the surface a
+//   - NewService / Service.RequirePrincipal / Service.CurrentUser — the surface a
 //     host wires into another pocket (e.g. cms admin gating).
 //   - Register — mounts the pocket's own HTTP routes.
 package authentication
@@ -410,10 +410,127 @@ var ErrPasswordFlowsDisabled = authsvc.ErrPasswordFlowsDisabled
 // API key, or — when Config.TokenSigner is wired — a bearer JWT). AV5
 // pins it as the one value type: actor references are (subject_type, subject_id)
 // string pairs everywhere, with no principals registry table. Type is a string
-// convention (Service.AuthenticateAPIKey yields "user" for an act-as-user key or
-// "service_account" otherwise); the alias keeps exactly one type across the
+// convention (an act-as-user API key resolves to "user", a self-acting service
+// account to "service_account"); the alias keeps exactly one type across the
 // public and internal packages.
 type Principal = authsvc.Principal
+
+// CredentialKind names the class of credential a request authenticated with —
+// the session-backed access JWT or a service account's API key. Aliased from
+// authsvc per the Principal precedent.
+type CredentialKind = authsvc.CredentialKind
+
+const (
+	// CredentialAccessToken is the session-backed JWT (claims user_id +
+	// session_id), carried by the Authorization header or by the session cookie
+	// whose value IS that access JWT.
+	CredentialAccessToken = authsvc.CredentialAccessToken
+	// CredentialAPIKey is a service account's key: its own principal, or the
+	// human owner an act-as-user account acts as.
+	CredentialAPIKey = authsvc.CredentialAPIKey
+)
+
+// Transport names how a credential reached the server — the axis orthogonal to
+// CredentialKind. Aliased from authsvc per the Principal precedent.
+type Transport = authsvc.Transport
+
+const (
+	// TransportHeader is `Authorization: Bearer <token>`.
+	TransportHeader = authsvc.TransportHeader
+	// TransportCookie is the access-JWT session cookie.
+	TransportCookie = authsvc.TransportCookie
+)
+
+// Credential is the proof a request presented, stashed beside the Principal and
+// read with Service.CurrentCredential: it distinguishes an act-as-user API key
+// from a person's session, which the Principal alone cannot. The zero value
+// means unauthenticated. Aliased from authsvc per the Principal precedent.
+type Credential = authsvc.Credential
+
+// PrincipalOption narrows what Service.RequirePrincipal admits: OR-sets over
+// credential kinds (Accept) and transports (Transports), plus the liveness tier
+// (Live) and the browser denial mode (Browser). Aliased from authsvc.
+type PrincipalOption = authsvc.PrincipalOption
+
+// Accept is the OR-set of credential kinds an authenticator admits; the default
+// is every wired kind. Zero arguments panic at construction — a set that admits
+// nothing is a programming error, not a posture.
+func Accept(kinds ...CredentialKind) PrincipalOption { return authsvc.Accept(kinds...) }
+
+// Transports is the OR-set of transports an authenticator reads; the default is
+// both, header authoritative. A credential arriving on a transport outside the
+// set is IGNORED, never denied. Zero arguments panic, like Accept.
+func Transports(ts ...Transport) PrincipalOption { return authsvc.Transports(ts...) }
+
+// Live raises an authenticator to the immediate-revocation tier: an access
+// token's session row must exist (failing CLOSED), and the proven session id is
+// stashed for CurrentSessionID. An API key passes — it was already DB-checked at
+// resolution and owns no session row.
+func Live() PrincipalOption { return authsvc.Live() }
+
+// Browser switches the denial from a JSON 401 to a 303 toward
+// Config.BrowserLoginPath with a validated return_to on GET/HEAD (design §9.2).
+func Browser() PrincipalOption { return authsvc.Browser() }
+
+// RoutePrincipalStrategy is a host's authentication posture for ONE bundled
+// route group (Config.BundledRouteAuth). It is opaque so "unset" stays
+// distinguishable from an explicit zero-option PrincipalStrategy(), which
+// deliberately means RequirePrincipal(): every wired credential, both
+// transports, stateless.
+type RoutePrincipalStrategy struct {
+	configured bool
+	opts       []PrincipalOption
+}
+
+// PrincipalStrategy builds the posture for one bundled route group out of the
+// same option vocabulary RequirePrincipal takes. Calling it with no options is
+// an explicit choice of the primitive defaults, NOT "leave the audited default
+// in place" — leave the field zero for that.
+func PrincipalStrategy(opts ...PrincipalOption) RoutePrincipalStrategy {
+	return RoutePrincipalStrategy{configured: true, opts: opts}
+}
+
+// BundledRouteAuthentication overrides the authentication posture of the bundled
+// route groups, one semantic surface at a time (Config.BundledRouteAuth). A zero
+// field keeps that group's audited default; a set field replaces only that
+// group. It configures AUTHENTICATION only: it cannot unmount the authenticator
+// from a protected surface, and it never replaces the separate host
+// authorization seams (MachineRoutesGate, UserAdminCheck, InviteCheck).
+//
+// An override also owns the inbound context contract of its surface. Handlers
+// that read CurrentUser — and the session-bound credential/step-up handlers that
+// also read CurrentSessionID — still fail closed when the configured strategy
+// authenticates a caller that cannot supply them (a self-acting service account
+// has no user; a stateless strategy proves no live session).
+type BundledRouteAuthentication struct {
+	// OAuthLinkStart gates GET /auth/oauth/{provider}/link/start.
+	// Default: RequireAccessToken().
+	OAuthLinkStart RoutePrincipalStrategy
+	// SessionSecurityReads gates GET /auth/delivery/status, /auth/methods, and
+	// /auth/csrf. Default: RequireAccessTokenLive().
+	SessionSecurityReads RoutePrincipalStrategy
+	// SessionHydration gates GET /auth/me. Default: RequireAccessTokenOrAPIKeyLive().
+	SessionHydration RoutePrincipalStrategy
+	// CredentialManagement gates the password change/set/remove routes, the
+	// step-up pair, identifier add/confirm/update/delete, and the OAuth unlink
+	// pair. Default: RequireAccessTokenLive().
+	CredentialManagement RoutePrincipalStrategy
+	// MachineLifecycle gates service-account creation/listing and key
+	// minting/listing/revocation. Default: RequireAccessTokenLive() — a key
+	// never creates, reads, mints, or revokes keys.
+	MachineLifecycle RoutePrincipalStrategy
+	// UserAdministration gates every /auth/admin/users route.
+	// Default: RequireAccessTokenOrAPIKeyLive() — a machine principal reaches
+	// Config.UserAdminCheck and the host decides.
+	UserAdministration RoutePrincipalStrategy
+	// Invitations gates the authenticated invitation routes.
+	// Default: RequireAccessTokenOrAPIKeyLive().
+	Invitations RoutePrincipalStrategy
+	// BrowserAccount gates the bundled HTML account pages and the form-only
+	// identifier edit POST. Default: RequirePrincipal(Accept(CredentialAccessToken),
+	// Transports(TransportCookie), Live(), Browser()).
+	BrowserAccount RoutePrincipalStrategy
+}
 
 // OAuthResult is the outcome of Service.OAuthCallback / Service.VerifyLink: the
 // Action taken, the access Token and RefreshToken (both empty for a pending
@@ -841,13 +958,13 @@ type Config struct {
 	// disallowed Origin; bearer-only (API) callers skip the gate entirely.
 	AllowedOrigins []string
 	// BrowserLoginPath is the login destination the browser identity gates
-	// (Service.RequirePrincipalBrowser / RequireLiveSessionBrowser) 303 to on an
+	// (any authenticator carrying Browser()) 303 to on an
 	// authentication denial (design §9.2). Empty (default) → "/auth/login". A non-empty
 	// value MUST be a safe root-relative path (leading "/", no "//" prefix, no scheme,
 	// no backslash, no control character) or construction fails with
 	// ErrBrowserLoginPathInvalid — so a browser gate can never be pointed off-site. It
-	// configures ONLY the browser gates: the existing JSON RequirePrincipal /
-	// RequireLiveSession middleware keep their byte-stable 401 behavior regardless.
+	// configures ONLY the Browser() denial mode: an authenticator without it keeps
+	// its byte-stable JSON 401 regardless.
 	BrowserLoginPath string `env:"AUTH_BROWSER_LOGIN_PATH"`
 	// RequireVerifiedEmail, when true, makes login refuse an unverified user
 	// with a 403 (ErrEmailNotVerified). Default false (design §7.1, AV8):
@@ -863,10 +980,11 @@ type Config struct {
 	PasswordFlowsDisabled bool `env:"AUTH_PASSWORD_FLOWS_DISABLED"`
 	// MachineRoutesGate is the authorization the bundled machine-identity lifecycle
 	// routes (/auth/service-accounts*, /auth/api-keys/{id}/revoke) run behind. Each
-	// route is RequireUser (human credential only — an API key, act-as-user or not,
-	// never administers machine identities through the bundled routes), then
-	// RequireLiveSession (immediate revocation, the invitation precedent), then —
-	// on the three MUTATIONS — the browser-safe Origin/CSRF gate, then this gate.
+	// route runs the BundledRouteAuth.MachineLifecycle authenticator — by default
+	// RequireAccessTokenLive(): human credential only (an API key, act-as-user or
+	// not, never administers machine identities through the bundled routes) at the
+	// immediate-revocation tier (the invitation precedent) — then, on the three
+	// MUTATIONS, the browser-safe Origin/CSRF gate, then this gate.
 	// The pocket never guesses a policy: nil → the routes are NOT mounted
 	// (deny-by-absence, like PasswordFlowsDisabled) and NewService WARNs when the
 	// machine repositories are wired without one; key AUTHENTICATION is unaffected.
@@ -876,6 +994,18 @@ type Config struct {
 	// non-nil slice would mean "mounted, ungated", the very bug this field closes.
 	// Typical: authorizer.RequirePermissionFixed("platform", "steward", "global").
 	MachineRoutesGate web.Middleware
+
+	// BundledRouteAuth overrides the AUTHENTICATION posture of the bundled route
+	// groups, one semantic surface at a time. Every zero field keeps that group's
+	// audited default (see BundledRouteAuthentication), so a host replaces one
+	// group without restating the others and without a half-constructed Service:
+	// NewService resolves each configured strategy into a concrete middleware and
+	// holds the resolved set immutable for the process's life.
+	//
+	// It is authentication only. It cannot unmount the authenticator from a
+	// protected bundled surface, and it never substitutes for the host
+	// authorization seams (MachineRoutesGate, UserAdminCheck, InviteCheck).
+	BundledRouteAuth BundledRouteAuthentication
 
 	// RuntimeMode is the REQUIRED fail-closed posture (auth v3 §8). It has no
 	// default: empty → ErrRuntimeModeRequired, unknown → ErrRuntimeModeInvalid,
@@ -1126,9 +1256,9 @@ type Config struct {
 	// ephemeral key is a SINGLE-INSTANCE DEV convenience only (example hosts),
 	// where restart kills access JWTs and clients recover via /auth/refresh.
 	// Verification applies a small clock-skew leeway (30–60s). Revocation is
-	// asymmetric and now BOUNDED per route: stateless RequireUser routes honor an
-	// outstanding access JWT for ≤ AccessTokenTTL after a session is revoked;
-	// RequireLiveSession routes revoke immediately.
+	// asymmetric and BOUNDED per route: a stateless authenticator honors an
+	// outstanding access JWT for ≤ AccessTokenTTL after a session is revoked; a
+	// Live() authenticator revokes immediately.
 	TokenSigner cryptids.JWTSigner
 	// AccessTokenTTL is the access-JWT lifetime (§1.1, D8). Zero → 15m. Keep it
 	// short: it bounds the revocation-asymmetry window on stateless routes.
@@ -1323,7 +1453,7 @@ type Config struct {
 
 // Service is the auth pocket's driving surface — every use-case as a method
 // (session lifecycle, passwords, OAuth, machine identity, tokens, invitations),
-// plus the cross-pocket identity seams (RequireUser middleware, CurrentUser
+// plus the cross-pocket identity seams (RequirePrincipal middleware, CurrentUser
 // port) a host wires into another pocket. It holds no mutable state beyond the
 // shared Repositories/Config values. The shipped HTTP layer is an optional
 // adapter over exactly this surface (FS2): a host may mount it (Register), mount
@@ -1372,6 +1502,11 @@ type Service struct {
 	// adapter mounts none of them (deny-by-absence); key authentication is
 	// unaffected. Threaded Register → Mount → mountMachine.
 	machineRoutesGate web.Middleware
+	// routeAuth is Config.BundledRouteAuth resolved to concrete middleware over
+	// this Service — done ONCE here, so a host's option slices can never be
+	// mutated into a different posture while the process serves. A group the host
+	// did not configure stays nil and takes its audited default at Mount.
+	routeAuth inbound.RouteAuthentication
 }
 
 // DeliveryStatus is the read-only delivery-status projection a session-gated caller
@@ -1524,6 +1659,33 @@ func inProcessRuntimeConfig(cfg Config) delivery.InProcessRuntimeConfig {
 		Workers:          cfg.InProcessDelivery.Workers,
 		ShutdownDeadline: cfg.InProcessDelivery.ShutdownDeadline,
 		MaxAttempts:      cfg.InProcessDelivery.MaxAttempts,
+	}
+}
+
+// middleware resolves one bundled-route strategy over svc, or nil when the host
+// left the slot unset — which Mount reads as "keep this group's audited
+// default". An explicit PrincipalStrategy() with no options is CONFIGURED and
+// resolves to the primitive defaults, which is why the configured bit exists.
+func (r RoutePrincipalStrategy) middleware(svc *authsvc.Service) web.Middleware {
+	if !r.configured {
+		return nil
+	}
+	return svc.RequirePrincipal(r.opts...)
+}
+
+// resolveBundledRouteAuth freezes Config.BundledRouteAuth into concrete
+// middleware over the constructed service (the "no half-constructed Service"
+// contract: a host names a posture in Config, never a Service method).
+func resolveBundledRouteAuth(cfg BundledRouteAuthentication, svc *authsvc.Service) inbound.RouteAuthentication {
+	return inbound.RouteAuthentication{
+		OAuthLinkStart:       cfg.OAuthLinkStart.middleware(svc),
+		SessionSecurityReads: cfg.SessionSecurityReads.middleware(svc),
+		SessionHydration:     cfg.SessionHydration.middleware(svc),
+		CredentialManagement: cfg.CredentialManagement.middleware(svc),
+		MachineLifecycle:     cfg.MachineLifecycle.middleware(svc),
+		UserAdministration:   cfg.UserAdministration.middleware(svc),
+		Invitations:          cfg.Invitations.middleware(svc),
+		BrowserAccount:       cfg.BrowserAccount.middleware(svc),
 	}
 }
 
@@ -2126,6 +2288,7 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 		views:             cfg.Views,
 		htmlPolicy:        cfg.HTMLPolicy,
 		machineRoutesGate: cfg.MachineRoutesGate,
+		routeAuth:         resolveBundledRouteAuth(cfg.BundledRouteAuth, authService),
 	}, nil
 }
 
@@ -2161,12 +2324,64 @@ func userLookup(idents identifier.IdentifierRepository, norm identifier.Normaliz
 	}
 }
 
-// RequireUser is HTTP middleware gating a route on a valid session. It satisfies
-// sdk/foundation/web.Middleware via the method value authSvc.RequireUser, so a host passes
-// it to another pocket (e.g. cms.Config.AdminMiddleware) without either pocket
-// importing the other.
-func (s *Service) RequireUser(next http.Handler) http.Handler {
-	return s.svc.RequireUser(next)
+// RequirePrincipal is THE authenticator. Its options are OR-sets over credential
+// kinds (Accept) and transports (Transports) plus a liveness tier (Live) and a
+// browser denial mode (Browser); with no options it admits every wired
+// credential over both transports, statelessly, denying with a JSON 401. It
+// returns web.Middleware, so a host passes it to another pocket (e.g.
+// cms.Config.AdminMiddleware) without either pocket importing the other.
+//
+// At the outermost position it resolves the request's credential within its set
+// and stashes the Principal (CurrentPrincipal / CurrentUser) plus the Credential
+// (CurrentCredential). Nested under an outer RequirePrincipal it NARROWS by
+// reading that stash instead of re-resolving, so a group-level authenticator and
+// a route-level one cost one resolution between them; a Live() gate performs its
+// session lookup once. The supported wiring invariant is ONE authentication
+// Service per middleware chain. An empty Accept()/Transports() panics at
+// construction.
+func (s *Service) RequirePrincipal(opts ...PrincipalOption) web.Middleware {
+	return s.svc.RequirePrincipal(opts...)
+}
+
+// RequireAccessTokenOrAPIKey admits every wired credential over both transports,
+// statelessly — RequirePrincipal(), the posture most read routes want.
+func (s *Service) RequireAccessTokenOrAPIKey() web.Middleware {
+	return s.svc.RequireAccessTokenOrAPIKey()
+}
+
+// RequireAccessTokenOrAPIKeyLive is the same OR-set at the immediate-revocation
+// tier — RequirePrincipal(Live()): a revoked session denies within one
+// round-trip, while an API key (already DB-checked at resolution) still passes.
+func (s *Service) RequireAccessTokenOrAPIKeyLive() web.Middleware {
+	return s.svc.RequireAccessTokenOrAPIKeyLive()
+}
+
+// RequireAccessToken admits a person's access token over either transport —
+// RequirePrincipal(Accept(CredentialAccessToken)). An API key is refused even
+// when it is otherwise valid, and so is a valid cookie presented alongside one:
+// a consulted bearer is authoritative.
+func (s *Service) RequireAccessToken() web.Middleware {
+	return s.svc.RequireAccessToken()
+}
+
+// RequireAccessTokenLive is the access-token-only gate at the
+// immediate-revocation tier — RequirePrincipal(Accept(CredentialAccessToken),
+// Live()), the "a key never mints a key" posture.
+func (s *Service) RequireAccessTokenLive() web.Middleware {
+	return s.svc.RequireAccessTokenLive()
+}
+
+// RequireAccessTokenCookie reads the session cookie ONLY —
+// RequirePrincipal(Accept(CredentialAccessToken), Transports(TransportCookie)):
+// a header credential is never consulted, the browser-app posture.
+func (s *Service) RequireAccessTokenCookie() web.Middleware {
+	return s.svc.RequireAccessTokenCookie()
+}
+
+// RequireAPIKey admits machines only —
+// RequirePrincipal(Accept(CredentialAPIKey)).
+func (s *Service) RequireAPIKey() web.Middleware {
+	return s.svc.RequireAPIKey()
 }
 
 // CurrentUser returns the authenticated user id on ctx, if any. It structurally
@@ -2176,65 +2391,19 @@ func (s *Service) CurrentUser(ctx context.Context) (userID string, ok bool) {
 	return s.svc.CurrentUser(ctx)
 }
 
-// RequireServiceAccount is HTTP middleware gating a route on an API-key bearer
-// credential (design §4.3). A host wires it like RequireUser; it stashes the
-// resolved Principal, read via CurrentPrincipal.
-func (s *Service) RequireServiceAccount(next http.Handler) http.Handler {
-	return s.svc.RequireServiceAccount(next)
-}
-
-// RequirePrincipal is HTTP middleware gating a route on either credential class
-// (session or API-key bearer, plus a bearer JWT when Config.TokenSigner is
-// wired). It stashes the resolved Principal, read via CurrentPrincipal.
-func (s *Service) RequirePrincipal(next http.Handler) http.Handler {
-	return s.svc.RequirePrincipal(next)
-}
-
-// RequireLiveSession is HTTP middleware for sensitive routes that gates on a LIVE
-// session — one PK lookup per request (§1.4, D1), the immediate-revocation tier
-// above RequireUser's stateless JWT check. A user JWT's session_id is looked up
-// (deleted/expired → deny); an API key passes (already DB-checked, no session
-// row); a repository error DENIES (fails CLOSED). A host wires it like RequireUser
-// on password-change, key-minting, invitation, or secret-read routes.
-func (s *Service) RequireLiveSession(next http.Handler) http.Handler {
-	return s.svc.RequireLiveSession(next)
-}
-
-// RequirePrincipalBrowser is the browser-facing sibling of RequirePrincipal for HTML
-// routes (design §9.2). It resolves the SAME credential classes and stashes the SAME
-// Principal (read via CurrentPrincipal), but on an authentication denial it 303s to
-// Config.BrowserLoginPath (default "/auth/login") instead of writing a JSON 401 — a
-// denied GET/HEAD carrying a validated return_to of the original path+query, an unsafe
-// method none. It never sniffs Accept or Fetch Metadata; mount it deliberately on the
-// HTML routes a host renders login pages for.
-func (s *Service) RequirePrincipalBrowser(next http.Handler) http.Handler {
-	return s.svc.RequirePrincipalBrowser(next)
-}
-
-// RequireLiveSessionBrowser is the browser-facing sibling of RequireLiveSession for
-// HTML routes (design §9.2). It enforces the SAME immediate-revocation live-session
-// matrix and stashes the SAME Principal/session id, but on denial it 303s to
-// Config.BrowserLoginPath (default "/auth/login") instead of writing a JSON 401 (same
-// validated return_to rule as RequirePrincipalBrowser). A statelessly-valid but
-// revoked user session passes RequirePrincipalBrowser and is denied here. Mount it on
-// unsafe HTML routes that need immediate revocation.
-func (s *Service) RequireLiveSessionBrowser(next http.Handler) http.Handler {
-	return s.svc.RequireLiveSessionBrowser(next)
-}
-
-// AuthenticateAPIKey resolves the effective Principal for a raw API key (design
-// §4.1): a personal act-as-user key yields Principal{Type: "user"}, otherwise
-// Principal{Type: "service_account"}. Revoked, expired, or unknown keys return a
-// generic sdk.ErrUnauthorized.
-func (s *Service) AuthenticateAPIKey(ctx context.Context, rawKey string) (Principal, error) {
-	return s.svc.AuthenticateAPIKey(ctx, rawKey)
-}
-
-// CurrentPrincipal returns the effective Principal stashed by
-// RequireServiceAccount / RequirePrincipal, if any — the machine-or-human
-// identity port a consuming pocket reads alongside CurrentUser.
+// CurrentPrincipal returns the effective Principal stashed by RequirePrincipal,
+// if any — the machine-or-human identity port a consuming pocket reads alongside
+// CurrentUser.
 func (s *Service) CurrentPrincipal(ctx context.Context) (Principal, bool) {
 	return s.svc.CurrentPrincipal(ctx)
+}
+
+// CurrentCredential returns what authenticated the request — the credential kind,
+// its transport, and the proof's coordinates — or false when the request was not
+// gated by RequirePrincipal. It is the read that tells an act-as-user API key
+// apart from a person's session, which CurrentPrincipal alone cannot.
+func (s *Service) CurrentCredential(ctx context.Context) (Credential, bool) {
+	return s.svc.CurrentCredential(ctx)
 }
 
 // resolverAssertion is the compile-time proof that the auth pocket satisfies the
@@ -2452,8 +2621,8 @@ func (s *Service) GetUserSummary(ctx context.Context, id string) (UserSummary, e
 // Changed=false with no second revision increment and no audit event, so a
 // retried admin request is safe.
 //
-// Stateless access JWTs already issued remain accepted on RequireUser-tier routes
-// until Config.AccessTokenTTL elapses; RequireLiveSession routes deny immediately
+// Stateless access JWTs already issued remain accepted on stateless-tier routes
+// until Config.AccessTokenTTL elapses; Live() routes deny immediately
 // because the sessions are gone. See the README's security posture section.
 //
 // TRUSTED: it applies NO authorization — see ListUsers. actor is recorded on the
@@ -2680,6 +2849,7 @@ func (s *Service) Register(m pocket.Mount) error {
 		Views:        s.views,
 		HTMLPolicy:   s.htmlPolicy,
 		MachineGate:  s.machineRoutesGate,
+		RouteAuth:    s.routeAuth,
 	})
 	return nil
 }

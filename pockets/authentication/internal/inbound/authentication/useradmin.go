@@ -17,7 +17,7 @@ import (
 //
 // Every route is gated in the same order:
 //
-//  1. RequireLiveSession — sensitive reads and mutations must observe revocation
+//  1. The UserAdministration authenticator — sensitive reads and mutations must observe revocation
 //     within one round-trip, not within AccessTokenTTL. A deactivated
 //     administrator loses this surface immediately, because the transition
 //     deleted their sessions.
@@ -75,15 +75,15 @@ func newUserSummaryResponse(s user.Summary) userSummaryResponse {
 // mountUserAdmin registers the optional administrative user surface. Called from
 // Mount only when svc.UserAdminEnabled() and svc.UserAdminAuthorized() are both
 // true.
-func mountUserAdmin(r pocket.RouteRegistrar, h *handlers, liveSession, browserSafe web.Middleware) {
-	r.Handle("GET", "/auth/admin/users", h.adminListUsers, liveSession)
-	r.Handle("GET", "/auth/admin/users/{id}", h.adminGetUser, liveSession)
-	r.Handle("POST", "/auth/admin/users/{id}/deactivate", h.adminDeactivateUser, liveSession, browserSafe)
-	r.Handle("POST", "/auth/admin/users/{id}/reactivate", h.adminReactivateUser, liveSession, browserSafe)
+func mountUserAdmin(r pocket.RouteRegistrar, h *handlers, userAdministration, browserSafe web.Middleware) {
+	r.Handle("GET", "/auth/admin/users", h.adminListUsers, userAdministration)
+	r.Handle("GET", "/auth/admin/users/{id}", h.adminGetUser, userAdministration)
+	r.Handle("POST", "/auth/admin/users/{id}/deactivate", h.adminDeactivateUser, userAdministration, browserSafe)
+	r.Handle("POST", "/auth/admin/users/{id}/reactivate", h.adminReactivateUser, userAdministration, browserSafe)
 	// The AUTHORIZED counterpart of the public, enumeration-safe resend (CHAU-2.3).
 	// It rides the same gate chain as the lifecycle mutations and may report real
 	// target state.
-	r.Handle("POST", "/auth/admin/users/{id}/verification/resend", h.adminResendVerification, liveSession, browserSafe)
+	r.Handle("POST", "/auth/admin/users/{id}/verification/resend", h.adminResendVerification, userAdministration, browserSafe)
 }
 
 // adminPrincipal resolves the caller's effective principal and runs the host
@@ -96,8 +96,8 @@ func mountUserAdmin(r pocket.RouteRegistrar, h *handlers, liveSession, browserSa
 func (h *handlers) adminPrincipal(w http.ResponseWriter, r *http.Request, action authsvc.UserAdminAction, targetUserID string) (authsvc.Principal, bool) {
 	principal, ok := h.svc.CurrentPrincipal(r.Context())
 	if !ok {
-		// RequireLiveSession already ran, so this is a wiring failure rather than a
-		// missing credential. Fail closed either way.
+		// The UserAdministration authenticator already ran, so this is a wiring
+		// failure rather than a missing credential. Fail closed either way.
 		web.RespondJSONError(w, web.ErrUnauthorized("authentication required"))
 		return authsvc.Principal{}, false
 	}

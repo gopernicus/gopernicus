@@ -257,8 +257,8 @@ func TestSecurityEventAPIKeyAuthSuccess(t *testing.T) {
 	ctx := context.Background()
 	sa, _ := h.svc.CreateServiceAccount(ctx, "admin", "bot", "", false, "")
 	key, raw, _ := h.svc.MintAPIKey(ctx, sa.ID, "deploy", time.Time{})
-	if _, err := h.svc.AuthenticateAPIKey(ctx, raw); err != nil {
-		t.Fatalf("AuthenticateAPIKey: %v", err)
+	if _, _, ok := h.svc.resolveAPIKeyCredential(ctx, raw); !ok {
+		t.Fatal("resolveAPIKeyCredential denied a valid key")
 	}
 	e := requireEvent(t, h.events, securityevent.TypeAPIKeyAuth, securityevent.StatusSuccess)
 	if e.Actor.Type != PrincipalServiceAccount || e.Actor.ID != sa.ID {
@@ -281,7 +281,7 @@ func TestSecurityEventAPIKeyAuthBlockedRevoked(t *testing.T) {
 	if err := h.svc.RevokeAPIKey(ctx, key.ID); err != nil {
 		t.Fatalf("RevokeAPIKey: %v", err)
 	}
-	if _, err := h.svc.AuthenticateAPIKey(ctx, raw); err == nil {
+	if _, _, ok := h.svc.resolveAPIKeyCredential(ctx, raw); ok {
 		t.Fatal("revoked key must deny")
 	}
 	e := requireEvent(t, h.events, securityevent.TypeAPIKeyAuth, securityevent.StatusBlocked)
@@ -297,7 +297,7 @@ func TestSecurityEventAPIKeyAuthFailureExpired(t *testing.T) {
 	ctx := context.Background()
 	sa, _ := h.svc.CreateServiceAccount(ctx, "admin", "bot", "", false, "")
 	_, raw, _ := h.svc.MintAPIKey(ctx, sa.ID, "k", time.Now().Add(-time.Hour))
-	if _, err := h.svc.AuthenticateAPIKey(ctx, raw); err == nil {
+	if _, _, ok := h.svc.resolveAPIKeyCredential(ctx, raw); ok {
 		t.Fatal("expired key must deny")
 	}
 	e := requireEvent(t, h.events, securityevent.TypeAPIKeyAuth, securityevent.StatusFailure)

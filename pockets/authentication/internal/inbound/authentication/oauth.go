@@ -41,19 +41,21 @@ type unlinkRequest struct {
 }
 
 // mountOAuth registers the OAuth route surface (design §3). Called from Mount
-// only when a provider is wired. The link-start route takes requireUser; the
-// code-gated unlink pair (design §5.4) is a sensitive mutation gated by
-// liveSession (immediate revocation) plus the browser-safe-mutation Origin/CSRF
-// gate, replacing the plain DELETE /auth/oauth/{provider}/link (pre-tag route
-// break). The caller's link inventory is no longer a route here: GET
-// /auth/oauth/linked is subsumed by the masked GET /auth/methods (design §5.1).
-func mountOAuth(r pocket.RouteRegistrar, h *handlers, requireUser, liveSession, browserSafe web.Middleware) {
+// only when a provider is wired. The link-start route takes the OAuthLinkStart
+// authenticator (a person's access token over either transport — an API key
+// cannot start a human OAuth link); the code-gated unlink pair (design §5.4) is
+// a credential mutation gated by the CredentialManagement authenticator
+// (immediate revocation, human credential only) plus the browser-safe-mutation
+// Origin/CSRF gate, replacing the plain DELETE /auth/oauth/{provider}/link
+// (pre-tag route break). The caller's link inventory is no longer a route here:
+// GET /auth/oauth/linked is subsumed by the masked GET /auth/methods (design §5.1).
+func mountOAuth(r pocket.RouteRegistrar, h *handlers, linkStart, credentialManagement, browserSafe web.Middleware) {
 	r.Handle("GET", "/auth/oauth/{provider}/start", h.oauthStart)
 	r.Handle("GET", "/auth/oauth/{provider}/callback", h.oauthCallback)
 	r.Handle("POST", verifyLinkPath, h.oauthVerifyLink)
-	r.Handle("GET", "/auth/oauth/{provider}/link/start", h.oauthLinkStart, requireUser)
-	r.Handle("POST", "/auth/oauth/{provider}/unlink/start", h.startUnlinkOAuth, liveSession, browserSafe)
-	r.Handle("POST", "/auth/oauth/{provider}/unlink", h.unlinkOAuth, liveSession, browserSafe)
+	r.Handle("GET", "/auth/oauth/{provider}/link/start", h.oauthLinkStart, linkStart)
+	r.Handle("POST", "/auth/oauth/{provider}/unlink/start", h.startUnlinkOAuth, credentialManagement, browserSafe)
+	r.Handle("POST", "/auth/oauth/{provider}/unlink", h.unlinkOAuth, credentialManagement, browserSafe)
 }
 
 // oauthStart redirects the browser to the provider authorization URL.

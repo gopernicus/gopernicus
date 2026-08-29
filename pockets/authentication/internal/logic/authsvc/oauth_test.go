@@ -410,7 +410,7 @@ func TestOAuthCallbackRegisterAndLink(t *testing.T) {
 	if res.RedirectTo != "https://app.example.com/welcome" {
 		t.Errorf("RedirectTo = %q, want the allowlisted target", res.RedirectTo)
 	}
-	if id, ok := h.svc.verifyBearer(res.Token); !ok || id != res.User.ID {
+	if id, _, ok := h.svc.verifyBearerClaims(res.Token); !ok || id != res.User.ID {
 		t.Errorf("minted oauth access token = (%q, %v), want (%q, true)", id, ok, res.User.ID)
 	}
 	if res.RefreshToken == "" {
@@ -539,7 +539,7 @@ func TestOAuthCallbackExistingLinkLogin(t *testing.T) {
 	if len(h.accounts.m) != 1 {
 		t.Errorf("existing-link login created a duplicate account: %d rows", len(h.accounts.m))
 	}
-	if id, ok := h.svc.verifyBearer(res.Token); !ok || id != pre.ID {
+	if id, _, ok := h.svc.verifyBearerClaims(res.Token); !ok || id != pre.ID {
 		t.Errorf("login access token = (%q, %v), want (%q, true)", id, ok, pre.ID)
 	}
 }

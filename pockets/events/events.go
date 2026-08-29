@@ -8,7 +8,7 @@
 // The pocket is datastore-free and view-free: it depends on its outbox port and
 // sdk facilities only, never on a concrete store, an integration, or another
 // pocket. The gateway's connect-time identity is read from sdk/foundation/identity (a host
-// stashes it via authentication.RequireUser on Config.StreamMiddleware); the
+// stashes it via authentication.RequireAccessToken() on Config.StreamMiddleware); the
 // pocket imports no other pocket.
 //
 // Package-name collision (O5): this package is events and so is sdk/capabilities/events; this
@@ -89,7 +89,7 @@ type Config struct {
 	// Bus is REQUIRED — the gateway subscribes to it. Nil → ErrBusRequired.
 	Bus sdkevents.Bus
 	// StreamMiddleware wraps every stream route. A host passes its identity-
-	// stashing middleware here (authentication.RequireUser): the handlers read the
+	// stashing middleware here (authentication.RequireAccessToken()): the handlers read the
 	// stashed identity.Principal and fail closed (401) when it is absent.
 	StreamMiddleware []web.Middleware
 	// Authorize gates resource-scoped streams. Nil → the /events/{resource_type}/

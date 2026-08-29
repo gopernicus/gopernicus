@@ -14,7 +14,7 @@ import (
 // its matching X-CSRF-Token header satisfy the gate (newTestHandler's empty Origin
 // allowlist passes an Origin-less same-context request, so the token pair is the
 // operative check). Cases that expect a pre-gate rejection (no/revoked session ->
-// RequireLiveSession 401, which runs before the gate) keep plain do.
+// authenticator's 401, which runs before the gate) keep plain do.
 func doChangePassword(t *testing.T, h http.Handler, body string, session *http.Cookie) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest("POST", "/auth/password/change", strings.NewReader(body))
@@ -182,7 +182,7 @@ func TestLogoutRouteClearsSession(t *testing.T) {
 		t.Errorf("logout did not clear the refresh cookie: %+v", rc)
 	}
 
-	// The session was deleted: a RequireLiveSession route rejects the access cookie
+	// The session was deleted: a Live()-gated route rejects the access cookie
 	// even though the stateless access JWT itself is still within its TTL.
 	stale := do(t, h, "POST", "/auth/password/change",
 		`{"current_password":"password123456789","new_password":"newpassword456789"}`,
@@ -268,7 +268,7 @@ func TestChangePasswordRouteHappyPath(t *testing.T) {
 		t.Errorf("change did not set a fresh session cookie: old=%v new=%v", old, fresh)
 	}
 
-	// The old session is revoked: the RequireLiveSession route rejects the old
+	// The old session is revoked: the Live()-gated route rejects the old
 	// access cookie.
 	stale := do(t, h, "POST", "/auth/password/change",
 		`{"current_password":"newpassword456789","new_password":"finalpass789012"}`,
@@ -276,7 +276,7 @@ func TestChangePasswordRouteHappyPath(t *testing.T) {
 	if stale.Code != http.StatusUnauthorized {
 		t.Errorf("old cookie after change status = %d, want 401", stale.Code)
 	}
-	// The fresh session cookie is live: it passes RequireLiveSession and changes
+	// The fresh session cookie is live: it passes the Live() gate and changes
 	// the password again.
 	ok := doChangePassword(t, h,
 		`{"current_password":"newpassword456789","new_password":"finalpass789012"}`,

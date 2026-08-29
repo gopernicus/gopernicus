@@ -28,7 +28,7 @@ type Config struct {
 	// receives the effective caller as an identity.Principal.
 	Authorize func(ctx context.Context, principal identity.Principal, resourceType, resourceID string) (bool, error)
 	// Middleware wraps every stream route (the host's identity-stashing
-	// middleware, e.g. authentication.RequireUser).
+	// middleware, e.g. authentication.RequireAccessToken()).
 	Middleware []web.Middleware
 	// Heartbeat is the SSE comment-frame cadence (already defaulted).
 	Heartbeat time.Duration

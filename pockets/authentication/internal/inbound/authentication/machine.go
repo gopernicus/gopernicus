@@ -123,27 +123,28 @@ func newPageResponse[E any, T any](p crud.Page[E], mapFn func(E) T) pageResponse
 // named a gate.
 //
 // Every route carries the same identity stack, outermost first (web.Handle
-// applies the list left-to-right as wrappers): requireUser admits the human
-// credential class ONLY — an API key, act-as-user or not, is 401 here, so a key
-// can never mint another key; requireLiveSession revokes within one round-trip
-// instead of RequireUser's ≤AccessTokenTTL stale window (the invitation
-// precedent — credential issuance is not less sensitive); then the host's gate
-// decides authorization and writes its own denial (the bundled handlers write no
-// 403 of their own).
+// applies the list left-to-right as wrappers): the MachineLifecycle
+// authenticator admits the human credential class ONLY and at the
+// immediate-revocation tier — an API key, act-as-user or not, is 401 here, so a
+// key can never mint another key, and a revoked session is denied within one
+// round-trip instead of lingering for its access token's remaining life (the
+// invitation precedent — credential issuance is not less sensitive); then the
+// host's gate decides authorization and writes its own denial (the bundled
+// handlers write no 403 of their own).
 //
-// The three MUTATIONS carry browserSafe between the live-session check and the
+// The three MUTATIONS carry browserSafe between the authenticator and the
 // gate, exactly like mountUserAdmin: a cookie-authenticated mint or revoke is a
 // browser-driven state change, so it must clear the allowlisted-Origin +
 // double-submit CSRF gate before the host's policy is consulted — a forged
 // cross-site request is refused as CSRF, never merely as unauthorized. Bearer-only
 // callers skip it (requireBrowserSafeMutation short-circuits). The two GETs are
 // body-less reads and stay off the mutation gate.
-func mountMachine(r pocket.RouteRegistrar, h *handlers, requireUser, requireLiveSession, browserSafe, gate web.Middleware) {
-	r.Handle("POST", "/auth/service-accounts", h.createServiceAccount, requireUser, requireLiveSession, browserSafe, gate)
-	r.Handle("GET", "/auth/service-accounts", h.listServiceAccounts, requireUser, requireLiveSession, gate)
-	r.Handle("POST", "/auth/service-accounts/{id}/keys", h.mintAPIKey, requireUser, requireLiveSession, browserSafe, gate)
-	r.Handle("GET", "/auth/service-accounts/{id}/keys", h.listAPIKeys, requireUser, requireLiveSession, gate)
-	r.Handle("POST", "/auth/api-keys/{id}/revoke", h.revokeAPIKey, requireUser, requireLiveSession, browserSafe, gate)
+func mountMachine(r pocket.RouteRegistrar, h *handlers, machineLifecycle, browserSafe, gate web.Middleware) {
+	r.Handle("POST", "/auth/service-accounts", h.createServiceAccount, machineLifecycle, browserSafe, gate)
+	r.Handle("GET", "/auth/service-accounts", h.listServiceAccounts, machineLifecycle, gate)
+	r.Handle("POST", "/auth/service-accounts/{id}/keys", h.mintAPIKey, machineLifecycle, browserSafe, gate)
+	r.Handle("GET", "/auth/service-accounts/{id}/keys", h.listAPIKeys, machineLifecycle, gate)
+	r.Handle("POST", "/auth/api-keys/{id}/revoke", h.revokeAPIKey, machineLifecycle, browserSafe, gate)
 }
 
 // createServiceAccount creates a machine identity created by the calling human.

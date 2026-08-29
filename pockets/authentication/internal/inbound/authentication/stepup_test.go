@@ -109,7 +109,7 @@ func jsonBearer(h http.Handler, path, token, body string) *httptest.ResponseReco
 	return rec
 }
 
-func TestStepUpRoutesRequireLiveSession(t *testing.T) {
+func TestStepUpRoutesRequireAccessTokenLive(t *testing.T) {
 	h, _ := newStepUpHandler(t)
 	for _, path := range []string{"/auth/step-up/begin", "/auth/step-up/password", "/auth/step-up/code"} {
 		r := httptest.NewRequest("POST", path, strings.NewReader(`{}`))

@@ -9,7 +9,7 @@ import (
 )
 
 // GET /auth/methods — the masked credential/identifier inventory (design §5.1). It
-// is live-session-gated (RequireLiveSession) because it returns sensitive contact
+// rides the SessionSecurityReads authenticator because it returns sensitive contact
 // and credential inventory, so a revoked access JWT is denied within one
 // round-trip. It is a bearer-safe read: GET with no request body, so it skips the
 // browser-safe-mutation CSRF gate (that gate protects state-changing routes). The
@@ -45,7 +45,7 @@ type identifierMethodResponse struct {
 	Removable  bool     `json:"removable"`
 }
 
-// methods returns the caller's masked method inventory. RequireLiveSession has
+// methods returns the caller's masked method inventory. The authenticator has
 // already validated the session and stashed the user id.
 func (h *handlers) methods(w http.ResponseWriter, r *http.Request) {
 	writeNoStore(w)

@@ -77,11 +77,90 @@ type Deps struct {
 	// routes run behind (authentication.Config.MachineRoutesGate). Nil → NONE of
 	// them mount (deny-by-absence); key authentication is unaffected.
 	MachineGate web.Middleware
+	// RouteAuth carries the host's resolved AUTHENTICATION posture for the
+	// bundled route groups (authentication.Config.BundledRouteAuth, resolved to
+	// concrete middleware at NewService). A nil field takes that group's audited
+	// default below, so a host overrides one semantic surface without restating
+	// the others.
+	RouteAuth RouteAuthentication
+}
+
+// RouteAuthentication is the authenticator each bundled route group runs behind
+// — one middleware per SEMANTIC surface, not per route, because the posture is a
+// property of what the surface does (read a session's security inventory, mutate
+// a human credential, administer machines) rather than of its path. A nil field
+// means "the audited default", which withDefaults materializes from the service.
+type RouteAuthentication struct {
+	OAuthLinkStart       web.Middleware
+	SessionSecurityReads web.Middleware
+	SessionHydration     web.Middleware
+	CredentialManagement web.Middleware
+	MachineLifecycle     web.Middleware
+	UserAdministration   web.Middleware
+	Invitations          web.Middleware
+	BrowserAccount       web.Middleware
+}
+
+// withDefaults fills every unset group with its audited default posture. This is
+// the ONE place the bundled route audit is expressed, so a default and the route
+// it guards can never drift apart:
+//
+//   - OAuthLinkStart — RequireAccessToken(): an API key cannot start a human
+//     OAuth link, but either transport may carry the person's token;
+//   - SessionSecurityReads — RequireAccessTokenLive(): explicitly
+//     established-session surfaces (the masked credential inventory, the CSRF
+//     bootstrap, the delivery-status read);
+//   - SessionHydration — RequireAccessTokenOrAPIKeyLive(): preserves the
+//     documented act-as-user-key hydration (a self-acting service account still
+//     fails the handler's CurrentUser requirement);
+//   - CredentialManagement — RequireAccessTokenLive(): these mutate or prove a
+//     HUMAN credential and several bind work to CurrentSessionID, so no API key,
+//     act-as-user included, substitutes for a session;
+//   - MachineLifecycle — RequireAccessTokenLive(): a key never creates, reads,
+//     mints, or revokes keys;
+//   - UserAdministration — RequireAccessTokenOrAPIKeyLive(): a machine principal
+//     deliberately REACHES Config.UserAdminCheck, and the host decides;
+//   - Invitations — RequireAccessTokenOrAPIKeyLive(): an act-as-user key acts as
+//     its effective human principal, while a self-acting service account fails
+//     the handlers' CurrentUser requirement;
+//   - BrowserAccount — cookie-only, live, redirecting on denial: the bundled
+//     browser UI reads only its own cookie and never a header.
+func (a RouteAuthentication) withDefaults(svc authService) RouteAuthentication {
+	if a.OAuthLinkStart == nil {
+		a.OAuthLinkStart = svc.RequirePrincipal(authsvc.Accept(authsvc.CredentialAccessToken))
+	}
+	if a.SessionSecurityReads == nil {
+		a.SessionSecurityReads = svc.RequirePrincipal(authsvc.Accept(authsvc.CredentialAccessToken), authsvc.Live())
+	}
+	if a.SessionHydration == nil {
+		a.SessionHydration = svc.RequirePrincipal(authsvc.Live())
+	}
+	if a.CredentialManagement == nil {
+		a.CredentialManagement = svc.RequirePrincipal(authsvc.Accept(authsvc.CredentialAccessToken), authsvc.Live())
+	}
+	if a.MachineLifecycle == nil {
+		a.MachineLifecycle = svc.RequirePrincipal(authsvc.Accept(authsvc.CredentialAccessToken), authsvc.Live())
+	}
+	if a.UserAdministration == nil {
+		a.UserAdministration = svc.RequirePrincipal(authsvc.Live())
+	}
+	if a.Invitations == nil {
+		a.Invitations = svc.RequirePrincipal(authsvc.Live())
+	}
+	if a.BrowserAccount == nil {
+		a.BrowserAccount = svc.RequirePrincipal(
+			authsvc.Accept(authsvc.CredentialAccessToken),
+			authsvc.Transports(authsvc.TransportCookie),
+			authsvc.Live(),
+			authsvc.Browser(),
+		)
+	}
+	return a
 }
 
 // Mount registers the auth pocket's routes on the registrar. The route surface
 // is POST /auth/{register,login,verify,refresh,logout,password/forgot,
-// password/reset} plus the RequireLiveSession-gated POST /auth/password/change.
+// password/reset} plus the credential-management-gated POST /auth/password/change.
 // /auth/refresh and /auth/logout are credential-driven, not middleware-gated
 // (§1.3/§1.5).
 //
@@ -96,6 +175,9 @@ type Deps struct {
 // A nil views leaves the pocket API-only, uniformly.
 func Mount(r pocket.RouteRegistrar, d Deps) {
 	svc, inv, views := d.Auth, d.Invitations, d.Views
+	// The bundled route groups' authenticators: the host's override where it set
+	// one (authentication.Config.BundledRouteAuth), the audited default otherwise.
+	auth := d.RouteAuth.withDefaults(svc)
 	r = clientInfoRegistrar{inner: r}
 	h := &handlers{svc: svc, inv: inv, listStrategy: d.ListStrategy, mutation: d.Mutation, views: views, htmlPolicy: d.HTMLPolicy}
 	// The password credential's routes register only when the posture is on
@@ -138,48 +220,50 @@ func Mount(r pocket.RouteRegistrar, d Deps) {
 	// expired-session logout has no live __Host-auth_csrf cookie to double-submit, so a hard
 	// double-submit gate would break exactly the shared-computer logout §1.5 protects.
 	r.Handle("POST", "/auth/logout", h.logout, requireBrowserSafeOrigin(h.mutation.csrf()))
-	// /auth/password/change is a sensitive route: RequireLiveSession revokes
-	// immediately (§1.4), not RequireUser's ≤AccessTokenTTL stale window. Like every
-	// other cookie-authenticated credential mutation it also carries the browser-safe
-	// gate (allowlisted Origin + double-submit CSRF, design §9.1); bearer-only API
-	// callers skip the gate. The gate is added below once browserSafe is built so the
-	// change route reaches parity with set/remove-password.
-	// /auth/delivery/status is the live-session-gated delivery-status read (design
-	// §6.1.1): a session-gated caller polls the durable outbox with its receipt to
-	// learn that delivery failed without holding the start request open.
-	r.Handle("GET", "/auth/delivery/status", h.deliveryStatus, svc.RequireLiveSession)
-	// /auth/methods is the live-session-gated masked method inventory (design §5.1):
-	// it returns sensitive credential/contact inventory, so RequireLiveSession denies
-	// a revoked access JWT within one round-trip. It is a bearer-safe GET read with no
-	// request body, so it skips the browser-safe-mutation CSRF gate (which guards
-	// state changes); the handler sets Cache-Control: no-store. It subsumes and
-	// replaces GET /auth/oauth/linked (removed, pre-tag route break — design §9).
-	r.Handle("GET", "/auth/methods", h.methods, svc.RequireLiveSession)
+	// /auth/password/change is a sensitive route: the CredentialManagement
+	// authenticator revokes immediately (§1.4) rather than admitting a stateless
+	// token for up to AccessTokenTTL. Like every other cookie-authenticated
+	// credential mutation it also carries the browser-safe gate (allowlisted Origin
+	// + double-submit CSRF, design §9.1); bearer-only API callers skip the gate. The
+	// gate is added below once browserSafe is built so the change route reaches
+	// parity with set/remove-password.
+	// /auth/delivery/status is a session-security read (design §6.1.1): a
+	// session-gated caller polls the durable outbox with its receipt to learn that
+	// delivery failed without holding the start request open.
+	r.Handle("GET", "/auth/delivery/status", h.deliveryStatus, auth.SessionSecurityReads)
+	// /auth/methods is the masked method inventory (design §5.1): it returns a
+	// human's credential/contact inventory, so it is a session-security read — an
+	// API key is refused and a revoked access JWT denies within one round-trip. It
+	// is a bearer-safe GET read with no request body, so it skips the
+	// browser-safe-mutation CSRF gate (which guards state changes); the handler sets
+	// Cache-Control: no-store. It subsumes and replaces GET /auth/oauth/linked
+	// (removed, pre-tag route break — design §9).
+	r.Handle("GET", "/auth/methods", h.methods, auth.SessionSecurityReads)
 	// /auth/csrf is the JSON double-submit bootstrap (upstream evidence §1a): a
 	// cookie-authenticated SPA served from a DIFFERENT origin than the API cannot
 	// read the API-origin __Host-auth_csrf cookie, so it reads the matching token from
-	// this body instead and echoes it in X-CSRF-Token. It is gated by
-	// RequireLiveSession (only an established session bootstraps; a
-	// credential-establishment endpoint needs no token) plus the ORIGIN-ONLY
+	// this body instead and echoes it in X-CSRF-Token. It is a session-security read
+	// (only an established human session bootstraps; a credential-establishment
+	// endpoint needs no token) plus the ORIGIN-ONLY
 	// browser gate — the double-submit gate cannot protect the very endpoint that
 	// hands out the token. The handler sets Cache-Control: no-store and reuses an
 	// existing well-formed token rather than rotating another tab's out from under
 	// it. The host must allow X-CSRF-Token in its CORS request-header policy
 	// (web.CORSWithConfig) for the browser to send the echo header.
-	r.Handle("GET", "/auth/csrf", h.csrfBootstrap, svc.RequireLiveSession, requireBrowserSafeOrigin(h.mutation.csrf()))
+	r.Handle("GET", "/auth/csrf", h.csrfBootstrap, auth.SessionSecurityReads, requireBrowserSafeOrigin(h.mutation.csrf()))
 	// /auth/me is session hydration: the cookie-authenticated client that cannot
 	// read its own session asks who it is signed in as, and gets the SAME
-	// userResponse body login and register return. It rides RequireLiveSession
-	// (ruling 6) rather than RequireUser — hydration intentionally pays one
-	// revocation lookup so a revoked access JWT cannot hydrate, matching
-	// /auth/methods. Like /auth/methods it is a bearer-safe GET with no body, so
-	// it skips the browser-safe-mutation CSRF gate; the handler sets
-	// Cache-Control: no-store and denies a machine principal (see me).
-	r.Handle("GET", "/auth/me", h.me, svc.RequireLiveSession)
+	// userResponse body login and register return. Hydration intentionally pays one
+	// revocation lookup (ruling 6) so a revoked access JWT cannot hydrate, and it
+	// keeps admitting an act-as-user API key, which hydrates as its human owner.
+	// Like /auth/methods it is a bearer-safe GET with no body, so it skips the
+	// browser-safe-mutation CSRF gate; the handler sets Cache-Control: no-store and
+	// denies a machine principal (see me).
+	r.Handle("GET", "/auth/me", h.me, auth.SessionHydration)
 
 	// Step-up (recent-authentication grant) routes (design §5.0). Each is a
-	// cookie-authenticated sensitive mutation: RequireLiveSession proves revocation
-	// state and stamps the session id, and the browser-safe-mutation gate adds the
+	// cookie-authenticated sensitive mutation: the CredentialManagement authenticator
+	// proves revocation state and stamps the session id, and the browser-safe-mutation gate adds the
 	// allowlisted-Origin + double-submit CSRF protection (design §9.1). The handlers
 	// themselves enforce the strict JSON body and set Cache-Control: no-store.
 	browserSafe := requireBrowserSafeMutation(h.mutation.csrf())
@@ -187,42 +271,44 @@ func Mount(r pocket.RouteRegistrar, d Deps) {
 		r.Handle("POST", "/auth/verification/resend", h.resendVerification, requireBrowserSafeOrigin(h.mutation.csrf()))
 	}
 	if pw {
-		r.Handle("POST", "/auth/password/change", h.changePassword, svc.RequireLiveSession, browserSafe)
+		r.Handle("POST", "/auth/password/change", h.changePassword, auth.CredentialManagement, browserSafe)
 	}
-	r.Handle("POST", "/auth/step-up/begin", h.beginStepUp, svc.RequireLiveSession, browserSafe)
+	r.Handle("POST", "/auth/step-up/begin", h.beginStepUp, auth.CredentialManagement, browserSafe)
 	if pw {
-		r.Handle("POST", "/auth/step-up/password", h.completeStepUpPassword, svc.RequireLiveSession, browserSafe)
+		r.Handle("POST", "/auth/step-up/password", h.completeStepUpPassword, auth.CredentialManagement, browserSafe)
 	}
-	r.Handle("POST", "/auth/step-up/code", h.completeStepUpCode, svc.RequireLiveSession, browserSafe)
+	r.Handle("POST", "/auth/step-up/code", h.completeStepUpCode, auth.CredentialManagement, browserSafe)
 
 	// Credential-suite password routes (design §5.2/§5.3). Each is a
-	// cookie-authenticated sensitive mutation gated by RequireLiveSession (immediate
-	// revocation) plus the browser-safe-mutation Origin/CSRF gate; the handlers add
+	// cookie-authenticated sensitive mutation gated by the CredentialManagement
+	// authenticator (immediate revocation, human credential only) plus the
+	// browser-safe-mutation Origin/CSRF gate; the handlers add
 	// strict JSON hardening and Cache-Control: no-store. /auth/password/set consumes a
 	// set_password grant; the remove pair delivers a remove_password code to a verified
 	// recovery identifier and completes through the revision-serialized credential rail.
 	if pw {
-		r.Handle("POST", "/auth/password/set", h.setPassword, svc.RequireLiveSession, browserSafe)
+		r.Handle("POST", "/auth/password/set", h.setPassword, auth.CredentialManagement, browserSafe)
 	}
 	if pw {
-		r.Handle("POST", "/auth/password/remove/start", h.startRemovePassword, svc.RequireLiveSession, browserSafe)
+		r.Handle("POST", "/auth/password/remove/start", h.startRemovePassword, auth.CredentialManagement, browserSafe)
 	}
 	if pw {
-		r.Handle("POST", "/auth/password/remove", h.removePassword, svc.RequireLiveSession, browserSafe)
+		r.Handle("POST", "/auth/password/remove", h.removePassword, auth.CredentialManagement, browserSafe)
 	}
 
 	// Identifier-management routes (design §5.5). Each is a cookie-authenticated
-	// sensitive mutation gated by RequireLiveSession (immediate revocation) plus the
+	// sensitive mutation gated by the CredentialManagement authenticator (immediate
+	// revocation, human credential only) plus the
 	// browser-safe-mutation Origin/CSRF gate; the handlers add strict JSON hardening
 	// and Cache-Control: no-store. The add/change start delivers an ownership-proof
 	// code to the proposed NEW address and the confirm applies the verified change;
 	// PATCH/DELETE route through the policy-guarded revision-serialized credential rail.
-	r.Handle("POST", "/auth/identifiers/email", h.startEmailIdentifier, svc.RequireLiveSession, browserSafe)
-	r.Handle("POST", "/auth/identifiers/email/confirm", h.confirmEmailIdentifier, svc.RequireLiveSession, browserSafe)
-	r.Handle("POST", "/auth/identifiers/phone", h.startPhoneIdentifier, svc.RequireLiveSession, browserSafe)
-	r.Handle("POST", "/auth/identifiers/phone/confirm", h.confirmPhoneIdentifier, svc.RequireLiveSession, browserSafe)
-	r.Handle("PATCH", "/auth/identifiers/{id}", h.patchIdentifier, svc.RequireLiveSession, browserSafe)
-	r.Handle("DELETE", "/auth/identifiers/{id}", h.deleteIdentifier, svc.RequireLiveSession, browserSafe)
+	r.Handle("POST", "/auth/identifiers/email", h.startEmailIdentifier, auth.CredentialManagement, browserSafe)
+	r.Handle("POST", "/auth/identifiers/email/confirm", h.confirmEmailIdentifier, auth.CredentialManagement, browserSafe)
+	r.Handle("POST", "/auth/identifiers/phone", h.startPhoneIdentifier, auth.CredentialManagement, browserSafe)
+	r.Handle("POST", "/auth/identifiers/phone/confirm", h.confirmPhoneIdentifier, auth.CredentialManagement, browserSafe)
+	r.Handle("PATCH", "/auth/identifiers/{id}", h.patchIdentifier, auth.CredentialManagement, browserSafe)
+	r.Handle("DELETE", "/auth/identifiers/{id}", h.deleteIdentifier, auth.CredentialManagement, browserSafe)
 
 	// The administrative user surface (CHAU-1.6) is registered only when the host
 	// made an explicit authorization decision AND the capability is wired
@@ -233,13 +319,13 @@ func Mount(r pocket.RouteRegistrar, d Deps) {
 	// (ErrUserAdminReposRequired), so reaching here with one and not the other is
 	// impossible — the belt-and-braces conjunction keeps the invariant local.
 	if svc.UserAdminEnabled() && svc.UserAdminAuthorized() {
-		mountUserAdmin(r, h, svc.RequireLiveSession, browserSafe)
+		mountUserAdmin(r, h, auth.UserAdministration, browserSafe)
 	}
 
 	// OAuth routes are registered only when at least one provider is wired
 	// (deny-by-absence, design §3): an unwired host returns 404 for them.
 	if svc.OAuthEnabled() {
-		mountOAuth(r, h, svc.RequireUser, svc.RequireLiveSession, browserSafe)
+		mountOAuth(r, h, auth.OAuthLinkStart, auth.CredentialManagement, browserSafe)
 	}
 
 	// Machine-identity lifecycle routes are registered only when both machine
@@ -250,7 +336,7 @@ func Mount(r pocket.RouteRegistrar, d Deps) {
 	// posture at boot. A host that wants its own lifecycle surface leaves the
 	// gate nil and serves it over the Service methods.
 	if svc.MachineEnabled() && d.MachineGate != nil {
-		mountMachine(r, h, svc.RequireUser, svc.RequireLiveSession, browserSafe, d.MachineGate)
+		mountMachine(r, h, auth.MachineLifecycle, browserSafe, d.MachineGate)
 	}
 
 	// The bearer-JWT token endpoint is registered only when a TokenSigner is
@@ -268,23 +354,24 @@ func Mount(r pocket.RouteRegistrar, d Deps) {
 
 	// Invitation routes are registered only when a Granter is wired (deny-by-
 	// absence, design §6): an unwired host returns 404 for the entire surface.
-	// Every authenticated invitation route rides RequireLiveSession (design §6/D3):
-	// a revoked session's outstanding access JWT cannot create, list, read-mine,
-	// accept, cancel, or resend an invitation. User-only semantics are preserved by
-	// the handlers, which resolve CurrentUser (Type=user) and reject a
-	// service-account principal — RequireLiveSession admits an API-key caller that
-	// RequireUser's JWT-only gate did not, so the invitation surface is NOT a
+	// Every authenticated invitation route rides the Invitations authenticator
+	// (design §6/D3): a revoked session's outstanding access JWT cannot create,
+	// list, read-mine, accept, cancel, or resend an invitation. User-only semantics
+	// are preserved by the handlers, which resolve CurrentUser (Type=user) and
+	// reject a service-account principal — the authenticator admits an act-as-user
+	// API key, which acts as its human owner, so the invitation surface is NOT a
 	// service-account administration API. Decline stays public and IP-rate-limited.
 	if inv != nil {
-		mountInvitations(r, h, svc.RequireLiveSession, svc.RateLimitByIP("invitation_decline", declineAttemptsPerMinute))
+		mountInvitations(r, h, auth.Invitations, svc.RateLimitByIP("invitation_decline", declineAttemptsPerMinute))
 	}
 
 	// The optional HTML GET surface is registered only when a Views port is wired
 	// (design §9.2): with a nil Views the pocket is API-only and every HTML page
 	// path 404s, while the JSON API above stays fully mounted. Account-security HTML
-	// pages ride RequireLiveSession, exactly like their JSON twins.
+	// pages ride the BrowserAccount authenticator: cookie-only and live, redirecting
+	// on denial instead of leaking a JSON 401 onto an HTML page.
 	if views != nil {
-		mountHTML(r, h, browserSafe)
+		mountHTML(r, h, auth.BrowserAccount, browserSafe)
 	}
 }
 

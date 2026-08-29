@@ -242,6 +242,19 @@ strategy (plan of record `plans/pgxdb-list-fixed-order.md`; gopernicus issue
 #15; originating host gps-360-go). Additive, zero-value-preserving, no schema,
 no pin moves (still `sdk v0.4.0`), no store retags. See the upgrade note below.
 
+**2026-08-29: `pockets/authentication` — next tag `v0.9.0`, BREAKING,
+pre-1.0** — one composable authenticator, `RequirePrincipal(opts ...PrincipalOption)`,
+named helpers, and the credential on the context (plan of record
+`plans/authentication-principal-posture.md`; originating host gps-360-go
+`plans/33-principals-api-keys-and-route-proof.md` D2). `RequireUser`,
+`RequireServiceAccount`, `RequireLiveSession`, `RequirePrincipalBrowser`,
+`RequireLiveSessionBrowser`, and `AuthenticateAPIKey` are REMOVED; every call
+site is rewritten against the four options (`Accept`, `Transports`, `Live`,
+`Browser`), the six named helpers, and `CurrentCredential`. `Config.BundledRouteAuth`
+lets a host replace one bundled route group's authentication posture without
+restating the others. No schema, no store retags. See the upgrade note below
+before adopting — the owner cuts the tag.
+
 ## Tagging scheme
 
 Nested Go modules in a single repo are tagged with the module's directory as a
@@ -534,6 +547,101 @@ Proof: hermetic SQL-capture tests (`TestList_FixedOrder*`) and the live
 `TestLive_ListBehavior/fixed_order_offset` against a throwaway Postgres 17 —
 `NULLS LAST` + name tiebreak traversal over three offset pages with
 `HasMore`/`HasPrev`/`Total` asserted and the cursor strategy refused.
+
+### pockets/authentication — v0.9.0 (next tag, 2026-08-29): one composable authenticator, named helpers, the credential on the context (BREAKING, pre-1.0)
+
+Plan of record `plans/authentication-principal-posture.md` (originating host
+gps-360-go `plans/33-principals-api-keys-and-route-proof.md` D2). `sdk`
+untouched; store modules untouched; no schema.
+
+**The one authenticator.** `Service.RequirePrincipal(opts ...PrincipalOption) web.Middleware`
+replaces the five fixed-name resolvers. Its options are OR-sets over credential
+kinds and transports plus a liveness tier and a browser denial mode:
+
+```go
+Accept(kinds ...CredentialKind)  // OR-set of credentials; default: every wired kind
+Transports(ts ...Transport)      // OR-set of transports;  default: header + cookie
+Live()                            // access_token ⇒ the session row must exist; api_key ⇒ pass
+Browser()                         // on denial 303 to Config.BrowserLoginPath instead of a JSON 401
+```
+
+Zero options = every wired credential, both transports, header authoritative,
+stateless, JSON 401. `Accept()` / `Transports()` with zero arguments PANICS at
+construction. A credential arriving on a transport outside the set is IGNORED,
+never denied. Nested under an outer `RequirePrincipal`, an inner instance never
+re-resolves: it narrows by reading the stashed `Credential` (a `Live()` inner
+runs the session lookup once; a second nested `Live()` reads the already-proven
+session id). The supported wiring invariant is **one authentication `Service`
+per chain**.
+
+**The migration table:**
+
+| removed | replacement | note |
+|---|---|---|
+| `RequirePrincipal` (method value, `func(http.Handler) http.Handler`) | `RequirePrincipal()` / `RequireAccessTokenOrAPIKey()` | every `web.Middleware` call site gains `()` |
+| `RequireUser` | `RequireAccessToken()` | **correction (security tightening):** a non-JWT bearer no longer falls through to the cookie — a key plus a valid cookie is now 401, where it previously passed as the cookie's user |
+| `RequireServiceAccount` | `RequireAPIKey()` or `RequirePrincipal(Accept(CredentialAPIKey), Transports(TransportHeader))` | identical behavior with the transport spelled |
+| `RequireLiveSession` | `RequireAccessTokenOrAPIKeyLive()` | identical |
+| `RequirePrincipalBrowser` | `RequirePrincipal(Browser())` | identical |
+| `RequireLiveSessionBrowser` | `RequirePrincipal(Live(), Browser())` | identical |
+| `AuthenticateAPIKey(ctx, rawKey)` | no direct replacement | raw credential verification is not an application-service entry point; it moves behind `RequirePrincipal` — read the result with `CurrentPrincipal` / `CurrentCredential` |
+
+**`Config.BundledRouteAuth`** exposes one optional `RoutePrincipalStrategy` per
+bundled route group (built with `PrincipalStrategy(opts...)`). A zero field
+keeps that group's audited default; a set field replaces only that group,
+resolved once at `NewService` into concrete middleware. It configures
+AUTHENTICATION only — it cannot unmount the authenticator from a protected
+bundled surface, and it never substitutes for the separate host authorization
+seams (`MachineRoutesGate`, `UserAdminCheck`, `InviteCheck`). `PrincipalStrategy()`
+called with no options is an explicit choice of the primitive's defaults, NOT
+"leave the audited default in place" — leave the field zero for that. Override
+example (every other bundled route keeps its default):
+
+```go
+Config{
+	BundledRouteAuth: BundledRouteAuthentication{
+		Invitations: PrincipalStrategy(
+			Accept(CredentialAccessToken),
+			Live(),
+		),
+	},
+}
+```
+
+**The bundled-route audit tightens what an API key reaches.** The old
+`RequireLiveSession` admitted both access tokens and API keys uniformly; the
+audited per-surface defaults do not:
+
+| tightened (API key no longer admitted) | preserved (API key, incl. act-as-user, still admitted) |
+|---|---|
+| `GET /auth/delivery/status`, `/auth/methods`, `/auth/csrf` (`SessionSecurityReads` → `RequireAccessTokenLive()`) | `GET /auth/me` (`SessionHydration` → `RequireAccessTokenOrAPIKeyLive()`) |
+| password/step-up/identifier/OAuth-unlink credential mutations (`CredentialManagement` → `RequireAccessTokenLive()`) | `/auth/admin/users…` (`UserAdministration` → `RequireAccessTokenOrAPIKeyLive()`) |
+| service-account/key create/list/mint/revoke (`MachineLifecycle` → single `RequireAccessTokenLive()`, replacing the old `RequireUser` → `RequireLiveSession` two-authenticator stack) | authenticated invitation routes (`Invitations` → `RequireAccessTokenOrAPIKeyLive()`) |
+
+The bundled HTML surface (`BrowserAccount`) reads its cookie only, requires a
+live session, and redirects on denial — including the HTML-only
+`POST /auth/identifiers/{id}` form route, which now 303s (instead of a JSON
+401) on an authentication denial; the HTML denial honors `Config.BrowserLoginPath`
+and carries a validated `path?query` `return_to`.
+
+**Host repin recipe:**
+
+```
+go mod edit -require github.com/gopernicus/gopernicus/pockets/authentication@v0.9.0
+go mod tidy
+```
+
+**gps-360-go's one call site:**
+
+```
+router.Group("/api/v1", authenticationSvc.RequirePrincipal, …)
+```
+becomes
+```
+router.Group("/api/v1", authenticationSvc.RequireAccessTokenOrAPIKey(), …)
+```
+
+No tag exists yet — the owner cuts `v0.9.0`.
 
 ### pockets/authentication — v0.8.2 — tagged 2026-08-28: identity.Resolver is principal-exact (patch)
 

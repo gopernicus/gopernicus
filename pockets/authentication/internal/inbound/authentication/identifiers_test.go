@@ -139,7 +139,7 @@ func (f identifierFixture) bearerFor(t *testing.T, email string) string {
 	return resp.AccessToken
 }
 
-func TestIdentifierRoutesRequireLiveSession(t *testing.T) {
+func TestIdentifierRoutesRequireAccessTokenLive(t *testing.T) {
 	f := newIdentifierFixture(t)
 	cases := []struct{ method, path string }{
 		{"POST", "/auth/identifiers/email"},

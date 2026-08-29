@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/domain/oauthaccount"
 	"github.com/gopernicus/gopernicus/pockets/authentication/domain/oauthstate"
 	"github.com/gopernicus/gopernicus/pockets/authentication/domain/serviceaccount"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/email"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/notify"
 	"github.com/gopernicus/gopernicus/sdk/capabilities/oauth"
@@ -29,8 +31,9 @@ import (
 var (
 	// Register conforms to the FS2 mount signature: a method on the built Service.
 	_ func(pocket.Mount) error = (&Service{}).Register
-	// Service.RequireUser is a web.Middleware via its method value.
-	_ web.Middleware = (&Service{}).RequireUser
+	// Service.RequirePrincipal and its named helpers return web.Middleware.
+	_ func(...PrincipalOption) web.Middleware = (&Service{}).RequirePrincipal
+	_ func() web.Middleware                   = (&Service{}).RequireAccessToken
 )
 
 // stubHasher / stubMailer satisfy the required Config ports for the
@@ -527,7 +530,7 @@ func TestRegisterMachineMountsRoutes(t *testing.T) {
 		t.Errorf("service-accounts status = %d, want 401 (route mounted + gated)", rec.Code)
 	}
 	if gateRan {
-		t.Error("the host gate ran for an unauthenticated request; RequireUser must be outermost")
+		t.Error("the host gate ran for an unauthenticated request; the authenticator must be outermost")
 	}
 }
 
@@ -581,7 +584,7 @@ func TestRegisterMountsRoutes(t *testing.T) {
 	if err := svc.Register(pocket.Mount{Router: h}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	// The mounted password/change route exists and is RequireLiveSession-gated
+	// The mounted password/change route exists and is credential-management gated
 	// (401 without a credential), proving the routes were registered onto the
 	// mount's router.
 	req := httptest.NewRequest("POST", "/auth/password/change", nil)
@@ -589,5 +592,181 @@ func TestRegisterMountsRoutes(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("password/change status = %d, want 401 (route mounted + gated)", rec.Code)
+	}
+}
+
+// --- Config.BundledRouteAuth: an override is EXPLICIT, never "unset" ---
+
+// liveServiceAccounts / liveAPIKeys are working machine repositories (the
+// stub* pair above returns zero values, which cannot carry a real key). They back
+// the bundled-route posture cases, where an actual API key must resolve.
+type liveServiceAccounts struct {
+	mu sync.Mutex
+	m  map[string]serviceaccount.ServiceAccount
+}
+
+func (r *liveServiceAccounts) Create(_ context.Context, sa serviceaccount.ServiceAccount) (serviceaccount.ServiceAccount, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.m[sa.ID] = sa
+	return sa, nil
+}
+func (r *liveServiceAccounts) Get(_ context.Context, id string) (serviceaccount.ServiceAccount, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	sa, ok := r.m[id]
+	if !ok {
+		return serviceaccount.ServiceAccount{}, sdk.ErrNotFound
+	}
+	return sa, nil
+}
+func (r *liveServiceAccounts) List(context.Context, crud.ListRequest) (crud.Page[serviceaccount.ServiceAccount], error) {
+	return crud.Page[serviceaccount.ServiceAccount]{Items: []serviceaccount.ServiceAccount{}}, nil
+}
+func (r *liveServiceAccounts) Update(_ context.Context, id string, sa serviceaccount.ServiceAccount) (serviceaccount.ServiceAccount, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.m[id] = sa
+	return sa, nil
+}
+func (r *liveServiceAccounts) Delete(_ context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.m, id)
+	return nil
+}
+
+type liveAPIKeys struct {
+	mu sync.Mutex
+	m  map[string]apikey.APIKey
+}
+
+func (r *liveAPIKeys) Create(_ context.Context, k apikey.APIKey) (apikey.APIKey, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.m[k.ID] = k
+	return k, nil
+}
+func (r *liveAPIKeys) GetByHash(_ context.Context, hash string) (apikey.APIKey, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, k := range r.m {
+		if k.KeyHash == hash {
+			return k, nil
+		}
+	}
+	return apikey.APIKey{}, sdk.ErrNotFound
+}
+func (r *liveAPIKeys) ListByServiceAccount(context.Context, string, crud.ListRequest) (crud.Page[apikey.APIKey], error) {
+	return crud.Page[apikey.APIKey]{Items: []apikey.APIKey{}}, nil
+}
+func (r *liveAPIKeys) Revoke(_ context.Context, id string, at time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	k, ok := r.m[id]
+	if !ok {
+		return sdk.ErrNotFound
+	}
+	k.RevokedAt = at
+	r.m[id] = k
+	return nil
+}
+func (r *liveAPIKeys) TouchLastUsed(context.Context, string, time.Time) error { return nil }
+
+// bundledRouteHost is a mounted host plus the key its machine subsystem minted
+// and a counter for the host's machine gate.
+type bundledRouteHost struct {
+	h        http.Handler
+	rawKey   string
+	gateRuns *int
+}
+
+// newBundledRouteHost builds a Service with a working machine subsystem, applies
+// bundled, mounts the routes, and mints one self-acting service-account key.
+func newBundledRouteHost(t *testing.T, bundled BundledRouteAuthentication) bundledRouteHost {
+	t.Helper()
+	runs := 0
+	gate := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			runs++
+			next.ServeHTTP(w, r)
+		})
+	}
+	svc, err := NewService(
+		Repositories{
+			ServiceAccounts: &liveServiceAccounts{m: map[string]serviceaccount.ServiceAccount{}},
+			APIKeys:         &liveAPIKeys{m: map[string]apikey.APIKey{}},
+		},
+		Config{
+			Hasher:            stubHasher{},
+			Mailer:            stubMailer{},
+			TokenSigner:       stubSigner{},
+			RuntimeMode:       RuntimeModeDevelopment,
+			DeliveryMode:      DeliveryModeOff,
+			MachineRoutesGate: gate,
+			BundledRouteAuth:  bundled,
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	h := web.NewWebHandler()
+	if err := svc.Register(pocket.Mount{Router: h}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	ctx := context.Background()
+	sa, err := svc.CreateServiceAccount(ctx, "admin", "bot", "", false, "")
+	if err != nil {
+		t.Fatalf("CreateServiceAccount: %v", err)
+	}
+	_, raw, err := svc.MintAPIKey(ctx, sa.ID, "deploy", time.Time{})
+	if err != nil {
+		t.Fatalf("MintAPIKey: %v", err)
+	}
+	return bundledRouteHost{h: h, rawKey: raw, gateRuns: &runs}
+}
+
+// keyRequest drives one route with the host's API key as its bearer credential.
+func (b bundledRouteHost) keyRequest(method, path string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(method, path, nil)
+	r.Header.Set("Authorization", "Bearer "+b.rawKey)
+	rec := httptest.NewRecorder()
+	b.h.ServeHTTP(rec, r)
+	return rec
+}
+
+// TestBundledRouteAuthOverrideIsExplicitNotUnset pins why RoutePrincipalStrategy
+// is opaque: a zero-argument PrincipalStrategy() is a CONFIGURED posture meaning
+// RequirePrincipal() — every wired credential, both transports, stateless — and
+// not "leave the audited default alone". The session-security default refuses
+// every API key; the explicit primitive admits one, and the caller reaches the
+// handler's own missing-receipt answer.
+func TestBundledRouteAuthOverrideIsExplicitNotUnset(t *testing.T) {
+	unset := newBundledRouteHost(t, BundledRouteAuthentication{})
+	if rec := unset.keyRequest("GET", "/auth/delivery/status"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("audited default: api key on /auth/delivery/status = %d, want 401; body=%s", rec.Code, rec.Body)
+	}
+
+	explicit := newBundledRouteHost(t, BundledRouteAuthentication{SessionSecurityReads: PrincipalStrategy()})
+	rec := explicit.keyRequest("GET", "/auth/delivery/status")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("PrincipalStrategy(): api key on /auth/delivery/status = %d, want 400 (the handler's own missing-receipt answer); body=%s", rec.Code, rec.Body)
+	}
+
+	// Every slot the host did NOT configure keeps its audited default: the machine
+	// lifecycle still refuses the same key, and the host's gate never runs for it.
+	if rec := explicit.keyRequest("GET", "/auth/service-accounts"); rec.Code != http.StatusUnauthorized {
+		t.Errorf("unconfigured MachineLifecycle: api key = %d, want 401; body=%s", rec.Code, rec.Body)
+	}
+	if *explicit.gateRuns != 0 {
+		t.Errorf("the host machine gate ran %d times for a refused credential, want 0", *explicit.gateRuns)
+	}
+	if rec := explicit.keyRequest("POST", "/auth/password/change"); rec.Code != http.StatusUnauthorized {
+		t.Errorf("unconfigured CredentialManagement: api key = %d, want 401; body=%s", rec.Code, rec.Body)
+	}
+	// SessionHydration's default admits a key; a SELF-acting one then fails the
+	// handler's own CurrentUser requirement — unchanged by the override above.
+	if rec := explicit.keyRequest("GET", "/auth/me"); rec.Code != http.StatusUnauthorized {
+		t.Errorf("unconfigured SessionHydration: self-acting key = %d, want 401; body=%s", rec.Code, rec.Body)
 	}
 }

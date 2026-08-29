@@ -167,9 +167,9 @@ func TestIssueTokenRoundTrip(t *testing.T) {
 		t.Errorf("AccessExpiresAt = %v, want ~%v", pair.AccessExpiresAt, want)
 	}
 	// The access token resolves back to the same user identity.
-	gotID, ok := h.svc.verifyBearer(pair.AccessToken)
+	gotID, _, ok := h.svc.verifyBearerClaims(pair.AccessToken)
 	if !ok || gotID != u.ID {
-		t.Errorf("verifyBearer = (%q, %v), want (%q, true)", gotID, ok, u.ID)
+		t.Errorf("verifyBearerClaims = (%q, %v), want (%q, true)", gotID, ok, u.ID)
 	}
 }
 
@@ -247,7 +247,7 @@ func TestIssueTokenRequireVerifiedEmailAllowsVerified(t *testing.T) {
 
 // --- bearer verification through the middleware trio ---
 
-func TestRequireUserBearerJWT(t *testing.T) {
+func TestRequireAccessTokenBearerJWT(t *testing.T) {
 	h := newTokenHarness(t, newFakeSigner(), false, nil)
 	u := h.mustRegister(t, "bru@example.com", "password123456789")
 	pair, err := h.svc.IssueToken(context.Background(), "bru@example.com", "password123456789")
@@ -260,15 +260,15 @@ func TestRequireUserBearerJWT(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id, ok := h.svc.CurrentUser(r.Context())
 		if !ok {
-			t.Error("CurrentUser not set inside RequireUser via bearer JWT")
+			t.Error("CurrentUser not set inside RequireAccessToken() via bearer JWT")
 		}
 		gotID = id
 		w.WriteHeader(http.StatusNoContent)
 	})
 	rec := httptest.NewRecorder()
-	h.svc.RequireUser(next).ServeHTTP(rec, bearerRequest(tok))
+	h.svc.RequireAccessToken()(next).ServeHTTP(rec, bearerRequest(tok))
 	if rec.Code != http.StatusNoContent || gotID != u.ID {
-		t.Errorf("bearer RequireUser: status=%d id=%q, want 204 %q", rec.Code, gotID, u.ID)
+		t.Errorf("bearer RequireAccessToken(): status=%d id=%q, want 204 %q", rec.Code, gotID, u.ID)
 	}
 }
 
@@ -284,9 +284,9 @@ func TestRequirePrincipalBearerJWT(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	rec := httptest.NewRecorder()
-	h.svc.RequirePrincipal(next).ServeHTTP(rec, bearerRequest(tok))
+	h.svc.RequirePrincipal()(next).ServeHTTP(rec, bearerRequest(tok))
 	if rec.Code != http.StatusNoContent || got.Type != PrincipalUser || got.ID != u.ID {
-		t.Errorf("bearer RequirePrincipal: status=%d principal=%+v, want 204 {user, %s}", rec.Code, got, u.ID)
+		t.Errorf("bearer RequirePrincipal(): status=%d principal=%+v, want 204 {user, %s}", rec.Code, got, u.ID)
 	}
 }
 
@@ -326,13 +326,13 @@ func TestBearerWrongSecretDenied(t *testing.T) {
 	assertBearerDenied(t, h, forged, "wrong-secret")
 }
 
-// assertBearerDenied asserts that both RequireUser and RequirePrincipal reject a
-// bearer token with 401 and never call next.
+// assertBearerDenied asserts that both RequireAccessToken() and RequirePrincipal()
+// reject a bearer token with 401 and never call next.
 func assertBearerDenied(t *testing.T, h *harness, token, label string) {
 	t.Helper()
 	for name, mw := range map[string]func(http.Handler) http.Handler{
-		"RequireUser":      h.svc.RequireUser,
-		"RequirePrincipal": h.svc.RequirePrincipal,
+		"RequireAccessToken": h.svc.RequireAccessToken(),
+		"RequirePrincipal":   h.svc.RequirePrincipal(),
 	} {
 		called := false
 		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

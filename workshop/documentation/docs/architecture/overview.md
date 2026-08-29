@@ -107,7 +107,7 @@ Pocket cores never import one another. When pocket A needs behavior pocket B hap
 
 Examples:
 
-- CMS accepts `AdminMiddleware`; the host passes authentication's `RequireUser`.
+- CMS accepts `AdminMiddleware`; the host passes authentication's `RequireAccessToken()`.
 - Authentication durable delivery depends on SDK work protocol interfaces; the jobs `Service` implements them.
 - Events stream middleware requires a principal; the host passes authentication middleware that stores one in context.
 

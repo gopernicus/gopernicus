@@ -72,7 +72,7 @@ The host also decides whether to include a sibling `views/goth` implementation. 
 
 ```go
 cms.Config{
-    AdminMiddleware: []web.Middleware{authSvc.RequireUser},
+    AdminMiddleware: []web.Middleware{authSvc.RequireAccessToken()},
 }
 ```
 

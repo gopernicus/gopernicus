@@ -338,7 +338,7 @@ func TestCSRFBootstrapReusesForeignWellFormedToken(t *testing.T) {
 }
 
 // TestCSRFBootstrapRequiresLiveSession proves the gate: no credential cannot
-// bootstrap, and a revoked session cannot bootstrap either (RequireLiveSession,
+// bootstrap, and a revoked session cannot bootstrap either (the Live() tier,
 // not the ≤AccessTokenTTL stale window).
 func TestCSRFBootstrapRequiresLiveSession(t *testing.T) {
 	h := newCSRFHandler(t)
