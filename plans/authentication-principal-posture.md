@@ -3,7 +3,7 @@
 **Module:** `pockets/authentication` (next tag `v0.9.0` — BREAKING, pre-1.0: four
 middleware names removed, `RequirePrincipal` gains a signature). `sdk` untouched;
 store modules untouched; no schema.
-**Status:** EXECUTED 2026-08-29 — tasks 1–4 landed on branch `authentication-principal-posture`, `make check` green; tag `pockets/authentication/v0.9.0` by owner after squash. PROPOSED 2026-08-29. Origin: gps-360-go `plans/33-principals-api-keys-
+**Status:** RELEASED 2026-08-29 — PR #18 squash @ `ad8b8a8`, `pockets/authentication/v0.9.0` (BREAKING, pre-1.0), cold-resolution verified through proxy.golang.org; host repin (gps-360-go `RequirePrincipal` → `RequireAccessTokenOrAPIKey()`, coordination-hub) is the owner's. PROPOSED 2026-08-29. Origin: gps-360-go `plans/33-principals-api-keys-
 and-route-proof.md` D2. Owner rulings 2026-08-28/29: "an application may want
 to use only bearer tokens… another one may want cookie sessions… and a user may
 validate either way"; "it needs to be composable ORs… exporting the explicit

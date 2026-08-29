@@ -242,8 +242,8 @@ strategy (plan of record `plans/pgxdb-list-fixed-order.md`; gopernicus issue
 #15; originating host gps-360-go). Additive, zero-value-preserving, no schema,
 no pin moves (still `sdk v0.4.0`), no store retags. See the upgrade note below.
 
-**2026-08-29: `pockets/authentication` — next tag `v0.9.0`, BREAKING,
-pre-1.0** — one composable authenticator, `RequirePrincipal(opts ...PrincipalOption)`,
+**2026-08-29: `pockets/authentication/v0.9.0` — TAGGED @ `ad8b8a8` (#18
+squash) — BREAKING, pre-1.0** — one composable authenticator, `RequirePrincipal(opts ...PrincipalOption)`,
 named helpers, and the credential on the context (plan of record
 `plans/authentication-principal-posture.md`; originating host gps-360-go
 `plans/33-principals-api-keys-and-route-proof.md` D2). `RequireUser`,
@@ -548,7 +548,7 @@ Proof: hermetic SQL-capture tests (`TestList_FixedOrder*`) and the live
 `NULLS LAST` + name tiebreak traversal over three offset pages with
 `HasMore`/`HasPrev`/`Total` asserted and the cursor strategy refused.
 
-### pockets/authentication — v0.9.0 (next tag, 2026-08-29): one composable authenticator, named helpers, the credential on the context (BREAKING, pre-1.0)
+### pockets/authentication — v0.9.0 — tagged 2026-08-29: one composable authenticator, named helpers, the credential on the context (BREAKING, pre-1.0)
 
 Plan of record `plans/authentication-principal-posture.md` (originating host
 gps-360-go `plans/33-principals-api-keys-and-route-proof.md` D2). `sdk`
