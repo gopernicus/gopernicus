@@ -472,12 +472,17 @@ func paginationSchema() map[string]any {
 	}
 }
 
+// errorSchema is the hand-authored component for the error envelope. Like
+// paginationSchema it mirrors a Go type's json tags by hand — Error and
+// FieldError — so nothing here is generated: when either type gains a field,
+// this map must gain it too.
 func errorSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"message": map[string]any{"type": "string"},
-			"code":    map[string]any{"type": "string"},
+			"message":            map[string]any{"type": "string"},
+			"code":               map[string]any{"type": "string"},
+			"current_updated_at": map[string]any{"type": "string", "format": "date-time", "description": "The stored compare-and-set token to retry against. Present on a stale-write conflict."},
 			"fields": map[string]any{
 				"type": "array",
 				"items": map[string]any{
@@ -485,6 +490,7 @@ func errorSchema() map[string]any {
 					"properties": map[string]any{
 						"field":   map[string]any{"type": "string"},
 						"message": map[string]any{"type": "string"},
+						"code":    map[string]any{"type": "string", "description": "Stable machine code for the violation (required, invalid_type, invalid_format, unknown_field, unknown_reference)."},
 					},
 				},
 			},

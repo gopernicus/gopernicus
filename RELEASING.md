@@ -255,6 +255,16 @@ lets a host replace one bundled route group's authentication posture without
 restating the others. No schema, no store retags. See the upgrade note below
 before adopting — the owner cuts the tag.
 
+**2026-08-31: `sdk/v0.7.0` — next tag, MINOR (additive)** — the crud write
+vocabulary (plan of record `.claude/plans/crud-write-vocabulary.md`; gopernicus
+issue #21; originating host gps-360-go slice S1). One module changes, one tag:
+the kernel gains `sdk.Violation`/`ValidationError`/`StaleError` + the five
+`Code*` strings (`faults.go`), `crud` gains `Field[T]`/`Some`/`Overlay`, and
+`web` gains `ReadBody` + `ErrStale` and renders the two new fault types. Every
+new symbol is additive and every new wire field is `omitempty`, so existing
+bodies are byte-identical; no `go.mod` changes, no sibling retags, no schema.
+See the upgrade note below before adopting — the owner cuts the tag.
+
 ## Tagging scheme
 
 Nested Go modules in a single repo are tagged with the module's directory as a
@@ -358,6 +368,175 @@ silently would break a host whose CSP no longer covers the kit's assets. Record 
 the module's next-tag upgrade note below and tell hosts to re-derive their CSP header.
 
 ## Upgrade notes (keyed to each module's next tag)
+
+### sdk — v0.7.0 (next tag, 2026-08-31): the write vocabulary (minor)
+
+Plan of record `.claude/plans/crud-write-vocabulary.md` (gopernicus #21). A
+**minor**: purely additive, but it materially expands the host contract. Every
+JSON write slice had been re-deriving the same four pieces — a sparse-PATCH
+field, a collect-every-problem refusal, a strict body reader, and a
+compare-and-set token. They now ship once.
+
+**Additions — kernel (`sdk`, new file `faults.go`).**
+
+- **`sdk.Violation{Field, Code, Message}`** — no json tags; the kernel stays
+  transport-agnostic and `web` owns the wire shape.
+- **`sdk.ValidationError{Violations []Violation}`** with `Add(field, code,
+  message)`, `Err()`, `Error()`, and `Unwrap() → sdk.ErrInvalidInput`. Every
+  method has a POINTER receiver and `Error` is pointer-only by design: a value
+  receiver makes `errors.As(err, &ve)` silently miss a value-stored error and
+  turn a 400 into a nondeterministic 500. `Err()` returns an explicit `nil` on
+  an empty collector (the typed-nil trap), pinned by test.
+- **`sdk.Refuse(field, code, message)`** and **`sdk.UnknownReference(field,
+  id)`** — the one-violation constructors. `UnknownReference` is a DOMAIN
+  PRE-CHECK artifact: store connectors map an FK fault to a bare
+  `sdk.ErrInvalidReference` with no field name, so the pre-check produces the
+  good message, the FK constraint still guards the check-then-write race, and
+  the race's fallback stays the generic 400 "invalid reference". Pass only an id
+  the CALLER supplied in that field — the message echoes it back.
+- **`sdk.CodeRequired`/`CodeInvalidType`/`CodeInvalidFormat`/`CodeUnknownField`/`CodeUnknownReference`**
+  — the stable machine codes clients may switch on.
+- **`sdk.StaleError{CurrentUpdatedAt time.Time}`**, `Unwrap() → sdk.ErrConflict`.
+
+**Why the kernel.** `foundation/web` may never import `foundation/crud` (the
+tier is flat, G12b, tests included) and `crud` may never import `net/http`
+(G21). A vocabulary both tiers must name therefore goes to the root. The
+admission criterion this first behavior-bearing promotion establishes is
+written into `sdk/README.md`: shared by two or more foundation packages,
+stdlib-only, zero transport semantics.
+
+**Additions — `crud` (new file `field.go`, zero new imports; G21 and
+store-adapter weight untouched).**
+
+- **`crud.Field[T]{Set bool; Value T}`**, **`crud.Some[T](v T) Field[T]`**,
+  **`crud.Overlay[T](current T, f Field[T]) T`** — the sparse-PATCH
+  representation and its fold. Zero value = absent = leave unchanged.
+- **The nullable rule is normative**, so five domains don't each pick
+  differently: a nullable column rides `Field[*T]` (`Some[*T](nil)` is the
+  explicit clear, `Field[*T]{}` is absent); a NOT NULL column rides `Field[T]`.
+- No custom JSON methods on `Field`: it is the domain's write representation,
+  not a decode target.
+
+**Additions — `web` (`errors.go`, `openapi.go`, new file `readbody.go`).**
+
+- **`web.ReadBody(w, r, keys ...string) (*Body, error)`** — bounded by
+  `web.DefaultBodyLimit` (1 MiB), decodes exactly one JSON object, and rejects
+  any key not in `keys` with one `unknown_field` violation PER unknown key, all
+  collected. That is the rule that a body must not smuggle a path-owned id: an
+  undeclared `organization_id` is a named 400, never silently ignored. `{}` is
+  valid — whether an empty PATCH is acceptable is the domain's call. Structural
+  failures return a **nil Body**: an overrun wraps `*http.MaxBytesError` (413
+  through `ErrValidation`), and an empty body / `null` / non-object / trailing
+  content wraps `sdk.ErrInvalidInput`, sentence first.
+- **`web.Body`'s getters** — `Has`, `Str`, `OptStr`, `Bool`, `Strs`, `Date`,
+  `Instant`, `ExpectedUpdatedAt` — **one getter never short-circuits the next**:
+  each records its violation and returns its zero value, so one pass collects
+  every field's problem and `Body.Err()` is the single terminal check. (Within a
+  getter the scan may stop early: `Strs` reports one violation per field, naming
+  the first non-string element.) They return PLAIN values plus presence, never `crud.Field` (web cannot
+  import crud), so a handler composes:
+  `if body.Has("title") { in.Title = crud.Some(body.Str("title")) }`.
+- **`web.BodyKeyExpectedUpdatedAt = "expected_updated_at"`** — the CAS key,
+  snake_case like every other key this framework puts on the wire, and NOT
+  implicit: a CAS route declares it in `keys` explicitly.
+- **`web.ErrStale(msg, current)`** — 409, code `"stale"`, with the token in the
+  new `current_updated_at` response field (RFC3339Nano, UTC). Handlers never
+  hand-build the literal.
+- **`web.FieldError.Code`** (`json:"code,omitempty"`) and
+  **`web.Error.CurrentUpdatedAt`** (`json:"current_updated_at,omitempty"`) —
+  a typed field, deliberately not a generic details map.
+- `errorSchema()` in `openapi.go` documents both new keys.
+
+**Posture amendment — `ErrFromDomain` recognizes two more typed errors.**
+Without it, every pocket/handler responding through `ErrFromDomain` would emit
+a fieldless generic 400 — the boilerplate this change exists to delete. The
+branch order is pinned by test: `SafeDomainError` → `*sdk.ValidationError`
+(guarded `len(Violations) > 0`) → `*sdk.StaleError` → `*http.MaxBytesError` →
+the existing `errors.Is` switch. Consequences to know:
+
+- A `SafeDomainError` wrapping a `ValidationError` still wins, and the
+  per-field detail is dropped — the host seam's chosen body is the more
+  specific statement of intent.
+- A typed but EMPTY `&sdk.ValidationError{}` falls through to the generic 400;
+  it never renders `"fields":[]`.
+- An oversized body answers **413**, the same body `ErrValidation` produces, so
+  a handler that maps everything through `ErrFromDomain` no longer 500s a
+  `*http.MaxBytesError` (a `SafeDomainError` around one still wins).
+- `ErrValidation` and `ErrFromDomain` render a `*sdk.ValidationError` through
+  one shared unexported helper, pinned by a body-parity test, so the two cannot
+  drift.
+- The "nothing but `SafeDomainError` is recognized" paragraph in `web/errors.go`
+  is now false and was rewritten in the same change: THREE explicit wire-text
+  contracts are recognized, all by concrete type (never structurally), and the
+  counter-rule is that `Violation.Message` is caller-facing text only — never
+  `sdk.Refuse(field, code, err.Error())` around a store or driver error, now
+  enforced by guard **G23** (`guard-violation-message-not-error`).
+- The pocket ruling, written into the same doc: a pocket MAY return
+  `sdk.ValidationError`/`sdk.StaleError` and have those sentences reach the
+  host's wire without wrapping — a field-shape refusal (required, invalid
+  format, unknown reference) states what the request got wrong about its own
+  body and is product-neutral in a way a policy sentence is not. Free-form
+  policy text still requires `SafeDomainError`.
+
+**Compatibility assertion (verified, not assumed).** Every new symbol is
+additive; both new wire fields are `omitempty`, so every existing response body
+is byte-identical (pinned by marshal tests); `sdk`'s `go.mod` still has no
+require block; no module repins and `examples/*` build unchanged.
+
+**The CAS precision contract — read before wiring `expected_updated_at`.** The
+framework cannot enforce a domain's comparison, so it is pinned in
+`StaleError`'s doc: compare with `time.Time.Equal`, never `==` and never a
+string compare of formatted tokens, and compare AT THE STORE'S PRECISION —
+Postgres `timestamptz` keeps microseconds (truncate both sides with
+`Truncate(time.Microsecond)`), turso stores text and round-trips what it wrote.
+A CAS that never matches on one store is worse than no CAS.
+
+**Adopter recipe.**
+
+```go
+body, err := web.ReadBody(w, r, "title", "summary", web.BodyKeyExpectedUpdatedAt)
+if err != nil {
+    web.RespondJSONError(w, web.ErrValidation(err))
+    return
+}
+
+var in article.Patch
+if body.Has("title") {
+    in.Title = crud.Some(body.Str("title"))
+}
+if body.Has("summary") {
+    in.Summary = crud.Some(body.OptStr("summary")) // *string: null clears
+}
+expected := body.ExpectedUpdatedAt()
+if err := body.Err(); err != nil {
+    web.RespondJSONError(w, web.ErrValidation(err))
+    return
+}
+
+// The domain refuses with sdk.Refuse / a sdk.ValidationError collector, or with
+// &sdk.StaleError{CurrentUpdatedAt: current} when the CAS loses; the handler's
+// tail is one line.
+out, err := svc.Update(ctx, id, expected, in)
+if err != nil {
+    web.RespondJSONError(w, web.ErrFromDomain(err))
+    return
+}
+```
+
+Not on this tag: **no numeric getter and no raw accessor on `Body`** — a write
+surface with a numeric field waits on the follow-up (the reader already decodes
+with `UseNumber`, so the precision is preserved for it and nothing about the
+decode changes when it lands); no generic PATCH endpoint and no
+reflection-driven struct patching (the domain still writes its own patch type
+and validators); no `UnmarshalJSON` on `Field`; no civil-date type — `Body.Date` returns a
+midnight-UTC `time.Time` parsed with strict `time.DateOnly`, and when a civil
+date lands, `Date()` may change or be deprecated (a v0.x break accepted here
+deliberately); no per-call body-limit option; no changes to `validation.Errors`
+or `web.FieldErrors` beyond the additive `Code` field and the three-collectors
+doc rule (which collector when: `validation.Errors` for pure field validators,
+`web.FieldErrors` for transport-edge request shape, `sdk.ValidationError` for
+domain-authored refusals that cross layer boundaries); no pocket, store, or
+example adopts the vocabulary on this train.
 
 ### sdk — v0.6.0 (next tag, 2026-08-27): the list contract reaches the request (minor)
 

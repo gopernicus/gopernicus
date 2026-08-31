@@ -400,3 +400,44 @@ func contains(s []string, v string) bool {
 	}
 	return false
 }
+
+// TestErrorSchema_WriteVocabularyFields pins the two hand-authored edits the
+// write vocabulary needed: the envelope's current_updated_at and the field
+// item's code. errorSchema mirrors Error/FieldError by hand — nothing here is
+// generated, so nothing fails if an edit is forgotten except this test.
+func TestErrorSchema_WriteVocabularyFields(t *testing.T) {
+	schema := errorSchema()
+
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %v, want a map", schema["properties"])
+	}
+
+	current, ok := props["current_updated_at"].(map[string]any)
+	if !ok {
+		t.Fatalf("current_updated_at missing from the error envelope; props: %v", keys(props))
+	}
+	if current["type"] != "string" || current["format"] != "date-time" {
+		t.Errorf("current_updated_at = %v, want string/date-time", current)
+	}
+
+	fields, ok := props["fields"].(map[string]any)
+	if !ok {
+		t.Fatalf("fields missing from the error envelope; props: %v", keys(props))
+	}
+	items, ok := fields["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("fields.items = %v, want a map", fields["items"])
+	}
+	itemProps, ok := items["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("fields.items.properties = %v, want a map", items["properties"])
+	}
+	code, ok := itemProps["code"].(map[string]any)
+	if !ok {
+		t.Fatalf("code missing from the field item schema; props: %v", keys(itemProps))
+	}
+	if code["type"] != "string" {
+		t.Errorf("field code = %v, want string", code)
+	}
+}

@@ -1,12 +1,15 @@
 package web
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
 )
@@ -233,5 +236,232 @@ func TestParseRejection_StatusAndMessagePaths(t *testing.T) {
 	}
 	if !errors.Is(err, sdk.ErrInvalidInput) {
 		t.Error("the synthetic error must keep matching sdk.ErrInvalidInput")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The write vocabulary: sdk.ValidationError and sdk.StaleError
+// ---------------------------------------------------------------------------
+
+func TestErrValidation_SDKValidationError(t *testing.T) {
+	ve := sdk.Refuse("name", sdk.CodeRequired, "name is required")
+	ve.Add("starts_at", sdk.CodeInvalidFormat, "starts_at must be a date")
+
+	got := ErrValidation(fmt.Errorf("create booking: %w", ve))
+
+	if got.Status != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", got.Status)
+	}
+	if got.Code != "validation_failed" {
+		t.Errorf("code = %q, want validation_failed", got.Code)
+	}
+	if got.Message != "validation failed" {
+		t.Errorf("message = %q, want %q", got.Message, "validation failed")
+	}
+	want := []FieldError{
+		{Field: "name", Message: "name is required", Code: sdk.CodeRequired},
+		{Field: "starts_at", Message: "starts_at must be a date", Code: sdk.CodeInvalidFormat},
+	}
+	if !reflect.DeepEqual(got.Fields, want) {
+		t.Errorf("fields = %+v, want %+v", got.Fields, want)
+	}
+}
+
+// TestValidationErrorRenderParity pins that ErrValidation and ErrFromDomain
+// render the same *sdk.ValidationError to byte-identical bodies — they share
+// one helper precisely so the two cannot drift.
+func TestValidationErrorRenderParity(t *testing.T) {
+	ve := sdk.Refuse("owner_id", sdk.CodeUnknownReference, `unknown owner_id "usr_1"`)
+	ve.Add("title", sdk.CodeRequired, "title is required")
+	err := fmt.Errorf("update article: %w", ve)
+
+	fromValidation := ErrValidation(err)
+	fromDomain := ErrFromDomain(err)
+
+	if !reflect.DeepEqual(fromValidation, fromDomain) {
+		t.Fatalf("ErrValidation = %+v, ErrFromDomain = %+v, want identical", fromValidation, fromDomain)
+	}
+
+	a, err1 := json.Marshal(fromValidation)
+	b, err2 := json.Marshal(fromDomain)
+	if err1 != nil || err2 != nil {
+		t.Fatalf("marshal errors: %v / %v", err1, err2)
+	}
+	if string(a) != string(b) {
+		t.Errorf("bodies differ:\n%s\n%s", a, b)
+	}
+}
+
+// TestErrValidation_MaxBytesWinsOverValidationError pins the branch order at
+// the transport edge: the 413 contract is checked before the field rendering.
+func TestErrValidation_MaxBytesWinsOverValidationError(t *testing.T) {
+	err := fmt.Errorf("%w: %w", &http.MaxBytesError{Limit: 1024}, sdk.Refuse("name", sdk.CodeRequired, "name is required"))
+
+	got := ErrValidation(err)
+	if got.Status != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %d, want 413", got.Status)
+	}
+	if got.Code != "payload_too_large" {
+		t.Errorf("code = %q, want payload_too_large", got.Code)
+	}
+}
+
+// TestEmptyValidationErrorFallsThrough pins the empty-collector rule: a typed
+// but empty *sdk.ValidationError never renders "fields":[] — it falls through
+// to the generic 400 on both paths.
+func TestEmptyValidationErrorFallsThrough(t *testing.T) {
+	empty := &sdk.ValidationError{}
+
+	fromDomain := ErrFromDomain(empty)
+	if fromDomain.Status != http.StatusBadRequest || fromDomain.Code != "bad_request" {
+		t.Errorf("ErrFromDomain status/code = %d/%q, want 400/bad_request", fromDomain.Status, fromDomain.Code)
+	}
+	if fromDomain.Message != "invalid input" {
+		t.Errorf("ErrFromDomain message = %q, want the generic body", fromDomain.Message)
+	}
+	if fromDomain.Fields != nil {
+		t.Errorf("ErrFromDomain fields = %+v, want nil", fromDomain.Fields)
+	}
+
+	fromValidation := ErrValidation(empty)
+	if fromValidation.Status != http.StatusBadRequest || fromValidation.Code != "bad_request" {
+		t.Errorf("ErrValidation status/code = %d/%q, want 400/bad_request", fromValidation.Status, fromValidation.Code)
+	}
+	if fromValidation.Fields != nil {
+		t.Errorf("ErrValidation fields = %+v, want nil", fromValidation.Fields)
+	}
+
+	body, _ := json.Marshal(fromValidation)
+	if strings.Contains(string(body), "fields") {
+		t.Errorf("body = %s, want no fields key", body)
+	}
+}
+
+// TestErrFromDomain_SafeDomainErrorWinsOverValidationError documents the pinned
+// branch order: the host seam's chosen body wins and the per-field detail is
+// dropped.
+func TestErrFromDomain_SafeDomainErrorWinsOverValidationError(t *testing.T) {
+	safe := NewSafeDomainError(
+		ErrBadRequest("that booking window is closed"),
+		sdk.Refuse("starts_at", sdk.CodeInvalidFormat, "starts_at must be in the future"),
+	)
+
+	got := ErrFromDomain(fmt.Errorf("book: %w", safe))
+	if got.Message != "that booking window is closed" {
+		t.Errorf("message = %q, want the host's sentence", got.Message)
+	}
+	if got.Fields != nil {
+		t.Errorf("fields = %+v, want nil (documented field drop)", got.Fields)
+	}
+}
+
+func TestErrStale(t *testing.T) {
+	current := time.Date(2026, 8, 31, 12, 30, 15, 123456000, time.UTC)
+
+	got := ErrStale("the resource changed", current)
+	if got.Status != http.StatusConflict {
+		t.Errorf("status = %d, want 409", got.Status)
+	}
+	if got.Code != "stale" {
+		t.Errorf("code = %q, want stale", got.Code)
+	}
+	if want := "2026-08-31T12:30:15.123456Z"; got.CurrentUpdatedAt != want {
+		t.Errorf("current_updated_at = %q, want %q", got.CurrentUpdatedAt, want)
+	}
+}
+
+func TestErrStale_NormalizesToUTC(t *testing.T) {
+	zone := time.FixedZone("UTC+2", 2*60*60)
+	got := ErrStale("the resource changed", time.Date(2026, 8, 31, 14, 0, 0, 0, zone))
+
+	if want := "2026-08-31T12:00:00Z"; got.CurrentUpdatedAt != want {
+		t.Errorf("current_updated_at = %q, want %q", got.CurrentUpdatedAt, want)
+	}
+}
+
+// TestErrFromDomain_StaleError pins that the StaleError branch runs BEFORE the
+// errors.Is switch, whose sdk.ErrConflict arm would otherwise swallow it.
+func TestErrFromDomain_StaleError(t *testing.T) {
+	current := time.Date(2026, 8, 31, 12, 30, 15, 123456000, time.UTC)
+	stale := &sdk.StaleError{CurrentUpdatedAt: current}
+
+	got := ErrFromDomain(fmt.Errorf("update article: %w", stale))
+	if got.Status != http.StatusConflict {
+		t.Errorf("status = %d, want 409", got.Status)
+	}
+	if got.Code != "stale" {
+		t.Errorf("code = %q, want stale (not the generic conflict)", got.Code)
+	}
+	if want := "2026-08-31T12:30:15.123456Z"; got.CurrentUpdatedAt != want {
+		t.Errorf("current_updated_at = %q, want %q", got.CurrentUpdatedAt, want)
+	}
+	if got.Message != stale.Error() {
+		t.Errorf("message = %q, want %q", got.Message, stale.Error())
+	}
+	if !errors.Is(stale, sdk.ErrConflict) {
+		t.Error("errors.Is(StaleError, sdk.ErrConflict) = false, want the sentinel preserved")
+	}
+}
+
+// TestErrorBodies_UnchangedWhenNewFieldsAreZero is the compatibility assertion:
+// every response that does not use the write vocabulary marshals exactly as it
+// did before code/current_updated_at existed.
+func TestErrorBodies_UnchangedWhenNewFieldsAreZero(t *testing.T) {
+	tests := []struct {
+		name string
+		err  *Error
+		want string
+	}{
+		{"NotFound", ErrNotFound("not found"), `{"message":"not found","code":"not_found"}`},
+		{"StateConflict", ErrStateConflict("conflict"), `{"message":"conflict","code":"conflict"}`},
+		{
+			"FieldErrors",
+			ErrValidation(FieldErrors{{Field: "name", Message: "name is required"}}),
+			`{"message":"validation failed","code":"validation_failed","fields":[{"field":"name","message":"name is required"}]}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body, err := json.Marshal(tt.err)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			if string(body) != tt.want {
+				t.Errorf("body = %s, want %s", body, tt.want)
+			}
+		})
+	}
+}
+
+// TestErrFromDomain_MaxBytesError pins the transport-structural branch: a
+// handler that maps everything through ErrFromDomain answers an oversized body
+// with the same 413 body ErrValidation produces, never a 500.
+func TestErrFromDomain_MaxBytesError(t *testing.T) {
+	err := fmt.Errorf("read body: %w", &http.MaxBytesError{Limit: DefaultBodyLimit})
+
+	fromDomain := ErrFromDomain(err)
+	if fromDomain.Status != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %d, want 413", fromDomain.Status)
+	}
+	if fromDomain.Code != "payload_too_large" {
+		t.Errorf("code = %q, want payload_too_large", fromDomain.Code)
+	}
+	if !reflect.DeepEqual(fromDomain, ErrValidation(err)) {
+		t.Errorf("ErrFromDomain = %+v, ErrValidation = %+v, want identical", fromDomain, ErrValidation(err))
+	}
+}
+
+// TestErrFromDomain_SafeDomainErrorWinsOverMaxBytes pins where the 413 branch
+// slots: a deliberate public body still wins.
+func TestErrFromDomain_SafeDomainErrorWinsOverMaxBytes(t *testing.T) {
+	safe := NewSafeDomainError(
+		ErrBadRequest("upload a smaller avatar"),
+		&http.MaxBytesError{Limit: DefaultBodyLimit},
+	)
+
+	got := ErrFromDomain(safe)
+	if got.Status != http.StatusBadRequest || got.Message != "upload a smaller avatar" {
+		t.Errorf("status/message = %d/%q, want 400 and the host's sentence", got.Status, got.Message)
 	}
 }
