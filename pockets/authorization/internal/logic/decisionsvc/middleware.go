@@ -10,7 +10,9 @@ import (
 // authorizersvc.Gates body, so a composite-mounted gate walks the identical
 // 401/403/500/503 ladder the relationship engine's own gates do — there is no
 // second gate implementation to drift from.
-func (c *Composite) gates() authorizersvc.Gates { return authorizersvc.NewGates(c, c) }
+func (c *Composite) gates() authorizersvc.Gates {
+	return authorizersvc.NewGates(c, c, c.limits.MaxBatchSize)
+}
 
 // RequirePermission gates a route on the composite's Check — the pair's owning
 // model decides. See authorizersvc.Gates.RequirePermission for the full HTTP
