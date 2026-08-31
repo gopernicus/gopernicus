@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gopernicus/gopernicus/sdk"
 )
@@ -11,11 +12,20 @@ import (
 // Error represents an HTTP error with status code, message, and optional code.
 // When Fields is populated, the error carries per-field validation detail
 // (forms reuse this to re-render with inline field errors).
+//
+// CurrentUpdatedAt is a typed, single-purpose field rather than a generic
+// details map, deliberately: the envelope carries exactly the payloads this
+// package names, never arbitrary domain data.
 type Error struct {
 	Status  int          `json:"-"`
 	Message string       `json:"message"`
 	Code    string       `json:"code,omitempty"`
 	Fields  []FieldError `json:"fields,omitempty"`
+	// CurrentUpdatedAt is the compare-and-set token the caller should retry
+	// with, RFC3339Nano in UTC. Set only by [ErrStale]; empty everywhere else,
+	// so every other body is byte-identical to what it was before this field
+	// existed.
+	CurrentUpdatedAt string `json:"current_updated_at,omitempty"`
 }
 
 func (e *Error) Error() string { return e.Message }
@@ -35,10 +45,14 @@ func NewError(status int, message string) *Error {
 // Field-level validation errors
 // ---------------------------------------------------------------------------
 
-// FieldError represents a validation error for a single field.
+// FieldError represents a validation error for a single field. Code is the
+// stable machine code from [sdk.Violation] (the sdk.Code* vocabulary) when the
+// error came from a [sdk.ValidationError]; it is empty — and omitted — for
+// [FieldErrors], which carry sentences only.
 type FieldError struct {
 	Field   string `json:"field"`
 	Message string `json:"message"`
+	Code    string `json:"code,omitempty"`
 }
 
 // FieldErrors collects validation errors for individual fields.
@@ -49,6 +63,21 @@ type FieldError struct {
 // fe.AddErr("name", validation.MinLength("name", req.Name, 3)) — folding a
 // validator's error into per-field detail. There is no import edge in either
 // direction; the two packages meet only through the plain error value.
+//
+// # Three collectors, one rule (normative)
+//
+// The framework has three accumulators, and which one to reach for is decided
+// by WHERE the refusal is authored, never by taste:
+//
+//   - validation.Errors — pure field validators inside domain or DTO helpers.
+//   - FieldErrors — transport-edge request-SHAPE validation in a DTO's
+//     Validate method (the [DecodeJSON] path). Sentences, no codes.
+//   - sdk.ValidationError — domain-authored refusals that must cross layer
+//     boundaries (the write vocabulary): carries sdk.Violation codes, unwraps
+//     sdk.ErrInvalidInput, and is rendered by both [ErrValidation] and
+//     [ErrFromDomain].
+//
+// No fourth collector without amending this rule.
 type FieldErrors []FieldError
 
 // Add appends a field error.
@@ -87,9 +116,9 @@ func (fe FieldErrors) Error() string {
 // Status-mapped error constructors
 // ---------------------------------------------------------------------------
 
-// ErrValidation returns a 400 error from a [DecodeJSON] error. If the error
-// contains [FieldErrors] (from a Validate method), the response includes
-// per-field detail. Otherwise the error message is used directly.
+// ErrValidation returns a 400 error from a [DecodeJSON] or [ReadBody] error. If
+// the error carries a [sdk.ValidationError] or [FieldErrors], the response
+// includes per-field detail. Otherwise the error message is used directly.
 //
 //	req, err := web.DecodeJSON[MyRequest](r)
 //	if err != nil {
@@ -104,6 +133,10 @@ func ErrValidation(err error) *Error {
 	if errors.As(err, &mbe) {
 		return ErrPayloadTooLarge("request body exceeds the maximum allowed size")
 	}
+	var ve *sdk.ValidationError
+	if errors.As(err, &ve) && len(ve.Violations) > 0 {
+		return validationErrorBody(ve)
+	}
 	var fe FieldErrors
 	if errors.As(err, &fe) {
 		return &Error{
@@ -114,6 +147,22 @@ func ErrValidation(err error) *Error {
 		}
 	}
 	return ErrBadRequest(err.Error())
+}
+
+// validationErrorBody renders a [sdk.ValidationError] as the wire body. Both
+// [ErrValidation] and [ErrFromDomain] go through this one helper so the two
+// responses cannot drift apart.
+func validationErrorBody(ve *sdk.ValidationError) *Error {
+	fields := make([]FieldError, 0, len(ve.Violations))
+	for _, v := range ve.Violations {
+		fields = append(fields, FieldError{Field: v.Field, Message: v.Message, Code: v.Code})
+	}
+	return &Error{
+		Status:  http.StatusBadRequest,
+		Message: "validation failed",
+		Code:    "validation_failed",
+		Fields:  fields,
+	}
 }
 
 // ErrBadRequest returns a 400 error.
@@ -155,6 +204,19 @@ func ErrStateConflict(msg string) *Error {
 	return &Error{Status: http.StatusConflict, Message: msg, Code: "conflict"}
 }
 
+// ErrStale returns a 409 error for a lost compare-and-set write (code
+// "stale"), pairing with [sdk.StaleError]. current is the stored token the
+// caller should re-read against; it is emitted as RFC3339Nano in UTC, so a
+// handler never hand-builds the literal.
+func ErrStale(msg string, current time.Time) *Error {
+	return &Error{
+		Status:           http.StatusConflict,
+		Message:          msg,
+		Code:             "stale",
+		CurrentUpdatedAt: current.UTC().Format(time.RFC3339Nano),
+	}
+}
+
 // ErrGone returns a 410 error.
 func ErrGone(msg string) *Error {
 	return &Error{Status: http.StatusGone, Message: msg, Code: "expired"}
@@ -191,8 +253,16 @@ func ErrInternal(msg string) *Error {
 // It is not a general permission for domain code to put user text on the wire.
 // Pocket-internal errors must not use this wrapper — a pocket cannot know
 // whether its own sentences are safe in a host's product. Bare sentinels and
-// arbitrary errors that merely wrap an [*Error] keep the generic mapping;
-// nothing but this wrapper is recognized.
+// arbitrary errors that merely wrap an [*Error] keep the generic mapping.
+//
+// [ErrFromDomain] recognizes exactly THREE explicit wire-text contracts, and
+// nothing else: this wrapper, [sdk.ValidationError], and [sdk.StaleError]. All
+// three are types whose entire point is a caller-facing sentence; the
+// recognition is by concrete type, never structural, so no error accidentally
+// satisfying an interface can put domain text on the wire. The counter-rule
+// that keeps the posture bounded: sdk.Violation.Message is CALLER-FACING TEXT
+// ONLY — never sdk.Refuse(field, code, err.Error()) around a store or driver
+// error.
 //
 // Construction contract: the wrapper's Unwrap returns the cause alone, so
 // errors.Is and errors.As continue to match the domain error — including the
@@ -246,13 +316,35 @@ func (e *SafeDomainError) Error() string {
 // This is a catch-all for errors the delivery layer doesn't handle explicitly.
 // For user-facing messages, handle specific errors before calling this.
 //
-// The one exception to the generic mapping is [SafeDomainError], the explicit
-// host-seam wrapper: its public body is returned as-is. A wrapper carrying no
-// public body falls through to the kind switch below.
+// Three typed exceptions to the generic mapping are recognized, in this pinned
+// order:
+//
+//  1. [SafeDomainError], the explicit host-seam wrapper: its public body is
+//     returned as-is. A wrapper carrying no public body falls through. Because
+//     it is checked FIRST, a SafeDomainError wrapping a sdk.ValidationError
+//     wins and the per-field detail is dropped — deliberate: the host seam's
+//     chosen body is the more specific statement of intent.
+//  2. [sdk.ValidationError] with at least one violation: the same 400 body
+//     [ErrValidation] renders, through the same helper. An EMPTY collector
+//     falls through to the kind switch, so a typed-but-empty error answers the
+//     generic 400 rather than a body with "fields":[].
+//  3. [sdk.StaleError]: a 409 with the current compare-and-set token. Checked
+//     before the errors.Is switch, whose sdk.ErrConflict branch it would
+//     otherwise be swallowed by.
 func ErrFromDomain(err error) *Error {
 	var safeErr *SafeDomainError
 	if errors.As(err, &safeErr) && safeErr.HTTPError() != nil {
 		return safeErr.HTTPError()
+	}
+
+	var validationErr *sdk.ValidationError
+	if errors.As(err, &validationErr) && len(validationErr.Violations) > 0 {
+		return validationErrorBody(validationErr)
+	}
+
+	var staleErr *sdk.StaleError
+	if errors.As(err, &staleErr) {
+		return ErrStale(staleErr.Error(), staleErr.CurrentUpdatedAt)
 	}
 
 	switch {
