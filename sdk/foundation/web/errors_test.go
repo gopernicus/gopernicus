@@ -433,3 +433,35 @@ func TestErrorBodies_UnchangedWhenNewFieldsAreZero(t *testing.T) {
 		})
 	}
 }
+
+// TestErrFromDomain_MaxBytesError pins the transport-structural branch: a
+// handler that maps everything through ErrFromDomain answers an oversized body
+// with the same 413 body ErrValidation produces, never a 500.
+func TestErrFromDomain_MaxBytesError(t *testing.T) {
+	err := fmt.Errorf("read body: %w", &http.MaxBytesError{Limit: DefaultBodyLimit})
+
+	fromDomain := ErrFromDomain(err)
+	if fromDomain.Status != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %d, want 413", fromDomain.Status)
+	}
+	if fromDomain.Code != "payload_too_large" {
+		t.Errorf("code = %q, want payload_too_large", fromDomain.Code)
+	}
+	if !reflect.DeepEqual(fromDomain, ErrValidation(err)) {
+		t.Errorf("ErrFromDomain = %+v, ErrValidation = %+v, want identical", fromDomain, ErrValidation(err))
+	}
+}
+
+// TestErrFromDomain_SafeDomainErrorWinsOverMaxBytes pins where the 413 branch
+// slots: a deliberate public body still wins.
+func TestErrFromDomain_SafeDomainErrorWinsOverMaxBytes(t *testing.T) {
+	safe := NewSafeDomainError(
+		ErrBadRequest("upload a smaller avatar"),
+		&http.MaxBytesError{Limit: DefaultBodyLimit},
+	)
+
+	got := ErrFromDomain(safe)
+	if got.Status != http.StatusBadRequest || got.Message != "upload a smaller avatar" {
+		t.Errorf("status/message = %d/%q, want 400 and the host's sentence", got.Status, got.Message)
+	}
+}

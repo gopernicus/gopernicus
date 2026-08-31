@@ -208,6 +208,12 @@ func ErrStateConflict(msg string) *Error {
 // "stale"), pairing with [sdk.StaleError]. current is the stored token the
 // caller should re-read against; it is emitted as RFC3339Nano in UTC, so a
 // handler never hand-builds the literal.
+//
+// When [ErrFromDomain] renders a [sdk.StaleError] it passes that error's own
+// sentence as msg, so the token appears BOTH in the message and in
+// current_updated_at — deliberate: the message stays legible in a log line, and
+// current_updated_at is the field a client parses. A domain wanting its own
+// sentence calls this constructor directly, or wraps with [SafeDomainError].
 func ErrStale(msg string, current time.Time) *Error {
 	return &Error{
 		Status:           http.StatusConflict,
@@ -251,9 +257,16 @@ func ErrInternal(msg string) *Error {
 // is the only way such a refusal can carry a legible sentence to the wire.
 //
 // It is not a general permission for domain code to put user text on the wire.
-// Pocket-internal errors must not use this wrapper — a pocket cannot know
-// whether its own sentences are safe in a host's product. Bare sentinels and
-// arbitrary errors that merely wrap an [*Error] keep the generic mapping.
+// Pocket-internal errors must not use this wrapper for FREE-FORM POLICY TEXT — a
+// pocket cannot know whether such a sentence is safe in a host's product. Bare
+// sentinels and arbitrary errors that merely wrap an [*Error] keep the generic
+// mapping.
+//
+// A pocket MAY, however, return [sdk.ValidationError] or [sdk.StaleError] and
+// have those sentences reach the host's wire without wrapping: a field-shape
+// refusal (required, invalid format, unknown reference) states what the request
+// got wrong about its own body and is product-neutral in a way a policy sentence
+// is not. Free-form policy text still goes through this wrapper.
 //
 // [ErrFromDomain] recognizes exactly THREE explicit wire-text contracts, and
 // nothing else: this wrapper, [sdk.ValidationError], and [sdk.StaleError]. All
@@ -331,6 +344,12 @@ func (e *SafeDomainError) Error() string {
 //  3. [sdk.StaleError]: a 409 with the current compare-and-set token. Checked
 //     before the errors.Is switch, whose sdk.ErrConflict branch it would
 //     otherwise be swallowed by.
+//
+// One transport-structural branch follows them: *http.MaxBytesError answers the
+// same 413 [ErrValidation] does, so a handler that maps everything through this
+// function does not 500 an oversized body. It slots AFTER the three wire-text
+// contracts — a deliberate public body still wins — and BEFORE the kind switch,
+// which would otherwise fall through to 500.
 func ErrFromDomain(err error) *Error {
 	var safeErr *SafeDomainError
 	if errors.As(err, &safeErr) && safeErr.HTTPError() != nil {
@@ -345,6 +364,11 @@ func ErrFromDomain(err error) *Error {
 	var staleErr *sdk.StaleError
 	if errors.As(err, &staleErr) {
 		return ErrStale(staleErr.Error(), staleErr.CurrentUpdatedAt)
+	}
+
+	var mbe *http.MaxBytesError
+	if errors.As(err, &mbe) {
+		return ErrPayloadTooLarge("request body exceeds the maximum allowed size")
 	}
 
 	switch {

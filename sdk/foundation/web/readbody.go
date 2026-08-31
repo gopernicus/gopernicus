@@ -27,9 +27,16 @@ const BodyKeyExpectedUpdatedAt = "expected_updated_at"
 
 // Body is a decoded, key-checked JSON request object with typed getters.
 //
-// The getters NEVER short-circuit: each one records a violation and returns its
-// zero value, so one pass over the body collects every problem the caller has,
-// and [Body.Err] is the single terminal check.
+// One getter call never short-circuits the next: each records its violation and
+// returns its zero value, so one pass over the body collects every field's
+// problem and [Body.Err] is the single terminal check. Within a single getter
+// the scan may stop early — [Body.Strs] reports one violation per field, naming
+// the first non-string element.
+//
+// Divergences from [DecodeJSON] worth knowing: keys match EXACTLY (byte-for-byte
+// and case-sensitively — there is no encoding/json case-insensitive fallback),
+// a duplicated key takes its LAST value (encoding/json's object semantics), and
+// the request's Content-Type is not inspected.
 //
 //	body, err := web.ReadBody(w, r, "title", "summary", web.BodyKeyExpectedUpdatedAt)
 //	if err != nil {
@@ -47,8 +54,8 @@ const BodyKeyExpectedUpdatedAt = "expected_updated_at"
 //
 // For a PATCH, guard each getter with [Body.Has] and wrap the result in
 // crud.Some — the sparse-write vocabulary lives in sdk/foundation/crud, which
-// this package may not import (guard G21), so the getters return plain values
-// and the handler composes the two.
+// this package may not import (guard G12b: the foundation tier is flat), so the
+// getters return plain values and the handler composes the two.
 type Body struct {
 	values map[string]any
 	ve     sdk.ValidationError
@@ -79,6 +86,10 @@ func ReadBody(w http.ResponseWriter, r *http.Request, keys ...string) (*Body, er
 	}
 
 	dec := json.NewDecoder(bytes.NewReader(data))
+	// UseNumber keeps every number as its literal text rather than a float64, so
+	// a large int64 id or a decimal amount survives the decode intact for the
+	// numeric getter this reader does not ship yet. Decoding to float64 first
+	// would lose that precision before any getter could ask for it.
 	dec.UseNumber()
 
 	var values map[string]any
@@ -173,8 +184,9 @@ func (b *Body) Bool(field string) bool {
 	return v
 }
 
-// Strs returns a required array-of-strings field. A non-string element is a
-// violation naming its index.
+// Strs returns a required array-of-strings field. It records at most ONE
+// violation for the field: the element scan stops at the first non-string
+// element and names its index.
 func (b *Body) Strs(field string) []string {
 	raw, ok := b.values[field]
 	if !ok {
@@ -198,8 +210,10 @@ func (b *Body) Strs(field string) []string {
 	return out
 }
 
-// Date returns a required calendar-date field, parsed strictly as YYYY-MM-DD
-// and returned at midnight UTC.
+// Date returns a required calendar-date field, parsed with the time.DateOnly
+// layout and returned at midnight UTC. The layout is what it accepts, not a
+// pattern match: Go's parser also takes single-digit months and days
+// ("2026-8-1"), so a surface needing zero-padded input validates that itself.
 //
 // Format the result back with time.DateOnly and store it in a DATE column: a
 // zone conversion changes the calendar day, which is why this is not an

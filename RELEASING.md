@@ -429,9 +429,11 @@ store-adapter weight untouched).**
   through `ErrValidation`), and an empty body / `null` / non-object / trailing
   content wraps `sdk.ErrInvalidInput`, sentence first.
 - **`web.Body`'s getters** — `Has`, `Str`, `OptStr`, `Bool`, `Strs`, `Date`,
-  `Instant`, `ExpectedUpdatedAt` — **never short-circuit**: each records a
-  violation and returns its zero value, and `Body.Err()` is the single terminal
-  check. They return PLAIN values plus presence, never `crud.Field` (web cannot
+  `Instant`, `ExpectedUpdatedAt` — **one getter never short-circuits the next**:
+  each records its violation and returns its zero value, so one pass collects
+  every field's problem and `Body.Err()` is the single terminal check. (Within a
+  getter the scan may stop early: `Strs` reports one violation per field, naming
+  the first non-string element.) They return PLAIN values plus presence, never `crud.Field` (web cannot
   import crud), so a handler composes:
   `if body.Has("title") { in.Title = crud.Some(body.Str("title")) }`.
 - **`web.BodyKeyExpectedUpdatedAt = "expected_updated_at"`** — the CAS key,
@@ -449,14 +451,17 @@ store-adapter weight untouched).**
 Without it, every pocket/handler responding through `ErrFromDomain` would emit
 a fieldless generic 400 — the boilerplate this change exists to delete. The
 branch order is pinned by test: `SafeDomainError` → `*sdk.ValidationError`
-(guarded `len(Violations) > 0`) → `*sdk.StaleError` → the existing `errors.Is`
-switch. Consequences to know:
+(guarded `len(Violations) > 0`) → `*sdk.StaleError` → `*http.MaxBytesError` →
+the existing `errors.Is` switch. Consequences to know:
 
 - A `SafeDomainError` wrapping a `ValidationError` still wins, and the
   per-field detail is dropped — the host seam's chosen body is the more
   specific statement of intent.
 - A typed but EMPTY `&sdk.ValidationError{}` falls through to the generic 400;
   it never renders `"fields":[]`.
+- An oversized body answers **413**, the same body `ErrValidation` produces, so
+  a handler that maps everything through `ErrFromDomain` no longer 500s a
+  `*http.MaxBytesError` (a `SafeDomainError` around one still wins).
 - `ErrValidation` and `ErrFromDomain` render a `*sdk.ValidationError` through
   one shared unexported helper, pinned by a body-parity test, so the two cannot
   drift.
@@ -464,7 +469,14 @@ switch. Consequences to know:
   is now false and was rewritten in the same change: THREE explicit wire-text
   contracts are recognized, all by concrete type (never structurally), and the
   counter-rule is that `Violation.Message` is caller-facing text only — never
-  `sdk.Refuse(field, code, err.Error())` around a store or driver error.
+  `sdk.Refuse(field, code, err.Error())` around a store or driver error, now
+  enforced by guard **G23** (`guard-violation-message-not-error`).
+- The pocket ruling, written into the same doc: a pocket MAY return
+  `sdk.ValidationError`/`sdk.StaleError` and have those sentences reach the
+  host's wire without wrapping — a field-shape refusal (required, invalid
+  format, unknown reference) states what the request got wrong about its own
+  body and is product-neutral in a way a policy sentence is not. Free-form
+  policy text still requires `SafeDomainError`.
 
 **Compatibility assertion (verified, not assumed).** Every new symbol is
 additive; both new wire fields are `omitempty`, so every existing response body
@@ -511,9 +523,12 @@ if err != nil {
 }
 ```
 
-Not on this tag: no generic PATCH endpoint and no reflection-driven struct
-patching (the domain still writes its own patch type and validators); no
-`UnmarshalJSON` on `Field`; no civil-date type — `Body.Date` returns a
+Not on this tag: **no numeric getter and no raw accessor on `Body`** — a write
+surface with a numeric field waits on the follow-up (the reader already decodes
+with `UseNumber`, so the precision is preserved for it and nothing about the
+decode changes when it lands); no generic PATCH endpoint and no
+reflection-driven struct patching (the domain still writes its own patch type
+and validators); no `UnmarshalJSON` on `Field`; no civil-date type — `Body.Date` returns a
 midnight-UTC `time.Time` parsed with strict `time.DateOnly`, and when a civil
 date lands, `Date()` may change or be deprecated (a v0.x break accepted here
 deliberately); no per-call body-limit option; no changes to `validation.Errors`

@@ -419,7 +419,7 @@ func TestBody_ExpectedUpdatedAtProblems(t *testing.T) {
 
 // ExampleReadBody is the compiled reference for the read → Has → getters →
 // Err() → ErrValidation flow. It uses plain locals deliberately: this package
-// may not import sdk/foundation/crud (guard G21, tests included), so the
+// may not import sdk/foundation/crud (guard G12b, tests included), so the
 // crud.Some composition recipe lives in that package's own doc.
 func ExampleReadBody() {
 	handler := func(w http.ResponseWriter, r *http.Request) {

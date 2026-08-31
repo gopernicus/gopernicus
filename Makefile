@@ -18,7 +18,7 @@ STORE_MODULES = pockets/cms/stores/pgx pockets/cms/stores/turso pockets/authenti
 	guard-workshop-boundary guard-sdk-layering guard-integration-no-inward \
 	guard-auth-no-delivery-repo guard-auth-no-request-time-provider \
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
-	guard-no-legacy-features-path guard-crud-no-nethttp
+	guard-no-legacy-features-path guard-crud-no-nethttp guard-violation-message-not-error
 
 # Regenerate *_templ.go from .templ sources. Each bundled views/templ module pins
 # its own templ tool; generation runs inside each so the tool version is
@@ -134,14 +134,14 @@ tidy:
 # Layering guards — each enforces one architectural boundary from the
 # constitution (00-overview.md) or the feature-standard charter (FS rules,
 # 2026-07-07); every target must print nothing and exit 0 on a clean tree.
-# `make guard` runs all twenty-one.
+# `make guard` runs all twenty-two.
 guard: guard-sdk-stdlib guard-pocket-isolation guard-sdk-no-outward guard-no-legacy-path \
 	guard-pocket-core-sdk-only guard-pocket-transport-sdk-web guard-pocket-no-cross-pocket \
 	guard-store-no-foreign-pocket guard-no-underlying guard-no-lax-scan \
 	guard-workshop-boundary guard-sdk-layering guard-integration-no-inward \
 	guard-auth-no-delivery-repo guard-auth-no-request-time-provider \
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
-	guard-no-legacy-features-path guard-crud-no-nethttp
+	guard-no-legacy-features-path guard-crud-no-nethttp guard-violation-message-not-error
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -295,6 +295,18 @@ guard-sdk-layering:
 guard-crud-no-nethttp:
 	@echo "== guard: sdk/foundation/crud never imports net/http (G21) =="
 	@! grep -rln --include='*.go' --exclude='*_test.go' '"net/http"' sdk/foundation/crud/ || { echo "ERROR (G21): sdk/foundation/crud imports net/http — crud is transport vocabulary over url.Values and every store adapter carries its imports"; exit 1; }
+
+# G23 (crud-write-vocabulary, 2026-08-31): sdk.Violation.Message is CALLER-FACING
+# TEXT ONLY. web.ErrFromDomain now puts a ValidationError's sentences on the wire
+# by concrete type, so wrapping a store/driver error string into a violation
+# leaks internals to the caller — sdk.Refuse(field, code, err.Error()) and
+# ve.Add(field, code, err.Error()) are the two shapes that do it. Comment lines
+# are excluded so the rule can be stated in prose (sdk/faults.go,
+# sdk/foundation/web/errors.go both name the anti-pattern).
+# (G22 is RESERVED for the host-layout-contract PR-B `gopernicus guard` tool.)
+guard-violation-message-not-error:
+	@echo "== guard: sdk.Violation messages never wrap a raw error string (G23) =="
+	@! grep -rn --include='*.go' -E '(Refuse\(|\.Add\().*err\.Error\(\)' sdk/ pockets/ integrations/ examples/ | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || { echo "ERROR (G23): a violation message wraps a raw error string — sdk.Violation.Message is caller-facing text only, never err.Error() from a store or driver"; exit 1; }
 
 # G13 (sdk-layering, 2026-07-10, folded steward finding): integrations never
 # import inward — no pockets/, examples/, or workshop/. Load-bearing now that
