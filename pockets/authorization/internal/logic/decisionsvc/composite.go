@@ -256,3 +256,31 @@ func (c *Composite) LookupResources(ctx context.Context, principal authorizersvc
 	}
 	return c.owner(resourceType, permission).LookupResources(ctx, principal, permission, resourceType)
 }
+
+// LookupResourcesIn is LookupResources with a caller Limit — the struct-input
+// sibling, and the ONE body that truncates. It validates the request, calls the
+// owning kind's budget-bounded enumeration UNCHANGED (the kind interface knows
+// nothing of Limit), and then caps the sorted, deduplicated IDs to the first
+// Limit, setting LookupResult.Truncated when that drops any.
+//
+// The budget is untouched: an enumeration that overflows MaxLookupResults is
+// still ErrEvaluationLimit even for a tiny Limit — the cap never turns an
+// indeterminate result into a short complete-looking one — and Limit does not
+// reduce enumeration cost in v1. Limit 0 is the budget ceiling (today's
+// behavior); a negative Limit is rejected by Validate. An Unrestricted answer
+// passes through untouched: it names no IDs to cap. See
+// authorizersvc.LookupRequest for the full semantics and the deferred After.
+func (c *Composite) LookupResourcesIn(ctx context.Context, req authorizersvc.LookupRequest) (authorizersvc.LookupResult, error) {
+	if err := req.Validate(); err != nil {
+		return authorizersvc.LookupResult{}, err
+	}
+	res, err := c.owner(req.ResourceType, req.Permission).LookupResources(ctx, req.Principal, req.Permission, req.ResourceType)
+	if err != nil {
+		return authorizersvc.LookupResult{}, err
+	}
+	if req.Limit > 0 && !res.Unrestricted && len(res.IDs) > req.Limit {
+		res.IDs = res.IDs[:req.Limit]
+		res.Truncated = true
+	}
+	return res, nil
+}

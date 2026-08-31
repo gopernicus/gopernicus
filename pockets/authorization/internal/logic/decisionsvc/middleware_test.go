@@ -130,6 +130,65 @@ func TestCompositeGatesLadderOnARolesOnlyHost(t *testing.T) {
 	}
 }
 
+// TestCompositeRequireAnyPermissionAcrossBothModels proves the disjunction
+// dispatches per alternative: one route line disjoins the relationship-owned
+// project/view pair with the role-owned project/audit pair, and EITHER grant
+// admits — with no grant it is a 403.
+func TestCompositeRequireAnyPermissionAcrossBothModels(t *testing.T) {
+	c, eng, roles := newBothKinds(t, authorizersvc.EvaluationLimits{})
+	grant(t, eng, "project", "byRelationship", "viewer", "user", "u1")
+	assign(t, roles, "u1", "auditor", "project", "byRole")
+
+	gate := c.RequireAnyPermission(
+		authorizersvc.GateSpec{ResourceType: "project", Permission: "view", Resource: authorizersvc.PathResource("project", "projectID")},
+		authorizersvc.GateSpec{ResourceType: "project", Permission: "audit", Resource: authorizersvc.PathResource("project", "projectID")},
+	)
+	call := func(projectID string) (int, bool) {
+		ran := false
+		req := principalRequest("/projects/"+projectID, true)
+		req.SetPathValue("projectID", projectID)
+		rec := httptest.NewRecorder()
+		gate(ranHandler(&ran)).ServeHTTP(rec, req)
+		return rec.Code, ran
+	}
+
+	if code, ran := call("byRelationship"); code != http.StatusOK || !ran {
+		t.Fatalf("relationship-owned alternative must admit: %d ran=%v", code, ran)
+	}
+	if code, ran := call("byRole"); code != http.StatusOK || !ran {
+		t.Fatalf("role-owned alternative must admit: %d ran=%v", code, ran)
+	}
+	if code, ran := call("ungranted"); code != http.StatusForbidden || ran {
+		t.Fatalf("neither alternative granted: want 403 with no next, got %d ran=%v", code, ran)
+	}
+}
+
+// TestCompositeRequireAnyPermissionRegistration: the alternatives are validated
+// against BOTH models at mount — a pair either declares is legal, a pair neither
+// declares panics.
+func TestCompositeRequireAnyPermissionRegistration(t *testing.T) {
+	c, _, _ := newBothKinds(t, authorizersvc.EvaluationLimits{})
+
+	t.Run("a pair from each model mounts", func(t *testing.T) {
+		_ = c.RequireAnyPermission(
+			authorizersvc.GateSpec{ResourceType: "project", Permission: "view", Resource: authorizersvc.PathResource("project", "projectID")},
+			authorizersvc.GateSpec{ResourceType: "platform", Permission: "steward", Resource: authorizersvc.FixedResource("platform", "global")},
+		)
+	})
+
+	t.Run("declared by neither panics", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("must panic at registration")
+			}
+		}()
+		c.RequireAnyPermission(
+			authorizersvc.GateSpec{ResourceType: "project", Permission: "view", Resource: authorizersvc.PathResource("project", "projectID")},
+			authorizersvc.GateSpec{ResourceType: "project", Permission: "fly", Resource: authorizersvc.PathResource("project", "projectID")},
+		)
+	})
+}
+
 // TestCompositeGatesEmptyPathParameterFailsClosed proves the resolver leg: a
 // route pattern that does not carry the named parameter is a 500, never a check
 // against an empty resource id.

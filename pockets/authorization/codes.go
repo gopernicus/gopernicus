@@ -81,6 +81,21 @@ var (
 	// kind, never sdk.ErrConflict — default #9).
 	ErrEvaluationLimit = authorizersvc.ErrEvaluationLimit
 
+	// ErrAlternativeNotApplicable is the sentinel a RequireAnyPermission
+	// ResourceResolver returns (or wraps) to declare that its alternative does not
+	// apply to THIS request — the row names no organization, the path carries no
+	// tenant. The gate then skips to the next alternative exactly as a deny does,
+	// and all-inapplicable is the ordinary 403. It is the same sentinel the gate
+	// body checks, re-exported so a host can wrap it with errors.Is-visible
+	// context (the ErrEvaluationLimit precedent).
+	//
+	// It is narrow ON PURPOSE: any OTHER resolver error still fails the whole
+	// request closed, so a store outage can never be swallowed into a later
+	// alternative's allow. It is an input to the gate, never a returned decision
+	// error, so it wraps no sdk taxonomy kind and takes no part in ReasonFor or
+	// RespondError below.
+	ErrAlternativeNotApplicable = authorizersvc.ErrAlternativeNotApplicable
+
 	// ErrInvalidLimits reports a negative Config.Limits field at NewService. It is
 	// a CONSTRUCTION error wrapping sdk.ErrInvalidInput — distinct from the
 	// runtime ErrEvaluationLimit above. Zero fields are valid: they select the

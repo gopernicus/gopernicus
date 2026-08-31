@@ -56,13 +56,14 @@ mutations and sensitive invitation tests use the v3 lifecycle.
 | **policy** (deferred) | attribute/condition-shaped rules | (future) `.Policies` | (future) `iam_policies` | a designed, named seam — see "The policy seam" below |
 
 **The decision surface — ONE facade, shared by the model-bearing kinds.**
-`Check`, `CheckExplain`, `CheckBatch`, `FilterAuthorized`, `LookupResources`
-and the three `RequirePermission*` gates are not a per-kind family: each
+`Check`, `CheckExplain`, `CheckBatch`, `FilterAuthorized`, `LookupResources`,
+`LookupResourcesIn` and the four gates (`RequirePermission*` plus
+`RequireAnyPermission`) are not a per-kind family: each
 `(resource type, permission)` pair is answered by the model that DECLARES it —
 the relationship `Schema` or the `RoleModel`, never both (`ErrModelConflict`
 forbids the overlap at construction). A pair neither model declares denies with
 `"no rules defined"`. On a host where NO kind bears a model (a roles-only wiring
-with no `RoleModel`), all five methods fail closed with `ErrNoDecisionKind` — a
+with no `RoleModel`), all six methods fail closed with `ErrNoDecisionKind` — a
 server-side wiring fault that answers HTTP 500, not a deny — and the gates panic
 at mount.
 
@@ -350,6 +351,44 @@ Rules:
   cancellation, infrastructure failure, and limit exhaustion never masquerade
   as an ordinary deny or a complete partial list. The engine checks context
   cancellation before recursion and before every store call.
+
+### Enumeration with a caller Limit — `LookupResourcesIn`
+
+`LookupResourcesIn(ctx, LookupRequest{Principal, Permission, ResourceType, Limit})`
+is the struct-input SIBLING of `LookupResources`, not a replacement: the
+positional method keeps its signature, so host ports and method values are
+untouched.
+
+- **`Limit == 0` means the `MaxLookupResults` budget ceiling** — today's
+  `LookupResources` behavior. It does NOT mean unbounded (nothing here is), and
+  it deliberately does NOT follow `crud.ListRequest`, where `0` means
+  `DefaultLimit`: an enumeration is not a page, and silently shrinking a host's
+  result set to a page default would be a correctness change, not a default. A
+  NEGATIVE `Limit` is a validation error wrapping `sdk.ErrInvalidInput` (HTTP
+  400) — a limit is not a reference, so it is not `ErrInvalidRef`.
+- **`LookupResult.Truncated`** reports that the `Limit` DROPPED IDs from the
+  complete enumeration — the "and more" affordance. Without it,
+  `len(IDs) == Limit` would be indistinguishable from exactly `Limit` grants.
+  Only the `Limit` path sets it; the classic `LookupResources` never does. `IDs`
+  stays non-nil through truncation, and the returned prefix is the first `Limit`
+  of the same sorted, deduplicated list.
+- **Overflow beats a small `Limit`.** `Limit` never weakens or bypasses the
+  budget: an enumeration that overflows `MaxLookupResults` is still
+  `ErrEvaluationLimit` even when `Limit` is 1. A truncating `Limit` must not be
+  able to turn an indeterminate result into a short one that looks complete.
+- **It does not make the query cheaper (v1).** The owning kind enumerates
+  exactly as it does today and truncation happens above it. `Limit` moves the
+  host's re-cap into the engine and anchors a future cursor — it is not a
+  performance knob.
+- **`Unrestricted` ignores `Limit`** and passes through untouched: it names no
+  IDs to cap, and the host must still skip ID filtering entirely.
+
+**DEFERRED — `After`/cursor continuation (issue #22).** Resuming an enumeration
+needs a deterministic continuation the OWNING KIND can honor, which is a
+store-port change across `memstore`, `stores/pgx`, `stores/turso`, and the
+`storetest` conformance suite — a multi-module train, not a core-only release.
+When a host actually needs it, it lands as an additive `LookupRequest.After`
+field with zero signature churn.
 
 **Fail-closed caller guidance (load-bearing).** `allowed, _ := authorizer.Check(...)`
 is a silent fail-OPEN — an engine error (store down, unwired kind, budget
@@ -758,6 +797,59 @@ responses use `web.RespondJSONError` (the FS9 `web.Error` shape) — an adopter
 replacing a hand-rolled gate with this builder changes its response *body*
 contract to the FS9 shape (status codes unchanged).
 
+**`RequireAnyPermission` — the disjunction on the route line.** A route admitted
+by EITHER of two grants used to hand-roll the OR in the handler. It is one gate
+now, over the same shared body:
+
+```go
+type GateSpec struct {
+    ResourceType string
+    Permission   string
+    Resource     ResourceResolver
+}
+func (s *Service) RequireAnyPermission(alternatives ...GateSpec) web.Middleware
+
+router.Handle("GET", "/orgs/{orgID}/projects/{projectID}", h.show,
+    authorizer.RequireAnyPermission(
+        authorization.GateSpec{ResourceType: "project", Permission: "view", Resource: authorization.PathResource("project", "projectID")},
+        authorization.GateSpec{ResourceType: "org", Permission: "admin", Resource: authorization.PathResource("org", "orgID")},
+    ))
+```
+
+- **Registration validation, per alternative.** Zero alternatives, a nil
+  `Resource` resolver, a `(resource type, permission)` pair NEITHER compiled
+  model declares, or more alternatives than `EvaluationLimits.MaxBatchSize` all
+  panic at mount, each message naming the alternative's index and pair
+  (`alternative 2 of 5`). The cap is not cosmetic: each alternative is one
+  budget-bounded `Check`, so an N-alternative route line multiplies per-request
+  store work by N — order and count both cost.
+- **The ladder, fail closed.** No principal → 401. Alternatives are evaluated
+  **strictly in order**, resolve-then-`Check`, and the **first allow
+  short-circuits** — later alternatives are never consulted. A resolver error,
+  a resolved `Resource.Type` disagreeing with the alternative's declared
+  `ResourceType`, or a `Check` error fails the **whole request** closed (503 for
+  `ErrEvaluationLimit`, 500 otherwise) even when a later alternative would have
+  allowed. Every alternative denied or inapplicable → 403. Type agreement is
+  checked because `mustDeclare` validates the DECLARED pair while `Check`
+  dispatches on the RESOLVED one: a disagreeing resolver would otherwise
+  evaluate a pair no model declares and deny forever behind a green mount.
+- **`ErrAlternativeNotApplicable` — the one skip.** A `ResourceResolver`
+  returning (or wrapping, `errors.Is`-visibly) this exported sentinel declares
+  "this alternative does not apply to THIS request" — the row names no
+  organization, the path carries no tenant — and evaluation moves to the next
+  alternative exactly as a deny does; all-inapplicable is the ordinary 403. It
+  is deliberately narrow: **any other** resolver error still fails the whole
+  request closed, so a store outage can never be swallowed into a later
+  alternative's allow.
+- **Order is outcome-affecting, not a cost knob.** Under whole-request
+  fail-closed, an erroring alternative 1 means alternative 2's allow is never
+  reached. Order by which alternative should decide. Duplicate alternatives (the
+  same pair with different resolvers) are legal and evaluated independently.
+- **No nesting, no policy language, no bypass hook.** An AND of ORs is stacked
+  middleware, as it is today, and the gate is the same PURE `Check` — a host
+  wanting platform-admin/self-access composes it in its own closure around this
+  middleware.
+
 **Consumer-side nil semantics** (in the CONSUMING pockets): a nil Check-shaped
 seam is deny-by-absence — auth's `Granter` (nil = no grant on invitation accept)
 and events' `Authorize` (nil = the resource-scoped stream route never registers)
@@ -990,6 +1082,45 @@ result, err := authorizer.LookupResources(ctx, authorization.PrincipalFrom(p), "
 // result.Unrestricted with an EMPTY IDs — check it before treating empty as
 // "no access". For admin-sees-everything, run the platform-admin Check first
 // and skip filtering.
+
+// Stop 3b — the same enumeration capped for a "first N + more" affordance.
+// Limit 0 would be the MaxLookupResults budget ceiling (today's behavior), NOT
+// crud's DefaultLimit; a negative Limit is invalid input (400). The cap NEVER
+// weakens the budget — an enumeration overflowing MaxLookupResults is still
+// ErrEvaluationLimit even for Limit 5 — and it does not make the query cheaper.
+capped, err := authorizer.LookupResourcesIn(ctx, authorization.LookupRequest{
+    Principal:    authorization.PrincipalFrom(p),
+    Permission:   "view",
+    ResourceType: "project",
+    Limit:        5,
+})
+if err != nil {
+    return err // fail CLOSED — a truncation is never an error, an error is never a short list
+}
+// capped.Truncated tells "there are more" apart from "exactly 5 grants";
+// capped.Unrestricted still ignores Limit and means: skip ID filtering.
+
+// Stop 3c — explain a decision (support/debug, never the hot path). CheckExplain
+// rides the SAME evaluation path and budget as Check: it cannot change the
+// decision or create a more permissive evaluator, and nothing is auto-logged.
+res, explanation, err := authorizer.CheckExplain(ctx, authorization.CheckRequest{
+    Principal:  authorization.PrincipalFrom(p),
+    Permission: "view",
+    Resource:   authorization.Resource{Type: "project", ID: projectID},
+})
+if err != nil {
+    return err // fail CLOSED — an unexplained decision is not an allow
+}
+log.Info("decision", "allowed", res.Allowed, "reason_code", res.ReasonCode) // the FROZEN wire code
+for _, step := range explanation.Steps { // bounded by the same budget
+    // Kind is ExplainKindDirect / ExplainKindThrough / ExplainKindRole; a role
+    // step carries Role + Scope (ExplainScopeDirect / ExplainScopeGlobal).
+    log.Info("step", "kind", step.Kind, "depth", step.Depth,
+        "resource", step.ResourceType+":"+step.ResourceID, "relation", step.Relation,
+        "role", step.Role, "scope", step.Scope, "outcome", step.Outcome)
+}
+// explanation.Decision equals res.ReasonCode. Reason (the debug TEXT on
+// CheckResult) is not contract — never switch on it.
 
 // Stop 4 — a role-gated host route. `audit` is declared by the RoleModel, so the
 // SAME coordinate gate the relationship kind uses answers it: the surface

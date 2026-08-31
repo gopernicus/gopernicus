@@ -10,7 +10,9 @@ import (
 // authorizersvc.Gates body, so a composite-mounted gate walks the identical
 // 401/403/500/503 ladder the relationship engine's own gates do — there is no
 // second gate implementation to drift from.
-func (c *Composite) gates() authorizersvc.Gates { return authorizersvc.NewGates(c, c) }
+func (c *Composite) gates() authorizersvc.Gates {
+	return authorizersvc.NewGates(c, c, c.limits.MaxBatchSize)
+}
 
 // RequirePermission gates a route on the composite's Check — the pair's owning
 // model decides. See authorizersvc.Gates.RequirePermission for the full HTTP
@@ -30,4 +32,14 @@ func (c *Composite) RequirePermissionOn(resourceType, permission, pathParam stri
 // same registration-time legality check as RequirePermissionOn.
 func (c *Composite) RequirePermissionFixed(resourceType, permission, resourceID string) web.Middleware {
 	return c.gates().RequirePermissionFixed(resourceType, permission, resourceID)
+}
+
+// RequireAnyPermission admits a route when ANY alternative allows, each
+// alternative decided by the model that OWNS its pair — so one route line may
+// disjoin a relationship-owned pair with a role-owned one. Every alternative's
+// pair is checked at REGISTRATION against both models, and the alternatives are
+// capped at the shared EvaluationLimits.MaxBatchSize. See
+// authorizersvc.Gates.RequireAnyPermission for the full ladder.
+func (c *Composite) RequireAnyPermission(alternatives ...authorizersvc.GateSpec) web.Middleware {
+	return c.gates().RequireAnyPermission(alternatives...)
 }

@@ -40,6 +40,12 @@ func TestRequirePermissionPanicsWithoutAModelBearingKind(t *testing.T) {
 			func() { _ = svc.RequirePermissionFixed("post", "delete", "p1") },
 			"authorization: RequirePermissionFixed requires a decision-capable kind (Config.RelationshipModel or Config.RoleModel); a roles-only host without a role model must not mount it",
 		},
+		"RequireAnyPermission": {
+			func() {
+				_ = svc.RequireAnyPermission(GateSpec{ResourceType: "post", Permission: "delete", Resource: FixedResource("post", "p1")})
+			},
+			"authorization: RequireAnyPermission requires a decision-capable kind (Config.RelationshipModel or Config.RoleModel); a roles-only host without a role model must not mount it",
+		},
 	}
 	for name, tc := range mounts {
 		t.Run(name, func(t *testing.T) {
@@ -80,9 +86,11 @@ func TestServicePublicMethodSetUnchanged(t *testing.T) {
 		"ListRoleAssignmentsByResource",
 		"ListRoleAssignmentsBySubject",
 		"LookupResources",
+		"LookupResourcesIn",
 		"PurgeResourceAuthorization",
 		"Register",
 		"ReplaceRelationship",
+		"RequireAnyPermission",
 		"RequirePermission",
 		"RequirePermissionFixed",
 		"RequirePermissionOn",
@@ -160,6 +168,46 @@ func TestGatesOnARolesOnlyModelHost(t *testing.T) {
 	})
 	if err != nil || !res.Allowed {
 		t.Fatalf("Check on a roles-only model host: got %+v err=%v", res, err)
+	}
+}
+
+// TestRequireAnyPermissionDelegates drives the disjunction through the PUBLIC
+// facade: alternatives are evaluated in order, the granted one admits, and a
+// route line whose alternatives are all ungranted is 403.
+func TestRequireAnyPermissionDelegates(t *testing.T) {
+	roles := newSeededRoles(t, assignment("u1", "auditor", "project", "p1"))
+	comps, err := NewService(Repositories{Roles: roles}, Config{RoleModel: projectRoleModel()})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	handler := comps.Service.RequireAnyPermission(
+		GateSpec{ResourceType: "project", Permission: "audit", Resource: FixedResource("project", "p2")},
+		GateSpec{ResourceType: "project", Permission: "audit", Resource: FixedResource("project", "p1")},
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/gated", nil)
+	req = req.WithContext(identity.WithPrincipal(req.Context(), identity.Principal{Type: "user", ID: "u1"}))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("the second alternative is granted: want 204, got %d (body %q)", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/gated", nil)
+	req = req.WithContext(identity.WithPrincipal(req.Context(), identity.Principal{Type: "user", ID: "u2"}))
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("no alternative granted: want 403, got %d", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/gated", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("no principal: want 401, got %d", rec.Code)
 	}
 }
 

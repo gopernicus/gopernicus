@@ -3,8 +3,11 @@ package authorizersvc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
@@ -260,7 +263,7 @@ func TestGatesLadder(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gates := NewGates(tt.checker, stubDeclarer{"post/delete": true})
+			gates := NewGates(tt.checker, stubDeclarer{"post/delete": true}, DefaultMaxBatchSize)
 
 			ran := false
 			handler := gates.RequirePermission("delete", tt.resource)(markerHandler(&ran))
@@ -292,7 +295,7 @@ func TestGatesLadder(t *testing.T) {
 // panicking at mount for a pair no model declares.
 func TestGatesCoordinates(t *testing.T) {
 	checker := &stubChecker{result: CheckResult{Allowed: true}}
-	gates := NewGates(checker, stubDeclarer{"post/delete": true})
+	gates := NewGates(checker, stubDeclarer{"post/delete": true}, DefaultMaxBatchSize)
 
 	ran := false
 	req := httptest.NewRequest(http.MethodGet, "/gated", nil)
@@ -328,4 +331,321 @@ func TestGatesCoordinates(t *testing.T) {
 			mount()
 		})
 	}
+}
+
+// scriptedChecker answers each Check from a per-(resource, permission) script and
+// records, IN ORDER, the coordinates it was consulted on — the counting Checker
+// that proves short-circuit, in-order evaluation, and never-consulted
+// alternatives.
+type scriptedChecker struct {
+	answers map[string]CheckResult
+	errs    map[string]error
+	seen    []string
+}
+
+func (c *scriptedChecker) Check(ctx context.Context, req CheckRequest) (CheckResult, error) {
+	key := req.Resource.Type + ":" + req.Resource.ID + "/" + req.Permission
+	c.seen = append(c.seen, key)
+	if err := c.errs[key]; err != nil {
+		return CheckResult{}, err
+	}
+	return c.answers[key], nil
+}
+
+// TestGatesRequireAnyPermission: the disjunction walks the one shared ladder —
+// 401, strictly in-order evaluation, short-circuit on the first allow, the
+// ErrAlternativeNotApplicable skip, whole-request fail-closed on any other
+// resolver error / type disagreement / Check error, and 403 when every
+// alternative denied or did not apply.
+func TestGatesRequireAnyPermission(t *testing.T) {
+	allow := CheckResult{Allowed: true}
+	deny := CheckResult{Allowed: false, ReasonCode: ReasonDenied}
+	declarer := stubDeclarer{"post/delete": true, "org/admin": true}
+
+	post := GateSpec{ResourceType: "post", Permission: "delete", Resource: FixedResource("post", "p1")}
+	org := GateSpec{ResourceType: "org", Permission: "admin", Resource: FixedResource("org", "o1")}
+	notApplicable := func(spec GateSpec) GateSpec {
+		spec.Resource = func(*http.Request) (Resource, error) {
+			return Resource{}, fmt.Errorf("the row names no organization: %w", ErrAlternativeNotApplicable)
+		}
+		return spec
+	}
+	broken := func(spec GateSpec) GateSpec {
+		spec.Resource = func(*http.Request) (Resource, error) { return Resource{}, errors.New("store exploded") }
+		return spec
+	}
+	mistyped := func(spec GateSpec) GateSpec {
+		spec.Resource = func(*http.Request) (Resource, error) { return Resource{Type: "comet", ID: "c1"}, nil }
+		return spec
+	}
+
+	tests := []struct {
+		name          string
+		alternatives  []GateSpec
+		answers       map[string]CheckResult
+		errs          map[string]error
+		withPrincipal bool
+		wantStatus    int
+		wantNext      bool
+		wantSeen      []string
+	}{
+		{
+			name:         "no principal → 401 before any Check",
+			alternatives: []GateSpec{post, org},
+			answers:      map[string]CheckResult{"post:p1/delete": allow},
+			wantStatus:   http.StatusUnauthorized,
+		},
+		{
+			name:          "first alternative allows → short-circuits, second never consulted",
+			alternatives:  []GateSpec{post, org},
+			answers:       map[string]CheckResult{"post:p1/delete": allow, "org:o1/admin": allow},
+			withPrincipal: true,
+			wantStatus:    http.StatusOK,
+			wantNext:      true,
+			wantSeen:      []string{"post:p1/delete"},
+		},
+		{
+			name:          "second alternative allows after a deny → in order, next runs",
+			alternatives:  []GateSpec{post, org},
+			answers:       map[string]CheckResult{"post:p1/delete": deny, "org:o1/admin": allow},
+			withPrincipal: true,
+			wantStatus:    http.StatusOK,
+			wantNext:      true,
+			wantSeen:      []string{"post:p1/delete", "org:o1/admin"},
+		},
+		{
+			name:          "every alternative denies → 403",
+			alternatives:  []GateSpec{post, org},
+			answers:       map[string]CheckResult{"post:p1/delete": deny, "org:o1/admin": deny},
+			withPrincipal: true,
+			wantStatus:    http.StatusForbidden,
+			wantSeen:      []string{"post:p1/delete", "org:o1/admin"},
+		},
+		{
+			name:          "single alternative allows → RequirePermission behavior",
+			alternatives:  []GateSpec{post},
+			answers:       map[string]CheckResult{"post:p1/delete": allow},
+			withPrincipal: true,
+			wantStatus:    http.StatusOK,
+			wantNext:      true,
+			wantSeen:      []string{"post:p1/delete"},
+		},
+		{
+			name:          "single alternative denies → RequirePermission behavior",
+			alternatives:  []GateSpec{post},
+			answers:       map[string]CheckResult{"post:p1/delete": deny},
+			withPrincipal: true,
+			wantStatus:    http.StatusForbidden,
+			wantSeen:      []string{"post:p1/delete"},
+		},
+		{
+			name: "duplicate pair with different resolvers is legal and evaluated independently",
+			alternatives: []GateSpec{
+				post,
+				{ResourceType: "post", Permission: "delete", Resource: FixedResource("post", "p2")},
+			},
+			answers:       map[string]CheckResult{"post:p1/delete": deny, "post:p2/delete": allow},
+			withPrincipal: true,
+			wantStatus:    http.StatusOK,
+			wantNext:      true,
+			wantSeen:      []string{"post:p1/delete", "post:p2/delete"},
+		},
+		{
+			name:          "first alternative Check error → 500, the allowing second never reached",
+			alternatives:  []GateSpec{post, org},
+			answers:       map[string]CheckResult{"org:o1/admin": allow},
+			errs:          map[string]error{"post:p1/delete": errors.New("decider exploded")},
+			withPrincipal: true,
+			wantStatus:    http.StatusInternalServerError,
+			wantSeen:      []string{"post:p1/delete"},
+		},
+		{
+			name:          "second alternative Check error after a deny → 500",
+			alternatives:  []GateSpec{post, org},
+			answers:       map[string]CheckResult{"post:p1/delete": deny},
+			errs:          map[string]error{"org:o1/admin": errors.New("decider exploded")},
+			withPrincipal: true,
+			wantStatus:    http.StatusInternalServerError,
+			wantSeen:      []string{"post:p1/delete", "org:o1/admin"},
+		},
+		{
+			name:          "evaluation limit → 503 fail closed",
+			alternatives:  []GateSpec{post, org},
+			answers:       map[string]CheckResult{"org:o1/admin": allow},
+			errs:          map[string]error{"post:p1/delete": ErrEvaluationLimit},
+			withPrincipal: true,
+			wantStatus:    http.StatusServiceUnavailable,
+			wantSeen:      []string{"post:p1/delete"},
+		},
+		{
+			name:          "non-sentinel resolver error → 500, the allowing second never reached",
+			alternatives:  []GateSpec{broken(post), org},
+			answers:       map[string]CheckResult{"org:o1/admin": allow},
+			withPrincipal: true,
+			wantStatus:    http.StatusInternalServerError,
+		},
+		{
+			name:          "non-sentinel resolver error after a deny → 500",
+			alternatives:  []GateSpec{post, broken(org)},
+			answers:       map[string]CheckResult{"post:p1/delete": deny},
+			withPrincipal: true,
+			wantStatus:    http.StatusInternalServerError,
+			wantSeen:      []string{"post:p1/delete"},
+		},
+		{
+			name:          "resolved type disagrees with the declared pair → 500 fail closed",
+			alternatives:  []GateSpec{mistyped(post), org},
+			answers:       map[string]CheckResult{"org:o1/admin": allow},
+			withPrincipal: true,
+			wantStatus:    http.StatusInternalServerError,
+		},
+		{
+			name:          "not-applicable sentinel skips to the alternative that allows",
+			alternatives:  []GateSpec{notApplicable(post), org},
+			answers:       map[string]CheckResult{"org:o1/admin": allow},
+			withPrincipal: true,
+			wantStatus:    http.StatusOK,
+			wantNext:      true,
+			wantSeen:      []string{"org:o1/admin"},
+		},
+		{
+			name:          "not-applicable on every alternative → 403, no Check consulted",
+			alternatives:  []GateSpec{notApplicable(post), notApplicable(org)},
+			withPrincipal: true,
+			wantStatus:    http.StatusForbidden,
+		},
+		{
+			name:          "not-applicable then a deny → 403",
+			alternatives:  []GateSpec{notApplicable(post), org},
+			answers:       map[string]CheckResult{"org:o1/admin": deny},
+			withPrincipal: true,
+			wantStatus:    http.StatusForbidden,
+			wantSeen:      []string{"org:o1/admin"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			checker := &scriptedChecker{answers: tt.answers, errs: tt.errs}
+			gates := NewGates(checker, declarer, DefaultMaxBatchSize)
+
+			ran := false
+			handler := gates.RequireAnyPermission(tt.alternatives...)(markerHandler(&ran))
+
+			req := httptest.NewRequest(http.MethodGet, "/gated", nil)
+			req.Header.Set("X-Marker", "kilroy")
+			if tt.withPrincipal {
+				req = req.WithContext(identity.WithPrincipal(req.Context(), identity.Principal{Type: "user", ID: "u1"}))
+			}
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status: want %d, got %d (body %q)", tt.wantStatus, rec.Code, rec.Body.String())
+			}
+			if ran != tt.wantNext {
+				t.Fatalf("next ran: want %v, got %v", tt.wantNext, ran)
+			}
+			if tt.wantNext && rec.Header().Get("X-Saw-Marker") != "kilroy" {
+				t.Fatalf("next did not see the original request header: got %q", rec.Header().Get("X-Saw-Marker"))
+			}
+			if !slices.Equal(checker.seen, tt.wantSeen) {
+				t.Fatalf("checks consulted: want %v, got %v", tt.wantSeen, checker.seen)
+			}
+		})
+	}
+}
+
+// TestGatesRequireAnyPermissionRegistration: every legality fault is a MOUNT
+// panic naming the alternative's index and pair — never a gate that quietly
+// checks something no model grants, and never an uncapped N-Check route line.
+func TestGatesRequireAnyPermissionRegistration(t *testing.T) {
+	post := GateSpec{ResourceType: "post", Permission: "delete", Resource: FixedResource("post", "p1")}
+	gates := NewGates(&stubChecker{result: CheckResult{Allowed: true}}, stubDeclarer{"post/delete": true, "org/admin": true}, 2)
+
+	for name, tc := range map[string]struct {
+		mount func()
+		want  string
+	}{
+		"zero alternatives": {
+			mount: func() { gates.RequireAnyPermission() },
+			want:  "at least one alternative",
+		},
+		"nil resolver": {
+			mount: func() {
+				gates.RequireAnyPermission(post, GateSpec{ResourceType: "org", Permission: "admin"})
+			},
+			want: `alternative 2 of 2 ("org", "admin") needs a Resource resolver`,
+		},
+		"undeclared permission": {
+			mount: func() {
+				gates.RequireAnyPermission(post, GateSpec{ResourceType: "post", Permission: "fly", Resource: FixedResource("post", "p1")})
+			},
+			want: `alternative 2 of 2: the model declares no permission "fly" on resource type "post"`,
+		},
+		"undeclared resource type": {
+			mount: func() {
+				gates.RequireAnyPermission(GateSpec{ResourceType: "comet", Permission: "delete", Resource: FixedResource("comet", "c1")})
+			},
+			want: `alternative 1 of 1: the model declares no permission "delete" on resource type "comet"`,
+		},
+		"over the alternatives cap": {
+			mount: func() { gates.RequireAnyPermission(post, post, post) },
+			want:  "at most 2 alternatives",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				got, ok := recover().(string)
+				if !ok {
+					t.Fatal("must panic at registration with a string message")
+				}
+				if !strings.Contains(got, tc.want) {
+					t.Fatalf("panic message: want it to contain %q, got %q", tc.want, got)
+				}
+			}()
+			tc.mount()
+		})
+	}
+}
+
+// TestServiceRequireAnyPermission: the relationship engine's own delegation
+// mounts the shared body against the compiled schema — the disjunction admits on
+// either real grant, and an undeclared pair panics at mount.
+func TestServiceRequireAnyPermission(t *testing.T) {
+	svc, err := NewService(&fakeStore{tuples: []relationship.CreateRelationship{
+		{ResourceType: "post", ResourceID: "p2", Relation: "owner", SubjectType: "user", SubjectID: "u1"},
+	}}, testSchema(), Config{})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	gate := svc.RequireAnyPermission(
+		GateSpec{ResourceType: "post", Permission: "delete", Resource: FixedResource("post", "p1")},
+		GateSpec{ResourceType: "post", Permission: "delete", Resource: FixedResource("post", "p2")},
+	)
+	call := func(principal identity.Principal) (int, bool) {
+		ran := false
+		req := httptest.NewRequest(http.MethodGet, "/gated", nil)
+		req = req.WithContext(identity.WithPrincipal(req.Context(), principal))
+		rec := httptest.NewRecorder()
+		gate(markerHandler(&ran)).ServeHTTP(rec, req)
+		return rec.Code, ran
+	}
+	if code, ran := call(identity.Principal{Type: "user", ID: "u1"}); code != http.StatusOK || !ran {
+		t.Fatalf("owner of the second alternative: %d ran=%v", code, ran)
+	}
+	if code, ran := call(identity.Principal{Type: "user", ID: "u2"}); code != http.StatusForbidden || ran {
+		t.Fatalf("stranger: %d ran=%v", code, ran)
+	}
+
+	t.Run("undeclared pair panics at mount", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("must panic at registration")
+			}
+		}()
+		svc.RequireAnyPermission(GateSpec{ResourceType: "post", Permission: "fly", Resource: FixedResource("post", "p1")})
+	})
 }
