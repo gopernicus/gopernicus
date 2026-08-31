@@ -12,6 +12,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/role"
 	"github.com/gopernicus/gopernicus/pockets/authorization/memstore"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
@@ -457,11 +458,72 @@ func TestDecisionSurfaceWithoutAModelBearingKind(t *testing.T) {
 	if _, err := svc.LookupResources(ctx, principal, "audit", "project"); !errors.Is(err, ErrNoDecisionKind) {
 		t.Fatalf("LookupResources: want ErrNoDecisionKind, got %v", err)
 	}
+	// The wiring sentinel is reported BEFORE the request is validated: an unwired
+	// decider is the operator's fault, not the caller's.
+	if _, err := svc.LookupResourcesIn(ctx, LookupRequest{Principal: principal, Permission: "audit", ResourceType: "project", Limit: -1}); !errors.Is(err, ErrNoDecisionKind) {
+		t.Fatalf("LookupResourcesIn: want ErrNoDecisionKind, got %v", err)
+	}
 	// The wiring sentinel is reported BEFORE the zero-length shortcut, exactly as
 	// the relationship-kind sentinel was: a modelless host learns it is
 	// misconfigured even on a call with nothing to decide.
 	if _, err := svc.FilterAuthorized(ctx, principal, "audit", "project", nil); !errors.Is(err, ErrNoDecisionKind) {
 		t.Fatalf("FilterAuthorized with no IDs: want ErrNoDecisionKind, got %v", err)
+	}
+}
+
+// TestLookupResourcesInThroughTheFacade drives the caller Limit through the
+// PUBLIC API: a truncating call returns the sorted prefix with Truncated set, a
+// Limit that fits (and Limit 0, the budget ceiling) returns the complete list
+// untruncated, the classic LookupResources NEVER sets Truncated, and a negative
+// Limit is invalid input a host maps to 400.
+func TestLookupResourcesInThroughTheFacade(t *testing.T) {
+	roles := newSeededRoles(t,
+		assignment("u1", "auditor", "project", "p1"),
+		assignment("u1", "auditor", "project", "p2"),
+		assignment("u1", "auditor", "project", "p3"),
+	)
+	comps, err := NewService(Repositories{Roles: roles}, Config{RoleModel: projectRoleModel()})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+	svc := comps.Service
+	ctx := context.Background()
+	principal := PrincipalRef{Type: "user", ID: "u1"}
+
+	for name, tc := range map[string]struct {
+		limit int
+		want  LookupResult
+	}{
+		"limit below the count truncates":  {2, LookupResult{IDs: []string{"p1", "p2"}, Truncated: true}},
+		"limit that fits":                  {3, LookupResult{IDs: []string{"p1", "p2", "p3"}}},
+		"limit zero is the budget ceiling": {0, LookupResult{IDs: []string{"p1", "p2", "p3"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := svc.LookupResourcesIn(ctx, LookupRequest{
+				Principal: principal, Permission: "audit", ResourceType: "project", Limit: tc.limit,
+			})
+			if err != nil {
+				t.Fatalf("LookupResourcesIn: %v", err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("got %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+
+	classic, err := svc.LookupResources(ctx, principal, "audit", "project")
+	if err != nil {
+		t.Fatalf("LookupResources: %v", err)
+	}
+	if classic.Truncated || len(classic.IDs) != 3 {
+		t.Fatalf("the classic method never truncates and never reports Truncated, got %+v", classic)
+	}
+
+	_, err = svc.LookupResourcesIn(ctx, LookupRequest{
+		Principal: principal, Permission: "audit", ResourceType: "project", Limit: -1,
+	})
+	if !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("a negative Limit must wrap sdk.ErrInvalidInput, got %v", err)
 	}
 }
 

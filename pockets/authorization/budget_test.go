@@ -275,6 +275,56 @@ func TestBudgetLookupResultsExhaustion(t *testing.T) {
 	}
 }
 
+// TestBudgetLookupResultsBeatsASmallLimit is the load-bearing proof that a
+// caller Limit NEVER weakens the evaluation budget: an enumeration that overflows
+// MaxLookupResults is ErrEvaluationLimit even when the caller asked for a single
+// ID. A truncating Limit must not be able to turn an indeterminate result into a
+// short one that looks complete.
+func TestBudgetLookupResultsBeatsASmallLimit(t *testing.T) {
+	ctx := context.Background()
+	model := NewSchema([]ResourceSchema{{
+		Name: "doc",
+		Def: ResourceTypeDef{
+			Relations:   map[string]RelationDef{"viewer": {AllowedSubjects: []SubjectTypeRef{{Type: "user"}}}},
+			Permissions: map[string]PermissionRule{"view": AnyOf(Direct("viewer"))},
+		},
+	}})
+	tuples := []CreateRelationship{
+		{ResourceType: "doc", ResourceID: "d1", Relation: "viewer", SubjectType: "user", SubjectID: "u1"},
+		{ResourceType: "doc", ResourceID: "d2", Relation: "viewer", SubjectType: "user", SubjectID: "u1"},
+		{ResourceType: "doc", ResourceID: "d3", Relation: "viewer", SubjectType: "user", SubjectID: "u1"},
+	}
+	principal := PrincipalRef{Type: "user", ID: "u1"}
+
+	tight, tightStore := budgetService(t, model, EvaluationLimits{MaxLookupResults: 2})
+	if err := tightStore.CreateRelationships(ctx, tuples); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	for _, limit := range []int{1, 2} {
+		_, err := tight.LookupResourcesIn(ctx, LookupRequest{
+			Principal: principal, Permission: "view", ResourceType: "doc", Limit: limit,
+		})
+		if !errors.Is(err, ErrEvaluationLimit) {
+			t.Fatalf("Limit %d over MaxLookupResults=2: want ErrEvaluationLimit, got %v", limit, err)
+		}
+	}
+
+	// The same small Limit truncates honestly once the BUDGET fits the set.
+	ok, okStore := budgetService(t, model, EvaluationLimits{MaxLookupResults: 3})
+	if err := okStore.CreateRelationships(ctx, tuples); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	res, err := ok.LookupResourcesIn(ctx, LookupRequest{
+		Principal: principal, Permission: "view", ResourceType: "doc", Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("LookupResourcesIn within budget: %v", err)
+	}
+	if !res.Truncated || len(res.IDs) != 1 || res.IDs[0] != "d1" {
+		t.Fatalf("want the truncated single-ID prefix [d1], got %+v", res)
+	}
+}
+
 // TestCancelBeforeStoreCall proves a canceled context short-circuits Check and
 // LookupResources with the context error (fail closed), never a deny or a list.
 func TestCancelBeforeStoreCall(t *testing.T) {

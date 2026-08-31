@@ -86,6 +86,7 @@ func TestServicePublicMethodSetUnchanged(t *testing.T) {
 		"ListRoleAssignmentsByResource",
 		"ListRoleAssignmentsBySubject",
 		"LookupResources",
+		"LookupResourcesIn",
 		"PurgeResourceAuthorization",
 		"Register",
 		"ReplaceRelationship",

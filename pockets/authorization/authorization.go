@@ -30,7 +30,7 @@
 // relationship.Storer / role.Storer ports and sdk facilities only. Register
 // mounts NO routes — the /authorization/* namespace is reserved for a future
 // admin surface. It does export the RequirePermission/RequirePermissionOn/
-// RequirePermissionFixed middleware builders (root delegations to the internal
+// RequirePermissionFixed/RequireAnyPermission middleware builders (root delegations to the internal
 // implementation in middleware.go), so hosts can gate routes on a Check; those
 // builders write their responses only through sdk/foundation/web, never at this
 // root package.
@@ -73,7 +73,7 @@ var (
 	ErrRoleModelWithoutRoles = errors.New("authorization: Config.RoleModel requires Repositories.Roles (a role model with no roles kind decides nothing)")
 
 	// ErrNoDecisionKind is returned by every decision method (Check, CheckBatch,
-	// CheckExplain, FilterAuthorized, LookupResources) on a host where NO kind
+	// CheckExplain, FilterAuthorized, LookupResources, LookupResourcesIn) on a host where NO kind
 	// bears a model — a roles-only wiring with no Config.RoleModel. It is a
 	// SERVER-SIDE WIRING FAULT on the decision surface, not anything the caller
 	// said: it wraps no sdk taxonomy kind, so ReasonFor reports no decision reason
@@ -108,6 +108,12 @@ type (
 	CheckRequest = authorizersvc.CheckRequest
 	CheckResult  = authorizersvc.CheckResult
 	LookupResult = authorizersvc.LookupResult
+
+	// LookupRequest is the struct-input enumeration query LookupResourcesIn takes
+	// — the positional LookupResources plus a caller Limit. See its own
+	// documentation for the exact Limit semantics (0 is the MaxLookupResults
+	// budget ceiling, not a page default) and the deferred After field.
+	LookupRequest = authorizersvc.LookupRequest
 
 	// Explanation and ExplainStep are the opt-in, bounded explain trace returned
 	// by CheckExplain. The trace shares the decision's evaluation budget, records
@@ -504,7 +510,7 @@ func (s *Service) Register(m pocket.Mount) error {
 // One facade, dispatched by pair ownership: each (resource type, permission) is
 // answered by the model that declares it — the relationship Schema or the
 // RoleModel, never both (ErrModelConflict forbids the overlap at construction).
-// A pair neither model declares denies with "no rules defined". These five
+// A pair neither model declares denies with "no rules defined". These six
 // methods are the ONLY ones that report ErrNoDecisionKind; every other
 // relationship-kind method below keeps ErrRelationshipsNotConfigured.
 // =============================================================================
@@ -563,6 +569,29 @@ func (s *Service) LookupResources(ctx context.Context, principal PrincipalRef, p
 		return LookupResult{}, ErrNoDecisionKind
 	}
 	return s.decider.LookupResources(ctx, principal, permission, resourceType)
+}
+
+// LookupResourcesIn is LookupResources with a caller Limit — the struct-input
+// sibling, not a replacement: LookupResources keeps its signature, so hosts and
+// their ports are untouched.
+//
+// The owning kind enumerates exactly as LookupResources does — same parity, same
+// deterministic sorted ordering, same budget — and the result is then capped to
+// the first LookupRequest.Limit IDs, with LookupResult.Truncated set when that
+// drops any. Limit 0 is the MaxLookupResults budget ceiling (today's behavior),
+// deliberately NOT crud.ListRequest's DefaultLimit; a negative Limit is a
+// validation error wrapping sdk.ErrInvalidInput (HTTP 400).
+//
+// The Limit NEVER weakens the budget: an enumeration that overflows
+// MaxLookupResults is still ErrEvaluationLimit even for a tiny Limit, and v1
+// Limit does not reduce enumeration cost — it moves the host's re-cap into the
+// engine. An Unrestricted answer ignores the Limit and passes through untouched:
+// the host must still skip ID filtering entirely.
+func (s *Service) LookupResourcesIn(ctx context.Context, req LookupRequest) (LookupResult, error) {
+	if s.decider == nil {
+		return LookupResult{}, ErrNoDecisionKind
+	}
+	return s.decider.LookupResourcesIn(ctx, req)
 }
 
 // =============================================================================
