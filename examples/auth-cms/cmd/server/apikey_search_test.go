@@ -46,7 +46,7 @@ type machineHost struct {
 func newMachineHost(t *testing.T) *machineHost {
 	t.Helper()
 
-	components, err := newAuthorization()
+	components, err := newAuthorization(nil)
 	if err != nil {
 		t.Fatalf("newAuthorization: %v", err)
 	}

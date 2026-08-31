@@ -33,7 +33,7 @@ import (
 // construction matrix (a guard requires a mutation repository, etc.) is exercised.
 func hostAuthz(t *testing.T) authorization.Components {
 	t.Helper()
-	comps, err := newAuthorization()
+	comps, err := newAuthorization(nil)
 	if err != nil {
 		t.Fatalf("newAuthorization: %v", err)
 	}
@@ -578,7 +578,7 @@ func TestAuthorizationPosturesDemonstrable(t *testing.T) {
 // relationship-owned pair in the RoleModel is a construction error, so the pair
 // ownership this host relies on cannot rot silently.
 func TestHostModelsSplitOneTypeByPermission(t *testing.T) {
-	if _, err := newAuthorization(); err != nil {
+	if _, err := newAuthorization(nil); err != nil {
 		t.Fatalf("production wiring (Schema + RoleModel over one resource type): %v", err)
 	}
 
