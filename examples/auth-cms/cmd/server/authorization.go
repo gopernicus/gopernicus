@@ -2,9 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"sync/atomic"
 
 	authorization "github.com/gopernicus/gopernicus/pockets/authorization"
 	authzmem "github.com/gopernicus/gopernicus/pockets/authorization/memstore"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
 // Host-owned authorization policy vocabulary.
@@ -101,7 +105,7 @@ func authzGuardianPolicy() authorization.GuardianPolicy {
 // the project-scoped guardian minimum, with the host MutationGuard wired into Config.Guard.
 // The returned Components hold the actor-facing Service and the separately held trusted
 // SystemMutator apart, by construction.
-func newAuthorization() (authorization.Components, error) {
+func newAuthorization(roleRoutesGate web.Middleware) (authorization.Components, error) {
 	store := authzmem.New(authzmem.WithGuardianPolicy(authzGuardianPolicy()))
 	return authorization.NewService(authorization.Repositories{
 		Relationships: store.Relationships(),
@@ -111,14 +115,82 @@ func newAuthorization() (authorization.Components, error) {
 		RelationshipModel: authzSchema(),
 		RoleModel:         authzRoleModel(),
 		Guard:             hostMutationGuard{},
+		// The bundled role-administration routes mount only because this host names
+		// a gate; nil (which every composition test passes) is the deny-by-absence
+		// posture and registers nothing.
+		RoleRoutesGate: roleRoutesGate,
+	})
+}
+
+// roleAdministrationGate composes the D6 chain the bundled /authorization/* routes
+// run behind. The pocket owns no credential and adds NO middleware beneath the
+// gate, so this closure is the ENTIRE stack:
+//
+//  1. authenticate — the auth pocket's live human-session middleware, which stashes
+//     the principal with identity.WithPrincipal. Without it the bundled writes
+//     answer 401 rather than fabricate a zero Actor.
+//  2. authorize — the platform-admin coordinate already declared in authzSchema
+//     (platform/admin on platform:main), the same one MachineRoutesGate names.
+//
+// ⚠ The third layer the pocket's README mandates for a COOKIE-credential host — a
+// browser-origin/CSRF defense on these state-changing POSTs — is deliberately NOT
+// composed here: the authentication pocket does not export its browser-safe
+// middleware, and whether the gate should be a slice so the pocket can help is an
+// OPEN QUESTION for the owner (authorization-role-routes, open question 1). A
+// production cookie host must add it.
+func roleAdministrationGate(authenticate, authorize web.Middleware) web.Middleware {
+	return func(next http.Handler) http.Handler {
+		return authenticate(authorize(next))
+	}
+}
+
+// deferredMiddleware carries a middleware that cannot exist yet at the moment it
+// must be NAMED. The authorization pocket is constructed and registered before the
+// auth pocket exists (the authorizer is itself an input to the auth config), but
+// the role-routes gate needs BOTH — so the host passes this indirection at
+// construction and assigns the real chain once, after both services are built and
+// before the server serves. The pointer is read PER REQUEST, so the ordering costs
+// one atomic load rather than a construction reshuffle.
+type deferredMiddleware struct {
+	chain atomic.Pointer[web.Middleware]
+}
+
+// errRoleRoutesGateNotInstalled is the boot failure for a role-routes gate that
+// was never assigned. It is deliberately a BOOT error rather than only the
+// middleware's request-time 500: an unassigned gate is a wiring fault the
+// operator must fix, so it fails construction like the pocket's own
+// ErrRoleRoutesGateWithoutGuard rather than surfacing as production 500s.
+var errRoleRoutesGateNotInstalled = errors.New("auth-cms: the role-administration gate was never installed; /authorization/roles* would answer 500")
+
+// set installs the real chain. It must be called before the host serves.
+func (d *deferredMiddleware) set(m web.Middleware) { d.chain.Store(&m) }
+
+// installed reports whether set has run. run() asserts it right after assignment
+// so a reordering refactor fails at boot instead of at the first request.
+func (d *deferredMiddleware) installed() bool { return d.chain.Load() != nil }
+
+// middleware is the web.Middleware the host hands to Config.RoleRoutesGate. An
+// unassigned chain fails CLOSED with a 500 rather than admitting the request: a
+// route that outran its gate is a host bug, never an open door.
+func (d *deferredMiddleware) middleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		chain := d.chain.Load()
+		if chain == nil {
+			web.RespondJSONError(w, web.ErrInternal("role-administration gate is not wired"))
+			return
+		}
+		(*chain)(next).ServeHTTP(w, r)
 	})
 }
 
 // seedOwnerSubject is the boot-seeded demo owner/platform-admin principal. This proof
 // host seeds no real user (registration is part of the proof flow), so the guardian
 // minimum is established for a documented synthetic principal at boot rather than by a
-// browser-driven "become owner" route — that role-assignment surface is deferred with
-// the AZADM packet.
+// browser-driven "become owner" route. The ROLE-assignment half of that deferral is
+// now closed: the pocket's bundled /authorization/roles* surface is mounted behind
+// roleAdministrationGate, so a platform admin assigns and unassigns roles over HTTP.
+// Establishing the FIRST owner stays trusted and boot-time — it cannot yet prove it
+// manages the resource.
 var seedOwnerSubject = authorization.SubjectRef{Type: "user", ID: "demo-owner"}
 
 // seedAuthorization establishes the ownable scope through the TRUSTED SystemMutator

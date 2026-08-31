@@ -28,9 +28,12 @@
 //
 // The pocket is datastore-free and view-free (FS1): it depends on its
 // relationship.Storer / role.Storer ports and sdk facilities only. Register
-// mounts NO routes — the /authorization/* namespace is reserved for a future
-// admin surface. It does export the RequirePermission/RequirePermissionOn/
-// RequirePermissionFixed/RequireAnyPermission middleware builders (root delegations to the internal
+// mounts the bundled ROLE-ADMINISTRATION routes under /authorization/* when the
+// host names a Config.RoleRoutesGate (assign, unassign, and the three role
+// listings, JSON only) and mounts NOTHING otherwise; the rest of the
+// /authorization/* namespace stays reserved. It does export the
+// RequirePermission, RequirePermissionOn, RequirePermissionFixed, and
+// RequireAnyPermission middleware builders (root delegations to the internal
 // implementation in middleware.go), so hosts can gate routes on a Check; those
 // builders write their responses only through sdk/foundation/web, never at this
 // root package.
@@ -44,12 +47,14 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/mutation"
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/role"
+	inbound "github.com/gopernicus/gopernicus/pockets/authorization/internal/inbound/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/internal/logic/authorizersvc"
 	"github.com/gopernicus/gopernicus/pockets/authorization/internal/logic/decisionsvc"
 	"github.com/gopernicus/gopernicus/pockets/authorization/internal/logic/rolesvc"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
+	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
@@ -308,6 +313,16 @@ type Repositories struct {
 // kind bears a model; Guard and Audit configure the actor-facing mutation posture. A setting orphaned by an
 // unwired kind is ignored with no error (the auth MailFrom precedent) — so
 // negative Limits are only rejected once some model-bearing kind is wired.
+//
+// # The orphan rule
+//
+// Stated once, here, because the bundled role-administration routes add a third
+// optional subsystem: a SECURITY-AFFECTING orphaned setting fails construction
+// (Audit without Guard, AssignmentPolicy without RoleRoutesGate — a rule that
+// can never run is a silent no-op giving false confidence); a COSMETIC orphaned
+// setting is silently ignored (ListStrategy without a gate — the MailFrom
+// precedent). An INVALID value is invalid either way: ListStrategy is validated
+// whenever it is non-zero, orphaned or not.
 type Config struct {
 	// RelationshipModel is the relationship kind's model — the ReBAC schema.
 	// Required when Repositories.Relationships is wired, forbidden otherwise
@@ -351,16 +366,64 @@ type Config struct {
 	// actor-mutation path off there is nothing for it to observe. Its failures are
 	// warned and never change a committed mutation.
 	Audit AuditSink
+
+	// RoleRoutesGate mounts the bundled role-administration routes under
+	// /authorization/* (assign, unassign, and the three role listings). Nil is the
+	// default: NOTHING mounts and a host serves its own wire over the Service
+	// methods. Non-nil requires Repositories.Roles (ErrRoleRoutesGateWithoutRoles)
+	// and Config.Guard (ErrRoleRoutesGateWithoutGuard).
+	//
+	// THE GATE IS THE ENTIRE MIDDLEWARE STACK, not just an authorization check.
+	// Unlike the authentication pocket, this pocket owns no credential and adds NO
+	// middleware of its own beneath the gate — no authenticator, no CSRF layer — so
+	// whatever the gate does not do, nothing does. It must therefore compose, in
+	// this order:
+	//
+	//  1. AUTHENTICATION that stashes the principal with
+	//     identity.WithPrincipal — the bundled writes read it back with
+	//     identity.FromContext and answer 401 when it is absent (they never
+	//     fabricate a zero Actor);
+	//  2. for a COOKIE-credential host, a browser-origin/CSRF defense — these are
+	//     state-changing POSTs and the pocket supplies no browserSafe layer;
+	//  3. the AUTHORIZATION decision, e.g.
+	//     authorizer.RequirePermissionFixed("platform", "admin", "platform").
+	//
+	// There is no web.Chain in sdk; compose them in the host:
+	//
+	//	gate := func(next http.Handler) http.Handler {
+	//		return authenticate(browserSafe(authorize(next)))
+	//	}
+	//
+	// The field stays a SINGLE middleware (the MachineRoutesGate precedent). The
+	// five bundled paths are distinct, so a gate that wants read-wide/write-narrow
+	// granularity switches on the request method or path itself.
+	RoleRoutesGate web.Middleware
+
+	// AssignmentPolicy is the optional legality pre-check the bundled assign route
+	// consults before Service.AssignRole. It requires RoleRoutesGate
+	// (ErrAssignmentPolicyWithoutRoutes). See [AssignmentPolicy] for the full
+	// contract: legality only, assign only, bundled routes only, not audited, and
+	// mapped through web.RespondJSONDomainError.
+	AssignmentPolicy AssignmentPolicy
+
+	// ListStrategy is the DEFAULT pagination strategy the bundled role listings
+	// apply when a request names neither a cursor nor an offset param. The zero
+	// value is crud.StrategyCursor; anything other than the zero value,
+	// crud.StrategyCursor, or crud.StrategyOffset fails NewService with
+	// ErrInvalidListStrategy. With no RoleRoutesGate it is a cosmetic orphan,
+	// silently ignored (see the orphan rule above).
+	ListStrategy crud.Strategy
 }
 
 // Service is the authorization pocket's host-facing surface. Each kind's method
 // family is present unconditionally; an unwired kind's methods fail closed with
 // that kind's sentinel. The decision surface (Check, CheckBatch, CheckExplain,
-// FilterAuthorized, LookupResources and the RequirePermission gates) is ONE
-// facade over the composite decider, which dispatches each (resource type,
-// permission) pair to the model that declares it — the relationship Schema or the
-// RoleModel, never both. A host still composes any bypass or cross-kind policy of
-// its own in its own closure; the pocket merges no kinds.
+// FilterAuthorized, LookupResources, LookupResourcesIn and the RequirePermission
+// gates) is ONE facade over the composite decider, which dispatches each
+// (resource type, permission) pair to the model that declares it — the
+// relationship Schema or the RoleModel, never both. A host still composes any
+// bypass or cross-kind policy of its own in its own closure; the pocket merges
+// no kinds.
 type Service struct {
 	relationships *authorizersvc.Service         // nil = relationship kind off
 	roles         *rolesvc.Service               // nil = roles kind off
@@ -371,6 +434,10 @@ type Service struct {
 	audit         AuditSink                      // nil = no actor-mutation auditing
 	maxBatchSize  int                            // resolved EvaluationLimits.MaxBatchSize (0 = no model-bearing kind)
 	log           *slog.Logger                   // set at Register; falls back to slog.Default()
+
+	roleRoutesGate   web.Middleware   // nil = the bundled role-administration routes do not mount
+	assignmentPolicy AssignmentPolicy // nil = no bundled-assign legality pre-check
+	listStrategy     crud.Strategy    // "" = crud.StrategyCursor at the bundled listings
 }
 
 // NewService validates the (repos, cfg) pair, builds the wired kinds, and returns
@@ -392,6 +459,15 @@ type Service struct {
 // ErrMutationsNotConfigured); a Guard without Repositories.Mutations fails with
 // ErrGuardWithoutMutations; an Audit sink without a Guard is an orphaned
 // actor-mutation setting and fails with ErrAuditWithoutGuard.
+//
+// Bundled role-administration construction matrix (issue #20): a
+// Config.RoleRoutesGate without Repositories.Roles is
+// ErrRoleRoutesGateWithoutRoles; a gate without Config.Guard is
+// ErrRoleRoutesGateWithoutGuard (every bundled write would fail closed); a
+// Config.AssignmentPolicy without a gate is ErrAssignmentPolicyWithoutRoutes; a
+// Config.ListStrategy that names neither strategy is ErrInvalidListStrategy. The
+// remaining route check — a gate with no Mount.Router — belongs to Register
+// (ErrRoleRoutesWithoutRouter).
 func NewService(repos Repositories, cfg Config) (Components, error) {
 	hasRel := repos.Relationships != nil
 	hasRoles := repos.Roles != nil
@@ -417,10 +493,26 @@ func NewService(repos Repositories, cfg Config) (Components, error) {
 		return Components{}, ErrAuditWithoutGuard
 	}
 
+	if cfg.RoleRoutesGate != nil && !hasRoles {
+		return Components{}, ErrRoleRoutesGateWithoutRoles
+	}
+	if cfg.RoleRoutesGate != nil && cfg.Guard == nil {
+		return Components{}, ErrRoleRoutesGateWithoutGuard
+	}
+	if cfg.AssignmentPolicy != nil && cfg.RoleRoutesGate == nil {
+		return Components{}, ErrAssignmentPolicyWithoutRoutes
+	}
+	if err := validateListStrategy(cfg.ListStrategy); err != nil {
+		return Components{}, err
+	}
+
 	svc := &Service{
-		guard:     cfg.Guard,
-		mutations: repos.Mutations,
-		audit:     cfg.Audit,
+		guard:            cfg.Guard,
+		mutations:        repos.Mutations,
+		audit:            cfg.Audit,
+		roleRoutesGate:   cfg.RoleRoutesGate,
+		assignmentPolicy: cfg.AssignmentPolicy,
+		listStrategy:     cfg.ListStrategy,
 	}
 	if hasRel {
 		eng, err := authorizersvc.NewService(repos.Relationships, model, authorizersvc.Config{
@@ -487,8 +579,16 @@ func NewService(repos Repositories, cfg Config) (Components, error) {
 }
 
 // Register mounts the pocket: it logs one line, captures the Mount logger for
-// best-effort audit warnings, and registers NO routes (the /authorization/*
-// namespace is reserved). It tolerates a zero-value Mount.
+// best-effort audit warnings, and — when the host named a Config.RoleRoutesGate
+// — mounts the bundled role-administration routes under /authorization/*. With
+// no gate it registers NO routes and tolerates a zero-value Mount, exactly as
+// before; the rest of the /authorization/* namespace stays reserved either way.
+//
+// With a gate set, a nil Mount.Router is ErrRoleRoutesWithoutRouter: routes were
+// promised, so nowhere to mount them must be loud rather than silently
+// route-free. With the roles kind and a Guard wired but NO gate, Register warns
+// once — the bundled routes are not mounted and will answer 404, which an
+// upgrading host should learn at boot rather than from production.
 func (s *Service) Register(m pocket.Mount) error {
 	if m.Logger != nil {
 		s.log = m.Logger
@@ -498,8 +598,27 @@ func (s *Service) Register(m pocket.Mount) error {
 			"role_model", s.roleModel != nil,
 			"baseline_relationship_writes", s.relationships != nil,
 			"actor_mutations", s.guard != nil,
+			"role_routes", s.roleRoutesGate != nil,
 		)
 	}
+	if s.roleRoutesGate == nil {
+		if s.roles != nil && s.guard != nil {
+			s.logger().Warn("authorization: the roles kind and Config.Guard are wired but Config.RoleRoutesGate is unset; the bundled role-administration routes are NOT mounted (404) — set a gate or serve your own routes over the Service methods")
+		}
+		return nil
+	}
+	if m.Router == nil {
+		return ErrRoleRoutesWithoutRouter
+	}
+	inbound.Mount(m.Router, inbound.Deps{
+		Service:      roleRouteAdapter{svc: s, policy: s.assignmentPolicy},
+		Gate:         s.roleRoutesGate,
+		ListStrategy: s.listStrategy,
+		// The bundled bodies answer through the pocket's own mapper, so a
+		// stale-revision or payload-mismatch refusal carries its STABLE machine
+		// code rather than a generic 409.
+		RespondError: RespondError,
+	})
 	return nil
 }
 

@@ -265,6 +265,21 @@ new symbol is additive and every new wire field is `omitempty`, so existing
 bodies are byte-identical; no `go.mod` changes, no sibling retags, no schema.
 See the upgrade note below before adopting — the owner cuts the tag.
 
+**2026-08-31: `pockets/authorization/v0.7.0` — next tag, MINOR (additive)** —
+the authorization train (plans of record
+`.claude/plans/authorization-gates-and-lookup.md` and
+`.claude/plans/authorization-role-routes.md`; gopernicus issues #19, #20, #22;
+originating host gps-360-go). One module changes, one tag:
+`RequireAnyPermission(…GateSpec)` puts the disjunction on the route line (with
+the `ErrAlternativeNotApplicable` resolver sentinel), `LookupResourcesIn` adds
+a caller `Limit` + `LookupResult.Truncated` above the untouched budget, and the
+role-administration routes come standard under `/authorization/*` behind
+`Config.RoleRoutesGate` + `Config.AssignmentPolicy`. Pin moves `sdk v0.5.0 →
+v0.7.0`. One visible upgrade-time change: a host wiring the roles kind + a
+`Guard` with no gate now logs a boot WARN (routes not mounted). No schema, no
+store retags. See the upgrade note below before adopting — the owner cuts the
+tag.
+
 ## Tagging scheme
 
 Nested Go modules in a single repo are tagged with the module's directory as a
@@ -368,6 +383,66 @@ silently would break a host whose CSP no longer covers the kit's assets. Record 
 the module's next-tag upgrade note below and tell hosts to re-derive their CSP header.
 
 ## Upgrade notes (keyed to each module's next tag)
+
+### pockets/authorization — v0.7.0 (next tag, 2026-08-31): the disjunction gate, the bounded lookup, and role administration comes standard (minor)
+
+Plans of record `.claude/plans/authorization-gates-and-lookup.md` (#19, #22)
+and `.claude/plans/authorization-role-routes.md` (#20). A **minor**: purely
+additive symbols, one pin move, one new boot WARN.
+
+**Additions — decision surface.**
+
+- `RequireAnyPermission(alternatives …GateSpec)` on `*Service`: the route line
+  states its own inclusive OR. Every (resourceType, permission) pair is
+  validated against the compiled model at REGISTRATION; evaluation
+  short-circuits on the first allow; a `Check` error or a non-sentinel resolver
+  error fails the WHOLE request closed; the shared 401/403/500/503 gate body
+  answers. `ErrAlternativeNotApplicable` is the one deliberate skip: a
+  `ResourceResolver` returning it marks its alternative "does not apply to this
+  request" and evaluation moves on as it would after a deny. The sentinel wraps
+  no sdk taxonomy kind and never reaches a response body.
+- `EvaluationLimits.MaxBatchSize` now ALSO caps the alternatives on one gate —
+  a host that tunes it down to 1 makes any two-alternative gate panic at mount.
+  The field doc names all three consumers.
+- `LookupResourcesIn(ctx, LookupRequest)` — struct-input sibling of
+  `LookupResources` with a caller `Limit` (0 = the `MaxLookupResults` ceiling,
+  today's behavior); `LookupResult` gains `Truncated`. The budget is untouched:
+  enumeration is still bounded by `MaxLookupResults` and still answers
+  `ErrEvaluationLimit` on overflow, whatever the Limit. Negative Limit wraps
+  `sdk.ErrInvalidInput`. The continuation cursor is deliberately NOT on this
+  tag (deterministic-ordering design, follow-up issue).
+
+**Additions — bundled role-administration routes (#6 precedent).**
+
+- Mounted by `Register` ONLY when `Config.RoleRoutesGate` (one
+  `web.Middleware`; the host pre-composes its whole stack — authenticator,
+  CSRF where cookies are in play, steward check) is non-nil: `POST
+  /authorization/roles`, `POST /authorization/roles/unassign`, `GET
+  /authorization/roles/{by-subject,by-resource,effective}`. Nil gate = not
+  mounted; a host with the roles kind + a `Guard` and no gate gets a boot WARN
+  — the one visible upgrade-time change.
+- `Config.AssignmentPolicy func(ctx, AssignRoleCommand) error` runs before
+  every bundled assign (assign-only by ruling); an error refuses with the sdk
+  error shape. Actor derives from the sdk `identity.FromContext` principal;
+  missing principal → 401.
+- Error bodies carry the pocket's STABLE codes (`stale_revision`,
+  `mutation_payload_mismatch`, …) via the root `RespondError` — fixed before
+  this tag so the wire never has to break to gain them.
+- Browser hosts: the bundled writes are JSON-only (415 to any form-encoded
+  request), which together with `SameSite=Lax` session cookies is the current
+  CSRF posture — it is NOT an origin check and lapses under a credentialed
+  CORS allowlist; compose a CSRF layer into the gate for cookie-authenticated
+  browser use (see the pocket README).
+
+**Pin move.** `sdk v0.5.0 → v0.7.0` (through v0.6.0's list contract and
+v0.7.0's write vocabulary; no authorization symbol depends on the new kernel
+faults yet).
+
+**Adoption.** gps-360-go: replace the sequential-`Check` OR handlers with
+`RequireAnyPermission` on the route line; delete the hand-written role wire
+(`pockets/auth/inbound/roles.go`) and pass `ValidateAssignment` as
+`Config.AssignmentPolicy`; re-cap dashboard rosters with
+`LookupResourcesIn(…, Limit)` instead of post-hoc slicing.
 
 ### sdk — v0.7.0 (next tag, 2026-08-31): the write vocabulary (minor)
 

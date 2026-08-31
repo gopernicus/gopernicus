@@ -688,15 +688,95 @@ curl -N --max-time 2 -b cjar http://localhost:8082/events/project/demo          
 curl -i -b bjar http://localhost:8082/demo/audit                                  # 403 (no granting role)
 ```
 
-**Role assignment has no HTTP surface** (AZ3-4.1): the session-only `POST
-/demo/roles/{assign,unassign}` and self-bootstrap routes were removed because a shipped
-route must not mutate authorization on session presence alone, and authentication does
-not yet export a public sensitive-operation protector. The guarded actor-mutation path
-(manage_access + platform-admin over the `DecisionView`), the trusted `SystemMutator`
-seeding/invitation flow, the last-owner guardian minimum, the roles kind's global
-fallback, and the enumeration-vs-decision divergence are all proven in
-`cmd/server/authorization_test.go`, not a browser flow. The browser-driven
-role-assignment surface returns with the deferred AZADM packet.
+**Role assignment now HAS an HTTP surface** — the pocket's own, not a host route.
+The host sets `authorization.Config.RoleRoutesGate`, so `Register` mounts the
+bundled role-administration routes under `/authorization/*`. The gate
+(`roleAdministrationGate`, `cmd/server/authorization.go`) is the ENTIRE chain the
+pocket requires: `authSvc.RequireAccessTokenLive()` (a live human session, which
+stashes the principal the routes read back) composed with
+`authorizer.RequirePermissionFixed("platform", "admin", "main")` — the same
+platform-admin coordinate `MachineRoutesGate` names. It is assigned through
+`deferredMiddleware` because the authorization pocket is built before `authSvc`
+exists; an unassigned gate fails closed with a 500, never an open door.
+
+The guarded actor-mutation path (manage_access + platform-admin over the
+`DecisionView`), the trusted `SystemMutator` seeding/invitation flow, the
+last-owner guardian minimum, the roles kind's global fallback, and the
+enumeration-vs-decision divergence remain proven in
+`cmd/server/authorization_test.go`; the bundled routes are proven end to end —
+real session, real permission, real FS9 bodies — in
+`cmd/server/role_routes_proof_test.go`.
+
+### Leg 7b — the bundled role-administration routes
+
+```sh
+# no credential -> 401 on all five (the gate's authenticating layer)
+curl -i http://localhost:8082/authorization/roles/by-resource?resource_type=project\&resource_id=demo
+#  -> 401 {"message":"authentication required","code":"unauthenticated"}
+
+# signed in but NOT a platform admin -> 403 on all five, the real FS9 denial body
+curl -i -b cjar -X POST http://localhost:8082/authorization/roles \
+  -H 'Content-Type: application/json' \
+  -d '{"subject_type":"user","subject_id":"grantee-1","role":"auditor","resource_type":"project","resource_id":"demo"}'
+#  -> 403 {"message":"permission denied","code":"permission_denied"}
+```
+
+**The 200 path needs the `platform:main#admin` tuple**, which this proof host
+boot-seeds for the synthetic `user:demo-owner` (`seedAuthorization`) — establishing
+the first admin is inherently trusted, so a freshly registered browser account is a
+403 by design. The authorized walkthrough is therefore driven in
+`TestRoleRoutesPlatformAdminDrivesTheLifecycle`, which seeds the tuple for a REAL
+registered user through the `SystemMutator` and then walks the whole flow over HTTP:
+
+```sh
+# assign -> 200 with a receipt (the client supplies its own idempotency key)
+curl -sX POST http://localhost:8082/authorization/roles -b adminjar \
+  -H 'Content-Type: application/json' \
+  -d '{"mutation_id":"my-own-idempotency-key-000001","subject_type":"user","subject_id":"grantee-1","role":"auditor","resource_type":"project","resource_id":"demo"}'
+#  -> {"receipt":{"mutation_id":"…","scope_kind":"resource","scope_type":"project",
+#                 "scope_id":"demo","operation":"role_assign","outcome":"applied",
+#                 "revision":1,"replayed":false,"created_at":"…"}}
+
+# replay the SAME mutation_id -> 200, replayed:true, same revision (no double grant)
+# list it
+curl -s -b adminjar 'http://localhost:8082/authorization/roles/by-subject?subject_type=user&subject_id=grantee-1'
+# the enumeration that agrees with HasRole
+curl -s -b adminjar 'http://localhost:8082/authorization/roles/effective?resource_type=project&resource_id=demo'
+# unassign -> 200 {"receipt":{…},"same_role_grant_remains":false}
+curl -sX POST http://localhost:8082/authorization/roles/unassign -b adminjar \
+  -H 'Content-Type: application/json' \
+  -d '{"subject_type":"user","subject_id":"grantee-1","role":"auditor","resource_type":"project","resource_id":"demo"}'
+```
+
+Refusals a client will meet: a role the host `RoleModel` does not declare → **400**;
+a half-scoped `resource_type`/`resource_id` pair → **400**; a listing missing either
+of its query values, or carrying `q` → **400**; every domain outcome
+(`no_change`, `semantic_conflict`, `invariant_blocked`, `not_found`) → **200** with
+the outcome named in the receipt, because a conflict is an outcome, not an error.
+
+Comment the `roleRoutesGate.set(...)` line's `Config.RoleRoutesGate` out of
+`newAuthorization` and all five paths answer **404** with one boot WARN naming the
+unset gate — the pocket's deny-by-absence posture.
+
+⚠ **Cookie hosts owe a CSRF layer; this host does not have one.** These are
+state-changing POSTs and the pocket adds nothing beneath your gate. This proof
+host composes authentication + authorization only, because the authentication
+pocket does not export its browser-safe middleware.
+
+What is actually carrying the defense here, precisely: the two writes require
+`Content-Type: application/json` and answer **415** to every content type an HTML
+form can send, so a form-POST forgery is refused; a cross-site `fetch` with a JSON
+content type is preflighted, and **this host installs no CORS policy at all**, so
+the preflight fails; and the session cookie is `SameSite=Lax`, so a browser
+withholds it from cross-site POSTs anyway.
+
+**None of that is an origin check.** It is content-type strictness plus two
+browser defaults, and it lapses the moment a host adds a credentialed CORS
+allowlist for an SPA origin, relaxes the accepted content type, or weakens the
+cookie's SameSite posture — any of which this example could plausibly grow. A
+production cookie-credential host composes a real Origin allowlist plus a
+double-submit token inside its own gate closure; see the pocket README's gate
+section.
 
 ### Leg 8 — auth-v3: normal HTML pages (twice-through)
 
@@ -833,6 +913,14 @@ unwired kind (e.g. `slack`) fails 400; email is always-on via the Mailer.
   `Config.Views` is wired, the HTML GET pages (`/auth/{login,register,verify,
   password/forgot,password/reset,account,step-up,magic,…}`) mount alongside the
   JSON API — a form POST 303-redirects, a JSON POST keeps its JSON body.
+- **authorization** (JSON, `pockets/authorization`): the bundled
+  role-administration surface `POST /authorization/roles`,
+  `POST /authorization/roles/unassign`, and
+  `GET /authorization/roles/{by-subject,by-resource,effective}` — mounted ONLY
+  because this host names a `Config.RoleRoutesGate`, which composes
+  `RequireAccessTokenLive()` with
+  `RequirePermissionFixed("platform","admin","main")` (see Leg 7b). The rest of
+  `/authorization/*` stays reserved.
 - **cms**: public site (`GET /`, published singles, contact) ungated; admin CRUD
   (`/articles`, `/pages`, `/terms`, `/menus`, `/media`, …) gated by
   `AdminMiddleware` (auth's `RequireUser`).
@@ -845,7 +933,9 @@ unwired kind (e.g. `slack`) fails 400; email is always-on via the Mailer.
   "demo")`, + a direct-scope `ListRoleAssignmentsByResource` read-back), and `GET /debug/security-events`
   (`AUTH_DEBUG=1` + `RequireUser`). The demo routes are READ-ONLY: AZ3-4.1 removed the
   session-only `POST /demo/roles/{assign,unassign}` and `POST /demo/admin/bootstrap`
-  mutation routes. See "Authorization postures" for the flagship demo flow.
+  mutation routes; role assignment now rides the POCKET's own bundled
+  `/authorization/roles*` surface above, not a host route. See "Authorization
+  postures" for the flagship demo flow.
 - **host-local health** (host code, not pocket surface): `GET /healthz` —
   unauthenticated liveness probe. Both stores are memory-backed, so there is no
   DB to probe: reaching the handler returns `200`. `GET /healthz/delivery` —

@@ -584,6 +584,41 @@ func TestCompositeLookupResourcesInTruncates(t *testing.T) {
 	}
 }
 
+// TestCompositeLookupResourcesInDoesNotAliasTheDroppedTail proves the truncated
+// slice is CLIPPED: appending to what a caller received cannot reach — or
+// overwrite — the IDs this answer deliberately withheld.
+func TestCompositeLookupResourcesInDoesNotAliasTheDroppedTail(t *testing.T) {
+	c, eng, _ := newBothKinds(t, authorizersvc.EvaluationLimits{})
+	for _, id := range []string{"p1", "p2", "p3"} {
+		grant(t, eng, "project", id, "viewer", "user", "u1")
+	}
+
+	got, err := c.LookupResourcesIn(context.Background(), authorizersvc.LookupRequest{
+		Principal: authorizersvc.PrincipalRef{Type: "user", ID: "u1"}, Permission: "view", ResourceType: "project", Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("LookupResourcesIn: %v", err)
+	}
+	if cap(got.IDs) != len(got.IDs) {
+		t.Fatalf("cap(IDs) = %d, len = %d; the truncated slice still reaches the dropped tail", cap(got.IDs), len(got.IDs))
+	}
+
+	// A caller appending to its own result must not disturb a second enumeration.
+	appended := append(got.IDs, "caller-owned")
+	if appended[1] != "caller-owned" {
+		t.Fatalf("append landed on %q", appended[1])
+	}
+	again, err := c.LookupResourcesIn(context.Background(), authorizersvc.LookupRequest{
+		Principal: authorizersvc.PrincipalRef{Type: "user", ID: "u1"}, Permission: "view", ResourceType: "project", Limit: 3,
+	})
+	if err != nil {
+		t.Fatalf("LookupResourcesIn: %v", err)
+	}
+	if !reflect.DeepEqual(again.IDs, []string{"p1", "p2", "p3"}) {
+		t.Fatalf("second enumeration = %v, want the untouched full set", again.IDs)
+	}
+}
+
 // TestCompositeLookupResourcesInPassesUnrestrictedThrough proves an Unrestricted
 // answer IGNORES the Limit: it names no IDs to cap, so it must not come back
 // looking truncated.

@@ -76,6 +76,12 @@ var (
 //     MaxLookupResults+1 so overflow is distinguishable from a complete bounded
 //     result; an overflowing Lookup returns ErrEvaluationLimit, never a truncated
 //     slice presented as complete.
+//   - MaxBatchSize AGAIN, at MOUNT rather than per decision: a
+//     RequireAnyPermission gate declaring more alternatives than MaxBatchSize
+//     PANICS at registration. It is the one enforcement here that is neither a
+//     per-decision charge nor an ErrEvaluationLimit — a route table is static, so
+//     an over-wide gate is a wiring bug that must fail before traffic, not a
+//     runtime indeterminate.
 //
 // Cancellation contract: no store call begins after ctx cancellation or budget
 // exhaustion is observed.
@@ -87,7 +93,13 @@ type EvaluationLimits struct {
 	MaxGraphStates int
 	// MaxRelationTargets bounds per-hop relation fan-out (0 -> default).
 	MaxRelationTargets int
-	// MaxBatchSize bounds one CheckBatch/FilterAuthorized (0 -> default).
+	// MaxBatchSize bounds one CheckBatch/FilterAuthorized (0 -> default). It has
+	// THREE consumers, so tune it against all of them: the batch decision APIs
+	// above; the actor-facing OpPurge blast-radius bound the mutation seam forces
+	// onto every purge command; and the number of alternatives ONE
+	// RequireAnyPermission gate may declare, which is checked at MOUNT and PANICS
+	// when exceeded. A host that narrows this to 1 therefore cannot register any
+	// two-alternative gate — the panic fires at boot, before traffic.
 	MaxBatchSize int
 	// MaxLookupResults bounds one LookupResources; enumeration fetches at most
 	// MaxLookupResults+1 to distinguish overflow from completeness (0 -> default).

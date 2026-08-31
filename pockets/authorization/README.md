@@ -633,6 +633,178 @@ accepted/denied/failed with coarse bounded fields — never raw resource/subject
 IDs as labels, never changing a committed mutation; a sink failure is warned and
 swallowed.
 
+## Bundled role-administration routes
+
+The pocket ships the HTTP wire for the guarded role lifecycle it already owns, so
+a flagship-posture host stops rebuilding the same ~200 lines. The routes mount
+**only** when the host names a gate: `Config.RoleRoutesGate == nil` is the
+default and nothing registers (the `MachineRoutesGate` precedent). Everything
+else in `/authorization/*` stays reserved.
+
+| Method | Path | Service call | Response |
+|---|---|---|---|
+| POST | `/authorization/roles` | `AssignRole` | 200 `{"receipt":{…}}` |
+| POST | `/authorization/roles/unassign` | `UnassignRole` | 200 `{"receipt":{…},"same_role_grant_remains":bool}` |
+| GET | `/authorization/roles/by-subject?subject_type=…&subject_id=…` | `ListRoleAssignmentsBySubject` | 200 page of assignments |
+| GET | `/authorization/roles/by-resource?resource_type=…&resource_id=…` | `ListRoleAssignmentsByResource` | 200 page of assignments |
+| GET | `/authorization/roles/effective?resource_type=…&resource_id=…` | `ListEffectiveRoleGrantsByResource` | 200 page of effective grants |
+
+The verb is **`unassign`**, not `revoke`: the domain verb is `OpRoleUnassign`, and
+one vocabulary beats a second wire verb. Each listing is its own path rather than
+one path dispatching on which query parameters are present, so a host gate can
+switch on method and path without re-parsing the query.
+
+### The gate is the ENTIRE middleware stack
+
+Unlike the authentication pocket, this one owns no credential and adds **no**
+middleware beneath your gate — no authenticator, no CSRF layer. Whatever the gate
+does not do, nothing does. Compose all three concerns yourself, outermost first:
+
+```go
+gate := func(next http.Handler) http.Handler {
+    return authenticate(browserSafe(
+        authorizer.RequirePermissionFixed("platform", "admin", "platform")(next),
+    ))
+}
+
+comps, err := authorization.NewService(repos, authorization.Config{
+    RoleModel:      model,
+    Guard:          hostGuard,
+    RoleRoutesGate: gate,
+})
+```
+
+1. **Authentication** must stash the principal with
+   `identity.WithPrincipal`. The bundled writes read it back with
+   `identity.FromContext` and answer **401** when it is absent — they never
+   fabricate a zero `Actor`. This is the AV5 platform convention, so any host
+   middleware satisfies it and the pocket imports no authentication pocket.
+2. **⚠ Cookie-credential hosts owe a browser-origin/CSRF layer.** These are
+   state-changing POSTs and the pocket supplies none (FS1 — it owns no session
+   cookie to compare against).
+
+   What actually carries the defense today, stated exactly: the two writes
+   **require `Content-Type: application/json`** and answer **415** to anything
+   else, which is every content type an HTML form can send
+   (`application/x-www-form-urlencoded`, `multipart/form-data`, `text/plain`) —
+   so the classic form-POST forgery is refused; and a cross-site `fetch` that
+   sets a JSON content type is not a simple request, so the browser preflights
+   it and the preflight fails absent a credentialed CORS allowlist. Session
+   cookies additionally ride `SameSite=Lax`, which withholds them from
+   cross-site POSTs.
+
+   **This is NOT an origin check, and it lapses.** It is content-type strictness
+   plus a browser default, not a decision the host made about who may call. It
+   stops working the moment a host installs a credentialed CORS allowlist for an
+   SPA origin (the preflight then passes and the cookie rides along), relaxes the
+   accepted content type, or moves to a cookie posture weaker than `Lax`. A host
+   in any of those postures MUST compose a real Origin allowlist plus a
+   double-submit token inside its gate closure.
+3. **Authorization** decides. The bundled handlers write no 403 of their own.
+
+`RoleRoutesGate` is a single `web.Middleware`, matching `MachineRoutesGate`. The
+five paths are distinct, so a gate wanting read-wide/write-narrow granularity
+switches on the request method or path itself.
+
+### `Config.AssignmentPolicy` — legality, not authorization
+
+An optional hook consulted **only** on the bundled assign route, immediately
+before `Service.AssignRole`:
+
+```go
+type AssignmentPolicy func(ctx context.Context, cmd AssignRoleCommand) error
+```
+
+Four properties, all deliberate:
+
+- **Legality only, over the command SHAPE** — unknown role names, global-only
+  rules, closed scope registries, machine subjects barred. A policy that needs to
+  read authorization STATE belongs in `Config.Guard`, which runs inside the
+  atomic boundary with a revision-tracked `DecisionView`; a route-level state
+  read would reinstate the detached check-then-write race this pocket eliminated.
+- **Assign only** — there is no symmetric unassignment hook, mirroring
+  `Config.RoleModel` (assignment legality governed; unassignment and every read
+  stay opaque). Revocation AUTHORIZATION already flows through `Config.Guard`,
+  which sees `OpRoleUnassign` and the scope kind atomically. A documented
+  non-goal, revisitable on demand.
+- **Bundled routes only** — a host driving `Service.AssignRole` directly is
+  unaffected.
+- **Not audited** — `Config.Audit` records guard outcomes, and a policy refusal
+  never reaches the guard.
+
+Error mapping: wrap an sdk sentinel (`sdk.ErrForbidden`, `sdk.ErrInvalidInput`)
+or return a `web.NewSafeDomainError` for a custom safe sentence. An unwrapped
+bare error lands **500 by design** — the same contract `MutationGuard`
+documents.
+
+### Misconfiguration matrix and the orphan rule
+
+| wiring | result |
+|---|---|
+| `RoleRoutesGate` set, `Repositories.Roles` nil | `ErrRoleRoutesGateWithoutRoles` at `NewService` |
+| `RoleRoutesGate` set, `Config.Guard` nil | `ErrRoleRoutesGateWithoutGuard` at `NewService` (every bundled write would fail closed with `ErrMutationsNotConfigured`) |
+| `AssignmentPolicy` set, no gate | `ErrAssignmentPolicyWithoutRoutes` at `NewService` |
+| `ListStrategy` neither `"cursor"` nor `"offset"` | `ErrInvalidListStrategy` at `NewService`, orphaned or not |
+| gate set, `Mount.Router` nil | `ErrRoleRoutesWithoutRouter` at `Register` |
+| roles + `Guard` wired, no gate | one **WARN** at `Register`: the routes are not mounted and will 404 |
+
+**The orphan rule.** A security-affecting orphaned setting fails construction
+(`AssignmentPolicy` without a gate; `Audit` without a `Guard`) — a rule that can
+never run is a silent no-op giving false confidence. A cosmetic orphaned setting
+is silently ignored (`ListStrategy` with no gate — the `MailFrom` precedent). An
+INVALID value is invalid either way.
+
+### Wire shapes, idempotency, and outcome-vs-error
+
+Both writes take the same body:
+
+```json
+{"mutation_id": "…", "subject_type": "user", "subject_id": "u-1",
+ "role": "viewer", "resource_type": "organization", "resource_id": "o-1",
+ "expected_revision": 7}
+```
+
+`mutation_id` is optional: absent, the server mints an unguessable one and every
+request is distinct; present, it is the client's own idempotency key, validated
+for strength, and an exact retry dedups against the stored receipt (`replayed:
+true`). Client ids are kept because retry idempotency is the point of the
+receipts rail; the squat surface is bounded — the population behind the gate is
+your administrators, and a squatted id yields a payload-mismatch conflict, never
+a silent overwrite. `expected_revision` is the optional compare-and-set anchor;
+omitting it from the wire would have been a silent capability cut. An empty
+`resource_type`/`resource_id` pair is a GLOBAL assignment; a half pair is a 400.
+
+The receipt is an **explicit** projection, never a marshal of `mutation.Receipt`:
+`mutation_id`, `scope_kind`, `scope_type`, `scope_id`, `operation`, `outcome`,
+`revision`, `replayed`, `created_at`. `payload_encoding`, `payload_digest`, and
+`schema_digest` are deliberately off the v1 wire (additive later if a host needs
+them). `same_role_grant_remains` is top-level on the unassign envelope only — it
+is a statement about that unassign, not a receipt field.
+
+**All five domain outcomes ride 200** with the outcome named in the receipt,
+`semantic_conflict`, `invariant_blocked`, and `not_found` included: a conflict is
+an OUTCOME, never an error. ERRORS map through `web.RespondJSONDomainError`
+(FS9): gate denial → 403, missing principal → 401, malformed body / half-scoped
+pair / `ErrMutationsNotConfigured` / a role the `RoleModel` does not declare →
+400, stale revision and payload mismatch → their existing 409 class, an unwrapped
+policy error → 500.
+
+Listings page with `limit`/`cursor`/`offset`/`count` plus `order`
+(`created_at` for the raw listings, `grant_key` for the effective one);
+`Config.ListStrategy` sets the default when a request names neither a cursor nor
+an offset. **Both** query values are required and non-empty on every listing, so
+the bundled surface cannot enumerate the GLOBAL scope — that is a documented
+non-goal, and a host that wants it writes its own route over
+`ListRoleAssignmentsByResource("", "")`. A non-empty `q` is a named 400: the role
+listings declare no search fields.
+
+### Non-goals
+
+No relationship-mutation routes (role administration only). No
+`UnassignmentPolicy`. No bundled global-scope enumeration. No `Mount.Events`
+emission — `AuditSink` remains the only observation seam for mutation attempts.
+No HTML: JSON only, the pocket stays view-free.
+
 ## Raw versus effective role listing
 
 Two listings, deliberately distinct:
@@ -677,6 +849,9 @@ mutation_service.go      Actor, MutationGuard, AuditSink, SystemMutator,
                          Components, the generic guarded ApplyMutation seam
 relationship_mutations.go  typed guarded relationship commands
 role_mutations.go        typed guarded role commands + UnassignRoleResult
+role_routes.go           AssignmentPolicy + the bundled-route construction
+                         sentinels, and roleRouteAdapter — the ONE conversion
+                         site between the transport and the command vocabulary
 middleware.go            RequirePermission* (root delegation; bodies internal)
 domain/                  the hexagon's public rim — tuple types + ports
   relationship/          SubjectRef, CreateRelationship, projections, the Storer
@@ -684,6 +859,9 @@ domain/                  the hexagon's public rim — tuple types + ports
   mutation/              MutationID, Command, Receipt, Outcome, Revision,
                          ScopeKey, GuardianPolicy, MutationRepository (the
                          frozen atomic write contract; port doc comments = spec)
+internal/inbound/
+  authorization/         the bundled role-administration JSON transport
+                         (RoleAdminService port, DTOs, the five gated routes)
 internal/logic/
   authorizersvc/         the sealed ReBAC engine (schema DSL, compiler,
                          immutable snapshot, bounded check/lookup, budget,
@@ -706,9 +884,10 @@ stores/pgx/              (source "authorization"), each its own module
 The socket is the FS2-shaped build plus the ratified `Components` bundle:
 `comps, err := authorization.NewService(repos, cfg)` then
 `comps.Service.Register(mount)`. `Register` logs one line, captures the logger
-for best-effort audit warnings, and mounts **no routes** — `/authorization/*`
-is this pocket's claimed-but-unregistered namespace (charter C1), reserved for
-a future admin surface (the deferred AZADM packet).
+for best-effort audit warnings, and mounts the bundled role-administration
+routes when `Config.RoleRoutesGate` is set — otherwise **no routes** at all. The
+rest of `/authorization/*` remains this pocket's claimed-but-unregistered
+namespace (charter C1).
 
 ## Wiring semantics — nil vs required
 
@@ -726,6 +905,9 @@ a future admin surface (the deferred AZADM packet).
 | `Config.IDs` | optional (`cryptids.IDGenerator`); zero value ⇒ the nanoid default; `cryptids.Database` defers to the store's DDL DEFAULT. Relationship-kind-scoped. |
 | `Config.Guard` | nil = actor-facing guarded mutations fail closed with `ErrMutationsNotConfigured`; decisions/lists and baseline `RelationshipWriter` still work. Non-nil requires `Repositories.Mutations`. No default-allow policy. |
 | `Config.Audit` | optional best-effort `AuditSink`; requires `Config.Guard` (`ErrAuditWithoutGuard`). |
+| `Config.RoleRoutesGate` | nil = the bundled role-administration routes do NOT mount (404) and a WARN fires at `Register` when roles + `Guard` are wired. Non-nil requires `Repositories.Roles` (`ErrRoleRoutesGateWithoutRoles`), `Config.Guard` (`ErrRoleRoutesGateWithoutGuard`), and a non-nil `Mount.Router` (`ErrRoleRoutesWithoutRouter`). It is the ENTIRE stack: authenticator + any CSRF layer + the decision. |
+| `Config.AssignmentPolicy` | optional bundled-assign legality pre-check; requires `RoleRoutesGate` (`ErrAssignmentPolicyWithoutRoutes`). Not the authorization seam, not audited, assign-only. |
+| `Config.ListStrategy` | optional `crud.Strategy` default for the bundled listings; zero ⇒ cursor. An unknown value is `ErrInvalidListStrategy` even when orphaned; a VALID unused value is silently ignored. |
 
 The nil-Guard/nil-model asymmetry is deliberate: an orphaned `RelationshipModel` errors
 loudly (capability-defining), while an orphaned `Limits`/`IDs` is

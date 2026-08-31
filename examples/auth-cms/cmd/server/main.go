@@ -204,7 +204,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// project-scoped guardian minimum, and the host MutationGuard (manage_access +
 	// platform-admin over the DecisionView) — the testable composition seam run() and
 	// the guarded-composition tests share.
-	authzComponents, err := newAuthorization()
+	//
+	// The bundled role-administration routes (/authorization/roles*) need a gate
+	// composed from BOTH pockets, and the authorization pocket is built first (the
+	// authorizer is an input to the auth config below). roleRoutesGate is that
+	// ordering seam: named here, resolved per request, assigned once right after
+	// authSvc exists and long before the host serves.
+	roleRoutesGate := &deferredMiddleware{}
+	authzComponents, err := newAuthorization(roleRoutesGate.middleware)
 	if err != nil {
 		return err
 	}
@@ -307,6 +314,22 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 	if err := authSvc.Register(mount); err != nil {
 		return err
+	}
+	// Close the role-routes ordering seam: the bundled /authorization/roles* surface
+	// now runs behind the live human session plus the platform-admin permission — the
+	// same coordinate MachineRoutesGate names. Assigned before the host serves, so no
+	// request can reach the routes ahead of their gate (which fails closed anyway).
+	roleRoutesGate.set(roleAdministrationGate(
+		authSvc.RequireAccessTokenLive(),
+		authorizer.RequirePermissionFixed(platformResourceType, "admin", platformResourceID),
+	))
+	// Boot fails LOUDLY if the chain never landed, matching the construction-matrix
+	// posture the pockets already give this host: a gate is a security control, and
+	// a refactor that reorders or drops the assignment must not reach production as
+	// a per-request 500. The middleware's own fail-closed 500 stays the floor, not
+	// the notification.
+	if !roleRoutesGate.installed() {
+		return errRoleRoutesGateNotInstalled
 	}
 
 	// In the bounded in_process mode the health surface reads the live queue depth from the
