@@ -111,6 +111,38 @@
 // LITERALLY (see MatchesSearch). What IS rejected is a non-blank term against a
 // list that declares no searchable fields — sdk.ErrInvalidInput, rather than an
 // unfiltered page presented as a search result.
+//
+// # The write vocabulary
+//
+// The read side has ListRequest; the write side has Field[T]/Some/Overlay (see
+// field.go) — the sparse-PATCH representation and its fold. The rest of the
+// write vocabulary is deliberately elsewhere, and this is the map:
+//
+//   - Field[T] / Some / Overlay live HERE: pure generic vocabulary, no imports
+//     at all, so a store adapter carries no new weight for them. A nullable
+//     column rides Field[*T] (Some[*T](nil) = explicit clear), a NOT NULL
+//     column rides Field[T].
+//
+//   - The FAULTS live in the kernel — sdk.ValidationError (the
+//     collect-every-problem refusal, unwrapping sdk.ErrInvalidInput, carrying
+//     sdk.Violation codes) and sdk.StaleError (the compare-and-set refusal,
+//     unwrapping sdk.ErrConflict and carrying the current token). Both
+//     foundation/crud and foundation/web must name them and the tier is flat,
+//     so they were promoted to the root. This reference is doc-only; there is
+//     no import edge, the same arrangement validation and web.FieldErrors
+//     already have.
+//
+//   - The strict BODY READER lives in sdk/foundation/web (web.ReadBody),
+//     because it needs http.MaxBytesReader for the 413 contract and crud may
+//     never import net/http (guard G21). Its getters return plain values plus
+//     presence.
+//
+// The handler composes the two vocabularies:
+//
+//	if body.Has("title") {
+//	    in.Title = crud.Some(body.Str("title"))
+//	}
+//	if err := body.Err(); err != nil { … }
 package crud
 
 import (
