@@ -19,10 +19,21 @@ The module is LAYERED, and the layers are physical:
 
 - **The kernel** is the root `package sdk` itself (`errors.go` — the
   error vocabulary; `context.go` — the request/trace/span-id context
-  vocabulary). Stdlib imports only. Leaf-ness is cycle-enforced against
+  vocabulary; `faults.go` — the write-fault vocabulary
+  `Violation`/`ValidationError`/`StaleError` + the `Code*` strings).
+  Stdlib imports only. Leaf-ness is cycle-enforced against
   every subpackage that imports it; guard G12(a) covers the rest.
   Promoting something to the kernel means adding a root file — a
-  visible, deliberate act.
+  visible, deliberate act. **The admission criterion** (written down at
+  crud-write-vocabulary, 2026-08-31, when the first behavior-bearing
+  vocabulary was promoted): a shape is admitted only when it is **shared
+  by two or more foundation packages that may not import each other**
+  (the flat tier's consequence), **stdlib-only**, and carries **zero
+  transport semantics** — the kernel names the fault, `foundation/web`
+  owns its wire shape. Carrying an `Add`/`Err` collector is not
+  disqualifying; carrying a status code, a json tag, or an
+  `http`/`url` import is. Argue the next promotion against these three
+  tests, not against this precedent.
 - **`foundation/`** — pure mechanism and vocabulary with zero service
   semantics (web, workers, identity, crud, cryptids, validation,
   logging, conversion, slug, async, environment). Foundation packages
