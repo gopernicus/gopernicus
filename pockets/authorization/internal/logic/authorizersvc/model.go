@@ -17,7 +17,12 @@
 // (the EAV-spine philosophy applied to permissions).
 package authorizersvc
 
-import "github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
+import (
+	"fmt"
+
+	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
+	"github.com/gopernicus/gopernicus/sdk"
+)
 
 // =============================================================================
 // Core check types
@@ -88,8 +93,68 @@ type CheckResult struct {
 }
 
 // =============================================================================
-// LookupResult
+// LookupRequest / LookupResult
 // =============================================================================
+
+// LookupRequest is the struct-input form of an enumeration query — what
+// LookupResourcesIn takes, beside CheckRequest in this same vocabulary. It is a
+// SIBLING of the positional LookupResources, never a replacement: that method
+// sits on host-defined ports and on the internal kind interface, so its
+// signature does not change, and a future field (see After below) is additive
+// here with zero signature churn.
+//
+// Limit caps the returned IDs to the first Limit of the sorted, deduplicated
+// enumeration — a deterministic prefix — and sets LookupResult.Truncated when it
+// drops any. Its semantics, stated exactly:
+//
+//   - Limit 0 means THE MaxLookupResults BUDGET CEILING — today's LookupResources
+//     behavior. It does NOT mean unbounded (nothing here is), and it deliberately
+//     does NOT follow crud.ListRequest, where 0 means DefaultLimit: an
+//     enumeration is not a page, and silently shrinking a host's result set to a
+//     page default would be a correctness change, not a default.
+//   - Limit NEVER weakens or bypasses the evaluation budget. An enumeration that
+//     overflows MaxLookupResults is still ErrEvaluationLimit even when Limit is
+//     tiny — a truncated list is never presented as complete.
+//   - Limit does NOT reduce enumeration cost in v1. The owning kind enumerates
+//     exactly as it does today and truncation happens above it; Limit moves the
+//     host's re-cap into the engine and anchors a future cursor, it does not make
+//     the query cheaper.
+//   - A negative Limit is a validation error wrapping sdk.ErrInvalidInput (a
+//     limit is not a reference, so it is not relationship.ErrInvalidRef), which
+//     hosts map to 400 through the pocket's error mapper.
+//   - Unrestricted passes through untouched and IGNORES Limit: there are no IDs
+//     to cap, and the host must skip ID filtering entirely.
+//
+// DEFERRED — After/cursor continuation (issue #22): resuming an enumeration
+// needs a deterministic continuation the OWNING KIND can honor, which is a
+// store-port change across memstore, stores/pgx, stores/turso, and the storetest
+// conformance suite — a multi-module train, not a core-only release. When it
+// lands it is an additive After field here.
+type LookupRequest struct {
+	Principal    PrincipalRef
+	Permission   string
+	ResourceType string
+	Limit        int
+}
+
+// Validate reports whether the request is structurally well formed: the
+// principal, the permission, and the resource type are all present and well
+// formed, and Limit is not negative. It applies no schema knowledge.
+func (r LookupRequest) Validate() error {
+	if err := r.Principal.Validate(); err != nil {
+		return err
+	}
+	if err := relationship.ValidateRefField("permission", r.Permission); err != nil {
+		return err
+	}
+	if err := relationship.ValidateRefField("resource type", r.ResourceType); err != nil {
+		return err
+	}
+	if r.Limit < 0 {
+		return fmt.Errorf("authorization: lookup limit must not be negative, got %d: %w", r.Limit, sdk.ErrInvalidInput)
+	}
+	return nil
+}
 
 // LookupResult is the enumeration result of LookupResources.
 //
@@ -104,9 +169,16 @@ type CheckResult struct {
 // resource of that type. There is no admin/unrestricted bypass in the
 // relationship engine: a host that wants admin-sees-everything checks for it in
 // its own closure BEFORE calling LookupResources and then skips ID filtering.
+//
+// Truncated reports that a LookupRequest.Limit DROPPED IDs from the complete
+// enumeration — the affordance a host renders as "and more". Without it,
+// len(IDs) == Limit would be indistinguishable from exactly Limit grants. Only
+// the Limit path sets it: the classic LookupResources never does, and neither
+// does an Unrestricted answer.
 type LookupResult struct {
 	IDs          []string
 	Unrestricted bool
+	Truncated    bool
 }
 
 // =============================================================================

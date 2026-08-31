@@ -539,6 +539,93 @@ func TestCompositeLookupResourcesValidatesArguments(t *testing.T) {
 	}
 }
 
+// TestCompositeLookupResourcesInTruncates proves the ONE truncation body: the
+// owning kind enumerates unchanged and the Limit caps the sorted prefix, on a
+// relationship-owned and a role-owned pair alike. Limit 0 / Limit >= len is
+// today's untruncated behavior, and Truncated is set only when IDs were dropped.
+func TestCompositeLookupResourcesInTruncates(t *testing.T) {
+	c, eng, roles := newBothKinds(t, authorizersvc.EvaluationLimits{})
+	ctx := context.Background()
+	for _, id := range []string{"p1", "p2", "p3"} {
+		grant(t, eng, "project", id, "viewer", "user", "u1")
+		assign(t, roles, "u1", "auditor", "project", id)
+	}
+	principal := authorizersvc.PrincipalRef{Type: "user", ID: "u1"}
+
+	for _, permission := range []string{"view", "audit"} {
+		t.Run(permission, func(t *testing.T) {
+			cases := map[string]struct {
+				limit int
+				want  authorizersvc.LookupResult
+			}{
+				"limit below the count truncates to the sorted prefix": {2, authorizersvc.LookupResult{IDs: []string{"p1", "p2"}, Truncated: true}},
+				"limit of one":                  {1, authorizersvc.LookupResult{IDs: []string{"p1"}, Truncated: true}},
+				"limit equal to the count":      {3, authorizersvc.LookupResult{IDs: []string{"p1", "p2", "p3"}}},
+				"limit above the count":         {10, authorizersvc.LookupResult{IDs: []string{"p1", "p2", "p3"}}},
+				"limit zero is today's ceiling": {0, authorizersvc.LookupResult{IDs: []string{"p1", "p2", "p3"}}},
+			}
+			for name, tc := range cases {
+				t.Run(name, func(t *testing.T) {
+					got, err := c.LookupResourcesIn(ctx, authorizersvc.LookupRequest{
+						Principal: principal, Permission: permission, ResourceType: "project", Limit: tc.limit,
+					})
+					if err != nil {
+						t.Fatalf("LookupResourcesIn: %v", err)
+					}
+					if !reflect.DeepEqual(got, tc.want) {
+						t.Fatalf("got %+v, want %+v", got, tc.want)
+					}
+					if got.IDs == nil {
+						t.Fatal("IDs must stay non-nil through truncation")
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestCompositeLookupResourcesInPassesUnrestrictedThrough proves an Unrestricted
+// answer IGNORES the Limit: it names no IDs to cap, so it must not come back
+// looking truncated.
+func TestCompositeLookupResourcesInPassesUnrestrictedThrough(t *testing.T) {
+	c, _, roles := newBothKinds(t, authorizersvc.EvaluationLimits{})
+	assign(t, roles, "u2", "auditor", "", "")
+
+	got, err := c.LookupResourcesIn(context.Background(), authorizersvc.LookupRequest{
+		Principal: authorizersvc.PrincipalRef{Type: "user", ID: "u2"}, Permission: "audit", ResourceType: "project", Limit: 1,
+	})
+	if err != nil {
+		t.Fatalf("LookupResourcesIn: %v", err)
+	}
+	if !got.Unrestricted || got.Truncated || len(got.IDs) != 0 {
+		t.Fatalf("a globally held granting role must pass through untouched, got %+v", got)
+	}
+}
+
+// TestCompositeLookupResourcesInValidates proves the request is validated before
+// any store is touched — the negative Limit included.
+func TestCompositeLookupResourcesInValidates(t *testing.T) {
+	boom := errors.New("store exploded")
+	eng := newRelationshipEngine(t, errRelationships{err: boom}, authorizersvc.EvaluationLimits{})
+	c := NewComposite(eng, errProbe{err: boom}, mustCompile(t, compositeRoleModel(), eng),
+		resolvedLimits(t, authorizersvc.EvaluationLimits{}))
+	good := authorizersvc.PrincipalRef{Type: "user", ID: "u1"}
+
+	cases := map[string]authorizersvc.LookupRequest{
+		"empty principal":     {Permission: "audit", ResourceType: "project"},
+		"empty permission":    {Principal: good, ResourceType: "project"},
+		"empty resource type": {Principal: good, Permission: "audit"},
+		"negative limit":      {Principal: good, Permission: "audit", ResourceType: "project", Limit: -1},
+	}
+	for name, req := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := c.LookupResourcesIn(context.Background(), req); err == nil || errors.Is(err, boom) {
+				t.Fatalf("want a validation error before any store call, got %v", err)
+			}
+		})
+	}
+}
+
 // =============================================================================
 // Single-kind equivalence
 // =============================================================================

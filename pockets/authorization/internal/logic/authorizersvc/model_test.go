@@ -1,6 +1,59 @@
 package authorizersvc
 
-import "testing"
+import (
+	"errors"
+	"testing"
+
+	"github.com/gopernicus/gopernicus/sdk"
+)
+
+// TestLookupRequestValidate pins the enumeration request's structural contract:
+// the same principal/permission/resource-type validation the positional path
+// runs, plus the Limit rule — 0 is legal (it selects the MaxLookupResults budget
+// ceiling, today's behavior) and only a NEGATIVE Limit is invalid input.
+func TestLookupRequestValidate(t *testing.T) {
+	valid := LookupRequest{
+		Principal:    PrincipalRef{Type: "user", ID: "u1"},
+		Permission:   "view",
+		ResourceType: "project",
+	}
+
+	for name, mutate := range map[string]func(LookupRequest) LookupRequest{
+		"zero limit is the budget ceiling": func(r LookupRequest) LookupRequest { return r },
+		"positive limit":                   func(r LookupRequest) LookupRequest { r.Limit = 5; return r },
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := mutate(valid).Validate(); err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+		})
+	}
+
+	t.Run("negative limit is invalid input", func(t *testing.T) {
+		req := valid
+		req.Limit = -1
+		err := req.Validate()
+		if err == nil {
+			t.Fatal("a negative Limit must not validate")
+		}
+		if !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("a negative Limit must wrap sdk.ErrInvalidInput, got %v", err)
+		}
+	})
+
+	for name, mutate := range map[string]func(LookupRequest) LookupRequest{
+		"empty principal type": func(r LookupRequest) LookupRequest { r.Principal.Type = ""; return r },
+		"empty principal id":   func(r LookupRequest) LookupRequest { r.Principal.ID = ""; return r },
+		"empty permission":     func(r LookupRequest) LookupRequest { r.Permission = ""; return r },
+		"empty resource type":  func(r LookupRequest) LookupRequest { r.ResourceType = ""; return r },
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := mutate(valid).Validate(); err == nil {
+				t.Fatal("must not validate")
+			}
+		})
+	}
+}
 
 func TestDSLHelpers(t *testing.T) {
 	if got := Direct("owner"); got.Relation != "owner" || got.Through != "" {
