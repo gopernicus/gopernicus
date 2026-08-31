@@ -323,6 +323,14 @@ func run(ctx context.Context, log *slog.Logger) error {
 		authSvc.RequireAccessTokenLive(),
 		authorizer.RequirePermissionFixed(platformResourceType, "admin", platformResourceID),
 	))
+	// Boot fails LOUDLY if the chain never landed, matching the construction-matrix
+	// posture the pockets already give this host: a gate is a security control, and
+	// a refactor that reorders or drops the assignment must not reach production as
+	// a per-request 500. The middleware's own fail-closed 500 stays the floor, not
+	// the notification.
+	if !roleRoutesGate.installed() {
+		return errRoleRoutesGateNotInstalled
+	}
 
 	// In the bounded in_process mode the health surface reads the live queue depth from the
 	// auth Service (a secret-free counts-only seam) so it can report backlog/saturation.

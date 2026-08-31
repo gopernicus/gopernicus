@@ -191,7 +191,7 @@ func (h *handlers) assignRole(w http.ResponseWriter, r *http.Request) {
 		ExpectedRevision: body.ExpectedRevision,
 	})
 	if err != nil {
-		web.RespondJSONDomainError(w, err)
+		h.respondError(w, err)
 		return
 	}
 	if receipt == nil {
@@ -225,7 +225,7 @@ func (h *handlers) unassignRole(w http.ResponseWriter, r *http.Request) {
 		ExpectedRevision: body.ExpectedRevision,
 	})
 	if err != nil {
-		web.RespondJSONDomainError(w, err)
+		h.respondError(w, err)
 		return
 	}
 	if receipt == nil {
@@ -251,7 +251,7 @@ func (h *handlers) listBySubject(w http.ResponseWriter, r *http.Request) {
 	}
 	page, err := h.svc.ListBySubject(r.Context(), subjectType, subjectID, req)
 	if err != nil {
-		web.RespondJSONDomainError(w, err)
+		h.respondError(w, err)
 		return
 	}
 	web.RespondJSONOK(w, newPageResponse(page, newAssignmentResponse))
@@ -271,7 +271,7 @@ func (h *handlers) listByResource(w http.ResponseWriter, r *http.Request) {
 	}
 	page, err := h.svc.ListByResource(r.Context(), resourceType, resourceID, req)
 	if err != nil {
-		web.RespondJSONDomainError(w, err)
+		h.respondError(w, err)
 		return
 	}
 	web.RespondJSONOK(w, newPageResponse(page, newAssignmentResponse))
@@ -291,7 +291,7 @@ func (h *handlers) listEffectiveByResource(w http.ResponseWriter, r *http.Reques
 	}
 	page, err := h.svc.ListEffectiveByResource(r.Context(), resourceType, resourceID, req)
 	if err != nil {
-		web.RespondJSONDomainError(w, err)
+		h.respondError(w, err)
 		return
 	}
 	web.RespondJSONOK(w, newPageResponse(page, newEffectiveGrantResponse))

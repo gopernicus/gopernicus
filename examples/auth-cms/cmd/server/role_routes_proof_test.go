@@ -320,6 +320,19 @@ func TestRoleRoutesRejectAHalfScopedPair(t *testing.T) {
 	}
 }
 
+// TestDeferredMiddlewareInstalledReportsAssignment pins the boot assertion run()
+// makes right after wiring the chain: unassigned is reported, assigned is not.
+func TestDeferredMiddlewareInstalledReportsAssignment(t *testing.T) {
+	gate := &deferredMiddleware{}
+	if gate.installed() {
+		t.Fatal("a fresh deferredMiddleware reports installed")
+	}
+	gate.set(func(next http.Handler) http.Handler { return next })
+	if !gate.installed() {
+		t.Error("an assigned deferredMiddleware reports NOT installed")
+	}
+}
+
 // TestDeferredMiddlewareFailsClosed pins the ordering seam's posture: a gate that
 // was never assigned refuses rather than admits.
 func TestDeferredMiddlewareFailsClosed(t *testing.T) {

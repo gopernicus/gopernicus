@@ -654,15 +654,49 @@ func TestBundledHalfScopedPairIs400(t *testing.T) {
 	}
 }
 
-// TestBundledStaleRevisionIsAConflict proves expected_revision reaches the
-// mutation boundary and a stale value answers the conflict class, not 200.
-func TestBundledStaleRevisionIsAConflict(t *testing.T) {
+// TestBundledMutationErrorsCarryStableCodes proves the bundled bodies answer
+// through the pocket's OWN mapper (codes.go RespondError, threaded into the
+// transport by Register) rather than the generic sdk-kind mapping: a client
+// branches on the stable machine code, not on 409-versus-409.
+func TestBundledMutationErrorsCarryStableCodes(t *testing.T) {
 	host := newRoleAdminHost(t, authenticatedGate(identity.Principal{Type: "user", ID: "admin-1"}), nil)
-	rec := postRole(t, host.handler, "/authorization/roles",
+
+	stale := postRole(t, host.handler, "/authorization/roles",
 		`{"subject_type":"user","subject_id":"u-1","role":"viewer","resource_type":"organization","resource_id":"o-1","expected_revision":42}`)
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("stale-revision assign = %d, body %s", rec.Code, rec.Body.String())
+	if stale.Code != http.StatusConflict {
+		t.Fatalf("stale-revision assign = %d, body %s", stale.Code, stale.Body.String())
 	}
+	if got := errorCode(t, stale); got != string(ReasonStaleRevision) {
+		t.Errorf("stale-revision code = %q, want %q", got, ReasonStaleRevision)
+	}
+
+	// A MutationID replayed under a DIFFERENT payload is the stable
+	// payload-mismatch refusal, never a silent overwrite.
+	mutationID := "bundled-mismatch-mutation-id-00001"
+	if first := postRole(t, host.handler, "/authorization/roles",
+		`{"mutation_id":"`+mutationID+`","subject_type":"user","subject_id":"u-1","role":"viewer","resource_type":"organization","resource_id":"o-1"}`); first.Code != http.StatusOK {
+		t.Fatalf("first assign = %d, body %s", first.Code, first.Body.String())
+	}
+	mismatch := postRole(t, host.handler, "/authorization/roles",
+		`{"mutation_id":"`+mutationID+`","subject_type":"user","subject_id":"u-2","role":"viewer","resource_type":"organization","resource_id":"o-1"}`)
+	if mismatch.Code != http.StatusConflict {
+		t.Fatalf("payload-mismatch replay = %d, body %s", mismatch.Code, mismatch.Body.String())
+	}
+	if got := errorCode(t, mismatch); got != string(ReasonMutationMismatch) {
+		t.Errorf("payload-mismatch code = %q, want %q", got, ReasonMutationMismatch)
+	}
+}
+
+// errorCode reads the machine code off an FS9 error body.
+func errorCode(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode error body %s: %v", rec.Body.String(), err)
+	}
+	return body.Code
 }
 
 // ---------------------------------------------------------------------------

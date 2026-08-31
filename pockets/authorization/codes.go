@@ -212,10 +212,12 @@ func errorResponse(err error) (*web.Error, bool) {
 
 // RespondError writes err as a JSON error, emitting the pocket's stable machine
 // code when err is an authorization sentinel and otherwise falling back to the
-// generic sdk-kind mapping (web.RespondJSONDomainError). It is the one seam a
-// future authorization inbound surface writes decision/mutation errors through,
-// so the JSON body code derives from one mapping and the sdk mapper stays
-// untouched. Denial is not an error and never reaches here.
+// generic sdk-kind mapping (web.RespondJSONDomainError). It is the one seam
+// domain errors reach the wire through: Register hands it to the bundled
+// role-administration transport as inbound.Deps.RespondError, and a host serving
+// its own routes over the Service methods calls it directly. Either way the JSON
+// body's code derives from ONE mapping and the sdk mapper stays untouched.
+// Denial is not an error and never reaches here.
 func RespondError(w http.ResponseWriter, err error) {
 	if mapped, ok := errorResponse(err); ok {
 		web.RespondJSONError(w, mapped)

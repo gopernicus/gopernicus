@@ -12,6 +12,7 @@ package authorization
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/mutation"
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/role"
@@ -101,19 +102,43 @@ type Deps struct {
 	// ListStrategy is the DefaultStrategy the listings pass to crud.ParseListQuery
 	// (authorization.Config.ListStrategy). "" resolves to crud.StrategyCursor.
 	ListStrategy crud.Strategy
+	// RespondError writes a DOMAIN error as JSON. Register fills it with the root
+	// package's RespondError, so a bundled body carries the pocket's STABLE machine
+	// code (stale_revision, mutation_payload_mismatch, …) rather than the generic
+	// sdk-kind mapping — the codes.go seam, reachable from here without this
+	// package importing the root. Nil falls back to web.RespondJSONDomainError, so
+	// a test mounting the transport alone still gets correct statuses.
+	//
+	// It carries DOMAIN errors only. Transport refusals the handlers author
+	// themselves (401, the named 400s, 415, 413) already name their own codes and
+	// are written directly through web.
+	RespondError func(http.ResponseWriter, error)
 }
 
 // handlers holds what the route handlers delegate to.
 type handlers struct {
 	svc          RoleAdminService
 	listStrategy crud.Strategy
+	respondErr   func(http.ResponseWriter, error)
+}
+
+// respondError writes a domain error through the host-supplied mapper, falling
+// back to the sdk-kind mapping when Deps carried none. It is the ONE place the
+// bundled surface answers a domain error, so a body's machine code cannot drift
+// per handler.
+func (h *handlers) respondError(w http.ResponseWriter, err error) {
+	if h.respondErr != nil {
+		h.respondErr(w, err)
+		return
+	}
+	web.RespondJSONDomainError(w, err)
 }
 
 // Mount registers the five bundled role-administration routes, each carrying
 // exactly the host gate. Register calls it only when the gate is non-nil, so
 // there is no ungated mount path.
 func Mount(r pocket.RouteRegistrar, deps Deps) {
-	h := &handlers{svc: deps.Service, listStrategy: deps.ListStrategy}
+	h := &handlers{svc: deps.Service, listStrategy: deps.ListStrategy, respondErr: deps.RespondError}
 	r.Handle("POST", pathAssignRole, h.assignRole, deps.Gate)
 	r.Handle("POST", pathUnassignRole, h.unassignRole, deps.Gate)
 	r.Handle("GET", pathRolesBySubject, h.listBySubject, deps.Gate)

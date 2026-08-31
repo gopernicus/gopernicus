@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sync/atomic"
 
@@ -154,8 +155,19 @@ type deferredMiddleware struct {
 	chain atomic.Pointer[web.Middleware]
 }
 
+// errRoleRoutesGateNotInstalled is the boot failure for a role-routes gate that
+// was never assigned. It is deliberately a BOOT error rather than only the
+// middleware's request-time 500: an unassigned gate is a wiring fault the
+// operator must fix, so it fails construction like the pocket's own
+// ErrRoleRoutesGateWithoutGuard rather than surfacing as production 500s.
+var errRoleRoutesGateNotInstalled = errors.New("auth-cms: the role-administration gate was never installed; /authorization/roles* would answer 500")
+
 // set installs the real chain. It must be called before the host serves.
 func (d *deferredMiddleware) set(m web.Middleware) { d.chain.Store(&m) }
+
+// installed reports whether set has run. run() asserts it right after assignment
+// so a reordering refactor fails at boot instead of at the first request.
+func (d *deferredMiddleware) installed() bool { return d.chain.Load() != nil }
 
 // middleware is the web.Middleware the host hands to Config.RoleRoutesGate. An
 // unassigned chain fails CLOSED with a 500 rather than admitting the request: a

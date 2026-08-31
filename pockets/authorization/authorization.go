@@ -32,8 +32,8 @@
 // host names a Config.RoleRoutesGate (assign, unassign, and the three role
 // listings, JSON only) and mounts NOTHING otherwise; the rest of the
 // /authorization/* namespace stays reserved. It does export the
-// RequirePermission/RequirePermissionOn/
-// RequirePermissionFixed/RequireAnyPermission middleware builders (root delegations to the internal
+// RequirePermission, RequirePermissionOn, RequirePermissionFixed, and
+// RequireAnyPermission middleware builders (root delegations to the internal
 // implementation in middleware.go), so hosts can gate routes on a Check; those
 // builders write their responses only through sdk/foundation/web, never at this
 // root package.
@@ -418,11 +418,12 @@ type Config struct {
 // Service is the authorization pocket's host-facing surface. Each kind's method
 // family is present unconditionally; an unwired kind's methods fail closed with
 // that kind's sentinel. The decision surface (Check, CheckBatch, CheckExplain,
-// FilterAuthorized, LookupResources and the RequirePermission gates) is ONE
-// facade over the composite decider, which dispatches each (resource type,
-// permission) pair to the model that declares it — the relationship Schema or the
-// RoleModel, never both. A host still composes any bypass or cross-kind policy of
-// its own in its own closure; the pocket merges no kinds.
+// FilterAuthorized, LookupResources, LookupResourcesIn and the RequirePermission
+// gates) is ONE facade over the composite decider, which dispatches each
+// (resource type, permission) pair to the model that declares it — the
+// relationship Schema or the RoleModel, never both. A host still composes any
+// bypass or cross-kind policy of its own in its own closure; the pocket merges
+// no kinds.
 type Service struct {
 	relationships *authorizersvc.Service         // nil = relationship kind off
 	roles         *rolesvc.Service               // nil = roles kind off
@@ -613,6 +614,10 @@ func (s *Service) Register(m pocket.Mount) error {
 		Service:      roleRouteAdapter{svc: s, policy: s.assignmentPolicy},
 		Gate:         s.roleRoutesGate,
 		ListStrategy: s.listStrategy,
+		// The bundled bodies answer through the pocket's own mapper, so a
+		// stale-revision or payload-mismatch refusal carries its STABLE machine
+		// code rather than a generic 409.
+		RespondError: RespondError,
 	})
 	return nil
 }

@@ -758,11 +758,25 @@ Comment the `roleRoutesGate.set(...)` line's `Config.RoleRoutesGate` out of
 `newAuthorization` and all five paths answer **404** with one boot WARN naming the
 unset gate — the pocket's deny-by-absence posture.
 
-⚠ **Cookie hosts owe a CSRF layer.** These are state-changing POSTs and the pocket
-adds nothing beneath your gate; this proof host composes authentication +
-authorization only, because the authentication pocket does not export its
-browser-safe middleware. A production cookie-credential host adds an
-Origin/double-submit layer inside its own gate closure.
+⚠ **Cookie hosts owe a CSRF layer; this host does not have one.** These are
+state-changing POSTs and the pocket adds nothing beneath your gate. This proof
+host composes authentication + authorization only, because the authentication
+pocket does not export its browser-safe middleware.
+
+What is actually carrying the defense here, precisely: the two writes require
+`Content-Type: application/json` and answer **415** to every content type an HTML
+form can send, so a form-POST forgery is refused; a cross-site `fetch` with a JSON
+content type is preflighted, and **this host installs no CORS policy at all**, so
+the preflight fails; and the session cookie is `SameSite=Lax`, so a browser
+withholds it from cross-site POSTs anyway.
+
+**None of that is an origin check.** It is content-type strictness plus two
+browser defaults, and it lapses the moment a host adds a credentialed CORS
+allowlist for an SPA origin, relaxes the accepted content type, or weakens the
+cookie's SameSite posture — any of which this example could plausibly grow. A
+production cookie-credential host composes a real Origin allowlist plus a
+double-submit token inside its own gate closure; see the pocket README's gate
+section.
 
 ### Leg 8 — auth-v3: normal HTML pages (twice-through)
 

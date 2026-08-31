@@ -679,10 +679,27 @@ comps, err := authorization.NewService(repos, authorization.Config{
    `identity.FromContext` and answer **401** when it is absent — they never
    fabricate a zero `Actor`. This is the AV5 platform convention, so any host
    middleware satisfies it and the pocket imports no authentication pocket.
-2. **⚠ Cookie-credential hosts must add a browser-origin/CSRF layer.** These are
-   state-changing POSTs; a policy-only gate over cookie credentials ships
-   CSRF-free writes. The pocket cannot supply the layer (FS1 — it owns no
-   session cookie to check against).
+2. **⚠ Cookie-credential hosts owe a browser-origin/CSRF layer.** These are
+   state-changing POSTs and the pocket supplies none (FS1 — it owns no session
+   cookie to compare against).
+
+   What actually carries the defense today, stated exactly: the two writes
+   **require `Content-Type: application/json`** and answer **415** to anything
+   else, which is every content type an HTML form can send
+   (`application/x-www-form-urlencoded`, `multipart/form-data`, `text/plain`) —
+   so the classic form-POST forgery is refused; and a cross-site `fetch` that
+   sets a JSON content type is not a simple request, so the browser preflights
+   it and the preflight fails absent a credentialed CORS allowlist. Session
+   cookies additionally ride `SameSite=Lax`, which withholds them from
+   cross-site POSTs.
+
+   **This is NOT an origin check, and it lapses.** It is content-type strictness
+   plus a browser default, not a decision the host made about who may call. It
+   stops working the moment a host installs a credentialed CORS allowlist for an
+   SPA origin (the preflight then passes and the cookie rides along), relaxes the
+   accepted content type, or moves to a cookie posture weaker than `Lax`. A host
+   in any of those postures MUST compose a real Origin allowlist plus a
+   double-submit token inside its gate closure.
 3. **Authorization** decides. The bundled handlers write no 403 of their own.
 
 `RoleRoutesGate` is a single `web.Middleware`, matching `MachineRoutesGate`. The

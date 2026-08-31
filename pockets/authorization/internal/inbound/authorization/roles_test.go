@@ -3,6 +3,7 @@ package authorization
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -107,10 +108,19 @@ func injectPrincipal(p identity.Principal) web.Middleware {
 // 401 rather than fabricating a zero actor.
 func passGate(next http.Handler) http.Handler { return next }
 
-// newFixture mounts the bundled surface behind gate.
+// newFixture mounts the bundled surface behind gate with NO host error mapper,
+// so the default fallback path is what most cases exercise.
 func newFixture(svc RoleAdminService, gate web.Middleware, strategy crud.Strategy) http.Handler {
 	h := web.NewWebHandler()
 	Mount(h, Deps{Service: svc, Gate: gate, ListStrategy: strategy})
+	return h
+}
+
+// newFixtureWithResponder mounts the surface with a host error mapper, the way
+// the pocket root wires codes.go RespondError.
+func newFixtureWithResponder(svc RoleAdminService, gate web.Middleware, respond func(http.ResponseWriter, error)) http.Handler {
+	h := web.NewWebHandler()
+	Mount(h, Deps{Service: svc, Gate: gate, RespondError: respond})
 	return h
 }
 
@@ -586,5 +596,72 @@ func TestListingsForwardTheirScope(t *testing.T) {
 	doJSON(t, h, "GET", "/authorization/roles/effective?resource_type=page&resource_id=p-2", "")
 	if stub.listScope != [2]string{"page", "p-2"} {
 		t.Errorf("effective forwarded %v", stub.listScope)
+	}
+}
+
+// TestDomainErrorsGoThroughTheHostResponder proves every domain-error site on the
+// surface answers through Deps.RespondError, so the pocket's stable machine codes
+// reach the wire instead of the generic sdk-kind mapping.
+func TestDomainErrorsGoThroughTheHostResponder(t *testing.T) {
+	sentinel := fmt.Errorf("stale revision: %w", sdk.ErrConflict)
+	routes := []struct{ method, path, body string }{
+		{"POST", "/authorization/roles", `{"subject_type":"user","subject_id":"u-1","role":"viewer"}`},
+		{"POST", "/authorization/roles/unassign", `{"subject_type":"user","subject_id":"u-1","role":"viewer"}`},
+		{"GET", "/authorization/roles/by-subject?subject_type=user&subject_id=u-1", ""},
+		{"GET", "/authorization/roles/by-resource?resource_type=organization&resource_id=o-1", ""},
+		{"GET", "/authorization/roles/effective?resource_type=organization&resource_id=o-1", ""},
+	}
+	for _, rt := range routes {
+		var seen error
+		respond := func(w http.ResponseWriter, err error) {
+			seen = err
+			web.RespondJSONError(w, web.NewError(http.StatusConflict, "stale revision").WithCode("stale_revision"))
+		}
+		h := newFixtureWithResponder(&stubRoleAdmin{err: sentinel}, adminGate(), respond)
+		rec := doJSON(t, h, rt.method, rt.path, rt.body)
+		if !errors.Is(seen, sentinel) {
+			t.Errorf("%s %s did not route its domain error through the responder (saw %v)", rt.method, rt.path, seen)
+			continue
+		}
+		if rec.Code != http.StatusConflict {
+			t.Errorf("%s %s = %d, want the responder's 409", rt.method, rt.path, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), `"code":"stale_revision"`) {
+			t.Errorf("%s %s body = %s, want the responder's stable code", rt.method, rt.path, rec.Body.String())
+		}
+	}
+}
+
+// TestNilResponderFallsBackToTheSDKMapping proves a transport mounted without a
+// host mapper still answers correct statuses — the fallback is honest, not a
+// panic or a 500.
+func TestNilResponderFallsBackToTheSDKMapping(t *testing.T) {
+	h := newFixture(&stubRoleAdmin{err: fmt.Errorf("denied: %w", sdk.ErrForbidden)}, adminGate(), "")
+	rec := doJSON(t, h, "POST", "/authorization/roles", `{"subject_type":"user","subject_id":"u-1","role":"viewer"}`)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("nil responder = %d, want 403 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestTransportRefusalsBypassTheHostResponder pins the split: the refusals the
+// TRANSPORT authors (401, the named 400s) already name their own codes and must
+// not be re-mapped by a host's domain-error responder.
+func TestTransportRefusalsBypassTheHostResponder(t *testing.T) {
+	var calls int
+	respond := func(w http.ResponseWriter, err error) {
+		calls++
+		web.RespondJSONDomainError(w, err)
+	}
+	h := newFixtureWithResponder(&stubRoleAdmin{receipt: testReceipt()}, passGate, respond)
+	if rec := doJSON(t, h, "POST", "/authorization/roles", `{"subject_type":"user","subject_id":"u-1","role":"viewer"}`); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("missing principal = %d, want 401", rec.Code)
+	}
+
+	gated := newFixtureWithResponder(&stubRoleAdmin{}, adminGate(), respond)
+	if rec := doJSON(t, gated, "GET", "/authorization/roles/by-subject?subject_type=user", ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("half query pair = %d, want 400", rec.Code)
+	}
+	if calls != 0 {
+		t.Errorf("the host responder handled %d transport refusals, want 0", calls)
 	}
 }

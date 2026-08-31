@@ -2,6 +2,7 @@ package decisionsvc
 
 import (
 	"context"
+	"slices"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
 	"github.com/gopernicus/gopernicus/pockets/authorization/internal/logic/authorizersvc"
@@ -279,7 +280,10 @@ func (c *Composite) LookupResourcesIn(ctx context.Context, req authorizersvc.Loo
 		return authorizersvc.LookupResult{}, err
 	}
 	if req.Limit > 0 && !res.Unrestricted && len(res.IDs) > req.Limit {
-		res.IDs = res.IDs[:req.Limit]
+		// Clip so the returned slice cannot reach the dropped tail: a caller that
+		// appends to it would otherwise overwrite IDs this answer deliberately
+		// withheld, and the withheld tail would stay reachable through cap.
+		res.IDs = slices.Clip(res.IDs[:req.Limit])
 		res.Truncated = true
 	}
 	return res, nil
