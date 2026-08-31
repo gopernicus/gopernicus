@@ -33,3 +33,13 @@ func (c *Composite) RequirePermissionOn(resourceType, permission, pathParam stri
 func (c *Composite) RequirePermissionFixed(resourceType, permission, resourceID string) web.Middleware {
 	return c.gates().RequirePermissionFixed(resourceType, permission, resourceID)
 }
+
+// RequireAnyPermission admits a route when ANY alternative allows, each
+// alternative decided by the model that OWNS its pair — so one route line may
+// disjoin a relationship-owned pair with a role-owned one. Every alternative's
+// pair is checked at REGISTRATION against both models, and the alternatives are
+// capped at the shared EvaluationLimits.MaxBatchSize. See
+// authorizersvc.Gates.RequireAnyPermission for the full ladder.
+func (c *Composite) RequireAnyPermission(alternatives ...authorizersvc.GateSpec) web.Middleware {
+	return c.gates().RequireAnyPermission(alternatives...)
+}
