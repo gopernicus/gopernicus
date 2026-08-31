@@ -28,8 +28,11 @@
 //
 // The pocket is datastore-free and view-free (FS1): it depends on its
 // relationship.Storer / role.Storer ports and sdk facilities only. Register
-// mounts NO routes — the /authorization/* namespace is reserved for a future
-// admin surface. It does export the RequirePermission/RequirePermissionOn/
+// mounts the bundled ROLE-ADMINISTRATION routes under /authorization/* when the
+// host names a Config.RoleRoutesGate (assign, unassign, and the three role
+// listings, JSON only) and mounts NOTHING otherwise; the rest of the
+// /authorization/* namespace stays reserved. It does export the
+// RequirePermission/RequirePermissionOn/
 // RequirePermissionFixed/RequireAnyPermission middleware builders (root delegations to the internal
 // implementation in middleware.go), so hosts can gate routes on a Check; those
 // builders write their responses only through sdk/foundation/web, never at this
@@ -44,6 +47,7 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/mutation"
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/role"
+	inbound "github.com/gopernicus/gopernicus/pockets/authorization/internal/inbound/authorization"
 	"github.com/gopernicus/gopernicus/pockets/authorization/internal/logic/authorizersvc"
 	"github.com/gopernicus/gopernicus/pockets/authorization/internal/logic/decisionsvc"
 	"github.com/gopernicus/gopernicus/pockets/authorization/internal/logic/rolesvc"
@@ -574,8 +578,16 @@ func NewService(repos Repositories, cfg Config) (Components, error) {
 }
 
 // Register mounts the pocket: it logs one line, captures the Mount logger for
-// best-effort audit warnings, and registers NO routes (the /authorization/*
-// namespace is reserved). It tolerates a zero-value Mount.
+// best-effort audit warnings, and — when the host named a Config.RoleRoutesGate
+// — mounts the bundled role-administration routes under /authorization/*. With
+// no gate it registers NO routes and tolerates a zero-value Mount, exactly as
+// before; the rest of the /authorization/* namespace stays reserved either way.
+//
+// With a gate set, a nil Mount.Router is ErrRoleRoutesWithoutRouter: routes were
+// promised, so nowhere to mount them must be loud rather than silently
+// route-free. With the roles kind and a Guard wired but NO gate, Register warns
+// once — the bundled routes are not mounted and will answer 404, which an
+// upgrading host should learn at boot rather than from production.
 func (s *Service) Register(m pocket.Mount) error {
 	if m.Logger != nil {
 		s.log = m.Logger
@@ -585,8 +597,23 @@ func (s *Service) Register(m pocket.Mount) error {
 			"role_model", s.roleModel != nil,
 			"baseline_relationship_writes", s.relationships != nil,
 			"actor_mutations", s.guard != nil,
+			"role_routes", s.roleRoutesGate != nil,
 		)
 	}
+	if s.roleRoutesGate == nil {
+		if s.roles != nil && s.guard != nil {
+			s.logger().Warn("authorization: the roles kind and Config.Guard are wired but Config.RoleRoutesGate is unset; the bundled role-administration routes are NOT mounted (404) — set a gate or serve your own routes over the Service methods")
+		}
+		return nil
+	}
+	if m.Router == nil {
+		return ErrRoleRoutesWithoutRouter
+	}
+	inbound.Mount(m.Router, inbound.Deps{
+		Service:      roleRouteAdapter{svc: s, policy: s.assignmentPolicy},
+		Gate:         s.roleRoutesGate,
+		ListStrategy: s.listStrategy,
+	})
 	return nil
 }
 

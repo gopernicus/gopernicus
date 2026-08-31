@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/domain/role"
+	inbound "github.com/gopernicus/gopernicus/pockets/authorization/internal/inbound/authorization"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
@@ -100,4 +102,142 @@ func validateListStrategy(s crud.Strategy) error {
 		return nil
 	}
 	return ErrInvalidListStrategy
+}
+
+// roleRouteAdapter is the SINGLE conversion site between the bundled transport's
+// request structs and this package's command vocabulary. Actor,
+// AssignRoleCommand, UnassignRoleCommand, and UnassignRoleResult are root types
+// and the root imports the transport to mount it, so the transport can never
+// import them back; it declares a narrow port over the domain packages instead
+// and this adapter is the one place the two shapes meet. Keeping it a single
+// site is what makes the duplicated command shape safe: it is unit-tested
+// field for field.
+//
+// It also owns the two things the transport cannot: minting or validating the
+// MutationID, and consulting the host AssignmentPolicy before the guarded
+// assign.
+type roleRouteAdapter struct {
+	svc    *Service
+	policy AssignmentPolicy
+}
+
+var _ inbound.RoleAdminService = roleRouteAdapter{}
+
+// AssignRole converts, runs the optional legality policy, then drives the
+// guarded Service.AssignRole. The policy runs AFTER conversion (so it sees the
+// exact command that would be applied, resolved MutationID included) and BEFORE
+// the service, so a refusal never reaches the guard, the store, or the audit
+// sink.
+func (a roleRouteAdapter) AssignRole(ctx context.Context, req inbound.AssignRoleRequest) (*Receipt, error) {
+	cmd, err := a.assignCommand(req)
+	if err != nil {
+		return nil, err
+	}
+	if a.policy != nil {
+		if err := a.policy(ctx, cmd); err != nil {
+			return nil, err
+		}
+	}
+	return a.svc.AssignRole(ctx, actorFrom(req.ActorType, req.ActorID), cmd)
+}
+
+// UnassignRole converts and drives the guarded Service.UnassignRole, splitting
+// the op-specific result into the receipt and the same_role_grant_remains
+// annotation the transport reports top-level. The AssignmentPolicy is
+// deliberately NOT consulted here (see [AssignmentPolicy]): revocation
+// authorization belongs to Config.Guard, inside the atomic boundary.
+func (a roleRouteAdapter) UnassignRole(ctx context.Context, req inbound.UnassignRoleRequest) (*Receipt, bool, error) {
+	cmd, err := a.unassignCommand(req)
+	if err != nil {
+		return nil, false, err
+	}
+	result, err := a.svc.UnassignRole(ctx, actorFrom(req.ActorType, req.ActorID), cmd)
+	if err != nil {
+		return nil, false, err
+	}
+	return result.Receipt, result.SameRoleGrantRemains, nil
+}
+
+// ListBySubject pages a subject's role assignments.
+func (a roleRouteAdapter) ListBySubject(ctx context.Context, subjectType, subjectID string, req crud.ListRequest) (crud.Page[role.Assignment], error) {
+	return a.svc.ListRoleAssignmentsBySubject(ctx, PrincipalRef{Type: subjectType, ID: subjectID}, req)
+}
+
+// ListByResource pages the RAW direct-scope assignments stored at a resource.
+func (a roleRouteAdapter) ListByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[role.Assignment], error) {
+	return a.svc.ListRoleAssignmentsByResource(ctx, resourceType, resourceID, req)
+}
+
+// ListEffectiveByResource pages the EFFECTIVE role grants on a resource.
+func (a roleRouteAdapter) ListEffectiveByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[role.EffectiveGrant], error) {
+	return a.svc.ListEffectiveRoleGrantsByResource(ctx, resourceType, resourceID, req)
+}
+
+// assignCommand builds the AssignRoleCommand a bundled request describes.
+func (a roleRouteAdapter) assignCommand(req inbound.AssignRoleRequest) (AssignRoleCommand, error) {
+	id, err := resolveMutationID(req.MutationID)
+	if err != nil {
+		return AssignRoleCommand{}, err
+	}
+	return AssignRoleCommand{
+		MutationID:       id,
+		Subject:          PrincipalRef{Type: req.SubjectType, ID: req.SubjectID},
+		Role:             req.Role,
+		ResourceType:     req.ResourceType,
+		ResourceID:       req.ResourceID,
+		ExpectedRevision: revisionFrom(req.ExpectedRevision),
+	}, nil
+}
+
+// unassignCommand builds the UnassignRoleCommand a bundled request describes.
+func (a roleRouteAdapter) unassignCommand(req inbound.UnassignRoleRequest) (UnassignRoleCommand, error) {
+	id, err := resolveMutationID(req.MutationID)
+	if err != nil {
+		return UnassignRoleCommand{}, err
+	}
+	return UnassignRoleCommand{
+		MutationID:       id,
+		Subject:          PrincipalRef{Type: req.SubjectType, ID: req.SubjectID},
+		Role:             req.Role,
+		ResourceType:     req.ResourceType,
+		ResourceID:       req.ResourceID,
+		ExpectedRevision: revisionFrom(req.ExpectedRevision),
+	}, nil
+}
+
+// actorFrom builds the untrusted Actor from the principal the host gate's
+// authenticating layer stashed. The transport already refused (401) when there
+// was none, so this never fabricates one.
+func actorFrom(principalType, principalID string) Actor {
+	return Actor{PrincipalRef: PrincipalRef{Type: principalType, ID: principalID}}
+}
+
+// resolveMutationID mints an unguessable id when the client supplied none, and
+// otherwise validates the client's own key.
+//
+// Client-supplied ids are KEPT because retry idempotency is the point of the
+// receipts rail: a client that retries with its own id dedups against the stored
+// receipt instead of double-granting. The squat surface is bounded and
+// documented: the population behind the gate is the host's administrators, an id
+// must clear MutationID.Validate's strength floor, and a squatted id yields a
+// payload-mismatch conflict, never a silent overwrite.
+func resolveMutationID(raw string) (MutationID, error) {
+	if raw == "" {
+		return NewMutationID()
+	}
+	id := MutationID(raw)
+	if err := id.Validate(); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// revisionFrom converts the transport's optional compare-and-set anchor into the
+// domain Revision pointer. Nil stays nil — no expectation.
+func revisionFrom(v *uint64) *Revision {
+	if v == nil {
+		return nil
+	}
+	rev := Revision(*v)
+	return &rev
 }
