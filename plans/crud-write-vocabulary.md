@@ -539,7 +539,7 @@ _None._
 ## Execution record
 
 **EXECUTED 2026-08-31**, branch `crud-write-vocabulary` off `main` @ `f32d9ff`.
-Not tagged — `sdk/v0.7.0` is the owner's cut.
+Tagged: `sdk/v0.7.0` @ `41ddfdb` (#23 squash), cold-verified first proxy poll.
 
 | task | commit | note |
 |---|---|---|

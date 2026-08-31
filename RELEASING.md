@@ -255,7 +255,7 @@ lets a host replace one bundled route group's authentication posture without
 restating the others. No schema, no store retags. See the upgrade note below
 before adopting — the owner cuts the tag.
 
-**2026-08-31: `sdk/v0.7.0` — next tag, MINOR (additive)** — the crud write
+**2026-08-31: `sdk/v0.7.0` — TAGGED @ `41ddfdb` (#23), MINOR (additive)** — the crud write
 vocabulary (plan of record `.claude/plans/crud-write-vocabulary.md`; gopernicus
 issue #21; originating host gps-360-go slice S1). One module changes, one tag:
 the kernel gains `sdk.Violation`/`ValidationError`/`StaleError` + the five
@@ -265,7 +265,7 @@ new symbol is additive and every new wire field is `omitempty`, so existing
 bodies are byte-identical; no `go.mod` changes, no sibling retags, no schema.
 See the upgrade note below before adopting — the owner cuts the tag.
 
-**2026-08-31: `pockets/authorization/v0.7.0` — next tag, MINOR (additive)** —
+**2026-08-31: `pockets/authorization/v0.7.0` — TAGGED @ `e95c82b` (#24, #25), MINOR (additive)** —
 the authorization train (plans of record
 `.claude/plans/authorization-gates-and-lookup.md` and
 `.claude/plans/authorization-role-routes.md`; gopernicus issues #19, #20, #22;
@@ -384,7 +384,7 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
-### pockets/authorization — v0.7.0 (next tag, 2026-08-31): the disjunction gate, the bounded lookup, and role administration comes standard (minor)
+### pockets/authorization — v0.7.0 — tagged 2026-08-31 @ `e95c82b`: the disjunction gate, the bounded lookup, and role administration comes standard (minor)
 
 Plans of record `.claude/plans/authorization-gates-and-lookup.md` (#19, #22)
 and `.claude/plans/authorization-role-routes.md` (#20). A **minor**: purely
@@ -444,7 +444,7 @@ faults yet).
 `Config.AssignmentPolicy`; re-cap dashboard rosters with
 `LookupResourcesIn(…, Limit)` instead of post-hoc slicing.
 
-### sdk — v0.7.0 (next tag, 2026-08-31): the write vocabulary (minor)
+### sdk — v0.7.0 — tagged 2026-08-31 @ `41ddfdb`: the write vocabulary (minor)
 
 Plan of record `.claude/plans/crud-write-vocabulary.md` (gopernicus #21). A
 **minor**: purely additive, but it materially expands the host contract. Every

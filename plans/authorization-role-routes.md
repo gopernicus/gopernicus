@@ -493,8 +493,9 @@ griefing surface documented instead), and `[]web.Middleware` for the gate
 ## Execution record
 
 **EXECUTED 2026-08-31**, branch `authorization-role-routes`, stacked on Plan B's
-`authorization-gates-and-lookup` (b7d13d7..e8a2c9b). Not tagged, not pushed —
-`pockets/authorization/v0.7.0` is the joint cut with Plan B, by the owner.
+`authorization-gates-and-lookup` (b7d13d7..e8a2c9b). Tagged: the joint train
+`pockets/authorization/v0.7.0` @ `e95c82b` (#24 + #25 squashes, sdk pin → v0.7.0),
+cold-verified first proxy poll.
 
 | task | commit | note |
 |---|---|---|

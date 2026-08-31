@@ -368,7 +368,7 @@ resolved-type-agreement check stays fail-closed. Defined in
 Out-of-scope bullet "No 'not applicable…' resolver sentinel in v1" and risk 1's
 "if the owner rules it in".
 
-**Release.** `pockets/authorization/v0.7.0` tags jointly with Plan C (#20) once
-both merge — minor, additive-only. That train pins `sdk v0.7.0`; the sdk pin
+**Release.** DONE — `pockets/authorization/v0.7.0` @ `e95c82b` tagged jointly with
+Plan C (#20) — minor, additive-only. That train pins `sdk v0.7.0`; the sdk pin
 was deliberately not touched here. Poll the proxy `.info` URL before any
 downstream `go mod tidy`. Do not tag from this plan.
