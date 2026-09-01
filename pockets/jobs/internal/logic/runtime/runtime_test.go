@@ -46,6 +46,9 @@ func (q *oneShotQueue) Claim(ctx context.Context, workerID string, now time.Time
 	return j, nil
 }
 func (q *oneShotQueue) Complete(ctx context.Context, jobID string, now time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	q.mu.Lock()
 	q.completed[jobID] = true
 	q.mu.Unlock()
@@ -53,6 +56,9 @@ func (q *oneShotQueue) Complete(ctx context.Context, jobID string, now time.Time
 	return nil
 }
 func (q *oneShotQueue) Fail(ctx context.Context, jobID string, now time.Time, reason string, maxAttempts int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	q.mu.Lock()
 	q.failed[jobID] = reason
 	q.mu.Unlock()
@@ -131,5 +137,69 @@ func TestRun_KnownKind_Completes(t *testing.T) {
 	}
 	if !q.completed["j2"] {
 		t.Fatal("known-kind job must be completed")
+	}
+}
+
+func TestRun_CancelDrainsInFlightHandlerAndPersistsCompletion(t *testing.T) {
+	q := newOneShotQueue(job.Job{JobID: "j-drain", Kind: "known.kind", JobStatus: job.StatusPending})
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	rt := New(Deps{
+		Queue: q,
+		Handlers: map[string]HandlerFunc{"known.kind": func(ctx context.Context, _ job.Job) error {
+			close(started)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-release:
+				return nil
+			}
+		}},
+		Workers:      1,
+		PollInterval: 20 * time.Millisecond,
+		IdleInterval: 20 * time.Millisecond,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- rt.Run(ctx) }()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler did not start")
+	}
+	cancel()
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("Run returned before the in-flight handler drained: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+
+	select {
+	case id := <-q.done:
+		if id != "j-drain" {
+			t.Fatalf("completed id = %q, want j-drain", id)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("in-flight completion was not persisted")
+	}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run returned error after clean drain: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after in-flight completion persisted")
+	}
+
+	q.mu.Lock()
+	completed := q.completed["j-drain"]
+	q.mu.Unlock()
+	if !completed {
+		t.Fatal("cancellation prevented durable completion")
 	}
 }

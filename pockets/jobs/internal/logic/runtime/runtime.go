@@ -58,7 +58,7 @@ func New(d Deps) *Runtime {
 	}
 
 	runner := workers.NewRunner[job.Job](d.Queue, process, log, workers.WithMaxAttempts(d.MaxAttempts))
-	queuePool := workers.NewPool(runner.WorkFunc(),
+	queuePool := workers.NewPool(drainInFlight(runner.WorkFunc()),
 		workers.WithName("jobs-queue"),
 		workers.WithWorkerCount(d.Workers),
 		workers.WithPollInterval(d.PollInterval),
@@ -69,7 +69,7 @@ func New(d Deps) *Runtime {
 
 	var schedulerPool *workers.Pool
 	if d.Scheduler != nil {
-		schedulerPool = workers.NewPool(d.Scheduler,
+		schedulerPool = workers.NewPool(drainInFlight(d.Scheduler),
 			workers.WithName("jobs-scheduler"),
 			workers.WithWorkerCount(1),
 			workers.WithPollInterval(d.PollInterval),
@@ -81,9 +81,24 @@ func New(d Deps) *Runtime {
 	return &Runtime{queuePool: queuePool, schedulerPool: schedulerPool}
 }
 
+// drainInFlight preserves context values (including the pool's worker id) but
+// detaches cancellation once an iteration has begun. Pool.Run checks
+// cancellation before starting each iteration, so shutdown still prevents new
+// claim iterations; an iteration already in progress is allowed to finish its
+// handler and persist Complete/Fail before the pool returns. Handlers must own a
+// timeout shorter than their queue lease so a stuck iteration cannot drain
+// forever. The fenced runtime intentionally does not use this wrapper: its
+// shutdown contract cancels processing and leaves the fenced lease reclaimable.
+func drainInFlight(work workers.WorkFunc) workers.WorkFunc {
+	return func(ctx context.Context) error {
+		return work(context.WithoutCancel(ctx))
+	}
+}
+
 // Run blocks running the queue pool and, when present, the scheduler pool.
-// Cancelling ctx drains both gracefully — in-flight jobs finish and persist
-// Complete/Fail — then Run returns the joined pool errors (nil on a clean drain).
+// Cancelling ctx stops new iterations and drains both gracefully — in-flight
+// jobs finish and persist Complete/Fail — then Run returns the joined pool
+// errors (nil on a clean drain).
 func (r *Runtime) Run(ctx context.Context) error {
 	if r.schedulerPool == nil {
 		return r.queuePool.Run(ctx)
