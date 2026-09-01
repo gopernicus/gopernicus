@@ -280,6 +280,19 @@ v0.7.0`. One visible upgrade-time change: a host wiring the roles kind + a
 store retags. See the upgrade note below before adopting — the owner cuts the
 tag.
 
+**2026-08-31: `pockets/jobs/v0.4.0` — TAGGED @ `3107dce`, MINOR (behavioral
+fix, no API change)** — graceful drain for the unfenced runtime (plan of record
+`.claude/plans/jobs-graceful-drain.md`; originating host gps-360-go plans/40
+Batch 0). One module changes, one tag: the unfenced queue and scheduler pool
+iterations run under `context.WithoutCancel`, so cancellation stops NEW claims
+but an iteration already begun finishes its handler and persists its terminal
+`Complete`/`Fail` on a live context — the drain the README always promised.
+The fenced runtime is deliberately unchanged (its cancellation-to-lease-recovery
+contract is different and stays different). No schema, no store retags, no pin
+moves. See the upgrade note below — a host must bound handler work with its own
+timeout strictly below the queue lease, since a detached iteration no longer
+dies with the process context.
+
 ## Tagging scheme
 
 Nested Go modules in a single repo are tagged with the module's directory as a
@@ -383,6 +396,31 @@ silently would break a host whose CSP no longer covers the kit's assets. Record 
 the module's next-tag upgrade note below and tell hosts to re-derive their CSP header.
 
 ## Upgrade notes (keyed to each module's next tag)
+
+### pockets/jobs — v0.4.0 — tagged 2026-08-31 @ `3107dce`: unfenced graceful drain honors the documented contract (minor)
+
+Plan of record `.claude/plans/jobs-graceful-drain.md` (originating host
+gps-360-go plans/40). A **minor**: a behavioral fix toward the README's own
+drain contract ("in-flight handlers finish and persist"); no API change, no
+schema, no store retags.
+
+**What changed.** `Runtime.Run` used to pass the canceled pool context through
+an already-claimed handler and into `Complete`/`Fail` — a context-aware handler
+stopped mid-work and the terminal write failed on the dead context, leaving the
+row `running` until lease recovery re-ran it. Now the unfenced queue and
+scheduler iterations are wrapped in `context.WithoutCancel` (values, including
+the worker id, survive); `workers.Pool` still checks cancellation before each
+iteration, so shutdown still stops new claims. The **fenced runtime is
+unchanged**: its cancellation intentionally abandons processing and leaves the
+lease reclaimable.
+
+**Adopter action.** A detached iteration no longer dies with the process
+context, so bound handler work yourself: wrap registered handlers in a timeout
+**strictly below the queue lease** (default 15m), or a hung handler can drain
+past the lease and be reclaimed concurrently. Reference: gps-360-go wraps every
+handler at a configurable 10m, boot-refusing a value at or above the lease. The
+regression proof is `internal/logic/runtime/runtime_test.go`'s
+cancellation-during-handler test.
 
 ### pockets/authorization — v0.7.0 — tagged 2026-08-31 @ `e95c82b`: the disjunction gate, the bounded lookup, and role administration comes standard (minor)
 
