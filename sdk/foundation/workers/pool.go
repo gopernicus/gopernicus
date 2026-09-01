@@ -28,6 +28,7 @@ type poolConfig struct {
 	workerCount  int
 	pollInterval time.Duration
 	idleInterval time.Duration
+	heartbeat    time.Duration
 	middlewares  []Middleware
 	logger       *slog.Logger
 	wake         <-chan struct{}
@@ -54,6 +55,20 @@ func WithPollInterval(interval time.Duration) PoolOption {
 // eventual pickup even when no wake signal arrives.
 func WithIdleInterval(interval time.Duration) PoolOption {
 	return func(c *poolConfig) { c.idleInterval = interval }
+}
+
+// WithHeartbeat turns on a periodic INFO "pool alive" line carrying the pool
+// name, the active worker count, and the iteration, claim, and error counts
+// since the previous beat. The pool beats even when every delta is zero, so a
+// MISSING heartbeat is the alarm: an idle pool proves it is alive and polling
+// instead of leaving silence as the steady state.
+//
+// An interval of zero or less disables the heartbeat, which is the default.
+// Unlike the poll and idle intervals there is no fallback clamp — an unset
+// value has to keep meaning "no heartbeat". There is no minimum either; a
+// sub-second interval is operator noise, not an error.
+func WithHeartbeat(interval time.Duration) PoolOption {
+	return func(c *poolConfig) { c.heartbeat = interval }
 }
 
 // WithMiddleware adds middleware around the WorkFunc. The first middleware
@@ -99,6 +114,7 @@ type Pool struct {
 	workerCount  int
 	pollInterval time.Duration
 	idleInterval time.Duration
+	heartbeat    time.Duration
 	log          *slog.Logger
 	wake         <-chan struct{}
 
@@ -106,6 +122,13 @@ type Pool struct {
 	stats    stats
 	wg       sync.WaitGroup
 	errors   chan error
+}
+
+// heartbeatCounters is the heartbeat's local view of the pool's counters: the
+// public snapshot plus the private claims total it reports as a delta.
+type heartbeatCounters struct {
+	stats  Stats
+	claims int64
 }
 
 // NewPool builds a Pool that calls work in a loop on each of its workers.
@@ -140,6 +163,7 @@ func NewPool(work WorkFunc, opts ...PoolOption) *Pool {
 		workerCount:  c.workerCount,
 		pollInterval: c.pollInterval,
 		idleInterval: c.idleInterval,
+		heartbeat:    c.heartbeat,
 		log:          c.logger,
 		wake:         c.wake,
 		errors:       make(chan error, c.workerCount),
@@ -170,6 +194,16 @@ func (p *Pool) Run(ctx context.Context) error {
 		"idle_interval", p.idleInterval,
 	)
 
+	// The heartbeat baseline is read synchronously, before anything is
+	// launched, so goroutine scheduling cannot hide startup work from the first
+	// beat.
+	var heartbeatDone chan struct{}
+	if p.heartbeat > 0 {
+		baseline := p.heartbeatSnapshot()
+		heartbeatDone = make(chan struct{})
+		go p.runHeartbeat(ctx, baseline, heartbeatDone)
+	}
+
 	for i := 0; i < p.workerCount; i++ {
 		workerID := fmt.Sprintf("%s-worker-%d", p.name, i+1)
 		p.wg.Add(1)
@@ -177,6 +211,16 @@ func (p *Pool) Run(ctx context.Context) error {
 	}
 
 	p.wg.Wait()
+
+	// The heartbeat is not in p.wg: workers can all exit via ErrWorkerShutdown
+	// without ctx ever being cancelled, and a heartbeat parked in the WaitGroup
+	// would then tick forever with Run blocked on Wait. Cancel once the workers
+	// are done, then wait for the heartbeat on its own channel.
+	cancel()
+	if heartbeatDone != nil {
+		<-heartbeatDone
+	}
+
 	close(p.errors)
 
 	p.log.InfoContext(context.Background(), "worker pool stopped",
@@ -231,6 +275,9 @@ func (p *Pool) worker(ctx context.Context, cancel context.CancelFunc, workerID s
 		err := p.runOnce(WithWorkerID(ctx, workerID), workerID)
 
 		p.stats.iterations.Add(1)
+		if err == nil {
+			p.stats.claims.Add(1)
+		}
 		if err != nil && !errors.Is(err, ErrNoWork) {
 			p.stats.errors.Add(1)
 		}
@@ -251,12 +298,57 @@ func (p *Pool) worker(ctx context.Context, cancel context.CancelFunc, workerID s
 
 		next := p.pollInterval
 		if errors.Is(err, ErrNoWork) {
+			p.log.DebugContext(ctx, "iteration: no work", "pool", p.name, "worker_id", workerID)
 			next = p.idleInterval
 		}
 		if next != interval {
 			interval = next
 			ticker.Reset(next)
 		}
+	}
+}
+
+// heartbeatSnapshot reads the counters the heartbeat reports: the public
+// snapshot plus the private claims total.
+func (p *Pool) heartbeatSnapshot() heartbeatCounters {
+	return heartbeatCounters{stats: p.stats.snapshot(), claims: p.stats.claims.Load()}
+}
+
+// runHeartbeat emits one INFO line per interval with the counter deltas since
+// the previous beat, and closes done when it stops. It is the pool's single
+// reader of previous, so the running totals need no extra synchronization.
+// Counters are independent atomics rather than a transactional tuple, so an
+// iteration completing on a tick may land on either adjacent beat; no delta can
+// go negative.
+func (p *Pool) runHeartbeat(ctx context.Context, previous heartbeatCounters, done chan<- struct{}) {
+	defer close(done)
+
+	ticker := time.NewTicker(p.heartbeat)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		// Cancellation takes precedence over a coincident tick, mirroring the
+		// worker loop: a draining pool is narrated by the runner and summarized
+		// by the shutdown stats line, so a drain-time beat adds nothing.
+		if ctx.Err() != nil {
+			return
+		}
+
+		current := p.heartbeatSnapshot()
+		p.log.InfoContext(ctx, "pool alive",
+			"pool", p.name,
+			"active_workers", current.stats.ActiveWorkers,
+			"iterations", current.stats.Iterations-previous.stats.Iterations,
+			"claims", current.claims-previous.claims,
+			"errors", current.stats.Errors-previous.stats.Errors,
+		)
+		previous = current
 	}
 }
 

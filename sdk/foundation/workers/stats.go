@@ -16,6 +16,13 @@ type stats struct {
 	iterations    atomic.Int64
 	errors        atomic.Int64
 	panics        atomic.Int64
+
+	// claims counts successful work iterations — WorkFunc calls that returned
+	// nil, which for Runner.WorkFunc means a job was claimed and handled.
+	// ErrNoWork, ordinary errors, the shutdown sentinels, and recovered panics
+	// never increment it. It stays private to the pool: the heartbeat reports
+	// it as a per-beat delta, and Stats keeps its exported shape.
+	claims atomic.Int64
 }
 
 func (s *stats) snapshot() Stats {

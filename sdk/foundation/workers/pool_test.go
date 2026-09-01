@@ -18,6 +18,70 @@ func silentLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError + 1}))
 }
 
+// captureHandler is a mutex-guarded slog.Handler that retains a clone of every
+// record it handles. The pool logs from several goroutines, so a shared
+// bytes.Buffer would race; tests read the records back after Run has returned.
+type captureHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *captureHandler) Enabled(_ context.Context, level slog.Level) bool {
+	return level >= slog.LevelDebug
+}
+
+func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r.Clone())
+	return nil
+}
+
+func (h *captureHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+
+func (h *captureHandler) WithGroup(_ string) slog.Handler { return h }
+
+// captured returns a snapshot of the records seen so far.
+func (h *captureHandler) captured() []slog.Record {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]slog.Record, len(h.records))
+	copy(out, h.records)
+	return out
+}
+
+// capturingLogger returns a logger enabled at Debug and the handler holding its
+// records.
+func capturingLogger() (*slog.Logger, *captureHandler) {
+	h := &captureHandler{}
+	return slog.New(h), h
+}
+
+func recordsWithMessage(records []slog.Record, msg string) []slog.Record {
+	var out []slog.Record
+	for _, r := range records {
+		if r.Message == msg {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func attrValue(r slog.Record, key string) (slog.Value, bool) {
+	var (
+		value slog.Value
+		found bool
+	)
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == key {
+			value, found = a.Value, true
+			return false
+		}
+		return true
+	})
+	return value, found
+}
+
 // testPool builds a fast pool: 1 worker, 10ms poll, 50ms idle, silent logger,
 // plus any extra options (which override the defaults above).
 func testPool(work WorkFunc, extra ...PoolOption) *Pool {
@@ -436,6 +500,286 @@ func TestPool_StatsActiveWorkersZeroAfterStop(t *testing.T) {
 
 	if got := pool.Stats().ActiveWorkers; got != 0 {
 		t.Errorf("expected 0 active workers after stop, got %d", got)
+	}
+}
+
+func TestPool_LogsNoWorkIterationAtDebug(t *testing.T) {
+	logger, capture := capturingLogger()
+	work := func(ctx context.Context) error { return ErrNoWork }
+
+	pool := testPool(work, WithIdleInterval(10*time.Millisecond), WithLogger(logger))
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	<-runPool(pool, ctx)
+
+	noWork := recordsWithMessage(capture.captured(), "iteration: no work")
+	if len(noWork) == 0 {
+		t.Fatal("expected at least one \"iteration: no work\" record")
+	}
+	for i, r := range noWork {
+		if r.Level != slog.LevelDebug {
+			t.Errorf("record %d: level = %v, want %v", i, r.Level, slog.LevelDebug)
+		}
+		if v, ok := attrValue(r, "pool"); !ok || v.String() != "test" {
+			t.Errorf("record %d: pool attr = %v (present %v), want \"test\"", i, v, ok)
+		}
+		if v, ok := attrValue(r, "worker_id"); !ok || v.String() != "test-worker-1" {
+			t.Errorf("record %d: worker_id attr = %v (present %v), want \"test-worker-1\"", i, v, ok)
+		}
+	}
+}
+
+func TestPool_NoWorkLineAbsentWhenWorkSucceeds(t *testing.T) {
+	logger, capture := capturingLogger()
+	work := func(ctx context.Context) error { return nil }
+
+	pool := testPool(work, WithPollInterval(5*time.Millisecond), WithLogger(logger))
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	<-runPool(pool, ctx)
+
+	if got := len(recordsWithMessage(capture.captured(), "iteration: no work")); got != 0 {
+		t.Errorf("expected no \"iteration: no work\" records from a succeeding WorkFunc, got %d", got)
+	}
+}
+
+// --- heartbeat tests ---
+
+func beatCount(capture *captureHandler) int {
+	return len(recordsWithMessage(capture.captured(), "pool alive"))
+}
+
+func waitForBeats(t *testing.T, capture *captureHandler, want int, within time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		if beatCount(capture) >= want {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("expected at least %d \"pool alive\" records within %v, got %d", want, within, beatCount(capture))
+}
+
+func intAttr(t *testing.T, r slog.Record, key string) int64 {
+	t.Helper()
+	v, ok := attrValue(r, key)
+	if !ok {
+		t.Fatalf("record %q is missing attr %q", r.Message, key)
+	}
+	if v.Kind() != slog.KindInt64 {
+		t.Fatalf("record %q attr %q kind = %v, want Int64", r.Message, key, v.Kind())
+	}
+	return v.Int64()
+}
+
+// assertBeat checks the shape every beat must have and returns its deltas.
+func assertBeat(t *testing.T, r slog.Record) (iterations, claims, errs int64) {
+	t.Helper()
+	if r.Level != slog.LevelInfo {
+		t.Errorf("beat level = %v, want %v", r.Level, slog.LevelInfo)
+	}
+	if v, ok := attrValue(r, "pool"); !ok || v.String() != "test" {
+		t.Errorf("beat pool attr = %v (present %v), want \"test\"", v, ok)
+	}
+	if got := intAttr(t, r, "active_workers"); got < 0 {
+		t.Errorf("beat active_workers = %d, want >= 0", got)
+	}
+	iterations = intAttr(t, r, "iterations")
+	claims = intAttr(t, r, "claims")
+	errs = intAttr(t, r, "errors")
+	if iterations < 0 || claims < 0 || errs < 0 {
+		t.Errorf("beat deltas must be non-negative, got iterations=%d claims=%d errors=%d", iterations, claims, errs)
+	}
+	return iterations, claims, errs
+}
+
+func TestPool_HeartbeatOffByDefault(t *testing.T) {
+	work := func(ctx context.Context) error { return ErrNoWork }
+
+	for _, tc := range []struct {
+		name  string
+		extra []PoolOption
+	}{
+		{name: "default"},
+		{name: "explicit zero", extra: []PoolOption{WithHeartbeat(0)}},
+		{name: "negative", extra: []PoolOption{WithHeartbeat(-time.Second)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logger, capture := capturingLogger()
+			opts := append([]PoolOption{WithIdleInterval(10 * time.Millisecond)}, tc.extra...)
+			opts = append(opts, WithLogger(logger))
+
+			pool := testPool(work, opts...)
+			if pool.heartbeat > 0 {
+				t.Fatalf("expected the heartbeat to be off, got %v", pool.heartbeat)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
+			defer cancel()
+			<-runPool(pool, ctx)
+
+			if got := beatCount(capture); got != 0 {
+				t.Errorf("expected no \"pool alive\" records with the heartbeat off, got %d", got)
+			}
+		})
+	}
+}
+
+func TestPool_HeartbeatBeatsWhileIdle(t *testing.T) {
+	logger, capture := capturingLogger()
+	work := func(ctx context.Context) error { return ErrNoWork }
+
+	pool := testPool(work,
+		WithIdleInterval(10*time.Millisecond),
+		WithHeartbeat(20*time.Millisecond),
+		WithLogger(logger),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	<-runPool(pool, ctx)
+
+	beats := recordsWithMessage(capture.captured(), "pool alive")
+	if len(beats) == 0 {
+		t.Fatal("expected at least one \"pool alive\" record from an idle pool")
+	}
+	for _, r := range beats {
+		if _, claims, _ := assertBeat(t, r); claims != 0 {
+			t.Errorf("an always-ErrNoWork pool reported claims = %d, want 0", claims)
+		}
+	}
+}
+
+func TestPool_HeartbeatCountsErrorsNotClaims(t *testing.T) {
+	logger, capture := capturingLogger()
+	work := func(ctx context.Context) error { return errors.New("boom") }
+
+	pool := testPool(work,
+		WithPollInterval(5*time.Millisecond),
+		WithHeartbeat(20*time.Millisecond),
+		WithLogger(logger),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	<-runPool(pool, ctx)
+
+	beats := recordsWithMessage(capture.captured(), "pool alive")
+	if len(beats) == 0 {
+		t.Fatal("expected at least one \"pool alive\" record")
+	}
+
+	var totalClaims, totalErrors int64
+	for _, r := range beats {
+		_, claims, errs := assertBeat(t, r)
+		totalClaims += claims
+		totalErrors += errs
+	}
+	if totalClaims != 0 {
+		t.Errorf("a failing WorkFunc reported %d claims, want 0", totalClaims)
+	}
+	if totalErrors == 0 {
+		t.Error("a failing WorkFunc reported no errors across any beat")
+	}
+}
+
+func TestPool_HeartbeatBaselineCapturesStartupClaim(t *testing.T) {
+	logger, capture := capturingLogger()
+
+	var once atomic.Bool
+	work := func(ctx context.Context) error {
+		if once.CompareAndSwap(false, true) {
+			return nil
+		}
+		return ErrNoWork
+	}
+
+	pool := testPool(work,
+		WithPollInterval(5*time.Millisecond),
+		WithIdleInterval(10*time.Millisecond),
+		WithHeartbeat(20*time.Millisecond),
+		WithLogger(logger),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	<-runPool(pool, ctx)
+
+	beats := recordsWithMessage(capture.captured(), "pool alive")
+	if len(beats) == 0 {
+		t.Fatal("expected at least one \"pool alive\" record")
+	}
+
+	var totalClaims int64
+	for _, r := range beats {
+		_, claims, _ := assertBeat(t, r)
+		totalClaims += claims
+	}
+	// The baseline is read synchronously before the workers launch, so the one
+	// successful iteration cannot be lost to scheduling before the first beat.
+	if totalClaims != 1 {
+		t.Errorf("total claims across beats = %d, want 1", totalClaims)
+	}
+}
+
+// TestPool_HeartbeatDoesNotDeadlockOnWorkerShutdown is the decision-5
+// regression: every worker exits via ErrWorkerShutdown, so ctx is never
+// cancelled from outside. A heartbeat that joined p.wg would tick forever with
+// Run blocked on Wait.
+func TestPool_HeartbeatDoesNotDeadlockOnWorkerShutdown(t *testing.T) {
+	work := func(ctx context.Context) error { return ErrWorkerShutdown }
+
+	pool := testPool(work,
+		WithWorkerCount(3),
+		WithHeartbeat(20*time.Millisecond),
+		WithLogger(silentLogger()),
+	)
+	done := runPool(pool, context.Background())
+	assertReturns(t, done, 2*time.Second, "Run did not return with the heartbeat enabled and every worker shut down")
+}
+
+// TestPool_HeartbeatSilentDuringDrain is the decision-6 regression: once ctx is
+// cancelled the heartbeat stops, even while an in-flight iteration keeps the
+// drain open past several beat intervals.
+func TestPool_HeartbeatSilentDuringDrain(t *testing.T) {
+	const heartbeat = 50 * time.Millisecond
+
+	logger, capture := capturingLogger()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+
+	work := func(ctx context.Context) error {
+		once.Do(func() { close(started) })
+		<-release
+		return ErrNoWork
+	}
+
+	pool := testPool(work, WithHeartbeat(heartbeat), WithLogger(logger))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := runPool(pool, ctx)
+
+	<-started
+	// Cancel right after a beat lands, so the next tick is still ~a full
+	// interval away and cancellation is the only reason no further beat fires.
+	waitForBeats(t, capture, 1, 2*time.Second)
+	atCancel := beatCount(capture)
+	cancel()
+
+	// Hold the drain open across several intervals' worth of ticks.
+	time.Sleep(4 * heartbeat)
+	if got := beatCount(capture); got != atCancel {
+		t.Errorf("heartbeat beat during drain: %d records at cancel, %d after", atCancel, got)
+	}
+
+	close(release)
+	assertReturns(t, done, 2*time.Second, "Run did not return after the in-flight iteration finished")
+
+	records := capture.captured()
+	if got := beatCount(capture); got != atCancel {
+		t.Errorf("heartbeat beat after cancel: %d records at cancel, %d once Run returned", atCancel, got)
+	}
+	if last := records[len(records)-1]; last.Message != "worker pool stopped" {
+		t.Errorf("last record = %q, want \"worker pool stopped\"", last.Message)
 	}
 }
 
