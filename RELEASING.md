@@ -293,6 +293,23 @@ moves. See the upgrade note below — a host must bound handler work with its ow
 timeout strictly below the queue lease, since a detached iteration no longer
 dies with the process context.
 
+**2026-09-01: `sdk/v0.7.1` — next tag, PATCH (additive, zero-value-preserving)**
+— workers idle observability (plan of record
+`.claude/plans/workers-idle-observability.md`; gopernicus issue #32;
+originating host gps-360-go `cmd/workers/io`, its plans/40). One module
+changes, one tag: `foundation/workers.Pool` logs a Debug `"iteration: no work"`
+line per idle iteration and gains `WithHeartbeat(interval)`, an opt-in INFO
+`"pool alive"` beat carrying the iteration / claim / error deltas since the
+previous beat. An idle pool was silent between boot and the first job, so an
+operator could not tell "alive and polling" from "wedged"; now a MISSING
+heartbeat is the alarm. Zero or less disables the heartbeat and is the default,
+so the option is a no-op for every existing host, and the Debug line is
+invisible to any host whose logger does not enable Debug — INFO-and-higher
+output, the exported `Stats` shape, and the shutdown stats line are all
+unchanged. No `go.mod` change (`sdk` still has no require block), no sibling
+retags, no schema, no new guard. See the upgrade note below before adopting —
+the owner cuts the tag.
+
 ## Tagging scheme
 
 Nested Go modules in a single repo are tagged with the module's directory as a
@@ -396,6 +413,61 @@ silently would break a host whose CSP no longer covers the kit's assets. Record 
 the module's next-tag upgrade note below and tell hosts to re-derive their CSP header.
 
 ## Upgrade notes (keyed to each module's next tag)
+
+### sdk — v0.7.1 (next tag, 2026-09-01): the worker pool proves it is idle, not wedged (patch)
+
+Plan of record `.claude/plans/workers-idle-observability.md` (gopernicus #32;
+originating host gps-360-go `cmd/workers/io`). A **patch**: two additive
+observability seams in `foundation/workers`, both zero-value-preserving. A
+workless pool used to emit nothing after its `worker started` lines — an empty
+claim (`ErrNoWork`) was swallowed in `Pool.worker` at every level, and the
+`Stats` the pool already tracks printed exactly once, at shutdown.
+
+**Addition 1 — a Debug line per idle iteration.** `Pool.worker` now logs
+`"iteration: no work"` at **Debug** with `pool` and `worker_id` whenever the
+WorkFunc returns `ErrNoWork`. Free in production; `LOG_LEVEL=DEBUG` makes a
+worker chatty exactly when someone is staring at it. It fires whether or not
+the heartbeat is enabled. This is the one change visible without opting in, and
+only to a host whose logger enables Debug.
+
+**Addition 2 — `WithHeartbeat(interval time.Duration) PoolOption`.** One INFO
+`"pool alive"` line per interval with `pool`, `active_workers`, and the
+`iterations` / `claims` / `errors` **deltas** since the previous beat. It beats
+even when every delta is zero — an all-zero beat from an idle pool is the whole
+point, so a missing heartbeat is the alarm rather than silence being the steady
+state. First beat lands one full interval after start (the existing
+`worker pool starting` line covers boot); the heartbeat stops at cancellation
+and deliberately does not beat during the drain. `interval <= 0` disables it
+and **is the default** — unlike `WithPollInterval`/`WithIdleInterval` there is
+no fallback clamp, because an unset value has to keep meaning "no heartbeat"
+for existing hosts. There is no minimum clamp either; a sub-second interval is
+operator noise, not an error.
+
+**Adopter action: none required.** The zero value is off, so every existing
+host behaves exactly as it did. To adopt, pass the option at pool
+construction and alert on the ABSENCE of the line:
+
+```go
+pool := workers.NewPool(runner.WorkFunc,
+    workers.WithWorkerCount(4),
+    workers.WithHeartbeat(time.Minute),
+)
+```
+
+**Vocabulary.** `claims` counts WorkFunc calls that returned `nil` — for
+`Runner.WorkFunc`, the package's intended adapter, that means a job was claimed
+and handled. `ErrNoWork`, ordinary errors, the shutdown sentinels, and
+recovered panics never count as claims; recovered panics already count into
+`errors` through the returned error, so there is no separate panic attr.
+
+Not on this tag: **no `Stats` change** — the claims counter stays private to the
+pool (an exported field would break external positional composite literals and
+would alter the shutdown line even with the heartbeat off), and cumulative
+totals remain where they are today, on `Stats()` and the shutdown line. No
+per-iteration INFO logging (four workers polling every 5–30s would drown the
+lines that matter), no metrics export (expvar/Prometheus/OTel), no `Runner` or
+fenced-runtime change, no parity change in `foundation/async`, and no cadence or
+drain-contract change. `sdk`'s `go.mod` still has no require block.
 
 ### pockets/jobs — v0.4.0 — tagged 2026-08-31 @ `3107dce`: unfenced graceful drain honors the documented contract (minor)
 
