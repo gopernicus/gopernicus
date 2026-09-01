@@ -29,6 +29,7 @@ type Deps struct {
 	Workers      int
 	PollInterval time.Duration
 	IdleInterval time.Duration
+	Heartbeat    time.Duration // 0 = no heartbeat (workers.WithHeartbeat)
 	MaxAttempts  int
 	Logger       *slog.Logger
 }
@@ -64,6 +65,7 @@ func New(d Deps) *Runtime {
 		workers.WithPollInterval(d.PollInterval),
 		workers.WithIdleInterval(d.IdleInterval),
 		workers.WithWakeChannel(d.Wake),
+		workers.WithHeartbeat(d.Heartbeat),
 		workers.WithLogger(log),
 	)
 
@@ -74,6 +76,7 @@ func New(d Deps) *Runtime {
 			workers.WithWorkerCount(1),
 			workers.WithPollInterval(d.PollInterval),
 			workers.WithIdleInterval(d.IdleInterval),
+			workers.WithHeartbeat(d.Heartbeat),
 			workers.WithLogger(log),
 		)
 	}

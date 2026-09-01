@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -201,5 +202,58 @@ func TestRun_CancelDrainsInFlightHandlerAndPersistsCompletion(t *testing.T) {
 	q.mu.Unlock()
 	if !completed {
 		t.Fatal("cancellation prevented durable completion")
+	}
+}
+
+// lockedBuffer is a goroutine-safe log sink for capturing pool output.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (w *lockedBuffer) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.Write(p)
+}
+
+func (w *lockedBuffer) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.String()
+}
+
+// TestHeartbeatReachesThePools proves Deps.Heartbeat is passed through to the
+// worker pools (workers.WithHeartbeat, sdk v0.7.1): an IDLE queue pool with a
+// heartbeat set beats "pool alive" — an all-zero beat from a workless pool is
+// the liveness signal the option exists for. Zero stays off upstream (no
+// clamp), so the passthrough is the only thing this package has to prove.
+func TestHeartbeatReachesThePools(t *testing.T) {
+	buf := &lockedBuffer{}
+	log := slog.New(slog.NewTextHandler(buf, nil))
+
+	rt := New(Deps{
+		Queue:        newOneShotQueue(), // empty: every claim is ErrNoWork
+		Handlers:     map[string]HandlerFunc{"noop": func(context.Context, job.Job) error { return nil }},
+		PollInterval: 5 * time.Millisecond,
+		IdleInterval: 5 * time.Millisecond,
+		Heartbeat:    20 * time.Millisecond,
+		Logger:       log,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- rt.Run(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && !strings.Contains(buf.String(), "pool alive") {
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(buf.String(), "pool alive") {
+		t.Fatalf("no \"pool alive\" heartbeat line reached the logger; Deps.Heartbeat is not passed to the pool")
 	}
 }

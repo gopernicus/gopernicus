@@ -37,8 +37,8 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/jobs/internal/logic/queuesvc"
 	"github.com/gopernicus/gopernicus/pockets/jobs/internal/logic/runtime"
 	"github.com/gopernicus/gopernicus/pockets/jobs/internal/logic/schedulesvc"
-	"github.com/gopernicus/gopernicus/sdk/pocket"
 	"github.com/gopernicus/gopernicus/sdk/foundation/workers"
+	"github.com/gopernicus/gopernicus/sdk/pocket"
 )
 
 const (
@@ -150,6 +150,11 @@ type Config struct {
 	// ScheduleBatch is the number of due schedules handled per tick; 0 →
 	// defaultScheduleBatch.
 	ScheduleBatch int
+	// Heartbeat is the pools' liveness cadence (sdk v0.7.1,
+	// workers.WithHeartbeat): one INFO "pool alive" line per interval with the
+	// iteration/claim/error deltas since the previous beat. 0 (the default)
+	// disables it — existing hosts behave exactly as before.
+	Heartbeat time.Duration
 	// Logger is the operational logger for the runtime pools (queue and
 	// scheduler); nil → slog.Default(). It is distinct from pocket.Mount.Logger:
 	// Config.Logger is the runtime pools' operational logger, while Mount.Logger
@@ -163,6 +168,7 @@ type resolvedConfig struct {
 	workers      int
 	pollInterval time.Duration
 	idleInterval time.Duration
+	heartbeat    time.Duration
 	maxAttempts  int
 	logger       *slog.Logger // nil → the seams fall back to slog.Default()
 }
@@ -172,7 +178,7 @@ type resolvedConfig struct {
 // shares that channel with the queue pool by construction.
 type Service struct {
 	repos     Repositories
-	queue     *queuesvc.Service // nil when Repositories.Queue is nil (fenced-only host)
+	queue     *queuesvc.Service    // nil when Repositories.Queue is nil (fenced-only host)
 	scheduler *schedulesvc.Service // nil when Repositories.Schedules or Queue is nil
 	handlers  map[string]HandlerFunc
 	cfg       resolvedConfig
@@ -198,6 +204,7 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 		workers:      cfg.Workers,
 		pollInterval: cfg.PollInterval,
 		idleInterval: cfg.IdleInterval,
+		heartbeat:    cfg.Heartbeat,
 		maxAttempts:  cfg.MaxAttempts,
 		logger:       cfg.Logger,
 	}
@@ -303,6 +310,7 @@ func NewRuntime(svc *Service) (*Runtime, error) {
 		Workers:      svc.cfg.workers,
 		PollInterval: svc.cfg.pollInterval,
 		IdleInterval: svc.cfg.idleInterval,
+		Heartbeat:    svc.cfg.heartbeat,
 		MaxAttempts:  svc.cfg.maxAttempts,
 		Logger:       svc.cfg.logger,
 	})
