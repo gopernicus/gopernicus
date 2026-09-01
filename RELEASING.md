@@ -293,7 +293,7 @@ moves. See the upgrade note below — a host must bound handler work with its ow
 timeout strictly below the queue lease, since a detached iteration no longer
 dies with the process context.
 
-**2026-09-01: `sdk/v0.7.1` — next tag, PATCH (additive, zero-value-preserving)**
+**2026-09-01: `sdk/v0.7.1` — TAGGED @ `418414f` (PR #33), PATCH (additive, zero-value-preserving)**
 — workers idle observability (plan of record
 `.claude/plans/workers-idle-observability.md`; gopernicus issue #32;
 originating host gps-360-go `cmd/workers/io`, its plans/40). One module
@@ -307,8 +307,8 @@ so the option is a no-op for every existing host, and the Debug line is
 invisible to any host whose logger does not enable Debug — INFO-and-higher
 output, the exported `Stats` shape, and the shutdown stats line are all
 unchanged. No `go.mod` change (`sdk` still has no require block), no sibling
-retags, no schema, no new guard. See the upgrade note below before adopting —
-the owner cuts the tag.
+retags, no schema, no new guard. See the upgrade note below before adopting.
+Cold-resolution verified on the module proxy first poll.
 
 ## Tagging scheme
 
@@ -414,7 +414,7 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
-### sdk — v0.7.1 (next tag, 2026-09-01): the worker pool proves it is idle, not wedged (patch)
+### sdk — v0.7.1 (tagged 2026-09-01 @ `418414f`): the worker pool proves it is idle, not wedged (patch)
 
 Plan of record `.claude/plans/workers-idle-observability.md` (gopernicus #32;
 originating host gps-360-go `cmd/workers/io`). A **patch**: two additive
