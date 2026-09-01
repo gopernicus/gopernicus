@@ -310,6 +310,15 @@ unchanged. No `go.mod` change (`sdk` still has no require block), no sibling
 retags, no schema, no new guard. See the upgrade note below before adopting.
 Cold-resolution verified on the module proxy first poll.
 
+**2026-09-01: `pockets/jobs/v0.4.1` — TAGGED, PATCH (additive)** — `Config.Heartbeat`
+passes the sdk v0.7.1 pool heartbeat through to jobs-built pools (plan of record
+`.claude/plans/jobs-heartbeat-passthrough.md`; originating host gps-360-go
+`cmd/workers/io`). A jobs host never calls `workers.NewPool`, so `WithHeartbeat`
+was unreachable behind `jobs.NewRuntime`; one additive Config field now threads
+it onto both pools (queue and scheduler). Zero is the default and stays "no
+heartbeat" — existing hosts are byte-identical. Pin moves sdk v0.5.0 → v0.7.1.
+The Debug "iteration: no work" line needed no pocket change — it rides the pool.
+
 ## Tagging scheme
 
 Nested Go modules in a single repo are tagged with the module's directory as a
@@ -413,6 +422,18 @@ silently would break a host whose CSP no longer covers the kit's assets. Record 
 the module's next-tag upgrade note below and tell hosts to re-derive their CSP header.
 
 ## Upgrade notes (keyed to each module's next tag)
+
+### pockets/jobs — v0.4.1 — tagged 2026-09-01: Config.Heartbeat, the pool heartbeat passthrough (patch)
+
+Plan of record `.claude/plans/jobs-heartbeat-passthrough.md`. A **patch**: one
+additive field. `jobs.Config.Heartbeat time.Duration` reaches
+`workers.WithHeartbeat` on both runtime pools; 0 (the default) keeps the
+heartbeat off, so no existing host changes behavior. Adopt by setting it at
+NewService and alerting on the ABSENCE of the "pool alive" line; sdk v0.7.1's
+Debug "iteration: no work" line comes with the repin regardless. Pin moves
+sdk v0.5.0 → v0.7.1; store modules do not retag (no repository contract
+change). Proof: `TestHeartbeatReachesThePools` — an idle pool with a heartbeat
+set must beat.
 
 ### sdk — v0.7.1 (tagged 2026-09-01 @ `418414f`): the worker pool proves it is idle, not wedged (patch)
 
