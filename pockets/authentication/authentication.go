@@ -764,11 +764,17 @@ type Repositories struct {
 // choices (Secure should be true behind TLS). Cookies are always HttpOnly with
 // SameSite=Lax.
 type CookieConfig struct {
-	Name   string
-	Path   string
-	Domain string
-	Secure bool
-	MaxAge int
+	// Name is the cookie name; empty → "session". (env: AUTH_COOKIE_NAME)
+	Name string `env:"AUTH_COOKIE_NAME"`
+	// Path is the cookie path; empty → "/". (env: AUTH_COOKIE_PATH)
+	Path string `env:"AUTH_COOKIE_PATH"`
+	// Domain is the cookie domain; empty → host-only. (env: AUTH_COOKIE_DOMAIN)
+	Domain string `env:"AUTH_COOKIE_DOMAIN"`
+	// Secure marks the cookie Secure; set it behind TLS. (env: AUTH_COOKIE_SECURE)
+	Secure bool `env:"AUTH_COOKIE_SECURE"`
+	// MaxAge is the cookie lifetime in seconds and the session lifetime; a
+	// non-positive value yields a browser session cookie. (env: AUTH_COOKIE_MAX_AGE)
+	MaxAge int `env:"AUTH_COOKIE_MAX_AGE"`
 }
 
 // InProcessDeliveryConfig tunes the bounded, EPHEMERAL in-process delivery runtime
@@ -928,8 +934,8 @@ type Config struct {
 	// Mailer is REQUIRED; nil → ErrMailerRequired. Delivers verification and
 	// password-reset messages.
 	Mailer email.Sender
-	// MailFrom is the From address on verification/reset mail.
-	MailFrom string
+	// MailFrom is the From address on verification/reset mail. (env: AUTH_MAIL_FROM)
+	MailFrom string `env:"AUTH_MAIL_FROM"`
 	// RateLimiter throttles login attempts; nil → ratelimiter.NewMemory()
 	// (safe-by-default: an in-process limiter, not "unlimited").
 	RateLimiter ratelimiter.Limiter
@@ -956,7 +962,8 @@ type Config struct {
 	// authorizes a credentialed cross-origin mutation. Empty leaves the gate to
 	// reject every cross-site cookie mutation and any request carrying a
 	// disallowed Origin; bearer-only (API) callers skip the gate entirely.
-	AllowedOrigins []string
+	// (env: AUTH_ALLOWED_ORIGINS, comma-separated)
+	AllowedOrigins []string `env:"AUTH_ALLOWED_ORIGINS"`
 	// BrowserLoginPath is the login destination the browser identity gates
 	// (any authenticator carrying Browser()) 303 to on an
 	// authentication denial (design §9.2). Empty (default) → "/auth/login". A non-empty
@@ -969,7 +976,8 @@ type Config struct {
 	// RequireVerifiedEmail, when true, makes login refuse an unverified user
 	// with a 403 (ErrEmailNotVerified). Default false (design §7.1, AV8):
 	// flipping it on requires a working Mailer so users can verify.
-	RequireVerifiedEmail bool
+	// (env: AUTH_REQUIRE_VERIFIED_EMAIL)
+	RequireVerifiedEmail bool `env:"AUTH_REQUIRE_VERIFIED_EMAIL"`
 	// PasswordFlowsDisabled turns the password credential OFF as a posture, for a
 	// host whose only way in is OAuth (or passwordless): Register mounts NONE of
 	// the registration / password-login / verification / forgot-reset /
@@ -1195,8 +1203,8 @@ type Config struct {
 	// Config.PublicAuthBaseURL for magic links (HTTPS in production). Listing a kind permits its active verified login-enabled
 	// identifiers as direct methods under the §5.6 credential policy. It NEVER
 	// auto-provisions and NEVER enables phone+password login (phone stays
-	// passwordless-only, V10).
-	Passwordless []string
+	// passwordless-only, V10). (env: AUTH_PASSWORDLESS, comma-separated)
+	Passwordless []string `env:"AUTH_PASSWORDLESS"`
 
 	// IDs is the app's entity-ID strategy, decided once at wiring (amended D9):
 	// it mints the keys of users, service accounts, API-key records, security
@@ -1232,8 +1240,8 @@ type Config struct {
 	TokenEncrypter cryptids.Encrypter
 	// OAuthCallbackBase is the absolute origin (e.g. "https://app.example.com")
 	// the provider callback URL is built from. Only meaningful when Providers is
-	// set.
-	OAuthCallbackBase string
+	// set. (env: AUTH_OAUTH_CALLBACK_BASE)
+	OAuthCallbackBase string `env:"AUTH_OAUTH_CALLBACK_BASE"`
 	// RedirectAllowlist is the exact-match allowlist of ABSOLUTE post-flow
 	// redirect destinations (open-redirect guard). The same-origin default ("/")
 	// is always allowed, and the browser lanes (OAuth flows and HTML form
@@ -1242,7 +1250,8 @@ type Config struct {
 	// verbatim here or it falls back to "/". The invitation lane resolves its
 	// mailed-link destination against this list only (exact match, no relative
 	// pass): a relative path is not a meaningful target inside an email.
-	RedirectAllowlist []string
+	// (env: AUTH_REDIRECT_ALLOWLIST, comma-separated)
+	RedirectAllowlist []string `env:"AUTH_REDIRECT_ALLOWLIST"`
 
 	// TokenSigner signs and verifies the access JWT — the primary access
 	// credential (§1.1, D3). It is REQUIRED; nil → ErrTokenSignerRequired at

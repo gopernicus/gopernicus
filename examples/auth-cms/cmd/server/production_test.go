@@ -169,6 +169,11 @@ func TestProductionNegatives(t *testing.T) {
 // delivery-transport WARN (and never rejects). Production rejects the same wiring
 // (TestProductionNegatives); development warns and proceeds.
 func TestDevelopmentConsoleTransportWarns(t *testing.T) {
+	// The host's development posture is now overridable from the environment
+	// (AUTH_RUNTIME_MODE); pin both posture keys empty (= not provided) so this
+	// development-default assertion cannot be decided by an ambient value.
+	t.Setenv("AUTH_RUNTIME_MODE", "")
+	t.Setenv("AUTH_DELIVERY_MODE", "")
 	rec := &recordHandler{}
 	cfg, err := buildAuthConfig(slog.New(rec), nil)
 	if err != nil {

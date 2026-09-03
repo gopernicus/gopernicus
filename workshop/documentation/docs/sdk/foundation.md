@@ -25,7 +25,9 @@ Foundation packages provide reusable mechanism and data vocabulary without servi
 
 ## Environment and deployment posture
 
-`environment.LoadEnv` reads a dotenv file without overwriting existing process variables. `ParseEnvTags` fills a struct from `env`, `default`, and `required` tags while keeping programmatic construction first-class.
+`environment.LoadEnv` reads a dotenv file without overwriting existing process variables; an unquoted ` #` starts an inline comment, so quote a value that contains one. `ParseEnvTags` fills a struct from `env`, `default`, and `required` tags while keeping programmatic construction first-class: it descends into untagged nested structs, and an empty value (`KEY=`) counts as not provided, so a field the host pre-seeds in the literal — or a `default:` tag — survives an env template copied with its optional keys left blank. `Secret(key, minBytes)` reads a hex-encoded secret with a minimum-length floor and returns nil when the key is unset or empty, leaving the "ephemeral in development, required in production" decision to the host.
+
+The way a host reads its configuration is therefore: pre-seed its own defaults in the literal, then parse. The sdk's `web.ServerConfig` and `logging.Options` already carry tags, as do the pocket Configs (`AUTH_*`, `JOBS_*`, `EVENTS_*`, `CMS_*`).
 
 ```go
 type Config struct {
@@ -40,6 +42,16 @@ var cfg Config
 if err := environment.ParseEnvTags("", &cfg); err != nil {
     return err
 }
+
+logOpts := logging.Options{Format: "text"}  // this host's own default; env wins, KEY= keeps it
+if err := environment.ParseEnvTags("", &logOpts); err != nil {
+    return err
+}
+srv := web.ServerConfig{Port: "8082"}
+if err := environment.ParseEnvTags("", &srv); err != nil {
+    return err
+}
+router.Use(web.TrustProxies(srv.TrustedProxyCount))
 ```
 
 Deployment posture is a required two-value vocabulary: development or production. `ParseMode` reads no implicit environment variable; the host decides which key supplies it. Preview, staging, and CI normally map to production posture because permissive behavior should be an explicit development choice.

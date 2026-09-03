@@ -83,10 +83,7 @@ func newLinkHostTuned(t *testing.T, tune func(*auth.Config)) *linkHost {
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
 
-	origins := allowedOrigins()
-	if len(origins) == 0 {
-		t.Fatal("host has no allowed origins; the browser-safe mutation gate cannot pass")
-	}
+	origins := hostAllowedOrigins(t)
 	return &linkHost{t: t, srv: srv, svc: svc, sender: sender, origin: origins[0]}
 }
 

@@ -41,22 +41,31 @@ func main() {
 	// Load .env (missing file is not an error) before reading any config.
 	_ = environment.LoadEnv()
 
-	log := logging.New(logging.Options{
-		Level:  environment.GetEnvOrDefault("LOG_LEVEL", "INFO"),
-		Format: environment.GetEnvOrDefault("LOG_FORMAT", "json"),
-		Output: environment.GetEnvOrDefault("LOG_OUTPUT", "STDERR"),
-	}, logging.WithTracing())
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx, log); err != nil {
-		log.ErrorContext(ctx, "server exited with error", "error", err)
+	if err := run(ctx); err != nil {
+		slog.Error("server exited with error", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, log *slog.Logger) error {
+func run(ctx context.Context) error {
+	// Config comes from the environment through the sdk's struct tags: the
+	// literal pre-seeds this host's own defaults, the environment wins over
+	// them, and an empty value (KEY=) keeps what is already set.
+	logOpts := logging.Options{Format: "json"}
+	if err := environment.ParseEnvTags("", &logOpts); err != nil {
+		return err
+	}
+	log := logging.New(logOpts, logging.WithTracing())
+
+	// Parsed before the tracer, whose flush budget reuses SHUTDOWN_TIMEOUT.
+	srv := web.ServerConfig{Port: "8080"}
+	if err := environment.ParseEnvTags("", &srv); err != nil {
+		return err
+	}
+
 	// Database. The Turso datastore connector owns the driver, DSN, and dialect
 	// error mapping; the pocket store adapter owns the CMS schema + repositories.
 	db, err := tursodb.Open(tursodb.Config{
@@ -84,7 +93,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		// Fresh context: the run-scoped ctx is already cancelled by the time
 		// web.Run returns, which would make the OTLP batch exporter skip its
 		// final flush (mirrors web.Run's own srv.Shutdown pattern).
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), durEnv("SHUTDOWN_TIMEOUT", 10*time.Second))
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), srv.ShutdownTimeout)
 		defer cancel()
 		if err := shutdownTracer(shutdownCtx); err != nil {
 			log.ErrorContext(shutdownCtx, "tracer shutdown failed", "error", err)
@@ -145,14 +154,18 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// schema was applied pre-boot by the host's migration runner); the pocket
 	// wires its services + routes.
 	repos := cmsturso.Repositories(db)
-	if err := cms.Register(mount, repos, cms.Config{
+	cmsCfg := cms.Config{
 		Views:     cmsViews, // host-owned custom public-site theme (the §6 seam) over ui/goth
 		Blobs:     blobs,
 		Cache:     cacher.NewMemory(), // in-memory public-page cache; redis later
 		Mailer:    sender,
-		MailFrom:  environment.GetEnvOrDefault("MAIL_FROM", "cms@localhost"),
-		ContactTo: environment.GetEnvOrDefault("CONTACT_EMAIL", "ops@localhost"),
-	}); err != nil {
+		MailFrom:  "cms@localhost",
+		ContactTo: "ops@localhost",
+	}
+	if err := environment.ParseEnvTags("", &cmsCfg); err != nil {
+		return err
+	}
+	if err := cms.Register(mount, repos, cmsCfg); err != nil {
 		return err
 	}
 
@@ -161,7 +174,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// unauthenticated by design, since a readiness probe can't log in.
 	router.Handle(http.MethodGet, "/healthz", healthzHandler(db))
 
-	return web.Run(ctx, router, serverConfig(), log)
+	return web.Run(ctx, router, srv, log)
 }
 
 // healthzHandler is this DB-backed host's readiness probe: it pings Turso via
@@ -196,25 +209,4 @@ func buildTracer(ctx context.Context) (tracing.Tracer, func(context.Context) err
 		return nil, nil, err
 	}
 	return tracer, tracer.Shutdown, nil
-}
-
-// serverConfig reads HTTP server settings from the environment with defaults.
-func serverConfig() web.ServerConfig {
-	return web.ServerConfig{
-		Host:            environment.GetEnvOrDefault("HOST", "localhost"),
-		Port:            environment.GetEnvOrDefault("PORT", "8080"),
-		ReadTimeout:     durEnv("READ_TIMEOUT", 15*time.Second),
-		WriteTimeout:    durEnv("WRITE_TIMEOUT", 15*time.Second),
-		IdleTimeout:     durEnv("IDLE_TIMEOUT", 120*time.Second),
-		ShutdownTimeout: durEnv("SHUTDOWN_TIMEOUT", 10*time.Second),
-	}
-}
-
-func durEnv(key string, fallback time.Duration) time.Duration {
-	if v := os.Getenv(key); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			return d
-		}
-	}
-	return fallback
 }

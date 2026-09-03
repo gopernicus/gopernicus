@@ -630,10 +630,7 @@ func newDemoAuditHost(t *testing.T) *demoAuditHost {
 	t.Cleanup(runDelivery(t, authSvc))
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
-	origins := allowedOrigins()
-	if len(origins) == 0 {
-		t.Fatal("host has no allowed origins; the browser-safe mutation gate cannot pass")
-	}
+	origins := hostAllowedOrigins(t)
 	return &demoAuditHost{
 		linkHost: &linkHost{t: t, srv: srv, svc: authSvc, sender: sender, origin: origins[0]},
 		comps:    comps,

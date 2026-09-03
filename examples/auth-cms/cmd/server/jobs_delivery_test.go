@@ -29,6 +29,9 @@ func TestJobsModeDeliveryEndToEnd(t *testing.T) {
 	}
 	cap := &captureSender{}
 	cfg.Mailer = cap // capture the rendered verification email instead of logging it
+	// This test IS the jobs-mode path: pin the mode rather than inherit whatever
+	// AUTH_DELIVERY_MODE says, now that the seam reads it.
+	cfg.DeliveryMode = auth.DeliveryModeJobs
 
 	// The generic-jobs delivery stack (mirrors run()): fenced queue -> jobs.Service ->
 	// dispatcher, wired into the auth Config BEFORE building the auth Service.

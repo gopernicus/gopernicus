@@ -97,17 +97,20 @@ type Config struct {
 	Authorize AuthorizeStream
 	// Projector opts into a richer SSE body; nil → metadata-only.
 	Projector Projector
-	// Heartbeat is the SSE comment-frame cadence; 0 → 25s.
-	Heartbeat time.Duration
+	// Heartbeat is the SSE comment-frame cadence; 0 → 25s. (env: EVENTS_HEARTBEAT)
+	Heartbeat time.Duration `env:"EVENTS_HEARTBEAT"`
 	// BufferSize is the per-connection channel depth; 0 → 64. A slow client whose
 	// buffer fills has further events dropped (SSE is a wake-up channel).
-	BufferSize int
+	// (env: EVENTS_BUFFER_SIZE)
+	BufferSize int `env:"EVENTS_BUFFER_SIZE"`
 	// MaxConnAge bounds a single stream's lifetime; 0 → 15m. It cannot be disabled
 	// (P5): the bounded age is the revocation-latency posture. A host wanting
 	// effectively-unlimited sets an explicitly large value (e.g. 8760h).
-	MaxConnAge time.Duration
+	// (env: EVENTS_MAX_CONN_AGE)
+	MaxConnAge time.Duration `env:"EVENTS_MAX_CONN_AGE"`
 	// MaxConnsPerSubject caps concurrent streams per subject; 0 → 10.
-	MaxConnsPerSubject int
+	// (env: EVENTS_MAX_CONNS_PER_SUBJECT)
+	MaxConnsPerSubject int `env:"EVENTS_MAX_CONNS_PER_SUBJECT"`
 }
 
 // Service is the events pocket's gateway surface. NewService builds it and

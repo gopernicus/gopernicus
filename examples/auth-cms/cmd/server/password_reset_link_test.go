@@ -46,7 +46,7 @@ func newResetHost(t *testing.T) *linkHost {
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
 
-	return &linkHost{t: t, srv: srv, svc: svc, sender: sender, origin: allowedOrigins()[0]}
+	return &linkHost{t: t, srv: srv, svc: svc, sender: sender, origin: hostAllowedOrigins(t)[0]}
 }
 
 // awaitResetLink waits for a reset message addressed to recipient and returns the

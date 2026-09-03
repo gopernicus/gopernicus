@@ -94,10 +94,7 @@ func newRoleRoutesHost(t *testing.T, withGate bool) *roleRoutesHost {
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
 
-	origins := allowedOrigins()
-	if len(origins) == 0 {
-		t.Fatal("host has no allowed origins")
-	}
+	origins := hostAllowedOrigins(t)
 	return &roleRoutesHost{
 		linkHost: &linkHost{t: t, srv: srv, svc: svc, sender: sender, origin: origins[0]},
 		comps:    comps,

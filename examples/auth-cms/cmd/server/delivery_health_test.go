@@ -33,7 +33,7 @@ func (failingBus) Emit(context.Context, sdkevents.Event, ...sdkevents.EmitOption
 }
 
 // bootHealth assembles the in_process host composition WITH the health surface wired exactly
-// as run() does for DELIVERY_MODE=in_process: the health emitter wraps the delivery-events
+// as run() does for AUTH_DELIVERY_MODE=in_process: the health emitter wraps the delivery-events
 // emitter, and the depth source reads the auth Service's InProcessQueueDepth. A nil emitter
 // defaults to a real in-memory bus; a nil sender keeps the console mailer.
 func bootHealth(t *testing.T, sender email.Sender, emitter sdkevents.Emitter, tune func(*auth.Config)) (*auth.Service, *deliveryhealth.Health) {

@@ -61,8 +61,10 @@ type Config struct {
 	Cache     cacher.Storer         // nil → no public-page caching
 	Blobs     media.BlobStore       // blob storage for media (disk/s3); host-owned
 	Mailer    email.Sender          // contact-form delivery; host-owned
-	MailFrom  string                // From address for contact notifications
-	ContactTo string                // recipient for contact notifications
+	// MailFrom is the From address for contact notifications. (env: CMS_MAIL_FROM)
+	MailFrom string `env:"CMS_MAIL_FROM"`
+	// ContactTo is the recipient for contact notifications. (env: CMS_CONTACT_TO)
+	ContactTo string `env:"CMS_CONTACT_TO"`
 
 	// IDs is the app's entity-ID strategy, decided once at wiring (amended D9):
 	// it mints the keys of entries, assets, menus, menu items, inquiries, and

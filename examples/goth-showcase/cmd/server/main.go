@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/gopernicus/gopernicus/examples/goth-showcase/internal/showcase"
 	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
@@ -20,22 +19,25 @@ import (
 )
 
 func main() {
-	log := logging.New(logging.Options{
-		Level:  environment.GetEnvOrDefault("LOG_LEVEL", "INFO"),
-		Format: environment.GetEnvOrDefault("LOG_FORMAT", "text"),
-		Output: environment.GetEnvOrDefault("LOG_OUTPUT", "STDERR"),
-	})
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx, log); err != nil {
-		log.ErrorContext(ctx, "showcase exited with error", "error", err)
+	if err := run(ctx); err != nil {
+		slog.Error("showcase exited with error", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, log *slog.Logger) error {
+func run(ctx context.Context) error {
+	// Config comes from the environment through the sdk's struct tags: the
+	// literal pre-seeds this host's own defaults, the environment wins over
+	// them, and an empty value (KEY=) keeps what is already set.
+	logOpts := logging.Options{Format: "text"}
+	if err := environment.ParseEnvTags("", &logOpts); err != nil {
+		return err
+	}
+	log := logging.New(logOpts)
+
 	router := web.NewWebHandler(web.WithLogging(log))
 	router.Use(web.RequestID(), web.Logger(log), web.Panics(log))
 
@@ -43,16 +45,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return err
 	}
 
-	return web.Run(ctx, router, serverConfig(), log)
-}
-
-func serverConfig() web.ServerConfig {
-	return web.ServerConfig{
-		Host:            environment.GetEnvOrDefault("HOST", "127.0.0.1"),
-		Port:            environment.GetEnvOrDefault("PORT", "8099"),
-		ReadTimeout:     15 * time.Second,
-		WriteTimeout:    15 * time.Second,
-		IdleTimeout:     120 * time.Second,
-		ShutdownTimeout: 10 * time.Second,
+	srv := web.ServerConfig{Host: "127.0.0.1", Port: "8099"}
+	if err := environment.ParseEnvTags("", &srv); err != nil {
+		return err
 	}
+
+	return web.Run(ctx, router, srv, log)
 }
