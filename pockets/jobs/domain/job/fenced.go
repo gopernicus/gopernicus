@@ -4,16 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"time"
-
-	"github.com/gopernicus/gopernicus/sdk/foundation/workers"
 )
 
-// Compile-time seam: FencedQueueRepository is a strict superset of the kernel's
-// lease-fenced store — its Claim/Complete/Fail share workers.FencedStore's exact
-// signatures — so a FencedQueueRepository is directly usable as the store a
-// workers.FencedRunner drives, with no shim (the QueueRepository/JobStore
-// precedent). Reclaimed/superseded → sdk.ErrConflict is the fence the runner reads.
-var _ workers.FencedStore[Job] = (FencedQueueRepository)(nil)
+// FencedQueueRepository is NOT a kernel workers.FencedStore[Job]: its Claim carries
+// a kinds filter the kernel port lacks. Complete/Fail/Reschedule share the kernel
+// signatures, and jobs.NewFencedRuntime adapts the port to the kernel by closing
+// over the kinds it registered handlers for (the QueueRepository precedent).
+// Reclaimed/superseded → sdk.ErrConflict is the fence the runner reads.
 
 // FencedQueueRepository is the FROZEN (AV3D-0.3) extension port that hardens the
 // durable queue into an at-least-once, lease-fenced, logical-key outbox — the
@@ -80,7 +77,12 @@ type FencedQueueRepository interface {
 	// increments Retries, stamps a fresh LeaseID plus LeasedUntil = now + leaseFor,
 	// and returns it; no due job yields workers.ErrNoWork. A given job is claimed by
 	// at most one concurrent caller. leaseID is the caller-supplied fresh token.
-	Claim(ctx context.Context, now time.Time, leaseID string, leaseFor time.Duration) (Job, error)
+	//
+	// kinds restricts the selection to jobs of those kinds — BOTH the pending arm
+	// and the expired-lease reclaim arm — so a runtime never leases (and never
+	// spends a retry on) a job it has no handler for. A nil/empty kinds applies no
+	// filter. Selection order is unchanged within the filtered set.
+	Claim(ctx context.Context, now time.Time, leaseID string, leaseFor time.Duration, kinds []string) (Job, error)
 
 	// Checkpoint atomically replaces the payload of the running job id while the
 	// caller still holds the current lease (leaseID equality), preserving JobID,

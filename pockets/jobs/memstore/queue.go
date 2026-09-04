@@ -115,7 +115,7 @@ func (q *Queue) Enqueue(_ context.Context, in job.Enqueue) (job.Job, error) {
 // job with scheduled_for <= now, OR a running job whose lease has expired
 // (claimed_at < now - lease). Selection order is priority DESC, then created_at
 // ascending, with the job id as a final tie-break for determinism.
-func (q *Queue) Claim(_ context.Context, workerID string, now time.Time) (job.Job, error) {
+func (q *Queue) Claim(_ context.Context, workerID string, now time.Time, kinds []string) (job.Job, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -123,7 +123,7 @@ func (q *Queue) Claim(_ context.Context, workerID string, now time.Time) (job.Jo
 	var best job.Job
 	found := false
 	for _, j := range q.jobs {
-		if !q.due(j, now, staleBefore) {
+		if !q.due(j, now, staleBefore) || !kindAllowed(kinds, j.Kind) {
 			continue
 		}
 		if !found || claimBefore(j, best) {
@@ -142,6 +142,21 @@ func (q *Queue) Claim(_ context.Context, workerID string, now time.Time) (job.Jo
 	best.UpdatedAt = now
 	q.jobs[best.JobID] = best
 	return best, nil
+}
+
+// kindAllowed reports whether kind passes the claim filter: a nil/empty kinds
+// allows every kind (the zero-value-does-not-filter convention); otherwise kind
+// must be listed. Linear scan — kinds is handler-count sized.
+func kindAllowed(kinds []string, kind string) bool {
+	if len(kinds) == 0 {
+		return true
+	}
+	for _, k := range kinds {
+		if k == kind {
+			return true
+		}
+	}
+	return false
 }
 
 // due reports whether j can be claimed at now: a pending job past its

@@ -44,7 +44,7 @@ func (q *memQueue) Enqueue(ctx context.Context, in job.Enqueue) (job.Job, error)
 	q.jobs[id] = &j
 	return j, nil
 }
-func (q *memQueue) Claim(ctx context.Context, workerID string, now time.Time) (job.Job, error) {
+func (q *memQueue) Claim(ctx context.Context, workerID string, now time.Time, _ []string) (job.Job, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	for _, j := range q.jobs {
@@ -87,10 +87,10 @@ func (s *noopSchedules) Ensure(ctx context.Context, in schedule.Ensure, next tim
 	s.ensured = append(s.ensured, in)
 	return schedule.Schedule{ID: "s", Name: in.Name, NextRunAt: next}, nil
 }
-func (s *noopSchedules) ListDue(ctx context.Context, now time.Time, limit int) ([]schedule.Schedule, error) {
+func (s *noopSchedules) ListDue(ctx context.Context, now time.Time, limit int, _ []string) ([]schedule.Schedule, error) {
 	return nil, nil
 }
-func (s *noopSchedules) ClaimDue(ctx context.Context, id string, prev, next, now time.Time) (bool, error) {
+func (s *noopSchedules) ClaimDue(ctx context.Context, id string, prev, next, now time.Time, _ string) (bool, error) {
 	return false, nil
 }
 func (s *noopSchedules) SetLastJob(ctx context.Context, id, jobID string, now time.Time) error {
@@ -397,13 +397,13 @@ func TestConfigLogger_RuntimePoolsLogThroughIt(t *testing.T) {
 	})
 }
 
-// TestSeamAssertions is a runtime witness that the compile-time seams in
-// logic/job hold: job.Job is a workers.Job and job.QueueRepository is a
-// workers.JobStore[job.Job].
+// TestSeamAssertions is a runtime witness that the compile-time seam in
+// domain/job holds: job.Job is a workers.Job. (job.QueueRepository is no longer
+// a workers.JobStore — its Claim carries the kinds filter; the runtime's
+// kind-scoped adapter is what the kernel drives.)
 func TestSeamAssertions(t *testing.T) {
 	var j workers.Job = job.Job{JobID: "x", JobStatus: job.StatusPending, Retries: 2}
 	if j.ID() != "x" || j.Status() != string(job.StatusPending) || j.RetryCount() != 2 {
 		t.Fatalf("workers.Job view = (%q,%q,%d)", j.ID(), j.Status(), j.RetryCount())
 	}
-	var _ workers.JobStore[job.Job] = newMemQueue()
 }

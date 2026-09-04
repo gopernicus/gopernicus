@@ -50,7 +50,7 @@ func (f *fakeQueue) Enqueue(ctx context.Context, in job.Enqueue) (job.Job, error
 	return j, nil
 }
 
-func (f *fakeQueue) Claim(ctx context.Context, workerID string, now time.Time) (job.Job, error) {
+func (f *fakeQueue) Claim(ctx context.Context, workerID string, now time.Time, _ []string) (job.Job, error) {
 	return job.Job{}, workers.ErrNoWork
 }
 func (f *fakeQueue) Complete(ctx context.Context, jobID string, now time.Time) error { return nil }

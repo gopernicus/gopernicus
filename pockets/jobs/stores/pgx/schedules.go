@@ -165,14 +165,20 @@ func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Ti
 
 // ListDue returns up to limit enabled schedules whose next_run_at <= now, ordered
 // by (next_run_at, schedule_id) so the batch is deterministic. A non-positive
-// limit returns all due schedules.
-func (s *Schedules) ListDue(ctx context.Context, now time.Time, limit int) ([]schedule.Schedule, error) {
+// limit returns all due schedules. A non-empty kinds (#37) restricts the scan to
+// those kinds inside the query, before the limit.
+func (s *Schedules) ListDue(ctx context.Context, now time.Time, limit int, kinds []string) ([]schedule.Schedule, error) {
+	where := `WHERE enabled = TRUE AND next_run_at <= @now`
+	args := pgx.NamedArgs{"now": now.UTC()}
+	if len(kinds) > 0 {
+		where += ` AND kind = ANY(@kinds)`
+		args["kinds"] = kinds
+	}
 	base := `SELECT ` + scheduleRowColumns + ` FROM ` + s.table("job_schedules") + `
-		WHERE enabled = TRUE AND next_run_at <= @now
+		` + where + `
 		ORDER BY next_run_at, schedule_id `
 
 	query := base + "LIMIT ALL"
-	args := pgx.NamedArgs{"now": now.UTC()}
 	if limit > 0 {
 		query = base + "LIMIT @limit"
 		args["limit"] = limit
@@ -196,17 +202,18 @@ func (s *Schedules) ListDue(ctx context.Context, now time.Time, limit int) ([]sc
 
 // ClaimDue is the pure value compare-and-set on next_run_at: it advances
 // next_run_at to newNextRunAt (and last_run_at to now) only when the row's
-// current next_run_at still equals prevNextRunAt and the schedule is enabled,
-// reporting true when this caller won the (schedule, slot) pair.
+// current next_run_at still equals prevNextRunAt, the schedule is enabled, and
+// its kind still equals expectedKind (#37: a re-kinded row is left to its new
+// owner), reporting true when this caller won the (schedule, slot) pair.
 //
-// The CAS statement is preserved VERBATIM from before the pgx idiom sweep
-// (pgx-crud-v1 P5 directive): the affected-rows bool contract is load-bearing, so
-// its args stay positional rather than risk any observable change from a NamedArgs
-// rewrite.
-func (s *Schedules) ClaimDue(ctx context.Context, id string, prevNextRunAt, newNextRunAt, now time.Time) (bool, error) {
+// The CAS statement's $1..$4 are preserved VERBATIM from before the pgx idiom
+// sweep (pgx-crud-v1 P5 directive): the affected-rows bool contract is
+// load-bearing, so its args stay positional rather than risk any observable
+// change from a NamedArgs rewrite; the kind guard is appended as $5.
+func (s *Schedules) ClaimDue(ctx context.Context, id string, prevNextRunAt, newNextRunAt, now time.Time, expectedKind string) (bool, error) {
 	q := `UPDATE ` + s.table("job_schedules") + ` SET next_run_at = $1, last_run_at = $2, updated_at = $2
-		WHERE schedule_id = $3 AND next_run_at = $4 AND enabled = TRUE`
-	n, err := pgxdb.ExecAffecting(ctx, s.db, q, newNextRunAt.UTC(), now.UTC(), id, prevNextRunAt.UTC())
+		WHERE schedule_id = $3 AND next_run_at = $4 AND enabled = TRUE AND kind = $5`
+	n, err := pgxdb.ExecAffecting(ctx, s.db, q, newNextRunAt.UTC(), now.UTC(), id, prevNextRunAt.UTC(), expectedKind)
 	if err != nil {
 		return false, err
 	}

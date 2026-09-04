@@ -2,10 +2,10 @@
 // entity, the Enqueue input, and the QueueRepository outbound port a store
 // adapter (pockets/jobs/stores/turso, the in-core memstore) or a host fills.
 //
-// The Job entity satisfies sdk/foundation/workers.Job and QueueRepository is a strict
-// superset of sdk/foundation/workers.JobStore[Job] — both asserted at compile time below,
-// so the pocket's runtime drives the store through the exact kernel contract
-// with no adapter layer.
+// The Job entity satisfies sdk/foundation/workers.Job (asserted at compile time
+// below). QueueRepository is the pocket-specific queue port: its Claim takes the
+// kinds the caller handles, so the runtime adapts it to the narrower kernel
+// sdk/foundation/workers.JobStore[Job] by closing over its registered kinds.
 package job
 
 import (
@@ -51,14 +51,11 @@ const (
 	StatusSuperseded = work.StatusSuperseded
 )
 
-// Compile-time seams: the Job entity satisfies the kernel's Job constraint, and
-// QueueRepository structurally satisfies the kernel's JobStore[Job] — so a
-// QueueRepository is directly usable as the store a workers.Runner drives, with
-// no shim. Claim's empty-queue signal is workers.ErrNoWork (see the port doc).
-var (
-	_ workers.Job           = Job{}
-	_ workers.JobStore[Job] = (QueueRepository)(nil)
-)
+// Compile-time seam: the Job entity satisfies the kernel's Job constraint.
+// QueueRepository is NOT a kernel JobStore — its Claim carries a kinds filter —
+// so the runtime wraps it with a kind-scoped adapter (see runtime.New). Claim's
+// empty-queue signal is still workers.ErrNoWork (see the port doc).
+var _ workers.Job = Job{}
 
 // Job is one durable unit of work.
 //
@@ -171,9 +168,10 @@ type ListFilter struct {
 
 // QueueRepository is the durable queue outbound port. A store adapter
 // (pockets/jobs/stores/turso, the in-core memstore) or a host fills it; the
-// pocket core stays dialect-blind. It is a strict superset of
-// sdk/foundation/workers.JobStore[Job]: Claim/Complete/Fail share the kernel's exact
-// signatures so a QueueRepository is the store a workers.Runner drives directly.
+// pocket core stays dialect-blind. Complete/Fail share the kernel
+// sdk/foundation/workers.JobStore[Job] signatures; Claim adds a trailing kinds
+// filter, and the runtime adapts the port to the kernel by closing over the
+// kinds it registered handlers for.
 type QueueRepository interface {
 	// Enqueue inserts one job; a duplicate ID yields sdk.ErrAlreadyExists.
 	Enqueue(ctx context.Context, in Enqueue) (Job, error)
@@ -182,7 +180,13 @@ type QueueRepository interface {
 	// pending with scheduled_for <= now, OR running with an expired lease
 	// (stale-claim recovery). Two concurrent claimers never receive the same
 	// job. Selection order is priority DESC, then created_at.
-	Claim(ctx context.Context, workerID string, now time.Time) (Job, error)
+	//
+	// kinds restricts the selection to jobs of those kinds — BOTH the pending
+	// arm and the stale-reclaim arm — so a runtime never claims (and never
+	// charges an attempt to) a job it has no handler for; a job of another kind
+	// simply waits for the binary that owns it. A nil/empty kinds applies no
+	// filter. Selection order is unchanged within the filtered set.
+	Claim(ctx context.Context, workerID string, now time.Time, kinds []string) (Job, error)
 	// Complete marks the job done.
 	Complete(ctx context.Context, jobID string, now time.Time) error
 	// Fail increments retry_count and either reschedules the job to pending or

@@ -147,8 +147,11 @@ func (q *Queue) Enqueue(ctx context.Context, in job.Enqueue) (job.Job, error) {
 // job with scheduled_for <= now, OR a running job whose lease has expired
 // (claimed_at < now - lease). The status predicate is repeated in the outer
 // WHERE (SQLite has no FOR UPDATE SKIP LOCKED); selection order is priority DESC,
-// then created_at, with job_id as a deterministic final tie-break.
-func (q *Queue) Claim(ctx context.Context, workerID string, now time.Time) (job.Job, error) {
+// then created_at, with job_id as a deterministic final tie-break. A non-empty
+// kinds (#37) restricts BOTH the pending and stale-reclaim arms to those kinds,
+// in the inner selector AND the repeated outer race guard (the kind args are
+// therefore bound twice); the unfiltered statement is the const one, unchanged.
+func (q *Queue) Claim(ctx context.Context, workerID string, now time.Time, kinds []string) (job.Job, error) {
 	nowTS := tursodb.FormatTime(now.UTC())
 	staleTS := tursodb.FormatTime(now.UTC().Add(-q.lease))
 
@@ -166,10 +169,34 @@ func (q *Queue) Claim(ctx context.Context, workerID string, now time.Time) (job.
 			OR (status = 'running' AND claimed_at < ?)
 		  )
 		RETURNING ` + jobColumns
+	stmt := claim
+	// Arg order: SET (worker, now, now); inner due (now, stale) [+ kinds]; outer
+	// due (now, stale) [+ kinds].
+	args := []any{workerID, nowTS, nowTS, nowTS, staleTS, nowTS, staleTS}
+
+	if kindClause, kindArgs := kindsIn(kinds); kindClause != "" {
+		stmt = `UPDATE job_queue
+		SET status = 'running', worker_name = ?, claimed_at = ?, updated_at = ?
+		WHERE job_id = (
+			SELECT job_id FROM job_queue
+			WHERE ((status = 'pending' AND scheduled_for <= ?)
+			   OR (status = 'running' AND claimed_at < ?))` + kindClause + `
+			ORDER BY priority DESC, created_at, job_id
+			LIMIT 1
+		)
+		  AND (
+			(status = 'pending' AND scheduled_for <= ?)
+			OR (status = 'running' AND claimed_at < ?)
+		  )` + kindClause + `
+		RETURNING ` + jobColumns
+		args = append([]any{workerID, nowTS, nowTS, nowTS, staleTS}, kindArgs...)
+		args = append(args, nowTS, staleTS)
+		args = append(args, kindArgs...)
+	}
 
 	var claimed job.Job
 	err := retryBusy(ctx, func() error {
-		row, e := tursodb.QueryOne[jobRow](ctx, q.db, claim, workerID, nowTS, nowTS, nowTS, staleTS, nowTS, staleTS)
+		row, e := tursodb.QueryOne[jobRow](ctx, q.db, stmt, args...)
 		if e != nil {
 			return e
 		}

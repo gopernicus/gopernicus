@@ -31,6 +31,23 @@ const (
 	busyMaxDelay   = 200 * time.Millisecond
 )
 
+// kindsIn renders the #37 kind filter for SQLite, which has no array
+// parameters: " AND kind IN (?, ?, …)" with one bound placeholder per kind (kind
+// values are never interpolated into SQL) plus the args to bind. An empty kinds
+// yields an empty clause and no args — the unfiltered statement is unchanged.
+func kindsIn(kinds []string) (clause string, args []any) {
+	if len(kinds) == 0 {
+		return "", nil
+	}
+	marks := make([]string, len(kinds))
+	args = make([]any, len(kinds))
+	for i, k := range kinds {
+		marks[i] = "?"
+		args[i] = k
+	}
+	return " AND kind IN (" + strings.Join(marks, ", ") + ")", args
+}
+
 // payloadValue returns a non-empty JSON text for storage: the raw payload, or
 // "{}" when it is empty (the column is NOT NULL).
 func payloadValue(p []byte) string {

@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/gopernicus/gopernicus/pockets/jobs/domain/job"
@@ -235,6 +236,7 @@ func NewService(repos Repositories, cfg Config) (*Service, error) {
 				Schedules: repos.Schedules,
 				Enqueuer:  svc.queue,
 				CronNext:  cronNextFunc(cfg.Cron),
+				Kinds:     handlerKinds(cfg.Handlers),
 				Batch:     cfg.ScheduleBatch,
 				Logger:    cfg.Logger,
 			})
@@ -299,6 +301,12 @@ func NewRuntime(svc *Service) (*Runtime, error) {
 	for kind, h := range svc.handlers {
 		handlers[kind] = runtime.HandlerFunc(h)
 	}
+	kinds := handlerKinds(svc.handlers)
+	if svc.cfg.logger != nil {
+		svc.cfg.logger.Info("jobs runtime: claiming kinds", "pool", "jobs-queue", "kinds", kinds)
+	} else {
+		slog.Info("jobs runtime: claiming kinds", "pool", "jobs-queue", "kinds", kinds)
+	}
 
 	var scheduler workers.WorkFunc
 	if svc.scheduler != nil {
@@ -308,6 +316,7 @@ func NewRuntime(svc *Service) (*Runtime, error) {
 	rt := runtime.New(runtime.Deps{
 		Queue:        svc.repos.Queue,
 		Handlers:     handlers,
+		Kinds:        kinds,
 		Scheduler:    scheduler,
 		Wake:         svc.queue.Wake(),
 		Workers:      svc.cfg.workers,
@@ -341,10 +350,26 @@ func (s *Service) Register(m pocket.Mount) error {
 	if m.Logger != nil {
 		m.Logger.Info("registered jobs pocket",
 			"handlers", len(s.handlers),
+			"kinds", handlerKinds(s.handlers),
 			"scheduler", s.repos.Schedules != nil,
 		)
 	}
 	return nil
+}
+
+// handlerKinds is the sorted, deduplicated key set of a handler registry: the
+// kinds a runtime claims and the kinds its scheduler fires (#37). Sorted so log
+// lines and store arguments are deterministic across runs. Nil for an empty map.
+func handlerKinds[H any](handlers map[string]H) []string {
+	if len(handlers) == 0 {
+		return nil
+	}
+	kinds := make([]string, 0, len(handlers))
+	for kind := range handlers {
+		kinds = append(kinds, kind)
+	}
+	sort.Strings(kinds)
+	return kinds
 }
 
 // cronNextFunc adapts the CronParser port into the internal schedule service's

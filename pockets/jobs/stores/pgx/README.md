@@ -16,7 +16,11 @@ Two SQL decisions worth flagging:
   locked so N concurrent claimers each take a *different* job with no contention
   — no busy-retry loop is needed (unlike the turso store's `SQLITE_BUSY`
   discipline). The lease-expiry reclaim arm (`status='running' AND claimed_at <
-  now-lease`) is folded into the same statement.
+  now-lease`) is folded into the same statement. The runtime's kind filter (#37)
+  is applied server-side as `kind = ANY($n)` over a `text[]` — in `Claim` (both
+  queues, a sibling statement that parenthesizes the whole due disjunction
+  first) and `ListDue`; `ClaimDue` adds `AND kind = $5`. No new index: the
+  existing partial claim indexes and `idx_job_queue_kind` cover it.
 - **`payload` is `JSON`, not `JSONB`.** The payload is opaque to this store (no
   jsonb operators or indexes), and `JSON` preserves the caller's exact bytes
   while `JSONB` re-canonicalizes whitespace/key order. The conformance suite

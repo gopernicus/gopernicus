@@ -21,12 +21,10 @@ import (
 // the returned generation and its Get are byte-identical.
 const fencedColumns = "job_id, kind, tenant_id, payload, status, priority, retry_count, max_attempts, logical_key, lease_id, leased_until, worker_name, failure_reason, scheduled_for, claimed_at, completed_at, terminal_at, created_at, updated_at"
 
-// Compile-time seams: the fenced store fills the frozen job.FencedQueueRepository
-// port (a strict superset of the kernel's workers.FencedStore).
-var (
-	_ job.FencedQueueRepository    = (*FencedQueue)(nil)
-	_ workers.FencedStore[job.Job] = (*FencedQueue)(nil)
-)
+// Compile-time seam: the fenced store fills the frozen job.FencedQueueRepository
+// port (the runtime adapts it to the kernel's workers.FencedStore by closing over
+// its registered kinds).
+var _ job.FencedQueueRepository = (*FencedQueue)(nil)
 
 // FencedQueue implements job.FencedQueueRepository over PostgreSQL — the hardened,
 // lease-fenced, logical-key sibling of Queue backed by the fenced_job_queue table.
@@ -161,25 +159,34 @@ func (q *FencedQueue) Replace(ctx context.Context, in job.Enqueue) (job.Job, err
 // leaseID for leaseFor, incrementing retry_count and returning it; no due job
 // yields workers.ErrNoWork. "Due" is a pending job with scheduled_for <= now, or a
 // running job whose lease has expired (leased_until <= now). FOR UPDATE SKIP
-// LOCKED gives contention-free concurrent claiming.
-func (q *FencedQueue) Claim(ctx context.Context, now time.Time, leaseID string, leaseFor time.Duration) (job.Job, error) {
+// LOCKED gives contention-free concurrent claiming. A non-empty kinds (#37)
+// restricts BOTH arms to those kinds: the due disjunction is parenthesized
+// before the kind predicate.
+func (q *FencedQueue) Claim(ctx context.Context, now time.Time, leaseID string, leaseFor time.Duration, kinds []string) (job.Job, error) {
 	nowUTC := now.UTC()
 	until := nowUTC.Add(leaseFor)
+
+	due := `(status = 'pending' AND scheduled_for <= @now)
+			   OR (status = 'running' AND leased_until <= @now)`
+	args := pgx.NamedArgs{"lease": leaseID, "until": until, "now": nowUTC}
+	if len(kinds) > 0 {
+		due = `(` + due + `) AND kind = ANY(@kinds)`
+		args["kinds"] = kinds
+	}
 
 	claim := `UPDATE ` + q.table("fenced_job_queue") + `
 		SET status = 'running', lease_id = @lease, leased_until = @until, claimed_at = @now,
 		    retry_count = retry_count + 1, updated_at = @now
 		WHERE job_id = (
 			SELECT job_id FROM ` + q.table("fenced_job_queue") + `
-			WHERE (status = 'pending' AND scheduled_for <= @now)
-			   OR (status = 'running' AND leased_until <= @now)
+			WHERE ` + due + `
 			ORDER BY priority DESC, created_at, job_id
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED
 		)
 		RETURNING ` + fencedColumns
 
-	row, err := pgxdb.QueryOne[fencedRow](ctx, q.db, claim, pgx.NamedArgs{"lease": leaseID, "until": until, "now": nowUTC})
+	row, err := pgxdb.QueryOne[fencedRow](ctx, q.db, claim, args)
 	if errors.Is(err, sdk.ErrNotFound) {
 		return job.Job{}, workers.ErrNoWork
 	}

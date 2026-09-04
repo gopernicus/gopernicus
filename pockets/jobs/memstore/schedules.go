@@ -66,14 +66,15 @@ func (s *Schedules) Ensure(_ context.Context, in schedule.Ensure, next time.Time
 }
 
 // ListDue returns up to limit enabled schedules whose next_run_at <= now,
-// ordered by (next_run_at, id) so the batch is deterministic.
-func (s *Schedules) ListDue(_ context.Context, now time.Time, limit int) ([]schedule.Schedule, error) {
+// ordered by (next_run_at, id) so the batch is deterministic. A non-empty kinds
+// restricts the scan to those kinds before the limit applies.
+func (s *Schedules) ListDue(_ context.Context, now time.Time, limit int, kinds []string) ([]schedule.Schedule, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	var due []schedule.Schedule
 	for _, sch := range s.byID {
-		if sch.Enabled && !sch.NextRunAt.After(now) {
+		if sch.Enabled && !sch.NextRunAt.After(now) && kindAllowed(kinds, sch.Kind) {
 			due = append(due, sch)
 		}
 	}
@@ -93,13 +94,14 @@ func (s *Schedules) ListDue(_ context.Context, now time.Time, limit int) ([]sche
 // next_run_at to newNextRunAt (and last_run_at to now) only when the row's
 // current next_run_at still equals prevNextRunAt and the schedule is enabled,
 // reporting true when this caller won the (schedule, slot) pair. A stale
-// prevNextRunAt, a disabled schedule, or a missing id loses (false, nil).
-func (s *Schedules) ClaimDue(_ context.Context, id string, prevNextRunAt, newNextRunAt, now time.Time) (bool, error) {
+// prevNextRunAt, a disabled schedule, a kind other than expectedKind, or a
+// missing id loses (false, nil).
+func (s *Schedules) ClaimDue(_ context.Context, id string, prevNextRunAt, newNextRunAt, now time.Time, expectedKind string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	sch, ok := s.byID[id]
-	if !ok || !sch.Enabled || !sch.NextRunAt.Equal(prevNextRunAt) {
+	if !ok || !sch.Enabled || !sch.NextRunAt.Equal(prevNextRunAt) || sch.Kind != expectedKind {
 		return false, nil
 	}
 	claimed := now

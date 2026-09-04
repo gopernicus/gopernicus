@@ -19,12 +19,10 @@ import (
 // job carries the stored timestamps a later Get reads back.
 const fencedColumns = "job_id, kind, tenant_id, payload, status, priority, retry_count, max_attempts, logical_key, lease_id, leased_until, worker_name, failure_reason, scheduled_for, claimed_at, completed_at, terminal_at, created_at, updated_at"
 
-// Compile-time seams: the fenced store fills the frozen job.FencedQueueRepository
-// port (a strict superset of the kernel's workers.FencedStore).
-var (
-	_ job.FencedQueueRepository    = (*FencedQueue)(nil)
-	_ workers.FencedStore[job.Job] = (*FencedQueue)(nil)
-)
+// Compile-time seam: the fenced store fills the frozen job.FencedQueueRepository
+// port (the runtime adapts it to the kernel's workers.FencedStore by closing over
+// its registered kinds).
+var _ job.FencedQueueRepository = (*FencedQueue)(nil)
 
 // FencedQueue implements job.FencedQueueRepository over a libSQL database — the
 // hardened, lease-fenced, logical-key sibling of Queue backed by the
@@ -154,8 +152,11 @@ func (q *FencedQueue) Replace(ctx context.Context, in job.Enqueue) (job.Job, err
 // leaseID for leaseFor, incrementing retry_count and returning it; no due job
 // yields workers.ErrNoWork. "Due" is a pending job with scheduled_for <= now, or a
 // running job whose lease has expired (leased_until <= now). The status predicate
-// is repeated in the outer WHERE (SQLite has no FOR UPDATE SKIP LOCKED).
-func (q *FencedQueue) Claim(ctx context.Context, now time.Time, leaseID string, leaseFor time.Duration) (job.Job, error) {
+// is repeated in the outer WHERE (SQLite has no FOR UPDATE SKIP LOCKED). A
+// non-empty kinds (#37) restricts BOTH arms to those kinds, in the inner selector
+// AND the outer race guard (the kind args are bound twice); the unfiltered
+// statement is the const one, unchanged.
+func (q *FencedQueue) Claim(ctx context.Context, now time.Time, leaseID string, leaseFor time.Duration, kinds []string) (job.Job, error) {
 	nowTS := tursodb.FormatTime(now.UTC())
 	untilTS := tursodb.FormatTime(now.UTC().Add(leaseFor))
 
@@ -174,10 +175,35 @@ func (q *FencedQueue) Claim(ctx context.Context, now time.Time, leaseID string, 
 			OR (status = 'running' AND leased_until <= ?)
 		  )
 		RETURNING ` + fencedColumns
+	stmt := claim
+	// Arg order: SET (lease, until, now, now); inner due (now, now) [+ kinds];
+	// outer due (now, now) [+ kinds].
+	args := []any{leaseID, untilTS, nowTS, nowTS, nowTS, nowTS, nowTS, nowTS}
+
+	if kindClause, kindArgs := kindsIn(kinds); kindClause != "" {
+		stmt = `UPDATE fenced_job_queue
+		SET status = 'running', lease_id = ?, leased_until = ?, claimed_at = ?,
+		    retry_count = retry_count + 1, updated_at = ?
+		WHERE job_id = (
+			SELECT job_id FROM fenced_job_queue
+			WHERE ((status = 'pending' AND scheduled_for <= ?)
+			   OR (status = 'running' AND leased_until <= ?))` + kindClause + `
+			ORDER BY priority DESC, created_at, job_id
+			LIMIT 1
+		)
+		  AND (
+			(status = 'pending' AND scheduled_for <= ?)
+			OR (status = 'running' AND leased_until <= ?)
+		  )` + kindClause + `
+		RETURNING ` + fencedColumns
+		args = append([]any{leaseID, untilTS, nowTS, nowTS, nowTS, nowTS}, kindArgs...)
+		args = append(args, nowTS, nowTS)
+		args = append(args, kindArgs...)
+	}
 
 	var claimed job.Job
 	err := retryBusy(ctx, func() error {
-		row, e := tursodb.QueryOne[fencedRow](ctx, q.db, claim, leaseID, untilTS, nowTS, nowTS, nowTS, nowTS, nowTS, nowTS)
+		row, e := tursodb.QueryOne[fencedRow](ctx, q.db, stmt, args...)
 		if e != nil {
 			return e
 		}

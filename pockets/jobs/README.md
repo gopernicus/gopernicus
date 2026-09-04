@@ -48,14 +48,22 @@ admin surface, per ratified decision J5.)
   (stale-claim recovery is folded into Claim — a crashed worker's job
   self-heals; lease is store configuration, `WithLease`, default 15m).
   Empty → `workers.ErrNoWork`. Selection: priority DESC, created_at, id.
+  **Claim takes the caller's `kinds`** (#37): both the pending arm and the
+  stale-reclaim arm select only among those kinds; `nil` is unfiltered. A
+  runtime always passes the sorted key set of its `Handlers`, so it never
+  claims — or spends an attempt on — a job it cannot process.
 - **Handlers are at-least-once — write them idempotent-preferred.** A
   reclaimed job re-runs; that is the standard contract of every
   claim-based queue.
 - **Fail** requeues below `MaxAttempts`, dead-letters at it. Duplicate
   enqueue IDs → `errs.ErrAlreadyExists` (the scheduler's dedup key).
-- **ClaimDue** is a pure value-CAS on `next_run_at`: N runtimes race, one
-  wins, losers stay silent; the deterministic job ID
-  `sched_<scheduleID>_<slotUnix>` + idempotent enqueue collapse
+- **ListDue takes `kinds` too**, applied inside the query before the
+  limit, so a runtime lists only the schedules it can fire.
+- **ClaimDue** is a pure value-CAS on `next_run_at` **and** the schedule's
+  kind (`expectedKind` — `Ensure` can re-kind a row without moving
+  `next_run_at`, and the runtime that listed it under the old kind must
+  lose): N runtimes race, one wins, losers stay silent; the deterministic
+  job ID `sched_<scheduleID>_<slotUnix>` + idempotent enqueue collapse
   crash-window refires. Missed windows fire ONCE (next advances from now).
 
 ## Config — nil semantics (charter item 12)
@@ -85,6 +93,17 @@ instead of waiting out a poll interval. The host owns the run loop
 dedicated worker binary where the poll interval is the cross-process
 backstop. Cancel the ctx to drain gracefully — in-flight handlers finish
 and persist.
+
+**N binaries, one queue, each its own kinds** (#37). A runtime claims only
+jobs — and its scheduler pool lists and fires only schedules — of the kinds
+in its `Handlers`; it wraps the store in a kind-scoped adapter so the kernel
+`workers` pool never sees a foreign job. A job or schedule of a kind no
+running binary handles therefore **waits** (pending, zero attempts charged)
+for the binary that owns it instead of being failed "no handler registered"
+and dead-lettered by one that does not. The trade is silence: a misnamed
+kind no longer fails loudly within minutes. `Register` and `NewRuntime` /
+`NewFencedRuntime` log the claimed `kinds` at INFO on start-up, and the
+operator query is `Queue.List(ListFilter{Kind, Status: pending})`.
 
 `Service.Enqueue(ctx, kind string, payload json.RawMessage) (string, error)`
 is deliberately **stdlib-typed** — a compatibility contract so another
@@ -135,6 +154,8 @@ that claims due jobs, hands each handler a checkpoint-capable `FencedClaim`, and
 applies the retry/dead-letter policy. Like `Runtime`, it starts nothing —
 `Register` starts no goroutine; the host runs `go rt.Run(ctx)` and cancels to drain.
 `ProcessTimeout` must sit inside `LeaseFor` (`ErrProcessTimeoutExceedsLease`).
+It filters by kind exactly as `Runtime` does: the fenced `Claim` takes the
+runtime's registered `kinds`, on both the pending and expired-lease arms.
 
 ## Datastores — {turso, postgres} out of the box, or none at all
 
