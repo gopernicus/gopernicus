@@ -363,9 +363,9 @@ resolved on the proxy, because the rendered `go.mod` requires it. Cold-verified:
 into a scratch dir renders the new `.env.example`/`go.mod`, and the scratch host
 builds against the proxy.
 
-**2026-09-04: `pockets/jobs/v0.5.0`, `pockets/jobs/stores/pgx/v0.5.0`,
-`pockets/jobs/stores/turso/v0.4.0` — next tags, ONE train, MINOR (breaking
-ports)** — Claim and the scheduler pool filter by the kinds a runtime actually
+**2026-09-04: `pockets/jobs/v0.5.0` — TAGGED @ `eac19a0` (PR #38);
+`pockets/jobs/stores/pgx/v0.5.0` + `pockets/jobs/stores/turso/v0.4.0` — TAGGED
+@ `de453fb`; ONE train, MINOR (breaking ports)** — Claim and the scheduler pool filter by the kinds a runtime actually
 handles (plan of record `.claude/plans/jobs-kind-filtered-claim.md`; gopernicus
 issue #37; originating host gps-360-go plans/43 §4.5a). `job.QueueRepository.
 Claim`, `job.FencedQueueRepository.Claim`, and `schedule.Repository.ListDue`
@@ -374,7 +374,11 @@ ClaimDue` gains a trailing `expectedKind string` re-asserted in the CAS. Both
 runtimes wrap the store in a kind-scoped adapter (the repository ports are no
 longer kernel `JobStore`/`FencedStore` themselves), derive the kinds from
 `Handlers`, and log them at start-up. No schema, no sdk change, no new guard.
-Store pins move `pockets/jobs v0.3.0 → v0.5.0`. See the upgrade note below.
+Store pins move `pockets/jobs v0.3.0 → v0.5.0` and, by MVS through it,
+`sdk v0.5.0 → v0.7.1`. Core tag first, proxy poll, then the pin commit and the
+store tags; all three cold-resolve from a fresh `GOMODCACHE` and satisfy the new
+ports from a throwaway module. #37 closed; the silent-orphan follow-up is #39.
+See the upgrade note below.
 
 ## Tagging scheme
 
@@ -480,7 +484,7 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
-### pockets/jobs — v0.5.0 (+ stores/pgx v0.5.0, stores/turso v0.4.0) — next tag: Claim and the scheduler pool filter by registered kinds (minor, breaking ports)
+### pockets/jobs — v0.5.0 @ `eac19a0` (+ stores/pgx v0.5.0, stores/turso v0.4.0 @ `de453fb`) — tagged 2026-09-04: Claim and the scheduler pool filter by registered kinds (minor, breaking ports)
 
 Plan of record `.claude/plans/jobs-kind-filtered-claim.md` (gopernicus #37;
 originating host gps-360-go). A **minor** by the repo's pre-1.0 convention that
