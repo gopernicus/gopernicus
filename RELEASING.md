@@ -319,7 +319,7 @@ it onto both pools (queue and scheduler). Zero is the default and stays "no
 heartbeat" — existing hosts are byte-identical. Pin moves sdk v0.5.0 → v0.7.1.
 The Debug "iteration: no work" line needed no pocket change — it rides the pool.
 
-**2026-09-03: `sdk/v0.8.0` — next tag, MINOR (additive + one parser semantic)** —
+**2026-09-03: `sdk/v0.8.0` — TAGGED @ `8564703` (PR #36), MINOR (additive + one parser semantic)** —
 environment secrets, the dotenv comment rule, and `ParseEnvTags` adoption (plan
 of record `.claude/plans/environment-secret-and-dotenv-gaps.md`; gopernicus
 issue #34; originating hosts gps-360-go and segovia v2). One module changes:
@@ -335,10 +335,12 @@ untagged nested structs and treats an empty value (`KEY=`) as not provided
 (env-tagged) plus `Origin()`. No `go.mod` change (`sdk` still has no require
 block), no schema, no new guard. See the upgrade note below — it carries a
 **key-rotation advisory** for hosts that read `AUTH_JWT_SECRET` as ASCII from a
-`.env` seeded off a `KEY=   # comment` template. The owner cuts the tag.
+`.env` seeded off a `KEY=   # comment` template. Cold-resolution verified on the
+module proxy first poll (fresh `GOMODCACHE`; `Secret` and `ServerConfig.Origin`
+exercised from a throwaway module).
 
 **2026-09-03: `pockets/jobs/v0.4.2`, `pockets/events/v0.2.1`, `pockets/cms/v0.2.1`,
-`pockets/authentication/v0.9.1` — next tags, ONE train, PATCH (tags only)** —
+`pockets/authentication/v0.9.1` — TAGGED @ `8564703` (PR #36), ONE train, PATCH (tags only)** —
 `env:` struct tags on the Configs' tuning and host-read fields (same plan of
 record; `JOBS_*` on `jobs.Config` and `FencedRuntimeConfig`, `EVENTS_*`,
 `CMS_MAIL_FROM`/`CMS_CONTACT_TO`, and the six untagged `AUTH_*` fields plus
@@ -347,16 +349,19 @@ zero-value contracts stay the defaults — so a struct-literal host is
 byte-identical; a host opts in by calling `ParseEnvTags` after its literal. No
 behavior, signature, schema, store retag, or pin move; the pockets keep their
 older sdk pins (the nested `AUTH_COOKIE_*` tags need the HOST's sdk ≥ v0.8.0).
-Cut after `sdk/v0.8.0` resolves.
+Cut after `sdk/v0.8.0` resolved; all four resolved on the proxy first poll.
 
-**2026-09-03: `workshop/gopernicus/v0.2.1` — next tag, PATCH** — the init
+**2026-09-03: `workshop/gopernicus/v0.2.1` — TAGGED @ `8564703` (PR #36), PATCH** — the init
 scaffold reads `web.ServerConfig`, `logging.Options`, and `pgxdb.Config`
 through `ParseEnvTags` (the `serverConfig()` helper and the three
 `GetEnvOrDefault` logging lines are gone), its `.env.example` moves every hint
 onto its own line above the key and states the `KEY=`-keeps-the-default
 convention, and its `go.mod` template pins move `sdk v0.5.0 → v0.8.0`,
 `pgxdb v0.1.0 → v0.6.1`, `turso v0.1.0 → v0.3.0`. Cut LAST, after `sdk/v0.8.0`
-resolves on the proxy, because the rendered `go.mod` requires it.
+resolved on the proxy, because the rendered `go.mod` requires it. Cold-verified:
+`go install …@v0.2.1` into a fresh `GOMODCACHE`/`GOBIN`, `gopernicus init --db pgx`
+into a scratch dir renders the new `.env.example`/`go.mod`, and the scratch host
+builds against the proxy.
 
 ## Tagging scheme
 
@@ -462,7 +467,7 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
-### sdk — v0.8.0 (next tag, 2026-09-03): secrets, the dotenv comment rule, and ParseEnvTags that hosts can actually adopt (minor)
+### sdk — v0.8.0 — tagged 2026-09-03 @ `8564703`: secrets, the dotenv comment rule, and ParseEnvTags that hosts can actually adopt (minor)
 
 Plan of record `.claude/plans/environment-secret-and-dotenv-gaps.md`
 (gopernicus #34; originating hosts gps-360-go and segovia v2). A **minor**:
@@ -549,7 +554,7 @@ environment now overrides a hard-coded posture; an unknown `AUTH_DELIVERY_MODE`
 is the pocket's loud construction error instead of a host fallback), and list
 values keep empty entries (`a,,b` is three).
 
-### pockets/jobs v0.4.2 · events v0.2.1 · cms v0.2.1 · authentication v0.9.1 (next tags, 2026-09-03): env tags on the Configs (patch; tags only)
+### pockets/jobs v0.4.2 · events v0.2.1 · cms v0.2.1 · authentication v0.9.1 — tagged 2026-09-03 @ `8564703`: env tags on the Configs (patch; tags only)
 
 Same plan of record. Tags only — no field, behavior, schema, store, or pin
 change; a struct-literal host is byte-identical. Keys: `jobs.Config` —
@@ -575,7 +580,7 @@ field). `authorization.Config` is untagged (its scalars live in the nested
 example hosts onto `Secret` with hex keys, and the example env templates
 documenting the newly readable keys).
 
-### workshop/gopernicus — v0.2.1 (next tag, 2026-09-03): the scaffold reads its config the sdk way (patch)
+### workshop/gopernicus — v0.2.1 — tagged 2026-09-03 @ `8564703`: the scaffold reads its config the sdk way (patch)
 
 Same plan of record. `gopernicus init` now emits a `main.go` whose logger and
 server config come from `ParseEnvTags` over pre-seeded literals (built inside
