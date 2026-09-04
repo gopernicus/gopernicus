@@ -4,8 +4,8 @@ go 1.26.1
 
 require (
 	github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.5.0
-	github.com/gopernicus/gopernicus/pockets/jobs v0.3.0
-	github.com/gopernicus/gopernicus/sdk v0.5.0
+	github.com/gopernicus/gopernicus/pockets/jobs v0.5.0
+	github.com/gopernicus/gopernicus/sdk v0.7.1
 	github.com/jackc/pgx/v5 v5.8.0
 )
 
