@@ -15,16 +15,28 @@ import (
 //
 // Supported tags:
 //   - `env:"KEY"` — environment variable name (namespaced via GetNamespaceEnvKey)
-//   - `default:"value"` — value used when the env var is unset and the field is zero
+//   - `default:"value"` — value used when the env var is unset or empty and the field is zero
 //   - `separator:","` — separator for slice values (defaults to comma)
-//   - `required:"true"` — error when the env var is unset
+//   - `required:"true"` — error when the env var is unset or empty
 //
 // Precedence: env var > existing non-zero field value > default tag value. Hosts
 // building environments via struct literal are unaffected until they opt in.
 //
+// An environment variable that is set to an empty value (KEY=) is treated
+// exactly like one that is not set: required:"true" errors, a zero field takes
+// its default tag, and a pre-seeded field keeps its value. A host that needs to
+// blank a defaulted field must do so in code. GetEnvOrDefault does NOT share
+// this rule — it keeps raw LookupEnv semantics, where KEY= is a set, empty
+// value.
+//
 // Supported field kinds: string, int, int64 (including time.Duration), bool,
 // float32/float64, and []string. cfg must be a pointer to a struct, and any
-// tagged field of an unsupported kind is an error.
+// tagged field of an unsupported kind is an error — including a struct field
+// carrying an env tag. An exported, settable struct-kind field WITHOUT an env
+// tag is instead recursed into under the same namespace, so a nested config
+// struct's own tags apply with no prefix of their own; a struct type with no
+// exported fields (time.Time) recurses to a no-op. Pointer-to-struct and
+// interface fields are skipped.
 func ParseEnvTags(namespace string, cfg any) error {
 	v := reflect.ValueOf(cfg)
 	if v.Kind() != reflect.Pointer || v.Elem().Kind() != reflect.Struct {
@@ -44,6 +56,11 @@ func ParseEnvTags(namespace string, cfg any) error {
 
 		envKey := fieldType.Tag.Get("env")
 		if envKey == "" {
+			if field.Kind() == reflect.Struct {
+				if err := ParseEnvTags(namespace, field.Addr().Interface()); err != nil {
+					return err
+				}
+			}
 			continue
 		}
 
@@ -54,7 +71,7 @@ func ParseEnvTags(namespace string, cfg any) error {
 		key := GetNamespaceEnvKey(namespace, envKey)
 		value, exists := os.LookupEnv(key)
 
-		if !exists {
+		if !exists || value == "" {
 			if required {
 				return fmt.Errorf("required environment variable %s is not set", key)
 			}

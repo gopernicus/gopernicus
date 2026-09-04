@@ -111,9 +111,7 @@ func postForgot(t *testing.T, router http.Handler, addr string) int {
 	body := `{"email":"` + addr + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/auth/password/forgot", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	if origins := allowedOrigins(); len(origins) > 0 {
-		req.Header.Set("Origin", origins[0])
-	}
+	req.Header.Set("Origin", hostAllowedOrigins(t)[0])
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	return rec.Code

@@ -21,6 +21,25 @@ func quietLog() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+// hostAllowedOrigins is the Origin allowlist this host composes, read off the SAME
+// buildAuthConfig seam run() wires — so it tracks the composition (its origin
+// derivation and the AUTH_ALLOWED_ORIGINS override) instead of restating it. It
+// replaces the retired allowedOrigins() helper for the tests that need an
+// allowlisted Origin header. It fatals rather than returning empty: a host with no
+// allowed origin cannot pass the browser-safe mutation gate, so every caller would
+// fail anyway, and the failure is clearer here.
+func hostAllowedOrigins(t *testing.T) []string {
+	t.Helper()
+	cfg, err := buildAuthConfig(quietLog(), nil)
+	if err != nil {
+		t.Fatalf("buildAuthConfig: %v", err)
+	}
+	if len(cfg.AllowedOrigins) == 0 {
+		t.Fatal("host has no allowed origins; the browser-safe mutation gate cannot pass")
+	}
+	return cfg.AllowedOrigins
+}
+
 // jobsDispatcher builds the generic-jobs delivery dispatcher over an in-memory fenced
 // queue — the jobs-mode delivery transport run() wires, reproduced here so a construction
 // test can satisfy the jobs-mode queue capability.
@@ -39,6 +58,10 @@ func jobsDispatcher(t *testing.T) auth.DeliveryDispatcher {
 // over the in-memory repositories (all v3 ports wired in authmem), with the delivery
 // worker acknowledged.
 func TestBuildAuthConfigConstructs(t *testing.T) {
+	// The assertions below are about the seam's OWN pre-seeded posture, which
+	// AUTH_DELIVERY_MODE now overrides; pin it empty (= not provided) so an ambient
+	// value cannot decide the outcome.
+	t.Setenv("AUTH_DELIVERY_MODE", "")
 	cfg, err := buildAuthConfig(quietLog(), nil)
 	if err != nil {
 		t.Fatalf("buildAuthConfig: %v", err)

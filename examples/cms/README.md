@@ -67,7 +67,7 @@ Copy `.env.example` (repo root) to `.env` and fill in:
 | `LOG_LEVEL`, `LOG_FORMAT`, `LOG_OUTPUT` | `slog` setup |
 | `MEDIA_DIR` | disk path for uploaded assets (default `media-data`) |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD` | email delivery; unset ⇒ console sender (logs mail) |
-| `MAIL_FROM`, `CONTACT_EMAIL` | From address + operator inbox for contact inquiries |
+| `CMS_MAIL_FROM`, `CMS_CONTACT_TO` | From address + operator inbox for contact inquiries |
 
 ## Make targets
 

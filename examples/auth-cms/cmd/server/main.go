@@ -46,7 +46,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -89,6 +88,11 @@ import (
 // and the asset route agree (ui-goth GOTH-7.2).
 const authAssetBasePath = "/assets/goth"
 
+// defaultPort is this host's own default bind port, pre-seeded into the
+// web.ServerConfig literal before ParseEnvTags so PORT= (or an unset PORT)
+// keeps 8082 instead of falling back to the sdk tag default.
+const defaultPort = "8082"
+
 // newAuthBundle constructs the immutable ui/goth presentation bundle the auth pages
 // render through. StylesOnly is the smallest safe profile for the native auth forms;
 // the externalized fragment-reader script is served separately and covered by the
@@ -100,22 +104,33 @@ func newAuthBundle() (*uigoth.Bundle, error) {
 func main() {
 	_ = environment.LoadEnv()
 
-	log := logging.New(logging.Options{
-		Level:  environment.GetEnvOrDefault("LOG_LEVEL", "INFO"),
-		Format: environment.GetEnvOrDefault("LOG_FORMAT", "text"),
-		Output: environment.GetEnvOrDefault("LOG_OUTPUT", "STDERR"),
-	})
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx, log); err != nil {
-		log.ErrorContext(ctx, "server exited with error", "error", err)
+	if err := run(ctx); err != nil {
+		slog.Error("server exited with error", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, log *slog.Logger) error {
+func run(ctx context.Context) error {
+	// Config comes from the environment through the sdk's struct tags: the literal
+	// pre-seeds this host's own defaults, the environment wins over them, and an
+	// empty value (KEY=) keeps what is already set. This host logs text by default.
+	logOpts := logging.Options{Format: "text"}
+	if err := environment.ParseEnvTags("", &logOpts); err != nil {
+		return err
+	}
+	log := logging.New(logOpts)
+
+	// The HTTP server config, read the same way. It is resolved here rather than at
+	// the web.Run call because TrustProxies (below) and every host-derived URL take
+	// their values from it.
+	srv := web.ServerConfig{Port: defaultPort}
+	if err := environment.ParseEnvTags("", &srv); err != nil {
+		return err
+	}
+
 	// Both stores are in-memory: no driver, no migrations, no datastore module.
 	cmsStore := memstore.New()
 	cmsRepos := cmsStore.Repositories()
@@ -127,14 +142,25 @@ func run(ctx context.Context, log *slog.Logger) error {
 	authStore := authmem.New()
 	authRepos := authStore.Repositories()
 
-	// Delivery mode selection (authv3-delivery-refactor AV3D-5.3). DELIVERY_MODE selects
-	// the host's outbound-delivery composition: the generic-jobs-mode wiring (default) or the
-	// bounded in-process mode. On THIS proof host BOTH are non-durable — jobs mode backs its
-	// fenced queue with jobsmem.NewFencedQueue (in-memory), so a real durable posture is a
-	// store swap a production host makes (pockets/jobs/stores/{pgx,turso}). The bounded mode
-	// is never hidden — it announces its crash-loss + per-process posture LOUDLY at startup
-	// (see the WARN below where the config is flipped).
-	mode := deliveryMode()
+	// Delivery mode selection (authv3-delivery-refactor AV3D-5.3). AUTH_DELIVERY_MODE
+	// selects the host's outbound-delivery composition: the generic-jobs-mode wiring
+	// (this host's pre-seeded default) or the bounded in-process mode. On THIS proof host
+	// BOTH are non-durable — jobs mode backs its fenced queue with jobsmem.NewFencedQueue
+	// (in-memory), so a real durable posture is a store swap a production host makes
+	// (pockets/jobs/stores/{pgx,turso}). The bounded mode is never hidden — it announces
+	// its crash-loss + per-process posture LOUDLY at startup (see the WARN below where the
+	// config is flipped).
+	//
+	// The value is the authentication pocket's own AUTH_DELIVERY_MODE tag, read here —
+	// ahead of buildAuthConfig — because the jobs-mode dispatcher must be built before the
+	// config is assembled. buildAuthConfig pre-seeds the same default and reads the same
+	// key, so the two never disagree; an unrecognized value is auth.NewService's loud
+	// construction error rather than a silent fallback to jobs.
+	deliverySelection := auth.Config{DeliveryMode: auth.DeliveryModeJobs}
+	if err := environment.ParseEnvTags("", &deliverySelection); err != nil {
+		return err
+	}
+	mode := deliverySelection.DeliveryMode
 
 	// Host operational health for delivery (AV3D-5.3): a secret-free, bounded, host-COMPOSED
 	// surface (internal/deliveryhealth). It observes the runtime lifecycle (host-owned), the
@@ -158,7 +184,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 		deliveryDispatcher *authjobs.Dispatcher
 	)
 	if mode == auth.DeliveryModeJobs {
-		dj, err := jobs.NewService(jobs.Repositories{FencedQueue: jobsmem.NewFencedQueue()}, jobs.Config{Logger: log})
+		jobsCfg := jobs.Config{Logger: log}
+		if err := environment.ParseEnvTags("", &jobsCfg); err != nil {
+			return err
+		}
+		dj, err := jobs.NewService(jobs.Repositories{FencedQueue: jobsmem.NewFencedQueue()}, jobsCfg)
 		if err != nil {
 			return err
 		}
@@ -175,7 +205,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// so a forged X-Forwarded-For can no longer rotate rate-limit keys or poison
 	// security-event audit rows; a proxied deployment sets it to its trusted-proxy
 	// hop count.
-	router.Use(web.TrustProxies(trustedProxyCount()), web.RequestID(), web.Logger(log), web.Panics(log))
+	router.Use(web.TrustProxies(srv.TrustedProxyCount), web.RequestID(), web.Logger(log), web.Panics(log))
 
 	// Serve the ui/goth fingerprinted assets (the auth pages' stylesheet) and the
 	// externalized fragment-reader script the reset/magic-link landings load. Both are
@@ -275,7 +305,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// composition seam does not receive (the DeliveryMode post-set precedent below).
 	authCfg.MachineRoutesGate = authorizer.RequirePermissionFixed(platformResourceType, "admin", platformResourceID)
 	// Apply the selected delivery mode to the auth config. buildAuthConfig returns the
-	// jobs-mode posture (in-memory fenced queue on this host); DELIVERY_MODE=in_process flips
+	// jobs-mode posture (in-memory fenced queue on this host); AUTH_DELIVERY_MODE=in_process flips
 	// it to the bounded EPHEMERAL pool here — and announces that posture LOUDLY. Neither mode
 	// is durable on this proof host (both use in-memory stores).
 	switch mode {
@@ -284,10 +314,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 		authCfg.DeliveryJobsAcknowledged = false
 		authCfg.DeliveryEphemeralAcknowledged = true
 		authCfg.DeliveryDispatcher = nil // in_process owns its bounded pool; no dispatcher
-		log.WarnContext(ctx, "DELIVERY_MODE=in_process: EPHEMERAL bounded delivery selected — "+
+		log.WarnContext(ctx, "AUTH_DELIVERY_MODE=in_process: EPHEMERAL bounded delivery selected — "+
 			"accepted in-flight work is LOST on crash or restart, there is NO cross-instance "+
 			"coordination, and running multiple instances de-duplicates on NEITHER (a user may "+
-			"receive duplicate messages). DELIVERY_MODE=jobs on this proof host is ALSO in-memory "+
+			"receive duplicate messages). AUTH_DELIVERY_MODE=jobs on this proof host is ALSO in-memory "+
 			"(non-durable); a durable posture requires a pgx/turso FencedQueue store, not this demo.",
 			"delivery_mode", "in_process")
 	default:
@@ -388,7 +418,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return err
 	}
 
-	if err := cms.Register(mount, cmsRepos, cms.Config{
+	cmsCfg := cms.Config{
 		Views:           cmsViews,                                // the ui/goth-backed bundled default
 		Types:           []content.ContentType{productType()},    // host-registered custom type (zero migration)
 		Templates:       []cms.TemplateBinding{productBinding()}, // its dev-authored renderer
@@ -397,7 +427,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 		MailFrom:        "cms@localhost",
 		ContactTo:       "ops@localhost",
 		AdminMiddleware: []web.Middleware{authSvc.RequireAccessToken()}, // auth gates cms's admin surface
-	}); err != nil {
+	}
+	// CMS_MAIL_FROM / CMS_CONTACT_TO win over the two addresses seeded above.
+	if err := environment.ParseEnvTags("", &cmsCfg); err != nil {
+		return err
+	}
+	if err := cms.Register(mount, cmsRepos, cmsCfg); err != nil {
 		return err
 	}
 
@@ -442,7 +477,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 		outboxStore = outboxmem.New()
 		eventsRepos = eventspocket.Repositories{Outbox: outboxStore}
 	}
-	eventsSvc, err := eventspocket.NewService(eventsRepos, eventspocket.Config{
+	eventsCfg := eventspocket.Config{
 		Bus:              bus,
 		StreamMiddleware: []web.Middleware{authSvc.RequireAccessToken()},
 		// Authorize (the FLAGSHIP posture — authorization-v1 Z4 commit 2): the SAME
@@ -460,7 +495,13 @@ func run(ctx context.Context, log *slog.Logger) error {
 			})
 			return res.Allowed, err
 		},
-	})
+	}
+	// EVENTS_HEARTBEAT / EVENTS_BUFFER_SIZE / EVENTS_MAX_CONN_AGE /
+	// EVENTS_MAX_CONNS_PER_SUBJECT tune the gateway; unset keeps the pocket defaults.
+	if err := environment.ParseEnvTags("", &eventsCfg); err != nil {
+		return err
+	}
+	eventsSvc, err := eventspocket.NewService(eventsRepos, eventsCfg)
 	if err != nil {
 		return err
 	}
@@ -592,7 +633,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	//     would make Memory.Close drain nothing). Closing after the poller stops is
 	//     why the poller's closed-bus edge (Poll emitting into a closed bus) never
 	//     happens.
-	runErr := web.Run(hostCtx, router, serverConfig(), log)
+	runErr := web.Run(hostCtx, router, srv, log)
 
 	// Stop the delivery runtime after HTTP drains (its own context, like the poller).
 	log.InfoContext(context.Background(), "stopping delivery runtime")
@@ -643,34 +684,6 @@ func run(ctx context.Context, log *slog.Logger) error {
 // (EVENTS_OUTBOX=memory). Default (unset/other) keeps the direct-emit rail.
 func durableOutbox() bool {
 	return environment.GetEnvOrDefault("EVENTS_OUTBOX", "") == "memory"
-}
-
-// deliveryMode selects the host's outbound-delivery composition from DELIVERY_MODE
-// (authv3-delivery-refactor AV3D-5.3). The default (unset or "jobs") is the generic-jobs-mode
-// wiring — non-durable on this proof host (in-memory fenced queue). "in_process" selects the
-// bounded EPHEMERAL pool, whose crash-loss + per-process posture run() announces LOUDLY at
-// startup. Any other value falls back to jobs — fail-safe: the host never silently selects a
-// different mode. (Neither mode is durable here; durability is a pgx/turso store swap.)
-func deliveryMode() auth.DeliveryMode {
-	if environment.GetEnvOrDefault("DELIVERY_MODE", "") == "in_process" {
-		return auth.DeliveryModeInProcess
-	}
-	return auth.DeliveryModeJobs
-}
-
-// trustedProxyCount is the number of trusted reverse proxies in front of the
-// server, from TRUSTED_PROXY_COUNT. Default 0 (unset/invalid) trusts only
-// RemoteAddr — the safe default for a directly-exposed host.
-func trustedProxyCount() int {
-	v := environment.GetEnvOrDefault("TRUSTED_PROXY_COUNT", "")
-	if v == "" {
-		return 0
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 0 {
-		return 0
-	}
-	return n
 }
 
 // outboxDemoHandler is the host-owned demo trigger for the EVENTS_OUTBOX=memory
@@ -852,7 +865,18 @@ func buildAuthConfig(log *slog.Logger, granter auth.Granter) (auth.Config, error
 		return auth.Config{}, err
 	}
 
-	return auth.Config{
+	// This host's own externally visible origin, resolved from the SAME
+	// web.ServerConfig tags run() serves on (PUBLIC_BASE_URL, else http://HOST:PORT).
+	// Every host-DERIVED default below — the OAuth callback base, the magic-link and
+	// password-reset landings, and the Origin-allowlist fallback — is pre-seeded from
+	// it, so an environment that leaves those keys empty keeps them.
+	srv := web.ServerConfig{Port: defaultPort}
+	if err := environment.ParseEnvTags("", &srv); err != nil {
+		return auth.Config{}, err
+	}
+	origin := srv.Origin()
+
+	cfg := auth.Config{
 		Hasher:               bcrypt.New(),
 		Mailer:               email.NewConsole(log),
 		MailFrom:             "auth@localhost",
@@ -888,50 +912,59 @@ func buildAuthConfig(log *slog.Logger, granter auth.Granter) (auth.Config, error
 		EmailContentTemplates: []auth.EmailContentTemplate{authpages.EmailOverride()},
 		// The exact-match Origin allowlist the browser-safe mutation gate validates
 		// cookie-authenticated sensitive mutations and HTML form posts against; defaults
-		// to this host's own origin (design §9.1).
-		AllowedOrigins: allowedOrigins(),
-		// Passwordless login for email + phone (design §4.2): magic link + OTP.
-		Passwordless: passwordlessKinds(),
-		// The magic-link / redemption-page base URL (design §6.4), config-only.
-		PublicAuthBaseURL: publicAuthBaseURL(),
+		// to this host's own origin (design §9.1), overridden by AUTH_ALLOWED_ORIGINS.
+		AllowedOrigins: []string{origin},
+		// Passwordless login for email + phone (design §4.2): magic link + OTP. Each
+		// listed kind needs a wired delivery channel (email via the Mailer, phone via the
+		// console Notifier) or construction fails LOUDLY; AUTH_PASSWORDLESS narrows it.
+		Passwordless: []string{identity.KindEmail, identity.KindPhone},
+		// The magic-link / redemption-page base URL (design §6.4), config-only: the
+		// framework appends "#token=<token>", so it points at the bundled fragment-reading
+		// landing GET this host mounts at /auth/magic. AUTH_PUBLIC_BASE_URL overrides it;
+		// request Host/forwarded headers NEVER participate.
+		PublicAuthBaseURL: origin + "/auth/magic",
 		// The password-reset landing route the reset mail links to (CHAU-5.1),
 		// config-only: the link is built in the delivery worker from THIS value,
 		// never from a request Host/forwarded header. Production requires it.
-		PasswordResetURL: passwordResetURL(),
+		// AUTH_PASSWORD_RESET_URL overrides this host's own reset page.
+		PasswordResetURL: origin + "/auth/password/reset",
 		// The OAuth pending-link landing URL the anti-takeover confirmation mail links
 		// to (oauth-pending-link plan D1), config-only. Empty by default, keeping the
 		// mail's bare-token line — but this demo DOES serve the pocket's bundled
 		// fragment-reading landing (public GET /auth/oauth/link, mounted with Views +
 		// a provider), so http://HOST:PORT/auth/oauth/link is a working value here. A
-		// real host points AUTH_OAUTH_LINK_URL at that route or its own SPA route.
-		OAuthLinkBaseURL: oauthLinkBaseURL(),
+		// real host points AUTH_OAUTH_LINK_URL at that route or its own SPA route; the
+		// empty pre-seed is what that key overrides.
+		OAuthLinkBaseURL: "",
 		// The queue is the only send path; affirm run() runs the generic-jobs delivery
 		// runtime (jobs.FencedRuntime) (authv3-delivery-refactor AV3D-0.1).
 		DeliveryJobsAcknowledged: true,
 		Providers:                []oauth.Provider{fakeOAuthProvider{}},
-		OAuthCallbackBase:        callbackBase(),
+		OAuthCallbackBase:        origin,
 		// Absolute post-flow destinations only; safe same-origin relative paths
 		// (e.g. the account page's ?redirect=/auth/account) need no entry.
 		RedirectAllowlist: []string{"/"},
 		TokenEncrypter:    encrypter,
 		TokenSigner:       signer,
-		AccessTokenTTL:    accessTokenTTL(),
-		RefreshTTL:        refreshTTL(),
-		Granter:           granter,
+		// AccessTokenTTL / RefreshTTL are left zero: AUTH_ACCESS_TOKEN_TTL and
+		// AUTH_REFRESH_TTL carry the pocket's own tag defaults (15m / 168h), which are
+		// the values the pocket resolves a zero field to anyway.
+		Granter: granter,
 		// The phone-kind console notifier makes phone a supported delivery kind
 		// (deny-by-absence; the dev stand-in for SMS — the token lands in the log).
 		Notifiers: []notify.Notifier{notify.NewConsole(identity.KindPhone, log)},
 		Logger:    log,
-	}, nil
-}
-
-func serverConfig() web.ServerConfig {
-	return web.ServerConfig{
-		Host:            environment.GetEnvOrDefault("HOST", "localhost"),
-		Port:            environment.GetEnvOrDefault("PORT", "8082"),
-		ReadTimeout:     15 * time.Second,
-		WriteTimeout:    15 * time.Second,
-		IdleTimeout:     120 * time.Second,
-		ShutdownTimeout: 10 * time.Second,
 	}
+	// The pocket's own env tags, applied over the literal: AUTH_MAIL_FROM,
+	// AUTH_ALLOWED_ORIGINS, AUTH_PASSWORDLESS, AUTH_PUBLIC_BASE_URL,
+	// AUTH_PASSWORD_RESET_URL, AUTH_OAUTH_LINK_URL, AUTH_OAUTH_CALLBACK_BASE,
+	// AUTH_REDIRECT_ALLOWLIST, AUTH_REQUIRE_VERIFIED_EMAIL, AUTH_RUNTIME_MODE,
+	// AUTH_DELIVERY_MODE, AUTH_ACCESS_TOKEN_TTL, AUTH_REFRESH_TTL, AUTH_LIST_STRATEGY,
+	// the AUTH_COOKIE_* nested cookie keys, and the remaining flags. An empty value
+	// keeps what the literal seeded; an unrecognized mode or strategy is the pocket's
+	// loud construction error.
+	if err := environment.ParseEnvTags("", &cfg); err != nil {
+		return auth.Config{}, err
+	}
+	return cfg, nil
 }

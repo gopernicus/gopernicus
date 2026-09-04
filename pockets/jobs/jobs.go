@@ -138,23 +138,26 @@ type Config struct {
 	// Cron parses cron expressions; nil is fine until a Spec.Cron schedule is
 	// ensured, which then returns ErrCronRequired.
 	Cron CronParser
-	// Workers is the queue pool size; 0 → defaultWorkers.
-	Workers int
+	// Workers is the queue pool size; 0 → defaultWorkers. (env: JOBS_WORKERS)
+	Workers int `env:"JOBS_WORKERS"`
 	// PollInterval is the delay between iterations while work flows; 0 → the pool
-	// default.
-	PollInterval time.Duration
+	// default. (env: JOBS_POLL_INTERVAL)
+	PollInterval time.Duration `env:"JOBS_POLL_INTERVAL"`
 	// IdleInterval is the delay after an empty poll; 0 → the pool default.
-	IdleInterval time.Duration
+	// (env: JOBS_IDLE_INTERVAL)
+	IdleInterval time.Duration `env:"JOBS_IDLE_INTERVAL"`
 	// MaxAttempts is the default per-job attempt ceiling; 0 → defaultMaxAttempts.
-	MaxAttempts int
+	// (env: JOBS_MAX_ATTEMPTS)
+	MaxAttempts int `env:"JOBS_MAX_ATTEMPTS"`
 	// ScheduleBatch is the number of due schedules handled per tick; 0 →
-	// defaultScheduleBatch.
-	ScheduleBatch int
+	// defaultScheduleBatch. (env: JOBS_SCHEDULE_BATCH)
+	ScheduleBatch int `env:"JOBS_SCHEDULE_BATCH"`
 	// Heartbeat is the pools' liveness cadence (sdk v0.7.1,
 	// workers.WithHeartbeat): one INFO "pool alive" line per interval with the
 	// iteration/claim/error deltas since the previous beat. 0 (the default)
 	// disables it — existing hosts behave exactly as before.
-	Heartbeat time.Duration
+	// (env: JOBS_HEARTBEAT_INTERVAL)
+	Heartbeat time.Duration `env:"JOBS_HEARTBEAT_INTERVAL"`
 	// Logger is the operational logger for the runtime pools (queue and
 	// scheduler); nil → slog.Default(). It is distinct from pocket.Mount.Logger:
 	// Config.Logger is the runtime pools' operational logger, while Mount.Logger

@@ -39,22 +39,25 @@ const gothAssetBasePath = "/assets/goth"
 func main() {
 	_ = environment.LoadEnv()
 
-	log := logging.New(logging.Options{
-		Level:  environment.GetEnvOrDefault("LOG_LEVEL", "INFO"),
-		Format: environment.GetEnvOrDefault("LOG_FORMAT", "text"),
-		Output: environment.GetEnvOrDefault("LOG_OUTPUT", "STDERR"),
-	})
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx, log); err != nil {
-		log.ErrorContext(ctx, "server exited with error", "error", err)
+	if err := run(ctx); err != nil {
+		slog.Error("server exited with error", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, log *slog.Logger) error {
+func run(ctx context.Context) error {
+	// Config comes from the environment through the sdk's struct tags: the
+	// literal pre-seeds this host's own defaults, the environment wins over
+	// them, and an empty value (KEY=) keeps what is already set.
+	logOpts := logging.Options{Format: "text"}
+	if err := environment.ParseEnvTags("", &logOpts); err != nil {
+		return err
+	}
+	log := logging.New(logOpts)
+
 	// The store is in-memory: no driver, no migrations, no datastore module.
 	store := memstore.New()
 	repos := store.Repositories()
@@ -99,7 +102,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// unauthenticated by design, since a readiness probe can't log in.
 	router.Handle(http.MethodGet, "/healthz", healthzHandler())
 
-	return web.Run(ctx, router, serverConfig(), log)
+	srv := web.ServerConfig{Port: "8081"}
+	if err := environment.ParseEnvTags("", &srv); err != nil {
+		return err
+	}
+
+	return web.Run(ctx, router, srv, log)
 }
 
 // healthzHandler is this host's liveness probe. This host is memory-backed, so
@@ -172,15 +180,4 @@ func seed(ctx context.Context, repos cms.Repositories) error {
 		return err
 	}
 	return nil
-}
-
-func serverConfig() web.ServerConfig {
-	return web.ServerConfig{
-		Host:            environment.GetEnvOrDefault("HOST", "localhost"),
-		Port:            environment.GetEnvOrDefault("PORT", "8081"),
-		ReadTimeout:     15 * time.Second,
-		WriteTimeout:    15 * time.Second,
-		IdleTimeout:     120 * time.Second,
-		ShutdownTimeout: 10 * time.Second,
-	}
 }

@@ -41,13 +41,13 @@ func LoadPath(p string) error {
 			line = strings.TrimSpace(trimmed)
 		}
 
-		key, value, ok := strings.Cut(line, "=")
+		key, raw, ok := strings.Cut(line, "=")
 		if !ok {
 			continue
 		}
 
 		key = strings.TrimSpace(key)
-		value = strings.TrimSpace(value)
+		value := strings.TrimSpace(raw)
 
 		// Strip surrounding quotes (single or double).
 		quoted := false
@@ -61,9 +61,11 @@ func LoadPath(p string) error {
 
 		// Strip inline comments (only for unquoted values).
 		// e.g. FOO=bar # this is a comment
+		// The scan runs on the raw text after '=' so that whitespace TrimSpace
+		// would have removed still marks the comment: "FOO=   # note" is empty.
 		if !quoted {
-			if idx := strings.Index(value, " #"); idx != -1 {
-				value = strings.TrimSpace(value[:idx])
+			if idx := inlineCommentIndex(raw); idx != -1 {
+				value = strings.TrimSpace(raw[:idx])
 			}
 		}
 
@@ -74,6 +76,19 @@ func LoadPath(p string) error {
 	}
 
 	return scanner.Err()
+}
+
+// inlineCommentIndex reports the index of the '#' that starts an inline comment
+// in an unquoted value — the first '#' preceded by a space or tab — or -1 when
+// the value has none. A '#' that is not preceded by whitespace is part of the
+// value (SLACK_CHANNEL=#alerts, COLOR=#ff0000).
+func inlineCommentIndex(value string) int {
+	for i := 1; i < len(value); i++ {
+		if value[i] == '#' && (value[i-1] == ' ' || value[i-1] == '\t') {
+			return i
+		}
+	}
+	return -1
 }
 
 // GetEnvOrDefault retrieves an environment variable, returning fallback

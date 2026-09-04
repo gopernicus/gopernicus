@@ -18,9 +18,26 @@ func TestServerConfig_EnvironmentTags(t *testing.T) {
 		"WriteTimeout":    {env: "WRITE_TIMEOUT", def: "15s"},
 		"IdleTimeout":     {env: "IDLE_TIMEOUT", def: "120s"},
 		"ShutdownTimeout": {env: "SHUTDOWN_TIMEOUT", def: "10s"},
+		// No default: zero already means "trust no proxy" and "derive the
+		// origin from the listen address".
+		"TrustedProxyCount": {env: "TRUSTED_PROXY_COUNT"},
+		"PublicBaseURL":     {env: "PUBLIC_BASE_URL"},
 	}
 
 	typ := reflect.TypeFor[ServerConfig]()
+
+	// The exact set: environment's tests carry a mirror of these tags, so a
+	// field added, renamed, or retagged here must be reflected there too.
+	var tagged []string
+	for i := range typ.NumField() {
+		if typ.Field(i).Tag.Get("env") != "" {
+			tagged = append(tagged, typ.Field(i).Name)
+		}
+	}
+	if len(tagged) != len(want) {
+		t.Fatalf("ServerConfig has %d env-tagged fields %v, want exactly %d", len(tagged), tagged, len(want))
+	}
+
 	for name, tags := range want {
 		field, ok := typ.FieldByName(name)
 		if !ok {

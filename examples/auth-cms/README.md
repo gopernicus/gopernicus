@@ -234,10 +234,10 @@ surface is deferred with the AZADM packet.
 - **Challenge rail**: `ChallengeProtector` (`buildChallengeProtector`, HMAC key
   ring with active key ID `dev`) + the `Challenges`/`PasswordResets`/`Challenges`
   ports from `authmem` back verify/reset/step-up/passwordless.
-- **Delivery** (two proof-host variants, `DELIVERY_MODE`): the queue is the ONLY
+- **Delivery** (two proof-host variants, `AUTH_DELIVERY_MODE`): the queue is the ONLY
   send path in either — the console mailer/notifier log the delivered secret, so
   drive codes/tokens/links from the server log.
-  - **`DELIVERY_MODE=jobs` (default — jobs-mode wiring over an IN-MEMORY fenced
+  - **`AUTH_DELIVERY_MODE=jobs` (default — jobs-mode wiring over an IN-MEMORY fenced
     queue):** `DeliveryMode: jobs` + `DeliveryEncrypter` (AES-GCM) +
     `DeliveryJobsAcknowledged: true`; the host wires `Config.DeliveryDispatcher` over
     the generic **jobs** pocket and runs the jobs `FencedRuntime` (bound to
@@ -259,7 +259,7 @@ surface is deferred with the AZADM packet.
     `DELIVERY_PURGE_BATCH` (default `500`). It is a no-op posture on this in-memory demo
     (nothing survives restart) but exercises the exact host-owned purge wiring a durable
     host uses; the purged count surfaces on `/healthz/delivery`.
-  - **`DELIVERY_MODE=in_process` (small/development — EPHEMERAL):** the same delivery
+  - **`AUTH_DELIVERY_MODE=in_process` (small/development — EPHEMERAL):** the same delivery
     processor runs behind a bounded queue + fixed worker pool the host drives via
     `authSvc.RunDelivery`. No dispatcher, no jobs runtime;
     `DeliveryEphemeralAcknowledged: true`. Its posture is **never hidden**: startup
@@ -341,7 +341,7 @@ v3 secrets (`AUTH_CHALLENGE_PEPPER`, `AUTH_IDENTIFIER_KEY`,
 `AUTH_DELIVERY_ENCRYPTER_KEY`), the v3 HTML/passwordless/magic-link knobs
 (`AUTH_PUBLIC_BASE_URL`, `AUTH_OAUTH_LINK_URL`, `AUTH_ALLOWED_ORIGINS`,
 `AUTH_PASSWORDLESS`),
-`DELIVERY_MODE` (`jobs` default / `in_process` for the ephemeral bounded variant —
+`AUTH_DELIVERY_MODE` (`jobs` default / `in_process` for the ephemeral bounded variant —
 see the Delivery wiring bullet), and
 `AUTH_DEBUG` + `OAUTH_CLIENT_ID/SECRET`. The host boots with **none** of them set:
 every secret gets a required-but-ephemeral single-instance key at boot

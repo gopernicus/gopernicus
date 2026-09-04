@@ -319,6 +319,45 @@ it onto both pools (queue and scheduler). Zero is the default and stays "no
 heartbeat" — existing hosts are byte-identical. Pin moves sdk v0.5.0 → v0.7.1.
 The Debug "iteration: no work" line needed no pocket change — it rides the pool.
 
+**2026-09-03: `sdk/v0.8.0` — next tag, MINOR (additive + one parser semantic)** —
+environment secrets, the dotenv comment rule, and `ParseEnvTags` adoption (plan
+of record `.claude/plans/environment-secret-and-dotenv-gaps.md`; gopernicus
+issue #34; originating hosts gps-360-go and segovia v2). One module changes:
+`foundation/environment` gains `Secret`/`DecodeSecret` (hex-encoded secret with
+a minimum-length floor; unset or empty → nil so the host applies its posture;
+`ErrSecretEncoding`/`ErrSecretUnderMinimum`), `LoadPath` adopts the dotenv
+inline-comment rule (an unquoted `#` opens a comment only when preceded by
+whitespace, evaluated before trimming — `KEY=   # note` is now empty instead of
+`# note`, `KEY=#alerts` stays `#alerts`), and `ParseEnvTags` descends into
+untagged nested structs and treats an empty value (`KEY=`) as not provided
+(`required` errors, `default:` applies, a pre-seeded field survives).
+`foundation/web.ServerConfig` gains `TrustedProxyCount` and `PublicBaseURL`
+(env-tagged) plus `Origin()`. No `go.mod` change (`sdk` still has no require
+block), no schema, no new guard. See the upgrade note below — it carries a
+**key-rotation advisory** for hosts that read `AUTH_JWT_SECRET` as ASCII from a
+`.env` seeded off a `KEY=   # comment` template. The owner cuts the tag.
+
+**2026-09-03: `pockets/jobs/v0.4.2`, `pockets/events/v0.2.1`, `pockets/cms/v0.2.1`,
+`pockets/authentication/v0.9.1` — next tags, ONE train, PATCH (tags only)** —
+`env:` struct tags on the Configs' tuning and host-read fields (same plan of
+record; `JOBS_*` on `jobs.Config` and `FencedRuntimeConfig`, `EVENTS_*`,
+`CMS_MAIL_FROM`/`CMS_CONTACT_TO`, and the six untagged `AUTH_*` fields plus
+`AUTH_COOKIE_*` on `CookieConfig`). No `default:` tags — the pockets' existing
+zero-value contracts stay the defaults — so a struct-literal host is
+byte-identical; a host opts in by calling `ParseEnvTags` after its literal. No
+behavior, signature, schema, store retag, or pin move; the pockets keep their
+older sdk pins (the nested `AUTH_COOKIE_*` tags need the HOST's sdk ≥ v0.8.0).
+Cut after `sdk/v0.8.0` resolves.
+
+**2026-09-03: `workshop/gopernicus/v0.2.1` — next tag, PATCH** — the init
+scaffold reads `web.ServerConfig`, `logging.Options`, and `pgxdb.Config`
+through `ParseEnvTags` (the `serverConfig()` helper and the three
+`GetEnvOrDefault` logging lines are gone), its `.env.example` moves every hint
+onto its own line above the key and states the `KEY=`-keeps-the-default
+convention, and its `go.mod` template pins move `sdk v0.5.0 → v0.8.0`,
+`pgxdb v0.1.0 → v0.6.1`, `turso v0.1.0 → v0.3.0`. Cut LAST, after `sdk/v0.8.0`
+resolves on the proxy, because the rendered `go.mod` requires it.
+
 ## Tagging scheme
 
 Nested Go modules in a single repo are tagged with the module's directory as a
@@ -422,6 +461,131 @@ silently would break a host whose CSP no longer covers the kit's assets. Record 
 the module's next-tag upgrade note below and tell hosts to re-derive their CSP header.
 
 ## Upgrade notes (keyed to each module's next tag)
+
+### sdk — v0.8.0 (next tag, 2026-09-03): secrets, the dotenv comment rule, and ParseEnvTags that hosts can actually adopt (minor)
+
+Plan of record `.claude/plans/environment-secret-and-dotenv-gaps.md`
+(gopernicus #34; originating hosts gps-360-go and segovia v2). A **minor**:
+four additive surfaces and one parser semantic in `foundation/environment` +
+`foundation/web`. Read all five items before repinning.
+
+**(a) `Secret(key, minBytes)` / `DecodeSecret(value, minBytes)`.** Hex-only.
+Unset OR empty → `nil, nil` (deliberately indistinguishable) so the host keeps
+its own "ephemeral in development, required in production" branch; a decode
+failure wraps `ErrSecretEncoding`, a short key wraps `ErrSecretUnderMinimum`,
+and `Secret` prefixes every error with the key name. `minBytes` is a floor,
+not the authority — `cryptids.NewAESGCM` still requires exactly 32. Hosts may
+delete their `hexKeyEnv` / `secretKeys.key` decode+length lines. A key read as
+raw ASCII today (the `examples/auth-cms` encrypter keys, its and gps-360-go's
+`AUTH_JWT_SECRET`) gets `ErrSecretEncoding` at boot if moved to `Secret`
+without re-encoding — move the value to hex when you move the read.
+
+**(b) KEY-ROTATION ADVISORY.** Before this tag, `LoadPath` turned
+`AUTH_JWT_SECRET=   # >=32 bytes; …` (the shape in `examples/auth-cms/.env.example`
+and any template copied from it) into the value `# >=32 bytes; …`. A host that
+reads that key as ASCII (`cryptids.NewHS256([]byte(secret))` — `examples/auth-cms`
+and gps-360-go do) accepted the 55-byte comment as its signing key with no
+warning: the EPHEMERAL-key WARN never fired and the host ran on publicly
+committed key material. Hex-read keys and exactly-32 AES keys failed loudly;
+the JWT key is the one that succeeded silently. If any environment was ever
+booted from such a `.env`, rotate `AUTH_JWT_SECRET` at repin.
+
+**(c) `LoadPath`: the dotenv inline-comment rule.** An unquoted `#` opens a
+comment only when the byte before it is a space or tab, evaluated on the raw
+text after `=` (the old code trimmed first, so `KEY=   # note` had no leading
+space left and kept `# note`). `KEY=   # note` and `KEY=\t# note` → `""` (the
+key is SET, empty); `KEY=#alerts`, `KEY=#ff0000` are unchanged; a quoted value
+is never comment-stripped. Consequence: a `KEY=   # hint` line that used to
+yield a loud hex/DSN error now yields empty — an operator debugging "why is my
+key unset" should look for whitespace-then-`#` on the line — and a value that
+legitimately contains ` #` must be quoted (`PASS="p4ss #1"`); today it was
+already truncated at the ` #`, so nothing that works today breaks.
+
+**(d) `ParseEnvTags` descends into nested structs.** An exported, settable
+struct-kind field WITHOUT an `env:` tag is recursed under the same namespace
+(no prefix); a tagged struct field is still an error; pointer-to-struct and
+interface fields are skipped; `time.Time` recurses to a no-op. A host whose
+parent struct already embeds a tagged struct as a field (`otel.Config`,
+`pgxdb.Config`, …) will see those tags applied where they were silently
+ignored before — check for that shape before repinning.
+
+**(e) `ParseEnvTags` treats an empty value as not provided — for every kind.**
+`KEY=` now behaves exactly like an unset key: `required:"true"` errors, a zero
+field takes its `default:`, a pre-seeded field keeps its value. Five of six
+kinds already ignored empty; `string` was the exception and wrote `""`. A host
+that relied on `KEY=` to blank a defaulted string must set the field in code.
+`GetEnvOrDefault` is UNCHANGED (raw `LookupEnv`: `KEY=` is set-and-empty) —
+the two now disagree about `KEY=`, so read your config through one of them.
+
+**(f) `web.ServerConfig`: `TrustedProxyCount` (`TRUSTED_PROXY_COUNT`),
+`PublicBaseURL` (`PUBLIC_BASE_URL`), and `Origin()`.** `HTTPServer` ignores the
+two new fields; pass `cfg.TrustedProxyCount` to `TrustProxies` and derive
+callback bases, allowed-origin fallbacks, and magic-link bases from
+`Origin()` (`PublicBaseURL` with trailing slashes trimmed, else
+`http://HOST:PORT` with `localhost` substituted for an empty or `0.0.0.0`
+host). `PublicBaseURL` must be scheme-qualified and path-free; `Origin()`
+documents that, it does not validate it. Every `ServerConfig` literal in this
+repo is keyed; a positional literal downstream would break.
+
+**Adopter shape — pre-seed your own defaults, then parse; env wins, `KEY=`
+keeps the seed:**
+
+```go
+logOpts := logging.Options{Format: "text"}
+if err := environment.ParseEnvTags("", &logOpts); err != nil { return err }
+srv := web.ServerConfig{Port: "8082"}
+if err := environment.ParseEnvTags("", &srv); err != nil { return err }
+router.Use(web.TrustProxies(srv.TrustedProxyCount), …)
+cfg := auth.Config{ /* ports… */, PublicAuthBaseURL: srv.Origin() + "/auth/magic" }
+if err := environment.ParseEnvTags("", &cfg); err != nil { return err }
+```
+
+Hosts may delete `serverConfig()`, the three `GetEnvOrDefault` logging lines,
+`trustedProxyCount()`, `publicBaseURL()`, and the `JOBS_*` / `AUTH_*`
+hand-parsers once the pocket tags below are pinned. Two semantic shifts to
+expect when `authentication.Config` starts going through `ParseEnvTags`: its
+thirteen pre-existing tags become live (`AUTH_RUNTIME_MODE` from the
+environment now overrides a hard-coded posture; an unknown `AUTH_DELIVERY_MODE`
+is the pocket's loud construction error instead of a host fallback), and list
+values keep empty entries (`a,,b` is three).
+
+### pockets/jobs v0.4.2 · events v0.2.1 · cms v0.2.1 · authentication v0.9.1 (next tags, 2026-09-03): env tags on the Configs (patch; tags only)
+
+Same plan of record. Tags only — no field, behavior, schema, store, or pin
+change; a struct-literal host is byte-identical. Keys: `jobs.Config` —
+`JOBS_WORKERS`, `JOBS_POLL_INTERVAL`, `JOBS_IDLE_INTERVAL`, `JOBS_MAX_ATTEMPTS`,
+`JOBS_SCHEDULE_BATCH`, `JOBS_HEARTBEAT_INTERVAL`; `jobs.FencedRuntimeConfig` —
+the shared `JOBS_WORKERS`/`JOBS_POLL_INTERVAL`/`JOBS_IDLE_INTERVAL`/`JOBS_MAX_ATTEMPTS`
+plus `JOBS_LEASE_FOR`, `JOBS_PROCESS_TIMEOUT` (a host running both runtimes in
+one process disambiguates with the namespace argument: `ParseEnvTags("FENCED",
+&cfg)` → `FENCED_JOBS_WORKERS`; `JOBS_PROCESS_TIMEOUT` without a covering
+`JOBS_LEASE_FOR` trips the existing `ErrProcessTimeoutExceedsLease`, loudly);
+`events.Config` — `EVENTS_HEARTBEAT`, `EVENTS_BUFFER_SIZE`, `EVENTS_MAX_CONN_AGE`,
+`EVENTS_MAX_CONNS_PER_SUBJECT`; `cms.Config` — `CMS_MAIL_FROM`,
+`CMS_CONTACT_TO`; `authentication.Config` — `AUTH_MAIL_FROM`,
+`AUTH_ALLOWED_ORIGINS`, `AUTH_OAUTH_CALLBACK_BASE`, `AUTH_REDIRECT_ALLOWLIST`,
+`AUTH_REQUIRE_VERIFIED_EMAIL`, `AUTH_PASSWORDLESS`; `CookieConfig` —
+`AUTH_COOKIE_NAME`, `AUTH_COOKIE_PATH`, `AUTH_COOKIE_DOMAIN`, `AUTH_COOKIE_SECURE`,
+`AUTH_COOKIE_MAX_AGE` (nested: needs the host's sdk ≥ v0.8.0; the pockets' own
+sdk pins do not move — MVS takes the host's). No `default:` tags anywhere: zero
+keeps every documented `0 → default` contract. Not retired by tags:
+gps-360-go's `JOBS_HANDLER_TIMEOUT` (a host-side handler wrapper, no Config
+field). `authorization.Config` is untagged (its scalars live in the nested
+`EvaluationLimits`; gopernicus #35 tracks it with the other follow-ups —
+example hosts onto `Secret` with hex keys, and the example env templates
+documenting the newly readable keys).
+
+### workshop/gopernicus — v0.2.1 (next tag, 2026-09-03): the scaffold reads its config the sdk way (patch)
+
+Same plan of record. `gopernicus init` now emits a `main.go` whose logger and
+server config come from `ParseEnvTags` over pre-seeded literals (built inside
+`run()` so a parse error is returned; `main()` reports it through the default
+`slog`), a `.env.example` with every hint on its own line and the two-line
+`KEY=`-keeps-the-default / quote-` #` header, three optional timeout keys, and
+a `go.mod` pinning `sdk v0.8.0` / `pgxdb v0.6.1` / `turso v0.3.0`. A
+render-only test pins the header, the no-inline-hint rule, and the sdk pin.
+Re-init a host with `go install …/workshop/gopernicus@v0.2.1` only after
+`sdk/v0.8.0` resolves on the proxy.
 
 ### pockets/jobs — v0.4.1 — tagged 2026-09-01: Config.Heartbeat, the pool heartbeat passthrough (patch)
 

@@ -275,6 +275,9 @@ func bootDeliveryEmit(t *testing.T, authRepos auth.Repositories, store job.Fence
 	if sender != nil {
 		cfg.Mailer = sender
 	}
+	// The jobs-mode composition is the subject here: pin the mode rather than inherit
+	// whatever AUTH_DELIVERY_MODE says, now that the seam reads it.
+	cfg.DeliveryMode = auth.DeliveryModeJobs
 	cfg.DeliveryDispatcher = authjobs.NewDispatcher(deliveryJobs)
 	if emitter != nil {
 		cfg.DeliveryEventsEmitter = emitter
@@ -446,9 +449,7 @@ func drivePasswordlessStart(t *testing.T, svc *auth.Service, identifier string) 
 	body := `{"identifier_kind":"email","identifier":"` + identifier + `"}`
 	req := httptest.NewRequest(http.MethodPost, "/auth/passwordless/start", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	if origins := allowedOrigins(); len(origins) > 0 {
-		req.Header.Set("Origin", origins[0])
-	}
+	req.Header.Set("Origin", hostAllowedOrigins(t)[0])
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	if rec.Code >= 500 {

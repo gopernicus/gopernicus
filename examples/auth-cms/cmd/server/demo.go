@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	auth "github.com/gopernicus/gopernicus/pockets/authentication"
@@ -16,7 +15,6 @@ import (
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 	"github.com/gopernicus/gopernicus/sdk/foundation/cryptids"
 	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
-	"github.com/gopernicus/gopernicus/sdk/foundation/identity"
 	"github.com/gopernicus/gopernicus/sdk/foundation/web"
 )
 
@@ -350,121 +348,6 @@ func buildIdentifierKeyer(log *slog.Logger) (auth.IdentifierKeyer, error) {
 		return nil, fmt.Errorf("build identifier keyer: %w", err)
 	}
 	return keyer, nil
-}
-
-// accessTokenTTL is the access-JWT lifetime from AUTH_ACCESS_TOKEN_TTL (a Go
-// duration); empty/invalid → 0, which auth defaults to 15m (Config.AccessTokenTTL).
-// A short value (e.g. AUTH_ACCESS_TOKEN_TTL=1s) drives the expired-access-JWT legs.
-func accessTokenTTL() time.Duration {
-	return durationEnv("AUTH_ACCESS_TOKEN_TTL")
-}
-
-// refreshTTL is the fixed refresh-token / session horizon from AUTH_REFRESH_TTL (a
-// Go duration); empty/invalid → 0, which auth defaults to 7d (Config.RefreshTTL).
-// It is set at mint and NEVER extended by rotation (fixed horizon, D2).
-func refreshTTL() time.Duration {
-	return durationEnv("AUTH_REFRESH_TTL")
-}
-
-// durationEnv parses env as a Go duration, returning 0 (defer to the pocket's
-// Config default) when unset, unparseable, or non-positive.
-func durationEnv(env string) time.Duration {
-	v := environment.GetEnvOrDefault(env, "")
-	if v == "" {
-		return 0
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil || d <= 0 {
-		return 0
-	}
-	return d
-}
-
-// callbackBase is the absolute origin the OAuth callback URL is built from,
-// derived from HOST/PORT (design §3's OAuthCallbackBase).
-func callbackBase() string {
-	host := environment.GetEnvOrDefault("HOST", "localhost")
-	port := environment.GetEnvOrDefault("PORT", "8082")
-	return "http://" + host + ":" + port
-}
-
-// publicAuthBaseURL is the absolute base URL magic links are built from (design §6.4):
-// the framework appends "#token=<token>" to exactly this value, so it must point at
-// the page that hosts the fragment-reading landing script. This host wires the bundled
-// default Views, whose magic-link landing GET is mounted at /auth/magic, so the empty
-// default is this host's own origin + that landing path — a clicked link then lands on
-// the landing page, which scrubs the fragment and POSTs the token to redeem. From
-// AUTH_PUBLIC_BASE_URL when set (a real deployment sets its own https landing URL).
-// Request Host/forwarded headers NEVER participate. Production RuntimeMode requires
-// HTTPS (a plain-http base is rejected at construction).
-func publicAuthBaseURL() string {
-	if v := environment.GetEnvOrDefault("AUTH_PUBLIC_BASE_URL", ""); v != "" {
-		return v
-	}
-	return callbackBase() + "/auth/magic"
-}
-
-// passwordResetURL is the absolute public reset landing route the reset mail
-// links to, BEFORE the token query parameter is appended (CHAU-5.1). It is a
-// SEPARATE field from publicAuthBaseURL: that one is the full passwordless
-// landing URL, not an origin, so a reset route cannot be derived from it.
-// Production REQUIRES it; this host defaults it to its own /auth/password/reset
-// page so the demo works out of the box.
-func passwordResetURL() string {
-	if v := environment.GetEnvOrDefault("AUTH_PASSWORD_RESET_URL", ""); v != "" {
-		return v
-	}
-	return callbackBase() + "/auth/password/reset"
-}
-
-// oauthLinkBaseURL is the absolute SPA landing URL the anti-takeover OAuth
-// pending-link email links to, BEFORE the "#token=<token>" fragment is appended
-// (oauth-pending-link plan D1). It is a SEPARATE field from publicAuthBaseURL: that
-// one POSTs magic-link redeem, while this one POSTs verify-link. From
-// AUTH_OAUTH_LINK_URL when set. EMPTY by default here: this bundled demo ships no
-// fragment-reading pending-link landing page (that is the host SPA's job — see
-// coordination-hub #162), so an empty value is the honest default and the email
-// degrades to its bare-token line (a startup WARN names AUTH_OAUTH_LINK_URL). A real
-// host sets its own https landing route.
-func oauthLinkBaseURL() string {
-	return environment.GetEnvOrDefault("AUTH_OAUTH_LINK_URL", "")
-}
-
-// allowedOrigins is the exact-match Origin allowlist the browser-safe mutation gate
-// validates cookie-authenticated sensitive mutations (and HTML form posts) against
-// (design §9.1), from a comma-separated AUTH_ALLOWED_ORIGINS; empty defaults to this
-// host's own origin so same-origin browser forms pass and cross-site credentialed
-// POSTs are refused. A "*" entry never authorizes a credentialed cross-origin mutation.
-func allowedOrigins() []string {
-	return splitEnvList("AUTH_ALLOWED_ORIGINS", []string{callbackBase()})
-}
-
-// passwordlessKinds is the set of identifier kinds passwordless login is enabled for
-// (design §4.2), from a comma-separated AUTH_PASSWORDLESS; empty defaults to both v3
-// kinds (email, phone) so the proof host exercises magic link + OTP on both rails.
-// Each listed kind needs a wired delivery channel (email via the Mailer, phone via
-// the console Notifier) or construction fails LOUDLY (auth.ErrPasswordlessKindUnsupported).
-func passwordlessKinds() []string {
-	return splitEnvList("AUTH_PASSWORDLESS", []string{identity.KindEmail, identity.KindPhone})
-}
-
-// splitEnvList parses env as a comma-separated list, trimming surrounding blanks and
-// dropping empties; an unset/blank value (or one that is all blanks) returns fallback.
-func splitEnvList(env string, fallback []string) []string {
-	v := environment.GetEnvOrDefault(env, "")
-	if v == "" {
-		return fallback
-	}
-	out := make([]string, 0)
-	for _, p := range strings.Split(v, ",") {
-		if s := strings.TrimSpace(p); s != "" {
-			out = append(out, s)
-		}
-	}
-	if len(out) == 0 {
-		return fallback
-	}
-	return out
 }
 
 // writeHostJSON writes v as a JSON response at status (host-local handlers).

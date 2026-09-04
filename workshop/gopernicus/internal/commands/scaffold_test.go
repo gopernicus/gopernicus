@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -29,6 +30,14 @@ import (
 var (
 	underlyingCall = "." + "Underlying()"
 	laxScanSymbol  = "RowToStructByName" + "Lax"
+)
+
+// The .env.example tripwire's expectations: the shape no emitted line may take
+// (a value followed by whitespace then a `#` hint) and the sdk pin the emitted
+// go.mod must carry. Bump sdkPin with every sdk tag the template moves to.
+var (
+	inlineHint = regexp.MustCompile(`^[A-Z0-9_]+=\S*\s+#`)
+	sdkPin     = baseModule + "/sdk v0.8.0"
 )
 
 // TestScaffoldInitNoneCompiles is the hermetic leg: an sdk-only host builds fully
@@ -87,6 +96,47 @@ func TestScaffoldInitTursoCompiles(t *testing.T) {
 	runGo(t, target, env, "build", "./...")
 
 	assertGuardShapes(t, target)
+}
+
+// TestScaffoldInitEnvTemplate is the render-only tripwire for the emitted
+// .env.example and go.mod (plan decision 5): the convention header is present,
+// no key carries an inline hint after its value (the `KEY=   # hint` shape is
+// #34 verbatim on any host whose sdk predates the LoadPath comment rule), and
+// the sdk pin is the version this train tags. It renders only — no tidy, no
+// build — so it never pulls a connector into the hermetic module cache.
+func TestScaffoldInitEnvTemplate(t *testing.T) {
+	for _, db := range []string{"pgx", "turso"} {
+		t.Run(db, func(t *testing.T) {
+			target := t.TempDir()
+			params, err := buildInitParams("example.com/scaffoldtest/env", db)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := emitInit(target, params); err != nil {
+				t.Fatalf("emitInit: %v", err)
+			}
+
+			env := readFile(t, filepath.Join(target, ".env.example"))
+			for _, header := range []string{
+				"# An empty value (KEY=) or a commented-out key keeps the default.",
+				`# Quote a value that contains " #" — an unquoted " #" starts a comment.`,
+			} {
+				if !strings.Contains(env, header) {
+					t.Errorf("emitted .env.example missing header line %q:\n%s", header, env)
+				}
+			}
+			for _, line := range strings.Split(env, "\n") {
+				if inlineHint.MatchString(line) {
+					t.Errorf("emitted .env.example keeps an inline hint after a value: %q", line)
+				}
+			}
+
+			gomod := readFile(t, filepath.Join(target, "go.mod"))
+			if !strings.Contains(gomod, sdkPin) {
+				t.Errorf("emitted go.mod missing %q:\n%s", sdkPin, gomod)
+			}
+		})
+	}
 }
 
 // repoRoot resolves this repo's root from the test file location and sanity-checks

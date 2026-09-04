@@ -79,7 +79,7 @@ func newProvisioningHostWithInvitations(t *testing.T) (*linkHost, *recordingGran
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
 
-	return &linkHost{t: t, srv: srv, svc: svc, sender: sender, origin: allowedOrigins()[0]}, granter
+	return &linkHost{t: t, srv: srv, svc: svc, sender: sender, origin: hostAllowedOrigins(t)[0]}, granter
 }
 
 // newProvisioningHost boots the host with provision-on-consumption enabled.
@@ -96,7 +96,7 @@ func newProvisioningHost(t *testing.T) *linkHost {
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
 
-	return &linkHost{t: t, srv: srv, svc: svc, sender: sender, origin: allowedOrigins()[0]}
+	return &linkHost{t: t, srv: srv, svc: svc, sender: sender, origin: hostAllowedOrigins(t)[0]}
 }
 
 // awaitMagicToken waits for a magic-link message addressed to recipient and
@@ -223,7 +223,7 @@ func TestProvisionDisabledSendsNothingForUnknownAddress(t *testing.T) {
 
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
-	host := &linkHost{t: t, srv: srv, svc: svc, sender: sender, origin: allowedOrigins()[0]}
+	host := &linkHost{t: t, srv: srv, svc: svc, sender: sender, origin: hostAllowedOrigins(t)[0]}
 
 	c := host.newClient()
 	before := sender.count()

@@ -69,10 +69,7 @@ func newAdminHost(t *testing.T) *adminHost {
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
 
-	origins := allowedOrigins()
-	if len(origins) == 0 {
-		t.Fatal("host has no allowed origins")
-	}
+	origins := hostAllowedOrigins(t)
 	h.linkHost = &linkHost{t: t, srv: srv, svc: svc, sender: sender, origin: origins[0]}
 	return h
 }
@@ -356,7 +353,7 @@ func TestUserAdminRoutesAbsentWithoutCheck(t *testing.T) {
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
 
-	origins := allowedOrigins()
+	origins := hostAllowedOrigins(t)
 	host := &linkHost{t: t, srv: srv, svc: svc, sender: &recordingSender{}, origin: origins[0]}
 	c := host.newClient()
 

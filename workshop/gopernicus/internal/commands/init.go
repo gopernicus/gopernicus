@@ -19,14 +19,15 @@ var initTemplates embed.FS
 // a datastore choice. No structural or per-field input — a richer input is the
 // workshop-v2b codegen trigger, not this slice.
 type initParams struct {
-	ModulePath     string
-	DB             string // none | turso | pgx
-	Port           string
-	HasDB          bool
-	ConnectorPath  string
-	ConnectorAlias string
-	ConnectorRel   string
-	LedgerDir      string
+	ModulePath       string
+	DB               string // none | turso | pgx
+	Port             string
+	HasDB            bool
+	ConnectorPath    string
+	ConnectorAlias   string
+	ConnectorRel     string
+	ConnectorVersion string
+	LedgerDir        string
 }
 
 func runInit(args []string) int {
@@ -96,10 +97,12 @@ func buildInitParams(modulePath, db string) (initParams, error) {
 		p.HasDB = true
 		p.ConnectorAlias = "tursodb"
 		p.ConnectorRel = "integrations/datastores/turso"
+		p.ConnectorVersion = "v0.3.0"
 	case "pgx":
 		p.HasDB = true
 		p.ConnectorAlias = "pgxdb"
 		p.ConnectorRel = "integrations/datastores/pgxdb"
+		p.ConnectorVersion = "v0.6.1"
 	default:
 		return initParams{}, fmt.Errorf("unknown --db %q (want: turso | pgx | none)", db)
 	}

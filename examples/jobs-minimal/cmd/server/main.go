@@ -36,22 +36,25 @@ import (
 func main() {
 	_ = environment.LoadEnv()
 
-	log := logging.New(logging.Options{
-		Level:  environment.GetEnvOrDefault("LOG_LEVEL", "INFO"),
-		Format: environment.GetEnvOrDefault("LOG_FORMAT", "text"),
-		Output: environment.GetEnvOrDefault("LOG_OUTPUT", "STDERR"),
-	})
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx, log); err != nil {
-		log.ErrorContext(ctx, "server exited with error", "error", err)
+	if err := run(ctx); err != nil {
+		slog.Error("server exited with error", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, log *slog.Logger) error {
+func run(ctx context.Context) error {
+	// Config comes from the environment through the sdk's struct tags: the
+	// literal pre-seeds this host's own defaults, the environment wins over
+	// them, and an empty value (KEY=) keeps what is already set.
+	logOpts := logging.Options{Format: "text"}
+	if err := environment.ParseEnvTags("", &logOpts); err != nil {
+		return err
+	}
+	log := logging.New(logOpts)
+
 	// Stores: the in-core memstore with its DEFAULT lease (15m). No driver, no
 	// migrations, no datastore module — zero external infrastructure.
 	queue := memstore.NewQueue()
@@ -79,6 +82,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 		// completed"/…) through the host logger, same format and stream as the
 		// handler logs — instead of the slog.Default() fallback.
 		Logger: log,
+	}
+	// The demo cadence above is pre-seeded, so it survives an empty environment;
+	// JOBS_* can still tune it.
+	if err := environment.ParseEnvTags("", &cfg); err != nil {
+		return err
 	}
 
 	svc, err := jobs.NewService(repos, cfg)
@@ -127,6 +135,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 		return err
 	}
 
+	srv := web.ServerConfig{Port: "8083"}
+	if err := environment.ParseEnvTags("", &srv); err != nil {
+		return err
+	}
+
 	// In-process topology (design §7.4): the Runtime runs next to the HTTP server,
 	// sharing one process and one cancellation. On ctx-cancel both drain — the HTTP
 	// server stops accepting, the pools stop claiming, in-flight handlers finish
@@ -135,7 +148,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	go func() { rtDone <- rt.Run(ctx) }()
 
 	log.InfoContext(ctx, "jobs proof host started", "enqueue", "POST /enqueue")
-	srvErr := web.Run(ctx, router, serverConfig(), log)
+	srvErr := web.Run(ctx, router, srv, log)
 
 	// web.Run returned because ctx was cancelled and the HTTP server drained. Wait
 	// for the jobs Runtime to drain too, so an in-flight slow handler finishes
@@ -257,16 +270,5 @@ func enqueueHandler(svc *jobs.Service, log *slog.Logger) http.HandlerFunc {
 func healthzHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	}
-}
-
-func serverConfig() web.ServerConfig {
-	return web.ServerConfig{
-		Host:            environment.GetEnvOrDefault("HOST", "localhost"),
-		Port:            environment.GetEnvOrDefault("PORT", "8083"),
-		ReadTimeout:     15 * time.Second,
-		WriteTimeout:    15 * time.Second,
-		IdleTimeout:     120 * time.Second,
-		ShutdownTimeout: 10 * time.Second,
 	}
 }

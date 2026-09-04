@@ -234,6 +234,10 @@ type DeadLetterFunc func(ctx context.Context, j job.Job) error
 
 // FencedRuntimeConfig configures the FencedRuntime. Handlers is required non-empty;
 // every zero sizing field selects its package default.
+//
+// Its env keys are the JOBS_* keys Config uses, deliberately: a host running both
+// runtimes in one process disambiguates with ParseEnvTags' namespace argument
+// (ParseEnvTags("FENCED", &cfg) reads FENCED_JOBS_WORKERS).
 type FencedRuntimeConfig struct {
 	// Handlers maps a job kind to its fenced handler; required non-empty.
 	Handlers map[string]FencedHandlerFunc
@@ -241,20 +245,22 @@ type FencedRuntimeConfig struct {
 	// dead-letter transition is durably recorded (never before, never on a retry, and
 	// never on a lease-fenced failure). Optional; a kind with no entry runs no hook.
 	DeadLetters map[string]DeadLetterFunc
-	// Workers is the fenced pool size; 0 → defaultFencedWorkers.
-	Workers int
+	// Workers is the fenced pool size; 0 → defaultFencedWorkers. (env: JOBS_WORKERS)
+	Workers int `env:"JOBS_WORKERS"`
 	// PollInterval / IdleInterval tune the pool cadence; 0 → the pool defaults.
-	PollInterval time.Duration
-	IdleInterval time.Duration
+	// (env: JOBS_POLL_INTERVAL, JOBS_IDLE_INTERVAL)
+	PollInterval time.Duration `env:"JOBS_POLL_INTERVAL"`
+	IdleInterval time.Duration `env:"JOBS_IDLE_INTERVAL"`
 	// LeaseFor is the claim lease each Claim requests; 0 → defaultFencedLeaseFor. Set
 	// it above a job's expected processing time and below the store's reclaim cadence.
-	LeaseFor time.Duration
+	// (env: JOBS_LEASE_FOR)
+	LeaseFor time.Duration `env:"JOBS_LEASE_FOR"`
 	// ProcessTimeout bounds each handler attempt with a child-context deadline that
-	// sits inside the lease; 0 → no per-attempt timeout.
-	ProcessTimeout time.Duration
+	// sits inside the lease; 0 → no per-attempt timeout. (env: JOBS_PROCESS_TIMEOUT)
+	ProcessTimeout time.Duration `env:"JOBS_PROCESS_TIMEOUT"`
 	// MaxAttempts caps process attempts before a job dead-letters; 0 →
-	// defaultFencedMaxAttempts.
-	MaxAttempts int
+	// defaultFencedMaxAttempts. (env: JOBS_MAX_ATTEMPTS)
+	MaxAttempts int `env:"JOBS_MAX_ATTEMPTS"`
 	// Backoff maps a just-spent attempt (1-based) to the retry-at delay; nil selects a
 	// capped exponential.
 	Backoff func(attempt int) time.Duration

@@ -128,6 +128,62 @@ func TestLoadPath_InlineCommentInQuotedValue(t *testing.T) {
 	os.Unsetenv("QUOTED")
 }
 
+func TestLoadPath_InlineCommentRule(t *testing.T) {
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, ".env")
+
+	content := "SPACED_EMPTY=   # note\n" +
+		"TABBED_EMPTY=\t# note\n" +
+		"CACHE_TTL=300 # seconds\n" +
+		"TABBED_TTL=300\t# seconds\n" +
+		"SLACK_CHANNEL=#alerts\n" +
+		"COLOR=#ff0000\n" +
+		"QUOTED_HASH=\"#keep\"\n" +
+		"EMPTY_VAL=\n"
+
+	if err := os.WriteFile(envFile, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		key  string
+		want string
+	}{
+		{"SPACED_EMPTY", ""},         // whitespace then '#' is a comment
+		{"TABBED_EMPTY", ""},         // tab then '#' is a comment
+		{"CACHE_TTL", "300"},         // inline comment stripped
+		{"TABBED_TTL", "300"},        // tab-separated inline comment stripped
+		{"SLACK_CHANNEL", "#alerts"}, // leading '#' is part of the value
+		{"COLOR", "#ff0000"},         // leading '#' is part of the value
+		{"QUOTED_HASH", "#keep"},     // quoted values never lose a '#'
+		{"EMPTY_VAL", ""},            // empty value preserved
+	}
+
+	for _, tt := range tests {
+		os.Unsetenv(tt.key)
+	}
+	defer func() {
+		for _, tt := range tests {
+			os.Unsetenv(tt.key)
+		}
+	}()
+
+	if err := LoadPath(envFile); err != nil {
+		t.Fatalf("LoadPath: %v", err)
+	}
+
+	for _, tt := range tests {
+		got, ok := os.LookupEnv(tt.key)
+		if !ok {
+			t.Errorf("%s not set, want set to %q", tt.key, tt.want)
+			continue
+		}
+		if got != tt.want {
+			t.Errorf("%s = %q, want %q", tt.key, got, tt.want)
+		}
+	}
+}
+
 func TestGetEnvOrDefault(t *testing.T) {
 	os.Setenv("EXISTS", "yes")
 	defer os.Unsetenv("EXISTS")

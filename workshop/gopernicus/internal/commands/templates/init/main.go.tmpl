@@ -14,7 +14,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/gopernicus/gopernicus/sdk/foundation/environment"
 	"github.com/gopernicus/gopernicus/sdk/foundation/logging"
@@ -29,23 +28,26 @@ func main() {
 	// Load .env (a missing file is not an error) before reading any config.
 	_ = environment.LoadEnv()
 
-	log := logging.New(logging.Options{
-		Level:  environment.GetEnvOrDefault("LOG_LEVEL", "INFO"),
-		Format: environment.GetEnvOrDefault("LOG_FORMAT", "json"),
-		Output: environment.GetEnvOrDefault("LOG_OUTPUT", "STDERR"),
-	})
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx, log); err != nil {
-		log.ErrorContext(ctx, "server exited with error", "error", err)
+	if err := run(ctx); err != nil {
+		slog.Error("server exited with error", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, log *slog.Logger) error {
+func run(ctx context.Context) error {
+	// Config comes from the environment through the sdk's struct tags: the
+	// literal pre-seeds this host's own defaults, the environment wins over
+	// them, and an empty value (KEY=) keeps what is already set.
+	logOpts := logging.Options{Format: "json"}
+	if err := environment.ParseEnvTags("", &logOpts); err != nil {
+		return err
+	}
+	log := logging.New(logOpts)
 {{- if .HasDB}}
+
 	// Database. The connector owns the driver, DSN, and dialect error mapping;
 	// the host owns the schema — migrations live under workshop/migrations and
 	// are applied pre-boot by `make migrate`, never by the framework at startup.
@@ -98,7 +100,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 	// probe can't log in.
 	router.Handle(http.MethodGet, "/healthz", healthzHandler({{if .HasDB}}db{{end}}))
 
-	return web.Run(ctx, router, serverConfig(), log)
+	srv := web.ServerConfig{Port: "{{.Port}}"}
+	if err := environment.ParseEnvTags("", &srv); err != nil {
+		return err
+	}
+
+	return web.Run(ctx, router, srv, log)
 }
 
 {{if .HasDB -}}
@@ -123,15 +130,3 @@ func healthzHandler() http.HandlerFunc {
 	}
 }
 {{- end}}
-
-// serverConfig reads HTTP server settings from the environment with defaults.
-func serverConfig() web.ServerConfig {
-	return web.ServerConfig{
-		Host:            environment.GetEnvOrDefault("HOST", "localhost"),
-		Port:            environment.GetEnvOrDefault("PORT", "{{.Port}}"),
-		ReadTimeout:     15 * time.Second,
-		WriteTimeout:    15 * time.Second,
-		IdleTimeout:     120 * time.Second,
-		ShutdownTimeout: 10 * time.Second,
-	}
-}

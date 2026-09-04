@@ -256,7 +256,7 @@ func TestAdminResendRouteAbsentWithoutCheck(t *testing.T) {
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
 
-	host := &linkHost{t: t, srv: srv, svc: svc, sender: &recordingSender{}, origin: allowedOrigins()[0]}
+	host := &linkHost{t: t, srv: srv, svc: svc, sender: &recordingSender{}, origin: hostAllowedOrigins(t)[0]}
 	c := host.newClient()
 
 	if resp, _ := c.do("POST", "/auth/admin/users/x/verification/resend", `{}`, nil); resp.StatusCode != http.StatusNotFound {
