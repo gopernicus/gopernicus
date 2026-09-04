@@ -13,11 +13,9 @@ import (
 )
 
 // Compile-time seam: FencedQueue fills the frozen job.FencedQueueRepository port
-// (which is a strict superset of the kernel's workers.FencedStore).
-var (
-	_ job.FencedQueueRepository    = (*FencedQueue)(nil)
-	_ workers.FencedStore[job.Job] = (*FencedQueue)(nil)
-)
+// (the runtime adapts it to the kernel's workers.FencedStore by closing over its
+// registered kinds).
+var _ job.FencedQueueRepository = (*FencedQueue)(nil)
 
 // FencedQueue is the in-memory reference for the hardened, lease-fenced queue
 // (job.FencedQueueRepository). It serializes every operation on a single mutex, so
@@ -92,14 +90,14 @@ func (q *FencedQueue) Replace(_ context.Context, in job.Enqueue) (job.Job, error
 // leaseID for leaseFor, incrementing Retries and returning it; no due job yields
 // workers.ErrNoWork. "Due" is a pending job with ScheduledFor at or before now, or
 // a running job whose lease has passed.
-func (q *FencedQueue) Claim(_ context.Context, now time.Time, leaseID string, leaseFor time.Duration) (job.Job, error) {
+func (q *FencedQueue) Claim(_ context.Context, now time.Time, leaseID string, leaseFor time.Duration, kinds []string) (job.Job, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	var best job.Job
 	found := false
 	for _, j := range q.jobs {
-		if !fencedDue(j, now) {
+		if !fencedDue(j, now) || !kindAllowed(kinds, j.Kind) {
 			continue
 		}
 		if !found || claimBefore(j, best) {

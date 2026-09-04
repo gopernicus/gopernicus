@@ -70,6 +70,7 @@ func RunQueue(t *testing.T, newRepo func(t *testing.T) job.QueueRepository) {
 	t.Run("ScheduledForGating", func(t *testing.T) { testScheduledForGating(t, newRepo(t)) })
 	t.Run("RetryThenDeadLetter", func(t *testing.T) { testRetryThenDeadLetter(t, newRepo(t)) })
 	t.Run("LeaseExpiryReclaim", func(t *testing.T) { testLeaseExpiryReclaim(t, newRepo(t)) })
+	t.Run("ClaimKindFilter", func(t *testing.T) { testClaimKindFilter(t, newRepo(t)) })
 	t.Run("ListFilterAndPaginate", func(t *testing.T) {
 		t.Run("FilterAndStatus", func(t *testing.T) { testQueueListFilterAndPaginate(t, newRepo(t)) })
 		runPagedFamily(t, newRepo,
@@ -94,7 +95,9 @@ func RunSchedules(t *testing.T, newRepo func(t *testing.T) schedule.Repository) 
 	t.Run("TenantRoundTrip", func(t *testing.T) { testSchedulesTenant(t, newRepo(t)) })
 	t.Run("AbsentNotFound", func(t *testing.T) { testSchedulesAbsent(t, newRepo(t)) })
 	t.Run("ListDueEnabledGating", func(t *testing.T) { testListDueGating(t, newRepo(t)) })
+	t.Run("ListDueKindFilter", func(t *testing.T) { testListDueKindFilter(t, newRepo(t)) })
 	t.Run("ClaimDueCAS", func(t *testing.T) { testClaimDueCAS(t, newRepo(t)) })
+	t.Run("ClaimDueKindGuard", func(t *testing.T) { testClaimDueKindGuard(t, newRepo(t)) })
 	t.Run("SetLastJobAndEnabled", func(t *testing.T) { testSetLastJobAndEnabled(t, newRepo(t)) })
 	t.Run("ListPaginate", func(t *testing.T) {
 		t.Run("Traversal", func(t *testing.T) { testSchedulesListPaginate(t, newRepo(t)) })
@@ -197,7 +200,7 @@ func testQueueTenant(t *testing.T, repo job.QueueRepository) {
 
 	// The claim projection carries it too, so a worker sees the scope of what it
 	// claimed. Only the tenanted job is due at now.
-	claimed, err := repo.Claim(ctx, "w1", now)
+	claimed, err := repo.Claim(ctx, "w1", now, nil)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -226,7 +229,7 @@ func testQueueTenant(t *testing.T, repo job.QueueRepository) {
 }
 
 func testClaimEmpty(t *testing.T, repo job.QueueRepository) {
-	if _, err := repo.Claim(context.Background(), "w1", time.Now().UTC()); !errors.Is(err, workers.ErrNoWork) {
+	if _, err := repo.Claim(context.Background(), "w1", time.Now().UTC(), nil); !errors.Is(err, workers.ErrNoWork) {
 		t.Errorf("Claim(empty): err=%v, want workers.ErrNoWork", err)
 	}
 }
@@ -247,7 +250,7 @@ func testClaimOrdering(t *testing.T, repo job.QueueRepository) {
 	claimNow := time.Now().UTC()
 	order := []string{"high", "low-old", "low-new"}
 	for i, want := range order {
-		got, err := repo.Claim(ctx, "w1", claimNow)
+		got, err := repo.Claim(ctx, "w1", claimNow, nil)
 		if err != nil {
 			t.Fatalf("Claim %d: %v", i, err)
 		}
@@ -258,7 +261,7 @@ func testClaimOrdering(t *testing.T, repo job.QueueRepository) {
 			t.Errorf("claimed job %q status = %q, want running", got.ID(), got.Status())
 		}
 	}
-	if _, err := repo.Claim(ctx, "w1", claimNow); !errors.Is(err, workers.ErrNoWork) {
+	if _, err := repo.Claim(ctx, "w1", claimNow, nil); !errors.Is(err, workers.ErrNoWork) {
 		t.Errorf("Claim after draining: err=%v, want ErrNoWork", err)
 	}
 }
@@ -271,10 +274,10 @@ func testScheduledForGating(t *testing.T, repo job.QueueRepository) {
 	mustEnqueue(t, repo, job.Enqueue{ID: "later", Kind: "demo", ScheduledFor: future})
 
 	// Not due until scheduled_for.
-	if _, err := repo.Claim(ctx, "w1", base); !errors.Is(err, workers.ErrNoWork) {
+	if _, err := repo.Claim(ctx, "w1", base, nil); !errors.Is(err, workers.ErrNoWork) {
 		t.Fatalf("Claim before scheduled_for: err=%v, want ErrNoWork", err)
 	}
-	got, err := repo.Claim(ctx, "w1", future.Add(time.Minute))
+	got, err := repo.Claim(ctx, "w1", future.Add(time.Minute), nil)
 	if err != nil {
 		t.Fatalf("Claim at/after scheduled_for: %v", err)
 	}
@@ -291,7 +294,7 @@ func testRetryThenDeadLetter(t *testing.T, repo job.QueueRepository) {
 	mustEnqueue(t, repo, job.Enqueue{ID: "flaky", Kind: "demo", ScheduledFor: now})
 
 	// First failure below the ceiling reschedules to pending and re-claimable.
-	if _, err := repo.Claim(ctx, "w1", now); err != nil {
+	if _, err := repo.Claim(ctx, "w1", now, nil); err != nil {
 		t.Fatalf("first Claim: %v", err)
 	}
 	if err := repo.Fail(ctx, "flaky", now, "boom-1", maxAttempts); err != nil {
@@ -303,7 +306,7 @@ func testRetryThenDeadLetter(t *testing.T, repo job.QueueRepository) {
 	}
 
 	// Second failure reaches max_attempts and dead-letters.
-	claimed, err := repo.Claim(ctx, "w1", now)
+	claimed, err := repo.Claim(ctx, "w1", now, nil)
 	if err != nil {
 		t.Fatalf("re-Claim after retry: %v", err)
 	}
@@ -322,7 +325,7 @@ func testRetryThenDeadLetter(t *testing.T, repo job.QueueRepository) {
 	}
 
 	// A dead-lettered job is never claimed again.
-	if _, err := repo.Claim(ctx, "w1", now); !errors.Is(err, workers.ErrNoWork) {
+	if _, err := repo.Claim(ctx, "w1", now, nil); !errors.Is(err, workers.ErrNoWork) {
 		t.Errorf("Claim after dead-letter: err=%v, want ErrNoWork", err)
 	}
 }
@@ -337,7 +340,7 @@ func testLeaseExpiryReclaim(t *testing.T, repo job.QueueRepository) {
 
 	mustEnqueue(t, repo, job.Enqueue{ID: "leased", Kind: "demo", ScheduledFor: now})
 
-	first, err := repo.Claim(ctx, "w1", time.Now().UTC())
+	first, err := repo.Claim(ctx, "w1", time.Now().UTC(), nil)
 	if err != nil {
 		t.Fatalf("first Claim: %v", err)
 	}
@@ -346,13 +349,13 @@ func testLeaseExpiryReclaim(t *testing.T, repo job.QueueRepository) {
 	}
 
 	// Still leased: a second claim before expiry finds nothing.
-	if _, err := repo.Claim(ctx, "w2", time.Now().UTC()); !errors.Is(err, workers.ErrNoWork) {
+	if _, err := repo.Claim(ctx, "w2", time.Now().UTC(), nil); !errors.Is(err, workers.ErrNoWork) {
 		t.Fatalf("Claim while leased: err=%v, want ErrNoWork", err)
 	}
 
 	time.Sleep(Lease + 100*time.Millisecond)
 
-	reclaimed, err := repo.Claim(ctx, "w2", time.Now().UTC())
+	reclaimed, err := repo.Claim(ctx, "w2", time.Now().UTC(), nil)
 	if err != nil {
 		t.Fatalf("Claim after lease expiry: %v", err)
 	}
@@ -361,6 +364,71 @@ func testLeaseExpiryReclaim(t *testing.T, repo job.QueueRepository) {
 	}
 	if reclaimed.WorkerName != "w2" {
 		t.Errorf("reclaimed worker = %q, want w2 (re-leased to the new claimer)", reclaimed.WorkerName)
+	}
+}
+
+// testClaimKindFilter proves the #37 contract: Claim selects only among the
+// given kinds, on BOTH the pending arm and the stale-reclaim arm, and a
+// nil/empty kinds is unfiltered. The excluded kind is seeded so it would win the
+// unfiltered ordering (older AND higher priority) — a store that filtered after
+// selection instead of inside it would return it and fail here.
+func testClaimKindFilter(t *testing.T, repo job.QueueRepository) {
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	mustEnqueue(t, repo, job.Enqueue{ID: "other-first", Kind: "other", Priority: 10, ScheduledFor: now})
+	time.Sleep(3 * time.Millisecond)
+	mustEnqueue(t, repo, job.Enqueue{ID: "mine", Kind: "mine", Priority: 0, ScheduledFor: now})
+	claimNow := time.Now().UTC()
+
+	// A filter naming no seeded kind claims nothing and charges nothing.
+	if _, err := repo.Claim(ctx, "w1", claimNow, []string{"absent"}); !errors.Is(err, workers.ErrNoWork) {
+		t.Fatalf("Claim(absent kind): err=%v, want ErrNoWork", err)
+	}
+	for _, id := range []string{"other-first", "mine"} {
+		got, err := repo.Get(ctx, id)
+		if err != nil {
+			t.Fatalf("Get %s: %v", id, err)
+		}
+		if got.Status() != string(job.StatusPending) || got.RetryCount() != 0 || got.WorkerName != "" {
+			t.Fatalf("%s after an excluded claim: status=%q retries=%d worker=%q, want pending/0/\"\"", id, got.Status(), got.RetryCount(), got.WorkerName)
+		}
+	}
+
+	// The filter selects within the allowed kinds only, even though "other" wins
+	// the unfiltered ordering; unknown kinds in the filter are harmless.
+	got, err := repo.Claim(ctx, "w1", claimNow, []string{"mine", "unrelated"})
+	if err != nil {
+		t.Fatalf("Claim(mine): %v", err)
+	}
+	if got.ID() != "mine" {
+		t.Fatalf("Claim(mine) = %q, want mine (kind filter must apply inside the selection)", got.ID())
+	}
+	if err := repo.Complete(ctx, "mine", claimNow); err != nil {
+		t.Fatalf("Complete mine: %v", err)
+	}
+
+	// nil = unfiltered: the remaining job is claimable.
+	got, err = repo.Claim(ctx, "w1", claimNow, nil)
+	if err != nil {
+		t.Fatalf("Claim(nil): %v", err)
+	}
+	if got.ID() != "other-first" {
+		t.Fatalf("Claim(nil) = %q, want other-first", got.ID())
+	}
+
+	// Stale-claim recovery honors the filter: once the lease lapses, a claimer
+	// whose kinds exclude "other" cannot recover it; one that includes it can.
+	time.Sleep(Lease + 100*time.Millisecond)
+	if _, err := repo.Claim(ctx, "w2", time.Now().UTC(), []string{"mine"}); !errors.Is(err, workers.ErrNoWork) {
+		t.Fatalf("stale reclaim with an excluding filter: err=%v, want ErrNoWork", err)
+	}
+	reclaimed, err := repo.Claim(ctx, "w2", time.Now().UTC(), []string{"other"})
+	if err != nil {
+		t.Fatalf("stale reclaim with an including filter: %v", err)
+	}
+	if reclaimed.ID() != "other-first" || reclaimed.WorkerName != "w2" {
+		t.Errorf("reclaimed = %q by %q, want other-first by w2", reclaimed.ID(), reclaimed.WorkerName)
 	}
 }
 
@@ -387,7 +455,7 @@ func testQueueListFilterAndPaginate(t *testing.T, repo job.QueueRepository) {
 	assertIDSet(t, ids(got, func(j job.Job) string { return j.ID() }), emailIDs)
 
 	// Status filter: claim one email job, then filter on running.
-	if _, err := repo.Claim(ctx, "w1", now); err != nil {
+	if _, err := repo.Claim(ctx, "w1", now, nil); err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
 	running, err := repo.List(ctx, job.ListFilter{Status: job.StatusRunning}, crud.ListRequest{Limit: 10})
@@ -426,7 +494,7 @@ func testConcurrentClaim(t *testing.T, repo job.QueueRepository) {
 		go func(worker string) {
 			defer wg.Done()
 			for {
-				j, err := repo.Claim(ctx, worker, time.Now().UTC())
+				j, err := repo.Claim(ctx, worker, time.Now().UTC(), nil)
 				if errors.Is(err, workers.ErrNoWork) {
 					return
 				}
@@ -546,7 +614,7 @@ func testSchedulesTenant(t *testing.T, repo schedule.Repository) {
 	}
 
 	// The due-scan projection carries it.
-	due, err := repo.ListDue(ctx, suiteBase.Add(time.Minute), 10)
+	due, err := repo.ListDue(ctx, suiteBase.Add(time.Minute), 10, nil)
 	if err != nil {
 		t.Fatalf("ListDue: %v", err)
 	}
@@ -596,7 +664,7 @@ func testListDueGating(t *testing.T, repo schedule.Repository) {
 	s2 := mustEnsure(t, repo, schedule.Ensure{Name: "s2", Kind: "demo", Spec: schedule.Spec{Every: time.Hour}}, suiteBase.Add(time.Hour))
 
 	// At base+30m only s1 is due.
-	due, err := repo.ListDue(ctx, suiteBase.Add(30*time.Minute), 10)
+	due, err := repo.ListDue(ctx, suiteBase.Add(30*time.Minute), 10, nil)
 	if err != nil {
 		t.Fatalf("ListDue: %v", err)
 	}
@@ -605,15 +673,99 @@ func testListDueGating(t *testing.T, repo schedule.Repository) {
 	}
 
 	// At base+2h both are due — until s2 is disabled.
-	if due, _ := repo.ListDue(ctx, suiteBase.Add(2*time.Hour), 10); len(due) != 2 {
+	if due, _ := repo.ListDue(ctx, suiteBase.Add(2*time.Hour), 10, nil); len(due) != 2 {
 		t.Fatalf("ListDue(base+2h) = %d, want 2", len(due))
 	}
 	if err := repo.SetEnabled(ctx, s2.ID, false, suiteBase); err != nil {
 		t.Fatalf("SetEnabled: %v", err)
 	}
-	due, _ = repo.ListDue(ctx, suiteBase.Add(2*time.Hour), 10)
+	due, _ = repo.ListDue(ctx, suiteBase.Add(2*time.Hour), 10, nil)
 	if len(due) != 1 || due[0].ID != s1.ID {
 		t.Errorf("ListDue after disabling s2 = %v, want only s1 (disabled excluded)", scheduleIDs(due))
+	}
+}
+
+// testListDueKindFilter proves ListDue applies kinds INSIDE the query, before
+// limit: the excluded schedule is due earlier (it would win the ordering), yet a
+// filtered ListDue with limit 1 still returns the included one. nil = unfiltered.
+func testListDueKindFilter(t *testing.T, repo schedule.Repository) {
+	ctx := context.Background()
+
+	sa := mustEnsure(t, repo, schedule.Ensure{Name: "ka", Kind: "a", Spec: schedule.Spec{Every: time.Hour}}, suiteBase)
+	sb := mustEnsure(t, repo, schedule.Ensure{Name: "kb", Kind: "b", Spec: schedule.Spec{Every: time.Hour}}, suiteBase.Add(time.Minute))
+	at := suiteBase.Add(2 * time.Minute)
+
+	due, err := repo.ListDue(ctx, at, 1, []string{"b"})
+	if err != nil {
+		t.Fatalf("ListDue(b, limit 1): %v", err)
+	}
+	if len(due) != 1 || due[0].ID != sb.ID {
+		t.Fatalf("ListDue(b, limit 1) = %v, want only %s (filter must precede limit)", scheduleIDs(due), sb.ID)
+	}
+
+	due, err = repo.ListDue(ctx, at, 10, []string{"absent"})
+	if err != nil {
+		t.Fatalf("ListDue(absent): %v", err)
+	}
+	if len(due) != 0 {
+		t.Fatalf("ListDue(absent) = %v, want none", scheduleIDs(due))
+	}
+
+	due, err = repo.ListDue(ctx, at, 10, nil)
+	if err != nil {
+		t.Fatalf("ListDue(nil): %v", err)
+	}
+	if len(due) != 2 || due[0].ID != sa.ID || due[1].ID != sb.ID {
+		t.Fatalf("ListDue(nil) = %v, want [%s %s] (unfiltered, next_run_at order)", scheduleIDs(due), sa.ID, sb.ID)
+	}
+
+	due, err = repo.ListDue(ctx, at, 10, []string{"a", "b"})
+	if err != nil {
+		t.Fatalf("ListDue(a,b): %v", err)
+	}
+	if len(due) != 2 {
+		t.Fatalf("ListDue(a,b) = %v, want both", scheduleIDs(due))
+	}
+}
+
+// testClaimDueKindGuard proves the CAS re-asserts the kind: Ensure can re-kind a
+// schedule without moving next_run_at (same spec), so a runtime that listed it
+// under the old kind must LOSE the claim and leave the slot to the new owner.
+func testClaimDueKindGuard(t *testing.T, repo schedule.Repository) {
+	ctx := context.Background()
+	now := suiteBase
+	s := mustEnsure(t, repo, schedule.Ensure{Name: "guard", Kind: "a", Spec: schedule.Spec{Every: time.Hour}}, suiteBase)
+	slot0 := s.NextRunAt
+	slot1 := slot0.Add(time.Hour)
+
+	// Re-kind with an unchanged spec: the slot must not move.
+	rekinded := mustEnsure(t, repo, schedule.Ensure{Name: "guard", Kind: "b", Spec: schedule.Spec{Every: time.Hour}}, suiteBase.Add(5*time.Hour))
+	if rekinded.ID != s.ID || rekinded.Kind != "b" || !rekinded.NextRunAt.Equal(slot0) {
+		t.Fatalf("re-kinded Ensure = (%s, %s, %v), want (%s, b, %v)", rekinded.ID, rekinded.Kind, rekinded.NextRunAt, s.ID, slot0)
+	}
+
+	lost, err := repo.ClaimDue(ctx, s.ID, slot0, slot1, now, "a")
+	if err != nil {
+		t.Fatalf("ClaimDue(a): %v", err)
+	}
+	if lost {
+		t.Fatal("ClaimDue with the stale kind must lose")
+	}
+	after, _ := repo.Get(ctx, s.ID)
+	if !after.NextRunAt.Equal(slot0) {
+		t.Errorf("next_run_at = %v after a kind-guarded loss, want unchanged %v", after.NextRunAt, slot0)
+	}
+
+	won, err := repo.ClaimDue(ctx, s.ID, slot0, slot1, now, "b")
+	if err != nil {
+		t.Fatalf("ClaimDue(b): %v", err)
+	}
+	if !won {
+		t.Fatal("ClaimDue with the current kind must win")
+	}
+	after, _ = repo.Get(ctx, s.ID)
+	if !after.NextRunAt.Equal(slot1) {
+		t.Errorf("next_run_at = %v after the win, want %v", after.NextRunAt, slot1)
 	}
 }
 
@@ -625,7 +777,7 @@ func testClaimDueCAS(t *testing.T, repo schedule.Repository) {
 	slot1 := slot0.Add(time.Hour)
 
 	// A caller holding the current slot wins and advances next_run_at.
-	won, err := repo.ClaimDue(ctx, s.ID, slot0, slot1, now)
+	won, err := repo.ClaimDue(ctx, s.ID, slot0, slot1, now, "demo")
 	if err != nil {
 		t.Fatalf("ClaimDue win: %v", err)
 	}
@@ -634,7 +786,7 @@ func testClaimDueCAS(t *testing.T, repo schedule.Repository) {
 	}
 
 	// A second caller with the now-stale prev slot loses; next_run_at unchanged.
-	lost, err := repo.ClaimDue(ctx, s.ID, slot0, slot0.Add(2*time.Hour), now)
+	lost, err := repo.ClaimDue(ctx, s.ID, slot0, slot0.Add(2*time.Hour), now, "demo")
 	if err != nil {
 		t.Fatalf("ClaimDue stale: %v", err)
 	}
@@ -650,7 +802,7 @@ func testClaimDueCAS(t *testing.T, repo schedule.Repository) {
 	if err := repo.SetEnabled(ctx, s.ID, false, now); err != nil {
 		t.Fatalf("SetEnabled: %v", err)
 	}
-	if won, _ := repo.ClaimDue(ctx, s.ID, slot1, slot1.Add(time.Hour), now); won {
+	if won, _ := repo.ClaimDue(ctx, s.ID, slot1, slot1.Add(time.Hour), now, "demo"); won {
 		t.Error("ClaimDue on a disabled schedule must lose")
 	}
 }

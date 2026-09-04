@@ -22,8 +22,12 @@ type HandlerFunc func(ctx context.Context, j job.Job) error
 
 // Deps are the pool-assembly inputs jobs.NewRuntime builds from the Service.
 type Deps struct {
-	Queue        job.QueueRepository
-	Handlers     map[string]HandlerFunc
+	Queue    job.QueueRepository
+	Handlers map[string]HandlerFunc
+	// Kinds is the sorted, deduplicated key set of Handlers: the ONLY kinds the
+	// queue pool claims (kindScopedQueue closes over it). jobs.NewRuntime derives
+	// it; a nil Kinds claims every kind (tests only — a Runtime always has one).
+	Kinds        []string
 	Scheduler    workers.WorkFunc // nil = no scheduler pool
 	Wake         <-chan struct{}  // the Service's wake channel
 	Workers      int
@@ -58,7 +62,7 @@ func New(d Deps) *Runtime {
 		return j, h(ctx, j)
 	}
 
-	runner := workers.NewRunner[job.Job](d.Queue, process, log, workers.WithMaxAttempts(d.MaxAttempts))
+	runner := workers.NewRunner[job.Job](kindScopedQueue{repo: d.Queue, kinds: d.Kinds}, process, log, workers.WithMaxAttempts(d.MaxAttempts))
 	queuePool := workers.NewPool(drainInFlight(runner.WorkFunc()),
 		workers.WithName("jobs-queue"),
 		workers.WithWorkerCount(d.Workers),
@@ -82,6 +86,30 @@ func New(d Deps) *Runtime {
 	}
 
 	return &Runtime{queuePool: queuePool, schedulerPool: schedulerPool}
+}
+
+// kindScopedQueue adapts the pocket's QueueRepository (whose Claim takes a kinds
+// filter) to the kernel's workers.JobStore by closing over the runtime's
+// registered kinds: the pool never claims a job it has no handler for, so a job
+// of another kind waits for the binary that owns it instead of being failed and
+// eventually dead-lettered here. Complete/Fail delegate unchanged.
+type kindScopedQueue struct {
+	repo  job.QueueRepository
+	kinds []string
+}
+
+var _ workers.JobStore[job.Job] = kindScopedQueue{}
+
+func (q kindScopedQueue) Claim(ctx context.Context, workerID string, now time.Time) (job.Job, error) {
+	return q.repo.Claim(ctx, workerID, now, q.kinds)
+}
+
+func (q kindScopedQueue) Complete(ctx context.Context, jobID string, now time.Time) error {
+	return q.repo.Complete(ctx, jobID, now)
+}
+
+func (q kindScopedQueue) Fail(ctx context.Context, jobID string, now time.Time, reason string, maxAttempts int) error {
+	return q.repo.Fail(ctx, jobID, now, reason, maxAttempts)
 }
 
 // drainInFlight preserves context values (including the pool's worker id) but

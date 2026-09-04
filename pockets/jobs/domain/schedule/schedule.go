@@ -61,12 +61,18 @@ type Repository interface {
 	// and payload, setting NextRunAt = next on create and on a spec change.
 	Ensure(ctx context.Context, in Ensure, next time.Time) (Schedule, error)
 	// ListDue returns up to limit enabled schedules whose NextRunAt <= now.
-	ListDue(ctx context.Context, now time.Time, limit int) ([]Schedule, error)
+	// kinds restricts the scan to schedules of those kinds (applied in the query,
+	// before limit) so a runtime lists only the schedules it can fire; a
+	// nil/empty kinds applies no filter.
+	ListDue(ctx context.Context, now time.Time, limit int, kinds []string) ([]Schedule, error)
 	// ClaimDue is a pure value compare-and-set on next_run_at: it advances
 	// next_run_at to newNextRunAt (and last_run_at to now) only when the row's
-	// current next_run_at still equals prevNextRunAt and the schedule is
-	// enabled. It reports true when this caller won the (schedule, slot) pair.
-	ClaimDue(ctx context.Context, id string, prevNextRunAt, newNextRunAt, now time.Time) (bool, error)
+	// current next_run_at still equals prevNextRunAt, the schedule is enabled,
+	// AND its kind still equals expectedKind. It reports true when this caller
+	// won the (schedule, slot) pair. The kind guard closes the list-to-claim
+	// race: Ensure can re-kind a schedule without moving next_run_at, and the
+	// runtime that listed it under the old kind must lose.
+	ClaimDue(ctx context.Context, id string, prevNextRunAt, newNextRunAt, now time.Time, expectedKind string) (bool, error)
 	// SetLastJob records the id of the job fired for the most recent slot.
 	SetLastJob(ctx context.Context, id, jobID string, now time.Time) error
 	// Get returns the schedule with the given id, or sdk.ErrNotFound.

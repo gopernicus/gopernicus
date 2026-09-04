@@ -18,6 +18,7 @@ type claimCall struct {
 	id         string
 	prev, next time.Time
 	now        time.Time
+	kind       string
 }
 
 // fakeSchedules is an in-test schedule.Repository. ListDue/ClaimDue/SetLastJob/
@@ -25,6 +26,7 @@ type claimCall struct {
 type fakeSchedules struct {
 	due        []schedule.Schedule
 	listDueErr error
+	listKinds  [][]string // the kinds each ListDue call was handed
 	claimFn    func(c claimCall) (bool, error)
 	claims     []claimCall
 	setLast    []struct{ id, jobID string }
@@ -41,11 +43,12 @@ func (f *fakeSchedules) Ensure(ctx context.Context, in schedule.Ensure, next tim
 	}{in, next})
 	return schedule.Schedule{ID: "sched-" + in.Name, Name: in.Name, Kind: in.Kind, Spec: in.Spec, NextRunAt: next, Enabled: true}, nil
 }
-func (f *fakeSchedules) ListDue(ctx context.Context, now time.Time, limit int) ([]schedule.Schedule, error) {
+func (f *fakeSchedules) ListDue(ctx context.Context, now time.Time, limit int, kinds []string) ([]schedule.Schedule, error) {
+	f.listKinds = append(f.listKinds, kinds)
 	return f.due, f.listDueErr
 }
-func (f *fakeSchedules) ClaimDue(ctx context.Context, id string, prev, next, now time.Time) (bool, error) {
-	c := claimCall{id: id, prev: prev, next: next, now: now}
+func (f *fakeSchedules) ClaimDue(ctx context.Context, id string, prev, next, now time.Time, expectedKind string) (bool, error) {
+	c := claimCall{id: id, prev: prev, next: next, now: now, kind: expectedKind}
 	f.claims = append(f.claims, c)
 	if f.claimFn != nil {
 		return f.claimFn(c)
@@ -94,6 +97,28 @@ func TestWorkFunc_NoDue_ReturnsErrNoWork(t *testing.T) {
 	err := svc.WorkFunc()(context.Background())
 	if !errors.Is(err, workers.ErrNoWork) {
 		t.Fatalf("err = %v, want ErrNoWork", err)
+	}
+}
+
+// TestWorkFunc_KindsReachListDueAndClaimDue proves the #37 wiring: the tick
+// lists only Deps.Kinds, and each fire re-asserts the listed schedule's kind in
+// the CAS so a re-kinded row is left to its new owner.
+func TestWorkFunc_KindsReachListDueAndClaimDue(t *testing.T) {
+	slot := time.Unix(1_000_000, 0).UTC()
+	now := slot.Add(time.Second)
+	repo := &fakeSchedules{
+		due: []schedule.Schedule{{ID: "s1", Name: "n", Kind: "a", Spec: schedule.Spec{Every: time.Hour}, NextRunAt: slot, Enabled: true}},
+	}
+	svc := NewService(Deps{Schedules: repo, Enqueuer: &fakeEnqueuer{}, Kinds: []string{"a", "z"}, Clock: fixedClock(now)})
+
+	if err := svc.WorkFunc()(context.Background()); err != nil {
+		t.Fatalf("workfunc: %v", err)
+	}
+	if len(repo.listKinds) != 1 || len(repo.listKinds[0]) != 2 || repo.listKinds[0][0] != "a" || repo.listKinds[0][1] != "z" {
+		t.Fatalf("ListDue kinds = %v, want [[a z]]", repo.listKinds)
+	}
+	if len(repo.claims) != 1 || repo.claims[0].kind != "a" {
+		t.Fatalf("ClaimDue calls = %+v, want one with expectedKind a", repo.claims)
 	}
 }
 

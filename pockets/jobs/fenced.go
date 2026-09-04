@@ -340,6 +340,8 @@ func NewFencedRuntime(svc *Service, cfg FencedRuntimeConfig) (*FencedRuntime, er
 	}
 
 	store := svc.fencedQueue
+	kinds := handlerKinds(handlers)
+	logger.Info("jobs runtime: claiming kinds", "pool", "fenced-delivery", "kinds", kinds)
 	process := func(ctx context.Context, j job.Job) (job.Job, error) {
 		handler, ok := handlers[j.Kind]
 		if !ok {
@@ -361,7 +363,7 @@ func NewFencedRuntime(svc *Service, cfg FencedRuntimeConfig) (*FencedRuntime, er
 	}
 
 	runner := workers.NewFencedRunner(
-		store,
+		kindScopedFenced{repo: store, kinds: kinds},
 		process,
 		logger,
 		workers.WithFencedClock(clock),
@@ -407,6 +409,33 @@ func NewFencedRuntime(svc *Service, cfg FencedRuntimeConfig) (*FencedRuntime, er
 
 // Run blocks running the fenced pool; cancel ctx to drain gracefully.
 func (r *FencedRuntime) Run(ctx context.Context) error { return r.pool.Run(ctx) }
+
+// kindScopedFenced adapts the FencedQueueRepository (whose Claim takes a kinds
+// filter) to the kernel's workers.FencedStore by closing over the runtime's
+// registered kinds, so the fenced pool never leases — or spends a retry on — a
+// job it has no handler for. Complete/Fail/Reschedule delegate unchanged.
+type kindScopedFenced struct {
+	repo  job.FencedQueueRepository
+	kinds []string
+}
+
+var _ workers.FencedStore[job.Job] = kindScopedFenced{}
+
+func (q kindScopedFenced) Claim(ctx context.Context, now time.Time, leaseID string, leaseFor time.Duration) (job.Job, error) {
+	return q.repo.Claim(ctx, now, leaseID, leaseFor, q.kinds)
+}
+
+func (q kindScopedFenced) Complete(ctx context.Context, id, leaseID string, now time.Time) error {
+	return q.repo.Complete(ctx, id, leaseID, now)
+}
+
+func (q kindScopedFenced) Fail(ctx context.Context, id, leaseID, reason string, now time.Time) error {
+	return q.repo.Fail(ctx, id, leaseID, reason, now)
+}
+
+func (q kindScopedFenced) Reschedule(ctx context.Context, id, leaseID string, availableAt time.Time, reason string, now time.Time) error {
+	return q.repo.Reschedule(ctx, id, leaseID, availableAt, reason, now)
+}
 
 // errUnhandledKind is the sentinel a fenced process returns for a job whose kind
 // has no registered handler.

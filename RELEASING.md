@@ -363,6 +363,19 @@ resolved on the proxy, because the rendered `go.mod` requires it. Cold-verified:
 into a scratch dir renders the new `.env.example`/`go.mod`, and the scratch host
 builds against the proxy.
 
+**2026-09-04: `pockets/jobs/v0.5.0`, `pockets/jobs/stores/pgx/v0.5.0`,
+`pockets/jobs/stores/turso/v0.4.0` — next tags, ONE train, MINOR (breaking
+ports)** — Claim and the scheduler pool filter by the kinds a runtime actually
+handles (plan of record `.claude/plans/jobs-kind-filtered-claim.md`; gopernicus
+issue #37; originating host gps-360-go plans/43 §4.5a). `job.QueueRepository.
+Claim`, `job.FencedQueueRepository.Claim`, and `schedule.Repository.ListDue`
+gain a trailing `kinds []string` (nil = unfiltered); `schedule.Repository.
+ClaimDue` gains a trailing `expectedKind string` re-asserted in the CAS. Both
+runtimes wrap the store in a kind-scoped adapter (the repository ports are no
+longer kernel `JobStore`/`FencedStore` themselves), derive the kinds from
+`Handlers`, and log them at start-up. No schema, no sdk change, no new guard.
+Store pins move `pockets/jobs v0.3.0 → v0.5.0`. See the upgrade note below.
+
 ## Tagging scheme
 
 Nested Go modules in a single repo are tagged with the module's directory as a
@@ -466,6 +479,45 @@ silently would break a host whose CSP no longer covers the kit's assets. Record 
 the module's next-tag upgrade note below and tell hosts to re-derive their CSP header.
 
 ## Upgrade notes (keyed to each module's next tag)
+
+### pockets/jobs — v0.5.0 (+ stores/pgx v0.5.0, stores/turso v0.4.0) — next tag: Claim and the scheduler pool filter by registered kinds (minor, breaking ports)
+
+Plan of record `.claude/plans/jobs-kind-filtered-claim.md` (gopernicus #37;
+originating host gps-360-go). A **minor** by the repo's pre-1.0 convention that
+**breaks the three repository ports** for anyone who implements them.
+
+**What changed.** Before, a worker polling a shared queue claimed the oldest
+due job of ANY kind, failed it "no handler registered for kind", and — at
+`MaxAttempts` — dead-lettered it; the scheduler pool fired EVERY due schedule
+row, then the claim half destroyed the fired jobs when the owning worker was
+down. N binaries sharing one queue all had to be up for any to be healthy.
+Now `Claim` (unfenced and fenced) takes the runtime's registered `kinds` —
+applied to the pending arm AND the stale-reclaim arm — `ListDue` takes them
+too, and `ClaimDue` re-asserts the listed schedule's kind in its CAS (an
+`Ensure` can re-kind a row without moving `next_run_at`). A job or schedule
+of a kind this binary does not handle **waits** for the binary that does:
+pending, zero attempts charged, never dead-lettered by a foreign worker.
+
+**Adopter action.**
+
+- **Hand-written repository doubles** (test fakes, host-owned stores): add
+  the trailing `kinds []string` parameter to `Claim` (both ports) and
+  `ListDue`, and `expectedKind string` to `ClaimDue`. `nil` kinds = no
+  filter; a non-empty `expectedKind` must match the row's kind for the CAS to
+  win. The compile error is the whole migration.
+- **Hosts running ONE worker binary with every kind registered**: no
+  behavior change beyond one INFO line per runtime (`"jobs runtime: claiming
+  kinds"`) and a `kinds` attr on `Register`'s line.
+- **Hosts running SEVERAL worker binaries over one queue** (gps-360-go's two
+  ingest workers): they stop dead-lettering each other's jobs and firing each
+  other's schedules — retire any deploy-together stopgap. Note the trade: a
+  kind nobody registers now waits silently instead of failing loudly; watch
+  the start-up `kinds` line and query pending-by-kind via
+  `Queue.List(ListFilter{Kind, Status: pending})`. A stale-pending report is
+  a filed follow-up, not in this train.
+- **Repin both**: `pockets/jobs` and your `stores/{pgx,turso}` move together
+  (the stores' `Claim`/`ListDue`/`ClaimDue` statements carry the filter; the
+  old store tags do not satisfy the new port). No migration, no new index.
 
 ### sdk — v0.8.0 — tagged 2026-09-03 @ `8564703`: secrets, the dotenv comment rule, and ParseEnvTags that hosts can actually adopt (minor)
 

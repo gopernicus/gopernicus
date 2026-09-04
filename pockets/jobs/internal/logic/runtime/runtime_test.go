@@ -18,6 +18,7 @@ import (
 // records Complete/Fail outcomes.
 type oneShotQueue struct {
 	mu        sync.Mutex
+	kinds     [][]string // the kinds each Claim was handed
 	pending   []job.Job
 	completed map[string]bool
 	failed    map[string]string
@@ -36,9 +37,10 @@ func newOneShotQueue(jobs ...job.Job) *oneShotQueue {
 func (q *oneShotQueue) Enqueue(ctx context.Context, in job.Enqueue) (job.Job, error) {
 	return job.Job{}, sdk.ErrInvalidInput
 }
-func (q *oneShotQueue) Claim(ctx context.Context, workerID string, now time.Time) (job.Job, error) {
+func (q *oneShotQueue) Claim(ctx context.Context, workerID string, now time.Time, kinds []string) (job.Job, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	q.kinds = append(q.kinds, kinds)
 	if len(q.pending) == 0 {
 		return job.Job{}, workers.ErrNoWork
 	}
@@ -114,6 +116,34 @@ func TestRun_UnknownKind_Fails(t *testing.T) {
 	}
 	if q.completed["j1"] {
 		t.Fatal("unknown-kind job must not be completed")
+	}
+}
+
+// TestRun_ClaimsWithRegisteredKinds proves the kind-scoped adapter hands
+// Deps.Kinds to every Claim (#37): the store, not the handler lookup, is what
+// keeps a runtime off jobs it cannot process.
+func TestRun_ClaimsWithRegisteredKinds(t *testing.T) {
+	q := newOneShotQueue(job.Job{JobID: "j3", Kind: "known.kind", JobStatus: job.StatusPending})
+	rt := New(Deps{
+		Queue:        q,
+		Handlers:     map[string]HandlerFunc{"known.kind": func(context.Context, job.Job) error { return nil }},
+		Kinds:        []string{"known.kind"},
+		Workers:      1,
+		PollInterval: 20 * time.Millisecond,
+		IdleInterval: 20 * time.Millisecond,
+	})
+
+	runBriefly(t, rt, q)
+
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.kinds) == 0 {
+		t.Fatal("Claim was never called")
+	}
+	for i, got := range q.kinds {
+		if len(got) != 1 || got[0] != "known.kind" {
+			t.Fatalf("Claim %d kinds = %v, want [known.kind]", i, got)
+		}
 	}
 }
 

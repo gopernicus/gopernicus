@@ -164,8 +164,11 @@ func (q *Queue) Enqueue(ctx context.Context, in job.Enqueue) (job.Job, error) {
 // The claim statement and its positional scan are preserved VERBATIM from before
 // the pgx idiom sweep (pgx-crud-v1 P5 directive): SKIP LOCKED correctness is
 // load-bearing, so its args stay positional rather than risk any observable
-// change from a NamedArgs rewrite.
-func (q *Queue) Claim(ctx context.Context, workerID string, now time.Time) (job.Job, error) {
+// change from a NamedArgs rewrite. The kind-filtered path (#37) is a SIBLING
+// statement, not an edit of that one: $1..$3 keep their meanings and $4 is the
+// kinds text[]; the whole due disjunction is parenthesized before the kind
+// predicate so the filter applies to the pending AND the stale-reclaim arm.
+func (q *Queue) Claim(ctx context.Context, workerID string, now time.Time, kinds []string) (job.Job, error) {
 	nowUTC := now.UTC()
 	stale := nowUTC.Add(-q.lease)
 
@@ -180,8 +183,25 @@ func (q *Queue) Claim(ctx context.Context, workerID string, now time.Time) (job.
 			FOR UPDATE SKIP LOCKED
 		)
 		RETURNING ` + jobSelect
+	args := []any{workerID, nowUTC, stale}
 
-	claimed, err := scanJob(q.db.QueryRow(ctx, claim, workerID, nowUTC, stale))
+	if len(kinds) > 0 {
+		claim = `UPDATE ` + q.table("job_queue") + `
+		SET status = 'running', worker_name = $1, claimed_at = $2, updated_at = $2
+		WHERE job_id = (
+			SELECT job_id FROM ` + q.table("job_queue") + `
+			WHERE ((status = 'pending' AND scheduled_for <= $2)
+			   OR (status = 'running' AND claimed_at < $3))
+			  AND kind = ANY($4)
+			ORDER BY priority DESC, created_at, job_id
+			LIMIT 1
+			FOR UPDATE SKIP LOCKED
+		)
+		RETURNING ` + jobSelect
+		args = append(args, kinds)
+	}
+
+	claimed, err := scanJob(q.db.QueryRow(ctx, claim, args...))
 	if errors.Is(err, sdk.ErrNotFound) {
 		return job.Job{}, workers.ErrNoWork
 	}

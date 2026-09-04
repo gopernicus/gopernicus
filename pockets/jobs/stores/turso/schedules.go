@@ -133,15 +133,20 @@ func (s *Schedules) Ensure(ctx context.Context, in schedule.Ensure, next time.Ti
 // ListDue returns up to limit enabled schedules whose next_run_at <= now, ordered
 // by (next_run_at, schedule_id) so the batch is deterministic. A non-positive
 // limit returns all due schedules.
-func (s *Schedules) ListDue(ctx context.Context, now time.Time, limit int) ([]schedule.Schedule, error) {
-	const q = `SELECT ` + scheduleColumns + ` FROM job_schedules
-		WHERE enabled = 1 AND next_run_at <= ?
+func (s *Schedules) ListDue(ctx context.Context, now time.Time, limit int, kinds []string) ([]schedule.Schedule, error) {
+	// A non-empty kinds (#37) restricts the scan to those kinds inside the query,
+	// before the limit.
+	kindClause, kindArgs := kindsIn(kinds)
+	q := `SELECT ` + scheduleColumns + ` FROM job_schedules
+		WHERE enabled = 1 AND next_run_at <= ?` + kindClause + `
 		ORDER BY next_run_at, schedule_id LIMIT ?`
 	lim := limit
 	if lim <= 0 {
 		lim = -1 // SQLite: no limit
 	}
-	rows, err := s.db.Query(ctx, q, tursodb.FormatTime(now.UTC()), lim)
+	args := append([]any{tursodb.FormatTime(now.UTC())}, kindArgs...)
+	args = append(args, lim)
+	rows, err := s.db.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -160,14 +165,15 @@ func (s *Schedules) ListDue(ctx context.Context, now time.Time, limit int) ([]sc
 
 // ClaimDue is the pure value compare-and-set on next_run_at: it advances
 // next_run_at to newNextRunAt (and last_run_at to now) only when the row's
-// current next_run_at still equals prevNextRunAt and the schedule is enabled,
-// reporting true when this caller won the (schedule, slot) pair.
-func (s *Schedules) ClaimDue(ctx context.Context, id string, prevNextRunAt, newNextRunAt, now time.Time) (bool, error) {
+// current next_run_at still equals prevNextRunAt, the schedule is enabled, and
+// its kind still equals expectedKind (#37: a re-kinded row is left to its new
+// owner), reporting true when this caller won the (schedule, slot) pair.
+func (s *Schedules) ClaimDue(ctx context.Context, id string, prevNextRunAt, newNextRunAt, now time.Time, expectedKind string) (bool, error) {
 	const q = `UPDATE job_schedules SET next_run_at = ?, last_run_at = ?, updated_at = ?
-		WHERE schedule_id = ? AND next_run_at = ? AND enabled = 1`
+		WHERE schedule_id = ? AND next_run_at = ? AND enabled = 1 AND kind = ?`
 	var won bool
 	err := retryBusy(ctx, func() error {
-		n, err := tursodb.ExecAffecting(ctx, s.db, q, tursodb.FormatTime(newNextRunAt.UTC()), tursodb.FormatTime(now.UTC()), tursodb.FormatTime(now.UTC()), id, tursodb.FormatTime(prevNextRunAt.UTC()))
+		n, err := tursodb.ExecAffecting(ctx, s.db, q, tursodb.FormatTime(newNextRunAt.UTC()), tursodb.FormatTime(now.UTC()), tursodb.FormatTime(now.UTC()), id, tursodb.FormatTime(prevNextRunAt.UTC()), expectedKind)
 		if err != nil {
 			return err
 		}

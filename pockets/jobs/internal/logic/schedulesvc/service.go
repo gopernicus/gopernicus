@@ -51,9 +51,13 @@ type Deps struct {
 	Schedules schedule.Repository
 	Enqueuer  Enqueuer
 	CronNext  CronNextFunc // nil = no cron support; a Spec.Cron then errors loudly
-	Batch     int          // due schedules per tick
-	Clock     func() time.Time
-	Logger    *slog.Logger
+	// Kinds is the runtime's registered handler kinds: the ONLY kinds the fire
+	// engine lists and fires (#37). A schedule of another kind waits for the
+	// binary that handles it. nil = no filter (tests only).
+	Kinds  []string
+	Batch  int // due schedules per tick
+	Clock  func() time.Time
+	Logger *slog.Logger
 }
 
 // Service implements the schedule use cases over the schedule repository port.
@@ -61,6 +65,7 @@ type Service struct {
 	repo     schedule.Repository
 	enqueuer Enqueuer
 	cronNext CronNextFunc
+	kinds    []string
 	batch    int
 	now      func() time.Time
 	log      *slog.Logger
@@ -85,6 +90,7 @@ func NewService(d Deps) *Service {
 		repo:     d.Schedules,
 		enqueuer: d.Enqueuer,
 		cronNext: d.CronNext,
+		kinds:    d.Kinds,
 		batch:    batch,
 		now:      clock,
 		log:      log,
@@ -107,11 +113,13 @@ func (s *Service) EnsureSchedule(ctx context.Context, in schedule.Ensure) (sched
 // WorkFunc returns the fire engine as a workers.WorkFunc for a single-worker
 // pool. A tick with no due schedules returns workers.ErrNoWork so the pool backs
 // off to its idle interval; a tick that saw due schedules returns nil so the
-// pool keeps polling actively.
+// pool keeps polling actively. Only schedules of Deps.Kinds are listed, and
+// fire re-asserts each schedule's kind in the ClaimDue CAS, so a schedule
+// re-kinded between the list and the claim is left for its new owner.
 func (s *Service) WorkFunc() workers.WorkFunc {
 	return func(ctx context.Context) error {
 		now := s.now()
-		due, err := s.repo.ListDue(ctx, now, s.batch)
+		due, err := s.repo.ListDue(ctx, now, s.batch, s.kinds)
 		if err != nil {
 			return err
 		}
@@ -135,7 +143,7 @@ func (s *Service) fire(ctx context.Context, sch schedule.Schedule, now time.Time
 		return
 	}
 
-	won, err := s.repo.ClaimDue(ctx, sch.ID, sch.NextRunAt, next, now)
+	won, err := s.repo.ClaimDue(ctx, sch.ID, sch.NextRunAt, next, now, sch.Kind)
 	if err != nil {
 		s.log.ErrorContext(ctx, "schedule: claim due failed", "schedule_id", sch.ID, "error", err)
 		return

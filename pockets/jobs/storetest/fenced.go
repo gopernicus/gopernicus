@@ -44,6 +44,7 @@ func RunFencedQueue(t *testing.T, newRepo func(t *testing.T) job.FencedQueueRepo
 	t.Run("ConcurrentReplaceVsEnqueueOnce", func(t *testing.T) { testFencedConcurrentReplaceVsEnqueueOnce(t, newRepo) })
 	t.Run("ReplaceFencesRunningClaim", func(t *testing.T) { testFencedReplaceFencesRunningClaim(t, newRepo) })
 	t.Run("ClaimFencingOnStaleLease", func(t *testing.T) { testFencedClaimFencing(t, newRepo) })
+	t.Run("ClaimKindFilter", func(t *testing.T) { testFencedClaimKindFilter(t, newRepo) })
 	t.Run("CheckpointWhileClaimCurrent", func(t *testing.T) { testFencedCheckpoint(t, newRepo) })
 	t.Run("CheckpointBeforeSideEffect", func(t *testing.T) { testFencedCheckpointBeforeSideEffect(t, newRepo) })
 	t.Run("CheckpointCrashReclaimReadsBytes", func(t *testing.T) { testFencedCheckpointCrashReclaim(t, newRepo) })
@@ -143,7 +144,7 @@ func testFencedTenant(t *testing.T, newRepo func(t *testing.T) job.FencedQueueRe
 	}
 
 	// Only the scoped execution is due at now, so the claim is deterministic.
-	claimed, err := repo.Claim(ctx, now, "lease-A", Lease)
+	claimed, err := repo.Claim(ctx, now, "lease-A", Lease, nil)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -450,7 +451,7 @@ func testFencedReplaceFencesRunningClaim(t *testing.T, newRepo func(t *testing.T
 	now := time.Now().UTC()
 
 	seed := mustEnqueueOnce(t, repo, job.Enqueue{Kind: "email", LogicalKey: "k1", ScheduledFor: now})
-	claimed, err := repo.Claim(ctx, time.Now().UTC(), "lease-A", Lease)
+	claimed, err := repo.Claim(ctx, time.Now().UTC(), "lease-A", Lease, nil)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -508,7 +509,7 @@ func testFencedClaimFencing(t *testing.T, newRepo func(t *testing.T) job.FencedQ
 
 	mustEnqueueOnce(t, repo, job.Enqueue{Kind: "email", LogicalKey: "k1", ScheduledFor: now})
 
-	first, err := repo.Claim(ctx, time.Now().UTC(), "lease-A", Lease)
+	first, err := repo.Claim(ctx, time.Now().UTC(), "lease-A", Lease, nil)
 	if err != nil {
 		t.Fatalf("first Claim: %v", err)
 	}
@@ -518,7 +519,7 @@ func testFencedClaimFencing(t *testing.T, newRepo func(t *testing.T) job.FencedQ
 
 	// Let the lease expire, then reclaim under a fresh lease.
 	time.Sleep(Lease + 100*time.Millisecond)
-	second, err := repo.Claim(ctx, time.Now().UTC(), "lease-B", Lease)
+	second, err := repo.Claim(ctx, time.Now().UTC(), "lease-B", Lease, nil)
 	if err != nil {
 		t.Fatalf("reclaim Claim: %v", err)
 	}
@@ -548,6 +549,67 @@ func testFencedClaimFencing(t *testing.T, newRepo func(t *testing.T) job.FencedQ
 	}
 }
 
+// testFencedClaimKindFilter proves the #37 contract on the fenced queue: Claim
+// selects only among the given kinds on BOTH the pending arm and the
+// expired-lease reclaim arm, an excluded claim spends no retry, and nil is
+// unfiltered. The excluded kind would win the unfiltered ordering. Lease expiry
+// is driven by the explicit now (no wall-clock sleep).
+func testFencedClaimKindFilter(t *testing.T, newRepo func(t *testing.T) job.FencedQueueRepository) {
+	repo := requireFenced(t, newRepo)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	mustEnqueueOnce(t, repo, job.Enqueue{ID: "other-first", Kind: "other", LogicalKey: "k-other", Priority: 10, ScheduledFor: now})
+	time.Sleep(3 * time.Millisecond)
+	mustEnqueueOnce(t, repo, job.Enqueue{ID: "mine", Kind: "mine", LogicalKey: "k-mine", ScheduledFor: now})
+	claimNow := time.Now().UTC()
+
+	if _, err := repo.Claim(ctx, claimNow, "lease-0", Lease, []string{"absent"}); !errors.Is(err, workers.ErrNoWork) {
+		t.Fatalf("Claim(absent kind): err=%v, want ErrNoWork", err)
+	}
+	for _, id := range []string{"other-first", "mine"} {
+		got, err := repo.Get(ctx, id)
+		if err != nil {
+			t.Fatalf("Get %s: %v", id, err)
+		}
+		if got.Status() != string(job.StatusPending) || got.Retries != 0 || got.LeaseID != "" {
+			t.Fatalf("%s after an excluded claim: status=%q retries=%d lease=%q, want pending/0/\"\"", id, got.Status(), got.Retries, got.LeaseID)
+		}
+	}
+
+	got, err := repo.Claim(ctx, claimNow, "lease-A", Lease, []string{"mine", "unrelated"})
+	if err != nil {
+		t.Fatalf("Claim(mine): %v", err)
+	}
+	if got.ID() != "mine" {
+		t.Fatalf("Claim(mine) = %q, want mine (kind filter must apply inside the selection)", got.ID())
+	}
+	if err := repo.Complete(ctx, "mine", "lease-A", claimNow); err != nil {
+		t.Fatalf("Complete mine: %v", err)
+	}
+
+	got, err = repo.Claim(ctx, claimNow, "lease-B", Lease, nil)
+	if err != nil {
+		t.Fatalf("Claim(nil): %v", err)
+	}
+	if got.ID() != "other-first" {
+		t.Fatalf("Claim(nil) = %q, want other-first", got.ID())
+	}
+
+	// Past the lease: an excluding filter cannot reclaim it, an including one can.
+	stale := claimNow.Add(Lease + time.Minute)
+	if _, err := repo.Claim(ctx, stale, "lease-C", Lease, []string{"mine"}); !errors.Is(err, workers.ErrNoWork) {
+		t.Fatalf("stale reclaim with an excluding filter: err=%v, want ErrNoWork", err)
+	}
+	reclaimed, err := repo.Claim(ctx, stale, "lease-D", Lease, []string{"other"})
+	if err != nil {
+		t.Fatalf("stale reclaim with an including filter: %v", err)
+	}
+	if reclaimed.ID() != "other-first" || reclaimed.LeaseID != "lease-D" {
+		t.Errorf("reclaimed = %q under %q, want other-first under lease-D", reclaimed.ID(), reclaimed.LeaseID)
+	}
+}
+
 // testFencedCheckpoint: a checkpoint from the current lease atomically replaces the
 // payload BYTE-FOR-BYTE — including arbitrary non-UTF8 encrypted ciphertext — while
 // preserving job identity, attempts, logical key, schedule, and running status. It
@@ -560,7 +622,7 @@ func testFencedCheckpoint(t *testing.T, newRepo func(t *testing.T) job.FencedQue
 	now := time.Now().UTC()
 
 	seed := mustEnqueueOnce(t, repo, job.Enqueue{Kind: "email", LogicalKey: "k1", Payload: []byte(`{"stage":"opaque"}`), ScheduledFor: now})
-	claimed, err := repo.Claim(ctx, time.Now().UTC(), "lease-A", Lease)
+	claimed, err := repo.Claim(ctx, time.Now().UTC(), "lease-A", Lease, nil)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -631,7 +693,7 @@ func testFencedCheckpointBeforeSideEffect(t *testing.T, newRepo func(t *testing.
 	}
 
 	mustEnqueueOnce(t, repo, job.Enqueue{Kind: "email", LogicalKey: "k1", ScheduledFor: now})
-	claimed, err := repo.Claim(ctx, time.Now().UTC(), "lease-A", Lease)
+	claimed, err := repo.Claim(ctx, time.Now().UTC(), "lease-A", Lease, nil)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -665,7 +727,7 @@ func testFencedCheckpointCrashReclaim(t *testing.T, newRepo func(t *testing.T) j
 	now := time.Now().UTC()
 
 	mustEnqueueOnce(t, repo, job.Enqueue{Kind: "email", LogicalKey: "k1", Payload: []byte(`{"stage":"opaque"}`), ScheduledFor: now})
-	claimed, err := repo.Claim(ctx, time.Now().UTC(), "lease-A", Lease)
+	claimed, err := repo.Claim(ctx, time.Now().UTC(), "lease-A", Lease, nil)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -677,7 +739,7 @@ func testFencedCheckpointCrashReclaim(t *testing.T, newRepo func(t *testing.T) j
 
 	// The worker crashes: no Complete/Fail. The lease lapses and the job is reclaimed.
 	time.Sleep(Lease + 100*time.Millisecond)
-	reclaimed, err := repo.Claim(ctx, time.Now().UTC(), "lease-B", Lease)
+	reclaimed, err := repo.Claim(ctx, time.Now().UTC(), "lease-B", Lease, nil)
 	if err != nil {
 		t.Fatalf("reclaim after crash: %v", err)
 	}
@@ -703,7 +765,7 @@ func testFencedConcurrentCheckpointVsReplace(t *testing.T, newRepo func(t *testi
 	now := time.Now().UTC()
 
 	seed := mustEnqueueOnce(t, repo, job.Enqueue{Kind: "email", LogicalKey: "race", ScheduledFor: now})
-	claimed, err := repo.Claim(ctx, time.Now().UTC(), "lease-A", Lease)
+	claimed, err := repo.Claim(ctx, time.Now().UTC(), "lease-A", Lease, nil)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -780,7 +842,7 @@ func testFencedRetryAt(t *testing.T, newRepo func(t *testing.T) job.FencedQueueR
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
 	mustEnqueueOnce(t, repo, job.Enqueue{Kind: "email", LogicalKey: "k1", ScheduledFor: now})
-	claimed, err := repo.Claim(ctx, now, "lease-A", Lease)
+	claimed, err := repo.Claim(ctx, now, "lease-A", Lease, nil)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -816,11 +878,11 @@ func testFencedRetryAt(t *testing.T, newRepo func(t *testing.T) job.FencedQueueR
 
 	// Not due before retryAt — a busy-loop worker polling every minute never
 	// re-serves it until its retry time.
-	if _, err := repo.Claim(ctx, now.Add(time.Minute), "lease-B", Lease); !errors.Is(err, workers.ErrNoWork) {
+	if _, err := repo.Claim(ctx, now.Add(time.Minute), "lease-B", Lease, nil); !errors.Is(err, workers.ErrNoWork) {
 		t.Errorf("Claim before retry-at: err=%v, want workers.ErrNoWork", err)
 	}
 	// Due at/after retryAt.
-	again, err := repo.Claim(ctx, retryAt.Add(time.Minute), "lease-C", Lease)
+	again, err := repo.Claim(ctx, retryAt.Add(time.Minute), "lease-C", Lease, nil)
 	if err != nil {
 		t.Fatalf("Claim after retry-at: %v", err)
 	}
@@ -837,7 +899,7 @@ func testFencedPermanentFail(t *testing.T, newRepo func(t *testing.T) job.Fenced
 	now := time.Now().UTC()
 
 	mustEnqueueOnce(t, repo, job.Enqueue{Kind: "email", LogicalKey: "k1", ScheduledFor: now})
-	claimed, err := repo.Claim(ctx, now, "lease-A", Lease)
+	claimed, err := repo.Claim(ctx, now, "lease-A", Lease, nil)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -848,7 +910,7 @@ func testFencedPermanentFail(t *testing.T, newRepo func(t *testing.T) job.Fenced
 	if dead.JobStatus != job.StatusDeadLetter || !dead.Terminal() {
 		t.Errorf("failed job status=%q terminal=%v, want dead_letter/terminal", dead.JobStatus, dead.Terminal())
 	}
-	if _, err := repo.Claim(ctx, now.Add(Lease+time.Minute), "lease-B", Lease); !errors.Is(err, workers.ErrNoWork) {
+	if _, err := repo.Claim(ctx, now.Add(Lease+time.Minute), "lease-B", Lease, nil); !errors.Is(err, workers.ErrNoWork) {
 		t.Errorf("Claim after dead-letter: err=%v, want workers.ErrNoWork", err)
 	}
 }
@@ -924,7 +986,7 @@ func testFencedErrorKinds(t *testing.T, newRepo func(t *testing.T) job.FencedQue
 	// against an otherwise-empty store so Claim (oldest-due first) returns exactly
 	// the job under test and not an unrelated leftover pending generation.
 	done := mustEnqueueOnce(t, repo, job.Enqueue{Kind: "email", ScheduledFor: now})
-	claimed, err := repo.Claim(ctx, now, "lease-A", Lease)
+	claimed, err := repo.Claim(ctx, now, "lease-A", Lease, nil)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}

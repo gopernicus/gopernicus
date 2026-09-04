@@ -84,7 +84,7 @@ The public jobs `Service` implements `work.Enqueuer`, `work.Replacer`, and `work
 
 ## Scheduling semantics
 
-Claiming a due schedule is a value compare-and-swap on `next_run_at`. Competing runtimes race; one wins. A deterministic job ID per schedule slot collapses crash-window retries. Missed windows fire once and advance from the current time rather than replaying an unbounded backlog.
+Claiming a due schedule is a value compare-and-swap on `next_run_at`. Competing runtimes race; one wins. A deterministic job ID per schedule slot collapses crash-window retries. Missed windows fire once and advance from the current time rather than replaying an unbounded backlog. A runtime lists only schedules of the kinds it registered handlers for and re-asserts that kind in the compare-and-swap, so a schedule of another kind waits for the binary that owns it (the same rule the queue's `Claim` follows).
 
 Cron evaluation is UTC. `integrations/scheduling/robfig-cron` implements the parser shape; `Spec.Every` needs no external library.
 
