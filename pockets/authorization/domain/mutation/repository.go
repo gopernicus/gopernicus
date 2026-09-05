@@ -1,6 +1,10 @@
 package mutation
 
-import "context"
+import (
+	"context"
+
+	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
+)
 
 // Dependency is one authorization scope a guard read while deciding, plus the
 // revision it observed. A [DecisionView] records these as the guard runs; the
@@ -13,19 +17,48 @@ type Dependency struct {
 	Revision Revision
 }
 
-// DecisionView is the dependency-tracking authorization reader the repository
-// supplies to a [Guard] INSIDE the atomic mutation boundary. Every read records
-// the scope key and the revision it observed (see [Dependency]) so the repository
-// can validate those dependencies at commit. A guard may make authorization reads
-// ONLY through this view: it must never call the outer authorization Service
-// (which would open a detached check-then-write race) and must perform no
-// network or unrelated-store I/O. Reads observe the transaction's own held
-// snapshot; they do not recursively lock.
-type DecisionView interface {
+// StoreDecisionView is the dependency-tracking authorization reader a
+// [MutationRepository] supplies to a [Guard] INSIDE the atomic mutation
+// boundary: the transaction-bound primitives a store implements. Every read
+// records the scope key and the revision it observed (see [Dependency]) so the
+// repository can validate those dependencies at commit. A guard may make
+// authorization reads ONLY through this view: it must never call the outer
+// authorization Service (which would open a detached check-then-write race) and
+// must perform no network or unrelated-store I/O. Reads observe the
+// transaction's own held snapshot; they do not recursively lock.
+//
+// Store authors implement THIS interface. The host-facing [DecisionView] the
+// authorization core hands a MutationGuard embeds it and adds the schema-driven
+// permission walk, which the core composes over these primitives.
+//
+// Dependency ordering is part of the contract: a primitive records a scope's
+// revision BEFORE it reads that scope's rows (or obtains both from one statement
+// snapshot), and a scope already recorded keeps its FIRST observed revision. Under
+// a read-committed transaction the two-statement alternative — read rows, then
+// record the revision — can pair a pre-revoke row with a post-revoke revision,
+// which commit validation would wrongly accept.
+type StoreDecisionView interface {
 	// CheckRelation reports whether subjectType:subjectID holds relation on the
-	// resource named by scope (a [ScopeResource] key), recording that scope and its
-	// revision as a mutation dependency.
+	// resource named by scope (a [ScopeResource] key), with UNBOUNDED exact-userset
+	// expansion, recording that scope, its revision, and every expansion scope as
+	// mutation dependencies. It is CheckRelationBounded with a non-positive bound.
 	CheckRelation(ctx context.Context, scope ScopeKey, relation, subjectType, subjectID string) (bool, error)
+
+	// CheckRelationBounded is CheckRelation with the read-side expansion-state
+	// accounting: maxExpansionStates bounds the distinct reachable states of the
+	// subject's userset expansion (the seed counts), and exceeding it returns
+	// relationship.ErrExpansionBudgetExceeded — never an allow, never a truncated
+	// deny. A non-positive bound selects the unbounded mode. The resource scope and
+	// every expansion scope are recorded as dependencies; dependency collection is
+	// itself bounded by the same budget.
+	CheckRelationBounded(ctx context.Context, scope ScopeKey, relation, subjectType, subjectID string, maxExpansionStates int) (bool, error)
+
+	// RelationTargets returns the subjects holding relation on the resource named
+	// by scope (a [ScopeResource] key), recording that scope and its revision as a
+	// dependency BEFORE the rows are read. Userset targets are returned as stored;
+	// the permission walk skips them. It is the transaction-bound twin of the
+	// read-side GetRelationTargets and the read a Through hop navigates.
+	RelationTargets(ctx context.Context, scope ScopeKey, relation string) ([]relationship.RelationTarget, error)
 
 	// HasRole reports whether subjectType:subjectID holds role at scope (resource
 	// or subject), recording that scope and its revision as a mutation dependency.
@@ -35,6 +68,26 @@ type DecisionView interface {
 	// [ScopeKey.Canonical]. The repository consults it to build its lock and
 	// revision-validation set; a test asserts what a guard depended on.
 	Dependencies() []Dependency
+}
+
+// DecisionView is what a host MutationGuard receives: the store's
+// [StoreDecisionView] plus the schema-driven permission walk the authorization
+// core composes over it. A host guard that needs "does this principal hold this
+// PERMISSION here" — inherited through the model's Through hops, not just a
+// direct tuple — asks CheckPermission and gets the read-side Check's answer,
+// evaluated inside the mutation boundary.
+type DecisionView interface {
+	StoreDecisionView
+
+	// CheckPermission reports whether principalType:principalID holds permission
+	// on the resource named by scope (a [ScopeResource] key) by the SAME
+	// evaluation the read-side Check performs — direct relations, exact usersets,
+	// every Through hop, the same budgets — with every scope the walk navigated
+	// recorded as a dependency. Budget exhaustion is the evaluation-limit error
+	// (a command error: the mutation writes nothing), never a deny. A pair the
+	// roles model owns is refused with a stable error; the guard uses HasRole for
+	// those.
+	CheckPermission(ctx context.Context, scope ScopeKey, permission, principalType, principalID string) (bool, error)
 }
 
 // Guard is the actor-facing authorization callback [MutationRepository.ApplyGuarded]
@@ -49,7 +102,7 @@ type DecisionView interface {
 // Service or perform network/unrelated-store I/O. Possession of a MutationID is
 // not authority — the guard runs on first application AND on every actor-facing
 // replay before a stored receipt is returned.
-type Guard func(ctx context.Context, view DecisionView) error
+type Guard func(ctx context.Context, view StoreDecisionView) error
 
 // SemanticValidator validates a receipt-ABSENT command against the CURRENT
 // compiled schema. It is PURE (no I/O) and is invoked by Apply ONLY when no
@@ -101,7 +154,7 @@ type SemanticValidator func(cmd Command) error
 //
 // # ApplyGuarded — the actor-facing path
 //
-// ApplyGuarded runs guard against a [DecisionView] INSIDE the same boundary,
+// ApplyGuarded runs guard against a [StoreDecisionView] INSIDE the same boundary,
 // before the receipt/revision/apply steps above, so the guard's authorization
 // dependencies are revision-tracked and validated at commit — never a detached
 // Check followed by a separate write. The guard runs on first application AND on

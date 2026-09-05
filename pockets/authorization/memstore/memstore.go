@@ -262,15 +262,23 @@ func (r *Relationships) CheckRelationWithGroupExpansion(ctx context.Context, res
 // membership edges the walk traversed — so the DecisionView can record each as a
 // ScopeResource dependency; a concurrent membership revoke on an intermediate
 // group scope then invalidates a guarded decision.
-func (r *Relationships) checkRelationExpandScopesLocked(resourceType, resourceID, relation, subjectType, subjectID string) (bool, map[reachable]bool) {
-	reached, _ := r.expandReachable(subjectType, subjectID, 0)
+//
+// maxExpansionStates is the read-side expansion budget (expandReachable): a
+// non-positive bound is unbounded; exceeding a positive bound returns
+// overflow=true with a deny and the partial set, which the caller turns into
+// relationship.ErrExpansionBudgetExceeded — never an allow, never a truncated deny.
+func (r *Relationships) checkRelationExpandScopesLocked(resourceType, resourceID, relation, subjectType, subjectID string, maxExpansionStates int) (ok bool, reached map[reachable]bool, overflow bool) {
+	reached, overflow = r.expandReachable(subjectType, subjectID, maxExpansionStates)
+	if overflow {
+		return false, reached, true
+	}
 	for _, row := range r.st.rel {
 		if row.resourceType == resourceType && row.resourceID == resourceID && row.relation == relation &&
 			reached[reachable{row.subjectType, row.subjectID, row.subjectRelation}] {
-			return true, reached
+			return true, reached, false
 		}
 	}
-	return false, reached
+	return false, reached, false
 }
 
 // CheckRelationExists reports whether an exact direct tuple is present for a
@@ -292,6 +300,13 @@ func (r *Relationships) CheckRelationExists(ctx context.Context, resourceType, r
 func (r *Relationships) GetRelationTargets(ctx context.Context, resourceType, resourceID, relation string) ([]relationship.RelationTarget, error) {
 	r.st.mu.Lock()
 	defer r.st.mu.Unlock()
+	return r.getRelationTargetsLocked(resourceType, resourceID, relation), nil
+}
+
+// getRelationTargetsLocked is the non-locking core of GetRelationTargets: the
+// caller already holds st.mu. It is the read the mutation repository's
+// DecisionView uses for a Through hop against the held snapshot.
+func (r *Relationships) getRelationTargetsLocked(resourceType, resourceID, relation string) []relationship.RelationTarget {
 	var out []relationship.RelationTarget
 	for _, row := range r.st.rel {
 		if row.resourceType == resourceType && row.resourceID == resourceID && row.relation == relation {
@@ -302,7 +317,7 @@ func (r *Relationships) GetRelationTargets(ctx context.Context, resourceType, re
 			})
 		}
 	}
-	return out, nil
+	return out
 }
 
 // CheckBatchDirect returns resourceID -> allowed for one relation across ids,

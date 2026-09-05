@@ -24,6 +24,23 @@ Existing v3 hosts need only update composition from
 `RelationshipWriter` where appropriate. `Register` still mounts no routes, so
 the new capability is not automatically public.
 
+## Store-port note (2026-09-05, core v0.8.0 / stores pgx v0.4.0 + turso v0.3.0)
+
+The guard's view split in two. `mutation.StoreDecisionView` is what a store
+implements and what `ApplyGuarded`'s `Guard` callback now receives; it gains
+`CheckRelationBounded` (the read-side expansion budget; overflow is
+`relationship.ErrExpansionBudgetExceeded`) and `RelationTargets` (a Through
+hop's edge read). `mutation.DecisionView` is what a host `MutationGuard`
+receives: the store view plus `CheckPermission`, the engine's schema walk run
+over those primitives inside the transaction. Both bundled SQL stores implement
+the new primitives with ONE statement per direct read (grant match, reached
+scopes, and their revisions from one snapshot) and record a scope's revision
+BEFORE reading its rows — the ordering that keeps commit validation honest
+under READ COMMITTED; the legacy `CheckRelation` is that primitive with bound
+0, which also closes its former two-statement hazard. No database migration:
+no schema, table, or column changes. Hosts repin the store module together with
+the core (`pockets/authorization v0.8.0`).
+
 Status: **EXECUTED & VALIDATED 2026-07-14** (authorizationv3, AZ3-5.1; drafted at
 AZ3-2.6). This is the operational protocol a host runs to move a live v1
 authorization database to v3. It **wraps** [`CONVERSION.md`](CONVERSION.md) — the

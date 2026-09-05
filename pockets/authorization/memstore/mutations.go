@@ -551,22 +551,43 @@ type decisionView struct {
 	order []string
 }
 
-var _ mutation.DecisionView = (*decisionView)(nil)
+var _ mutation.StoreDecisionView = (*decisionView)(nil)
 
 func (v *decisionView) CheckRelation(ctx context.Context, scope mutation.ScopeKey, relation, subjectType, subjectID string) (bool, error) {
+	return v.CheckRelationBounded(ctx, scope, relation, subjectType, subjectID, 0)
+}
+
+func (v *decisionView) CheckRelationBounded(ctx context.Context, scope mutation.ScopeKey, relation, subjectType, subjectID string, maxExpansionStates int) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
 	v.record(scope)
-	ok, reached := v.m.rels.checkRelationExpandScopesLocked(scope.Type, scope.ID, relation, subjectType, subjectID)
+	ok, reached, overflow := v.m.rels.checkRelationExpandScopesLocked(scope.Type, scope.ID, relation, subjectType, subjectID, maxExpansionStates)
 	// Record every intermediate resource scope traversed during group expansion;
 	// its membership edges live under (type, id), so a concurrent revoke bumps
 	// that scope's revision and must invalidate the decision. Recording the seed
-	// (the subject as a resource scope) is a harmless over-record.
+	// (the subject as a resource scope) is a harmless over-record. The set is
+	// bounded by the same budget as the decision, so an overflow never records
+	// more than the budget allowed before it is reported.
 	for ref := range reached {
 		v.record(mutation.ScopeKey{Kind: mutation.ScopeResource, Type: ref[0], ID: ref[1]})
 	}
+	if overflow {
+		return false, relationship.ErrExpansionBudgetExceeded
+	}
 	return ok, nil
+}
+
+// RelationTargets records the scope's revision, then reads its targets from the
+// held snapshot (the non-locking read-side helper): the record-before-read order
+// the port mandates, kept here for uniformity even though the mutex already makes
+// the two observations one snapshot.
+func (v *decisionView) RelationTargets(ctx context.Context, scope mutation.ScopeKey, relation string) ([]relationship.RelationTarget, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	v.record(scope)
+	return v.m.rels.getRelationTargetsLocked(scope.Type, scope.ID, relation), nil
 }
 
 func (v *decisionView) HasRole(ctx context.Context, scope mutation.ScopeKey, role, subjectType, subjectID string) (bool, error) {

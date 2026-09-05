@@ -380,6 +380,30 @@ store tags; all three cold-resolve from a fresh `GOMODCACHE` and satisfy the new
 ports from a throwaway module. #37 closed; the silent-orphan follow-up is #39.
 See the upgrade note below.
 
+**2026-09-05: `pockets/authorization/v0.8.0`; `pockets/authorization/stores/pgx/v0.4.0` +
+`pockets/authorization/stores/turso/v0.3.0` — NEXT TAGS (train prepared on
+branch `authorization-decisionview-permission`, PR pending), ONE train, MINOR
+(breaking store port)** — `DecisionView.CheckPermission`: the hierarchy walk
+inside the guarded mutation (plan of record
+`.claude/plans/authorization-decisionview-permission.md`; originating host
+segovia v2 tenancy D13). The guard's only relationship read was a direct-tuple
+`CheckRelation` that could not follow a `Through`, so a space manager or tenant
+owner — who holds no direct tuple on the dashboard they legitimately manage —
+was invisible to the guard. Now the read-side walk is generic over a two-method
+`PermissionReader`, `Service.EvaluateWith` runs it over any reader, and the
+core composes a `permissionView` over the store's view so a host guard asks
+`view.CheckPermission(scope, permission, principal)` and gets the read-side
+answer inside the transaction, every navigated scope a locked,
+revision-validated dependency. The store port splits: `StoreDecisionView`
+(what a store implements; gains `CheckRelationBounded` and `RelationTargets`,
+record-before-read) and `DecisionView` (what a guard receives; embeds it and
+adds `CheckPermission`); `mutation.Guard` takes `StoreDecisionView`. The legacy
+pgx/turso `CheckRelation` two-statement snapshot hazard is closed by delegation
+(grant, reached scopes, and their revisions now come from ONE statement). No
+schema, no sdk change, no new guard. Store pins move `pockets/authorization
+v0.6.0 → v0.8.0`. Core tag first, proxy poll, then the pin commit and the store
+tags. See the upgrade note below.
+
 ## Tagging scheme
 
 Nested Go modules in a single repo are tagged with the module's directory as a
@@ -483,6 +507,84 @@ silently would break a host whose CSP no longer covers the kit's assets. Record 
 the module's next-tag upgrade note below and tell hosts to re-derive their CSP header.
 
 ## Upgrade notes (keyed to each module's next tag)
+
+### pockets/authorization — v0.8.0 (next tag) (+ stores/pgx v0.4.0, stores/turso v0.3.0): `DecisionView.CheckPermission` — the hierarchy walk inside the guarded mutation (minor, breaking store port)
+
+Plan of record `.claude/plans/authorization-decisionview-permission.md`
+(originating host segovia v2, `v2-tenancy.md` D13). A **minor** by the repo's
+pre-1.0 convention that **breaks the mutation store port** for anyone who
+implements `mutation.DecisionView` or hands a `mutation.Guard` closure to
+`ApplyGuarded` directly. A host guard's `AuthorizeMutation(ctx, attempt, view
+authorization.DecisionView)` compiles unchanged and gains a method.
+
+**What changed.** Before, the `DecisionView` a `MutationGuard` received had ONE
+relationship read, `CheckRelation`: a direct-tuple test with userset expansion
+on one scope. In any schema where authority is inherited from a container
+(`dashboard.manage = owner | Through(space, manage)`), the actor who manages
+the container holds no direct tuple on the item and the guard could not see
+their authority; the host's only options were to re-walk the ancestor chain in
+its own code (duplicating the schema) or to drop to a detached `Service.Check`
+(reopening the check-then-write race). Now the traversal lives in the engine,
+once:
+
+- `authorizersvc.PermissionReader` — the exact two-method subset the walk reads
+  (`CheckRelationWithGroupExpansion`, `GetRelationTargets`); the per-decision
+  budget carries the reader; `Service.EvaluateWith(ctx, reader, req)` runs the
+  ordinary evaluation over any reader. No read-side behavior change.
+- `mutation.StoreDecisionView` — what a **store** implements: `CheckRelation`
+  (unbounded, now `CheckRelationBounded(…, 0)`), **`CheckRelationBounded`**
+  (the read-side expansion accounting; overflow is
+  `relationship.ErrExpansionBudgetExceeded`, never an allow or a truncated
+  deny), **`RelationTargets`** (a Through hop's edge read, revision recorded
+  BEFORE the rows are read), `HasRole`, `Dependencies`.
+- `mutation.DecisionView` — what a **guard** receives: embeds
+  `StoreDecisionView` and adds **`CheckPermission(ctx, scope, permission,
+  principalType, principalID)`**: the SAME decision the read-side `Check`
+  makes, evaluated inside the mutation transaction, every navigated scope a
+  dependency. Budget exhaustion is `ErrEvaluationLimit` (a command error, the
+  mutation writes nothing), never a deny.
+- `mutation.Guard` is now `func(ctx, view StoreDecisionView) error`. The core's
+  `composeGuard` wraps the store view in the permission view before calling
+  the host `MutationGuard`.
+- `authorization.StoreDecisionView` alias; `ErrPermissionOwnedByRoles`
+  (wrapping `sdk.ErrInvalidInput`): `CheckPermission` on a pair the
+  `RoleModel` declares is refused before any store read, in mixed-model and
+  roles-only deployments alike — the guard uses `HasRole` for those. A
+  non-resource scope is `ErrInvalidRequest`.
+- **Snapshot fix in the legacy primitive (pgx, turso).** `CheckRelation` ran
+  the EXISTS query in one statement and re-ran the reachable CTE in a second
+  to record expansion scopes; under READ COMMITTED a membership revoke
+  committing between them paired a pre-revoke allow with post-revoke
+  revisions, and validation accepted it. Both primitives now obtain the grant
+  match, the reached scopes, and their revisions from ONE statement (the
+  `recordExpansionScopes` helpers are gone). Deterministic pgx interleaving
+  tests (`stores/pgx/mutations_permission_live_test.go`) prove a parent edge
+  revoked after the target read, and an inherited grant revoked after the
+  check, both abort as `ErrStaleRevision` with no row, receipt, or revision
+  bump.
+
+**Who must change.**
+
+- **Third-party store authors** (none known): implement `CheckRelationBounded`
+  and `RelationTargets` on your view and satisfy `StoreDecisionView`; the
+  repository callback now receives `StoreDecisionView`. Record a scope's
+  revision BEFORE reading its rows, or read both in one statement snapshot; a
+  scope already recorded keeps its first revision. The storetest suite
+  (`Mutations/GuardedPermission*`) is the conformance oracle.
+- **Host tests with a hand-rolled `DecisionView` fake**: add the two methods
+  (a stub that records the scope and returns nothing is enough), and retype a
+  `mutation.Guard` closure's parameter to `StoreDecisionView`. A fake handed to
+  a host guard as `authorization.DecisionView` also needs `CheckPermission`.
+- **Host guards**: nothing. Adopt `view.CheckPermission` where the guard was
+  re-walking the schema or calling a detached `Check`.
+
+**Pin move.** Stores: `pockets/authorization v0.6.0 → v0.8.0` (through v0.7.0's
+additive gate/lookup/role-routes tag; no store symbol depends on them). Core
+`go.mod` unchanged (`sdk v0.7.0`).
+
+**Adoption.** segovia v2 leg 3: the host guard becomes platform-admin
+short-circuit, the change-shape matrix, then `view.CheckPermission(scope,
+manage | manage_access, actor)`.
 
 ### pockets/jobs — v0.5.0 @ `eac19a0` (+ stores/pgx v0.5.0, stores/turso v0.4.0 @ `de453fb`) — tagged 2026-09-04: Claim and the scheduler pool filter by registered kinds (minor, breaking ports)
 
