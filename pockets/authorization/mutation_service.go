@@ -124,18 +124,20 @@ type MutationGuard interface {
 // runs inside the atomic boundary. This is the AZ3-0.4 seam completed: the
 // repository port stays free of Actor/MutationGuard and gains them without a
 // breaking change. The closure carries only the actor-independent Command state
-// into the MutationAttempt (actor supplied separately), and passes the
-// repository's DecisionView straight through so every guard read is
+// into the MutationAttempt (actor supplied separately), and wraps the
+// repository's StoreDecisionView in the permission view — the store's
+// dependency-recording primitives plus CheckPermission, the relationship engine's
+// walk over those primitives — so every guard read, direct or inherited, is
 // revision-tracked against the mutation scope's dependency set.
-func composeGuard(actor Actor, guard MutationGuard, cmd Command) Guard {
+func composeGuard(actor Actor, guard MutationGuard, cmd Command, engine *authorizersvc.Service, roleModel *decisionsvc.CompiledRoleModel) Guard {
 	attempt := MutationAttempt{
 		Actor:     actor,
 		Operation: cmd.Operation,
 		Scope:     cmd.Scope,
 		Change:    ProposedChange{Relationships: cmd.Relationships, Roles: cmd.Roles},
 	}
-	return func(ctx context.Context, view DecisionView) error {
-		return guard.AuthorizeMutation(ctx, attempt, view)
+	return func(ctx context.Context, view StoreDecisionView) error {
+		return guard.AuthorizeMutation(ctx, attempt, permissionView{StoreDecisionView: view, engine: engine, roleModel: roleModel})
 	}
 }
 
@@ -474,7 +476,7 @@ func (s *Service) applyMutation(ctx context.Context, actor Actor, cmd Command) (
 	if err := cmd.Validate(); err != nil {
 		return nil, err
 	}
-	guard := composeGuard(actor, s.guard, cmd)
+	guard := composeGuard(actor, s.guard, cmd, s.relationships, s.roleModel)
 	receipt, err := s.mutations.ApplyGuarded(ctx, cmd, guard, semanticValidatorFor(s.relationships, s.roleModel))
 	s.recordMutationAudit(ctx, actor, cmd, receipt, err)
 	return receipt, err

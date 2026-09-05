@@ -158,6 +158,14 @@ var (
 	// deployed host, so it answers 400; a decision surface with no model-bearing
 	// kind is an operator wiring fault and answers 500.
 	ErrMutationsNotConfigured = fmt.Errorf("authorization: actor-facing mutations are not configured (no MutationGuard): %w", sdk.ErrInvalidInput)
+
+	// ErrPermissionOwnedByRoles reports a DecisionView.CheckPermission on a
+	// (resource type, permission) pair the ROLES model declares. CheckPermission
+	// answers relationship-model pairs only — it is the relationship walk inside
+	// the mutation boundary; a roles-owned pair is answered by the view's HasRole.
+	// It is a stable precondition refusal (wrapping sdk.ErrInvalidInput), raised
+	// before any store read, in mixed-model and roles-only deployments alike.
+	ErrPermissionOwnedByRoles = fmt.Errorf("authorization: permission is owned by the roles model (use HasRole): %w", sdk.ErrInvalidInput)
 )
 
 // ReasonFor classifies err into its stable [Reason], returning ok=false for an

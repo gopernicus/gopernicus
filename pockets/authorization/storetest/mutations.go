@@ -64,6 +64,15 @@ func runMutations(t *testing.T, newRepos func(t *testing.T) authorization.Reposi
 	t.Run("GuardedViewReadsAndDenies", func(t *testing.T) {
 		specGuardedView(t, newRepos)
 	})
+	t.Run("GuardedPermissionWalksThrough", func(t *testing.T) {
+		specGuardedPermissionThrough(t, newRepos)
+	})
+	t.Run("GuardedPermissionExpansionBudgetParity", func(t *testing.T) {
+		specGuardedPermissionExpansionParity(t, newRepos)
+	})
+	t.Run("ConcurrentGuardedPermissionThroughRevokeRaces", func(t *testing.T) {
+		specGuardedPermissionThroughRevokeRaces(t, newRepos)
+	})
 	t.Run("ConcurrentReplayStorm", func(t *testing.T) {
 		specReplayStorm(t, newRepos)
 	})
@@ -748,7 +757,7 @@ func specGuardedView(t *testing.T, newRepos func(t *testing.T) authorization.Rep
 
 	// Guard allows only if the named principal is an owner of the mutation scope.
 	guardOwnedBy := func(principal string) mutation.Guard {
-		return func(ctx context.Context, view mutation.DecisionView) error {
+		return func(ctx context.Context, view mutation.StoreDecisionView) error {
 			ok, err := view.CheckRelation(ctx, resScope("d1"), "owner", "user", principal)
 			if err != nil {
 				return err
@@ -958,7 +967,7 @@ func specGuardRevokeRace(t *testing.T, newRepos func(t *testing.T) authorization
 
 		// The guard allows only while u1 still holds owner on the mutation scope, so
 		// the revoke's revision bump invalidates a stale allow.
-		guard := func(ctx context.Context, view mutation.DecisionView) error {
+		guard := func(ctx context.Context, view mutation.StoreDecisionView) error {
 			ok, err := view.CheckRelation(ctx, resScope(res), "owner", "user", "u1")
 			if err != nil {
 				return err
@@ -1089,7 +1098,7 @@ func specCrossScopeGuardRevokeRace(t *testing.T, newRepos func(t *testing.T) aut
 		// expansion satisfies through group:grp#member — so the F2 fix records
 		// group:grp as a dependency and a concurrent membership revoke on that scope
 		// invalidates a stale allow.
-		guard := func(ctx context.Context, view mutation.DecisionView) error {
+		guard := func(ctx context.Context, view mutation.StoreDecisionView) error {
 			ok, err := view.CheckRelation(ctx, resScope(res), "editor", "user", "alice")
 			if err != nil {
 				return err

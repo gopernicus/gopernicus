@@ -29,6 +29,14 @@ type budget struct {
 	limits EvaluationLimits
 	states map[stateKey]struct{}
 
+	// reader is the PermissionReader the walk's two relationship reads go
+	// through for THIS decision: the service's own store on Check/CheckExplain/
+	// Lookup, or a transaction-bound dependency-recording view handed in by
+	// EvaluateWith. It rides on the budget because the budget is already the one
+	// per-decision object every nested frame shares — the walk itself is the
+	// same in both cases.
+	reader PermissionReader
+
 	// trace is the OPTIONAL explain collector. It is nil for an ordinary decision
 	// and non-nil only for a CheckExplain call. It rides the SAME evaluation path
 	// (there is no second evaluator): the engine appends coarse rule/path steps to
@@ -38,8 +46,8 @@ type budget struct {
 	trace *explainTrace
 }
 
-func newBudget(limits EvaluationLimits) *budget {
-	return &budget{limits: limits, states: make(map[stateKey]struct{})}
+func newBudget(limits EvaluationLimits, reader PermissionReader) *budget {
+	return &budget{limits: limits, states: make(map[stateKey]struct{}), reader: reader}
 }
 
 // record appends one coarse rule/path step to the explain trace when tracing is

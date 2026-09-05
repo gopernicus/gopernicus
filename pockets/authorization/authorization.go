@@ -214,6 +214,7 @@ type (
 	Receipt            = mutation.Receipt
 	Dependency         = mutation.Dependency
 	DecisionView       = mutation.DecisionView
+	StoreDecisionView  = mutation.StoreDecisionView
 	Guard              = mutation.Guard
 	SemanticValidator  = mutation.SemanticValidator
 	MutationRepository = mutation.MutationRepository
