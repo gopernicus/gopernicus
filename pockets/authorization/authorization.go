@@ -176,6 +176,7 @@ const (
 	DefaultMaxRelationTargets = authorizersvc.DefaultMaxRelationTargets
 	DefaultMaxBatchSize       = authorizersvc.DefaultMaxBatchSize
 	DefaultMaxLookupResults   = authorizersvc.DefaultMaxLookupResults
+	DefaultMaxFilterScan      = authorizersvc.DefaultMaxFilterScan
 )
 
 // Root aliases — the relationship rim types hosts pass to / receive from the
@@ -434,6 +435,7 @@ type Service struct {
 	mutations     mutation.MutationRepository    // nil = no atomic write path
 	audit         AuditSink                      // nil = no actor-mutation auditing
 	maxBatchSize  int                            // resolved EvaluationLimits.MaxBatchSize (0 = no model-bearing kind)
+	limits        EvaluationLimits               // the resolved decision-surface budget (zero = no model-bearing kind)
 	log           *slog.Logger                   // set at Register; falls back to slog.Default()
 
 	roleRoutesGate   web.Middleware   // nil = the bundled role-administration routes do not mount
@@ -562,6 +564,7 @@ func NewService(repos Repositories, cfg Config) (Components, error) {
 		// for the actor-facing mutation blast-radius bound.
 		svc.decider = decisionsvc.NewComposite(svc.relationships, svc.roles, svc.roleModel, limits)
 		svc.maxBatchSize = limits.MaxBatchSize
+		svc.limits = limits
 	}
 	var writer *RelationshipWriter
 	if svc.relationships != nil {

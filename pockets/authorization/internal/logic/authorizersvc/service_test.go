@@ -3,6 +3,7 @@ package authorizersvc
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
@@ -18,6 +19,44 @@ import (
 type fakeStore struct {
 	tuples    []relationship.CreateRelationship
 	lastBatch []relationship.CreateRelationship // captured for mint assertions
+
+	// Per-read call counters, keyed by the exact read arguments (see
+	// targetsCallKey / directCallKey). They are nil until first use and exist for
+	// the batch-reader memo tests; nothing else asserts on them. mu guards ONLY
+	// the counters, because one immutability test drives the fake concurrently.
+	mu           sync.Mutex
+	targetsCalls map[string]int
+	directCalls  map[string]int
+	lookupCalls  int
+}
+
+func targetsCallKey(resourceType, resourceID, relation string) string {
+	return resourceType + ":" + resourceID + "#" + relation
+}
+
+func directCallKey(resourceType, resourceID, relation, subjectType, subjectID string) string {
+	return resourceType + ":" + resourceID + "#" + relation + "@" + subjectType + ":" + subjectID
+}
+
+func (f *fakeStore) count(m *map[string]int, key string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if *m == nil {
+		*m = make(map[string]int)
+	}
+	(*m)[key]++
+}
+
+func (f *fakeStore) countLookup() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.lookupCalls++
+}
+
+func (f *fakeStore) calls(m map[string]int, key string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return m[key]
 }
 
 func (f *fakeStore) match(resourceType, resourceID, relation, subjectType, subjectID string) bool {
@@ -31,6 +70,7 @@ func (f *fakeStore) match(resourceType, resourceID, relation, subjectType, subje
 }
 
 func (f *fakeStore) CheckRelationWithGroupExpansion(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string, maxExpansionStates int) (bool, error) {
+	f.count(&f.directCalls, directCallKey(resourceType, resourceID, relation, subjectType, subjectID))
 	return f.match(resourceType, resourceID, relation, subjectType, subjectID), nil
 }
 
@@ -39,6 +79,7 @@ func (f *fakeStore) CheckRelationExists(ctx context.Context, resourceType, resou
 }
 
 func (f *fakeStore) GetRelationTargets(ctx context.Context, resourceType, resourceID, relation string) ([]relationship.RelationTarget, error) {
+	f.count(&f.targetsCalls, targetsCallKey(resourceType, resourceID, relation))
 	var out []relationship.RelationTarget
 	for _, t := range f.tuples {
 		if t.ResourceType == resourceType && t.ResourceID == resourceID && t.Relation == relation {
@@ -120,6 +161,7 @@ func (f *fakeStore) ListRelationshipsByResource(ctx context.Context, resourceTyp
 }
 
 func (f *fakeStore) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID string, limit int) ([]string, error) {
+	f.countLookup()
 	var out []string
 	for _, t := range f.tuples {
 		if t.ResourceType != resourceType || t.SubjectType != subjectType || t.SubjectID != subjectID {
@@ -135,6 +177,7 @@ func (f *fakeStore) LookupResourceIDs(ctx context.Context, resourceType string, 
 }
 
 func (f *fakeStore) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string, limit int) ([]string, error) {
+	f.countLookup()
 	set := make(map[string]bool, len(targetIDs))
 	for _, id := range targetIDs {
 		set[id] = true
@@ -149,6 +192,7 @@ func (f *fakeStore) LookupResourceIDsByRelationTarget(ctx context.Context, resou
 }
 
 func (f *fakeStore) LookupDescendantResourceIDs(ctx context.Context, resourceType, relation, subjectType string, rootIDs []string, limit int) ([]string, error) {
+	f.countLookup()
 	return nil, nil
 }
 
