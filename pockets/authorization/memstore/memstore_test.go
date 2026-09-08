@@ -120,7 +120,7 @@ func TestDescendantWalk(t *testing.T) {
 		rel("space", "s2", "parent", "space", "s1"),
 		rel("space", "s3", "parent", "space", "s2"),
 	)
-	ids, err := r.LookupDescendantResourceIDs(context.Background(), "space", "parent", "space", []string{"s1"}, 100)
+	ids, err := r.LookupDescendantResourceIDs(context.Background(), "space", []string{"parent"}, "space", []string{"s1"}, "", 100)
 	if err != nil {
 		t.Fatalf("descendants: %v", err)
 	}

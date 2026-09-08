@@ -31,7 +31,7 @@ func (s errRelationships) GetRelationTargets(ctx context.Context, resourceType, 
 	return nil, s.err
 }
 
-func (s errRelationships) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID string, limit int) ([]string, error) {
+func (s errRelationships) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID, after string, limit int) ([]string, error) {
 	return nil, s.err
 }
 

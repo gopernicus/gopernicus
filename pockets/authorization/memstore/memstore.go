@@ -401,8 +401,9 @@ func (r *Relationships) DeleteByResourceAndSubject(ctx context.Context, resource
 }
 
 // LookupResourceIDs returns the distinct resource IDs where the subject has any
-// of the relations (with group expansion), capped at limit (see relationship.Storer).
-func (r *Relationships) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID string, limit int) ([]string, error) {
+// of the relations (with group expansion), strictly after `after`, capped at
+// limit (see relationship.Storer).
+func (r *Relationships) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID, after string, limit int) ([]string, error) {
 	r.st.mu.Lock()
 	defer r.st.mu.Unlock()
 	relSet := make(map[string]bool, len(relations))
@@ -410,15 +411,15 @@ func (r *Relationships) LookupResourceIDs(ctx context.Context, resourceType stri
 		relSet[rel] = true
 	}
 	reached, _ := r.expandReachable(subjectType, subjectID, 0)
-	return capIDs(r.distinctResourceIDs(func(row relRow) bool {
+	return capIDs(afterIDs(r.distinctResourceIDs(func(row relRow) bool {
 		return row.resourceType == resourceType && relSet[row.relation] &&
 			reached[reachable{row.subjectType, row.subjectID, row.subjectRelation}]
-	}), limit), nil
+	}), after), limit), nil
 }
 
 // LookupResourceIDsByRelationTarget returns distinct resource IDs whose relation
-// points at any of the target IDs, capped at limit.
-func (r *Relationships) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string, limit int) ([]string, error) {
+// points at any of the target IDs, strictly after `after`, capped at limit.
+func (r *Relationships) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string, after string, limit int) ([]string, error) {
 	if len(targetIDs) == 0 {
 		return nil, nil
 	}
@@ -428,20 +429,25 @@ func (r *Relationships) LookupResourceIDsByRelationTarget(ctx context.Context, r
 	for _, id := range targetIDs {
 		targets[id] = true
 	}
-	return capIDs(r.distinctResourceIDs(func(row relRow) bool {
+	return capIDs(afterIDs(r.distinctResourceIDs(func(row relRow) bool {
 		return row.resourceType == resourceType && row.relation == relation &&
 			row.subjectType == targetType && targets[row.subjectID] && row.subjectRelation == ""
-	}), limit), nil
+	}), after), limit), nil
 }
 
-// LookupDescendantResourceIDs walks a self-referential relation transitively
-// from the root IDs (cycle-safe fixpoint), capped at limit.
-func (r *Relationships) LookupDescendantResourceIDs(ctx context.Context, resourceType, relation, subjectType string, rootIDs []string, limit int) ([]string, error) {
-	if len(rootIDs) == 0 {
+// LookupDescendantResourceIDs walks the union of the self-referential relations
+// transitively from the root IDs (cycle-safe fixpoint), then returns the sorted
+// closure strictly after `after`, capped at limit.
+func (r *Relationships) LookupDescendantResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType string, rootIDs []string, after string, limit int) ([]string, error) {
+	if len(rootIDs) == 0 || len(relations) == 0 {
 		return nil, nil
 	}
 	r.st.mu.Lock()
 	defer r.st.mu.Unlock()
+	relSet := make(map[string]bool, len(relations))
+	for _, rel := range relations {
+		relSet[rel] = true
+	}
 
 	result := map[string]bool{}
 	frontier := make(map[string]bool, len(rootIDs))
@@ -451,7 +457,7 @@ func (r *Relationships) LookupDescendantResourceIDs(ctx context.Context, resourc
 	for len(frontier) > 0 {
 		next := map[string]bool{}
 		for _, row := range r.st.rel {
-			if row.resourceType == resourceType && row.relation == relation && row.subjectType == subjectType &&
+			if row.resourceType == resourceType && relSet[row.relation] && row.subjectType == subjectType &&
 				row.subjectRelation == "" && frontier[row.subjectID] && !result[row.resourceID] {
 				result[row.resourceID] = true
 				next[row.resourceID] = true
@@ -465,7 +471,20 @@ func (r *Relationships) LookupDescendantResourceIDs(ctx context.Context, resourc
 		out = append(out, id)
 	}
 	sort.Strings(out)
-	return capIDs(out, limit), nil
+	return capIDs(afterIDs(out, after), limit), nil
+}
+
+// afterIDs drops the prefix of a sorted id slice that is <= after — the keyset
+// half of the lookup contract (after == "" keeps everything).
+func afterIDs(ids []string, after string) []string {
+	if after == "" {
+		return ids
+	}
+	i := sort.SearchStrings(ids, after)
+	if i < len(ids) && ids[i] == after {
+		i++
+	}
+	return ids[i:]
 }
 
 // capIDs truncates a sorted, distinct ID slice to at most limit entries. A

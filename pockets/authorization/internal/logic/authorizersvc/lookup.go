@@ -119,7 +119,7 @@ func (s *Service) lookupResources(ctx context.Context, principal PrincipalRef, p
 
 	for _, check := range checks {
 		if check.Through == "" {
-			found, err := s.store.LookupResourceIDs(ctx, resourceType, []string{check.Relation}, principal.Type, principal.ID, b.resultFetchCap())
+			found, err := s.store.LookupResourceIDs(ctx, resourceType, []string{check.Relation}, principal.Type, principal.ID, "", b.resultFetchCap())
 			if err != nil {
 				return fail(err)
 			}
@@ -156,7 +156,7 @@ func (s *Service) lookupResources(ctx context.Context, principal PrincipalRef, p
 			if len(targetResult.IDs) == 0 {
 				continue
 			}
-			throughIDs, err := s.store.LookupResourceIDsByRelationTarget(ctx, resourceType, check.Through, targetType, targetResult.IDs, b.resultFetchCap())
+			throughIDs, err := s.store.LookupResourceIDsByRelationTarget(ctx, resourceType, check.Through, targetType, targetResult.IDs, "", b.resultFetchCap())
 			if err != nil {
 				return fail(err)
 			}
@@ -203,7 +203,7 @@ func (s *Service) expandSelfHierarchy(ctx context.Context, resourceType string, 
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			desc, err := s.store.LookupDescendantResourceIDs(ctx, resourceType, rel, resourceType, frontier, b.resultFetchCap())
+			desc, err := s.store.LookupDescendantResourceIDs(ctx, resourceType, []string{rel}, resourceType, frontier, "", b.resultFetchCap())
 			if err != nil {
 				return err
 			}

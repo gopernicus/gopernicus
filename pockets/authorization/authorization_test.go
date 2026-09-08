@@ -60,13 +60,13 @@ func (f *relFake) ListRelationshipsBySubject(ctx context.Context, subjectType, s
 func (f *relFake) ListRelationshipsByResource(ctx context.Context, resourceType, resourceID string, filter relationship.ResourceRelationshipFilter, req crud.ListRequest) (crud.Page[relationship.ResourceRelationship], error) {
 	return crud.Page[relationship.ResourceRelationship]{}, nil
 }
-func (f *relFake) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID string, limit int) ([]string, error) {
+func (f *relFake) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID, after string, limit int) ([]string, error) {
 	return nil, nil
 }
-func (f *relFake) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string, limit int) ([]string, error) {
+func (f *relFake) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string, after string, limit int) ([]string, error) {
 	return nil, nil
 }
-func (f *relFake) LookupDescendantResourceIDs(ctx context.Context, resourceType, relation, subjectType string, rootIDs []string, limit int) ([]string, error) {
+func (f *relFake) LookupDescendantResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType string, rootIDs []string, after string, limit int) ([]string, error) {
 	return nil, nil
 }
 
@@ -88,6 +88,9 @@ func (f *roleFake) ListBySubject(ctx context.Context, subjectType, subjectID str
 }
 func (f *roleFake) ListByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[role.Assignment], error) {
 	return crud.Page[role.Assignment]{}, nil
+}
+func (f *roleFake) LookupResourceIDsBySubjectAndRoles(ctx context.Context, subjectType, subjectID, resourceType string, roles []string, after string, limit int) ([]string, bool, error) {
+	return nil, false, nil
 }
 func (f *roleFake) ListEffectiveByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[role.EffectiveGrant], error) {
 	return crud.Page[role.EffectiveGrant]{}, nil
