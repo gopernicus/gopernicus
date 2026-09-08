@@ -167,4 +167,16 @@ type Storer interface {
 	// scope is itself global ("",""), there is no fallback and every grant is
 	// Direct — matching HasRole's no-fallback path for an unscoped query.
 	ListEffectiveByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[EffectiveGrant], error)
+
+	// LookupResourceIDsBySubjectAndRoles is the roles kind's resource-id lookup
+	// (authorization-lookup-paging, A3b). When the subject holds ANY of roles
+	// GLOBALLY ("", "") it reports unrestricted=true with nil ids — the subject
+	// reaches every resource of the type and the caller must skip id filtering.
+	// Otherwise it returns the DISTINCT resource_id values of resourceType at
+	// which the subject holds any of roles: sorted ascending in byte order,
+	// strictly greater than after (after == "" means from the start), at most
+	// limit of them (a non-positive limit means unbounded). An empty roles is
+	// (nil, false, nil). It applies no model knowledge: the caller passes the
+	// compiled granting roles.
+	LookupResourceIDsBySubjectAndRoles(ctx context.Context, subjectType, subjectID, resourceType string, roles []string, after string, limit int) (ids []string, unrestricted bool, err error)
 }

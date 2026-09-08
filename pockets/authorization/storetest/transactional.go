@@ -508,13 +508,13 @@ func snapshotRelationships(t *testing.T, ctx context.Context, s relationship.Sto
 	for _, it := range byRes.Items {
 		snap.byResource = append(snap.byResource, it.SubjectID)
 	}
-	if snap.lookup, err = s.LookupResourceIDs(ctx, "doc", []string{"viewer"}, "user", "u1", 100); err != nil {
+	if snap.lookup, err = s.LookupResourceIDs(ctx, "doc", []string{"viewer"}, "user", "u1", "", 100); err != nil {
 		t.Fatalf("LookupResourceIDs: %v", err)
 	}
-	if snap.byTarget, err = s.LookupResourceIDsByRelationTarget(ctx, "space", "parent", "space", []string{"s1"}, 100); err != nil {
+	if snap.byTarget, err = s.LookupResourceIDsByRelationTarget(ctx, "space", "parent", "space", []string{"s1"}, "", 100); err != nil {
 		t.Fatalf("LookupResourceIDsByRelationTarget: %v", err)
 	}
-	if snap.descendants, err = s.LookupDescendantResourceIDs(ctx, "space", "parent", "space", []string{"s1"}, 100); err != nil {
+	if snap.descendants, err = s.LookupDescendantResourceIDs(ctx, "space", []string{"parent"}, "space", []string{"s1"}, "", 100); err != nil {
 		t.Fatalf("LookupDescendantResourceIDs: %v", err)
 	}
 	return snap

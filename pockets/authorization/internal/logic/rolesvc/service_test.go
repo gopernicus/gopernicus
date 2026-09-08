@@ -59,6 +59,10 @@ func (f *fakeRoleStore) ListByResource(ctx context.Context, resourceType, resour
 // ListEffectiveByResource unions the direct scoped rows with the global rows a
 // scoped query would fall back to, keyed by (subject, role) with provenance — a
 // faithful-enough reference for the service delegation/validation tests.
+func (f *fakeRoleStore) LookupResourceIDsBySubjectAndRoles(ctx context.Context, subjectType, subjectID, resourceType string, roles []string, after string, limit int) ([]string, bool, error) {
+	return nil, false, nil
+}
+
 func (f *fakeRoleStore) ListEffectiveByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[role.EffectiveGrant], error) {
 	if f.err != nil {
 		return crud.Page[role.EffectiveGrant]{}, f.err

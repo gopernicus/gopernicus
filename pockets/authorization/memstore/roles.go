@@ -122,6 +122,41 @@ func (r *Roles) ListByResource(ctx context.Context, resourceType, resourceID str
 	return pageMem(items, req, role.OrderFields, assignmentKey)
 }
 
+// LookupResourceIDsBySubjectAndRoles reports a global grant of any of roles as
+// unrestricted, else the sorted distinct scoped resource ids of resourceType at
+// which the subject holds any of roles, strictly after `after`, capped at limit.
+func (r *Roles) LookupResourceIDsBySubjectAndRoles(ctx context.Context, subjectType, subjectID, resourceType string, roles []string, after string, limit int) ([]string, bool, error) {
+	if len(roles) == 0 {
+		return nil, false, nil
+	}
+	r.st.mu.Lock()
+	defer r.st.mu.Unlock()
+	granting := make(map[string]bool, len(roles))
+	for _, name := range roles {
+		granting[name] = true
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, row := range r.st.role {
+		if row.subjectType != subjectType || row.subjectID != subjectID || !granting[row.role] {
+			continue
+		}
+		if row.resourceType == "" && row.resourceID == "" {
+			return nil, true, nil
+		}
+		if row.resourceType == resourceType && row.resourceID != "" && !seen[row.resourceID] {
+			seen[row.resourceID] = true
+			out = append(out, row.resourceID)
+		}
+	}
+	sort.Strings(out)
+	out = afterIDs(out, after)
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, false, nil
+}
+
 // ListEffectiveByResource pages the EFFECTIVE role grants on a resource: the
 // union of the direct scoped assignments at (resourceType, resourceID) with the
 // global assignments a scoped HasRole satisfies, de-duplicated by (subject,
