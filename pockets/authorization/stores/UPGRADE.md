@@ -88,7 +88,7 @@ What a host must know:
   `pockets/authorization v0.9.0`. No database migration: no schema, table, or
   column changes.
 
-## Store-port note (next tag — core v0.11.0 / stores pgx v0.6.0 + turso v0.5.0, plan `authorization-lookup-paging`)
+## Store-port note (2026-09-08, core v0.11.0 / stores pgx v0.6.0 + turso v0.5.0, plan `authorization-lookup-paging`)
 
 **The lookup ports became keyset reads, and both ledgers gain a REQUIRED
 `0005_iam_lookup_keyset.sql`.** This is the first authorization store change

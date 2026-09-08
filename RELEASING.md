@@ -536,7 +536,7 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
-### pockets/authorization — v0.11.0 (next tag) (+ stores/pgx v0.6.0, stores/turso v0.5.0): `LookupResourcesIn` pages — keyset `After`/`NextCursor` over both kinds (minor; BREAKING store ports; host migration `0005`)
+### pockets/authorization — v0.11.0 @ `4bd2363` (+ stores/pgx v0.6.0, stores/turso v0.5.0 @ `a78aab2`) — tagged 2026-09-08: `LookupResourcesIn` pages — keyset `After`/`NextCursor` over both kinds (minor; BREAKING store ports; host migration `0005`)
 
 Plan of record `.claude/plans/authorization-lookup-paging.md` (#29, the
 deferred half of #22; originating host segovia v2, `v2-tenancy.md` O6/D10),
@@ -612,8 +612,18 @@ release as a deprecated alias.
   containers is a BitmapAnd of the subject index and the new index; the
   descendant closure's cost is the closure, not the page.
 - Full details, including the third-party-store obligations:
-  `pockets/authorization/stores/UPGRADE.md`, "Store-port note (next tag — core
+  `pockets/authorization/stores/UPGRADE.md`, "Store-port note (2026-09-08, core
   v0.11.0 …)".
+
+**Verification (train).** Pocket hermetic + race green on both PRs; `make
+guard` green; pgx live (postgres:17, `en_US.utf8`) default +
+`POSTGRES_TEST_SCHEMA` legs green incl. `TestLookupPlansAtScale` at 1e6 rows;
+turso playground full `TestConformance$` green (1145 s, its own invocation) and
+every other live test green; v0.10.0, v0.11.0 and both store tags served by
+the proxy on the first poll; all three modules cold-built and vetted
+`GOWORK=off` from a fresh `GOMODCACHE`; the v0.10.0 core cold-tested too.
+PR #43 (the stacked form of this train) was auto-closed when #42's branch was
+deleted at merge and reopened as #45 on the same commits.
 
 **Pin moves.** Both store modules: `pockets/authorization v0.9.0 → v0.11.0`
 (through v0.10.0). `sdk v0.7.0` unchanged.
@@ -629,7 +639,7 @@ release as a deprecated alias.
 - Any host implementing `relationship.Storer` / `role.Storer` itself: add the
   parameters and the role lookup, honor byte order, run `storetest.Run`.
 
-### pockets/authorization — v0.10.0 (next tag): `FilterPage`, the postfilter page-filler, and the memoized batch reader (minor; core-only)
+### pockets/authorization — v0.10.0 @ `162d24e` — tagged 2026-09-08: `FilterPage`, the postfilter page-filler, and the memoized batch reader (minor; core-only)
 
 Plan of record `.claude/plans/authorization-lookup-paging.md` (#29, the
 deferred half of #22; originating host segovia v2, `v2-tenancy.md` O6/D10),
