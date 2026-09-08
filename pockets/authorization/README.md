@@ -465,6 +465,58 @@ accumulates old and new targets. Additions are validated against the immutable
 compiled schema before storage. Deletions validate reference shape but may
 remove a tuple no longer accepted by a newer schema.
 
+#### Ambient transactions — the row and its tuple commit together
+
+The writer passes `ctx` straight through to the relationship store, and the
+bundled SQL stores honor the connector's ambient transaction: when `ctx` carries
+the transaction a `crud.Transactor.Transact` call stashed there (pgxdb, turso —
+the host's own `*pgxdb.DB` / `*tursodb.DB` IS the transactor), **every** store
+method — reads and writes, relationships and roles — runs ON that transaction.
+No second connection, no nested begin. So a host that projects topology from
+its own rows writes the row and the tuple as one unit:
+
+```go
+err := db.Transact(ctx, func(ctx context.Context) error {
+    if err := spaces.Move(ctx, spaceID, newParentID); err != nil { // the app row
+        return err
+    }
+    return writer.SetRelationTargets(ctx,                             // its projection
+        authorization.Resource{Type: "space", ID: spaceID},
+        "parent",
+        []authorization.SubjectRef{{Type: "space", ID: newParentID}},
+    )
+})
+```
+
+The rules a host must hold:
+
+- **Return write errors from the callback.** The store never rolls back or
+  marks the transaction rollback-only; the enclosing `Transact` decides from the
+  callback's return. Returning `nil` after swallowing a `SetRelationTargets`
+  conflict (`sdk.ErrConflict`) commits the row without its tuple.
+- **Reads inside the transaction see the transaction's own uncommitted state**
+  (read-then-decide-then-write in one unit); the same read with a context
+  outside the transaction sees committed state only.
+- **The serialization lock widens to the host's commit.** `SetRelationTargets`
+  serializes competing callers on one key; inside an ambient transaction that
+  lock is released at the host's commit, so a competing move waits for the whole
+  workflow — the property that keeps a concurrent move from slipping between
+  the row and the tuple. Do slow work before the write, not after.
+- **The guarded path does NOT join.** `Service` mutation methods and
+  `SystemMutator` keep their own transaction (anchor locks, receipt, replay
+  ledger). Called inside an ambient transaction they refuse with
+  `ErrGuardedInsideTransaction` (wrapping `sdk.ErrInvalidInput`) before any
+  guard, validator, or row is touched, instead of silently committing on a
+  second connection. Keep guarded calls outside `Transact`.
+- **Outside a transaction nothing changed.** Every method behaves exactly as
+  before; `SetRelationTargets` still opens and owns its own transaction.
+- **memstore has no transaction concept.** It is mutex-atomic per operation and
+  ignores the context; a host that needs the join wires a SQL store.
+
+The `storetest.RunTransactional` family is the executable form of this contract
+(the join proven from both sides, not just a rollback); every bundled SQL store
+runs it live, and a third-party store over another connector must pass it.
+
 ### The optional high-integrity mutation lifecycle
 
 On this path every write is one atomic command with a `MutationID`, one mutation
@@ -1122,6 +1174,18 @@ The suite's named families are acceptance criteria, not nice-to-haves:
   `ListBySubject` walk per dialect).
 - The `Budget/*` family — depth-boundary, fan-out, lookup-result-cap, and
   sibling-Through parity across dialects.
+- The `Transactional/*` family (`storetest.RunTransactional(t, newRepos func(t)
+  (authorization.Repositories, crud.Transactor))`, separate entry point because
+  it needs the connector's transactor) — the ambient-transaction contract proven
+  from BOTH sides: `CreateJoinsTransaction`, `SetRelationTargetsJoinsTransaction`
+  (ambient read sees new, outside read sees old, until commit),
+  `SetRelationTargetsConflictRollsBackHostWork`, `DeletesJoinTransaction` (all
+  four deletes), `RolesJoinTransaction`, `ReadsJoinTransaction` (every read
+  method, both CTE budget branches, listings with a count and a cursor
+  follow-up), `MutationRefusesAmbientTransaction` (`Apply` and `ApplyGuarded`),
+  `StandaloneUnchanged`. The memstore registers it with a nil transactor and
+  skips it loudly; each SQL store runs it live and adds a direct-SQL assertion
+  that a refused guarded mutation left the anchors and receipts untouched.
 - The `Roles/*` family — assign/unassign idempotence, exact-scope isolation, the
   Q5 global fallback, `EffectiveEnumerationAgreesWithHasRole`,
   `ScopedRevokeGlobalRoleRemains`, `EffectivePagination`.

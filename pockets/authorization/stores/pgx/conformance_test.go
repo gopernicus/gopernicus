@@ -19,6 +19,7 @@ package pgx
 
 import (
 	"context"
+	"errors"
 	"os"
 	"regexp"
 	"strings"
@@ -27,7 +28,9 @@ import (
 
 	pgxdb "github.com/gopernicus/gopernicus/integrations/datastores/pgxdb"
 	"github.com/gopernicus/gopernicus/pockets/authorization"
+	"github.com/gopernicus/gopernicus/pockets/authorization/domain/mutation"
 	"github.com/gopernicus/gopernicus/pockets/authorization/storetest"
+	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
 // authorizationTables are the pocket's tables cleared before each newRepos call
@@ -78,6 +81,77 @@ func TestConformance(t *testing.T) {
 		}
 		return repos
 	})
+}
+
+// TestTransactional runs the shared ambient-transaction family: the connector
+// (*pgxdb.DB) is the crud.Transactor, and the SAME connector backs the
+// repositories, so a Transact-owned transaction is the one the stores join.
+// Each newRepos call builds a fresh, truncated store exactly as TestConformance
+// does; the family never calls it for an observer (see storetest.RunTransactional).
+func TestTransactional(t *testing.T) {
+	dsn := requireDSN(t)
+
+	storetest.RunTransactional(t, func(t *testing.T) (authorization.Repositories, crud.Transactor) {
+		db := openAndMigrate(t, dsn)
+		repos, err := Repositories(db, storeOptions(t)...)
+		if err != nil {
+			t.Fatalf("Repositories: %v", err)
+		}
+		return repos, db
+	})
+}
+
+// TestTransactionalRefusalLeavesLedgerUntouched is the adapter-local half of the
+// shared MutationRefusesAmbientTransaction spec: the port exposes no anchor or
+// receipt reader, so the proof that a refused guarded mutation touched neither
+// iam_scopes nor iam_mutations is direct SQL here — checked through the pool
+// while the host transaction is still OPEN (so it does not lean on the rollback
+// to hide effects) and again after it.
+func TestTransactionalRefusalLeavesLedgerUntouched(t *testing.T) {
+	ctx := context.Background()
+	db, repos := liveRepos(t)
+	m := repos.Mutations
+
+	mustApplyLive(t, m, grantCmd(mutID(t), "M", "owner", "u1"))
+	before := ledgerState(t, db)
+
+	err := db.Transact(ctx, func(ctx context.Context) error {
+		rcpt, err := m.Apply(ctx, grantCmd(mutID(t), "M", "viewer", "u2"), nil)
+		if !errors.Is(err, mutation.ErrGuardedInsideTransaction) || rcpt != nil {
+			t.Fatalf("Apply inside Transact: want ErrGuardedInsideTransaction + nil receipt, got %+v, %v", rcpt, err)
+		}
+		if open := ledgerState(t, db); open != before {
+			t.Fatalf("ledger changed while the host transaction was open: before=%+v now=%+v", before, open)
+		}
+		return err
+	})
+	if !errors.Is(err, mutation.ErrGuardedInsideTransaction) {
+		t.Fatalf("Transact must return the refusal, got %v", err)
+	}
+	if after := ledgerState(t, db); after != before {
+		t.Fatalf("ledger changed across the refused mutation: before=%+v after=%+v", before, after)
+	}
+}
+
+// ledger is the direct-SQL view of the write-path tables: receipt rows, anchor
+// rows, and the sum of anchor revisions (a bump moves it; a bare revision-0
+// insert moves the count).
+type ledger struct {
+	receipts, anchors int
+	revisionSum       int64
+}
+
+// ledgerState reads ledger through the POOL (never the ambient transaction).
+func ledgerState(t *testing.T, db *pgxdb.DB) ledger {
+	t.Helper()
+	var l ledger
+	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM `+qualify(t, "iam_mutations")).Scan(&l.receipts); err != nil {
+		t.Fatalf("count receipts: %v", err)
+	}
+	if err := db.QueryRow(context.Background(), `SELECT count(*), coalesce(sum(revision), 0) FROM `+qualify(t, "iam_scopes")).Scan(&l.anchors, &l.revisionSum); err != nil {
+		t.Fatalf("count anchors: %v", err)
+	}
+	return l
 }
 
 // testSchema is the optional schema leg's target, or the zero Schema.

@@ -262,6 +262,21 @@ type ResourceRelationshipFilter struct {
 // DESC — so pages stay stable when several tuples share a created_at (bulk
 // create stamps one timestamp for the whole batch, making the id tiebreak
 // load-bearing).
+//
+// Ambient transactions. When ctx carries the connector's Transact-owned
+// transaction (sdk/foundation/crud.Transactor — the connector stashes the
+// transaction in the context and its own QuerierFrom/TxFromContext retrieve
+// it), EVERY method of the store — reads and writes alike — runs ON that
+// transaction and never opens, commits, or rolls back one of its own; the
+// enclosing Transact decides the outcome from its callback's return value. A
+// host must return a write error from that callback (SetRelationTargets'
+// conflict included) to roll the whole workflow back; returning nil requests
+// commit of everything before it. Outside an ambient transaction behavior is
+// unchanged. A SetRelationTargets that must serialize concurrent callers does
+// so with a lock scoped to the ambient transaction, so the serialization lasts
+// until the host's commit. The contract names the connector's ambient
+// transaction, not a dialect: a store over any connector honors it the same
+// way, and the storetest RunTransactional family is its executable form.
 type Storer interface {
 	// -------------------------------------------------------------------
 	// Permission checks

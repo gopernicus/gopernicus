@@ -75,7 +75,14 @@ capped AS (
 	SELECT atype, aid, arelation FROM states LIMIT ?
 )`
 
-// relationshipStore fills relationship.Storer over iam_relationships.
+// relationshipStore fills relationship.Storer over iam_relationships. Every
+// statement runs on s.db.QuerierFrom(ctx): the connector's ambient
+// Transact-owned transaction when the context carries one, the pooled
+// connection otherwise (the port's ambient-transaction contract — reads
+// included, so a host that reads, decides, and writes inside ONE transaction
+// sees its own uncommitted state). The only place the store begins a
+// transaction of its own is the standalone SetRelationTargets path, and only
+// when no ambient one exists.
 type relationshipStore struct {
 	db *tursodb.DB
 }
@@ -138,7 +145,7 @@ SELECT EXISTS(
 	JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 	WHERE r.resource_type = ? AND r.resource_id = ? AND r.relation = ?
 )`
-		return existsQuery(ctx, s.db, query, subjectType, subjectID, resourceType, resourceID, relation)
+		return existsQuery(ctx, s.db.QuerierFrom(ctx), query, subjectType, subjectID, resourceType, resourceID, relation)
 	}
 
 	query := boundedReachableCTE + `
@@ -151,7 +158,7 @@ SELECT
 		WHERE r.resource_type = ? AND r.resource_id = ? AND r.relation = ?
 	)`
 	var stateCount, matched int
-	if err := s.db.QueryRow(ctx, query,
+	if err := s.db.QuerierFrom(ctx).QueryRow(ctx, query,
 		subjectType, subjectID, maxExpansionStates, maxExpansionStates+1,
 		resourceType, resourceID, relation,
 	).Scan(&stateCount, &matched); err != nil {
@@ -174,12 +181,13 @@ type rowQuerier interface {
 // empty subject_relation reads back as "" (a concrete subject); a non-empty one
 // as the exact userset relation.
 func (s *relationshipStore) GetRelationTargets(ctx context.Context, resourceType, resourceID, relation string) ([]relationship.RelationTarget, error) {
-	return relationTargets(ctx, s.db, resourceType, resourceID, relation)
+	return relationTargets(ctx, s.db.QuerierFrom(ctx), resourceType, resourceID, relation)
 }
 
 // relationTargets is the one relation-targets read: the read-side
-// GetRelationTargets runs it on the pool, the DecisionView's RelationTargets on
-// the mutation transaction. Same statement, same row order, same mapping.
+// GetRelationTargets runs it on the ambient querier (pool or host transaction),
+// the DecisionView's RelationTargets on the mutation transaction. Same
+// statement, same row order, same mapping.
 func relationTargets(ctx context.Context, q rowQuerier, resourceType, resourceID, relation string) ([]relationship.RelationTarget, error) {
 	const stmt = `SELECT subject_type, subject_id, subject_relation FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ?`
 	rows, err := q.Query(ctx, stmt, resourceType, resourceID, relation)
@@ -212,7 +220,7 @@ func relationTargets(ctx context.Context, q rowQuerier, resourceType, resourceID
 // platform-admin data-tuple check and last-owner counting.
 func (s *relationshipStore) CheckRelationExists(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) (bool, error) {
 	const q = `SELECT EXISTS(SELECT 1 FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ? AND subject_type = ? AND subject_id = ? AND subject_relation = '')`
-	return existsQuery(ctx, s.db, q, resourceType, resourceID, relation, subjectType, subjectID)
+	return existsQuery(ctx, s.db.QuerierFrom(ctx), q, resourceType, resourceID, relation, subjectType, subjectID)
 }
 
 // CheckBatchDirect returns resourceID -> allowed for one relation across the
@@ -241,7 +249,7 @@ FROM iam_relationships r
 JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 WHERE r.resource_type = ? AND r.relation = ? AND r.resource_id IN ` + inClause(len(resourceIDs))
 
-		matched, err := queryStrings(ctx, s.db, query, args...)
+		matched, err := queryStrings(ctx, s.db.QuerierFrom(ctx), query, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -267,7 +275,7 @@ matches AS (
 )
 SELECT cnt.n, m.rid FROM cnt LEFT JOIN matches m ON 1=1`
 
-	rows, err := s.db.Query(ctx, query, args...)
+	rows, err := s.db.QuerierFrom(ctx).Query(ctx, query, args...)
 	if err != nil {
 		return nil, tursodb.MapError(err)
 	}
@@ -307,7 +315,7 @@ SELECT cnt.n, m.rid FROM cnt LEFT JOIN matches m ON 1=1`
 // MIXED batch is a loud store error (the engine mints all-or-none). There is no
 // RETURNING — the port is error-only.
 func (s *relationshipStore) CreateRelationships(ctx context.Context, in []relationship.CreateRelationship) error {
-	return createRelationships(ctx, s.db, in)
+	return createRelationships(ctx, s.db.QuerierFrom(ctx), in)
 }
 
 func createRelationships(ctx context.Context, db tursodb.Querier, in []relationship.CreateRelationship) error {
@@ -357,11 +365,24 @@ func createRelationships(ctx context.Context, db tursodb.Querier, in []relations
 	return nil
 }
 
-// SetRelationTargets reconciles one resource+relation inside Turso's
-// BEGIN IMMEDIATE transaction. Competing writers serialize before reading, so
-// concurrent desired-state moves cannot commit an accidental union. Retrying a
-// residual busy error is naturally safe because the operation describes state,
-// not a one-time occurrence.
+// SetRelationTargets reconciles one resource+relation (conflict probe,
+// delete-surplus, insert-missing) inside a BEGIN IMMEDIATE transaction.
+// Competing writers serialize at the write intent before reading, so concurrent
+// desired-state moves cannot commit an accidental union.
+//
+// Which transaction is the port's ambient contract: when ctx carries the
+// connector's Transact-owned transaction the reconciliation runs ON it — no
+// begin, no commit, no rollback here; the host's callback return decides, and
+// the host must return this method's error (sdk.ErrConflict included) to roll
+// its own preceding work back. The write lock the host's BEGIN IMMEDIATE holds
+// is released at the HOST's commit, so a competing caller waits for the whole
+// host workflow. There is NO busy retry on the ambient path: retryBusy re-runs
+// the whole transaction, which is only sound when the store owns it; inside a
+// BEGIN IMMEDIATE transaction the write lock is already held so SQLITE_BUSY is
+// not expected, and if one surfaces it is returned as-is for the host to
+// propagate. Without an ambient transaction the store opens and owns one under
+// the bounded busy retry exactly as before — retrying is naturally safe because
+// the operation describes state, not a one-time occurrence.
 func (s *relationshipStore) SetRelationTargets(ctx context.Context, resourceType, resourceID, relationName string, in []relationship.CreateRelationship) error {
 	desired := make(map[relationship.SubjectRef]relationship.CreateRelationship, len(in))
 	for _, c := range in {
@@ -375,64 +396,76 @@ func (s *relationshipStore) SetRelationTargets(ctx context.Context, resourceType
 		rows = append(rows, c)
 	}
 
+	if tx, ok := tursodb.TxFromContext(ctx); ok {
+		return s.setRelationTargetsTx(ctx, tx, resourceType, resourceID, relationName, rows)
+	}
 	return retryBusy(ctx, func() error {
 		return s.db.InTx(ctx, func(tx *tursodb.Tx) error {
-			if len(rows) == 0 {
-				_, err := tx.Exec(ctx, `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ?`, resourceType, resourceID, relationName)
-				return tursodb.MapError(err)
-			}
-
-			var predicate strings.Builder
-			args := make([]any, 0, len(rows)*3)
-			for i, c := range rows {
-				if i > 0 {
-					predicate.WriteString(" OR ")
-				}
-				predicate.WriteString("(subject_type = ? AND subject_id = ? AND subject_relation = ?)")
-				args = append(args, c.SubjectType, c.SubjectID, c.SubjectRelation)
-			}
-			pred := predicate.String()
-
-			conflictArgs := []any{resourceType, resourceID, relationName}
-			conflictArgs = append(conflictArgs, args...)
-			var conflict bool
-			conflictQ := `SELECT EXISTS (SELECT 1 FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation <> ? AND (` + pred + `))`
-			if err := tx.QueryRow(ctx, conflictQ, conflictArgs...).Scan(&conflict); err != nil {
-				return tursodb.MapError(err)
-			}
-			if conflict {
-				return fmt.Errorf("authorization turso store: a desired target already holds a different relation on %s:%s: %w", resourceType, resourceID, sdk.ErrConflict)
-			}
-
-			deleteArgs := []any{resourceType, resourceID, relationName}
-			deleteArgs = append(deleteArgs, args...)
-			deleteQ := `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ? AND NOT (` + pred + `)`
-			if _, err := tx.Exec(ctx, deleteQ, deleteArgs...); err != nil {
-				return tursodb.MapError(err)
-			}
-			return createRelationships(ctx, tx, rows)
+			return s.setRelationTargetsTx(ctx, tx, resourceType, resourceID, relationName, rows)
 		})
 	})
+}
+
+// setRelationTargetsTx is the reconciliation body over an OPEN transaction —
+// the store's own (standalone) or the host's (ambient). It probes for a desired
+// target already holding a different relation (sdk.ErrConflict), deletes the
+// surplus rows, and inserts the missing ones. It never commits or rolls back:
+// the caller that owns tx does.
+func (s *relationshipStore) setRelationTargetsTx(ctx context.Context, tx *tursodb.Tx, resourceType, resourceID, relationName string, rows []relationship.CreateRelationship) error {
+	if len(rows) == 0 {
+		_, err := tx.Exec(ctx, `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ?`, resourceType, resourceID, relationName)
+		return tursodb.MapError(err)
+	}
+
+	var predicate strings.Builder
+	args := make([]any, 0, len(rows)*3)
+	for i, c := range rows {
+		if i > 0 {
+			predicate.WriteString(" OR ")
+		}
+		predicate.WriteString("(subject_type = ? AND subject_id = ? AND subject_relation = ?)")
+		args = append(args, c.SubjectType, c.SubjectID, c.SubjectRelation)
+	}
+	pred := predicate.String()
+
+	conflictArgs := []any{resourceType, resourceID, relationName}
+	conflictArgs = append(conflictArgs, args...)
+	var conflict bool
+	conflictQ := `SELECT EXISTS (SELECT 1 FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation <> ? AND (` + pred + `))`
+	if err := tx.QueryRow(ctx, conflictQ, conflictArgs...).Scan(&conflict); err != nil {
+		return tursodb.MapError(err)
+	}
+	if conflict {
+		return fmt.Errorf("authorization turso store: a desired target already holds a different relation on %s:%s: %w", resourceType, resourceID, sdk.ErrConflict)
+	}
+
+	deleteArgs := []any{resourceType, resourceID, relationName}
+	deleteArgs = append(deleteArgs, args...)
+	deleteQ := `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ? AND NOT (` + pred + `)`
+	if _, err := tx.Exec(ctx, deleteQ, deleteArgs...); err != nil {
+		return tursodb.MapError(err)
+	}
+	return createRelationships(ctx, tx, rows)
 }
 
 // DeleteResourceRelationships removes every tuple for a resource (idempotent).
 func (s *relationshipStore) DeleteResourceRelationships(ctx context.Context, resourceType, resourceID string) error {
 	const q = `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ?`
-	_, err := s.db.Exec(ctx, q, resourceType, resourceID)
+	_, err := s.db.QuerierFrom(ctx).Exec(ctx, q, resourceType, resourceID)
 	return err
 }
 
 // DeleteRelationshipTarget removes one exact tuple, including subject_relation.
 func (s *relationshipStore) DeleteRelationshipTarget(ctx context.Context, resourceType, resourceID, relationName string, target relationship.SubjectRef) error {
 	const q = `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ? AND subject_type = ? AND subject_id = ? AND subject_relation = ?`
-	_, err := s.db.Exec(ctx, q, resourceType, resourceID, relationName, target.Type, target.ID, target.Relation)
+	_, err := s.db.QuerierFrom(ctx).Exec(ctx, q, resourceType, resourceID, relationName, target.Type, target.ID, target.Relation)
 	return err
 }
 
 // DeleteRelationship removes one exact tuple (idempotent — absent is nil).
 func (s *relationshipStore) DeleteRelationship(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) error {
 	const q = `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ? AND subject_type = ? AND subject_id = ?`
-	_, err := s.db.Exec(ctx, q, resourceType, resourceID, relation, subjectType, subjectID)
+	_, err := s.db.QuerierFrom(ctx).Exec(ctx, q, resourceType, resourceID, relation, subjectType, subjectID)
 	return err
 }
 
@@ -440,7 +473,7 @@ func (s *relationshipStore) DeleteRelationship(ctx context.Context, resourceType
 // (idempotent).
 func (s *relationshipStore) DeleteByResourceAndSubject(ctx context.Context, resourceType, resourceID, subjectType, subjectID string) error {
 	const q = `DELETE FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND subject_type = ? AND subject_id = ?`
-	_, err := s.db.Exec(ctx, q, resourceType, resourceID, subjectType, subjectID)
+	_, err := s.db.QuerierFrom(ctx).Exec(ctx, q, resourceType, resourceID, subjectType, subjectID)
 	return err
 }
 
@@ -449,7 +482,7 @@ func (s *relationshipStore) DeleteByResourceAndSubject(ctx context.Context, reso
 func (s *relationshipStore) CountByResourceAndRelation(ctx context.Context, resourceType, resourceID, relation string) (int, error) {
 	const q = `SELECT COUNT(*) FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ?`
 	var n int
-	if err := s.db.QueryRow(ctx, q, resourceType, resourceID, relation).Scan(&n); err != nil {
+	if err := s.db.QuerierFrom(ctx).QueryRow(ctx, q, resourceType, resourceID, relation).Scan(&n); err != nil {
 		return 0, tursodb.MapError(err)
 	}
 	return n, nil
@@ -477,7 +510,7 @@ func (s *relationshipStore) ListRelationshipsBySubject(ctx context.Context, subj
 		OrderValueOf: func(r subjectRelationshipRow, _ string) any { return r.CreatedAt.Time },
 		PKOf:         func(r subjectRelationshipRow) string { return r.ID },
 	}
-	page, err := tursodb.List(ctx, s.db, q, req)
+	page, err := tursodb.List(ctx, s.db.QuerierFrom(ctx), q, req)
 	if err != nil {
 		return crud.Page[relationship.SubjectRelationship]{}, err
 	}
@@ -506,7 +539,7 @@ func (s *relationshipStore) ListRelationshipsByResource(ctx context.Context, res
 		OrderValueOf: func(r resourceRelationshipRow, _ string) any { return r.CreatedAt.Time },
 		PKOf:         func(r resourceRelationshipRow) string { return r.ID },
 	}
-	page, err := tursodb.List(ctx, s.db, q, req)
+	page, err := tursodb.List(ctx, s.db.QuerierFrom(ctx), q, req)
 	if err != nil {
 		return crud.Page[relationship.ResourceRelationship]{}, err
 	}
@@ -532,7 +565,7 @@ JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.
 WHERE r.resource_type = ? AND r.relation IN ` + inClause(len(relations)) + `
 ORDER BY r.resource_id`
 	query, args = withLimit(query, args, limit)
-	return queryStrings(ctx, s.db, query, args...)
+	return queryStrings(ctx, s.db.QuerierFrom(ctx), query, args...)
 }
 
 // LookupResourceIDsByRelationTarget returns the distinct resource IDs (sorted)
@@ -549,7 +582,7 @@ func (s *relationshipStore) LookupResourceIDsByRelationTarget(ctx context.Contex
 WHERE resource_type = ? AND relation = ? AND subject_type = ? AND subject_id IN ` + inClause(len(targetIDs)) + ` AND subject_relation = ''
 ORDER BY resource_id`
 	query, args = withLimit(query, args, limit)
-	return queryStrings(ctx, s.db, query, args...)
+	return queryStrings(ctx, s.db.QuerierFrom(ctx), query, args...)
 }
 
 // LookupDescendantResourceIDs walks a self-referential relation transitively from
@@ -578,7 +611,7 @@ func (s *relationshipStore) LookupDescendantResourceIDs(ctx context.Context, res
 )
 SELECT DISTINCT rid FROM descendants ORDER BY rid`
 	query, args = withLimit(query, args, limit)
-	return queryStrings(ctx, s.db, query, args...)
+	return queryStrings(ctx, s.db.QuerierFrom(ctx), query, args...)
 }
 
 // withLimit appends a bounded ` LIMIT ?` and its argument when limit is positive

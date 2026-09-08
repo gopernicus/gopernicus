@@ -103,7 +103,10 @@ func rolesBaseSQL(schema pgxdb.Schema, innerWhere string) string {
 ) AS r WHERE 1 = 1`
 }
 
-// roleStore fills role.Storer over iam_roles.
+// roleStore fills role.Storer over iam_roles. Every statement runs on
+// s.db.QuerierFrom(ctx) — the connector's ambient Transact-owned transaction
+// when the context carries one, the pool otherwise — so a role assignment joins
+// the same host transaction the relationship tuples beside it do.
 type roleStore struct {
 	db     *pgxdb.DB
 	schema pgxdb.Schema
@@ -127,7 +130,7 @@ func (s *roleStore) Assign(ctx context.Context, a role.Assignment) error {
 	q := `INSERT INTO ` + s.table("iam_roles") + ` (subject_type, subject_id, role, resource_type, resource_id, created_at)
 VALUES (@subject_type, @subject_id, @role, @resource_type, @resource_id, @created_at)
 ON CONFLICT (subject_type, subject_id, role, resource_type, resource_id) DO NOTHING`
-	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
+	_, err := s.db.QuerierFrom(ctx).Exec(ctx, q, pgx.NamedArgs{
 		"subject_type":  a.SubjectType,
 		"subject_id":    a.SubjectID,
 		"role":          a.Role,
@@ -141,7 +144,7 @@ ON CONFLICT (subject_type, subject_id, role, resource_type, resource_id) DO NOTH
 // Unassign removes an exact assignment (idempotent — zero rows deleted is nil).
 func (s *roleStore) Unassign(ctx context.Context, subjectType, subjectID, roleName, resourceType, resourceID string) error {
 	q := `DELETE FROM ` + s.table("iam_roles") + ` WHERE subject_type = @subject_type AND subject_id = @subject_id AND role = @role AND resource_type = @resource_type AND resource_id = @resource_id`
-	if _, err := pgxdb.ExecAffecting(ctx, s.db, q, pgx.NamedArgs{
+	if _, err := pgxdb.ExecAffecting(ctx, s.db.QuerierFrom(ctx), q, pgx.NamedArgs{
 		"subject_type":  subjectType,
 		"subject_id":    subjectID,
 		"role":          roleName,
@@ -159,7 +162,7 @@ func (s *roleStore) Unassign(ctx context.Context, subjectType, subjectID, roleNa
 func (s *roleStore) HasExactRole(ctx context.Context, subjectType, subjectID, roleName, resourceType, resourceID string) (bool, error) {
 	q := `SELECT EXISTS (SELECT 1 FROM ` + s.table("iam_roles") + ` WHERE subject_type = @subject_type AND subject_id = @subject_id AND role = @role AND resource_type = @resource_type AND resource_id = @resource_id)`
 	var ok bool
-	if err := s.db.QueryRow(ctx, q, pgx.NamedArgs{
+	if err := s.db.QuerierFrom(ctx).QueryRow(ctx, q, pgx.NamedArgs{
 		"subject_type":  subjectType,
 		"subject_id":    subjectID,
 		"role":          roleName,
@@ -182,7 +185,7 @@ func (s *roleStore) ListBySubject(ctx context.Context, subjectType, subjectID st
 		OrderValueOf: func(r roleRow, _ string) any { return r.CreatedAt },
 		PKOf:         func(r roleRow) string { return r.RoleKey },
 	}
-	page, err := pgxdb.List(ctx, s.db, q, req)
+	page, err := pgxdb.List(ctx, s.db.QuerierFrom(ctx), q, req)
 	if err != nil {
 		return crud.Page[role.Assignment]{}, err
 	}
@@ -203,7 +206,7 @@ func (s *roleStore) ListByResource(ctx context.Context, resourceType, resourceID
 		OrderValueOf: func(r roleRow, _ string) any { return r.CreatedAt },
 		PKOf:         func(r roleRow) string { return r.RoleKey },
 	}
-	page, err := pgxdb.List(ctx, s.db, q, req)
+	page, err := pgxdb.List(ctx, s.db.QuerierFrom(ctx), q, req)
 	if err != nil {
 		return crud.Page[role.Assignment]{}, err
 	}
@@ -228,7 +231,7 @@ func (s *roleStore) ListEffectiveByResource(ctx context.Context, resourceType, r
 		OrderValueOf: func(r effectiveRoleRow, _ string) any { return r.GrantKey },
 		PKOf:         func(r effectiveRoleRow) string { return r.GrantKey },
 	}
-	page, err := pgxdb.List(ctx, s.db, q, req)
+	page, err := pgxdb.List(ctx, s.db.QuerierFrom(ctx), q, req)
 	if err != nil {
 		return crud.Page[role.EffectiveGrant]{}, err
 	}

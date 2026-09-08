@@ -88,6 +88,22 @@ var ErrPayloadMismatch = fmt.Errorf("authorization mutation: mutation id payload
 // [Outcome] (default #8).
 var ErrStaleRevision = fmt.Errorf("authorization mutation: stale revision: %w", sdk.ErrConflict)
 
+// ErrGuardedInsideTransaction is the stable PRECONDITION refusal
+// [MutationRepository.Apply] and [MutationRepository.ApplyGuarded] return when
+// the context carries the connector's Transact-owned ambient transaction
+// (sdk/foundation/crud.Transactor). The guarded path owns its transaction —
+// anchor locks, receipt, replay ledger — and joining a host transaction would
+// change receipt durability and the guardian's view of scope revisions; running
+// on a second connection instead would silently split the atomicity the host
+// believes it has (the receipt and tuples commit even when the host rolls back).
+// So the store refuses BEFORE any guard, validator, lock, or row is touched:
+// nothing changes, no receipt is minted, and the returned receipt is nil. The
+// baseline relationship and role stores DO join the ambient transaction; move
+// the guarded call outside Transact. It wraps [sdk.ErrInvalidInput] (a
+// precondition the caller can fix, never transient); the root package
+// re-exports it as ErrGuardedInsideTransaction.
+var ErrGuardedInsideTransaction = fmt.Errorf("authorization mutation: guarded mutation inside an ambient transaction (move the call outside Transact): %w", sdk.ErrInvalidInput)
+
 // MutationID is the required, cryptographically strong, globally unguessable
 // idempotency key for one write. Possession or guessing of a MutationID is NOT
 // mutation authority (an actor-facing replay still runs its guard). It is

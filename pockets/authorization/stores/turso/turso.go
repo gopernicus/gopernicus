@@ -151,8 +151,9 @@ func inClause(n int) string {
 	return "(" + strings.Repeat("?, ", n-1) + "?)"
 }
 
-// queryStrings runs a single-column string SELECT and collects the rows.
-func queryStrings(ctx context.Context, db *tursodb.DB, query string, args ...any) ([]string, error) {
+// queryStrings runs a single-column string SELECT on db (the pool or the
+// ambient transaction — callers pass s.db.QuerierFrom(ctx)) and collects the rows.
+func queryStrings(ctx context.Context, db tursodb.Querier, query string, args ...any) ([]string, error) {
 	rows, err := db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -173,8 +174,10 @@ func queryStrings(ctx context.Context, db *tursodb.DB, query string, args ...any
 	return out, nil
 }
 
-// existsQuery scans a `SELECT EXISTS(...)` (always exactly one 0/1 row) to a bool.
-func existsQuery(ctx context.Context, db *tursodb.DB, query string, args ...any) (bool, error) {
+// existsQuery scans a `SELECT EXISTS(...)` (always exactly one 0/1 row) on db
+// (the pool or the ambient transaction — callers pass s.db.QuerierFrom(ctx)) to
+// a bool.
+func existsQuery(ctx context.Context, db tursodb.Querier, query string, args ...any) (bool, error) {
 	var n int
 	if err := db.QueryRow(ctx, query, args...).Scan(&n); err != nil {
 		return false, tursodb.MapError(err)

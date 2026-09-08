@@ -21,6 +21,17 @@ import (
 // authorization checks and ordinary state-write races. Use Service's guarded
 // mutation methods for operations that need atomic authorization, dependency
 // revision checks, guardian invariants, receipts, durable idempotency, or audit.
+//
+// Every method passes ctx through to the relationship store unchanged. When ctx
+// carries the host connector's Transact-owned transaction (crud.Transactor), the
+// bundled SQL stores run the write ON that transaction — no second connection,
+// no nested begin — so the host's own application row and the tuple that
+// projects it commit or roll back together. The host must return the writer's
+// error (a SetRelationTargets conflict included) from its Transact callback to
+// roll the workflow back; returning nil commits everything before it. The
+// guarded path (Service mutations, SystemMutator) does NOT join an ambient
+// transaction: it refuses with ErrGuardedInsideTransaction, so keep guarded
+// calls outside Transact.
 type RelationshipWriter struct {
 	relationships *authorizersvc.Service
 }

@@ -274,43 +274,11 @@ func runRelationshipContracts(t *testing.T, newRepos func(t *testing.T) authoriz
 	})
 
 	t.Run("SetRelationTargetsConcurrentCallsDoNotUnion", func(t *testing.T) {
-		s := newRepos(t).Relationships
-		var wg sync.WaitGroup
-		for _, id := range []string{"a", "b"} {
-			id := id
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				if err := s.SetRelationTargets(ctx, "space", "child", "parent", []relationship.CreateRelationship{
-					ct("space", "child", "parent", "space", id),
-				}); err != nil {
-					t.Errorf("set %s: %v", id, err)
-				}
-			}()
-		}
-		wg.Wait()
-		targets, err := s.GetRelationTargets(ctx, "space", "child", "parent")
-		if err != nil || len(targets) != 1 {
-			t.Fatalf("concurrent desired states must serialize to one winner: %+v err=%v", targets, err)
-		}
+		specSetRelationTargetsConcurrentCallsDoNotUnion(t, newRepos(t).Relationships)
 	})
 
 	t.Run("SetRelationTargetsConflictRollsBack", func(t *testing.T) {
-		s := newRepos(t).Relationships
-		mustCreate(t, s,
-			ct("space", "child", "parent", "space", "keep"),
-			ct("space", "child", "owner", "space", "occupied"),
-		)
-		err := s.SetRelationTargets(ctx, "space", "child", "parent", []relationship.CreateRelationship{
-			ct("space", "child", "parent", "space", "occupied"),
-		})
-		if !errors.Is(err, sdk.ErrConflict) {
-			t.Fatalf("desired target holding another relation: want conflict, got %v", err)
-		}
-		targets, err := s.GetRelationTargets(ctx, "space", "child", "parent")
-		if err != nil || len(targets) != 1 || targets[0].ID != "keep" {
-			t.Fatalf("conflicting reconciliation changed prior state: %+v err=%v", targets, err)
-		}
+		specSetRelationTargetsConflictRollsBack(t, newRepos(t).Relationships)
 	})
 
 	t.Run("CheckBatchDirect", func(t *testing.T) {
@@ -432,6 +400,55 @@ func runRelationshipContracts(t *testing.T, newRepos func(t *testing.T) authoriz
 		}
 		assertFullCoverage(t, s, "user", "u1", 4) // d1..d4, each exactly once
 	})
+}
+
+// specSetRelationTargetsConcurrentCallsDoNotUnion is the standalone
+// serialization body: two concurrent desired states for one key resolve to ONE
+// winner, never a union. Shared by Run and by RunTransactional's
+// StandaloneUnchanged, which re-proves it through the ambient-aware dispatch
+// with no transaction in the context.
+func specSetRelationTargetsConcurrentCallsDoNotUnion(t *testing.T, s relationship.Storer) {
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	for _, id := range []string{"a", "b"} {
+		id := id
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := s.SetRelationTargets(ctx, "space", "child", "parent", []relationship.CreateRelationship{
+				ct("space", "child", "parent", "space", id),
+			}); err != nil {
+				t.Errorf("set %s: %v", id, err)
+			}
+		}()
+	}
+	wg.Wait()
+	targets, err := s.GetRelationTargets(ctx, "space", "child", "parent")
+	if err != nil || len(targets) != 1 {
+		t.Fatalf("concurrent desired states must serialize to one winner: %+v err=%v", targets, err)
+	}
+}
+
+// specSetRelationTargetsConflictRollsBack is the standalone conflict body: a
+// desired target already holding a different relation is sdk.ErrConflict and the
+// store's OWN transaction rolls back unchanged. Shared by Run and by
+// RunTransactional's StandaloneUnchanged (see above).
+func specSetRelationTargetsConflictRollsBack(t *testing.T, s relationship.Storer) {
+	ctx := context.Background()
+	mustCreate(t, s,
+		ct("space", "child", "parent", "space", "keep"),
+		ct("space", "child", "owner", "space", "occupied"),
+	)
+	err := s.SetRelationTargets(ctx, "space", "child", "parent", []relationship.CreateRelationship{
+		ct("space", "child", "parent", "space", "occupied"),
+	})
+	if !errors.Is(err, sdk.ErrConflict) {
+		t.Fatalf("desired target holding another relation: want conflict, got %v", err)
+	}
+	targets, err := s.GetRelationTargets(ctx, "space", "child", "parent")
+	if err != nil || len(targets) != 1 || targets[0].ID != "keep" {
+		t.Fatalf("conflicting reconciliation changed prior state: %+v err=%v", targets, err)
+	}
 }
 
 // assertFullCoverage pages through a subject's relationships two at a time and

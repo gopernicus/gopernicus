@@ -3,7 +3,7 @@ module github.com/gopernicus/gopernicus/pockets/authorization/stores/turso
 go 1.26.1
 
 require (
-	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.1.0
+	github.com/gopernicus/gopernicus/integrations/datastores/turso v0.3.0
 	github.com/gopernicus/gopernicus/pockets/authorization v0.8.0
 	github.com/gopernicus/gopernicus/sdk v0.7.0
 )
