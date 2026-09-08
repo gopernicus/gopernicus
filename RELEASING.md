@@ -536,6 +536,99 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
+### pockets/authorization — v0.11.0 (next tag) (+ stores/pgx v0.6.0, stores/turso v0.5.0): `LookupResourcesIn` pages — keyset `After`/`NextCursor` over both kinds (minor; BREAKING store ports; host migration `0005`)
+
+Plan of record `.claude/plans/authorization-lookup-paging.md` (#29, the
+deferred half of #22; originating host segovia v2, `v2-tenancy.md` O6/D10),
+tasks 1–4 — the SECOND train under ruling R4, on top of v0.10.0. A **minor**
+by the repo's pre-1.0 convention that **breaks both store ports** and ships a
+**required host migration**. Owner rulings 2026-09-08: R1 `MaxLookupResults`
+stays 1000 (hosts with large open tenants raise it themselves); R2 cursors are
+bound to the owning model digest on BOTH kinds; R5 `Truncated` stays one
+release as a deprecated alias.
+
+**What changed — decision surface.**
+
+- `LookupRequest.After` + `LookupResult{HasMore, NextCursor}`. `Limit` is now
+  a PAGE SIZE: 0 = `MaxLookupResults`, above it → `sdk.ErrInvalidInput`; it is
+  never a total-results cap. Order is resource id ascending, BYTE order — opaque
+  and stable, meaningless to a human; never sort a paged prefilter client-side
+  and expect cross-page consistency. No snapshot across pages (standard keyset:
+  a grant that lands ahead of the cursor is seen, one that lands behind it is
+  missed; refetch from page one for a consistent view).
+- `NextCursor` is base64url JSON `{v, id, fp}`; the fingerprint binds the
+  owning kind, that kind's model digest, the principal, the permission, and the
+  resource type. A cursor presented against any other query, the other kind,
+  or a model that changed since (a deploy that edits the Schema or the
+  RoleModel) is `ErrInvalidCursor` (wraps `sdk.ErrInvalidInput`, 400) — the
+  client restarts from page one. `CompiledRoleModel.Digest()` is new and
+  order-independent.
+- **What the budget bounds now.** Top-level leaf reads are bounded by the page
+  (every stream reads `after` + `limit+1`). A non-self `Through` hop's TARGET
+  set and a self-hierarchy's ROOT set are still complete and bounded by
+  `MaxLookupResults` — a principal who can view more containers than the budget
+  gets `ErrEvaluationLimit` on EVERY page (the documented A3 cliff; the
+  access-index follow-up is the structural fix). The roles kind pages straight
+  off an indexed store lookup: no assignment scan, no `MaxGraphStates` charge.
+- `LookupResult.Truncated` is **deprecated**: it carries `HasMore`'s value and
+  is removed next minor. Plain `LookupResources` is unchanged in output, order,
+  and budget.
+
+**What changed — ports (BREAKING for third-party stores).**
+
+- `relationship.Storer`: `LookupResourceIDs(…, subjectID, after string, limit
+  int)` and `LookupResourceIDsByRelationTarget(…, targetIDs, after string, limit
+  int)` return distinct ids sorted in BYTE order, strictly greater than `after`,
+  at most `limit`; `LookupDescendantResourceIDs(ctx, resourceType, relations
+  []string, subjectType, rootIDs, after, limit)` closes over the UNION of the
+  self relations in one call. Byte order is contractual: the engine merges
+  streams with Go string comparison, so a locale-collated order skips or
+  repeats ids across pages.
+- `role.Storer.LookupResourceIDsBySubjectAndRoles(ctx, subjectType,
+  subjectID, resourceType, roles, after, limit) (ids, unrestricted, err)`.
+- `storetest` proves both: `Relationship/LookupKeyset/*`,
+  `Roles/RolesLookupKeyset/*`, `Parity/LookupPagedParity/*`,
+  `Parity/RolesPagedParity/*`, `Composed/PagedPairOwnershipDispatch`.
+
+**What changed — stores (host migration).**
+
+- `migrations/0005_iam_lookup_keyset.sql` in BOTH ledgers:
+  `idx_iam_relationships_type_relation_resource` on `(resource_type, relation,
+  resource_id COLLATE "C")` (pgx; no COLLATE on turso — BINARY is byte order)
+  and `idx_iam_roles_subject_resource_lookup` on `(subject_type, subject_id,
+  resource_type, resource_id, role)`. **Hosts pin the ledger verbatim, so this
+  file is a REQUIRED re-export** (segovia v2's `ledger_test` fails until it is
+  copied). It is an ORDINARY transactional `CREATE INDEX IF NOT EXISTS` —
+  `pgxdb.RunMigrations` applies the stream in one transaction, where
+  `CONCURRENTLY` is impossible — so the build holds a SHARE lock (writes block,
+  reads proceed) for its duration; schedule it, or create the two indexes
+  `CONCURRENTLY` by hand first and let `IF NOT EXISTS` make the file a no-op.
+- pgx pins `COLLATE "C"` per lookup query (`resource_id` is deliberately
+  uncollated in 0001 because it is a recursion column of the expansion CTE) and
+  projects the collated expression (PostgreSQL requires a `SELECT DISTINCT`
+  ORDER BY expression in the select list). Measured at 1e6 rows on an
+  `en_US.utf8` cluster (`TestLookupPlansAtScale`, env-gated): the role lookup
+  is an Index Only Scan on the new index; `ByRelationTarget` over 200 broad
+  containers is a BitmapAnd of the subject index and the new index; the
+  descendant closure's cost is the closure, not the page.
+- Full details, including the third-party-store obligations:
+  `pockets/authorization/stores/UPGRADE.md`, "Store-port note (next tag — core
+  v0.11.0 …)".
+
+**Pin moves.** Both store modules: `pockets/authorization v0.9.0 → v0.11.0`
+(through v0.10.0). `sdk v0.7.0` unchanged.
+
+**Adoption.**
+
+- segovia v2 leg 6 (home, D10a): `LookupResourcesIn` per item type with
+  `Limit: 50`, cursor per section; set `Limits.MaxLookupResults: 5000` (R1);
+  re-export `0005` into the ledger; add the overflow case to the verify list.
+- gps-360-go `/client-hubs` (the #22 origin): `After` replaces the host-side
+  cap of 50; re-export `0005`.
+- Coordination Hub `myCampaigns`: `After` once it moves onto v0.11+.
+- Any host implementing `relationship.Storer` / `role.Storer` itself: add the
+  parameters and the role lookup, honor byte order, run `storetest.Run`.
+
 ### pockets/authorization — v0.10.0 (next tag): `FilterPage`, the postfilter page-filler, and the memoized batch reader (minor; core-only)
 
 Plan of record `.claude/plans/authorization-lookup-paging.md` (#29, the
