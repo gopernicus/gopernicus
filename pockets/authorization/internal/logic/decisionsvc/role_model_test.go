@@ -341,3 +341,95 @@ func TestCompiledRoleModelDeclaresRole(t *testing.T) {
 		t.Fatal("a nil compiled model must declare no role")
 	}
 }
+
+// =============================================================================
+// Digest
+// =============================================================================
+
+// TestCompiledRoleModelDigestIsIndependentOfSourceOrder proves the digest is a
+// property of what the model DECLARES, not of the order a host typed it in: two
+// equivalent models — different map insertion, different role and grantor slice
+// order — digest identically. This is what makes a role-owned lookup cursor
+// survive a redeploy that only re-orders the model.
+func TestCompiledRoleModelDigestIsIndependentOfSourceOrder(t *testing.T) {
+	a := mustCompile(t, RoleModel{ResourceTypes: map[string]RoleTypeDef{
+		"organization": {
+			Roles: []string{"viewer", "contributor", "steward"},
+			Permissions: map[string][]string{
+				"view":       {"steward", "viewer", "contributor"},
+				"contribute": {"contributor", "steward"},
+			},
+		},
+		"platform": {Roles: []string{"operator"}, Permissions: map[string][]string{"operate": {"operator"}}},
+	}}, nil)
+	b := mustCompile(t, RoleModel{ResourceTypes: map[string]RoleTypeDef{
+		"platform": {Roles: []string{"operator"}, Permissions: map[string][]string{"operate": {"operator"}}},
+		"organization": {
+			Roles: []string{"steward", "viewer", "contributor"},
+			Permissions: map[string][]string{
+				"contribute": {"steward", "contributor"},
+				"view":       {"contributor", "viewer", "steward"},
+			},
+		},
+	}}, nil)
+
+	if a.Digest() == "" {
+		t.Fatal("a compiled model must carry a digest")
+	}
+	if a.Digest() != b.Digest() {
+		t.Fatalf("equivalent models produced different digests: %q vs %q", a.Digest(), b.Digest())
+	}
+	if (*CompiledRoleModel)(nil).Digest() != "" {
+		t.Fatal("a nil model has no digest")
+	}
+}
+
+// TestCompiledRoleModelDigestChangesWithEveryDeclaration proves ANY change to
+// what the model declares changes the digest — a new type, a new role, a new
+// permission, or one more granting role — so a cursor minted under the old model
+// is refused after the deploy.
+func TestCompiledRoleModelDigestChangesWithEveryDeclaration(t *testing.T) {
+	base := mustCompile(t, orgModel(), nil)
+
+	variants := map[string]RoleModel{
+		"another type": {ResourceTypes: map[string]RoleTypeDef{
+			"organization": orgModel().ResourceTypes["organization"],
+			"platform":     {Roles: []string{"operator"}, Permissions: map[string][]string{"operate": {"operator"}}},
+		}},
+		"another role and grantor": {ResourceTypes: map[string]RoleTypeDef{
+			"organization": {
+				Roles: []string{"viewer", "contributor", "steward", "auditor"},
+				Permissions: map[string][]string{
+					"view":       {"viewer", "contributor", "steward", "auditor"},
+					"contribute": {"contributor", "steward"},
+				},
+			},
+		}},
+		"one fewer grantor": {ResourceTypes: map[string]RoleTypeDef{
+			"organization": {
+				Roles: []string{"viewer", "contributor", "steward"},
+				Permissions: map[string][]string{
+					"view":       {"viewer", "contributor", "steward"},
+					"contribute": {"steward"},
+					"steward":    {"contributor"},
+				},
+			},
+		}},
+		"another permission name": {ResourceTypes: map[string]RoleTypeDef{
+			"organization": {
+				Roles: []string{"viewer", "contributor", "steward"},
+				Permissions: map[string][]string{
+					"read":       {"viewer", "contributor", "steward"},
+					"contribute": {"contributor", "steward"},
+				},
+			},
+		}},
+	}
+	for name, model := range variants {
+		t.Run(name, func(t *testing.T) {
+			if got := mustCompile(t, model, nil).Digest(); got == base.Digest() {
+				t.Fatalf("a changed model must change the digest, both are %q", got)
+			}
+		})
+	}
+}

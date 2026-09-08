@@ -218,3 +218,62 @@ func (s *roleStore) ListEffectiveByResource(ctx context.Context, resourceType, r
 	}
 	return crud.MapPage(page, effectiveRoleRow.toDomain), nil
 }
+
+// lookupResourceIDsBySubjectAndRolesSQL renders the SCOPED half of the roles
+// keyset lookup and its args (split from the method for diagnostics). The order
+// and the `> after` predicate are SQLite's default BINARY collation — byte order,
+// which is what the contract requires.
+func lookupResourceIDsBySubjectAndRolesSQL(subjectType, subjectID, resourceType string, roles []string, after string, limit int) (string, []any) {
+	args := []any{subjectType, subjectID, resourceType}
+	for _, name := range roles {
+		args = append(args, name)
+	}
+	args = append(args, after, after)
+	query := `SELECT DISTINCT resource_id FROM iam_roles
+WHERE subject_type = ? AND subject_id = ? AND resource_type = ? AND role IN ` + inClause(len(roles)) + `
+  AND (? = '' OR resource_id > ?)
+ORDER BY resource_id`
+	return withLimit(query, args, limit)
+}
+
+// globalRoleGrantSQL renders the GLOBAL probe of the roles keyset lookup: does the
+// subject hold any of the granting roles at the GLOBAL scope (both scope columns
+// empty)? A hit is the unrestricted verdict — the subject reaches every resource
+// of the type, so there is nothing to page.
+func globalRoleGrantSQL(subjectType, subjectID string, roles []string) (string, []any) {
+	args := []any{subjectType, subjectID}
+	for _, name := range roles {
+		args = append(args, name)
+	}
+	query := `SELECT EXISTS(SELECT 1 FROM iam_roles
+WHERE subject_type = ? AND subject_id = ? AND resource_type = '' AND resource_id = '' AND role IN ` + inClause(len(roles)) + `)`
+	return query, args
+}
+
+// LookupResourceIDsBySubjectAndRoles is the roles kind's resource-id lookup: a
+// global grant of any of roles reports unrestricted (nil ids, nothing to page),
+// otherwise the distinct scoped resource IDs of resourceType at which the subject
+// holds any of roles — byte-order sorted, strictly greater than after, at most
+// limit rows. An empty roles is (nil, false, nil): no role grants nothing, and the
+// caller is spared a query. It applies no model knowledge — the engine passes the
+// compiled granting roles.
+func (s *roleStore) LookupResourceIDsBySubjectAndRoles(ctx context.Context, subjectType, subjectID, resourceType string, roles []string, after string, limit int) ([]string, bool, error) {
+	if len(roles) == 0 {
+		return nil, false, nil
+	}
+	probe, probeArgs := globalRoleGrantSQL(subjectType, subjectID, roles)
+	unrestricted, err := existsQuery(ctx, s.db.QuerierFrom(ctx), probe, probeArgs...)
+	if err != nil {
+		return nil, false, err
+	}
+	if unrestricted {
+		return nil, true, nil
+	}
+
+	query, args := lookupResourceIDsBySubjectAndRolesSQL(subjectType, subjectID, resourceType, roles, after, limit)
+	ids, err := queryStrings(ctx, s.db.QuerierFrom(ctx), query, args...)
+	if err != nil {
+		return nil, false, err
+	}
+	return ids, false, nil
+}

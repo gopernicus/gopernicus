@@ -192,9 +192,38 @@ func (f *fakeStore) LookupResourceIDsByRelationTarget(ctx context.Context, resou
 	return keysetIDs(out, after, limit), nil
 }
 
+// LookupDescendantResourceIDs walks the UNION of relations transitively from
+// rootIDs (breadth-first, cycle-safe: a root reappears only when a cycle makes it
+// a genuine descendant), then applies the port's keyset contract to the closure.
 func (f *fakeStore) LookupDescendantResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType string, rootIDs []string, after string, limit int) ([]string, error) {
 	f.countLookup()
-	return nil, nil
+	wanted := make(map[string]bool, len(relations))
+	for _, r := range relations {
+		wanted[r] = true
+	}
+	visited := make(map[string]bool, len(rootIDs))
+	frontier := append([]string(nil), rootIDs...)
+	var closure []string
+	for len(frontier) > 0 {
+		parents := make(map[string]bool, len(frontier))
+		for _, id := range frontier {
+			parents[id] = true
+		}
+		var next []string
+		for _, t := range f.tuples {
+			if t.ResourceType != resourceType || t.SubjectType != subjectType || !wanted[t.Relation] || !parents[t.SubjectID] {
+				continue
+			}
+			if visited[t.ResourceID] {
+				continue
+			}
+			visited[t.ResourceID] = true
+			closure = append(closure, t.ResourceID)
+			next = append(next, t.ResourceID)
+		}
+		frontier = next
+	}
+	return keysetIDs(closure, after, limit), nil
 }
 
 // keysetIDs applies the lookup port's output contract to a raw id list: sorted,

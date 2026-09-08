@@ -41,7 +41,7 @@ under READ COMMITTED; the legacy `CheckRelation` is that primitive with bound
 no schema, table, or column changes. Hosts repin the store module together with
 the core (`pockets/authorization v0.8.0`).
 
-## Store-port note (next tag — core v0.9.0 / stores pgx v0.5.0 + turso v0.4.0, plan `authorization-stores-ambient-transaction`)
+## Store-port note (2026-09-08, core v0.9.0 / stores pgx v0.5.0 + turso v0.4.0, plan `authorization-stores-ambient-transaction`)
 
 **Baseline writes join the ambient transaction.** When the context handed to a
 `relationship.Storer` or `role.Storer` method carries the connector's
@@ -87,6 +87,74 @@ What a host must know:
   v0.1.0 → v0.3.0` (v0.1.0 predates `Transact`/`QuerierFrom`); both stores pin
   `pockets/authorization v0.9.0`. No database migration: no schema, table, or
   column changes.
+
+## Store-port note (next tag — core v0.11.0 / stores pgx v0.6.0 + turso v0.5.0, plan `authorization-lookup-paging`)
+
+**The lookup ports became keyset reads, and both ledgers gain a REQUIRED
+`0005_iam_lookup_keyset.sql`.** This is the first authorization store change
+with a database migration since the canonical set was authored.
+
+The port change (`relationship.Storer` + `role.Storer`):
+
+- All three relationship lookups take an `after string` parameter before
+  `limit`: `LookupResourceIDs`, `LookupResourceIDsByRelationTarget`, and
+  `LookupDescendantResourceIDs`. Each returns the DISTINCT resource IDs
+  **strictly greater than `after`** (`after == ""` starts from the beginning),
+  sorted ascending in **BYTE order**, at most `limit` of them. That order is
+  contractual, not cosmetic: the engine merges several of these ID streams by Go
+  string comparison, so a locale-collated order would skip or repeat IDs across
+  pages.
+- `LookupDescendantResourceIDs` now takes `relations []string` instead of one
+  relation. The recursive walk closes over the UNION of the self relations in
+  BOTH the anchor and the recursive term, so a path that alternates relations is
+  followed in one call (the engine's old multi-call fixpoint is gone).
+  `after`/`limit` page the sorted closure, not its work: the database recomputes
+  the closure on every page by design.
+- `role.Storer` gains `LookupResourceIDsBySubjectAndRoles(ctx, subjectType,
+  subjectID, resourceType, roles, after, limit) (ids, unrestricted, err)`. A
+  global grant of any of `roles` reports `unrestricted = true` with nil ids
+  (nothing to page); otherwise it returns the scoped `resource_id` values under
+  the same keyset contract. An empty `roles` is `(nil, false, nil)`.
+- **A host that implements either port itself** must add the parameters and the
+  new method, and must honor byte order and the exclusive `after`. The shared
+  `storetest` suite carries the keyset cases; run it.
+
+**The migration is a required host re-export.** Hosts pin the store ledger
+verbatim (segovia v2's `ledger_test` compares the host's migration tree against
+the store's canonical set), so a host that repins the store WITHOUT copying
+`0005_iam_lookup_keyset.sql` into its own migrations dir fails that test and, if
+it skips the file entirely, runs every paged lookup without its access path.
+Re-run `ExportMigrations` (or copy the one file beside `0001`–`0004`) and apply
+the stream with the host's runner pre-boot, as usual. The canonical ledger is
+now `0001`–`0005` in both dialects.
+
+The file adds two indexes and nothing else — no table, column, or constraint
+changes, and no data conversion:
+
+- `idx_iam_relationships_type_relation_resource (resource_type, relation,
+  resource_id COLLATE "C")` on `iam_relationships`. The existing
+  `idx_iam_relationships_type_relation` does not carry `resource_id`, so a
+  keyset predicate could only filter and the order could only be a sort of the
+  whole matching set. The `COLLATE "C"` is the contractual byte order: the pgx
+  store pins `COLLATE "C"` per query (because `resource_id` is deliberately
+  uncollated in `0001` — it is a recursion column of the userset-expansion CTE),
+  and the index must carry the same collation for the planner to match it. The
+  turso index needs no collation clause: SQLite's BINARY is byte order already.
+- `idx_iam_roles_subject_resource_lookup (subject_type, subject_id,
+  resource_type, resource_id, role)` on `iam_roles` — the roles lookup's exact
+  predicate, answered as an index-only scan.
+
+**Schedule the lock.** `pgxdb.RunMigrations` applies the whole stream in ONE
+transaction, so `CREATE INDEX CONCURRENTLY` is not available (it cannot run in a
+transaction block) and these are ordinary `CREATE INDEX IF NOT EXISTS`
+statements. Each build takes a **SHARE lock on its table for the duration of the
+build**: concurrent READS proceed, concurrent WRITES (relationship grants and
+revokes, role assignments) BLOCK until it finishes. On an empty or small table
+that is instant; on a large existing `iam_relationships` schedule the deploy
+accordingly. A host that cannot take the write pause may create the two indexes
+`CONCURRENTLY` by hand BEFORE deploying — `IF NOT EXISTS` then makes the
+migration a no-op. On libSQL/SQLite the build holds the database write lock for
+its duration (reads proceed under WAL).
 
 Status: **EXECUTED & VALIDATED 2026-07-14** (authorizationv3, AZ3-5.1; drafted at
 AZ3-2.6). This is the operational protocol a host runs to move a live v1

@@ -337,6 +337,10 @@ func runRelationshipContracts(t *testing.T, newRepos func(t *testing.T) authoriz
 		}
 	})
 
+	t.Run("LookupKeyset", func(t *testing.T) {
+		runRelationshipKeyset(t, newRepos)
+	})
+
 	t.Run("ListingPagination", func(t *testing.T) {
 		s := newRepos(t).Relationships
 		mustCreate(t, s,

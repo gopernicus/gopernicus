@@ -250,6 +250,10 @@ func runRoles(t *testing.T, newRepos func(t *testing.T) authorization.Repositori
 		}
 	})
 
+	t.Run("RolesLookupKeyset", func(t *testing.T) {
+		runRolesKeyset(t, newRepos)
+	})
+
 	t.Run("GlobalFallback", func(t *testing.T) {
 		// Service-level (layer (b)): a global grant satisfies a scoped HasRole while
 		// the store lookup stays exact; a scoped grant never satisfies another scope;

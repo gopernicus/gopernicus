@@ -546,71 +546,120 @@ func (s *relationshipStore) ListRelationshipsByResource(ctx context.Context, res
 	return crud.MapPage(page, resourceRelationshipRow.toDomain), nil
 }
 
-// LookupResourceIDs returns the distinct resource IDs (sorted) where the subject
-// has any of the relations, with group expansion. It returns at most limit rows:
-// the engine passes MaxLookupResults+1 so a full-limit return is a distinguishable
-// overflow signal, never a silently truncated complete result.
-func (s *relationshipStore) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID string, limit int) ([]string, error) {
-	if len(relations) == 0 {
-		return nil, nil
-	}
+// lookupResourceIDsSQL renders the direct-relation keyset lookup and its args.
+// It is split from the method so an EXPLAIN/diagnostic caller can reach the exact
+// statement the store runs.
+//
+// The keyset predicate and the ORDER BY are RAW BYTE order, contractually: the
+// engine merges several of these ID streams by Go string comparison
+// (relationship.Storer's Bounding note), so a collated order would skip or repeat
+// IDs across pages. SQLite's default BINARY collation IS byte order, so — unlike
+// the pgx sibling, which pins COLLATE "C" per query — nothing is added here; the
+// contract holds because no column in this schema declares a COLLATE clause.
+func lookupResourceIDsSQL(resourceType string, relations []string, subjectType, subjectID, after string, limit int) (string, []any) {
 	args := []any{subjectType, subjectID, resourceType}
 	for _, rel := range relations {
 		args = append(args, rel)
 	}
+	args = append(args, after, after)
 	query := reachableCTE + `
 SELECT DISTINCT r.resource_id
 FROM iam_relationships r
 JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 WHERE r.resource_type = ? AND r.relation IN ` + inClause(len(relations)) + `
+  AND (? = '' OR r.resource_id > ?)
 ORDER BY r.resource_id`
-	query, args = withLimit(query, args, limit)
+	return withLimit(query, args, limit)
+}
+
+// LookupResourceIDs returns the distinct resource IDs where the subject has any
+// of the relations, with group expansion: sorted ascending in BYTE order,
+// strictly greater than after (after == "" starts from the beginning), at most
+// limit rows. The engine passes MaxLookupResults+1 for a complete enumeration —
+// a full-limit return is a distinguishable overflow signal, never a silently
+// truncated complete result — or page+1 for a paged one, where the extra row is
+// the HasMore lookahead.
+func (s *relationshipStore) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID, after string, limit int) ([]string, error) {
+	if len(relations) == 0 {
+		return nil, nil
+	}
+	query, args := lookupResourceIDsSQL(resourceType, relations, subjectType, subjectID, after, limit)
 	return queryStrings(ctx, s.db.QuerierFrom(ctx), query, args...)
 }
 
-// LookupResourceIDsByRelationTarget returns the distinct resource IDs (sorted)
-// whose relation points at any of the target IDs (no expansion), at most limit rows.
-func (s *relationshipStore) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string, limit int) ([]string, error) {
-	if len(targetIDs) == 0 {
-		return nil, nil
-	}
+// lookupResourceIDsByRelationTargetSQL renders the relation-target keyset lookup
+// and its args (split from the method for diagnostics).
+func lookupResourceIDsByRelationTargetSQL(resourceType, relation, targetType string, targetIDs []string, after string, limit int) (string, []any) {
 	args := []any{resourceType, relation, targetType}
 	for _, id := range targetIDs {
 		args = append(args, id)
 	}
+	args = append(args, after, after)
 	query := `SELECT DISTINCT resource_id FROM iam_relationships
 WHERE resource_type = ? AND relation = ? AND subject_type = ? AND subject_id IN ` + inClause(len(targetIDs)) + ` AND subject_relation = ''
+  AND (? = '' OR resource_id > ?)
 ORDER BY resource_id`
-	query, args = withLimit(query, args, limit)
+	return withLimit(query, args, limit)
+}
+
+// LookupResourceIDsByRelationTarget returns the distinct resource IDs whose
+// relation points at any of the target IDs (concrete subjects, no expansion):
+// byte-order sorted, strictly greater than after, at most limit rows. Same keyset
+// contract as [relationshipStore.LookupResourceIDs].
+func (s *relationshipStore) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string, after string, limit int) ([]string, error) {
+	if len(targetIDs) == 0 {
+		return nil, nil
+	}
+	query, args := lookupResourceIDsByRelationTargetSQL(resourceType, relation, targetType, targetIDs, after, limit)
 	return queryStrings(ctx, s.db.QuerierFrom(ctx), query, args...)
 }
 
-// LookupDescendantResourceIDs walks a self-referential relation transitively from
-// the root IDs (recursive CTE, cycle-safe via UNION dedup). Roots are not
-// returned unless a cycle makes one a genuine descendant. Result is sorted and
-// bounded at limit rows (the recursive-expansion result cap).
-func (s *relationshipStore) LookupDescendantResourceIDs(ctx context.Context, resourceType, relation, subjectType string, rootIDs []string, limit int) ([]string, error) {
-	if len(rootIDs) == 0 {
-		return nil, nil
-	}
+// lookupDescendantResourceIDsSQL renders the descendant-closure statement and its
+// args (split from the method for diagnostics). The relation set is closed over
+// in BOTH the anchor and the recursive term, so one call follows a path that
+// alternates relations.
+func lookupDescendantResourceIDsSQL(resourceType string, relations []string, subjectType string, rootIDs []string, after string, limit int) (string, []any) {
 	// Base: children of the roots. Recursive: children of discovered descendants.
-	args := []any{resourceType, relation, subjectType}
+	args := []any{resourceType}
+	for _, rel := range relations {
+		args = append(args, rel)
+	}
+	args = append(args, subjectType)
 	for _, id := range rootIDs {
 		args = append(args, id)
 	}
-	args = append(args, resourceType, relation, subjectType)
+	args = append(args, resourceType)
+	for _, rel := range relations {
+		args = append(args, rel)
+	}
+	args = append(args, subjectType, after, after)
 	query := `WITH RECURSIVE descendants(rid) AS (
 	SELECT r.resource_id
 	FROM iam_relationships r
-	WHERE r.resource_type = ? AND r.relation = ? AND r.subject_type = ? AND r.subject_relation = '' AND r.subject_id IN ` + inClause(len(rootIDs)) + `
+	WHERE r.resource_type = ? AND r.relation IN ` + inClause(len(relations)) + ` AND r.subject_type = ? AND r.subject_relation = '' AND r.subject_id IN ` + inClause(len(rootIDs)) + `
 	UNION
 	SELECT r.resource_id
 	FROM iam_relationships r
 	JOIN descendants d ON r.subject_id = d.rid
-	WHERE r.resource_type = ? AND r.relation = ? AND r.subject_type = ? AND r.subject_relation = ''
+	WHERE r.resource_type = ? AND r.relation IN ` + inClause(len(relations)) + ` AND r.subject_type = ? AND r.subject_relation = ''
 )
-SELECT DISTINCT rid FROM descendants ORDER BY rid`
-	query, args = withLimit(query, args, limit)
+SELECT DISTINCT rid FROM descendants
+WHERE (? = '' OR rid > ?)
+ORDER BY rid`
+	return withLimit(query, args, limit)
+}
+
+// LookupDescendantResourceIDs walks the UNION of the self-referential relations
+// transitively from the root IDs (one recursive CTE, cycle-safe via UNION dedup).
+// Roots are not returned unless a cycle makes one a genuine descendant.
+// after/limit page the sorted closure, not its work: the database computes the
+// whole closure on every call (plan A3), so this stream's per-page cost stays the
+// closure size.
+func (s *relationshipStore) LookupDescendantResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType string, rootIDs []string, after string, limit int) ([]string, error) {
+	if len(rootIDs) == 0 || len(relations) == 0 {
+		return nil, nil
+	}
+	query, args := lookupDescendantResourceIDsSQL(resourceType, relations, subjectType, rootIDs, after, limit)
 	return queryStrings(ctx, s.db.QuerierFrom(ctx), query, args...)
 }
 

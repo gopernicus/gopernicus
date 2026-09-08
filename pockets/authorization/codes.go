@@ -81,6 +81,15 @@ var (
 	// kind, never sdk.ErrConflict — default #9).
 	ErrEvaluationLimit = authorizersvc.ErrEvaluationLimit
 
+	// ErrInvalidCursor reports a LookupRequest.After the decision surface refuses:
+	// malformed, an unknown cursor version, or bound to a DIFFERENT query — another
+	// principal, permission, or resource type, the other owning kind, or a model
+	// that has changed since the cursor was minted. It is the same sentinel the
+	// engine returns, re-exported so a host can classify it with errors.Is; it
+	// wraps sdk.ErrInvalidInput (HTTP 400), and the client's remedy is to restart
+	// the enumeration from page one.
+	ErrInvalidCursor = authorizersvc.ErrInvalidCursor
+
 	// ErrAlternativeNotApplicable is the sentinel a RequireAnyPermission
 	// ResourceResolver returns (or wraps) to declare that its alternative does not
 	// apply to THIS request — the row names no organization, the path carries no

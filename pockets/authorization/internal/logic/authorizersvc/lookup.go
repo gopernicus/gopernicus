@@ -2,6 +2,7 @@ package authorizersvc
 
 import (
 	"context"
+	"slices"
 	"sort"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
@@ -80,17 +81,19 @@ func (s *Service) lookupResources(ctx context.Context, principal PrincipalRef, p
 		return LookupResult{IDs: []string{}}, nil
 	}
 
-	checks := s.compiled.permissionChecks(resourceType, permission)
-	if len(checks) == 0 {
+	if len(s.compiled.permissionChecks(resourceType, permission)) == 0 {
 		res := LookupResult{IDs: []string{}}
 		memo[key] = res
 		return res, nil
 	}
 
-	stack[key] = true
+	ids, seen, selfRelations, err := s.lookupRoots(ctx, principal, permission, resourceType, b, stack, memo)
+	if err != nil {
+		return LookupResult{}, err
+	}
 
-	seen := make(map[string]bool)
-	var ids []string
+	// ids now holds the ROOT set: every resource granted the permission WITHOUT
+	// descending the self-hierarchy. Expand descendants from all of them (D1(c)).
 	add := func(newIDs []string) error {
 		for _, id := range newIDs {
 			if !seen[id] {
@@ -103,28 +106,73 @@ func (s *Service) lookupResources(ctx context.Context, principal PrincipalRef, p
 		}
 		return nil
 	}
-
-	// selfRelations collects the same-permission self-referential Through
-	// relations (target type == resourceType AND target permission == permission)
-	// — the sanctioned hierarchy self-loop. Their descendants are expanded from
-	// the full root set AFTER the non-self roots are gathered, so a root derived
-	// through a non-self Through still seeds descendant expansion (D1(c)).
-	var selfRelations []string
-	selfSeen := make(map[string]bool)
-
-	fail := func(err error) (LookupResult, error) {
-		delete(stack, key)
-		return LookupResult{}, err
+	if len(selfRelations) > 0 {
+		if err := s.expandSelfHierarchy(ctx, resourceType, selfRelations, ids, "", b.resultFetchCap(), add); err != nil {
+			return LookupResult{}, err
+		}
 	}
+
+	if ids == nil {
+		ids = []string{} // guarantee a non-nil slice — empty means no access
+	}
+	sort.Strings(ids) // deterministic ordering, each ID exactly once (dedup above)
+	res := LookupResult{IDs: ids}
+	memo[key] = res
+	return res, nil
+}
+
+// lookupRoots computes the ROOT set of (resourceType, permission): the union of
+// every non-self grant — direct relations, and Through relations to OTHER types
+// (or to the same type under a DIFFERENT permission, which recurses on a
+// distinct memo key). It returns the roots in discovery order (the caller
+// sorts), the dedup set they were collected into, and the same-permission
+// self-referential Through relations the caller must expand descendants over.
+//
+// It is COMPLETE and budget-bounded, never paged: root id order does not
+// constrain descendant id order, so a paged root set could not preserve global
+// id order (plan A3). Every store call fetches at most MaxLookupResults+1 and
+// the running distinct union is charged against MaxLookupResults; overflow is
+// ErrEvaluationLimit, never a truncated list. Cancellation is checked before
+// each store call and recursion.
+func (s *Service) lookupRoots(ctx context.Context, principal PrincipalRef, permission, resourceType string, b *budget, stack map[string]bool, memo map[string]LookupResult) (roots []string, seen map[string]bool, selfRelations []string, err error) {
+	seen = make(map[string]bool)
+	checks := s.compiled.permissionChecks(resourceType, permission)
+	if len(checks) == 0 {
+		return nil, seen, nil, nil
+	}
+
+	key := resourceType + ":" + permission
+	stack[key] = true
+	defer delete(stack, key)
+
+	add := func(newIDs []string) error {
+		for _, id := range newIDs {
+			if !seen[id] {
+				seen[id] = true
+				roots = append(roots, id)
+			}
+		}
+		if b.resultsOverflow(len(roots)) {
+			return ErrEvaluationLimit
+		}
+		return nil
+	}
+
+	// selfSeen dedups the same-permission self-referential Through relations
+	// (target type == resourceType AND target permission == permission) — the
+	// sanctioned hierarchy self-loop. Their descendants are expanded from the
+	// full root set AFTER the non-self roots are gathered, so a root derived
+	// through a non-self Through still seeds descendant expansion (D1(c)).
+	selfSeen := make(map[string]bool)
 
 	for _, check := range checks {
 		if check.Through == "" {
 			found, err := s.store.LookupResourceIDs(ctx, resourceType, []string{check.Relation}, principal.Type, principal.ID, "", b.resultFetchCap())
 			if err != nil {
-				return fail(err)
+				return nil, nil, nil, err
 			}
 			if err := add(found); err != nil {
-				return fail(err)
+				return nil, nil, nil, err
 			}
 			continue
 		}
@@ -136,9 +184,9 @@ func (s *Service) lookupResources(ctx context.Context, principal PrincipalRef, p
 		for _, targetType := range s.compiled.relationResourceTargets(resourceType, check.Through) {
 			if targetType == resourceType && check.Permission == permission {
 				// Same-permission self-hierarchy: defer to descendant expansion
-				// from the full root set (below). Recursing here would hit the
-				// stack cycle guard and contribute nothing; the store's transitive
-				// walk resolves the self-loop instead.
+				// from the full root set (the caller's job). Recursing here would
+				// hit the stack cycle guard and contribute nothing; the store's
+				// transitive walk resolves the self-loop instead.
 				if !selfSeen[check.Through] {
 					selfSeen[check.Through] = true
 					selfRelations = append(selfRelations, check.Through)
@@ -151,72 +199,185 @@ func (s *Service) lookupResources(ctx context.Context, principal PrincipalRef, p
 			// set, then map it back to this resource type through the relation.
 			targetResult, err := s.lookupResources(ctx, principal, check.Permission, targetType, b, stack, memo)
 			if err != nil {
-				return fail(err)
+				return nil, nil, nil, err
 			}
 			if len(targetResult.IDs) == 0 {
 				continue
 			}
 			throughIDs, err := s.store.LookupResourceIDsByRelationTarget(ctx, resourceType, check.Through, targetType, targetResult.IDs, "", b.resultFetchCap())
 			if err != nil {
-				return fail(err)
+				return nil, nil, nil, err
 			}
 			if err := add(throughIDs); err != nil {
-				return fail(err)
+				return nil, nil, nil, err
 			}
 		}
 	}
-
-	// ids now holds the ROOT set: every resource granted the permission WITHOUT
-	// descending the self-hierarchy. Expand descendants from all of them (D1(c)).
-	if len(selfRelations) > 0 {
-		if err := s.expandSelfHierarchy(ctx, resourceType, selfRelations, ids, b, seen, add); err != nil {
-			return fail(err)
-		}
-	}
-
-	delete(stack, key)
-	if ids == nil {
-		ids = []string{} // guarantee a non-nil slice — empty means no access
-	}
-	sort.Strings(ids) // deterministic ordering, each ID exactly once (dedup above)
-	res := LookupResult{IDs: ids}
-	memo[key] = res
-	return res, nil
+	return roots, seen, selfRelations, nil
 }
 
 // expandSelfHierarchy expands a same-permission self-referential hierarchy: given
 // the root resource IDs already granted the permission by non-self means, it adds
-// every descendant reachable by transitively following a self-referential
-// relation (space→parent→space) toward a root. The store's descendant walk is
-// cycle-safe and does the full transitive closure per relation in one call; the
-// outer fixpoint loop only matters when TWO OR MORE self relations interleave (a
-// node reached via relation A becomes a root for relation B), and terminates
-// because the universe is finite and each round adds only previously-unseen IDs.
+// every descendant reachable by transitively following ANY of the self-referential
+// relations (space→parent→space) toward a root. The store walks the UNION of the
+// relations in ONE cycle-safe recursive call, so a path that ALTERNATES relations
+// is complete without an engine-side fixpoint loop; after/limit page the sorted
+// closure, not the work the database does to compute it (plan A3).
 //
 // Every discovered ID is added through add (which dedups, charges the result
-// budget, and reports overflow as ErrEvaluationLimit — never a truncated list).
-func (s *Service) expandSelfHierarchy(ctx context.Context, resourceType string, selfRelations, roots []string, b *budget, seen map[string]bool, add func([]string) error) error {
-	frontier := append([]string(nil), roots...)
-	for len(frontier) > 0 {
-		var next []string
-		for _, rel := range selfRelations {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			desc, err := s.store.LookupDescendantResourceIDs(ctx, resourceType, []string{rel}, resourceType, frontier, "", b.resultFetchCap())
-			if err != nil {
-				return err
-			}
-			for _, id := range desc {
-				if !seen[id] {
-					next = append(next, id)
-				}
-			}
-			if err := add(desc); err != nil {
-				return err
+// budget on the complete path, and reports overflow as ErrEvaluationLimit — never
+// a truncated list).
+func (s *Service) expandSelfHierarchy(ctx context.Context, resourceType string, selfRelations, roots []string, after string, limit int, add func([]string) error) error {
+	if len(roots) == 0 {
+		return nil // nothing to descend from: no store call
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	desc, err := s.store.LookupDescendantResourceIDs(ctx, resourceType, selfRelations, resourceType, roots, after, limit)
+	if err != nil {
+		return err
+	}
+	return add(desc)
+}
+
+// LookupResourcesPage is the PAGED enumeration behind LookupResourcesIn: the ids
+// of resourceType the principal can access with permission that sort strictly
+// after `after`, at most limit of them, plus HasMore.
+//
+// Order is the same global resource-id ascending byte order LookupResources
+// returns, so the concatenation of every page equals the plain result exactly —
+// same ids, same order, no repeats. There is no snapshot across pages: a keyset
+// continuation sees grants that land ahead of it and misses ones that land
+// behind it.
+//
+// What the page bounds and what it does not (plan A2–A4):
+//
+//   - Every TOP-LEVEL leaf stream — one per direct relation, one per non-self
+//     Through hop, and at most one self-hierarchy closure — is read with the
+//     page's own `after` and limit+1 rows. The extra row is the HasMore
+//     lookahead, and limit+1 distinct rows per stream are sufficient to produce
+//     limit distinct union rows plus lookahead.
+//   - A non-self Through hop's TARGET set is still the complete, memoized,
+//     budget-bounded lookupResources enumeration, computed once per page. A
+//     principal over MaxLookupResults targets is ErrEvaluationLimit on EVERY
+//     page — the documented intermediate cliff, never a short list.
+//   - A self-hierarchy's non-descendant ROOT set is likewise complete and
+//     budget-bounded before it seeds one closure stream, because root id order
+//     does not constrain descendant id order.
+//
+// Cancellation is checked before each store call, and the arguments are
+// validated exactly as LookupResources validates them.
+func (s *Service) LookupResourcesPage(ctx context.Context, principal PrincipalRef, permission, resourceType, after string, limit int) (LookupResult, error) {
+	if err := principal.Validate(); err != nil {
+		return LookupResult{}, err
+	}
+	if err := relationship.ValidateRefField("permission", permission); err != nil {
+		return LookupResult{}, err
+	}
+	if err := relationship.ValidateRefField("resource type", resourceType); err != nil {
+		return LookupResult{}, err
+	}
+	if limit <= 0 {
+		limit = s.limits.MaxLookupResults
+	}
+
+	checks := s.compiled.permissionChecks(resourceType, permission)
+	if len(checks) == 0 {
+		return LookupResult{IDs: []string{}}, nil
+	}
+
+	b := newBudget(s.limits, s.store)
+	stack := make(map[string]bool)
+	memo := make(map[string]LookupResult)
+
+	// fetch is the per-stream row cap: one page plus the lookahead row that
+	// distinguishes "the page ends here" from "there is more".
+	fetch := limit + 1
+
+	seen := make(map[string]bool)
+	var union []string
+	merge := func(newIDs []string) {
+		for _, id := range newIDs {
+			if !seen[id] {
+				seen[id] = true
+				union = append(union, id)
 			}
 		}
-		frontier = next
 	}
-	return nil
+
+	var selfRelations []string
+	selfSeen := make(map[string]bool)
+
+	for _, check := range checks {
+		if err := ctx.Err(); err != nil {
+			return LookupResult{}, err
+		}
+		if check.Through == "" {
+			found, err := s.store.LookupResourceIDs(ctx, resourceType, []string{check.Relation}, principal.Type, principal.ID, after, fetch)
+			if err != nil {
+				return LookupResult{}, err
+			}
+			merge(found)
+			continue
+		}
+
+		for _, targetType := range s.compiled.relationResourceTargets(resourceType, check.Through) {
+			if targetType == resourceType && check.Permission == permission {
+				if !selfSeen[check.Through] {
+					selfSeen[check.Through] = true
+					selfRelations = append(selfRelations, check.Through)
+				}
+				continue
+			}
+
+			targetResult, err := s.lookupResources(ctx, principal, check.Permission, targetType, b, stack, memo)
+			if err != nil {
+				return LookupResult{}, err
+			}
+			if len(targetResult.IDs) == 0 {
+				continue
+			}
+			if err := ctx.Err(); err != nil {
+				return LookupResult{}, err
+			}
+			throughIDs, err := s.store.LookupResourceIDsByRelationTarget(ctx, resourceType, check.Through, targetType, targetResult.IDs, after, fetch)
+			if err != nil {
+				return LookupResult{}, err
+			}
+			merge(throughIDs)
+		}
+	}
+
+	if len(selfRelations) > 0 {
+		// The closure needs the COMPLETE root set (after "" and the budget cap):
+		// a lexically late root may grant a lexically early descendant.
+		roots, _, _, err := s.lookupRoots(ctx, principal, permission, resourceType, b, stack, memo)
+		if err != nil {
+			return LookupResult{}, err
+		}
+		if err := s.expandSelfHierarchy(ctx, resourceType, selfRelations, roots, after, fetch, func(ids []string) error {
+			merge(ids)
+			return nil
+		}); err != nil {
+			return LookupResult{}, err
+		}
+	}
+
+	sort.Strings(union)
+	hasMore := len(union) > limit
+	if hasMore {
+		// Clip so the returned slice cannot reach the withheld tail: a caller
+		// appending to it would otherwise overwrite ids the next page owns.
+		union = slices.Clip(union[:limit])
+	}
+	if union == nil {
+		union = []string{} // guarantee a non-nil slice — empty means no access
+	}
+	return LookupResult{IDs: union, HasMore: hasMore}, nil
 }
+
+// ModelDigest is the relationship kind's model identity for cursor binding: the
+// compiled schema digest. A deploy that changes the schema changes it, which
+// invalidates every in-flight lookup cursor bound to this kind.
+func (s *Service) ModelDigest() string { return s.SchemaDigest() }

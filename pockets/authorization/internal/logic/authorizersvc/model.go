@@ -24,6 +24,14 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
+// ErrInvalidCursor reports a LookupRequest.After the decision surface refuses:
+// malformed base64/JSON, an unknown cursor version, a fingerprint bound to a
+// DIFFERENT query (another principal, permission, resource type, owning kind,
+// or owning model), or a structurally invalid resource id inside it. It wraps
+// sdk.ErrInvalidInput (HTTP 400) — a client presenting it restarts the
+// enumeration from page one; it is never an evaluation-budget outcome.
+var ErrInvalidCursor = fmt.Errorf("authorization: invalid lookup cursor: %w", sdk.ErrInvalidInput)
+
 // =============================================================================
 // Core check types
 // =============================================================================
@@ -100,41 +108,38 @@ type CheckResult struct {
 // LookupResourcesIn takes, beside CheckRequest in this same vocabulary. It is a
 // SIBLING of the positional LookupResources, never a replacement: that method
 // sits on host-defined ports and on the internal kind interface, so its
-// signature does not change, and a future field (see After below) is additive
-// here with zero signature churn.
+// signature does not change, and a new field is additive here with zero
+// signature churn.
 //
-// Limit caps the returned IDs to the first Limit of the sorted, deduplicated
-// enumeration — a deterministic prefix — and sets LookupResult.Truncated when it
-// drops any. Its semantics, stated exactly:
+// LookupResourcesIn is PAGED. Limit is a PAGE SIZE and After is the previous
+// page's continuation:
 //
-//   - Limit 0 means THE MaxLookupResults BUDGET CEILING — today's LookupResources
-//     behavior. It does NOT mean unbounded (nothing here is), and it deliberately
-//     does NOT follow crud.ListRequest, where 0 means DefaultLimit: an
-//     enumeration is not a page, and silently shrinking a host's result set to a
-//     page default would be a correctness change, not a default.
-//   - Limit NEVER weakens or bypasses the evaluation budget. An enumeration that
-//     overflows MaxLookupResults is still ErrEvaluationLimit even when Limit is
-//     tiny — a truncated list is never presented as complete.
-//   - Limit does NOT reduce enumeration cost in v1. The owning kind enumerates
-//     exactly as it does today and truncation happens above it; Limit moves the
-//     host's re-cap into the engine and anchors a future cursor, it does not make
-//     the query cheaper.
+//   - Limit 0 means MaxLookupResults — one full page's worth. It does NOT mean
+//     unbounded (nothing here is), and it deliberately does NOT follow
+//     crud.ListRequest, where 0 means DefaultLimit.
+//   - Limit GREATER than MaxLookupResults is rejected by the decision surface
+//     (which knows the resolved limits) as sdk.ErrInvalidInput: the budget
+//     bounds the page size, so a page may not be asked to exceed it.
 //   - A negative Limit is a validation error wrapping sdk.ErrInvalidInput (a
 //     limit is not a reference, so it is not relationship.ErrInvalidRef), which
 //     hosts map to 400 through the pocket's error mapper.
-//   - Unrestricted passes through untouched and IGNORES Limit: there are no IDs
-//     to cap, and the host must skip ID filtering entirely.
-//
-// DEFERRED — After/cursor continuation (issue #22): resuming an enumeration
-// needs a deterministic continuation the OWNING KIND can honor, which is a
-// store-port change across memstore, stores/pgx, stores/turso, and the storetest
-// conformance suite — a multi-module train, not a core-only release. When it
-// lands it is an additive After field here.
+//   - Limit NEVER weakens the evaluation budget. The budget still bounds every
+//     INTERMEDIATE node and every self-hierarchy root set, so an enumeration
+//     whose intermediate work overflows is ErrEvaluationLimit on every page —
+//     never a short list presented as complete.
+//   - After is the NextCursor of the previous page; "" starts at the beginning.
+//     It is opaque: the decision surface decodes it against the query it is
+//     bound to (principal, permission, resource type, owning kind, owning model
+//     digest) and refuses a foreign or stale one with ErrInvalidCursor. A
+//     non-empty After is validated by that decode, not by Validate below.
+//   - Unrestricted passes through untouched and IGNORES both fields: there are
+//     no IDs to page, and the host must skip ID filtering entirely.
 type LookupRequest struct {
 	Principal    PrincipalRef
 	Permission   string
 	ResourceType string
 	Limit        int
+	After        string
 }
 
 // Validate reports whether the request is structurally well formed: the
@@ -170,15 +175,20 @@ func (r LookupRequest) Validate() error {
 // relationship engine: a host that wants admin-sees-everything checks for it in
 // its own closure BEFORE calling LookupResources and then skips ID filtering.
 //
-// Truncated reports that a LookupRequest.Limit DROPPED IDs from the complete
-// enumeration — the affordance a host renders as "and more". Without it,
-// len(IDs) == Limit would be indistinguishable from exactly Limit grants. Only
-// the Limit path sets it: the classic LookupResources never does, and neither
-// does an Unrestricted answer.
+// HasMore reports that the PAGED surface (LookupResourcesIn) has at least one
+// more ID after this page, and NextCursor is the opaque continuation to pass
+// back as LookupRequest.After. NextCursor is set only when HasMore is true; an
+// Unrestricted answer and the classic LookupResources never set either.
 type LookupResult struct {
 	IDs          []string
 	Unrestricted bool
-	Truncated    bool
+
+	HasMore    bool
+	NextCursor string
+
+	// Deprecated: Truncated is HasMore under its v0.7.0 name; it is set to the
+	// same value and removed in the next minor.
+	Truncated bool
 }
 
 // =============================================================================
