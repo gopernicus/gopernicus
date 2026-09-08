@@ -115,9 +115,10 @@ type (
 	LookupResult = authorizersvc.LookupResult
 
 	// LookupRequest is the struct-input enumeration query LookupResourcesIn takes
-	// — the positional LookupResources plus a caller Limit. See its own
-	// documentation for the exact Limit semantics (0 is the MaxLookupResults
-	// budget ceiling, not a page default) and the deferred After field.
+	// — the positional LookupResources plus a page size and a continuation. See
+	// its own documentation for the exact semantics (Limit is a PAGE size: 0 is
+	// MaxLookupResults, above MaxLookupResults is invalid input; After is the
+	// previous page's LookupResult.NextCursor).
 	LookupRequest = authorizersvc.LookupRequest
 
 	// Explanation and ExplainStep are the opt-in, bounded explain trace returned
@@ -694,22 +695,36 @@ func (s *Service) LookupResources(ctx context.Context, principal PrincipalRef, p
 	return s.decider.LookupResources(ctx, principal, permission, resourceType)
 }
 
-// LookupResourcesIn is LookupResources with a caller Limit — the struct-input
-// sibling, not a replacement: LookupResources keeps its signature, so hosts and
-// their ports are untouched.
+// LookupResourcesIn is the PAGED enumeration surface — the struct-input sibling
+// of LookupResources, not a replacement: the positional method keeps its
+// signature and its complete, budget-bounded semantics, so hosts and their ports
+// are untouched.
 //
-// The owning kind enumerates exactly as LookupResources does — same parity, same
-// deterministic sorted ordering, same budget — and the result is then capped to
-// the first LookupRequest.Limit IDs, with LookupResult.Truncated set when that
-// drops any. Limit 0 is the MaxLookupResults budget ceiling (today's behavior),
-// deliberately NOT crud.ListRequest's DefaultLimit; a negative Limit is a
-// validation error wrapping sdk.ErrInvalidInput (HTTP 400).
+// One call returns ONE page of the same globally sorted, deduplicated
+// enumeration: at most LookupRequest.Limit ids, LookupResult.HasMore when more
+// remain, and LookupResult.NextCursor to pass back as the next request's
+// LookupRequest.After. Walking to HasMore == false yields exactly what
+// LookupResources returns — same ids, same order, no repeats — but it is not a
+// snapshot: a keyset continuation sees grants that land ahead of it and misses
+// ones that land behind it.
 //
-// The Limit NEVER weakens the budget: an enumeration that overflows
-// MaxLookupResults is still ErrEvaluationLimit even for a tiny Limit, and v1
-// Limit does not reduce enumeration cost — it moves the host's re-cap into the
-// engine. An Unrestricted answer ignores the Limit and passes through untouched:
-// the host must still skip ID filtering entirely.
+//   - Limit is a PAGE SIZE. 0 means MaxLookupResults (deliberately NOT
+//     crud.ListRequest's DefaultLimit); a Limit above MaxLookupResults and a
+//     negative Limit are both validation errors wrapping sdk.ErrInvalidInput
+//     (HTTP 400).
+//   - After is opaque and query-bound: the cursor carries a fingerprint of the
+//     principal, the permission, the resource type, the OWNING KIND, and that
+//     kind's model digest. A cursor presented against a different query — or
+//     after a deploy changed the model — is ErrInvalidCursor, and the client
+//     restarts from page one.
+//   - The budget is NOT a total cap. MaxLookupResults bounds the page size and
+//     every INTERMEDIATE node (a Through hop's target set, a self-hierarchy's
+//     root set), so an enumeration whose intermediate work overflows is
+//     ErrEvaluationLimit on EVERY page — never a short list that looks complete.
+//   - Unrestricted ignores both fields and passes through untouched, with no
+//     cursor: the host must still skip ID filtering entirely.
+//   - LookupResult.Truncated is DEPRECATED: it carries the same value as HasMore
+//     for one release and is then removed.
 func (s *Service) LookupResourcesIn(ctx context.Context, req LookupRequest) (LookupResult, error) {
 	if s.decider == nil {
 		return LookupResult{}, ErrNoDecisionKind

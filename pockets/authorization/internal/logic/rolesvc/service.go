@@ -111,6 +111,27 @@ func (s *Service) HasRoleWhere(ctx context.Context, subjectType, subjectID, role
 	return false, "", nil
 }
 
+// LookupResourceIDsBySubjectAndRoles is the roles kind's resource-id lookup for
+// a PAGED enumeration (plan A3b): unrestricted=true (with nil ids) when the
+// subject holds any of roles GLOBALLY, else the distinct scoped resource ids of
+// resourceType at which the subject holds any of them — sorted ascending in byte
+// order, strictly after `after`, at most limit.
+//
+// It is a passthrough: the caller (the decision surface) passes the compiled
+// granting roles, and this service applies no model knowledge — the roles kind
+// never sees the decision engine. The three reference fields are validated as
+// the other methods validate them; a lookup is always type-scoped, so an empty
+// resourceType is rejected rather than read as a global query.
+func (s *Service) LookupResourceIDsBySubjectAndRoles(ctx context.Context, subjectType, subjectID, resourceType string, roles []string, after string, limit int) ([]string, bool, error) {
+	if err := validateSubjectFields(subjectType, subjectID); err != nil {
+		return nil, false, err
+	}
+	if resourceType == "" {
+		return nil, false, ErrInvalidRoleAssignment
+	}
+	return s.store.LookupResourceIDsBySubjectAndRoles(ctx, subjectType, subjectID, resourceType, roles, after, limit)
+}
+
 // ListRoleAssignmentsBySubject pages a subject's assignments. The subject fields
 // are validated symmetrically with the mutation/decision methods (a non-empty
 // subject type and ID).

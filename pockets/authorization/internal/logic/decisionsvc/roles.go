@@ -3,6 +3,7 @@ package decisionsvc
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
@@ -17,6 +18,7 @@ import (
 type roleProbe interface {
 	HasRoleWhere(ctx context.Context, subjectType, subjectID, roleName, resourceType, resourceID string) (held bool, provenance string, err error)
 	ListRoleAssignmentsBySubject(ctx context.Context, subjectType, subjectID string, req crud.ListRequest) (crud.Page[role.Assignment], error)
+	LookupResourceIDsBySubjectAndRoles(ctx context.Context, subjectType, subjectID, resourceType string, roles []string, after string, limit int) (ids []string, unrestricted bool, err error)
 }
 
 // roleEngine answers the decision surface for the ROLES kind: it resolves a
@@ -248,3 +250,61 @@ func (e *roleEngine) LookupResources(ctx context.Context, principal authorizersv
 	sort.Strings(ids)
 	return authorizersvc.LookupResult{IDs: ids}, nil
 }
+
+// LookupResourcesPage is the roles kind's PAGED enumeration: the resource ids of
+// resourceType the principal can access with permission that sort strictly after
+// `after`, at most limit of them, plus HasMore.
+//
+// It is one indexed store read of the pair's compiled grantor roles (A3b), not
+// the assignment walk LookupResources performs: it neither scans every
+// assignment nor charges MaxGraphStates for assignments irrelevant to the query.
+// The page size is the only bound it needs. An undeclared pair returns an empty,
+// non-nil IDs; a GLOBALLY held granting role returns Unrestricted with an empty
+// IDs, no page and no continuation, exactly as the unpaged method does.
+func (e *roleEngine) LookupResourcesPage(ctx context.Context, principal authorizersvc.PrincipalRef, permission, resourceType, after string, limit int) (authorizersvc.LookupResult, error) {
+	if err := principal.Validate(); err != nil {
+		return authorizersvc.LookupResult{}, err
+	}
+	if err := relationship.ValidateRefField("permission", permission); err != nil {
+		return authorizersvc.LookupResult{}, err
+	}
+	if err := relationship.ValidateRefField("resource type", resourceType); err != nil {
+		return authorizersvc.LookupResult{}, err
+	}
+	if limit <= 0 {
+		limit = e.limits.MaxLookupResults
+	}
+
+	grantors := e.model.grantors(resourceType, permission)
+	if grantors == nil {
+		return authorizersvc.LookupResult{IDs: []string{}}, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return authorizersvc.LookupResult{}, err
+	}
+
+	// limit+1 is the lookahead row that distinguishes "the page ends here" from
+	// "there is more".
+	ids, unrestricted, err := e.probe.LookupResourceIDsBySubjectAndRoles(ctx, principal.Type, principal.ID, resourceType, grantors, after, limit+1)
+	if err != nil {
+		return authorizersvc.LookupResult{}, err
+	}
+	if unrestricted {
+		return authorizersvc.LookupResult{IDs: []string{}, Unrestricted: true}, nil
+	}
+	hasMore := len(ids) > limit
+	if hasMore {
+		// Clip so the returned slice cannot reach the withheld tail.
+		ids = slices.Clip(ids[:limit])
+	}
+	if ids == nil {
+		ids = []string{} // guarantee a non-nil slice — empty means no access
+	}
+	return authorizersvc.LookupResult{IDs: ids, HasMore: hasMore}, nil
+}
+
+// ModelDigest is the roles kind's model identity for cursor binding: the
+// compiled role model's deterministic digest. A deploy that changes the model
+// changes it, which invalidates every in-flight lookup cursor bound to this
+// kind.
+func (e *roleEngine) ModelDigest() string { return e.model.Digest() }

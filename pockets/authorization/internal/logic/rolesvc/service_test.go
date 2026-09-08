@@ -3,6 +3,7 @@ package rolesvc
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -16,6 +17,17 @@ import (
 type fakeRoleStore struct {
 	rows map[string]bool // key: type|id|role|rtype|rid
 	err  error
+
+	lastLookup *lookupArgs // the arguments of the last resource-id lookup
+}
+
+// lookupArgs captures one LookupResourceIDsBySubjectAndRoles call, so the
+// passthrough can be proven to forward every argument unchanged.
+type lookupArgs struct {
+	subjectType, subjectID, resourceType string
+	roles                                []string
+	after                                string
+	limit                                int
 }
 
 func key(subjectType, subjectID, roleName, resourceType, resourceID string) string {
@@ -60,7 +72,11 @@ func (f *fakeRoleStore) ListByResource(ctx context.Context, resourceType, resour
 // scoped query would fall back to, keyed by (subject, role) with provenance — a
 // faithful-enough reference for the service delegation/validation tests.
 func (f *fakeRoleStore) LookupResourceIDsBySubjectAndRoles(ctx context.Context, subjectType, subjectID, resourceType string, roles []string, after string, limit int) ([]string, bool, error) {
-	return nil, false, nil
+	f.lastLookup = &lookupArgs{subjectType, subjectID, resourceType, roles, after, limit}
+	if f.err != nil {
+		return nil, false, f.err
+	}
+	return []string{"r2", "r3"}, false, nil
 }
 
 func (f *fakeRoleStore) ListEffectiveByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[role.EffectiveGrant], error) {
@@ -320,5 +336,60 @@ func TestHasRoleWhereFailClosedOnStoreError(t *testing.T) {
 	}
 	if !errors.Is(err, boom) {
 		t.Fatalf("store error must propagate, got %v", err)
+	}
+}
+
+// TestLookupResourceIDsBySubjectAndRolesPassesThrough proves the roles kind's
+// resource-id lookup is a PASSTHROUGH: every argument reaches the store
+// unchanged (the caller passes the compiled granting roles — this service holds
+// no model), the store's answer is returned verbatim, and a store failure is
+// propagated rather than read as "no access".
+func TestLookupResourceIDsBySubjectAndRolesPassesThrough(t *testing.T) {
+	store := &fakeRoleStore{}
+	svc := NewService(store)
+
+	ids, unrestricted, err := svc.LookupResourceIDsBySubjectAndRoles(context.Background(),
+		"user", "u1", "organization", []string{"viewer", "steward"}, "r1", 3)
+	if err != nil {
+		t.Fatalf("LookupResourceIDsBySubjectAndRoles: %v", err)
+	}
+	if unrestricted || !reflect.DeepEqual(ids, []string{"r2", "r3"}) {
+		t.Fatalf("got (%v, %v), want the store answer verbatim", ids, unrestricted)
+	}
+	want := &lookupArgs{"user", "u1", "organization", []string{"viewer", "steward"}, "r1", 3}
+	if !reflect.DeepEqual(store.lastLookup, want) {
+		t.Fatalf("store received %+v, want %+v", store.lastLookup, want)
+	}
+
+	failing := NewService(&fakeRoleStore{err: errors.New("store exploded")})
+	if _, _, err := failing.LookupResourceIDsBySubjectAndRoles(context.Background(),
+		"user", "u1", "organization", []string{"viewer"}, "", 3); err == nil {
+		t.Fatal("a store failure must never read as an empty page")
+	}
+}
+
+// TestLookupResourceIDsBySubjectAndRolesValidatesItsRefFields proves the three
+// reference fields are validated before any store read — the same emptiness rule
+// the other methods apply, plus the type scope a lookup always needs.
+func TestLookupResourceIDsBySubjectAndRolesValidatesItsRefFields(t *testing.T) {
+	store := &fakeRoleStore{}
+	svc := NewService(store)
+
+	cases := map[string]struct{ subjectType, subjectID, resourceType string }{
+		"empty subject type":  {"", "u1", "organization"},
+		"empty subject id":    {"user", "", "organization"},
+		"empty resource type": {"user", "u1", ""},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := svc.LookupResourceIDsBySubjectAndRoles(context.Background(),
+				tc.subjectType, tc.subjectID, tc.resourceType, []string{"viewer"}, "", 3)
+			if !errors.Is(err, ErrInvalidRoleAssignment) {
+				t.Fatalf("want ErrInvalidRoleAssignment, got %v", err)
+			}
+			if store.lastLookup != nil {
+				t.Fatalf("no store read may happen before validation, got %+v", store.lastLookup)
+			}
+		})
 	}
 }

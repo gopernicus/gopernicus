@@ -237,3 +237,66 @@ func (s *roleStore) ListEffectiveByResource(ctx context.Context, resourceType, r
 	}
 	return crud.MapPage(page, effectiveRoleRow.toDomain), nil
 }
+
+// lookupResourceIDsBySubjectAndRolesSQL renders the SCOPED half of the roles
+// keyset lookup and its args (split from the method so the EXPLAIN test can plan
+// the exact statement the store runs). No per-query COLLATE "C" is needed here,
+// unlike the relationship lookups: every iam_roles structural column is pinned
+// COLLATE "C" in 0002, so resource_id already compares and orders byte-wise.
+func (s *roleStore) lookupResourceIDsBySubjectAndRolesSQL(subjectType, subjectID, resourceType string, roles []string, after string, limit int) (string, pgx.NamedArgs) {
+	q := `SELECT DISTINCT resource_id FROM ` + s.table("iam_roles") + `
+WHERE subject_type = @subject_type AND subject_id = @subject_id AND resource_type = @resource_type AND role = ANY(@roles::text[])
+  AND (@after::text = '' OR resource_id > @after::text)
+ORDER BY resource_id` + limitClause(limit)
+	return q, pgx.NamedArgs{
+		"subject_type":  subjectType,
+		"subject_id":    subjectID,
+		"resource_type": resourceType,
+		"roles":         roles,
+		"after":         after,
+		"limit":         limit,
+	}
+}
+
+// globalRoleGrantSQL renders the GLOBAL probe of the roles keyset lookup: does
+// the subject hold any of the granting roles at the GLOBAL scope (both scope
+// columns empty)? A hit
+// is the unrestricted verdict — the subject reaches every resource of the type,
+// so there is nothing to page.
+func (s *roleStore) globalRoleGrantSQL(subjectType, subjectID string, roles []string) (string, pgx.NamedArgs) {
+	q := `SELECT EXISTS (SELECT 1 FROM ` + s.table("iam_roles") + `
+WHERE subject_type = @subject_type AND subject_id = @subject_id AND resource_type = '' AND resource_id = '' AND role = ANY(@roles::text[]))`
+	return q, pgx.NamedArgs{
+		"subject_type": subjectType,
+		"subject_id":   subjectID,
+		"roles":        roles,
+	}
+}
+
+// LookupResourceIDsBySubjectAndRoles is the roles kind's resource-id lookup: a
+// global grant of any of roles reports unrestricted (nil ids, nothing to page),
+// otherwise the distinct scoped resource IDs of resourceType at which the subject
+// holds any of roles — byte-order sorted, strictly greater than after, at most
+// limit rows. An empty roles is (nil, false, nil): no role grants nothing, and
+// the caller is spared a query. It applies no model knowledge — the engine passes
+// the compiled granting roles.
+func (s *roleStore) LookupResourceIDsBySubjectAndRoles(ctx context.Context, subjectType, subjectID, resourceType string, roles []string, after string, limit int) ([]string, bool, error) {
+	if len(roles) == 0 {
+		return nil, false, nil
+	}
+	probe, probeArgs := s.globalRoleGrantSQL(subjectType, subjectID, roles)
+	var unrestricted bool
+	if err := s.db.QuerierFrom(ctx).QueryRow(ctx, probe, probeArgs).Scan(&unrestricted); err != nil {
+		return nil, false, pgxdb.MapError(err)
+	}
+	if unrestricted {
+		return nil, true, nil
+	}
+
+	q, args := s.lookupResourceIDsBySubjectAndRolesSQL(subjectType, subjectID, resourceType, roles, after, limit)
+	ids, err := queryStrings(ctx, s.db.QuerierFrom(ctx), q, args)
+	if err != nil {
+		return nil, false, err
+	}
+	return ids, false, nil
+}

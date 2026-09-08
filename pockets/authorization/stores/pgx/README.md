@@ -127,6 +127,23 @@ set** as the turso sibling:
   ledger, keyed by MutationID). Stores the payload digest, resulting revision,
   domain outcome, and governing schema digest — never the payload itself.
   `expires_at` is nullable; **permanent retention is the default posture**.
+- `migrations/0005_iam_lookup_keyset.sql` — the **keyset access paths** for the
+  paged lookups. The four `Lookup*` reads page by resource id (`… AND resource_id
+  > @after ORDER BY resource_id LIMIT @limit`), and neither
+  `idx_iam_relationships_type_relation` nor `idx_iam_roles_subject` carries
+  `resource_id`, so without these two indexes every page would sort the whole
+  matching set. It adds `idx_iam_relationships_type_relation_resource
+  (resource_type, relation, resource_id COLLATE "C")` — the `COLLATE "C"` matches
+  the per-query pin the lookup SQL carries, because the engine merges these ID
+  streams by Go string comparison and `resource_id` is deliberately uncollated in
+  0001 — and `idx_iam_roles_subject_resource_lookup (subject_type, subject_id,
+  resource_type, resource_id, role)`, which answers the roles lookup as an
+  index-only scan. Both are **ordinary transactional** `CREATE INDEX IF NOT
+  EXISTS` statements (the runner applies the stream in one transaction, so
+  `CONCURRENTLY` is not available): each build holds a SHARE lock on its table —
+  reads proceed, writes wait — so schedule the upgrade on a large existing table.
+  `TestLookupPlansAtScale` is the measurement: at ~1e6 tuples it EXPLAINs every
+  lookup shape and asserts the selected access paths.
 
 After export, the host owns the final migration stream in its own dir.
 

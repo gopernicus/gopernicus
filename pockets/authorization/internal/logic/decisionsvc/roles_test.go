@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -26,6 +27,10 @@ func (p errProbe) ListRoleAssignmentsBySubject(ctx context.Context, subjectType,
 	return crud.Page[role.Assignment]{}, p.err
 }
 
+func (p errProbe) LookupResourceIDsBySubjectAndRoles(ctx context.Context, subjectType, subjectID, resourceType string, roles []string, after string, limit int) ([]string, bool, error) {
+	return nil, false, p.err
+}
+
 // smallPages forces a tiny page size onto the listing so the engine's
 // cursor-following walk is exercised over several pages.
 type smallPages struct {
@@ -44,6 +49,10 @@ func (p *smallPages) ListRoleAssignmentsBySubject(ctx context.Context, subjectTy
 	return p.inner.ListRoleAssignmentsBySubject(ctx, subjectType, subjectID, req)
 }
 
+func (p *smallPages) LookupResourceIDsBySubjectAndRoles(ctx context.Context, subjectType, subjectID, resourceType string, roles []string, after string, limit int) ([]string, bool, error) {
+	return p.inner.LookupResourceIDsBySubjectAndRoles(ctx, subjectType, subjectID, resourceType, roles, after, limit)
+}
+
 // stallProbe answers every listing with an EMPTY page that claims HasMore — the
 // adversarial store shape (no rows, so no MaxGraphStates charge, and a cursor
 // that cannot advance) a cursor-following walk must not spin on.
@@ -58,6 +67,10 @@ func (p *stallProbe) ListRoleAssignmentsBySubject(ctx context.Context, subjectTy
 	return crud.Page[role.Assignment]{Items: nil, HasMore: true, NextCursor: "stuck"}, nil
 }
 
+func (p *stallProbe) LookupResourceIDsBySubjectAndRoles(ctx context.Context, subjectType, subjectID, resourceType string, roles []string, after string, limit int) ([]string, bool, error) {
+	return nil, false, nil
+}
+
 // rawRows answers every listing with the same single page of rows, so a raw-port
 // row shape the typed mutation paths cannot produce can still be presented to
 // the engine.
@@ -69,6 +82,10 @@ func (p *rawRows) HasRoleWhere(ctx context.Context, subjectType, subjectID, role
 
 func (p *rawRows) ListRoleAssignmentsBySubject(ctx context.Context, subjectType, subjectID string, req crud.ListRequest) (crud.Page[role.Assignment], error) {
 	return crud.Page[role.Assignment]{Items: p.items}, nil
+}
+
+func (p *rawRows) LookupResourceIDsBySubjectAndRoles(ctx context.Context, subjectType, subjectID, resourceType string, roles []string, after string, limit int) ([]string, bool, error) {
+	return nil, false, nil
 }
 
 // orgModel: organization/view is granted by three roles, organization/contribute
@@ -656,3 +673,114 @@ func TestRoleEngineDeclaresPermission(t *testing.T) {
 }
 
 var _ roleProbe = (*rolesvc.Service)(nil)
+
+// =============================================================================
+// LookupResourcesPage (the roles kind's paged enumeration)
+// =============================================================================
+
+// TestRoleEngineLookupResourcesPagePagesInOrder proves the paged path returns the
+// same globally sorted ids the unpaged walk does, one page at a time, and that
+// duplicate resource ids reached through TWO granting roles fold into one entry.
+func TestRoleEngineLookupResourcesPagePagesInOrder(t *testing.T) {
+	engine, svc := newTestEngine(t, orgModel(), authorizersvc.EvaluationLimits{})
+	ctx := context.Background()
+	for _, id := range []string{"o1", "o2", "o3"} {
+		assign(t, svc, "u1", "viewer", "organization", id)
+	}
+	assign(t, svc, "u1", "contributor", "organization", "o2") // a second granting role on o2
+
+	principal := authorizersvc.PrincipalRef{Type: "user", ID: "u1"}
+	plain, err := engine.LookupResources(ctx, principal, "view", "organization")
+	if err != nil {
+		t.Fatalf("LookupResources: %v", err)
+	}
+
+	for _, limit := range []int{1, 2, 7} {
+		got := []string{}
+		after := ""
+		for pages := 0; ; pages++ {
+			if pages > 16 {
+				t.Fatalf("limit %d: page walk did not terminate", limit)
+			}
+			res, err := engine.LookupResourcesPage(ctx, principal, "view", "organization", after, limit)
+			if err != nil {
+				t.Fatalf("LookupResourcesPage(after=%q): %v", after, err)
+			}
+			if res.IDs == nil {
+				t.Fatalf("limit %d: IDs must be non-nil", limit)
+			}
+			got = append(got, res.IDs...)
+			if !res.HasMore {
+				break
+			}
+			after = res.IDs[len(res.IDs)-1]
+		}
+		if !reflect.DeepEqual(got, plain.IDs) {
+			t.Fatalf("limit %d: pages concatenated to %v, want the plain result %v", limit, got, plain.IDs)
+		}
+	}
+}
+
+// TestRoleEngineLookupResourcesPageGlobalGrantIsUnrestricted proves a GLOBALLY
+// held granting role ends the query on the paged surface too: unrestricted, no
+// ids, and no continuation to follow.
+func TestRoleEngineLookupResourcesPageGlobalGrantIsUnrestricted(t *testing.T) {
+	engine, svc := newTestEngine(t, orgModel(), authorizersvc.EvaluationLimits{})
+	assign(t, svc, "u1", "viewer", "", "")
+
+	res, err := engine.LookupResourcesPage(context.Background(), authorizersvc.PrincipalRef{Type: "user", ID: "u1"},
+		"view", "organization", "", 1)
+	if err != nil {
+		t.Fatalf("LookupResourcesPage: %v", err)
+	}
+	if !res.Unrestricted || len(res.IDs) != 0 || res.IDs == nil || res.HasMore {
+		t.Fatalf("want unrestricted with an empty non-nil page and no continuation, got %+v", res)
+	}
+}
+
+// TestRoleEngineLookupResourcesPageUndeclaredPairAndBadArguments proves the paged
+// path applies the SAME preconditions as the unpaged one: an undeclared pair
+// enumerates nothing (non-nil), and malformed arguments are rejected before any
+// store read.
+func TestRoleEngineLookupResourcesPageUndeclaredPairAndBadArguments(t *testing.T) {
+	engine, svc := newTestEngine(t, orgModel(), authorizersvc.EvaluationLimits{})
+	assign(t, svc, "u1", "viewer", "organization", "o1")
+	good := authorizersvc.PrincipalRef{Type: "user", ID: "u1"}
+
+	res, err := engine.LookupResourcesPage(context.Background(), good, "fly", "organization", "", 5)
+	if err != nil {
+		t.Fatalf("undeclared pair: %v", err)
+	}
+	if res.IDs == nil || len(res.IDs) != 0 || res.HasMore {
+		t.Fatalf("undeclared pair: want an empty non-nil page, got %+v", res)
+	}
+
+	cases := map[string]struct {
+		principal                authorizersvc.PrincipalRef
+		permission, resourceType string
+	}{
+		"empty principal":     {authorizersvc.PrincipalRef{}, "view", "organization"},
+		"empty permission":    {good, "", "organization"},
+		"empty resource type": {good, "view", ""},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := engine.LookupResourcesPage(context.Background(), tc.principal, tc.permission, tc.resourceType, "", 5); err == nil {
+				t.Fatal("want a validation error")
+			}
+		})
+	}
+}
+
+// TestRoleEngineLookupResourcesPageStoreErrorIsNeverAnAllow proves a store
+// failure surfaces as an error, never an empty page a caller might read as "no
+// access".
+func TestRoleEngineLookupResourcesPageStoreErrorIsNeverAnAllow(t *testing.T) {
+	boom := errors.New("store exploded")
+	engine := newRoleEngine(errProbe{err: boom}, mustCompile(t, orgModel(), nil),
+		resolvedLimits(t, authorizersvc.EvaluationLimits{}))
+	if _, err := engine.LookupResourcesPage(context.Background(), authorizersvc.PrincipalRef{Type: "user", ID: "u1"},
+		"view", "organization", "", 2); !errors.Is(err, boom) {
+		t.Fatalf("want the store error, got %v", err)
+	}
+}

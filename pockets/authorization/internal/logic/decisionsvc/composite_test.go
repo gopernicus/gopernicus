@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
 	"github.com/gopernicus/gopernicus/pockets/authorization/internal/logic/authorizersvc"
 	"github.com/gopernicus/gopernicus/pockets/authorization/internal/logic/rolesvc"
 	"github.com/gopernicus/gopernicus/pockets/authorization/memstore"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // errRelationships is a relationship.Storer whose every read fails — the proof
@@ -539,10 +541,12 @@ func TestCompositeLookupResourcesValidatesArguments(t *testing.T) {
 	}
 }
 
-// TestCompositeLookupResourcesInTruncates proves the ONE truncation body: the
-// owning kind enumerates unchanged and the Limit caps the sorted prefix, on a
-// relationship-owned and a role-owned pair alike. Limit 0 / Limit >= len is
-// today's untruncated behavior, and Truncated is set only when IDs were dropped.
+// TestCompositeLookupResourcesInTruncates proves the ONE paging body: the owning
+// kind pages its own enumeration and the composite returns the page plus its
+// continuation, on a relationship-owned and a role-owned pair alike. A page
+// smaller than the result carries HasMore, a non-empty NextCursor, and the
+// deprecated Truncated alias set to the same value; a page that holds everything
+// carries neither.
 func TestCompositeLookupResourcesInTruncates(t *testing.T) {
 	c, eng, roles := newBothKinds(t, authorizersvc.EvaluationLimits{})
 	ctx := context.Background()
@@ -555,14 +559,15 @@ func TestCompositeLookupResourcesInTruncates(t *testing.T) {
 	for _, permission := range []string{"view", "audit"} {
 		t.Run(permission, func(t *testing.T) {
 			cases := map[string]struct {
-				limit int
-				want  authorizersvc.LookupResult
+				limit       int
+				wantIDs     []string
+				wantHasMore bool
 			}{
-				"limit below the count truncates to the sorted prefix": {2, authorizersvc.LookupResult{IDs: []string{"p1", "p2"}, Truncated: true}},
-				"limit of one":                  {1, authorizersvc.LookupResult{IDs: []string{"p1"}, Truncated: true}},
-				"limit equal to the count":      {3, authorizersvc.LookupResult{IDs: []string{"p1", "p2", "p3"}}},
-				"limit above the count":         {10, authorizersvc.LookupResult{IDs: []string{"p1", "p2", "p3"}}},
-				"limit zero is today's ceiling": {0, authorizersvc.LookupResult{IDs: []string{"p1", "p2", "p3"}}},
+				"limit below the count pages to the sorted prefix": {2, []string{"p1", "p2"}, true},
+				"limit of one":                   {1, []string{"p1"}, true},
+				"limit equal to the count":       {3, []string{"p1", "p2", "p3"}, false},
+				"limit above the count":          {10, []string{"p1", "p2", "p3"}, false},
+				"limit zero is the page ceiling": {0, []string{"p1", "p2", "p3"}, false},
 			}
 			for name, tc := range cases {
 				t.Run(name, func(t *testing.T) {
@@ -572,15 +577,251 @@ func TestCompositeLookupResourcesInTruncates(t *testing.T) {
 					if err != nil {
 						t.Fatalf("LookupResourcesIn: %v", err)
 					}
-					if !reflect.DeepEqual(got, tc.want) {
-						t.Fatalf("got %+v, want %+v", got, tc.want)
+					if !reflect.DeepEqual(got.IDs, tc.wantIDs) || got.Unrestricted {
+						t.Fatalf("got %+v, want IDs %v", got, tc.wantIDs)
+					}
+					if got.HasMore != tc.wantHasMore {
+						t.Fatalf("HasMore = %v, want %v (%+v)", got.HasMore, tc.wantHasMore, got)
+					}
+					if got.Truncated != got.HasMore {
+						t.Fatalf("the deprecated Truncated must carry HasMore, got %+v", got)
+					}
+					if (got.NextCursor != "") != tc.wantHasMore {
+						t.Fatalf("NextCursor %q disagrees with HasMore %v", got.NextCursor, got.HasMore)
 					}
 					if got.IDs == nil {
-						t.Fatal("IDs must stay non-nil through truncation")
+						t.Fatal("IDs must stay non-nil through paging")
 					}
 				})
 			}
 		})
+	}
+}
+
+// pageThrough walks LookupResourcesIn to exhaustion at a page size, following
+// NextCursor, and returns the concatenation.
+func pageThrough(t *testing.T, c *Composite, principal authorizersvc.PrincipalRef, permission, resourceType string, limit int) []string {
+	t.Helper()
+	all := []string{}
+	cursor := ""
+	for pages := 0; ; pages++ {
+		if pages > 64 {
+			t.Fatalf("page walk did not terminate at limit %d", limit)
+		}
+		res, err := c.LookupResourcesIn(context.Background(), authorizersvc.LookupRequest{
+			Principal: principal, Permission: permission, ResourceType: resourceType, Limit: limit, After: cursor,
+		})
+		if err != nil {
+			t.Fatalf("LookupResourcesIn(after=%q): %v", cursor, err)
+		}
+		all = append(all, res.IDs...)
+		if !res.HasMore {
+			if res.NextCursor != "" {
+				t.Fatalf("the last page must carry no continuation, got %q", res.NextCursor)
+			}
+			return all
+		}
+		if res.NextCursor == "" {
+			t.Fatal("HasMore without a continuation cannot advance")
+		}
+		cursor = res.NextCursor
+	}
+}
+
+// TestCompositeLookupResourcesInPagesToThePlainResult is the parity property of
+// the paged surface: walking the cursor at Limit 1 concatenates to EXACTLY what
+// the plain LookupResources returns — same ids, same order, no repeats — on both
+// owning kinds.
+func TestCompositeLookupResourcesInPagesToThePlainResult(t *testing.T) {
+	c, eng, roles := newBothKinds(t, authorizersvc.EvaluationLimits{})
+	ctx := context.Background()
+	for _, id := range []string{"p1", "p2", "p3", "p4"} {
+		grant(t, eng, "project", id, "viewer", "user", "u1")
+		assign(t, roles, "u1", "auditor", "project", id)
+	}
+	principal := authorizersvc.PrincipalRef{Type: "user", ID: "u1"}
+
+	for _, permission := range []string{"view", "audit"} {
+		t.Run(permission, func(t *testing.T) {
+			plain, err := c.LookupResources(ctx, principal, permission, "project")
+			if err != nil {
+				t.Fatalf("LookupResources: %v", err)
+			}
+			for _, limit := range []int{1, 2, 7} {
+				got := pageThrough(t, c, principal, permission, "project", limit)
+				if !reflect.DeepEqual(got, plain.IDs) {
+					t.Fatalf("limit %d: pages concatenated to %v, want the plain result %v", limit, got, plain.IDs)
+				}
+			}
+		})
+	}
+}
+
+// TestCompositeLookupResourcesInRefusesAForeignCursor proves the cursor is bound
+// to its query: a continuation minted for one permission, one principal, or one
+// OWNING KIND is refused for another — the enumerations do not share an id
+// order, so a tolerated cursor would silently skip or repeat rows.
+func TestCompositeLookupResourcesInRefusesAForeignCursor(t *testing.T) {
+	c, eng, roles := newBothKinds(t, authorizersvc.EvaluationLimits{})
+	ctx := context.Background()
+	for _, id := range []string{"p1", "p2", "p3"} {
+		grant(t, eng, "project", id, "viewer", "user", "u1")
+		grant(t, eng, "project", id, "viewer", "user", "u2")
+		assign(t, roles, "u1", "auditor", "project", id)
+	}
+	u1 := authorizersvc.PrincipalRef{Type: "user", ID: "u1"}
+
+	minted, err := c.LookupResourcesIn(ctx, authorizersvc.LookupRequest{
+		Principal: u1, Permission: "view", ResourceType: "project", Limit: 1,
+	})
+	if err != nil || minted.NextCursor == "" {
+		t.Fatalf("seed page: %+v, %v", minted, err)
+	}
+
+	cases := map[string]authorizersvc.LookupRequest{
+		"another owning kind": {Principal: u1, Permission: "audit", ResourceType: "project", Limit: 1, After: minted.NextCursor},
+		"another principal": {Principal: authorizersvc.PrincipalRef{Type: "user", ID: "u2"}, Permission: "view",
+			ResourceType: "project", Limit: 1, After: minted.NextCursor},
+		"another resource type": {Principal: u1, Permission: "enter", ResourceType: "org", Limit: 1, After: minted.NextCursor},
+	}
+	for name, req := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := c.LookupResourcesIn(ctx, req); !errors.Is(err, authorizersvc.ErrInvalidCursor) {
+				t.Fatalf("want ErrInvalidCursor, got %v", err)
+			}
+		})
+	}
+}
+
+// TestCompositeLookupResourcesInRefusesACursorAfterAModelChange proves the R2
+// binding: a cursor carries the OWNING MODEL's digest, so a deploy that changes
+// the relationship schema or the role model invalidates the cursors in flight
+// and the client restarts from page one rather than paging a different graph.
+func TestCompositeLookupResourcesInRefusesACursorAfterAModelChange(t *testing.T) {
+	ctx := context.Background()
+	limits := resolvedLimits(t, authorizersvc.EvaluationLimits{})
+	store := memstore.NewRelationships()
+	roleStore := memstore.NewRoles()
+	eng := newRelationshipEngine(t, store, authorizersvc.EvaluationLimits{})
+	roles := rolesvc.NewService(roleStore)
+	c := NewComposite(eng, roles, mustCompile(t, compositeRoleModel(), eng), limits)
+	for _, id := range []string{"p1", "p2", "p3"} {
+		grant(t, eng, "project", id, "viewer", "user", "u1")
+		assign(t, roles, "u1", "auditor", "project", id)
+	}
+	principal := authorizersvc.PrincipalRef{Type: "user", ID: "u1"}
+
+	// A changed ROLE model: the same pair, one more granting role.
+	changedRoles := RoleModel{ResourceTypes: map[string]RoleTypeDef{
+		"project":  {Roles: []string{"auditor", "inspector"}, Permissions: map[string][]string{"audit": {"auditor", "inspector"}}},
+		"platform": {Roles: []string{"steward"}, Permissions: map[string][]string{"steward": {"steward"}}},
+	}}
+	// A changed relationship SCHEMA: the same pair, one more granting relation.
+	changedSchema := authorizersvc.NewSchema([]authorizersvc.ResourceSchema{
+		{Name: "org", Def: authorizersvc.ResourceTypeDef{
+			Relations:   map[string]authorizersvc.RelationDef{"member": {AllowedSubjects: []authorizersvc.SubjectTypeRef{{Type: "user"}}}},
+			Permissions: map[string]authorizersvc.PermissionRule{"enter": authorizersvc.AnyOf(authorizersvc.Direct("member"))},
+		}},
+		{Name: "project", Def: authorizersvc.ResourceTypeDef{
+			Relations: map[string]authorizersvc.RelationDef{
+				"viewer": {AllowedSubjects: []authorizersvc.SubjectTypeRef{{Type: "user"}}},
+				"editor": {AllowedSubjects: []authorizersvc.SubjectTypeRef{{Type: "user"}}},
+				"org":    {AllowedSubjects: []authorizersvc.SubjectTypeRef{{Type: "org"}}},
+			},
+			Permissions: map[string]authorizersvc.PermissionRule{
+				"view": authorizersvc.AnyOf(authorizersvc.Direct("viewer"), authorizersvc.Direct("editor"),
+					authorizersvc.Through("org", "enter")),
+			},
+		}},
+	})
+
+	cases := map[string]struct {
+		permission string
+		rebuild    func() *Composite
+	}{
+		"role model changed": {"audit", func() *Composite {
+			return NewComposite(eng, roles, mustCompile(t, changedRoles, eng), limits)
+		}},
+		"relationship schema changed": {"view", func() *Composite {
+			changed, err := authorizersvc.NewService(store, changedSchema, authorizersvc.Config{})
+			if err != nil {
+				t.Fatalf("authorizersvc.NewService: %v", err)
+			}
+			return NewComposite(changed, roles, mustCompile(t, compositeRoleModel(), changed), limits)
+		}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			minted, err := c.LookupResourcesIn(ctx, authorizersvc.LookupRequest{
+				Principal: principal, Permission: tc.permission, ResourceType: "project", Limit: 1,
+			})
+			if err != nil || minted.NextCursor == "" {
+				t.Fatalf("seed page: %+v, %v", minted, err)
+			}
+			redeployed := tc.rebuild()
+			_, err = redeployed.LookupResourcesIn(ctx, authorizersvc.LookupRequest{
+				Principal: principal, Permission: tc.permission, ResourceType: "project", Limit: 1, After: minted.NextCursor,
+			})
+			if !errors.Is(err, authorizersvc.ErrInvalidCursor) {
+				t.Fatalf("want ErrInvalidCursor after the model change, got %v", err)
+			}
+		})
+	}
+}
+
+// TestCompositeLookupResourcesInRejectsAnOversizeLimit proves the budget bounds
+// the PAGE SIZE: a Limit above MaxLookupResults is invalid input the host maps
+// to 400, not a silently clamped page.
+func TestCompositeLookupResourcesInRejectsAnOversizeLimit(t *testing.T) {
+	c, eng, _ := newBothKinds(t, authorizersvc.EvaluationLimits{MaxLookupResults: 3})
+	grant(t, eng, "project", "p1", "viewer", "user", "u1")
+	principal := authorizersvc.PrincipalRef{Type: "user", ID: "u1"}
+
+	_, err := c.LookupResourcesIn(context.Background(), authorizersvc.LookupRequest{
+		Principal: principal, Permission: "view", ResourceType: "project", Limit: 4,
+	})
+	if !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("a Limit above MaxLookupResults must wrap sdk.ErrInvalidInput, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "4") || !strings.Contains(err.Error(), "3") {
+		t.Fatalf("the message must name both the requested limit and the ceiling, got %q", err)
+	}
+	// The ceiling itself is a legal page size.
+	if _, err := c.LookupResourcesIn(context.Background(), authorizersvc.LookupRequest{
+		Principal: principal, Permission: "view", ResourceType: "project", Limit: 3,
+	}); err != nil {
+		t.Fatalf("Limit at the ceiling: %v", err)
+	}
+}
+
+// TestCompositeLookupResourcesInAfterWithLimitZero proves a continuation works
+// with the default page size: Limit 0 resolves to MaxLookupResults and After is
+// honored on the same call.
+func TestCompositeLookupResourcesInAfterWithLimitZero(t *testing.T) {
+	c, eng, _ := newBothKinds(t, authorizersvc.EvaluationLimits{MaxLookupResults: 2})
+	ctx := context.Background()
+	for _, id := range []string{"p1", "p2", "p3"} {
+		grant(t, eng, "project", id, "viewer", "user", "u1")
+	}
+	principal := authorizersvc.PrincipalRef{Type: "user", ID: "u1"}
+
+	first, err := c.LookupResourcesIn(ctx, authorizersvc.LookupRequest{
+		Principal: principal, Permission: "view", ResourceType: "project",
+	})
+	if err != nil {
+		t.Fatalf("first page: %v", err)
+	}
+	if !reflect.DeepEqual(first.IDs, []string{"p1", "p2"}) || !first.HasMore || first.NextCursor == "" {
+		t.Fatalf("first page = %+v, want the two-id page with a continuation", first)
+	}
+	second, err := c.LookupResourcesIn(ctx, authorizersvc.LookupRequest{
+		Principal: principal, Permission: "view", ResourceType: "project", After: first.NextCursor,
+	})
+	if err != nil {
+		t.Fatalf("second page: %v", err)
+	}
+	if !reflect.DeepEqual(second.IDs, []string{"p3"}) || second.HasMore || second.NextCursor != "" {
+		t.Fatalf("second page = %+v, want the final [p3] page", second)
 	}
 }
 
@@ -632,8 +873,8 @@ func TestCompositeLookupResourcesInPassesUnrestrictedThrough(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LookupResourcesIn: %v", err)
 	}
-	if !got.Unrestricted || got.Truncated || len(got.IDs) != 0 {
-		t.Fatalf("a globally held granting role must pass through untouched, got %+v", got)
+	if !got.Unrestricted || got.Truncated || got.HasMore || got.NextCursor != "" || len(got.IDs) != 0 {
+		t.Fatalf("a globally held granting role must pass through untouched and unpaged, got %+v", got)
 	}
 }
 

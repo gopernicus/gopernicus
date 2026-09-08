@@ -104,6 +104,19 @@ step; content is per-dialect):
   ledger, keyed by MutationID). Stores the payload digest, resulting revision,
   domain outcome, and governing schema digest — never the payload itself.
   `expires_at` is nullable; **permanent retention is the default posture**.
+- `migrations/0005_iam_lookup_keyset.sql` — the **keyset access paths** for the
+  paged lookups. The four `Lookup*` reads page by resource id (`… AND resource_id
+  > ? ORDER BY resource_id LIMIT ?`), and neither
+  `idx_iam_relationships_type_relation` nor `idx_iam_roles_subject` carries
+  `resource_id`, so without these two indexes every page would sort the whole
+  matching set. It adds `idx_iam_relationships_type_relation_resource
+  (resource_type, relation, resource_id)` and
+  `idx_iam_roles_subject_resource_lookup (subject_type, subject_id,
+  resource_type, resource_id, role)`. No `COLLATE` clause appears here (the pgx
+  sibling must spell out `COLLATE "C"`): the ordering contract is raw byte order
+  and SQLite's default BINARY collation already is that. The index build holds
+  the write lock for its duration, so schedule the upgrade on a large existing
+  database.
 
 After export, the host owns the final migration stream in its own dir.
 

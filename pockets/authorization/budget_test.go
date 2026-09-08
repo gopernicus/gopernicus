@@ -3,6 +3,7 @@ package authorization
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/memstore"
@@ -275,54 +276,132 @@ func TestBudgetLookupResultsExhaustion(t *testing.T) {
 	}
 }
 
-// TestBudgetLookupResultsBeatsASmallLimit is the load-bearing proof that a
-// caller Limit NEVER weakens the evaluation budget: an enumeration that overflows
-// MaxLookupResults is ErrEvaluationLimit even when the caller asked for a single
-// ID. A truncating Limit must not be able to turn an indeterminate result into a
-// short one that looks complete.
+// TestBudgetLookupResultsBeatsASmallLimit is the load-bearing proof of where the
+// budget bites once LookupResourcesIn PAGES. MaxLookupResults is no longer a
+// total-results cap:
+//
+//   - A TOP-LEVEL enumeration larger than the budget now PAGES. Three docs under
+//     MaxLookupResults=2 are read one page at a time — no error, HasMore on every
+//     page but the last, and the walk yields all three in the plain order.
+//   - The "overflow beats a small limit" property MOVES to the work the paging
+//     cannot page (plan A3): an INTERMEDIATE Through target set over the budget,
+//     and a self-hierarchy ROOT set over the budget, are still ErrEvaluationLimit
+//     on EVERY page — never a short list that looks complete.
 func TestBudgetLookupResultsBeatsASmallLimit(t *testing.T) {
 	ctx := context.Background()
-	model := NewSchema([]ResourceSchema{{
-		Name: "doc",
-		Def: ResourceTypeDef{
-			Relations:   map[string]RelationDef{"viewer": {AllowedSubjects: []SubjectTypeRef{{Type: "user"}}}},
-			Permissions: map[string]PermissionRule{"view": AnyOf(Direct("viewer"))},
-		},
-	}})
-	tuples := []CreateRelationship{
-		{ResourceType: "doc", ResourceID: "d1", Relation: "viewer", SubjectType: "user", SubjectID: "u1"},
-		{ResourceType: "doc", ResourceID: "d2", Relation: "viewer", SubjectType: "user", SubjectID: "u1"},
-		{ResourceType: "doc", ResourceID: "d3", Relation: "viewer", SubjectType: "user", SubjectID: "u1"},
-	}
 	principal := PrincipalRef{Type: "user", ID: "u1"}
 
-	tight, tightStore := budgetService(t, model, EvaluationLimits{MaxLookupResults: 2})
-	if err := tightStore.CreateRelationships(ctx, tuples); err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	for _, limit := range []int{1, 2} {
-		_, err := tight.LookupResourcesIn(ctx, LookupRequest{
-			Principal: principal, Permission: "view", ResourceType: "doc", Limit: limit,
-		})
-		if !errors.Is(err, ErrEvaluationLimit) {
-			t.Fatalf("Limit %d over MaxLookupResults=2: want ErrEvaluationLimit, got %v", limit, err)
+	t.Run("a top-level enumeration over the budget pages", func(t *testing.T) {
+		model := NewSchema([]ResourceSchema{{
+			Name: "doc",
+			Def: ResourceTypeDef{
+				Relations:   map[string]RelationDef{"viewer": {AllowedSubjects: []SubjectTypeRef{{Type: "user"}}}},
+				Permissions: map[string]PermissionRule{"view": AnyOf(Direct("viewer"))},
+			},
+		}})
+		svc, store := budgetService(t, model, EvaluationLimits{MaxLookupResults: 2})
+		if err := store.CreateRelationships(ctx, []CreateRelationship{
+			{ResourceType: "doc", ResourceID: "d1", Relation: "viewer", SubjectType: "user", SubjectID: "u1"},
+			{ResourceType: "doc", ResourceID: "d2", Relation: "viewer", SubjectType: "user", SubjectID: "u1"},
+			{ResourceType: "doc", ResourceID: "d3", Relation: "viewer", SubjectType: "user", SubjectID: "u1"},
+		}); err != nil {
+			t.Fatalf("create: %v", err)
 		}
-	}
 
-	// The same small Limit truncates honestly once the BUDGET fits the set.
-	ok, okStore := budgetService(t, model, EvaluationLimits{MaxLookupResults: 3})
-	if err := okStore.CreateRelationships(ctx, tuples); err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	res, err := ok.LookupResourcesIn(ctx, LookupRequest{
-		Principal: principal, Permission: "view", ResourceType: "doc", Limit: 1,
+		for _, limit := range []int{1, 2} {
+			var got []string
+			cursor := ""
+			for pages := 0; ; pages++ {
+				if pages > 8 {
+					t.Fatalf("limit %d: page walk did not terminate", limit)
+				}
+				res, err := svc.LookupResourcesIn(ctx, LookupRequest{
+					Principal: principal, Permission: "view", ResourceType: "doc", Limit: limit, After: cursor,
+				})
+				if err != nil {
+					t.Fatalf("limit %d, after %q: want a page, got %v", limit, cursor, err)
+				}
+				if len(res.IDs) > limit {
+					t.Fatalf("limit %d: page of %d ids", limit, len(res.IDs))
+				}
+				got = append(got, res.IDs...)
+				if !res.HasMore {
+					break
+				}
+				if res.NextCursor == "" {
+					t.Fatalf("limit %d: HasMore without a continuation", limit)
+				}
+				cursor = res.NextCursor
+			}
+			if want := []string{"d1", "d2", "d3"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("limit %d: pages concatenated to %v, want %v", limit, got, want)
+			}
+		}
+
+		// The classic method still refuses to answer at all: it is the COMPLETE
+		// enumeration, and three docs do not fit a budget of two.
+		if _, err := svc.LookupResources(ctx, principal, "view", "doc"); !errors.Is(err, ErrEvaluationLimit) {
+			t.Fatalf("LookupResources over MaxLookupResults: want ErrEvaluationLimit, got %v", err)
+		}
 	})
-	if err != nil {
-		t.Fatalf("LookupResourcesIn within budget: %v", err)
-	}
-	if !res.Truncated || len(res.IDs) != 1 || res.IDs[0] != "d1" {
-		t.Fatalf("want the truncated single-ID prefix [d1], got %+v", res)
-	}
+
+	t.Run("an intermediate node over the budget fails on every page", func(t *testing.T) {
+		model := NewSchema([]ResourceSchema{
+			{Name: "org", Def: ResourceTypeDef{
+				Relations:   map[string]RelationDef{"admin": {AllowedSubjects: []SubjectTypeRef{{Type: "user"}}}},
+				Permissions: map[string]PermissionRule{"manage": AnyOf(Direct("admin"))},
+			}},
+			{Name: "post", Def: ResourceTypeDef{
+				Relations:   map[string]RelationDef{"org": {AllowedSubjects: []SubjectTypeRef{{Type: "org"}}}},
+				Permissions: map[string]PermissionRule{"view": AnyOf(Through("org", "manage"))},
+			}},
+		})
+		svc, store := budgetService(t, model, EvaluationLimits{MaxLookupResults: 2})
+		var tuples []CreateRelationship
+		for _, org := range []string{"o1", "o2", "o3"} { // 3 orgs > the budget of 2
+			tuples = append(tuples,
+				CreateRelationship{ResourceType: "org", ResourceID: org, Relation: "admin", SubjectType: "user", SubjectID: "u1"},
+				CreateRelationship{ResourceType: "post", ResourceID: "p_" + org, Relation: "org", SubjectType: "org", SubjectID: org},
+			)
+		}
+		if err := store.CreateRelationships(ctx, tuples); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+
+		for _, limit := range []int{1, 2} {
+			_, err := svc.LookupResourcesIn(ctx, LookupRequest{
+				Principal: principal, Permission: "view", ResourceType: "post", Limit: limit,
+			})
+			if !errors.Is(err, ErrEvaluationLimit) {
+				t.Fatalf("limit %d over an intermediate set of 3: want ErrEvaluationLimit, got %v", limit, err)
+			}
+			if !errors.Is(err, sdk.ErrUnavailable) {
+				t.Fatalf("evaluation-limit must wrap sdk.ErrUnavailable, got %v", err)
+			}
+		}
+	})
+
+	t.Run("a hierarchy root set over the budget fails on every page", func(t *testing.T) {
+		svc, store := budgetService(t, folderHierarchy(), EvaluationLimits{MaxLookupResults: 2})
+		if err := store.CreateRelationships(ctx, []CreateRelationship{
+			{ResourceType: "folder", ResourceID: "f1", Relation: "viewer", SubjectType: "user", SubjectID: "u1"},
+			{ResourceType: "folder", ResourceID: "f2", Relation: "viewer", SubjectType: "user", SubjectID: "u1"},
+			{ResourceType: "folder", ResourceID: "f3", Relation: "viewer", SubjectType: "user", SubjectID: "u1"},
+			{ResourceType: "folder", ResourceID: "f4", Relation: "parent", SubjectType: "folder", SubjectID: "f1"},
+		}); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		for _, limit := range []int{1, 2} {
+			// The closure needs the COMPLETE root set before it can page, so an
+			// over-budget root set is indeterminate however small the page is.
+			_, err := svc.LookupResourcesIn(ctx, LookupRequest{
+				Principal: principal, Permission: "view", ResourceType: "folder", Limit: limit,
+			})
+			if !errors.Is(err, ErrEvaluationLimit) {
+				t.Fatalf("limit %d over a root set of 3: want ErrEvaluationLimit, got %v", limit, err)
+			}
+		}
+	})
 }
 
 // TestCancelBeforeStoreCall proves a canceled context short-circuits Check and

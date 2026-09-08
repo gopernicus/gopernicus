@@ -3,6 +3,7 @@ package storetest
 import (
 	"context"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization"
@@ -289,6 +290,10 @@ func runRolesParity(t *testing.T, newRepos func(t *testing.T) authorization.Repo
 			t.Fatalf("viewer must not grant audit: %+v", res)
 		}
 	})
+
+	t.Run("RolesPagedParity", func(t *testing.T) {
+		runRolesPagedParity(t, newRepos)
+	})
 }
 
 // walkProjectID names the walk fixture's resources with a FIXED-WIDTH suffix so
@@ -346,5 +351,41 @@ func runComposed(t *testing.T, newRepos func(t *testing.T) authorization.Reposit
 				t.Fatalf("LookupResources(%s, %s) = %+v, want IDs %v and not unrestricted", tc.subject, tc.permission, look, tc.want)
 			}
 		}
+	})
+
+	t.Run("PagedPairOwnershipDispatch", func(t *testing.T) {
+		repos := newRepos(t)
+		comps := newRoleModelService(t, repos, authorization.Config{
+			RelationshipModel: composedSchema(),
+			RoleModel:         composedRoleModel(),
+		})
+		svc := comps.Service
+
+		// Each principal holds TWO resources under its own kind, so each owner has
+		// a real continuation to follow.
+		mustCreate(t, repos.Relationships,
+			ct("project", "p1", "viewer", "user", "u_tuple"),
+			ct("project", "p2", "viewer", "user", "u_tuple"),
+		)
+		grantRole(t, repos, comps.SystemMutator, "user", "u_role", "auditor", "project", "p1")
+		grantRole(t, repos, comps.SystemMutator, "user", "u_role", "auditor", "project", "p2")
+
+		tupleHolder := authorization.PrincipalRef{Type: "user", ID: "u_tuple"}
+		roleHolder := authorization.PrincipalRef{Type: "user", ID: "u_role"}
+		want := []string{"p1", "p2"}
+		if got := assertPagedParityAt(t, svc, tupleHolder, "view", "project", []int{1, 2}); !slices.Equal(got, want) {
+			t.Fatalf("relationship-owned paging = %v, want %v", got, want)
+		}
+		if got := assertPagedParityAt(t, svc, roleHolder, "audit", "project", []int{1, 2}); !slices.Equal(got, want) {
+			t.Fatalf("role-owned paging = %v, want %v", got, want)
+		}
+
+		// A cursor's fingerprint binds the OWNING KIND, not only the query: a
+		// relationship-owned continuation is refused on the role-owned permission
+		// of the SAME resource type.
+		cursor := firstPage(t, svc, tupleHolder, "view", "project", 1).NextCursor
+		assertRefusedCursor(t, svc, "on the role-owned permission of the same type", authorization.LookupRequest{
+			Principal: tupleHolder, Permission: "audit", ResourceType: "project", Limit: 1, After: cursor,
+		})
 	})
 }

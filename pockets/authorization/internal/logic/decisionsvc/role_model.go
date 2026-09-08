@@ -12,13 +12,23 @@
 package decisionsvc
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"sort"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
 	"github.com/gopernicus/gopernicus/pockets/authorization/internal/logic/authorizersvc"
 	"github.com/gopernicus/gopernicus/sdk"
 )
+
+// RoleModelEncodingVersion identifies the canonical role-model encoding hashed
+// into a digest. The digest hashes this prefix plus the canonical bytes, so
+// bumping it changes every digest — a deliberate, visible break. It mirrors
+// authorizersvc.SchemaEncodingVersion for the relationship kind.
+const RoleModelEncodingVersion = "gopernicus.authorization.rolemodel/1"
 
 var (
 	// ErrInvalidRoleModel reports a RoleModel violation. It wraps
@@ -93,6 +103,7 @@ type compiledRoleType struct {
 // deterministic.
 type CompiledRoleModel struct {
 	resourceTypes map[string]compiledRoleType
+	digest        string
 }
 
 // CompileRoleModel validates a RoleModel and returns its immutable compilation.
@@ -185,7 +196,69 @@ func CompileRoleModel(model RoleModel, declared Declarer) (*CompiledRoleModel, e
 		}
 	}
 
+	compiled.digest = computeRoleModelDigest(compiled.resourceTypes)
 	return compiled, nil
+}
+
+// Digest returns the compiled model's stable SHA-256 digest (lowercase hex). Two
+// models that declare the same types, roles, permissions, and grantors have the
+// same digest regardless of the map or slice order they were typed in; ANY
+// change to a declaration changes it. It is the roles kind's counterpart of the
+// relationship schema digest, and it is what binds a role-owned lookup cursor to
+// the model that produced it.
+func (m *CompiledRoleModel) Digest() string {
+	if m == nil {
+		return ""
+	}
+	return m.digest
+}
+
+// computeRoleModelDigest streams the version prefix and the canonical bytes of
+// the compiled model into SHA-256. The encoding is length-prefixed so opaque
+// names (which may legally contain any non-control rune) cannot alias across
+// field boundaries; every collection is emitted in sorted order so the digest is
+// independent of source map and slice order.
+func computeRoleModelDigest(rts map[string]compiledRoleType) string {
+	h := sha256.New()
+	io.WriteString(h, RoleModelEncodingVersion)
+	h.Write([]byte{0}) // separate the version prefix from the canonical bytes
+
+	typeNames := sortedKeys(rts)
+	writeDigestUint(h, len(typeNames))
+	for _, typeName := range typeNames {
+		writeDigestString(h, typeName)
+		rt := rts[typeName]
+
+		roleNames := sortedKeys(rt.roles)
+		writeDigestUint(h, len(roleNames))
+		for _, roleName := range roleNames {
+			writeDigestString(h, roleName)
+		}
+
+		permNames := sortedKeys(rt.grantors)
+		writeDigestUint(h, len(permNames))
+		for _, permName := range permNames {
+			writeDigestString(h, permName)
+			grantors := append([]string(nil), rt.grantors[permName]...)
+			sort.Strings(grantors)
+			writeDigestUint(h, len(grantors))
+			for _, roleName := range grantors {
+				writeDigestString(h, roleName)
+			}
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func writeDigestString(h io.Writer, s string) {
+	writeDigestUint(h, len(s))
+	io.WriteString(h, s)
+}
+
+func writeDigestUint(h io.Writer, v int) {
+	var b [4]byte
+	binary.BigEndian.PutUint32(b[:], uint32(v))
+	h.Write(b[:])
 }
 
 // DeclaresPermission reports whether the compiled role model declares permission

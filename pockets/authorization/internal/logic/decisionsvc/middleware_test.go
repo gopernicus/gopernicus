@@ -28,6 +28,10 @@ func (limitProbe) ListRoleAssignmentsBySubject(ctx context.Context, subjectType,
 	return crud.Page[role.Assignment]{}, authorizersvc.ErrEvaluationLimit
 }
 
+func (limitProbe) LookupResourceIDsBySubjectAndRoles(ctx context.Context, subjectType, subjectID, resourceType string, roles []string, after string, limit int) ([]string, bool, error) {
+	return nil, false, authorizersvc.ErrEvaluationLimit
+}
+
 func ranHandler(ran *bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		*ran = true
