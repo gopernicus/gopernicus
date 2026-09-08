@@ -41,6 +41,53 @@ under READ COMMITTED; the legacy `CheckRelation` is that primitive with bound
 no schema, table, or column changes. Hosts repin the store module together with
 the core (`pockets/authorization v0.8.0`).
 
+## Store-port note (next tag — core v0.9.0 / stores pgx v0.5.0 + turso v0.4.0, plan `authorization-stores-ambient-transaction`)
+
+**Baseline writes join the ambient transaction.** When the context handed to a
+`relationship.Storer` or `role.Storer` method carries the connector's
+Transact-owned transaction (`crud.Transactor` — `(*pgxdb.DB).Transact` /
+`(*tursodb.DB).Transact`), every method of both bundled SQL stores — reads and
+writes — now runs ON that transaction (`QuerierFrom(ctx)`), and
+`SetRelationTargets` reconciles on it instead of opening its own. A host's
+application row and the tuple that projects it therefore commit or roll back
+together (segovia v2 tenancy D15). Outside an ambient transaction nothing
+changed: `SetRelationTargets` still opens and owns its transaction (pgx
+advisory xact lock; turso `BEGIN IMMEDIATE` under the bounded busy retry).
+
+What a host must know:
+
+- **Return write errors from the `Transact` callback.** The store never rolls
+  back or marks the transaction rollback-only; a swallowed `sdk.ErrConflict`
+  from `SetRelationTargets` followed by `return nil` commits the host's earlier
+  work without the tuple. On PostgreSQL the conflict probe is a successful
+  SELECT, so it does not abort the transaction; a genuinely failed statement
+  does (25P02 until rollback) — return it.
+- **The pgx advisory lock widens to the host's commit.** `pg_advisory_xact_lock`
+  is released when the transaction it was taken in ends; inside an ambient
+  transaction that is the host's commit, so a competing `SetRelationTargets` on
+  the same key waits for the whole workflow. Do slow work before the write, not
+  after. Documented, not mitigated.
+- **turso: no busy retry on the ambient path.** The host's `BEGIN IMMEDIATE`
+  already holds the write lock, so `SQLITE_BUSY` is not expected; if one
+  surfaces it is returned as-is for the host to propagate.
+- **Guarded mutations refuse to run inside an ambient transaction (D5).**
+  `Apply`/`ApplyGuarded` — and therefore every `Service` mutation method and
+  `SystemMutator`, protected teardown included — return
+  `authorization.ErrGuardedInsideTransaction` (= `mutation.ErrGuardedInsideTransaction`,
+  wrapping `sdk.ErrInvalidInput`) with a nil receipt when the context carries the
+  ambient transaction, BEFORE any guard, validator, lock, or row. Previously the
+  guarded path silently ran on its own connection, committing its receipt and
+  tuples even when the host rolled back. No known host does this; if yours does,
+  move the guarded call outside `Transact` (a retry after a lost host row is a
+  replay by `MutationID`), or file for the joining design.
+- **Third-party stores** must honor the same contract (the port doc paragraphs
+  on both `Storer` interfaces) and pass `storetest.RunTransactional`, the new
+  exported entry point beside `storetest.Run`.
+- **Pins.** The turso store's connector pin moves `integrations/datastores/turso
+  v0.1.0 → v0.3.0` (v0.1.0 predates `Transact`/`QuerierFrom`); both stores pin
+  `pockets/authorization v0.9.0`. No database migration: no schema, table, or
+  column changes.
+
 Status: **EXECUTED & VALIDATED 2026-07-14** (authorizationv3, AZ3-5.1; drafted at
 AZ3-2.6). This is the operational protocol a host runs to move a live v1
 authorization database to v3. It **wraps** [`CONVERSION.md`](CONVERSION.md) — the

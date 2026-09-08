@@ -116,7 +116,13 @@ func (r resourceRelationshipRow) toDomain() relationship.ResourceRelationship {
 	}
 }
 
-// relationshipStore fills relationship.Storer over iam_relationships.
+// relationshipStore fills relationship.Storer over iam_relationships. Every
+// statement runs on s.db.QuerierFrom(ctx): the connector's ambient
+// Transact-owned transaction when the context carries one, the pool otherwise
+// (the port's ambient-transaction contract — reads included, so a host that
+// reads, decides, and writes inside ONE transaction sees its own uncommitted
+// state). The only place the store begins a transaction of its own is the
+// standalone SetRelationTargets path, and only when no ambient one exists.
 type relationshipStore struct {
 	db     *pgxdb.DB
 	schema pgxdb.Schema
@@ -147,7 +153,7 @@ SELECT EXISTS (
 	WHERE r.resource_type = @resource_type AND r.resource_id = @resource_id AND r.relation = @relation
 )`
 		var ok bool
-		if err := s.db.QueryRow(ctx, q, pgx.NamedArgs{
+		if err := s.db.QuerierFrom(ctx).QueryRow(ctx, q, pgx.NamedArgs{
 			"subject_type":  subjectType,
 			"subject_id":    subjectID,
 			"resource_type": resourceType,
@@ -170,7 +176,7 @@ SELECT
 	) AS matched`
 	var stateCount int
 	var matched bool
-	if err := s.db.QueryRow(ctx, q, pgx.NamedArgs{
+	if err := s.db.QuerierFrom(ctx).QueryRow(ctx, q, pgx.NamedArgs{
 		"subject_type":  subjectType,
 		"subject_id":    subjectID,
 		"resource_type": resourceType,
@@ -198,12 +204,13 @@ type rowQuerier interface {
 // empty subject_relation reads back as "" (a concrete subject); a non-empty one
 // as the exact userset relation.
 func (s *relationshipStore) GetRelationTargets(ctx context.Context, resourceType, resourceID, relation string) ([]relationship.RelationTarget, error) {
-	return relationTargets(ctx, s.db, s.schema, resourceType, resourceID, relation)
+	return relationTargets(ctx, s.db.QuerierFrom(ctx), s.schema, resourceType, resourceID, relation)
 }
 
 // relationTargets is the one relation-targets read: the read-side
-// GetRelationTargets runs it on the pool, the DecisionView's RelationTargets on
-// the mutation transaction. Same statement, same row order, same mapping.
+// GetRelationTargets runs it on the ambient querier (pool or host transaction),
+// the DecisionView's RelationTargets on the mutation transaction. Same
+// statement, same row order, same mapping.
 func relationTargets(ctx context.Context, q rowQuerier, schema pgxdb.Schema, resourceType, resourceID, relation string) ([]relationship.RelationTarget, error) {
 	stmt := `SELECT subject_type, subject_id, subject_relation FROM ` + schema.Table("iam_relationships") + ` WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation`
 	rows, err := q.Query(ctx, stmt, pgx.NamedArgs{"resource_type": resourceType, "resource_id": resourceID, "relation": relation})
@@ -237,7 +244,7 @@ func relationTargets(ctx context.Context, q rowQuerier, schema pgxdb.Schema, res
 func (s *relationshipStore) CheckRelationExists(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) (bool, error) {
 	q := `SELECT EXISTS (SELECT 1 FROM ` + s.table("iam_relationships") + ` WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation AND subject_type = @subject_type AND subject_id = @subject_id AND subject_relation = '')`
 	var ok bool
-	if err := s.db.QueryRow(ctx, q, pgx.NamedArgs{
+	if err := s.db.QuerierFrom(ctx).QueryRow(ctx, q, pgx.NamedArgs{
 		"resource_type": resourceType,
 		"resource_id":   resourceID,
 		"relation":      relation,
@@ -298,7 +305,7 @@ matches AS (
 )
 SELECT cnt.n AS state_count, m.rid
 FROM cnt LEFT JOIN matches m ON true`
-	rows, err := s.db.Query(ctx, q, pgx.NamedArgs{
+	rows, err := s.db.QuerierFrom(ctx).Query(ctx, q, pgx.NamedArgs{
 		"subject_type":  subjectType,
 		"subject_id":    subjectID,
 		"resource_type": resourceType,
@@ -347,7 +354,7 @@ FROM cnt LEFT JOIN matches m ON true`
 // key; an ALL-populated batch includes them; a MIXED batch is a loud store error
 // (the engine mints all-or-none). There is no RETURNING — the port is error-only.
 func (s *relationshipStore) CreateRelationships(ctx context.Context, in []relationship.CreateRelationship) error {
-	return createRelationships(ctx, s.db, s.schema, in)
+	return createRelationships(ctx, s.db.QuerierFrom(ctx), s.schema, in)
 }
 
 func createRelationships(ctx context.Context, db pgxdb.Querier, schema pgxdb.Schema, in []relationship.CreateRelationship) error {
@@ -424,8 +431,23 @@ ON CONFLICT DO NOTHING`
 }
 
 // SetRelationTargets serializes calls for one resource+relation with a
-// transaction-scoped advisory lock, then reconciles the set in one transaction.
-// The lock prevents two concurrent desired-state moves from committing a union.
+// transaction-scoped advisory lock, then reconciles the set (conflict probe,
+// delete-surplus, insert-missing) in ONE transaction. The lock prevents two
+// concurrent desired-state moves from committing a union.
+//
+// Which transaction is the port's ambient contract: when ctx carries the
+// connector's Transact-owned transaction the reconciliation runs ON it — no
+// begin, no commit, no rollback here; the host's callback return decides, and
+// the host must return this method's error (sdk.ErrConflict included) to roll
+// its own preceding work back. The advisory lock is pg_advisory_xact_lock, so
+// inside an ambient transaction it is released at the HOST's commit: a
+// competing caller on the same key waits for the whole host workflow, which is
+// exactly what keeps a concurrent move from slipping between the host's row and
+// the tuple that projects it (documented in the upgrade note, not mitigated).
+// The conflict probe is a successful SELECT that yields a Go error, so it never
+// puts PostgreSQL into the aborted-transaction state; a host that swallows it
+// and returns nil commits its earlier work without the tuple. Without an
+// ambient transaction the store opens and owns one exactly as before.
 func (s *relationshipStore) SetRelationTargets(ctx context.Context, resourceType, resourceID, relationName string, in []relationship.CreateRelationship) error {
 	desired := make(map[relationship.SubjectRef]relationship.CreateRelationship, len(in))
 	for _, c := range in {
@@ -439,67 +461,80 @@ func (s *relationshipStore) SetRelationTargets(ctx context.Context, resourceType
 		rows = append(rows, c)
 	}
 
+	if tx, ok := pgxdb.TxFromContext(ctx); ok {
+		return s.setRelationTargetsTx(ctx, tx, resourceType, resourceID, relationName, rows)
+	}
 	return s.db.InTx(ctx, func(tx *pgxdb.Tx) error {
-		lockKey := resourceType + "\x1f" + resourceID + "\x1f" + relationName
-		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended(@lock_key, 0))`, pgx.NamedArgs{"lock_key": lockKey}); err != nil {
-			return pgxdb.MapError(err)
-		}
+		return s.setRelationTargetsTx(ctx, tx, resourceType, resourceID, relationName, rows)
+	})
+}
 
-		if len(rows) == 0 {
-			_, err := tx.Exec(ctx, `DELETE FROM `+s.table("iam_relationships")+` WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation`, pgx.NamedArgs{
-				"resource_type": resourceType, "resource_id": resourceID, "relation": relationName,
-			})
-			return pgxdb.MapError(err)
-		}
+// setRelationTargetsTx is the reconciliation body over an OPEN transaction —
+// the store's own (standalone) or the host's (ambient). It takes the
+// transaction-scoped advisory lock for the key, probes for a desired target
+// already holding a different relation (sdk.ErrConflict), deletes the surplus
+// rows, and inserts the missing ones. It never commits or rolls back: the
+// caller that owns tx does.
+func (s *relationshipStore) setRelationTargetsTx(ctx context.Context, tx *pgxdb.Tx, resourceType, resourceID, relationName string, rows []relationship.CreateRelationship) error {
+	lockKey := resourceType + "\x1f" + resourceID + "\x1f" + relationName
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended(@lock_key, 0))`, pgx.NamedArgs{"lock_key": lockKey}); err != nil {
+		return pgxdb.MapError(err)
+	}
 
-		subjectTypes := make([]string, len(rows))
-		subjectIDs := make([]string, len(rows))
-		subjectRelations := make([]string, len(rows))
-		for i, c := range rows {
-			subjectTypes[i], subjectIDs[i], subjectRelations[i] = c.SubjectType, c.SubjectID, c.SubjectRelation
-		}
-		args := pgx.NamedArgs{
+	if len(rows) == 0 {
+		_, err := tx.Exec(ctx, `DELETE FROM `+s.table("iam_relationships")+` WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation`, pgx.NamedArgs{
 			"resource_type": resourceType, "resource_id": resourceID, "relation": relationName,
-			"subject_types": subjectTypes, "subject_ids": subjectIDs, "subject_relations": subjectRelations,
-		}
-		conflictQ := `SELECT EXISTS (
+		})
+		return pgxdb.MapError(err)
+	}
+
+	subjectTypes := make([]string, len(rows))
+	subjectIDs := make([]string, len(rows))
+	subjectRelations := make([]string, len(rows))
+	for i, c := range rows {
+		subjectTypes[i], subjectIDs[i], subjectRelations[i] = c.SubjectType, c.SubjectID, c.SubjectRelation
+	}
+	args := pgx.NamedArgs{
+		"resource_type": resourceType, "resource_id": resourceID, "relation": relationName,
+		"subject_types": subjectTypes, "subject_ids": subjectIDs, "subject_relations": subjectRelations,
+	}
+	conflictQ := `SELECT EXISTS (
 	SELECT 1 FROM ` + s.table("iam_relationships") + ` r
 	JOIN UNNEST(@subject_types::text[], @subject_ids::text[], @subject_relations::text[]) AS d(st, sid, sr)
 	  ON r.subject_type = d.st AND r.subject_id = d.sid AND r.subject_relation = d.sr
 	WHERE r.resource_type = @resource_type AND r.resource_id = @resource_id AND r.relation <> @relation
 )`
-		var conflict bool
-		if err := tx.QueryRow(ctx, conflictQ, args).Scan(&conflict); err != nil {
-			return pgxdb.MapError(err)
-		}
-		if conflict {
-			return fmt.Errorf("authorization pgx store: a desired target already holds a different relation on %s:%s: %w", resourceType, resourceID, sdk.ErrConflict)
-		}
+	var conflict bool
+	if err := tx.QueryRow(ctx, conflictQ, args).Scan(&conflict); err != nil {
+		return pgxdb.MapError(err)
+	}
+	if conflict {
+		return fmt.Errorf("authorization pgx store: a desired target already holds a different relation on %s:%s: %w", resourceType, resourceID, sdk.ErrConflict)
+	}
 
-		deleteQ := `DELETE FROM ` + s.table("iam_relationships") + ` r
+	deleteQ := `DELETE FROM ` + s.table("iam_relationships") + ` r
 WHERE r.resource_type = @resource_type AND r.resource_id = @resource_id AND r.relation = @relation
   AND NOT EXISTS (
 	SELECT 1 FROM UNNEST(@subject_types::text[], @subject_ids::text[], @subject_relations::text[]) AS d(st, sid, sr)
 	WHERE r.subject_type = d.st AND r.subject_id = d.sid AND r.subject_relation = d.sr
   )`
-		if _, err := tx.Exec(ctx, deleteQ, args); err != nil {
-			return pgxdb.MapError(err)
-		}
-		return createRelationships(ctx, tx, s.schema, rows)
-	})
+	if _, err := tx.Exec(ctx, deleteQ, args); err != nil {
+		return pgxdb.MapError(err)
+	}
+	return createRelationships(ctx, tx, s.schema, rows)
 }
 
 // DeleteResourceRelationships removes every tuple for a resource (idempotent).
 func (s *relationshipStore) DeleteResourceRelationships(ctx context.Context, resourceType, resourceID string) error {
 	q := `DELETE FROM ` + s.table("iam_relationships") + ` WHERE resource_type = @resource_type AND resource_id = @resource_id`
-	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{"resource_type": resourceType, "resource_id": resourceID})
+	_, err := s.db.QuerierFrom(ctx).Exec(ctx, q, pgx.NamedArgs{"resource_type": resourceType, "resource_id": resourceID})
 	return err
 }
 
 // DeleteRelationshipTarget removes one exact tuple, including subject_relation.
 func (s *relationshipStore) DeleteRelationshipTarget(ctx context.Context, resourceType, resourceID, relationName string, target relationship.SubjectRef) error {
 	q := `DELETE FROM ` + s.table("iam_relationships") + ` WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation AND subject_type = @subject_type AND subject_id = @subject_id AND subject_relation = @subject_relation`
-	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
+	_, err := s.db.QuerierFrom(ctx).Exec(ctx, q, pgx.NamedArgs{
 		"resource_type": resourceType, "resource_id": resourceID, "relation": relationName,
 		"subject_type": target.Type, "subject_id": target.ID, "subject_relation": target.Relation,
 	})
@@ -509,7 +544,7 @@ func (s *relationshipStore) DeleteRelationshipTarget(ctx context.Context, resour
 // DeleteRelationship removes one exact tuple (idempotent — absent is nil).
 func (s *relationshipStore) DeleteRelationship(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) error {
 	q := `DELETE FROM ` + s.table("iam_relationships") + ` WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation AND subject_type = @subject_type AND subject_id = @subject_id`
-	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
+	_, err := s.db.QuerierFrom(ctx).Exec(ctx, q, pgx.NamedArgs{
 		"resource_type": resourceType,
 		"resource_id":   resourceID,
 		"relation":      relation,
@@ -523,7 +558,7 @@ func (s *relationshipStore) DeleteRelationship(ctx context.Context, resourceType
 // (idempotent).
 func (s *relationshipStore) DeleteByResourceAndSubject(ctx context.Context, resourceType, resourceID, subjectType, subjectID string) error {
 	q := `DELETE FROM ` + s.table("iam_relationships") + ` WHERE resource_type = @resource_type AND resource_id = @resource_id AND subject_type = @subject_type AND subject_id = @subject_id`
-	_, err := s.db.Exec(ctx, q, pgx.NamedArgs{
+	_, err := s.db.QuerierFrom(ctx).Exec(ctx, q, pgx.NamedArgs{
 		"resource_type": resourceType,
 		"resource_id":   resourceID,
 		"subject_type":  subjectType,
@@ -537,7 +572,7 @@ func (s *relationshipStore) DeleteByResourceAndSubject(ctx context.Context, reso
 func (s *relationshipStore) CountByResourceAndRelation(ctx context.Context, resourceType, resourceID, relation string) (int, error) {
 	q := `SELECT COUNT(*) FROM ` + s.table("iam_relationships") + ` WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation`
 	var n int
-	if err := s.db.QueryRow(ctx, q, pgx.NamedArgs{"resource_type": resourceType, "resource_id": resourceID, "relation": relation}).Scan(&n); err != nil {
+	if err := s.db.QuerierFrom(ctx).QueryRow(ctx, q, pgx.NamedArgs{"resource_type": resourceType, "resource_id": resourceID, "relation": relation}).Scan(&n); err != nil {
 		return 0, pgxdb.MapError(err)
 	}
 	return n, nil
@@ -565,7 +600,7 @@ func (s *relationshipStore) ListRelationshipsBySubject(ctx context.Context, subj
 		OrderValueOf: func(r subjectRelationshipRow, _ string) any { return r.CreatedAt },
 		PKOf:         func(r subjectRelationshipRow) string { return r.ID },
 	}
-	page, err := pgxdb.List(ctx, s.db, q, req)
+	page, err := pgxdb.List(ctx, s.db.QuerierFrom(ctx), q, req)
 	if err != nil {
 		return crud.Page[relationship.SubjectRelationship]{}, err
 	}
@@ -594,7 +629,7 @@ func (s *relationshipStore) ListRelationshipsByResource(ctx context.Context, res
 		OrderValueOf: func(r resourceRelationshipRow, _ string) any { return r.CreatedAt },
 		PKOf:         func(r resourceRelationshipRow) string { return r.ID },
 	}
-	page, err := pgxdb.List(ctx, s.db, q, req)
+	page, err := pgxdb.List(ctx, s.db.QuerierFrom(ctx), q, req)
 	if err != nil {
 		return crud.Page[relationship.ResourceRelationship]{}, err
 	}
@@ -682,7 +717,7 @@ func limitClause(limit int) string {
 
 // queryStrings runs a single-column string SELECT and collects the rows.
 func (s *relationshipStore) queryStrings(ctx context.Context, query string, args pgx.NamedArgs) ([]string, error) {
-	rows, err := s.db.Query(ctx, query, args)
+	rows, err := s.db.QuerierFrom(ctx).Query(ctx, query, args)
 	if err != nil {
 		return nil, pgxdb.MapError(err)
 	}

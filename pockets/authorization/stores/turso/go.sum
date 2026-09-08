@@ -6,8 +6,8 @@ github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkp
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
-github.com/gopernicus/gopernicus/integrations/datastores/turso v0.1.0 h1:nDnl402LalI9vvxBTEuaw1CJmi1KPQzs4/cKg9xBwPA=
-github.com/gopernicus/gopernicus/integrations/datastores/turso v0.1.0/go.mod h1:DVdVESRXisN3AMwCZTxBg9lZaub7U8IT2dYJMO3FGkQ=
+github.com/gopernicus/gopernicus/integrations/datastores/turso v0.3.0 h1:mgp19pYvm/pkKKHDBaMnRxu/sC4yUClKWZBFSCY00PM=
+github.com/gopernicus/gopernicus/integrations/datastores/turso v0.3.0/go.mod h1:DNuK7lPIgIVULBk3Ih7L5m9sZCNTmhy5S6xOgMaoKVc=
 github.com/gopernicus/gopernicus/pockets/authorization v0.8.0 h1:miBu262Kffq5rWojITRQxjriFjOu7DR9emtdCTLYKo8=
 github.com/gopernicus/gopernicus/pockets/authorization v0.8.0/go.mod h1:yd6PdrEtZgtUlB7Pbxd6K+0ufV8V/Vw68Z8pAggHrGY=
 github.com/gopernicus/gopernicus/sdk v0.7.0 h1:dHgcnS8PQfD2L5dzXB51/ONzXadQ6bc29mLH4R9neyQ=

@@ -86,9 +86,22 @@ func (m *mutationStore) ApplyGuarded(ctx context.Context, cmd mutation.Command, 
 // mismatch, guard denial, semantic-validate failure, cancellation, or
 // infrastructure failure) returns (nil, err) and the transaction rolls back — no
 // rows, no revision bump, no receipt.
+//
+// The transaction is ALWAYS the store's own. A context carrying the connector's
+// Transact-owned ambient transaction is refused up front with
+// mutation.ErrGuardedInsideTransaction — before the guard, the validator, the
+// busy retry, or any row: running the guarded path on its own connection inside
+// a host transaction would silently split the atomicity the host believes it
+// has (the receipt and tuples commit even when the host rolls back), and
+// joining the host transaction would change receipt durability and the
+// guardian's view of scope revisions. The baseline relationship and role stores
+// DO join; the guarded call belongs outside Transact.
 func (m *mutationStore) apply(ctx context.Context, cmd mutation.Command, guard mutation.Guard, validate mutation.SemanticValidator) (*mutation.Receipt, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if _, ok := tursodb.TxFromContext(ctx); ok {
+		return nil, mutation.ErrGuardedInsideTransaction
 	}
 	if err := cmd.Validate(); err != nil {
 		return nil, err

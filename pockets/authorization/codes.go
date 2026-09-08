@@ -129,6 +129,17 @@ var (
 	// this package's mapper all share ONE identity (the ErrEvaluationLimit precedent).
 	ErrStaleRevision = mutation.ErrStaleRevision
 
+	// ErrGuardedInsideTransaction reports a guarded mutation (Service mutation
+	// methods, SystemMutator, or a direct MutationRepository call) attempted while
+	// the context carried the host connector's Transact-owned ambient transaction.
+	// The guarded path keeps its own transaction and refuses rather than silently
+	// committing on a second connection; the baseline RelationshipWriter and role
+	// stores DO join the ambient transaction. It is the shared contract sentinel
+	// (mutation.ErrGuardedInsideTransaction) re-exported so a host classifies it
+	// with one identity; it wraps sdk.ErrInvalidInput (HTTP 400 through
+	// RespondError: a precondition, not transient saturation).
+	ErrGuardedInsideTransaction = mutation.ErrGuardedInsideTransaction
+
 	// ErrInvariantConflict reports a protected-invariant block.
 	ErrInvariantConflict = fmt.Errorf("authorization: invariant conflict: %w", sdk.ErrConflict)
 

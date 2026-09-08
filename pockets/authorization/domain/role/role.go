@@ -122,6 +122,15 @@ func (g EffectiveGrant) Provenance() string {
 // Storer is the storage contract for the roles kind — plain lookups, no graph
 // walk. The listing methods are crud-typed with the same cursor/tiebreak
 // conventions as the relationship listings.
+//
+// Ambient transactions. When ctx carries the connector's Transact-owned
+// transaction (sdk/foundation/crud.Transactor), every method of the store runs
+// ON that transaction and never opens, commits, or rolls back one of its own;
+// the enclosing Transact decides the outcome from its callback's return value,
+// so a host must return a write error from that callback to roll the workflow
+// back. Outside an ambient transaction behavior is unchanged. Same contract as
+// relationship.Storer, so a role assignment and the relationship tuples written
+// beside it in one Transact commit or roll back together.
 type Storer interface {
 	// Assign inserts a role assignment. It is idempotent: a duplicate (same
 	// subject, role, and scope) is a no-op returning nil, and the existing row

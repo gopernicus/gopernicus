@@ -108,7 +108,11 @@ func (r roleRow) toDomain() role.Assignment {
 	}
 }
 
-// roleStore fills role.Storer over iam_roles.
+// roleStore fills role.Storer over iam_roles. Every statement runs on
+// s.db.QuerierFrom(ctx) — the connector's ambient Transact-owned transaction
+// when the context carries one, the pooled connection otherwise — so a role
+// assignment joins the same host transaction the relationship tuples beside it
+// do.
 type roleStore struct {
 	db *tursodb.DB
 }
@@ -127,7 +131,7 @@ func (s *roleStore) Assign(ctx context.Context, a role.Assignment) error {
 	const q = `INSERT INTO iam_roles (` + roleColumns + `)
 VALUES (?, ?, ?, ?, ?, ?)
 ON CONFLICT(subject_type, subject_id, role, resource_type, resource_id) DO NOTHING`
-	_, err := s.db.Exec(ctx, q,
+	_, err := s.db.QuerierFrom(ctx).Exec(ctx, q,
 		a.SubjectType, a.SubjectID, a.Role, a.ResourceType, a.ResourceID,
 		tursodb.FormatTime(time.Now().UTC()),
 	)
@@ -137,7 +141,7 @@ ON CONFLICT(subject_type, subject_id, role, resource_type, resource_id) DO NOTHI
 // Unassign removes an exact assignment (idempotent — zero rows deleted is nil).
 func (s *roleStore) Unassign(ctx context.Context, subjectType, subjectID, roleName, resourceType, resourceID string) error {
 	const q = `DELETE FROM iam_roles WHERE subject_type = ? AND subject_id = ? AND role = ? AND resource_type = ? AND resource_id = ?`
-	if _, err := tursodb.ExecAffecting(ctx, s.db, q, subjectType, subjectID, roleName, resourceType, resourceID); err != nil {
+	if _, err := tursodb.ExecAffecting(ctx, s.db.QuerierFrom(ctx), q, subjectType, subjectID, roleName, resourceType, resourceID); err != nil {
 		return err
 	}
 	return nil
@@ -148,7 +152,7 @@ func (s *roleStore) Unassign(ctx context.Context, subjectType, subjectID, roleNa
 // never the store's.
 func (s *roleStore) HasExactRole(ctx context.Context, subjectType, subjectID, roleName, resourceType, resourceID string) (bool, error) {
 	const q = `SELECT EXISTS(SELECT 1 FROM iam_roles WHERE subject_type = ? AND subject_id = ? AND role = ? AND resource_type = ? AND resource_id = ?)`
-	return existsQuery(ctx, s.db, q, subjectType, subjectID, roleName, resourceType, resourceID)
+	return existsQuery(ctx, s.db.QuerierFrom(ctx), q, subjectType, subjectID, roleName, resourceType, resourceID)
 }
 
 // ListBySubject pages a subject's assignments (created_at DESC, role_key DESC).
@@ -162,7 +166,7 @@ func (s *roleStore) ListBySubject(ctx context.Context, subjectType, subjectID st
 		OrderValueOf: func(r roleRow, _ string) any { return r.CreatedAt.Time },
 		PKOf:         func(r roleRow) string { return r.RoleKey },
 	}
-	page, err := tursodb.List(ctx, s.db, q, req)
+	page, err := tursodb.List(ctx, s.db.QuerierFrom(ctx), q, req)
 	if err != nil {
 		return crud.Page[role.Assignment]{}, err
 	}
@@ -183,7 +187,7 @@ func (s *roleStore) ListByResource(ctx context.Context, resourceType, resourceID
 		OrderValueOf: func(r roleRow, _ string) any { return r.CreatedAt.Time },
 		PKOf:         func(r roleRow) string { return r.RoleKey },
 	}
-	page, err := tursodb.List(ctx, s.db, q, req)
+	page, err := tursodb.List(ctx, s.db.QuerierFrom(ctx), q, req)
 	if err != nil {
 		return crud.Page[role.Assignment]{}, err
 	}
@@ -208,7 +212,7 @@ func (s *roleStore) ListEffectiveByResource(ctx context.Context, resourceType, r
 		OrderValueOf: func(r effectiveRoleRow, _ string) any { return r.GrantKey },
 		PKOf:         func(r effectiveRoleRow) string { return r.GrantKey },
 	}
-	page, err := tursodb.List(ctx, s.db, q, req)
+	page, err := tursodb.List(ctx, s.db.QuerierFrom(ctx), q, req)
 	if err != nil {
 		return crud.Page[role.EffectiveGrant]{}, err
 	}
