@@ -536,6 +536,35 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
+### pockets/authentication — v0.10.0 @ `62e69f4` — tagged 2026-09-08: `Optional()`, the pass-by-absence posture on `RequirePrincipal` (minor; additive)
+
+Plan of record `plans/authentication-optional-principal.md` (originating host
+segovia v2 tenancy D11 / leg 6b, the anonymous public read). `sdk` untouched;
+store modules untouched; no schema. PR #44.
+
+**One more `PrincipalOption`:**
+
+```go
+Optional()  // no credential ⇒ continue with NO principal; a presented credential still resolves and still denies when bad
+```
+
+At the OUTERMOST position, no credential presented within the set continues the
+request with no principal and no credential stashed (`CurrentPrincipal` /
+`CurrentCredential` report false), skipping the `Live()` tier and the `Browser()`
+redirect. A credential presented within the set is resolved exactly as before and
+**still denies** when invalid, expired, revoked, or of a kind outside the set — a
+stale cookie is a 401, never an anonymous pass. "Presented" follows the resolver's
+own transport rules: a credential on a transport outside the set is not read, so
+an anonymous pass there is correct. Nested: an inner gate under an anonymous outer
+finds no stash and resolves the same request itself — a required inner denies, an
+optional inner passes; an optional inner under a required outer narrows as usual.
+
+**Adoption.** `RequirePrincipal(Optional())` on a surface that serves both
+principals (ReBAC decides) and anonymous visitors (a per-resource public
+attribute decides); the handler reads `CurrentPrincipal` and branches on
+absence. No existing posture changes; no host code needs to move.
+
+
 ### pockets/authorization — v0.9.0 @ `495787c` (+ stores/pgx v0.5.0, stores/turso v0.4.0 @ `a5ca592`) — tagged 2026-09-08: baseline writes join the ambient `crud.Transactor` transaction (minor; store behavior change; guarded path refuses inside a transaction)
 
 Plan of record `.claude/plans/authorization-stores-ambient-transaction.md`
