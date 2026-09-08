@@ -45,7 +45,7 @@ func (s *Service) LookupResources(ctx context.Context, principal PrincipalRef, p
 	if err := relationship.ValidateRefField("resource type", resourceType); err != nil {
 		return LookupResult{}, err
 	}
-	return s.lookupResources(ctx, principal, permission, resourceType, newBudget(s.limits), make(map[string]bool), make(map[string]LookupResult))
+	return s.lookupResources(ctx, principal, permission, resourceType, newBudget(s.limits, s.store), make(map[string]bool), make(map[string]LookupResult))
 }
 
 // lookupResources enumerates the resource IDs of resourceType the principal can

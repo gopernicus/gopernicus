@@ -39,6 +39,18 @@ type Config struct {
 	IDs cryptids.IDGenerator
 }
 
+// PermissionReader is what the relationship walk reads through: the exact
+// two-method subset of relationship.Storer that checkDirectRelation and
+// checkThrough use. On the read side it is the service's own store; inside a
+// guarded mutation it is the transaction-bound, dependency-recording view the
+// authorization core adapts (EvaluateWith). relationship.Storer satisfies it
+// structurally. Depth, graph-state and fan-out budgets stay on the per-decision
+// budget, so the same walk runs over either reader with the same limits.
+type PermissionReader interface {
+	CheckRelationWithGroupExpansion(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string, maxExpansionStates int) (bool, error)
+	GetRelationTargets(ctx context.Context, resourceType, resourceID, relation string) ([]relationship.RelationTarget, error)
+}
+
 // Service is the sealed ReBAC evaluation engine. It evaluates permission checks
 // and manages relationship tuples against a relationship.Storer and an immutable
 // CompiledSchema. It retains NO caller schema data: Compile deep-copies the
@@ -91,7 +103,22 @@ func (s *Service) DeclaresPermission(resourceType, permission string) bool {
 // the engine a pure schema evaluator and fails closed — a host that omits a
 // bypass recipe simply gets no bypass.
 func (s *Service) Check(ctx context.Context, req CheckRequest) (CheckResult, error) {
-	return s.check(ctx, req, newBudget(s.limits))
+	return s.check(ctx, req, newBudget(s.limits, s.store))
+}
+
+// EvaluateWith runs the ordinary permission evaluation for req over reader
+// instead of the service's own store: the same compiled schema, the same
+// resolved limits, the same walk (direct relations, exact usersets, every
+// Through hop, path-local cycle detection). It is the seam a guarded mutation
+// uses to evaluate a permission INSIDE its transaction through a
+// dependency-recording view, so the guard gets the decision Check would give
+// rather than a re-implementation of the schema in host code. A nil reader is
+// rejected as invalid input (wrapping sdk.ErrInvalidInput) before any evaluation.
+func (s *Service) EvaluateWith(ctx context.Context, reader PermissionReader, req CheckRequest) (CheckResult, error) {
+	if reader == nil {
+		return CheckResult{}, fmt.Errorf("authorization evaluate: nil permission reader: %w", sdk.ErrInvalidInput)
+	}
+	return s.check(ctx, req, newBudget(s.limits, reader))
 }
 
 // check is the single evaluation funnel shared by Check and CheckExplain. The
@@ -236,7 +263,7 @@ func (s *Service) checkPermission(ctx context.Context, req CheckRequest, checks 
 				return result, nil
 			}
 		} else {
-			result, err := s.checkDirectRelation(ctx, req, check.Relation)
+			result, err := s.checkDirectRelation(ctx, req, check.Relation, b)
 			if err != nil {
 				return CheckResult{}, err
 			}
@@ -267,11 +294,11 @@ func mapExpansionBudget(err error) error {
 	return err
 }
 
-func (s *Service) checkDirectRelation(ctx context.Context, req CheckRequest, relation string) (CheckResult, error) {
+func (s *Service) checkDirectRelation(ctx context.Context, req CheckRequest, relation string, b *budget) (CheckResult, error) {
 	if err := ctx.Err(); err != nil {
 		return CheckResult{}, err
 	}
-	allowed, err := s.store.CheckRelationWithGroupExpansion(
+	allowed, err := b.reader.CheckRelationWithGroupExpansion(
 		ctx, req.Resource.Type, req.Resource.ID, relation, req.Principal.Type, req.Principal.ID, s.limits.MaxGraphStates,
 	)
 	if err != nil {
@@ -287,7 +314,7 @@ func (s *Service) checkThrough(ctx context.Context, req CheckRequest, check Perm
 	if err := ctx.Err(); err != nil {
 		return CheckResult{}, err
 	}
-	targets, err := s.store.GetRelationTargets(ctx, req.Resource.Type, req.Resource.ID, check.Through)
+	targets, err := b.reader.GetRelationTargets(ctx, req.Resource.Type, req.Resource.ID, check.Through)
 	if err != nil {
 		return CheckResult{}, err
 	}

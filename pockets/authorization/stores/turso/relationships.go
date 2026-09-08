@@ -2,6 +2,7 @@ package turso
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -162,12 +163,26 @@ SELECT
 	return matched != 0, nil
 }
 
+// rowQuerier is the Query seam shared by the pool (*tursodb.DB) and a
+// transaction (*tursodb.Tx), so one relation-targets reader serves the read side
+// and the mutation repository's transaction-bound DecisionView alike.
+type rowQuerier interface {
+	Query(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
 // GetRelationTargets returns the subjects holding a relation on a resource. An
 // empty subject_relation reads back as "" (a concrete subject); a non-empty one
 // as the exact userset relation.
 func (s *relationshipStore) GetRelationTargets(ctx context.Context, resourceType, resourceID, relation string) ([]relationship.RelationTarget, error) {
-	const q = `SELECT subject_type, subject_id, subject_relation FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ?`
-	rows, err := s.db.Query(ctx, q, resourceType, resourceID, relation)
+	return relationTargets(ctx, s.db, resourceType, resourceID, relation)
+}
+
+// relationTargets is the one relation-targets read: the read-side
+// GetRelationTargets runs it on the pool, the DecisionView's RelationTargets on
+// the mutation transaction. Same statement, same row order, same mapping.
+func relationTargets(ctx context.Context, q rowQuerier, resourceType, resourceID, relation string) ([]relationship.RelationTarget, error) {
+	const stmt = `SELECT subject_type, subject_id, subject_relation FROM iam_relationships WHERE resource_type = ? AND resource_id = ? AND relation = ?`
+	rows, err := q.Query(ctx, stmt, resourceType, resourceID, relation)
 	if err != nil {
 		return nil, err
 	}

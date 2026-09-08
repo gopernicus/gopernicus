@@ -515,14 +515,45 @@ type MutationGuard interface {
 The guard returns nil to ALLOW or a stable denial/error (typically wrapping
 `sdk.ErrForbidden`) to reject. **A guard that depends on authorization DATA must
 read it only through `view`** — the dependency-tracking `DecisionView` the
-repository supplies inside the atomic boundary (`view.CheckRelation` /
-`view.HasRole`) — and must **never** call the outer `Service`, which would open a
-detached check-then-write race. Every scope the guard reads through `view` is
-recorded with the revision it observed; the repository locks those anchors plus
-the mutation scope in canonical order and **re-validates every observed revision
-before commit** — a mismatch returns `ErrStaleRevision` and writes nothing. The
-guard must be synchronous, honor `ctx` cancellation, and do no network or
-unrelated-store I/O.
+repository supplies inside the atomic boundary — and must **never** call the
+outer `Service`, which would open a detached check-then-write race. Every scope
+the guard reads through `view` is recorded with the revision it observed; the
+repository locks those anchors plus the mutation scope in canonical order and
+**re-validates every observed revision before commit** — a mismatch returns
+`ErrStaleRevision` and writes nothing. The guard must be synchronous, honor
+`ctx` cancellation, and do no network or unrelated-store I/O.
+
+The view is two layers. `StoreDecisionView` is what a store implements: the
+transaction-bound primitives `CheckRelation` (unbounded userset expansion),
+`CheckRelationBounded` (the read-side expansion budget), `RelationTargets` (a
+Through hop's edge read), `HasRole`, and `Dependencies`. `DecisionView` — what
+`AuthorizeMutation` receives — embeds it and adds **`CheckPermission`**, the
+relationship engine's own walk run over those primitives:
+
+```go
+func (g hostGuard) AuthorizeMutation(ctx context.Context, attempt authorization.MutationAttempt, view authorization.DecisionView) error {
+    ok, err := view.CheckPermission(ctx, attempt.Scope, "manage", attempt.Actor.Type, attempt.Actor.ID)
+    if err != nil {
+        return err // ErrEvaluationLimit, ErrPermissionOwnedByRoles, … — the mutation writes nothing
+    }
+    if !ok {
+        return fmt.Errorf("manage denied: %w", sdk.ErrForbidden)
+    }
+    return nil
+}
+```
+
+`CheckPermission` gives the SAME answer the read-side `Check` gives for that
+principal on that resource — direct relations, exact usersets, every `Through`
+hop, the same `Config.Limits` budgets — evaluated inside the mutation
+transaction, with every scope the walk navigated recorded as a locked,
+revision-validated dependency. So a schema where authority is inherited from a
+container (`dashboard.manage = owner | Through(space, manage)`) needs no
+ancestor re-walk in host code and no detached `Service.Check`. Budget
+exhaustion is `ErrEvaluationLimit` (a command error), never a deny. A pair the
+`RoleModel` declares is refused with `ErrPermissionOwnedByRoles` before any
+store read — the guard asks `HasRole` for those. The scope must be a resource
+scope; anything else is `ErrInvalidRequest`.
 
 Typed guarded commands (each takes `actor Actor` + a command struct carrying a
 `MutationID`, the target, and an optional `ExpectedRevision *Revision`):

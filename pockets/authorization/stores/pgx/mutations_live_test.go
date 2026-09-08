@@ -66,7 +66,7 @@ func TestMutationAbsentAnchorNoPhantom(t *testing.T) {
 
 	sScope := mutation.ScopeKey{Kind: mutation.ScopeResource, Type: "doc", ID: "S"}
 
-	guard := func(gctx context.Context, view mutation.DecisionView) error {
+	guard := func(gctx context.Context, view mutation.StoreDecisionView) error {
 		// 1. Record dependency on S while it has no anchor → observed revision 0.
 		if _, err := view.CheckRelation(gctx, sScope, "owner", "user", "u9"); err != nil {
 			return err
@@ -106,7 +106,7 @@ func TestMutationGuardPanicRollsBack(t *testing.T) {
 	m := repos.Mutations
 	mustApplyLive(t, m, grantCmd(mutID(t), "P", "owner", "u1")) // revision 1
 
-	panicGuard := func(context.Context, mutation.DecisionView) error {
+	panicGuard := func(context.Context, mutation.StoreDecisionView) error {
 		panic("guard blew up")
 	}
 

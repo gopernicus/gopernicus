@@ -187,12 +187,26 @@ SELECT
 	return matched, nil
 }
 
+// rowQuerier is the Query seam shared by the pool (*pgxdb.DB) and a transaction
+// (*pgxdb.Tx), so one relation-targets reader serves the read side and the
+// mutation repository's transaction-bound DecisionView alike.
+type rowQuerier interface {
+	Query(ctx context.Context, query string, args ...any) (pgx.Rows, error)
+}
+
 // GetRelationTargets returns the subjects holding a relation on a resource. An
 // empty subject_relation reads back as "" (a concrete subject); a non-empty one
 // as the exact userset relation.
 func (s *relationshipStore) GetRelationTargets(ctx context.Context, resourceType, resourceID, relation string) ([]relationship.RelationTarget, error) {
-	q := `SELECT subject_type, subject_id, subject_relation FROM ` + s.table("iam_relationships") + ` WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation`
-	rows, err := s.db.Query(ctx, q, pgx.NamedArgs{"resource_type": resourceType, "resource_id": resourceID, "relation": relation})
+	return relationTargets(ctx, s.db, s.schema, resourceType, resourceID, relation)
+}
+
+// relationTargets is the one relation-targets read: the read-side
+// GetRelationTargets runs it on the pool, the DecisionView's RelationTargets on
+// the mutation transaction. Same statement, same row order, same mapping.
+func relationTargets(ctx context.Context, q rowQuerier, schema pgxdb.Schema, resourceType, resourceID, relation string) ([]relationship.RelationTarget, error) {
+	stmt := `SELECT subject_type, subject_id, subject_relation FROM ` + schema.Table("iam_relationships") + ` WHERE resource_type = @resource_type AND resource_id = @resource_id AND relation = @relation`
+	rows, err := q.Query(ctx, stmt, pgx.NamedArgs{"resource_type": resourceType, "resource_id": resourceID, "relation": relation})
 	if err != nil {
 		return nil, pgxdb.MapError(err)
 	}

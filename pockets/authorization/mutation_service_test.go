@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
+
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -24,6 +26,16 @@ type stubDecisionView struct {
 func (v *stubDecisionView) CheckRelation(_ context.Context, scope ScopeKey, _, _, _ string) (bool, error) {
 	v.deps = append(v.deps, Dependency{Scope: scope})
 	return false, nil
+}
+
+func (v *stubDecisionView) CheckRelationBounded(_ context.Context, scope ScopeKey, _, _, _ string, _ int) (bool, error) {
+	v.deps = append(v.deps, Dependency{Scope: scope})
+	return false, nil
+}
+
+func (v *stubDecisionView) RelationTargets(_ context.Context, scope ScopeKey, _ string) ([]relationship.RelationTarget, error) {
+	v.deps = append(v.deps, Dependency{Scope: scope})
+	return nil, nil
 }
 
 func (v *stubDecisionView) HasRole(_ context.Context, scope ScopeKey, _, _, _ string) (bool, error) {
@@ -146,13 +158,14 @@ func TestActorHasNoConstructibleSystemKind(t *testing.T) {
 
 // TestGuardComposesIntoMutationGuard proves Actor + MutationGuard fold into the
 // repository-level Guard closure: the closure carries the actor, operation, scope,
-// and proposed change into the MutationAttempt and passes the repository's view
-// straight through.
+// and proposed change into the MutationAttempt and hands the guard the
+// repository's view wrapped as the permission view (the store primitives pass
+// through; CheckPermission rides on top).
 func TestGuardComposesIntoMutationGuard(t *testing.T) {
 	guard := &stubGuard{}
 	cmd := validGrantCommand(t)
 	actor := actorU1()
-	closure := composeGuard(actor, guard, cmd)
+	closure := composeGuard(actor, guard, cmd, nil, nil)
 
 	view := &stubDecisionView{}
 	if err := closure(context.Background(), view); err != nil {
@@ -167,8 +180,9 @@ func TestGuardComposesIntoMutationGuard(t *testing.T) {
 	if len(guard.gotAttempt.Change.Relationships) != 1 {
 		t.Fatalf("proposed change not propagated: %+v", guard.gotAttempt.Change)
 	}
-	if guard.gotView != view {
-		t.Fatalf("repository view not passed through to the guard")
+	pv, ok := guard.gotView.(permissionView)
+	if !ok || pv.StoreDecisionView != view {
+		t.Fatalf("repository view not passed through to the guard: got %T", guard.gotView)
 	}
 }
 

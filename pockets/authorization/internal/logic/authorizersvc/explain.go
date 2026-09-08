@@ -81,7 +81,7 @@ func (t *explainTrace) explanation(decision Reason) Explanation {
 // infrastructure errors; a store/limit failure returns the error and the partial
 // steps gathered so far.
 func (s *Service) CheckExplain(ctx context.Context, req CheckRequest) (CheckResult, Explanation, error) {
-	b := newBudget(s.limits)
+	b := newBudget(s.limits, s.store)
 	b.trace = &explainTrace{}
 	res, err := s.check(ctx, req, b)
 	return res, b.trace.explanation(res.ReasonCode), err

@@ -495,83 +495,120 @@ type decisionView struct {
 	order  []string
 }
 
-var _ mutation.DecisionView = (*decisionView)(nil)
+var _ mutation.StoreDecisionView = (*decisionView)(nil)
 
 func newDecisionView(tx *pgxdb.Tx, schema pgxdb.Schema) *decisionView {
 	return &decisionView{tx: tx, schema: schema, deps: map[string]mutation.Dependency{}}
 }
 
-// CheckRelation reports whether subjectType:subjectID holds relation on the
-// resource named by scope, with group expansion (the reachable CTE), recording the
-// scope + revision as a dependency.
+// CheckRelation is CheckRelationBounded in the unbounded mode: the legacy
+// primitive, now with the same one-snapshot dependency collection.
 func (v *decisionView) CheckRelation(ctx context.Context, scope mutation.ScopeKey, relation, subjectType, subjectID string) (bool, error) {
+	return v.CheckRelationBounded(ctx, scope, relation, subjectType, subjectID, 0)
+}
+
+// reachedState is one row of the CheckRelationBounded statement: a state of the
+// subject's exact-userset expansion, the revision of the resource scope its
+// membership edges live under (0 with no anchor), and whether a grant on the
+// checked resource matches this state.
+type reachedState struct {
+	atype, aid string
+	revision   int64
+	grants     bool
+}
+
+// CheckRelationBounded reports whether subjectType:subjectID holds relation on
+// the resource named by scope, with exact-userset expansion bounded by
+// maxExpansionStates (the read-side accounting: the seed counts; overflow is
+// relationship.ErrExpansionBudgetExceeded, never an allow or a truncated deny; a
+// non-positive bound is unbounded). The resource scope is recorded BEFORE the
+// grant read. Then ONE statement — one PostgreSQL snapshot — returns the reached
+// states, each state's resource-scope revision, and the per-state grant match,
+// so the decision and the revisions it depends on can never straddle a
+// concurrent commit (the two-statement read-then-record hazard under READ
+// COMMITTED). Dependency collection is bounded by the same cap as the decision.
+func (v *decisionView) CheckRelationBounded(ctx context.Context, scope mutation.ScopeKey, relation, subjectType, subjectID string, maxExpansionStates int) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
 	if err := v.record(ctx, scope); err != nil {
 		return false, err
 	}
-	q := reachableCTE(v.schema) + `
-SELECT EXISTS (
-	SELECT 1
-	FROM ` + v.schema.Table("iam_relationships") + ` r
-	JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
-	WHERE r.resource_type = @resource_type AND r.resource_id = @resource_id AND r.relation = @relation
-)`
-	var ok bool
-	if err := v.tx.QueryRow(ctx, q, pgx.NamedArgs{
+	args := pgx.NamedArgs{
 		"subject_type":  subjectType,
 		"subject_id":    subjectID,
 		"resource_type": scope.Type,
 		"resource_id":   scope.ID,
 		"relation":      relation,
-	}).Scan(&ok); err != nil {
+		"resource_kind": string(mutation.ScopeResource),
+	}
+	cte, from := reachableCTE(v.schema), "reachable"
+	if maxExpansionStates > 0 {
+		cte, from = boundedReachableCTE(v.schema), "capped"
+		args["max_depth"] = maxExpansionStates
+		args["state_cap"] = maxExpansionStates + 1
+	}
+	q := cte + `
+SELECT s.atype, s.aid, COALESCE(sc.revision, 0),
+	EXISTS (
+		SELECT 1 FROM ` + v.schema.Table("iam_relationships") + ` r
+		WHERE r.resource_type = @resource_type AND r.resource_id = @resource_id AND r.relation = @relation
+		  AND r.subject_type = s.atype AND r.subject_id = s.aid AND r.subject_relation = s.arelation
+	)
+FROM ` + from + ` s
+LEFT JOIN ` + v.schema.Table("iam_scopes") + ` sc
+	ON sc.scope_kind = @resource_kind AND sc.scope_type = s.atype AND sc.scope_id = s.aid`
+	rows, err := v.tx.Query(ctx, q, args)
+	if err != nil {
 		return false, mapMutationError(err)
 	}
-	// Record every intermediate resource scope traversed during group expansion:
-	// an edge feeding the reachable set lives under its (atype, aid) resource
-	// scope, so a concurrent membership revoke bumps that scope's revision. Not
-	// recording it would let a guarded mutation commit on a now-false decision.
-	if err := v.recordExpansionScopes(ctx, subjectType, subjectID); err != nil {
-		return false, err
-	}
-	return ok, nil
-}
-
-// recordExpansionScopes records a ScopeResource dependency for every distinct
-// (atype, aid) in the subject's reachable set — the intermediate resource scopes
-// whose membership edges the CheckRelation expansion traversed. It runs the same
-// reachable CTE in the same tx. Recording the seed (the subject itself as a
-// resource scope) is a harmless over-record; UNDER-recording is the safety bug.
-func (v *decisionView) recordExpansionScopes(ctx context.Context, subjectType, subjectID string) error {
-	rows, err := v.tx.Query(ctx, reachableCTE(v.schema)+`
-SELECT DISTINCT atype, aid FROM reachable`, pgx.NamedArgs{
-		"subject_type": subjectType,
-		"subject_id":   subjectID,
-	})
-	if err != nil {
-		return mapMutationError(err)
-	}
-	type scopePair struct{ atype, aid string }
-	var pairs []scopePair
+	var states []reachedState
 	for rows.Next() {
-		var p scopePair
-		if err := rows.Scan(&p.atype, &p.aid); err != nil {
+		var st reachedState
+		if err := rows.Scan(&st.atype, &st.aid, &st.revision, &st.grants); err != nil {
 			rows.Close()
-			return mapMutationError(err)
+			return false, mapMutationError(err)
 		}
-		pairs = append(pairs, p)
+		states = append(states, st)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return mapMutationError(err)
+		return false, mapMutationError(err)
 	}
-	for _, p := range pairs {
-		if err := v.record(ctx, mutation.ScopeKey{Kind: mutation.ScopeResource, Type: p.atype, ID: p.aid}); err != nil {
-			return err
-		}
+	if maxExpansionStates > 0 && len(states) > maxExpansionStates {
+		return false, relationship.ErrExpansionBudgetExceeded
 	}
-	return nil
+	// Record every resource scope the expansion traversed with the revision THIS
+	// snapshot observed: an edge feeding the reachable set lives under its
+	// (atype, aid) scope, so a concurrent membership revoke bumps that revision
+	// and invalidates the decision at commit. Recording the seed (the subject as
+	// a resource scope) is a harmless over-record; UNDER-recording is the bug.
+	allowed := false
+	for _, st := range states {
+		v.recordObserved(mutation.ScopeKey{Kind: mutation.ScopeResource, Type: st.atype, ID: st.aid}, mutation.Revision(st.revision))
+		allowed = allowed || st.grants
+	}
+	return allowed, nil
+}
+
+// RelationTargets records the scope's revision FIRST, then reads its targets
+// through the transaction with the read-side statement. With record-before-read
+// a parent edge that a concurrent transaction revokes between the two reads is
+// paired with the PRE-revoke revision, so commit validation sees the bump and
+// aborts as stale; the reverse order would pair the stale edge with the
+// post-revoke revision and validate it.
+func (v *decisionView) RelationTargets(ctx context.Context, scope mutation.ScopeKey, relation string) ([]relationship.RelationTarget, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := v.record(ctx, scope); err != nil {
+		return nil, err
+	}
+	targets, err := relationTargets(ctx, v.tx, v.schema, scope.Type, scope.ID, relation)
+	if err != nil {
+		return nil, mapMutationError(err)
+	}
+	return targets, nil
 }
 
 // HasRole reports whether subjectType:subjectID holds role at scope, recording the
@@ -623,15 +660,26 @@ func (v *decisionView) Dependencies() []mutation.Dependency {
 
 // record captures a scope dependency once, reading its current (unlocked) revision.
 func (v *decisionView) record(ctx context.Context, scope mutation.ScopeKey) error {
-	key := scope.Canonical()
-	if _, ok := v.deps[key]; ok {
+	if _, ok := v.deps[scope.Canonical()]; ok {
 		return nil
 	}
 	rev, err := scopeRevision(ctx, v.tx, v.schema, scope)
 	if err != nil {
 		return err
 	}
+	v.recordObserved(scope, rev)
+	return nil
+}
+
+// recordObserved captures a scope dependency with a revision the caller already
+// read in the same statement snapshot as the rows it depends on. A scope
+// recorded earlier keeps its FIRST revision: an older observation can only make
+// commit validation stricter, never let a later change slip through.
+func (v *decisionView) recordObserved(scope mutation.ScopeKey, rev mutation.Revision) {
+	key := scope.Canonical()
+	if _, ok := v.deps[key]; ok {
+		return
+	}
 	v.deps[key] = mutation.Dependency{Scope: scope, Revision: rev}
 	v.order = append(v.order, key)
-	return nil
 }
