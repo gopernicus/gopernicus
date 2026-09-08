@@ -536,6 +536,52 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
+### pockets/authorization — v0.10.0 (next tag): `FilterPage`, the postfilter page-filler, and the memoized batch reader (minor; core-only)
+
+Plan of record `.claude/plans/authorization-lookup-paging.md` (#29, the
+deferred half of #22; originating host segovia v2, `v2-tenancy.md` O6/D10),
+tasks 5–6 — the FIRST of two trains under ruling R4. A **minor**: purely
+additive, no store port change, store modules NOT retagged, `sdk v0.7.0` pin
+unchanged.
+
+**Additions.**
+
+- `FilterPage[T](ctx, *Service, FilterPageRequest[T]) (crud.Page[T], error)` —
+  the DENSE-and-bounded enumeration path: pulls candidate pages from a host
+  `CandidateSource[T]` (one `Candidate.NextCursor` PER ROW, the source's own
+  keyset cursor after that row), decides each pull with ONE `FilterAuthorized`
+  call, and fills one authorized page in the host's order. Continuation = the
+  cursor after the last candidate consumed, including a mid-batch stop. A
+  source that returns more than asked, reports `HasMore` with no rows, returns
+  an empty or non-advancing cursor, or repeats a cursor within one call is
+  refused with `sdk.ErrInvalidInput` (400). `Limit` 0 is `crud.DefaultLimit`
+  (this IS a page, unlike `LookupResourcesIn`); negative or above
+  `MaxBatchSize` is `sdk.ErrInvalidInput`. Items is always non-nil.
+- `EvaluationLimits.MaxFilterScan` (default `DefaultMaxFilterScan` = 20 000 =
+  20 × `DefaultMaxBatchSize`): every source pull is clamped to
+  `min(2×Limit, MaxBatchSize, remaining MaxFilterScan)`, so one call never
+  scans more. Reaching the bound with the page unfilled returns the PARTIAL
+  page plus a continuation — the one budget dimension whose exhaustion is a
+  page, not `ErrEvaluationLimit`, because the cursor makes it resumable.
+  Consequence hosts must render for: `Page.HasMore` means UNSCANNED CANDIDATES
+  REMAIN, not that another authorized row exists — following a `HasMore` page
+  may yield a final empty page.
+- **B4 — the memoized batch reader (no API change).** `CheckBatch` /
+  `FilterAuthorized` over a permission with any `Through` check (or a
+  heterogeneous batch) still evaluates each request with its OWN fresh budget,
+  but over ONE batch-local reader that memoizes successful exact
+  `GetRelationTargets` / `CheckRelationWithGroupExpansion` reads. A container's
+  500 items now read the shared container's targets and run its direct check
+  once. Results and every `ErrEvaluationLimit` are identical to sequential
+  `Check`; it never enumerates globally, so a bounded container listing cannot
+  fail on a principal whose total accessible set exceeds `MaxLookupResults`.
+
+**Adoption.** segovia v2 container listings (`/spaces/{id}/spaces`,
+`/spaces/{id}/dashboards`, `/tenants/{id}/spaces`): replace the unbounded
+`FilterAuthorized` over the whole container with `FilterPage` over the
+tenancy/dashboards stores' keyset queries (per-row cursors). "Everything of
+type X I may see" stays on the prefilter — paged on the next tag.
+
 ### pockets/authentication — v0.10.0 @ `62e69f4` — tagged 2026-09-08: `Optional()`, the pass-by-absence posture on `RequirePrincipal` (minor; additive)
 
 Plan of record `plans/authentication-optional-principal.md` (originating host
