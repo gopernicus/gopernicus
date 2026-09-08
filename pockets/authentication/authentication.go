@@ -472,6 +472,15 @@ func Live() PrincipalOption { return authsvc.Live() }
 // Config.BrowserLoginPath with a validated return_to on GET/HEAD (design §9.2).
 func Browser() PrincipalOption { return authsvc.Browser() }
 
+// Optional switches the OUTERMOST authenticator from deny-by-absence to
+// pass-by-absence: no credential presented within the set continues the
+// request with no principal and no credential stashed, skipping the Live()
+// tier and the Browser() redirect. A credential presented within the set is
+// still resolved and denied when invalid, expired, revoked, or of a kind
+// outside the set — a stale or wrong-kind credential is never laundered into
+// anonymity.
+func Optional() PrincipalOption { return authsvc.Optional() }
+
 // RoutePrincipalStrategy is a host's authentication posture for ONE bundled
 // route group (Config.BundledRouteAuth). It is opaque so "unset" stays
 // distinguishable from an explicit zero-option PrincipalStrategy(), which

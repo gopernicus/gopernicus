@@ -784,3 +784,174 @@ func TestCurrentCredentialAbsent(t *testing.T) {
 		t.Error("CurrentCredential reported a credential for a principal it did not resolve")
 	}
 }
+
+// --- Optional(): pass-by-absence, still deny-on-presented-but-invalid ---
+
+// optionalObserved is what an Optional() request saw on its context, including
+// the presence bools the plain observed type does not carry — Optional()'s
+// whole point is distinguishing "no credential" from "a resolved one".
+type optionalObserved struct {
+	reached     bool
+	principal   Principal
+	principalOK bool
+	cred        Credential
+	credOK      bool
+	sessionID   string
+	sessionOK   bool
+}
+
+// serveOptional runs one request through mw and captures the stash by presence,
+// not just value — Optional()'s anonymous pass must report false, not a zero
+// value indistinguishable from an admitted zero-ID principal.
+func serveOptional(mw web.Middleware, r *http.Request, h *credentialHarness) (*httptest.ResponseRecorder, optionalObserved) {
+	var got optionalObserved
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got.reached = true
+		got.principal, got.principalOK = h.svc.CurrentPrincipal(r.Context())
+		got.cred, got.credOK = h.svc.CurrentCredential(r.Context())
+		got.sessionID, got.sessionOK = h.svc.CurrentSessionID(r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+	rec := httptest.NewRecorder()
+	mw(next).ServeHTTP(rec, r)
+	return rec, got
+}
+
+// TestRequirePrincipalOptional pins Optional(): absent within the set passes
+// anonymous with nothing stashed, present-but-invalid still denies (a stale
+// cookie is a 401, never laundered into anonymity), a transport outside the
+// set is never read, Live() pays no lookup for an anonymous pass but still
+// fails closed on a presented one, nesting is the same request the same
+// answer, and Browser() only redirects a presented-but-bad credential.
+func TestRequirePrincipalOptional(t *testing.T) {
+	h := newCredentialHarness(t)
+	const garbageJWT = "aaa.bbb.ccc"
+	expiredJWT := h.expiredAccessJWT(t)
+	badSigJWT := h.badSignatureAccessJWT(t)
+	revokedKey, revokedKeyID, _ := h.mintKey(t, "revoked", false, "", time.Time{})
+	if err := h.svc.RevokeAPIKey(context.Background(), revokedKeyID); err != nil {
+		t.Fatalf("RevokeAPIKey: %v", err)
+	}
+
+	t.Run("a) no credential passes anonymous", func(t *testing.T) {
+		rec, got := serveOptional(h.svc.RequirePrincipal(Optional()), h.credentialRequest("", ""), h)
+		if rec.Code != http.StatusOK || !got.reached {
+			t.Fatalf("status = %d reached=%v, want 200 reached", rec.Code, got.reached)
+		}
+		if got.principalOK {
+			t.Errorf("CurrentPrincipal reported %+v, want false", got.principal)
+		}
+		if got.credOK {
+			t.Errorf("CurrentCredential reported %+v, want false", got.cred)
+		}
+	})
+
+	t.Run("b) valid cookie admits the user principal", func(t *testing.T) {
+		rec, got := serveOptional(h.svc.RequirePrincipal(Optional()), h.credentialRequest("", h.accessJWT), h)
+		if rec.Code != http.StatusOK || !got.reached {
+			t.Fatalf("status = %d reached=%v, want 200 reached", rec.Code, got.reached)
+		}
+		if want := (Principal{Type: PrincipalUser, ID: h.userID}); !got.principalOK || got.principal != want {
+			t.Errorf("principal = %+v ok=%v, want %+v", got.principal, got.principalOK, want)
+		}
+		if !got.credOK || got.cred.Kind != CredentialAccessToken || got.cred.Transport != TransportCookie {
+			t.Errorf("credential = %s/%s ok=%v, want %s/%s", got.cred.Kind, got.cred.Transport, got.credOK, CredentialAccessToken, TransportCookie)
+		}
+	})
+
+	t.Run("c) valid bearer is authoritative", func(t *testing.T) {
+		rec, got := serveOptional(h.svc.RequirePrincipal(Optional()), h.credentialRequest(h.accessJWT, ""), h)
+		if rec.Code != http.StatusOK || !got.reached {
+			t.Fatalf("status = %d reached=%v, want 200 reached", rec.Code, got.reached)
+		}
+		if got.cred.Kind != CredentialAccessToken || got.cred.Transport != TransportHeader {
+			t.Errorf("credential = %s/%s, want %s/%s", got.cred.Kind, got.cred.Transport, CredentialAccessToken, TransportHeader)
+		}
+	})
+
+	t.Run("d) expired bearer still denies", func(t *testing.T) {
+		rec, got := serveOptional(h.svc.RequirePrincipal(Optional()), h.credentialRequest(expiredJWT, ""), h)
+		if rec.Code != http.StatusUnauthorized || got.reached {
+			t.Errorf("status = %d reached=%v, want 401 not-reached", rec.Code, got.reached)
+		}
+	})
+
+	t.Run("e) bad-signature cookie still denies", func(t *testing.T) {
+		rec, got := serveOptional(h.svc.RequirePrincipal(Optional()), h.credentialRequest("", badSigJWT), h)
+		if rec.Code != http.StatusUnauthorized || got.reached {
+			t.Errorf("status = %d reached=%v, want 401 not-reached", rec.Code, got.reached)
+		}
+	})
+
+	t.Run("f) revoked api key still denies", func(t *testing.T) {
+		rec, got := serveOptional(h.svc.RequirePrincipal(Optional()), h.credentialRequest(revokedKey, ""), h)
+		if rec.Code != http.StatusUnauthorized || got.reached {
+			t.Errorf("status = %d reached=%v, want 401 not-reached", rec.Code, got.reached)
+		}
+	})
+
+	t.Run("g) a transport outside the set is not read", func(t *testing.T) {
+		rec, got := serveOptional(h.svc.RequirePrincipal(Optional(), Transports(TransportCookie)), h.credentialRequest(garbageJWT, ""), h)
+		if rec.Code != http.StatusOK || !got.reached {
+			t.Fatalf("status = %d reached=%v, want 200 reached (the header is never read)", rec.Code, got.reached)
+		}
+		if got.principalOK {
+			t.Errorf("CurrentPrincipal reported %+v, want false", got.principal)
+		}
+	})
+
+	t.Run("h) Live() pays no lookup anonymous, fails closed on a deleted session's JWT", func(t *testing.T) {
+		before := h.sessionGets()
+		rec, got := serveOptional(h.svc.RequirePrincipal(Optional(), Live()), h.credentialRequest("", ""), h)
+		if rec.Code != http.StatusOK || !got.reached {
+			t.Fatalf("status = %d reached=%v, want 200 reached", rec.Code, got.reached)
+		}
+		if after := h.sessionGets(); after != before {
+			t.Errorf("session lookups = %d, want %d for an anonymous pass", after, before)
+		}
+
+		if err := h.sess.Delete(context.Background(), h.sessionID); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+		recLive, gotLive := serveOptional(h.svc.RequirePrincipal(Optional(), Live()), h.credentialRequest(h.accessJWT, ""), h)
+		if recLive.Code != http.StatusUnauthorized || gotLive.reached {
+			t.Errorf("status = %d reached=%v, want 401 not-reached for a deleted session's JWT", recLive.Code, gotLive.reached)
+		}
+	})
+
+	t.Run("i) nesting", func(t *testing.T) {
+		t.Run("a required inner under an optional outer denies anonymous", func(t *testing.T) {
+			chain := func(next http.Handler) http.Handler {
+				return h.svc.RequirePrincipal(Optional())(h.svc.RequirePrincipal()(next))
+			}
+			rec, got := serveOptional(chain, h.credentialRequest("", ""), h)
+			if rec.Code != http.StatusUnauthorized || got.reached {
+				t.Errorf("status = %d reached=%v, want 401 not-reached", rec.Code, got.reached)
+			}
+		})
+		t.Run("an optional inner under an optional outer passes anonymous", func(t *testing.T) {
+			chain := func(next http.Handler) http.Handler {
+				return h.svc.RequirePrincipal(Optional())(h.svc.RequirePrincipal(Optional())(next))
+			}
+			rec, got := serveOptional(chain, h.credentialRequest("", ""), h)
+			if rec.Code != http.StatusOK || !got.reached {
+				t.Errorf("status = %d reached=%v, want 200 reached", rec.Code, got.reached)
+			}
+		})
+	})
+
+	t.Run("j) Browser", func(t *testing.T) {
+		t.Run("anonymous passes without a redirect", func(t *testing.T) {
+			rec, got := serveOptional(h.svc.RequirePrincipal(Optional(), Browser()), h.credentialRequest("", ""), h)
+			if rec.Code != http.StatusOK || !got.reached {
+				t.Fatalf("status = %d reached=%v, want 200 reached", rec.Code, got.reached)
+			}
+		})
+		t.Run("an expired cookie still redirects", func(t *testing.T) {
+			rec, got := serveOptional(h.svc.RequirePrincipal(Optional(), Browser()), h.credentialRequest("", expiredJWT), h)
+			if rec.Code != http.StatusSeeOther || got.reached {
+				t.Errorf("status = %d reached=%v, want 303 not-reached", rec.Code, got.reached)
+			}
+		})
+	})
+}

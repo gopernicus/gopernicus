@@ -330,6 +330,10 @@ func (s *Service) RequirePrincipal(opts ...PrincipalOption) web.Middleware {
 			} else {
 				p, resolved, ok := s.resolveCredential(r, set)
 				if !ok {
+					if set.optional && !s.credentialPresented(r, set) {
+						next.ServeHTTP(w, r)
+						return
+					}
 					s.denyPrincipal(w, r, set)
 					return
 				}
@@ -382,6 +386,26 @@ func (s *Service) resolveCredential(r *http.Request, set principalSet) (Principa
 		}
 	}
 	return Principal{}, Credential{}, false
+}
+
+// credentialPresented reports whether the request carries a credential on a
+// transport within set, by PRESENCE only — no verification. It mirrors
+// resolveCredential's two reads (a bearer header when the header transport is
+// in the set, the access cookie when the cookie transport is in the set) so
+// Optional()'s pass-by-absence check can never drift from what the resolver
+// actually reads.
+func (s *Service) credentialPresented(r *http.Request, set principalSet) bool {
+	if set.header {
+		if _, ok := bearerToken(r); ok {
+			return true
+		}
+	}
+	if set.cookie {
+		if _, err := r.Cookie(s.cookie.Name); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveAccessToken verifies an access JWT presented over transport and builds

@@ -67,6 +67,7 @@ type principalSet struct {
 	cookie      bool
 	live        bool
 	browser     bool
+	optional    bool
 }
 
 // Accept is the OR-set of credential kinds the authenticator admits. The default
@@ -137,6 +138,20 @@ func Live() PrincipalOption {
 // Metadata.
 func Browser() PrincipalOption {
 	return func(set *principalSet) { set.browser = true }
+}
+
+// Optional switches the OUTERMOST authenticator from deny-by-absence to
+// pass-by-absence: no credential presented within the set continues the
+// request with NO principal and NO credential stashed (CurrentPrincipal /
+// CurrentCredential report false), skipping the Live() tier and the Browser()
+// redirect. A credential presented within the set is resolved exactly as
+// today — denied when invalid, expired, revoked, or of a kind outside the
+// set — so a stale or wrong-kind credential is still a 401 (or 303), never
+// laundered into anonymity. A credential arriving on a transport outside the
+// set is IGNORED, as for a required posture, so an anonymous pass there is
+// correct.
+func Optional() PrincipalOption {
+	return func(set *principalSet) { set.optional = true }
 }
 
 // defaultSet is the posture of an option-free RequirePrincipal: every WIRED
