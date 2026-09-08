@@ -652,6 +652,7 @@ func Accept(kinds ...CredentialKind) PrincipalOption // OR-set of credentials; d
 func Transports(ts ...Transport) PrincipalOption    // OR-set of transports;  default: header + cookie
 func Live() PrincipalOption                          // access_token ⇒ the session row must exist; api_key ⇒ pass
 func Browser() PrincipalOption                       // on denial 303 to Config.BrowserLoginPath (validated return_to) instead of a JSON 401
+func Optional() PrincipalOption                      // no credential within the set passes anonymous instead of denying
 
 func (s *Service) RequirePrincipal(opts ...PrincipalOption) web.Middleware
 ```
@@ -667,6 +668,14 @@ denied** — the set says what the surface reads, so a header at a
 cookie-only gate (or a cookie at a header-only one) is not a bypass, it is
 simply not read.
 
+**`Optional()`** switches the OUTERMOST gate from deny-by-absence to
+pass-by-absence: no credential presented within the set continues the request
+with no principal and no credential stashed, skipping `Live()` and the
+`Browser()` redirect; a credential presented within the set is resolved and
+denied exactly as today when invalid, expired, revoked, or of a kind outside
+the set — a stale or wrong-kind credential is never laundered into anonymity,
+and a transport outside the set is still not read.
+
 **Nesting.** An inner `RequirePrincipal` mounted under an outer one **narrows**:
 it reads the `Credential` the outer gate already stashed and checks it against
 its own set — it never re-resolves the request. A `Live()` inner runs the
@@ -678,7 +687,10 @@ below carry `Browser()`. This nesting trusts the credential stash written
 earlier in the SAME chain: the supported wiring invariant is **one
 authentication `Service` per chain** — composing middleware from independently
 configured `Service` instances on one chain is a host wiring error the pocket
-does not defend against.
+does not defend against. An outer `Optional()` gate that passed anonymously
+stashes nothing, so an inner gate finds no stash and resolves the request
+itself: an inner required gate denies (nothing to admit), an inner
+`Optional()` passes anonymously again — the same request, the same answer.
 
 **The six helpers** are one-line pre-compositions, exported so the common
 postures read as vocabulary at the call site:
