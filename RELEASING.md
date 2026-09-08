@@ -380,10 +380,10 @@ store tags; all three cold-resolve from a fresh `GOMODCACHE` and satisfy the new
 ports from a throwaway module. #37 closed; the silent-orphan follow-up is #39.
 See the upgrade note below.
 
-**2026-09-05: `pockets/authorization/v0.8.0`; `pockets/authorization/stores/pgx/v0.4.0` +
-`pockets/authorization/stores/turso/v0.3.0` — NEXT TAGS (train prepared on
-branch `authorization-decisionview-permission`, PR pending), ONE train, MINOR
-(breaking store port)** — `DecisionView.CheckPermission`: the hierarchy walk
+**2026-09-08: `pockets/authorization/v0.8.0` — TAGGED @ `3c446c0` (PR #40);
+`pockets/authorization/stores/pgx/v0.4.0` + `pockets/authorization/stores/turso/v0.3.0`
+— TAGGED @ `9e5a713`; ONE train, MINOR (breaking store port; train prepared
+2026-09-05 on branch `authorization-decisionview-permission`)** — `DecisionView.CheckPermission`: the hierarchy walk
 inside the guarded mutation (plan of record
 `.claude/plans/authorization-decisionview-permission.md`; originating host
 segovia v2 tenancy D13). The guard's only relationship read was a direct-tuple
@@ -401,8 +401,11 @@ adds `CheckPermission`); `mutation.Guard` takes `StoreDecisionView`. The legacy
 pgx/turso `CheckRelation` two-statement snapshot hazard is closed by delegation
 (grant, reached scopes, and their revisions now come from ONE statement). No
 schema, no sdk change, no new guard. Store pins move `pockets/authorization
-v0.6.0 → v0.8.0`. Core tag first, proxy poll, then the pin commit and the store
-tags. See the upgrade note below.
+v0.6.0 → v0.8.0` and, by MVS through it, `sdk v0.5.0 → v0.7.0`. Core tag first,
+proxy poll, then the pin commit and the store tags; all three cold-resolve from
+a fresh `GOMODCACHE` with `GOWORK=off` and the `StoreDecisionView` /
+`DecisionView` split compiles from a throwaway module. See the upgrade note
+below.
 
 ## Tagging scheme
 
@@ -508,7 +511,7 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
-### pockets/authorization — v0.8.0 (next tag) (+ stores/pgx v0.4.0, stores/turso v0.3.0): `DecisionView.CheckPermission` — the hierarchy walk inside the guarded mutation (minor, breaking store port)
+### pockets/authorization — v0.8.0 @ `3c446c0` (+ stores/pgx v0.4.0, stores/turso v0.3.0 @ `9e5a713`) — tagged 2026-09-08: `DecisionView.CheckPermission` — the hierarchy walk inside the guarded mutation (minor, breaking store port)
 
 Plan of record `.claude/plans/authorization-decisionview-permission.md`
 (originating host segovia v2, `v2-tenancy.md` D13). A **minor** by the repo's
