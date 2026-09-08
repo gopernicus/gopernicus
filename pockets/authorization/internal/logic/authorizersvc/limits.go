@@ -27,6 +27,9 @@ const (
 	DefaultMaxBatchSize = 1000
 	// DefaultMaxLookupResults bounds the resource IDs one LookupResources returns.
 	DefaultMaxLookupResults = 1000
+	// DefaultMaxFilterScan = 20 × DefaultMaxBatchSize candidates one FilterPage
+	// call may scan.
+	DefaultMaxFilterScan = 20000
 )
 
 var (
@@ -76,6 +79,10 @@ var (
 //     MaxLookupResults+1 so overflow is distinguishable from a complete bounded
 //     result; an overflowing Lookup returns ErrEvaluationLimit, never a truncated
 //     slice presented as complete.
+//   - MaxFilterScan: clamps every source request of one FilterPage and ends the
+//     call at the bound with a partial page and a continuation — it is the one
+//     dimension whose exhaustion is a partial PAGE, not ErrEvaluationLimit,
+//     because the continuation makes it resumable.
 //   - MaxBatchSize AGAIN, at MOUNT rather than per decision: a
 //     RequireAnyPermission gate declaring more alternatives than MaxBatchSize
 //     PANICS at registration. It is the one enforcement here that is neither a
@@ -104,6 +111,11 @@ type EvaluationLimits struct {
 	// MaxLookupResults bounds one LookupResources; enumeration fetches at most
 	// MaxLookupResults+1 to distinguish overflow from completeness (0 -> default).
 	MaxLookupResults int
+	// MaxFilterScan bounds the candidates ONE FilterPage call may pull from its
+	// source (0 -> default). Every source request is clamped to the remaining
+	// budget, so a call never overshoots it; reaching the bound with the page
+	// unfilled returns a PARTIAL page plus a continuation, not ErrEvaluationLimit.
+	MaxFilterScan int
 }
 
 // Resolve validates the configured limits and returns the effective budget:
@@ -129,6 +141,7 @@ func (l EvaluationLimits) Resolve() (EvaluationLimits, error) {
 		MaxRelationTargets: resolve("MaxRelationTargets", l.MaxRelationTargets, DefaultMaxRelationTargets),
 		MaxBatchSize:       resolve("MaxBatchSize", l.MaxBatchSize, DefaultMaxBatchSize),
 		MaxLookupResults:   resolve("MaxLookupResults", l.MaxLookupResults, DefaultMaxLookupResults),
+		MaxFilterScan:      resolve("MaxFilterScan", l.MaxFilterScan, DefaultMaxFilterScan),
 	}
 	if len(errs) > 0 {
 		return EvaluationLimits{}, fmt.Errorf("%w: %w", ErrInvalidLimits, errors.Join(errs...))

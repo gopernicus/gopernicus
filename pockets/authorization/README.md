@@ -333,6 +333,7 @@ nested checks. Fields and their zero-value defaults (re-exported as
 | `MaxRelationTargets` | per-hop relation fan-out / expanded targets — relationship kind only | 1000 |
 | `MaxBatchSize` | checks accepted in one `CheckBatch`/`FilterAuthorized`, charged ONCE for the whole batch by the decision surface whichever kinds own its pairs (also bounds a purge's affected rows) | 1000 |
 | `MaxLookupResults` | resource IDs one `LookupResources` returns, on either kind (the relationship store fetches max+1 so overflow is distinguishable; the roles walk charges its running distinct count) | 1000 |
+| `MaxFilterScan` | candidates ONE `FilterPage` call may pull from its source; every source request is clamped to the remaining budget. Reaching it returns a PARTIAL page plus a continuation, not `ErrEvaluationLimit` — the one dimension whose exhaustion is resumable | 20000 |
 
 Rules:
 
@@ -410,6 +411,73 @@ are frozen wire codes a host, audit sink, or explain trace can switch on;
 `CheckExplain` returns an opt-in bounded `Explanation` that rides the same
 evaluation path and budget (it cannot create a separate, more permissive
 evaluator, cannot change the decision, and is never auto-logged).
+
+### The postfilter page-filler — `FilterPage`
+
+`FilterPage` is the OTHER enumeration path: instead of asking the engine which
+resources are accessible and then reading those rows (the prefilter), it reads
+host-ordered candidate rows first and filters them with `FilterAuthorized` until
+one page is full.
+
+| | prefilter — `LookupResources`/`LookupResourcesIn` | postfilter — `FilterPage` |
+|---|---|---|
+| use when | access is SPARSE relative to the table ("everything of type X I may see", a cross-container "mine" list, a home feed) | access is DENSE within a set the database already bounds (a container's contents, a search result, the caller's own starred rows) |
+| who orders | the ENGINE (resource id ascending); any user-facing order is the client's after fetch | the HOST/database (name, date, rank — whatever its keyset query orders by) |
+| cost scales with | the principal's total reachable set (bounded by `MaxLookupResults`; overflow is `ErrEvaluationLimit`) | the candidates scanned to fill one page (bounded by `MaxFilterScan`; the bound yields a partial page, not an error) |
+
+A host may use both on one resource type — they are different questions.
+
+**The candidate-cursor contract.** A `CandidateSource` returns one cursor PER
+ROW (`Candidate.NextCursor`, the source-compatible cursor immediately AFTER that
+row), not one per page: that is the state `FilterPage` needs to stop in the
+middle of an over-fetched pull without skipping or repeating a row. Every cursor
+must be non-empty and must differ from the cursor immediately before it, and no
+cursor may repeat within one call (a cycle is refused rather than spun on). A
+source that returns more candidates than requested, or reports `HasMore` while
+returning none, is refused the same way. All four refusals wrap
+`sdk.ErrInvalidInput`. Cursors are opaque to the pocket and are returned to the
+caller VERBATIM — `FilterPage` adds no encoding of its own.
+
+**The scan bound.** Each pull asks for `min(2×Limit, MaxBatchSize, remaining
+MaxFilterScan)` candidates and costs exactly one `FilterAuthorized` call, so one
+`FilterPage` call never scans more than `MaxFilterScan` candidates. Reaching the
+bound with the page unfilled returns the partial page and the cursor after the
+last scanned candidate. **`Page.HasMore` therefore means UNSCANNED CANDIDATES
+REMAIN, not that another authorized row is guaranteed:** following a page with
+`HasMore` may produce a final EMPTY page when every remaining candidate is
+denied. `Limit` 0 is `crud.DefaultLimit` (this IS a page, unlike
+`LookupResourcesIn`); a negative `Limit` or one above `MaxBatchSize` is
+`sdk.ErrInvalidInput`; `Items` is always non-nil.
+
+```go
+// The host's keyset query is the source: rows in ITS order, each with the
+// cursor that follows it.
+source := func(ctx context.Context, cursor string, limit int) (authorization.CandidatePage[Dashboard], error) {
+    rows, hasMore, err := dashboards.ListBySpaceAfter(ctx, spaceID, cursor, limit)
+    if err != nil {
+        return authorization.CandidatePage[Dashboard]{}, err
+    }
+    items := make([]authorization.Candidate[Dashboard], len(rows))
+    for i, row := range rows {
+        items[i] = authorization.Candidate[Dashboard]{Item: row, NextCursor: row.Name + "\x00" + row.ID}
+    }
+    return authorization.CandidatePage[Dashboard]{Items: items, HasMore: hasMore}, nil
+}
+
+page, err := authorization.FilterPage(ctx, authorizer, authorization.FilterPageRequest[Dashboard]{
+    Principal:    authorization.PrincipalFrom(principal),
+    Permission:   "view",
+    ResourceType: "dashboard",
+    ID:           func(d Dashboard) string { return d.ID },
+    Source:       source,
+    Limit:        req.Limit,
+    Cursor:       req.Cursor,
+})
+if err != nil {
+    return crud.Page[Dashboard]{}, err // fail CLOSED
+}
+```
+
 
 ## Choosing a relationship write path
 

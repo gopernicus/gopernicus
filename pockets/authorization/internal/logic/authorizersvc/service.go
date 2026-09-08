@@ -356,10 +356,17 @@ func (s *Service) checkThrough(ctx context.Context, req CheckRequest, check Perm
 // Batch internals
 // =============================================================================
 
+// checkBatchSequential evaluates each request through the ordinary evaluation
+// funnel with its OWN fresh budget, over ONE batch-local memoReader (B4). The
+// memo shares successful store reads across the batch — a container's items no
+// longer re-read the shared container's targets and re-run its direct check —
+// while the per-request budget keeps depth/state/fan-out charging, and therefore
+// every result and every ErrEvaluationLimit, identical to a standalone Check.
 func (s *Service) checkBatchSequential(ctx context.Context, reqs []CheckRequest) ([]CheckResult, error) {
 	results := make([]CheckResult, len(reqs))
+	reader := newMemoReader(s.store)
 	for i, req := range reqs {
-		result, err := s.Check(ctx, req)
+		result, err := s.check(ctx, req, newBudget(s.limits, reader))
 		if err != nil {
 			return nil, err
 		}

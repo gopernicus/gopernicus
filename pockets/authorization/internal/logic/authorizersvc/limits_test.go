@@ -23,6 +23,7 @@ func TestEvaluationLimitsResolveDefaults(t *testing.T) {
 		MaxRelationTargets: DefaultMaxRelationTargets,
 		MaxBatchSize:       DefaultMaxBatchSize,
 		MaxLookupResults:   DefaultMaxLookupResults,
+		MaxFilterScan:      DefaultMaxFilterScan,
 	}
 	if got != want {
 		t.Fatalf("Resolve zero = %+v, want %+v", got, want)
@@ -57,6 +58,7 @@ func TestEvaluationLimitsResolveNegativeRejected(t *testing.T) {
 		"MaxRelationTargets": {MaxRelationTargets: -1},
 		"MaxBatchSize":       {MaxBatchSize: -1},
 		"MaxLookupResults":   {MaxLookupResults: -1},
+		"MaxFilterScan":      {MaxFilterScan: -1},
 	}
 	for name, l := range cases {
 		t.Run(name, func(t *testing.T) {
