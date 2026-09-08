@@ -3,8 +3,8 @@ github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.5.0 h1:EANhsxvfIFkQ03zPTlhMY/GfbLqMdwaUEr7R8IUfq+8=
 github.com/gopernicus/gopernicus/integrations/datastores/pgxdb v0.5.0/go.mod h1:56TbLSn2XcHH3ygeNOGchRhmTKQKdgZF3M+WDt/IFIw=
-github.com/gopernicus/gopernicus/pockets/authorization v0.9.0 h1:x+17kdL/B9N1tTm71VvYbfyIJlsv19bVEhzfQX7pJa4=
-github.com/gopernicus/gopernicus/pockets/authorization v0.9.0/go.mod h1:yd6PdrEtZgtUlB7Pbxd6K+0ufV8V/Vw68Z8pAggHrGY=
+github.com/gopernicus/gopernicus/pockets/authorization v0.11.0 h1:0qk2Gokg3hVmQU/pncUemTNkEW6dTsNTQPdoHakFlRI=
+github.com/gopernicus/gopernicus/pockets/authorization v0.11.0/go.mod h1:yd6PdrEtZgtUlB7Pbxd6K+0ufV8V/Vw68Z8pAggHrGY=
 github.com/gopernicus/gopernicus/sdk v0.7.0 h1:dHgcnS8PQfD2L5dzXB51/ONzXadQ6bc29mLH4R9neyQ=
 github.com/gopernicus/gopernicus/sdk v0.7.0/go.mod h1:z0bypQiCybwPoxoDfzhYvB1BtH2av549QR84GacngaE=
 github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=
