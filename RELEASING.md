@@ -407,6 +407,31 @@ a fresh `GOMODCACHE` with `GOWORK=off` and the `StoreDecisionView` /
 `DecisionView` split compiles from a throwaway module. See the upgrade note
 below.
 
+**2026-09-08 (same day): `pockets/authorization/v0.9.0` — TAGGED @ `495787c` (PR #41);
+`pockets/authorization/stores/pgx/v0.5.0` + `pockets/authorization/stores/turso/v0.4.0`
+— TAGGED @ `a5ca592`; ONE train, MINOR (host-contract expansion: the store ports
+gain the ambient-transaction paragraph and `storetest` gains an exported entry
+point; stores change behavior)** — baseline writes join the ambient
+`crud.Transactor` transaction (plan of record
+`.claude/plans/authorization-stores-ambient-transaction.md`, executed copy in
+`plans/`; originating host segovia v2 tenancy D15: "application rows are
+canonical; navigational tuples are an atomic projection"). Before, a host that
+wrapped its own row write and `RelationshipWriter.SetRelationTargets` in one
+`Transact` got a silent atomicity split: the row rolled back with the
+transaction while the tuple committed on the store's own connection. Now every
+`relationship.Storer` / `role.Storer` method in both SQL stores runs on
+`QuerierFrom(ctx)` (reads included), `SetRelationTargets` reconciles ON the
+ambient transaction instead of opening its own (pgx: the advisory xact lock is
+released at the HOST's commit; turso: no busy retry on the ambient path), and
+the guarded path — `Apply`/`ApplyGuarded`, so every `Service` mutation and
+`SystemMutator` — REFUSES inside an ambient transaction with the new
+`mutation.ErrGuardedInsideTransaction` (re-exported `authorization.ErrGuardedInsideTransaction`,
+wraps `sdk.ErrInvalidInput`) rather than splitting atomicity silently. Outside
+a transaction nothing changed. The proof is `storetest.RunTransactional` (eight
+specs, the join proven from both sides through the same fixture) plus the pgx
+row-plus-tuple live test with the widened-lock proof. The turso store's connector
+pin moves `v0.1.0 → v0.3.0`. No database migration. See the upgrade note.
+
 ## Tagging scheme
 
 Nested Go modules in a single repo are tagged with the module's directory as a
@@ -510,6 +535,75 @@ silently would break a host whose CSP no longer covers the kit's assets. Record 
 the module's next-tag upgrade note below and tell hosts to re-derive their CSP header.
 
 ## Upgrade notes (keyed to each module's next tag)
+
+### pockets/authorization — v0.9.0 @ `495787c` (+ stores/pgx v0.5.0, stores/turso v0.4.0 @ `a5ca592`) — tagged 2026-09-08: baseline writes join the ambient `crud.Transactor` transaction (minor; store behavior change; guarded path refuses inside a transaction)
+
+Plan of record `.claude/plans/authorization-stores-ambient-transaction.md`
+(originating host segovia v2, `v2-tenancy.md` D15). A **minor** by the repo's
+pre-1.0 convention: no signature changes, but the store ports gain a contract
+paragraph every store author must honor and `storetest` gains an exported
+entry point. Owner rulings 2026-09-08: this version line; roles IN; the guarded
+path refuses.
+
+**What changed.**
+
+- **Both SQL stores honor the connector's ambient transaction.** When the
+  context handed to ANY `relationship.Storer` or `role.Storer` method carries
+  the transaction a `(*pgxdb.DB).Transact` / `(*tursodb.DB).Transact` call
+  stashed there, the method runs ON it — `s.db.QuerierFrom(ctx)` for every
+  statement, helper argument, connector `List`, and `ExecAffecting`. Reads too:
+  a host that reads, decides, and writes inside one transaction sees its own
+  uncommitted state. `SetRelationTargets` dispatches on `TxFromContext`: ambient
+  → the reconciliation body over the host's `*Tx` (no begin, no commit, no
+  rollback); standalone → its own transaction exactly as before.
+- **Host obligations.** Return write errors from the `Transact` callback — the
+  store never rolls back or marks the transaction rollback-only, so a swallowed
+  `sdk.ErrConflict` from `SetRelationTargets` followed by `return nil` commits
+  the earlier host work without the tuple. On PostgreSQL the conflict probe is a
+  successful SELECT and does not abort the transaction; a genuinely failed
+  statement does (25P02 until rollback) — return it.
+- **pgx: the advisory lock widens to the host's commit.** `pg_advisory_xact_lock`
+  ends with the transaction it was taken in; inside an ambient one that is the
+  host's commit, so a competing `SetRelationTargets` on the same key waits for
+  the whole workflow (the property D15 wants). Do slow work before the write.
+  Documented, not mitigated; the live test proves the wait is bounded by the
+  commit, not leaked.
+- **turso: no busy retry on the ambient path.** `retryBusy` re-runs the whole
+  transaction, which is only sound when the store owns it; the host's `BEGIN
+  IMMEDIATE` already holds the write lock, so `SQLITE_BUSY` is not expected and
+  is returned as-is if it surfaces.
+- **Guarded mutations refuse inside an ambient transaction (D5).**
+  `Apply`/`ApplyGuarded` — therefore every `Service` mutation method and
+  `SystemMutator`, protected teardown included — return
+  `authorization.ErrGuardedInsideTransaction` with a nil receipt when the
+  context carries the ambient transaction, BEFORE any guard, validator, lock, or
+  row. Previously the guarded path silently ran on its own connection. No known
+  host does this (the Hub writes no tuples; segovia's only guarded call, the
+  `tenant#owner` seed, runs outside `Transact`). If yours does: move the guarded
+  call outside `Transact`, or file for the joining design.
+- **`storetest.RunTransactional(t, newRepos func(t) (authorization.Repositories, crud.Transactor))`**
+  — the new family; a nil transactor skips it loudly (memstore). Third-party
+  stores must pass it. Each bundled SQL store additionally asserts through SQL
+  that a refused guarded mutation left `iam_scopes`/`iam_mutations` untouched.
+- **Pins.** `stores/pgx` and `stores/turso` pin `pockets/authorization v0.9.0`;
+  `stores/turso` moves `integrations/datastores/turso v0.1.0 → v0.3.0` (v0.1.0
+  predates `Transact`/`QuerierFrom`). **No database migration**: no schema,
+  table, or column changes.
+
+**Adopting.** Repin the core and your store module together. A host that
+wants the join wraps row write + `RelationshipWriter` call in its connector's
+`Transact` and passes the callback's `ctx` to both — the same `*pgxdb.DB` must
+back the host repositories and the authorization store (two pools over one DSN
+never share a transaction). The memstore ignores the context (mutex-atomic per
+operation) — wire a SQL store for the join.
+
+**Verification (train).** Pocket hermetic green; pgx live (postgres:17)
+default + `POSTGRES_TEST_SCHEMA` legs green incl. the new family and
+`TestAmbientRowAndTupleCommitTogether`; turso live playground: `TestConformance`
+green (1466s, run as its own invocation), `TestTransactional` + every other live
+test green, `TestSchemaProbe` = the known playground constraint gap; `make
+guard` 22/22; store modules cold-built `GOWORK=off` from a fresh `GOMODCACHE`
+against the tags.
 
 ### pockets/authorization — v0.8.0 @ `3c446c0` (+ stores/pgx v0.4.0, stores/turso v0.3.0 @ `9e5a713`) — tagged 2026-09-08: `DecisionView.CheckPermission` — the hierarchy walk inside the guarded mutation (minor, breaking store port)
 
