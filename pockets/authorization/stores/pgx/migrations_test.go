@@ -16,6 +16,7 @@ var canonicalMigrations = []string{
 	"0002_iam_roles.sql",
 	"0003_iam_scopes.sql",
 	"0004_iam_mutations.sql",
+	"0005_iam_lookup_keyset.sql",
 }
 
 // expectedTables are every CREATE TABLE the canonical set must define.
@@ -47,8 +48,9 @@ var expectedConstraints = []string{
 // depend on: the exact-tuple unique, the one-relation-per-exact-SubjectRef unique
 // (WITHOUT relation, so a subject holds one relation but usersets stay distinct),
 // the resource/subject/type-relation secondaries feeding the recursive-CTE reads
-// (AZ3-1.1), and the roles unique/subject/resource secondaries feeding the
-// effective-role GROUP BY (AZ3-1.5).
+// (AZ3-1.1), the roles unique/subject/resource secondaries feeding the
+// effective-role GROUP BY (AZ3-1.5), and the two 0005 keyset paths the paged
+// lookups range-scan (authorization-lookup-paging, A6).
 var expectedIndexes = []string{
 	"idx_iam_relationships_unique_tuple",
 	"idx_iam_relationships_unique_subject",
@@ -58,6 +60,8 @@ var expectedIndexes = []string{
 	"idx_iam_roles_unique",
 	"idx_iam_roles_subject",
 	"idx_iam_roles_resource",
+	"idx_iam_relationships_type_relation_resource",
+	"idx_iam_roles_subject_resource_lookup",
 }
 
 func migrationNames(t *testing.T) []string {

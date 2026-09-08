@@ -3,6 +3,7 @@ package authorizersvc
 import (
 	"context"
 	"errors"
+	"sort"
 	"sync"
 	"testing"
 
@@ -160,7 +161,7 @@ func (f *fakeStore) ListRelationshipsByResource(ctx context.Context, resourceTyp
 	return crud.Page[relationship.ResourceRelationship]{}, nil
 }
 
-func (f *fakeStore) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID string, limit int) ([]string, error) {
+func (f *fakeStore) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID, after string, limit int) ([]string, error) {
 	f.countLookup()
 	var out []string
 	for _, t := range f.tuples {
@@ -173,10 +174,10 @@ func (f *fakeStore) LookupResourceIDs(ctx context.Context, resourceType string, 
 			}
 		}
 	}
-	return out, nil
+	return keysetIDs(out, after, limit), nil
 }
 
-func (f *fakeStore) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string, limit int) ([]string, error) {
+func (f *fakeStore) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string, after string, limit int) ([]string, error) {
 	f.countLookup()
 	set := make(map[string]bool, len(targetIDs))
 	for _, id := range targetIDs {
@@ -188,12 +189,59 @@ func (f *fakeStore) LookupResourceIDsByRelationTarget(ctx context.Context, resou
 			out = append(out, t.ResourceID)
 		}
 	}
-	return out, nil
+	return keysetIDs(out, after, limit), nil
 }
 
-func (f *fakeStore) LookupDescendantResourceIDs(ctx context.Context, resourceType, relation, subjectType string, rootIDs []string, limit int) ([]string, error) {
+// LookupDescendantResourceIDs walks the UNION of relations transitively from
+// rootIDs (breadth-first, cycle-safe: a root reappears only when a cycle makes it
+// a genuine descendant), then applies the port's keyset contract to the closure.
+func (f *fakeStore) LookupDescendantResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType string, rootIDs []string, after string, limit int) ([]string, error) {
 	f.countLookup()
-	return nil, nil
+	wanted := make(map[string]bool, len(relations))
+	for _, r := range relations {
+		wanted[r] = true
+	}
+	visited := make(map[string]bool, len(rootIDs))
+	frontier := append([]string(nil), rootIDs...)
+	var closure []string
+	for len(frontier) > 0 {
+		parents := make(map[string]bool, len(frontier))
+		for _, id := range frontier {
+			parents[id] = true
+		}
+		var next []string
+		for _, t := range f.tuples {
+			if t.ResourceType != resourceType || t.SubjectType != subjectType || !wanted[t.Relation] || !parents[t.SubjectID] {
+				continue
+			}
+			if visited[t.ResourceID] {
+				continue
+			}
+			visited[t.ResourceID] = true
+			closure = append(closure, t.ResourceID)
+			next = append(next, t.ResourceID)
+		}
+		frontier = next
+	}
+	return keysetIDs(closure, after, limit), nil
+}
+
+// keysetIDs applies the lookup port's output contract to a raw id list: sorted,
+// distinct, strictly after `after`, at most limit.
+func keysetIDs(ids []string, after string, limit int) []string {
+	seen := make(map[string]bool, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if !seen[id] && id > after {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
 }
 
 func filter(in []relationship.CreateRelationship, keep func(relationship.CreateRelationship) bool) []relationship.CreateRelationship {

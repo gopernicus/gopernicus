@@ -65,14 +65,14 @@ func (stubStorer) ListRelationshipsByResource(ctx context.Context, resourceType,
 	return crud.Page[ResourceRelationship]{}, nil
 }
 
-func (stubStorer) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID string, limit int) ([]string, error) {
+func (stubStorer) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID, after string, limit int) ([]string, error) {
 	return nil, nil
 }
 
-func (stubStorer) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string, limit int) ([]string, error) {
+func (stubStorer) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string, after string, limit int) ([]string, error) {
 	return nil, nil
 }
 
-func (stubStorer) LookupDescendantResourceIDs(ctx context.Context, resourceType, relation, subjectType string, rootIDs []string, limit int) ([]string, error) {
+func (stubStorer) LookupDescendantResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType string, rootIDs []string, after string, limit int) ([]string, error) {
 	return nil, nil
 }

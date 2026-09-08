@@ -60,13 +60,13 @@ func (f *relFake) ListRelationshipsBySubject(ctx context.Context, subjectType, s
 func (f *relFake) ListRelationshipsByResource(ctx context.Context, resourceType, resourceID string, filter relationship.ResourceRelationshipFilter, req crud.ListRequest) (crud.Page[relationship.ResourceRelationship], error) {
 	return crud.Page[relationship.ResourceRelationship]{}, nil
 }
-func (f *relFake) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID string, limit int) ([]string, error) {
+func (f *relFake) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID, after string, limit int) ([]string, error) {
 	return nil, nil
 }
-func (f *relFake) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string, limit int) ([]string, error) {
+func (f *relFake) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string, after string, limit int) ([]string, error) {
 	return nil, nil
 }
-func (f *relFake) LookupDescendantResourceIDs(ctx context.Context, resourceType, relation, subjectType string, rootIDs []string, limit int) ([]string, error) {
+func (f *relFake) LookupDescendantResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType string, rootIDs []string, after string, limit int) ([]string, error) {
 	return nil, nil
 }
 
@@ -88,6 +88,9 @@ func (f *roleFake) ListBySubject(ctx context.Context, subjectType, subjectID str
 }
 func (f *roleFake) ListByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[role.Assignment], error) {
 	return crud.Page[role.Assignment]{}, nil
+}
+func (f *roleFake) LookupResourceIDsBySubjectAndRoles(ctx context.Context, subjectType, subjectID, resourceType string, roles []string, after string, limit int) ([]string, bool, error) {
+	return nil, false, nil
 }
 func (f *roleFake) ListEffectiveByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[role.EffectiveGrant], error) {
 	return crud.Page[role.EffectiveGrant]{}, nil
@@ -471,11 +474,11 @@ func TestDecisionSurfaceWithoutAModelBearingKind(t *testing.T) {
 	}
 }
 
-// TestLookupResourcesInThroughTheFacade drives the caller Limit through the
-// PUBLIC API: a truncating call returns the sorted prefix with Truncated set, a
-// Limit that fits (and Limit 0, the budget ceiling) returns the complete list
-// untruncated, the classic LookupResources NEVER sets Truncated, and a negative
-// Limit is invalid input a host maps to 400.
+// TestLookupResourcesInThroughTheFacade drives the PAGED surface through the
+// PUBLIC API: a page smaller than the result carries HasMore plus a continuation
+// (and the deprecated Truncated alias), a page that holds everything carries
+// neither, walking the cursor reproduces the classic LookupResources result
+// exactly, and an out-of-range Limit is invalid input a host maps to 400.
 func TestLookupResourcesInThroughTheFacade(t *testing.T) {
 	roles := newSeededRoles(t,
 		assignment("u1", "auditor", "project", "p1"),
@@ -491,12 +494,13 @@ func TestLookupResourcesInThroughTheFacade(t *testing.T) {
 	principal := PrincipalRef{Type: "user", ID: "u1"}
 
 	for name, tc := range map[string]struct {
-		limit int
-		want  LookupResult
+		limit       int
+		wantIDs     []string
+		wantHasMore bool
 	}{
-		"limit below the count truncates":  {2, LookupResult{IDs: []string{"p1", "p2"}, Truncated: true}},
-		"limit that fits":                  {3, LookupResult{IDs: []string{"p1", "p2", "p3"}}},
-		"limit zero is the budget ceiling": {0, LookupResult{IDs: []string{"p1", "p2", "p3"}}},
+		"limit below the count pages":    {2, []string{"p1", "p2"}, true},
+		"limit that fits":                {3, []string{"p1", "p2", "p3"}, false},
+		"limit zero is the page ceiling": {0, []string{"p1", "p2", "p3"}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := svc.LookupResourcesIn(ctx, LookupRequest{
@@ -505,25 +509,76 @@ func TestLookupResourcesInThroughTheFacade(t *testing.T) {
 			if err != nil {
 				t.Fatalf("LookupResourcesIn: %v", err)
 			}
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("got %+v, want %+v", got, tc.want)
+			if !reflect.DeepEqual(got.IDs, tc.wantIDs) {
+				t.Fatalf("IDs = %v, want %v", got.IDs, tc.wantIDs)
+			}
+			if got.HasMore != tc.wantHasMore || got.Truncated != got.HasMore {
+				t.Fatalf("HasMore = %v (Truncated %v), want %v", got.HasMore, got.Truncated, tc.wantHasMore)
+			}
+			if (got.NextCursor != "") != tc.wantHasMore {
+				t.Fatalf("NextCursor %q disagrees with HasMore %v", got.NextCursor, got.HasMore)
 			}
 		})
+	}
+
+	// Walking the continuation reproduces the classic enumeration exactly.
+	var walked []string
+	cursor := ""
+	for pages := 0; ; pages++ {
+		if pages > 8 {
+			t.Fatal("page walk did not terminate")
+		}
+		page, err := svc.LookupResourcesIn(ctx, LookupRequest{
+			Principal: principal, Permission: "audit", ResourceType: "project", Limit: 1, After: cursor,
+		})
+		if err != nil {
+			t.Fatalf("LookupResourcesIn(after=%q): %v", cursor, err)
+		}
+		walked = append(walked, page.IDs...)
+		if !page.HasMore {
+			break
+		}
+		cursor = page.NextCursor
 	}
 
 	classic, err := svc.LookupResources(ctx, principal, "audit", "project")
 	if err != nil {
 		t.Fatalf("LookupResources: %v", err)
 	}
-	if classic.Truncated || len(classic.IDs) != 3 {
-		t.Fatalf("the classic method never truncates and never reports Truncated, got %+v", classic)
+	if classic.Truncated || classic.HasMore || classic.NextCursor != "" || len(classic.IDs) != 3 {
+		t.Fatalf("the classic method never pages and never reports a continuation, got %+v", classic)
+	}
+	if !reflect.DeepEqual(walked, classic.IDs) {
+		t.Fatalf("the pages concatenated to %v, want the classic result %v", walked, classic.IDs)
 	}
 
-	_, err = svc.LookupResourcesIn(ctx, LookupRequest{
-		Principal: principal, Permission: "audit", ResourceType: "project", Limit: -1,
+	// A cursor from ANOTHER principal is refused: it is bound to the query that
+	// minted it, and a host maps the refusal to 400.
+	first, err := svc.LookupResourcesIn(ctx, LookupRequest{
+		Principal: principal, Permission: "audit", ResourceType: "project", Limit: 1,
 	})
-	if !errors.Is(err, sdk.ErrInvalidInput) {
-		t.Fatalf("a negative Limit must wrap sdk.ErrInvalidInput, got %v", err)
+	if err != nil || first.NextCursor == "" {
+		t.Fatalf("seed page: %+v, %v", first, err)
+	}
+	_, err = svc.LookupResourcesIn(ctx, LookupRequest{
+		Principal: PrincipalRef{Type: "user", ID: "u2"}, Permission: "audit", ResourceType: "project",
+		Limit: 1, After: first.NextCursor,
+	})
+	if !errors.Is(err, ErrInvalidCursor) || !errors.Is(err, sdk.ErrInvalidInput) {
+		t.Fatalf("a foreign cursor must be ErrInvalidCursor wrapping sdk.ErrInvalidInput, got %v", err)
+	}
+
+	for name, req := range map[string]LookupRequest{
+		"negative limit": {Principal: principal, Permission: "audit", ResourceType: "project", Limit: -1},
+		"limit above MaxLookupResults": {Principal: principal, Permission: "audit", ResourceType: "project",
+			Limit: DefaultMaxLookupResults + 1},
+		"malformed cursor": {Principal: principal, Permission: "audit", ResourceType: "project", After: "not-a-cursor"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := svc.LookupResourcesIn(ctx, req); !errors.Is(err, sdk.ErrInvalidInput) {
+				t.Fatalf("want sdk.ErrInvalidInput, got %v", err)
+			}
+		})
 	}
 }
 

@@ -277,7 +277,7 @@ SELECT DISTINCT r.resource_id
 FROM ` + s.table("iam_relationships") + ` r
 JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 WHERE r.resource_type = @resource_type AND r.relation = @relation AND r.resource_id = ANY(@resource_ids::text[])`
-		matched, err := s.queryStrings(ctx, q, pgx.NamedArgs{
+		matched, err := queryStrings(ctx, s.db.QuerierFrom(ctx), q, pgx.NamedArgs{
 			"subject_type":  subjectType,
 			"subject_id":    subjectID,
 			"resource_type": resourceType,
@@ -636,74 +636,127 @@ func (s *relationshipStore) ListRelationshipsByResource(ctx context.Context, res
 	return crud.MapPage(page, resourceRelationshipRow.toDomain), nil
 }
 
-// LookupResourceIDs returns the distinct resource IDs (sorted) where the subject
-// has any of the relations, with group expansion. It returns at most limit rows
-// (@limit): the engine passes MaxLookupResults+1 so a full-limit return is a
-// distinguishable overflow signal, never a silently truncated complete result.
-func (s *relationshipStore) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID string, limit int) ([]string, error) {
-	if len(relations) == 0 {
-		return nil, nil
-	}
+// lookupResourceIDsSQL renders the direct-relation keyset lookup and its args.
+// It is split from the method so the EXPLAIN test can plan the exact statement
+// the store runs.
+//
+// Every lookup statement in this file pins COLLATE "C" PER QUERY rather than
+// leaning on the column's collation. The three lookups are KEYSET reads whose
+// output the ENGINE merges across streams with Go string comparison
+// (relationship.Storer's Bounding note), so both the order and the `> after`
+// predicate must be RAW BYTE order — a locale-collated order would skip or
+// repeat IDs across pages. iam_relationships.resource_id is DELIBERATELY left
+// uncollated in 0001 (it is a recursion column of the reachable
+// userset-expansion CTE, and pinning it in the DDL raises a recursive-term
+// collation mismatch, SQLSTATE 42P21), so the byte-order contract is pinned
+// here, at every comparison and ORDER BY that carries it, and matched by the
+// 0005 index's `resource_id COLLATE "C"` column so the keyset predicate
+// range-scans instead of sorting. The collated expression is also what the
+// SELECT list projects: PostgreSQL requires a SELECT DISTINCT query's ORDER BY
+// expression to appear in the select list, and the projected value is
+// byte-identical either way (collation governs comparison, not the text).
+func (s *relationshipStore) lookupResourceIDsSQL(resourceType string, relations []string, subjectType, subjectID, after string, limit int) (string, pgx.NamedArgs) {
 	q := reachableCTE(s.schema) + `
-SELECT DISTINCT r.resource_id
+SELECT DISTINCT r.resource_id COLLATE "C" AS resource_id
 FROM ` + s.table("iam_relationships") + ` r
 JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
 WHERE r.resource_type = @resource_type AND r.relation = ANY(@relations::text[])
-ORDER BY r.resource_id` + limitClause(limit)
-	return s.queryStrings(ctx, q, pgx.NamedArgs{
+  AND (@after::text = '' OR r.resource_id COLLATE "C" > @after::text)
+ORDER BY r.resource_id COLLATE "C"` + limitClause(limit)
+	return q, pgx.NamedArgs{
 		"subject_type":  subjectType,
 		"subject_id":    subjectID,
 		"resource_type": resourceType,
 		"relations":     relations,
+		"after":         after,
 		"limit":         limit,
-	})
+	}
 }
 
-// LookupResourceIDsByRelationTarget returns the distinct resource IDs (sorted)
-// whose relation points at any of the target IDs (no expansion), at most limit
-// rows.
-func (s *relationshipStore) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string, limit int) ([]string, error) {
-	if len(targetIDs) == 0 {
+// LookupResourceIDs returns the distinct resource IDs where the subject has any
+// of the relations, with group expansion: sorted ascending in BYTE order,
+// strictly greater than after (after == "" starts from the beginning), at most
+// limit rows (@limit). The engine passes MaxLookupResults+1 for a complete
+// enumeration — a full-limit return is a distinguishable overflow signal, never
+// a silently truncated complete result — or page+1 for a paged one, where the
+// extra row is the HasMore lookahead. See [relationshipStore.lookupResourceIDsSQL]
+// for the COLLATE "C" pin.
+func (s *relationshipStore) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID, after string, limit int) ([]string, error) {
+	if len(relations) == 0 {
 		return nil, nil
 	}
-	q := `SELECT DISTINCT resource_id FROM ` + s.table("iam_relationships") + `
+	q, args := s.lookupResourceIDsSQL(resourceType, relations, subjectType, subjectID, after, limit)
+	return queryStrings(ctx, s.db.QuerierFrom(ctx), q, args)
+}
+
+// lookupResourceIDsByRelationTargetSQL renders the relation-target keyset lookup
+// and its args (split from the method for the EXPLAIN test).
+func (s *relationshipStore) lookupResourceIDsByRelationTargetSQL(resourceType, relation, targetType string, targetIDs []string, after string, limit int) (string, pgx.NamedArgs) {
+	q := `SELECT DISTINCT resource_id COLLATE "C" AS resource_id FROM ` + s.table("iam_relationships") + `
 WHERE resource_type = @resource_type AND relation = @relation AND subject_type = @target_type AND subject_id = ANY(@target_ids::text[]) AND subject_relation = ''
-ORDER BY resource_id` + limitClause(limit)
-	return s.queryStrings(ctx, q, pgx.NamedArgs{
+  AND (@after::text = '' OR resource_id COLLATE "C" > @after::text)
+ORDER BY resource_id COLLATE "C"` + limitClause(limit)
+	return q, pgx.NamedArgs{
 		"resource_type": resourceType,
 		"relation":      relation,
 		"target_type":   targetType,
 		"target_ids":    targetIDs,
+		"after":         after,
 		"limit":         limit,
-	})
+	}
 }
 
-// LookupDescendantResourceIDs walks a self-referential relation transitively from
-// the root IDs (recursive CTE, cycle-safe via UNION dedup). Roots are not
-// returned unless a cycle makes one a genuine descendant. Result is sorted and
-// bounded at limit rows (the recursive-expansion result cap).
-func (s *relationshipStore) LookupDescendantResourceIDs(ctx context.Context, resourceType, relation, subjectType string, rootIDs []string, limit int) ([]string, error) {
-	if len(rootIDs) == 0 {
+// LookupResourceIDsByRelationTarget returns the distinct resource IDs whose
+// relation points at any of the target IDs (concrete subjects, no expansion):
+// byte-order sorted, strictly greater than after, at most limit rows. Same
+// keyset contract and COLLATE "C" pin as [relationshipStore.LookupResourceIDs].
+func (s *relationshipStore) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string, after string, limit int) ([]string, error) {
+	if len(targetIDs) == 0 {
 		return nil, nil
 	}
+	q, args := s.lookupResourceIDsByRelationTargetSQL(resourceType, relation, targetType, targetIDs, after, limit)
+	return queryStrings(ctx, s.db.QuerierFrom(ctx), q, args)
+}
+
+// lookupDescendantResourceIDsSQL renders the descendant-closure statement and its
+// args (split from the method for the EXPLAIN test).
+func (s *relationshipStore) lookupDescendantResourceIDsSQL(resourceType string, relations []string, subjectType string, rootIDs []string, after string, limit int) (string, pgx.NamedArgs) {
 	q := `WITH RECURSIVE descendants(rid) AS (
 	SELECT r.resource_id
 	FROM ` + s.table("iam_relationships") + ` r
-	WHERE r.resource_type = @resource_type AND r.relation = @relation AND r.subject_type = @subject_type AND r.subject_relation = '' AND r.subject_id = ANY(@root_ids::text[])
+	WHERE r.resource_type = @resource_type AND r.relation = ANY(@relations::text[]) AND r.subject_type = @subject_type AND r.subject_relation = '' AND r.subject_id = ANY(@root_ids::text[])
 	UNION
 	SELECT r.resource_id
 	FROM ` + s.table("iam_relationships") + ` r
 	JOIN descendants d ON r.subject_id = d.rid
-	WHERE r.resource_type = @resource_type AND r.relation = @relation AND r.subject_type = @subject_type AND r.subject_relation = ''
+	WHERE r.resource_type = @resource_type AND r.relation = ANY(@relations::text[]) AND r.subject_type = @subject_type AND r.subject_relation = ''
 )
-SELECT DISTINCT rid FROM descendants ORDER BY rid` + limitClause(limit)
-	return s.queryStrings(ctx, q, pgx.NamedArgs{
+SELECT DISTINCT rid COLLATE "C" AS rid FROM descendants
+WHERE (@after::text = '' OR rid COLLATE "C" > @after::text)
+ORDER BY rid COLLATE "C"` + limitClause(limit)
+	return q, pgx.NamedArgs{
 		"resource_type": resourceType,
-		"relation":      relation,
+		"relations":     relations,
 		"subject_type":  subjectType,
 		"root_ids":      rootIDs,
+		"after":         after,
 		"limit":         limit,
-	})
+	}
+}
+
+// LookupDescendantResourceIDs walks the UNION of the self-referential relations
+// transitively from the root IDs (one recursive CTE, cycle-safe via UNION dedup;
+// the relation set is closed over in BOTH the anchor and the recursive term, so
+// a path that alternates relations is followed in one call). Roots are not
+// returned unless a cycle makes one a genuine descendant. after/limit page the
+// sorted closure, not its work: the database computes the whole closure on every
+// call (plan A3), so this stream's per-page cost stays the closure size.
+func (s *relationshipStore) LookupDescendantResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType string, rootIDs []string, after string, limit int) ([]string, error) {
+	if len(rootIDs) == 0 || len(relations) == 0 {
+		return nil, nil
+	}
+	q, args := s.lookupDescendantResourceIDsSQL(resourceType, relations, subjectType, rootIDs, after, limit)
+	return queryStrings(ctx, s.db.QuerierFrom(ctx), q, args)
 }
 
 // limitClause appends a bounded LIMIT when limit is positive (the engine always
@@ -715,9 +768,11 @@ func limitClause(limit int) string {
 	return ""
 }
 
-// queryStrings runs a single-column string SELECT and collects the rows.
-func (s *relationshipStore) queryStrings(ctx context.Context, query string, args pgx.NamedArgs) ([]string, error) {
-	rows, err := s.db.QuerierFrom(ctx).Query(ctx, query, args)
+// queryStrings runs a single-column string SELECT on q (the pool, the ambient
+// transaction, or a mutation transaction — callers pass s.db.QuerierFrom(ctx))
+// and collects the rows.
+func queryStrings(ctx context.Context, q rowQuerier, query string, args pgx.NamedArgs) ([]string, error) {
+	rows, err := q.Query(ctx, query, args)
 	if err != nil {
 		return nil, pgxdb.MapError(err)
 	}

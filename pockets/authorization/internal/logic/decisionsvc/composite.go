@@ -2,10 +2,18 @@ package decisionsvc
 
 import (
 	"context"
-	"slices"
+	"fmt"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
 	"github.com/gopernicus/gopernicus/pockets/authorization/internal/logic/authorizersvc"
+	"github.com/gopernicus/gopernicus/sdk"
+)
+
+// Stable kind names hashed into a lookup cursor's fingerprint. They are wire
+// identity, not display text: changing one invalidates every in-flight cursor.
+const (
+	kindNameRelationship = "relationship"
+	kindNameRole         = "role"
 )
 
 // kind is the decision surface ONE model-bearing kind exposes to the composite:
@@ -18,6 +26,10 @@ type kind interface {
 	CheckExplain(ctx context.Context, req authorizersvc.CheckRequest) (authorizersvc.CheckResult, authorizersvc.Explanation, error)
 	CheckBatch(ctx context.Context, reqs []authorizersvc.CheckRequest) ([]authorizersvc.CheckResult, error)
 	LookupResources(ctx context.Context, principal authorizersvc.PrincipalRef, permission, resourceType string) (authorizersvc.LookupResult, error)
+	LookupResourcesPage(ctx context.Context, principal authorizersvc.PrincipalRef, permission, resourceType, after string, limit int) (authorizersvc.LookupResult, error)
+	// ModelDigest is the kind's model identity, hashed into a lookup cursor so a
+	// deploy that changes the model invalidates the cursors it minted.
+	ModelDigest() string
 }
 
 // Composite is the ONE decision surface across the model-bearing kinds. It
@@ -117,6 +129,17 @@ func (c *Composite) owner(resourceType, permission string) kind {
 		return c.roles
 	}
 	return c.undeclared
+}
+
+// ownerWithName returns the kind that answers the pair together with its stable
+// NAME ("relationship" or "role"). The name is hashed into a lookup cursor's
+// fingerprint, so a cursor minted while one kind owned a pair is refused after
+// the pair changes hands.
+func (c *Composite) ownerWithName(resourceType, permission string) (kind, string) {
+	if c.ownedByRelationships(resourceType, permission) {
+		return c.relationships, kindNameRelationship
+	}
+	return c.owner(resourceType, permission), kindNameRole
 }
 
 // =============================================================================
@@ -258,33 +281,59 @@ func (c *Composite) LookupResources(ctx context.Context, principal authorizersvc
 	return c.owner(resourceType, permission).LookupResources(ctx, principal, permission, resourceType)
 }
 
-// LookupResourcesIn is LookupResources with a caller Limit — the struct-input
-// sibling, and the ONE body that truncates. It validates the request, calls the
-// owning kind's budget-bounded enumeration UNCHANGED (the kind interface knows
-// nothing of Limit), and then caps the sorted, deduplicated IDs to the first
-// Limit, setting LookupResult.Truncated when that drops any.
+// LookupResourcesIn is the PAGED enumeration surface — the struct-input sibling
+// of LookupResources, and the ONE body that pages. It validates the request,
+// resolves the page size against the shared budget, dispatches to the SINGLE
+// owning kind exactly as Check and LookupResources do (never a cross-kind
+// merge), and binds the continuation cursor to that query.
 //
-// The budget is untouched: an enumeration that overflows MaxLookupResults is
-// still ErrEvaluationLimit even for a tiny Limit — the cap never turns an
-// indeterminate result into a short complete-looking one — and Limit does not
-// reduce enumeration cost in v1. Limit 0 is the budget ceiling (today's
-// behavior); a negative Limit is rejected by Validate. An Unrestricted answer
-// passes through untouched: it names no IDs to cap. See
-// authorizersvc.LookupRequest for the full semantics and the deferred After.
+//   - LookupRequest.Limit is a PAGE SIZE: 0 means MaxLookupResults; a Limit
+//     ABOVE MaxLookupResults is sdk.ErrInvalidInput (the budget bounds the page
+//     size); a negative Limit is rejected by Validate.
+//   - LookupRequest.After is the previous page's NextCursor. It is decoded
+//     against a fingerprint of (owning kind, that kind's model digest,
+//     principal, permission, resource type); a cursor from another query, the
+//     other kind, or a changed model is ErrInvalidCursor and the client
+//     restarts from page one.
+//   - NextCursor is set only when HasMore is true. Truncated carries the same
+//     value as HasMore for one deprecation release.
+//   - The budget is NOT a total cap: it bounds every intermediate node and every
+//     self-hierarchy root set, so an overflowing enumeration is
+//     ErrEvaluationLimit on every page rather than a short list that looks
+//     complete. An Unrestricted answer names no IDs to page and passes through
+//     with no cursor.
 func (c *Composite) LookupResourcesIn(ctx context.Context, req authorizersvc.LookupRequest) (authorizersvc.LookupResult, error) {
 	if err := req.Validate(); err != nil {
 		return authorizersvc.LookupResult{}, err
 	}
-	res, err := c.owner(req.ResourceType, req.Permission).LookupResources(ctx, req.Principal, req.Permission, req.ResourceType)
+	limit := req.Limit
+	switch {
+	case limit == 0:
+		limit = c.limits.MaxLookupResults
+	case limit > c.limits.MaxLookupResults:
+		return authorizersvc.LookupResult{}, fmt.Errorf("authorization: lookup limit %d exceeds MaxLookupResults %d: %w",
+			limit, c.limits.MaxLookupResults, sdk.ErrInvalidInput)
+	}
+
+	owner, ownerName := c.ownerWithName(req.ResourceType, req.Permission)
+	fingerprint := authorizersvc.LookupFingerprint(ownerName, owner.ModelDigest(), req.Principal, req.Permission, req.ResourceType)
+
+	after := ""
+	if req.After != "" {
+		decoded, err := authorizersvc.DecodeLookupCursor(req.After, fingerprint)
+		if err != nil {
+			return authorizersvc.LookupResult{}, err
+		}
+		after = decoded
+	}
+
+	res, err := owner.LookupResourcesPage(ctx, req.Principal, req.Permission, req.ResourceType, after, limit)
 	if err != nil {
 		return authorizersvc.LookupResult{}, err
 	}
-	if req.Limit > 0 && !res.Unrestricted && len(res.IDs) > req.Limit {
-		// Clip so the returned slice cannot reach the dropped tail: a caller that
-		// appends to it would otherwise overwrite IDs this answer deliberately
-		// withheld, and the withheld tail would stay reachable through cap.
-		res.IDs = slices.Clip(res.IDs[:req.Limit])
-		res.Truncated = true
+	if res.HasMore && len(res.IDs) > 0 {
+		res.NextCursor = authorizersvc.EncodeLookupCursor(res.IDs[len(res.IDs)-1], fingerprint)
 	}
+	res.Truncated = res.HasMore
 	return res, nil
 }

@@ -332,7 +332,7 @@ nested checks. Fields and their zero-value defaults (re-exported as
 | `MaxGraphStates` | distinct `(resource, permission)` states expanded (diamond-deduped) — **and** every role-assignment row a roles-kind `LookupResources` walk scans, so an adversarial assignment count is bounded work, never an open-ended store walk | 10000 |
 | `MaxRelationTargets` | per-hop relation fan-out / expanded targets — relationship kind only | 1000 |
 | `MaxBatchSize` | checks accepted in one `CheckBatch`/`FilterAuthorized`, charged ONCE for the whole batch by the decision surface whichever kinds own its pairs (also bounds a purge's affected rows) | 1000 |
-| `MaxLookupResults` | resource IDs one `LookupResources` returns, on either kind (the relationship store fetches max+1 so overflow is distinguishable; the roles walk charges its running distinct count) | 1000 |
+| `MaxLookupResults` | resource IDs one `LookupResources` returns, on either kind (the relationship store fetches max+1 so overflow is distinguishable; the roles walk charges its running distinct count) — **and**, for the paged `LookupResourcesIn`, the PAGE SIZE plus every INTERMEDIATE node (a `Through` hop's target set, a self-hierarchy's root set); it is never a total-results cap on a paged query | 1000 |
 | `MaxFilterScan` | candidates ONE `FilterPage` call may pull from its source; every source request is clamped to the remaining budget. Reaching it returns a PARTIAL page plus a continuation, not `ErrEvaluationLimit` — the one dimension whose exhaustion is resumable | 20000 |
 
 Rules:
@@ -355,41 +355,55 @@ Rules:
 
 ### Enumeration with a caller Limit — `LookupResourcesIn`
 
-`LookupResourcesIn(ctx, LookupRequest{Principal, Permission, ResourceType, Limit})`
-is the struct-input SIBLING of `LookupResources`, not a replacement: the
-positional method keeps its signature, so host ports and method values are
-untouched.
+`LookupResourcesIn(ctx, LookupRequest{Principal, Permission, ResourceType, Limit, After})`
+is the PAGED struct-input SIBLING of `LookupResources`, not a replacement: the
+positional method keeps its signature and its complete, budget-bounded
+semantics, so host ports and method values are untouched.
 
-- **`Limit == 0` means the `MaxLookupResults` budget ceiling** — today's
-  `LookupResources` behavior. It does NOT mean unbounded (nothing here is), and
-  it deliberately does NOT follow `crud.ListRequest`, where `0` means
-  `DefaultLimit`: an enumeration is not a page, and silently shrinking a host's
-  result set to a page default would be a correctness change, not a default. A
-  NEGATIVE `Limit` is a validation error wrapping `sdk.ErrInvalidInput` (HTTP
-  400) — a limit is not a reference, so it is not `ErrInvalidRef`.
-- **`LookupResult.Truncated`** reports that the `Limit` DROPPED IDs from the
-  complete enumeration — the "and more" affordance. Without it,
-  `len(IDs) == Limit` would be indistinguishable from exactly `Limit` grants.
-  Only the `Limit` path sets it; the classic `LookupResources` never does. `IDs`
-  stays non-nil through truncation, and the returned prefix is the first `Limit`
-  of the same sorted, deduplicated list.
-- **Overflow beats a small `Limit`.** `Limit` never weakens or bypasses the
-  budget: an enumeration that overflows `MaxLookupResults` is still
-  `ErrEvaluationLimit` even when `Limit` is 1. A truncating `Limit` must not be
-  able to turn an indeterminate result into a short one that looks complete.
-- **It does not make the query cheaper (v1).** The owning kind enumerates
-  exactly as it does today and truncation happens above it. `Limit` moves the
-  host's re-cap into the engine and anchors a future cursor — it is not a
-  performance knob.
-- **`Unrestricted` ignores `Limit`** and passes through untouched: it names no
-  IDs to cap, and the host must still skip ID filtering entirely.
+One call returns ONE page: at most `Limit` ids, `LookupResult.HasMore` when more
+remain, and `LookupResult.NextCursor` to hand back as the next request's
+`After`. Walking to `HasMore == false` yields exactly what `LookupResources`
+returns — same ids, same order, no repeats.
 
-**DEFERRED — `After`/cursor continuation (issue #22).** Resuming an enumeration
-needs a deterministic continuation the OWNING KIND can honor, which is a
-store-port change across `memstore`, `stores/pgx`, `stores/turso`, and the
-`storetest` conformance suite — a multi-module train, not a core-only release.
-When a host actually needs it, it lands as an additive `LookupRequest.After`
-field with zero signature churn.
+- **`Limit` is a PAGE SIZE.** `Limit == 0` means `MaxLookupResults` — one full
+  page. It does NOT mean unbounded (nothing here is), and it deliberately does
+  NOT follow `crud.ListRequest`, where `0` means `DefaultLimit`. A `Limit` ABOVE
+  `MaxLookupResults` and a NEGATIVE `Limit` are both validation errors wrapping
+  `sdk.ErrInvalidInput` (HTTP 400) — a limit is not a reference, so it is not
+  `ErrInvalidRef`.
+- **`After` is the previous page's `NextCursor`,** and `""` starts at the
+  beginning. `NextCursor` is set only when `HasMore` is true.
+- **The cursor is bound to its query.** It carries a fingerprint of the
+  principal, the permission, the resource type, the OWNING KIND, and that kind's
+  MODEL DIGEST (the compiled relationship schema digest, or the compiled role
+  model's digest). A cursor presented against a different query, against the
+  other kind, or after a deploy that CHANGED the model is `ErrInvalidCursor`
+  (wrapping `sdk.ErrInvalidInput`) — in-flight cursors are invalidated and the
+  client restarts from page one. The fingerprint is query binding, not
+  authentication: the id inside stays untrusted client input and is validated
+  like any resource id.
+- **Keyset, not a snapshot.** Pages are ordered by resource id ascending in BYTE
+  order, and the cursor is the last id returned. A page sees grants that land
+  ahead of it and misses ones that land behind it — the standard keyset
+  contract; a client that needs a consistent view refetches from the start. Ids
+  are opaque (nanoid), so the order is stable but meaningless to a human: NEVER
+  sort a paged prefilter client-side and expect consistency across pages. Any
+  user-facing order belongs to the client after it fetches its rows, or to a
+  postfilter.
+- **What the budget bounds now.** `MaxLookupResults` bounds the PAGE SIZE and
+  every INTERMEDIATE node — a non-self `Through` hop's target set (the orgs
+  whose posts you are enumerating) and a self-hierarchy's non-descendant ROOT
+  set, which must be complete before it seeds the closure because a lexically
+  late root may grant a lexically early descendant. It is NEVER a total-results
+  cap on a paged query. A principal over the intermediate bound is
+  `ErrEvaluationLimit` on EVERY page — indeterminate, never a short list that
+  looks complete. Top-level leaf reads are bounded by the page, not by the total
+  number of reachable resources.
+- **`LookupResult.Truncated` is DEPRECATED.** It carries the same value as
+  `HasMore` for one release and is then removed; new code reads `HasMore`.
+- **`Unrestricted` ignores `Limit` and `After`** and passes through untouched
+  with no cursor: it names no IDs to page, and the host must still skip ID
+  filtering entirely.
 
 **Fail-closed caller guidance (load-bearing).** `allowed, _ := authorizer.Check(...)`
 is a silent fail-OPEN — an engine error (store down, unwired kind, budget
@@ -1216,6 +1230,16 @@ all three, live per dialect at milestone close.
 
 The suite's named families are acceptance criteria, not nice-to-haves:
 
+- The `Relationship/*` port contract — CRUD round-trip, the
+  one-relation-per-subject rules, desired-state `SetRelationTargets`, listings,
+  and `LookupKeyset` (`Direct`, `ByRelationTarget`, `Descendants`,
+  `DescendantsFollowTheRelationUnion`): the keyset half of the three lookup
+  ports on every dialect — `after` is EXCLUSIVE at every position, `limit` caps
+  the head of the order, ids come back DISTINCT and sorted in BYTE order (the
+  fixture ids `B a _x ~z Z é` interleave differently under a locale collation,
+  so a store comparing under the database's default collation FAILS rather than
+  passing by accident), and ONE descendant call follows the UNION of the self
+  relations along a path that ALTERNATES them.
 - `Adversarial/*` — `MembershipCycle` (cyclic group data terminates; CTEs
   cycle-safe by relation-aware UNION dedup, memstore by a `[3]string` visited
   set — all unbounded-but-cycle-safe), `DeepNesting`, `DiamondDedup` (with the
@@ -1239,7 +1263,21 @@ The suite's named families are acceptance criteria, not nice-to-haves:
   MODEL-BEARING KIND, each gated on its own kind: the relationship arm, and
   `Parity/Roles` (added v0.3.0 — `RolesCheckLookupOracle`, plus
   `RolesMultiPageWalk`, which pins cursor behaviour across a multi-page
-  `ListBySubject` walk per dialect).
+  `ListBySubject` walk per dialect). Paging joins the oracle:
+  `LookupPagedParity` — `OracleUniverse` (walk `LookupResourcesIn` at page sizes
+  1/2/7/universe; the concatenation IS the plain `LookupResources` result, same
+  ids, same order, no repeats, every id passing `Check`, every page non-nil with
+  `Truncated` mirroring `HasMore` and a continuation exactly while `HasMore`),
+  `HierarchyDescendantBeforeRoot` (a descendant lexically BEFORE its root, one
+  path alternating two self relations), `CursorIsBoundToItsQuery` (refused for
+  another principal, another permission, another resource type, and after a
+  schema change — while the cursor's OWN query still pages),
+  `IntermediateOverflowIsErrorOnEveryPage` (an overflowing `Through` target set
+  stays `ErrEvaluationLimit` on every page; a `Limit` above the budget is
+  `sdk.ErrInvalidInput`) — and `RolesPagedParity` — `ScopedWalk` (page sizes
+  1/7/50 over the multi-page assignment fixture),
+  `DuplicateGrantingRolesAppearOnce`, `GlobalGrantHasNoPage`,
+  `CursorRefusedAfterRoleModelChange`.
 - The `Budget/*` family — depth-boundary, fan-out, lookup-result-cap, and
   sibling-Through parity across dialects.
 - The `Transactional/*` family (`storetest.RunTransactional(t, newRepos func(t)
@@ -1256,7 +1294,12 @@ The suite's named families are acceptance criteria, not nice-to-haves:
   that a refused guarded mutation left the anchors and receipts untouched.
 - The `Roles/*` family — assign/unassign idempotence, exact-scope isolation, the
   Q5 global fallback, `EffectiveEnumerationAgreesWithHasRole`,
-  `ScopedRevokeGlobalRoleRemains`, `EffectivePagination`.
+  `ScopedRevokeGlobalRoleRemains`, `EffectivePagination`, and
+  `RolesLookupKeyset` (`Scoped`, `GlobalQueriedRoleIsUnrestricted`,
+  `GlobalUnqueriedRoleIsNotUnrestricted`, `EmptyRolesIsNothing`) — the role
+  resource-id lookup's keyset contract: byte order, exclusive `after`, capping
+  `limit`, ONE id per resource across two granting roles, and a global grant of
+  a QUERIED role as `unrestricted` with no ids to page.
 - The `Roles/Decision` family (added v0.3.0) — the same three backends run the
   role engine over a `Config.RoleModel`: `DirectGrantAllows`,
   `GlobalGrantSatisfiesScopedCheck`, `UndeclaredPairDenies`,
@@ -1264,7 +1307,10 @@ The suite's named families are acceptance criteria, not nice-to-haves:
 - The `Composed/*` family (added v0.3.0; skipped unless BOTH kinds are wired) —
   `PairOwnershipDispatch` over a fixture whose one resource type is split across
   the two models by permission, so the dispatch is proved per dialect and not
-  only in unit tests.
+  only in unit tests, plus `PagedPairOwnershipDispatch` — each owner pages to
+  its own plain result, and a relationship-owned cursor presented on the
+  role-owned permission of the SAME type is `ErrInvalidCursor` (the fingerprint
+  binds the owning KIND, not only the query).
 
 **Migrations:** source `"authorization"` — the identical four-file set in both
 store modules (dialect-specific DDL inside):
@@ -1428,22 +1474,24 @@ result, err := authorizer.LookupResources(ctx, authorization.PrincipalFrom(p), "
 // "no access". For admin-sees-everything, run the platform-admin Check first
 // and skip filtering.
 
-// Stop 3b — the same enumeration capped for a "first N + more" affordance.
-// Limit 0 would be the MaxLookupResults budget ceiling (today's behavior), NOT
-// crud's DefaultLimit; a negative Limit is invalid input (400). The cap NEVER
-// weakens the budget — an enumeration overflowing MaxLookupResults is still
-// ErrEvaluationLimit even for Limit 5 — and it does not make the query cheaper.
-capped, err := authorizer.LookupResourcesIn(ctx, authorization.LookupRequest{
+// Stop 3b — the same enumeration PAGED: Limit is a page size (0 = the
+// MaxLookupResults ceiling, NOT crud's DefaultLimit; above it or negative is
+// invalid input, 400) and After is the previous page's NextCursor. The
+// top-level reads are bounded by the page; an intermediate Through target set
+// or a hierarchy root set over MaxLookupResults is still ErrEvaluationLimit on
+// every page — never a short list.
+page, err := authorizer.LookupResourcesIn(ctx, authorization.LookupRequest{
     Principal:    authorization.PrincipalFrom(p),
     Permission:   "view",
     ResourceType: "project",
-    Limit:        5,
+    Limit:        50,
+    After:        cursorFromClient, // "" on the first page; ErrInvalidCursor (400) if it was minted for another query or an older model
 })
 if err != nil {
-    return err // fail CLOSED — a truncation is never an error, an error is never a short list
+    return err // fail CLOSED — a page end is never an error, an error is never a short list
 }
-// capped.Truncated tells "there are more" apart from "exactly 5 grants";
-// capped.Unrestricted still ignores Limit and means: skip ID filtering.
+// page.HasMore + page.NextCursor continue the walk in the same byte order;
+// page.Unrestricted ignores Limit and means: skip ID filtering.
 
 // Stop 3c — explain a decision (support/debug, never the hot path). CheckExplain
 // rides the SAME evaluation path and budget as Check: it cannot change the

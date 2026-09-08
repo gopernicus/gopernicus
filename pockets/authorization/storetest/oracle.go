@@ -180,6 +180,10 @@ func runParity(t *testing.T, newRepos func(t *testing.T) authorization.Repositor
 		}
 	})
 
+	t.Run("LookupPagedParity", func(t *testing.T) {
+		runLookupPagedParity(t, newRepos)
+	})
+
 	t.Run("LimitExhaustionIsError", func(t *testing.T) {
 		// u_hc can view exactly 3 docs (d_hroot + descendants). With
 		// MaxLookupResults=2 that is over budget: the result is ErrEvaluationLimit,

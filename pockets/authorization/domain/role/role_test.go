@@ -30,6 +30,10 @@ func (stubStorer) ListByResource(ctx context.Context, resourceType, resourceID s
 	return crud.Page[Assignment]{}, nil
 }
 
+func (stubStorer) LookupResourceIDsBySubjectAndRoles(ctx context.Context, subjectType, subjectID, resourceType string, roles []string, after string, limit int) ([]string, bool, error) {
+	return nil, false, nil
+}
+
 func (stubStorer) ListEffectiveByResource(ctx context.Context, resourceType, resourceID string, req crud.ListRequest) (crud.Page[EffectiveGrant], error) {
 	return crud.Page[EffectiveGrant]{}, nil
 }

@@ -246,16 +246,22 @@ type ResourceRelationshipFilter struct {
 // same bool it returned before the bound existed. Expansion stays cycle-safe by
 // construction (visited-set / relation-aware UNION dedup).
 //
-// The three LOOKUP methods DO carry a result cap: the engine passes its
-// resolved MaxLookupResults+1 as limit, and each method returns AT MOST limit
-// distinct IDs. A returned count equal to limit is how the engine distinguishes
-// a bounded-complete result from an overflow it must report as ErrEvaluationLimit
-// — never a silently truncated slice presented as complete (a store MUST NOT
-// return more than limit, and MUST NOT drop the overflow signal by capping at
-// limit-1). A non-positive limit means unbounded; the engine always passes a
-// positive cap. The other engine budget dimensions (Through depth, distinct
-// graph states, per-hop fan-out, batch size) are engine-scoped and are not
-// threaded here.
+// The three LOOKUP methods are KEYSET reads (authorization-lookup-paging, A2):
+// each returns DISTINCT resource IDs sorted ascending in BYTE order, STRICTLY
+// GREATER than after (after == "" means from the start), and AT MOST limit of
+// them. The engine passes either its resolved MaxLookupResults+1 (a complete,
+// budget-bounded enumeration: a returned count equal to limit is how it
+// distinguishes a bounded-complete result from an overflow it must report as
+// ErrEvaluationLimit — never a silently truncated slice presented as complete)
+// or page+1 (a paged enumeration: the extra row is the HasMore lookahead). A
+// store MUST NOT return more than limit, MUST NOT cap at limit-1, MUST NOT
+// return an ID <= after, and MUST order by the raw bytes of resource_id — the
+// engine merges several of these streams by Go string comparison, so a
+// locale-collated order would skip or repeat IDs across pages (the pgx store
+// pins COLLATE "C"; SQLite's BINARY is byte order). A non-positive limit means
+// unbounded; the engine always passes a positive cap. The other engine budget
+// dimensions (Through depth, distinct graph states, per-hop fan-out, batch
+// size) are engine-scoped and are not threaded here.
 //
 // The listing methods are crud-typed (design §9): a crud.ListRequest in, a
 // crud.Page[T] out. Ordering is contractual — created_at DESC, relationship_id
@@ -379,20 +385,25 @@ type Storer interface {
 	// LookupResources
 	// -------------------------------------------------------------------
 
-	// LookupResourceIDs returns resource IDs where the subject has any of the
-	// given direct relations (with group expansion), capped at limit distinct IDs
-	// (see the Bounding note above).
-	LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID string, limit int) ([]string, error)
+	// LookupResourceIDs returns the resource IDs where the subject has any of the
+	// given direct relations (with group expansion): distinct, byte-order sorted,
+	// strictly greater than after, at most limit (see the Bounding note above).
+	LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID, after string, limit int) ([]string, error)
 
-	// LookupResourceIDsByRelationTarget returns resource IDs that have a specific
-	// relation pointing to any of the target IDs, capped at limit distinct IDs.
+	// LookupResourceIDsByRelationTarget returns the resource IDs whose relation
+	// points at any of the target IDs (concrete subjects only, no expansion):
+	// distinct, byte-order sorted, strictly greater than after, at most limit.
 	// Used for through-relation traversal in LookupResources.
-	LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string, limit int) ([]string, error)
+	LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string, after string, limit int) ([]string, error)
 
-	// LookupDescendantResourceIDs returns all resource IDs reachable by walking a
-	// self-referential relation transitively (recursive, cycle-safe), capped at
-	// limit distinct IDs. Used when a Through target type equals the current
-	// resource type (e.g. space→parent→space): given rootIDs=[S1] with
-	// relation="parent", S1←S2←S3 yields [S2, S3].
-	LookupDescendantResourceIDs(ctx context.Context, resourceType, relation, subjectType string, rootIDs []string, limit int) ([]string, error)
+	// LookupDescendantResourceIDs returns the resource IDs reachable from the
+	// root IDs by walking the UNION of the self-referential relations
+	// transitively (recursive, cycle-safe; a path may alternate relations), then
+	// applies after/limit to the sorted, distinct closure. Used when a Through
+	// target type equals the current resource type (e.g. space→parent→space):
+	// given rootIDs=[S1] with relations=["parent"], S1←S2←S3 yields [S2, S3]. A
+	// root is returned only when a cycle makes it a genuine descendant. The
+	// database computes the whole closure on every call; after/limit page its
+	// result, not its work (plan A3).
+	LookupDescendantResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType string, rootIDs []string, after string, limit int) ([]string, error)
 }

@@ -317,24 +317,28 @@ func runRelationshipContracts(t *testing.T, newRepos func(t *testing.T) authoriz
 			ct("space", "s2", "parent", "space", "s1"),
 			ct("space", "s3", "parent", "space", "s2"),
 		)
-		ids, _ := s.LookupResourceIDs(ctx, "doc", []string{"viewer"}, "user", "u1", 100)
+		ids, _ := s.LookupResourceIDs(ctx, "doc", []string{"viewer"}, "user", "u1", "", 100)
 		if len(ids) != 2 {
 			t.Fatalf("LookupResourceIDs want 2, got %v", ids)
 		}
-		byTarget, _ := s.LookupResourceIDsByRelationTarget(ctx, "space", "parent", "space", []string{"s1"}, 100)
+		byTarget, _ := s.LookupResourceIDsByRelationTarget(ctx, "space", "parent", "space", []string{"s1"}, "", 100)
 		if len(byTarget) != 1 || byTarget[0] != "s2" {
 			t.Fatalf("LookupResourceIDsByRelationTarget want [s2], got %v", byTarget)
 		}
-		desc, _ := s.LookupDescendantResourceIDs(ctx, "space", "parent", "space", []string{"s1"}, 100)
+		desc, _ := s.LookupDescendantResourceIDs(ctx, "space", []string{"parent"}, "space", []string{"s1"}, "", 100)
 		if len(desc) != 2 {
 			t.Fatalf("descendants want [s2 s3], got %v", desc)
 		}
 		// The result cap is a distinguishable overflow signal: a cap of 1 returns
 		// exactly 1 of the 2 viewer docs (never a silent "complete" 2).
-		capped, _ := s.LookupResourceIDs(ctx, "doc", []string{"viewer"}, "user", "u1", 1)
+		capped, _ := s.LookupResourceIDs(ctx, "doc", []string{"viewer"}, "user", "u1", "", 1)
 		if len(capped) != 1 {
 			t.Fatalf("LookupResourceIDs cap=1 must return exactly 1 (overflow signal), got %v", capped)
 		}
+	})
+
+	t.Run("LookupKeyset", func(t *testing.T) {
+		runRelationshipKeyset(t, newRepos)
 	})
 
 	t.Run("ListingPagination", func(t *testing.T) {
