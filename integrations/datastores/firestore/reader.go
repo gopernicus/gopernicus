@@ -71,12 +71,13 @@ type Writer interface {
 	Delete(ctx context.Context, ref *gcfs.DocumentRef, pre ...gcfs.Precondition) error
 }
 
-// Compile-time assertions for the two implementations of each half.
+// Compile-time assertions for every implementation of each half.
 var (
 	_ Reader = clientReader{}
 	_ Reader = txReader{}
 	_ Writer = clientWriter{}
 	_ Writer = txWriter{}
+	_ Writer = readOnlyWriter{}
 )
 
 // ReaderFrom returns the Reader for ctx: the ambient Firestore transaction's
@@ -84,17 +85,28 @@ var (
 // client's. A store that calls it on every read cannot accidentally bypass a
 // transaction it is running inside.
 func (d *DB) ReaderFrom(ctx context.Context) Reader {
-	if tx, ok := TxFromContext(ctx); ok {
-		return txReader{tx: tx}
+	if ambient, ok := ambientTxFrom(ctx); ok {
+		return txReader{tx: ambient.tx}
 	}
 	return clientReader{client: d.client}
 }
 
 // WriterFrom returns the Writer for ctx: the ambient transaction's writer when
 // the context carries one, otherwise the client's.
+//
+// Inside a ReadSnapshot the ambient transaction is READ-ONLY, and the Writer
+// returned refuses every method with ErrWriteInReadOnlyTransaction before
+// touching the vendor. The vendor refuses it too (errWriteReadOnly), but the
+// refusal that matters is this one: it holds even if a vendor bump reworded or
+// relaxed that check, so "a snapshot never writes" is a property of the
+// connector rather than of a string comparison.
 func (d *DB) WriterFrom(ctx context.Context) Writer {
-	if tx, ok := TxFromContext(ctx); ok {
-		return txWriter{tx: tx}
+	ambient, ok := ambientTxFrom(ctx)
+	switch {
+	case ok && ambient.readOnly:
+		return readOnlyWriter{}
+	case ok:
+		return txWriter{tx: ambient.tx}
 	}
 	return clientWriter{client: d.client}
 }
@@ -207,6 +219,28 @@ func (w txWriter) Update(_ context.Context, ref *gcfs.DocumentRef, updates []gcf
 
 func (w txWriter) Delete(_ context.Context, ref *gcfs.DocumentRef, pre ...gcfs.Precondition) error {
 	return MapError(w.tx.Delete(ref, pre...))
+}
+
+// readOnlyWriter is the Writer a ReadSnapshot's context hands out: every method
+// fails with ErrWriteInReadOnlyTransaction, queueing nothing. It exists so the
+// snapshot's write-free guarantee is enforced by this package, at the seam,
+// rather than by recognizing the vendor's errWriteReadOnly text after the fact.
+type readOnlyWriter struct{}
+
+func (readOnlyWriter) Create(context.Context, *gcfs.DocumentRef, any) error {
+	return ErrWriteInReadOnlyTransaction
+}
+
+func (readOnlyWriter) Set(context.Context, *gcfs.DocumentRef, any, ...gcfs.SetOption) error {
+	return ErrWriteInReadOnlyTransaction
+}
+
+func (readOnlyWriter) Update(context.Context, *gcfs.DocumentRef, []gcfs.Update, ...gcfs.Precondition) error {
+	return ErrWriteInReadOnlyTransaction
+}
+
+func (readOnlyWriter) Delete(context.Context, *gcfs.DocumentRef, ...gcfs.Precondition) error {
+	return ErrWriteInReadOnlyTransaction
 }
 
 // countFrom reads the count aggregation's value out of the vendor's result map.

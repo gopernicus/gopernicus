@@ -57,6 +57,11 @@ import (
 // vendor's name for a project's unnamed default database.
 const DefaultDatabase = gcfs.DefaultDatabaseID
 
+// DefaultMaxAttempts is how many times Transact runs its callback before a
+// commit that keeps losing its contention race gives up — the vendor's own
+// default, restated here so a Config author does not have to import gcfs.
+const DefaultMaxAttempts = gcfs.DefaultTransactionMaxAttempts
+
 // defaultConnectTimeout bounds Open's eager boot validation when Config leaves
 // ConnectTimeout unset.
 const defaultConnectTimeout = 10 * time.Second
@@ -97,6 +102,19 @@ type Config struct {
 	// auto-retried by the connector — Firestore's own transaction contention
 	// retry lives in the vendor client, and statement retry is store-owned.
 	Retry RetryPolicy
+
+	// MaxAttempts caps how many times Transact runs its callback when the
+	// COMMIT loses a contention race (the vendor's Aborted retry loop). 0
+	// defaults to DefaultMaxAttempts, the vendor's own default of 5. It is not
+	// a request retry: a failed read or write inside the callback is never
+	// retried by itself, and ReadSnapshot's read-only transaction is never
+	// retried at all.
+	//
+	// Raise it for a hot document under heavy write contention (each retry
+	// re-runs the whole callback, so the cost is real reads); lower it to 1 to
+	// turn a contention loss into an immediate sdk.ErrConflict the caller
+	// handles itself.
+	MaxAttempts int
 }
 
 // Redacted returns the connection target — project and database only — safe to
@@ -126,6 +144,9 @@ func Open(ctx context.Context, cfg Config) (*DB, error) {
 	if cfg.ConnectTimeout <= 0 {
 		cfg.ConnectTimeout = defaultConnectTimeout
 	}
+	if cfg.MaxAttempts <= 0 {
+		cfg.MaxAttempts = DefaultMaxAttempts
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, cfg.ConnectTimeout)
 	defer cancel()
@@ -140,7 +161,12 @@ func Open(ctx context.Context, cfg Config) (*DB, error) {
 		return nil, fmt.Errorf("opening firestore database %s: %w", cfg.Redacted(), err)
 	}
 
-	db := &DB{client: client, database: cfg.database(), project: cfg.ProjectID}
+	db := &DB{
+		client:      client,
+		database:    cfg.database(),
+		project:     cfg.ProjectID,
+		maxAttempts: cfg.MaxAttempts,
+	}
 
 	if cfg.Retry.Attempts > 1 {
 		if err := retry(ctx, cfg.Retry, func(ctx context.Context) error {

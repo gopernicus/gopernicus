@@ -27,7 +27,7 @@ func TestReaderFromSelectsTheAmbientTransaction(t *testing.T) {
 	}
 
 	tx := &gcfs.Transaction{}
-	ctx := withTx(plain, tx)
+	ctx := withTx(plain, tx, false)
 
 	got, ok := TxFromContext(ctx)
 	if !ok || got != tx {
@@ -41,6 +41,39 @@ func TestReaderFromSelectsTheAmbientTransaction(t *testing.T) {
 	}
 }
 
+// TestWriterFromRefusesInsideAReadOnlySnapshot proves the guarantee ReadSnapshot
+// advertises is enforced HERE, at the seam, and not by recognizing a vendor
+// error after the write was attempted: with a read-only ambient transaction
+// every Writer method fails before touching the vendor, while the Reader still
+// reads from the same transaction.
+func TestWriterFromRefusesInsideAReadOnlySnapshot(t *testing.T) {
+	t.Setenv("FIRESTORE_EMULATOR_HOST", "127.0.0.1:1")
+	db := openForTest(t)
+
+	tx := &gcfs.Transaction{}
+	ctx := withTx(context.Background(), tx, true)
+
+	if r, ok := ReaderFromIsTx(db.ReaderFrom(ctx)); !ok || r.tx != tx {
+		t.Error("ReaderFrom inside a read-only snapshot did not return the transaction's Reader")
+	}
+	if _, ok := WriterFromIsTx(db.WriterFrom(ctx)); ok {
+		t.Fatal("WriterFrom inside a read-only snapshot returned a transactional Writer that would queue writes")
+	}
+
+	w := db.WriterFrom(ctx)
+	ref := db.Doc("widgets", "w1")
+	for name, err := range map[string]error{
+		"Create": w.Create(ctx, ref, map[string]any{"a": 1}),
+		"Set":    w.Set(ctx, ref, map[string]any{"a": 1}),
+		"Update": w.Update(ctx, ref, []gcfs.Update{{Path: "a", Value: 1}}),
+		"Delete": w.Delete(ctx, ref),
+	} {
+		if !errors.Is(err, ErrWriteInReadOnlyTransaction) {
+			t.Errorf("%s inside a read-only snapshot = %v, want ErrWriteInReadOnlyTransaction", name, err)
+		}
+	}
+}
+
 // TestTxFromContextIgnoresAbsentAndNil pins the two negative cases: a bare
 // context, and a context carrying a nil transaction (which must not produce a
 // Reader that panics on first use).
@@ -48,7 +81,7 @@ func TestTxFromContextIgnoresAbsentAndNil(t *testing.T) {
 	if tx, ok := TxFromContext(context.Background()); ok || tx != nil {
 		t.Errorf("TxFromContext(background) = %v, %v; want nil, false", tx, ok)
 	}
-	if tx, ok := TxFromContext(withTx(context.Background(), nil)); ok || tx != nil {
+	if tx, ok := TxFromContext(withTx(context.Background(), nil, false)); ok || tx != nil {
 		t.Errorf("TxFromContext(nil transaction) = %v, %v; want nil, false", tx, ok)
 	}
 }

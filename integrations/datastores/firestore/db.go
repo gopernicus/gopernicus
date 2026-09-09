@@ -30,9 +30,10 @@ const statusCheckTimeout = time.Second
 // reach documents through Collection/Doc and issue I/O through the tx-aware
 // Reader/Writer seams, so an ambient transaction can never be bypassed.
 type DB struct {
-	client   *gcfs.Client
-	project  string
-	database string
+	client      *gcfs.Client
+	project     string
+	database    string
+	maxAttempts int
 }
 
 // Close releases the client's resources.
