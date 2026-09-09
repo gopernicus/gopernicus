@@ -49,6 +49,16 @@ func decodeRelationship(snap *gcfs.DocumentSnapshot) (relationshipDoc, error) {
 	return row, nil
 }
 
+// relationshipResourceID is the keyset lookup's id projection for a relationship
+// document (idStream.idOf).
+func relationshipResourceID(snap *gcfs.DocumentSnapshot) (string, error) {
+	row, err := decodeRelationship(snap)
+	if err != nil {
+		return "", err
+	}
+	return row.ResourceID, nil
+}
+
 // toSubjectRelationship projects a row for ListRelationshipsBySubject.
 func (r relationshipDoc) toSubjectRelationship() relationship.SubjectRelationship {
 	return relationship.SubjectRelationship{

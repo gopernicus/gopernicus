@@ -3,14 +3,12 @@ package firestore
 import (
 	"context"
 	"errors"
-	"fmt"
 	"slices"
 
 	gcfs "cloud.google.com/go/firestore"
 	"google.golang.org/api/iterator"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
-	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // lookupPageSize is the number of documents ONE keyset stream pulls per physical
@@ -59,6 +57,7 @@ type idStream struct {
 	reader   firestoredb.Reader
 	base     gcfs.Query
 	pageSize int
+	idOf     func(*gcfs.DocumentSnapshot) (string, error)
 
 	buf  []string
 	pos  int
@@ -68,8 +67,10 @@ type idStream struct {
 
 // newIDStream builds one chunk stream. after is the port's EXCLUSIVE cursor: an
 // empty after starts at the beginning, and the inequality is the query's first
-// order clause as Firestore requires.
-func newIDStream(reader firestoredb.Reader, q gcfs.Query, after string, limit int) *idStream {
+// order clause as Firestore requires. idOf projects one document to its
+// resource_id, which is what lets the SAME stream serve the relationship
+// lookups and the roles kind's lookup over two different document shapes.
+func newIDStream(reader firestoredb.Reader, q gcfs.Query, after string, limit int, idOf func(*gcfs.DocumentSnapshot) (string, error)) *idStream {
 	if after != "" {
 		q = q.Where("resource_id", ">", after)
 	}
@@ -81,6 +82,7 @@ func newIDStream(reader firestoredb.Reader, q gcfs.Query, after string, limit in
 		reader:   reader,
 		base:     q.OrderBy("resource_id", gcfs.Asc).OrderBy(gcfs.DocumentID, gcfs.Asc),
 		pageSize: size,
+		idOf:     idOf,
 	}
 }
 
@@ -112,11 +114,11 @@ func (s *idStream) peek(ctx context.Context) (string, bool, error) {
 		if err != nil {
 			return "", false, firestoredb.MapError(err)
 		}
-		var row relationshipDoc
-		if err := snap.DataTo(&row); err != nil {
-			return "", false, fmt.Errorf("authorization firestore store: decoding %s: %s: %w", collectionRelationships, err, sdk.ErrInvalidInput)
+		id, err := s.idOf(snap)
+		if err != nil {
+			return "", false, err
 		}
-		s.buf = append(s.buf, row.ResourceID)
+		s.buf = append(s.buf, id)
 		s.last = snap
 	}
 	if len(s.buf) < s.pageSize {

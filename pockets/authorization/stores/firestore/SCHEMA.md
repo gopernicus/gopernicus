@@ -382,6 +382,38 @@ lookup stream carries four filters and two orders per disjunct, so its budget is
 the Go client does not pre-validate. `maxChunk` in `reads.go` resolves both caps;
 `chunking_test.go` pins the arithmetic hermetically.
 
+### 7.2 Query shapes the roles port issues (A3a–A3b)
+
+Same conventions as §7.1. Three of the seven `role.Storer` methods issue NO
+query at all: the unique 5-tuple is the document id, so an exact read, an
+assign, and an unassign address ONE document, and the unrestricted short-circuit
+addresses one document per queried role.
+
+| Method | Equality | Range / order | Chunked by |
+|---|---|---|---|
+| `Assign` (read phase) | document `Get` | — | — |
+| `Assign` (write) / `Unassign` | document `Create` / `Delete` | — | — |
+| `HasExactRole` | document `Get` | — | — |
+| unrestricted probe | `GetAll` on the computed global-role ids | — | — |
+| `ListBySubject` | `subject_key` | order `created_at`, `role_key`, BOTH directions | — |
+| `ListByResource` | `resource_key` | same | — |
+| `LookupResourceIDsBySubjectAndRoles` | `subject_key`, `resource_type`, `role in*` | `resource_id ~`, order `resource_id`, `__name__` | 24 |
+| `ListEffectiveByResource` (per stream) | `resource_key` | `grant_key ~`, order `grant_key`, BOTH directions | — |
+
+The roles lookup carries the same four filters and two sort orders per disjunct
+as the relationship lookups (subject key, resource type, role, and the
+`resource_id` cursor), so it shares `lookupChunkBudget` — 24, not 30. The
+effective listing issues TWO of its stream shape per call for a scoped request
+(the requested `resource_key` and the global one) and exactly ONE for a global
+request; the shape is identical, so both are served by one composite index per
+direction.
+
+Every composite these shapes need is already in the provisional manifest:
+`(subject_key, created_at, role_key)` and `(resource_key, created_at, role_key)`
+in both directions, `(subject_key, resource_type, role, resource_id)`, and
+`(resource_key, grant_key)` in both directions. A5's live matrix is still the
+proof — the emulator enforces none of them.
+
 ## 8. Known family differences (R1)
 
 The store returns no `crud.Transactor` and refuses a context carrying a
@@ -400,3 +432,18 @@ a split is a partially applied batch, which is exactly the atomicity those
 methods promise. The SQL families have no equivalent bound: one statement covers
 any number of rows. A host that bulk-loads or tears down more than 166 tuples for
 one resource calls the port in several batches, each atomic on its own.
+
+### 8.2 The effective listing's count is O(population) (A3b)
+
+`ListEffectiveByResource` de-duplicates by `(subject_type, subject_id, role)`
+ACROSS the requested scope and the global scope, so the unit a page, a cursor, an
+offset, and a count all count is a GROUP. Firestore's count aggregation counts
+DOCUMENTS and cannot group, so a `WithCount` request reads and groups the whole
+population of both scopes — O(population) document reads, under the page's own
+snapshot so the two always agree. The SQL families answer the same count with one
+`GROUP BY` the database evaluates. The RAW listings (`ListBySubject`,
+`ListByResource`) count documents and stay on the connector's server-side
+aggregation, so this cost is confined to the effective listing.
+
+A group that spans BOTH scopes is read as two documents and returned as one row;
+a page limit therefore bounds the ROWS returned, not the documents read.

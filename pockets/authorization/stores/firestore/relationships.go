@@ -440,7 +440,7 @@ func (s *relationshipStore) LookupResourceIDs(ctx context.Context, resourceType 
 			q := whereAnyOf(
 				whereAnyOf(s.db.Collection(collectionRelationships).Where("resource_type", "==", resourceType), "relation", pair.primary),
 				"subject_key", pair.secondary)
-			streams = append(streams, newIDStream(r, q, after, limit))
+			streams = append(streams, newIDStream(r, q, after, limit, relationshipResourceID))
 		}
 		out, err = mergeDistinctIDs(ctx, streams, limit)
 		return err
@@ -474,7 +474,7 @@ func (s *relationshipStore) LookupResourceIDsByRelationTarget(ctx context.Contex
 			q := whereAnyOf(s.db.Collection(collectionRelationships).
 				Where("resource_type", "==", resourceType).
 				Where("relation", "==", relation), "subject_key", chunk)
-			streams = append(streams, newIDStream(r, q, after, limit))
+			streams = append(streams, newIDStream(r, q, after, limit, relationshipResourceID))
 		}
 		var err error
 		out, err = mergeDistinctIDs(ctx, streams, limit)
