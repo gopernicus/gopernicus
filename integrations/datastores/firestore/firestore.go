@@ -166,6 +166,7 @@ func Open(ctx context.Context, cfg Config) (*DB, error) {
 		database:    cfg.database(),
 		project:     cfg.ProjectID,
 		maxAttempts: cfg.MaxAttempts,
+		clientOpts:  opts,
 	}
 
 	if cfg.Retry.Attempts > 1 {

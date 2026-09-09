@@ -439,10 +439,7 @@ func (q ListQuery[T]) count(ctx context.Context, r Reader, field string, directi
 // visit accepted), which is what makes the loop advance under a predicate that
 // rejects a whole page.
 func (q ListQuery[T]) scan(ctx context.Context, r Reader, base gcfs.Query, field string, want int, visit func(T) bool) error {
-	pageSize := want
-	if pageSize < scanPageSize {
-		pageSize = scanPageSize
-	}
+	pageSize := max(want, scanPageSize)
 
 	page := base
 	for {

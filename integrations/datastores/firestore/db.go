@@ -6,6 +6,7 @@ import (
 	"time"
 
 	gcfs "cloud.google.com/go/firestore"
+	"google.golang.org/api/option"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -34,6 +35,13 @@ type DB struct {
 	project     string
 	database    string
 	maxAttempts int
+
+	// clientOpts are the credential options Open built, kept so ProbeIndexes
+	// can construct its own Admin API client against the SAME identity. The
+	// Admin API is a different service with a different Go client; without
+	// this, a host that passed CredentialsJSON would find the probe silently
+	// falling back to Application Default Credentials.
+	clientOpts []option.ClientOption
 }
 
 // Close releases the client's resources.

@@ -69,11 +69,19 @@ var (
 // console URL that creates the index. It is deliberately a value a host can log
 // or surface to an operator — retyping the URL by hand is how index deployments
 // go wrong.
+//
+// ProbeIndexes (C5) produces the same type for a manifest index the database
+// does not have, so a host handles ONE type whether the diagnosis came from the
+// boot probe or from a live query; there the two fields are the connector's own
+// description of the gap and the database's console index page.
 type MissingIndexError struct {
-	// Message is the server's FAILED_PRECONDITION message, unmodified.
+	// Message is the server's FAILED_PRECONDITION message, unmodified — or, for
+	// a ProbeIndexes gap, the connector's description of the missing index.
 	Message string
-	// URL is the index-creation link the server embedded, unmodified. Empty
-	// when the message carried none (a still-building index sometimes omits it).
+	// URL is the index-creation link the server embedded, unmodified — or, for
+	// a ProbeIndexes gap, the console page listing the database's indexes.
+	// Empty when neither is available (a still-building index sometimes omits
+	// the link).
 	URL string
 }
 
