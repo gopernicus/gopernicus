@@ -414,6 +414,29 @@ in both directions, `(subject_key, resource_type, role, resource_id)`, and
 `(resource_key, grant_key)` in both directions. A5's live matrix is still the
 proof — the emulator enforces none of them.
 
+### 7.3 Query shapes the mutation path issues (A4a–A4c)
+
+Same conventions as §7.1. The guarded mutation path is dominated by DOCUMENT
+reads rather than queries, on purpose: a Firestore transaction locks everything
+it reads until it commits, so every fact that can be addressed by id is read by
+id, and the anchors and the receipt are read in ONE `GetAll`.
+
+| Phase | Shape | Notes |
+|---|---|---|
+| guard — `CheckRelation(Bounded)` | the expansion hop and the expanded check of §7.1 | the transaction's Reader, one snapshot |
+| guard — `RelationTargets` | `resource_key`, `relation` | the §7.1 relation-targets shape |
+| guard — `HasRole` | document `Get` (exact scope, then the global fallback) | no query; the 5-tuple is the id |
+| guard — dependency anchors | document `Get` per newly recorded scope | absent = revision 0, never materialized |
+| anchors + receipt | ONE `GetAll` over the lock set plus `iam_mutations/h(id)` | canonical order, one round trip |
+| grant / revoke / replace / purge | `resource_key` | the whole resource; the guardian counts direct anchors in the READ rows |
+| teardown role sweep | `resource_key` (on `iam_roles`) | a transaction has no count aggregation, so the rows removed are the rows read |
+| role assign / unassign | `GetAll` on the exact 5-tuple ids (plus the global ids for `same_role_grant_remains`) | no query |
+| create pre-check | `GetAll` on each new tuple's three documents | claims cannot first be discovered in the write phase |
+
+No composite index beyond §7.1 and §7.2 is required: every mutation query is
+either a document address or the single-equality `resource_key` shape the write
+paths already use.
+
 ## 8. Known family differences (R1)
 
 The store returns no `crud.Transactor` and refuses a context carrying a
@@ -447,3 +470,49 @@ aggregation, so this cost is confined to the effective listing.
 
 A group that spans BOTH scopes is read as two documents and returned as one row;
 a page limit therefore bounds the ROWS returned, not the documents read.
+
+### 8.3 The per-transaction mutation ceiling (A4b)
+
+The same 500-write commit limit §8.1 describes bounds a single `Command`, but the
+unit is DOCUMENTS, not tuples, because one command writes several kinds:
+
+| Staged change | Documents |
+|---|---|
+| a created relationship row | 3 (row + subject claim + id claim) |
+| a removed relationship row | 3 |
+| a REPLACED relationship row | 4 (the old row's delete, the new row's create, and one `Set` on each claim — neither claim id carries the relation, so neither moves) |
+| a role grant assigned or unassigned | 1 |
+| the scope anchor, when the outcome changes rows | 1 |
+| the receipt, when the outcome is persisted | 1 |
+
+So a grant applies at most **166 rows** (166×3 + anchor + receipt = 500), a
+replace at most **124**, and a teardown at most **166** relationship rows minus
+one document per scoped role it also sweeps. Past that the command fails with
+`ErrMutationWriteLimit` (wrapping `sdk.ErrInvalidInput`) BEFORE its first write,
+so nothing is applied — the mutation path never splits a command across
+transactions, because a split is a partially applied command and atomicity is
+exactly what `mutation.MutationRepository` promises. The SQL families have no
+equivalent bound. A host tearing down a resource with more relationships than
+that removes them in batches through the raw port first (§8.1), then tears the
+remainder down.
+
+### 8.4 Contention surfaces as waiting, not as an error (A4b)
+
+Every command on one scope reads that scope's anchor and its resource's rows, so
+N concurrent commands on ONE resource genuinely serialize. The vendor re-runs the
+transaction callback up to `Config.MaxAttempts` times (5) with its own backoff;
+past that the store re-runs the WHOLE apply a bounded number of times with a
+JITTERED backoff (`contention.go`), because Apply is idempotent by MutationID and
+a re-run either replays a now-committed receipt or re-evaluates against current
+state. Only a VENDOR failure is retried — a guard denial, a payload mismatch and
+a stale revision are answers, and `mutation.ErrStaleRevision` wraps
+`sdk.ErrConflict` too, so retrying on the sentinel alone would spin on a
+deterministic refusal.
+
+The jitter is load-bearing rather than decorative: without it every contender
+waits the same interval and collides again in the same order, and the shared
+suite's twenty-way `ConcurrentReceiptRevisionForensics` storm starved one writer
+past every retry budget on the emulator (measured: 186 s and a failure, versus
+6.7 s and a pass with jitter). When the budget IS exhausted the caller gets
+`sdk.ErrConflict` — an infrastructure conflict it may retry — never a committed
+outcome and never a minted receipt.

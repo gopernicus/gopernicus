@@ -2,9 +2,11 @@ package firestore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	gcfs "cloud.google.com/go/firestore"
+	"google.golang.org/api/iterator"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/role"
@@ -101,6 +103,39 @@ func decodeRole(snap *gcfs.DocumentSnapshot) (roleDoc, error) {
 		return roleDoc{}, fmt.Errorf("authorization firestore store: decoding %s: %s: %w", collectionRoles, err, sdk.ErrInvalidInput)
 	}
 	return row, nil
+}
+
+// queryRoles runs one role query and decodes every document it returns. It is
+// the roles-kind twin of queryRelationships and, like it, consumes iterator.Done
+// as the loop terminator and maps every other Next error HERE, at the iteration
+// boundary. The guarded-mutation path's teardown sweep is its caller: a
+// transaction cannot count, so the rows a teardown removes are the rows it read.
+func queryRoles(ctx context.Context, r firestoredb.Reader, q gcfs.Query) ([]roleDoc, error) {
+	it := r.Documents(ctx, q)
+	defer it.Stop()
+
+	var out []roleDoc
+	for {
+		snap, err := it.Next()
+		if errors.Is(err, iterator.Done) {
+			return out, nil
+		}
+		if err != nil {
+			return nil, firestoredb.MapError(err)
+		}
+		row, err := decodeRole(snap)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+}
+
+// scopedRolesQuery is the query for every role grant stored EXACTLY at
+// (resourceType, resourceID) — the teardown sweep's population and the global
+// scope's own listing when the pair is empty.
+func scopedRolesQuery(db *firestoredb.DB, resourceType, resourceID string) gcfs.Query {
+	return rolesQuery(db).Where("resource_key", "==", resourceKey(resourceType, resourceID))
 }
 
 // roleResourceID is the keyset lookup's id projection for a role document — the

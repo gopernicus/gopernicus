@@ -45,11 +45,6 @@ var ErrAmbientTransactionUnsupported = fmt.Errorf("authorization firestore store
 // exactly this refusal and which the shared conformance suite asserts.
 var errAmbientMutation = fmt.Errorf("%w (%w)", ErrAmbientTransactionUnsupported, mutation.ErrGuardedInsideTransaction)
 
-// errNotImplemented is the A1 skeleton's placeholder. Tasks A2–A4 replace every
-// method body that returns it; nothing but those bodies may reference it, and it
-// is removed when the last one lands.
-var errNotImplemented = fmt.Errorf("authorization firestore store: not implemented: %w", sdk.ErrUnavailable)
-
 // Option configures the store set at construction.
 type Option func(*config)
 

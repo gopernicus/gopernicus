@@ -75,6 +75,47 @@ func putTuple(ctx context.Context, db *firestoredb.DB, w firestoredb.Writer, row
 	return w.Create(ctx, db.Doc(collectionIDClaims, idClaimDocID(row.RelationshipID)), idClaimDoc{RelationshipID: row.RelationshipID, TupleID: id})
 }
 
+// writesPerReplacedTuple is what replaceTuple costs: the old row's Delete, the
+// new row's Create, and one Set on each claim (both claim ids are unchanged, so
+// neither is deleted and re-created).
+const writesPerReplacedTuple = 4
+
+// replaceTuple moves an existing tuple to a NEW relation in place — the
+// mutation path's OpReplace, whose SQL siblings say `UPDATE iam_relationships
+// SET relation = ?`. Firestore has no such update available here, because the
+// relation is part of the ROW's document id, so the row moves; the two claims do
+// NOT, because neither id carries the relation.
+//
+// The identity the SQL UPDATE preserves is preserved here too: the new row keeps
+// the old row's relationship_id and created_at, so a replace is invisible to the
+// listings' order and to the primary-key claim. The claims are Set rather than
+// Created because their documents already exist and only their contents move
+// (the subject claim's relation, and both claims' tuple_id) — a Create would
+// fail AlreadyExists on the store's own consistent state.
+//
+// It performs no read, for the same reason putTuple and dropTuple do not: the
+// caller established the old row inside the transaction's read phase.
+func replaceTuple(ctx context.Context, db *firestoredb.DB, w firestoredb.Writer, old relationshipDoc, relation string) error {
+	next := old
+	next.Relation = relation
+	next.ResourceKey = resourceKey(next.ResourceType, next.ResourceID)
+	next.SubjectKey = subjectKey(next.SubjectType, next.SubjectID, next.SubjectRelation)
+	next.CreatedAt = firestoredb.TruncateTime(next.CreatedAt)
+	id := tupleID(next)
+
+	if err := w.Delete(ctx, db.Doc(collectionRelationships, tupleID(old))); err != nil {
+		return err
+	}
+	if err := w.Create(ctx, db.Doc(collectionRelationships, id), next); err != nil {
+		return err
+	}
+	claim := subjectClaimDoc{Relation: relation, TupleID: id, RelationshipID: next.RelationshipID}
+	if err := w.Set(ctx, db.Doc(collectionSubjectClaims, subjectClaimDocID(next.ResourceType, next.ResourceID, next.SubjectType, next.SubjectID, next.SubjectRelation)), claim); err != nil {
+		return err
+	}
+	return w.Set(ctx, db.Doc(collectionIDClaims, idClaimDocID(next.RelationshipID)), idClaimDoc{RelationshipID: next.RelationshipID, TupleID: id})
+}
+
 // dropTuple removes one relationship tuple and both of its claims through w.
 // Delete is idempotent in Firestore (a missing document is not an error), which
 // is exactly the idempotency every delete on this port promises.

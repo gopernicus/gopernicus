@@ -70,9 +70,33 @@ func maxChunk(filtersPerDisjunct, orders int) int {
 // ONE firestoredb.ReadSnapshot (or, for the guarded-mutation path, inside the
 // transaction's Reader), so all hops observe the same instant.
 func expand(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, subjectType, subjectID string, budget int) (map[string]struct{}, error) {
+	reached, _, err := expandScoped(ctx, db, r, subjectType, subjectID, budget)
+	return reached, err
+}
+
+// subjectScope is one resource the walk traversed: the (type, id) pair whose
+// membership edges produced a reached state. The guarded-mutation decision view
+// turns each into a mutation dependency, because a concurrent revoke of one of
+// those edges bumps THAT resource's revision and must invalidate the decision.
+// The read-side callers have no use for it and ignore it.
+type subjectScope struct {
+	resourceType string
+	resourceID   string
+}
+
+// expandScoped is [expand] plus the traversed resource scopes, in first-seen
+// order: the seed (the subject itself, read as a resource scope — the same
+// harmless over-record the memstore and both SQL siblings make) followed by
+// every resource whose row contributed a reachable userset state. Under-recording
+// is the bug it exists to prevent: a dependency the guard actually read but did
+// not record is a stale allow nothing would catch at commit.
+func expandScoped(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, subjectType, subjectID string, budget int) (map[string]struct{}, []subjectScope, error) {
 	seed := subjectKey(subjectType, subjectID, "")
 	seen := map[string]struct{}{seed: {}}
 	frontier := []string{seed}
+
+	scopes := []subjectScope{{resourceType: subjectType, resourceID: subjectID}}
+	scopeSeen := map[subjectScope]struct{}{scopes[0]: {}}
 
 	for len(frontier) > 0 {
 		var next []string
@@ -80,9 +104,14 @@ func expand(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, subje
 			q := db.Collection(collectionRelationships).Where("subject_key", "in", chunk)
 			rows, err := queryRelationships(ctx, r, q)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			for _, row := range rows {
+				scope := subjectScope{resourceType: row.ResourceType, resourceID: row.ResourceID}
+				if _, ok := scopeSeen[scope]; !ok {
+					scopeSeen[scope] = struct{}{}
+					scopes = append(scopes, scope)
+				}
 				state := subjectKey(row.ResourceType, row.ResourceID, row.Relation)
 				if _, ok := seen[state]; ok {
 					continue
@@ -90,7 +119,7 @@ func expand(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, subje
 				if budget > 0 && len(seen) >= budget {
 					// Adding this state would push the distinct count past the
 					// budget: the call is indeterminate. Never a truncated set.
-					return nil, relationship.ErrExpansionBudgetExceeded
+					return nil, nil, relationship.ErrExpansionBudgetExceeded
 				}
 				seen[state] = struct{}{}
 				next = append(next, state)
@@ -98,7 +127,7 @@ func expand(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, subje
 		}
 		frontier = next
 	}
-	return seen, nil
+	return seen, scopes, nil
 }
 
 // anyTupleWithSubject reports whether the resource+relation carries a tuple whose
