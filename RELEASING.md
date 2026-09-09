@@ -1,57 +1,5 @@
 # Releasing gopernicus modules
 
-## Unreleased: SDK validation consolidation (2026-09-09)
-
-Breaking SDK update; no tag or dependency pin has been changed. Plan:
-[`plans/validation-consolidation.md`](plans/validation-consolidation.md).
-Release this as a deliberate pre-v1 breaking SDK version, not a maintenance
-patch. Consumers must migrate before adopting it.
-
-- `sdk.ValidationError` is the field-error collector for both DTOs and domains.
-  `validation.Errors` and `web.FieldErrors` are removed. `web.FieldError` remains
-  the JSON response representation. `Validate() error` signatures stay the same.
-- Every validation helper returns optional `*sdk.Violation` data. Replace
-  `errs.Add(validation.Required(...))` or
-  `fields.AddErr("name", validation.Required(...))` with
-  `problems.AddViolation(validation.Required(...))` on a
-  `sdk.ValidationError`, then return `problems.Err()`. A direct
-  `return validation.Email(...)` from an error-returning function also needs
-  this collector. Do not cast a violation to error or stringify it.
-- Replace `web.FieldErrors.Add(field, message)` with
-  `sdk.ValidationError.Add(field, "", message)` to preserve sentence-only
-  field JSON. Helpers now set `required` or `invalid_format` codes; using them
-  adds those codes to the response. Field-list ordering and the
-  `validation_failed` response envelope are preserved.
-- `IfSet` callbacks now return `*sdk.Violation`. `PasswordsMatch` now takes
-  `(field, password, confirm)` so the caller chooses the confirmation field.
-  The fixed-policy `PasswordStrength` helper is removed; keep password policy
-  in authentication or the host. Custom validators belong in the consuming app.
-- `MinLength`/`MaxLength` and pointer variants count Unicode code points,
-  changing non-ASCII acceptance. Optional pointer checks skip nil and delegate
-  to the scalar rule, so `MinLengthPtr` now accepts a present empty string;
-  compose with `RequiredPtr` when blank values must be rejected.
-- `DecodeJSON[Request]` and `DecodeJSON[*Request]` both invoke validation exactly
-  once when implemented. Top-level JSON `null` is rejected for all targets,
-  including unvalidated pointer/map/slice targets; optional null data must be
-  represented as fields of the request or handled by an explicit decoder.
-  Empty/malformed JSON and body-size error handling remain available.
-
-```go
-func (in *createUser) Validate() error {
-    var problems sdk.ValidationError
-    problems.AddViolation(validation.Required("name", in.Name))
-    problems.AddViolation(validation.Email("email", in.Email))
-    return problems.Err()
-}
-```
-
-Keep unexpected errors separate from field validation; `AddViolation` accepts
-only typed, caller-facing data. Aggregate field problems in one collector
-before wrapping with `%w`; `errors.Join` is not a replacement for that collector.
-The sampled consumer requiring a `web.FieldErrors` migration is gps-360-go's
-`internal/inbound/domains/echo/notes.go`. Consumer repositories have not been
-edited or repinned by this change.
-
 This repo is a multi-module workspace (`go.work`, dev-only) with thirty-seven
 modules today: `sdk`; `integrations/{cryptids/bcrypt, cryptids/golang-jwt, cryptids/google-uuid,
 datastores/pgxdb, datastores/turso, email/sendgrid, filestorage/gcs,
