@@ -1,0 +1,65 @@
+package firestore
+
+import (
+	"context"
+
+	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
+)
+
+// putTuple and dropTuple are the ONLY two writers of a relationship tuple's
+// document set. A tuple owns THREE documents — the row in iam_relationships plus
+// the two claims that reproduce the SQL constraints a deterministic document id
+// cannot carry (SCHEMA.md §5.2, §5.3) — and the failure mode this pair exists to
+// prevent is a future write path that updates the row and forgets a claim,
+// leaving the uniqueness invariant enforced by nothing. Every write path goes
+// through them; a test asserts no other code touches the claim collections.
+//
+// Neither helper reads. That is deliberate and load-bearing: a Firestore
+// transaction refuses any read issued after its first write, so the CALLER does
+// the complete read phase (tuple + both claims, for every row in the batch) and
+// only then calls these. A2c's CreateRelationships / SetRelationTargets / delete
+// family own that phase; A2a/A2b use putTuple only to seed fixtures.
+
+// tupleID is the relationship document's id for a row — the KeyHash of the
+// unique six-part tuple, in the SQL unique index's column order.
+func tupleID(row relationshipDoc) string {
+	return relationshipDocID(row.ResourceType, row.ResourceID, row.Relation, row.SubjectType, row.SubjectID, row.SubjectRelation)
+}
+
+// putTuple writes one relationship tuple and both of its claims through w. The
+// derived keys and the truncated timestamp are computed HERE rather than by the
+// caller, so a row can never reach the collection with a resource_key that does
+// not match its own fields.
+//
+// The verb is Create, never Set (SCHEMA.md §5.1): the document id IS the unique
+// tuple, so a duplicate loses at the server instead of overwriting a row whose
+// relationship_id and created_at the port promises to preserve. The caller has
+// already established, in the transaction's read phase, that the row is missing.
+func putTuple(ctx context.Context, db *firestoredb.DB, w firestoredb.Writer, row relationshipDoc) error {
+	id := tupleID(row)
+	row.ResourceKey = resourceKey(row.ResourceType, row.ResourceID)
+	row.SubjectKey = subjectKey(row.SubjectType, row.SubjectID, row.SubjectRelation)
+	row.CreatedAt = firestoredb.TruncateTime(row.CreatedAt)
+
+	if err := w.Create(ctx, db.Doc(collectionRelationships, id), row); err != nil {
+		return err
+	}
+	claim := subjectClaimDoc{Relation: row.Relation, TupleID: id, RelationshipID: row.RelationshipID}
+	if err := w.Create(ctx, db.Doc(collectionSubjectClaims, subjectClaimDocID(row.ResourceType, row.ResourceID, row.SubjectType, row.SubjectID, row.SubjectRelation)), claim); err != nil {
+		return err
+	}
+	return w.Create(ctx, db.Doc(collectionIDClaims, idClaimDocID(row.RelationshipID)), idClaimDoc{RelationshipID: row.RelationshipID, TupleID: id})
+}
+
+// dropTuple removes one relationship tuple and both of its claims through w.
+// Delete is idempotent in Firestore (a missing document is not an error), which
+// is exactly the idempotency every delete on this port promises.
+func dropTuple(ctx context.Context, db *firestoredb.DB, w firestoredb.Writer, row relationshipDoc) error {
+	if err := w.Delete(ctx, db.Doc(collectionRelationships, tupleID(row))); err != nil {
+		return err
+	}
+	if err := w.Delete(ctx, db.Doc(collectionSubjectClaims, subjectClaimDocID(row.ResourceType, row.ResourceID, row.SubjectType, row.SubjectID, row.SubjectRelation))); err != nil {
+		return err
+	}
+	return w.Delete(ctx, db.Doc(collectionIDClaims, idClaimDocID(row.RelationshipID)))
+}

@@ -2,9 +2,11 @@ package firestore
 
 import (
 	"context"
+	"errors"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
@@ -21,46 +23,191 @@ func newRelationshipStore(db *firestoredb.DB) *relationshipStore {
 	return &relationshipStore{db: db}
 }
 
+// CheckRelationWithGroupExpansion reports whether the concrete subject — or any
+// EXACT userset it transitively belongs to — holds the relation on the resource.
+// It is the engine-side walk of ruling R2: expand the subject, then ask whether
+// the resource+relation carries a tuple whose subject is any reached state. A
+// grant referencing group#admin is satisfied only by admin membership, never by
+// group#member, because the reached states carry the userset relation.
+//
+// Every query — every expansion hop, every chunk, and the final match — runs
+// inside ONE firestoredb.ReadSnapshot, so the whole check observes a single
+// server-selected instant. Without that, a concurrent "revoke membership, grant
+// the group access" pair could be straddled and authorize a path that never
+// existed at any moment.
+//
+// maxExpansionStates bounds the walk exactly as the memstore bounds it:
+// exceeding it returns relationship.ErrExpansionBudgetExceeded, never a deny;
+// non-positive is unbounded.
 func (s *relationshipStore) CheckRelationWithGroupExpansion(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string, maxExpansionStates int) (bool, error) {
 	if err := refuseAmbient(ctx); err != nil {
 		return false, err
 	}
-	return false, errNotImplemented
+	var allowed bool
+	err := s.db.ReadSnapshot(ctx, func(ctx context.Context, r firestoredb.Reader) error {
+		allowed = false
+		reached, err := expand(ctx, s.db, r, subjectType, subjectID, maxExpansionStates)
+		if err != nil {
+			return err
+		}
+		allowed, err = anyTupleWithSubject(ctx, s.db, r, resourceType, resourceID, relation, reached)
+		return err
+	})
+	if err != nil {
+		return false, err
+	}
+	return allowed, nil
 }
 
+// GetRelationTargets returns the subjects holding a relation on a resource, used
+// for "through" permission traversal. It is ONE query on the derived
+// resource_key, so it needs no snapshot; userset targets come back as stored
+// (an empty Relation is a concrete subject).
 func (s *relationshipStore) GetRelationTargets(ctx context.Context, resourceType, resourceID, relation string) ([]relationship.RelationTarget, error) {
 	if err := refuseAmbient(ctx); err != nil {
 		return nil, err
 	}
-	return nil, errNotImplemented
+	return relationTargets(ctx, s.db, s.db.ReaderFrom(ctx), resourceType, resourceID, relation)
 }
 
+// FilterRelation returns the DISTINCT, byte-order sorted subset of resourceIDs
+// the subject holds relation on, directly or through exact userset expansion —
+// the set form of CheckRelationWithGroupExpansion over ONE shared walk.
+//
+// The candidate set is read in chunks of maxDisjunctions ids, never one query
+// per candidate, and an id list past that chunk bound is MERGED rather than
+// rejected or truncated: chunking is invisible to the contract. Everything — the
+// walk and every candidate chunk — runs under one snapshot. An empty candidate
+// list performs NO database I/O, and a budget overflow fails the whole call
+// rather than returning a short list.
 func (s *relationshipStore) FilterRelation(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) ([]string, error) {
 	if err := refuseAmbient(ctx); err != nil {
 		return nil, err
 	}
-	return nil, errNotImplemented
+	ids := distinctSortedIDs(resourceIDs)
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var out []string
+	err := s.db.ReadSnapshot(ctx, func(ctx context.Context, r firestoredb.Reader) error {
+		var err error
+		out, err = filterRelation(ctx, s.db, r, resourceType, ids, relation, subjectType, subjectID, maxExpansionStates)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
+// filterRelation is FilterRelation's snapshot-bound body: one shared expansion,
+// then one query per candidate chunk. ids must be distinct and byte-sorted, so
+// the output is produced in the contractual order by construction.
+func filterRelation(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, resourceType string, ids []string, relation, subjectType, subjectID string, maxExpansionStates int) ([]string, error) {
+	reached, err := expand(ctx, db, r, subjectType, subjectID, maxExpansionStates)
+	if err != nil {
+		return nil, err
+	}
+	matched := make(map[string]struct{}, len(ids))
+	if err := scanCandidates(ctx, db, r, resourceType, ids, relation, func(row relationshipDoc) {
+		if _, ok := reached[row.SubjectKey]; ok {
+			matched[row.ResourceID] = struct{}{}
+		}
+	}); err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, id := range ids {
+		if _, ok := matched[id]; ok {
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+
+// RelationTargetsFor returns, for each of resourceIDs, the subjects holding
+// relation on it — the set form of GetRelationTargets. An id with NO targets is
+// ABSENT from the map, a duplicated input id carries one entry, userset targets
+// are returned as stored, and an empty input performs no database I/O. The
+// candidate set is read in chunks of maxDisjunctions ids under one snapshot and
+// the chunks are merged, so chunking is invisible to the contract.
 func (s *relationshipStore) RelationTargetsFor(ctx context.Context, resourceType string, resourceIDs []string, relation string) (map[string][]relationship.RelationTarget, error) {
 	if err := refuseAmbient(ctx); err != nil {
 		return nil, err
 	}
-	return nil, errNotImplemented
+	ids := distinctSortedIDs(resourceIDs)
+	out := make(map[string][]relationship.RelationTarget, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	err := s.db.ReadSnapshot(ctx, func(ctx context.Context, r firestoredb.Reader) error {
+		clear(out)
+		return scanCandidates(ctx, s.db, r, resourceType, ids, relation, func(row relationshipDoc) {
+			out[row.ResourceID] = append(out[row.ResourceID], relationship.RelationTarget{
+				Type:     row.SubjectType,
+				ID:       row.SubjectID,
+				Relation: row.SubjectRelation,
+			})
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
+// CheckRelationExists reports whether an exact DIRECT tuple is present for a
+// CONCRETE subject — no expansion, and a stored userset tuple with the same
+// type/id does not satisfy it, which is why the probed document id carries an
+// empty subject_relation. It is the cheapest read in the store: the tuple's
+// document id IS the unique tuple, so this is one Get by id rather than a query.
 func (s *relationshipStore) CheckRelationExists(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) (bool, error) {
 	if err := refuseAmbient(ctx); err != nil {
 		return false, err
 	}
-	return false, errNotImplemented
+	ref := s.db.Doc(collectionRelationships, relationshipDocID(resourceType, resourceID, relation, subjectType, subjectID, ""))
+	snap, err := s.db.ReaderFrom(ctx).Get(ctx, ref)
+	if err != nil && !errors.Is(err, sdk.ErrNotFound) {
+		return false, err
+	}
+	return snap != nil && snap.Exists(), nil
 }
 
+// CheckBatchDirect returns resourceID -> allowed for one relation across the
+// requested ids, with group expansion. EVERY requested id is present in the map
+// (default false). The subject is expanded ONCE and the candidates are read in
+// chunks of maxDisjunctions ids under one snapshot, never one query per
+// candidate; a budget overflow fails the whole call rather than returning a
+// partial map, and an empty id list performs no database I/O.
 func (s *relationshipStore) CheckBatchDirect(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) (map[string]bool, error) {
 	if err := refuseAmbient(ctx); err != nil {
 		return nil, err
 	}
-	return nil, errNotImplemented
+	out := make(map[string]bool, len(resourceIDs))
+	for _, id := range resourceIDs {
+		out[id] = false
+	}
+	ids := distinctSortedIDs(resourceIDs)
+	if len(ids) == 0 {
+		return out, nil
+	}
+	err := s.db.ReadSnapshot(ctx, func(ctx context.Context, r firestoredb.Reader) error {
+		for id := range out {
+			out[id] = false
+		}
+		matched, err := filterRelation(ctx, s.db, r, resourceType, ids, relation, subjectType, subjectID, maxExpansionStates)
+		if err != nil {
+			return err
+		}
+		for _, id := range matched {
+			out[id] = true
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *relationshipStore) CreateRelationships(ctx context.Context, relationships []relationship.CreateRelationship) error {
@@ -105,11 +252,27 @@ func (s *relationshipStore) DeleteByResourceAndSubject(ctx context.Context, reso
 	return errNotImplemented
 }
 
+// CountByResourceAndRelation counts DIRECT tuples only — never expanded
+// membership. That is the last-owner security pin, so the query is a plain
+// equality pair on the derived resource_key with no expansion anywhere near it.
+//
+// It is ONE query, and it deliberately does NOT open a ReadSnapshot: the count
+// aggregation is unavailable inside any Firestore transaction
+// (firestoredb.ErrCountInTransaction), and a single query needs no snapshot to
+// be self-consistent. The ambient refusal above is what guarantees ReaderFrom
+// returns the client reader here.
 func (s *relationshipStore) CountByResourceAndRelation(ctx context.Context, resourceType, resourceID, relation string) (int, error) {
 	if err := refuseAmbient(ctx); err != nil {
 		return 0, err
 	}
-	return 0, errNotImplemented
+	q := s.db.Collection(collectionRelationships).
+		Where("resource_key", "==", resourceKey(resourceType, resourceID)).
+		Where("relation", "==", relation)
+	n, err := s.db.ReaderFrom(ctx).Count(ctx, q)
+	if err != nil {
+		return 0, err
+	}
+	return int(n), nil
 }
 
 func (s *relationshipStore) ListRelationshipsBySubject(ctx context.Context, subjectType, subjectID string, filter relationship.SubjectRelationshipFilter, req crud.ListRequest) (crud.Page[relationship.SubjectRelationship], error) {
