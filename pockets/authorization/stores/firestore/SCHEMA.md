@@ -343,99 +343,111 @@ is `COLLECTION` scope and no collection-group index is required. Names mirror th
 SQL table names so the two documentation trees and operator vocabulary stay
 shared (milestone convention).
 
-## 7. Index manifest
+## 7. The query matrix
 
-`firestore.indexes.json` ships the A-D7 expected composites. It is
-**provisional**: A5 derives the definitive set from the complete query matrix
-(every optional-filter subset, both directions, the reverse HasPrev probe, and
-the chunk shapes) and proves it against a live database. The emulator enforces
-no composite index, so nothing here is proven by an emulator-green run.
+Every query the three ports issue, in the vocabulary Firestore's index rules are
+written in. It is the manifest's SPECIFICATION (ruling R5): §9's
+`firestore.indexes.json` is DERIVED from this matrix, not from the queries a test
+happened to run.
+
+The matrix is **executable**. `queryMatrix()` in `indexes_test.go` carries the
+same rows, `requiredIndex` applies the derivation rules of §9.1 to each, and
+`TestIndexManifestMatchesTheQueryMatrix` asserts the correspondence in BOTH
+directions — a query with no index fails the test, and an index no query needs
+fails it too. The tables below and that table are kept in step by review; the
+test is what a build enforces.
+
+Conventions: `~` marks a range/inequality filter, `in*` an `in` filter that is
+chunked, and **Composite** names the §9 entry the shape requires (`—` means
+Firestore serves it from automatic single-field indexes). Reads addressed by
+DOCUMENT ID use no index at all and are listed for completeness, never as index
+requirements.
 
 ### 7.1 Query shapes the relationship port issues (A2a–A2d)
 
-A5's matrix supersedes this list; it is recorded as A5's raw input, in the order
-the tasks added the shapes. `~` marks a range filter, `in*` an `in` filter that
-is chunked.
+| Method | Equality | Range / order | Chunked by | Composite |
+|---|---|---|---|---|
+| expansion hop (`expandScoped`) | `subject_key in*` | — | 30 | — (one `in`, one field) |
+| expanded check (`anyTupleWithSubject`) | `resource_key`, `relation`, `subject_key in*` | `Limit(1)` | 30 | `(resource_key, relation, subject_key)` |
+| relation targets (`relationTargets`) | `resource_key`, `relation` | — | — | — (equality only) |
+| direct count (`CountByResourceAndRelation`) | `resource_key`, `relation` | count aggregation | — | — (the query underneath needs none) |
+| reconciliation read (`setRelationTargets`) | `resource_key`, `relation` | — | — | — |
+| delete by relation (`DeleteRelationship`) | `resource_key`, `relation` | — | — | — |
+| delete by resource / resource rows (`dropMatching`, `resourceRows`) | `resource_key` | — | — | — (one field) |
+| candidate scan (`scanCandidates`: batch check, `FilterRelation`, `RelationTargetsFor`) | `resource_type`, `relation`, `resource_id in*` | — | 30 | `(resource_type, relation, resource_id)` |
+| descendant hop (`descendantClosure`) | `resource_type`, `relation in*`, `subject_key in*` | — | 30 (product) | `(resource_type, relation, subject_key)` |
+| lookup by relations (`LookupResourceIDs`) | `resource_type`, `relation in*`, `subject_key in*` | `resource_id ~`, order `resource_id`, `__name__` | 24 (product) | `(resource_type, relation, subject_key, resource_id)` |
+| lookup by relation target (`LookupResourceIDsByRelationTarget`) | `resource_type`, `relation`, `subject_key in*` | same | 24 | the same entry |
+| list by subject (`ListRelationshipsBySubject`) | `subject_type`, `subject_id` (+ optional `resource_type`, `relation`) | order `created_at`, `relationship_id`, BOTH directions | — | four subsets × two directions = 8 entries |
+| list by resource (`ListRelationshipsByResource`) | `resource_key` (+ optional `subject_type`, `relation`) | same | — | four subsets × two directions = 8 entries |
+| tuple / claim / id-claim reads and writes | document id | — | — | — (no query) |
 
-| Method | Equality | Range / order | Chunked by |
-|---|---|---|---|
-| expansion hop | `subject_key in*` | — | 30 |
-| expanded check | `resource_key`, `relation`, `subject_key in*` | `Limit(1)` | 30 |
-| relation targets | `resource_key`, `relation` | — | — |
-| candidate scan (set reads) | `resource_type`, `relation`, `resource_id in*` | — | 30 |
-| direct count | `resource_key`, `relation` | count aggregation | — |
-| reconciliation read | `resource_key`, `relation` | — | — |
-| delete by resource | `resource_key` | — | — |
-| delete by relation | `resource_key`, `relation` | — | — |
-| list by subject | `subject_type`, `subject_id` (+ optional `resource_type`, `relation`) | order `created_at`, `relationship_id`, BOTH directions | — |
-| list by resource | `resource_key` (+ optional `subject_type`, `relation`) | same | — |
-| lookup by relations | `resource_type`, `relation in*`, `subject_key in*` | `resource_id ~`, order `resource_id`, `__name__` | 24 (product) |
-| lookup by target | `resource_type`, `relation`, `subject_key in*` | same | 24 |
-| descendant hop | `resource_type`, `relation in*`, `subject_key in*` | — | 30 (product) |
+The two `in`-chunk sizes come from vendor caps, not taste: at most **30
+disjunctions** after DNF expansion (an `in` of N values contributes N, and two
+`in` filters contribute their PRODUCT), AND at most **100 filters plus sort
+orders** counted across the expanded disjunctions. A lookup stream carries four
+filters and two orders per disjunct, so its budget is `(100 - 2) / 4 = 24`, not
+30. `maxChunk` in `reads.go` resolves both caps; `chunking_test.go` pins the
+arithmetic hermetically. Chunk SIZE never changes which index a shape needs: a
+one-value `in` is written as `==` (`whereAnyOf`) and both use the same index.
 
-Two vendor caps decide those chunk sizes, and only the first was pinned before
-A2d: at most **30 disjunctions** after DNF expansion (an `in` of N values
-contributes N, and two `in` filters contribute their PRODUCT), AND at most
-**100 filters plus sort orders**, counted across the expanded disjunctions. A
-lookup stream carries four filters and two orders per disjunct, so its budget is
-`(100 - 2) / 4 = 24`, not 30 — thirty was 120 filters and an `InvalidArgument`
-the Go client does not pre-validate. `maxChunk` in `reads.go` resolves both caps;
-`chunking_test.go` pins the arithmetic hermetically.
+**Why every optional-filter subset is its own index.** A composite index serves a
+query only when its equality prefix is the query's WHOLE equality set, so
+`(subject_type, subject_id, created_at, relationship_id)` does not serve the same
+listing with a `relation` filter added. Firestore MAY merge single-field indexes
+for equality-only queries and MAY merge composites that share a sort suffix
+("Use index merging"), but merging is a documented optimization, not a
+guarantee — and an under-declared manifest surfaces as a production
+`FAILED_PRECONDITION`, which is the failure this manifest exists to prevent. The
+live matrix leg (§9.4) is what may later justify pruning entries; nothing else
+may.
 
 ### 7.2 Query shapes the roles port issues (A3a–A3b)
 
-Same conventions as §7.1. Three of the seven `role.Storer` methods issue NO
-query at all: the unique 5-tuple is the document id, so an exact read, an
-assign, and an unassign address ONE document, and the unrestricted short-circuit
-addresses one document per queried role.
+Three of the seven `role.Storer` methods issue NO query at all: the unique
+5-tuple is the document id, so an exact read, an assign, and an unassign address
+ONE document, and the unrestricted short-circuit is a `GetAll` over the computed
+global-role ids.
 
-| Method | Equality | Range / order | Chunked by |
-|---|---|---|---|
-| `Assign` (read phase) | document `Get` | — | — |
-| `Assign` (write) / `Unassign` | document `Create` / `Delete` | — | — |
-| `HasExactRole` | document `Get` | — | — |
-| unrestricted probe | `GetAll` on the computed global-role ids | — | — |
-| `ListBySubject` | `subject_key` | order `created_at`, `role_key`, BOTH directions | — |
-| `ListByResource` | `resource_key` | same | — |
-| `LookupResourceIDsBySubjectAndRoles` | `subject_key`, `resource_type`, `role in*` | `resource_id ~`, order `resource_id`, `__name__` | 24 |
-| `ListEffectiveByResource` (per stream) | `resource_key` | `grant_key ~`, order `grant_key`, BOTH directions | — |
+| Method | Equality | Range / order | Chunked by | Composite |
+|---|---|---|---|---|
+| `Assign` / `Unassign` / `HasExactRole` | document id | — | — | — (no query) |
+| unrestricted probe (`anyGlobalRole`) | `GetAll` on computed ids | — | — | — (no query) |
+| teardown role sweep (`scopedRolesQuery`) | `resource_key` | — | — | — (one field) |
+| `ListBySubject` | `subject_key` | order `created_at`, `role_key`, BOTH directions | — | `(subject_key, created_at, role_key)` × 2 |
+| `ListByResource` | `resource_key` | same | — | `(resource_key, created_at, role_key)` × 2 |
+| `LookupResourceIDsBySubjectAndRoles` | `subject_key`, `resource_type`, `role in*` | `resource_id ~`, order `resource_id`, `__name__` | 24 | `(subject_key, resource_type, role, resource_id)` |
+| `ListEffectiveByResource` (per stream) | `resource_key` | `grant_key ~`, order `grant_key`, BOTH directions | — | `(resource_key, grant_key)` × 2 |
 
 The roles lookup carries the same four filters and two sort orders per disjunct
-as the relationship lookups (subject key, resource type, role, and the
-`resource_id` cursor), so it shares `lookupChunkBudget` — 24, not 30. The
+as the relationship lookups, so it shares `lookupChunkBudget` — 24, not 30. The
 effective listing issues TWO of its stream shape per call for a scoped request
 (the requested `resource_key` and the global one) and exactly ONE for a global
-request; the shape is identical, so both are served by one composite index per
-direction.
-
-Every composite these shapes need is already in the provisional manifest:
-`(subject_key, created_at, role_key)` and `(resource_key, created_at, role_key)`
-in both directions, `(subject_key, resource_type, role, resource_id)`, and
-`(resource_key, grant_key)` in both directions. A5's live matrix is still the
-proof — the emulator enforces none of them.
+request; the shape is identical, so one index per direction serves both.
 
 ### 7.3 Query shapes the mutation path issues (A4a–A4c)
 
-Same conventions as §7.1. The guarded mutation path is dominated by DOCUMENT
-reads rather than queries, on purpose: a Firestore transaction locks everything
-it reads until it commits, so every fact that can be addressed by id is read by
-id, and the anchors and the receipt are read in ONE `GetAll`.
+The guarded mutation path is dominated by DOCUMENT reads rather than queries, on
+purpose: a Firestore transaction locks everything it reads until it commits, so
+every fact that can be addressed by id is read by id, and the anchors and the
+receipt are read in ONE `GetAll`.
 
-| Phase | Shape | Notes |
+| Phase | Shape | Composite |
 |---|---|---|
-| guard — `CheckRelation(Bounded)` | the expansion hop and the expanded check of §7.1 | the transaction's Reader, one snapshot |
-| guard — `RelationTargets` | `resource_key`, `relation` | the §7.1 relation-targets shape |
-| guard — `HasRole` | document `Get` (exact scope, then the global fallback) | no query; the 5-tuple is the id |
-| guard — dependency anchors | document `Get` per newly recorded scope | absent = revision 0, never materialized |
-| anchors + receipt | ONE `GetAll` over the lock set plus `iam_mutations/h(id)` | canonical order, one round trip |
-| grant / revoke / replace / purge | `resource_key` | the whole resource; the guardian counts direct anchors in the READ rows |
-| teardown role sweep | `resource_key` (on `iam_roles`) | a transaction has no count aggregation, so the rows removed are the rows read |
-| role assign / unassign | `GetAll` on the exact 5-tuple ids (plus the global ids for `same_role_grant_remains`) | no query |
-| create pre-check | `GetAll` on each new tuple's three documents | claims cannot first be discovered in the write phase |
+| guard — `CheckRelation(Bounded)` | the expansion hop and the expanded check of §7.1 | those entries |
+| guard — `RelationTargets` | `resource_key`, `relation` | — |
+| guard — `HasRole` | document `Get` (exact scope, then the global fallback) | — |
+| guard — dependency anchors | document `Get` per newly recorded scope | — |
+| anchors + receipt | ONE `GetAll` over the lock set plus `iam_mutations/h(id)` | — |
+| grant / revoke / replace / purge | `resource_key` (`resourceRows`) | — |
+| teardown role sweep | `resource_key` on `iam_roles` | — |
+| role assign / unassign | `GetAll` on the exact 5-tuple ids | — |
+| create pre-check | `GetAll` on each new tuple's three documents | — |
 
-No composite index beyond §7.1 and §7.2 is required: every mutation query is
-either a document address or the single-equality `resource_key` shape the write
-paths already use.
+The mutation path therefore adds NO index of its own: every query it issues is
+either a document address or a shape §7.1/§7.2 already declares. That is a
+property worth keeping — a new guarded query that needs a new index must add a
+matrix row, or `TestIndexManifestMatchesTheQueryMatrix` fails.
 
 ## 8. Known family differences (R1)
 
@@ -516,3 +528,137 @@ past every retry budget on the emulator (measured: 186 s and a failure, versus
 6.7 s and a pass with jitter). When the budget IS exhausted the caller gets
 `sdk.ErrConflict` — an infrastructure conflict it may retry — never a committed
 outcome and never a minted receipt.
+
+## 9. Index manifest (A5)
+
+`firestore.indexes.json` declares **27 composite indexes** — 20 on
+`iam_relationships`, 7 on `iam_roles` — all at `COLLECTION` scope (§6: every
+collection is top-level), and **no field overrides**. It is no longer
+provisional: every entry is derived from §7 by the rules below, and
+`indexes_test.go` fails if the two disagree in either direction. A database
+allows 200 composite indexes without billing enabled and 1,000 with it, shared
+across every store a host mounts; this store's 27 are its share of that budget,
+and `TestIndexManifestParses` states the number so a change has to move it
+deliberately.
+
+**No field overrides, deliberately.** An override is needed for an array field
+(`array-contains`), for a collection-group scoped single-field index, or to
+DISABLE the automatic single-field indexing of a field. This store has no array
+field (usersets are separate documents, never an array), queries no collection
+group, and depends on the automatic ascending/descending single-field indexes for
+the equality-only shapes in §7 — the default configuration provides exactly
+those. The connector does not probe what a manifest does not declare, so an empty
+`fieldOverrides` is honest: nothing here needs one.
+
+### 9.1 The derivation rules, with sources
+
+From [index-overview](https://firebase.google.com/docs/firestore/query-data/index-overview)
+and [queries](https://firebase.google.com/docs/firestore/query-data/queries):
+
+1. **Equality-only needs nothing.** "You can combine constraints with a logical
+   AND by chaining multiple equality operators (`==` or `array-contains`).
+   However, you must create a composite index to combine equality operators with
+   the inequality operators, `<`, `<=`, `>`, and `!=`." A single `in` likewise:
+   "You can also create `in` and compound equality (`==`) queries" appears under
+   *Queries supported by single-field indexes*.
+2. **`in` is an equality for index selection** — "Since the query uses an
+   equality (`==` or `in`) for the `country` field…", "`in` and `==` clauses use
+   the same index". This store still declares a composite when an `in` is
+   combined with ANOTHER filter field: the server may serve those disjunctions by
+   merging single-field indexes, but merging is an optimization the docs
+   recommend, not a guarantee, and the cost asymmetry is the whole argument (a
+   surplus index costs storage; a missing one is a production
+   `FAILED_PRECONDITION`).
+3. **Filter + sort on another field, or any two-field sort, needs one.** "If you
+   need to run a compound query that uses a range comparison … or if you need to
+   sort by a different field, you must create a manual index for that query."
+4. **Field order.** "The start position is prefixed with the query's equality
+   filters and ends with the range and inequality filters on the first `orderBy`
+   field" — equality-class fields first, then the range/order fields in the
+   query's direction. Firestore accepts any order WITHIN the equality prefix, so
+   the manifest pins one (`equalityPrecedence` in `indexes_test.go`, which is the
+   order the store's query builders apply their filters in) and every shape obeys
+   it, or two spellings of one index would both have to be deployed.
+5. **`__name__` is implicit.** "By default, the `__name__` field is sorted in the
+   same direction of the last sorted field in the index definition … To sort
+   results by the non-default `__name__` direction, you need to create that
+   index." Every ordered shape here sorts `__name__` in the last order field's
+   direction (the keyset streams state it explicitly, `.OrderBy(DocumentID, Asc)`
+   after `resource_id ASC`), so no entry lists it.
+6. **An aggregation uses the index of the query underneath it.**
+   `CountByResourceAndRelation` and the connector List's `WithCount` add no
+   entry.
+
+### 9.2 Both directions are listed — Firestore has no automatic reverse index
+
+Every list in §7 is served in both directions: the port's order is
+caller-supplied, and the connector List's HasPrev probe re-issues the page query
+with EVERY direction flipped (`ListQuery.ordered(…, reverse: true)`). The vendor
+does not derive one from the other:
+
+> To run the same queries but with a descending sort order, you need an
+> additional index in the descending direction for `population`.
+> — [index-overview](https://firebase.google.com/docs/firestore/query-data/index-overview),
+> *Queries supported by manual indexes*
+
+So each list shape contributes an all-ASCENDING entry and an all-DESCENDING one
+(the equality prefix stays `ASCENDING` in both — the docs state the prefix's mode
+is free for equality fields, so pinning it keeps the two entries comparable).
+This mirrors the connector's own C4/C5 live leg, which deploys four indexes for
+two order fields × two directions. The keyset lookups are the exception that
+proves the rule: `idStream` only ever traverses `resource_id ASC`, so they
+contribute one direction, not two.
+
+### 9.3 The entries
+
+| Collection | Fields (all `ASCENDING` unless marked) | Serves |
+|---|---|---|
+| `iam_relationships` | `resource_key`, `relation`, `subject_key` | expanded check |
+| `iam_relationships` | `resource_type`, `relation`, `resource_id` | candidate scan |
+| `iam_relationships` | `resource_type`, `relation`, `subject_key` | descendant hop |
+| `iam_relationships` | `resource_type`, `relation`, `subject_key`, `resource_id` | both keyset lookups |
+| `iam_relationships` | `subject_type`, `subject_id`[, `resource_type`][, `relation`], `created_at`, `relationship_id` — 4 subsets × 2 directions | `ListRelationshipsBySubject` + its HasPrev probe |
+| `iam_relationships` | `resource_key`[, `subject_type`][, `relation`], `created_at`, `relationship_id` — 4 subsets × 2 directions | `ListRelationshipsByResource` + its HasPrev probe |
+| `iam_roles` | `subject_key`, `created_at`, `role_key` — 2 directions | `ListBySubject` |
+| `iam_roles` | `resource_key`, `created_at`, `role_key` — 2 directions | `ListByResource` |
+| `iam_roles` | `subject_key`, `resource_type`, `role`, `resource_id` | `LookupResourceIDsBySubjectAndRoles` |
+| `iam_roles` | `resource_key`, `grant_key` — 2 directions | `ListEffectiveByResource`'s streams |
+
+Changes from the A1 provisional manifest (16 entries, A-D7's expectations):
+`(resource_key, relation)` and `(subject_type, subject_key, relation,
+resource_id)` were REMOVED — the first is equality-only (rule 1), the second is a
+shape no query issues (the target lookup filters `resource_type`, not
+`subject_type`). `(resource_type, subject_key, relation, resource_id)` was
+RESPELLED as `(resource_type, relation, subject_key, resource_id)` to obey the
+pinned equality order (rule 4). Thirteen entries were ADDED: the descendant hop's
+`(resource_type, relation, subject_key)` and the twelve optional-filter subsets
+of the two relationship listings.
+
+### 9.4 Export, probe, and what live still owes
+
+`ExportIndexes(dst)` merges this fragment into the host's own manifest (the
+connector's `ExportIndexes`: union by index identity, byte-stable, atomic
+rename), which is why a host's unrelated indexes survive and a re-export is an
+empty diff. The checked-in file is byte-identical to that output
+(`TestIndexManifestIsSortedAsMergeSorts`), so it is also directly deployable by
+the connector README's `gcloud firestore indexes composite create` loop.
+
+`Repositories` / `RelationshipRepository` probe the manifest at construction
+(`firestoredb.ProbeIndexesFS`) unless `WithoutIndexProbe()` is passed. The
+constructors take no `context.Context` — the SQL siblings' table probes do not
+either — so the probe runs on `context.Background()` and is bounded by the
+connector's `ProbeTimeout` (30 s), which is what an Admin API that never answers
+hits instead of hanging a host's boot. Against the emulator the probe is
+`ErrProbeUnavailableOnEmulator` rather than a silent skip
+(`indexes_integration_test.go` asserts both sides).
+
+**Owed, and not satisfiable on an emulator:** `indexes_live_test.go` deploys
+nothing but requires this manifest deployed and READY on the target database
+(CI: `FIRESTORE_LIVE_INDEXES=pockets/authorization/stores/firestore/firestore.indexes.json`,
+wired by A6). It then proves (a) the probe accepts the deployment and both
+constructors succeed with the probe ENABLED, and (b) every matrix row executes
+without a `*firestoredb.MissingIndexError`. As of A5 it has NOT run — no live GCP
+project existed in that session — so the manifest is derived, reviewed, and
+hermetically consistent with the code, but the index set itself is UNPROVEN until
+that leg runs. Anything rule 2's conservatism over-declared can only be pruned by
+that run.

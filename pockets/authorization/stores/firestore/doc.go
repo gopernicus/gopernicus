@@ -32,4 +32,11 @@
 // an emulator run passes [WithoutIndexProbe]. SCHEMA.md is the tracked
 // statement of the document layout and of which SQL constraint each claim
 // document reproduces.
+//
+// README.md is what a host reads before choosing this family: the
+// ambient-transaction difference above and what to do instead, the manifest's
+// scaffold/deploy/probe cycle, and the ceilings and costs the SQL families do
+// not have (166 tuples per write call, the same document ceiling on one
+// mutation command, the effective listing's O(population) count, contention as
+// waiting, and the uncached expansion walk).
 package firestore

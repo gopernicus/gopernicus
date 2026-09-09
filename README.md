@@ -8,7 +8,7 @@ infrastructure. Gopernicus is open source under the [MIT License](LICENSE),
 very much a work in progress, and not stable. See [ARCHITECTURE.md](ARCHITECTURE.md)
 for the full layering rules and [NOTES.md](NOTES.md) for the decision log.
 
-## The forty modules
+## The forty-one modules
 
 ```
 sdk/                                stdlib-only, layered: root = kernel; foundation/ + capabilities/ + pocket (empty go.mod = structural enforcement)
@@ -34,6 +34,7 @@ pockets/authentication/views/goth/           auth's bundled default views (ui/go
 pockets/authorization/             IAM hexagon — independently wireable kinds (relationships/ReBAC + roles); datastore-free; public memstore/
 pockets/authorization/stores/pgx/  authorization's pgx store adapter, its own module
 pockets/authorization/stores/turso/ authorization's Turso store adapter, its own module
+pockets/authorization/stores/firestore/ authorization's Firestore store adapter (Native mode; no ambient-transaction join — ruling R1), its own module
 pockets/cms/                       the CMS hexagon — datastore-free; domain/ public rim, internal/ interior
 pockets/cms/stores/pgx/            the CMS pocket's pgx store adapter, its own module
 pockets/cms/stores/turso/          the CMS pocket's Turso store adapter, its own module
@@ -115,7 +116,7 @@ make migrate           # applies examples/cms/workshop/migrations pre-boot
 make run                # or: cd examples/cms && go run ./cmd/server
 ```
 
-From the repo root, `make check` builds, vets, and tests all forty modules
+From the repo root, `make check` builds, vets, and tests all forty-one modules
 and runs the twenty-three layering guards; `make test-stores` runs the live dialect
 conformance suites (expects `POSTGRES_TEST_DSN` / `TURSO_*`). See [examples/cms/README.md](examples/cms/README.md)
 for that host's full env/make-target reference.

@@ -188,11 +188,17 @@ jobs:
           POSTGRES_TEST_DSN: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
         run: go test -race ./...
 
-  # Job C — the Firestore CONNECTOR's emulator suite
-  # (integrations/datastores/firestore, -tags=integration). The connector is in
-  # MODULES, not STORE_MODULES, so `make test-stores` reaches it but this job
-  # runs the module directly — the postgres/turso legs have no business gating
-  # the Firestore one.
+  # Job C — the Firestore emulator suites: the CONNECTOR
+  # (integrations/datastores/firestore) and every pocket store train built on it
+  # (pockets/authorization/stores/firestore), both -tags=integration. The
+  # connector is in MODULES and the stores in STORE_MODULES, so `make test-stores`
+  # reaches them, but this job runs the modules directly — the postgres/turso legs
+  # have no business gating the Firestore ones.
+  #
+  # Each module opens its OWN emulator database (the connector its default one,
+  # the authorization store "authorization"): firestoretest.Reset clears a WHOLE
+  # database, so two suites sharing one would delete each other's rows and the
+  # failure would arrive as a flake.
   #
   # The emulator is a background docker step (see the header) with a readiness
   # wait against its HTTP root; the tests themselves skip loudly if
@@ -239,6 +245,16 @@ jobs:
           FIRESTORE_EMULATOR_HOST: 127.0.0.1:8080
           FIRESTORE_PROJECT_ID: gopernicus-test
         run: go test -tags=integration -count=1 -timeout 15m ./...
+      # 30 minutes, not the connector's 15: the shared authorization conformance
+      # suite runs ~130 fixtures, several of them concurrent transaction specs,
+      # and the emulator holds a contended lock for up to thirty seconds. The
+      # Makefile's test-stores leg carries the same timeout for the same reason.
+      - name: authorization firestore store emulator suite (-tags=integration)
+        working-directory: pockets/authorization/stores/firestore
+        env:
+          FIRESTORE_EMULATOR_HOST: 127.0.0.1:8080
+          FIRESTORE_PROJECT_ID: gopernicus-test
+        run: go test -tags=integration -count=1 -timeout 30m ./...
       - name: stop the Firestore emulator
         if: always()
         run: docker rm -f firestore-emulator || true
@@ -311,8 +327,16 @@ jobs:
       # roots the connector declares today (C7 derived and counted eleven). It
       # exists so a broken derivation or a quietly deleted live test cannot pass
       # as "everything expected ran". BUMP IT in the same change that adds live
-      # roots; lowering it is a deliberate, reviewable act.
+      # roots; lowering it is a deliberate, reviewable act. Each store train's
+      # audit step OVERRIDES this at step level with its own module's floor.
       FIRESTORE_LIVE_MIN_ROOTS: "11"
+      # The index manifests to deploy on this run's database, SPACE-SEPARATED,
+      # repo-relative — one per store module whose live suite runs below (the
+      # connector ships none of its own; its four fixtures' indexes are created
+      # explicitly). A store train appends its manifest here in the same change
+      # that adds its live step, because a store whose composites were never
+      # deployed fails live as FAILED_PRECONDITION that reads like a store bug.
+      FIRESTORE_LIVE_INDEXES: pockets/authorization/stores/firestore/firestore.indexes.json
       # Force-unset. Nothing else in this job writes FIRESTORE_EMULATOR_HOST —
       # this line exists so that a value inherited from anywhere (a future
       # repo-level env, a runner image default) cannot point the "live" leg at an
@@ -427,12 +451,18 @@ jobs:
       #      needs on firestore_c4_list_live — both directions of both order
       #      fields, because the reverse HasPrev probe flips every direction and
       #      a composite index is direction-specific;
-      #   2. deploys the manifest a store train exported, if FIRESTORE_LIVE_INDEXES
-      #      points at one. That is a jq loop over the manifest's composites into
-      #      the same `gcloud firestore indexes composite create` — NOT
-      #      `firebase deploy`, which needs the Firebase CLI (absent on
-      #      ubuntu-latest) and a firebase.json this repo does not have. jq IS
-      #      preinstalled. Empty/unset ⇒ skipped with a notice.
+      #   2. deploys every manifest a store train exported —
+      #      FIRESTORE_LIVE_INDEXES is a SPACE-SEPARATED LIST of repo-relative
+      #      paths, because one run's database serves every store module's live
+      #      leg and each module embeds its own manifest. That is a jq loop over
+      #      each manifest's composites into the same
+      #      `gcloud firestore indexes composite create` — NOT `firebase deploy`,
+      #      which needs the Firebase CLI (absent on ubuntu-latest) and a
+      #      firebase.json this repo does not have. jq IS preinstalled.
+      #      Empty/unset ⇒ skipped with a notice. Duplicate composites across two
+      #      manifests are harmless: the second create answers ALREADY_EXISTS,
+      #      which this step treats as success, and `expected` counts creates,
+      #      not distinct indexes — so the READY wait's floor stays a floor.
       #
       # ALREADY_EXISTS is the one benign failure (a pinned database keeps its
       # indexes between runs); anything else fails the step with gcloud's stderr,
@@ -484,35 +514,41 @@ jobs:
           done
 
           if [ -n "${FIRESTORE_LIVE_INDEXES:-}" ]; then
-            if [ ! -f "$FIRESTORE_LIVE_INDEXES" ]; then
-              echo "ERROR: FIRESTORE_LIVE_INDEXES=$FIRESTORE_LIVE_INDEXES does not exist — a store train set it to a path this checkout does not have"
-              exit 1
-            fi
-            echo "deploying the exported index manifest $FIRESTORE_LIVE_INDEXES"
-            args="$RUNNER_TEMP/firestore-index-args.tsv"
-            jq -r '
-              (.indexes // [])[]
-              | [ .collectionGroup ]
-                + (if ((.queryScope // "COLLECTION") == "COLLECTION") then []
-                   else [ "--query-scope=" + (.queryScope | ascii_downcase | gsub("_"; "-")) ] end)
-                + ( (.fields // []) | map(
-                      if .order then "--field-config=field-path=" + .fieldPath + ",order=" + (.order | ascii_downcase)
-                      elif .arrayConfig then "--field-config=field-path=" + .fieldPath + ",array-config=" + (.arrayConfig | ascii_downcase)
-                      else "UNSUPPORTED-FIELD:" + (. | tojson) end ) )
-              | @tsv
-            ' "$FIRESTORE_LIVE_INDEXES" > "$args"
-            if grep -q 'UNSUPPORTED-FIELD:' "$args"; then
-              echo "ERROR: the manifest declares an index field this step cannot express as a --field-config (vector-config / search-config are not supported here)"
-              grep 'UNSUPPORTED-FIELD:' "$args"
-              exit 1
-            fi
-            while IFS=$'\t' read -r -a spec; do
-              [ "${#spec[@]}" -gt 0 ] || continue
-              expected=$((expected + 1))
-              create_index "${spec[@]}"
-            done < "$args"
+            # Unquoted on purpose: the value is a space-separated LIST of
+            # manifests, one per store module with a live leg in this job.
+            manifest_n=0
+            for manifest in $FIRESTORE_LIVE_INDEXES; do
+              if [ ! -f "$manifest" ]; then
+                echo "ERROR: FIRESTORE_LIVE_INDEXES names $manifest, which this checkout does not have — a store train set it to a path that moved or was never committed"
+                exit 1
+              fi
+              manifest_n=$((manifest_n + 1))
+              echo "deploying the exported index manifest $manifest"
+              args="$RUNNER_TEMP/firestore-index-args-$manifest_n.tsv"
+              jq -r '
+                (.indexes // [])[]
+                | [ .collectionGroup ]
+                  + (if ((.queryScope // "COLLECTION") == "COLLECTION") then []
+                     else [ "--query-scope=" + (.queryScope | ascii_downcase | gsub("_"; "-")) ] end)
+                  + ( (.fields // []) | map(
+                        if .order then "--field-config=field-path=" + .fieldPath + ",order=" + (.order | ascii_downcase)
+                        elif .arrayConfig then "--field-config=field-path=" + .fieldPath + ",array-config=" + (.arrayConfig | ascii_downcase)
+                        else "UNSUPPORTED-FIELD:" + (. | tojson) end ) )
+                | @tsv
+              ' "$manifest" > "$args"
+              if grep -q 'UNSUPPORTED-FIELD:' "$args"; then
+                echo "ERROR: $manifest declares an index field this step cannot express as a --field-config (vector-config / search-config are not supported here)"
+                grep 'UNSUPPORTED-FIELD:' "$args"
+                exit 1
+              fi
+              while IFS=$'\t' read -r -a spec; do
+                [ "${#spec[@]}" -gt 0 ] || continue
+                expected=$((expected + 1))
+                create_index "${spec[@]}"
+              done < "$args"
+            done
           else
-            echo "no exported index manifest configured (the connector ships none; each store train sets FIRESTORE_LIVE_INDEXES to the manifest its store exported)"
+            echo "no exported index manifest configured (the connector ships none; each store train APPENDS its exported manifest to FIRESTORE_LIVE_INDEXES)"
           fi
 
           echo "waiting for $expected expected composite index(es) to report READY"
@@ -630,6 +666,128 @@ jobs:
             exit 1
           fi
 
+      # ---------------------------------------------------------------------
+      # The authorization pocket's Firestore STORE (train 2). Its own test step
+      # and its own audit step, per the convention the connector's audit
+      # established: the two modules declare different live roots, carry
+      # different floors, and — unlike the connector — this one has an ALLOWED
+      # SKIP.
+      # ---------------------------------------------------------------------
+      - name: authorization firestore store live suite (-tags='integration,live')
+        if: env.LIVE_CONFIGURED == '1'
+        working-directory: pockets/authorization/stores/firestore
+        run: |
+          set +e
+          go test -json -count=1 -tags='integration,live' -timeout 30m -run 'Live$' ./... \
+            > "$RUNNER_TEMP/firestore-authorization-live.json"
+          status=$?
+          set -e
+          echo "go test exit status: $status"
+          echo "AUTHZ_GO_TEST_STATUS=$status" >> "$GITHUB_ENV"
+          exit 0
+
+      # The same C-D8 audit, over THIS module's roots, plus the one thing the
+      # connector's copy has no need for: an ALLOW-LIST BY TEST NAME.
+      #
+      # TestRunTransactionalLive is ruling R1's known family difference — this
+      # store supplies no crud.Transactor, so the ambient family skips. It is the
+      # ONE root allowed to skip on a required run, it is named here explicitly,
+      # and a name in the list that is not a derived root fails the step: an
+      # allow-list that silently allows nothing is how a real skip gets waved
+      # through later.
+      - name: audit the authorization store's live test/skip counts
+        if: env.LIVE_CONFIGURED == '1'
+        working-directory: pockets/authorization/stores/firestore
+        env:
+          # This module's own floor, overriding the job-level connector one.
+          # The seven roots it declares today: the conformance entrypoint
+          # (TestConformanceLive), R1's ambient pair (TestRunTransactionalLive,
+          # TestAmbientTransactionRefusedLive), the index manifest's live proofs
+          # (TestIndexProbeAcceptsTheDeployedManifestLive,
+          # TestQueryMatrixExecutesAgainstTheDeployedIndexesLive) and the two
+          # serialization assertions the emulator cannot make honestly
+          # (TestGuardedMutationDependencyRevokeIsDeterminedLive,
+          # TestSetRelationTargetsConcurrentDisjointSetsConvergeLive). BUMP IT in
+          # the same change that adds a live root.
+          FIRESTORE_LIVE_MIN_ROOTS: "7"
+        run: |
+          expected_file="$RUNNER_TEMP/firestore-authorization-live-expected.txt"
+          allowed_file="$RUNNER_TEMP/firestore-authorization-live-allowed.txt"
+          audit_file="$RUNNER_TEMP/firestore-authorization-live-audit.txt"
+          set +e
+          grep -rl '//go:build integration && live' --include='*_test.go' . \
+            | xargs -r grep -hoE '^func Test[A-Za-z0-9_]*Live\(' \
+            | sed -E 's/^func //; s/\($//' \
+            | sort -u > "$expected_file"
+          set -e
+          roots=$(wc -l < "$expected_file" | tr -d ' ')
+          echo "expected live roots ($roots):"
+          cat "$expected_file"
+          if [ "$roots" -eq 0 ]; then
+            echo "ERROR: the derived expected-root set is EMPTY — either the live tests are gone or the derivation broke. An empty set makes this audit vacuously green, which is the exact false-positive it exists to prevent."
+            exit 1
+          fi
+          if [ "$FIRESTORE_LIVE_REQUIRED" = "1" ] && [ "$roots" -lt "$FIRESTORE_LIVE_MIN_ROOTS" ]; then
+            echo "ERROR: only $roots live roots were derived, fewer than the recorded minimum FIRESTORE_LIVE_MIN_ROOTS=$FIRESTORE_LIVE_MIN_ROOTS — live coverage shrank, or the derivation is matching fewer files than it should. If roots were removed on purpose, lower FIRESTORE_LIVE_MIN_ROOTS in this workflow in the SAME change."
+            exit 1
+          fi
+
+          # Ruling R1, and nothing else, ever, without a plan ruling.
+          printf '%s\n' TestRunTransactionalLive > "$allowed_file"
+          while read -r allowed; do
+            [ -n "$allowed" ] || continue
+            if ! grep -qx "$allowed" "$expected_file"; then
+              echo "ERROR: the allow-list names $allowed, which is not a live root of this module — an allow-list entry that matches nothing silently stops allowing anything and would wave a REAL skip through later"
+              exit 1
+            fi
+          done < "$allowed_file"
+          echo "allowed skips (ruling R1):"
+          cat "$allowed_file"
+
+          set +e
+          awk -v required="$FIRESTORE_LIVE_REQUIRED" \
+              -v expected="$expected_file" \
+              -v allowed="$allowed_file" '
+            BEGIN {
+              while ((getline root < expected) > 0) { if (root != "") want[root] = 1 }
+              while ((getline root < allowed) > 0) { if (root != "") ok_to_skip[root] = 1 }
+            }
+            {
+              if (!match($0, /"Test":"[^"]+"/)) next
+              test = substr($0, RSTART + 8, RLENGTH - 9)
+              if (index(test, "/") > 0) next
+              if (!match($0, /"Action":"[^"]+"/)) next
+              action = substr($0, RSTART + 10, RLENGTH - 11)
+              if (action == "pass" || action == "fail" || action == "skip") saw[test] = action
+            }
+            END {
+              bad = 0
+              for (root in want) {
+                state = (root in saw) ? saw[root] : "ABSENT"
+                printf "  %-52s %s\n", root, state
+                if (state == "ABSENT") { print "ERROR: " root " never ran — the live leg proved nothing about it"; bad = 1 }
+                else if (state == "fail") { bad = 1 }
+                else if (state == "skip") {
+                  if (root in ok_to_skip) { print "ALLOWED SKIP: " root " — firestore-stores ruling R1 (this store joins no ambient transaction)" }
+                  else if (required == "1") { print "ERROR: " root " SKIPPED while FIRESTORE_LIVE_REQUIRED=1"; bad = 1 }
+                  else { print "WARNING: " root " skipped (not a release verification run)" }
+                }
+              }
+              exit bad
+            }
+          ' "$RUNNER_TEMP/firestore-authorization-live.json" > "$audit_file"
+          audit_status=$?
+          set -e
+          cat "$audit_file"
+          if [ "$audit_status" != "0" ]; then
+            echo "ERROR: the authorization store's live test/skip audit failed (see the table above)"
+            exit 1
+          fi
+          if [ "${AUTHZ_GO_TEST_STATUS:-1}" != "0" ]; then
+            echo "ERROR: the authorization store's live suite itself failed (go test exit status ${AUTHZ_GO_TEST_STATUS:-unset})"
+            exit 1
+          fi
+
       # The release evidence. RELEASING.md's firestore gate cites THIS artifact
       # by run id instead of a count pasted into a document by hand: the JSON the
       # audit read, the roots it derived, the table it printed, and the index
@@ -649,6 +807,10 @@ jobs:
             ${{ runner.temp }}/firestore-live.json
             ${{ runner.temp }}/firestore-live-expected.txt
             ${{ runner.temp }}/firestore-live-audit.txt
+            ${{ runner.temp }}/firestore-authorization-live.json
+            ${{ runner.temp }}/firestore-authorization-live-expected.txt
+            ${{ runner.temp }}/firestore-authorization-live-allowed.txt
+            ${{ runner.temp }}/firestore-authorization-live-audit.txt
             ${{ runner.temp }}/firestore-indexes.json
           if-no-files-found: warn
           retention-days: 400

@@ -16,6 +16,12 @@ STORE_MODULES = pockets/cms/stores/pgx pockets/cms/stores/turso pockets/authenti
 # as those trains land, firestore) stores, plus the firestore connector itself —
 # which lives in MODULES, not STORE_MODULES, so it is named explicitly.
 INTEGRATION_TAG_MODULES = $(filter %/turso %/firestore,$(STORE_MODULES)) integrations/datastores/firestore
+# LIVE_TAG_MODULES carry `integration && live` sources — the firestore family only
+# (a live GCP project is the one backend no hermetic or emulator leg can stand in
+# for). `make check` vets them compile-only so the live leg cannot rot between the
+# dispatches of .github/workflows/live-stores.yml, which is the only thing that
+# RUNS them.
+LIVE_TAG_MODULES = $(filter %/firestore,$(INTEGRATION_TAG_MODULES))
 
 .PHONY: generate generate-ui-assets build vet test test-stores test-ui-browser docs-install docs docs-build run migrate check tidy guard warm-scaffold-cache \
 	guard-sdk-stdlib guard-pocket-isolation guard-sdk-no-outward guard-no-legacy-path \
@@ -354,9 +360,9 @@ guard-violation-message-not-error:
 # among them (firestore-stores A2c), because a bare `.Add(` also matches
 # sync.WaitGroup.Add in a store's own concurrency test, which is not I/O at all.
 #
-# The glob passes trivially today — no pockets/*/stores/firestore exists yet —
-# and that is the point of landing it with the connector: the first store train
-# is born under it. An empty glob must not error, hence the [ -d ] skip.
+# The glob was empty when this guard landed with the connector, which was the
+# point: the first store train (pockets/authorization/stores/firestore) was born
+# under it. An empty glob must not error, hence the [ -d ] skip.
 guard-firestore-mediation:
 	@echo "== guard: firestore store adapters issue I/O only through the connector's Reader/Writer (G24) =="
 	@fail=0; for d in pockets/*/stores/firestore/; do \
@@ -559,7 +565,6 @@ check:
 	@for m in $(MODULES); do echo "== $$m =="; (cd $$m && go vet ./... && go build ./... && go test ./...) || exit 1; done
 	@echo "== integration-tag vet (compile-only, no DB) =="
 	@for m in $(INTEGRATION_TAG_MODULES); do echo "== vet -tags=integration $$m =="; (cd $$m && go vet -tags=integration ./...) || exit 1; done
-	@echo "== vet -tags=integration,live integrations/datastores/firestore =="
-	@cd integrations/datastores/firestore && go vet -tags='integration,live' ./...
+	@for m in $(LIVE_TAG_MODULES); do echo "== vet -tags=integration,live $$m =="; (cd $$m && go vet -tags='integration,live' ./...) || exit 1; done
 	@$(MAKE) guard
 	@echo "all checks passed"

@@ -17,10 +17,13 @@ import (
 // with [ExportIndexes] and deploys it; the constructor probes the live database
 // for it at wiring time.
 //
-// The manifest is PROVISIONAL until task A5 of the firestore-stores milestone
-// derives the definitive set from the complete query matrix and proves it
-// against a live database. The emulator enforces no composite index, so an
-// emulator-green run proves nothing about it (SCHEMA.md §7).
+// Its 27 entries are DERIVED from the complete query matrix (SCHEMA.md §7) by
+// the rules in SCHEMA.md §9.1, and indexes_test.go asserts the correspondence
+// both ways: a query with no index and an index no query needs both fail the
+// build. The emulator enforces no composite index, so an emulator-green run
+// still proves nothing about the SET being right — indexes_live_test.go executes
+// every matrix row against a real database, and until it runs the manifest is
+// derived and reviewed rather than proven.
 //
 //go:embed firestore.indexes.json
 var IndexesFS embed.FS
@@ -138,6 +141,10 @@ func newConfig(db *firestoredb.DB, opts []Option) (config, error) {
 		return config{}, fmt.Errorf("authorization firestore store: nil database: %w", sdk.ErrInvalidInput)
 	}
 	if cfg.probeIndex {
+		// The constructor takes no context — neither do the SQL siblings' table
+		// probes — so the probe runs on Background and is bounded by the
+		// connector's ProbeTimeout (30s): an Admin API that never answers fails
+		// the boot instead of hanging it (SCHEMA.md §9.4).
 		if err := firestoredb.ProbeIndexesFS(context.Background(), db, IndexesFS, IndexesFile); err != nil {
 			return config{}, err
 		}

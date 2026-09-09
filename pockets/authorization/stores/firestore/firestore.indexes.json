@@ -4,146 +4,582 @@
       "collectionGroup": "iam_relationships",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "resource_key", "order": "ASCENDING" },
-        { "fieldPath": "relation", "order": "ASCENDING" },
-        { "fieldPath": "subject_key", "order": "ASCENDING" }
+        {
+          "fieldPath": "resource_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "created_at",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relationship_id",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "iam_relationships",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "resource_key", "order": "ASCENDING" },
-        { "fieldPath": "relation", "order": "ASCENDING" }
+        {
+          "fieldPath": "resource_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "created_at",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "relationship_id",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "iam_relationships",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "resource_type", "order": "ASCENDING" },
-        { "fieldPath": "relation", "order": "ASCENDING" },
-        { "fieldPath": "resource_id", "order": "ASCENDING" }
+        {
+          "fieldPath": "resource_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relation",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "created_at",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relationship_id",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "iam_relationships",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "resource_type", "order": "ASCENDING" },
-        { "fieldPath": "subject_key", "order": "ASCENDING" },
-        { "fieldPath": "relation", "order": "ASCENDING" },
-        { "fieldPath": "resource_id", "order": "ASCENDING" }
+        {
+          "fieldPath": "resource_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relation",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "created_at",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "relationship_id",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "iam_relationships",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "subject_type", "order": "ASCENDING" },
-        { "fieldPath": "subject_key", "order": "ASCENDING" },
-        { "fieldPath": "relation", "order": "ASCENDING" },
-        { "fieldPath": "resource_id", "order": "ASCENDING" }
+        {
+          "fieldPath": "resource_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relation",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "subject_key",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "iam_relationships",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "resource_key", "order": "ASCENDING" },
-        { "fieldPath": "created_at", "order": "DESCENDING" },
-        { "fieldPath": "relationship_id", "order": "DESCENDING" }
+        {
+          "fieldPath": "resource_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "subject_type",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "created_at",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relationship_id",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "iam_relationships",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "resource_key", "order": "ASCENDING" },
-        { "fieldPath": "created_at", "order": "ASCENDING" },
-        { "fieldPath": "relationship_id", "order": "ASCENDING" }
+        {
+          "fieldPath": "resource_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "subject_type",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "created_at",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "relationship_id",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "iam_relationships",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "subject_type", "order": "ASCENDING" },
-        { "fieldPath": "subject_id", "order": "ASCENDING" },
-        { "fieldPath": "created_at", "order": "DESCENDING" },
-        { "fieldPath": "relationship_id", "order": "DESCENDING" }
+        {
+          "fieldPath": "resource_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "subject_type",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relation",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "created_at",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relationship_id",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "iam_relationships",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "subject_type", "order": "ASCENDING" },
-        { "fieldPath": "subject_id", "order": "ASCENDING" },
-        { "fieldPath": "created_at", "order": "ASCENDING" },
-        { "fieldPath": "relationship_id", "order": "ASCENDING" }
+        {
+          "fieldPath": "resource_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "subject_type",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relation",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "created_at",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "relationship_id",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "iam_relationships",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "resource_type",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relation",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "resource_id",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "iam_relationships",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "resource_type",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relation",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "subject_key",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "iam_relationships",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "resource_type",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relation",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "subject_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "resource_id",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "iam_relationships",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "subject_type",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "subject_id",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "created_at",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relationship_id",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "iam_relationships",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "subject_type",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "subject_id",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "created_at",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "relationship_id",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "iam_relationships",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "subject_type",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "subject_id",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relation",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "created_at",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relationship_id",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "iam_relationships",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "subject_type",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "subject_id",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relation",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "created_at",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "relationship_id",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "iam_relationships",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "subject_type",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "subject_id",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "resource_type",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "created_at",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relationship_id",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "iam_relationships",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "subject_type",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "subject_id",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "resource_type",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "created_at",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "relationship_id",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "iam_relationships",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "subject_type",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "subject_id",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "resource_type",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relation",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "created_at",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relationship_id",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "iam_relationships",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "subject_type",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "subject_id",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "resource_type",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relation",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "created_at",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "relationship_id",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "iam_roles",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "subject_key", "order": "ASCENDING" },
-        { "fieldPath": "created_at", "order": "DESCENDING" },
-        { "fieldPath": "role_key", "order": "DESCENDING" }
+        {
+          "fieldPath": "resource_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "created_at",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "role_key",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "iam_roles",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "subject_key", "order": "ASCENDING" },
-        { "fieldPath": "created_at", "order": "ASCENDING" },
-        { "fieldPath": "role_key", "order": "ASCENDING" }
+        {
+          "fieldPath": "resource_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "created_at",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "role_key",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "iam_roles",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "resource_key", "order": "ASCENDING" },
-        { "fieldPath": "created_at", "order": "DESCENDING" },
-        { "fieldPath": "role_key", "order": "DESCENDING" }
+        {
+          "fieldPath": "resource_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "grant_key",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "iam_roles",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "resource_key", "order": "ASCENDING" },
-        { "fieldPath": "created_at", "order": "ASCENDING" },
-        { "fieldPath": "role_key", "order": "ASCENDING" }
+        {
+          "fieldPath": "resource_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "grant_key",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "iam_roles",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "subject_key", "order": "ASCENDING" },
-        { "fieldPath": "resource_type", "order": "ASCENDING" },
-        { "fieldPath": "role", "order": "ASCENDING" },
-        { "fieldPath": "resource_id", "order": "ASCENDING" }
+        {
+          "fieldPath": "subject_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "created_at",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "role_key",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "iam_roles",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "resource_key", "order": "ASCENDING" },
-        { "fieldPath": "grant_key", "order": "ASCENDING" }
+        {
+          "fieldPath": "subject_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "created_at",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "role_key",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "iam_roles",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "resource_key", "order": "ASCENDING" },
-        { "fieldPath": "grant_key", "order": "DESCENDING" }
+        {
+          "fieldPath": "subject_key",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "resource_type",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "role",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "resource_id",
+          "order": "ASCENDING"
+        }
       ]
     }
   ]
