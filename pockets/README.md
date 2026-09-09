@@ -205,9 +205,19 @@ store isolates neither, so this refusal stands.
   switches store by one import and one `Open` call. A pocket's dialect trees
   carry an **identical migration version (filename) set — gaps reproduced**;
   after export, the host owns the final ordering in `workshop/migrations/{db}`.
+  **Firestore is an OPTIONAL third family, not a DP1 requirement**
+  (firestore-stores, 2026-09-09): `{turso, pgx}` remains the parity bar every
+  pocket must clear, and `stores/firestore` ships only where a host demand
+  exists — authentication and authorization in that milestone; cms, events, and
+  jobs get none. It is also the family that does NOT join a host's ambient
+  `crud.Transactor` transaction (ruling R1): a Firestore transaction sees none
+  of its own pending writes, so `storetest.RunTransactional` skips loudly there
+  and a store method handed a connector transaction fails loud rather than
+  splitting atomicity. Each store README states which family a host gets.
   Live-store conformance is env-gated (`POSTGRES_TEST_DSN`; turso's
-  `-tags=integration` + `TURSO_*`) with loud skips — `make check` stays
-  hermetic, `make test-stores` expects the env vars, and milestone close
+  `-tags=integration` + `TURSO_*`; firestore's `-tags=integration` +
+  `FIRESTORE_EMULATOR_HOST`, with a separate live-project leg) with loud skips
+  — `make check` stays hermetic, `make test-stores` expects the env vars, and milestone close
   requires a recorded live run per dialect (a dated NOTES.md artifact), never
   a hermetic green. **Store posture (C, ratified 2026-07-02):** the shipped
   dialect stores are framework-maintained *reference implementations* —

@@ -14,6 +14,7 @@ worked example `examples/cms`.
     cryptids/bcrypt/      module …/integrations/cryptids/bcrypt         — a connector (x/crypto bcrypt)
     cryptids/golang-jwt/  module …/integrations/cryptids/golang-jwt     — a connector (golang-jwt/jwt v5)
     cryptids/google-uuid/ module …/integrations/cryptids/google-uuid    — a connector (google/uuid v4/v7)
+    datastores/firestore/ module …/integrations/datastores/firestore    — a connector (cloud.google.com/go/firestore; Native mode: documents, transactions, index manifest)
     datastores/pgxdb/       module …/integrations/datastores/pgxdb          — a connector (jackc/pgx v5; multi-port: crud.Transactor + ratelimiter)
     datastores/turso/     module …/integrations/datastores/turso        — a connector (sdk + libsql)
     email/sendgrid/       module …/integrations/email/sendgrid          — a connector (sendgrid/sendgrid-go)
@@ -55,7 +56,7 @@ worked example `examples/cms`.
       cmd/
 ```
 
-**Thirty-six modules today.** `sdk` is the kernel; `integrations/*` are reusable
+**Forty modules today.** `sdk` is the kernel; `integrations/*` are reusable
 third-party connectors (one external dependency each, each its own module);
 `pockets/<name>` is a datastore-free pocket core with its store adapters as
 sibling modules — one per supported store implementation; `examples/*` are host apps that

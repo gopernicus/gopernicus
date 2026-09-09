@@ -1,6 +1,6 @@
 # gopernicus — framework monorepo (sdk + integrations + pockets + examples)
 #
-# Multi-module workspace (go.work), 39 modules. templ is pinned via the `tool`
+# Multi-module workspace (go.work), 40 modules. templ is pinned via the `tool`
 # directive in pockets/cms/views/goth/go.mod (where the .templ sources live),
 # so `go tool templ` is reproducible.
 
@@ -10,6 +10,12 @@ MODULES = sdk integrations/cryptids/bcrypt integrations/cryptids/golang-jwt inte
 # database). `make check`/`make test` run them hermetically (loud skips); `make
 # test-stores` runs them EXPECTING the datastore env vars set.
 STORE_MODULES = pockets/cms/stores/pgx pockets/cms/stores/turso pockets/authentication/stores/pgx pockets/authentication/stores/turso pockets/jobs/stores/pgx pockets/jobs/stores/turso pockets/events/stores/pgx pockets/events/stores/turso pockets/authorization/stores/pgx pockets/authorization/stores/turso
+
+# INTEGRATION_TAG_MODULES carry `-tags=integration` sources `make check` must keep
+# COMPILING even though they never RUN without their datastore env: the turso (and,
+# as those trains land, firestore) stores, plus the firestore connector itself —
+# which lives in MODULES, not STORE_MODULES, so it is named explicitly.
+INTEGRATION_TAG_MODULES = $(filter %/turso %/firestore,$(STORE_MODULES)) integrations/datastores/firestore
 
 .PHONY: generate generate-ui-assets build vet test test-stores test-ui-browser docs-install docs docs-build run migrate check tidy guard warm-scaffold-cache \
 	guard-sdk-stdlib guard-pocket-isolation guard-sdk-no-outward guard-no-legacy-path \
@@ -53,11 +59,17 @@ test:
 # the datastore env vars set (vs `make check`/`make test`, which skip loudly and
 # stay hermetic). It fails loudly if POSTGRES_TEST_DSN is unset — this milestone's
 # proof is the live postgres run. The turso leg is `-tags=integration` and skips
-# loudly without TURSO_DATABASE_URL/TURSO_AUTH_TOKEN.
+# loudly without TURSO_DATABASE_URL/TURSO_AUTH_TOKEN. The firestore connector leg
+# is `-tags=integration` too and skips loudly without FIRESTORE_EMULATOR_HOST;
+# its live-project leg is CI-only (live-stores.yml), since it needs a disposable
+# GCP database.
 #
-# Spin a local postgres and run:
+# Spin a local postgres and a Firestore emulator, then run:
 #   docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17
-#   POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' make test-stores
+#   docker run --rm -d -p 8080:8080 gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
+#     gcloud emulators firestore start --host-port=0.0.0.0:8080 --project=gopernicus-test
+#   POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' \
+#     FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 FIRESTORE_PROJECT_ID=gopernicus-test make test-stores
 # pgx-leg runs one pgx store module's live suite twice: once unqualified (the
 # default every existing host runs) and once with POSTGRES_TEST_SCHEMA set, so
 # every statement is proven both bare and schema-qualified
@@ -94,6 +106,9 @@ test-stores:
 	$(call pgx-leg,pockets/authorization/stores/pgx)
 	@echo "== pockets/authorization/stores/turso (live, -tags=integration) =="
 	@cd pockets/authorization/stores/turso && go test -tags=integration ./...
+	@echo "== integrations/datastores/firestore (emulator, -tags=integration) =="
+	@if [ -z "$$FIRESTORE_EMULATOR_HOST" ]; then echo "   FIRESTORE_EMULATOR_HOST not set — the emulator cases SKIP loudly (Firestore emulator conformance NOT verified)"; fi
+	@cd integrations/datastores/firestore && go test -tags=integration -count=1 -timeout 15m ./...
 
 # test-ui-browser runs the ui/goth three-engine Playwright + axe harness
 # (Chromium, Firefox, WebKit) against the zero-datastore examples/goth-showcase
@@ -497,6 +512,8 @@ check:
 	@$(MAKE) warm-scaffold-cache
 	@for m in $(MODULES); do echo "== $$m =="; (cd $$m && go vet ./... && go build ./... && go test ./...) || exit 1; done
 	@echo "== integration-tag vet (compile-only, no DB) =="
-	@for m in $(filter %/turso,$(STORE_MODULES)); do echo "== vet -tags=integration $$m =="; (cd $$m && go vet -tags=integration ./...) || exit 1; done
+	@for m in $(INTEGRATION_TAG_MODULES); do echo "== vet -tags=integration $$m =="; (cd $$m && go vet -tags=integration ./...) || exit 1; done
+	@echo "== vet -tags=integration,live integrations/datastores/firestore =="
+	@cd integrations/datastores/firestore && go vet -tags='integration,live' ./...
 	@$(MAKE) guard
 	@echo "all checks passed"

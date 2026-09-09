@@ -536,6 +536,68 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
+### integrations/datastores/firestore — v0.1.0 (FIRST TAG; not yet cut — the owner cuts it after a passing required live run): the Firestore connector (new module; no existing consumer)
+
+Plan of record `.claude/plans/firestore-stores/connector.md` (train 1 of three;
+the manifest's rulings R1–R5 govern). A NEW module — nothing existing depends on
+it, so adopting is opt-in and nothing breaks by not adopting.
+
+**What it is.** `integrations/datastores/firestore` is the third datastore
+connector, beside `pgxdb` and `turso`, for **Google Cloud Firestore in Native
+mode**: `Config`/`Open`/`Close`/`StatusCheck`/`RetryPolicy`/`Redacted`,
+`Emulated`/`Target`, the tx-aware `Reader`/`Writer` surface (there is no
+`Underlying()`/`Client()` accessor — G9), `(*DB).Transact` implementing
+`sdk/foundation/crud.Transactor` plus `ReadSnapshot`, `MapError`, `List[T]` over
+the crud list grammar, the `firestore.indexes.json` manifest
+(`ParseIndexManifest`/`Merge`/`ExportIndexes`/`ProbeIndexes`) where the SQL
+connectors have migrations, the time/id/`KeyHash` helpers, and the
+`firestoretest` emulator + live factories. Datastore mode and Firestore
+Enterprise are out of scope. Full surface and semantics:
+[`integrations/datastores/firestore/README.md`](integrations/datastores/firestore/README.md).
+
+**Pin.** `sdk v0.4.0` — the same sdk the turso connector pins today. Verified
+sufficient at C1/C4 with `GOWORK=off` against the published tag (every crud
+symbol `List[T]` and `Transactor` need exists there), so the pin is proven, not
+workspace-hidden. Direct requires: `cloud.google.com/go/firestore v1.25.0`
+(whose module also carries the Admin API package the index probe uses),
+`google.golang.org/api` (credential options), `google.golang.org/grpc` (the
+status codes every Firestore error is expressed in). No pocket, store, or host
+pin moves with this tag.
+
+**Two behaviors to read before wiring it, both different from the SQL
+connectors.**
+
+- **`Transact`'s callback MAY RUN MORE THAN ONCE.** Firestore commits
+  optimistically and re-runs the callback on a losing commit, up to
+  `Config.MaxAttempts` (default 5). The callback must be idempotent in every
+  side effect outside Firestore, must reset any enclosing-scope state at its
+  top, and must read everything before it writes. Exhausted retries surface as
+  `sdk.ErrConflict`. `MapError` WRAPS the sentinel (`firestore: <server
+  message>: %w<sentinel>`) instead of returning it bare, so the document path,
+  the failed precondition, and the index-creation URL survive; `errors.Is` is
+  unaffected.
+- **Known family difference (ruling R1): the pocket `stores/firestore` modules
+  do NOT join a host's ambient transaction.** A Firestore transaction requires
+  all reads before all writes and never observes its own pending writes, so
+  `storetest.RunTransactional` — which proves the join from both sides — cannot
+  pass. Those stores return no `crud.Transactor` (the family skips loudly) and
+  fail loud when handed a connector transaction rather than silently running
+  beside it. Redis, DynamoDB, and Firestore all fail that same SQL-family spec;
+  a host that needs the ambient-join guarantee stays on `pgx`/`turso`. This
+  connector still implements `crud.Transactor` for a host's OWN multi-document
+  atomicity.
+
+**Release gate — a live run precedes the tag.** The emulator enforces no
+composite indexes, keeps no index registry (`ProbeIndexes` refuses against it),
+and cannot produce commit-contention exhaustion, so an emulator-green suite is
+not release evidence. Before this tag is cut, the milestone requires a recorded
+passing run of `-tags='integration,live' -run 'Live$'` against a disposable
+run-owned Firestore database (never `(default)`) with the manifest deployed and
+READY, archived with its test and skip counts;
+`FIRESTORE_LIVE_REQUIRED=1` turns missing configuration or a skipped required
+case into a failure. Provisioning commands, IAM, and the CI legs are in the
+module README and `.github/workflows/live-stores.yml`.
+
 ### pockets/authorization — v0.12.0 @ `1439407` (+ stores/pgx v0.7.0, stores/turso v0.6.0 @ `340f6f2`) — tagged 2026-09-09: `FilterAuthorized` decides the candidate SET in one evaluation (minor; BREAKING store port; no schema)
 
 Plan of record `plans/authorization-batch-decision.md` (originating host
