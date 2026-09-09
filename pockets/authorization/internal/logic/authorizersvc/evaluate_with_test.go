@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"testing"
 
 	"github.com/gopernicus/gopernicus/pockets/authorization/domain/relationship"
@@ -47,6 +48,9 @@ func (g *graphStore) expand(subjectType, subjectID string, maxExpansionStates in
 }
 
 func (g *graphStore) CheckRelationWithGroupExpansion(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string, maxExpansionStates int) (bool, error) {
+	// Counted like the embedded fake's own version (which this overrides), so a
+	// per-resource read stays visible to the read-count cases.
+	g.count(&g.directCalls, directCallKey(resourceType, resourceID, relation, subjectType, subjectID))
 	seen, overflow := g.expand(subjectType, subjectID, maxExpansionStates)
 	if overflow {
 		return false, relationship.ErrExpansionBudgetExceeded
@@ -58,6 +62,38 @@ func (g *graphStore) CheckRelationWithGroupExpansion(ctx context.Context, resour
 		}
 	}
 	return false, nil
+}
+
+// FilterRelation is the SET form of graphStore's expansion-aware check: the
+// embedded fakeStore's direct-match version would silently drop group
+// expansion, which is exactly the divergence the set/per-resource parity cases
+// exist to catch.
+func (g *graphStore) FilterRelation(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) ([]string, error) {
+	if len(resourceIDs) == 0 {
+		return nil, nil
+	}
+	g.countSet(&g.setDirectCalls)
+	seen, overflow := g.expand(subjectType, subjectID, maxExpansionStates)
+	if overflow {
+		return nil, relationship.ErrExpansionBudgetExceeded
+	}
+	want := make(map[string]bool, len(resourceIDs))
+	for _, id := range resourceIDs {
+		want[id] = true
+	}
+	matched := make(map[string]bool, len(resourceIDs))
+	for _, t := range g.tuples {
+		if t.ResourceType == resourceType && t.Relation == relation && want[t.ResourceID] &&
+			seen[graphNode{t.SubjectType, t.SubjectID, t.SubjectRelation}] {
+			matched[t.ResourceID] = true
+		}
+	}
+	out := make([]string, 0, len(matched))
+	for id := range matched {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // recordingReader wraps a PermissionReader and logs every call the walk makes,
@@ -76,6 +112,16 @@ func (r *recordingReader) CheckRelationWithGroupExpansion(ctx context.Context, r
 func (r *recordingReader) GetRelationTargets(ctx context.Context, rt, rid, rel string) ([]relationship.RelationTarget, error) {
 	r.calls = append(r.calls, fmt.Sprintf("targets %s:%s#%s", rt, rid, rel))
 	return r.inner.GetRelationTargets(ctx, rt, rid, rel)
+}
+
+func (r *recordingReader) FilterRelation(ctx context.Context, rt string, ids []string, rel, st, sid string, max int) ([]string, error) {
+	r.calls = append(r.calls, fmt.Sprintf("filter %s:%v#%s@%s:%s max=%d", rt, ids, rel, st, sid, max))
+	return r.inner.FilterRelation(ctx, rt, ids, rel, st, sid, max)
+}
+
+func (r *recordingReader) RelationTargetsFor(ctx context.Context, rt string, ids []string, rel string) (map[string][]relationship.RelationTarget, error) {
+	r.calls = append(r.calls, fmt.Sprintf("targetsFor %s:%v#%s", rt, ids, rel))
+	return r.inner.RelationTargetsFor(ctx, rt, ids, rel)
 }
 
 // evaluateWithSchema: a self-referential hierarchy (Through to the same type)

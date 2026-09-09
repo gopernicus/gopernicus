@@ -441,6 +441,52 @@ one page is full.
 
 A host may use both on one resource type — they are different questions.
 
+**Which one a container listing wants.** Prefilter when the principal's visible
+set of that type is BOUNDED — the ordinary case for a member of a handful of
+tenants and spaces, and the pattern a host should reach for first. Postfilter
+(`FilterPage`) when it is NOT bounded and the host's own query is: a manager
+listing inside a huge tenant, a search result, a host-ordered candidate stream
+where "everything of type X I may see" would be a table scan. Both are cheap
+now; the choice is about which set is smaller, not about which one is safe.
+
+### What one `FilterAuthorized` costs
+
+`FilterAuthorized` decides the whole candidate set as ONE evaluation of the
+permission, not one evaluation per candidate. It walks the permission tree once,
+level by level: each `Direct` branch is a single store read over the candidates
+still undecided (an admitted candidate leaves the set — the `AnyOf`
+short-circuit, per candidate), and each `Through` hop is a single read that
+collects every candidate's targets, whose DISTINCT targets are then decided the
+same way one level down.
+
+So **a denied candidate costs a SHARE of one read per branch, not a read per
+branch.** The reads one call makes are `O(branches + hops)` — a function of the
+SCHEMA — while the candidate count only widens each read:
+
+| shape | reads for N candidates |
+|---|---|
+| 5 direct branches (one userset-bearing) + `Through(org)` + `Through(tenant)`, every candidate DENIED | **9**, for N = 1, 50, or 500 |
+| the same work as N per-request `Check`s (what `CheckBatch` still does) | `6N + 3` — 303 at N = 50, 1803 at N = 300 |
+
+(The engine's own benchmark prints both numbers:
+`go test ./internal/logic/authorizersvc -bench DeniedCandidates`.)
+
+The answers are the ones N sequential `Check`s give, and the budget is one
+decision's: `MaxThroughDepth`, `MaxRelationTargets` and the group-expansion
+bound are charged exactly as `Check` charges them, and `MaxGraphStates` is
+charged ONCE for the set rather than once per candidate. That last one is the
+single behavioral consequence to size for: a very wide candidate set over a very
+deep graph can exhaust `MaxGraphStates` where each candidate alone would not, and
+exhaustion is `ErrEvaluationLimit` (indeterminate, fail closed) for the whole
+call — never a wrong answer, and never a partial list presented as complete.
+`MaxBatchSize` bounds the candidate set, so the two limits are a deliberate
+ratio: `MaxGraphStates` should exceed `MaxBatchSize` times the states one
+candidate's walk reaches.
+
+`CheckBatch` is deliberately unchanged: it accepts requests that mix
+principals, permissions, and resource types, so it stays a per-request path (with
+the v0.10.0 memoized reader sharing reads across the batch).
+
 **The candidate-cursor contract.** A `CandidateSource` returns one cursor PER
 ROW (`Candidate.NextCursor`, the source-compatible cursor immediately AFTER that
 row), not one per page: that is the state `FilterPage` needs to stop in the

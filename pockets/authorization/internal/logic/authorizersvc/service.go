@@ -40,15 +40,23 @@ type Config struct {
 }
 
 // PermissionReader is what the relationship walk reads through: the exact
-// two-method subset of relationship.Storer that checkDirectRelation and
-// checkThrough use. On the read side it is the service's own store; inside a
-// guarded mutation it is the transaction-bound, dependency-recording view the
-// authorization core adapts (EvaluateWith). relationship.Storer satisfies it
-// structurally. Depth, graph-state and fan-out budgets stay on the per-decision
-// budget, so the same walk runs over either reader with the same limits.
+// four-method subset of relationship.Storer that checkDirectRelation,
+// checkThrough, and the set walk (evaluateSet) use. On the read side it is the
+// service's own store; inside a guarded mutation it is the transaction-bound,
+// dependency-recording view the authorization core adapts (EvaluateWith).
+// relationship.Storer satisfies it structurally. Depth, graph-state and fan-out
+// budgets stay on the per-decision budget, so the same walk runs over either
+// reader with the same limits.
+//
+// The two PER-RESOURCE methods answer ONE state; the two SET methods answer the
+// same questions for a whole candidate set in one read, and must agree with
+// their per-resource siblings id for id — that agreement is the whole basis of
+// Check/Filter parity.
 type PermissionReader interface {
 	CheckRelationWithGroupExpansion(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string, maxExpansionStates int) (bool, error)
 	GetRelationTargets(ctx context.Context, resourceType, resourceID, relation string) ([]relationship.RelationTarget, error)
+	FilterRelation(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) ([]string, error)
+	RelationTargetsFor(ctx context.Context, resourceType string, resourceIDs []string, relation string) (map[string][]relationship.RelationTarget, error)
 }
 
 // Service is the sealed ReBAC evaluation engine. It evaluates permission checks
@@ -180,31 +188,49 @@ func (s *Service) CheckBatch(ctx context.Context, reqs []CheckRequest) ([]CheckR
 	return s.checkBatchOptimized(ctx, reqs)
 }
 
-// FilterAuthorized returns only the resource IDs the subject can access, via
-// CheckBatch.
+// FilterAuthorized returns only the resource IDs the subject can access, as ONE
+// SET evaluation of the permission (evaluateSet) rather than N independent
+// Checks: one store read per (branch, hop) over the whole candidate set instead
+// of one per (candidate, branch, hop). The answers are the ones N sequential
+// Checks give — see evaluateSet for the exact parity contract and the two
+// budget dimensions where one set evaluation is deliberately more conservative
+// than N per-decision budgets.
+//
+// The output preserves the CALLER's order and multiplicity: it is resourceIDs
+// filtered in place, so a repeated input id repeats in the output exactly as it
+// did when this ran through CheckBatch. Refusals keep their order too — the
+// MaxBatchSize ceiling is charged before any validation, and validation before
+// any store call.
 func (s *Service) FilterAuthorized(ctx context.Context, principal PrincipalRef, permission, resourceType string, resourceIDs []string) ([]string, error) {
 	if len(resourceIDs) == 0 {
 		return nil, nil
 	}
-
-	reqs := make([]CheckRequest, len(resourceIDs))
-	for i, id := range resourceIDs {
-		reqs[i] = CheckRequest{
+	if len(resourceIDs) > s.limits.MaxBatchSize {
+		return nil, ErrEvaluationLimit
+	}
+	for _, id := range resourceIDs {
+		req := CheckRequest{
 			Principal:  principal,
 			Permission: permission,
 			Resource:   Resource{Type: resourceType, ID: id},
 		}
-	}
-
-	results, err := s.CheckBatch(ctx, reqs)
-	if err != nil {
-		return nil, err
+		if err := req.Validate(); err != nil {
+			return nil, err
+		}
 	}
 
 	allowed := make([]string, 0, len(resourceIDs))
-	for i, result := range results {
-		if result.Allowed {
-			allowed = append(allowed, resourceIDs[i])
+	if len(s.compiled.permissionChecks(resourceType, permission)) == 0 {
+		return allowed, nil // no rules defined: every candidate denies, no store call
+	}
+
+	decided, err := s.evaluateSet(ctx, principal, permission, resourceType, distinctSorted(resourceIDs), newBudget(s.limits, newMemoReader(s.store)))
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range resourceIDs {
+		if decided[id] {
+			allowed = append(allowed, id)
 		}
 	}
 	return allowed, nil

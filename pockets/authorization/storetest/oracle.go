@@ -164,6 +164,24 @@ func runParity(t *testing.T, newRepos func(t *testing.T) authorization.Repositor
 		}
 	})
 
+	t.Run("FilterCheckOracle", func(t *testing.T) {
+		// The SET decision over the same universe: FilterAuthorized answers a
+		// whole candidate list in ONE evaluation (authorization-batch-decision),
+		// and must return exactly the ids Check allows one at a time. The
+		// candidate lists include a doc AND its hierarchy ancestors, so a set walk
+		// that mistook a fellow candidate for an in-progress frame fails here.
+		repos := newRepos(t)
+		mustCreate(t, repos.Relationships, oracleFixture()...)
+		svc := newOracleService(t, repos, generousLimits())
+
+		universe := oracleUniverse()
+		for _, principal := range oraclePrincipals() {
+			for _, resourceType := range []string{"doc", "org"} {
+				assertFilterCheckParity(t, ctx, svc, principal, "view", resourceType, universe[resourceType])
+			}
+		}
+	})
+
 	t.Run("D1cOrgSeededDescendants", func(t *testing.T) {
 		// The pointed D1(c) closure: a self-hierarchy root reachable ONLY via a
 		// non-self Through still expands its descendants in LookupResources.
@@ -281,4 +299,37 @@ func newOracleService(t *testing.T, repos authorization.Repositories, limits aut
 		t.Fatalf("NewService: %v", err)
 	}
 	return comps.Service
+}
+
+// assertFilterCheckParity proves the SET decision equals the per-resource one:
+// FilterAuthorized over the whole universe returns exactly the ids Check
+// allows, in the caller's order, with no extra and none missing.
+func assertFilterCheckParity(t *testing.T, ctx context.Context, svc *authorization.Service, principal authorization.PrincipalRef, permission, resourceType string, ids []string) {
+	t.Helper()
+
+	var want []string
+	for _, id := range ids {
+		res, err := svc.Check(ctx, authorization.CheckRequest{
+			Principal: principal, Permission: permission, Resource: authorization.Resource{Type: resourceType, ID: id},
+		})
+		if err != nil {
+			t.Fatalf("Check(%s %s:%s): %v", principal.ID, resourceType, id, err)
+		}
+		if res.Allowed {
+			want = append(want, id)
+		}
+	}
+
+	got, err := svc.FilterAuthorized(ctx, principal, permission, resourceType, ids)
+	if err != nil {
+		t.Fatalf("FilterAuthorized(%s, %s): %v", principal.ID, resourceType, err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("FilterAuthorized(%s, %s) = %v, want the Check-allowed ids %v", principal.ID, resourceType, got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("FilterAuthorized(%s, %s) = %v, want the Check-allowed ids %v (in the caller's order)", principal.ID, resourceType, got, want)
+		}
+	}
 }

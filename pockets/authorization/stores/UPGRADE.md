@@ -190,6 +190,44 @@ Two disjoint paths follow, and a host takes exactly one:
 
 ---
 
+## Store-port note (next tags, core + stores pgx + turso, plan `authorization-batch-decision`)
+
+**`relationship.Storer` gains two SET reads. No migration** — the `0005` keyset
+index already serves them.
+
+```go
+FilterRelation(ctx, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) ([]string, error)
+RelationTargetsFor(ctx, resourceType string, resourceIDs []string, relation string) (map[string][]RelationTarget, error)
+```
+
+- They are the SET forms of `CheckRelationWithGroupExpansion` and
+  `GetRelationTargets`: one read per (branch, hop) over a whole candidate set
+  instead of one per (candidate, branch, hop). The engine's `FilterAuthorized`
+  (and therefore every `FilterPage` pull) is now one set evaluation built on
+  them; `Check` and `CheckBatch` still use the per-resource pair.
+- `FilterRelation` returns DISTINCT ids, sorted ascending in **BYTE order**, a
+  **SUBSET** of the input, with the same expansion bound and the same
+  `relationship.ErrExpansionBudgetExceeded` overflow the per-resource check
+  raises. `RelationTargetsFor` omits an id that has no targets; userset targets
+  are returned as stored. Empty input is an empty result and **no store call**.
+- **No id-count ceiling in the port.** The candidate set is bounded by the
+  caller (`MaxBatchSize`). A store whose dialect bounds statement parameters
+  chunks internally and merges; it never rejects an id list and never returns a
+  partial answer.
+- **A host that implements the port itself** must add both methods before
+  repinning the core. The shared `storetest` suite carries the
+  `Relationship/SetReads` family, which proves the set reads agree with the
+  per-resource ones id for id (group expansion included); run it.
+
+What the bundled stores do: **pgx** binds the id set as one `text[]`
+(`resource_id = ANY(@resource_ids)`) — no chunking, `COLLATE "C"` pinned per
+query as on the keyset lookups, and the `0005` index
+`(resource_type, relation, resource_id COLLATE "C")` serves both the equality
+columns and the ordered output. **turso** binds ids positionally, so it chunks
+at **500 ids per statement** and merges; ids are sorted and de-duplicated before
+chunking, so the chunks cover disjoint ascending ranges and their concatenation
+is already the sorted, distinct answer.
+
 ## 1. Before you start — is this an upgrade at all?
 
 Re-confirm the pre-tag posture. The canonical `0001`–`0004` migrations are the

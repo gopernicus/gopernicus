@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -302,6 +304,168 @@ SELECT cnt.n, m.rid FROM cnt LEFT JOIN matches m ON 1=1`
 		return nil, relationship.ErrExpansionBudgetExceeded
 	}
 	return out, nil
+}
+
+// maxSetReadIDs bounds the candidate ids ONE set-read statement binds. libSQL
+// binds each id as a positional parameter, so an unchunked `IN (…)` over a
+// full-size candidate set would push a statement toward the dialect's
+// bind-parameter ceiling (and its expression-depth limit) as the candidate set
+// grows. The set reads therefore CHUNK internally and merge — the port forbids
+// rejecting an id list, and chunking is invisible in the answer: the ids are
+// sorted and de-duplicated before chunking, so the chunks cover disjoint,
+// ascending ranges and their concatenation is already the distinct, byte-order
+// sorted output the port promises. The pgx sibling binds one text[] and needs no
+// chunk; both answer identically, which storetest's SetReads family proves.
+const maxSetReadIDs = 500
+
+// setReadIDs folds a candidate list to the DISTINCT ids in byte order — the
+// canonical shape the chunked set reads walk, and the shape whose chunks
+// concatenate into a sorted, distinct answer.
+func setReadIDs(resourceIDs []string) []string {
+	out := make([]string, len(resourceIDs))
+	copy(out, resourceIDs)
+	sort.Strings(out)
+	return slices.Compact(out)
+}
+
+// FilterRelation returns the DISTINCT, byte-order sorted subset of resourceIDs
+// the subject holds relation on, with group expansion — the set form of
+// CheckRelationWithGroupExpansion, one statement per chunk of at most
+// maxSetReadIDs ids. SQLite's default BINARY collation IS byte order, so the
+// ORDER BY needs no collation pin (its pgx sibling pins COLLATE "C" to reach the
+// same order).
+//
+// maxExpansionStates bounds the shared subject expansion (boundedReachableCTE);
+// overflow in ANY chunk returns relationship.ErrExpansionBudgetExceeded for the
+// whole call, never a short list. maxExpansionStates <= 0 uses the unbounded
+// reachableCTE.
+func (s *relationshipStore) FilterRelation(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) ([]string, error) {
+	ids := setReadIDs(resourceIDs)
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var out []string
+	for start := 0; start < len(ids); start += maxSetReadIDs {
+		chunk := ids[start:min(start+maxSetReadIDs, len(ids))]
+		matched, err := s.filterRelationChunk(ctx, resourceType, chunk, relation, subjectType, subjectID, maxExpansionStates)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, matched...)
+	}
+	return out, nil
+}
+
+// filterRelationChunk answers FilterRelation for ONE bind-safe chunk of sorted
+// candidate ids.
+func (s *relationshipStore) filterRelationChunk(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) ([]string, error) {
+	if maxExpansionStates <= 0 {
+		args := []any{subjectType, subjectID, resourceType, relation}
+		for _, id := range resourceIDs {
+			args = append(args, id)
+		}
+		query := reachableCTE + `
+SELECT DISTINCT r.resource_id
+FROM iam_relationships r
+JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
+WHERE r.resource_type = ? AND r.relation = ? AND r.resource_id IN ` + inClause(len(resourceIDs)) + `
+ORDER BY r.resource_id`
+		return queryStrings(ctx, s.db.QuerierFrom(ctx), query, args...)
+	}
+
+	// The distinct-state count rides every result row via the cnt cross-join, so
+	// overflow is detectable even when no resource matches (zero match rows) —
+	// the same shape CheckBatchDirect uses.
+	args := []any{subjectType, subjectID, maxExpansionStates, maxExpansionStates + 1, resourceType, relation}
+	for _, id := range resourceIDs {
+		args = append(args, id)
+	}
+	query := boundedReachableCTE + `,
+cnt AS (SELECT count(*) AS n FROM capped),
+matches AS (
+	SELECT DISTINCT r.resource_id AS rid
+	FROM iam_relationships r
+	JOIN capped ON r.subject_type = capped.atype AND r.subject_id = capped.aid AND r.subject_relation = capped.arelation
+	WHERE r.resource_type = ? AND r.relation = ? AND r.resource_id IN ` + inClause(len(resourceIDs)) + `
+)
+SELECT cnt.n, m.rid FROM cnt LEFT JOIN matches m ON 1=1 ORDER BY m.rid`
+
+	rows, err := s.db.QuerierFrom(ctx).Query(ctx, query, args...)
+	if err != nil {
+		return nil, tursodb.MapError(err)
+	}
+	defer rows.Close()
+
+	overflow := false
+	var out []string
+	for rows.Next() {
+		var stateCount int
+		var rid *string
+		if err := rows.Scan(&stateCount, &rid); err != nil {
+			return nil, tursodb.MapError(err)
+		}
+		if stateCount > maxExpansionStates {
+			overflow = true
+		}
+		if rid != nil {
+			out = append(out, *rid)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, tursodb.MapError(err)
+	}
+	if overflow {
+		return nil, relationship.ErrExpansionBudgetExceeded
+	}
+	return out, nil
+}
+
+// RelationTargetsFor returns the subjects holding relation on each of
+// resourceIDs — the set form of GetRelationTargets, one statement per chunk of
+// at most maxSetReadIDs ids, merged into one map. An id with no targets is
+// absent from the map; a duplicated input id carries one entry.
+func (s *relationshipStore) RelationTargetsFor(ctx context.Context, resourceType string, resourceIDs []string, relation string) (map[string][]relationship.RelationTarget, error) {
+	ids := setReadIDs(resourceIDs)
+	out := make(map[string][]relationship.RelationTarget, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	for start := 0; start < len(ids); start += maxSetReadIDs {
+		chunk := ids[start:min(start+maxSetReadIDs, len(ids))]
+		if err := s.relationTargetsForChunk(ctx, resourceType, chunk, relation, out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// relationTargetsForChunk reads ONE bind-safe chunk into the accumulating map.
+func (s *relationshipStore) relationTargetsForChunk(ctx context.Context, resourceType string, resourceIDs []string, relation string, out map[string][]relationship.RelationTarget) error {
+	args := []any{resourceType, relation}
+	for _, id := range resourceIDs {
+		args = append(args, id)
+	}
+	query := `SELECT resource_id, subject_type, subject_id, subject_relation FROM iam_relationships
+WHERE resource_type = ? AND relation = ? AND resource_id IN ` + inClause(len(resourceIDs))
+
+	rows, err := s.db.QuerierFrom(ctx).Query(ctx, query, args...)
+	if err != nil {
+		return tursodb.MapError(err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var resourceID, subjectType, subjectID, subjectRelation string
+		if err := rows.Scan(&resourceID, &subjectType, &subjectID, &subjectRelation); err != nil {
+			return tursodb.MapError(err)
+		}
+		out[resourceID] = append(out[resourceID], relationship.RelationTarget{
+			Type:     subjectType,
+			ID:       subjectID,
+			Relation: subjectRelation,
+		})
+	}
+	return tursodb.MapError(rows.Err())
 }
 
 // CreateRelationships inserts a batch as one multi-row INSERT ... ON CONFLICT DO

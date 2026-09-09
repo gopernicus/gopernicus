@@ -337,6 +337,10 @@ func runRelationshipContracts(t *testing.T, newRepos func(t *testing.T) authoriz
 		}
 	})
 
+	t.Run("SetReads", func(t *testing.T) {
+		runRelationshipSetReads(t, newRepos)
+	})
+
 	t.Run("LookupKeyset", func(t *testing.T) {
 		runRelationshipKeyset(t, newRepos)
 	})

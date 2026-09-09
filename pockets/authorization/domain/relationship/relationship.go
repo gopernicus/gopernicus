@@ -224,7 +224,7 @@ type ResourceRelationshipFilter struct {
 	Relation    *string // filter to a specific relation (e.g. "owner")
 }
 
-// Storer is the storage contract for the relationship kind — the full 16-method
+// Storer is the storage contract for the relationship kind — the full 18-method
 // surface the engine needs for permission checks, tuple CRUD, direct counts,
 // listing, and resource lookup. It is intentionally lean: business logic
 // (last-owner guards, role-change validation) lives on the engine, not the
@@ -262,6 +262,22 @@ type ResourceRelationshipFilter struct {
 // unbounded; the engine always passes a positive cap. The other engine budget
 // dimensions (Through depth, distinct graph states, per-hop fan-out, batch
 // size) are engine-scoped and are not threaded here.
+//
+// # Set reads (authorization-batch-decision, S1)
+//
+// FilterRelation and RelationTargetsFor are the SET forms of the two
+// permission-walk reads: one read per (branch, hop) over a whole candidate set
+// instead of one per (candidate, branch, hop). They answer EXACTLY what a loop
+// over their per-resource siblings answers — same expansion, same userset
+// exactness, same bounding sentinel — so a store proves them by parity against
+// CheckRelationWithGroupExpansion / GetRelationTargets in storetest.
+//
+// The candidate set is bounded by the CALLER (the engine passes at most
+// MaxBatchSize ids), so the port declares no id-count ceiling of its own. A
+// store whose dialect bounds the parameters of one statement CHUNKS internally
+// and merges the chunks — it never rejects an id list and never returns a
+// partial answer. Chunking is invisible: the output contract (distinct, byte
+// order, subset) holds over the whole input.
 //
 // The listing methods are crud-typed (design §9): a crud.ListRequest in, a
 // crud.Page[T] out. Ordering is contractual — created_at DESC, relationship_id
@@ -302,6 +318,26 @@ type Storer interface {
 	// GetRelationTargets returns all subjects holding a specific relation on a
 	// resource. Used for "through" permission traversal.
 	GetRelationTargets(ctx context.Context, resourceType, resourceID, relation string) ([]RelationTarget, error)
+
+	// FilterRelation reports WHICH of resourceIDs carry relation for the subject,
+	// directly or through exact userset (group) expansion — the SET form of
+	// CheckRelationWithGroupExpansion, answered in ONE read (see the Set reads
+	// note above). Output is DISTINCT, sorted ascending in BYTE order, and a
+	// SUBSET of resourceIDs; a duplicated input id appears at most once. An empty
+	// resourceIDs is an empty result and NO store call. maxExpansionStates bounds
+	// the shared subject expansion exactly as it bounds the per-resource method:
+	// exceeding it returns ErrExpansionBudgetExceeded — never a short list.
+	// maxExpansionStates <= 0 means unbounded.
+	FilterRelation(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) ([]string, error)
+
+	// RelationTargetsFor returns, for each of resourceIDs, the subjects holding
+	// relation on it — the SET form of GetRelationTargets, answered in ONE read
+	// (see the Set reads note above). An id with NO targets is ABSENT from the
+	// map (a missing key reads as the nil slice callers range over), and a
+	// duplicated input id carries one entry. An empty resourceIDs is an empty map
+	// and NO store call. Userset targets are returned as stored; the permission
+	// walk skips them.
+	RelationTargetsFor(ctx context.Context, resourceType string, resourceIDs []string, relation string) (map[string][]RelationTarget, error)
 
 	// CheckRelationExists reports whether a specific direct relationship tuple
 	// exists for a CONCRETE subject (no expansion; a stored userset tuple with the

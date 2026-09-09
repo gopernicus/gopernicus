@@ -29,6 +29,11 @@ type fakeStore struct {
 	targetsCalls map[string]int
 	directCalls  map[string]int
 	lookupCalls  int
+	// Set-read counters: ONE per FilterRelation / RelationTargetsFor call,
+	// whatever the size of the candidate set — the number the set evaluation's
+	// cost claim is about.
+	setDirectCalls  int
+	setTargetsCalls int
 }
 
 func targetsCallKey(resourceType, resourceID, relation string) string {
@@ -46,6 +51,18 @@ func (f *fakeStore) count(m *map[string]int, key string) {
 		*m = make(map[string]int)
 	}
 	(*m)[key]++
+}
+
+func (f *fakeStore) countSet(n *int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	*n++
+}
+
+func (f *fakeStore) setReads() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.setDirectCalls + f.setTargetsCalls
 }
 
 func (f *fakeStore) countLookup() {
@@ -85,6 +102,42 @@ func (f *fakeStore) GetRelationTargets(ctx context.Context, resourceType, resour
 	for _, t := range f.tuples {
 		if t.ResourceType == resourceType && t.ResourceID == resourceID && t.Relation == relation {
 			out = append(out, relationship.RelationTarget{Type: t.SubjectType, ID: t.SubjectID, Relation: t.SubjectRelation})
+		}
+	}
+	return out, nil
+}
+
+// FilterRelation is the SET form of the direct check: ONE counted read for the
+// whole candidate set, answered over the same direct-match scan.
+func (f *fakeStore) FilterRelation(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) ([]string, error) {
+	if len(resourceIDs) == 0 {
+		return nil, nil
+	}
+	f.countSet(&f.setDirectCalls)
+	var out []string
+	for _, id := range distinctSorted(resourceIDs) {
+		if f.match(resourceType, id, relation, subjectType, subjectID) {
+			out = append(out, id)
+		}
+	}
+	return out, nil
+}
+
+// RelationTargetsFor is the SET form of the Through-hop read: ONE counted read
+// for the whole candidate set.
+func (f *fakeStore) RelationTargetsFor(ctx context.Context, resourceType string, resourceIDs []string, relation string) (map[string][]relationship.RelationTarget, error) {
+	out := make(map[string][]relationship.RelationTarget, len(resourceIDs))
+	if len(resourceIDs) == 0 {
+		return out, nil
+	}
+	f.countSet(&f.setTargetsCalls)
+	want := make(map[string]bool, len(resourceIDs))
+	for _, id := range resourceIDs {
+		want[id] = true
+	}
+	for _, t := range f.tuples {
+		if t.ResourceType == resourceType && t.Relation == relation && want[t.ResourceID] {
+			out[t.ResourceID] = append(out[t.ResourceID], relationship.RelationTarget{Type: t.SubjectType, ID: t.SubjectID, Relation: t.SubjectRelation})
 		}
 	}
 	return out, nil

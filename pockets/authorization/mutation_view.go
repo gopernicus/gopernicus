@@ -77,3 +77,17 @@ func (r viewReader) GetRelationTargets(ctx context.Context, resourceType, resour
 	scope := mutation.ScopeKey{Kind: mutation.ScopeResource, Type: resourceType, ID: resourceID}
 	return r.view.RelationTargets(ctx, scope, relation)
 }
+
+// FilterRelation and RelationTargetsFor complete the PermissionReader port over
+// a view that has only per-resource primitives. The guarded mutation path
+// evaluates ONE resource's permission (CheckPermission → EvaluateWith → Check),
+// never a candidate SET, so these are never on its hot path; they fan out over
+// the same recorded reads so a caller that did reach them would still get the
+// view's dependency tracking and the port's output contract.
+func (r viewReader) FilterRelation(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) ([]string, error) {
+	return authorizersvc.FilterRelationOver(ctx, r, resourceType, resourceIDs, relation, subjectType, subjectID, maxExpansionStates)
+}
+
+func (r viewReader) RelationTargetsFor(ctx context.Context, resourceType string, resourceIDs []string, relation string) (map[string][]relationship.RelationTarget, error) {
+	return authorizersvc.RelationTargetsForOver(ctx, r, resourceType, resourceIDs, relation)
+}
