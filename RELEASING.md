@@ -536,9 +536,9 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
-### pockets/authorization — next tag (+ stores/pgx, stores/turso — next tags): `FilterAuthorized` decides the candidate SET in one evaluation (minor; BREAKING store port; no schema)
+### pockets/authorization — v0.12.0 @ `1439407` (+ stores/pgx v0.7.0, stores/turso v0.6.0 @ `340f6f2`) — tagged 2026-09-09: `FilterAuthorized` decides the candidate SET in one evaluation (minor; BREAKING store port; no schema)
 
-Plan of record `.claude/plans/authorization-batch-decision.md` (originating host
+Plan of record `plans/authorization-batch-decision.md` (originating host
 segovia v2, `v2-tenancy.md` leg 6.3 / O13: the owner's ruling "upstream should
 support batch lookups on B" after a DENIED check was measured at ~60–80 ms
 against pgx, making a sparse container page of 300 candidates take ~18 s). ONE
