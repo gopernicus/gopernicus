@@ -4,12 +4,12 @@
 # directive in pockets/cms/views/goth/go.mod (where the .templ sources live),
 # so `go tool templ` is reproducible.
 
-MODULES = sdk integrations/cryptids/bcrypt integrations/cryptids/golang-jwt integrations/cryptids/google-uuid integrations/datastores/pgxdb integrations/datastores/turso integrations/datastores/firestore integrations/email/sendgrid integrations/filestorage/gcs integrations/filestorage/s3 integrations/kvstores/goredis integrations/notify/mailer integrations/oauth/github integrations/oauth/google integrations/scheduling/robfig-cron integrations/tracing/otel pockets/authentication pockets/authentication/stores/pgx pockets/authentication/stores/turso pockets/authentication/views/goth pockets/authorization pockets/authorization/stores/pgx pockets/authorization/stores/turso pockets/cms pockets/cms/stores/pgx pockets/cms/stores/turso pockets/cms/views/goth pockets/events pockets/events/stores/pgx pockets/events/stores/turso pockets/jobs pockets/jobs/stores/pgx pockets/jobs/stores/turso ui/goth examples/auth-cms examples/cms examples/goth-showcase examples/jobs-minimal examples/minimal workshop/gopernicus
+MODULES = sdk integrations/cryptids/bcrypt integrations/cryptids/golang-jwt integrations/cryptids/google-uuid integrations/datastores/pgxdb integrations/datastores/turso integrations/datastores/firestore integrations/email/sendgrid integrations/filestorage/gcs integrations/filestorage/s3 integrations/kvstores/goredis integrations/notify/mailer integrations/oauth/github integrations/oauth/google integrations/scheduling/robfig-cron integrations/tracing/otel pockets/authentication pockets/authentication/stores/pgx pockets/authentication/stores/turso pockets/authentication/views/goth pockets/authorization pockets/authorization/stores/pgx pockets/authorization/stores/turso pockets/authorization/stores/firestore pockets/cms pockets/cms/stores/pgx pockets/cms/stores/turso pockets/cms/views/goth pockets/events pockets/events/stores/pgx pockets/events/stores/turso pockets/jobs pockets/jobs/stores/pgx pockets/jobs/stores/turso ui/goth examples/auth-cms examples/cms examples/goth-showcase examples/jobs-minimal examples/minimal workshop/gopernicus
 
 # STORE_MODULES carry env-gated live conformance suites (storetest against a real
 # database). `make check`/`make test` run them hermetically (loud skips); `make
 # test-stores` runs them EXPECTING the datastore env vars set.
-STORE_MODULES = pockets/cms/stores/pgx pockets/cms/stores/turso pockets/authentication/stores/pgx pockets/authentication/stores/turso pockets/jobs/stores/pgx pockets/jobs/stores/turso pockets/events/stores/pgx pockets/events/stores/turso pockets/authorization/stores/pgx pockets/authorization/stores/turso
+STORE_MODULES = pockets/cms/stores/pgx pockets/cms/stores/turso pockets/authentication/stores/pgx pockets/authentication/stores/turso pockets/jobs/stores/pgx pockets/jobs/stores/turso pockets/events/stores/pgx pockets/events/stores/turso pockets/authorization/stores/pgx pockets/authorization/stores/turso pockets/authorization/stores/firestore
 
 # INTEGRATION_TAG_MODULES carry `-tags=integration` sources `make check` must keep
 # COMPILING even though they never RUN without their datastore env: the turso (and,
@@ -60,10 +60,10 @@ test:
 # the datastore env vars set (vs `make check`/`make test`, which skip loudly and
 # stay hermetic). It fails loudly if POSTGRES_TEST_DSN is unset — this milestone's
 # proof is the live postgres run. The turso leg is `-tags=integration` and skips
-# loudly without TURSO_DATABASE_URL/TURSO_AUTH_TOKEN. The firestore connector leg
-# is `-tags=integration` too and skips loudly without FIRESTORE_EMULATOR_HOST;
-# its live-project leg is CI-only (live-stores.yml), since it needs a disposable
-# GCP database.
+# loudly without TURSO_DATABASE_URL/TURSO_AUTH_TOKEN. The firestore connector and
+# pocket-store legs are `-tags=integration` too and skip loudly without
+# FIRESTORE_EMULATOR_HOST; their live-project legs are CI-only (live-stores.yml),
+# since they need a disposable GCP database.
 #
 # Spin a local postgres and a Firestore emulator, then run:
 #   docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17
@@ -115,6 +115,9 @@ test-stores:
 	@echo "== integrations/datastores/firestore (emulator, -tags=integration) =="
 	@if [ -z "$$FIRESTORE_EMULATOR_HOST" ]; then echo "   FIRESTORE_EMULATOR_HOST not set — the emulator cases SKIP loudly (Firestore emulator conformance NOT verified)"; fi
 	@cd integrations/datastores/firestore && go test -tags=integration -count=1 -timeout 15m ./...
+	@echo "== pockets/authorization/stores/firestore (emulator, -tags=integration) =="
+	@if [ -z "$$FIRESTORE_EMULATOR_HOST" ]; then echo "   FIRESTORE_EMULATOR_HOST not set — the emulator cases SKIP loudly (Firestore emulator conformance NOT verified)"; fi
+	@cd pockets/authorization/stores/firestore && go test -tags=integration -count=1 -timeout 30m ./...
 
 # test-ui-browser runs the ui/goth three-engine Playwright + axe harness
 # (Chromium, Firefox, WebKit) against the zero-datastore examples/goth-showcase
