@@ -1,0 +1,209 @@
+package firestore
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+
+	"google.golang.org/api/iterator"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	"github.com/gopernicus/gopernicus/sdk"
+)
+
+// The vendor client reports a handful of client-side misuses as PLAIN errors
+// (errors.New, no gRPC status), so string equality is the only handle on them.
+// They are the exact values from cloud.google.com/go/firestore v1.25.0
+// transaction.go:116-119; a vendor bump that reworded them turns the mapping
+// silently generic, which is why MapError has a test row per constant.
+const (
+	vendorReadAfterWrite    = "firestore: read after write in transaction"
+	vendorWriteReadOnly     = "firestore: write in read-only transaction"
+	vendorNestedTransaction = "firestore: nested transaction"
+	vendorInvalidReadTime   = "firestore: ReadTime cannot be set via WithReadOptions on a Transaction"
+)
+
+// indexConsoleHost is the host of the index-creation link the server puts in a
+// missing-index FAILED_PRECONDITION message. Together with "index" it is the
+// second recognizer for messages that do not use the "requires an index"
+// phrasing (single-field and still-building variants word it differently).
+const indexConsoleHost = "https://console.firebase.google.com"
+
+// requiresIndexPhrase is the server's canonical missing-composite-index wording:
+// "The query requires an index. You can create it here: <url>".
+const requiresIndexPhrase = "requires an index"
+
+var (
+	// ErrMissingIndex reports a query the target database has no usable index
+	// for — either none is defined or it is still building. It wraps
+	// sdk.ErrUnavailable because the query is not wrong, the database is not
+	// ready to answer it; deploying the index manifest fixes it. Every
+	// *MissingIndexError matches it, so callers can errors.Is without naming
+	// the type. ProbeIndexes (C5) reports missing indexes with the same sentinel.
+	ErrMissingIndex = fmt.Errorf("firestore: query requires an index that does not exist or is not READY: %w", sdk.ErrUnavailable)
+
+	// ErrReadAfterWrite reports the vendor's reads-before-writes rule: inside a
+	// transaction, no read may follow a write. It is a programming error in the
+	// callback (restructure it to read everything first), not a runtime
+	// condition, hence sdk.ErrInvalidInput.
+	ErrReadAfterWrite = fmt.Errorf("firestore: read after write in a transaction — all reads must precede all writes: %w", sdk.ErrInvalidInput)
+
+	// ErrWriteInReadOnlyTransaction reports a write attempted inside a read-only
+	// transaction — the mechanism that keeps ReadSnapshot write-free by
+	// construction. Also a programming error.
+	ErrWriteInReadOnlyTransaction = fmt.Errorf("firestore: write inside a read-only transaction: %w", sdk.ErrInvalidInput)
+
+	// ErrCountInTransaction reports Count called on a transactional Reader.
+	// Firestore's Go client offers no transaction-guarded aggregation: the
+	// AggregationQuery.Transaction escape hatch skips the reads-before-writes
+	// check the rest of the transaction surface enforces, so a count issued
+	// after a write inside a transaction would silently break the transaction's
+	// own contract. A store that needs a count under a snapshot iterates the
+	// query through the transactional Reader instead (C-D3).
+	ErrCountInTransaction = fmt.Errorf("firestore: Count is unavailable inside a transaction — iterate the query through the transactional Reader: %w", sdk.ErrInvalidInput)
+)
+
+// MissingIndexError carries the server's missing-index diagnosis verbatim: the
+// full FAILED_PRECONDITION message and, when the server supplied one, the
+// console URL that creates the index. It is deliberately a value a host can log
+// or surface to an operator — retyping the URL by hand is how index deployments
+// go wrong.
+type MissingIndexError struct {
+	// Message is the server's FAILED_PRECONDITION message, unmodified.
+	Message string
+	// URL is the index-creation link the server embedded, unmodified. Empty
+	// when the message carried none (a still-building index sometimes omits it).
+	URL string
+}
+
+// Error names the condition and repeats the server's own message.
+func (e *MissingIndexError) Error() string {
+	if e.URL != "" {
+		return fmt.Sprintf("firestore: query requires an index that does not exist or is not READY: %s (create it: %s)", e.Message, e.URL)
+	}
+	return fmt.Sprintf("firestore: query requires an index that does not exist or is not READY: %s", e.Message)
+}
+
+// Unwrap chains to ErrMissingIndex, which itself wraps sdk.ErrUnavailable — so
+// both errors.Is checks hold on one linear chain.
+func (e *MissingIndexError) Unwrap() error { return ErrMissingIndex }
+
+// MapError translates a Firestore error into the sdk sentinel vocabulary the
+// pockets' ports are written against (C-D5). It is the ONLY place vendor error
+// shapes are interpreted: every Reader/Writer method returns through it, and a
+// store maps its own iterator errors with it at the iteration boundary.
+//
+// The mapping:
+//
+//	NotFound                                     → sdk.ErrNotFound
+//	AlreadyExists                                → sdk.ErrAlreadyExists
+//	Aborted (transaction retries exhausted)      → sdk.ErrConflict
+//	FailedPrecondition, missing index            → *MissingIndexError (ErrMissingIndex → sdk.ErrUnavailable)
+//	FailedPrecondition, otherwise                → sdk.ErrConflict
+//	InvalidArgument                              → sdk.ErrInvalidInput
+//	DeadlineExceeded, Unavailable, ResourceExhausted → sdk.ErrUnavailable
+//	PermissionDenied                             → sdk.ErrForbidden
+//	Unauthenticated                              → sdk.ErrUnauthorized
+//	read after write / write in a read-only tx   → the connector sentinels above
+//	nested transaction / invalid read time       → sdk.ErrInvalidInput
+//
+// Three inputs pass through byte-identical, on purpose:
+//
+//   - nil, so callers can map unconditionally;
+//   - iterator.Done, which the iterating caller CONSUMES as its loop terminator
+//     and must never see rewritten into a port error;
+//   - anything that already carries an sdk sentinel — a store's own domain error
+//     handed back through a helper, or a value MapError already produced. That
+//     makes MapError idempotent.
+//
+// Anything else is returned wrapped with a "firestore:" prefix and NO sentinel,
+// so an unrecognized failure surfaces as a 500 rather than being flattened into
+// a plausible-looking domain outcome.
+func MapError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, iterator.Done) {
+		return err
+	}
+	if sdk.IsExpected(err) {
+		return err
+	}
+
+	if mapped := mapVendorError(err); mapped != nil {
+		return mapped
+	}
+
+	st, ok := status.FromError(err)
+	if !ok {
+		return fmt.Errorf("firestore: %w", err)
+	}
+	msg := st.Message()
+	switch st.Code() {
+	case codes.NotFound:
+		return fmt.Errorf("firestore: %s: %w", msg, sdk.ErrNotFound)
+	case codes.AlreadyExists:
+		return fmt.Errorf("firestore: %s: %w", msg, sdk.ErrAlreadyExists)
+	case codes.Aborted:
+		return fmt.Errorf("firestore: %s: %w", msg, sdk.ErrConflict)
+	case codes.FailedPrecondition:
+		if isMissingIndex(msg) {
+			return &MissingIndexError{Message: msg, URL: indexURL(msg)}
+		}
+		return fmt.Errorf("firestore: %s: %w", msg, sdk.ErrConflict)
+	case codes.InvalidArgument:
+		return fmt.Errorf("firestore: %s: %w", msg, sdk.ErrInvalidInput)
+	case codes.DeadlineExceeded, codes.Unavailable, codes.ResourceExhausted:
+		return fmt.Errorf("firestore: %s: %w", msg, sdk.ErrUnavailable)
+	case codes.PermissionDenied:
+		return fmt.Errorf("firestore: %s: %w", msg, sdk.ErrForbidden)
+	case codes.Unauthenticated:
+		return fmt.Errorf("firestore: %s: %w", msg, sdk.ErrUnauthorized)
+	}
+	return fmt.Errorf("firestore: %w", err)
+}
+
+// mapVendorError recognizes the vendor's plain (non-status) client-side errors,
+// returning nil when err is none of them.
+func mapVendorError(err error) error {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, vendorReadAfterWrite):
+		return ErrReadAfterWrite
+	case strings.Contains(msg, vendorWriteReadOnly):
+		return ErrWriteInReadOnlyTransaction
+	case strings.Contains(msg, vendorNestedTransaction):
+		return fmt.Errorf("firestore: %s: %w", msg, sdk.ErrInvalidInput)
+	case strings.Contains(msg, vendorInvalidReadTime):
+		return fmt.Errorf("firestore: %s: %w", msg, sdk.ErrInvalidInput)
+	}
+	return nil
+}
+
+// isMissingIndex reports whether a FAILED_PRECONDITION message is the server's
+// "no usable index" diagnosis. Two recognizers: the canonical composite-index
+// phrasing, and the console link the server attaches to every index-related
+// variant (single-field, still-building) whose wording differs.
+func isMissingIndex(msg string) bool {
+	if strings.Contains(msg, requiresIndexPhrase) {
+		return true
+	}
+	return strings.Contains(msg, "index") && strings.Contains(msg, indexConsoleHost)
+}
+
+// indexURL extracts the console link from a missing-index message verbatim,
+// returning "" when there is none. The URL runs to the first whitespace; a
+// trailing sentence period is trimmed because the server sometimes ends the
+// sentence right after the link.
+func indexURL(msg string) string {
+	start := strings.Index(msg, indexConsoleHost)
+	if start < 0 {
+		return ""
+	}
+	url := msg[start:]
+	if end := strings.IndexAny(url, " \t\n\r"); end >= 0 {
+		url = url[:end]
+	}
+	return strings.TrimRight(url, ".")
+}

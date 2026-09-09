@@ -18,6 +18,28 @@
 // Firestore keeps the SQL connectors' shape and swaps the vocabulary: documents
 // and queries for statements, an index manifest for migrations, and a
 // transaction whose callback MAY RUN MORE THAN ONCE for BEGIN/COMMIT.
+//
+// # Mediation discipline
+//
+// DB.Collection and DB.Doc hand out the vendor's own *CollectionRef,
+// *DocumentRef and Query values, and those types carry their own I/O methods
+// (ref.Get, q.Documents, ref.Create). Holding one is NOT permission to use
+// them. A store issues every read and write through the Reader and Writer
+// returned by DB.ReaderFrom(ctx) / DB.WriterFrom(ctx); references and queries
+// are values to BUILD, never to execute. The reason is not tidiness: a direct
+// ref.Get inside a Transact callback runs on the client, outside the
+// transaction, and silently splits an atomic unit — the exact false green the
+// tx-aware surface exists to prevent, and one no import guard can see (G9 only
+// proves no Underlying()/Client() accessor exists).
+//
+// Two obligations follow the seam out to the caller, because the vendor's
+// iterator cannot be wrapped without losing its cursor:
+//
+//   - Stop every iterator Documents returns (defer it at the call site).
+//   - At the iteration boundary, treat iterator.Done as the loop terminator and
+//     pass every other Next error through MapError. Errors the transactional
+//     reader defers to Next — the read-after-write refusal among them — arrive
+//     nowhere else.
 package firestore
 
 import (
