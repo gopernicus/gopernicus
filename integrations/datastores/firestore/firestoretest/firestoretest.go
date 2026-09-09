@@ -11,6 +11,7 @@
 //     FIRESTORE_EMULATOR_HOST and skip loudly without it. Reset clears the whole
 //     selected database through the emulator's DELETE endpoint and REFUSES to
 //     run against anything that is not the emulator.
+//
 //   - OpenLive/ResetLive target a REAL Firestore database
 //     (FIRESTORE_LIVE_PROJECT_ID + FIRESTORE_LIVE_DATABASE_ID). They refuse an
 //     emulator endpoint and refuse the default database, and ResetLive deletes
@@ -21,6 +22,28 @@
 // Missing live configuration SKIPS an ordinary run loudly and FAILS it when
 // FIRESTORE_LIVE_REQUIRED=1 — the release gate, so a release train cannot pass
 // by silently skipping the only leg that proves production behavior.
+//
+// # The emulator isolation contract (read this before writing a store harness)
+//
+// Reset clears the WHOLE selected database — not a collection, not a fixture.
+// Two suites sharing a database therefore delete each other's rows, and the
+// failure is a flake ("a document that existed a moment ago is gone"), not an
+// error anyone can read. Two rules follow, and neither is optional:
+//
+//  1. Tests that call Open or Reset must NOT run in parallel with each other
+//     across packages. One emulator, one database, one clock — and go test runs
+//     different PACKAGES concurrently by default. Either give the package its
+//     own database (rule 2) or run those packages with -p 1.
+//  2. Every pocket store train opens its OWN database:
+//     OpenDatabase(t, "authorization") in pockets/authorization/stores/firestore,
+//     OpenDatabase(t, "authentication") in its authentication twin. The
+//     emulator serves named databases side by side and the clear endpoint is
+//     scoped to one of them, so the two store suites and this connector's own
+//     suite cannot clobber one another even when they run at the same time.
+//
+// Open itself stays on the database named by FIRESTORE_DATABASE_ID (the default
+// database when it is unset), which is what lets a CI job point a whole run at
+// one named database without editing a test.
 package firestoretest
 
 import (
@@ -43,6 +66,11 @@ const (
 	EmulatorHostEnv = "FIRESTORE_EMULATOR_HOST"
 	// ProjectEnv overrides the emulator project id.
 	ProjectEnv = "FIRESTORE_PROJECT_ID"
+	// DatabaseEnv selects the emulator database Open uses. Unset means the
+	// default database. It moves a whole run onto one named database without
+	// touching a test; OpenDatabase's explicit argument ignores it, because a
+	// suite that named its own database means it.
+	DatabaseEnv = "FIRESTORE_DATABASE_ID"
 	// LiveProjectEnv names the Google Cloud project holding the live test database.
 	LiveProjectEnv = "FIRESTORE_LIVE_PROJECT_ID"
 	// LiveDatabaseEnv names the run-owned database inside that project.
@@ -76,17 +104,33 @@ func EmulatorHost() (string, bool) {
 	return emulatorHost(os.Getenv(EmulatorHostEnv))
 }
 
-// Open opens the emulator's default database, skipping loudly when no emulator
-// is configured. The returned DB is closed by t.Cleanup.
+// Open opens the emulator database named by FIRESTORE_DATABASE_ID — the
+// default database when that is unset — skipping loudly when no emulator is
+// configured. The returned DB is closed by t.Cleanup.
+//
+// Everything Open returns SHARES one database with every other Open in the run,
+// so a suite that calls Reset must own its database instead: see the isolation
+// contract on the package, and call OpenDatabase(t, "<module-name>").
 func Open(t testing.TB) *firestore.DB {
 	t.Helper()
-	return OpenDatabase(t, "")
+	return OpenDatabase(t, EmulatorDatabase())
+}
+
+// EmulatorDatabase returns the database id Open selects: DatabaseEnv, or ""
+// (the default database) when it is unset.
+func EmulatorDatabase() string {
+	return emulatorDatabase(os.Getenv(DatabaseEnv))
 }
 
 // OpenDatabase opens a named database on the emulator, skipping loudly when no
-// emulator is configured. An empty databaseID selects the default database.
-// Named databases give two modules (or two packages) their own isolated
-// document space on one emulator, so a Reset in one cannot clear the other.
+// emulator is configured. An empty databaseID selects the default database, and
+// FIRESTORE_DATABASE_ID is NOT consulted — a caller that named a database is
+// asking for that one.
+//
+// This is the isolation seam: the emulator serves named databases side by side
+// and Reset's clear endpoint is scoped to one of them, so every pocket store
+// train opens its own — OpenDatabase(t, "authorization"),
+// OpenDatabase(t, "authentication") — and no suite can clear another's rows.
 func OpenDatabase(t testing.TB, databaseID string) *firestore.DB {
 	t.Helper()
 
@@ -122,6 +166,12 @@ func EmulatorProject() string {
 // endpoint (DELETE /emulator/v1/projects/{p}/databases/{d}/documents), scoped to
 // the database db is bound to. It is the emulator's own bulk delete: no
 // collection list to keep in sync, and no risk of a half-cleared fixture.
+//
+// WHOLE DATABASE. Not this test's collections, not this package's — every
+// document the database holds. A suite that resets shares that blast radius
+// with anything else pointed at the same database, so it either opens its own
+// (OpenDatabase(t, "<module-name>")) or runs without package-level parallelism.
+// See the isolation contract on the package.
 //
 // It REFUSES, loudly, if db is not an emulator client. That refusal is the
 // whole safety story of this function: the same call shape against a real
@@ -166,6 +216,14 @@ func emulatorHost(value string) (string, bool) {
 		value = rest
 	}
 	return strings.TrimSuffix(value, "/"), value != ""
+}
+
+// emulatorDatabase resolves the emulator database id from DatabaseEnv's value:
+// blank (or whitespace) means the default database, which firestore.Config
+// spells as an empty DatabaseID. Pure, so the selection is testable without an
+// emulator.
+func emulatorDatabase(value string) string {
+	return strings.TrimSpace(value)
 }
 
 // emulatorProject resolves the emulator project id from ProjectEnv's value.

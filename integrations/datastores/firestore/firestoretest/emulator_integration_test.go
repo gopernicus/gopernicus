@@ -8,12 +8,14 @@ package firestoretest_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/firestore"
 	"github.com/gopernicus/gopernicus/integrations/datastores/firestore/firestoretest"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // TestOpenAndReset is the factory's contract in one pass: a document written
@@ -65,6 +67,48 @@ func TestResetIsScopedToItsDatabase(t *testing.T) {
 	}
 	if got := count(t, ctx, other, "c6_fixture"); got != 1 {
 		t.Errorf("the sibling database holds %d documents, want 1 — Reset was not scoped", got)
+	}
+}
+
+// TestOpenDatabaseNamesAreIsolated is the C8 isolation contract proved rather
+// than promised: the two pocket store trains open OpenDatabase(t,
+// "authorization") and OpenDatabase(t, "authentication") on ONE emulator, and
+// each suite resets its own database wholesale. If named databases shared a
+// document space — or if Reset's clear endpoint were not scoped to one — the
+// two suites would delete each other's fixtures and fail as flakes rather than
+// as errors.
+func TestOpenDatabaseNamesAreIsolated(t *testing.T) {
+	ctx := context.Background()
+
+	alpha := firestoretest.OpenDatabase(t, "c8-alpha")
+	beta := firestoretest.OpenDatabase(t, "c8-beta")
+
+	if err := alpha.WriterFrom(ctx).Create(ctx, alpha.Doc("c8_isolation", "only-in-alpha"), map[string]any{"n": 1}); err != nil {
+		t.Skipf("named databases are unavailable on this emulator (%v) — isolation NOT verified", err)
+	}
+	t.Cleanup(func() { firestoretest.Reset(t, alpha) })
+	if err := beta.WriterFrom(ctx).Create(ctx, beta.Doc("c8_isolation", "only-in-beta"), map[string]any{"n": 2}); err != nil {
+		t.Fatalf("Create in c8-beta: %v", err)
+	}
+	t.Cleanup(func() { firestoretest.Reset(t, beta) })
+
+	// A document written in one database is invisible in the other, at the same
+	// path.
+	if _, err := beta.ReaderFrom(ctx).Get(ctx, beta.Doc("c8_isolation", "only-in-alpha")); !errors.Is(err, sdk.ErrNotFound) {
+		t.Errorf("c8-beta can see c8-alpha's document (err = %v) — the databases are not isolated", err)
+	}
+	if _, err := alpha.ReaderFrom(ctx).Get(ctx, alpha.Doc("c8_isolation", "only-in-beta")); !errors.Is(err, sdk.ErrNotFound) {
+		t.Errorf("c8-alpha can see c8-beta's document (err = %v) — the databases are not isolated", err)
+	}
+
+	// And a Reset of one is not felt by the other.
+	firestoretest.Reset(t, alpha)
+
+	if got := count(t, ctx, alpha, "c8_isolation"); got != 0 {
+		t.Errorf("c8-alpha holds %d documents after its own Reset, want 0", got)
+	}
+	if got := count(t, ctx, beta, "c8_isolation"); got != 1 {
+		t.Errorf("c8-beta holds %d documents after c8-alpha reset, want 1 — Reset crossed databases", got)
 	}
 }
 

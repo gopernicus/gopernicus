@@ -550,7 +550,7 @@ var searchNames = []string{
 }
 
 // TestListSearchAsAPostFilter is R4 proved end to end: the store composes a
-// PostFilter from crud.MatchesSearch over its SearchFields, and the helper
+// PostFilter with firestore.SearchFilter over its SearchFields, and the helper
 // makes that behave like the SQL connectors' LIKE/ILIKE predicate. The
 // expectations mirror the pocket storetest search group — LiteralSubstringOracle,
 // BlankTermIsUnfiltered, SearchIsScopedToTheParent, CountReflectsTheSearch,
@@ -572,20 +572,21 @@ func TestListSearchAsAPostFilter(t *testing.T) {
 	}, "sa-other")
 
 	r := db.ReaderFrom(ctx)
-	// searchFields is the store's allow-list; the PostFilter is exactly what a
-	// Firestore store writes (R4).
+	// searchFields is the store's allow-list and firestore.SearchFilter is the
+	// shared composition of it — exactly the three lines a Firestore store
+	// writes (R4). A blank term yields a nil PostFilter, which is how "no
+	// search is not a filter" reaches the helper.
 	searchFields := []crud.SearchField{{Column: "name"}}
+	searchValueOf := func(row listItem, field string) string {
+		if field == "name" {
+			return row.Name
+		}
+		return ""
+	}
 	searchQuery := func(parent, term string) firestore.ListQuery[listItem] {
 		q := listQueryFor(db, collection, parent)
 		q.DefaultOrder = crud.NewOrder("created_at", crud.ASC)
-		q.PostFilter = func(row listItem) bool {
-			for _, f := range searchFields {
-				if f.Column == "name" && crud.MatchesSearch(row.Name, term) {
-					return true
-				}
-			}
-			return false
-		}
+		q.PostFilter = firestore.SearchFilter(searchFields, searchValueOf, term)
 		return q
 	}
 	namesFor := func(t *testing.T, term string) []string {
@@ -708,6 +709,154 @@ func TestListSearchAsAPostFilter(t *testing.T) {
 		if !second.HasPrev {
 			t.Error("the second page reports no previous page; the reverse probe lost the predicate")
 		}
+	})
+}
+
+// TestListCountDescribesTheTraversablePopulation is the C8 fold of finding 1.
+// Firestore's OrderBy EXCLUDES every document that does not have the ordered
+// field — there is no NULLS LAST, an absent field is an absent index entry — so
+// a count taken over the BASE query would promise rows no cursor can reach.
+// Total must describe the population the page traverses, on both count paths
+// (the server aggregation outside a transaction, the iterate fallback inside a
+// snapshot).
+func TestListCountDescribesTheTraversablePopulation(t *testing.T) {
+	ctx, db, collection := listFixture(t)
+	seedListItems(t, ctx, db, collection)
+
+	// One more row under the SAME parent, with no "n" field at all. It is a
+	// legitimate document: it lists and counts under created_at, and it is
+	// invisible to every path ordered by n.
+	if err := db.WriterFrom(ctx).Create(ctx, db.Doc(collection, "no-n"), map[string]any{
+		"id":         "no-n",
+		"created_at": firestore.TruncateTime(listBase.Add(5 * time.Minute)),
+		"name":       "ghost",
+		"kind":       "a",
+	}); err != nil {
+		t.Fatalf("seeding the row without an order field: %v", err)
+	}
+
+	r := db.ReaderFrom(ctx)
+	q := listQueryFor(db, collection, "a")
+	byN := crud.NewOrder("n", crud.ASC)
+
+	traversable := traverseListIDs(t, ctx, r, q, byN, 2)
+	eqListIDs(t, traversable, []string{"e2", "e3", "e1", "e4", "e5"}, "n asc traversal")
+
+	t.Run("outside a transaction the aggregation counts the ordered query", func(t *testing.T) {
+		page := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Order: byN, WithCount: true})
+		if page.Total == nil {
+			t.Fatal("Total is nil under WithCount")
+		}
+		if int(*page.Total) != len(traversable) {
+			t.Errorf("Total = %d, want %d — the count must describe the rows the page can reach, not the rows the filter matches", *page.Total, len(traversable))
+		}
+	})
+
+	t.Run("inside a ReadSnapshot the iterate fallback agrees", func(t *testing.T) {
+		err := db.ReadSnapshot(ctx, func(snapCtx context.Context, sr firestore.Reader) error {
+			page, err := firestore.List(snapCtx, sr, q, crud.ListRequest{Limit: 2, Order: byN, WithCount: true})
+			if err != nil {
+				return err
+			}
+			if page.Total == nil || int(*page.Total) != len(traversable) {
+				t.Errorf("Total under a snapshot = %v, want %d", page.Total, len(traversable))
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("ReadSnapshot: %v", err)
+		}
+	})
+
+	t.Run("a different order field is a different population", func(t *testing.T) {
+		// Ordered by created_at, which every row HAS, the same list counts six.
+		// That is the point: Total answers "how many rows can this ordering
+		// reach", not "how many documents match the filter".
+		page := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Order: crud.NewOrder("created_at", crud.ASC), WithCount: true})
+		if page.Total == nil || *page.Total != int64(len(traversable)+1) {
+			t.Errorf("Total under created_at = %v, want %d", page.Total, len(traversable)+1)
+		}
+	})
+}
+
+// TestListPostFilterResumesOnSnapshotsNotValues is the C8 fold of finding 4.
+// The page-fill loop resumes each underlying pull with a StartAfter on the last
+// SNAPSHOT it scanned, not on the decoded row's order value. The difference is
+// invisible until a document's order field is NULL: a Decode that maps null to
+// the Go zero time (the documented absent model) would hand the resume a
+// TIMESTAMP, and Firestore sorts null before every timestamp — so the rest of
+// the null run would be jumped over and those documents would silently vanish
+// from the page.
+//
+// The fixture puts the pull boundary INSIDE a null run: 55 null-ordered rows
+// (more than one pull of scanPageSize=50) followed by ten timestamped ones,
+// with matches placed both before and after the boundary.
+func TestListPostFilterResumesOnSnapshotsNotValues(t *testing.T) {
+	ctx, db, collection := listFixture(t)
+
+	const (
+		nulls    = 55
+		matchTag = "match"
+	)
+	// Matches: one in the first pull, three in the null run AFTER the boundary.
+	matches := map[string]bool{"n01": true, "n52": true, "n53": true, "n54": true}
+
+	writer := db.WriterFrom(ctx)
+	for i := 1; i <= nulls; i++ {
+		id := fmt.Sprintf("n%02d", i)
+		name := "other"
+		if matches[id] {
+			name = matchTag
+		}
+		if err := writer.Create(ctx, db.Doc(collection, id), map[string]any{
+			"id": id, "created_at": firestore.NullTime(time.Time{}), "name": name, "kind": "nulls",
+		}); err != nil {
+			t.Fatalf("seeding %s: %v", id, err)
+		}
+	}
+	for i := 1; i <= 10; i++ {
+		id := fmt.Sprintf("t%02d", i)
+		if err := writer.Create(ctx, db.Doc(collection, id), map[string]any{
+			"id": id, "created_at": firestore.TruncateTime(listBase.Add(time.Duration(i) * time.Minute)), "name": "other", "kind": "nulls",
+		}); err != nil {
+			t.Fatalf("seeding %s: %v", id, err)
+		}
+	}
+
+	q := listQueryFor(db, collection, "nulls")
+	q.DefaultOrder = crud.NewOrder("created_at", crud.ASC)
+	// The documented absent model: a null timestamp decodes to the zero time.
+	q.Decode = func(snap *gcfs.DocumentSnapshot) (listItem, error) {
+		data := snap.Data()
+		created, err := firestore.ParseNullTime(data["created_at"])
+		if err != nil {
+			return listItem{}, err
+		}
+		name, _ := data["name"].(string)
+		return listItem{ID: snap.Ref.ID, CreatedAt: created, Name: name}, nil
+	}
+	q.PostFilter = func(row listItem) bool { return row.Name == matchTag }
+
+	r := db.ReaderFrom(ctx)
+
+	t.Run("the page fills across the pull boundary inside the null run", func(t *testing.T) {
+		page := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Order: crud.NewOrder("created_at", crud.ASC)})
+		eqListIDs(t, listIDs(page.Items), []string{"n01", "n52"}, "first page of matches")
+		if !page.HasMore {
+			t.Error("HasMore = false — the matches after the pull boundary were dropped")
+		}
+	})
+
+	t.Run("no match is dropped from the count either", func(t *testing.T) {
+		page := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Order: crud.NewOrder("created_at", crud.ASC), WithCount: true})
+		if page.Total == nil || int(*page.Total) != len(matches) {
+			t.Fatalf("Total = %v, want %d — the counting scan resumes the same way the page does", page.Total, len(matches))
+		}
+	})
+
+	t.Run("an offset over matches crosses the boundary too", func(t *testing.T) {
+		page := mustList(t, ctx, r, q, crud.ListRequest{Limit: 2, Offset: 1, Order: crud.NewOrder("created_at", crud.ASC), Strategy: crud.StrategyOffset})
+		eqListIDs(t, listIDs(page.Items), []string{"n52", "n53"}, "offset over matches")
 	})
 }
 

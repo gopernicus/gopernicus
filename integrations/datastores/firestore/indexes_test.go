@@ -588,6 +588,76 @@ func TestExportIndexesRefusesRatherThanCorrupts(t *testing.T) {
 	})
 }
 
+// TestExportIndexesIsAtomicAndLeavesNoDebris is the C8 fold of "never truncate
+// the host's manifest". Export writes a temporary beside dst and renames it
+// over, so a reader sees the old file or the new one and never a half-written
+// one — and, just as importantly, every REFUSED export leaves the directory
+// exactly as it found it: no orphan .tmp for someone to find months later and
+// wonder whether it is the real manifest.
+func TestExportIndexesIsAtomicAndLeavesNoDebris(t *testing.T) {
+	assertNoTmp := func(t *testing.T, dir string) {
+		t.Helper()
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("reading %s: %v", dir, err)
+		}
+		for _, e := range entries {
+			if strings.HasSuffix(e.Name(), ".tmp") {
+				t.Errorf("export left %s behind", e.Name())
+			}
+		}
+	}
+
+	t.Run("a successful export leaves only the manifest", func(t *testing.T) {
+		dir := t.TempDir()
+		dst := filepath.Join(dir, "firestore.indexes.json")
+		if err := firestore.ExportIndexes(manifest(t, "store_manifest.json"), dst); err != nil {
+			t.Fatalf("ExportIndexes: %v", err)
+		}
+		if _, err := os.Stat(dst); err != nil {
+			t.Fatalf("the manifest was not written: %v", err)
+		}
+		assertNoTmp(t, dir)
+	})
+
+	t.Run("a refused export leaves no tmp and no manifest", func(t *testing.T) {
+		dir := t.TempDir()
+		dst := filepath.Join(dir, "firestore.indexes.json")
+		bad := firestore.IndexManifest{Indexes: []firestore.CompositeIndex{{
+			CollectionGroup: "c",
+			QueryScope:      "SOMEWHERE",
+			Fields: []firestore.IndexField{
+				{FieldPath: "a", Order: firestore.OrderAscending},
+				{FieldPath: "b", Order: firestore.OrderAscending},
+			},
+		}}}
+		if err := firestore.ExportIndexes(bad, dst); !errors.Is(err, sdk.ErrInvalidInput) {
+			t.Fatalf("error = %v, want sdk.ErrInvalidInput", err)
+		}
+		if _, err := os.Stat(dst); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("a rejected export created %s", dst)
+		}
+		assertNoTmp(t, dir)
+	})
+
+	t.Run("a refused merge leaves the host manifest and no tmp", func(t *testing.T) {
+		dir := t.TempDir()
+		dst := filepath.Join(dir, "firestore.indexes.json")
+		original := []byte(`{"indexes":[],"fieldOverrides":[{"collectionGroup":"iam_relationships","fieldPath":"subject_key","indexes":[{"order":"DESCENDING","queryScope":"COLLECTION_GROUP"}]}]}`)
+		if err := os.WriteFile(dst, original, 0o644); err != nil {
+			t.Fatalf("seed dst: %v", err)
+		}
+		if err := firestore.ExportIndexes(manifest(t, "store_manifest.json"), dst); !errors.Is(err, firestore.ErrConflictingFieldOverride) {
+			t.Fatalf("error = %v, want ErrConflictingFieldOverride", err)
+		}
+		got, _ := os.ReadFile(dst)
+		if string(got) != string(original) {
+			t.Errorf("a refused merge rewrote the host manifest: %q", got)
+		}
+		assertNoTmp(t, dir)
+	})
+}
+
 // TestProbeIndexesNeedsADB pins the wiring-bug guard so a nil DB is an error
 // rather than a panic in a store constructor.
 func TestProbeIndexesNeedsADB(t *testing.T) {

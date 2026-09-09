@@ -101,10 +101,23 @@ type ListQuery[T any] struct {
 // collation; crud.OrderField.CastLower has no Firestore analogue and is
 // REFUSED (sdk.ErrInvalidInput) rather than silently ignored.
 //
+// Order by a field EVERY document in the population has. An OrderBy clause
+// drops documents that lack the field entirely (they are not in that index),
+// and a document whose field is NULL sorts before every other value but cannot
+// be addressed by a crud.Cursor — a cursor carries the DECODED order value, and
+// an absent model decodes to a Go zero (time.Time{}), which Firestore compares
+// as a timestamp rather than as null. Page-fill resumes are unaffected (they
+// carry the snapshot, not the value), but a page BOUNDARY landing inside a null
+// run cannot be resumed exactly. Stores write optional timestamps through
+// NullTime and do not order by them.
+//
 // # WithCount
 //
 // Without a PostFilter the total is the server-side count aggregation over the
-// base query — the whole filtered population, never the page. Inside a
+// ORDERED query — the whole population the page can traverse, never the page
+// itself. Ordered rather than base because Firestore's OrderBy drops documents
+// that lack the ordered field, so a base-query count would promise rows no
+// cursor can reach. Inside a
 // transaction or a ReadSnapshot the aggregation is unavailable
 // (ErrCountInTransaction), so List falls back to counting by iterating the same
 // population; that keeps a snapshot-bound count consistent with the page it
@@ -230,15 +243,6 @@ func (q ListQuery[T]) cursorPosition(cursor *crud.Cursor, field string) []any {
 	return []any{cursor.OrderValue, cursor.PK}
 }
 
-// rowPosition is cursorPosition for a row already read — the position a
-// page-fill scan resumes AFTER.
-func (q ListQuery[T]) rowPosition(row T, field string) []any {
-	if q.pk() == field {
-		return []any{q.PKOf(row)}
-	}
-	return []any{q.OrderValueOf(row, field), q.PKOf(row)}
-}
-
 // listCursor is the keyset flow: decode the cursor (a nil cursor — first page or
 // a stale token — skips both the StartAfter and the reverse probe), collect
 // limit+1 rows, TrimPage for HasMore/NextCursor, then probe backwards for
@@ -260,7 +264,7 @@ func (q ListQuery[T]) listCursor(ctx context.Context, r Reader, req crud.ListReq
 		forward = forward.StartAfter(q.cursorPosition(cursor, field)...)
 	}
 
-	items, err := q.window(ctx, r, forward, field, limit+1)
+	items, err := q.window(ctx, r, forward, limit+1)
 	if err != nil {
 		return crud.Page[T]{}, err
 	}
@@ -306,9 +310,9 @@ func (q ListQuery[T]) listOffset(ctx context.Context, r Reader, req crud.ListReq
 		err   error
 	)
 	if q.PostFilter == nil {
-		items, err = q.fetch(ctx, r, base.Offset(req.Offset).Limit(limit+1))
+		items, _, err = q.fetch(ctx, r, base.Offset(req.Offset).Limit(limit+1))
 	} else {
-		items, err = q.filteredOffset(ctx, r, base, field, req.Offset, limit+1)
+		items, err = q.filteredOffset(ctx, r, base, req.Offset, limit+1)
 	}
 	if err != nil {
 		return crud.Page[T]{}, err
@@ -342,7 +346,7 @@ func (q ListQuery[T]) listOffset(ctx context.Context, r Reader, req crud.ListReq
 func (q ListQuery[T]) markPrev(ctx context.Context, r Reader, page *crud.Page[T], field string, direction gcfs.Direction, limit int, cursor *crud.Cursor, encode func(T) (string, error)) error {
 	backward := q.ordered(field, direction, true).StartAfter(q.cursorPosition(cursor, field)...)
 
-	prev, err := q.window(ctx, r, backward, field, limit)
+	prev, err := q.window(ctx, r, backward, limit)
 	if err != nil {
 		return err
 	}
@@ -356,13 +360,14 @@ func (q ListQuery[T]) markPrev(ctx context.Context, r Reader, page *crud.Page[T]
 
 // window returns up to want rows from base: one query when there is no
 // PostFilter, the page-fill loop when there is.
-func (q ListQuery[T]) window(ctx context.Context, r Reader, base gcfs.Query, field string, want int) ([]T, error) {
+func (q ListQuery[T]) window(ctx context.Context, r Reader, base gcfs.Query, want int) ([]T, error) {
 	if q.PostFilter == nil {
-		return q.fetch(ctx, r, base.Limit(want))
+		rows, _, err := q.fetch(ctx, r, base.Limit(want))
+		return rows, err
 	}
 
 	matches := make([]T, 0, want)
-	err := q.scan(ctx, r, base, field, want, func(row T) bool {
+	err := q.scan(ctx, r, base, want, func(row T) bool {
 		if !q.PostFilter(row) {
 			return true
 		}
@@ -377,10 +382,10 @@ func (q ListQuery[T]) window(ctx context.Context, r Reader, base gcfs.Query, fie
 
 // filteredOffset is the offset flow's page-fill: discard exactly offset
 // MATCHES, then collect want of them.
-func (q ListQuery[T]) filteredOffset(ctx context.Context, r Reader, base gcfs.Query, field string, offset, want int) ([]T, error) {
+func (q ListQuery[T]) filteredOffset(ctx context.Context, r Reader, base gcfs.Query, offset, want int) ([]T, error) {
 	skipped := 0
 	matches := make([]T, 0, want)
-	err := q.scan(ctx, r, base, field, want, func(row T) bool {
+	err := q.scan(ctx, r, base, want, func(row T) bool {
 		if !q.PostFilter(row) {
 			return true
 		}
@@ -400,6 +405,13 @@ func (q ListQuery[T]) filteredOffset(ctx context.Context, r Reader, base gcfs.Qu
 // count returns the size of the whole filtered population — never the page,
 // never bounded by the request limit.
 //
+// It counts the ORDERED query, not the bare base query, because those are two
+// different populations in Firestore: an OrderBy clause EXCLUDES every document
+// that does not have the ordered field (there is no NULLS LAST — an absent
+// field means an absent index entry). The page traverses the ordered query, so
+// a count over the base query would report a total the caller can never page
+// to. Total therefore describes the population this list can actually reach.
+//
 // The server-side aggregation answers it in one round trip, but only outside a
 // transaction: inside one (including a ReadSnapshot, which is a read-only
 // transaction) the vendor exposes no transaction-guarded aggregation and the
@@ -409,8 +421,10 @@ func (q ListQuery[T]) filteredOffset(ctx context.Context, r Reader, base gcfs.Qu
 // snapshot. A PostFilter takes the iterating path unconditionally: the server
 // cannot evaluate a Go predicate.
 func (q ListQuery[T]) count(ctx context.Context, r Reader, field string, direction gcfs.Direction) (int64, error) {
+	ordered := q.ordered(field, direction, false)
+
 	if q.PostFilter == nil {
-		total, err := r.Count(ctx, q.Query)
+		total, err := r.Count(ctx, ordered)
 		if err == nil {
 			return total, nil
 		}
@@ -420,7 +434,7 @@ func (q ListQuery[T]) count(ctx context.Context, r Reader, field string, directi
 	}
 
 	var total int64
-	err := q.scan(ctx, r, q.ordered(field, direction, false), field, scanPageSize, func(row T) bool {
+	err := q.scan(ctx, r, ordered, scanPageSize, func(row T) bool {
 		if q.PostFilter == nil || q.PostFilter(row) {
 			total++
 		}
@@ -435,15 +449,24 @@ func (q ListQuery[T]) count(ctx context.Context, r Reader, field string, directi
 // scan walks the population of base in its own order, pulling pages of
 // max(want, scanPageSize) documents and calling visit with each decoded row
 // until visit returns false or a short page proves the population is exhausted.
-// Each pull resumes with a StartAfter on the last row SCANNED (not the last one
-// visit accepted), which is what makes the loop advance under a predicate that
-// rejects a whole page.
-func (q ListQuery[T]) scan(ctx context.Context, r Reader, base gcfs.Query, field string, want int, visit func(T) bool) error {
+//
+// Each pull resumes with a StartAfter on the last SNAPSHOT scanned (not the
+// last row visit accepted), which is what makes the loop advance under a
+// predicate that rejects a whole page. The cursor is the snapshot itself, which
+// the vendor accepts and resolves against the query's own order clauses: it is
+// the document the server already positioned, so resuming cannot depend on the
+// decoded row round-tripping its order value. That difference is load-bearing —
+// a NULL order field decodes to some Go zero value (a Decode that maps a null
+// timestamp to time.Time{}, say), and a StartAfter built from that zero would
+// jump the cursor to the wrong place and silently drop documents. Cursors a
+// caller receives still come from OrderValueOf/PKOf: those describe a row, and
+// a row is what the caller sends back.
+func (q ListQuery[T]) scan(ctx context.Context, r Reader, base gcfs.Query, want int, visit func(T) bool) error {
 	pageSize := max(want, scanPageSize)
 
 	page := base
 	for {
-		rows, err := q.fetch(ctx, r, page.Limit(pageSize))
+		rows, snaps, err := q.fetch(ctx, r, page.Limit(pageSize))
 		if err != nil {
 			return err
 		}
@@ -455,37 +478,42 @@ func (q ListQuery[T]) scan(ctx context.Context, r Reader, base gcfs.Query, field
 		if len(rows) < pageSize {
 			return nil
 		}
-		page = base.StartAfter(q.rowPosition(rows[len(rows)-1], field)...)
+		page = base.StartAfter(snaps[len(snaps)-1])
 	}
 }
 
-// fetch runs one query and decodes every document it returns. The iterator is
-// always stopped, iterator.Done is consumed as the loop terminator, and any
-// other iteration error — including a transaction's read-after-write refusal
-// and the missing-index FAILED_PRECONDITION, both of which the vendor defers to
-// Next — goes through MapError here, at the iteration boundary.
+// fetch runs one query and decodes every document it returns, returning the
+// decoded rows AND the snapshots they came from, positionally. The snapshots
+// are what a page-fill scan resumes after (see scan); callers that only page
+// one query discard them. The iterator is always stopped, iterator.Done is
+// consumed as the loop terminator, and any other iteration error — including a
+// transaction's read-after-write refusal and the missing-index
+// FAILED_PRECONDITION, both of which the vendor defers to Next — goes through
+// MapError here, at the iteration boundary.
 //
-// The slice is allocated even when the query matches nothing, so an empty page
-// marshals "items":[] and never "items":null on every path, not just the ones
-// crud.TrimPage normalizes.
-func (q ListQuery[T]) fetch(ctx context.Context, r Reader, query gcfs.Query) ([]T, error) {
+// The row slice is allocated even when the query matches nothing, so an empty
+// page marshals "items":[] and never "items":null on every path, not just the
+// ones crud.TrimPage normalizes.
+func (q ListQuery[T]) fetch(ctx context.Context, r Reader, query gcfs.Query) ([]T, []*gcfs.DocumentSnapshot, error) {
 	it := r.Documents(ctx, query)
 	defer it.Stop()
 
 	rows := []T{}
+	var snaps []*gcfs.DocumentSnapshot
 	for {
 		snap, err := it.Next()
 		if errors.Is(err, iterator.Done) {
-			return rows, nil
+			return rows, snaps, nil
 		}
 		if err != nil {
-			return nil, MapError(err)
+			return nil, nil, MapError(err)
 		}
 		row, err := q.Decode(snap)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		rows = append(rows, row)
+		snaps = append(snaps, snap)
 	}
 }
 

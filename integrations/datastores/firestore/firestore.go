@@ -86,8 +86,16 @@ type Config struct {
 	// and any workload with an attached service account. Never logged.
 	CredentialsJSON []byte
 
-	// ConnectTimeout bounds client construction and the eager boot validation
-	// below. 0 defaults to 10s.
+	// ConnectTimeout bounds the EAGER BOOT VALIDATION below — the round trip
+	// Retry.Attempts > 1 opts into, including all of its retries. 0 defaults to
+	// 10s.
+	//
+	// It deliberately does NOT bound client construction. The Google Cloud
+	// clients keep the context they were built with for the lifetime of their
+	// connection pool, so a construction context that Open cancels on return
+	// would poison every later request (the posture
+	// integrations/filestorage/gcs takes: the caller's ctx goes to the
+	// constructor untouched). Construction issues no RPC anyway.
 	ConnectTimeout time.Duration
 
 	// Retry, when its Attempts is > 1, makes Open perform EAGER boot validation:
@@ -123,6 +131,13 @@ func (cfg Config) Redacted() string {
 	return fmt.Sprintf("projects/%s/databases/%s", cfg.ProjectID, cfg.database())
 }
 
+// String makes Redacted the ONLY rendering of a Config, so a service-account key
+// cannot reach a log through the back door. fmt's %v and %+v prefer a String
+// method over field-by-field printing, and slog uses it for a Config passed as
+// an attribute value — without it, `slog.Info("boot", "cfg", cfg)` or a
+// `fmt.Errorf("... %+v", cfg)` would print CredentialsJSON's bytes.
+func (cfg Config) String() string { return cfg.Redacted() }
+
 // database resolves DatabaseID, mapping the zero value to the default database.
 func (cfg Config) database() string {
 	if cfg.DatabaseID == "" {
@@ -135,8 +150,11 @@ func (cfg Config) database() string {
 // vendor client routes to the emulator and ignores credentials; DB.Emulated
 // reports that so callers (the index probe, tests) can branch LOUDLY.
 //
-// Client construction issues no RPC. Set Config.Retry.Attempts > 1 to make Open
-// verify the database with a real round-trip before returning.
+// Client construction issues no RPC and receives the CALLER's context, which the
+// vendor's connection pool keeps: passing a context Open cancels on return would
+// break every later request. Set Config.Retry.Attempts > 1 to make Open verify
+// the database with a real round-trip before returning; that check — and only
+// that check — is bounded by Config.ConnectTimeout.
 func Open(ctx context.Context, cfg Config) (*DB, error) {
 	if cfg.ProjectID == "" {
 		return nil, ErrNoProjectID
@@ -147,9 +165,6 @@ func Open(ctx context.Context, cfg Config) (*DB, error) {
 	if cfg.MaxAttempts <= 0 {
 		cfg.MaxAttempts = DefaultMaxAttempts
 	}
-
-	ctx, cancel := context.WithTimeout(ctx, cfg.ConnectTimeout)
-	defer cancel()
 
 	var opts []option.ClientOption
 	if len(cfg.CredentialsJSON) > 0 {
@@ -170,7 +185,12 @@ func Open(ctx context.Context, cfg Config) (*DB, error) {
 	}
 
 	if cfg.Retry.Attempts > 1 {
-		if err := retry(ctx, cfg.Retry, func(ctx context.Context) error {
+		// ConnectTimeout bounds the boot check and ONLY the boot check: this
+		// context is cancelled when Open returns, and the client must outlive
+		// it.
+		bootCtx, cancel := context.WithTimeout(ctx, cfg.ConnectTimeout)
+		defer cancel()
+		if err := retry(bootCtx, cfg.Retry, func(ctx context.Context) error {
 			return StatusCheck(ctx, db)
 		}); err != nil {
 			client.Close()

@@ -1,6 +1,7 @@
 package firestore
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -24,11 +25,21 @@ const (
 	vendorInvalidReadTime   = "firestore: ReadTime cannot be set via WithReadOptions on a Transaction"
 )
 
-// indexConsoleHost is the host of the index-creation link the server puts in a
-// missing-index FAILED_PRECONDITION message. Together with "index" it is the
-// second recognizer for messages that do not use the "requires an index"
-// phrasing (single-field and still-building variants word it differently).
-const indexConsoleHost = "https://console.firebase.google.com"
+// indexConsolePrefix is the prefix EVERY index-creation link the server embeds
+// in a missing-index FAILED_PRECONDITION message shares. The HOST is not fixed:
+// a database created through Firebase is linked to console.firebase.google.com
+// and one created through Google Cloud to console.cloud.google.com, so
+// recognizing either host by name would make the mapping depend on how the
+// host's database happened to be provisioned. Together with "index" this prefix
+// is the second recognizer, for the variants that do not use the "requires an
+// index" phrasing (single-field and still-building messages word it
+// differently).
+const indexConsolePrefix = "https://console."
+
+// urlScheme is what indexURL scans for. A missing-index message carries exactly
+// one link, so taking the FIRST https:// token extracts it without knowing the
+// host or the wording around it.
+const urlScheme = "https://"
 
 // requiresIndexPhrase is the server's canonical missing-composite-index wording:
 // "The query requires an index. You can create it here: <url>".
@@ -41,6 +52,12 @@ var (
 	// ready to answer it; deploying the index manifest fixes it. Every
 	// *MissingIndexError matches it, so callers can errors.Is without naming
 	// the type. ProbeIndexes (C5) reports missing indexes with the same sentinel.
+	//
+	// It is a WIRING error, not a retryable condition, and the sentinel it
+	// wraps makes that easy to get wrong: a caller with a generic
+	// sdk.ErrUnavailable retry must test errors.Is(err, ErrMissingIndex) FIRST
+	// and give up, because no amount of waiting deploys an index. See
+	// ProbeIndexes for the branch, spelled out.
 	ErrMissingIndex = fmt.Errorf("firestore: query requires an index that does not exist or is not READY: %w", sdk.ErrUnavailable)
 
 	// ErrReadAfterWrite reports the vendor's reads-before-writes rule: inside a
@@ -111,6 +128,7 @@ func (e *MissingIndexError) Unwrap() error { return ErrMissingIndex }
 //	FailedPrecondition, otherwise                → sdk.ErrConflict
 //	InvalidArgument                              → sdk.ErrInvalidInput
 //	DeadlineExceeded, Unavailable, ResourceExhausted → sdk.ErrUnavailable
+//	context.DeadlineExceeded (no status attached)  → sdk.ErrUnavailable
 //	PermissionDenied                             → sdk.ErrForbidden
 //	Unauthenticated                              → sdk.ErrUnauthorized
 //	read after write / write in a read-only tx   → the connector sentinels above
@@ -137,6 +155,17 @@ func MapError(err error) error {
 	}
 	if sdk.IsExpected(err) {
 		return err
+	}
+	// A timed-out RPC does not always arrive as a gRPC status: the vendor
+	// client retries a refused connection internally and, when the caller's
+	// deadline expires first, hands back the bare context error. That is the
+	// same condition as codes.DeadlineExceeded above and gets the same
+	// sentinel, so a health check against an unreachable database reports
+	// "unavailable" instead of an unrecognized 500. context.Canceled is
+	// deliberately NOT mapped: the caller withdrew the request, which is not a
+	// statement about the database.
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("firestore: %s: %w", err, sdk.ErrUnavailable)
 	}
 
 	if mapped := mapVendorError(err); mapped != nil {
@@ -190,22 +219,25 @@ func mapVendorError(err error) error {
 }
 
 // isMissingIndex reports whether a FAILED_PRECONDITION message is the server's
-// "no usable index" diagnosis. Two recognizers: the canonical composite-index
-// phrasing, and the console link the server attaches to every index-related
-// variant (single-field, still-building) whose wording differs.
+// "no usable index" diagnosis. Two recognizers, both host-agnostic: the
+// canonical composite-index phrasing, and "index" plus the console link the
+// server attaches to every index-related variant (single-field, still-building)
+// whose wording differs.
 func isMissingIndex(msg string) bool {
 	if strings.Contains(msg, requiresIndexPhrase) {
 		return true
 	}
-	return strings.Contains(msg, "index") && strings.Contains(msg, indexConsoleHost)
+	return strings.Contains(msg, "index") && strings.Contains(msg, indexConsolePrefix)
 }
 
 // indexURL extracts the console link from a missing-index message verbatim,
-// returning "" when there is none. The URL runs to the first whitespace; a
-// trailing sentence period is trimmed because the server sometimes ends the
-// sentence right after the link.
+// returning "" when there is none. It takes the FIRST https:// token — the
+// message carries one link and its host varies with how the database was
+// provisioned, so scanning for a fixed host would drop the URL from half the
+// messages. The URL runs to the first whitespace; a trailing sentence period is
+// trimmed because the server sometimes ends the sentence right after the link.
 func indexURL(msg string) string {
-	start := strings.Index(msg, indexConsoleHost)
+	start := strings.Index(msg, urlScheme)
 	if start < 0 {
 		return ""
 	}

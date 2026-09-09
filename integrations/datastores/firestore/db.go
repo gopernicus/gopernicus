@@ -2,13 +2,14 @@ package firestore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	gcfs "cloud.google.com/go/firestore"
 	"google.golang.org/api/option"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
+
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // statusCollection / statusDocument name the reserved path StatusCheck reads. It
@@ -75,18 +76,40 @@ func (d *DB) Doc(collection, id string) *gcfs.DocumentRef {
 	return d.client.Collection(collection).Doc(id)
 }
 
+// CollectionGroup returns a reference to every collection with this name at any
+// depth — the query scope a subcollection ("a user's sessions", "a resource's
+// relationships") is read across owners with. Building the reference performs
+// no I/O, and the SAME mediation rules apply to what it produces: build a Query
+// from it and run that Query through ReaderFrom(ctx).Documents, never through
+// the reference's own I/O methods, or an ambient transaction is bypassed.
+//
+// A collection-group query needs its indexes declared at COLLECTION_GROUP query
+// scope in the index manifest (C-D7); the collection-scoped index of the same
+// fields does not serve it, and ProbeIndexes reports that as a gap.
+func (d *DB) CollectionGroup(name string) *gcfs.CollectionGroupRef {
+	return d.client.CollectionGroup(name)
+}
+
 // StatusCheck returns nil if it can successfully talk to the database. It reads
-// one reserved document that is never written: NotFound is the healthy answer —
-// it proves the round-trip completed and the caller is authorized to read —
-// while transport, permission, and quota failures surface as themselves.
+// one reserved document that is never written: sdk.ErrNotFound is the healthy
+// answer — it proves the round-trip completed and the caller is authorized to
+// read — while transport, permission, and quota failures surface as themselves,
+// already classified by MapError (an unreachable database is sdk.ErrUnavailable,
+// a denied credential sdk.ErrForbidden). A host's health endpoint and Open's
+// boot validation therefore get an error they can act on rather than a raw gRPC
+// status.
+//
+// The read goes through ReaderFrom, like every other read in this package: on a
+// context carrying an ambient transaction the check joins it instead of opening
+// a second, unmediated conversation with the server.
 func StatusCheck(ctx context.Context, db *DB) error {
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, statusCheckTimeout)
 		defer cancel()
 	}
-	_, err := db.Doc(statusCollection, statusDocument).Get(ctx)
-	if err != nil && status.Code(err) != codes.NotFound {
+	_, err := db.ReaderFrom(ctx).Get(ctx, db.Doc(statusCollection, statusDocument))
+	if err != nil && !errors.Is(err, sdk.ErrNotFound) {
 		return err
 	}
 	return nil

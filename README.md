@@ -87,7 +87,7 @@ tagged versions, not the workspace.
   dependency arrows.
 - **Dependencies point inward.** `examples` → `pockets`/`integrations` →
   `sdk`, never the reverse; a `ui/` implementation depends only on its own
-  view/runtime libraries and `sdk`. `make check`'s twenty-one layering guards
+  view/runtime libraries and `sdk`. `make check`'s twenty-three layering guards
   enforce this.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full detail, including the
@@ -116,7 +116,7 @@ make run                # or: cd examples/cms && go run ./cmd/server
 ```
 
 From the repo root, `make check` builds, vets, and tests all forty modules
-and runs the twenty-one layering guards; `make test-stores` runs the live dialect
+and runs the twenty-three layering guards; `make test-stores` runs the live dialect
 conformance suites (expects `POSTGRES_TEST_DSN` / `TURSO_*`). See [examples/cms/README.md](examples/cms/README.md)
 for that host's full env/make-target reference.
 

@@ -85,6 +85,13 @@ func TestReadSnapshotReusesTheAmbientTransaction(t *testing.T) {
 			if tr, ok := ReaderFromIsTx(db.ReaderFrom(snapCtx)); !ok || tr.tx != tx {
 				t.Errorf("%s: ReaderFrom inside the reused snapshot did not resolve to it", name)
 			}
+			// C8 fold: the reused context is re-stashed READ-ONLY whichever
+			// kind it reused, so WriterFrom refuses at the seam. A snapshot
+			// that inherited a read-write stash would let a helper written
+			// against ReadSnapshot queue writes into its caller's transaction.
+			if _, ok := db.WriterFrom(snapCtx).(readOnlyWriter); !ok {
+				t.Errorf("%s: WriterFrom inside the reused snapshot returned %T, want readOnlyWriter", name, db.WriterFrom(snapCtx))
+			}
 			return sentinel
 		})
 		if !ran {

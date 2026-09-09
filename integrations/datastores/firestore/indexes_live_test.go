@@ -20,9 +20,19 @@
 //     nothing else in this module touches. The missing-index case depends on
 //     its absence, so a database that has one makes this test fail correctly.
 //
-//   - a credential with datastore.indexes.list / datastore.indexes.get
-//     (roles/datastore.indexAdmin, or roles/datastore.owner as the CI live
-//     database provisioning already grants — see the plan's N7).
+//   - a credential with datastore.indexes.list (roles/datastore.indexAdmin, or
+//     roles/datastore.owner as the CI live database provisioning already grants
+//     — see the plan's N7). ONE permission covers both Admin calls this file
+//     makes: the IAM permission tables map firestore.googleapis.com's
+//     collectionGroups.indexes.list AND collectionGroups.fields.get to
+//     datastore.indexes.list. There is no fields.get permission to grant, and
+//     the denial message this connector prints says list for that reason —
+//     CHECK IT on the live leg: run once with a credential holding
+//     roles/datastore.viewer only (or no datastore role) and confirm the
+//     PermissionDenied path names datastore.indexes.list for BOTH the
+//     ListIndexes call and the GetField call, and that granting exactly that
+//     permission makes both succeed. If the API ever demands a different
+//     permission for GetField, the message is what has to change.
 //
 //     FIRESTORE_EMULATOR_HOST= FIRESTORE_LIVE_PROJECT_ID=<project> \
 //     FIRESTORE_LIVE_DATABASE_ID=<run-owned-db> \

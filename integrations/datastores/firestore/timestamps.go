@@ -25,13 +25,32 @@ func TruncateTime(t time.Time) time.Time {
 }
 
 // NullTime renders a possibly-zero timestamp for storage: the zero time writes
-// as nil (an absent/null field — "never expires", "not set"), any other value as
-// a truncated UTC timestamp. It is the VALUE-typed absent model, mirroring
-// turso's FormatNullTime: the caller's zero time.Time is the "not set"
-// sentinel. Use NullTimePtr when absence is a nil pointer instead.
+// as nil, any other value as a truncated UTC timestamp. It is the VALUE-typed
+// absent model, mirroring turso's FormatNullTime: the caller's zero time.Time
+// is the "not set" sentinel. Use NullTimePtr when absence is a nil pointer
+// instead.
 //
 // Unlike the SQL connectors there is no string formatting: Firestore stores a
 // native timestamp, and native timestamps order and range-filter natively.
+//
+// # nil writes an explicit NULL, not an absent field — and that is deliberate
+//
+// A nil in the document data becomes a stored field holding the null VALUE. It
+// does not omit the field, and the difference is not cosmetic in Firestore:
+//
+//   - OrderBy on a field EXCLUDES every document that does not have it. A
+//     document missing its order field is invisible to every List path — page,
+//     cursor, reverse probe, and (since the count follows the ordered query)
+//     the total. A null value is present, so the document is still traversed,
+//     sorting first in ascending order (null is the lowest type in Firestore's
+//     value ordering).
+//   - INEQUALITY filters (<, <=, >, >=) exclude null anyway. A range query over
+//     an expiry field will not see "never expires" rows whether the field is
+//     null or absent, so a store that means "unbounded" filters for it
+//     explicitly rather than expecting a range to include it.
+//
+// So: write every optional timestamp through NullTime or NullTimePtr, and never
+// omit the field instead. Omitting it removes the document from its own list.
 func NullTime(t time.Time) any {
 	if t.IsZero() {
 		return nil

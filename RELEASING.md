@@ -590,13 +590,31 @@ connectors.**
 **Release gate — a live run precedes the tag.** The emulator enforces no
 composite indexes, keeps no index registry (`ProbeIndexes` refuses against it),
 and cannot produce commit-contention exhaustion, so an emulator-green suite is
-not release evidence. Before this tag is cut, the milestone requires a recorded
-passing run of `-tags='integration,live' -run 'Live$'` against a disposable
-run-owned Firestore database (never `(default)`) with the manifest deployed and
-READY, archived with its test and skip counts;
-`FIRESTORE_LIVE_REQUIRED=1` turns missing configuration or a skipped required
-case into a failure. Provisioning commands, IAM, and the CI legs are in the
-module README and `.github/workflows/live-stores.yml`.
+not release evidence. Before this tag is cut, the milestone requires a passing
+`live-stores` dispatch with `firestore_live_required: true` — which sets
+`FIRESTORE_LIVE_REQUIRED=1` and turns missing configuration or a skipped
+required case into a failure — running `-tags='integration,live' -run 'Live$'`
+against a disposable run-owned Firestore database (never `(default)`) with every
+expected composite index READY. **Cite that run, not a count.** The gate is
+satisfied by recording the workflow **run id** and its
+`firestore-live-evidence-<run id>-<attempt>` artifact (the `go test -json`
+output, the derived expected-root list, the audit table, and the index states);
+a number pasted into this file cannot be re-checked and drifts the moment a live
+test is added. Provisioning commands, IAM, the first-dispatch checklist, and the
+CI legs are in the module README and `.github/workflows/live-stores.yml`.
+
+**Boot-probe failure is fail-fast, and that is the ratified behavior.** A store
+built against a non-emulator database probes its index manifest through the
+Admin API at construction time and REFUSES to construct when an index is missing
+or the probe cannot run (no `datastore.indexes.list`, Admin API disabled,
+transient Admin API unavailability). It is not retried and not degraded: a host
+that boots without its indexes serves `FAILED_PRECONDITION` at request time
+instead, which is strictly worse than not booting. A host that cannot tolerate a
+boot-time dependency on the Admin API — a runtime service account that may not
+list indexes, or a deployment that must come up while Google's Admin API is
+degraded — passes `WithoutIndexProbe()` and takes ownership of deploying and
+verifying the manifest itself (`ExportIndexes` writes it; the CI leg in
+`live-stores.yml` shows the deploy-and-wait shape).
 
 ### pockets/authorization — v0.12.0 @ `1439407` (+ stores/pgx v0.7.0, stores/turso v0.6.0 @ `340f6f2`) — tagged 2026-09-09: `FilterAuthorized` decides the candidate SET in one evaluation (minor; BREAKING store port; no schema)
 

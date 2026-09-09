@@ -562,9 +562,18 @@ func TestReadSnapshotReturnsTheCallbackErrorUnwrapped(t *testing.T) {
 // TestReadSnapshotInsideTransactReusesIt proves the C-D3 reuse decision against
 // a real transaction: no nested RunTransaction (the vendor refuses those), the
 // same reader, and the enclosing transaction still commits.
+//
+// It also pins the C8 fold: the context the reused snapshot hands its callback
+// is READ-ONLY, exactly like the one a standalone ReadSnapshot builds. "A
+// snapshot never writes" must be a property of the seam, not of which caller it
+// happened to be nested in — otherwise a helper written against ReadSnapshot
+// would queue writes into its caller's transaction the moment someone wrapped
+// it in a Transact, which is the silent-atomicity bug the seam exists to
+// prevent. The enclosing Transact keeps writing on its OWN context.
 func TestReadSnapshotInsideTransactReusesIt(t *testing.T) {
 	ctx, db, collection := transactFixture(t, 0)
 	ref := db.Doc(collection, "subject")
+	other := db.Doc(collection, "written-by-the-snapshot")
 	seedDoc(t, ctx, db, ref, map[string]any{"state": "pending"})
 
 	err := db.Transact(ctx, func(txCtx context.Context) error {
@@ -573,8 +582,24 @@ func TestReadSnapshotInsideTransactReusesIt(t *testing.T) {
 			if got, ok := firestore.TxFromContext(snapCtx); !ok || got != tx {
 				t.Error("the reused snapshot did not carry the enclosing transaction")
 			}
-			_, err := r.Get(snapCtx, ref)
-			return err
+			if _, err := r.Get(snapCtx, ref); err != nil {
+				return err
+			}
+
+			// All four Writer methods refuse, at the seam, before the vendor.
+			w := db.WriterFrom(snapCtx)
+			writes := map[string]error{
+				"Create": w.Create(snapCtx, other, map[string]any{"n": 1}),
+				"Set":    w.Set(snapCtx, other, map[string]any{"n": 1}),
+				"Update": w.Update(snapCtx, other, []gcfs.Update{{Path: "n", Value: 1}}),
+				"Delete": w.Delete(snapCtx, other),
+			}
+			for name, werr := range writes {
+				if !errors.Is(werr, firestore.ErrWriteInReadOnlyTransaction) {
+					t.Errorf("%s inside a reused snapshot = %v, want ErrWriteInReadOnlyTransaction", name, werr)
+				}
+			}
+			return nil
 		}); err != nil {
 			return err
 		}
@@ -585,6 +610,11 @@ func TestReadSnapshotInsideTransactReusesIt(t *testing.T) {
 	}
 	if got := documentField(t, ctx, db, ref, "state"); got != "final" {
 		t.Errorf("state = %v, want final", got)
+	}
+	// Nothing the refused writes named may exist: the refusal must queue
+	// nothing into the enclosing transaction either.
+	if _, err := db.ReaderFrom(ctx).Get(ctx, other); !errors.Is(err, sdk.ErrNotFound) {
+		t.Errorf("a write refused inside the snapshot was committed anyway (err = %v)", err)
 	}
 }
 

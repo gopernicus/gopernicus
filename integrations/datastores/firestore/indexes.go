@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	admin "cloud.google.com/go/firestore/apiv1/admin"
 	"cloud.google.com/go/firestore/apiv1/admin/adminpb"
@@ -59,6 +60,20 @@ const (
 	indexesFileMode = 0o644
 	indexesDirMode  = 0o755
 )
+
+// tmpSuffix names the file ExportIndexes writes before renaming it over dst.
+// Beside dst, so the rename stays within one filesystem and is atomic.
+const tmpSuffix = ".tmp"
+
+// ProbeTimeout bounds ProbeIndexes when the caller's context carries no
+// deadline of its own. The probe runs at WIRING TIME, in front of a host's
+// boot, and it talks to the Admin API — a service whose latency has nothing to
+// do with the data path. Without a bound, an Admin API that hangs would hang
+// the boot silently instead of failing it; 30s is generous for a ListIndexes
+// call plus one GetField per declared field override, and a caller that wants a
+// different budget passes a context with its own deadline, which is honored
+// unchanged.
+const ProbeTimeout = 30 * time.Second
 
 // stateReady is the only Admin API index state that answers a query. CREATING
 // and NEEDS_REPAIR both mean "this query will fail in production".
@@ -332,7 +347,23 @@ func ExportIndexes(m IndexManifest, dst string) error {
 	if _, err := parseIndexManifest(data, dst); err != nil {
 		return err
 	}
-	return os.WriteFile(dst, data, indexesFileMode)
+
+	// Write through a temporary file and rename it over dst. os.WriteFile
+	// truncates first, so an interrupted or short write would leave the host's
+	// checked-in manifest — the file this function just merged INTO — empty or
+	// half-written. rename(2) is atomic within a directory, so a reader sees
+	// either the old manifest or the new one. The temporary lives beside dst so
+	// the rename cannot cross a filesystem boundary; a failure after it is
+	// created removes it, so a refused export leaves no debris.
+	tmp := dst + tmpSuffix
+	if err := os.WriteFile(tmp, data, indexesFileMode); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 // ProbeIndexes verifies that every composite index in m exists and is READY on
@@ -358,6 +389,32 @@ func ExportIndexes(m IndexManifest, dst string) error {
 //
 // An empty manifest requires nothing and issues no RPC.
 //
+// # A probe failure is a wiring error, never a retry
+//
+// ErrMissingIndex wraps sdk.ErrUnavailable because the query is not wrong and
+// the database is not broken — the index simply is not there. That sentinel is
+// the one a caller's generic infrastructure retry watches for, and retrying a
+// missing index only delays the boot failure: no amount of waiting deploys an
+// index. A caller that retries sdk.ErrUnavailable MUST branch first:
+//
+//	if err := firestoredb.ProbeIndexesFS(ctx, db, IndexesFS, IndexesFile); err != nil {
+//	    if errors.Is(err, firestoredb.ErrMissingIndex) {
+//	        return err // deploy the manifest; retrying cannot help
+//	    }
+//	    // only now is a transport failure worth another attempt
+//	}
+//
+// The one exception proves the rule: an index reported as CREATING becomes
+// READY on its own, which is why the CI live leg WAITS for the build to finish
+// before it runs its query matrix — deliberately, in the provisioning step,
+// not by looping a boot probe.
+//
+// # Deadline
+//
+// A caller's deadline is honored as given. A context without one is bounded by
+// ProbeTimeout, so an Admin API that never answers fails the boot instead of
+// hanging it.
+//
 // What is NOT probed, stated plainly because a probe that implies more than it
 // checks is worse than none:
 //
@@ -366,6 +423,11 @@ func ExportIndexes(m IndexManifest, dst string) error {
 //     single-field indexing surviving, it declares that dependency as a
 //     fieldOverride entry, and only then is it checked. A host disabling
 //     indexing on some other field is invisible here.
+//   - A DECLARED field override whose index set is EMPTY. It names a field and
+//     asks for nothing, so there is nothing to compare and no RPC is issued for
+//     it (probeFieldOverride returns early). Such an entry documents intent —
+//     usually a TTL setting the probe never interprets — and must not be read
+//     as "this field's indexing was checked".
 //   - TTL configuration, index density, and multikey/vector/search index modes.
 //   - Whether an index is WIDE ENOUGH for a query the manifest never described.
 //     A probe proves the manifest was deployed; the store's query matrix
@@ -382,6 +444,12 @@ func ProbeIndexes(ctx context.Context, db *DB, m IndexManifest) error {
 	}
 	if len(m.Indexes) == 0 && len(m.FieldOverrides) == 0 {
 		return nil
+	}
+
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, ProbeTimeout)
+		defer cancel()
 	}
 
 	client, err := admin.NewFirestoreAdminClient(ctx, db.clientOpts...)
@@ -586,7 +654,13 @@ func probeFieldOverride(ctx context.Context, client *admin.FirestoreAdminClient,
 	case status.Code(err) == codes.NotFound:
 		return missingFieldIndexes(o.Indexes, defaultFieldIndexes), nil
 	case err != nil:
-		return nil, db.adminError(fmt.Sprintf("reading the field configuration of %s", name), "datastore.indexes.get", err)
+		// GetField (firestore.googleapis.com/…/collectionGroups.fields.get) is
+		// authorized by datastore.indexes.list in the IAM permission tables —
+		// NOT by a "fields.get" permission, which does not exist. Naming the
+		// wrong permission in a denial message costs an operator an hour, so
+		// this is the same permission the ListIndexes call above names, and it
+		// is what roles/datastore.indexAdmin and roles/datastore.owner grant.
+		return nil, db.adminError(fmt.Sprintf("reading the field configuration of %s", name), "datastore.indexes.list", err)
 	}
 
 	cfg := field.GetIndexConfig()

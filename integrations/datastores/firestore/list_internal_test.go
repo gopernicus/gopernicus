@@ -304,24 +304,6 @@ func TestCursorArityMatchesTheOrderClauses(t *testing.T) {
 	})
 }
 
-// TestRowPosition: the scan resume tuple mirrors the cursor tuple.
-func TestRowPosition(t *testing.T) {
-	db := hermeticDB(t)
-	q := hermeticQuery(t, db)
-	row := listRow{ID: "e4", CreatedAt: time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC), Name: "delta"}
-
-	position := q.rowPosition(row, "name")
-	if len(position) != 2 || position[0] != "delta" || position[1] != "e4" {
-		t.Fatalf("rowPosition = %v, want [delta e4]", position)
-	}
-
-	// When the order field IS the pk, the single value comes from PKOf.
-	position = q.rowPosition(row, "id")
-	if len(position) != 1 || position[0] != "e4" {
-		t.Fatalf("rowPosition = %v, want the single pk value", position)
-	}
-}
-
 // TestFlipDirection is the two-row truth table the reverse probe rests on.
 func TestFlipDirection(t *testing.T) {
 	if got := flipDirection(gcfs.Asc); got != gcfs.Desc {

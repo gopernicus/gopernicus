@@ -44,6 +44,39 @@ func TestEmulatorProject(t *testing.T) {
 	}
 }
 
+// TestEmulatorDatabase pins Open's database selection — the C8 isolation
+// contract's escape hatch. Blank (or whitespace) means the DEFAULT database,
+// which firestore.Config spells as an empty DatabaseID; a value moves the whole
+// run onto one named database without editing a test.
+func TestEmulatorDatabase(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{in: "", want: ""},
+		{in: "   ", want: ""},
+		{in: "ci-42", want: "ci-42"},
+		{in: "  ci-42\n", want: "ci-42"},
+		{in: "(default)", want: "(default)"},
+	}
+	for _, tc := range cases {
+		if got := emulatorDatabase(tc.in); got != tc.want {
+			t.Errorf("emulatorDatabase(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestEmulatorDatabaseReadsTheEnvironment proves the exported reader is wired to
+// DatabaseEnv and to nothing else — a store harness that trusted the wrong
+// variable would share a database it thought it owned.
+func TestEmulatorDatabaseReadsTheEnvironment(t *testing.T) {
+	t.Setenv(DatabaseEnv, "")
+	if got := EmulatorDatabase(); got != "" {
+		t.Errorf("EmulatorDatabase() = %q with %s unset, want the default database", got, DatabaseEnv)
+	}
+	t.Setenv(DatabaseEnv, "ci-42")
+	if got := EmulatorDatabase(); got != "ci-42" {
+		t.Errorf("EmulatorDatabase() = %q, want ci-42", got)
+	}
+}
+
 // TestLiveTarget is the live factory's whole decision table. Each row is a
 // reason the live leg must refuse, or the one shape it accepts.
 func TestLiveTarget(t *testing.T) {

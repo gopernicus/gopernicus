@@ -2,8 +2,11 @@ package firestore
 
 import (
 	"context"
+	"errors"
 	"math/rand/v2"
 	"time"
+
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // defaultMinBackoff is retry's backoff floor and initial cap when
@@ -30,6 +33,15 @@ type RetryPolicy struct {
 // aborts immediately with ctx.Err(); otherwise fn's last error is returned once
 // Attempts is exhausted. This helper is duplicated from the turso/pgxdb
 // connectors by design: sdk is stdlib-vocabulary, not connector plumbing.
+//
+// One deliberate difference from those two: a PERMANENT error stops the loop
+// immediately (see permanent). The SQL connectors retry every boot failure
+// because a DSN mistake and an unreachable host are hard to tell apart in a
+// driver error, but Firestore classifies its own failures — a denied service
+// account or a malformed project answers PermissionDenied/Unauthenticated/
+// InvalidArgument, and MapError has already turned that into an sdk sentinel by
+// the time it reaches here. Sleeping five backoffs over a credential that will
+// never work delays the boot failure and buries its cause under a retry count.
 func retry(ctx context.Context, policy RetryPolicy, fn func(context.Context) error) error {
 	attempts := policy.Attempts
 	if attempts < 1 {
@@ -53,6 +65,9 @@ func retry(ctx context.Context, policy RetryPolicy, fn func(context.Context) err
 		if err = fn(ctx); err == nil {
 			return nil
 		}
+		if permanent(err) {
+			return err
+		}
 		if attempt == attempts-1 {
 			break
 		}
@@ -71,4 +86,15 @@ func retry(ctx context.Context, policy RetryPolicy, fn func(context.Context) err
 		}
 	}
 	return err
+}
+
+// permanent reports whether err is a condition no amount of waiting fixes: a
+// credential the database refuses (sdk.ErrForbidden, sdk.ErrUnauthorized) or a
+// request it will never accept (sdk.ErrInvalidInput — a bad project or database
+// id). Everything else, including sdk.ErrUnavailable and a deadline, is the
+// orchestration race the retry exists for.
+func permanent(err error) bool {
+	return errors.Is(err, sdk.ErrForbidden) ||
+		errors.Is(err, sdk.ErrUnauthorized) ||
+		errors.Is(err, sdk.ErrInvalidInput)
 }

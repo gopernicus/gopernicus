@@ -1,6 +1,7 @@
 package firestore_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -92,6 +93,11 @@ func TestMapError(t *testing.T) {
 			want: sdk.ErrInvalidInput,
 		},
 		{
+			name: "a bare context deadline (the vendor's own retry outlived it)",
+			in:   fmt.Errorf("Get: %w", context.DeadlineExceeded),
+			want: sdk.ErrUnavailable,
+		},
+		{
 			name: "FailedPrecondition, missing composite index",
 			in:   status.Error(codes.FailedPrecondition, requiresIndexMessage),
 			want: firestore.ErrMissingIndex,
@@ -166,6 +172,73 @@ func TestMapErrorMissingIndex(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "index") {
 		t.Errorf("Error() = %q, want it to name the missing index", err)
+	}
+}
+
+// TestMapErrorMissingIndexRecognizersAreHostAgnostic pins C8's fold: the two
+// recognizers must not depend on WHICH console a database is linked to. A
+// database provisioned through Firebase gets console.firebase.google.com links
+// and one provisioned through Google Cloud gets console.cloud.google.com links,
+// for the same query and the same missing index — so a recognizer naming one
+// host would map half of production's missing-index failures to a bare
+// sdk.ErrConflict with no URL, which reads as "somebody violated a
+// precondition" and sends an operator looking in the wrong place.
+func TestMapErrorMissingIndexRecognizersAreHostAgnostic(t *testing.T) {
+	const cloudURL = "https://console.cloud.google.com/firestore/databases/-default-/indexes?create_composite=ClFwcm9qZWN0cy9nb3Blcm5pY3Vz&project=gopernicus-test"
+
+	cases := []struct {
+		name string
+		msg  string
+		url  string
+	}{
+		{
+			name: "canonical phrasing, firebase console",
+			msg:  requiresIndexMessage,
+			url:  indexCreateURL,
+		},
+		{
+			name: "canonical phrasing, cloud console",
+			msg:  "The query requires an index. You can create it here: " + cloudURL,
+			url:  cloudURL,
+		},
+		{
+			name: "still building, firebase console, never says \"requires an index\"",
+			msg:  buildingIndexMessage,
+			url:  indexCreateURL,
+		},
+		{
+			name: "still building, cloud console, never says \"requires an index\"",
+			msg:  "The index for this query is currently building and cannot be used yet. See its status here: " + cloudURL,
+			url:  cloudURL,
+		},
+		{
+			name: "trailing sentence period is not part of the link",
+			msg:  "The query requires an index. Create it here: " + cloudURL + ".",
+			url:  cloudURL,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := firestore.MapError(status.Error(codes.FailedPrecondition, tc.msg))
+
+			var missing *firestore.MissingIndexError
+			if !errors.As(err, &missing) {
+				t.Fatalf("MapError = %v (%T), want a *firestore.MissingIndexError", err, err)
+			}
+			if missing.URL == "" {
+				t.Fatal("URL is empty — the message carried a link and an operator needs it")
+			}
+			if missing.URL != tc.url {
+				t.Errorf("URL = %q, want %q", missing.URL, tc.url)
+			}
+			if !errors.Is(err, firestore.ErrMissingIndex) || !errors.Is(err, sdk.ErrUnavailable) {
+				t.Errorf("MapError = %v, want ErrMissingIndex over sdk.ErrUnavailable", err)
+			}
+			if errors.Is(err, sdk.ErrConflict) {
+				t.Error("a missing index must not read as a precondition conflict")
+			}
+		})
 	}
 }
 

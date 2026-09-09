@@ -137,7 +137,10 @@ func (d *DB) Transact(ctx context.Context, fn func(ctx context.Context) error) e
 //
 //   - No write is possible. WriterFrom on fn's context returns a Writer whose
 //     every method fails with ErrWriteInReadOnlyTransaction, and the vendor
-//     refuses the write underneath that as well.
+//     refuses the write underneath that as well. This holds on the reuse path
+//     below too: a snapshot standing inside a read-write Transact still hands
+//     fn a write-refusing context, while the enclosing Transact's own context
+//     keeps writing.
 //   - It is never retried, so unlike Transact's, fn runs exactly ONCE.
 //   - Count is unavailable (ErrCountInTransaction, as in any transaction);
 //     count under a snapshot by iterating the query.
@@ -155,7 +158,13 @@ func (d *DB) Transact(ctx context.Context, fn func(ctx context.Context) error) e
 // re-panics after the transaction is released.
 func (d *DB) ReadSnapshot(ctx context.Context, fn func(ctx context.Context, r Reader) error) error {
 	if ambient, ok := ambientTxFrom(ctx); ok {
-		return fn(ctx, txReader{tx: ambient.tx})
+		// The context handed to fn is re-stashed READ-ONLY, even when the
+		// enclosing transaction is a read-write Transact. Inside a
+		// ReadSnapshot, WriterFrom must refuse — that is the guarantee this
+		// seam advertises, and it cannot depend on whether the snapshot began
+		// its own transaction or reused one. The enclosing Transact's own
+		// context is untouched, so it keeps writing after fn returns.
+		return fn(withTx(ctx, ambient.tx, true), txReader{tx: ambient.tx})
 	}
 
 	run := &attemptState{}

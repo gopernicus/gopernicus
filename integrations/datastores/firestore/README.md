@@ -42,19 +42,34 @@ db, err := firestoredb.Open(ctx, firestoredb.Config{
 Credentials (the normal posture on Cloud Run, GKE, or any workload with an
 attached service account). `Config.Redacted()` prints the connection target —
 `projects/<p>/databases/<d>` — and never a credential; `DB.Target()` is the same
-string for an open `DB`.
+string for an open `DB`. `Config` also implements `String()` as `Redacted()`, so
+`%v`, `%+v`, and a `slog` attribute all print the target and never
+`CredentialsJSON`'s bytes — a redaction helper only protects the caller who
+remembers to call it.
 
-Client construction issues no RPC. `Config.Retry.Attempts > 1` opts into **eager
-boot validation**, exactly the turso connector's posture: `Open` runs a real
-round-trip (`StatusCheck`) retried under a full-jitter exponential backoff,
-targeting the orchestration race where the database is not yet reachable at
-startup. `Config.Retry` governs the boot check and nothing else — no read or
-write is ever auto-retried by the connector.
+Client construction issues no RPC and receives the **caller's** context
+unchanged: the Google Cloud clients keep the construction context for the life
+of their connection pool, so a context `Open` cancelled on return would poison
+every later request (the posture `integrations/filestorage/gcs` takes).
+`Config.ConnectTimeout` therefore bounds the **boot check only**.
+
+`Config.Retry.Attempts > 1` opts into **eager boot validation**, exactly the
+turso connector's posture: `Open` runs a real round-trip (`StatusCheck`) retried
+under a full-jitter exponential backoff, targeting the orchestration race where
+the database is not yet reachable at startup. `Config.Retry` governs the boot
+check and nothing else — no read or write is ever auto-retried by the connector.
+A **permanent** failure short-circuits the loop: an error carrying
+`sdk.ErrForbidden`, `sdk.ErrUnauthorized`, or `sdk.ErrInvalidInput` is a
+credential or a request the database will never accept, and sleeping five
+backoffs over it only delays the boot failure and buries its cause.
 
 `StatusCheck` reads ONE document at the reserved path
-`gopernicus_status/status`, which is never written: **`NotFound` is the healthy
-answer** — it proves the round trip completed and the caller may read — while
-transport, permission, and quota failures surface as themselves. The path uses
+`gopernicus_status/status`, which is never written: **`sdk.ErrNotFound` is the
+healthy answer** — it proves the round trip completed and the caller may read —
+while transport, permission, and quota failures surface as themselves, already
+classified by `MapError` (an unreachable database is `sdk.ErrUnavailable`, a
+denied credential `sdk.ErrForbidden`), so a health endpoint can branch on them.
+The read goes through `ReaderFrom` like every other read here. The path uses
 ordinary identifiers on purpose: Firestore rejects any collection or document id
 matching `__.*__` with `InvalidArgument`, so the tempting `__gopernicus__`
 spelling is illegal.
@@ -67,8 +82,14 @@ it **loudly**, never silently.
 
 ## Reads and writes go through `Reader`/`Writer` — a reference is not permission
 
-`DB.Collection(name)` and `DB.Doc(collection, id)` hand out the vendor's own
-`*CollectionRef` / `*DocumentRef`, and `gcfs.Query` values are built from them.
+`DB.Collection(name)`, `DB.Doc(collection, id)`, and `DB.CollectionGroup(name)`
+hand out the vendor's own `*CollectionRef` / `*DocumentRef` /
+`*CollectionGroupRef`, and `gcfs.Query` values are built from them.
+`CollectionGroup` is the scope for reading a subcollection across every owner
+("all sessions", "all relationships"); building it performs no I/O and the same
+mediation rules apply to the query it produces. A collection-group query needs
+its indexes declared at `COLLECTION_GROUP` query scope in the manifest — the
+collection-scoped index of the same fields does not serve it.
 Those types carry their own I/O methods. **Holding one is not permission to use
 them.** There is deliberately no `Underlying()` and no `Client()` accessor
 (guard G9). Every read and write goes through the tx-aware seams:
@@ -212,8 +233,13 @@ and `Count` is unavailable, as in any transaction.
 Called from inside an existing `Transact`, it REUSES that transaction's snapshot
 and `Reader` instead of nesting — the one nesting case the connector resolves
 rather than refuses, because a read-write transaction already reads one
-snapshot. `Transact` inside a `ReadSnapshot` is still `ErrNestedTransact`: a
-snapshot cannot grow a write.
+snapshot. The context it hands the callback is re-stashed **read-only** even
+then, so `WriterFrom` refuses inside the snapshot exactly as it would in a
+standalone one; the enclosing `Transact` keeps writing on its OWN context. That
+matters because a helper written against `ReadSnapshot` must not start queueing
+writes into someone else's transaction the day it is wrapped in a `Transact`.
+`Transact` inside a `ReadSnapshot` is still `ErrNestedTransact`: a snapshot
+cannot grow a write.
 
 `TxFromContext(ctx) (*gcfs.Transaction, bool)` reports either kind. It is the
 seam a store uses to REFUSE to run inside a host's transaction — see the known
@@ -231,9 +257,11 @@ errors with it at the iteration boundary.
 | `AlreadyExists` | `sdk.ErrAlreadyExists` |
 | `Aborted` (transaction retries exhausted) | `sdk.ErrConflict` |
 | `FailedPrecondition`, missing index | `*MissingIndexError` → `ErrMissingIndex` → `sdk.ErrUnavailable`, carrying the server's message and its index-creation URL |
+| `FailedPrecondition`, index still BUILDING (different wording, same link) | the same `*MissingIndexError` |
 | `FailedPrecondition`, otherwise | `sdk.ErrConflict` |
 | `InvalidArgument` | `sdk.ErrInvalidInput` |
 | `DeadlineExceeded`, `Unavailable`, `ResourceExhausted` | `sdk.ErrUnavailable` |
+| a bare `context.DeadlineExceeded` (the vendor's own retry outlived the caller's deadline, no status attached) | `sdk.ErrUnavailable` |
 | `PermissionDenied` | `sdk.ErrForbidden` |
 | `Unauthenticated` | `sdk.ErrUnauthorized` |
 | read after write in a transaction | `ErrReadAfterWrite` (`sdk.ErrInvalidInput`) |
@@ -251,6 +279,15 @@ map an error a helper already mapped without flattening a domain outcome into a
 generic sentinel. Anything unrecognized comes back wrapped with a `firestore:`
 prefix and NO sentinel, so an unknown failure surfaces as a 500 instead of a
 plausible-looking domain answer.
+
+The two missing-index recognizers are **host-agnostic**: the canonical "requires
+an index" phrasing, and `index` plus a `https://console.` link. The console HOST
+varies with how the database was provisioned (`console.firebase.google.com` for
+one created through Firebase, `console.cloud.google.com` for one created through
+Google Cloud) and the still-building variant never says "requires an index", so
+matching either host by name would map half of production's missing-index
+failures to a bare `sdk.ErrConflict` with no URL. `MissingIndexError.URL` is the
+first `https://` token in the message, verbatim.
 
 The connector maps INFRASTRUCTURE errors only. Store-level CAS, no-op, and
 idempotency semantics stay with the owning adapter.
@@ -277,27 +314,51 @@ counts. The per-pocket `storetest` conformance suites are the parity proof.
 - **Offset strategy.** `Offset(n).Limit(limit+1)`, `HasMore` from the
   over-fetch, no cursors emitted. O(offset) documents are billed. Under a
   `PostFilter` the offset counts MATCHES, not scanned documents.
-- **`WithCount`.** The server-side count aggregation over the base query — the
-  whole filtered population, never the page. Inside a `Transact` or a
-  `ReadSnapshot` the aggregation is unavailable (`ErrCountInTransaction`), so
-  `List` falls back to counting by iterating the same population: a
-  snapshot-bound count stays consistent with the page it accompanies, at
-  O(population) reads. With a `PostFilter` the count is always the
-  iterate-and-filter one — the server does not know the predicate.
+- **`WithCount`.** The server-side count aggregation over the **ordered** query
+  — the whole population the page can traverse, never the page itself. Ordered,
+  not base, because Firestore's `OrderBy` EXCLUDES documents that lack the
+  ordered field (there is no NULLS LAST: an absent field is an absent index
+  entry), so a base-query count would promise rows no cursor can reach. Inside a
+  `Transact` or a `ReadSnapshot` the aggregation is unavailable
+  (`ErrCountInTransaction`), so `List` falls back to counting by iterating the
+  same population: a snapshot-bound count stays consistent with the page it
+  accompanies, at O(population) reads. With a `PostFilter` the count is always
+  the iterate-and-filter one — the server does not know the predicate.
 - **`PostFilter`** makes every path a page-fill loop: successive underlying
   pulls of `max(limit+1, 50)` documents are decoded and filtered until enough
-  matches are collected or the population is exhausted. `NextCursor` is encoded
-  from the last RETURNED match after trimming, never from the extra match or the
-  last scanned document.
+  matches are collected or the population is exhausted. Each pull resumes with a
+  `StartAfter` on the last **snapshot** scanned, not on the decoded row's order
+  value — the document the server already positioned, so resuming never depends
+  on a value round-tripping. That is load-bearing where the order field can be
+  NULL: an absent model decodes to a Go zero (`time.Time{}`), which Firestore
+  compares as a timestamp and sorts AFTER every null, so a value-based resume
+  would jump the rest of a null run and silently drop those documents.
+  `NextCursor` is still encoded from the last RETURNED match after trimming
+  (through `OrderValueOf`/`PKOf`), never from the extra match or the last
+  scanned document.
 
 **Search (ruling R4).** `List` itself never interprets `req.Search`: the STORE
-composes a `PostFilter` from `crud.MatchesSearch` and its `SearchFields`, which
-is how the `storetest` search group passes without a server-side text operator.
-A non-blank search against a `ListQuery` with a NIL `PostFilter` is REFUSED with
-`sdk.ErrInvalidInput` rather than answered with an unfiltered page. The rule
-pinned for the future: **a Firestore list honors `Search` only under a parent
-scope**; a top-level searchable list is a plan-level decision, never an
-accidental full scan.
+composes a `PostFilter` from its `SearchFields`, which is how the `storetest`
+search group passes without a server-side text operator. Both store trains use
+ONE composition of it so they cannot drift from each other or from turso:
+
+```go
+q.PostFilter = firestoredb.SearchFilter(apikey.SearchFields, func(row apikey.APIKey, field string) string {
+    if field == "name" { return row.Name }
+    return ""
+}, req.Search)
+```
+
+`SearchFilter` matches with `crud.MatchesSearch` (literal substring, ASCII-only
+case folding, so `%`, `_` and `\` are ordinary characters) and ORs across the
+declared fields — a field the store did not declare is not searched. It returns
+`nil` for a blank term (no search is not a filter) and for a non-blank term over
+an empty field list; pass that `nil` straight through, because a non-blank
+search against a `ListQuery` with a NIL `PostFilter` is REFUSED with
+`sdk.ErrInvalidInput` rather than answered with an unfiltered page — the same
+answer turso's `AddSearchClause` gives. The rule pinned for the future: **a
+Firestore list honors `Search` only under a parent scope**; a top-level
+searchable list is a plan-level decision, never an accidental full scan.
 
 `crud.OrderField.CastLower` is likewise REFUSED, not ignored: Firestore cannot
 case-fold in an index, and no store in this repository sets the flag. Firestore
@@ -310,6 +371,12 @@ production. The emulator enforces none, so an emulator-green list proves nothing
 about production's `FAILED_PRECONDITION`; every direction a store serves — plus
 the reversed direction the HasPrev probe issues, which needs the same index with
 all directions flipped — belongs in that store's manifest.
+
+Order by a field **every document in the population has**. A document missing
+the order field is invisible to every List path — page, cursor, reverse probe,
+and total — and a document whose field is NULL is traversed (null sorts first)
+but cannot be addressed by a `crud.Cursor`, which carries the decoded value.
+Write optional timestamps through `NullTime`, and do not order by them.
 
 ## The index manifest — shipped, exported, probed
 
@@ -346,7 +413,10 @@ the host's unrelated indexes and field overrides survive and re-exporting an
 unchanged fragment is an empty diff. A destination that CONTRADICTS the fragment
 (a field override with different index sets, or a conflicting `ttl` value) fails
 with `ErrConflictingFieldOverride` and is left untouched rather than silently
-resolved.
+resolved. The write itself is ATOMIC: the merged document goes to `dst.tmp` and
+is renamed over `dst`, so an interrupted export cannot truncate the manifest it
+was merging into, and a refused export leaves no `.tmp` behind for someone to
+mistake for the real file months later.
 
 **The probe is the boot check.** `ProbeIndexes` asks the Firestore Admin API
 whether every composite index in the manifest exists and is `READY`, and whether
@@ -355,7 +425,26 @@ configuration — the same "fail at wiring time, name the missing thing" posture
 as the SQL stores' table probes. It answers `nil`; a `*MissingIndexError` (or an
 `errors.Join` of them) naming each gap and the database's console index page; or
 an `sdk.ErrForbidden`-wrapped error naming the **`datastore.indexes.list`**
-permission the credential lacks. An empty manifest issues no RPC at all.
+permission the credential lacks — one permission covers BOTH Admin calls, since
+the IAM tables map `collectionGroups.indexes.list` and
+`collectionGroups.fields.get` to it (there is no `fields.get` permission to
+grant). An empty manifest issues no RPC at all. A caller's deadline is honored
+as given; a context without one is bounded by **`ProbeTimeout`** (30s), so an
+Admin API that never answers fails the boot instead of hanging it.
+
+**A probe failure is a wiring error, never a retry.** `ErrMissingIndex` wraps
+`sdk.ErrUnavailable` — the sentinel a generic infrastructure retry watches for —
+but no amount of waiting deploys an index. A caller that retries
+`sdk.ErrUnavailable` must branch first:
+
+```go
+if err := firestoredb.ProbeIndexesFS(ctx, db, IndexesFS, IndexesFile); err != nil {
+    if errors.Is(err, firestoredb.ErrMissingIndex) {
+        return err // deploy the manifest; retrying cannot help
+    }
+    // only now is a transport failure worth another attempt
+}
+```
 
 A store's constructor runs the probe unless the host passes **`WithoutIndexProbe()`**
 — the store-side escape for a runtime service account that cannot be granted
@@ -369,9 +458,12 @@ credentials. Conformance harnesses pass `WithoutIndexProbe()`.
 What is NOT probed, stated plainly because a probe that implies more than it
 checks is worse than none: a field override the manifest does not declare (a
 store whose query depends on a field's default single-field indexing DECLARES
-that dependency and only then is it checked); TTL configuration, index density,
-and multikey/vector/search modes; and whether an index is wide enough for a
-query the manifest never described. The probe proves the manifest was deployed.
+that dependency and only then is it checked); a DECLARED field override whose
+index set is EMPTY (it asks for nothing, so nothing is compared and no RPC is
+issued for it — such an entry documents intent, usually a TTL setting, and must
+not be read as "this field was checked"); TTL configuration, index density, and
+multikey/vector/search modes; and whether an index is wide enough for a query
+the manifest never described. The probe proves the manifest was deployed.
 The store's query matrix — run live — proves the manifest is right.
 
 Firestore allows 200 composite indexes per database without billing enabled and
@@ -386,6 +478,15 @@ Firestore allows 200 composite indexes per database without billing enabled and
   `ParseNullTime` / `ParseNullTimePtr` their read twins over a decoded document
   value; a mistyped field is `sdk.ErrInvalidInput`, never a silent zero
   timestamp that would read as "not set".
+
+  `NullTime` writes an explicit **null value**, not an absent field, and the
+  difference is not cosmetic: `OrderBy` excludes documents that do not HAVE the
+  field, so a document missing its order field is invisible to every List path —
+  page, cursor, reverse probe, and total. A null is present, so the document is
+  still traversed (null sorts first ascending). Inequality filters exclude null
+  either way, so a store that means "unbounded" filters for it explicitly rather
+  than expecting a range to include it. Write optional timestamps through these
+  helpers; never omit the field.
 - `NewID()` — a vendor-shaped auto id (20 characters of `[A-Za-z0-9]`,
   `crypto/rand`), for the ports where the datastore generates the id.
 - `KeyHash(parts...)` — the document id for a natural key: lowercase hex
@@ -420,13 +521,31 @@ can turn into the other.
 
 **Emulator.** `Open(t)` / `OpenDatabase(t, id)` require `FIRESTORE_EMULATOR_HOST`
 and **skip loudly** without it; the project is `FIRESTORE_PROJECT_ID` or
-`gopernicus-test`. `OpenDatabase` gives two modules isolated document spaces on
-one emulator. `Reset(t, db)` clears the whole database through the emulator's
-own endpoint (`DELETE /emulator/v1/projects/{p}/databases/{d}/documents`),
-SCOPED to the database that `db` is bound to, and REFUSES — loudly — if `db` is
-not an emulator client. That refusal is the whole safety story: the same call
-shape against a real project would mean "empty the database". Emulator-only
-tests build under `integration && !live`.
+`gopernicus-test`. `Open(t)` stays on the database named by
+`FIRESTORE_DATABASE_ID` — the default database when that is unset — so a CI job
+can point a whole run at one named database without editing a test.
+`OpenDatabase(t, id)` names a database explicitly and ignores that variable.
+`Reset(t, db)` clears the whole database through the emulator's own endpoint
+(`DELETE /emulator/v1/projects/{p}/databases/{d}/documents`), SCOPED to the
+database that `db` is bound to, and REFUSES — loudly — if `db` is not an
+emulator client. That refusal is the whole safety story: the same call shape
+against a real project would mean "empty the database". Emulator-only tests
+build under `integration && !live`.
+
+**The isolation contract.** `Reset` clears the WHOLE selected database — not a
+collection, not a fixture — so two suites sharing a database delete each other's
+rows, and the failure arrives as a flake rather than as an error. Two rules
+follow, and neither is optional:
+
+1. Tests that call `Open` or `Reset` must NOT run in parallel with each other
+   across packages (`go test` runs different PACKAGES concurrently by default;
+   either give the package its own database, or run those packages with `-p 1`).
+2. **Every pocket store train opens its own database** —
+   `OpenDatabase(t, "authorization")` in `pockets/authorization/stores/firestore`,
+   `OpenDatabase(t, "authentication")` in its authentication twin. The emulator
+   serves named databases side by side and the clear endpoint is scoped to one,
+   so the two store suites and this connector's own suite cannot clobber one
+   another even when they run at the same time.
 
 **Live.** `OpenLive(t)` uses `FIRESTORE_LIVE_PROJECT_ID` +
 `FIRESTORE_LIVE_DATABASE_ID` with Application Default Credentials, and refuses
@@ -474,23 +593,62 @@ The live leg needs a **disposable, run-owned named database** — never
 `(default)` — in a dedicated test project, created and deleted per run:
 
 ```sh
-# create (Native mode, never the default database)
+# create (Native mode, never the default database). No --delete-protection flag:
+# it is a value-less boolean that defaults to FALSE, so a new database is already
+# deletable. `--delete-protection=DISABLED` is not a valid value and fails.
 gcloud firestore databases create \
   --database="ci-$GITHUB_RUN_ID" \
   --location="$FIRESTORE_LIVE_LOCATION" \
   --type=firestore-native \
-  --project="$FIRESTORE_LIVE_PROJECT_ID" \
-  --delete-protection=DISABLED
+  --project="$FIRESTORE_LIVE_PROJECT_ID"
 
-# deploy the exported manifest and wait for every index to report READY
-gcloud firestore indexes composite create ...      # or: firebase deploy --only firestore:indexes
+# deploy the exported manifest: one `indexes composite create` per composite in
+# firestore.indexes.json. CI does this with a jq loop (the Firebase CLI is not on
+# the runner); a host that already uses the Firebase CLI can equally run
+# `firebase deploy --only firestore:indexes` against its own firebase.json.
+# --query-scope is omitted because its default is `collection`; pass
+# `--query-scope=collection-group` for a collection-group index.
+gcloud firestore indexes composite create \
+  --collection-group=iam_relationships \
+  --database="ci-$GITHUB_RUN_ID" --project="$FIRESTORE_LIVE_PROJECT_ID" \
+  --field-config=field-path=resource_key,order=ascending \
+  --field-config=field-path=created_at,order=descending
+
+# wait: every expected index must be READY and none CREATING before any query
+# runs (a query against a building index is a FAILED_PRECONDITION that reads
+# like a connector bug). Count them — "no CREATING" alone is also true of a
+# database where nothing was created.
 gcloud firestore indexes composite list \
-  --database="ci-$GITHUB_RUN_ID" --project="$FIRESTORE_LIVE_PROJECT_ID"
+  --database="ci-$GITHUB_RUN_ID" --project="$FIRESTORE_LIVE_PROJECT_ID" \
+  --format=json | jq '[.[] | select(.state == "READY")] | length'
 
 # teardown — ONLY the run-owned database, never "(default)", never the project
 gcloud firestore databases delete \
   --database="ci-$GITHUB_RUN_ID" --project="$FIRESTORE_LIVE_PROJECT_ID" --quiet
 ```
+
+CI names the pre-provisioned-database secret **`FIRESTORE_LIVE_DATABASE_PIN`**,
+not `FIRESTORE_LIVE_DATABASE_ID`: the workflow resolves the id (the pin, or
+`ci-<run id>`) and exports `FIRESTORE_LIVE_DATABASE_ID` for the tests, and a
+job-level secret of that name would win over the resolved value. The credential
+secret is `FIRESTORE_LIVE_CREDENTIALS_B64` (base64 of the key JSON, mapped on
+one step and shredded afterwards). The test PROCESS still reads
+`FIRESTORE_LIVE_DATABASE_ID` — only the secret is named differently.
+
+**Sweep for survivors.** A cancelled run, a revoked permission, or a failed
+`databases delete` can leave a `ci-*` database behind, and it keeps costing.
+Periodically (the owner's habit: before each release train, and monthly
+otherwise):
+
+```sh
+gcloud firestore databases list --project="$FIRESTORE_LIVE_PROJECT_ID" \
+  --format='table(name, createTime)' | grep '/ci-'
+```
+
+Anything older than the run that created it is an orphan; delete it with the
+teardown command above. The workflow records ownership BEFORE it creates the
+database, so a normal failure is already covered — this sweep is for the cases
+where the cleanup step itself never got to run.
 
 IAM on the CI service account, project-scoped to the test project:
 `roles/datastore.owner` covers it, or the least-privilege split
@@ -508,6 +666,45 @@ Application Default Credentials, an EMPTY `FIRESTORE_EMULATOR_HOST`, and — on 
 release train — `FIRESTORE_LIVE_REQUIRED=1`. Cleanup deletes only the database
 that run created; setup and cleanup errors fail the run. No project-wide or
 shared-database cleanup, ever.
+
+## Before the first live dispatch
+
+The `firestore-live` job in `.github/workflows/live-stores.yml` has never run —
+no GCP project exists for this repository yet. Walk this list once, in order,
+the first time it does:
+
+1. **A dedicated project, with billing enabled.** Named (non-`(default)`)
+   Firestore databases require a billing-enabled project, and the whole
+   disposable-database protocol depends on named databases. A free/no-billing
+   project cannot run this leg at all.
+2. **Firestore API enabled** in that project:
+   `gcloud services enable firestore.googleapis.com --project=<test-project>`.
+   The Admin API the index probe uses is part of it.
+3. **IAM bound** on the CI service account, project-scoped, exactly as in
+   "Live-database provisioning" above: `roles/datastore.owner`, or the
+   least-privilege split plus the two database-admin permissions.
+4. **Secrets uploaded**: `FIRESTORE_LIVE_PROJECT_ID`,
+   `FIRESTORE_LIVE_CREDENTIALS_B64` (`base64 -w0 key.json`), and optionally
+   `FIRESTORE_LIVE_DATABASE_PIN` / `FIRESTORE_LIVE_LOCATION`. A project id is
+   **not** a credential — it can equally live in a repository `vars.` entry
+   (`vars.FIRESTORE_LIVE_PROJECT_ID`), which keeps it readable in logs and PRs
+   from forks are still unaffected because the workflow is dispatch-only. Secret
+   vs var is an owner call; switching means editing one line of the job's `env:`.
+   The credential itself is always a secret.
+5. **The runner has gcloud.** The job asserts this with a `gcloud --version`
+   gate step before it creates anything; if a future runner image drops the
+   Cloud SDK, that step names it instead of a half-provisioned database.
+6. **Dispatch once with `firestore_live_required: false`.** The first run is the
+   job's own first proof — every gcloud invocation in it is written from the
+   verified CLI reference but has never executed. A skip is acceptable here; a
+   failure tells you which step is wrong before a release depends on it.
+7. **Confirm the evidence**: the index step ends with "every expected composite
+   index is READY", and the audit table shows every derived `Test*Live` root as
+   `pass`. Both are in the run's uploaded `firestore-live-evidence-*` artifact.
+8. **Confirm no survivors**: run the `ci-*` sweep above; the run-owned database
+   must be gone.
+9. **Only then dispatch with `firestore_live_required: true`** — that is the run
+   whose artifact and run id the release gate cites.
 
 ## Testing
 
@@ -528,6 +725,17 @@ FIRESTORE_EMULATOR_HOST= FIRESTORE_LIVE_REQUIRED=1 \
   GOOGLE_APPLICATION_CREDENTIALS='<sa.json>' \
   go test -json -count=1 -tags='integration,live' -timeout 30m -run 'Live$' ./...
 ```
+
+If port 8080 is already taken, publish another one —
+`docker run --rm -d -p 8081:8080 …` with
+`FIRESTORE_EMULATOR_HOST=127.0.0.1:8081`, or, running the emulator directly,
+`gcloud emulators firestore start --host-port=0.0.0.0:8081`. The tests read the
+endpoint from the environment; nothing here assumes 8080.
+
+The `:emulators` tag above is deliberately floating for local runs. CI pins that
+image **by digest** (see `.github/workflows/live-stores.yml`), because the
+emulator's transaction and lock timing is exactly what the contention tests
+measure.
 
 From the repository root, `make test-stores` runs the emulator leg (skipping
 loudly without `FIRESTORE_EMULATOR_HOST`) and `make check` vets the

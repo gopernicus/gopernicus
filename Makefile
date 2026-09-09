@@ -24,7 +24,8 @@ INTEGRATION_TAG_MODULES = $(filter %/turso %/firestore,$(STORE_MODULES)) integra
 	guard-workshop-boundary guard-sdk-layering guard-integration-no-inward \
 	guard-auth-no-delivery-repo guard-auth-no-request-time-provider \
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
-	guard-no-legacy-features-path guard-crud-no-nethttp guard-violation-message-not-error
+	guard-no-legacy-features-path guard-crud-no-nethttp guard-violation-message-not-error \
+	guard-firestore-mediation
 
 # Regenerate *_templ.go from .templ sources. Each bundled views/templ module pins
 # its own templ tool; generation runs inside each so the tool version is
@@ -68,6 +69,11 @@ test:
 #   docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:17
 #   docker run --rm -d -p 8080:8080 gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
 #     gcloud emulators firestore start --host-port=0.0.0.0:8080 --project=gopernicus-test
+# The floating :emulators tag is deliberate for local runs (convenience, not a
+# gate); CI pins that image BY DIGEST in .github/workflows/live-stores.yml, and
+# bumping the digest there means re-running C3's contention measurements. If
+# 8080 is already taken locally, publish another port
+# (`-p 8081:8080` … FIRESTORE_EMULATOR_HOST=127.0.0.1:8081).
 #   POSTGRES_TEST_DSN='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable' \
 #     FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 FIRESTORE_PROJECT_ID=gopernicus-test make test-stores
 # pgx-leg runs one pgx store module's live suite twice: once unqualified (the
@@ -149,14 +155,15 @@ tidy:
 # Layering guards — each enforces one architectural boundary from the
 # constitution (00-overview.md) or the feature-standard charter (FS rules,
 # 2026-07-07); every target must print nothing and exit 0 on a clean tree.
-# `make guard` runs all twenty-two.
+# `make guard` runs all twenty-three.
 guard: guard-sdk-stdlib guard-pocket-isolation guard-sdk-no-outward guard-no-legacy-path \
 	guard-pocket-core-sdk-only guard-pocket-transport-sdk-web guard-pocket-no-cross-pocket \
 	guard-store-no-foreign-pocket guard-no-underlying guard-no-lax-scan \
 	guard-workshop-boundary guard-sdk-layering guard-integration-no-inward \
 	guard-auth-no-delivery-repo guard-auth-no-request-time-provider \
 	guard-authorization-no-delivery-repo guard-authorization-rolesvc-no-engine guard-ui-no-inward guard-ui-require-whitelist \
-	guard-no-legacy-features-path guard-crud-no-nethttp guard-violation-message-not-error
+	guard-no-legacy-features-path guard-crud-no-nethttp guard-violation-message-not-error \
+	guard-firestore-mediation
 
 # G1: sdk imports only the standard library (also enforced structurally by
 # sdk/go.mod having no require block).
@@ -323,6 +330,39 @@ guard-violation-message-not-error:
 	@echo "== guard: sdk.Violation messages never wrap a raw error string (G23) =="
 	@! grep -rn --include='*.go' -E '(Refuse\(|\.Add\().*err\.Error\(\)' sdk/ pockets/ integrations/ examples/ | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || { echo "ERROR (G23): a violation message wraps a raw error string — sdk.Violation.Message is caller-facing text only, never err.Error() from a store or driver"; exit 1; }
 
+# G24 (firestore-stores C8): a pockets/*/stores/firestore adapter reaches
+# Firestore ONLY through the connector's tx-aware seams. The connector hands out
+# the vendor's own *DocumentRef / *CollectionRef / Query values — they are how a
+# query is BUILT — and every one of them carries its own I/O methods. So a store
+# can call ref.Get(ctx) or q.Documents(ctx) directly, run OUTSIDE the ambient
+# transaction, and silently split an atomic unit. No import guard sees that: the
+# import itself is legitimate. This one greps for the calls, in two parts.
+#
+# (a) the vendor identifiers a store may name at all: the TYPES and VALUES that
+# build a query or describe a write. Anything else under gcfs. — a client
+# constructor, an option, a transaction type — means the store is doing the
+# connector's job. Where/OrderBy/Limit/StartAfter are METHODS on Query and never
+# appear as gcfs.X, so query building is unaffected.
+#
+# (b) the I/O verbs, forbidden on every receiver EXCEPT the connector's seams
+# (a Reader/Writer value, or ReaderFrom/WriterFrom inline). Those are the calls
+# that must not be issued on a raw reference, collection, or query.
+#
+# The glob passes trivially today — no pockets/*/stores/firestore exists yet —
+# and that is the point of landing it with the connector: the first store train
+# is born under it. An empty glob must not error, hence the [ -d ] skip.
+guard-firestore-mediation:
+	@echo "== guard: firestore store adapters issue I/O only through the connector's Reader/Writer (G24) =="
+	@fail=0; for d in pockets/*/stores/firestore/; do \
+		[ -d "$$d" ] || continue; \
+		names=$$(grep -rno --include='*.go' -E 'gcfs\.[A-Za-z_][A-Za-z0-9_]*' $$d \
+			| grep -vE 'gcfs\.(Query|CollectionRef|CollectionGroupRef|DocumentRef|DocumentSnapshot|DocumentIterator|Update|Precondition|SetOption|Merge|MergeAll|Exists|LastUpdateTime|Delete|DocumentID|ServerTimestamp|Asc|Desc|Direction)$$' || true); \
+		if [ -n "$$names" ]; then echo "ERROR (G24): a firestore store adapter names a vendor symbol outside the query/write vocabulary — client lifecycle, transactions and options belong to integrations/datastores/firestore:"; echo "$$names"; fail=1; fi; \
+		io=$$(grep -rn --include='*.go' -E '\.(Documents|GetAll|NewDoc|Add|Snapshots|BulkWriter)\(|\.(Get|Create|Set|Update|Delete)\(ctx' $$d \
+			| grep -vE '(ReaderFrom\(|WriterFrom\(|(^|[^A-Za-z0-9_])(r|w|reader|writer|[A-Za-z]+(Reader|Writer))\.)' || true); \
+		if [ -n "$$io" ]; then echo "ERROR (G24): a firestore store adapter issues vendor I/O directly — build the reference or query, then run it through db.ReaderFrom(ctx) / db.WriterFrom(ctx):"; echo "$$io"; fail=1; fi; \
+	done; exit $$fail
+
 # G13 (sdk-layering, 2026-07-10, folded steward finding): integrations never
 # import inward — no pockets/, examples/, or workshop/. Load-bearing now that
 # COMPOSING integrations (zero external deps, e.g. notify/mailer) are
@@ -480,7 +520,7 @@ guard-no-legacy-features-path:
 # <<< LEGACY-PATTERNS
 
 # CI-style gate: templ generation must be a no-op (no drift), then per-module
-# vet/build/test across all MODULES, then the twenty-one layering guards. Drift
+# vet/build/test across all MODULES, then the twenty-three layering guards. Drift
 # is checked via `git diff` when this tree is a git repo; this repo IS a git
 # repo (as of phase 2), so that branch runs. The before/after checksum branch
 # remains as a fallback for gitless checkouts of *_templ.go.

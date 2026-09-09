@@ -1,6 +1,7 @@
 package firestore_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -8,8 +9,11 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/firestore"
 	"github.com/gopernicus/gopernicus/sdk"
@@ -114,6 +118,109 @@ func TestOpenEmulatedReportsEmulated(t *testing.T) {
 
 	if !db.Emulated() {
 		t.Error("Emulated() = false under FIRESTORE_EMULATOR_HOST")
+	}
+}
+
+// TestConfigStringIsRedacted is the C8 fold of "a Config must not be printable
+// into a log". Redacted() only helps a caller who remembers to call it; %v,
+// %+v, and slog's attribute rendering all reach for String() first, and without
+// one they print every field — including CredentialsJSON's bytes.
+func TestConfigStringIsRedacted(t *testing.T) {
+	const secret = "-----BEGIN PRIVATE KEY-----super-secret-key-material"
+	cfg := firestore.Config{
+		ProjectID:       "gopernicus-test",
+		DatabaseID:      "ci-42",
+		CredentialsJSON: []byte(`{"private_key":"` + secret + `"}`),
+	}
+
+	for _, format := range []string{"%v", "%+v", "%s"} {
+		got := fmt.Sprintf(format, cfg)
+		if strings.Contains(got, secret) {
+			t.Errorf("fmt.Sprintf(%q, cfg) leaked the key: %q", format, got)
+		}
+		if strings.Contains(got, "CredentialsJSON") {
+			t.Errorf("fmt.Sprintf(%q, cfg) = %q, want Redacted()'s target string — a field dump is one struct change away from leaking", format, got)
+		}
+		if got != cfg.Redacted() {
+			t.Errorf("fmt.Sprintf(%q, cfg) = %q, want %q", format, got, cfg.Redacted())
+		}
+	}
+
+	// The same rule through a wrapped error, which is how a boot failure is
+	// actually written.
+	if got := fmt.Errorf("verifying %+v", cfg).Error(); strings.Contains(got, secret) {
+		t.Errorf("a wrapped error leaked the key: %q", got)
+	}
+
+	// slog reaches for String() through its Any value, the shape a host uses.
+	var buf bytes.Buffer
+	slog.New(slog.NewTextHandler(&buf, nil)).Info("boot", "cfg", cfg)
+	if strings.Contains(buf.String(), secret) {
+		t.Errorf("slog leaked the key: %q", buf.String())
+	}
+}
+
+// TestCollectionGroupBuildsAGroupQuery proves the C8 addition is the
+// collection-GROUP scope (every collection with that id, at any depth) and not
+// a second spelling of Collection. Hermetic: building a reference is no I/O,
+// and the vendor's own serialization is the only handle on a Query's private
+// clauses.
+func TestCollectionGroupBuildsAGroupQuery(t *testing.T) {
+	t.Setenv("FIRESTORE_EMULATOR_HOST", "127.0.0.1:1")
+
+	db, err := firestore.Open(context.Background(), firestore.Config{ProjectID: "gopernicus-test"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	group := db.CollectionGroup("sessions")
+	if group == nil {
+		t.Fatal("CollectionGroup returned nil")
+	}
+
+	groupBytes, err := group.Where("user_id", "==", "u1").Serialize()
+	if err != nil {
+		t.Fatalf("serializing the group query: %v", err)
+	}
+	topBytes, err := db.Collection("sessions").Where("user_id", "==", "u1").Serialize()
+	if err != nil {
+		t.Fatalf("serializing the collection query: %v", err)
+	}
+	if bytes.Equal(groupBytes, topBytes) {
+		t.Error("the collection-group query serialized identically to the top-level one — it is not group-scoped")
+	}
+	if !bytes.Contains(groupBytes, []byte("sessions")) {
+		t.Error("the collection-group query does not name the collection id")
+	}
+}
+
+// TestStatusCheckClassifiesFailures proves a failing health check hands the host
+// an sdk-classified error rather than a raw gRPC status: a health endpoint and
+// Open's boot validation both branch on those sentinels.
+func TestStatusCheckClassifiesFailures(t *testing.T) {
+	// Port 1 refuses the connection, so the round trip fails for real without a
+	// server. The zero Retry keeps Open itself from making the trip.
+	t.Setenv("FIRESTORE_EMULATOR_HOST", "127.0.0.1:1")
+
+	db, err := firestore.Open(context.Background(), firestore.Config{ProjectID: "gopernicus-test"})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err = firestore.StatusCheck(ctx, db)
+	if err == nil {
+		t.Fatal("StatusCheck against an unreachable endpoint returned nil")
+	}
+	if !sdk.IsExpected(err) {
+		t.Fatalf("StatusCheck error = %v (%T), want an sdk-classified error", err, err)
+	}
+	if !errors.Is(err, sdk.ErrUnavailable) {
+		t.Errorf("StatusCheck error = %v, want sdk.ErrUnavailable — an unreachable database is a transport failure", err)
 	}
 }
 
