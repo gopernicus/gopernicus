@@ -25,6 +25,27 @@ import (
 // facts"; ruling R2).
 const maxDisjunctions = 30
 
+// maxQueryComplexity is Firestore's SECOND query cap, and the one a
+// disjunction-only budget misses: the sum of FILTERS and SORT ORDERS, counted
+// AFTER expansion to disjunctive normal form, may not exceed 100. Every
+// disjunct carries the whole conjunction, so a query with four filters per
+// disjunct is capped at twenty-four disjunctions, not thirty — thirty would be
+// 120 filters and an InvalidArgument the Go client does not pre-validate.
+const maxQueryComplexity = 100
+
+// maxChunk returns the largest number of disjunctions one query may carry, given
+// how many filters each disjunct contributes and how many sort orders the query
+// adds. It is BOTH vendor caps in one place: the DNF disjunction cap and the
+// filters-plus-orders cap. It never returns less than one, so a pathological
+// filter count still produces a legal (if useless) chunk rather than an empty
+// one that would silently drop values.
+func maxChunk(filtersPerDisjunct, orders int) int {
+	if filtersPerDisjunct < 1 {
+		filtersPerDisjunct = 1
+	}
+	return min(maxDisjunctions, max((maxQueryComplexity-orders)/filtersPerDisjunct, 1))
+}
+
 // expand is the engine-side group walk (ruling R2), the Firestore port of the
 // memstore's expandReachable: it returns the set of subject KEYS the concrete
 // subject IS, transitively — the seed subjectKey(type, id, "") plus every exact

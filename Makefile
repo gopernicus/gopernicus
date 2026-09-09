@@ -349,7 +349,10 @@ guard-violation-message-not-error:
 #
 # (b) the I/O verbs, forbidden on every receiver EXCEPT the connector's seams
 # (a Reader/Writer value, or ReaderFrom/WriterFrom inline). Those are the calls
-# that must not be issued on a raw reference, collection, or query.
+# that must not be issued on a raw reference, collection, or query. The verbs
+# whose vendor signature takes ctx FIRST are matched with it — CollectionRef.Add
+# among them (firestore-stores A2c), because a bare `.Add(` also matches
+# sync.WaitGroup.Add in a store's own concurrency test, which is not I/O at all.
 #
 # The glob passes trivially today — no pockets/*/stores/firestore exists yet —
 # and that is the point of landing it with the connector: the first store train
@@ -361,7 +364,7 @@ guard-firestore-mediation:
 		names=$$(grep -rno --include='*.go' -E 'gcfs\.[A-Za-z_][A-Za-z0-9_]*' $$d \
 			| grep -vE 'gcfs\.(Query|CollectionRef|CollectionGroupRef|DocumentRef|DocumentSnapshot|DocumentIterator|Update|Precondition|SetOption|Merge|MergeAll|Exists|LastUpdateTime|Delete|DocumentID|ServerTimestamp|Asc|Desc|Direction)$$' || true); \
 		if [ -n "$$names" ]; then echo "ERROR (G24): a firestore store adapter names a vendor symbol outside the query/write vocabulary — client lifecycle, transactions and options belong to integrations/datastores/firestore:"; echo "$$names"; fail=1; fi; \
-		io=$$(grep -rn --include='*.go' -E '\.(Documents|GetAll|NewDoc|Add|Snapshots|BulkWriter)\(|\.(Get|Create|Set|Update|Delete)\(ctx' $$d \
+		io=$$(grep -rn --include='*.go' -E '\.(Documents|GetAll|NewDoc|Snapshots|BulkWriter)\(|\.(Get|Create|Set|Update|Delete|Add)\(ctx' $$d \
 			| grep -vE '(ReaderFrom\(|WriterFrom\(|(^|[^A-Za-z0-9_])(r|w|reader|writer|[A-Za-z]+(Reader|Writer))\.)' || true); \
 		if [ -n "$$io" ]; then echo "ERROR (G24): a firestore store adapter issues vendor I/O directly — build the reference or query, then run it through db.ReaderFrom(ctx) / db.WriterFrom(ctx):"; echo "$$io"; fail=1; fi; \
 	done; exit $$fail

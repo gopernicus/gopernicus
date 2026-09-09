@@ -351,9 +351,52 @@ shared (milestone convention).
 the chunk shapes) and proves it against a live database. The emulator enforces
 no composite index, so nothing here is proven by an emulator-green run.
 
+### 7.1 Query shapes the relationship port issues (A2a–A2d)
+
+A5's matrix supersedes this list; it is recorded as A5's raw input, in the order
+the tasks added the shapes. `~` marks a range filter, `in*` an `in` filter that
+is chunked.
+
+| Method | Equality | Range / order | Chunked by |
+|---|---|---|---|
+| expansion hop | `subject_key in*` | — | 30 |
+| expanded check | `resource_key`, `relation`, `subject_key in*` | `Limit(1)` | 30 |
+| relation targets | `resource_key`, `relation` | — | — |
+| candidate scan (set reads) | `resource_type`, `relation`, `resource_id in*` | — | 30 |
+| direct count | `resource_key`, `relation` | count aggregation | — |
+| reconciliation read | `resource_key`, `relation` | — | — |
+| delete by resource | `resource_key` | — | — |
+| delete by relation | `resource_key`, `relation` | — | — |
+| list by subject | `subject_type`, `subject_id` (+ optional `resource_type`, `relation`) | order `created_at`, `relationship_id`, BOTH directions | — |
+| list by resource | `resource_key` (+ optional `subject_type`, `relation`) | same | — |
+| lookup by relations | `resource_type`, `relation in*`, `subject_key in*` | `resource_id ~`, order `resource_id`, `__name__` | 24 (product) |
+| lookup by target | `resource_type`, `relation`, `subject_key in*` | same | 24 |
+| descendant hop | `resource_type`, `relation in*`, `subject_key in*` | — | 30 (product) |
+
+Two vendor caps decide those chunk sizes, and only the first was pinned before
+A2d: at most **30 disjunctions** after DNF expansion (an `in` of N values
+contributes N, and two `in` filters contribute their PRODUCT), AND at most
+**100 filters plus sort orders**, counted across the expanded disjunctions. A
+lookup stream carries four filters and two orders per disjunct, so its budget is
+`(100 - 2) / 4 = 24`, not 30 — thirty was 120 filters and an `InvalidArgument`
+the Go client does not pre-validate. `maxChunk` in `reads.go` resolves both caps;
+`chunking_test.go` pins the arithmetic hermetically.
+
 ## 8. Known family differences (R1)
 
 The store returns no `crud.Transactor` and refuses a context carrying a
 connector transaction with `ErrAmbientTransactionUnsupported` (the mutation
 methods also wrap `mutation.ErrGuardedInsideTransaction`, the sentinel the pocket
 already defines for that refusal). `storetest.RunTransactional` skips loudly.
+
+### 8.1 The per-transaction tuple ceiling (A2c)
+
+Firestore commits at most **500 write operations** in one transaction, and a
+tuple owns three documents (row + two claims), so a single `CreateRelationships`,
+`SetRelationTargets`, or delete may change at most **166 tuples**. Past that the
+call fails with `ErrTupleWriteLimit` (wrapping `sdk.ErrInvalidInput`) BEFORE
+anything is written — the operation is never split across transactions, because
+a split is a partially applied batch, which is exactly the atomicity those
+methods promise. The SQL families have no equivalent bound: one statement covers
+any number of rows. A host that bulk-loads or tears down more than 166 tuples for
+one resource calls the port in several batches, each atomic on its own.

@@ -2,8 +2,12 @@ package firestore
 
 import (
 	"context"
+	"fmt"
+
+	gcfs "cloud.google.com/go/firestore"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
+	"github.com/gopernicus/gopernicus/sdk"
 )
 
 // putTuple and dropTuple are the ONLY two writers of a relationship tuple's
@@ -24,6 +28,26 @@ import (
 // unique six-part tuple, in the SQL unique index's column order.
 func tupleID(row relationshipDoc) string {
 	return relationshipDocID(row.ResourceType, row.ResourceID, row.Relation, row.SubjectType, row.SubjectID, row.SubjectRelation)
+}
+
+// claimRefs returns the three document references a tuple owns: the row itself,
+// its subject claim, and its relationship_id claim.
+func claimRefs(db *firestoredb.DB, row relationshipDoc) (tuple, subject, id *gcfs.DocumentRef) {
+	return db.Doc(collectionRelationships, tupleID(row)),
+		db.Doc(collectionSubjectClaims, subjectClaimDocID(row.ResourceType, row.ResourceID, row.SubjectType, row.SubjectID, row.SubjectRelation)),
+		db.Doc(collectionIDClaims, idClaimDocID(row.RelationshipID))
+}
+
+// decodeSubjectClaim decodes one subject-claim document. It lives here rather
+// than with the caller for the same reason putTuple and dropTuple do: every
+// reference to the claim collections belongs to this file, so the compiler and
+// TestClaimCollectionsAreOwnedByTuplesOnly can both see the whole set.
+func decodeSubjectClaim(snap *gcfs.DocumentSnapshot) (subjectClaimDoc, bool, error) {
+	var claim subjectClaimDoc
+	if err := snap.DataTo(&claim); err != nil {
+		return subjectClaimDoc{}, false, fmt.Errorf("authorization firestore store: decoding %s: %s: %w", collectionSubjectClaims, err, sdk.ErrInvalidInput)
+	}
+	return claim, true, nil
 }
 
 // putTuple writes one relationship tuple and both of its claims through w. The

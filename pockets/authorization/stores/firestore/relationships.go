@@ -210,46 +210,134 @@ func (s *relationshipStore) CheckBatchDirect(ctx context.Context, resourceType s
 	return out, nil
 }
 
+// CreateRelationships inserts a batch of tuples in ONE Firestore transaction:
+// every document the batch could collide with is read first, then the surviving
+// rows are written. There is no partial commit — the whole batch lands or none
+// of it does — and the batch shares one created_at, which is what makes the
+// relationship_id the load-bearing keyset tiebreak.
+//
+// A colliding row is a SILENT NO-OP (nil error, existing row untouched), never
+// ErrAlreadyExists: the SQL siblings' bare `ON CONFLICT DO NOTHING` has no
+// conflict target, so it covers the unique tuple, the one-relation-per-subject
+// index, AND the primary key. See createRelationships for the three collisions
+// and for how duplicates inside the batch resolve in input order.
+//
+// A batch past the transaction write limit is refused BEFORE the transaction
+// opens (ErrTupleWriteLimit): splitting it across transactions would be a
+// partially applied batch, which is the one thing this method promises not to
+// be.
 func (s *relationshipStore) CreateRelationships(ctx context.Context, relationships []relationship.CreateRelationship) error {
 	if err := refuseAmbient(ctx); err != nil {
 		return err
 	}
-	return errNotImplemented
+	if len(relationships) == 0 {
+		return nil
+	}
+	if len(relationships) > maxTuplesPerTransaction {
+		return writeLimitError("CreateRelationships", len(relationships))
+	}
+	return s.db.Transact(ctx, func(ctx context.Context) error {
+		return createRelationships(ctx, s.db, relationships)
+	})
 }
 
+// SetRelationTargets makes the stored targets of one resource+relation equal the
+// desired set, atomically, in ONE Firestore transaction: read the current
+// targets and the missing targets' claims, then delete the surplus and create
+// the missing. An empty desired set clears the relation, and repeating a desired
+// state changes nothing — existing rows keep their id and created_at.
+//
+// Concurrent callers CONVERGE rather than union. Firestore aborts the commit
+// that lost the race against a writer whose document the loser's query covered,
+// the vendor re-runs this callback, and the retry sees the winner's row as
+// surplus and removes it. A desired target already holding a different relation
+// is sdk.ErrConflict and the transaction rolls back unchanged.
 func (s *relationshipStore) SetRelationTargets(ctx context.Context, resourceType, resourceID, relation string, targets []relationship.CreateRelationship) error {
 	if err := refuseAmbient(ctx); err != nil {
 		return err
 	}
-	return errNotImplemented
+	desired, err := desiredTargets(resourceType, resourceID, relation, targets)
+	if err != nil {
+		return err
+	}
+	return s.db.Transact(ctx, func(ctx context.Context) error {
+		return setRelationTargets(ctx, s.db, resourceType, resourceID, relation, desired)
+	})
 }
 
+// DeleteRelationshipTarget removes ONE exact tuple, userset relation included.
+// The tuple's document id IS the six-part tuple, so the read is a single Get
+// rather than a query — but it still happens inside the transaction, because the
+// relationship_id claim can only be dropped by reading the row that owns it.
+// An absent tuple is nil (idempotent) and writes nothing.
 func (s *relationshipStore) DeleteRelationshipTarget(ctx context.Context, resourceType, resourceID, relation string, target relationship.SubjectRef) error {
 	if err := refuseAmbient(ctx); err != nil {
 		return err
 	}
-	return errNotImplemented
+	ref := s.db.Doc(collectionRelationships, relationshipDocID(resourceType, resourceID, relation, target.Type, target.ID, target.Relation))
+	return s.db.Transact(ctx, func(ctx context.Context) error {
+		snap, err := s.db.ReaderFrom(ctx).Get(ctx, ref)
+		if err != nil && !errors.Is(err, sdk.ErrNotFound) {
+			return err
+		}
+		if snap == nil || !snap.Exists() {
+			return nil
+		}
+		row, err := decodeRelationship(snap)
+		if err != nil {
+			return err
+		}
+		return dropTuple(ctx, s.db, s.db.WriterFrom(ctx), row)
+	})
 }
 
+// DeleteResourceRelationships removes every tuple for a resource — rows and both
+// claims — in ONE transaction. Idempotent: a resource with no tuples writes
+// nothing and returns nil.
 func (s *relationshipStore) DeleteResourceRelationships(ctx context.Context, resourceType, resourceID string) error {
 	if err := refuseAmbient(ctx); err != nil {
 		return err
 	}
-	return errNotImplemented
+	return s.db.Transact(ctx, func(ctx context.Context) error {
+		return dropMatching(ctx, s.db, "DeleteResourceRelationships",
+			s.db.Collection(collectionRelationships).Where("resource_key", "==", resourceKey(resourceType, resourceID)),
+			nil)
+	})
 }
 
+// DeleteRelationship removes the tuples a CONCRETE subject pair holds under one
+// relation on a resource. It deliberately does not constrain subject_relation —
+// the SQL siblings' five-column DELETE does not either — so a subject that is
+// also stored as a userset on that relation loses both rows in the same
+// transaction. Idempotent.
 func (s *relationshipStore) DeleteRelationship(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) error {
 	if err := refuseAmbient(ctx); err != nil {
 		return err
 	}
-	return errNotImplemented
+	return s.db.Transact(ctx, func(ctx context.Context) error {
+		return dropMatching(ctx, s.db, "DeleteRelationship",
+			s.db.Collection(collectionRelationships).
+				Where("resource_key", "==", resourceKey(resourceType, resourceID)).
+				Where("relation", "==", relation),
+			func(row relationshipDoc) bool {
+				return row.SubjectType == subjectType && row.SubjectID == subjectID
+			})
+	})
 }
 
+// DeleteByResourceAndSubject removes every relation a subject holds on one
+// resource, in ONE transaction. Idempotent.
 func (s *relationshipStore) DeleteByResourceAndSubject(ctx context.Context, resourceType, resourceID, subjectType, subjectID string) error {
 	if err := refuseAmbient(ctx); err != nil {
 		return err
 	}
-	return errNotImplemented
+	return s.db.Transact(ctx, func(ctx context.Context) error {
+		return dropMatching(ctx, s.db, "DeleteByResourceAndSubject",
+			s.db.Collection(collectionRelationships).Where("resource_key", "==", resourceKey(resourceType, resourceID)),
+			func(row relationshipDoc) bool {
+				return row.SubjectType == subjectType && row.SubjectID == subjectID
+			})
+	})
 }
 
 // CountByResourceAndRelation counts DIRECT tuples only — never expanded
@@ -275,37 +363,157 @@ func (s *relationshipStore) CountByResourceAndRelation(ctx context.Context, reso
 	return int(n), nil
 }
 
+// ListRelationshipsBySubject pages the resources a subject relates to, in the
+// port's contractual order (created_at DESC, relationship_id DESC by default).
+// The subject is matched on its type and id ONLY — never on subject_key, which
+// folds in subject_relation — so a subject's userset rows are listed beside its
+// concrete ones, exactly as the SQL siblings' five-column WHERE lists them.
+// Both optional filters become equality clauses.
 func (s *relationshipStore) ListRelationshipsBySubject(ctx context.Context, subjectType, subjectID string, filter relationship.SubjectRelationshipFilter, req crud.ListRequest) (crud.Page[relationship.SubjectRelationship], error) {
 	if err := refuseAmbient(ctx); err != nil {
 		return crud.Page[relationship.SubjectRelationship]{}, err
 	}
-	return crud.Page[relationship.SubjectRelationship]{}, errNotImplemented
+	base := s.db.Collection(collectionRelationships).
+		Where("subject_type", "==", subjectType).
+		Where("subject_id", "==", subjectID)
+	if filter.ResourceType != nil {
+		base = base.Where("resource_type", "==", *filter.ResourceType)
+	}
+	if filter.Relation != nil {
+		base = base.Where("relation", "==", *filter.Relation)
+	}
+	page, err := firestoredb.List(ctx, s.db.ReaderFrom(ctx), listRelationships(base), req)
+	if err != nil {
+		return crud.Page[relationship.SubjectRelationship]{}, err
+	}
+	return crud.MapPage(page, relationshipDoc.toSubjectRelationship), nil
 }
 
+// ListRelationshipsByResource pages the subjects related to a resource, in the
+// same contractual order. The resource is ONE equality clause on the derived
+// resource_key, which is the hash of exactly the (resource_type, resource_id)
+// pair the SQL siblings match with two columns.
 func (s *relationshipStore) ListRelationshipsByResource(ctx context.Context, resourceType, resourceID string, filter relationship.ResourceRelationshipFilter, req crud.ListRequest) (crud.Page[relationship.ResourceRelationship], error) {
 	if err := refuseAmbient(ctx); err != nil {
 		return crud.Page[relationship.ResourceRelationship]{}, err
 	}
-	return crud.Page[relationship.ResourceRelationship]{}, errNotImplemented
+	base := s.db.Collection(collectionRelationships).
+		Where("resource_key", "==", resourceKey(resourceType, resourceID))
+	if filter.SubjectType != nil {
+		base = base.Where("subject_type", "==", *filter.SubjectType)
+	}
+	if filter.Relation != nil {
+		base = base.Where("relation", "==", *filter.Relation)
+	}
+	page, err := firestoredb.List(ctx, s.db.ReaderFrom(ctx), listRelationships(base), req)
+	if err != nil {
+		return crud.Page[relationship.ResourceRelationship]{}, err
+	}
+	return crud.MapPage(page, relationshipDoc.toResourceRelationship), nil
 }
 
+// LookupResourceIDs returns the DISTINCT resource ids where the subject holds
+// any of the relations, with group expansion: raw-byte order, strictly after
+// `after`, at most limit (non-positive is unbounded).
+//
+// The subject is expanded ONCE, and the reached states and the relations are
+// both `in` filters — so the queries are chunked by their DNF PRODUCT, and the
+// per-chunk streams are merged in id order with duplicates folded BEFORE the
+// limit applies. The expansion and every chunk stream run under ONE snapshot, so
+// a page cannot mix a pre- and post-revocation view of the membership graph.
 func (s *relationshipStore) LookupResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType, subjectID, after string, limit int) ([]string, error) {
 	if err := refuseAmbient(ctx); err != nil {
 		return nil, err
 	}
-	return nil, errNotImplemented
+	if len(relations) == 0 {
+		return nil, nil
+	}
+	var out []string
+	err := s.db.ReadSnapshot(ctx, func(ctx context.Context, r firestoredb.Reader) error {
+		out = nil
+		reached, err := expand(ctx, s.db, r, subjectType, subjectID, 0)
+		if err != nil {
+			return err
+		}
+		var streams []*idStream
+		for _, pair := range chunkProduct(distinctSortedIDs(relations), sortedKeys(reached), lookupChunkBudget) {
+			q := whereAnyOf(
+				whereAnyOf(s.db.Collection(collectionRelationships).Where("resource_type", "==", resourceType), "relation", pair.primary),
+				"subject_key", pair.secondary)
+			streams = append(streams, newIDStream(r, q, after, limit))
+		}
+		out, err = mergeDistinctIDs(ctx, streams, limit)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
+// LookupResourceIDsByRelationTarget returns the DISTINCT resource ids whose
+// relation points at any of the target ids — CONCRETE subjects only, no
+// expansion — in the same keyset contract as LookupResourceIDs.
+//
+// The concrete-subject requirement is not a separate filter: a subject key
+// hashes (type, id, subject_relation) together, so keying the targets with an
+// empty subject relation is what excludes a stored userset with the same type
+// and id.
 func (s *relationshipStore) LookupResourceIDsByRelationTarget(ctx context.Context, resourceType, relation, targetType string, targetIDs []string, after string, limit int) ([]string, error) {
 	if err := refuseAmbient(ctx); err != nil {
 		return nil, err
 	}
-	return nil, errNotImplemented
+	if len(targetIDs) == 0 {
+		return nil, nil
+	}
+	var out []string
+	err := s.db.ReadSnapshot(ctx, func(ctx context.Context, r firestoredb.Reader) error {
+		out = nil
+		var streams []*idStream
+		for _, chunk := range chunkStrings(subjectKeysOf(targetType, targetIDs), lookupChunkBudget) {
+			q := whereAnyOf(s.db.Collection(collectionRelationships).
+				Where("resource_type", "==", resourceType).
+				Where("relation", "==", relation), "subject_key", chunk)
+			streams = append(streams, newIDStream(r, q, after, limit))
+		}
+		var err error
+		out, err = mergeDistinctIDs(ctx, streams, limit)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
+// LookupDescendantResourceIDs walks the UNION of the self-referential relations
+// transitively from the root ids and pages the sorted, distinct CLOSURE — after
+// and limit bound the RESULT, not the work, exactly as the recursive CTE in the
+// SQL siblings computes the whole closure on every call. A root is returned only
+// when a cycle makes it a genuine descendant, and the walk terminates on a cycle
+// because a resource already in the closure is never re-queued.
+//
+// The whole walk runs under ONE snapshot: a hop that observed a newer instant
+// than its predecessor could return a descendant of an edge that never coexisted
+// with the one that reached it.
 func (s *relationshipStore) LookupDescendantResourceIDs(ctx context.Context, resourceType string, relations []string, subjectType string, rootIDs []string, after string, limit int) ([]string, error) {
 	if err := refuseAmbient(ctx); err != nil {
 		return nil, err
 	}
-	return nil, errNotImplemented
+	if len(rootIDs) == 0 || len(relations) == 0 {
+		return nil, nil
+	}
+	var out []string
+	err := s.db.ReadSnapshot(ctx, func(ctx context.Context, r firestoredb.Reader) error {
+		closure, err := descendantClosure(ctx, s.db, r, resourceType, relations, subjectType, rootIDs)
+		if err != nil {
+			return err
+		}
+		out = pageIDs(closure, after, limit)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
