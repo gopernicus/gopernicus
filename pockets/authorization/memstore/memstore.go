@@ -320,6 +320,58 @@ func (r *Relationships) getRelationTargetsLocked(resourceType, resourceID, relat
 	return out
 }
 
+// FilterRelation returns the DISTINCT, byte-order sorted subset of resourceIDs
+// the subject holds relation on, directly or through exact userset expansion —
+// the set form of CheckRelationWithGroupExpansion over ONE shared walk of the
+// membership graph. An empty input is an empty result with no walk at all.
+func (r *Relationships) FilterRelation(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) ([]string, error) {
+	if len(resourceIDs) == 0 {
+		return nil, nil
+	}
+	r.st.mu.Lock()
+	defer r.st.mu.Unlock()
+	want := make(map[string]bool, len(resourceIDs))
+	for _, id := range resourceIDs {
+		want[id] = true
+	}
+	reached, overflow := r.expandReachable(subjectType, subjectID, maxExpansionStates)
+	if overflow {
+		return nil, relationship.ErrExpansionBudgetExceeded
+	}
+	return r.distinctResourceIDs(func(row relRow) bool {
+		return row.resourceType == resourceType && row.relation == relation && want[row.resourceID] &&
+			reached[reachable{row.subjectType, row.subjectID, row.subjectRelation}]
+	}), nil
+}
+
+// RelationTargetsFor returns the subjects holding relation on each of
+// resourceIDs — the set form of GetRelationTargets over one pass of the rows.
+// An id with no targets is absent from the map; a duplicated input id carries
+// one entry.
+func (r *Relationships) RelationTargetsFor(ctx context.Context, resourceType string, resourceIDs []string, relation string) (map[string][]relationship.RelationTarget, error) {
+	out := make(map[string][]relationship.RelationTarget, len(resourceIDs))
+	if len(resourceIDs) == 0 {
+		return out, nil
+	}
+	r.st.mu.Lock()
+	defer r.st.mu.Unlock()
+	want := make(map[string]bool, len(resourceIDs))
+	for _, id := range resourceIDs {
+		want[id] = true
+	}
+	for _, row := range r.st.rel {
+		if row.resourceType != resourceType || row.relation != relation || !want[row.resourceID] {
+			continue
+		}
+		out[row.resourceID] = append(out[row.resourceID], relationship.RelationTarget{
+			Type:     row.subjectType,
+			ID:       row.subjectID,
+			Relation: row.subjectRelation,
+		})
+	}
+	return out, nil
+}
+
 // CheckBatchDirect returns resourceID -> allowed for one relation across ids,
 // with group expansion.
 func (r *Relationships) CheckBatchDirect(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) (map[string]bool, error) {

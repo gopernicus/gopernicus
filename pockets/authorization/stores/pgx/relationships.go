@@ -342,6 +342,133 @@ FROM cnt LEFT JOIN matches m ON true`
 	return out, nil
 }
 
+// FilterRelation returns the DISTINCT, byte-order sorted subset of resourceIDs
+// the subject holds relation on, with group expansion — the set form of
+// CheckRelationWithGroupExpansion in ONE statement. The whole id set binds as a
+// SINGLE text[] parameter (`resource_id = ANY(@resource_ids)`), so PostgreSQL's
+// bind-parameter ceiling is never the bound here and no chunking is needed; the
+// 0005 index (resource_type, relation, resource_id COLLATE "C") serves both the
+// equality columns and the ordered output.
+//
+// COLLATE "C" is pinned on the projected/ordered expression for the same reason
+// the keyset lookups pin it (see lookupResourceIDsSQL): the engine compares this
+// output with Go string comparison, so the order must be RAW BYTE order.
+//
+// maxExpansionStates bounds the shared subject expansion (boundedReachableCTE);
+// overflow returns relationship.ErrExpansionBudgetExceeded, never a short list.
+// maxExpansionStates <= 0 uses the unbounded reachableCTE.
+func (s *relationshipStore) FilterRelation(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) ([]string, error) {
+	if len(resourceIDs) == 0 {
+		return nil, nil
+	}
+
+	if maxExpansionStates <= 0 {
+		q := reachableCTE(s.schema) + `
+SELECT DISTINCT r.resource_id COLLATE "C" AS resource_id
+FROM ` + s.table("iam_relationships") + ` r
+JOIN reachable ON r.subject_type = reachable.atype AND r.subject_id = reachable.aid AND r.subject_relation = reachable.arelation
+WHERE r.resource_type = @resource_type AND r.relation = @relation AND r.resource_id = ANY(@resource_ids::text[])
+ORDER BY r.resource_id COLLATE "C"`
+		return queryStrings(ctx, s.db.QuerierFrom(ctx), q, pgx.NamedArgs{
+			"subject_type":  subjectType,
+			"subject_id":    subjectID,
+			"resource_type": resourceType,
+			"relation":      relation,
+			"resource_ids":  resourceIDs,
+		})
+	}
+
+	// The distinct-state count rides every result row via the cnt cross-join, so
+	// overflow is detectable even when no resource matches (zero match rows) —
+	// the same shape CheckBatchDirect uses.
+	q := boundedReachableCTE(s.schema) + `,
+cnt AS (SELECT count(*) AS n FROM capped),
+matches AS (
+	SELECT DISTINCT r.resource_id COLLATE "C" AS rid
+	FROM ` + s.table("iam_relationships") + ` r
+	JOIN capped ON r.subject_type = capped.atype AND r.subject_id = capped.aid AND r.subject_relation = capped.arelation
+	WHERE r.resource_type = @resource_type AND r.relation = @relation AND r.resource_id = ANY(@resource_ids::text[])
+)
+SELECT cnt.n AS state_count, m.rid
+FROM cnt LEFT JOIN matches m ON true
+ORDER BY m.rid COLLATE "C"`
+	rows, err := s.db.QuerierFrom(ctx).Query(ctx, q, pgx.NamedArgs{
+		"subject_type":  subjectType,
+		"subject_id":    subjectID,
+		"resource_type": resourceType,
+		"relation":      relation,
+		"resource_ids":  resourceIDs,
+		"max_depth":     maxExpansionStates,
+		"state_cap":     maxExpansionStates + 1,
+	})
+	if err != nil {
+		return nil, pgxdb.MapError(err)
+	}
+	defer rows.Close()
+
+	overflow := false
+	var out []string
+	for rows.Next() {
+		var stateCount int
+		var rid *string
+		if err := rows.Scan(&stateCount, &rid); err != nil {
+			return nil, pgxdb.MapError(err)
+		}
+		if stateCount > maxExpansionStates {
+			overflow = true
+		}
+		if rid != nil {
+			out = append(out, *rid)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, pgxdb.MapError(err)
+	}
+	if overflow {
+		return nil, relationship.ErrExpansionBudgetExceeded
+	}
+	return out, nil
+}
+
+// RelationTargetsFor returns the subjects holding relation on each of
+// resourceIDs — the set form of GetRelationTargets in ONE statement, with the
+// id set bound as a single text[] parameter. An id with no targets is absent
+// from the map; a duplicated input id carries one entry.
+func (s *relationshipStore) RelationTargetsFor(ctx context.Context, resourceType string, resourceIDs []string, relation string) (map[string][]relationship.RelationTarget, error) {
+	out := make(map[string][]relationship.RelationTarget, len(resourceIDs))
+	if len(resourceIDs) == 0 {
+		return out, nil
+	}
+
+	q := `SELECT resource_id, subject_type, subject_id, subject_relation FROM ` + s.table("iam_relationships") + `
+WHERE resource_type = @resource_type AND relation = @relation AND resource_id = ANY(@resource_ids::text[])`
+	rows, err := s.db.QuerierFrom(ctx).Query(ctx, q, pgx.NamedArgs{
+		"resource_type": resourceType,
+		"relation":      relation,
+		"resource_ids":  resourceIDs,
+	})
+	if err != nil {
+		return nil, pgxdb.MapError(err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var resourceID, subjectType, subjectID, subjectRelation string
+		if err := rows.Scan(&resourceID, &subjectType, &subjectID, &subjectRelation); err != nil {
+			return nil, pgxdb.MapError(err)
+		}
+		out[resourceID] = append(out[resourceID], relationship.RelationTarget{
+			Type:     subjectType,
+			ID:       subjectID,
+			Relation: subjectRelation,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, pgxdb.MapError(err)
+	}
+	return out, nil
+}
+
 // CreateRelationships inserts a batch as one INSERT ... SELECT FROM UNNEST(...) ON
 // CONFLICT DO NOTHING (the postgres bulk-insert analog of turso's multi-row
 // VALUES). The bare ON CONFLICT covers both unique indexes: an exact-duplicate

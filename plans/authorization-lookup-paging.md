@@ -264,6 +264,19 @@ says why in one table (sparse vs dense, who orders, what the cost scales with).
 | a space's children / dashboards, a tenant's roots | dense, bounded by the container, host order (name) | B over the store's `BySpace` / `Children` / `Roots` as a keyset source |
 | breadcrumb navigability, item rosters | tiny, already fetched | plain `FilterAuthorized` / `Check`, as today |
 
+**Amended 2026-09-08 (`authorization-batch-decision`, task 4).** The container
+row above was written when a `FilterAuthorized` cost N × (branches + hops) round
+trips, which is what made a sparse container page unusable (segovia v2 O13: 12
+allowed of 300 candidates, ~18 s) and moved those listings to prefilter. That
+cost is gone — one `FilterAuthorized` is now ONE set evaluation, `O(branches +
+hops)` reads for the whole candidate set — so the rule is about which SET is
+smaller, not about which path is safe:
+
+| list | rule |
+|---|---|
+| a container listing where the principal's visible set of that type is BOUNDED (the ordinary member of a few tenants/spaces) | **PREFILTER** — v1's rule, and what segovia v2 shipped in O13. One `LookupResourcesIn` and the host's own `WHERE id = ANY(...)` beats scanning candidates. |
+| a host-ordered candidate stream whose visible set is NOT bounded — a manager inside a huge tenant, a search result, "my own rows" across containers | **B (`FilterPage`)**, which is the case this plan reserved it for and which the set decision now makes honest. |
+
 ## Tasks
 
 | # | task | where | done when |

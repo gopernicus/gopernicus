@@ -229,12 +229,30 @@ func (c *Composite) CheckBatch(ctx context.Context, reqs []authorizersvc.CheckRe
 	return results, nil
 }
 
-// FilterAuthorized returns only the resource IDs the principal can access,
-// through CheckBatch — so each ID's decision comes from the model that declares
-// the pair and the batch ceiling is charged once. No IDs is (nil, nil).
+// FilterAuthorized returns only the resource IDs the principal can access. The
+// query names ONE resource type and ONE permission, so exactly one model owns
+// it and answers the whole call — the batch ceiling is charged once, here,
+// before any validation or store call. No IDs is (nil, nil).
+//
+// The two kinds answer it in the shape each is good at. The RELATIONSHIP kind
+// evaluates the candidate set ONCE (authorizersvc.FilterAuthorized →
+// evaluateSet): one store read per (branch, hop) over the whole set instead of
+// one per (candidate, branch, hop), which is what makes a page of DENIED
+// candidates cost branches-and-hops rather than N × branches round trips. The
+// ROLES kind keeps its own already-set-shaped answer through CheckBatch, whose
+// Unrestricted (globally held role) semantics are untouched.
 func (c *Composite) FilterAuthorized(ctx context.Context, principal authorizersvc.PrincipalRef, permission, resourceType string, resourceIDs []string) ([]string, error) {
 	if len(resourceIDs) == 0 {
 		return nil, nil
+	}
+	// Reject an over-size candidate set BEFORE any store call, exactly as
+	// CheckBatch does — an oversized request is indeterminate work, not a
+	// decision.
+	if len(resourceIDs) > c.limits.MaxBatchSize {
+		return nil, authorizersvc.ErrEvaluationLimit
+	}
+	if c.ownedByRelationships(resourceType, permission) {
+		return c.relationships.FilterAuthorized(ctx, principal, permission, resourceType, resourceIDs)
 	}
 
 	reqs := make([]authorizersvc.CheckRequest, len(resourceIDs))

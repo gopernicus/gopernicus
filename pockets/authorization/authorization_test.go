@@ -27,6 +27,15 @@ func (f *relFake) CheckRelationWithGroupExpansion(ctx context.Context, resourceT
 func (f *relFake) GetRelationTargets(ctx context.Context, resourceType, resourceID, relation string) ([]relationship.RelationTarget, error) {
 	return nil, nil
 }
+func (f *relFake) FilterRelation(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) ([]string, error) {
+	for range resourceIDs {
+		f.checkCalls++
+	}
+	return nil, nil
+}
+func (f *relFake) RelationTargetsFor(ctx context.Context, resourceType string, resourceIDs []string, relation string) (map[string][]relationship.RelationTarget, error) {
+	return nil, nil
+}
 func (f *relFake) CheckRelationExists(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) (bool, error) {
 	return false, nil
 }

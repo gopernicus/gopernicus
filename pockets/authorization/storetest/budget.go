@@ -185,6 +185,11 @@ func runBudget(t *testing.T, newRepos func(t *testing.T) authorization.Repositor
 			if _, err := s.CheckBatchDirect(ctx, "doc", []string{"d1"}, "viewer", "user", "u1", 3); !errors.Is(err, relationship.ErrExpansionBudgetExceeded) {
 				t.Fatalf("batch over budget: want ErrExpansionBudgetExceeded, got %v", err)
 			}
+			// FilterRelation shares it too — this is the read the engine's SET
+			// evaluation makes, so it is the bound a candidate page actually hits.
+			if _, err := s.FilterRelation(ctx, "doc", []string{"d1", "d2"}, "viewer", "user", "u1", 3); !errors.Is(err, relationship.ErrExpansionBudgetExceeded) {
+				t.Fatalf("set read over budget: want ErrExpansionBudgetExceeded, got %v", err)
+			}
 		})
 
 		t.Run("WithinBudgetNoFalseOverflow", func(t *testing.T) {
@@ -206,10 +211,21 @@ func runBudget(t *testing.T, newRepos func(t *testing.T) authorization.Repositor
 			if !batch["d1"] {
 				t.Fatalf("batch within budget: want d1 allowed, got %v", batch)
 			}
+			filtered, err := s.FilterRelation(ctx, "doc", []string{"d1", "d2"}, "viewer", "user", "u1", 50)
+			if err != nil {
+				t.Fatalf("set read within budget: unexpected err %v", err)
+			}
+			if len(filtered) != 1 || filtered[0] != "d1" {
+				t.Fatalf("set read within budget: want [d1], got %v", filtered)
+			}
 			// A non-member within budget is a clean deny, not an error.
 			deny, err := s.CheckRelationWithGroupExpansion(ctx, "doc", "d1", "viewer", "user", "nobody", 50)
 			if err != nil || deny {
 				t.Fatalf("non-member within budget: want (false,nil), got (%v,%v)", deny, err)
+			}
+			none, err := s.FilterRelation(ctx, "doc", []string{"d1"}, "viewer", "user", "nobody", 50)
+			if err != nil || len(none) != 0 {
+				t.Fatalf("non-member set read within budget: want an empty result, got (%v,%v)", none, err)
 			}
 		})
 	})

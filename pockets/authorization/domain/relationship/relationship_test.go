@@ -21,6 +21,14 @@ func (stubStorer) GetRelationTargets(ctx context.Context, resourceType, resource
 	return nil, nil
 }
 
+func (stubStorer) FilterRelation(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) ([]string, error) {
+	return nil, nil
+}
+
+func (stubStorer) RelationTargetsFor(ctx context.Context, resourceType string, resourceIDs []string, relation string) (map[string][]RelationTarget, error) {
+	return nil, nil
+}
+
 func (stubStorer) CheckRelationExists(ctx context.Context, resourceType, resourceID, relation, subjectType, subjectID string) (bool, error) {
 	return false, nil
 }

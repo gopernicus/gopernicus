@@ -16,11 +16,13 @@ var errStubRead = errors.New("stub read failed")
 // stubReader is a minimal PermissionReader for memoReader unit tests: it counts
 // calls, can fail its first call of each method, and returns a fixed answer.
 type stubReader struct {
-	targets      []relationship.RelationTarget
-	allowed      bool
-	failFirst    bool
-	targetsCalls int
-	directCalls  int
+	targets         []relationship.RelationTarget
+	allowed         bool
+	failFirst       bool
+	targetsCalls    int
+	directCalls     int
+	setTargetsCalls int
+	setDirectCalls  int
 }
 
 func (s *stubReader) GetRelationTargets(ctx context.Context, resourceType, resourceID, relation string) ([]relationship.RelationTarget, error) {
@@ -37,6 +39,31 @@ func (s *stubReader) CheckRelationWithGroupExpansion(ctx context.Context, resour
 		return false, errStubRead
 	}
 	return s.allowed, nil
+}
+
+func (s *stubReader) FilterRelation(ctx context.Context, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) ([]string, error) {
+	s.setDirectCalls++
+	if s.failFirst && s.setDirectCalls == 1 {
+		return nil, errStubRead
+	}
+	if !s.allowed {
+		return nil, nil
+	}
+	return distinctSorted(resourceIDs), nil
+}
+
+func (s *stubReader) RelationTargetsFor(ctx context.Context, resourceType string, resourceIDs []string, relation string) (map[string][]relationship.RelationTarget, error) {
+	s.setTargetsCalls++
+	if s.failFirst && s.setTargetsCalls == 1 {
+		return nil, errStubRead
+	}
+	out := make(map[string][]relationship.RelationTarget, len(resourceIDs))
+	for _, id := range distinctSorted(resourceIDs) {
+		if len(s.targets) > 0 {
+			out[id] = cloneTargets(s.targets)
+		}
+	}
+	return out, nil
 }
 
 // chainSchema adds a second Through hop above testSchema's: post.view goes
@@ -418,5 +445,80 @@ func benchmarkCheckBatchThrough(b *testing.B, schema Schema) {
 		if _, err := svc.CheckBatch(ctx, reqs); err != nil {
 			b.Fatalf("CheckBatch: %v", err)
 		}
+	}
+}
+
+// TestMemoReaderCachesSetReads proves the memo covers the SET reads too, keyed
+// by the SORTED, DISTINCT candidate set plus the read's other arguments: the
+// same ids in any order (or with repeats) are one read, a different set is a
+// second read, and the returned map is isolated from memo state.
+func TestMemoReaderCachesSetReads(t *testing.T) {
+	inner := &stubReader{targets: []relationship.RelationTarget{{Type: "org", ID: "o1"}}, allowed: true}
+	m := newMemoReader(inner)
+	ctx := context.Background()
+
+	if _, err := m.FilterRelation(ctx, "post", []string{"p2", "p1"}, "owner", "user", "u1", 10); err != nil {
+		t.Fatalf("FilterRelation: %v", err)
+	}
+	if _, err := m.FilterRelation(ctx, "post", []string{"p1", "p2", "p1"}, "owner", "user", "u1", 10); err != nil {
+		t.Fatalf("FilterRelation (hit): %v", err)
+	}
+	if inner.setDirectCalls != 1 {
+		t.Fatalf("inner FilterRelation calls = %d, want 1 (order and repeats must not change the key)", inner.setDirectCalls)
+	}
+	if _, err := m.FilterRelation(ctx, "post", []string{"p1", "p3"}, "owner", "user", "u1", 10); err != nil {
+		t.Fatalf("FilterRelation (different set): %v", err)
+	}
+	if inner.setDirectCalls != 2 {
+		t.Fatalf("inner FilterRelation calls = %d, want 2 (a different id set is a different read)", inner.setDirectCalls)
+	}
+	// The expansion bound is part of the read, exactly as it is per resource.
+	if _, err := m.FilterRelation(ctx, "post", []string{"p2", "p1"}, "owner", "user", "u1", 11); err != nil {
+		t.Fatalf("FilterRelation (different bound): %v", err)
+	}
+	if inner.setDirectCalls != 3 {
+		t.Fatalf("inner FilterRelation calls = %d, want 3 (a different expansion bound is a different read)", inner.setDirectCalls)
+	}
+
+	first, err := m.RelationTargetsFor(ctx, "post", []string{"p1", "p2"}, "org")
+	if err != nil {
+		t.Fatalf("RelationTargetsFor: %v", err)
+	}
+	first["p1"][0].ID = "mutated"
+	delete(first, "p2")
+
+	second, err := m.RelationTargetsFor(ctx, "post", []string{"p2", "p1"}, "org")
+	if err != nil {
+		t.Fatalf("RelationTargetsFor (hit): %v", err)
+	}
+	if inner.setTargetsCalls != 1 {
+		t.Fatalf("inner RelationTargetsFor calls = %d, want 1", inner.setTargetsCalls)
+	}
+	if len(second) != 2 || second["p1"][0].ID != "o1" {
+		t.Fatalf("memo hit = %v, want both ids with o1 (caller mutation leaked into memo state)", second)
+	}
+}
+
+// TestMemoReaderDoesNotCacheSetReadErrors is the set-read half of the
+// only-successful-results rule.
+func TestMemoReaderDoesNotCacheSetReadErrors(t *testing.T) {
+	inner := &stubReader{targets: []relationship.RelationTarget{{Type: "org", ID: "o1"}}, allowed: true, failFirst: true}
+	m := newMemoReader(inner)
+	ctx := context.Background()
+
+	if _, err := m.FilterRelation(ctx, "post", []string{"p1"}, "owner", "user", "u1", 10); !errors.Is(err, errStubRead) {
+		t.Fatalf("FilterRelation err = %v, want errStubRead", err)
+	}
+	ids, err := m.FilterRelation(ctx, "post", []string{"p1"}, "owner", "user", "u1", 10)
+	if err != nil || len(ids) != 1 || inner.setDirectCalls != 2 {
+		t.Fatalf("retry reached inner=%d calls with %v (err %v), want 2 calls and [p1]", inner.setDirectCalls, ids, err)
+	}
+
+	if _, err := m.RelationTargetsFor(ctx, "post", []string{"p1"}, "org"); !errors.Is(err, errStubRead) {
+		t.Fatalf("RelationTargetsFor err = %v, want errStubRead", err)
+	}
+	targets, err := m.RelationTargetsFor(ctx, "post", []string{"p1"}, "org")
+	if err != nil || len(targets) != 1 || inner.setTargetsCalls != 2 {
+		t.Fatalf("retry reached inner=%d calls with %v (err %v), want 2 calls and one entry", inner.setTargetsCalls, targets, err)
 	}
 }

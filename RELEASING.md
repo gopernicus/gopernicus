@@ -536,6 +536,92 @@ the module's next-tag upgrade note below and tell hosts to re-derive their CSP h
 
 ## Upgrade notes (keyed to each module's next tag)
 
+### pockets/authorization — next tag (+ stores/pgx, stores/turso — next tags): `FilterAuthorized` decides the candidate SET in one evaluation (minor; BREAKING store port; no schema)
+
+Plan of record `.claude/plans/authorization-batch-decision.md` (originating host
+segovia v2, `v2-tenancy.md` leg 6.3 / O13: the owner's ruling "upstream should
+support batch lookups on B" after a DENIED check was measured at ~60–80 ms
+against pgx, making a sparse container page of 300 candidates take ~18 s). ONE
+train: core minor + both store minors together, because the point of the change
+IS the store port (ruling R1). No migration — the `0005` keyset index from
+`authorization-lookup-paging` already serves the new reads. `CheckBatch` is
+deliberately untouched (ruling R2).
+
+**What changed — decision surface (no API change).**
+
+- `FilterAuthorized(principal, permission, type, ids)` — and therefore every
+  `FilterPage` pull — is now ONE set evaluation of the permission instead of N
+  `Check`s. The engine walks the permission tree once, level by level: each
+  `Direct` branch is a single store read over the candidates still undecided (an
+  admitted candidate leaves the set — the `AnyOf` short-circuit, per candidate),
+  and each `Through` hop is a single read whose DISTINCT targets are decided the
+  same way one level down. Reads are `O(branches + hops)` for the whole set: the
+  shipped benchmark reports **9 reads at N = 50 and at N = 500** for a five-branch
+  permission with one userset and two `Through` hops where every candidate is
+  denied, against `6N + 3` (303 and 1803) for the same work through `CheckBatch`.
+- Answers are unchanged: the result is the least fixpoint of the schema's rules
+  over the tuples, which is exactly what a per-resource `Check` computes (its
+  path-local cycle rule IS the least-fixpoint rule). A property test over random
+  schemas, tuple sets and candidate sets pins `FilterAuthorized(ids)` ==
+  `{id : Check(id).Allowed}`. Output order and multiplicity are unchanged: the
+  caller's `ids` filtered in place.
+- Answers are also unchanged for the shape that used to be subtle: a candidate
+  set containing BOTH a resource and its ancestor. The set walk is a fixpoint,
+  not a depth-first path, so the ancestor is another state whose grant
+  propagates — never an "in progress" frame that denies its own descendant.
+- **One behavior consequence to size for.** The set evaluation is ONE decision
+  and carries ONE budget. `MaxThroughDepth`, `MaxRelationTargets` and the
+  group-expansion bound are charged exactly as `Check` charges them, but
+  `MaxGraphStates` is charged ONCE for the set rather than once per candidate. A
+  very wide candidate set over a very deep graph can therefore exhaust it where
+  each candidate alone would not; exhaustion is `ErrEvaluationLimit`
+  (indeterminate, HTTP 503, fail closed) for the whole call, exactly as
+  `CheckBatch` has always reported one request's overflow for a whole batch —
+  never a wrong answer and never a partial list presented as complete. Size
+  `MaxGraphStates` above `MaxBatchSize` × the states one candidate's walk
+  reaches. The roles kind's answer, `Unrestricted` included, is untouched.
+- `CheckBatch` keeps its per-request semantics (it accepts mixed principals,
+  permissions and resource types) and its v0.10.0 memoized reader.
+
+**What changed — store port (BREAKING for third-party stores).**
+`relationship.Storer` gains two SET reads beside their per-resource siblings:
+
+```go
+FilterRelation(ctx, resourceType string, resourceIDs []string, relation, subjectType, subjectID string, maxExpansionStates int) ([]string, error)
+RelationTargetsFor(ctx, resourceType string, resourceIDs []string, relation string) (map[string][]RelationTarget, error)
+```
+
+`FilterRelation` is the set form of `CheckRelationWithGroupExpansion`: DISTINCT,
+byte-order sorted, a SUBSET of the input, same expansion bound and same
+`ErrExpansionBudgetExceeded` overflow. `RelationTargetsFor` is the set form of
+`GetRelationTargets`; an id with no targets is ABSENT from the map. Empty input
+is an empty result and NO store call. The candidate set is bounded by the CALLER
+(`MaxBatchSize`), so the port declares no id-count ceiling: a store whose dialect
+bounds statement parameters CHUNKS internally and merges — it never rejects an id
+list. A host with its own `relationship.Storer` must implement both before
+upgrading; the bundled `memstore`, pgx and turso stores already do, and
+`storetest`'s new `Relationship/SetReads` family proves every backend answers
+them identically to N per-resource reads (subset/sorted/distinct, group
+expansion, empty input, duplicate ids, and a list past the statement bound).
+
+**stores/pgx.** Both reads bind the whole id set as ONE `text[]` parameter
+(`resource_id = ANY(@resource_ids)`), so no chunking is needed and the `0005`
+index `(resource_type, relation, resource_id COLLATE "C")` serves the equality
+columns and the ordered output; `COLLATE "C"` is pinned per query exactly as the
+keyset lookups pin it. **stores/turso.** libSQL binds each id positionally, so
+both reads chunk at **500 ids per statement** and merge; the ids are sorted and
+de-duplicated before chunking, so the chunks cover disjoint ascending ranges and
+their concatenation is already the sorted, distinct answer. Chunking is invisible
+in the result.
+
+**Adoption.** Nothing to change: same call, same answers, same order. The
+listings worth revisiting are the ones moved to prefilter only because
+postfiltering was expensive — a manager's listing inside a huge tenant, a search
+result, any host-ordered candidate stream whose visible set is not bounded. A
+container listing whose visible set IS bounded should stay on the prefilter
+(`LookupResourcesIn` + `WHERE id = ANY(...)`); see the amended choosing table in
+`plans/authorization-lookup-paging.md`.
+
 ### pockets/authorization — v0.11.0 @ `4bd2363` (+ stores/pgx v0.6.0, stores/turso v0.5.0 @ `a78aab2`) — tagged 2026-09-08: `LookupResourcesIn` pages — keyset `After`/`NextCursor` over both kinds (minor; BREAKING store ports; host migration `0005`)
 
 Plan of record `.claude/plans/authorization-lookup-paging.md` (#29, the
