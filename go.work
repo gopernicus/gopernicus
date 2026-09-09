@@ -9,6 +9,7 @@ use (
 	./integrations/cryptids/bcrypt
 	./integrations/cryptids/golang-jwt
 	./integrations/cryptids/google-uuid
+	./integrations/datastores/firestore
 	./integrations/datastores/pgxdb
 	./integrations/datastores/turso
 	./integrations/email/sendgrid
