@@ -183,10 +183,8 @@ func TestLookupDedupesAcrossChunksAndPages(t *testing.T) {
 		)
 	}
 	tuples = append(tuples, ctf("doc", "other", "viewer", "user", "u1"))
-	for _, batch := range chunkCreates(tuples, maxTuplesPerTransaction) {
-		if err := s.CreateRelationships(ctx, batch); err != nil {
-			t.Fatalf("create: %v", err)
-		}
+	if err := s.CreateRelationships(ctx, tuples); err != nil {
+		t.Fatalf("create: %v", err)
 	}
 
 	got, err := s.LookupResourceIDs(ctx, "doc", []string{"viewer", "editor"}, "user", "u1", "", 100)
@@ -395,13 +393,4 @@ func TestLookupAfterIsRawByteOrder(t *testing.T) {
 			t.Fatalf("after %q: want %v, got %v", after, want[i+1:], rest)
 		}
 	}
-}
-
-// chunkCreates splits a fixture batch to fit the store's transaction budget.
-func chunkCreates(in []relationship.CreateRelationship, size int) [][]relationship.CreateRelationship {
-	var out [][]relationship.CreateRelationship
-	for start := 0; start < len(in); start += size {
-		out = append(out, in[start:min(start+size, len(in))])
-	}
-	return out
 }

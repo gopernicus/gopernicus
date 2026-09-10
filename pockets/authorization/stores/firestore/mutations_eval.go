@@ -11,21 +11,6 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-// ErrMutationWriteLimit reports a command whose document writes would exceed
-// Firestore's per-transaction commit limit. Like ErrTupleWriteLimit on the raw
-// write path it wraps sdk.ErrInvalidInput: the command is too large for one
-// atomic unit and no retry changes that. The mutation path REFUSES rather than
-// splits, because a split is a partially applied command — exactly the atomicity
-// mutation.MutationRepository promises. SCHEMA.md §8.3 states the ceiling per
-// operation.
-var ErrMutationWriteLimit = fmt.Errorf("authorization firestore store: a mutation may change at most %d documents in one transaction (Firestore's commit limit): %w", maxWritesPerTransaction, sdk.ErrInvalidInput)
-
-// mutationWriteLimitError names the operation and the size, so the log line says
-// what to split rather than only that something was too big.
-func mutationWriteLimitError(op mutation.Operation, writes int) error {
-	return fmt.Errorf("authorization firestore store: %s would change %d documents: %w", op, writes, ErrMutationWriteLimit)
-}
-
 // mutationResult is what the read-and-evaluate phase produces: the domain
 // outcome, whether it changes rows (which drives the revision bump), the
 // COMPLETE staged write set, and the operation-specific annotation. Nothing here
@@ -56,14 +41,6 @@ type mutationWrites struct {
 	creates   []relationshipDoc
 	roleDrops []roleDoc
 	roleAdds  []roleDoc
-}
-
-// count is the number of DOCUMENT writes the set commits — the unit Firestore's
-// per-transaction limit counts, not the number of rows.
-func (m mutationWrites) count() int {
-	return (len(m.drops)+len(m.creates))*writesPerTuple +
-		len(m.replaces)*writesPerReplacedTuple +
-		len(m.roleDrops) + len(m.roleAdds)
 }
 
 // flush queues every staged write. Deletes precede creates so a purge and a
@@ -132,6 +109,13 @@ func (s *mutationStore) evaluate(ctx context.Context, r firestoredb.Reader, cmd 
 // relation is a one-relation semantic conflict that rolls the WHOLE command back
 // (no partial batch); a grant that would leave a protected resource below its
 // guardian minimum is invariant-blocked.
+//
+// DEPENDS ON Command.Validate (mutation.go, the relationship branch), which
+// rejects a command whose rows name one subject twice — "subject %s:%s#%s
+// appears in more than one relationship row of one command". So this loop can
+// decide each row against `current` alone: a second row for the same subject
+// would otherwise be judged against a stale view and stage two Creates on one
+// document id.
 func (s *mutationStore) grant(ctx context.Context, r firestoredb.Reader, cmd mutation.Command) (mutationResult, error) {
 	rt, rid := cmd.Scope.Type, cmd.Scope.ID
 	current, err := resourceRows(ctx, s.db, r, rt, rid)
@@ -157,7 +141,7 @@ func (s *mutationStore) grant(ctx context.Context, r firestoredb.Reader, cmd mut
 	if !s.invariantOK(rt, append(append([]relationshipDoc(nil), current...), adds...)) {
 		return mutationResult{outcome: mutation.OutcomeInvariantBlocked}, nil
 	}
-	if err := assertClaimsFree(ctx, s.db, r, adds); err != nil {
+	if err := assertClaimsFree(ctx, s.db, r, adds, nil); err != nil {
 		return mutationResult{}, err
 	}
 	return mutationResult{outcome: mutation.OutcomeApplied, changed: true, writes: mutationWrites{creates: adds}}, nil
@@ -235,7 +219,7 @@ func (s *mutationStore) replace(ctx context.Context, r firestoredb.Reader, cmd m
 	if !s.invariantOK(rt, next) {
 		return mutationResult{outcome: mutation.OutcomeInvariantBlocked}, nil
 	}
-	if err := assertClaimsFree(ctx, s.db, r, writes.creates); err != nil {
+	if err := assertClaimsFree(ctx, s.db, r, writes.creates, writes.replaces); err != nil {
 		return mutationResult{}, err
 	}
 	return mutationResult{outcome: mutation.OutcomeApplied, changed: true, writes: writes}, nil
@@ -288,6 +272,14 @@ func (s *mutationStore) purge(ctx context.Context, r firestoredb.Reader, cmd mut
 // scope is a scoped assignment; a subject scope is a global assignment).
 // Exact-duplicate assignments are a no-op that leaves the stored row — and its
 // original created_at — untouched.
+//
+// DEPENDS ON Command.Validate (mutation.go, the role branch), which rejects a
+// command carrying the same (subject_type, subject_id, role) row twice before it
+// ever reaches a store — "role row %s:%s/%s is duplicated in one command". That
+// is why this loop needs no in-batch de-duplication: two rows here cannot map to
+// one document id, since the id is exactly that triple plus the command's one
+// scope. If Validate ever relaxes it, this loop is where the duplicate would
+// become two Creates on one document.
 func (s *mutationStore) roleAssign(ctx context.Context, r firestoredb.Reader, cmd mutation.Command) (mutationResult, error) {
 	resourceType, resourceID := roleScopeOf(cmd.Scope)
 	refs := newDocRefs(len(cmd.Roles))
@@ -301,15 +293,10 @@ func (s *mutationStore) roleAssign(ctx context.Context, r firestoredb.Reader, cm
 
 	now := time.Now().UTC()
 	var adds []roleDoc
-	claimed := make(map[string]struct{}, len(cmd.Roles))
 	for i, row := range cmd.Roles {
 		if refs.exists(paths[i]) {
 			continue
 		}
-		if _, dup := claimed[paths[i]]; dup {
-			continue
-		}
-		claimed[paths[i]] = struct{}{}
 		adds = append(adds, roleDoc{
 			SubjectType:  row.SubjectType,
 			SubjectID:    row.SubjectID,
@@ -416,28 +403,46 @@ func resourceRows(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader,
 		Where("resource_key", "==", resourceKey(resourceType, resourceID)))
 }
 
-// assertClaimsFree reads the three documents each new row will Create and
-// refuses if any is already taken. It runs in the READ phase because putTuple
-// cannot discover a taken claim in the write phase — a transaction refuses a
-// read after its first write, and Create's AlreadyExists would arrive at commit,
-// after the decision was made.
+// assertClaimsFree reads every document the staged writes will CREATE and
+// refuses if any is already taken. It runs in the READ phase because
+// putTuple/replaceTuple cannot discover a taken document in the write phase — a
+// transaction refuses a read after its first write, and Create's AlreadyExists
+// would arrive at commit, after the decision was made.
 //
-// On a consistent store it never fires: the evaluator has just read the
-// resource's rows and established that none of these subjects holds a relation
-// there, the claims live and die with their row (putTuple/dropTuple), and the
-// relationship_id is freshly minted inside this attempt. A hit therefore means
-// row/claim drift, which is a store-integrity failure and not a domain outcome —
-// so it is loud, and it is sdk.ErrUnavailable rather than a conflict a caller
-// would retry forever.
-func assertClaimsFree(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, rows []relationshipDoc) error {
-	if len(rows) == 0 {
+// Two kinds of write are covered, and they need different sets of documents:
+//
+//   - creates own all THREE of a tuple's documents (the row and both claims),
+//     so all three must be free;
+//   - replacements move a row to a new document id but Set both claims IN PLACE
+//     (neither claim id carries the relation, so both already exist by design).
+//     Only the new ROW document is checked — checking their claims would refuse
+//     the store's own consistent state.
+//
+// On a consistent store neither fires: the evaluator has just read the
+// resource's rows and established what holds which relation there, the claims
+// live and die with their row (putTuple/dropTuple), and the relationship_id is
+// freshly minted inside this attempt. A hit therefore means row/claim drift,
+// which is a store-integrity failure and not a domain outcome — so it is loud,
+// and it is sdk.ErrUnavailable rather than a conflict a caller would retry
+// forever.
+func assertClaimsFree(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, rows []relationshipDoc, replacements []tupleReplacement) error {
+	if len(rows) == 0 && len(replacements) == 0 {
 		return nil
 	}
-	refs := newDocRefs(len(rows) * writesPerTuple)
+	refs := newDocRefs(len(rows)*writesPerTuple + len(replacements))
 	paths := make([][3]string, len(rows))
 	for i, row := range rows {
 		tuple, subject, id := claimRefs(db, row)
 		paths[i] = [3]string{refs.add(tuple), refs.add(subject), refs.add(id)}
+	}
+	moved := make([]relationshipDoc, len(replacements))
+	movedPaths := make([]string, len(replacements))
+	for i, rep := range replacements {
+		next := rep.old
+		next.Relation = rep.relation
+		moved[i] = next
+		tuple, _, _ := claimRefs(db, next)
+		movedPaths[i] = refs.add(tuple)
 	}
 	if err := refs.read(ctx, r); err != nil {
 		return err
@@ -445,12 +450,23 @@ func assertClaimsFree(ctx context.Context, db *firestoredb.DB, r firestoredb.Rea
 	for i, row := range rows {
 		for _, path := range paths[i] {
 			if refs.exists(path) {
-				return fmt.Errorf("authorization firestore store: %s:%s#%s <- %s:%s already claims %s while no row was read for it (row/claim drift): %w",
-					row.ResourceType, row.ResourceID, row.Relation, row.SubjectType, row.SubjectID, path, sdk.ErrUnavailable)
+				return claimDriftError(row, path)
 			}
 		}
 	}
+	for i, row := range moved {
+		if refs.exists(movedPaths[i]) {
+			return claimDriftError(row, movedPaths[i])
+		}
+	}
 	return nil
+}
+
+// claimDriftError names the row whose document was already taken and the
+// document that took it.
+func claimDriftError(row relationshipDoc, path string) error {
+	return fmt.Errorf("authorization firestore store: %s:%s#%s <- %s:%s already claims %s while no row was read for it (row/claim drift): %w",
+		row.ResourceType, row.ResourceID, row.Relation, row.SubjectType, row.SubjectID, path, sdk.ErrUnavailable)
 }
 
 // newMutationRow builds the document for one new relationship row of a command.

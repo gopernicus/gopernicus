@@ -71,7 +71,6 @@ not the shipped behavior, and nothing here degrades silently into it.
 | `ExportIndexes(dst string) error` | MERGES this store's manifest into the host's own `firestore.indexes.json` |
 | `IndexesFS` / `IndexesFile` | the embedded manifest, this store's analogue of the SQL siblings' `MigrationsFS`/`MigrationsDir` |
 | `ErrAmbientTransactionUnsupported` | ruling R1's sentinel (wraps `sdk.ErrInvalidInput`) |
-| `ErrTupleWriteLimit` / `ErrMutationWriteLimit` | the per-transaction document ceilings (wrap `sdk.ErrInvalidInput`) — see "Ceilings" |
 
 **Kind selection is the host's wiring choice**, as with every store:
 `Repositories` returns both kinds and the mutation repository; a host wanting a
@@ -130,7 +129,17 @@ probe refuses outright there and every emulator query runs index-free. An
 emulator-green suite is therefore *no evidence at all* about index coverage;
 that is why the manifest's proof is a live run (see "Testing").
 
-The entry count and the per-query derivation are in
+The manifest declares two things, and the probe checks both: the **composite
+indexes** the multi-filter and ordered queries need, and the **field overrides**
+that pin the single-field indexes the composite-free shapes read through (the
+expansion hop, the whole-resource reads, the role sweep). Declaring the latter is
+what makes them checkable — the probe validates only what the manifest states, so
+an undeclared dependency on Firestore's automatic single-field indexing is an
+unchecked one, and an emulator run cannot notice. Note that declaring a field
+override REPLACES that field's default index set; `SCHEMA.md` §9.5 says why that
+is safe here.
+
+The entry counts and the per-query derivation are in
 [`SCHEMA.md`](SCHEMA.md) §9 — the manifest is the store's contract with hosts the
 way `migrations/0001`–`0005` are for the SQL siblings.
 
@@ -165,17 +174,15 @@ field by field, in [`SCHEMA.md`](SCHEMA.md) §3–§5.
 Everything here is a Firestore property, stated so it is chosen rather than
 discovered. Full detail in [`SCHEMA.md`](SCHEMA.md) §8.
 
-- **166 tuples per write call** (§8.1). Firestore commits at most 500 writes per
-  transaction and a tuple owns three documents, so one `CreateRelationships`,
-  `SetRelationTargets`, or delete changes at most 166 tuples. Past that the call
-  fails with `ErrTupleWriteLimit` **before anything is written**. The operation
-  is never split across transactions: a split is a partially applied batch,
-  which is the opposite of what these methods promise. Bulk work is several
-  batches, each atomic on its own.
-- **The same 500-document ceiling bounds one mutation `Command`** (§8.3), in
-  documents rather than tuples: 166 created/removed rows, 124 replaced rows, or
-  a teardown's rows minus the roles it sweeps, each plus the anchor and the
-  receipt. `ErrMutationWriteLimit`, again before the first write.
+- **A batch is bounded by the request, not by a write count** (§8.1, §8.3).
+  Firestore publishes **no** per-transaction write COUNT limit: the quotas page
+  bounds a commit by the 10 MiB maximum API request size and by 500 field
+  transformations *per document*. This store therefore enforces no ceiling of its
+  own, and it never splits a call — a split is a partially applied batch, which
+  is the opposite of what these methods promise. An oversized request is refused
+  by the SERVER, **atomically**: nothing is written, and the caller sends less in
+  one call. A relationship tuple costs three documents (row + two claims) and a
+  replaced row four, which is what a large command's request size is made of.
 - **`ListEffectiveByResource` with `WithCount` is O(population)** (§8.2). The
   listing de-duplicates grants across the requested scope and the global scope,
   so its unit is a GROUP; Firestore's count aggregation counts DOCUMENTS and
@@ -203,6 +210,23 @@ discovered. Full detail in [`SCHEMA.md`](SCHEMA.md) §8.
   implementation would cost 65; a descendant walk over a 31-wide frontier and
   two relations costs **5**. Depth and group width, not row count, are what a
   host should watch.
+- **Reads per expanded check, measured** (`TestCheckReadBudgetScalesWithTheGrantsOfThePrincipal`).
+  For the shape that dominates — a principal holding N direct grants and
+  belonging to no group — one `CheckRelationWithGroupExpansion` reads
+  **N + 1 documents**: the principal's own N grants (the first expansion hop
+  reads every row where it is the subject) plus the one matching row. The query
+  count is `1 + ceil(N/30)` for the hops plus the chunks the final match scans,
+  each `Limit(1)`. Measured on the emulator:
+
+  | direct grants of the principal | queries | document reads |
+  |---|---|---|
+  | 1 | 3 | 2 |
+  | 100 | 7 | 101 |
+  | 1000 | 52 | 1001 |
+
+  The cost is linear in the PRINCIPAL's grants, not in the resource's, and it is
+  paid on every check because there is no cache yet. A principal with thousands
+  of direct grants is the shape to watch.
 - **Search** is a client-side postfilter scoped to a parent (ruling R4). No list
   in *this* pocket is searchable, and `ListEffectiveByResource` refuses a
   non-blank `Search` with `sdk.ErrInvalidInput` rather than ignoring it.

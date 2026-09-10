@@ -52,11 +52,12 @@ func (v *decisionView) CheckRelation(ctx context.Context, scope mutation.ScopeKe
 // instant the commit validates.
 //
 // The resource scope is recorded BEFORE any row is read, and every resource the
-// expansion traversed is recorded with it: a membership edge lives under ITS
-// resource's scope, so a concurrent revoke there bumps a revision this decision
-// depends on. Recording the seed subject as a resource scope is the same
-// harmless over-record the memstore and both SQL siblings make; UNDER-recording
-// is the bug.
+// expansion traversed is recorded with it — INCLUDING when the expansion
+// overflows its budget, since those scopes were still read. A membership edge
+// lives under ITS resource's scope, so a concurrent revoke there bumps a
+// revision this decision depends on. Recording the seed subject as a resource
+// scope is the same harmless over-record the memstore and both SQL siblings
+// make; UNDER-recording is the bug.
 func (v *decisionView) CheckRelationBounded(ctx context.Context, scope mutation.ScopeKey, relation, subjectType, subjectID string, maxExpansionStates int) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -64,14 +65,19 @@ func (v *decisionView) CheckRelationBounded(ctx context.Context, scope mutation.
 	if err := v.record(ctx, scope); err != nil {
 		return false, err
 	}
-	reached, scopes, err := expandScoped(ctx, v.db, v.r, subjectType, subjectID, maxExpansionStates)
-	if err != nil {
-		return false, err
-	}
+	reached, scopes, expandErr := expandScoped(ctx, v.db, v.r, subjectType, subjectID, maxExpansionStates)
+	// The scopes are recorded BEFORE the error is returned, overflow included:
+	// they are the resources this transaction actually READ, and a dependency
+	// that is read but not recorded is a stale allow nothing catches at commit.
+	// The memstore does the same (memstore/mutations.go — record every reached
+	// scope, then report the overflow).
 	for _, s := range scopes {
 		if err := v.record(ctx, mutation.ScopeKey{Kind: mutation.ScopeResource, Type: s.resourceType, ID: s.resourceID}); err != nil {
 			return false, err
 		}
+	}
+	if expandErr != nil {
+		return false, expandErr
 	}
 	return anyTupleWithSubject(ctx, v.db, v.r, scope.Type, scope.ID, relation, reached)
 }

@@ -118,7 +118,7 @@ func TestRunTransactionalLive(t *testing.T) {
 // loud instead of running on the client beside the host's transaction. The
 // emulator proves the same refusal, but the refusal is the store's side of the
 // contract a host reads in the README, so the live leg asserts it too rather
-// than assuming the emulator's TxFromContext behaves like production's.
+// than assuming the emulator's transaction plumbing behaves like production's.
 func TestAmbientTransactionRefusedLive(t *testing.T) {
 	db := firestoretest.OpenLive(t)
 	repos := newLiveRepos(t, db)(t)

@@ -11,8 +11,6 @@ import (
 	"time"
 
 	gcfs "cloud.google.com/go/firestore"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
 	"github.com/gopernicus/gopernicus/integrations/datastores/firestore/firestoretest"
@@ -452,7 +450,7 @@ func TestMutationRetryReturnsTheCommittedAttemptsAnswer(t *testing.T) {
 			// command was going to create. Attempt one would have concluded
 			// "applied"; attempt two must conclude "no_change".
 			seedTuples(t, db, ctf("doc", "d1", "viewer", "user", "u2"))
-			return status.Error(codes.Aborted, "forced contention")
+			return firestoretest.AbortedError("forced contention")
 		}
 		return nil
 	}
@@ -668,20 +666,19 @@ func TestGuardedMutationConcurrentDependencyBump(t *testing.T) {
 	}
 }
 
-// TestMutationWriteCeiling pins the family difference the SQL siblings do not
-// have: Firestore commits at most 500 documents in one transaction, and a
-// relationship tuple owns three of them, so an oversized command is REFUSED
-// before its first write rather than split across transactions — a split is a
-// partially applied command, which is exactly the atomicity this port promises.
-func TestMutationWriteCeiling(t *testing.T) {
-	ctx := context.Background()
+// TestMutationLargeCommandAppliesInOneTransaction is the A7 fold of the
+// per-command document ceiling this path used to enforce. Firestore publishes
+// no per-transaction write COUNT limit (the quotas page bounds a commit by the
+// 10 MiB request size and by 500 field transformations PER DOCUMENT), so a
+// client-side refusal rejected commands the server accepts. 200 rows is 600
+// documents plus the anchor and the receipt, and it applies in one transaction.
+func TestMutationLargeCommandAppliesInOneTransaction(t *testing.T) {
 	db, m, _ := newMutations(t)
 
-	// 166 tuples * 3 documents + the anchor + the receipt = 500, the exact
-	// ceiling; one more row is 503 and must be refused.
-	rows := make([]mutation.RelationshipRow, 0, 167)
+	const rowCount = 200
+	rows := make([]mutation.RelationshipRow, 0, rowCount)
 	rows = append(rows, mutation.RelationshipRow{Relation: "owner", Subject: user("u0")}) // satisfies the guardian
-	for i := 1; i < 167; i++ {
+	for i := 1; i < rowCount; i++ {
 		rows = append(rows, mutation.RelationshipRow{Relation: "viewer", Subject: user(docID("u", i))})
 	}
 	cmd := mutation.Command{
@@ -689,23 +686,115 @@ func TestMutationWriteCeiling(t *testing.T) {
 		Relationships: rows,
 	}
 
-	rcpt, err := m.Apply(ctx, cmd, nil)
-	if !errors.Is(err, ErrMutationWriteLimit) || !errors.Is(err, sdk.ErrInvalidInput) {
-		t.Fatalf("an oversized command must be ErrMutationWriteLimit (invalid input), got rcpt=%+v err=%v", rcpt, err)
+	applyOK(t, m, cmd, mutation.OutcomeApplied)
+	if _, ok := storedRow(t, db, "doc", "big", "owner", user("u0")); !ok {
+		t.Fatalf("the command committed no row")
 	}
-	if rcpt != nil {
-		t.Fatalf("a refused command must return no receipt")
+	if _, ok := storedRow(t, db, "doc", "big", "viewer", user(docID("u", rowCount-1))); !ok {
+		t.Fatalf("the command committed only part of its rows")
 	}
-	if got := anchorAt(t, db, docScope("big")); got != 0 {
-		t.Fatalf("a refused command must write nothing, anchor = %d", got)
+	if got := anchorAt(t, db, docScope("big")); got != 1 {
+		t.Fatalf("anchor = %d, want 1", got)
 	}
-	if _, ok := storedRow(t, db, "doc", "big", "owner", user("u0")); ok {
-		t.Fatalf("a refused command must write no row")
+}
+
+// TestMutationRetriesAMappedAbortedFromATransactionalRead is the A7 review's
+// first backend finding, made executable. Before the fold, retryability was
+// decided by WHERE the error surfaced: anything the callback returned was
+// terminal. So a transactional READ that lost its race — mapped to
+// sdk.ErrConflict, which is the only honest thing to do with it — ended the
+// mutation, while the identical Aborted reported by the COMMIT was retried. One
+// condition, two answers, and the losing one reached the caller as a conflict on
+// an operation that could simply have been re-run.
+//
+// Two mechanisms now recover it, and this pins them end to end: the connector's
+// MapError keeps the gRPC status in the chain, so the VENDOR's retry gate still
+// sees contention; and this store classifies by the error's identity, so its own
+// loop would re-run it too. The injection point is the semantic validator, which
+// runs inside applyTx after the whole anchor/receipt read phase — the same place
+// in the callback a contended read would fail.
+func TestMutationRetriesAMappedAbortedFromATransactionalRead(t *testing.T) {
+	ctx := context.Background()
+	db, m, _ := newMutations(t)
+
+	attempts := 0
+	validate := func(mutation.Command) error {
+		attempts++
+		if attempts == 1 {
+			return firestoredb.MapError(firestoretest.AbortedError("a transactional read lost its race"))
+		}
+		return nil
 	}
 
-	// One row fewer fits exactly and applies.
-	fits := cmd
-	fits.MutationID = mutID(t)
-	fits.Relationships = rows[:166]
-	applyOK(t, m, fits, mutation.OutcomeApplied)
+	cmd := grantCmd(t, "d1", "owner", user("u1"))
+	rcpt, err := m.Apply(ctx, cmd, validate)
+	if err != nil {
+		t.Fatalf("a mapped Aborted raised inside the callback must be retried, not returned: %v", err)
+	}
+	if attempts < 2 {
+		t.Fatalf("the callback ran %d times, want at least 2", attempts)
+	}
+	if rcpt.Outcome != mutation.OutcomeApplied {
+		t.Fatalf("outcome = %q, want applied", rcpt.Outcome)
+	}
+	if _, ok := storedRow(t, db, "doc", "d1", "owner", user("u1")); !ok {
+		t.Fatalf("the retried attempt committed no row")
+	}
+	if got := anchorAt(t, db, docScope("d1")); got != 1 {
+		t.Fatalf("anchor = %d, want 1", got)
+	}
+}
+
+// TestGuardedViewRecordsScopesTraversedBeforeABudgetOverflow is the A7 review's
+// fourth backend finding. An expansion that overflows its budget still READ
+// every row it walked, and a guard's decision — even a failed one — must depend
+// on what it read: the memstore records every reached scope and only then
+// reports relationship.ErrExpansionBudgetExceeded (memstore/mutations.go,
+// decisionView.CheckRelationBounded). This store returned the error with the
+// scopes discarded, so a retry-and-succeed path could commit against a
+// dependency set that omitted the resources the guard actually traversed.
+func TestGuardedViewRecordsScopesTraversedBeforeABudgetOverflow(t *testing.T) {
+	ctx := context.Background()
+	db, m, _ := newMutations(t)
+
+	// A three-hop chain: u1 is a member of g1, g1 of g2, g2 of g3. Each hop
+	// adds a distinct state, so a budget of 3 overflows on the way and the walk
+	// has traversed group g1 (and the seed) before it does.
+	seedTuples(t, db,
+		ctf("group", "g1", "member", "user", "u1"),
+		ctfUserset("group", "g2", "member", "group", "g1", "member"),
+		ctfUserset("group", "g3", "member", "group", "g2", "member"),
+	)
+
+	var recorded []mutation.Dependency
+	guard := func(ctx context.Context, view mutation.StoreDecisionView) error {
+		_, err := view.CheckRelationBounded(ctx, docScope("d1"), "viewer", "user", "u1", 3)
+		if !errors.Is(err, relationship.ErrExpansionBudgetExceeded) {
+			t.Fatalf("CheckRelationBounded = %v, want ErrExpansionBudgetExceeded", err)
+		}
+		recorded = view.Dependencies()
+		return err
+	}
+
+	if _, err := m.ApplyGuarded(ctx, grantCmd(t, "d1", "viewer", user("u2")), guard, nil); !errors.Is(err, relationship.ErrExpansionBudgetExceeded) {
+		t.Fatalf("ApplyGuarded = %v, want the overflow returned to the caller", err)
+	}
+
+	have := map[string]bool{}
+	for _, dep := range recorded {
+		have[dep.Scope.Canonical()] = true
+	}
+	// The mutation scope (recorded first), the seed subject read as a resource
+	// scope, and the group whose membership row the walk traversed before it
+	// overflowed. Under-recording is the bug: a dependency read but not
+	// recorded is a stale allow nothing catches at commit.
+	for _, want := range []mutation.ScopeKey{
+		docScope("d1"),
+		{Kind: mutation.ScopeResource, Type: "user", ID: "u1"},
+		{Kind: mutation.ScopeResource, Type: "group", ID: "g1"},
+	} {
+		if !have[want.Canonical()] {
+			t.Errorf("the overflowed walk did not record %s, which it read; recorded %v", want.Canonical(), recorded)
+		}
+	}
 }

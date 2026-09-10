@@ -456,17 +456,28 @@ connector transaction with `ErrAmbientTransactionUnsupported` (the mutation
 methods also wrap `mutation.ErrGuardedInsideTransaction`, the sentinel the pocket
 already defines for that refusal). `storetest.RunTransactional` skips loudly.
 
-### 8.1 The per-transaction tuple ceiling (A2c)
+### 8.1 The request-size ceiling is the SERVER's (A2c; corrected at A7)
 
-Firestore commits at most **500 write operations** in one transaction, and a
-tuple owns three documents (row + two claims), so a single `CreateRelationships`,
-`SetRelationTargets`, or delete may change at most **166 tuples**. Past that the
-call fails with `ErrTupleWriteLimit` (wrapping `sdk.ErrInvalidInput`) BEFORE
-anything is written — the operation is never split across transactions, because
-a split is a partially applied batch, which is exactly the atomicity those
-methods promise. The SQL families have no equivalent bound: one statement covers
-any number of rows. A host that bulk-loads or tears down more than 166 tuples for
-one resource calls the port in several batches, each atomic on its own.
+**There is no per-transaction write COUNT limit.** The Firestore quotas page
+bounds a commit by the **10 MiB maximum API request size** and by **500 field
+transformations per document** — neither of which counts writes — so this store
+enforces no ceiling of its own on `CreateRelationships`, `SetRelationTargets`, or
+the delete family. A tuple owns three documents (row + two claims), and a batch
+of any size commits as one transaction.
+
+An oversized request fails at the SERVER, atomically: the commit is rejected,
+nothing is written, and the error arrives through `firestoredb.MapError` like any
+other. There is no half-applied state to repair and no remediation step beyond
+"send less in one call".
+
+The A2c implementation shipped a client-side refusal of more than 166 tuples,
+derived from a "500 writes per transaction" limit the quotas page does not
+state. The A7 data review checked the page and found only the two bounds above,
+so the constants, `ErrTupleWriteLimit`, and every pre-write count check were
+REMOVED — they rejected batches Firestore accepts. `TestLargeBatchesCommitInOneTransaction`
+commits 600 documents in one transaction on the emulator and
+`TestLargeBatchCommitsInOneTransactionLive` does the same against a real
+database.
 
 ### 8.2 The effective listing's count is O(population) (A3b)
 
@@ -483,10 +494,12 @@ aggregation, so this cost is confined to the effective listing.
 A group that spans BOTH scopes is read as two documents and returned as one row;
 a page limit therefore bounds the ROWS returned, not the documents read.
 
-### 8.3 The per-transaction mutation ceiling (A4b)
+### 8.3 What one command writes (A4b; ceiling removed at A7)
 
-The same 500-write commit limit §8.1 describes bounds a single `Command`, but the
-unit is DOCUMENTS, not tuples, because one command writes several kinds:
+§8.1's correction applies here too: a `Command` is bounded by the server's
+10 MiB request size and by nothing this store checks. The document COUNTS are
+still worth stating, because they are what a large command's request size is made
+of:
 
 | Staged change | Documents |
 |---|---|
@@ -497,29 +510,52 @@ unit is DOCUMENTS, not tuples, because one command writes several kinds:
 | the scope anchor, when the outcome changes rows | 1 |
 | the receipt, when the outcome is persisted | 1 |
 
-So a grant applies at most **166 rows** (166×3 + anchor + receipt = 500), a
-replace at most **124**, and a teardown at most **166** relationship rows minus
-one document per scoped role it also sweeps. Past that the command fails with
-`ErrMutationWriteLimit` (wrapping `sdk.ErrInvalidInput`) BEFORE its first write,
-so nothing is applied — the mutation path never splits a command across
-transactions, because a split is a partially applied command and atomicity is
-exactly what `mutation.MutationRepository` promises. The SQL families have no
-equivalent bound. A host tearing down a resource with more relationships than
-that removes them in batches through the raw port first (§8.1), then tears the
-remainder down.
+A command whose staged writes exceed the request size is refused by the server
+with nothing written and no receipt minted, so a caller that hits it splits the
+work and re-applies with a fresh MutationID. The mutation path never splits a
+command itself: a split is a partially applied command, and atomicity is exactly
+what `mutation.MutationRepository` promises. `ErrMutationWriteLimit` and its
+pre-write count check were removed at A7 for the reason §8.1 gives.
 
-### 8.4 Contention surfaces as waiting, not as an error (A4b)
+### 8.4 Contention surfaces as waiting, not as an error (A4b; widened at A7)
 
 Every command on one scope reads that scope's anchor and its resource's rows, so
 N concurrent commands on ONE resource genuinely serialize. The vendor re-runs the
 transaction callback up to `Config.MaxAttempts` times (5) with its own backoff;
-past that the store re-runs the WHOLE apply a bounded number of times with a
-JITTERED backoff (`contention.go`), because Apply is idempotent by MutationID and
-a re-run either replays a now-committed receipt or re-evaluates against current
-state. Only a VENDOR failure is retried — a guard denial, a payload mismatch and
-a stale revision are answers, and `mutation.ErrStaleRevision` wraps
-`sdk.ErrConflict` too, so retrying on the sentinel alone would spin on a
-deterministic refusal.
+past that the store re-runs the WHOLE operation a bounded number of times with a
+JITTERED backoff (`contention.go`).
+
+**The retry is store-wide, not mutation-only.** Every raw write path —
+`CreateRelationships`, `SetRelationTargets`, the four deletes, and
+`Assign` — runs its transaction under the same loop (`retryTransact`). Each of
+those callbacks re-READS before it decides, so re-running one is safe; `Apply` is
+additionally idempotent by MutationID, so its re-run either replays a
+now-committed receipt or re-evaluates against current state.
+
+**Retryability is decided by the error's IDENTITY, never by where it surfaced.**
+The A4b implementation retried only a failure the CALLBACK did not return, which
+made a mapped `Aborted` raised by a transactional READ terminal while the
+identical condition reported by the COMMIT was retried — one condition, two
+answers. The rule now (`retryableConflict`): retry an `sdk.ErrConflict` unless it
+is one of the stable domain refusals — `mutation.ErrStaleRevision`,
+`mutation.ErrPayloadMismatch`, `mutation.ErrInvalidCommand`, the reconciliation's
+own relation conflict — or the guard returned it (a denial is an answer, however
+it is spelled). Anything that is not `sdk.ErrConflict` is not contention.
+
+The connector half of the same fix: `firestoredb.MapError` PRESERVES the gRPC
+status in the wrap chain, so a mapped `Aborted` still drives the VENDOR's own
+retry gate. Without it, only a losing commit was ever re-run.
+
+**The two loops do not nest.** `detachVendorRetry` re-roots a retryable conflict
+this store's callback can SEE on `sdk.ErrConflict` alone, dropping the status, so
+the vendor's loop ends and THIS loop re-runs the operation. That is not a
+walk-back of the connector fix — the condition is still retried, and a host's own
+`Transact` callback still gets the vendor's retry, which is what the connector
+change is for. It is about WHOSE backoff runs: the vendor's is not jittered, and
+§8.4's measurement is precisely that an un-jittered backoff starves a twenty-way
+storm (186.7 s and a failure) where a jittered one drains it (6.7 s). A conflict
+the callback cannot see — a losing COMMIT — is still the vendor's to retry, then
+falls through to this loop.
 
 The jitter is load-bearing rather than decorative: without it every contender
 waits the same interval and collides again in the same order, and the shared
@@ -529,26 +565,17 @@ past every retry budget on the emulator (measured: 186 s and a failure, versus
 `sdk.ErrConflict` — an infrastructure conflict it may retry — never a committed
 outcome and never a minted receipt.
 
-## 9. Index manifest (A5)
+## 9. Index manifest (A5; field overrides added at A7)
 
-`firestore.indexes.json` declares **27 composite indexes** — 20 on
+`firestore.indexes.json` declares **28 composite indexes** — 21 on
 `iam_relationships`, 7 on `iam_roles` — all at `COLLECTION` scope (§6: every
-collection is top-level), and **no field overrides**. It is no longer
+collection is top-level), plus **17 field overrides** (§9.5). It is no longer
 provisional: every entry is derived from §7 by the rules below, and
 `indexes_test.go` fails if the two disagree in either direction. A database
 allows 200 composite indexes without billing enabled and 1,000 with it, shared
-across every store a host mounts; this store's 27 are its share of that budget,
+across every store a host mounts; this store's 28 are its share of that budget,
 and `TestIndexManifestParses` states the number so a change has to move it
 deliberately.
-
-**No field overrides, deliberately.** An override is needed for an array field
-(`array-contains`), for a collection-group scoped single-field index, or to
-DISABLE the automatic single-field indexing of a field. This store has no array
-field (usersets are separate documents, never an array), queries no collection
-group, and depends on the automatic ascending/descending single-field indexes for
-the equality-only shapes in §7 — the default configuration provides exactly
-those. The connector does not probe what a manifest does not declare, so an empty
-`fieldOverrides` is honest: nothing here needs one.
 
 ### 9.1 The derivation rules, with sources
 
@@ -563,12 +590,18 @@ and [queries](https://firebase.google.com/docs/firestore/query-data/queries):
    *Queries supported by single-field indexes*.
 2. **`in` is an equality for index selection** — "Since the query uses an
    equality (`==` or `in`) for the `country` field…", "`in` and `==` clauses use
-   the same index". This store still declares a composite when an `in` is
-   combined with ANOTHER filter field: the server may serve those disjunctions by
-   merging single-field indexes, but merging is an optimization the docs
-   recommend, not a guarantee, and the cost asymmetry is the whole argument (a
-   surplus index costs storage; a missing one is a production
-   `FAILED_PRECONDITION`).
+   the same index". Rule 1 is therefore narrowed to a SINGLE filter field: this
+   store declares a composite for **any query with two or more filter fields**,
+   `in` or not. The server may serve multi-equality queries by MERGING automatic
+   single-field indexes, but merging is an optimization the docs recommend, not a
+   guarantee, and the cost asymmetry is the whole argument (a surplus index costs
+   storage; a missing one is a production `FAILED_PRECONDITION`).
+
+   The rule was previously conditional on an `in` being present, which is what
+   dropped `(resource_key, relation)` — an equality PAIR — from the A5 manifest
+   while keeping composites for otherwise identical shapes that happened to carry
+   an `in`. Two spellings of one rule. A7 made it uniform and restored that
+   entry; it is the single index the count moved by (27 → 28).
 3. **Filter + sort on another field, or any two-field sort, needs one.** "If you
    need to run a compound query that uses a range comparison … or if you need to
    sort by a different field, you must create a manual index for that query."
@@ -613,6 +646,7 @@ contribute one direction, not two.
 
 | Collection | Fields (all `ASCENDING` unless marked) | Serves |
 |---|---|---|
+| `iam_relationships` | `resource_key`, `relation` | relation targets, the direct count, the reconciliation read, `DeleteRelationship`'s sweep |
 | `iam_relationships` | `resource_key`, `relation`, `subject_key` | expanded check |
 | `iam_relationships` | `resource_type`, `relation`, `resource_id` | candidate scan |
 | `iam_relationships` | `resource_type`, `relation`, `subject_key` | descendant hop |
@@ -625,14 +659,51 @@ contribute one direction, not two.
 | `iam_roles` | `resource_key`, `grant_key` — 2 directions | `ListEffectiveByResource`'s streams |
 
 Changes from the A1 provisional manifest (16 entries, A-D7's expectations):
-`(resource_key, relation)` and `(subject_type, subject_key, relation,
-resource_id)` were REMOVED — the first is equality-only (rule 1), the second is a
-shape no query issues (the target lookup filters `resource_type`, not
-`subject_type`). `(resource_type, subject_key, relation, resource_id)` was
-RESPELLED as `(resource_type, relation, subject_key, resource_id)` to obey the
-pinned equality order (rule 4). Thirteen entries were ADDED: the descendant hop's
+`(subject_type, subject_key, relation, resource_id)` was REMOVED — a shape no
+query issues (the target lookup filters `resource_type`, not `subject_type`).
+`(resource_type, subject_key, relation, resource_id)` was RESPELLED as
+`(resource_type, relation, subject_key, resource_id)` to obey the pinned equality
+order (rule 4). Thirteen entries were ADDED: the descendant hop's
 `(resource_type, relation, subject_key)` and the twelve optional-filter subsets
-of the two relationship listings.
+of the two relationship listings. `(resource_key, relation)` was removed at A5
+and RESTORED at A7 when rule 2 became uniform.
+
+### 9.5 Field overrides — the single-field indexes this store depends on
+
+A composite index is not the only index the store needs. Several §7 shapes derive
+none at all — the expansion hop (one `in` on `subject_key`), the resource-rows
+read and the delete family (one equality on `resource_key`), the role teardown
+sweep — and each is served by Firestore's AUTOMATIC single-field indexing.
+
+Automatic is not the same as guaranteed. A host, or a later manifest of this
+store's own, can disable a field's single-field indexes with a `fieldOverride`,
+and those queries would then fail with `FAILED_PRECONDITION` in production while
+every emulator run stayed green (the emulator enforces no index at all). The
+manifest is the specification and `ProbeIndexes` checks only what the manifest
+DECLARES (connector C5), so an undeclared dependency is an unchecked one. A5's
+"no field overrides, deliberately" reasoned that the default configuration
+supplies what those shapes need — true, and exactly the assumption that goes
+unnoticed when it stops holding.
+
+So the manifest declares them. The rule is uniform rather than minimal: **every
+field any matrix row filters or orders on**, on the collection that queries it —
+nine on `iam_relationships` (`resource_key`, `subject_key`, `relation`,
+`resource_type`, `resource_id`, `subject_type`, `subject_id`, `created_at`,
+`relationship_id`) and eight on `iam_roles` (`subject_key`, `resource_key`,
+`resource_type`, `role`, `resource_id`, `grant_key`, `role_key`, `created_at`).
+`TestCompositeFreeShapesDeclareTheirSingleFieldIndexes` enforces both directions:
+a composite-free shape whose field is undeclared fails, and a declared override
+no query uses fails.
+
+Each entry asks for ONE index — `ASCENDING` at `COLLECTION` scope. **Declaring an
+override REPLACES a field's default set** (ascending + descending +
+array-contains), which is deliberate: these collections carry no array field
+(usersets are separate documents, never an array), no query is collection-group
+scoped, and no query sorts a single field descending without an equality prefix —
+every descending order in §7 belongs to a composite. The effect on a deployed
+database is fewer single-field indexes, not fewer served queries. A host that
+adds its own queries against these collections must extend the manifest rather
+than rely on the defaults.
 
 ### 9.4 Export, probe, and what live still owes
 

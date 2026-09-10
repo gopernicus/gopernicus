@@ -46,7 +46,10 @@ var claimSymbols = []string{
 // review that introduces the drift, not on a datastore run.
 //
 // Test files are exempt: proving the claim lifecycle requires reading those
-// documents, and a test cannot corrupt production state.
+// documents, and a test cannot corrupt production state. Like the role rule
+// below it reads CODE, not prose — the source is rendered with its comments
+// removed, because a package doc naming the SQL table it mirrors is
+// documentation, not a write path.
 func TestClaimCollectionsAreOwnedByTuplesOnly(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {
@@ -59,13 +62,13 @@ func TestClaimCollectionsAreOwnedByTuplesOnly(t *testing.T) {
 		if entry.IsDir() || filepath.Ext(name) != ".go" || strings.HasSuffix(name, "_test.go") || claimOwners[name] {
 			continue
 		}
-		src, err := os.ReadFile(name)
+		src, err := sourceWithoutComments(name)
 		if err != nil {
 			t.Fatalf("reading %s: %v", name, err)
 		}
 		checked++
 		for _, symbol := range claimSymbols {
-			if strings.Contains(string(src), symbol) {
+			if strings.Contains(src, symbol) {
 				t.Errorf("%s names %s: a tuple's claim documents are owned by putTuple/dropTuple in tuples.go — route the change through them instead", name, symbol)
 			}
 		}
@@ -153,6 +156,86 @@ func TestRoleOwnersExist(t *testing.T) {
 		if _, err := os.Stat(name); err != nil {
 			t.Errorf("role owner %s: %v", name, err)
 		}
+	}
+}
+
+// mutationOwners are the only non-test files allowed to name the two mutation
+// collections: keys.go DECLARES the constants and the two document-id builders,
+// documents.go declares the two document SHAPES, and mutations.go is the file
+// that owns them — anchorRef/readAnchor/writeAnchor are the anchor's only
+// addressing and its only writer, readAnchorsAndReceipt and insertReceipt the
+// receipt's.
+var mutationOwners = map[string]bool{
+	"keys.go":      true,
+	"documents.go": true,
+	"mutations.go": true,
+}
+
+// mutationSymbols are the names a write path would have to use to reach a scope
+// anchor or a receipt: the constants, and the raw collection names in case a
+// future change reaches past them.
+var mutationSymbols = []string{
+	"collectionScopes",
+	"collectionMutations",
+	"iam_scopes",
+	"iam_mutations",
+}
+
+// TestMutationCollectionsAreOwnedByMutationsOnly is the A7 fold's third
+// ownership rule, and it guards the two documents that decide whether a mutation
+// is idempotent at all.
+//
+// The scope anchor is the revision every ExpectedRevision check and every
+// dependency validation reads; the receipt is what makes a replayed MutationID
+// return the original answer instead of applying twice. A write path that
+// bumped an anchor outside writeAnchor, or minted a receipt outside
+// insertReceipt, would break exactly-once semantics with nothing at read time
+// noticing — the same failure class the claim and role rules exist for, on the
+// two collections where it is worst.
+//
+// Hermetic, comment-stripped, test files exempt, for the same reasons as above.
+func TestMutationCollectionsAreOwnedByMutationsOnly(t *testing.T) {
+	assertCollectionOwnership(t, mutationOwners, mutationSymbols,
+		"scope anchors and receipts are owned by mutations.go (writeAnchor/insertReceipt) — route the change through them instead")
+}
+
+// TestMutationOwnersExist keeps the allow-list honest.
+func TestMutationOwnersExist(t *testing.T) {
+	for name := range mutationOwners {
+		if _, err := os.Stat(name); err != nil {
+			t.Errorf("mutation owner %s: %v", name, err)
+		}
+	}
+}
+
+// assertCollectionOwnership is the shared body of the ownership rules: no
+// non-test file outside owners may NAME any of symbols, comments excluded.
+func assertCollectionOwnership(t *testing.T, owners map[string]bool, symbols []string, remedy string) {
+	t.Helper()
+
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("reading the package directory: %v", err)
+	}
+	checked := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || filepath.Ext(name) != ".go" || strings.HasSuffix(name, "_test.go") || owners[name] {
+			continue
+		}
+		src, err := sourceWithoutComments(name)
+		if err != nil {
+			t.Fatalf("reading %s: %v", name, err)
+		}
+		checked++
+		for _, symbol := range symbols {
+			if strings.Contains(src, symbol) {
+				t.Errorf("%s names %s: %s", name, symbol, remedy)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no package sources were checked — the guard would pass vacuously")
 	}
 }
 

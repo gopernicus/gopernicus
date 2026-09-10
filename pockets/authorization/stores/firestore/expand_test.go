@@ -5,6 +5,7 @@ package firestore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -358,4 +359,72 @@ func sameTargets(a, b []relationship.RelationTarget) bool {
 		remaining = slices.Delete(remaining, i, i+1)
 	}
 	return true
+}
+
+// TestCheckReadBudgetScalesWithTheGrantsOfThePrincipal measures — and PINS —
+// what one expanded check costs in document reads, which is the number the
+// README publishes under "Ceilings and costs". A SQL host reads this cost off a
+// recursive CTE's plan; here it is the store's own chunking, so it is measured.
+//
+// The fixture is the shape that dominates in practice: a principal holding N
+// DIRECT grants and belonging to no group. The walk still runs, because the
+// store cannot know in advance that none of those grants is a userset:
+//
+//	hop 1   one query on the seed subject_key, returning the principal's N rows
+//	hop 2   the N reached states, chunked 30 at a time, reaching nothing
+//	match   the reached set (N+1 keys) chunked 30 at a time, each Limit(1),
+//	        stopping at the first chunk that hits
+//
+// so reads = N (the principal's own grants) + 1 (the matching row) and queries
+// = 1 + ceil(N/30) + the chunks the match scans. The point of pinning it is that
+// a regression to "one query per candidate" or "read the whole target list"
+// would move these numbers by an order of magnitude on the 1000-grant row.
+func TestCheckReadBudgetScalesWithTheGrantsOfThePrincipal(t *testing.T) {
+	for _, grants := range []int{1, 100, 1000} {
+		t.Run(fmt.Sprintf("%d direct grants", grants), func(t *testing.T) {
+			ctx := context.Background()
+			db, s := newRelationships(t)
+
+			batch := make([]relationship.CreateRelationship, 0, grants)
+			for i := 0; i < grants; i++ {
+				batch = append(batch, ctf("doc", docID("d", i), "viewer", "user", "u1"))
+			}
+			if err := s.CreateRelationships(ctx, batch); err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+
+			var (
+				allowed bool
+				counter *countingReader
+			)
+			if err := db.ReadSnapshot(ctx, func(ctx context.Context, r firestoredb.Reader) error {
+				counter = &countingReader{reader: r}
+				reached, err := expand(ctx, db, counter, "user", "u1", 0)
+				if err != nil {
+					return err
+				}
+				allowed, err = anyTupleWithSubject(ctx, db, counter, "doc", docID("d", 0), "viewer", reached)
+				return err
+			}); err != nil {
+				t.Fatalf("check: %v", err)
+			}
+			if !allowed {
+				t.Fatalf("the principal holds the relation directly; the check denied it")
+			}
+
+			// hop 1 is one query; hop 2 chunks the reached states; the match
+			// scans chunks of the same set until one hits.
+			hopQueries := 1 + (grants+maxDisjunctions-1)/maxDisjunctions
+			matchChunks := (grants + 1 + maxDisjunctions - 1) / maxDisjunctions
+			if counter.queries < hopQueries+1 || counter.queries > hopQueries+matchChunks {
+				t.Fatalf("check issued %d queries, want between %d and %d (one per CHUNK, never one per grant)",
+					counter.queries, hopQueries+1, hopQueries+matchChunks)
+			}
+			if want := grants + 1; counter.documents != want {
+				t.Fatalf("check read %d documents, want %d (the principal's %d direct grants + the one matching row)",
+					counter.documents, want, grants)
+			}
+			t.Logf("%d direct grants: %d queries, %d document reads", grants, counter.queries, counter.documents)
+		})
+	}
 }

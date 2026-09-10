@@ -118,7 +118,7 @@ make run                # or: cd examples/cms && go run ./cmd/server
 
 From the repo root, `make check` builds, vets, and tests all forty-one modules
 and runs the twenty-three layering guards; `make test-stores` runs the live dialect
-conformance suites (expects `POSTGRES_TEST_DSN` / `TURSO_*`). See [examples/cms/README.md](examples/cms/README.md)
+conformance suites (expects `POSTGRES_TEST_DSN` / `TURSO_*` / `FIRESTORE_EMULATOR_HOST`). See [examples/cms/README.md](examples/cms/README.md)
 for that host's full env/make-target reference.
 
 ## Documentation

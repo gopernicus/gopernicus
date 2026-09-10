@@ -222,10 +222,10 @@ func (s *relationshipStore) CheckBatchDirect(ctx context.Context, resourceType s
 // index, AND the primary key. See createRelationships for the three collisions
 // and for how duplicates inside the batch resolve in input order.
 //
-// A batch past the transaction write limit is refused BEFORE the transaction
-// opens (ErrTupleWriteLimit): splitting it across transactions would be a
-// partially applied batch, which is the one thing this method promises not to
-// be.
+// The batch is never split. Firestore publishes no per-transaction write COUNT
+// limit — the bound is the 10 MiB request size — and an oversized commit fails
+// at the server atomically, so a batch too large for one request is refused by
+// Firestore with nothing written rather than half applied here (SCHEMA.md §8.1).
 func (s *relationshipStore) CreateRelationships(ctx context.Context, relationships []relationship.CreateRelationship) error {
 	if err := refuseAmbient(ctx); err != nil {
 		return err
@@ -233,10 +233,7 @@ func (s *relationshipStore) CreateRelationships(ctx context.Context, relationshi
 	if len(relationships) == 0 {
 		return nil
 	}
-	if len(relationships) > maxTuplesPerTransaction {
-		return writeLimitError("CreateRelationships", len(relationships))
-	}
-	return s.db.Transact(ctx, func(ctx context.Context) error {
+	return retryTransact(ctx, s.db, func(ctx context.Context) error {
 		return createRelationships(ctx, s.db, relationships)
 	})
 }
@@ -260,7 +257,7 @@ func (s *relationshipStore) SetRelationTargets(ctx context.Context, resourceType
 	if err != nil {
 		return err
 	}
-	return s.db.Transact(ctx, func(ctx context.Context) error {
+	return retryTransact(ctx, s.db, func(ctx context.Context) error {
 		return setRelationTargets(ctx, s.db, resourceType, resourceID, relation, desired)
 	})
 }
@@ -275,7 +272,7 @@ func (s *relationshipStore) DeleteRelationshipTarget(ctx context.Context, resour
 		return err
 	}
 	ref := s.db.Doc(collectionRelationships, relationshipDocID(resourceType, resourceID, relation, target.Type, target.ID, target.Relation))
-	return s.db.Transact(ctx, func(ctx context.Context) error {
+	return retryTransact(ctx, s.db, func(ctx context.Context) error {
 		snap, err := s.db.ReaderFrom(ctx).Get(ctx, ref)
 		if err != nil && !errors.Is(err, sdk.ErrNotFound) {
 			return err
@@ -298,8 +295,8 @@ func (s *relationshipStore) DeleteResourceRelationships(ctx context.Context, res
 	if err := refuseAmbient(ctx); err != nil {
 		return err
 	}
-	return s.db.Transact(ctx, func(ctx context.Context) error {
-		return dropMatching(ctx, s.db, "DeleteResourceRelationships",
+	return retryTransact(ctx, s.db, func(ctx context.Context) error {
+		return dropMatching(ctx, s.db,
 			s.db.Collection(collectionRelationships).Where("resource_key", "==", resourceKey(resourceType, resourceID)),
 			nil)
 	})
@@ -314,8 +311,8 @@ func (s *relationshipStore) DeleteRelationship(ctx context.Context, resourceType
 	if err := refuseAmbient(ctx); err != nil {
 		return err
 	}
-	return s.db.Transact(ctx, func(ctx context.Context) error {
-		return dropMatching(ctx, s.db, "DeleteRelationship",
+	return retryTransact(ctx, s.db, func(ctx context.Context) error {
+		return dropMatching(ctx, s.db,
 			s.db.Collection(collectionRelationships).
 				Where("resource_key", "==", resourceKey(resourceType, resourceID)).
 				Where("relation", "==", relation),
@@ -331,8 +328,8 @@ func (s *relationshipStore) DeleteByResourceAndSubject(ctx context.Context, reso
 	if err := refuseAmbient(ctx); err != nil {
 		return err
 	}
-	return s.db.Transact(ctx, func(ctx context.Context) error {
-		return dropMatching(ctx, s.db, "DeleteByResourceAndSubject",
+	return retryTransact(ctx, s.db, func(ctx context.Context) error {
+		return dropMatching(ctx, s.db,
 			s.db.Collection(collectionRelationships).Where("resource_key", "==", resourceKey(resourceType, resourceID)),
 			func(row relationshipDoc) bool {
 				return row.SubjectType == subjectType && row.SubjectID == subjectID

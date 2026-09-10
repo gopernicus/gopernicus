@@ -103,14 +103,24 @@ func closedDB(t *testing.T) *firestoredb.DB {
 	return db
 }
 
-// countingReader wraps a connector Reader and counts the QUERIES issued through
-// it. It is what makes "one read per chunk, never one per candidate" a proven
-// property instead of a claim in a comment — the Reader is an interface, so the
-// count is taken at the seam every read of this store goes through.
+// countingReader wraps a connector Reader and counts what an operation actually
+// reads: the QUERIES issued, the DOCUMENTS those queries return, and the
+// documents fetched by address. It is what makes "one read per chunk, never one
+// per candidate" — and the published read budgets in README.md, "Ceilings and
+// costs" — proven properties instead of claims in a comment. The Reader is an
+// interface, so the counts are taken at the seam every read of this store goes
+// through.
+//
+// documents is measured by DRAINING A DUPLICATE of each query before the real
+// iterator is handed back, because *gcfs.DocumentIterator is a concrete type and
+// cannot be decorated. So a counted operation issues each of its queries twice.
+// That is fine for a measurement — the store's read SHAPE is what is under test
+// — but the counter is not itself a cost measurement of the run it decorates.
 type countingReader struct {
-	reader  firestoredb.Reader
-	queries int
-	gets    int
+	reader    firestoredb.Reader
+	queries   int
+	documents int
+	gets      int
 }
 
 func (c *countingReader) Get(ctx context.Context, ref *gcfs.DocumentRef) (*gcfs.DocumentSnapshot, error) {
@@ -125,7 +135,25 @@ func (c *countingReader) GetAll(ctx context.Context, refs []*gcfs.DocumentRef) (
 
 func (c *countingReader) Documents(ctx context.Context, q gcfs.Query) *gcfs.DocumentIterator {
 	c.queries++
+	c.documents += countDocuments(ctx, c.reader, q)
 	return c.reader.Documents(ctx, q)
+}
+
+// countDocuments drains a DUPLICATE of q and reports how many documents it
+// returns — the number of document reads Firestore bills for that query, Limit
+// clauses included. An error ends the count rather than failing: the real
+// iterator the caller receives reports it, and that is where it belongs.
+func countDocuments(ctx context.Context, r firestoredb.Reader, q gcfs.Query) int {
+	it := r.Documents(ctx, q)
+	defer it.Stop()
+
+	n := 0
+	for {
+		if _, err := it.Next(); err != nil {
+			return n
+		}
+		n++
+	}
 }
 
 func (c *countingReader) Count(ctx context.Context, q gcfs.Query) (int64, error) {

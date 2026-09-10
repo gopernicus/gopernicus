@@ -266,51 +266,35 @@ func TestSetRelationTargetsConcurrentDisjointSetsConverge(t *testing.T) {
 	}, false)
 }
 
-// TestWriteLimitRefusesBeforeWriting proves the transaction budget is a
-// PRECONDITION, not a partial commit: an oversized create writes nothing, and
-// an oversized delete leaves every row in place. Both answer ErrTupleWriteLimit
-// (sdk.ErrInvalidInput) rather than splitting the operation.
-func TestWriteLimitRefusesBeforeWriting(t *testing.T) {
+// TestLargeBatchesCommitInOneTransaction is the A7 fold of the "500 writes per
+// transaction" ceiling this store used to enforce: there is no such limit. The
+// Firestore quotas page bounds a commit by the 10 MiB maximum API request size
+// and by 500 FIELD TRANSFORMATIONS PER DOCUMENT — neither of which counts
+// writes — so a client-side refusal rejected batches the server accepts.
+//
+// 200 tuples is 600 documents, well past the number that was refused before.
+// One CreateRelationships call commits all of it atomically, and one
+// DeleteResourceRelationships removes all of it, both without splitting.
+func TestLargeBatchesCommitInOneTransaction(t *testing.T) {
 	ctx := context.Background()
 	_, s := newRelationships(t)
 
-	oversized := make([]relationship.CreateRelationship, 0, maxTuplesPerTransaction+1)
-	for i := 0; i <= maxTuplesPerTransaction; i++ {
-		oversized = append(oversized, ctf("doc", "big", "viewer", "user", docID("u", i)))
+	const tuples = 200
+	batch := make([]relationship.CreateRelationship, 0, tuples)
+	for i := 0; i < tuples; i++ {
+		batch = append(batch, ctf("doc", "big", "viewer", "user", docID("u", i)))
 	}
-	err := s.CreateRelationships(ctx, oversized)
-	if !errors.Is(err, ErrTupleWriteLimit) || !errors.Is(err, sdk.ErrInvalidInput) {
-		t.Fatalf("oversized create: want ErrTupleWriteLimit wrapping sdk.ErrInvalidInput, got %v", err)
+	if err := s.CreateRelationships(ctx, batch); err != nil {
+		t.Fatalf("a %d-tuple (%d-document) batch must commit in one transaction: %v", tuples, tuples*3, err)
+	}
+	if n, _ := s.CountByResourceAndRelation(ctx, "doc", "big", "viewer"); n != tuples {
+		t.Fatalf("committed %d rows, want %d", n, tuples)
+	}
+
+	if err := s.DeleteResourceRelationships(ctx, "doc", "big"); err != nil {
+		t.Fatalf("a %d-document delete must commit in one transaction: %v", tuples*3, err)
 	}
 	if n, _ := s.CountByResourceAndRelation(ctx, "doc", "big", "viewer"); n != 0 {
-		t.Fatalf("a refused batch wrote %d rows", n)
-	}
-
-	// Seed one tuple past the limit in two accepted batches, then prove the
-	// delete refuses the whole resource rather than removing part of it.
-	if err := s.CreateRelationships(ctx, oversized[:maxTuplesPerTransaction]); err != nil {
-		t.Fatalf("seed batch 1: %v", err)
-	}
-	if err := s.CreateRelationships(ctx, oversized[maxTuplesPerTransaction:]); err != nil {
-		t.Fatalf("seed batch 2: %v", err)
-	}
-	total := len(oversized)
-	if n, _ := s.CountByResourceAndRelation(ctx, "doc", "big", "viewer"); n != total {
-		t.Fatalf("seeded %d rows, want %d", n, total)
-	}
-
-	if err := s.DeleteResourceRelationships(ctx, "doc", "big"); !errors.Is(err, ErrTupleWriteLimit) {
-		t.Fatalf("oversized delete: want ErrTupleWriteLimit, got %v", err)
-	}
-	if n, _ := s.CountByResourceAndRelation(ctx, "doc", "big", "viewer"); n != total {
-		t.Fatalf("a refused delete changed the state: %d rows left, want %d", n, total)
-	}
-	// A delete that FITS still works on the same resource, so the refusal is
-	// about size and nothing else.
-	if err := s.DeleteRelationship(ctx, "doc", "big", "viewer", "user", docID("u", 0)); err != nil {
-		t.Fatalf("in-budget delete: %v", err)
-	}
-	if n, _ := s.CountByResourceAndRelation(ctx, "doc", "big", "viewer"); n != total-1 {
-		t.Fatalf("in-budget delete removed %d rows", total-n)
+		t.Fatalf("the delete left %d rows", n)
 	}
 }

@@ -97,32 +97,3 @@ func TestLockSetIsCanonicalAndDeduped(t *testing.T) {
 		t.Fatalf("the trusted path locks the mutation scope alone, got %+v", only)
 	}
 }
-
-// TestMutationWriteCountsMatchTheHelpers keeps the budget arithmetic honest: the
-// per-transaction ceiling is checked against a COUNT, so if a write helper ever
-// changes how many documents it touches the count must change with it. A tuple
-// owns three documents; a replaced tuple touches four (the old row's delete, the
-// new row's create, and one Set on each claim, whose ids do not carry the
-// relation); a role grant is one.
-func TestMutationWriteCountsMatchTheHelpers(t *testing.T) {
-	if writesPerTuple != 3 {
-		t.Fatalf("a tuple owns %d documents, want 3 (row + subject claim + id claim)", writesPerTuple)
-	}
-	if writesPerReplacedTuple != 4 {
-		t.Fatalf("a replaced tuple touches %d documents, want 4", writesPerReplacedTuple)
-	}
-	writes := mutationWrites{
-		drops:     make([]relationshipDoc, 2),
-		replaces:  make([]tupleReplacement, 3),
-		creates:   make([]relationshipDoc, 4),
-		roleDrops: make([]roleDoc, 5),
-		roleAdds:  make([]roleDoc, 6),
-	}
-	want := 2*writesPerTuple + 3*writesPerReplacedTuple + 4*writesPerTuple + 5 + 6
-	if got := writes.count(); got != want {
-		t.Fatalf("staged write count = %d, want %d", got, want)
-	}
-	if (mutationWrites{}).count() != 0 {
-		t.Fatalf("an empty write set costs nothing")
-	}
-}

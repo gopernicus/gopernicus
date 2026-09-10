@@ -1,6 +1,6 @@
 # gopernicus — framework monorepo (sdk + integrations + pockets + examples)
 #
-# Multi-module workspace (go.work), 40 modules. templ is pinned via the `tool`
+# Multi-module workspace (go.work), 41 modules. templ is pinned via the `tool`
 # directive in pockets/cms/views/goth/go.mod (where the .templ sources live),
 # so `go tool templ` is reproducible.
 
@@ -360,6 +360,30 @@ guard-violation-message-not-error:
 # among them (firestore-stores A2c), because a bare `.Add(` also matches
 # sync.WaitGroup.Add in a store's own concurrency test, which is not I/O at all.
 #
+# (c) the vendor MODULE surface a store may import at all. The connector is the
+# isolation unit for cloud.google.com/go/firestore and for the companion modules
+# its API forces on a caller (google.golang.org/api/option, grpc/codes+status),
+# so a store imports exactly two vendor paths: the aliased client (for the query
+# and document TYPES part (a) allows) and the iterator whose Done value is the
+# loop terminator at every iteration boundary. Anything else — grpc/status to
+# build an error, the admin API, option — is the connector's job, and a store
+# that needed one would be reimplementing it. Test files are INCLUDED: a store
+# that needs a gRPC status for a test gets a helper from the connector's
+# firestoretest package (AbortedError), not a direct require of grpc.
+#
+# (d) the ambient-transaction refusal lives in ONE file. TxFromContext is how a
+# store detects a host's transaction and fails loud (R1); scattered across the
+# package it would be a rule enforced by a dozen call sites, each of which could
+# forget it. store.go owns refuseAmbient/refuseAmbientMutation and is the only
+# file allowed to name the seam.
+#
+# The receiver matching in (b) is a HEURISTIC, deliberately: it accepts a call
+# whose receiver is spelled r/w/reader/writer or *Reader/*Writer, and an inline
+# ReaderFrom(/WriterFrom(. A connector Reader stored in a differently named
+# variable would trip it, and the fix is to rename the variable rather than to
+# widen the regex — the alternative is an AST pass, which is what the store's own
+# claim/role/mutation ownership tests are for.
+#
 # The glob was empty when this guard landed with the connector, which was the
 # point: the first store train (pockets/authorization/stores/firestore) was born
 # under it. An empty glob must not error, hence the [ -d ] skip.
@@ -373,6 +397,11 @@ guard-firestore-mediation:
 		io=$$(grep -rn --include='*.go' -E '\.(Documents|GetAll|NewDoc|Snapshots|BulkWriter)\(|\.(Get|Create|Set|Update|Delete|Add)\(ctx' $$d \
 			| grep -vE '(ReaderFrom\(|WriterFrom\(|(^|[^A-Za-z0-9_])(r|w|reader|writer|[A-Za-z]+(Reader|Writer))\.)' || true); \
 		if [ -n "$$io" ]; then echo "ERROR (G24): a firestore store adapter issues vendor I/O directly — build the reference or query, then run it through db.ReaderFrom(ctx) / db.WriterFrom(ctx):"; echo "$$io"; fail=1; fi; \
+		imports=$$(grep -rn --include='*.go' -E '^[[:space:]]*([A-Za-z_.][A-Za-z0-9_]* )?"(cloud\.google\.com|google\.golang\.org)/' $$d \
+			| grep -vE '(gcfs "cloud\.google\.com/go/firestore"|"google\.golang\.org/api/iterator")$$' || true); \
+		if [ -n "$$imports" ]; then echo "ERROR (G24): a firestore store adapter imports a vendor module beyond the aliased client and the iterator — the connector is the isolation unit for the client library AND the companion modules its API forces on a caller (option, grpc/codes+status); a test needing a gRPC status uses the connector's firestoretest helpers:"; echo "$$imports"; fail=1; fi; \
+		ambient=$$(grep -rln --include='*.go' 'TxFromContext' $$d | grep -vE '/store\.go$$' || true); \
+		if [ -n "$$ambient" ]; then echo "ERROR (G24): TxFromContext is named outside store.go — the ambient-transaction refusal (R1) lives in refuseAmbient/refuseAmbientMutation, so every port method inherits it instead of re-deciding:"; echo "$$ambient"; fail=1; fi; \
 	done; exit $$fail
 
 # G13 (sdk-layering, 2026-07-10, folded steward finding): integrations never

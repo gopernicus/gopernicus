@@ -19,10 +19,16 @@ import (
 // reviewer can see, and because a Firestore database allows 200 composite
 // indexes without billing enabled (1,000 with it) SHARED across every store a
 // host mounts — this store's share of that budget is a fact, not an accident.
-const indexManifestCount = 27
+const indexManifestCount = 28
 
 // compositeBudget is the no-billing composite-index cap of one database.
 const compositeBudget = 200
+
+// indexFieldOverrideCount is the number of single-field dependencies
+// firestore.indexes.json declares — see derivedFieldOverrides for why they are
+// declared at all and why the set is every queried field rather than only the
+// composite-free ones.
+const indexFieldOverrideCount = 17
 
 // probeValue and probeValues are the literals the live matrix leg filters with.
 // They match nothing: the point of executing a matrix row live is that Firestore
@@ -345,8 +351,15 @@ func (s queryShape) needsComposite() bool {
 	case order == 1 && filters > 0:
 		// Filter on one field, sort by another.
 		return true
-	case order == 0 && filters >= 2 && len(s.in) > 0:
-		// A disjunction combined with another filter field.
+	case order == 0 && filters >= 2:
+		// Two or more filter fields. `in` counts as an equality for index
+		// selection ("in and == clauses use the same index"), and the server
+		// MAY serve a multi-equality query by MERGING automatic single-field
+		// indexes — but merging is a documented optimization, not a guarantee,
+		// and an under-declared manifest surfaces as a production
+		// FAILED_PRECONDITION. The rule is therefore uniform: two filter fields
+		// get a composite, `in` or not. It was previously conditional on an
+		// `in` being present, which is what dropped (resource_key, relation).
 		return true
 	default:
 		return false
@@ -376,12 +389,72 @@ func filterSuffix(filters []string) string {
 	return " +" + strings.Join(filters, "+")
 }
 
-// derivedManifest is the manifest the matrix requires: every required index,
-// de-duplicated by the connector's identity and sorted the way Merge sorts.
+// derivedFieldOverrides is the SINGLE-FIELD half of the manifest, and it exists
+// because a composite index is not the only index this store depends on.
+//
+// Several query shapes derive no composite at all — the expansion hop (one `in`
+// on subject_key), the resource-rows read (one equality on resource_key), the
+// role teardown sweep — and every one of them is served by Firestore's
+// AUTOMATIC single-field indexing. Automatic is not the same as guaranteed: a
+// host (or a later manifest of this store's own) can disable a field's
+// single-field indexes with a fieldOverride, and the query would then fail with
+// FAILED_PRECONDITION in production while every emulator run stayed green. The
+// manifest is the specification, and ProbeIndexes checks only what the manifest
+// DECLARES (connector C5), so an undeclared dependency is an unchecked one.
+//
+// The rule is uniform rather than minimal: every field any matrix row filters or
+// orders on is declared, on the collection that queries it. A field used only
+// inside a composite costs nothing to declare and keeps the rule stateable in
+// one sentence.
+//
+// Each entry asks for ONE index — ASCENDING at COLLECTION scope. Declaring an
+// override REPLACES the default set (ascending + descending + array-contains),
+// which is deliberate here: these collections carry no array field, and no
+// query sorts a single field descending without an equality prefix (every
+// descending order in the matrix belongs to a composite). SCHEMA.md §9 says so.
+func derivedFieldOverrides() []firestoredb.FieldOverride {
+	fields := map[string]map[string]bool{}
+	note := func(collection, field string) {
+		if field == "" || field == gcfs.DocumentID {
+			return
+		}
+		if fields[collection] == nil {
+			fields[collection] = map[string]bool{}
+		}
+		fields[collection][field] = true
+	}
+	for _, s := range queryMatrix() {
+		for _, f := range slices.Concat(s.equality, s.in) {
+			note(s.collection, f)
+		}
+		note(s.collection, s.rangeField)
+		for _, o := range s.order {
+			note(s.collection, o.field)
+		}
+	}
+
+	var out []firestoredb.FieldOverride
+	for collection, set := range fields {
+		for field := range set {
+			out = append(out, firestoredb.FieldOverride{
+				CollectionGroup: collection,
+				FieldPath:       field,
+				Indexes: []firestoredb.FieldOverrideIndex{
+					{Order: firestoredb.OrderAscending, QueryScope: firestoredb.ScopeCollection},
+				},
+			})
+		}
+	}
+	return out
+}
+
+// derivedManifest is the manifest the matrix requires: every required composite
+// index plus every declared single-field dependency, de-duplicated by the
+// connector's identity and sorted the way Merge sorts.
 func derivedManifest(t *testing.T) firestoredb.IndexManifest {
 	t.Helper()
 
-	var m firestoredb.IndexManifest
+	m := firestoredb.IndexManifest{FieldOverrides: derivedFieldOverrides()}
 	seen := map[string]bool{}
 	for _, s := range queryMatrix() {
 		idx, ok := requiredIndex(s)
@@ -436,8 +509,8 @@ func TestIndexManifestParses(t *testing.T) {
 	if len(m.Indexes) > compositeBudget {
 		t.Errorf("manifest declares %d composite indexes, over the %d a database allows without billing — and that budget is shared with every other store the host mounts", len(m.Indexes), compositeBudget)
 	}
-	if len(m.FieldOverrides) != 0 {
-		t.Errorf("manifest declares %d field overrides, want none: no query here filters an array field or depends on a collection-group scoped or disabled single-field index", len(m.FieldOverrides))
+	if len(m.FieldOverrides) != indexFieldOverrideCount {
+		t.Errorf("manifest declares %d field overrides, want %d — the single-field indexes the composite-free query shapes depend on (SCHEMA.md §9)", len(m.FieldOverrides), indexFieldOverrideCount)
 	}
 	for _, idx := range m.Indexes {
 		if idx.QueryScope != firestoredb.ScopeCollection {
@@ -562,6 +635,75 @@ func TestExportIndexesCarriesEveryDerivedIndexIntoAHostManifest(t *testing.T) {
 	}
 	if !keys[indexKey(host.Indexes[0])] {
 		t.Errorf("the host's own index %s did not survive the export", indexKey(host.Indexes[0]))
+	}
+}
+
+// TestCompositeFreeShapesDeclareTheirSingleFieldIndexes is the A7 fold of the
+// manifest's other half. A query shape that derives NO composite index is served
+// by Firestore's automatic single-field indexing — an assumption nothing in this
+// package checked and the probe could not check, because ProbeIndexes validates
+// only what the manifest DECLARES. A host (or this store's own manifest) that
+// disabled one of those fields would break the query in production with every
+// emulator run still green.
+//
+// So: every filter and order field of every composite-free shape must appear in
+// fieldOverrides for its collection, with an ASCENDING/COLLECTION entry. The
+// converse is checked too — a declared override must belong to a field some
+// query actually uses — so the block cannot rot into a list nobody maintains.
+func TestCompositeFreeShapesDeclareTheirSingleFieldIndexes(t *testing.T) {
+	shipped, err := firestoredb.ParseIndexManifest(IndexesFS, IndexesFile)
+	if err != nil {
+		t.Fatalf("ParseIndexManifest: %v", err)
+	}
+
+	declared := map[string]firestoredb.FieldOverride{}
+	for _, o := range shipped.FieldOverrides {
+		declared[o.CollectionGroup+"."+o.FieldPath] = o
+	}
+
+	ascendingCollection := func(o firestoredb.FieldOverride) bool {
+		for _, idx := range o.Indexes {
+			if idx.Order == firestoredb.OrderAscending && idx.QueryScope == firestoredb.ScopeCollection {
+				return true
+			}
+		}
+		return false
+	}
+
+	used := map[string]bool{}
+	for _, s := range queryMatrix() {
+		fields := slices.Concat(s.equality, s.in)
+		if s.rangeField != "" {
+			fields = append(fields, s.rangeField)
+		}
+		for _, o := range s.order {
+			fields = append(fields, o.field)
+		}
+		_, hasComposite := requiredIndex(s)
+		for _, f := range fields {
+			if f == gcfs.DocumentID {
+				continue
+			}
+			key := s.collection + "." + f
+			used[key] = true
+			if hasComposite {
+				continue
+			}
+			o, ok := declared[key]
+			if !ok {
+				t.Errorf("query shape %q derives no composite and depends on the automatic single-field index of %s — declare it in fieldOverrides", s.name, key)
+				continue
+			}
+			if !ascendingCollection(o) {
+				t.Errorf("%s is declared without an ASCENDING/COLLECTION index, which is what shape %q reads through", key, s.name)
+			}
+		}
+	}
+
+	for key := range declared {
+		if !used[key] {
+			t.Errorf("fieldOverrides declares %s, which no query shape filters or orders on — delete it or add the query", key)
+		}
 	}
 }
 

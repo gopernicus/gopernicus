@@ -42,12 +42,15 @@ func claimRefs(db *firestoredb.DB, row relationshipDoc) (tuple, subject, id *gcf
 // than with the caller for the same reason putTuple and dropTuple do: every
 // reference to the claim collections belongs to this file, so the compiler and
 // TestClaimCollectionsAreOwnedByTuplesOnly can both see the whole set.
-func decodeSubjectClaim(snap *gcfs.DocumentSnapshot) (subjectClaimDoc, bool, error) {
+//
+// The caller establishes PRESENCE (docRefs.exists); this only decodes, so it
+// reports no second "found" boolean of its own.
+func decodeSubjectClaim(snap *gcfs.DocumentSnapshot) (subjectClaimDoc, error) {
 	var claim subjectClaimDoc
 	if err := snap.DataTo(&claim); err != nil {
-		return subjectClaimDoc{}, false, fmt.Errorf("authorization firestore store: decoding %s: %s: %w", collectionSubjectClaims, err, sdk.ErrInvalidInput)
+		return subjectClaimDoc{}, fmt.Errorf("authorization firestore store: decoding %s: %s: %w", collectionSubjectClaims, err, sdk.ErrInvalidInput)
 	}
-	return claim, true, nil
+	return claim, nil
 }
 
 // putTuple writes one relationship tuple and both of its claims through w. The
@@ -75,11 +78,6 @@ func putTuple(ctx context.Context, db *firestoredb.DB, w firestoredb.Writer, row
 	return w.Create(ctx, db.Doc(collectionIDClaims, idClaimDocID(row.RelationshipID)), idClaimDoc{RelationshipID: row.RelationshipID, TupleID: id})
 }
 
-// writesPerReplacedTuple is what replaceTuple costs: the old row's Delete, the
-// new row's Create, and one Set on each claim (both claim ids are unchanged, so
-// neither is deleted and re-created).
-const writesPerReplacedTuple = 4
-
 // replaceTuple moves an existing tuple to a NEW relation in place — the
 // mutation path's OpReplace, whose SQL siblings say `UPDATE iam_relationships
 // SET relation = ?`. Firestore has no such update available here, because the
@@ -102,6 +100,16 @@ func replaceTuple(ctx context.Context, db *firestoredb.DB, w firestoredb.Writer,
 	next.SubjectKey = subjectKey(next.SubjectType, next.SubjectID, next.SubjectRelation)
 	next.CreatedAt = firestoredb.TruncateTime(next.CreatedAt)
 	id := tupleID(next)
+
+	if id == tupleID(old) {
+		// The relation did not change, so the row does not move and there is
+		// nothing to write. Without the guard this would queue a Delete and a
+		// Create on the SAME document in one commit, which is not a rename —
+		// it is a document whose final state depends on write ordering. The
+		// evaluator already skips a same-relation row (mutations_eval.go
+		// replace), so this is the structural backstop for any future caller.
+		return nil
+	}
 
 	if err := w.Delete(ctx, db.Doc(collectionRelationships, tupleID(old))); err != nil {
 		return err

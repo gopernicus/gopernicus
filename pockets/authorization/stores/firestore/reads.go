@@ -25,13 +25,20 @@ import (
 // facts"; ruling R2).
 const maxDisjunctions = 30
 
-// maxQueryComplexity is Firestore's SECOND query cap, and the one a
-// disjunction-only budget misses: the sum of FILTERS and SORT ORDERS, counted
+// maxQueryComplexity is the budget this store's queries have under Firestore's
+// SECOND cap — the one a disjunction-only budget misses. The vendor rule is
+// that the sum of FILTERS, SORT ORDERS, and PARENT PATH COMPONENTS, counted
 // AFTER expansion to disjunctive normal form, may not exceed 100. Every
 // disjunct carries the whole conjunction, so a query with four filters per
 // disjunct is capped at twenty-four disjunctions, not thirty — thirty would be
 // 120 filters and an InvalidArgument the Go client does not pre-validate.
-const maxQueryComplexity = 100
+//
+// It is 99, not 100, because the parent path is part of the sum and this
+// store's collections are top-level: their parent is the database root
+// document, which contributes ONE component. A store whose collections were
+// nested deeper would have less budget still, which is why the component is
+// named here rather than assumed away.
+const maxQueryComplexity = 99
 
 // maxChunk returns the largest number of disjunctions one query may carry, given
 // how many filters each disjunct contributes and how many sort orders the query
@@ -90,6 +97,14 @@ type subjectScope struct {
 // every resource whose row contributed a reachable userset state. Under-recording
 // is the bug it exists to prevent: a dependency the guard actually read but did
 // not record is a stale allow nothing would catch at commit.
+//
+// On BUDGET OVERFLOW it returns the scopes traversed so far ALONGSIDE
+// relationship.ErrExpansionBudgetExceeded — the memstore's contract
+// (memstore/mutations.go, decisionView.CheckRelationBounded records every
+// reached scope and only then reports the overflow). The reached set is still
+// nil, because a truncated reachable set is never an answer; the scopes are not
+// an answer either, they are the rows this transaction READ, and a guard that
+// read them must depend on them whether or not it reached a decision.
 func expandScoped(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, subjectType, subjectID string, budget int) (map[string]struct{}, []subjectScope, error) {
 	seed := subjectKey(subjectType, subjectID, "")
 	seen := map[string]struct{}{seed: {}}
@@ -118,8 +133,11 @@ func expandScoped(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader,
 				}
 				if budget > 0 && len(seen) >= budget {
 					// Adding this state would push the distinct count past the
-					// budget: the call is indeterminate. Never a truncated set.
-					return nil, nil, relationship.ErrExpansionBudgetExceeded
+					// budget: the call is indeterminate. Never a truncated set —
+					// but the scopes traversed SO FAR come back with the error,
+					// because they were read and a caller recording
+					// dependencies must record them (memstore parity).
+					return nil, scopes, relationship.ErrExpansionBudgetExceeded
 				}
 				seen[state] = struct{}{}
 				next = append(next, state)

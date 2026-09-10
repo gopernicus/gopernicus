@@ -24,6 +24,21 @@ var _ mutation.MutationRepository = (*mutationStore)(nil)
 // store-local constant, never parsed.
 const receiptSchemaDigestUnset = "unset"
 
+// errReceiptRaced reports a receipt document that appeared between this
+// transaction's read phase (which found none) and its Create. It is a
+// STORE-INTEGRITY signal about the transaction, not a statement about the
+// command: the payload was never compared, so calling it
+// mutation.ErrPayloadMismatch would report a permanent domain refusal for what
+// is a lost race, and a caller replaying its own MutationID would be told its
+// payload changed.
+//
+// It wraps sdk.ErrConflict and is therefore RETRYABLE (retryableConflict): the
+// re-run reads the receipt that is now present and replays it — which, if the
+// payload really does differ, is where ErrPayloadMismatch is raised, on an
+// actual comparison. It should be unreachable, since the read is in the
+// transaction's read set and a concurrent Create must abort this commit first.
+var errReceiptRaced = fmt.Errorf("authorization firestore store: the receipt for this mutation id was created concurrently: %w", sdk.ErrConflict)
+
 // mutationStore is the Firestore mutation.MutationRepository: ONE
 // db.Transact per Apply, with A-D5's six phases strictly ordered — refuse an
 // ambient transaction, authorize, replay/digest, validate and read, evaluate and
@@ -94,27 +109,35 @@ func (s *mutationStore) apply(ctx context.Context, cmd mutation.Command, guard m
 	}
 
 	var out *mutation.Receipt
-	if err := retryContention(ctx, func() (bool, error) {
-		// refused reports whether the CALLBACK ended the transaction. It
-		// separates a domain refusal (a guard denial, a stale revision, a
-		// payload mismatch — returned by the vendor byte-identical and never
-		// retryable) from a vendor contention failure, which is the only thing
-		// this loop re-runs.
-		refused := false
+	if err := retryContention(ctx, func() (error, bool) {
+		// Reset at the TOP of the retry closure, not only inside the vendor
+		// callback: a Transact that fails before it ever calls the callback
+		// (a begin failure) must not leave a previous attempt's receipt behind.
+		out = nil
+
+		// guardReturned is the one classification the error's identity cannot
+		// carry. A guard's refusal is an authorization ANSWER even when it
+		// happens to wrap sdk.ErrConflict, so it is terminal for this loop
+		// however it is spelled. Everything else — including a mapped Aborted
+		// raised by a transactional READ — is judged by retryableConflict.
+		guardReturned := false
 		err := s.db.Transact(ctx, func(ctx context.Context) error {
-			// Reset per attempt: the vendor re-runs this callback when a commit
-			// loses a race, and a receipt built by a losing attempt is not the
-			// receipt of the transaction that committed.
-			out, refused = nil, false
-			rcpt, err := s.applyTx(ctx, cmd, guard, validate)
+			// Reset per attempt too: the vendor re-runs this callback when a
+			// commit loses a race, and a receipt built by a losing attempt is
+			// not the receipt of the transaction that committed.
+			out, guardReturned = nil, false
+			rcpt, fromGuard, err := s.applyTx(ctx, cmd, guard, validate)
+			guardReturned = fromGuard
 			if err != nil {
-				refused = true
-				return err
+				// A conflict this callback can SEE is re-run by the loop
+				// OUTSIDE, with jitter — never by the vendor's un-jittered one
+				// as well. See detachVendorRetry.
+				return detachVendorRetry(err)
 			}
 			out = rcpt
 			return nil
 		})
-		return !refused, err
+		return err, guardReturned
 	}); err != nil {
 		return nil, err
 	}
@@ -122,7 +145,11 @@ func (s *mutationStore) apply(ctx context.Context, cmd mutation.Command, guard m
 }
 
 // applyTx is the transactional critical section: every read, then every write.
-func (s *mutationStore) applyTx(ctx context.Context, cmd mutation.Command, guard mutation.Guard, validate mutation.SemanticValidator) (*mutation.Receipt, error) {
+//
+// The second return value reports that the error came from the GUARD, which the
+// retry loop treats as terminal — a denial is an answer, not contention, even
+// when it wraps a conflict sentinel.
+func (s *mutationStore) applyTx(ctx context.Context, cmd mutation.Command, guard mutation.Guard, validate mutation.SemanticValidator) (*mutation.Receipt, bool, error) {
 	r := s.db.ReaderFrom(ctx)
 
 	// 1. Authorize the actor (guarded path) FIRST — before the MutationID/digest
@@ -132,7 +159,7 @@ func (s *mutationStore) applyTx(ctx context.Context, cmd mutation.Command, guard
 	if guard != nil {
 		view = newDecisionView(s.db, r)
 		if err := runGuard(ctx, guard, view); err != nil {
-			return nil, err
+			return nil, true, err
 		}
 	}
 
@@ -146,7 +173,7 @@ func (s *mutationStore) applyTx(ctx context.Context, cmd mutation.Command, guard
 	//    guard's own reads built.
 	locked, existing, found, err := readAnchorsAndReceipt(ctx, s.db, r, lockSet(cmd.Scope, view), cmd.MutationID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	current := locked[cmd.Scope.Canonical()]
 
@@ -154,14 +181,14 @@ func (s *mutationStore) applyTx(ctx context.Context, cmd mutation.Command, guard
 	//    verbatim; a different one is the stable payload-mismatch command error.
 	if found {
 		if existing.PayloadDigest != cmd.PayloadDigest() {
-			return nil, mutation.ErrPayloadMismatch
+			return nil, false, mutation.ErrPayloadMismatch
 		}
 		if err := validateDeps(view, locked); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		replay := existing
 		replay.Replayed = true
-		return &replay, nil
+		return &replay, false, nil
 	}
 
 	// 4. Receipt-absent: validate the guard's observed dependency revisions,
@@ -169,15 +196,15 @@ func (s *mutationStore) applyTx(ctx context.Context, cmd mutation.Command, guard
 	//    which is why an exact stored replay survives a schema that would now
 	//    reject the original relation), then the expected-revision precondition.
 	if err := validateDeps(view, locked); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if validate != nil {
 		if err := validate(cmd); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 	if cmd.ExpectedRevision != nil && *cmd.ExpectedRevision != current {
-		return nil, mutation.ErrStaleRevision
+		return nil, false, mutation.ErrStaleRevision
 	}
 
 	// 5. Read every affected row, claim, and role fact, then evaluate invariants
@@ -185,7 +212,7 @@ func (s *mutationStore) applyTx(ctx context.Context, cmd mutation.Command, guard
 	//    returns is the complete write set.
 	result, err := s.evaluate(ctx, r, cmd)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	now := firestoredb.TruncateTime(time.Now().UTC())
 	if result.outcome == mutation.OutcomeSemanticConflict || result.outcome == mutation.OutcomeInvariantBlocked {
@@ -193,31 +220,23 @@ func (s *mutationStore) applyTx(ctx context.Context, cmd mutation.Command, guard
 		// receipt. The transaction commits an EMPTY write set, so the reads it
 		// took are still validated and the caller gets a receipt with a nil
 		// error, as the port requires.
-		return s.receipt(cmd, result.outcome, current, now), nil
+		return s.receipt(cmd, result.outcome, current, now), false, nil
 	}
 
-	// 6. The write phase. No read may follow it, and the whole set must fit one
-	//    commit, so the budget is checked BEFORE the first write.
-	writes := result.writes.count()
-	if result.changed {
-		writes++ // the anchor bump
-	}
-	if result.outcome.Persisted() {
-		writes++ // the receipt
-	}
-	if writes > maxWritesPerTransaction {
-		return nil, mutationWriteLimitError(cmd.Operation, writes)
-	}
-
+	// 6. The write phase. No read may follow it. There is no client-side write
+	//    budget to check: Firestore publishes no per-transaction write COUNT
+	//    limit, only the 10 MiB request size, and an oversized commit fails at
+	//    the server ATOMICALLY — nothing written, mapped error, no receipt
+	//    (SCHEMA.md §8.3).
 	w := s.db.WriterFrom(ctx)
 	if err := result.writes.flush(ctx, s.db, w); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	revision := current
 	if result.changed {
 		revision = current + 1
 		if err := writeAnchor(ctx, s.db, w, cmd.Scope, revision); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
 	rcpt := s.receipt(cmd, result.outcome, revision, now)
@@ -229,10 +248,10 @@ func (s *mutationStore) applyTx(ctx context.Context, cmd mutation.Command, guard
 	rcpt.SameRoleGrantRemains = result.sameRoleGrantRemains
 	if result.outcome.Persisted() {
 		if err := insertReceipt(ctx, s.db, w, rcpt); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 	}
-	return rcpt, nil
+	return rcpt, false, nil
 }
 
 // receipt builds the receipt for a resolved outcome, recording the command's
@@ -427,8 +446,7 @@ func (d mutationDoc) toReceipt() mutation.Receipt {
 // the MutationID, so a concurrent double-apply loses at the server instead of
 // overwriting a receipt someone already replayed. The caller read the same
 // document in this transaction's read phase, so reaching AlreadyExists means a
-// writer the read set missed — remapped to the stable payload-mismatch command
-// error, as the SQL siblings remap their unique violation.
+// writer the read set missed — errReceiptRaced, which the retry loop re-runs.
 func insertReceipt(ctx context.Context, db *firestoredb.DB, w firestoredb.Writer, r *mutation.Receipt) error {
 	err := w.Create(ctx, db.Doc(collectionMutations, mutationDocID(string(r.MutationID))), mutationDoc{
 		MutationID:      string(r.MutationID),
@@ -445,7 +463,7 @@ func insertReceipt(ctx context.Context, db *firestoredb.DB, w firestoredb.Writer
 		ExpiresAt:       firestoredb.NullTime(time.Time{}),
 	})
 	if errors.Is(err, sdk.ErrAlreadyExists) {
-		return mutation.ErrPayloadMismatch
+		return errReceiptRaced
 	}
 	return err
 }

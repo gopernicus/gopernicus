@@ -20,6 +20,7 @@ package firestore
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
@@ -112,5 +113,48 @@ func TestSetRelationTargetsConcurrentDisjointSetsConvergeLive(t *testing.T) {
 				t.Fatalf("loser %s left its %s behind", id, what)
 			}
 		}
+	}
+}
+
+// TestLargeBatchCommitsInOneTransactionLive proves the vendor fact the A7 review
+// settled, against the real server rather than the emulator: Firestore has NO
+// per-transaction write COUNT limit. The quotas page bounds a commit by the
+// 10 MiB maximum API request size and by 500 field transformations per
+// document — neither is a count of writes — and this store therefore enforces
+// no client-side ceiling of its own.
+//
+// 200 tuples is 600 documents in ONE transaction, past the 500 this store used
+// to refuse. The emulator agrees (writes_test.go), but the emulator "does not
+// enforce all limits", so only this leg is evidence about production.
+func TestLargeBatchCommitsInOneTransactionLive(t *testing.T) {
+	db := firestoretest.OpenLive(t)
+	firestoretest.ResetLive(t, db, liveCollections...)
+
+	s, err := RelationshipRepository(db, WithoutIndexProbe())
+	if err != nil {
+		t.Fatalf("RelationshipRepository: %v", err)
+	}
+
+	ctx := context.Background()
+	const tuples = 200
+	batch := make([]relationship.CreateRelationship, 0, tuples)
+	for i := 0; i < tuples; i++ {
+		batch = append(batch, relationship.CreateRelationship{
+			ResourceType: "doc", ResourceID: "live-big", Relation: "viewer",
+			SubjectType: "user", SubjectID: fmt.Sprintf("u%04d", i),
+		})
+	}
+	if err := s.CreateRelationships(ctx, batch); err != nil {
+		t.Fatalf("a %d-tuple (%d-document) batch must commit in one transaction: %v", tuples, tuples*3, err)
+	}
+	n, err := s.CountByResourceAndRelation(ctx, "doc", "live-big", "viewer")
+	if err != nil {
+		t.Fatalf("CountByResourceAndRelation: %v", err)
+	}
+	if n != tuples {
+		t.Fatalf("committed %d rows, want %d", n, tuples)
+	}
+	if err := s.DeleteResourceRelationships(ctx, "doc", "live-big"); err != nil {
+		t.Fatalf("a %d-document delete must commit in one transaction: %v", tuples*3, err)
 	}
 }

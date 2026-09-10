@@ -12,7 +12,9 @@ import (
 
 // TestMaxChunkHonoursBothVendorCaps pins the two caps a chunk size has to
 // satisfy at once: at most thirty disjunctions after DNF expansion, and at most
-// one hundred filters PLUS sort orders counted across those disjunctions.
+// one hundred filters PLUS sort orders PLUS parent path components counted
+// across those disjunctions — of which this store's top-level collections spend
+// one on the path, leaving maxQueryComplexity (99).
 func TestMaxChunkHonoursBothVendorCaps(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -47,7 +49,7 @@ func TestMaxChunkHonoursBothVendorCaps(t *testing.T) {
 // before it silently reshapes every lookup.
 func TestChunkBudgetsAreTheOnesTheQueriesUse(t *testing.T) {
 	if lookupChunkBudget != 24 {
-		t.Fatalf("lookupChunkBudget = %d, want 24 ((100 - 2 orders) / 4 filters)", lookupChunkBudget)
+		t.Fatalf("lookupChunkBudget = %d, want 24 ((99 - 2 orders) / 4 filters)", lookupChunkBudget)
 	}
 	if descendantChunkBudget != 30 {
 		t.Fatalf("descendantChunkBudget = %d, want 30 (the disjunction cap binds first)", descendantChunkBudget)

@@ -43,7 +43,7 @@ func (s *roleStore) Assign(ctx context.Context, a role.Assignment) error {
 	if err := refuseAmbient(ctx); err != nil {
 		return err
 	}
-	return s.db.Transact(ctx, func(ctx context.Context) error {
+	return retryTransact(ctx, s.db, func(ctx context.Context) error {
 		exists, err := roleExists(ctx, s.db, s.db.ReaderFrom(ctx), a.SubjectType, a.SubjectID, a.Role, a.ResourceType, a.ResourceID)
 		if err != nil {
 			return err

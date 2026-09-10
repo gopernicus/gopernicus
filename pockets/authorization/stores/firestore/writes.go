@@ -12,36 +12,27 @@ import (
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
-// The write-side transaction budget. Firestore commits at most
-// maxWritesPerTransaction operations in ONE transaction (the same 500-write
-// ceiling a batched write has), and a tuple owns writesPerTuple documents — the
-// row plus its two claims (SCHEMA.md §5) — so maxTuplesPerTransaction is the
-// real ceiling every write path on this port checks.
+// writesPerTuple is how many documents one relationship tuple owns: the row
+// plus its two claims (SCHEMA.md §5). It sizes read-phase collections; it is
+// NOT a budget.
 //
-// The SQL siblings have no equivalent bound: one INSERT/DELETE statement covers
-// any number of rows. This store REFUSES the oversized operation instead of
-// splitting it across transactions, because a split is a partially applied
-// batch — exactly the atomicity CreateRelationships and the delete family
-// promise. The 10 MiB request limit is the other ceiling; at three small
-// documents per tuple the write count is reached first, so it is the one this
-// store enforces.
-const (
-	maxWritesPerTransaction = 500
-	writesPerTuple          = 3
-	maxTuplesPerTransaction = maxWritesPerTransaction / writesPerTuple
-)
+// There is no per-transaction WRITE COUNT ceiling to budget against. The
+// Firestore quotas page bounds a commit by the 10 MiB maximum API request size
+// and by 500 field transformations per document — neither of which is a count
+// of writes — so this store enforces no count of its own. An oversized commit
+// fails at the server, ATOMICALLY: nothing is written, the error is mapped, and
+// the caller splits the work itself. Inventing a client-side refusal here would
+// reject batches Firestore accepts (SCHEMA.md §8.1).
+const writesPerTuple = 3
 
-// ErrTupleWriteLimit reports an operation whose document writes would exceed
-// Firestore's per-transaction commit limit. It wraps [sdk.ErrInvalidInput]: the
-// batch is too large for one atomic unit and no retry changes that — the caller
-// splits the work into several calls, each of which is atomic on its own.
-var ErrTupleWriteLimit = fmt.Errorf("authorization firestore store: a single transaction may change at most %d relationship tuples (%d documents each, Firestore's %d-write commit limit): %w", maxTuplesPerTransaction, writesPerTuple, maxWritesPerTransaction, sdk.ErrInvalidInput)
-
-// writeLimitError names the operation and the actual size, so the log line says
-// what to split rather than only that something was too big.
-func writeLimitError(op string, tuples int) error {
-	return fmt.Errorf("authorization firestore store: %s would change %d tuples (%d documents): %w", op, tuples, tuples*writesPerTuple, ErrTupleWriteLimit)
-}
+// errTargetRelationConflict is the reconciliation's stable domain refusal: a
+// desired target already holds a DIFFERENT relation on the resource, which the
+// one-relation-per-subject claim forbids. It wraps sdk.ErrConflict, which is
+// what the port and the conformance suite check
+// (specSetRelationTargetsConflictRollsBack), and it is named so the contention
+// retry can tell it apart from a lost race: re-running it would re-read the
+// same claim and refuse again, so it is TERMINAL (retryableConflict).
+var errTargetRelationConflict = fmt.Errorf("authorization firestore store: a desired target already holds a different relation on the resource: %w", sdk.ErrConflict)
 
 // docRefs collects document references for one transaction's READ phase,
 // de-duplicated by path. A Firestore transaction must issue every read before
@@ -99,7 +90,11 @@ func (d *docRefs) subjectClaimAt(path string) (subjectClaimDoc, bool, error) {
 	if !d.exists(path) {
 		return subjectClaimDoc{}, false, nil
 	}
-	return decodeSubjectClaim(d.snaps[d.index[path]])
+	claim, err := decodeSubjectClaim(d.snaps[d.index[path]])
+	if err != nil {
+		return subjectClaimDoc{}, false, err
+	}
+	return claim, true, nil
 }
 
 // newRow builds the document for an incoming tuple, minting the relationship_id
@@ -265,12 +260,8 @@ func setRelationTargets(ctx context.Context, db *firestoredb.DB, resourceType, r
 		if ok && claim.Relation != relationName {
 			return fmt.Errorf("authorization firestore store: target %s already holds relation %q on %s:%s: %w",
 				relationship.SubjectRef{Type: row.SubjectType, ID: row.SubjectID, Relation: row.SubjectRelation},
-				claim.Relation, resourceType, resourceID, sdk.ErrConflict)
+				claim.Relation, resourceType, resourceID, errTargetRelationConflict)
 		}
-	}
-
-	if n := len(surplus) + len(missing); n > maxTuplesPerTransaction {
-		return writeLimitError("SetRelationTargets", n)
 	}
 
 	w := db.WriterFrom(ctx)
@@ -298,16 +289,14 @@ func setRelationTargets(ctx context.Context, db *firestoredb.DB, resourceType, r
 // dropMatching is the delete family's ONE body: inside a transaction, read the
 // resource's tuples through query, keep the ones match accepts, and drop each
 // through dropTuple so the row and BOTH claims go together. Nothing matching is
-// nil — every delete on this port is idempotent — and the write-limit check
-// runs before the first write, so an oversized delete leaves the state
-// unchanged rather than half applied.
+// nil — every delete on this port is idempotent.
 //
 // The subject-level predicates are applied in Go rather than as query filters
 // on purpose: the reads are already scoped to one resource (and often one
 // relation), which is a bounded population, and every delete therefore rides
 // the two index shapes the store already needs — resource_key alone, and
 // (resource_key, relation) — instead of adding a composite per delete variant.
-func dropMatching(ctx context.Context, db *firestoredb.DB, op string, query gcfs.Query, match func(relationshipDoc) bool) error {
+func dropMatching(ctx context.Context, db *firestoredb.DB, query gcfs.Query, match func(relationshipDoc) bool) error {
 	rows, err := queryRelationships(ctx, db.ReaderFrom(ctx), query)
 	if err != nil {
 		return err
@@ -320,9 +309,6 @@ func dropMatching(ctx context.Context, db *firestoredb.DB, op string, query gcfs
 	}
 	if len(matched) == 0 {
 		return nil
-	}
-	if len(matched) > maxTuplesPerTransaction {
-		return writeLimitError(op, len(matched))
 	}
 	w := db.WriterFrom(ctx)
 	for _, row := range matched {
