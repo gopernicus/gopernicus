@@ -190,15 +190,17 @@ jobs:
 
   # Job C — the Firestore emulator suites: the CONNECTOR
   # (integrations/datastores/firestore) and every pocket store train built on it
-  # (pockets/authorization/stores/firestore), both -tags=integration. The
-  # connector is in MODULES and the stores in STORE_MODULES, so `make test-stores`
-  # reaches them, but this job runs the modules directly — the postgres/turso legs
-  # have no business gating the Firestore ones.
+  # (pockets/authorization/stores/firestore, pockets/authentication/stores/firestore),
+  # all -tags=integration. The connector is in MODULES and the stores in
+  # STORE_MODULES, so `make test-stores` reaches them, but this job runs the
+  # modules directly — the postgres/turso legs have no business gating the
+  # Firestore ones.
   #
   # Each module opens its OWN emulator database (the connector its default one,
-  # the authorization store "authorization"): firestoretest.Reset clears a WHOLE
-  # database, so two suites sharing one would delete each other's rows and the
-  # failure would arrive as a flake.
+  # the authorization store "authorization", the authentication store
+  # "authentication"): firestoretest.Reset clears a WHOLE database, so two suites
+  # sharing one would delete each other's rows and the failure would arrive as a
+  # flake.
   #
   # The emulator is a background docker step (see the header) with a readiness
   # wait against its HTTP root; the tests themselves skip loudly if
@@ -255,14 +257,29 @@ jobs:
           FIRESTORE_EMULATOR_HOST: 127.0.0.1:8080
           FIRESTORE_PROJECT_ID: gopernicus-test
         run: go test -tags=integration -count=1 -timeout 30m ./...
+      # 45 minutes, not the authorization store's 30: this suite is 212
+      # conformance leaves plus ~70 document-level roots, each resetting a
+      # 20-collection database with a DELETE sweep, and its contended families
+      # sit directly on the emulator's thirty-second lock release —
+      # ConcurrentDeactivateVersusMint alone measures 20–29 s. Locally the whole
+      # package runs in ~72 s; the ceiling is for a loaded shared runner. The
+      # Makefile's test-stores leg carries the same timeout for the same reason.
+      - name: authentication firestore store emulator suite (-tags=integration)
+        working-directory: pockets/authentication/stores/firestore
+        env:
+          FIRESTORE_EMULATOR_HOST: 127.0.0.1:8080
+          FIRESTORE_PROJECT_ID: gopernicus-test
+        run: go test -tags=integration -count=1 -timeout 45m ./...
       - name: stop the Firestore emulator
         if: always()
         run: docker rm -f firestore-emulator || true
 
   # Job D — the OPTIONAL live-project leg (-tags='integration,live', Test*Live).
-  # It is the only thing that proves what the emulator cannot: composite indexes
-  # actually resolving, the Admin API index probe, production read-only snapshot
-  # isolation, and commit-contention exhaustion → sdk.ErrConflict.
+  # It is the only thing that proves what the emulator cannot: the shipped index
+  # manifests deployed WHOLE — composite indexes actually resolving AND the
+  # single-field configuration each manifest's fieldOverrides declare — the Admin
+  # API index probe's verdict against a real index registry, production read-only
+  # snapshot isolation, and commit-contention exhaustion → sdk.ErrConflict.
   #
   # Configuration (repo secrets, NONE of which exist yet — see the header):
   #   FIRESTORE_LIVE_PROJECT_ID        the DEDICATED test project. Gate: empty ⇒ skip.
@@ -303,11 +320,26 @@ jobs:
   # job's own first proof — run it with firestore_live_required: false.
   firestore-live:
     runs-on: ubuntu-latest
-    # A live run provisions a database, builds indexes (up to the 20-minute
-    # ceiling below) and runs a 30-minute suite; 90 minutes is the point at which
-    # something is wrong and the run should be killed with its cleanup step still
-    # reachable, rather than burning the 6-hour default.
-    timeout-minutes: 90
+    # The budget, itemized, because "90" was written when this job ran ONE
+    # 30-minute suite and no longer covers what runs here:
+    #
+    #   provisioning + checkout + setup-go             ~5 min
+    #   composite index deploy, waited to READY        up to 20 min (loop below)
+    #   single-field configuration deploy, settled     up to 10 min (loop below)
+    #   connector live suite (its own -timeout 30m)    up to 30 min
+    #   authorization store live suite (-timeout 30m)  up to 30 min
+    #   authentication store live suite (-timeout 45m) up to 45 min
+    #                                                  -----------------------
+    #                                                  up to 140 min
+    #
+    # The three go-test steps DO NOT share a budget: each carries its own
+    # -timeout and they run in sequence, so this ceiling has to cover their sum
+    # PLUS both deploy waits. 150 is that sum with a small margin — the point at
+    # which something is wrong and the run should be killed with its cleanup step
+    # still reachable, rather than burning the 6-hour default. A ceiling below
+    # the sum is worse than none: it kills a healthy long run in the middle of
+    # the last suite and reports it as a live-store failure.
+    timeout-minutes: 150
     # One live run at a time, repo-wide: two concurrent dispatches would race for
     # index quota in the shared test project and (with FIRESTORE_LIVE_DATABASE_PIN
     # set) for the same database's documents. cancel-in-progress is FALSE on
@@ -336,7 +368,9 @@ jobs:
       # explicitly). A store train appends its manifest here in the same change
       # that adds its live step, because a store whose composites were never
       # deployed fails live as FAILED_PRECONDITION that reads like a store bug.
-      FIRESTORE_LIVE_INDEXES: pockets/authorization/stores/firestore/firestore.indexes.json
+      FIRESTORE_LIVE_INDEXES: >-
+        pockets/authorization/stores/firestore/firestore.indexes.json
+        pockets/authentication/stores/firestore/firestore.indexes.json
       # Force-unset. Nothing else in this job writes FIRESTORE_EMULATOR_HOST —
       # this line exists so that a value inherited from anywhere (a future
       # repo-level env, a runner image default) cannot point the "live" leg at an
@@ -417,9 +451,31 @@ jobs:
         if: env.LIVE_CONFIGURED == '1'
         run: |
           set -euo pipefail
+          # A PINNED database ACCUMULATES index state that nothing here ever
+          # prunes. The deploy step only creates and patches: a composite a
+          # manifest USED to declare stays READY forever, and a field exemption a
+          # manifest USED to declare stays applied, both counting against the
+          # per-database caps (200 composite indexes and 200 single-field
+          # configurations without billing enabled — the latter shared with TTL
+          # policies). A run-owned ci-<run id> database has no such drift because
+          # it is deleted at the end. The pinned one needs a periodic sweep,
+          # BY HAND, against a checkout's manifests:
+          #
+          #   gcloud firestore indexes composite list --database="$FIRESTORE_LIVE_DATABASE_PIN" \
+          #     --project="$FIRESTORE_LIVE_PROJECT_ID" --format=json
+          #   gcloud firestore indexes composite delete <index id> --database="$FIRESTORE_LIVE_DATABASE_PIN" \
+          #     --project="$FIRESTORE_LIVE_PROJECT_ID"
+          #   gcloud firestore indexes fields list --database="$FIRESTORE_LIVE_DATABASE_PIN" \
+          #     --project="$FIRESTORE_LIVE_PROJECT_ID" --format=json
+          #   gcloud firestore indexes fields update <fieldPath> --collection-group=<cg> \
+          #     --database="$FIRESTORE_LIVE_DATABASE_PIN" --project="$FIRESTORE_LIVE_PROJECT_ID" --clear-exemption
+          #
+          # It is deliberately NOT automated: a delete loop driven by "not in
+          # today's manifest" would wipe another pocket's or the host's indexes
+          # off a shared database on the first run of a branch that dropped one.
           if [ -n "$FIRESTORE_LIVE_DATABASE_PIN" ]; then
             echo "FIRESTORE_LIVE_DATABASE_ID=$FIRESTORE_LIVE_DATABASE_PIN" >> "$GITHUB_ENV"
-            echo "using the pre-provisioned database $FIRESTORE_LIVE_DATABASE_PIN — this run will NOT create or delete a database"
+            echo "using the pre-provisioned database $FIRESTORE_LIVE_DATABASE_PIN — this run will NOT create or delete a database, and stale indexes/field exemptions from earlier runs are NOT pruned (see the comment above and the store READMEs)"
             exit 0
           fi
           database="ci-$GITHUB_RUN_ID"
@@ -444,44 +500,91 @@ jobs:
             --project="$FIRESTORE_LIVE_PROJECT_ID"
           echo "created the run-owned database $database"
 
-      # Indexes. The connector ships NO index manifest of its own (each store
-      # module embeds one and exports it), so this step does two things:
+      # Indexes AND single-field configuration — the two things the emulator
+      # cannot verify at all, which is the whole premise of this job.
       #
-      #   1. creates the four composite indexes the connector's own live leg
-      #      needs on firestore_c4_list_live — both directions of both order
-      #      fields, because the reverse HasPrev probe flips every direction and
-      #      a composite index is direction-specific;
-      #   2. deploys every manifest a store train exported —
-      #      FIRESTORE_LIVE_INDEXES is a SPACE-SEPARATED LIST of repo-relative
-      #      paths, because one run's database serves every store module's live
-      #      leg and each module embeds its own manifest. That is a jq loop over
-      #      each manifest's composites into the same
-      #      `gcloud firestore indexes composite create` — NOT `firebase deploy`,
-      #      which needs the Firebase CLI (absent on ubuntu-latest) and a
-      #      firebase.json this repo does not have. jq IS preinstalled.
-      #      Empty/unset ⇒ skipped with a notice. Duplicate composites across two
-      #      manifests are harmless: the second create answers ALREADY_EXISTS,
-      #      which this step treats as success, and `expected` counts creates,
-      #      not distinct indexes — so the READY wait's floor stays a floor.
+      # The connector ships NO index manifest of its own (each store module
+      # embeds one and exports it), so this step collects three sets:
       #
-      # ALREADY_EXISTS is the one benign failure (a pinned database keeps its
-      # indexes between runs); anything else fails the step with gcloud's stderr,
-      # because a silently uncreated index becomes a FAILED_PRECONDITION that
-      # reads like a connector bug. Then it waits until every expected index is
-      # READY and none is CREATING — querying a still-building index fails the
-      # same way.
+      #   1. the four composite indexes the connector's own live leg needs on
+      #      firestore_c4_list_live — both directions of both order fields,
+      #      because the reverse HasPrev probe flips every direction and a
+      #      composite index is direction-specific;
+      #   2. every composite a store train exported — FIRESTORE_LIVE_INDEXES is a
+      #      SPACE-SEPARATED LIST of repo-relative paths, because one run's
+      #      database serves every store module's live leg and each module embeds
+      #      its own manifest. That is a jq loop over each manifest's `.indexes`
+      #      into `gcloud firestore indexes composite create` — NOT
+      #      `firebase deploy`, which needs the Firebase CLI (absent on
+      #      ubuntu-latest) and a firebase.json this repo does not have. jq IS
+      #      preinstalled. Empty/unset ⇒ skipped with a notice;
+      #   3. every manifest's `.fieldOverrides`, into
+      #      `gcloud firestore indexes fields update`. A field override is not
+      #      decoration: it REPLACES that field's default single-field index set,
+      #      and the stores' boot probe CHECKS every declared override
+      #      (ProbeIndexes issues one GetField per override with a non-empty
+      #      index list). A run that deployed only the composites would fail the
+      #      probe at CONSTRUCTION on a field the manifest declares and the
+      #      database never got — which reads like a store bug and is really an
+      #      undeployed half of the manifest. With this step, the live leg proves
+      #      the manifest as a WHOLE: composites AND field configuration.
       #
-      # --query-scope is omitted for the connector's four: the flag's default IS
-      # `collection` and its values are lowercase (verified at C8 against gcloud
-      # 557.0.0 --help and
-      # cloud.google.com/sdk/gcloud/reference/firestore/indexes/composite/create).
-      # The manifest loop emits it only for a non-COLLECTION scope.
-      - name: install composite indexes and wait for READY
+      # All three sets are accumulated into two arg files and `sort -u`'d BEFORE
+      # anything is created. Deduplication is not cosmetic: `expected` is the
+      # floor the READY wait compares against, and counting the same index twice
+      # — two manifests declaring it, or the connector's four colliding with a
+      # manifest's — would set a floor the database can never reach, so the wait
+      # would time out on a database that is entirely correct.
+      #
+      # ALREADY_EXISTS is the one benign composite failure (a pinned database
+      # keeps its indexes between runs); anything else fails the step with
+      # gcloud's stderr, because a silently uncreated index becomes a
+      # FAILED_PRECONDITION that reads like a connector bug. A field update needs
+      # no such branch: it PATCHES the field's index configuration, so
+      # re-applying a configuration a pinned database already carries succeeds.
+      #
+      # Both creates pass --async (the flag is on BOTH commands — verified
+      # against gcloud 557.0.0 `--help` and the reference pages
+      # cloud.google.com/sdk/gcloud/reference/firestore/indexes/composite/create
+      # and .../firestore/indexes/fields/update). Without it every call blocks on
+      # its own long-running operation and ~60 of them serialize into an hour of
+      # waiting for states the loops below read anyway. Those loops are the
+      # SINGLE source of readiness, and there are two of them because one does
+      # not cover the other:
+      #
+      #   - composites: `indexes composite list` until at least `expected` are
+      #     READY and none is CREATING — querying a still-building index fails
+      #     the same way a missing one does;
+      #   - field configuration: a field update is a long-running operation too,
+      #     and `indexes composite list` NEVER returns single-field indexes. It
+      #     is waited separately with `indexes fields list`, whose Field resource
+      #     carries exactly the state needed — indexConfig.usesAncestorConfig
+      #     (false once the exemption is applied), indexConfig.reverting, and a
+      #     per-index `state` that reads CREATING while the single-field index
+      #     builds (cloud.google.com/firestore/docs/reference/rest/v1/
+      #     projects.databases.collectionGroups.fields).
+      #
+      # --query-scope is omitted for the connector's four composites: the flag's
+      # default IS `collection` and its values are lowercase (verified at C8
+      # against gcloud 557.0.0 --help and the composite/create reference page).
+      # The composite manifest loop emits it only for a non-COLLECTION scope. The
+      # FIELD loop cannot emit it at all: `indexes fields update --index` accepts
+      # ONLY the keys `order` and `array-config` — there is no query-scope key on
+      # that flag — so a fieldOverride asking for a COLLECTION_GROUP-scoped
+      # single-field index is refused loudly here rather than deployed as
+      # something narrower than the manifest says.
+      - name: deploy the index manifests (composites + field configuration) and wait
         if: env.LIVE_CONFIGURED == '1'
         run: |
           set -euo pipefail
           indexes_json="$RUNNER_TEMP/firestore-indexes.json"
-          expected=0
+          fields_json="$RUNNER_TEMP/firestore-fields.json"
+          composite_args="$RUNNER_TEMP/firestore-composite-args.tsv"
+          field_args="$RUNNER_TEMP/firestore-field-args.tsv"
+          field_keys="$RUNNER_TEMP/firestore-field-keys.tsv"
+          field_settled="$RUNNER_TEMP/firestore-field-settled.tsv"
+          : > "$composite_args"
+          : > "$field_args"
 
           create_index() {
             group="$1"; shift
@@ -489,6 +592,7 @@ jobs:
                 --collection-group="$group" \
                 --database="$FIRESTORE_LIVE_DATABASE_ID" \
                 --project="$FIRESTORE_LIVE_PROJECT_ID" \
+                --async \
                 "$@" 2>&1); then
               echo "  created  $group  $*"
               return 0
@@ -502,29 +606,41 @@ jobs:
             return 1
           }
 
-          # The connector's own live fixtures (C4).
+          update_field() {
+            group="$1"; field="$2"; shift 2
+            if out=$(gcloud firestore indexes fields update "$field" \
+                --collection-group="$group" \
+                --database="$FIRESTORE_LIVE_DATABASE_ID" \
+                --project="$FIRESTORE_LIVE_PROJECT_ID" \
+                --async \
+                "$@" 2>&1); then
+              echo "  configured  $group.$field  $*"
+              return 0
+            fi
+            echo "ERROR: configuring the single-field indexes of $group.$field failed: $*"
+            printf '%s\n' "$out"
+            return 1
+          }
+
+          # 1. The connector's own live fixtures (C4), into the SAME arg file as
+          #    the manifests so the sort -u below dedupes across all of them.
           for direction in ascending descending; do
             for field in created_at n; do
-              expected=$((expected + 1))
-              create_index firestore_c4_list_live \
-                "--field-config=field-path=group,order=ascending" \
-                "--field-config=field-path=$field,order=$direction" \
-                "--field-config=field-path=id,order=$direction"
+              printf 'firestore_c4_list_live\t--field-config=field-path=group,order=ascending\t--field-config=field-path=%s,order=%s\t--field-config=field-path=id,order=%s\n' \
+                "$field" "$direction" "$direction" >> "$composite_args"
             done
           done
 
+          # 2 and 3. Every exported manifest's composites and field overrides.
           if [ -n "${FIRESTORE_LIVE_INDEXES:-}" ]; then
             # Unquoted on purpose: the value is a space-separated LIST of
             # manifests, one per store module with a live leg in this job.
-            manifest_n=0
             for manifest in $FIRESTORE_LIVE_INDEXES; do
               if [ ! -f "$manifest" ]; then
                 echo "ERROR: FIRESTORE_LIVE_INDEXES names $manifest, which this checkout does not have — a store train set it to a path that moved or was never committed"
                 exit 1
               fi
-              manifest_n=$((manifest_n + 1))
-              echo "deploying the exported index manifest $manifest"
-              args="$RUNNER_TEMP/firestore-index-args-$manifest_n.tsv"
+              echo "collecting the exported index manifest $manifest"
               jq -r '
                 (.indexes // [])[]
                 | [ .collectionGroup ]
@@ -533,25 +649,71 @@ jobs:
                   + ( (.fields // []) | map(
                         if .order then "--field-config=field-path=" + .fieldPath + ",order=" + (.order | ascii_downcase)
                         elif .arrayConfig then "--field-config=field-path=" + .fieldPath + ",array-config=" + (.arrayConfig | ascii_downcase)
-                        else "UNSUPPORTED-FIELD:" + (. | tojson) end ) )
+                        else "UNSUPPORTED-INDEX:" + (. | tojson) end ) )
                 | @tsv
-              ' "$manifest" > "$args"
-              if grep -q 'UNSUPPORTED-FIELD:' "$args"; then
-                echo "ERROR: $manifest declares an index field this step cannot express as a --field-config (vector-config / search-config are not supported here)"
-                grep 'UNSUPPORTED-FIELD:' "$args"
-                exit 1
-              fi
-              while IFS=$'\t' read -r -a spec; do
-                [ "${#spec[@]}" -gt 0 ] || continue
-                expected=$((expected + 1))
-                create_index "${spec[@]}"
-              done < "$args"
+              ' "$manifest" >> "$composite_args"
+              jq -r '
+                (.fieldOverrides // [])[]
+                | [ .collectionGroup, .fieldPath ]
+                  + ( if ((.ttl // false) == true) then
+                        [ "UNSUPPORTED-INDEX:a ttl policy — this step deploys index configuration only; a TTL is a different command (gcloud firestore fields ttls update)" ]
+                      elif (has("indexes") | not) then
+                        [ "UNSUPPORTED-INDEX:no \"indexes\" key — an override that names no index list is ambiguous, and guessing would DISABLE the field entirely" ]
+                      elif ((.indexes | length) == 0) then
+                        [ "--disable-indexes" ]
+                      else ( .indexes | map(
+                          if ((.queryScope // "COLLECTION") != "COLLECTION") then "UNSUPPORTED-INDEX:" + (. | tojson)
+                          elif .order then "--index=order=" + (.order | ascii_downcase)
+                          elif .arrayConfig then "--index=array-config=" + (.arrayConfig | ascii_downcase)
+                          else "UNSUPPORTED-INDEX:" + (. | tojson) end ) )
+                      end )
+                | @tsv
+              ' "$manifest" >> "$field_args"
             done
           else
             echo "no exported index manifest configured (the connector ships none; each store train APPENDS its exported manifest to FIRESTORE_LIVE_INDEXES)"
           fi
 
+          if grep -q 'UNSUPPORTED-INDEX:' "$composite_args" "$field_args"; then
+            echo "ERROR: a manifest declares index configuration this step cannot express as a gcloud flag (vector-config, search-config, a non-COLLECTION single-field scope, or a TTL)"
+            grep -h 'UNSUPPORTED-INDEX:' "$composite_args" "$field_args"
+            exit 1
+          fi
+
+          # SORT -U BEFORE COUNTING. `expected` is the floor the READY wait
+          # compares against, so it has to count DISTINCT indexes: a duplicate
+          # would demand a READY count no correct database can ever report.
+          LC_ALL=C sort -u "$composite_args" -o "$composite_args"
+          LC_ALL=C sort -u "$field_args" -o "$field_args"
+          cut -f1,2 "$field_args" | LC_ALL=C sort -u > "$field_keys"
+
+          # `fields update --index` OVERWRITES a field's index list and DELETES
+          # any index it omits, so two manifests asking for DIFFERENT sets on the
+          # same field is not a merge — it is whichever ran last silently
+          # winning. sort -u keeps both lines; this refuses the pair outright.
+          conflicts=$(cut -f1,2 "$field_args" | LC_ALL=C sort | uniq -d)
+          if [ -n "$conflicts" ]; then
+            echo "ERROR: two manifests declare DIFFERENT single-field index sets for the same collection group and field path. That flag overwrites rather than merges, so deploying both would silently delete one manifest's indexes:"
+            printf '%s\n' "$conflicts"
+            exit 1
+          fi
+
+          expected=$(wc -l < "$composite_args" | tr -d ' ')
+          echo "deploying $expected distinct composite index(es)"
+          while IFS=$'\t' read -r -a spec; do
+            [ "${#spec[@]}" -gt 0 ] || continue
+            create_index "${spec[@]}"
+          done < "$composite_args"
+
+          field_total=$(wc -l < "$field_args" | tr -d ' ')
+          echo "deploying $field_total distinct single-field configuration(s)"
+          while IFS=$'\t' read -r -a spec; do
+            [ "${#spec[@]}" -gt 0 ] || continue
+            update_field "${spec[@]}"
+          done < "$field_args"
+
           echo "waiting for $expected expected composite index(es) to report READY"
+          composites_ready=""
           for i in $(seq 1 60); do
             gcloud firestore indexes composite list \
               --database="$FIRESTORE_LIVE_DATABASE_ID" \
@@ -564,13 +726,60 @@ jobs:
             if [ "$creating" -eq 0 ] && [ "$ready" -ge "$expected" ]; then
               jq -r '.[] | "  " + (.name | split("/") | last) + "  " + .state' "$indexes_json"
               echo "every expected composite index is READY"
-              exit 0
+              composites_ready=1
+              break
             fi
             sleep 20
           done
-          echo "ERROR: after 20 minutes the database still does not report $expected READY composite index(es) with none CREATING"
-          jq -r '.[] | "  " + .name + "  " + .state' "$indexes_json" || true
-          exit 1
+          if [ -z "$composites_ready" ]; then
+            echo "ERROR: after 20 minutes the database still does not report $expected READY composite index(es) with none CREATING"
+            jq -r '.[] | "  " + .name + "  " + .state' "$indexes_json" || true
+            exit 1
+          fi
+
+          if [ "$field_total" -eq 0 ]; then
+            echo "no manifest declares a field override — nothing further to wait for"
+            exit 0
+          fi
+
+          # The SECOND wait. The loop above cannot stand in for it: `indexes
+          # composite list` never returns single-field indexes, so a field whose
+          # exemption is still being applied is invisible there and would fail
+          # the store's boot probe (or a query) minutes later, on a run that
+          # reported its indexes READY.
+          echo "waiting for $field_total single-field configuration(s) to settle"
+          fields_ready=""
+          for i in $(seq 1 30); do
+            gcloud firestore indexes fields list \
+              --database="$FIRESTORE_LIVE_DATABASE_ID" \
+              --project="$FIRESTORE_LIVE_PROJECT_ID" \
+              --format=json > "$fields_json"
+            jq -r '
+              .[]
+              | (.name | split("/collectionGroups/")) as $parts
+              | select(($parts | length) == 2)
+              | ($parts[1] | split("/fields/")) as $key
+              | select(($key | length) == 2)
+              | select((.indexConfig.usesAncestorConfig // false) | not)
+              | select((.indexConfig.reverting // false) | not)
+              | select(([ .indexConfig.indexes[]? | select(.state? == "CREATING") ] | length) == 0)
+              | [ $key[0], $key[1] ] | @tsv
+            ' "$fields_json" | LC_ALL=C sort -u > "$field_settled"
+            settled=$(wc -l < "$field_settled" | tr -d ' ')
+            pending=$(LC_ALL=C comm -23 "$field_keys" "$field_settled" | wc -l | tr -d ' ')
+            echo "  ${i}/30: $settled field(s) carry an applied configuration, $pending of this run's $field_total still pending"
+            if [ "$pending" -eq 0 ]; then
+              echo "every declared field override is applied and no single-field index is CREATING"
+              fields_ready=1
+              break
+            fi
+            sleep 20
+          done
+          if [ -z "$fields_ready" ]; then
+            echo "ERROR: after 10 minutes these declared field overrides are still absent, inherited from an ancestor, reverting, or CREATING:"
+            LC_ALL=C comm -23 "$field_keys" "$field_settled" || true
+            exit 1
+          fi
 
       # -run 'Live$' selects the live roots by name, as C-D8 requires. The JSON
       # goes to a file so the audit below can read it; the exit status is kept
@@ -700,16 +909,25 @@ jobs:
         working-directory: pockets/authorization/stores/firestore
         env:
           # This module's own floor, overriding the job-level connector one.
-          # The seven roots it declares today: the conformance entrypoint
-          # (TestConformanceLive), R1's ambient pair (TestRunTransactionalLive,
-          # TestAmbientTransactionRefusedLive), the index manifest's live proofs
-          # (TestIndexProbeAcceptsTheDeployedManifestLive,
-          # TestQueryMatrixExecutesAgainstTheDeployedIndexesLive) and the two
-          # serialization assertions the emulator cannot make honestly
-          # (TestGuardedMutationDependencyRevokeIsDeterminedLive,
-          # TestSetRelationTargetsConcurrentDisjointSetsConvergeLive). BUMP IT in
-          # the same change that adds a live root.
-          FIRESTORE_LIVE_MIN_ROOTS: "7"
+          # The EIGHT roots it declares today, derived with the SAME grep this
+          # step runs (`grep -rl '//go:build integration && live'` piped into
+          # `grep -hoE '^func Test[A-Za-z0-9_]*Live\('`):
+          #
+          #   TestAmbientTransactionRefusedLive
+          #   TestConformanceLive
+          #   TestGuardedMutationDependencyRevokeIsDeterminedLive
+          #   TestIndexProbeAcceptsTheDeployedManifestLive
+          #   TestLargeBatchCommitsInOneTransactionLive
+          #   TestQueryMatrixExecutesAgainstTheDeployedIndexesLive
+          #   TestRunTransactionalLive
+          #   TestSetRelationTargetsConcurrentDisjointSetsConvergeLive
+          #
+          # The "seven" this comment used to claim omitted
+          # TestLargeBatchCommitsInOneTransactionLive — A7's proof that Firestore
+          # publishes no per-transaction write COUNT limit — so the floor sat one
+          # BELOW the truth and would not have noticed that root disappearing.
+          # BUMP IT in the same change that adds a live root.
+          FIRESTORE_LIVE_MIN_ROOTS: "8"
         run: |
           expected_file="$RUNNER_TEMP/firestore-authorization-live-expected.txt"
           allowed_file="$RUNNER_TEMP/firestore-authorization-live-allowed.txt"
@@ -788,6 +1006,135 @@ jobs:
             exit 1
           fi
 
+      # ---------------------------------------------------------------------
+      # The authentication pocket's Firestore STORE (train 3). Its own test step
+      # and its own audit step, same convention as the two above — and the first
+      # module here whose allow-list is EMPTY. This pocket ships no
+      # RunTransactional conformance family, so ruling R1 appears only as the
+      # ambient REFUSAL, which is asserted, not skipped: on a required run every
+      # derived root must pass.
+      #
+      # 45 minutes, not 30: the shared authentication suite is 212 conformance
+      # leaves, each resetting a 20-collection database, and its contended
+      # families (deactivate-versus-mint, concurrent redemption, concurrent grant
+      # consume) sit on real transaction serialization here rather than the
+      # emulator's lock timing.
+      # ---------------------------------------------------------------------
+      - name: authentication firestore store live suite (-tags='integration,live')
+        if: env.LIVE_CONFIGURED == '1'
+        working-directory: pockets/authentication/stores/firestore
+        run: |
+          set +e
+          go test -json -count=1 -tags='integration,live' -timeout 45m -run 'Live$' ./... \
+            > "$RUNNER_TEMP/firestore-authentication-live.json"
+          status=$?
+          set -e
+          echo "go test exit status: $status"
+          echo "AUTHN_GO_TEST_STATUS=$status" >> "$GITHUB_ENV"
+          exit 0
+
+      # The same C-D8 audit over THIS module's roots, with an allow-list that is
+      # deliberately EMPTY.
+      #
+      # An empty allow-list is not a missing one: the file is CREATED empty, the
+      # validation loop over it runs zero times, and the awk BEGIN block reads
+      # zero names into ok_to_skip — so every skipped root on a required run is
+      # an ERROR, with nothing waved through. It is written out and uploaded with
+      # the evidence precisely so "this module allows no skip" is a recorded fact
+      # rather than the absence of one.
+      - name: audit the authentication store's live test/skip counts
+        if: env.LIVE_CONFIGURED == '1'
+        working-directory: pockets/authentication/stores/firestore
+        env:
+          # This module's own floor, overriding the job-level connector one. The
+          # four roots it declares today: the conformance entrypoint
+          # (TestConformanceLive), R1's ambient refusal across all fifty-eight
+          # port methods (TestAmbientTransactionRefusedLive), and the index
+          # manifest's two live proofs
+          # (TestIndexProbeAcceptsTheDeployedManifestLive,
+          # TestQueryMatrixExecutesAgainstTheDeployedIndexesLive). BUMP IT in the
+          # same change that adds a live root.
+          FIRESTORE_LIVE_MIN_ROOTS: "4"
+        run: |
+          expected_file="$RUNNER_TEMP/firestore-authentication-live-expected.txt"
+          allowed_file="$RUNNER_TEMP/firestore-authentication-live-allowed.txt"
+          audit_file="$RUNNER_TEMP/firestore-authentication-live-audit.txt"
+          set +e
+          grep -rl '//go:build integration && live' --include='*_test.go' . \
+            | xargs -r grep -hoE '^func Test[A-Za-z0-9_]*Live\(' \
+            | sed -E 's/^func //; s/\($//' \
+            | sort -u > "$expected_file"
+          set -e
+          roots=$(wc -l < "$expected_file" | tr -d ' ')
+          echo "expected live roots ($roots):"
+          cat "$expected_file"
+          if [ "$roots" -eq 0 ]; then
+            echo "ERROR: the derived expected-root set is EMPTY — either the live tests are gone or the derivation broke. An empty set makes this audit vacuously green, which is the exact false-positive it exists to prevent."
+            exit 1
+          fi
+          if [ "$FIRESTORE_LIVE_REQUIRED" = "1" ] && [ "$roots" -lt "$FIRESTORE_LIVE_MIN_ROOTS" ]; then
+            echo "ERROR: only $roots live roots were derived, fewer than the recorded minimum FIRESTORE_LIVE_MIN_ROOTS=$FIRESTORE_LIVE_MIN_ROOTS — live coverage shrank, or the derivation is matching fewer files than it should. If roots were removed on purpose, lower FIRESTORE_LIVE_MIN_ROOTS in this workflow in the SAME change."
+            exit 1
+          fi
+
+          # EMPTY BY DESIGN. This pocket has no ambient-transaction conformance
+          # family, so ruling R1 costs it no skip and nothing else may claim one.
+          # Adding a name here requires a plan ruling, exactly as the
+          # authorization store's single entry did.
+          : > "$allowed_file"
+          while read -r allowed; do
+            [ -n "$allowed" ] || continue
+            if ! grep -qx "$allowed" "$expected_file"; then
+              echo "ERROR: the allow-list names $allowed, which is not a live root of this module — an allow-list entry that matches nothing silently stops allowing anything and would wave a REAL skip through later"
+              exit 1
+            fi
+          done < "$allowed_file"
+          echo "allowed skips: NONE (this module has no ambient-transaction family; every derived root must pass)"
+
+          set +e
+          awk -v required="$FIRESTORE_LIVE_REQUIRED" \
+              -v expected="$expected_file" \
+              -v allowed="$allowed_file" '
+            BEGIN {
+              while ((getline root < expected) > 0) { if (root != "") want[root] = 1 }
+              while ((getline root < allowed) > 0) { if (root != "") ok_to_skip[root] = 1 }
+            }
+            {
+              if (!match($0, /"Test":"[^"]+"/)) next
+              test = substr($0, RSTART + 8, RLENGTH - 9)
+              if (index(test, "/") > 0) next
+              if (!match($0, /"Action":"[^"]+"/)) next
+              action = substr($0, RSTART + 10, RLENGTH - 11)
+              if (action == "pass" || action == "fail" || action == "skip") saw[test] = action
+            }
+            END {
+              bad = 0
+              for (root in want) {
+                state = (root in saw) ? saw[root] : "ABSENT"
+                printf "  %-52s %s\n", root, state
+                if (state == "ABSENT") { print "ERROR: " root " never ran — the live leg proved nothing about it"; bad = 1 }
+                else if (state == "fail") { bad = 1 }
+                else if (state == "skip") {
+                  if (root in ok_to_skip) { print "ALLOWED SKIP: " root }
+                  else if (required == "1") { print "ERROR: " root " SKIPPED while FIRESTORE_LIVE_REQUIRED=1"; bad = 1 }
+                  else { print "WARNING: " root " skipped (not a release verification run)" }
+                }
+              }
+              exit bad
+            }
+          ' "$RUNNER_TEMP/firestore-authentication-live.json" > "$audit_file"
+          audit_status=$?
+          set -e
+          cat "$audit_file"
+          if [ "$audit_status" != "0" ]; then
+            echo "ERROR: the authentication store's live test/skip audit failed (see the table above)"
+            exit 1
+          fi
+          if [ "${AUTHN_GO_TEST_STATUS:-1}" != "0" ]; then
+            echo "ERROR: the authentication store's live suite itself failed (go test exit status ${AUTHN_GO_TEST_STATUS:-unset})"
+            exit 1
+          fi
+
       # The release evidence. RELEASING.md's firestore gate cites THIS artifact
       # by run id instead of a count pasted into a document by hand: the JSON the
       # audit read, the roots it derived, the table it printed, and the index
@@ -811,7 +1158,14 @@ jobs:
             ${{ runner.temp }}/firestore-authorization-live-expected.txt
             ${{ runner.temp }}/firestore-authorization-live-allowed.txt
             ${{ runner.temp }}/firestore-authorization-live-audit.txt
+            ${{ runner.temp }}/firestore-authentication-live.json
+            ${{ runner.temp }}/firestore-authentication-live-expected.txt
+            ${{ runner.temp }}/firestore-authentication-live-allowed.txt
+            ${{ runner.temp }}/firestore-authentication-live-audit.txt
             ${{ runner.temp }}/firestore-indexes.json
+            ${{ runner.temp }}/firestore-fields.json
+            ${{ runner.temp }}/firestore-composite-args.tsv
+            ${{ runner.temp }}/firestore-field-args.tsv
           if-no-files-found: warn
           retention-days: 400
 

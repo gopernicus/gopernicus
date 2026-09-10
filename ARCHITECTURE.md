@@ -30,6 +30,7 @@ worked example `examples/cms`.
     authentication/       module github.com/gopernicus/gopernicus/pockets/authentication               — session-auth hexagon (datastore-free)
       stores/pgx/         module …/pockets/authentication/stores/pgx             — auth's pgx store adapter
       stores/turso/       module …/pockets/authentication/stores/turso           — auth's Turso store adapter
+      stores/firestore/   module …/pockets/authentication/stores/firestore       — auth's Firestore store adapter (Native mode; index manifest instead of migrations; joins no ambient transaction)
     authorization/        module github.com/gopernicus/gopernicus/pockets/authorization              — IAM hexagon: independently wireable kinds (relationships/ReBAC + roles; datastore-free; public memstore/)
       stores/pgx/         module …/pockets/authorization/stores/pgx            — authorization's pgx store adapter
       stores/turso/       module …/pockets/authorization/stores/turso          — authorization's Turso store adapter
@@ -57,7 +58,7 @@ worked example `examples/cms`.
       cmd/
 ```
 
-**Forty-one modules today.** `sdk` is the kernel; `integrations/*` are reusable
+**Forty-two modules today.** `sdk` is the kernel; `integrations/*` are reusable
 third-party connectors (one external dependency each, each its own module);
 `pockets/<name>` is a datastore-free pocket core with its store adapters as
 sibling modules — one per supported store implementation; `examples/*` are host apps that
