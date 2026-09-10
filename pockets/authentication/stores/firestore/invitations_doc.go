@@ -7,6 +7,7 @@ import (
 	gcfs "cloud.google.com/go/firestore"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/domain/invitation"
 	"github.com/gopernicus/gopernicus/sdk"
 )
@@ -84,17 +85,22 @@ func invitationsBySubjectQuery(db *firestoredb.DB, kind, identifierValue string)
 // the id when the caller left it empty (the port's DB-generated-key case) and
 // deriving both equality keys from the columns their listings filter on.
 //
-// Metadata is written through the domain's CloneMetadata, which is
-// always-non-nil: a nil map would store Firestore's null and read back as a nil
-// map, while the pocket's uniform contract is a non-nil empty map (the SQL
-// column's '{}' default).
+// Metadata is written as JSON TEXT through encodeMetadata, the SQL adapters'
+// own encoding: an empty or nil map stores '{}' and reads back as a non-nil
+// empty map (the pocket's uniform contract), and every host key — "", "a.b",
+// "__x__" — survives, which a native Firestore map's field-path keys would not
+// (documents.go).
 //
 // It is called INSIDE the write path so a retried attempt mints a fresh id
 // rather than reusing one a rolled-back attempt claimed (N-D5).
-func newInvitationDoc(inv invitation.Invitation) invitationDoc {
+func newInvitationDoc(inv invitation.Invitation) (invitationDoc, error) {
 	invitationID := inv.ID
 	if invitationID == "" {
 		invitationID = firestoredb.NewID()
+	}
+	metadata, err := encodeMetadata(inv.Metadata)
+	if err != nil {
+		return invitationDoc{}, err
 	}
 	return invitationDoc{
 		ID:                invitationID,
@@ -112,10 +118,10 @@ func newInvitationDoc(inv invitation.Invitation) invitationDoc {
 		AcceptedAt:        firestoredb.NullTime(inv.AcceptedAt),
 		CreatedAt:         firestoredb.TruncateTime(inv.CreatedAt),
 		UpdatedAt:         firestoredb.TruncateTime(inv.UpdatedAt),
-		Metadata:          invitation.CloneMetadata(inv.Metadata),
+		Metadata:          metadata,
 		ResourceKey:       invitationResourceKey(inv.ResourceType, inv.ResourceID),
 		SubjectKey:        invitationSubjectKey(inv.IdentifierKind, inv.Identifier),
-	}
+	}, nil
 }
 
 // putInvitation writes a NEW invitation row and records both claims it takes.
@@ -188,7 +194,18 @@ func readInvitationByTokenClaim(ctx context.Context, db *firestoredb.DB, r fires
 	if err := snap.DataTo(&claim); err != nil {
 		return invitationDoc{}, fmt.Errorf("authentication firestore store: decoding %s: %s: %w", collectionInvitationTokens, err, sdk.ErrInvalidInput)
 	}
-	return readInvitation(ctx, db, r, claim.InvitationID)
+	row, err := readInvitation(ctx, db, r, claim.InvitationID)
+	if err != nil {
+		return invitationDoc{}, err
+	}
+	// The row's own token hash is re-verified in constant time: a mailed
+	// invitation link is a bearer credential, and a claim that named the wrong
+	// invitation would accept it into the wrong resource. A mismatch is
+	// sdk.ErrNotFound, matching the SQL predicate's empty result.
+	if !auth.ConstantTimeDigestEqual(tokenHash, row.TokenHash) {
+		return invitationDoc{}, sdk.ErrNotFound
+	}
+	return row, nil
 }
 
 // listInvitationsByResource is ListByResource's paged query, and
@@ -262,17 +279,17 @@ func (d invitationDoc) applied(upd invitation.StatusUpdate) invitationDoc {
 	return next
 }
 
-// toDomain projects the document onto the domain aggregate. Metadata is
-// normalized to a NON-NIL map: absent, null, and empty are one fact here, and
-// the pocket's round-trip contract is the empty map (the '{}' column default).
+// toDomain projects the document onto the domain aggregate. Metadata decodes to
+// a NON-NIL map: absent, "null", and '{}' are one fact here, and the pocket's
+// round-trip contract is the empty map (the '{}' column default).
 func (d invitationDoc) toDomain() (invitation.Invitation, error) {
 	acceptedAt, err := firestoredb.ParseNullTime(d.AcceptedAt)
 	if err != nil {
 		return invitation.Invitation{}, err
 	}
-	metadata := d.Metadata
-	if metadata == nil {
-		metadata = map[string]string{}
+	metadata, err := decodeMetadata(d.Metadata)
+	if err != nil {
+		return invitation.Invitation{}, err
 	}
 	return invitation.Invitation{
 		ID:                d.ID,

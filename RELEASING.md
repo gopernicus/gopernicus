@@ -594,8 +594,12 @@ not release evidence. Before this tag is cut, the milestone requires a passing
 `live-stores` dispatch with `firestore_live_required: true` — which sets
 `FIRESTORE_LIVE_REQUIRED=1` and turns missing configuration or a skipped
 required case into a failure — running `-tags='integration,live' -run 'Live$'`
-against a disposable run-owned Firestore database (never `(default)`) with every
-expected composite index READY. **Cite that run, not a count.** The gate is
+against a disposable run-owned Firestore database (never `(default)`) with the
+index manifests deployed WHOLE: every expected composite index READY **and** every
+declared `fieldOverrides` entry applied, waited for separately because `gcloud
+firestore indexes composite list` never returns single-field indexes. A run that
+deployed only the composites would fail the stores' boot probe on a field their
+manifests declare. **Cite that run, not a count.** The gate is
 satisfied by recording the workflow **run id** and its
 `firestore-live-evidence-<run id>-<attempt>` artifact (the `go test -json`
 output, the derived expected-root list, the audit table, and the index states);
@@ -668,12 +672,23 @@ Firestore's aggregation counts documents and cannot group.
 
 **Migrations are an index manifest.** There is no DDL and no migration tree:
 `ExportIndexes` MERGES the embedded `firestore.indexes.json` into the host's own
-manifest, the host deploys it pre-boot (`firebase deploy --only
-firestore:indexes`, or `gcloud firestore indexes composite create` per entry),
-and the constructor PROBES it through the Admin API at wiring time, refusing to
-construct when an index is missing or still building. `WithoutIndexProbe()` is
-the documented escape for the emulator and for a credential that cannot be
-granted `datastore.indexes.list`. The v1 → v3 `CONVERSION.md`/`UPGRADE.md`
+manifest and the host deploys it pre-boot. The manifest has TWO halves and both
+must be deployed — `firebase deploy --only firestore:indexes` covers them, or
+`gcloud firestore indexes composite create` per composite AND `gcloud firestore
+indexes fields update` per `fieldOverrides` entry. The constructor PROBES both
+through the Admin API at wiring time, refusing to construct when a composite is
+missing or still building OR when a declared field override is not reflected in
+that field's live configuration. `WithoutIndexProbe()` is the documented escape
+for exactly three callers: the emulator, a credential that cannot be granted
+`datastore.indexes.list`, and a deployment that must boot while the Admin API is
+degraded — the probe is a hard boot dependency on an API the request path never
+touches. **Index configuration spends two per-database caps**, not one: 200
+composite indexes without billing enabled (1000 with) and, separately, 200
+single-field configurations (1000 with), the latter shared with TTL policies (an
+exemption and a TTL policy on the same field count as one). Both are per
+DATABASE, so the host's own collections and any other pocket's manifest count
+against the same budget; each module's `SCHEMA.md` states the numbers it asks
+for. The v1 → v3 `CONVERSION.md`/`UPGRADE.md`
 runbooks are SQL-only and do not apply: a Firestore host is greenfield by
 construction and starts from the manifest.
 
@@ -683,9 +698,12 @@ registry, so it cannot show that the shipped manifest covers this store's
 queries — which is the whole claim `v0.1.0` makes. Before this tag is cut, the
 milestone requires a passing `live-stores` dispatch with
 `firestore_live_required: true` whose **`audit the authorization store's live
-test/skip counts`** step is green: seven derived live roots, all `pass` except
-`TestRunTransactionalLive`, which is allowed BY NAME as ruling R1's one
-permitted skip. **Cite the workflow run id and its
+test/skip counts`** step is green: **eight** derived live roots, all `pass`
+except `TestRunTransactionalLive`, which is allowed BY NAME as ruling R1's one
+permitted skip. (Eight, not seven: the count this file first recorded omitted
+`TestLargeBatchCommitsInOneTransactionLive`, A7's proof that Firestore publishes
+no per-transaction write COUNT limit. `FIRESTORE_LIVE_MIN_ROOTS` for that step is
+`8`.) **Cite the workflow run id and its
 `firestore-live-evidence-<run id>-<attempt>` artifact**, not a pasted count.
 
 ### pockets/authentication/stores/firestore — v0.1.0 (FIRST TAG; not yet cut — the owner cuts it after a passing required live run): the authentication pocket's Firestore store (new module; no existing consumer)
@@ -762,16 +780,29 @@ while `Challenges.PurgeExpired` returns one the conformance suite asserts at an
 exact boundary. TTL is reasonable only for independently disposable, claim-free,
 uncounted rows (`oauth_states`; `security_events` beyond a retention window),
 after an ownership audit against `SCHEMA.md` §5. This module ships no TTL policy;
-a host that adds one adds it to its own manifest.
+a host that adds one adds it to its own manifest — and spends one of the 200
+single-field configurations that database allows without billing, the same budget
+the manifest's `fieldOverrides` spend.
 
 **Migrations are an index manifest.** There is no DDL and no migration tree:
 `ExportIndexes` MERGES the embedded `firestore.indexes.json` into the host's own
-manifest, the host deploys it pre-boot (`firebase deploy --only
-firestore:indexes`, or `gcloud firestore indexes composite create` per entry),
-and the constructor PROBES it through the Admin API at wiring time, refusing to
-construct when an index is missing or still building. `WithoutIndexProbe()` is
-the documented escape for the emulator and for a credential that cannot be
-granted `datastore.indexes.list`. There is no v1 → v3 conversion runbook for this
+manifest and the host deploys it pre-boot. The manifest has TWO halves and both
+must be deployed — `firebase deploy --only firestore:indexes` covers them, or
+`gcloud firestore indexes composite create` per composite AND `gcloud firestore
+indexes fields update` per `fieldOverrides` entry. The constructor PROBES both
+through the Admin API at wiring time, refusing to construct when a composite is
+missing or still building OR when a declared field override is not reflected in
+that field's live configuration. `WithoutIndexProbe()` is the documented escape
+for exactly three callers: the emulator, a credential that cannot be granted
+`datastore.indexes.list`, and a deployment that must boot while the Admin API is
+degraded — the probe is a hard boot dependency on an API the request path never
+touches. **Index configuration spends two per-database caps**, not one: 200
+composite indexes without billing enabled (1000 with) and, separately, 200
+single-field configurations (1000 with), the latter shared with TTL policies (an
+exemption and a TTL policy on the same field count as one). Both are per
+DATABASE, so the host's own collections and any other pocket's manifest count
+against the same budget; each module's `SCHEMA.md` states the numbers it asks
+for. There is no v1 → v3 conversion runbook for this
 family: a Firestore host is greenfield by construction, and a host moving data
 from a SQL authentication database must do it THROUGH THE PORTS, because no bulk
 document import creates the seven claim collections.

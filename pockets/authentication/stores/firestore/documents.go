@@ -168,48 +168,53 @@ type apiKeyDoc struct {
 }
 
 // securityEventDoc is one security_events document (migration 0008): the
-// append-only audit rail. Details is a NATIVE map where SQL stores JSON text —
-// the round-trip contract is uniform (nil or empty in, non-nil empty out), and
-// the storage shape is each family's choice.
+// append-only audit rail. Details is JSON TEXT, exactly as both SQL adapters
+// store it, and deliberately NOT a native Firestore map.
 //
-// Its element type is `any`, matching securityevent.SecurityEvent.Details
-// exactly: the bag is OPEN, and narrowing it to string here would either drop or
-// refuse a value the SQL adapters happily JSON-encode. Firestore's own type
-// system is what a value round-trips through, so a number comes back as int64 or
-// float64 where the SQL families return JSON's float64 — the same family
-// difference their JSON encoding already has, and the audit writer stores
-// identifiers and key prefixes (§5.1's content hygiene), which are strings.
+// A native map looks like the better fit and is the trap. Firestore map KEYS are
+// field paths: a key of "" is rejected outright, a key containing "." is split
+// into nested fields, and "__x__" is a reserved name — so an audit writer that
+// recorded a header name, a URL fragment, or a form field would silently store a
+// different bag than it handed in, or fail a write the SQL families accept. The
+// bag is OPEN (its element type is `any`, matching
+// securityevent.SecurityEvent.Details), which means the store cannot know which
+// keys a host will use. JSON text has no key vocabulary at all, so every key
+// round-trips as itself, and NUMBERS come back as JSON's float64 in all three
+// families instead of Firestore's int64/float64 split — one fewer divergence,
+// not one more.
 type securityEventDoc struct {
-	ID          string         `firestore:"id"`
-	UserID      string         `firestore:"user_id"`
-	ActorType   string         `firestore:"actor_type"`
-	ActorID     string         `firestore:"actor_id"`
-	EventType   string         `firestore:"event_type"`
-	EventStatus string         `firestore:"event_status"`
-	Details     map[string]any `firestore:"details"`
-	IPAddress   string         `firestore:"ip_address"`
-	UserAgent   string         `firestore:"user_agent"`
-	CreatedAt   time.Time      `firestore:"created_at"`
+	ID          string    `firestore:"id"`
+	UserID      string    `firestore:"user_id"`
+	ActorType   string    `firestore:"actor_type"`
+	ActorID     string    `firestore:"actor_id"`
+	EventType   string    `firestore:"event_type"`
+	EventStatus string    `firestore:"event_status"`
+	Details     string    `firestore:"details"`
+	IPAddress   string    `firestore:"ip_address"`
+	UserAgent   string    `firestore:"user_agent"`
+	CreatedAt   time.Time `firestore:"created_at"`
 }
 
 // invitationDoc is one invitations document (migrations 0009, 0016).
 type invitationDoc struct {
-	ID                string            `firestore:"id"`
-	ResourceType      string            `firestore:"resource_type"`
-	ResourceID        string            `firestore:"resource_id"`
-	Relation          string            `firestore:"relation"`
-	Identifier        string            `firestore:"identifier"`
-	IdentifierKind    string            `firestore:"identifier_kind"`
-	ResolvedSubjectID string            `firestore:"resolved_subject_id"`
-	InvitedBy         string            `firestore:"invited_by"`
-	TokenHash         string            `firestore:"token_hash"`
-	AutoAccept        bool              `firestore:"auto_accept"`
-	Status            string            `firestore:"status"`
-	ExpiresAt         time.Time         `firestore:"expires_at"`
-	AcceptedAt        any               `firestore:"accepted_at"`
-	CreatedAt         time.Time         `firestore:"created_at"`
-	UpdatedAt         time.Time         `firestore:"updated_at"`
-	Metadata          map[string]string `firestore:"metadata"`
+	ID                string    `firestore:"id"`
+	ResourceType      string    `firestore:"resource_type"`
+	ResourceID        string    `firestore:"resource_id"`
+	Relation          string    `firestore:"relation"`
+	Identifier        string    `firestore:"identifier"`
+	IdentifierKind    string    `firestore:"identifier_kind"`
+	ResolvedSubjectID string    `firestore:"resolved_subject_id"`
+	InvitedBy         string    `firestore:"invited_by"`
+	TokenHash         string    `firestore:"token_hash"`
+	AutoAccept        bool      `firestore:"auto_accept"`
+	Status            string    `firestore:"status"`
+	ExpiresAt         time.Time `firestore:"expires_at"`
+	AcceptedAt        any       `firestore:"accepted_at"`
+	CreatedAt         time.Time `firestore:"created_at"`
+	UpdatedAt         time.Time `firestore:"updated_at"`
+	// Metadata is JSON TEXT for the reason securityEventDoc's Details is: the
+	// keys are the HOST's, and Firestore map keys are field paths.
+	Metadata string `firestore:"metadata"`
 
 	// ResourceKey and SubjectKey are the derived equality keys of the two paged
 	// listings (SCHEMA.md §4.2): identities, never projections, never sort keys.
@@ -357,6 +362,65 @@ func encodeMethods(methods []session.AuthenticationMethod) (string, error) {
 		return "", fmt.Errorf("authentication firestore store: encoding authentication methods: %s: %w", err, sdk.ErrInvalidInput)
 	}
 	return string(b), nil
+}
+
+// encodeDetails renders an open security-event details bag as JSON text, the
+// same '{}'-for-empty encoding both SQL adapters write, so a nil or empty bag
+// reads back as a NON-NIL EMPTY map in every family.
+func encodeDetails(details map[string]any) (string, error) {
+	if len(details) == 0 {
+		return "{}", nil
+	}
+	b, err := json.Marshal(details)
+	if err != nil {
+		return "", fmt.Errorf("authentication firestore store: encoding security event details: %s: %w", err, sdk.ErrInvalidInput)
+	}
+	return string(b), nil
+}
+
+// decodeDetails reverses encodeDetails into a NON-NIL map: '{}', "null", and an
+// absent field are one fact — an empty bag.
+func decodeDetails(encoded string) (map[string]any, error) {
+	out := map[string]any{}
+	if encoded == "" || encoded == "null" {
+		return out, nil
+	}
+	if err := json.Unmarshal([]byte(encoded), &out); err != nil {
+		return nil, fmt.Errorf("authentication firestore store: decoding security event details: %s: %w", err, sdk.ErrInvalidInput)
+	}
+	if out == nil {
+		out = map[string]any{}
+	}
+	return out, nil
+}
+
+// encodeMetadata renders opaque host invitation metadata as JSON text, the same
+// encoding and the same empty-map contract as encodeDetails. The domain has
+// already bounded the map.
+func encodeMetadata(metadata map[string]string) (string, error) {
+	if len(metadata) == 0 {
+		return "{}", nil
+	}
+	b, err := json.Marshal(metadata)
+	if err != nil {
+		return "", fmt.Errorf("authentication firestore store: encoding invitation metadata: %s: %w", err, sdk.ErrInvalidInput)
+	}
+	return string(b), nil
+}
+
+// decodeMetadata reverses encodeMetadata into a NON-NIL map.
+func decodeMetadata(encoded string) (map[string]string, error) {
+	out := map[string]string{}
+	if encoded == "" || encoded == "null" {
+		return out, nil
+	}
+	if err := json.Unmarshal([]byte(encoded), &out); err != nil {
+		return nil, fmt.Errorf("authentication firestore store: decoding invitation metadata: %s: %w", err, sdk.ErrInvalidInput)
+	}
+	if out == nil {
+		out = map[string]string{}
+	}
+	return out, nil
 }
 
 // decodeMethods reverses encodeMethods; the empty string reads back as nil.

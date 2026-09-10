@@ -42,7 +42,10 @@ func (s *invitationStore) Create(ctx context.Context, inv invitation.Invitation)
 	}
 	var row invitationDoc
 	err := retryTransact(ctx, s.db, func(ctx context.Context) error {
-		row = newInvitationDoc(inv)
+		var err error
+		if row, err = newInvitationDoc(inv); err != nil {
+			return err
+		}
 		w := s.db.WriterFrom(ctx)
 		plan := newClaimPlan()
 		if err := putInvitation(ctx, s.db, w, plan, row); err != nil {

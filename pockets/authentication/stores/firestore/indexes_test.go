@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -24,11 +25,27 @@ const indexManifestCount = 32
 // compositeBudget is the no-billing composite-index cap of one database.
 const compositeBudget = 200
 
-// indexFieldOverrideCount is the number of single-field dependencies
-// firestore.indexes.json declares — see derivedFieldOverrides for why they are
-// declared at all and why the set is every queried field rather than only the
-// composite-free ones.
-const indexFieldOverrideCount = 36
+// singleFieldConfigBudget is the per-database cap on FIELD CONFIGURATIONS — the
+// entries a fieldOverride creates. It is a separate 200 from compositeBudget and
+// is shared with every other store the host mounts, exactly as the composite
+// budget is, which is why the manifest states its share rather than discovering
+// it when a deployment starts failing.
+const singleFieldConfigBudget = 200
+
+// indexFieldOverrideCount is the number of field overrides
+// firestore.indexes.json declares: the single-field DEPENDENCIES this store's
+// queries have (indexFieldDependencyCount) plus the EXEMPTIONS that turn
+// SCHEMA.md §4.2's "never indexed" row from a claim into a fact
+// (indexFieldExemptionCount). See derivedFieldOverrides.
+const indexFieldOverrideCount = indexFieldDependencyCount + indexFieldExemptionCount
+
+// indexFieldDependencyCount is the queried half: every field any matrix row
+// filters or orders on, on the collection that queries it.
+const indexFieldDependencyCount = 36
+
+// indexFieldExemptionCount is the exempted half: every never-queried field whose
+// automatic single-field indexes this store DISABLES (exemptFields).
+const indexFieldExemptionCount = 17
 
 // probeValue and probeValues are the literals the live matrix leg filters with.
 // They match nothing: the point of executing a matrix row live is that Firestore
@@ -63,6 +80,99 @@ var equalityPrecedence = map[string][]string{
 	collectionInvitations:     {"resource_key", "subject_key", "created_at", "id"},
 	collectionChallenges:      {"user_id", "purpose", "expires_at", "id"},
 	collectionAuthGrants:      {"consume_key", "consumed_at", "session_id", "user_id", "created_at", "id"},
+}
+
+// exemptFields are the fields whose AUTOMATIC single-field indexes this store
+// DISABLES, with a fieldOverride carrying an empty index set.
+//
+// SCHEMA.md §4.2 has always had a "never indexed" row. Until now it described an
+// intention: Firestore indexes EVERY scalar field of every document by default,
+// ascending and descending, so "never indexed" was true of the store's queries
+// and false of the database. That gap is not cosmetic on this schema — the
+// fields below are the store's secrets and its largest values:
+//
+//   - Index entries on a secret are a second copy of it, in a structure with its
+//     own retention and its own export path, ordered so that a range scan by
+//     anyone who can read indexes is a prefix walk over hashes and addresses.
+//   - Every write pays for every index entry. security_events is append-only and
+//     the highest-volume collection here; api_keys, sessions and challenges are
+//     written on every authentication.
+//   - Index entries over 1500 bytes TRUNCATE (§4.2), so on the unbounded fields
+//     they are not even a correct copy.
+//
+// The rule for adding one: the field must appear in NO row of queryMatrix, on
+// any collection — TestExemptedFieldsAreNeverQueried proves it, and the
+// partition test below proves the remaining fields were left indexed
+// DELIBERATELY rather than by omission. A field that is ever queried must never
+// appear here: an exemption is not a performance hint, it makes the query fail
+// with FAILED_PRECONDITION in production while every emulator run stays green.
+//
+// Two of them earned their place at N7 by CHANGING TYPE: security_events.details
+// and invitations.metadata are JSON text now (documents.go), so they are one
+// large string each rather than a map whose every subfield was separately
+// indexed.
+var exemptFields = map[string][]string{
+	collectionUsers:           {"display_name"},
+	collectionPasswords:       {"hash"},
+	collectionIdentifiers:     {"normalized_value"},
+	collectionSessions:        {"refresh_token_hash", "authentication_methods"},
+	collectionOAuthAccounts:   {"access_token", "refresh_token"},
+	collectionOAuthStates:     {"payload"},
+	collectionServiceAccounts: {"name"},
+	collectionAPIKeys:         {"name", "key_prefix", "key_hash"},
+	collectionSecurityEvents:  {"details"},
+	collectionInvitations:     {"token_hash", "metadata"},
+	collectionChallenges:      {"secret_digest"},
+	collectionAuthGrants:      {"methods"},
+}
+
+// defaultIndexedFields is the REMAINDER, pinned: every field of a row document
+// that this manifest neither declares as a query dependency nor exempts, and
+// which therefore keeps Firestore's automatic ascending + descending +
+// array-contains single-field indexes.
+//
+// It is pinned so that adding a field to a document is a decision about its
+// indexing rather than a default nobody looked at. A new field lands here, in
+// exemptFields, or in a query shape, and TestEveryStoredFieldIsClassified says
+// which by name.
+//
+// Most of these are small, low-cardinality, and plausibly worth a filter a host
+// might one day add (status, kinds, flags, the actor columns); a few are
+// timestamps that no query orders by alone. None is a secret and none is
+// unbounded except by a host's own input.
+var defaultIndexedFields = map[string][]string{
+	collectionUsers:           {"auth_revision", "email_verified", "primary_email", "status", "status_changed_at", "updated_at"},
+	collectionPasswords:       {"user_id"},
+	collectionIdentifiers:     {"is_primary", "kind", "login_enabled", "notification_enabled", "recovery_enabled", "replaced_at", "updated_at", "verified_at"},
+	collectionSessions:        {"assurance_level", "authenticated_at", "created_at", "expires_at", "id", "previous_used", "rotation_count"},
+	collectionOAuthAccounts:   {"account_verified", "provider_email", "provider_email_verified", "scope", "token_expires_at", "token_type"},
+	collectionOAuthStates:     {"expires_at", "provider", "purpose", "token"},
+	collectionServiceAccounts: {"act_as_user", "created_by", "description", "owner_user_id", "updated_at"},
+	collectionAPIKeys:         {"expires_at", "last_used_at", "revoked_at"},
+	collectionSecurityEvents:  {"actor_id", "actor_type", "ip_address", "user_agent"},
+	collectionInvitations:     {"accepted_at", "auto_accept", "expires_at", "identifier", "identifier_kind", "invited_by", "relation", "resolved_subject_id", "resource_id", "resource_type", "status", "updated_at"},
+	collectionChallenges:      {"attempt_count", "context", "created_at", "protector_key_id", "subject_key", "version"},
+	collectionContactChanges:  {"created_at", "expires_at", "id", "kind", "login_enabled", "make_primary", "new_value", "notification_enabled", "recovery_enabled", "replaces_identifier_id", "user_id"},
+	collectionAuthGrants:      {"assurance", "authenticated_at", "context_digest", "expires_at", "purpose"},
+}
+
+// rowDocuments maps each row collection to the document shape it stores, so the
+// classification test can enumerate a collection's stored fields from the struct
+// tags rather than from a list that would rot.
+var rowDocuments = map[string]any{
+	collectionUsers:           userDoc{},
+	collectionPasswords:       passwordDoc{},
+	collectionIdentifiers:     identifierDoc{},
+	collectionSessions:        sessionDoc{},
+	collectionOAuthAccounts:   oauthAccountDoc{},
+	collectionOAuthStates:     oauthStateDoc{},
+	collectionServiceAccounts: serviceAccountDoc{},
+	collectionAPIKeys:         apiKeyDoc{},
+	collectionSecurityEvents:  securityEventDoc{},
+	collectionInvitations:     invitationDoc{},
+	collectionChallenges:      challengeDoc{},
+	collectionContactChanges:  contactChangeDoc{},
+	collectionAuthGrants:      authGrantDoc{},
 }
 
 // orderSpec is one ORDER BY clause of a query shape: the field and the direction
@@ -202,12 +312,24 @@ func queryMatrix() []queryShape {
 				{field: "id", direction: firestoredb.OrderAscending},
 			},
 		},
-		// grants_doc.go grantsForSessionQuery — DeleteBySession and the session
-		// half of the lifecycle cascade.
+		// grants_doc.go grantsForSessionQuery — DeleteBySession, which revokes
+		// ONE session.
 		{
 			name:       "grants by session",
 			collection: collectionAuthGrants,
 			equality:   []string{"session_id"},
+		},
+		// grants_doc.go grantsForSessionsQuery — the session half of the
+		// LIFECYCLE cascade, chunked at the 30-disjunction cap so a subject with
+		// many live sessions costs a bounded number of queries inside the
+		// revoking transaction rather than one per session. A single-field `in`
+		// selects the same index as a single-field `==` ("in and == clauses use
+		// the same index"), so it derives no composite — which is a claim this
+		// row exists to keep tested rather than assumed.
+		{
+			name:       "grants by sessions",
+			collection: collectionAuthGrants,
+			in:         []string{"session_id"},
 		},
 		// grants_doc.go grantsForUserQuery — the user half of the lifecycle
 		// cascade and the passwordless adoption's revocation.
@@ -441,12 +563,18 @@ func filterSuffix(filters []string) string {
 // inside a composite costs nothing to declare and keeps the rule stateable in
 // one sentence.
 //
-// Each entry asks for ONE index — ASCENDING at COLLECTION scope. Declaring an
-// override REPLACES the default set (ascending + descending + array-contains),
-// which is deliberate here and justified per field class in SCHEMA.md §8.4: no
-// document in any queried collection carries an array field, and no query sorts
-// a single field descending without an equality prefix (every descending order
-// in the matrix belongs to a composite).
+// Each dependency entry asks for ONE index — ASCENDING at COLLECTION scope.
+// Declaring an override REPLACES the default set (ascending + descending +
+// array-contains), which is deliberate here and justified per field class in
+// SCHEMA.md §8.4: no document in any queried collection carries an array field,
+// and no query sorts a single field descending without an equality prefix
+// (every descending order in the matrix belongs to a composite).
+//
+// The second half is exemptFields: the never-queried secrets and large values
+// whose automatic indexes are switched OFF, with an empty index set. The two
+// halves are the same mechanism pointed in opposite directions, which is why
+// they are derived together and why an overlap between them is a test failure
+// rather than a silent winner.
 func derivedFieldOverrides() []firestoredb.FieldOverride {
 	fields := map[string]map[string]bool{}
 	note := func(collection, field string) {
@@ -477,6 +605,20 @@ func derivedFieldOverrides() []firestoredb.FieldOverride {
 				Indexes: []firestoredb.FieldOverrideIndex{
 					{Order: firestoredb.OrderAscending, QueryScope: firestoredb.ScopeCollection},
 				},
+			})
+		}
+	}
+	// The EXEMPTIONS. An empty (but present) index set is Firestore's "no
+	// single-field indexes for this field", and it is the only way to say it —
+	// a field with no override gets ascending, descending and array-contains
+	// automatically. ProbeIndexes skips an empty set (there is nothing to
+	// verify), so an exemption costs nothing at boot.
+	for collection, exempt := range exemptFields {
+		for _, field := range exempt {
+			out = append(out, firestoredb.FieldOverride{
+				CollectionGroup: collection,
+				FieldPath:       field,
+				Indexes:         []firestoredb.FieldOverrideIndex{},
 			})
 		}
 	}
@@ -556,11 +698,125 @@ func TestIndexManifestParses(t *testing.T) {
 			t.Errorf("%s: %s is not a collection this store queries — the other ten answer point reads only (SCHEMA.md §7.1)", indexKey(idx), idx.CollectionGroup)
 		}
 	}
+	if len(m.FieldOverrides) > singleFieldConfigBudget {
+		t.Errorf("manifest declares %d field overrides, over the %d field configurations a database allows — and that budget is shared with every other store the host mounts", len(m.FieldOverrides), singleFieldConfigBudget)
+	}
 	for _, o := range m.FieldOverrides {
-		if _, queried := equalityPrecedence[o.CollectionGroup]; !queried {
-			t.Errorf("field override on %s.%s: %s is not a collection this store queries", o.CollectionGroup, o.FieldPath, o.CollectionGroup)
+		_, queried := equalityPrecedence[o.CollectionGroup]
+		_, exempting := exemptFields[o.CollectionGroup]
+		if !queried && !exempting {
+			t.Errorf("field override on %s.%s: %s is neither a collection this store queries nor one it exempts a field on", o.CollectionGroup, o.FieldPath, o.CollectionGroup)
+		}
+		if len(o.Indexes) == 0 && !slices.Contains(exemptFields[o.CollectionGroup], o.FieldPath) {
+			t.Errorf("field override on %s.%s declares NO single-field index but is not in exemptFields — an accidental exemption is a production FAILED_PRECONDITION the emulator cannot show", o.CollectionGroup, o.FieldPath)
 		}
 	}
+}
+
+// TestExemptedFieldsAreNeverQueried is the safety rule for exemptFields: an
+// exemption switches a field's automatic single-field indexes OFF, so a field
+// that any query filters or orders on would start failing with
+// FAILED_PRECONDITION in production while every emulator run stayed green (the
+// emulator enforces no index at all). The two sets must be disjoint, and the
+// check is deliberately GLOBAL as well as per-collection: `previous_refresh_token_hash`
+// looks exactly like the other session hash and is the one the grace lookup
+// queries.
+func TestExemptedFieldsAreNeverQueried(t *testing.T) {
+	queried := map[string]bool{}
+	queriedAnywhere := map[string]bool{}
+	for _, shape := range queryMatrix() {
+		fields := slices.Concat(shape.equality, shape.in)
+		if shape.rangeField != "" {
+			fields = append(fields, shape.rangeField)
+		}
+		for _, o := range shape.order {
+			fields = append(fields, o.field)
+		}
+		for _, f := range fields {
+			queried[shape.collection+"."+f] = true
+			queriedAnywhere[f] = true
+		}
+	}
+
+	total := 0
+	for collection, exempt := range exemptFields {
+		for _, field := range exempt {
+			total++
+			if queried[collection+"."+field] {
+				t.Errorf("%s.%s is exempted from single-field indexing AND queried by a matrix row — the query would fail with FAILED_PRECONDITION on a real database", collection, field)
+			}
+			if queriedAnywhere[field] {
+				t.Errorf("%s.%s is exempted, and a field named %q is queried on another collection — re-read the exemption before trusting the name", collection, field, field)
+			}
+		}
+	}
+	if total != indexFieldExemptionCount {
+		t.Errorf("exemptFields declares %d fields, want %d — move indexFieldExemptionCount deliberately", total, indexFieldExemptionCount)
+	}
+}
+
+// TestEveryStoredFieldIsClassified pins the OTHER half of the exemption
+// decision: the fields that keep Firestore's automatic single-field indexes.
+//
+// Every field of every row document is exactly one of three things — a query
+// dependency (declared ASCENDING/COLLECTION), an exemption (declared empty), or
+// the default-indexed remainder (declared nowhere). Without this test the third
+// bucket is invisible: a new field would silently acquire three index entries on
+// every write, and a field DELETED from a document would leave an override
+// behind for a field that no longer exists. The remainder is therefore written
+// down, and a change to a document shape has to move a name here on purpose.
+func TestEveryStoredFieldIsClassified(t *testing.T) {
+	dependencies := map[string]bool{}
+	for _, o := range derivedFieldOverrides() {
+		if len(o.Indexes) > 0 {
+			dependencies[o.CollectionGroup+"."+o.FieldPath] = true
+		}
+	}
+
+	for collection, doc := range rowDocuments {
+		stored := firestoreFields(doc)
+		var remainder []string
+		for _, field := range stored {
+			key := collection + "." + field
+			exempt := slices.Contains(exemptFields[collection], field)
+			switch {
+			case dependencies[key] && exempt:
+				t.Errorf("%s is both a declared query dependency and an exemption", key)
+			case dependencies[key], exempt:
+			default:
+				remainder = append(remainder, field)
+			}
+		}
+		slices.Sort(remainder)
+		want := slices.Clone(defaultIndexedFields[collection])
+		slices.Sort(want)
+		if !slices.Equal(remainder, want) {
+			t.Errorf("%s keeps Firestore's automatic single-field indexes on %v, pinned as %v — classify the difference: query dependency (add the query), exemption (exemptFields), or default (defaultIndexedFields)", collection, remainder, want)
+		}
+		for _, field := range exemptFields[collection] {
+			if !slices.Contains(stored, field) {
+				t.Errorf("%s.%s is exempted but is not a field of the stored document — an override for a field that does not exist", collection, field)
+			}
+		}
+	}
+	for collection := range exemptFields {
+		if _, ok := rowDocuments[collection]; !ok {
+			t.Errorf("exemptFields names %s, which is not a row collection", collection)
+		}
+	}
+}
+
+// firestoreFields lists a document shape's stored field names, taken from the
+// struct tags so the test reads the SAME names Firestore does.
+func firestoreFields(doc any) []string {
+	typ := reflect.TypeOf(doc)
+	out := make([]string, 0, typ.NumField())
+	for i := range typ.NumField() {
+		if tag := typ.Field(i).Tag.Get("firestore"); tag != "" {
+			out = append(out, strings.Split(tag, ",")[0])
+		}
+	}
+	return out
 }
 
 // TestIndexManifestMatchesTheQueryMatrix is the point of the matrix: the shipped
@@ -749,7 +1005,12 @@ func TestCompositeFreeShapesDeclareTheirSingleFieldIndexes(t *testing.T) {
 		}
 	}
 
-	for key := range declared {
+	for key, o := range declared {
+		if len(o.Indexes) == 0 {
+			// An EXEMPTION, whose whole point is that no query uses the field.
+			// TestExemptedFieldsAreNeverQueried holds it to the opposite rule.
+			continue
+		}
 		if !used[key] {
 			t.Errorf("fieldOverrides declares %s, which no query shape filters or orders on — delete it or add the query", key)
 		}

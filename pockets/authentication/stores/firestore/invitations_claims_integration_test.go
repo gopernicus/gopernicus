@@ -34,8 +34,12 @@ func invitationFixture(t *testing.T, relation, identifierValue, kind, tokenHash 
 // helper, so the test cannot disagree with the store about what the tuple is.
 func pendingClaimHolder(t *testing.T, db *firestoredb.DB, inv invitation.Invitation) (invitationPendingClaimDoc, bool) {
 	t.Helper()
+	row, err := newInvitationDoc(inv)
+	if err != nil {
+		t.Fatalf("newInvitationDoc: %v", err)
+	}
 	var claim invitationPendingClaimDoc
-	if !readClaim(t, db, invitationPendingClaimRef(db, newInvitationDoc(inv)), &claim) {
+	if !readClaim(t, db, invitationPendingClaimRef(db, row), &claim) {
 		return invitationPendingClaimDoc{}, false
 	}
 	return claim, true

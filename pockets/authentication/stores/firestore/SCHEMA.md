@@ -345,23 +345,28 @@ store stricter than its SQL siblings, so none is written (§5.9).
 
 `id` (store-minted when empty) → doc id `h(id)`; `user_id`, `actor_type`,
 `actor_id`, `event_type`, `event_status`, `details`, `ip_address`, `user_agent`,
-`created_at`. `details` is a NATIVE map where SQL stores `'{}'` JSON text — the
-round-trip contract is uniform (nil or empty in, non-nil empty out) and the
-storage shape is each family's choice. Append-only: no update or delete path
-exists in the port, so none exists here.
+`created_at`. `details` is **JSON TEXT**, the same `'{}'`-for-empty encoding both
+SQL adapters write; the round-trip contract is uniform (nil or empty in, non-nil
+empty out). Append-only: no update or delete path exists in the port, so none
+exists here.
 
-**N4a correction:** the document field is `map[string]any`, matching
+**N4a correction:** the document field carries `map[string]any`, matching
 `securityevent.SecurityEvent.Details` exactly. The N1 skeleton typed it
 `map[string]string`, which would have narrowed an OPEN bag — a non-string value
 the SQL adapters JSON-encode without comment would have been dropped or refused
-here. `normalizeDetails` writes an EMPTY MAP for a nil or empty bag (never a
-null, never an absent field) and copies the caller's map, so the read-back is a
-non-nil empty map on every path and a caller mutating its own map afterwards
-cannot change what was stored. Residual family difference: a stored NUMBER comes
-back as Firestore's `int64`/`float64` where the SQL families return JSON's
-`float64` — the same kind of encoding difference their JSON text already has, and
-outside the rail's documented content (identifiers and key prefixes, §5.1's
-content hygiene).
+here.
+
+**N7 correction — JSON TEXT, not a native map.** N4a stored the bag as a native
+Firestore map, on the reasoning that the storage shape is each family's choice.
+It is not, because Firestore map KEYS are FIELD PATHS: `""` is rejected outright,
+`"a.b"` is split into nested fields, `"__x__"` is a reserved name, and `"a/b"` /
+`"a[0]"` collide with the path syntax. The bag is open and its keys come from a
+HOST, so a rail that recorded a header name, a URL fragment or a form field would
+have stored a different bag than it was handed, or failed a write the SQL
+families accept. `encodeDetails`/`decodeDetails` (documents.go) are the turso
+adapter's `marshalDetails`/`unmarshalDetails` verbatim, so every key round-trips
+as itself. The int64/float64 divergence N4a recorded is GONE with it: a number
+now comes back as JSON's `float64` in all three families.
 
 Indexes `idx_security_events_created_at_id`, `_user_id`, `_event_type`,
 `_event_status` become the composite matrix of §7.
@@ -371,8 +376,11 @@ Indexes `idx_security_events_created_at_id`, `_user_id`, `_event_type`,
 Columns map one-to-one (`id`, `resource_type`, `resource_id`, `relation`,
 `identifier`, `identifier_kind`, `resolved_subject_id`, `invited_by`,
 `token_hash`, `auto_accept` bool, `status`, `expires_at`, `accepted_at`
-nullable, `created_at`, `updated_at`, `metadata` — a native map where SQL stores
-`'{}'`), plus the derived `resource_key` and `subject_key` (§4).
+nullable, `created_at`, `updated_at`, `metadata` — **JSON TEXT** since N7, the
+same `'{}'`-for-empty encoding SQL stores, because the keys are the HOST's and a
+native Firestore map's keys are field paths: see §3.8's N7 correction, which
+applies here for the same reason), plus the derived `resource_key` and
+`subject_key` (§4).
 
 | SQL constraint | Firestore enforcement |
 |---|---|
@@ -486,7 +494,7 @@ Consequences, and the posture taken:
 | **Single-component id equality kept RAW** | `user_id`, `service_account_id`, `session_id`, `provider`, `purpose`, `kind`, `status`, `event_type`, `event_status`, `previous_refresh_token_hash` | raw, for SQL parity and a readable manifest. Documented ceiling: an id or purpose ≥ 1500 bytes is out of contract |
 | **Sortable / range fields** | `created_at`, `updated_at`, `expires_at`, `linked_at`, `authenticated_at` (timestamps) | **safe** — a timestamp has no length |
 | **Sortable tiebreak** | each collection's original `id`; `provider_user_id` on `ListByUser` | store-minted ids are 20 characters (`firestoredb.NewID`) or a `cryptids` nanoid; a HOST-supplied id or a provider-issued subject is unbounded at the port. Over 1500 bytes its index entry truncates and a keyset page could repeat or skip a row |
-| **Never indexed** | `display_name`, `name` (searched in Go under R4), `payload`, the OAuth token ciphertext, `details`, `metadata`, `hash` | no exposure |
+| **Never indexed** | `display_name`, `name` (searched in Go under R4), `key_prefix`, `normalized_value`, `payload`, the OAuth token ciphertext, `details`, `metadata`, `hash`, and every stored SECRET DIGEST (`key_hash`, `token_hash`, `secret_digest`, `refresh_token_hash`) | no exposure — and since N7 that is enforced rather than described: each one carries a `fieldOverride` with an EMPTY index set (§8.4), which is the only way to switch Firestore's automatic single-field indexing off |
 
 **DECISION (N1):** the store does NOT reject an oversized value and does NOT
 silently truncate — either would make it stricter than, or divergent from, the
@@ -511,6 +519,32 @@ source-scanning ownership test, and which N2–N4 reproduce here. A claim is
 released the moment its row leaves the index's STORED predicate, in the same
 transaction: replacement, demotion, retirement, consumption, purge, and bulk
 revocation all release.
+
+**THE READ RULE (N7): the claim is a PATH to the answer; the ROW is the answer.**
+Six read rails resolve a secret through a claim document — `GetLogin`/
+`GetRecovery`, the primary-claim resolution the directory projection is
+recomputed from, `GetByRefreshHash`, `APIKeys.GetByHash`,
+`Invitations.GetByTokenHash`, and the `(purpose, digest)` rail
+`Challenges.ConsumeToken`, `PasswordResets.Redeem` and `Passwordless.Redeem`
+share. In SQL the predicate IS the query, so a row that stops matching stops
+being returned whatever else went wrong. Here the claim is an index entry this
+store maintains BY HAND, so every one of those reads RE-VERIFIES the row against
+the claim's own predicate — kind and normalized value and the use conjunct;
+`session_id`'s current hash; the key hash; the token hash; the challenge's
+purpose AND digest, the digests compared with
+`auth.ConstantTimeDigestEqual` — and answers `sdk.ErrNotFound` on a mismatch.
+Without it, a single claim-lifecycle slip is not a duplicate row months later, it
+is a credential resolving to the WRONG SUBJECT immediately.
+`claims_verification_integration_test.go` plants a mis-pointed claim on every
+rail and requires exactly that answer.
+
+**THE COMPLETENESS GATE (N7):** `claims_audit_integration_test.go` scripts a full
+lifecycle sweep through the ports — create, replace, promote, demote, retire,
+rotate, consume-grace, delete, deactivate, reactivate, resend, decline, challenge
+replacement, a wrong attempt, a purge, a token consumption, provision, adopt,
+revoke — then recomputes all seven predicates below from the RAW documents and
+diffs them against the claim collections in both directions: zero missing, zero
+stranded.
 
 ### 5.1 `identifier_claims` — the authentication claim
 
@@ -887,16 +921,20 @@ Go over the parent-scoped page fill (R4).
 `security_events`, 4 on `invitations`, 2 each on `users`, `service_accounts`,
 `api_keys` and `oauth_accounts`, 2 on `challenges`, 1 each on `user_identifiers`
 and `authentication_grants` — all at `COLLECTION` scope (every collection is
-top-level), plus **36 field overrides** (§8.4). It is no longer provisional:
-every entry is derived from §7 by the rules below, and `indexes_test.go` fails if
-the two disagree in either direction.
+top-level), plus **53 field overrides** (§8.4): 36 single-field DEPENDENCIES and,
+since N7, 17 EXEMPTIONS. It is no longer provisional: every entry is derived from
+§7 by the rules below, and `indexes_test.go` fails if the two disagree in either
+direction.
 
-The other ten of this store's twenty collections carry NO index entry at all,
-because they answer
-point reads only (§7.1): `user_passwords`, `oauth_states`, `contact_changes`, and
-the seven claim collections. That is the design paying off — a claim resolves an
-address by document id, so unbounded address text is never an indexed filter
-value (§4.2) and the manifest is far smaller than the SQL adapters' index list.
+The other ten of this store's twenty collections carry NO COMPOSITE at all,
+because they answer point reads only (§7.1): `user_passwords`, `oauth_states`,
+`contact_changes`, and the seven claim collections. (Two of them do appear in the
+field overrides — `user_passwords.hash` and `oauth_states.payload` are exempted
+from automatic single-field indexing, §8.4 — which is the opposite kind of entry:
+an index switched OFF, not one required.) That is the design paying off — a claim
+resolves an address by document id, so unbounded address text is never an indexed
+filter value (§4.2) and the manifest is far smaller than the SQL adapters' index
+list.
 
 **The count against the cap.** A database allows 200 composite indexes without
 billing enabled (1,000 with it), shared across every store a host mounts. This
@@ -905,13 +943,23 @@ pockets spends 60 and keeps **140** for its own collections.
 `TestIndexManifestParses` states both numbers (`indexManifestCount`,
 `compositeBudget`) so a change has to move a number a reviewer can see.
 
+**The SECOND cap, added at N7.** Field configurations have their own per-database
+limit of 200, and it is spent by field overrides rather than by composites. This
+store's 53 is its share, and `singleFieldConfigBudget` in `indexes_test.go`
+asserts the manifest stays under it for the same reason `compositeBudget` does:
+the limit is shared with every other store the host mounts, and discovering it at
+deployment time is discovering it late.
+
 The provisional N1 manifest carried 16 composites and no field overrides. N5
 ADDED 16 and REMOVED or RESPELLED none: **14** security-events entries (N1 shipped
 only the `user_id` subset in both directions; §7.3 had projected all eight
 subsets, and this is where the projection became the file), plus the
 `(user_id, provider)` oauth delete and the `(user_id, purpose)` challenge
-revocation that rule 2 turned from "no composite" into two. The 36 field
-overrides are entirely new.
+revocation that rule 2 turned from "no composite" into two. The 36 dependency
+field overrides were N5's; the 17 exemptions are N7's. N7 changed NO composite:
+the `session_id in [...]` chunk it added to the revocation cascade
+(`readGrantsForRevocation`) is a single-field `in`, which selects the same index
+as the `==` shape already in the matrix.
 
 ### 8.1 The derivation rules, with sources
 
@@ -1019,7 +1067,7 @@ cascade), `sessions` by `previous_refresh_token_hash` (the grace refresh lookup)
 `user_id`. Their dependencies are declared as field overrides instead (§8.4) —
 that is the point of the overrides, not an oversight.
 
-### 8.4 Field overrides — the single-field indexes this store depends on
+### 8.4 Field overrides — the single-field indexes this store depends on, and the ones it switches OFF
 
 A composite index is not the only index the store needs. The four shapes just
 listed derive none at all, and each is served by Firestore's AUTOMATIC
@@ -1034,15 +1082,17 @@ DECLARES (connector C5), so an undeclared dependency is an unchecked one.
 
 So the manifest declares them. The rule is uniform rather than minimal: **every
 field any matrix row filters or orders on**, on the collection that queries it —
-36 entries across the ten queried collections (`authentication_grants` 6,
+36 DEPENDENCY entries across the ten queried collections (`authentication_grants` 6,
 `security_events` 5, `user_identifiers`/`oauth_accounts`/`invitations`/
 `challenges` 4 each, `api_keys` 3, `users`/`service_accounts`/`sessions` 2 each).
 `TestCompositeFreeShapesDeclareTheirSingleFieldIndexes` enforces both directions:
-a composite-free shape whose field is undeclared fails, and a declared override
-no query uses fails.
+a composite-free shape whose field is undeclared fails, and a declared
+DEPENDENCY no query uses fails (an EXEMPTION is exempt from that half by
+construction — see below — and answers to `TestExemptedFieldsAreNeverQueried`
+instead).
 
-Each entry asks for ONE index — `ASCENDING` at `COLLECTION` scope. **Declaring an
-override REPLACES a field's default set** (ascending + descending +
+Each DEPENDENCY entry asks for ONE index — `ASCENDING` at `COLLECTION` scope.
+**Declaring an override REPLACES a field's default set** (ascending + descending +
 array-contains). That is deliberate, and the justification is per field class:
 
 | Field class | Fields | Why ASCENDING/COLLECTION alone is enough |
@@ -1051,12 +1101,64 @@ array-contains). That is deliberate, and the justification is per field class:
 | Booleans | `active` | Only ever `== true`, and only inside the `user_identifiers` composite. |
 | Timestamps | `created_at`, `linked_at`, `expires_at` | Every ordering that uses one is a two-field sort and therefore a composite (rule 3); no query sorts a timestamp alone, in either direction. The `>=`/`<`/`<=` windows ride the composite's leading field. |
 | Nullable timestamp | `consumed_at` | Only ever `== null`, inside the grant composite. Firestore indexes null as a value, so the IS_NULL filter is an ordinary equality. |
-| Arrays | *(none)* | No queried collection carries an array field. `security_events.details` and `invitations.metadata` are MAPS, and no query touches either — which also means their subfields keep their default automatic indexing, and a host that wants to stop paying for a large `details` bag may add its own override. |
+| Arrays | *(none)* | No queried collection carries an array field. `security_events.details` and `invitations.metadata` are JSON TEXT since N7 (§3.8), so they are one string each rather than a map whose every subfield was separately indexed — and both are exempted outright below. |
 
 The effect on a deployed database is fewer single-field indexes, not fewer served
 queries — and on an append-only rail like `security_events` that is a write-cost
 saving as well. A host that adds its OWN queries against these collections must
 extend the manifest rather than rely on the defaults.
+
+#### The 17 exemptions (N7) — "never indexed" made true
+
+Until N7 the "never indexed" row of §4.2 described an INTENTION. Firestore
+indexes every scalar field of every document by default — ascending, descending
+and array-contains — so the phrase was true of this store's queries and false of
+the database underneath it, and on this schema the gap is not cosmetic: the
+fields concerned are the store's SECRETS and its largest values. An index entry
+on a secret is a second copy of it in a structure with its own retention and its
+own export path, ordered so that a scan is a prefix walk over hashes and
+addresses; every write pays for every entry, on the highest-volume collections
+here; and past 1500 bytes the entry is a TRUNCATED copy (§4.2) rather than a
+correct one.
+
+So each of these carries a `fieldOverride` with an EMPTY index set, which is
+Firestore's only way to say "no single-field indexes for this field":
+
+| Collection | Exempted |
+|---|---|
+| `users` | `display_name` |
+| `user_passwords` | `hash` |
+| `user_identifiers` | `normalized_value` |
+| `sessions` | `refresh_token_hash`, `authentication_methods` |
+| `oauth_accounts` | `access_token`, `refresh_token` |
+| `oauth_states` | `payload` |
+| `service_accounts` | `name` |
+| `api_keys` | `name`, `key_prefix`, `key_hash` |
+| `security_events` | `details` |
+| `invitations` | `token_hash`, `metadata` |
+| `challenges` | `secret_digest` |
+| `authentication_grants` | `methods` |
+
+`previous_refresh_token_hash` is deliberately NOT among them: it is the one
+session hash a query filters on (the grace refresh lookup), which is exactly why
+`TestExemptedFieldsAreNeverQueried` checks the exempted set against every matrix
+row by name as well as by collection. An exemption is not a performance hint — it
+makes the query fail with `FAILED_PRECONDITION` in production while every
+emulator run stays green.
+
+The REMAINDER — every other stored field, which keeps the automatic indexes — is
+pinned by name in `defaultIndexedFields`, and
+`TestEveryStoredFieldIsClassified` derives each collection's field list from the
+document struct tags and requires the three sets to partition it. Adding a field
+to a document is therefore a decision about its indexing rather than a default
+nobody looked at.
+
+**Net effect on a deployed database:** the queried fields carry ONE index each
+instead of three, the seventeen above carry none, and every remaining field keeps
+Firestore's default set. A host that wants `details` or `metadata` indexed after
+all has to change this manifest rather than add a conflicting override —
+`IndexManifest.Merge` refuses two definitions of one field with different index
+sets (`ErrConflictingFieldOverride`) rather than silently picking a winner.
 
 ### 8.5 Export, probe, and what live still owes
 
@@ -1105,3 +1207,53 @@ against real operator filter usage.
 - **The transaction callback may run more than once.** Every attempt-local
   outcome is reset at the top of the callback; nothing outside Firestore happens
   inside one.
+
+The rest of this list was added at N7, when the reviews asked for each difference
+to be written down rather than left in a comment.
+
+- **Under EXHAUSTED contention, `sdk.ErrConflict` can escape a port whose
+  contract does not name it.** `retryContention` re-runs a losing transaction six
+  times with jittered backoff and then returns the mapped conflict. For
+  `Passwordless.Redeem` and `Challenges.ConsumeCode` that is a THIRD outcome
+  beside the port's own two: not the committed result and not the stable domain
+  rejection, but "the store could not decide, and nothing was written". The SQL
+  adapters can reach the same place (turso's busy retry, pgx's serialization
+  retry) and it is fail-closed either way — nothing is committed, and the caller
+  may re-run the whole workflow. The emulator's documented thirty-second lock
+  release makes it far likelier there than on a real database, which is why the
+  LIVE leg has to measure the real rate rather than infer it from an emulator run
+  that never hit it.
+- **A lost claim reports a NEUTRAL message.** Firestore evaluates every `Create`
+  precondition at commit, so a lost claim arrives as the vendor's AlreadyExists
+  naming the losing document — `…/identifier_claims/<64 hex>`, which is this
+  store's collection layout plus a SHA-256 fingerprint of the address, token or
+  digest the operation was about. `retryTransact` maps it to a store-typed error
+  that still matches `sdk.ErrAlreadyExists` and carries neither.
+- **`Consumed.ConsumedAt` is FULL precision**, not the microsecond truncation the
+  stored timestamps take: the row is being deleted, the value only travels back
+  to the caller, and turso returns `now.UTC()` there.
+- **An empty binding blob stores NULL**, exactly as the SQL adapters' `nullBlob`
+  does for `len(b) == 0`, so a `[]byte{}` and a `nil` binding are one stored fact
+  in all three families.
+- **The challenge revocation cascade SKIPS an empty `user_id`.**
+  `readChallengesForPurposes` reads nothing when the user id is blank, where the
+  SQL adapters' `WHERE user_id = ? AND purpose IN (…)` would match rows whose
+  `user_id` is the empty string — the magic-link rows the subject key exists for.
+  No caller in the pocket reaches it with a blank id (a reset and an adoption both
+  resolve a subject first), and matching blank-to-blank would let one anonymous
+  flow revoke every other anonymous flow's secrets. Recorded as a difference
+  rather than fixed, because the SQL behavior is the accident.
+- **`RetireIdentifier`'s `ReplacementPrimaryID` is not checked for ownership**, in
+  any family: the SQL adapters promote it with an unguarded `UPDATE … WHERE id =
+  ?`. This store follows them, and the divergence is what happens AFTERWARDS —
+  the promoted row becomes a candidate for the ACTING user's directory
+  projection, so a host that passes another user's identifier can publish that
+  address as the acting user's `primary_email`, where the SQL summary's join is
+  scoped by `user_id` and would show nothing. The projection is a projection, not
+  an authority (§6), and `user_identifiers` still says who owns the row.
+- **`Challenges.PurgeExpired` with a non-positive limit is ONE request.** The
+  whole purge is a single transaction bounded by the 10 MiB request size and the
+  270-second ceiling rather than by a write count, so a large backlog should be
+  swept with an explicit limit and repeated calls; an oversized purge fails
+  atomically, having deleted nothing. The SQL adapters bound the STATEMENT
+  instead, so this is a scheduling difference rather than a semantic one.

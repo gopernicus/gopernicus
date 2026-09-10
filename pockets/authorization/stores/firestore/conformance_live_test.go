@@ -6,10 +6,10 @@
 //
 //   - the emulator enforces NO composite index and keeps no index registry, so
 //     an emulator green says nothing about whether the shipped
-//     firestore.indexes.json actually covers this store's query matrix. Here the
-//     repositories are constructed WITHOUT WithoutIndexProbe, so every one of the
-//     ~130 fixtures re-runs the boot probe against the deployed manifest and a
-//     gap fails the suite at construction, naming the missing index (ruling R5);
+//     firestore.indexes.json actually covers this store's query matrix. Here ONE
+//     probe-enabled construction runs per package (probeLiveOnce), so a gap in
+//     the deployed manifest fails the suite at construction, naming the missing
+//     index (ruling R5);
 //   - the emulator holds transaction locks for up to thirty seconds and "does
 //     not implement all transaction behavior", so its contention results are
 //     timing, not serializability.
@@ -33,6 +33,7 @@
 package firestore
 
 import (
+	"sync"
 	"testing"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
@@ -56,27 +57,51 @@ var liveAllCollections = []string{
 	collectionMutations,
 }
 
+// liveProbeOnce memoizes the ONE probe-enabled construction this package makes,
+// and liveProbeErr carries its verdict to every root that asks for it.
+var (
+	liveProbeOnce sync.Once
+	liveProbeErr  error
+)
+
+// probeLiveOnce runs the boot index probe against the deployed manifest EXACTLY
+// ONCE per package, and fails whichever root asks after a failure.
+//
+// The probe is never skipped here — R5's claim is that the shipped manifest
+// covers this store's queries on a real database, and the only proof of that is
+// a probe passing against the deployed indexes. But one construction proves it
+// exactly as well as a hundred do, and a hundred cost a hundred Admin API
+// ListIndexes plus a hundred GetField per declared field override against a
+// shared project's Admin quota. So the proof is hoisted here and the fixtures
+// below pass WithoutIndexProbe() EXPLICITLY, which is a stated exemption rather
+// than a quiet one; TestIndexProbeAcceptsTheDeployedManifestLive asserts the
+// probe's verdict on its own besides.
+func probeLiveOnce(t *testing.T, db *firestoredb.DB) {
+	t.Helper()
+	liveProbeOnce.Do(func() {
+		_, liveProbeErr = Repositories(db)
+	})
+	if liveProbeErr != nil {
+		t.Fatalf("Repositories against %s with the index probe ENABLED (ruling R5 — a missing composite or an undeployed field override fails construction, naming it): %v", db.Target(), liveProbeErr)
+	}
+}
+
 // newLiveRepos returns the per-fixture factory over ONE live client: each call
 // clears this store's six collections and constructs the repository set afresh,
 // which is the "FRESH, empty Repositories per call" storetest requires. The
 // client is opened once, at the root, rather than per fixture — the suite calls
 // this factory well over a hundred times and a client per call would be a
-// hundred gRPC connections to prove nothing extra.
-//
-// The probe is deliberately NOT skipped: R5's claim is that the shipped manifest
-// covers this store's queries on a real database, and the only proof of that is
-// the probe passing against the deployed indexes. It costs one Admin API
-// ListIndexes per fixture; if a live run ever shows Admin quota pressure, hoist
-// the probe to a single root-level construction and say so HERE — do not quietly
-// pass WithoutIndexProbe, which would delete the proof.
+// hundred gRPC connections to prove nothing extra. The probe is hoisted for the
+// same reason (probeLiveOnce, above); the per-fixture constructions skip it.
 func newLiveRepos(t *testing.T, db *firestoredb.DB) func(*testing.T) authorization.Repositories {
 	t.Helper()
+	probeLiveOnce(t, db)
 	return func(t *testing.T) authorization.Repositories {
 		t.Helper()
 		firestoretest.ResetLive(t, db, liveAllCollections...)
-		repos, err := Repositories(db)
+		repos, err := Repositories(db, WithoutIndexProbe())
 		if err != nil {
-			t.Fatalf("Repositories against %s (the index probe runs here — a missing composite fails construction, naming it): %v", db.Target(), err)
+			t.Fatalf("Repositories against %s: %v", db.Target(), err)
 		}
 		return repos
 	}
@@ -84,9 +109,10 @@ func newLiveRepos(t *testing.T, db *firestoredb.DB) func(*testing.T) authorizati
 
 // TestConformanceLive is the full shared suite — every family, including the
 // v0.12.0 set reads and the mutation families — against a real Firestore
-// database with the manifest deployed. NOTHING here is skipped: R1's ambient
-// family (TestRunTransactionalLive) is the one allowed skip of this leg, and it
-// is a separate root so this one's verdict is unambiguous.
+// database with the manifest deployed and the package's one probe-enabled
+// construction behind it. NOTHING here is skipped: R1's ambient family
+// (TestRunTransactionalLive) is the one allowed skip of this leg, and it is a
+// separate root so this one's verdict is unambiguous.
 //
 // The client is opened at the ROOT on purpose. firestoretest.OpenLive skips (or,
 // when required, fails) the test it is handed, so opening it inside the factory

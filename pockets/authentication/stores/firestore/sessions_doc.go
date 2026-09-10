@@ -9,6 +9,7 @@ import (
 	"google.golang.org/api/iterator"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/domain/session"
 	"github.com/gopernicus/gopernicus/sdk"
 )
@@ -72,6 +73,13 @@ func sessionByPreviousHashQuery(db *firestoredb.DB, hash string) gcfs.Query {
 // otherwise share the empty string and a lookup for an empty hash could match an
 // arbitrary session — the cross-session bleed migration 0003 calls out, and the
 // port's own EmptyPreviousGuard case.
+//
+// Unlike newChallengeDoc and newInvitationDoc, it is called OUTSIDE the
+// transaction callback, and the difference is that IT MINTS NOTHING: the session
+// id and the refresh hash are the caller's, so a retried attempt would rebuild a
+// byte-identical document. The two that mint an id must run INSIDE the callback
+// so a retry mints a fresh one rather than reusing an id a rolled-back attempt
+// claimed (N-D5); this one is hoisted precisely because it cannot.
 func newSessionDoc(sess session.Session) (sessionDoc, error) {
 	methods, err := encodeMethods(sess.Authentication.Methods)
 	if err != nil {
@@ -166,6 +174,14 @@ func readSession(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, 
 // readSessionByRefreshClaim resolves a CURRENT refresh hash through its claim:
 // the claim document names the row, and the row is then read. Absence at either
 // hop is sdk.ErrNotFound.
+//
+// The row's own current hash is then re-verified against the presented one, in
+// constant time. The claim is an index entry this store maintains itself, and a
+// claim that out-lived or out-pointed its row would hand a refresh credential
+// the wrong SESSION — the store's most direct path from a claim-lifecycle slip
+// to an account takeover. The row is the authority; the claim is only the way
+// to it, and a mismatch is sdk.ErrNotFound exactly as SQL's
+// `WHERE refresh_token_hash = ?` returning no row is.
 func readSessionByRefreshClaim(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, hash string) (sessionDoc, error) {
 	snap, err := r.Get(ctx, refreshClaimRef(db, hash))
 	if err != nil {
@@ -175,7 +191,14 @@ func readSessionByRefreshClaim(ctx context.Context, db *firestoredb.DB, r firest
 	if err := snap.DataTo(&claim); err != nil {
 		return sessionDoc{}, fmt.Errorf("authentication firestore store: decoding %s: %s: %w", collectionRefreshHashClaims, err, sdk.ErrInvalidInput)
 	}
-	return readSession(ctx, db, r, claim.SessionID)
+	row, err := readSession(ctx, db, r, claim.SessionID)
+	if err != nil {
+		return sessionDoc{}, err
+	}
+	if !auth.ConstantTimeDigestEqual(hash, row.RefreshTokenHash) {
+		return sessionDoc{}, sdk.ErrNotFound
+	}
+	return row, nil
 }
 
 // readSessionsForUser reads every session of one user. It is the READ half the

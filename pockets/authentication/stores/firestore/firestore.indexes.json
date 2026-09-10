@@ -612,6 +612,21 @@
     },
     {
       "collectionGroup": "api_keys",
+      "fieldPath": "key_hash",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "api_keys",
+      "fieldPath": "key_prefix",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "api_keys",
+      "fieldPath": "name",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "api_keys",
       "fieldPath": "service_account_id",
       "indexes": [
         {
@@ -659,6 +674,11 @@
           "queryScope": "COLLECTION"
         }
       ]
+    },
+    {
+      "collectionGroup": "authentication_grants",
+      "fieldPath": "methods",
+      "indexes": []
     },
     {
       "collectionGroup": "authentication_grants",
@@ -712,6 +732,11 @@
     },
     {
       "collectionGroup": "challenges",
+      "fieldPath": "secret_digest",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "challenges",
       "fieldPath": "user_id",
       "indexes": [
         {
@@ -742,6 +767,11 @@
     },
     {
       "collectionGroup": "invitations",
+      "fieldPath": "metadata",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "invitations",
       "fieldPath": "resource_key",
       "indexes": [
         {
@@ -759,6 +789,16 @@
           "queryScope": "COLLECTION"
         }
       ]
+    },
+    {
+      "collectionGroup": "invitations",
+      "fieldPath": "token_hash",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "oauth_accounts",
+      "fieldPath": "access_token",
+      "indexes": []
     },
     {
       "collectionGroup": "oauth_accounts",
@@ -792,6 +832,11 @@
     },
     {
       "collectionGroup": "oauth_accounts",
+      "fieldPath": "refresh_token",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "oauth_accounts",
       "fieldPath": "user_id",
       "indexes": [
         {
@@ -799,6 +844,11 @@
           "queryScope": "COLLECTION"
         }
       ]
+    },
+    {
+      "collectionGroup": "oauth_states",
+      "fieldPath": "payload",
+      "indexes": []
     },
     {
       "collectionGroup": "security_events",
@@ -809,6 +859,11 @@
           "queryScope": "COLLECTION"
         }
       ]
+    },
+    {
+      "collectionGroup": "security_events",
+      "fieldPath": "details",
+      "indexes": []
     },
     {
       "collectionGroup": "security_events",
@@ -871,6 +926,16 @@
       ]
     },
     {
+      "collectionGroup": "service_accounts",
+      "fieldPath": "name",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "sessions",
+      "fieldPath": "authentication_methods",
+      "indexes": []
+    },
+    {
       "collectionGroup": "sessions",
       "fieldPath": "previous_refresh_token_hash",
       "indexes": [
@@ -879,6 +944,11 @@
           "queryScope": "COLLECTION"
         }
       ]
+    },
+    {
+      "collectionGroup": "sessions",
+      "fieldPath": "refresh_token_hash",
+      "indexes": []
     },
     {
       "collectionGroup": "sessions",
@@ -922,6 +992,11 @@
     },
     {
       "collectionGroup": "user_identifiers",
+      "fieldPath": "normalized_value",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "user_identifiers",
       "fieldPath": "user_id",
       "indexes": [
         {
@@ -929,6 +1004,11 @@
           "queryScope": "COLLECTION"
         }
       ]
+    },
+    {
+      "collectionGroup": "user_passwords",
+      "fieldPath": "hash",
+      "indexes": []
     },
     {
       "collectionGroup": "users",
@@ -939,6 +1019,11 @@
           "queryScope": "COLLECTION"
         }
       ]
+    },
+    {
+      "collectionGroup": "users",
+      "fieldPath": "display_name",
+      "indexes": []
     },
     {
       "collectionGroup": "users",

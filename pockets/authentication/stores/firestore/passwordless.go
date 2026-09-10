@@ -362,6 +362,19 @@ func (c redemptionWrites) login(ctx context.Context, db *firestoredb.DB, w fires
 func (c redemptionWrites) adopt(ctx context.Context, db *firestoredb.DB, w firestoredb.Writer, plan *claimPlan,
 	in passwordless.RedeemInput, now time.Time) (passwordless.RedeemResult, error) {
 
+	// The proposed session may not be one of the sessions this adoption is
+	// revoking. It is a caller mistake rather than a race — a host that reused
+	// a live session id for the new session — but it would reach Firestore as a
+	// Delete and a Create for ONE document in one transaction, whose committed
+	// outcome depends on write ordering rather than on either intent. Worse, on
+	// the ordering that keeps the row, the anti-takeover guarantee silently
+	// fails: a squatter's session would survive the adoption that exists to
+	// revoke it. The port's answer for every stable bad outcome is one
+	// sentinel, and nothing is written.
+	if revokes(c.live, in.Session.ID) {
+		return passwordless.RedeemResult{}, passwordless.ErrRedemption
+	}
+
 	next := c.identifier
 	next.VerifiedAt = firestoredb.NullTime(now)
 	next.LoginEnabled = in.AdoptedIdentifierUses.Login
@@ -484,6 +497,17 @@ func (c redemptionWrites) provision(ctx context.Context, db *firestoredb.DB, w f
 		Session:     sess,
 		Provisioned: true,
 	}, nil
+}
+
+// revokes reports whether sessionID is one of the sessions rows names. It is a
+// linear scan on purpose: the revocation set is one subject's live sessions.
+func revokes(rows []sessionDoc, sessionID string) bool {
+	for _, row := range rows {
+		if row.ID == sessionID {
+			return true
+		}
+	}
+	return false
 }
 
 // insertRedemptionSession writes the proposed session inside the redemption

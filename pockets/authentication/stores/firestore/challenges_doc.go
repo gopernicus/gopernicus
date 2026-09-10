@@ -10,6 +10,7 @@ import (
 	"google.golang.org/api/iterator"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/domain/challenge"
 	"github.com/gopernicus/gopernicus/sdk"
 )
@@ -130,8 +131,14 @@ func newChallengeDoc(c challenge.Challenge) challengeDoc {
 
 // nullBlob maps an absent binding blob to Firestore's null and a present one to
 // its opaque text — an already-digested validator, never a secret.
+//
+// An EMPTY non-nil blob is null too, which is the turso parity call: SQL's
+// nullBlob stores NULL for len(b) == 0, so a []byte{} written there and read
+// back is nil. Distinguishing the two here would make one family's round trip
+// disagree with the other two on a value no port produces, and ConsumeCode's
+// binding comparison reads a stored null as "" either way.
 func nullBlob(b []byte) any {
-	if b == nil {
+	if len(b) == 0 {
 		return nil
 	}
 	return string(b)
@@ -233,11 +240,26 @@ func readChallengeByDigestClaim(ctx context.Context, db *firestoredb.DB, r fires
 	if err := snap.DataTo(&claim); err != nil {
 		return challengeDoc{}, fmt.Errorf("authentication firestore store: decoding %s: %s: %w", collectionChallengeDigests, err, sdk.ErrInvalidInput)
 	}
-	row, err := r.Get(ctx, db.Doc(collectionChallenges, claim.DocID))
+	snapshot, err := r.Get(ctx, db.Doc(collectionChallenges, claim.DocID))
 	if err != nil {
 		return challengeDoc{}, err
 	}
-	return decodeChallenge(row)
+	row, err := decodeChallenge(snapshot)
+	if err != nil {
+		return challengeDoc{}, err
+	}
+	// The row is re-verified against BOTH columns of
+	// idx_challenges_purpose_secret_digest before it is returned, the digest in
+	// constant time because it is attacker-supplied. The claim is an index entry
+	// this store maintains itself: a claim that out-lived its row, or that a
+	// replacement re-pointed, would otherwise let one purpose's token consume
+	// another purpose's challenge — a magic link redeeming a password reset. The
+	// row is the authority, and a mismatch is sdk.ErrNotFound, exactly as SQL's
+	// `WHERE purpose = ? AND secret_digest = ?` returning no row is.
+	if row.Purpose != purpose || !auth.ConstantTimeDigestEqual(presentedDigest, row.SecretDigest) {
+		return challengeDoc{}, sdk.ErrNotFound
+	}
+	return row, nil
 }
 
 // readExpiredChallenges reads the purge candidates INSIDE the caller's
@@ -348,6 +370,11 @@ func (d challengeDoc) consumed(now time.Time) challenge.Consumed {
 		Purpose:        d.Purpose,
 		Context:        d.binding(),
 		ProtectorKeyID: d.ProtectorKeyID,
-		ConsumedAt:     firestoredb.TruncateTime(now),
+		// FULL precision, not the microsecond truncation the STORED timestamps
+		// take: this value is never written — the row is being deleted — and
+		// the turso adapter returns now.UTC() here. Truncating it would make
+		// the three families disagree on a field that only ever travels back to
+		// the caller.
+		ConsumedAt: now.UTC(),
 	}
 }

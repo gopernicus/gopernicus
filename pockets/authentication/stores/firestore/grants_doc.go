@@ -35,6 +35,13 @@ import (
 // revoke.
 
 // The grant field paths the queries filter and order on.
+// sessionChunkSize bounds one `session_id in [...]` disjunction, the same cap
+// purposeChunkSize states for challenges: Firestore expands a query to
+// disjunctive normal form and refuses more than 30 disjuncts, and the Go client
+// pre-validates none of it — an over-long list arrives as the server's
+// InvalidArgument.
+const sessionChunkSize = 30
+
 const (
 	fieldGrantConsumeKey = "consume_key"
 	fieldGrantConsumedAt = "consumed_at"
@@ -67,6 +74,18 @@ func unspentGrantQuery(db *firestoredb.DB, consumeKey string) gcfs.Query {
 // invalidates every grant bound to it, spent or not.
 func grantsForSessionQuery(db *firestoredb.DB, sessionID string) gcfs.Query {
 	return db.Collection(collectionAuthGrants).Where(fieldGrantSessionID, "==", sessionID)
+}
+
+// grantsForSessionsQuery is the same cascade for a WHOLE revocation set, in one
+// query per chunk instead of one per session — the document reading of the SQL
+// adapters' `session_id IN (…)`. `in` is an equality for index selection, so it
+// needs no composite (indexes_test.go's matrix derives that and pins it).
+func grantsForSessionsQuery(db *firestoredb.DB, sessionIDs []string) gcfs.Query {
+	values := make([]any, 0, len(sessionIDs))
+	for _, id := range sessionIDs {
+		values = append(values, id)
+	}
+	return db.Collection(collectionAuthGrants).Where(fieldGrantSessionID, "in", values)
 }
 
 // grantsForUserQuery is the user revocation cascade's other half: a lifecycle
@@ -163,6 +182,14 @@ func readGrantsForUser(ctx context.Context, db *firestoredb.DB, r firestoredb.Re
 // two Delete writes for one document in one commit is not a stronger delete, it
 // is an ambiguous transaction. The reads all happen here so the caller can
 // finish its read phase before its first write.
+//
+// The session half is CHUNKED `session_id in [...]`, not one query per session.
+// That matters twice over, and both times because this runs inside a
+// transaction: every read is a round trip the whole revocation waits on, and —
+// the load-bearing half — a user with hundreds of live sessions would otherwise
+// put hundreds of QUERIES in one transaction's read set, which is how a
+// lifecycle transition starts timing out against the 270-second transaction
+// ceiling on exactly the accounts most worth revoking.
 func readGrantsForRevocation(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, userID string, sessionIDs []string) ([]authGrantDoc, error) {
 	owned, err := readGrantsForUser(ctx, db, r, userID)
 	if err != nil {
@@ -170,23 +197,22 @@ func readGrantsForRevocation(ctx context.Context, db *firestoredb.DB, r firestor
 	}
 	seen := make(map[string]bool, len(owned))
 	out := make([]authGrantDoc, 0, len(owned))
-	for _, row := range owned {
-		if !seen[row.ID] {
-			seen[row.ID] = true
-			out = append(out, row)
-		}
-	}
-	for _, sessionID := range sessionIDs {
-		bound, err := readGrantsForSession(ctx, db, r, sessionID)
-		if err != nil {
-			return nil, err
-		}
-		for _, row := range bound {
+	collect := func(rows []authGrantDoc) {
+		for _, row := range rows {
 			if !seen[row.ID] {
 				seen[row.ID] = true
 				out = append(out, row)
 			}
 		}
+	}
+	collect(owned)
+	for start := 0; start < len(sessionIDs); start += sessionChunkSize {
+		end := min(start+sessionChunkSize, len(sessionIDs))
+		bound, err := queryAuthGrants(ctx, r, grantsForSessionsQuery(db, sessionIDs[start:end]))
+		if err != nil {
+			return nil, err
+		}
+		collect(bound)
 	}
 	return out, nil
 }

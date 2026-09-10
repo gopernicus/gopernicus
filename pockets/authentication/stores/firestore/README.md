@@ -94,22 +94,49 @@ if err := authfirestore.ExportIndexes("firestore.indexes.json"); err != nil { ..
 ```
 
 **Deploy.** The host deploys its merged manifest, exactly as it applies
-migrations — pre-boot, never by the framework:
+migrations — pre-boot, never by the framework. The manifest has **two halves and
+both must be deployed**: the `indexes` (composites) and the `fieldOverrides` (the
+single-field configuration the composite-free shapes read through). Deploying
+only the composites leaves the store's boot probe failing on a field the manifest
+declares — which reads like a store bug and is an undeployed manifest.
 
 ```sh
-firebase deploy --only firestore:indexes          # with a firebase.json
-# or, per composite, without the Firebase CLI:
+firebase deploy --only firestore:indexes          # with a firebase.json, both halves
+
+# or, without the Firebase CLI — one call per composite:
 gcloud firestore indexes composite create \
   --collection-group=security_events \
   --database="$DATABASE" --project="$PROJECT" \
   --field-config=field-path=user_id,order=ascending \
   --field-config=field-path=created_at,order=descending \
   --field-config=field-path=id,order=descending
+
+# and one call per field override. `--index` OVERWRITES that field's index set
+# and deletes anything it omits, so pass every index the manifest declares for
+# it; an override whose "indexes" array is EMPTY is an exemption instead:
+gcloud firestore indexes fields update created_at \
+  --collection-group=security_events \
+  --database="$DATABASE" --project="$PROJECT" \
+  --index=order=ascending
+gcloud firestore indexes fields update <field> \
+  --collection-group=<collection> \
+  --database="$DATABASE" --project="$PROJECT" \
+  --disable-indexes
 ```
 
-`.github/workflows/live-stores.yml` does the gcloud form in a `jq` loop over this
-module's manifest and then **waits for every index to be READY** — a query
-against a still-building index fails the same way a missing one does.
+`.github/workflows/live-stores.yml` does the gcloud form in `jq` loops over this
+module's manifest — composites **and** field overrides — and then waits for
+**both**: every composite READY (a query against a still-building index fails the
+same way a missing one does) and every declared field configuration applied and
+not `CREATING`. The two waits are separate because `indexes composite list` never
+returns single-field indexes; that is what makes the live leg evidence for the
+manifest as a WHOLE rather than for its composites alone. On a **pinned**
+(re-used) live database nothing prunes what a manifest no longer declares —
+sweep stale entries by hand with `gcloud firestore indexes composite list
+--database=<pin>` / `indexes composite delete`, and `gcloud firestore indexes
+fields list --database=<pin>` / `indexes fields update <field>
+--collection-group=<cg> --clear-exemption`, or they keep consuming the two caps
+below.
 
 **Probe.** `Repositories` checks the manifest against the live database through
 the Firestore Admin API at construction time and REFUSES to construct when an
@@ -118,22 +145,61 @@ tuple, and the console page. That is this store's version of the SQL siblings'
 table probe: **fail at wiring time, name the missing thing** — because the
 alternative is a `FAILED_PRECONDITION` on a production login. The probe is not
 retried and not degraded; it needs one IAM permission,
-`datastore.indexes.list`. A host that cannot grant even that passes
-`WithoutIndexProbe()` and takes ownership of deploying and verifying the manifest
-itself.
+`datastore.indexes.list`.
+
+**Who passes `WithoutIndexProbe()`** — the same three callers `RELEASING.md`
+names, and no fourth:
+
+1. **the emulator**, which keeps no index registry, so the probe refuses there
+   outright (this store's emulator suite passes it);
+2. **a credential that cannot be granted `datastore.indexes.list`** — a runtime
+   service account a host will not widen;
+3. **a deployment that must boot while the Admin API is degraded**, because the
+   probe is a HARD BOOT DEPENDENCY on an API the request path never touches.
+
+All three take ownership of deploying and verifying the manifest themselves.
+
+**What the probe costs at boot.** One Admin `ListIndexes` for the composites plus
+one `GetField` per declared field override with a non-empty index list (an
+override that declares an empty list issues no RPC). Both pockets mounted in one
+host is therefore roughly **2 + N Admin RPCs before the first request**, under
+**two** independent `firestoredb.ProbeTimeout` budgets of 30 s — the constructors
+take no context, so each store bounds its own probe. For a host that would rather
+pay that at DEPLOY time than at boot, the preflight shape is:
+
+```go
+// deploy step / preflight job — not the request path
+if err := firestoredb.ProbeIndexesFS(ctx, db, authfirestore.IndexesFS, authfirestore.IndexesFile); err != nil { ... }
+
+// boot
+repos, err := authfirestore.Repositories(db, authfirestore.WithoutIndexProbe())
+```
+
+That keeps the manifest checked against the real database and takes the Admin API
+out of the boot path; what it gives up is the guarantee that the database a
+process actually connects to is the one that was checked.
 
 **The emulator keeps no index registry and enforces no composite index**, so the
 probe refuses outright there and every emulator query runs index-free. An
 emulator-green suite is therefore *no evidence at all* about index coverage; that
 is why the manifest's proof is a live run (see "Testing").
 
-The entry **count**, the field overrides, and the per-query derivation are in
+The entry **counts**, the field overrides, and the per-query derivation are in
 [`SCHEMA.md`](SCHEMA.md) §8 ("Index manifest") — the manifest is this store's
 contract with hosts the way `migrations/0001`–`0016` are for the SQL siblings,
-and the security-events filter matrix is its largest single contributor. Firestore
-allows 200 composite indexes per database without billing enabled, shared with
-whatever the host and any other pocket deploy; `SCHEMA.md` states the number this
-module asks for.
+and the security-events filter matrix is its largest single contributor.
+
+**Two caps, not one**, and this manifest spends both. Firestore allows **200
+composite indexes per database** without billing enabled (1000 with) and,
+separately, **200 single-field configurations per database** without billing
+(1000 with) — the budget every `fieldOverrides` entry spends. That second budget
+is **shared with TTL policies**: an indexing exemption and a TTL policy on the
+same field count as ONE configuration, so a TTL policy on any *other* field costs
+another one. Both caps are per DATABASE, so this module is only part of the bill —
+the host's own collections, any other pocket's manifest (the authorization store
+ships one too), and every TTL policy count against the same two numbers.
+`SCHEMA.md` §8 states the exact numbers this module asks for; they live there and
+not here so the count cannot drift in two places.
 
 ## Document model
 
@@ -170,8 +236,52 @@ active primary email remains. A `users` document is therefore never written from
 a whole-document `Set` built out of a domain `user.User` — which has no email
 fields and would silently erase it.
 
+**A claim is a PATH to the answer; the row is the answer.** Six read rails resolve
+a secret through a claim document — `Identifiers.GetLogin`/`GetRecovery`,
+`Sessions.GetByRefreshHash`, `APIKeys.GetByHash`, `Invitations.GetByTokenHash`,
+and the `(purpose, digest)` rail behind `Challenges.ConsumeToken`,
+`PasswordResets.Redeem` and `Passwordless.Redeem`. Each one RE-VERIFIES the row
+it reached against the claim's own predicate (the digests compared in constant
+time) and answers `sdk.ErrNotFound` on a mismatch. In SQL that predicate is part
+of the query and cannot be skipped; here the claim is an index this store
+maintains by hand, and without the re-check a single lifecycle slip would not be
+a duplicate row months later — it would be a credential resolving to the wrong
+subject immediately.
+
+**The two open bags are JSON TEXT, not Firestore maps.**
+`SecurityEvents.Details` and `Invitations.Metadata` are stored with the SQL
+adapters' own `'{}'`-for-empty JSON encoding, so every host key round-trips as
+itself. Firestore map keys are FIELD PATHS: `""` is rejected, `"a.b"` becomes a
+nested field, `"__x__"` is reserved. A native map would have quietly restructured
+a header name or a form field, or refused a write the other two families accept.
+The side effect is one fewer divergence, not one more: a stored number comes back
+as JSON's `float64` everywhere.
+
 Field by field, claim by claim, with every port method's read set and write set:
 [`SCHEMA.md`](SCHEMA.md) §3–§7.
+
+### Those twenty collection ids are RESERVED by this store
+
+This store owns the twenty ids above outright. It creates, queries, resets and
+sweeps them, and its claim collections encode uniqueness that only its own writes
+maintain — so a host document that happens to live under one of those ids is not
+"extra data", it is a row this store believes it owns.
+
+It reaches further than the top level, because a **field override is
+database-wide for a collection-group id, at any depth**. A `fieldOverrides` entry
+naming `users` configures the single-field indexing of `users` *everywhere in the
+database*: a host's own `orgs/{id}/users` subcollection inherits this store's
+index configuration for `created_at`, `id`, `primary_email` and the rest, and an
+entry with an empty `indexes` array would DISABLE indexing on that host
+subcollection's field. The manifest cannot scope it more narrowly; that is how
+Firestore's field configuration works, not a choice this store made.
+
+**So: this store expects a database that does not share those twenty names** —
+neither as a top-level collection nor as a subcollection id anywhere. Give it its
+own database (the cheapest answer, and what CI does per run), or rename the
+host's colliding collections before wiring it up. There is no prefix option; the
+collection ids deliberately mirror the SQL table names so the two documentation
+trees and the operator vocabulary stay shared.
 
 ## Family differences a SQL host is choosing
 
@@ -238,6 +348,36 @@ accident. Each cites the `SCHEMA.md` section that derives it.
   one leaves NOTHING written, and the port says every stable bad outcome is one
   generic sentinel. Letting `sdk.ErrAlreadyExists` escape would also fail the
   port's own concurrency contract.
+- **Under EXHAUSTED contention, `sdk.ErrConflict` can escape `Redeem` and
+  `ConsumeCode`** (§9). A losing transaction is re-run six times with jittered
+  backoff and then reported as a conflict: not the committed result and not the
+  stable domain rejection, but "the store could not decide, and nothing was
+  written". The SQL adapters can reach the same place through their own busy /
+  serialization retries, and it is fail-closed in every family — the caller may
+  re-run the workflow. The emulator's documented thirty-second lock release makes
+  it far likelier there than on a real database, so the **live leg is what
+  measures the real rate**; an emulator run that never hit it proves nothing
+  about production.
+- **A lost claim reports a NEUTRAL message** (§9). The vendor's AlreadyExists
+  names the losing document — this store's collection layout plus a SHA-256
+  fingerprint of the address, token or digest the operation was about. The error
+  a caller sees still matches `sdk.ErrAlreadyExists` and carries neither.
+- **The challenge revocation cascade skips a blank `user_id`** (§9), where the SQL
+  adapters' `WHERE user_id = ?` would match rows whose `user_id` is the empty
+  string — the anonymous magic-link rows. No caller in the pocket reaches it with
+  a blank id, and matching blank-to-blank would let one anonymous flow revoke
+  every other anonymous flow's secrets.
+- **`RetireIdentifier` does not check that `ReplacementPrimaryID` belongs to the
+  user** — no family does; the SQL promotion is an unguarded `UPDATE … WHERE id =
+  ?`. What differs is the consequence: the promoted row feeds the ACTING user's
+  persisted directory projection, so a host that passes another user's identifier
+  can publish that address as this user's `primary_email`, where the SQL
+  summary's `user_id`-scoped join would show nothing (§9).
+- **`PurgeExpired` with a non-positive limit is ONE request** (§9). The whole
+  purge is a single transaction bounded by the 10 MiB request size and the
+  270-second ceiling, not by a write count, so sweep a large backlog with an
+  explicit limit and repeated calls; an oversized purge fails atomically, having
+  deleted nothing.
 
 ## TTL is operational only — never a substitute for `PurgeExpired`
 
@@ -263,6 +403,25 @@ here.
   `security_events` beyond a retention window if the host wants one. Audit
   ownership against `SCHEMA.md` §5 before adding a policy, and add it to the
   HOST's manifest: this module ships none.
+- **A TTL policy is also a single-field configuration**, and those are capped at
+  200 per database without billing enabled (1000 with) — the SAME budget this
+  module's `fieldOverrides` spend (an exemption and a TTL policy on the *same*
+  field count as one; on different fields they cost one each). A host adding TTL
+  policies is spending down the index-configuration budget, not a separate one.
+  See "Indexes are this store's migrations" above and `SCHEMA.md` §8 for what
+  this module already asks for.
+
+**An unbounded `PurgeExpired` is ONE request.** `Challenges.PurgeExpired(ctx,
+before, limit)` treats a non-positive `limit` as unbounded (the port's contract),
+and here the whole purge — the candidate read, every row deletion and every claim
+deletion — is a SINGLE Firestore transaction, bounded by the 10 MiB maximum
+request size and the 270-second transaction ceiling rather than by a write count.
+An oversized purge is refused by the server ATOMICALLY: nothing is deleted, so it
+is safe and makes no progress. **Sweeping a backlog that accumulated while the
+job was off, pass a limit and call again** — a few thousand at a time. The SQL
+adapters bound their *statement* instead of their transaction, so this is a
+scheduling difference between the families, not a semantic one (`SCHEMA.md` §9);
+the steady-state scheduled purge is unaffected.
 
 ## Search is a parent-scoped postfilter (ruling R4)
 
@@ -323,6 +482,13 @@ revocation set**, not row count.
   splits an operation — a split is a partially applied revocation, the opposite
   of what these methods promise. An oversized request is refused by the SERVER,
   **atomically**: nothing is written.
+- **The Admin API is a BOOT cost, not a per-request one.** The index probe issues
+  one `ListIndexes` plus one `GetField` per declared field override with a
+  non-empty index list, once per `Repositories` call, under a 30 s
+  `firestoredb.ProbeTimeout`; nothing on the request path touches the Admin API.
+  The live suite therefore constructs with the probe ONCE per package rather than
+  once per fixture — see "Indexes are this store's migrations" for the
+  deploy-time preflight a host can use instead.
 - **`Transact`'s callback may run more than once.** That is the connector's
   contract and it reaches through here: a retried attempt re-runs the whole read
   phase and resets every attempt-local result. Exhaustion is `sdk.ErrConflict` —
@@ -384,17 +550,22 @@ produce commit-contention exhaustion; it does not enforce all limits.
 `ResetLive(t, db, <this store's twenty collections>)`; a live database is never
 emptied wholesale, and a collection missing from that list would leak state
 between fixtures — a leaked CLAIM most of all, because it reads as a
-duplicate-detection bug rather than as leftover data. The live conformance
-entrypoint constructs **with the probe enabled**: that the shipped manifest
-actually serves this store's queries is precisely what only a live run can show.
-Unconfigured, every root skips loudly; `FIRESTORE_LIVE_REQUIRED=1` turns those
-skips into the release-gate failure.
+duplicate-detection bug rather than as leftover data. The live leg makes **one
+probe-enabled construction per package** (`probeLiveOnce`) and every per-fixture
+construction then passes `WithoutIndexProbe()` explicitly: that the shipped
+manifest actually serves this store's queries is precisely what only a live run
+can show, and one construction proves it exactly as well as two hundred do —
+while two hundred would spend two hundred `ListIndexes` plus two hundred
+`GetField` per declared override against a shared project's Admin quota.
+`TestIndexProbeAcceptsTheDeployedManifestLive` asserts the probe's verdict on its
+own besides. Unconfigured, every root skips loudly;
+`FIRESTORE_LIVE_REQUIRED=1` turns those skips into the release-gate failure.
 
 Live roots today, and what each is for:
 
 | root | why it is live |
 |---|---|
-| `TestConformanceLive` | the FULL shared suite against real Firestore with the manifest deployed and the boot probe running on every fixture |
+| `TestConformanceLive` | the FULL shared suite against real Firestore with the manifest deployed and the package's one probe-enabled construction behind it |
 | `TestAmbientTransactionRefusedLive` | R1's refusal, all fifty-eight methods, asserted against production's transaction behavior rather than the emulator's |
 | `TestIndexProbeAcceptsTheDeployedManifestLive` | the probe's verdict against a real Admin API index registry |
 | `TestQueryMatrixExecutesAgainstTheDeployedIndexesLive` | every query shape in [`SCHEMA.md`](SCHEMA.md) §7 executed against the deployed indexes — the manifest's actual coverage proof |

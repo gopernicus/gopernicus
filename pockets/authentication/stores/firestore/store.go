@@ -3,7 +3,6 @@ package firestore
 import (
 	"context"
 	"embed"
-	"errors"
 	"fmt"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
@@ -42,12 +41,6 @@ const IndexesFile = "firestore.indexes.json"
 // fails instead. It wraps [sdk.ErrInvalidInput]: the wiring is wrong, and no
 // retry fixes it.
 var ErrAmbientTransactionUnsupported = fmt.Errorf("authentication firestore store: this store does not join an ambient firestore transaction — call it outside Transact (firestore-stores ruling R1): %w", sdk.ErrInvalidInput)
-
-// errNotImplemented is the N1 skeleton's answer from a port method whose body
-// lands in N2–N4. It deliberately wraps NO sdk sentinel: an unclassified error
-// surfaces as a 500 and fails every conformance case that expects a domain
-// outcome, so a half-built store can never be mistaken for a passing one.
-var errNotImplemented = errors.New("authentication firestore store: port method not implemented yet (firestore-stores task N1 skeleton — N2–N4 fill the bodies)")
 
 // Option configures the store set at construction.
 type Option func(*config)

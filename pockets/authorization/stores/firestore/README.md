@@ -96,22 +96,44 @@ if err := authzfirestore.ExportIndexes("firestore.indexes.json"); err != nil { .
 ```
 
 **Deploy.** The host deploys its merged manifest, exactly as it applies
-migrations — pre-boot, never by the framework:
+migrations — pre-boot, never by the framework. The manifest has **two halves and
+both must be deployed**: the `indexes` (composites) and the `fieldOverrides` (the
+single-field indexes the composite-free shapes read through). Deploying only the
+composites leaves the boot probe failing on a field the manifest declares — which
+reads like a store bug and is an undeployed manifest.
 
 ```sh
-firebase deploy --only firestore:indexes          # with a firebase.json
-# or, per composite, without the Firebase CLI:
+firebase deploy --only firestore:indexes          # with a firebase.json, both halves
+
+# or, without the Firebase CLI — one call per composite:
 gcloud firestore indexes composite create \
   --collection-group=iam_relationships \
   --database="$DATABASE" --project="$PROJECT" \
   --field-config=field-path=resource_key,order=ascending \
   --field-config=field-path=relation,order=ascending \
   --field-config=field-path=subject_key,order=ascending
+
+# and one call per field override. `--index` OVERWRITES that field's index set
+# and deletes anything it omits, so pass every index the manifest declares for it:
+gcloud firestore indexes fields update resource_key \
+  --collection-group=iam_relationships \
+  --database="$DATABASE" --project="$PROJECT" \
+  --index=order=ascending
 ```
 
-`.github/workflows/live-stores.yml` does the gcloud form in a `jq` loop over the
-manifest and then **waits for every index to be READY** — a query against a
-still-building index fails the same way a missing one does.
+`.github/workflows/live-stores.yml` does the gcloud form in `jq` loops over the
+manifest — composites **and** field overrides — and then waits for **both**:
+every composite READY (a query against a still-building index fails the same way
+a missing one does) and every declared field configuration applied and not
+`CREATING`. The two waits are separate because `indexes composite list` never
+returns single-field indexes; that is what makes the live leg evidence for the
+manifest as a WHOLE. On a **pinned** (re-used) live database nothing prunes what
+a manifest no longer declares — sweep stale entries by hand with `gcloud
+firestore indexes composite list --database=<pin>` / `indexes composite delete`,
+and `gcloud firestore indexes fields list --database=<pin>` / `indexes fields
+update <field> --collection-group=<cg> --clear-exemption`, or they keep consuming
+the per-database caps (200 composite indexes and 200 single-field configurations
+without billing enabled, 1000 each with; the second is shared with TTL policies).
 
 **Probe.** `Repositories`/`RelationshipRepository` check the manifest against the
 live database through the Firestore Admin API at construction time and REFUSE to
@@ -120,9 +142,39 @@ group, the exact field tuple, and the console page. That is this store's version
 of the SQL siblings' table probe: **fail at wiring time, name the missing
 thing** — because the alternative is a `FAILED_PRECONDITION` on a production
 request. The probe is not retried and not degraded; it needs one IAM permission,
-`datastore.indexes.list`. A host that cannot grant even that passes
-`WithoutIndexProbe()` and takes ownership of deploying and verifying the
-manifest itself.
+`datastore.indexes.list`.
+
+**Who passes `WithoutIndexProbe()`** — the same three callers `RELEASING.md`
+names, and no fourth:
+
+1. **the emulator**, which keeps no index registry, so the probe refuses there
+   outright (this store's emulator suite passes it);
+2. **a credential that cannot be granted `datastore.indexes.list`** — a runtime
+   service account a host will not widen;
+3. **a deployment that must boot while the Admin API is degraded**, because the
+   probe is a HARD BOOT DEPENDENCY on an API the request path never touches.
+
+All three take ownership of deploying and verifying the manifest themselves.
+
+**What the probe costs at boot.** One Admin `ListIndexes` for the composites plus
+one `GetField` per declared field override with a non-empty index list (an
+override declaring an empty list issues no RPC). Both pockets mounted in one host
+is therefore roughly **2 + N Admin RPCs before the first request**, under **two**
+independent `firestoredb.ProbeTimeout` budgets of 30 s — the constructors take no
+context, so each store bounds its own probe. A host that would rather pay that at
+DEPLOY time than at boot can:
+
+```go
+// deploy step / preflight job — not the request path
+if err := firestoredb.ProbeIndexesFS(ctx, db, authzfirestore.IndexesFS, authzfirestore.IndexesFile); err != nil { ... }
+
+// boot
+repos, err := authzfirestore.Repositories(db, authzfirestore.WithoutIndexProbe())
+```
+
+That keeps the manifest checked against the real database and takes the Admin API
+out of the boot path; what it gives up is the guarantee that the database a
+process actually connects to is the one that was checked.
 
 **The emulator keeps no index registry and enforces no composite index**, so the
 probe refuses outright there and every emulator query runs index-free. An
@@ -168,6 +220,26 @@ returned; a hash is an identity, never a projection and never a sort key. The
 derived query keys (`resource_key`, `subject_key`) and the two **raw** sort keys
 (`role_key`, `grant_key`, byte-identical to the SQL adapters') are documented,
 field by field, in [`SCHEMA.md`](SCHEMA.md) §3–§5.
+
+### Those six collection ids are RESERVED by this store
+
+This store owns the six ids above outright — it creates, queries, resets and
+sweeps them, and its claim collections encode uniqueness only its own writes
+maintain, so a host document under one of those ids is not "extra data", it is a
+row this store believes it owns.
+
+It reaches further than the top level, because a **field override is
+database-wide for a collection-group id, at any depth**. A `fieldOverrides` entry
+naming `iam_roles` configures the single-field indexing of `iam_roles`
+*everywhere in the database* — a host's own `orgs/{id}/iam_roles` subcollection
+would inherit it. The manifest cannot scope it more narrowly; that is how
+Firestore field configuration works, not a choice this store made.
+
+**So: this store expects a database that does not share those six names**, as a
+top-level collection or as a subcollection id anywhere. Give it its own database
+(the cheapest answer, and what CI does per run), or rename the host's colliding
+collections. There is no prefix option; the ids deliberately mirror the SQL table
+names so the two documentation trees and the operator vocabulary stay shared.
 
 ## Ceilings and costs a SQL host does not have
 
@@ -282,20 +354,26 @@ produce commit-contention exhaustion; it does not enforce all limits.
 
 **Live (`integration && live`).** `firestoretest.OpenLive` +
 `ResetLive(t, db, <this store's six collections>)`; a live database is never
-emptied wholesale. The live conformance entrypoint constructs **with the probe
-enabled** — that the shipped manifest actually serves this store's queries is
-precisely what only a live run can show. Unconfigured, every root skips loudly;
+emptied wholesale. The live leg makes **one probe-enabled construction per
+package** (`probeLiveOnce`) and every per-fixture construction then passes
+`WithoutIndexProbe()` explicitly — that the shipped manifest actually serves this
+store's queries is precisely what only a live run can show, and one construction
+proves it exactly as well as a hundred do, while a hundred would spend a hundred
+`ListIndexes` plus a hundred `GetField` per declared override against a shared
+project's Admin quota. `TestIndexProbeAcceptsTheDeployedManifestLive` asserts the
+probe's verdict on its own besides. Unconfigured, every root skips loudly;
 `FIRESTORE_LIVE_REQUIRED=1` turns those skips into the release-gate failure.
 
 Live roots today, and what each is for:
 
 | root | why it is live |
 |---|---|
-| `TestConformanceLive` | the FULL shared suite against real Firestore with the manifest deployed and the boot probe running on every fixture |
+| `TestConformanceLive` | the FULL shared suite against real Firestore with the manifest deployed and the package's one probe-enabled construction behind it |
 | `TestIndexProbeAcceptsTheDeployedManifestLive` | the probe's verdict against a real Admin API index registry |
 | `TestQueryMatrixExecutesAgainstTheDeployedIndexesLive` | every query shape in `SCHEMA.md` §7 executed against the deployed indexes — the manifest's actual coverage proof |
 | `TestGuardedMutationDependencyRevokeIsDeterminedLive` | which side of a dependency race wins is timing on the emulator and DETERMINED on real Firestore (the aborted commit re-evaluates and denies) |
 | `TestSetRelationTargetsConcurrentDisjointSetsConvergeLive` | four-caller strict convergence — the emulator's thirty-second locks would exhaust the attempt budget on timing, not serialization |
+| `TestLargeBatchCommitsInOneTransactionLive` | A7's proof that Firestore publishes no per-transaction write COUNT limit: a batch the old "500 writes" ceiling would have refused commits in ONE real transaction |
 | `TestAmbientTransactionRefusedLive` | R1's refusal asserted against production's transaction behavior, not the emulator's |
 | `TestRunTransactionalLive` | **the ONE allowed skip** (R1). `.github/workflows/live-stores.yml` allows it BY NAME; any other skipped root fails a required run |
 
@@ -304,5 +382,6 @@ loudly without `FIRESTORE_EMULATOR_HOST`) and `make check` vets the `integration
 and `integration,live` files compile-only, so the live leg cannot rot between
 dispatches. Both CI legs — `firestore-emulator` and `firestore-live` — live in
 `.github/workflows/live-stores.yml`; the live one is dispatch-only, provisions a
-disposable database, deploys this module's manifest, waits for READY, and audits
-the test/skip counts against the roots derived from the source.
+disposable database, deploys BOTH halves of this module's manifest, waits for the
+composites to be READY and the field configuration to be applied, and audits the
+test/skip counts against the **eight** roots derived from the source.

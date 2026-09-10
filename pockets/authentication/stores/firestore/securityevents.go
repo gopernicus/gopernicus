@@ -32,11 +32,14 @@ func (s *securityEventStore) Create(ctx context.Context, evt securityevent.Secur
 	if err := refuseAmbient(ctx); err != nil {
 		return securityevent.SecurityEvent{}, err
 	}
-	row := newSecurityEventDoc(evt)
+	row, err := newSecurityEventDoc(evt)
+	if err != nil {
+		return securityevent.SecurityEvent{}, err
+	}
 	if err := putSecurityEvent(ctx, s.db, s.db.WriterFrom(ctx), row); err != nil {
 		return securityevent.SecurityEvent{}, err
 	}
-	return row.toDomain(), nil
+	return row.toDomain()
 }
 
 // List pages the rail under the filter's equality subset and its inclusive

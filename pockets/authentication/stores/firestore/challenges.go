@@ -135,6 +135,16 @@ func (s *challengeStore) ConsumeToken(ctx context.Context, purpose, presentedDig
 // digest claims, and returns the COMMITTED count. A non-positive limit is
 // unbounded (the port's own contract).
 //
+// UNBOUNDED MEANS ONE REQUEST. The whole purge — the candidate read, every row
+// deletion and every claim deletion — is a single Firestore transaction, and a
+// transaction is bounded by a 10 MiB request and a 270-second ceiling, not by a
+// write count (the vendor publishes no per-transaction write cap). An operator
+// sweeping a backlog that accumulated while the job was off should therefore
+// pass a LIMIT and call again: an oversized purge fails atomically, having
+// deleted nothing, which is safe but makes no progress. The SQL adapters bound
+// their statement instead of their transaction, so this is a scheduling
+// difference between the families, not a semantic one (SCHEMA.md §9).
+//
 // The candidates are selected INSIDE the transaction, which is the whole design
 // of this method. Selecting them outside would make the deletion act on a stale
 // snapshot: a Replace that landed in between would have written a LIVE challenge

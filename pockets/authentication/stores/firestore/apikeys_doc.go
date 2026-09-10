@@ -8,6 +8,7 @@ import (
 	gcfs "cloud.google.com/go/firestore"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
+	auth "github.com/gopernicus/gopernicus/pockets/authentication"
 	"github.com/gopernicus/gopernicus/pockets/authentication/domain/apikey"
 	"github.com/gopernicus/gopernicus/sdk"
 )
@@ -143,7 +144,18 @@ func readAPIKeyByHashClaim(ctx context.Context, db *firestoredb.DB, r firestored
 	if err != nil {
 		return apiKeyDoc{}, err
 	}
-	return decodeAPIKey(rowSnap)
+	row, err := decodeAPIKey(rowSnap)
+	if err != nil {
+		return apiKeyDoc{}, err
+	}
+	// The row's own hash is the authority, compared in constant time: a claim
+	// that named the wrong key would authenticate the wrong service account,
+	// and nothing downstream re-checks it. A mismatch is sdk.ErrNotFound, the
+	// same answer SQL's `WHERE key_hash = ?` gives for an unknown hash.
+	if !auth.ConstantTimeDigestEqual(keyHash, row.KeyHash) {
+		return apiKeyDoc{}, sdk.ErrNotFound
+	}
+	return row, nil
 }
 
 // decodeAPIKey turns one snapshot into a key document.

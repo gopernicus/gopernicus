@@ -74,10 +74,14 @@ func securityEventsQuery(db *firestoredb.DB, filter securityevent.ListFilter) gc
 // newSecurityEventDoc builds the document for an event being APPENDED, minting
 // the id when the caller left it empty (the greenfield cryptids.Database
 // convention).
-func newSecurityEventDoc(evt securityevent.SecurityEvent) securityEventDoc {
+func newSecurityEventDoc(evt securityevent.SecurityEvent) (securityEventDoc, error) {
 	id := evt.ID
 	if id == "" {
 		id = firestoredb.NewID()
+	}
+	details, err := encodeDetails(evt.Details)
+	if err != nil {
+		return securityEventDoc{}, err
 	}
 	return securityEventDoc{
 		ID:          id,
@@ -86,11 +90,11 @@ func newSecurityEventDoc(evt securityevent.SecurityEvent) securityEventDoc {
 		ActorID:     evt.Actor.ID,
 		EventType:   evt.EventType,
 		EventStatus: evt.EventStatus,
-		Details:     normalizeDetails(evt.Details),
+		Details:     details,
 		IPAddress:   evt.IPAddress,
 		UserAgent:   evt.UserAgent,
 		CreatedAt:   firestoredb.TruncateTime(evt.CreatedAt),
-	}
+	}, nil
 }
 
 // putSecurityEvent appends one event. Create, never Set: the document id IS the
@@ -116,7 +120,7 @@ func decodeSecurityEventRow(snap *gcfs.DocumentSnapshot) (securityevent.Security
 	if err != nil {
 		return securityevent.SecurityEvent{}, err
 	}
-	return row.toDomain(), nil
+	return row.toDomain()
 }
 
 // listSecurityEvents is the ListQuery the rail pages with, under the filter's
@@ -140,33 +144,24 @@ func listSecurityEvents(db *firestoredb.DB, filter securityevent.ListFilter) fir
 	}
 }
 
-// normalizeDetails is the write half of the uniform round-trip contract: a nil
-// or empty bag is stored as an EMPTY MAP, never as a null and never as an absent
-// field, so it reads back as a non-nil empty map exactly as the SQL adapters'
-// '{}' does. The map is copied rather than stored by reference, so a caller that
-// mutates its own map after Create does not change what this store wrote.
-func normalizeDetails(details map[string]any) map[string]any {
-	out := make(map[string]any, len(details))
-	for k, v := range details {
-		out[k] = v
-	}
-	return out
-}
-
 // toDomain projects the document onto the domain aggregate, re-assembling the
 // flat actor columns into the Principal and guaranteeing a NON-NIL Details map
 // on every path — including a document written before this field existed, whose
-// absent map decodes to nil.
-func (d securityEventDoc) toDomain() securityevent.SecurityEvent {
+// absent value decodes to the empty string and therefore to an empty bag.
+func (d securityEventDoc) toDomain() (securityevent.SecurityEvent, error) {
+	details, err := decodeDetails(d.Details)
+	if err != nil {
+		return securityevent.SecurityEvent{}, err
+	}
 	return securityevent.SecurityEvent{
 		ID:          d.ID,
 		UserID:      d.UserID,
 		Actor:       securityevent.Principal{Type: d.ActorType, ID: d.ActorID},
 		EventType:   d.EventType,
 		EventStatus: d.EventStatus,
-		Details:     normalizeDetails(d.Details),
+		Details:     details,
 		IPAddress:   d.IPAddress,
 		UserAgent:   d.UserAgent,
 		CreatedAt:   d.CreatedAt,
-	}
+	}, nil
 }

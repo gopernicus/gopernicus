@@ -23,6 +23,7 @@ package firestore
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/firestore/firestoretest"
@@ -30,11 +31,31 @@ import (
 	"github.com/gopernicus/gopernicus/pockets/authentication/storetest"
 )
 
-// emulatorDatabase is this store train's own emulator database. It is NOT the
+// emulatorDatabase is this test PROCESS's own emulator database. It is NOT the
 // default database, NOT the connector's, and NOT the authorization store's:
 // firestoretest.Reset clears the whole selected database, so two suites sharing
 // one would delete each other's rows and the failure would arrive as a flake.
-const emulatorDatabase = "authentication"
+//
+// The pid suffix extends that isolation to two runs of THIS package at once —
+// a second terminal, a -run of one leaf beside a full sweep, or a CI job that
+// shards the suite. Sharing one named database across processes reproduces the
+// exact failure the per-train database exists to prevent, and it is invisible:
+// the losing process just sees rows disappear. The emulator serves named
+// databases on demand, so a fresh name costs nothing.
+//
+// FIRESTORE_DATABASE_ID overrides it, for a CI job that wants one named
+// database for a whole run. firestoretest.OpenDatabase deliberately ignores that
+// variable (an explicit argument means that database), so the harness reads it
+// here, which is also where the pid default belongs.
+var emulatorDatabase = emulatorDatabaseID()
+
+// emulatorDatabaseID resolves the database name above.
+func emulatorDatabaseID() string {
+	if id := os.Getenv(firestoretest.DatabaseEnv); id != "" {
+		return id
+	}
+	return "authentication-" + strconv.Itoa(os.Getpid())
+}
 
 // newRepos opens the emulator database, clears it, and constructs the full
 // repository set — a FRESH, empty store per call, which is what every storetest
@@ -54,10 +75,6 @@ func newRepos(t *testing.T) auth.Repositories {
 // group plus the search and concurrency families — against the emulator. It is
 // the executable form of all eighteen ports' contracts, and the whole suite is
 // green as of task N4d (212 leaves, 0 failures, 0 skips).
-//
-// It was wired at N1, when every port method still answered errNotImplemented
-// and it failed wholesale, rather than at the end — so no slice could be
-// declared complete without the suite's judgment.
 //
 // The 45-minute timeout the Makefile and CI carry is not padding. Two hundred
 // leaves each reset the emulator database (a DELETE sweep, not a TRUNCATE), and

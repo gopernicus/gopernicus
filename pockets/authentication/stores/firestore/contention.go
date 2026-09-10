@@ -8,6 +8,9 @@ import (
 	"time"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/credential"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/identifier"
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/session"
 	"github.com/gopernicus/gopernicus/sdk"
 )
 
@@ -47,6 +50,35 @@ const (
 // deterministic refusal into a spin.
 var errStaleAuthRevision = fmt.Errorf("authentication firestore store: the user's auth_revision advanced since the caller read it: %w", sdk.ErrConflict)
 
+// errClaimLost is what a write path reports when a uniqueness key it tried to
+// TAKE was taken by someone else between its read phase and its commit — a lost
+// claim, a duplicate document id, either way nothing was written.
+//
+// It exists to keep the vendor's own AlreadyExists text OUT of the answer. That
+// message names the document that lost: "…/identifier_claims/<64 hex>". The
+// collection layout is an implementation detail no caller should couple to, and
+// the id is a SHA-256 fingerprint of the very address, token, or secret digest
+// the operation was about — an attacker-supplied value, echoed back through a
+// host's error log at exactly the rate a probe can drive it. retryTransact maps
+// every sdk.ErrAlreadyExists leaving a transaction onto this, so the sentinel
+// the port contract names still matches and the fingerprint stays inside the
+// store.
+var errClaimLost = fmt.Errorf("authentication firestore store: a uniqueness key this operation had to take is already held; nothing was written: %w", sdk.ErrAlreadyExists)
+
+// stableConflicts are the conflict-shaped answers that are DECISIONS, not races
+// (see retryableConflict). Adding a domain sentinel that wraps sdk.ErrConflict
+// here is not optional.
+var stableConflicts = []error{
+	errStaleAuthRevision,
+	session.ErrRotationConflict,
+	identifier.ErrVerificationRequired,
+	credential.ErrNoLoginMethod,
+	credential.ErrNoRecoveryMethod,
+	credential.ErrInsufficientRecovery,
+	credential.ErrRecoveryRequiresNonPSTN,
+	credential.ErrInsufficientAssurance,
+}
+
 // retryContention runs fn until it stops reporting a retryable contention
 // conflict, with a bounded, backing-off, JITTERED wait. It stops on success, on
 // a non-retryable error, on exhausting the budget (the caller then sees
@@ -82,11 +114,24 @@ func retryContention(ctx context.Context, fn func() error) error {
 //     (sdk.ErrAlreadyExists), a missing row, a validator refusal, a cancelled
 //     context, an unavailable database — is an ANSWER or a failure, and
 //     re-running it would only repeat it.
-//   - It must not be one of this store's STABLE conflict sentinels. Today that
-//     is errStaleAuthRevision alone; the later tasks that add CAS ports
-//     (session.ErrRotationConflict at N3a, the credential rail at N2b) add
-//     theirs to the switch below, which is why the sentinel and its
-//     classification live in one file.
+//   - It must not be one of the STABLE conflict sentinels — a deterministic
+//     refusal that a re-read would only reproduce, so retrying it turns an
+//     answer into a spin and then into a mangled error (detachVendorRetry
+//     re-roots a retryable conflict on sdk.ErrConflict ALONE, which would drop
+//     the sentinel the caller is meant to branch on).
+//
+// The rule for that list, stated once because it is the one a future path gets
+// wrong: EVERY domain sentinel that wraps sdk.ErrConflict belongs in it. Most of
+// this pocket's domain answers wrap a different sentinel and are already
+// excluded by the first rule — passwordless.ErrRedemption (Unauthorized),
+// session.ErrUserNotActive (Forbidden), sdk.ErrExpired, sdk.ErrNotFound,
+// sdk.ErrAlreadyExists — but the credential POLICY errors and
+// identifier.ErrVerificationRequired do wrap sdk.ErrConflict, and
+// session.ErrRotationConflict is a bare sentinel today that reads like one.
+// They are named below whether or not a callback in this store returns them
+// today, because the cost of naming a sentinel that never arrives is zero and
+// the cost of missing one is a domain refusal reported as infrastructure
+// contention. contention_test.go enumerates them one at a time.
 //
 // Everything left is genuine contention: a mapped Aborted from a transactional
 // read, a lost commit race, or an emulator lock timeout.
@@ -94,18 +139,32 @@ func retryableConflict(err error) bool {
 	if !errors.Is(err, sdk.ErrConflict) {
 		return false
 	}
-	return !errors.Is(err, errStaleAuthRevision)
+	for _, stable := range stableConflicts {
+		if errors.Is(err, stable) {
+			return false
+		}
+	}
+	return true
 }
 
 // retryTransact is the shape every write path takes: ONE db.Transact under the
 // contention retry. Each callback re-reads before it decides, so re-running it
 // is safe.
 func retryTransact(ctx context.Context, db *firestoredb.DB, fn func(ctx context.Context) error) error {
-	return retryContention(ctx, func() error {
+	err := retryContention(ctx, func() error {
 		return db.Transact(ctx, func(ctx context.Context) error {
 			return detachVendorRetry(fn(ctx))
 		})
 	})
+	// The last error path, and the one place a lost claim can be recognized:
+	// Firestore evaluates every Create precondition at COMMIT, so a claim lost
+	// to a concurrent writer arrives here as the vendor's AlreadyExists with the
+	// losing document's path in its message. errClaimLost keeps the sentinel and
+	// drops the fingerprint.
+	if err != nil && errors.Is(err, sdk.ErrAlreadyExists) {
+		return errClaimLost
+	}
+	return err
 }
 
 // detachVendorRetry re-roots a retryable contention conflict on sdk.ErrConflict
@@ -124,6 +183,14 @@ func retryTransact(ctx context.Context, db *firestoredb.DB, fn func(ctx context.
 // loop and is re-run HERE, with jitter and with the whole operation reset. A
 // conflict the callback cannot see — a losing COMMIT — is still the vendor's,
 // and it retries that as it always did before falling through to this loop.
+//
+// The cause is formatted with %s and NOT %w, and that is the whole mechanism
+// rather than a formatting slip: %w would put the mapped gRPC status back in
+// the chain, the vendor's isAborted (status.FromError → errors.As, which walks
+// Unwrap) would find it again, and both loops would fire on one error exactly
+// as before. TestDetachVendorRetryDropsTheAbortedStatus pins that property, so
+// a later "fix" to %w fails loudly instead of quietly restoring the starvation.
+// The message is preserved verbatim, which is what a log needs.
 func detachVendorRetry(err error) error {
 	if err == nil || !retryableConflict(err) {
 		return err
