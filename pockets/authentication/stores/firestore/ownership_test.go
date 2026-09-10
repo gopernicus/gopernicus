@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -143,10 +144,90 @@ func TestProjectionFieldsAreOwnedByProjection(t *testing.T) {
 		"the directory projection fields are owned by projection.go — recompute the pair with resolveEmailProjection and hand it to putUser or advanceUserRevision")
 }
 
+// sessionOwners are the only non-test files allowed to name the session row's
+// collection or its refresh-hash claim collection: keys.go DECLARES the
+// constants and the id builders, documents.go declares the row and claim
+// SHAPES, and sessions_doc.go is the file that owns them — putSession,
+// updateSession and dropSession are its only writers.
+var sessionOwners = map[string]bool{
+	"keys.go":         true,
+	"documents.go":    true,
+	"sessions_doc.go": true,
+}
+
+var sessionSymbols = []string{
+	"collectionSessions",
+	"collectionRefreshHashClaims",
+	"sessions",
+	"session_refresh_hashes",
+}
+
+// TestSessionCollectionsAreOwnedBySessionsDoc is the R3 discipline for the
+// CURRENT refresh credential (SCHEMA.md §5.3). Uniqueness lives in one claim
+// document beside the row, and the rotated-away hash deliberately has none — an
+// asymmetry a call site can break in either direction, by claiming the grace
+// slot (which makes a rotation collide with itself) or by forgetting to release
+// the old current claim (which makes the credential unusable forever). Keeping
+// the pair the only way in is what makes that unreachable.
+func TestSessionCollectionsAreOwnedBySessionsDoc(t *testing.T) {
+	assertOwnership(t, sessionOwners, sessionSymbols,
+		"session rows and their refresh-hash claim are owned by sessions_doc.go (putSession/updateSession/dropSession) — route the change through them instead")
+}
+
+// oauthOwners are the only non-test files allowed to name either OAuth
+// collection. Neither has a claim: both uniqueness rules are carried by the
+// DOCUMENT ID, which is precisely why every reference must go through the file
+// that derives those ids.
+var oauthOwners = map[string]bool{
+	"keys.go":      true,
+	"documents.go": true,
+	"oauth_doc.go": true,
+}
+
+var oauthSymbols = []string{
+	"collectionOAuthAccounts",
+	"collectionOAuthStates",
+	"oauth_accounts",
+	"oauth_states",
+}
+
+// TestOAuthCollectionsAreOwnedByOAuthDoc keeps the id-derived uniqueness in one
+// place. A write path that reached the account collection with any other
+// document id — a surrogate id, a user-scoped key — would silently drop the
+// "one local user per provider identity" rule the whole anti-takeover flow rests
+// on, and no read would notice.
+func TestOAuthCollectionsAreOwnedByOAuthDoc(t *testing.T) {
+	assertOwnership(t, oauthOwners, oauthSymbols,
+		"OAuth links and flow secrets are owned by oauth_doc.go — their document ids ARE their uniqueness, so route the change through it")
+}
+
+// grantOwners are the only non-test files allowed to name the step-up grant
+// collection.
+var grantOwners = map[string]bool{
+	"keys.go":       true,
+	"documents.go":  true,
+	"grants_doc.go": true,
+}
+
+var grantSymbols = []string{
+	"collectionAuthGrants",
+	"authentication_grants",
+}
+
+// TestGrantCollectionIsOwnedByGrantsDoc keeps the derived consume key a single
+// identity. The three columns Consume selects on are collapsed into ONE indexed
+// equality, and a writer that stored a row without it — or with a key built from
+// different parts — would create a grant that can never be spent and never be
+// found again.
+func TestGrantCollectionIsOwnedByGrantsDoc(t *testing.T) {
+	assertOwnership(t, grantOwners, grantSymbols,
+		"step-up grants are owned by grants_doc.go (putAuthGrant/spendAuthGrant/dropAuthGrants) — route the change through them instead")
+}
+
 // TestOwnerFilesExist keeps every allow-list honest: a renamed or deleted owner
 // must fail here rather than silently widening the rule it appears in.
 func TestOwnerFilesExist(t *testing.T) {
-	for _, owners := range []map[string]bool{identifierOwners, userOwners, passwordOwners, projectionOwners} {
+	for _, owners := range []map[string]bool{identifierOwners, userOwners, passwordOwners, projectionOwners, sessionOwners, oauthOwners, grantOwners} {
 		for name := range owners {
 			if _, err := os.Stat(name); err != nil {
 				t.Errorf("owner file %s: %v", name, err)
@@ -176,7 +257,7 @@ func assertOwnership(t *testing.T, owners map[string]bool, symbols []string, rem
 		}
 		checked++
 		for _, symbol := range symbols {
-			if strings.Contains(src, symbol) {
+			if namesSymbol(src, symbol) {
 				t.Errorf("%s names %s: %s", name, symbol, remedy)
 			}
 		}
@@ -184,6 +265,19 @@ func assertOwnership(t *testing.T, owners map[string]bool, symbols []string, rem
 	if checked == 0 {
 		t.Fatal("no package sources were checked — the guard would pass vacuously")
 	}
+}
+
+// namesSymbol reports whether src NAMES symbol — as a whole identifier or a
+// whole quoted string, not as a fragment of a longer name. The boundaries
+// matter: oauth_accounts carries its provider's OWN verified-email flag
+// (ProviderEmailVerified), which has nothing to do with the users document's
+// directory projection (EmailVerified) and must not be read as a violation of
+// its rule. A plain substring test cannot tell the two apart; this can, and it
+// still catches every real use, because a real one is preceded by a dot, a
+// space, a brace, or a quote.
+func namesSymbol(src, symbol string) bool {
+	pattern := regexp.MustCompile(`(^|[^\p{L}\p{N}_])` + regexp.QuoteMeta(symbol) + `([^\p{L}\p{N}_]|$)`)
+	return pattern.MatchString(src)
 }
 
 // sourceWithoutComments renders one package source with its COMMENTS removed. It

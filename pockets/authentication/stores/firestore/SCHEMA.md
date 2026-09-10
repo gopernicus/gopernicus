@@ -639,14 +639,14 @@ projection of what the unbuilt tasks will issue.
 |---|---|---|---|
 | `users` | — | `(created_at, id)` both directions | `UserAdmin.List` — **BUILT (N2c)**, through the connector `List` helper with `user.OrderFields`/`user.DefaultOrder` and PK `id`; the reverse direction is the `HasPrev` probe's |
 | `user_identifiers` | `user_id ==`, `active ==` | `(created_at, id)` ascending | `ListByUser` — **BUILT (N2a)**, exactly one shape: `user_id == AND active == true ORDER BY created_at ASC, id ASC`. It is NOT paged (the port returns a slice), so it needs no reversed direction of its own. Credential `Snapshot` (N2b) reuses it |
-| `sessions` | `user_id ==` \| `previous_refresh_token_hash ==` | — | revocation cascades, grace lookup |
-| `oauth_accounts` | `user_id ==` (+ `provider ==` for Delete) | `(linked_at DESC, provider_user_id DESC)` | `ListByUser` |
+| `sessions` | `user_id ==` \| `previous_refresh_token_hash ==` | — | **BUILT (N3a)**, exactly two shapes, both a SINGLE equality with NO order: `user_id ==` (`DeleteByUser`, and the N2b/N4d revocation cascades) and `previous_refresh_token_hash == … LIMIT 1` (`GetByRefreshHash`'s grace half, under a `ReadSnapshot`). Firestore serves a single-field equality from the automatic index, so NEITHER needs a composite. The CURRENT hash issues no query at all — its claim is the access path (§7.1) |
+| `oauth_accounts` | `user_id ==` (+ `provider ==` for Delete) | `(linked_at DESC, provider_user_id DESC)` | **BUILT (N3b)**, two shapes: `ListByUser` = `user_id == ORDER BY linked_at DESC, provider_user_id DESC` (a COMPOSITE — already in the manifest — with no reversed direction, because the port returns a slice, not a page) and `Delete` = `user_id == AND provider ==`, equality-only and therefore served without a composite (Firestore merges the two automatic single-field indexes) |
 | `service_accounts` | — | `(created_at, id)` both directions | `List` |
 | `api_keys` | `service_account_id ==` | `(created_at, id)` both directions | + `PostFilter` search (R4) |
 | `security_events` | any subset of `user_id`, `event_type`, `event_status` × `created_at` range | `(created_at, id)` both directions | the widest set: every equality subset × the range × both directions |
 | `invitations` | `resource_key ==` \| `subject_key ==` \| `resolved_subject_id ==` | `(created_at, id)` both directions | |
 | `challenges` | `expires_at <=` (purge); `user_id ==` + `purpose in` (reset/adoption revocation) | `expires_at`, then `id` | |
-| `authentication_grants` | `consume_key ==` + `consumed_at == null`; `session_id ==`; `user_id ==` | `(created_at, id)` | Consume, and the two revocation cascades |
+| `authentication_grants` | `consume_key ==` + `consumed_at == null`; `session_id ==`; `user_id ==` | `(created_at, id)` ascending | `Consume` — **BUILT (N3b)** — is `consume_key == AND consumed_at == null ORDER BY created_at ASC, id ASC LIMIT 1`; `consumed_at == null` is a Firestore IS_NULL filter and the shape needs the four-field COMPOSITE the manifest already carries. `session_id ==` (`DeleteBySession`) is **BUILT (N3b)** and equality-only, so no composite. `user_id ==` is N2b's half of the lifecycle cascade (`readGrantsForUser`), also equality-only |
 
 Every direction a store serves — PLUS the reversed direction the List helper's
 `HasPrev` probe issues, which needs the same index with all directions flipped —
@@ -666,6 +666,11 @@ document id:
 | `Identifiers.Get`, and every retirement's read of the row it retires | `user_identifiers/h(identifier_id)` |
 | `Identifiers.GetLogin` / `GetRecovery` | `identifier_claims/h(kind, value)` → the row it names (**two point reads under ONE `ReadSnapshot`**, so the claim and the row agree) |
 | the active primary of a `(user, kind)` — the primary switch's demotion target AND the directory projection's only input | `identifier_primaries/h(user_id, kind)` → the row it names |
+| `Sessions.Get`, `Rotate`/`ConsumeGrace`'s CAS read, `Delete`'s claim lookup | `sessions/h(session_id)` |
+| `Sessions.GetByRefreshHash`, CURRENT slot | `session_refresh_hashes/h(hash)` → the row it names (**two point reads under ONE `ReadSnapshot`**, with the grace QUERY as the fallback in the same snapshot) |
+| `OAuthAccounts.GetByProvider` | `oauth_accounts/h(provider, provider_user_id)` |
+| `OAuthStates.Consume` | `oauth_states/h(token)` |
+| `ActiveSessions.CreateForActiveUser`'s status proof | `users/h(user_id)` — the read that FENCES the mint against a concurrent `SetStatus` |
 
 This is why the CLAIM documents are described as access paths and not only as
 constraints (§5.1, §5.2): resolving an address through its claim keeps the lookup
@@ -682,6 +687,30 @@ Two shapes deliberately do NOT appear above and must not appear at N5 either:
 - **No query enforces uniqueness.** A claim is taken with `Create`, whose
   precondition the SERVER evaluates at commit; nothing reads a claim to decide
   whether it is free (ruling R3).
+
+### 7.2 Ownership rules (the executable half of §5)
+
+Every collection whose uniqueness is carried by a claim document OR by a derived
+document id has exactly one owner file, and `ownership_test.go` fails the build
+if any other non-test file so much as names the collection. The rules are
+hermetic (no emulator) and match on identifier boundaries, so a fragment of a
+longer name — `oauth_accounts.provider_email_verified` is not the users
+document's `email_verified` projection — is not a violation.
+
+| Owner file | Owns | Writers |
+|---|---|---|
+| `users_doc.go` | `users` | `putUser` (the ONLY whole-document write; takes the projection explicitly), `updateUserProfile`, `advanceUserRevision` |
+| `identifiers_doc.go` | `user_identifiers`, `identifier_claims`, `identifier_primaries` | `putIdentifier`, `updateIdentifier` |
+| `passwords_doc.go` | `user_passwords` | `putPassword` |
+| `projection.go` | the two projection FIELD names, in both spellings | `resolveEmailProjection` and its `apply`/`updates`/`fill` |
+| `sessions_doc.go` (N3a) | `sessions`, `session_refresh_hashes` | `putSession`, `updateSession`, `dropSession`, `dropSessionsForUser` |
+| `oauth_doc.go` (N3b) | `oauth_accounts`, `oauth_states` | `putOAuthAccount`, `dropOAuthAccounts`, `putOAuthState`, `dropOAuthState` |
+| `grants_doc.go` (N3b) | `authentication_grants` | `putAuthGrant`, `spendAuthGrant`, `dropAuthGrants` |
+
+The revocation helpers (`dropSessionsForUser`, `dropAuthGrants`) take
+ALREADY-READ documents and read nothing, which is what lets N2b's `SetStatus` and
+N4d's adoption finish a multi-collection read phase before they write — the
+vendor refuses any read issued after a transaction's first write.
 
 ## 8. Index manifest
 

@@ -1,6 +1,13 @@
 package firestore
 
-import "time"
+import (
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/gopernicus/gopernicus/pockets/authentication/domain/session"
+	"github.com/gopernicus/gopernicus/sdk"
+)
 
 // The document shapes. Field names and semantics are pinned in SCHEMA.md; they
 // mirror the SQL column names so the two documentation trees stay shared, plus
@@ -322,4 +329,36 @@ type invitationPendingClaimDoc struct {
 type challengeDigestClaimDoc struct {
 	DocID       string `firestore:"doc_id"`
 	ChallengeID string `firestore:"challenge_id"`
+}
+
+// The shared field encodings. authentication_methods on a session and methods
+// on a grant are the SAME domain value — []session.AuthenticationMethod — and
+// both SQL adapters persist it as JSON text. This store keeps that encoding
+// rather than a native Firestore array: the descriptors are a domain type this
+// store must not tag with firestore struct tags, and a JSON string round-trips
+// them byte-identically across all three families.
+
+// encodeMethods marshals the honest method descriptors; an empty set encodes as
+// the empty string, which is the SQL column's DEFAULT.
+func encodeMethods(methods []session.AuthenticationMethod) (string, error) {
+	if len(methods) == 0 {
+		return "", nil
+	}
+	b, err := json.Marshal(methods)
+	if err != nil {
+		return "", fmt.Errorf("authentication firestore store: encoding authentication methods: %s: %w", err, sdk.ErrInvalidInput)
+	}
+	return string(b), nil
+}
+
+// decodeMethods reverses encodeMethods; the empty string reads back as nil.
+func decodeMethods(encoded string) ([]session.AuthenticationMethod, error) {
+	if encoded == "" {
+		return nil, nil
+	}
+	var out []session.AuthenticationMethod
+	if err := json.Unmarshal([]byte(encoded), &out); err != nil {
+		return nil, fmt.Errorf("authentication firestore store: decoding authentication methods: %s: %w", err, sdk.ErrInvalidInput)
+	}
+	return out, nil
 }
