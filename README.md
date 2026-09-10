@@ -8,13 +8,14 @@ infrastructure. Gopernicus is open source under the [MIT License](LICENSE),
 very much a work in progress, and not stable. See [ARCHITECTURE.md](ARCHITECTURE.md)
 for the full layering rules and [NOTES.md](NOTES.md) for the decision log.
 
-## The thirty-nine modules
+## The forty modules
 
 ```
 sdk/                                stdlib-only, layered: root = kernel; foundation/ + capabilities/ + pocket (empty go.mod = structural enforcement)
 integrations/cryptids/bcrypt/       password-hashing connector (x/crypto), its own module
 integrations/cryptids/golang-jwt/   JWT-signing connector (golang-jwt/jwt v5), its own module
 integrations/cryptids/google-uuid/  uuid ID-generation connector (google/uuid v4/v7), its own module
+integrations/datastores/firestore/  reusable Google Cloud Firestore connector (Native mode; sdk + cloud.google.com/go/firestore), its own module
 integrations/datastores/pgxdb/        reusable Postgres connector (sdk + pgx/v5), its own module
 integrations/datastores/turso/      reusable Turso/libSQL connector (sdk + libsql), its own module
 integrations/email/sendgrid/        SendGrid email connector (sendgrid-go), its own module
@@ -86,7 +87,7 @@ tagged versions, not the workspace.
   dependency arrows.
 - **Dependencies point inward.** `examples` → `pockets`/`integrations` →
   `sdk`, never the reverse; a `ui/` implementation depends only on its own
-  view/runtime libraries and `sdk`. `make check`'s twenty-one layering guards
+  view/runtime libraries and `sdk`. `make check`'s twenty-three layering guards
   enforce this.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full detail, including the
@@ -114,8 +115,8 @@ make migrate           # applies examples/cms/workshop/migrations pre-boot
 make run                # or: cd examples/cms && go run ./cmd/server
 ```
 
-From the repo root, `make check` builds, vets, and tests all thirty-nine modules
-and runs the twenty-one layering guards; `make test-stores` runs the live dialect
+From the repo root, `make check` builds, vets, and tests all forty modules
+and runs the twenty-three layering guards; `make test-stores` runs the live dialect
 conformance suites (expects `POSTGRES_TEST_DSN` / `TURSO_*`). See [examples/cms/README.md](examples/cms/README.md)
 for that host's full env/make-target reference.
 

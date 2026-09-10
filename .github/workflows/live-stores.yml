@@ -27,6 +27,45 @@
 # ("TURSO_DATABASE_URL/TURSO_AUTH_TOKEN not set — turso conformance NOT
 # verified") — the correct, expected mid-milestone outcome, not a failure.
 #
+# Firestore live credentials (repo secrets): FIRESTORE_LIVE_PROJECT_ID,
+# FIRESTORE_LIVE_CREDENTIALS_B64 (base64 of a service-account key JSON), and the
+# optional FIRESTORE_LIVE_DATABASE_PIN / FIRESTORE_LIVE_LOCATION. Owner jrazmi.
+# The key belongs to a service account in ONE dedicated test project, scoped to
+# Firestore there (the IAM split is in
+# integrations/datastores/firestore/README.md) — it is not a project-wide
+# credential and must never be reused for anything else. Rotation is three
+# actions and touches nothing in this file: mint a new key, `base64 -w0 key.json`
+# into the repo secret, delete the superseded key in IAM. Expiry: service-account
+# keys DO NOT expire on their own, so rotation is deliberate (owner target: every
+# 90 days, and immediately after any run whose logs are suspect). These jobs run
+# on GITHUB-HOSTED runners ONLY: the decoded key lives in $RUNNER_TEMP for the
+# length of one ephemeral VM and is shredded by an always() step; a self-hosted
+# runner would leave it on a machine this workflow does not own.
+#
+# RECOMMENDED TARGET STATE (owner decision — documented here, deliberately NOT
+# implemented): replace the long-lived key with Workload Identity Federation via
+# `google-github-actions/auth@v2` (`permissions: id-token: write` + a workload
+# identity pool trusting this repository). That mints a short-lived credential
+# per run and removes the secret — and with it the rotation duty and the
+# base64-decode step — entirely. Until that pool exists, the key secret stands.
+#
+# Secrets status as of 2026-09-09: FIRESTORE_LIVE_PROJECT_ID,
+# FIRESTORE_LIVE_CREDENTIALS_B64, FIRESTORE_LIVE_DATABASE_PIN and
+# FIRESTORE_LIVE_LOCATION DO NOT EXIST YET — no GCP project has been
+# provisioned for this repo. Until they do, the firestore-live job SKIPS LOUDLY
+# ("no live Firestore configuration — live Firestore behavior NOT verified") and
+# the firestore-emulator job carries the whole Firestore signal. That emulator
+# signal is NOT release evidence: the emulator enforces no composite indexes,
+# keeps no index registry (ProbeIndexes refuses against it), and cannot produce
+# commit-contention exhaustion. The firestore-stores milestone's release gate is
+# a required live run (workflow_dispatch input firestore_live_required: true,
+# which sets FIRESTORE_LIVE_REQUIRED=1 and turns every skip into a failure).
+#
+# The Firestore emulator is started as a BACKGROUND DOCKER STEP, not a service
+# container: a service container cannot override the image's command, and
+# gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators needs
+# `gcloud emulators firestore start …` as its command.
+#
 # NOT testcontainers (that harness is workshop-v2 scope): the services here are
 # workflow infrastructure; the Go tests stay env-gated exactly as written. gcs /
 # s3 / sendgrid have no legs here (no CI creds; out of scope).
@@ -38,6 +77,13 @@ name: live-stores
 
 on:
   workflow_dispatch:
+    inputs:
+      firestore_live_required:
+        description: >-
+          Release verification: fail (instead of skipping) when the live
+          Firestore configuration is missing or any required live test skips.
+        type: boolean
+        default: false
 
 # Least-privilege: these jobs only read the tree and talk to their own services.
 permissions:
@@ -141,3 +187,502 @@ jobs:
           # callers at a ceiling of 8 must yield exactly 8 admissions.
           POSTGRES_TEST_DSN: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
         run: go test -race ./...
+
+  # Job C — the Firestore CONNECTOR's emulator suite
+  # (integrations/datastores/firestore, -tags=integration). The connector is in
+  # MODULES, not STORE_MODULES, so `make test-stores` reaches it but this job
+  # runs the module directly — the postgres/turso legs have no business gating
+  # the Firestore one.
+  #
+  # The emulator is a background docker step (see the header) with a readiness
+  # wait against its HTTP root; the tests themselves skip loudly if
+  # FIRESTORE_EMULATOR_HOST is unset, so a failed start cannot pass as a green.
+  firestore-emulator:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+      - name: start the Firestore emulator
+        run: |
+          # DIGEST-PINNED to the image C0 measured. A floating :emulators tag
+          # would swap the emulator under this suite between two dispatches, and
+          # the emulator's transaction/lock behavior is exactly what C3 measured.
+          # To bump: pull the tag, read the digest
+          # (`docker inspect --format '{{index .RepoDigests 0}}' <image>`),
+          # replace it below, and RE-RUN C3's contention and lock-timing
+          # measurements in the same change — they are properties of the
+          # emulator build, not of this repository. The Makefile and module
+          # README keep the floating tag for local runs on purpose: those are
+          # developer convenience, not a gate.
+          docker run -d --name firestore-emulator -p 8080:8080 \
+            gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators@sha256:45a15cc163d2df13137478856b4b9bb90426100fa8aec542269460c10110b727 \
+            gcloud emulators firestore start --host-port=0.0.0.0:8080 --project=gopernicus-test
+          for i in $(seq 1 60); do
+            if curl -fsS -o /dev/null http://127.0.0.1:8080/; then
+              echo "emulator ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "ERROR: the Firestore emulator did not answer on 127.0.0.1:8080 within 60s"
+          docker logs firestore-emulator || true
+          exit 1
+      - name: firestore connector emulator suite (-tags=integration)
+        working-directory: integrations/datastores/firestore
+        env:
+          # Unset ⇒ every emulator case skips loudly. Set here on purpose: this
+          # job exists to make them RUN.
+          FIRESTORE_EMULATOR_HOST: 127.0.0.1:8080
+          FIRESTORE_PROJECT_ID: gopernicus-test
+        run: go test -tags=integration -count=1 -timeout 15m ./...
+      - name: stop the Firestore emulator
+        if: always()
+        run: docker rm -f firestore-emulator || true
+
+  # Job D — the OPTIONAL live-project leg (-tags='integration,live', Test*Live).
+  # It is the only thing that proves what the emulator cannot: composite indexes
+  # actually resolving, the Admin API index probe, production read-only snapshot
+  # isolation, and commit-contention exhaustion → sdk.ErrConflict.
+  #
+  # Configuration (repo secrets, NONE of which exist yet — see the header):
+  #   FIRESTORE_LIVE_PROJECT_ID        the DEDICATED test project. Gate: empty ⇒ skip.
+  #                                    A project id is NOT a credential; it can equally be
+  #                                    a repo `vars.` entry. Owner call — both options are
+  #                                    written up in the module README's first-dispatch
+  #                                    checklist; switching means editing ONE line here.
+  #   FIRESTORE_LIVE_CREDENTIALS_B64   base64 of a service-account key JSON. Mapped ONLY on
+  #                                    the step that writes it (never job-level env), decoded
+  #                                    to a file, exported as GOOGLE_APPLICATION_CREDENTIALS,
+  #                                    and shredded by an always() step. Gate: empty ⇒ skip.
+  #   FIRESTORE_LIVE_DATABASE_PIN      OPTIONAL. Set ⇒ use that pre-provisioned database and
+  #                                    never create or delete one. Empty ⇒ this job provisions
+  #                                    a disposable ci-<run id> database and deletes ONLY that
+  #                                    one in cleanup (C-D8). Deliberately NOT named
+  #                                    FIRESTORE_LIVE_DATABASE_ID: that name is the RESOLVED
+  #                                    id this job exports to $GITHUB_ENV for the tests, and a
+  #                                    job-level secret of the same name would collide with it
+  #                                    (a job-level env value WINS over $GITHUB_ENV, so the
+  #                                    provisioned id would never reach the tests).
+  #   FIRESTORE_LIVE_LOCATION          OPTIONAL, default nam5. Only used when provisioning.
+  #
+  # IAM on that service account, project-scoped to the test project:
+  # roles/datastore.owner — or roles/datastore.user + roles/datastore.indexAdmin
+  # plus datastore.databases.create/delete, which today only datastore.owner
+  # bundles. See integrations/datastores/firestore/README.md.
+  #
+  # Secrets are mapped to job-level env because the secrets context is not
+  # available in step `if:` conditions; every step therefore gates on env. The
+  # credential is the exception — it is mapped at step level, and the gate below
+  # tests only WHETHER it is set, through an expression that never puts the value
+  # in the environment.
+  #
+  # NEVER RUN as of 2026-09-09: no GCP project exists for this repo. The gcloud
+  # flag SPELLINGS below were verified at C8 against gcloud 557.0.0 (`--help`)
+  # and the published reference pages, but the invocations as a whole are
+  # UNVERIFIED end to end. The first dispatch with real secrets is also this
+  # job's own first proof — run it with firestore_live_required: false.
+  firestore-live:
+    runs-on: ubuntu-latest
+    # A live run provisions a database, builds indexes (up to the 20-minute
+    # ceiling below) and runs a 30-minute suite; 90 minutes is the point at which
+    # something is wrong and the run should be killed with its cleanup step still
+    # reachable, rather than burning the 6-hour default.
+    timeout-minutes: 90
+    # One live run at a time, repo-wide: two concurrent dispatches would race for
+    # index quota in the shared test project and (with FIRESTORE_LIVE_DATABASE_PIN
+    # set) for the same database's documents. cancel-in-progress is FALSE on
+    # purpose — cancelling a run mid-flight can strand the ci-<run id> database it
+    # created; the queued run waits instead.
+    concurrency:
+      group: firestore-live
+      cancel-in-progress: false
+    env:
+      FIRESTORE_LIVE_PROJECT_ID: ${{ secrets.FIRESTORE_LIVE_PROJECT_ID }}
+      FIRESTORE_LIVE_DATABASE_PIN: ${{ secrets.FIRESTORE_LIVE_DATABASE_PIN }}
+      FIRESTORE_LIVE_LOCATION: ${{ secrets.FIRESTORE_LIVE_LOCATION }}
+      # The release gate. "1" turns a missing configuration or a skipped
+      # required case into a failure, in the tests AND in the audit step.
+      FIRESTORE_LIVE_REQUIRED: ${{ inputs.firestore_live_required && '1' || '' }}
+      # The floor the audit asserts on a REQUIRED run: the number of Test*Live
+      # roots the connector declares today (C7 derived and counted eleven). It
+      # exists so a broken derivation or a quietly deleted live test cannot pass
+      # as "everything expected ran". BUMP IT in the same change that adds live
+      # roots; lowering it is a deliberate, reviewable act.
+      FIRESTORE_LIVE_MIN_ROOTS: "11"
+      # Force-unset. Nothing else in this job writes FIRESTORE_EMULATOR_HOST —
+      # this line exists so that a value inherited from anywhere (a future
+      # repo-level env, a runner image default) cannot point the "live" leg at an
+      # emulator. firestoretest.OpenLive refuses outright when it is non-empty;
+      # this is the belt to that suspender.
+      FIRESTORE_EMULATOR_HOST: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      # The gate, stated once. Everything after it is conditioned on
+      # LIVE_CONFIGURED, so an unconfigured dispatch reports one loud line
+      # instead of a wall of red — unless this is a release verification, where
+      # missing configuration IS the failure.
+      - name: check the live Firestore configuration
+        env:
+          # Presence, not value: the expression is evaluated by the runner and
+          # only ever expands to "1" or "", so the key never enters this step's
+          # environment or its logs.
+          HAVE_CREDENTIALS: ${{ secrets.FIRESTORE_LIVE_CREDENTIALS_B64 != '' && '1' || '' }}
+        run: |
+          if [ -n "$FIRESTORE_LIVE_PROJECT_ID" ] && [ -n "$HAVE_CREDENTIALS" ]; then
+            echo "LIVE_CONFIGURED=1" >> "$GITHUB_ENV"
+            echo "live Firestore configuration present (project $FIRESTORE_LIVE_PROJECT_ID)"
+            exit 0
+          fi
+          if [ "$FIRESTORE_LIVE_REQUIRED" = "1" ]; then
+            echo "ERROR: firestore_live_required was requested but FIRESTORE_LIVE_PROJECT_ID / FIRESTORE_LIVE_CREDENTIALS_B64 are not set — live Firestore behavior CANNOT be verified"
+            exit 1
+          fi
+          echo "SKIPPING: no live Firestore configuration — live Firestore behavior NOT verified"
+
+      # gcloud is preinstalled on GitHub-hosted ubuntu-latest, but "preinstalled"
+      # is an assumption this job's whole database lifecycle rests on, so it is
+      # asserted once, loudly, before anything is created.
+      - name: check that gcloud is available
+        if: env.LIVE_CONFIGURED == '1'
+        run: |
+          if ! command -v gcloud >/dev/null 2>&1; then
+            echo "ERROR: gcloud is not on PATH — this runner cannot provision, index, or clean up a Firestore database. Add google-github-actions/setup-gcloud, or use a runner image that ships the Cloud SDK."
+            exit 1
+          fi
+          gcloud --version
+
+      - name: write the service-account credentials
+        if: env.LIVE_CONFIGURED == '1'
+        env:
+          # Step-level ONLY, and base64 so the value cannot be line-split or
+          # mangled by shell quoting on its way to the file.
+          FIRESTORE_LIVE_CREDENTIALS_B64: ${{ secrets.FIRESTORE_LIVE_CREDENTIALS_B64 }}
+        run: |
+          set -euo pipefail
+          key="$RUNNER_TEMP/firestore-sa.json"
+          umask 077
+          if ! printf '%s' "$FIRESTORE_LIVE_CREDENTIALS_B64" | base64 -d > "$key"; then
+            echo "ERROR: FIRESTORE_LIVE_CREDENTIALS_B64 is not valid base64 — store the key as \`base64 -w0 key.json\`"
+            exit 1
+          fi
+          chmod 600 "$key"
+          if ! head -c 1 "$key" | grep -q '{'; then
+            echo "ERROR: the decoded credential is not JSON — the secret holds base64 of something else"
+            exit 1
+          fi
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$key" >> "$GITHUB_ENV"
+          gcloud auth activate-service-account --key-file="$key"
+
+      # C-D8: a DISPOSABLE, run-owned database per run — never "(default)",
+      # never a shared one — unless the operator pinned a pre-provisioned
+      # database with FIRESTORE_LIVE_DATABASE_PIN. Both branches export the
+      # RESOLVED id as FIRESTORE_LIVE_DATABASE_ID, which is what the tests and
+      # every gcloud call below read. FIRESTORE_LIVE_OWNED records that this run
+      # created the database, so cleanup can only ever delete what it made.
+      - name: provision a disposable Firestore database
+        if: env.LIVE_CONFIGURED == '1'
+        run: |
+          set -euo pipefail
+          if [ -n "$FIRESTORE_LIVE_DATABASE_PIN" ]; then
+            echo "FIRESTORE_LIVE_DATABASE_ID=$FIRESTORE_LIVE_DATABASE_PIN" >> "$GITHUB_ENV"
+            echo "using the pre-provisioned database $FIRESTORE_LIVE_DATABASE_PIN — this run will NOT create or delete a database"
+            exit 0
+          fi
+          database="ci-$GITHUB_RUN_ID"
+          # Ownership is recorded BEFORE the create call, not after: `databases
+          # create` can create the database and then fail or be cancelled while
+          # reporting the operation (network drop, job timeout). Writing it
+          # afterwards is how CI leaves orphans behind. The cleanup step checks
+          # with `databases describe` first, so recording a database that was
+          # never created costs one no-op describe, not a failure.
+          echo "FIRESTORE_LIVE_OWNED=$database" >> "$GITHUB_ENV"
+          echo "FIRESTORE_LIVE_DATABASE_ID=$database" >> "$GITHUB_ENV"
+          # No --delete-protection flag: it is a value-less BOOLEAN that defaults
+          # to false (verified at C8 against gcloud 557.0.0 --help and
+          # cloud.google.com/sdk/gcloud/reference/firestore/databases/create), so
+          # a new database is deletable unless the flag is passed. The old
+          # `--delete-protection=DISABLED` was not a valid value and would have
+          # failed the first dispatch.
+          gcloud firestore databases create \
+            --database="$database" \
+            --location="${FIRESTORE_LIVE_LOCATION:-nam5}" \
+            --type=firestore-native \
+            --project="$FIRESTORE_LIVE_PROJECT_ID"
+          echo "created the run-owned database $database"
+
+      # Indexes. The connector ships NO index manifest of its own (each store
+      # module embeds one and exports it), so this step does two things:
+      #
+      #   1. creates the four composite indexes the connector's own live leg
+      #      needs on firestore_c4_list_live — both directions of both order
+      #      fields, because the reverse HasPrev probe flips every direction and
+      #      a composite index is direction-specific;
+      #   2. deploys the manifest a store train exported, if FIRESTORE_LIVE_INDEXES
+      #      points at one. That is a jq loop over the manifest's composites into
+      #      the same `gcloud firestore indexes composite create` — NOT
+      #      `firebase deploy`, which needs the Firebase CLI (absent on
+      #      ubuntu-latest) and a firebase.json this repo does not have. jq IS
+      #      preinstalled. Empty/unset ⇒ skipped with a notice.
+      #
+      # ALREADY_EXISTS is the one benign failure (a pinned database keeps its
+      # indexes between runs); anything else fails the step with gcloud's stderr,
+      # because a silently uncreated index becomes a FAILED_PRECONDITION that
+      # reads like a connector bug. Then it waits until every expected index is
+      # READY and none is CREATING — querying a still-building index fails the
+      # same way.
+      #
+      # --query-scope is omitted for the connector's four: the flag's default IS
+      # `collection` and its values are lowercase (verified at C8 against gcloud
+      # 557.0.0 --help and
+      # cloud.google.com/sdk/gcloud/reference/firestore/indexes/composite/create).
+      # The manifest loop emits it only for a non-COLLECTION scope.
+      - name: install composite indexes and wait for READY
+        if: env.LIVE_CONFIGURED == '1'
+        run: |
+          set -euo pipefail
+          indexes_json="$RUNNER_TEMP/firestore-indexes.json"
+          expected=0
+
+          create_index() {
+            group="$1"; shift
+            if out=$(gcloud firestore indexes composite create \
+                --collection-group="$group" \
+                --database="$FIRESTORE_LIVE_DATABASE_ID" \
+                --project="$FIRESTORE_LIVE_PROJECT_ID" \
+                "$@" 2>&1); then
+              echo "  created  $group  $*"
+              return 0
+            fi
+            if printf '%s' "$out" | grep -Eqi 'already exists|ALREADY_EXISTS'; then
+              echo "  exists   $group  $*"
+              return 0
+            fi
+            echo "ERROR: creating the composite index on $group failed: $*"
+            printf '%s\n' "$out"
+            return 1
+          }
+
+          # The connector's own live fixtures (C4).
+          for direction in ascending descending; do
+            for field in created_at n; do
+              expected=$((expected + 1))
+              create_index firestore_c4_list_live \
+                "--field-config=field-path=group,order=ascending" \
+                "--field-config=field-path=$field,order=$direction" \
+                "--field-config=field-path=id,order=$direction"
+            done
+          done
+
+          if [ -n "${FIRESTORE_LIVE_INDEXES:-}" ]; then
+            if [ ! -f "$FIRESTORE_LIVE_INDEXES" ]; then
+              echo "ERROR: FIRESTORE_LIVE_INDEXES=$FIRESTORE_LIVE_INDEXES does not exist — a store train set it to a path this checkout does not have"
+              exit 1
+            fi
+            echo "deploying the exported index manifest $FIRESTORE_LIVE_INDEXES"
+            args="$RUNNER_TEMP/firestore-index-args.tsv"
+            jq -r '
+              (.indexes // [])[]
+              | [ .collectionGroup ]
+                + (if ((.queryScope // "COLLECTION") == "COLLECTION") then []
+                   else [ "--query-scope=" + (.queryScope | ascii_downcase | gsub("_"; "-")) ] end)
+                + ( (.fields // []) | map(
+                      if .order then "--field-config=field-path=" + .fieldPath + ",order=" + (.order | ascii_downcase)
+                      elif .arrayConfig then "--field-config=field-path=" + .fieldPath + ",array-config=" + (.arrayConfig | ascii_downcase)
+                      else "UNSUPPORTED-FIELD:" + (. | tojson) end ) )
+              | @tsv
+            ' "$FIRESTORE_LIVE_INDEXES" > "$args"
+            if grep -q 'UNSUPPORTED-FIELD:' "$args"; then
+              echo "ERROR: the manifest declares an index field this step cannot express as a --field-config (vector-config / search-config are not supported here)"
+              grep 'UNSUPPORTED-FIELD:' "$args"
+              exit 1
+            fi
+            while IFS=$'\t' read -r -a spec; do
+              [ "${#spec[@]}" -gt 0 ] || continue
+              expected=$((expected + 1))
+              create_index "${spec[@]}"
+            done < "$args"
+          else
+            echo "no exported index manifest configured (the connector ships none; each store train sets FIRESTORE_LIVE_INDEXES to the manifest its store exported)"
+          fi
+
+          echo "waiting for $expected expected composite index(es) to report READY"
+          for i in $(seq 1 60); do
+            gcloud firestore indexes composite list \
+              --database="$FIRESTORE_LIVE_DATABASE_ID" \
+              --project="$FIRESTORE_LIVE_PROJECT_ID" \
+              --format=json > "$indexes_json"
+            total=$(jq 'length' "$indexes_json")
+            ready=$(jq '[.[] | select(.state == "READY")] | length' "$indexes_json")
+            creating=$(jq '[.[] | select(.state == "CREATING")] | length' "$indexes_json")
+            echo "  ${i}/60: $total listed, $ready READY, $creating CREATING (need >= $expected READY and 0 CREATING)"
+            if [ "$creating" -eq 0 ] && [ "$ready" -ge "$expected" ]; then
+              jq -r '.[] | "  " + (.name | split("/") | last) + "  " + .state' "$indexes_json"
+              echo "every expected composite index is READY"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "ERROR: after 20 minutes the database still does not report $expected READY composite index(es) with none CREATING"
+          jq -r '.[] | "  " + .name + "  " + .state' "$indexes_json" || true
+          exit 1
+
+      # -run 'Live$' selects the live roots by name, as C-D8 requires. The JSON
+      # goes to a file so the audit below can read it; the exit status is kept
+      # and re-raised after the audit has printed its table (a bare pipe would
+      # hide it).
+      - name: firestore connector live suite (-tags='integration,live')
+        if: env.LIVE_CONFIGURED == '1'
+        working-directory: integrations/datastores/firestore
+        run: |
+          set +e
+          go test -json -count=1 -tags='integration,live' -timeout 30m -run 'Live$' ./... \
+            > "$RUNNER_TEMP/firestore-live.json"
+          status=$?
+          set -e
+          echo "go test exit status: $status"
+          echo "GO_TEST_STATUS=$status" >> "$GITHUB_ENV"
+          exit 0
+
+      # The C-D8 audit, jq-free: every Test*Live root DECLARED under the
+      # `integration && live` build tag must appear in the JSON, and none may
+      # skip when FIRESTORE_LIVE_REQUIRED=1. Deriving the expected roots from
+      # the source rather than from a list in this file is deliberate — a new
+      # live test cannot be silently absent from the gate. The derivation itself
+      # is then checked: an EMPTY expected set would make the audit vacuously
+      # green, and on a required run the set must also still be at least
+      # FIRESTORE_LIVE_MIN_ROOTS large.
+      #
+      # Each store train adds its OWN audit step, with its own
+      # working-directory (pockets/<p>/stores/firestore) and its own minimum —
+      # this one only ever sees the connector's roots.
+      - name: audit the live test/skip counts
+        if: env.LIVE_CONFIGURED == '1'
+        working-directory: integrations/datastores/firestore
+        run: |
+          expected_file="$RUNNER_TEMP/firestore-live-expected.txt"
+          audit_file="$RUNNER_TEMP/firestore-live-audit.txt"
+          set +e
+          grep -rl '//go:build integration && live' --include='*_test.go' . \
+            | xargs -r grep -hoE '^func Test[A-Za-z0-9_]*Live\(' \
+            | sed -E 's/^func //; s/\($//' \
+            | sort -u > "$expected_file"
+          set -e
+          roots=$(wc -l < "$expected_file" | tr -d ' ')
+          echo "expected live roots ($roots):"
+          cat "$expected_file"
+          if [ "$roots" -eq 0 ]; then
+            echo "ERROR: the derived expected-root set is EMPTY — either the live tests are gone or the derivation broke. An empty set makes this audit vacuously green, which is the exact false-positive it exists to prevent."
+            exit 1
+          fi
+          if [ "$FIRESTORE_LIVE_REQUIRED" = "1" ] && [ "$roots" -lt "$FIRESTORE_LIVE_MIN_ROOTS" ]; then
+            echo "ERROR: only $roots live roots were derived, fewer than the recorded minimum FIRESTORE_LIVE_MIN_ROOTS=$FIRESTORE_LIVE_MIN_ROOTS — live coverage shrank, or the derivation is matching fewer files than it should. If roots were removed on purpose, lower FIRESTORE_LIVE_MIN_ROOTS in this workflow in the SAME change."
+            exit 1
+          fi
+
+          set +e
+          awk -v required="$FIRESTORE_LIVE_REQUIRED" \
+              -v expected="$expected_file" '
+            BEGIN {
+              while ((getline root < expected) > 0) { if (root != "") want[root] = 1 }
+            }
+            {
+              if (!match($0, /"Test":"[^"]+"/)) next
+              test = substr($0, RSTART + 8, RLENGTH - 9)
+              if (index(test, "/") > 0) next
+              if (!match($0, /"Action":"[^"]+"/)) next
+              action = substr($0, RSTART + 10, RLENGTH - 11)
+              if (action == "pass" || action == "fail" || action == "skip") saw[test] = action
+            }
+            END {
+              bad = 0
+              for (root in want) {
+                state = (root in saw) ? saw[root] : "ABSENT"
+                printf "  %-52s %s\n", root, state
+                if (state == "ABSENT") { print "ERROR: " root " never ran — the live leg proved nothing about it"; bad = 1 }
+                else if (state == "fail") { bad = 1 }
+                else if (state == "skip") {
+                  if (required == "1") { print "ERROR: " root " SKIPPED while FIRESTORE_LIVE_REQUIRED=1"; bad = 1 }
+                  else { print "WARNING: " root " skipped (not a release verification run)" }
+                }
+              }
+              exit bad
+            }
+          ' "$RUNNER_TEMP/firestore-live.json" > "$audit_file"
+          audit_status=$?
+          set -e
+          cat "$audit_file"
+          if [ "$audit_status" != "0" ]; then
+            echo "ERROR: the live test/skip audit failed (see the table above)"
+            exit 1
+          fi
+          if [ "${GO_TEST_STATUS:-1}" != "0" ]; then
+            echo "ERROR: the live suite itself failed (go test exit status ${GO_TEST_STATUS:-unset})"
+            exit 1
+          fi
+
+      # The release evidence. RELEASING.md's firestore gate cites THIS artifact
+      # by run id instead of a count pasted into a document by hand: the JSON the
+      # audit read, the roots it derived, the table it printed, and the index
+      # states the suite ran against. always() so a FAILED live run is just as
+      # archived as a green one.
+      #
+      # retention-days is the maximum a repository may request; GitHub silently
+      # clamps it to the repo/org limit (90 days on public repos), so this asks
+      # for the longest the settings allow rather than a number that must be
+      # kept in sync with them.
+      - name: upload the live-run evidence
+        if: always() && env.LIVE_CONFIGURED == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: firestore-live-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/firestore-live.json
+            ${{ runner.temp }}/firestore-live-expected.txt
+            ${{ runner.temp }}/firestore-live-audit.txt
+            ${{ runner.temp }}/firestore-indexes.json
+          if-no-files-found: warn
+          retention-days: 400
+
+      # Cleanup deletes ONLY the database this run created (FIRESTORE_LIVE_OWNED
+      # is written nowhere else), never "(default)", never a pinned one, never
+      # the project. always() so a failed suite still tears down. The `describe`
+      # probe distinguishes "the create never happened" (nothing to do) from "the
+      # delete failed" (a real failure that must be loud — a blanket `|| true`
+      # here is how a project fills up with ci-* databases nobody knows about).
+      - name: delete the run-owned Firestore database
+        if: always() && env.FIRESTORE_LIVE_OWNED != ''
+        run: |
+          set -euo pipefail
+          if ! gcloud firestore databases describe \
+              --database="$FIRESTORE_LIVE_OWNED" \
+              --project="$FIRESTORE_LIVE_PROJECT_ID" >/dev/null 2>&1; then
+            echo "no database named $FIRESTORE_LIVE_OWNED exists in $FIRESTORE_LIVE_PROJECT_ID — the create never completed; nothing to delete"
+            exit 0
+          fi
+          gcloud firestore databases delete \
+            --database="$FIRESTORE_LIVE_OWNED" \
+            --project="$FIRESTORE_LIVE_PROJECT_ID" \
+            --quiet
+          echo "deleted the run-owned database $FIRESTORE_LIVE_OWNED"
+
+      # Last, and after the cleanup that needs it: the decoded key does not
+      # outlive the job even in the failure paths. The runner VM is destroyed
+      # anyway; this is defense in depth, and it is cheap.
+      - name: shred the service-account key
+        if: always()
+        run: |
+          key="$RUNNER_TEMP/firestore-sa.json"
+          if [ -f "$key" ]; then
+            shred -u "$key" 2>/dev/null || rm -f "$key"
+            echo "removed $key"
+          fi
