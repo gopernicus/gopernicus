@@ -66,7 +66,7 @@ transaction locks what it read — which is why every row states it.
 |---|---|---|---|
 | `List` | query users, order `(created_at, id)`; the projection fields answer PrimaryEmail/EmailVerified in the SAME query | — | — |
 | `GetSummary` | users doc | — | — |
-| `SetStatus` | users doc, every session of the user (for their hash claims), every grant owned by the user **or bound to those sessions** | status, `status_changed_at`, `updated_at`, `auth_revision + 1`; delete sessions and grants | releases every deleted session's refresh claim |
+| `SetStatus` | **BUILT (N2b)** — users doc, every session of the user (for their hash claims), every grant owned by the user **or bound to those sessions** (`readGrantsForRevocation`, deduplicated by grant id) | status, `status_changed_at`, `updated_at`, `auth_revision + 1`; delete sessions and grants. A replay of the stored status writes NOTHING | releases every deleted session's refresh claim |
 
 ### `session.SessionRepository` — 7
 
@@ -163,8 +163,20 @@ transaction locks what it read — which is why every row states it.
 
 | Method | Reads | Writes | Claims |
 |---|---|---|---|
-| `Snapshot` | ONE `ReadSnapshot` over: users doc (`auth_revision`), user_passwords existence, oauth_accounts by user ordered by provider, active identifiers by user | — | — |
-| `Apply` | users doc (revision CAS) + the typed mutation's targets: `RemovePassword` → the password doc; `UnlinkOAuth` → the user's link for that provider; `RetireIdentifier` → the retired row, the promoted replacement, their claims, the projection; `ChangeIdentifierUses` → the row, the displaced primary, the auth/primary claims, the projection | exactly the targeted source, `auth_revision + 1` | per mutation — see §6.3 |
+| `Snapshot` | **BUILT (N2b)** — ONE `ReadSnapshot` over: users doc (`auth_revision`), user_passwords existence, oauth_accounts by user (`ListByUser`'s index, re-sorted by provider in Go — §7), active identifiers by user | — | — |
+| `Apply` | **BUILT (N2b)** — users doc (revision CAS) + the typed mutation's targets: `RemovePassword` → NOTHING (see below); `UnlinkOAuth` → the user's links for that provider (a query: the doc id needs `provider_user_id`); `RetireIdentifier` → the retired row, the named replacement, the active primary email; `ChangeIdentifierUses` → the row, the displaced primary of its kind, the active primary email | exactly the targeted source, its claims, the recomputed projection, `auth_revision + 1` | per mutation — see §6.3 |
+
+`RemovePassword` reads NOTHING beyond the revision CAS, which reads as an
+omission against the row above's original text and is not one: the credential
+document's id is derived from the user id and an unconditional `Delete` is
+idempotent (the SQL `DELETE … WHERE user_id = ?` affects zero rows without
+failing), so reading it first would only widen the transaction's lock set. Same
+call, same reason, as N2a's "a free claim is taken, never read".
+
+An ABSENT target is a successful no-op that still advances `auth_revision` in all
+three families: the SQL statement behind every kind affects zero rows rather than
+erroring, and this store reproduces that rather than inventing a `sdk.ErrNotFound`
+the port does not describe.
 
 ### `passwordreset.Repository` — 1
 
@@ -611,15 +623,15 @@ projection fields, and they recompute rather than assume.
 | 3 | `Identifiers.ApplyVerifiedChange` — replacement (`ReplacesIdentifierID`) | recompute: the retired row may have BEEN the projected address |
 | 4 | `Identifiers.ApplyVerifiedChange` — primary switch (`MakePrimary`) | the displaced primary is retired; the new row becomes the projection |
 | 5 | `Identifiers.ApplyVerifiedChange` — verification | `email_verified` follows the new row's `verified_at` |
-| 6 | `CredentialMutations.Apply` / `RetireIdentifier` | clear when the retired row was the projected primary email and no replacement is named |
-| 7 | `CredentialMutations.Apply` / `RetireIdentifier` with `ReplacementPrimaryID` | the promoted row becomes the projection (its own `verified_at` decides the flag) |
-| 8 | `CredentialMutations.Apply` / `ChangeIdentifierUses` with `MakePrimary` | promotion demotes the current primary of that kind → recompute |
-| 9 | `CredentialMutations.Apply` / `RemovePassword`, `UnlinkOAuth` | NO projection change (listed so the enumeration is complete rather than silent) |
+| 6 | `CredentialMutations.Apply` / `RetireIdentifier` | **BUILT (N2b)**; clear when the retired row was the projected primary email and no replacement is named |
+| 7 | `CredentialMutations.Apply` / `RetireIdentifier` with `ReplacementPrimaryID` | **BUILT (N2b)**; the promoted row becomes the projection (its own `verified_at` decides the flag) |
+| 8 | `CredentialMutations.Apply` / `ChangeIdentifierUses` with `MakePrimary` | **BUILT (N2b)**; promotion demotes the current primary of that kind → recompute |
+| 9 | `CredentialMutations.Apply` / `RemovePassword`, `UnlinkOAuth` | **BUILT (N2b)**; NO projection change (listed so the enumeration is complete rather than silent) |
 | 10 | `Passwordless.Redeem` — provision | the new user's verified primary identifier IS the projection |
 | 11 | `Passwordless.Redeem` — adopt | the adopted identifier becomes verified; when it is the active primary email, `email_verified` flips true |
 | 12 | `Passwordless.Redeem` — login | NO projection change |
 | 13 | `PasswordResets.Redeem` | NO projection change (no identifier is touched) |
-| 14 | `UserAdmin.SetStatus` | writes `status`, `status_changed_at`, `updated_at`, `auth_revision` — all Summary fields — and MUST NOT disturb the two projection fields (§6.2) |
+| 14 | `UserAdmin.SetStatus` | **BUILT (N2b)**; writes `status`, `status_changed_at`, `updated_at`, `auth_revision` — all Summary fields — and MUST NOT disturb the two projection fields (§6.2) |
 | 15 | `Users.Update` | writes `display_name`, `updated_at` — same rule |
 
 Rows 1–8 and 10–11 are the ones that WRITE the projection; 9, 12, 13 are audited
@@ -638,15 +650,15 @@ projection of what the unbuilt tasks will issue.
 | Collection | Filters | Order | Notes |
 |---|---|---|---|
 | `users` | — | `(created_at, id)` both directions | `UserAdmin.List` — **BUILT (N2c)**, through the connector `List` helper with `user.OrderFields`/`user.DefaultOrder` and PK `id`; the reverse direction is the `HasPrev` probe's |
-| `user_identifiers` | `user_id ==`, `active ==` | `(created_at, id)` ascending | `ListByUser` — **BUILT (N2a)**, exactly one shape: `user_id == AND active == true ORDER BY created_at ASC, id ASC`. It is NOT paged (the port returns a slice), so it needs no reversed direction of its own. Credential `Snapshot` (N2b) reuses it |
-| `sessions` | `user_id ==` \| `previous_refresh_token_hash ==` | — | **BUILT (N3a)**, exactly two shapes, both a SINGLE equality with NO order: `user_id ==` (`DeleteByUser`, and the N2b/N4d revocation cascades) and `previous_refresh_token_hash == … LIMIT 1` (`GetByRefreshHash`'s grace half, under a `ReadSnapshot`). Firestore serves a single-field equality from the automatic index, so NEITHER needs a composite. The CURRENT hash issues no query at all — its claim is the access path (§7.1) |
-| `oauth_accounts` | `user_id ==` (+ `provider ==` for Delete) | `(linked_at DESC, provider_user_id DESC)` | **BUILT (N3b)**, two shapes: `ListByUser` = `user_id == ORDER BY linked_at DESC, provider_user_id DESC` (a COMPOSITE — already in the manifest — with no reversed direction, because the port returns a slice, not a page) and `Delete` = `user_id == AND provider ==`, equality-only and therefore served without a composite (Firestore merges the two automatic single-field indexes) |
+| `user_identifiers` | `user_id ==`, `active ==` | `(created_at, id)` ascending | `ListByUser` — **BUILT (N2a)**, exactly one shape: `user_id == AND active == true ORDER BY created_at ASC, id ASC`. It is NOT paged (the port returns a slice), so it needs no reversed direction of its own. Credential `Snapshot` **reuses it verbatim (N2b)** — no new shape |
+| `sessions` | `user_id ==` \| `previous_refresh_token_hash ==` | — | **BUILT (N3a)**, exactly two shapes, both a SINGLE equality with NO order: `user_id ==` (`DeleteByUser`, the N2b lifecycle cascade — **BUILT** — and N4d's adoption) and `previous_refresh_token_hash == … LIMIT 1` (`GetByRefreshHash`'s grace half, under a `ReadSnapshot`). Firestore serves a single-field equality from the automatic index, so NEITHER needs a composite. The CURRENT hash issues no query at all — its claim is the access path (§7.1) |
+| `oauth_accounts` | `user_id ==` (+ `provider ==` for Delete) | `(linked_at DESC, provider_user_id DESC)` | **BUILT (N3b)**, two shapes: `ListByUser` = `user_id == ORDER BY linked_at DESC, provider_user_id DESC` (a COMPOSITE — already in the manifest — with no reversed direction, because the port returns a slice, not a page) and `Delete` = `user_id == AND provider ==`, equality-only and therefore served without a composite (Firestore merges the two automatic single-field indexes). **N2b adds no shape**: `CredentialMutations.UnlinkOAuth` reuses `Delete`'s query, and `Snapshot` reuses `ListByUser`'s and re-sorts the handful of links by provider IN GO rather than asking Firestore for a `(user_id, provider)` ordering — the SQL adapters' `ORDER BY provider` on a per-user inventory is not worth a composite index of its own |
 | `service_accounts` | — | `(created_at, id)` both directions | `List` |
 | `api_keys` | `service_account_id ==` | `(created_at, id)` both directions | + `PostFilter` search (R4) |
 | `security_events` | any subset of `user_id`, `event_type`, `event_status` × `created_at` range | `(created_at, id)` both directions | the widest set: every equality subset × the range × both directions |
 | `invitations` | `resource_key ==` \| `subject_key ==` \| `resolved_subject_id ==` | `(created_at, id)` both directions | |
 | `challenges` | `expires_at <=` (purge); `user_id ==` + `purpose in` (reset/adoption revocation) | `expires_at`, then `id` | |
-| `authentication_grants` | `consume_key ==` + `consumed_at == null`; `session_id ==`; `user_id ==` | `(created_at, id)` ascending | `Consume` — **BUILT (N3b)** — is `consume_key == AND consumed_at == null ORDER BY created_at ASC, id ASC LIMIT 1`; `consumed_at == null` is a Firestore IS_NULL filter and the shape needs the four-field COMPOSITE the manifest already carries. `session_id ==` (`DeleteBySession`) is **BUILT (N3b)** and equality-only, so no composite. `user_id ==` is N2b's half of the lifecycle cascade (`readGrantsForUser`), also equality-only |
+| `authentication_grants` | `consume_key ==` + `consumed_at == null`; `session_id ==`; `user_id ==` | `(created_at, id)` ascending | `Consume` — **BUILT (N3b)** — is `consume_key == AND consumed_at == null ORDER BY created_at ASC, id ASC LIMIT 1`; `consumed_at == null` is a Firestore IS_NULL filter and the shape needs the four-field COMPOSITE the manifest already carries. `session_id ==` (`DeleteBySession`) is **BUILT (N3b)** and equality-only, so no composite. `user_id ==` (`readGrantsForUser`, the user half of the lifecycle cascade) is **BUILT (N2b)** and equality-only, so no composite; `SetStatus` issues it once plus one `session_id ==` per revoked session |
 
 Every direction a store serves — PLUS the reversed direction the List helper's
 `HasPrev` probe issues, which needs the same index with all directions flipped —
@@ -699,13 +711,13 @@ document's `email_verified` projection — is not a violation.
 
 | Owner file | Owns | Writers |
 |---|---|---|
-| `users_doc.go` | `users` | `putUser` (the ONLY whole-document write; takes the projection explicitly), `updateUserProfile`, `advanceUserRevision` |
+| `users_doc.go` | `users` | `putUser` (the ONLY whole-document write; takes the projection explicitly), `updateUserProfile`, `advanceUserRevision`, `transitionUserStatus` (N2b — the lifecycle fields, never the projection) |
 | `identifiers_doc.go` | `user_identifiers`, `identifier_claims`, `identifier_primaries` | `putIdentifier`, `updateIdentifier` |
-| `passwords_doc.go` | `user_passwords` | `putPassword` |
+| `passwords_doc.go` | `user_passwords` | `putPassword`, `dropPassword` (N2b) |
 | `projection.go` | the two projection FIELD names, in both spellings | `resolveEmailProjection` and its `apply`/`updates`/`fill` |
 | `sessions_doc.go` (N3a) | `sessions`, `session_refresh_hashes` | `putSession`, `updateSession`, `dropSession`, `dropSessionsForUser` |
 | `oauth_doc.go` (N3b) | `oauth_accounts`, `oauth_states` | `putOAuthAccount`, `dropOAuthAccounts`, `putOAuthState`, `dropOAuthState` |
-| `grants_doc.go` (N3b) | `authentication_grants` | `putAuthGrant`, `spendAuthGrant`, `dropAuthGrants` |
+| `grants_doc.go` (N3b) | `authentication_grants` | `putAuthGrant`, `spendAuthGrant`, `dropAuthGrants`; `readGrantsForRevocation` (N2b) is its read half |
 
 The revocation helpers (`dropSessionsForUser`, `dropAuthGrants`) take
 ALREADY-READ documents and read nothing, which is what lets N2b's `SetStatus` and

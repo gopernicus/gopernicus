@@ -147,6 +147,50 @@ func readGrantsForUser(ctx context.Context, db *firestoredb.DB, r firestoredb.Re
 	return queryAuthGrants(ctx, r, grantsForUserQuery(db, userID))
 }
 
+// readGrantsForRevocation reads every grant a LIFECYCLE revocation must delete:
+// the ones the user owns, plus the ones bound to each session being revoked. It
+// is the document reading of the SQL adapters' single statement
+//
+//	DELETE FROM authentication_grants
+//	 WHERE user_id = ? OR session_id IN (SELECT id FROM sessions WHERE user_id = ?)
+//
+// and the second disjunct is not redundant: a grant whose session row was
+// already deleted, or one minted for a session the user no longer owns, must not
+// outlive the transition either.
+//
+// Results are DEDUPLICATED by grant id, because a grant that names both the user
+// and one of those sessions satisfies both queries and must be deleted once —
+// two Delete writes for one document in one commit is not a stronger delete, it
+// is an ambiguous transaction. The reads all happen here so the caller can
+// finish its read phase before its first write.
+func readGrantsForRevocation(ctx context.Context, db *firestoredb.DB, r firestoredb.Reader, userID string, sessionIDs []string) ([]authGrantDoc, error) {
+	owned, err := readGrantsForUser(ctx, db, r, userID)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool, len(owned))
+	out := make([]authGrantDoc, 0, len(owned))
+	for _, row := range owned {
+		if !seen[row.ID] {
+			seen[row.ID] = true
+			out = append(out, row)
+		}
+	}
+	for _, sessionID := range sessionIDs {
+		bound, err := readGrantsForSession(ctx, db, r, sessionID)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range bound {
+			if !seen[row.ID] {
+				seen[row.ID] = true
+				out = append(out, row)
+			}
+		}
+	}
+	return out, nil
+}
+
 // queryAuthGrants runs one grant query and decodes every document it returns,
 // consuming iterator.Done as the loop terminator and mapping every other Next
 // error HERE, at the iteration boundary.

@@ -2,6 +2,7 @@ package firestore
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	firestoredb "github.com/gopernicus/gopernicus/integrations/datastores/firestore"
@@ -60,9 +61,107 @@ func (s *userAdminStore) GetSummary(ctx context.Context, id string) (user.Summar
 // its timestamp, auth_revision + 1, and the deletion of every session (with its
 // refresh claim) and every grant owned by the user or bound to those sessions.
 // Replaying the same status changes nothing and revokes nothing.
+//
+// An invalid status is refused BEFORE the transaction opens (user.ErrInvalidStatus
+// wrapping sdk.ErrInvalidInput), so a rejected value cannot have written
+// anything — the port states that as its own case, and the closed vocabulary is
+// the domain's, not this store's.
+//
+// The fence against a concurrent mint is the READ SET: this transaction reads
+// AND writes the users document, and session.ActiveUserRepository.CreateForActiveUser
+// reads that same document to prove the subject is active. Firestore therefore
+// serializes the two — either the mint commits first and the revocation below
+// deletes its session, or the transition commits first and the mint re-reads a
+// deactivated subject and refuses. That is the same guarantee turso obtains from
+// BEGIN IMMEDIATE and pgx from row locking.
 func (s *userAdminStore) SetStatus(ctx context.Context, id string, status user.Status, now time.Time) (user.StatusChange, error) {
 	if err := refuseAmbient(ctx); err != nil {
 		return user.StatusChange{}, err
 	}
-	return user.StatusChange{}, errNotImplemented
+	if !status.Valid() {
+		return user.StatusChange{}, fmt.Errorf("authentication firestore store: %q: %w", status, user.ErrInvalidStatus)
+	}
+
+	var out user.StatusChange
+	err := retryTransact(ctx, s.db, func(ctx context.Context) error {
+		return s.transition(ctx, id, status, now, &out)
+	})
+	if err != nil {
+		return user.StatusChange{}, err
+	}
+	return out, nil
+}
+
+// transition is ONE attempt at the lifecycle change, reads strictly before
+// writes, recording its outcome in out.
+//
+// out is RESET first. A Firestore callback may run more than once, and the
+// outcome an aborted attempt computed — how many sessions IT saw — is not the
+// outcome of the transaction that commits. Leaving a previous attempt's count in
+// place would report a revocation that never happened.
+//
+// The read phase is the whole revocation set, because the vendor refuses any
+// read issued after the transaction's first write: the users document, every
+// session of the user (each carries the refresh-hash claim its deletion must
+// release), and every grant the user owns or that is bound to one of those
+// sessions. Reading them is also what makes them the CONTENTION set.
+func (s *userAdminStore) transition(ctx context.Context, id string, status user.Status, now time.Time, out *user.StatusChange) error {
+	*out = user.StatusChange{}
+	r := s.db.ReaderFrom(ctx)
+
+	row, err := readUser(ctx, s.db, r, id)
+	if err != nil {
+		return err
+	}
+	changedAt, err := firestoredb.ParseNullTime(row.StatusChangedAt)
+	if err != nil {
+		return err
+	}
+	// The idempotent replay: the desired status is already the stored one, so
+	// nothing is written — no revision increment, no revocation — and the
+	// previously recorded transition time is reported unchanged.
+	if user.NormalizeStatus(user.Status(row.Status)) == status {
+		*out = user.StatusChange{Status: status, ChangedAt: changedAt}
+		return nil
+	}
+
+	live, err := readSessionsForUser(ctx, s.db, r, id)
+	if err != nil {
+		return err
+	}
+	ids := make([]string, 0, len(live))
+	for _, sess := range live {
+		ids = append(ids, sess.ID)
+	}
+	grants, err := readGrantsForRevocation(ctx, s.db, r, id, ids)
+	if err != nil {
+		return err
+	}
+
+	// WRITE PHASE. Nothing below reads. The status, the revision, the sessions
+	// with their claims, and the grants commit together or not at all: an
+	// update-then-best-effort-delete would leave a deactivated subject holding
+	// live credentials after a crash, which is the failure the port names.
+	w := s.db.WriterFrom(ctx)
+	plan := newClaimPlan()
+	if err := transitionUserStatus(ctx, s.db, w, id, status, row.AuthRevision+1, now); err != nil {
+		return err
+	}
+	if err := dropAuthGrants(ctx, s.db, w, grants); err != nil {
+		return err
+	}
+	if err := dropSessionsForUser(ctx, s.db, w, plan, live); err != nil {
+		return err
+	}
+	if err := plan.commit(ctx, w); err != nil {
+		return err
+	}
+
+	*out = user.StatusChange{
+		Status:          status,
+		Changed:         true,
+		ChangedAt:       firestoredb.TruncateTime(now),
+		RevokedSessions: len(live),
+	}
+	return nil
 }
