@@ -724,30 +724,32 @@ so recomputing would be the only way to get it wrong); 14 and 15 are the whole-d
 semantics AND the absence semantics (no active primary email → empty, verified
 false), and that a page costs no per-user identifier read.
 
-## 7. The query matrix (provisional — N5 is the authority)
+## 7. The query matrix
 
-The manifest's specification is the COMPLETE supported query matrix, derived and
-proven live at N5. What the audit already pins:
+The manifest's specification is the COMPLETE supported query matrix (ruling R5).
+This section is the prose half; the EXECUTABLE half is `queryMatrix()` in
+`indexes_test.go`, which §8 derives `firestore.indexes.json` from and checks both
+ways. A query that is not a row here is a query with no index, and an index no
+row requires fails the build.
 
-Rows the implementation has REACHED are marked; the rest are still the audit's
-projection of what the unbuilt tasks will issue.
+Every shape below is BUILT and covered by a matrix row as of N5.
 
 | Collection | Filters | Order | Notes |
 |---|---|---|---|
 | `users` | — | `(created_at, id)` both directions | `UserAdmin.List` — **BUILT (N2c)**, through the connector `List` helper with `user.OrderFields`/`user.DefaultOrder` and PK `id`; the reverse direction is the `HasPrev` probe's. **N4d adds no shape**: a redemption reaches every users document by id (§7.1) |
 | `user_identifiers` | `user_id ==`, `active ==` | `(created_at, id)` ascending | `ListByUser` — **BUILT (N2a)**, exactly one shape: `user_id == AND active == true ORDER BY created_at ASC, id ASC`. It is NOT paged (the port returns a slice), so it needs no reversed direction of its own. Credential `Snapshot` **reuses it verbatim (N2b)** — no new shape. **N4d adds none either**: a redemption resolves the bound address through its authentication CLAIM and never queries identifier text (§7.1) |
 | `sessions` | `user_id ==` \| `previous_refresh_token_hash ==` | — | **BUILT (N3a)**, exactly two shapes, both a SINGLE equality with NO order: `user_id ==` (`DeleteByUser`, the N2b lifecycle cascade and N4d's passwordless adoption — all three **BUILT**, all three the same shape) and `previous_refresh_token_hash == … LIMIT 1` (`GetByRefreshHash`'s grace half, under a `ReadSnapshot`). Firestore serves a single-field equality from the automatic index, so NEITHER needs a composite. The CURRENT hash issues no query at all — its claim is the access path (§7.1) |
-| `oauth_accounts` | `user_id ==` (+ `provider ==` for Delete) | `(linked_at DESC, provider_user_id DESC)` | **BUILT (N3b)**, two shapes: `ListByUser` = `user_id == ORDER BY linked_at DESC, provider_user_id DESC` (a COMPOSITE — already in the manifest — with no reversed direction, because the port returns a slice, not a page) and `Delete` = `user_id == AND provider ==`, equality-only and therefore served without a composite (Firestore merges the two automatic single-field indexes). **N2b adds no shape**: `CredentialMutations.UnlinkOAuth` reuses `Delete`'s query, and `Snapshot` reuses `ListByUser`'s and re-sorts the handful of links by provider IN GO rather than asking Firestore for a `(user_id, provider)` ordering — the SQL adapters' `ORDER BY provider` on a per-user inventory is not worth a composite index of its own |
+| `oauth_accounts` | `user_id ==` (+ `provider ==` for Delete) | `(linked_at DESC, provider_user_id DESC)` | **BUILT (N3b)**, two shapes: `ListByUser` = `user_id == ORDER BY linked_at DESC, provider_user_id DESC` (a COMPOSITE — already in the manifest — with no reversed direction, because the port returns a slice, not a page) and `Delete` = `user_id == AND provider ==`, two equality fields and therefore a COMPOSITE of its own — N5 CORRECTED this row: the server MAY merge two automatic single-field indexes, but merging is a documented optimization rather than a guarantee, and the manifest declares what it depends on (§8.1). **N2b adds no shape**: `CredentialMutations.UnlinkOAuth` reuses `Delete`'s query, and `Snapshot` reuses `ListByUser`'s and re-sorts the handful of links by provider IN GO rather than asking Firestore for a `(user_id, provider)` ordering — the SQL adapters' `ORDER BY provider` on a per-user inventory is not worth a composite index of its own |
 | `service_accounts` | — | `(created_at, id)` both directions | `List` — **BUILT (N4a)**, one shape: the unfiltered collection ordered `(created_at, id)`, through the connector `List` with `serviceaccount.OrderFields`/`DefaultOrder` and PK `id`. The reverse direction is the `HasPrev` probe's. No `PostFilter`, so a non-blank `Search` is `sdk.ErrInvalidInput` |
 | `api_keys` | `service_account_id ==` | `(created_at, id)` both directions | `ListByServiceAccount` — **BUILT (N4a)**, ONE query shape in both directions: `service_account_id == … ORDER BY created_at, id`. `req.Search` adds NO query shape — it is a client-side `PostFilter` from `firestoredb.SearchFilter(apikey.SearchFields, …)` applied while page-filling, which is exactly why R4 restricts it to this parent-scoped list. `GetByHash` issues no query (§7.1) |
 | `security_events` | any subset of `user_id`, `event_type`, `event_status` × `created_at` range | `(created_at, id)` both directions | `List` — **BUILT (N4a)**; the widest set in the store, enumerated exhaustively in §7.3. The range field IS the leading order field, so a subset costs one composite per direction and not two |
-| `invitations` | `resource_key ==` \| `subject_key ==` \| `resolved_subject_id ==` | `(created_at, id)` both directions | **BUILT (N4b)**, exactly two shapes, both through the connector `List` helper with `invitation.OrderFields`/`DefaultOrder` and PK `id`: `resource_key == ORDER BY created_at, id` and `subject_key == ORDER BY created_at, id`, each in BOTH directions (the reverse is the `HasPrev` probe's) — the four composites the manifest already carries. `resolved_subject_id ==` is NOT issued by any port today (the pocket drives resolve-on-registration through `ListBySubject`); it stays a documented access path for N5 to decide on. Neither list declares a `PostFilter`, so a non-blank `Search` is `sdk.ErrInvalidInput` (R4) |
-| `challenges` | `expires_at <=` (purge); `user_id ==` + `purpose in` (reset/adoption revocation) | `expires_at`, then `id` | **BUILT (N4c)**, exactly two shapes. `PurgeExpired` is `expires_at <= before ORDER BY expires_at ASC, id ASC [LIMIT n]` — the two-field COMPOSITE the manifest already carries, one direction only (the port returns a count, not a page), and the query runs INSIDE the purge's transaction so its candidates are the contention set. The revocation cascade is `user_id == AND purpose in [...]`, equality-only and therefore served without a composite; the `in` list is chunked at 30 (the DNF disjunction cap) even though this pocket's purge sets are two or three purposes. **N4d adds no shape**: passwordless adoption reuses the revocation query |
+| `invitations` | `resource_key ==` \| `subject_key ==` \| `resolved_subject_id ==` | `(created_at, id)` both directions | **BUILT (N4b)**, exactly two shapes, both through the connector `List` helper with `invitation.OrderFields`/`DefaultOrder` and PK `id`: `resource_key == ORDER BY created_at, id` and `subject_key == ORDER BY created_at, id`, each in BOTH directions (the reverse is the `HasPrev` probe's) — the four composites the manifest already carries. `resolved_subject_id ==` is NOT issued by any port today (the pocket drives resolve-on-registration through `ListBySubject`), and N5 RULED it out of the matrix: it is neither a composite nor a declared single-field dependency, because the manifest declares what the store queries and nothing else. A port that starts filtering on it adds a matrix row, which adds its index. Neither list declares a `PostFilter`, so a non-blank `Search` is `sdk.ErrInvalidInput` (R4) |
+| `challenges` | `expires_at <=` (purge); `user_id ==` + `purpose in` (reset/adoption revocation) | `expires_at`, then `id` | **BUILT (N4c)**, exactly two shapes. `PurgeExpired` is `expires_at <= before ORDER BY expires_at ASC, id ASC [LIMIT n]` — the two-field COMPOSITE the manifest already carries, one direction only (the port returns a count, not a page), and the query runs INSIDE the purge's transaction so its candidates are the contention set. The revocation cascade is `user_id == AND purpose in [...]`, two filter fields and therefore a COMPOSITE of its own — N5 CORRECTED this row for the reason the oauth `Delete` row states (§8.1): `in` and `==` select the same index, and index MERGING is an optimization the manifest must not depend on. The `in` list is chunked at 30 (the DNF disjunction cap) even though this pocket's purge sets are two or three purposes. **N4d adds no shape**: passwordless adoption reuses the revocation query |
 | `authentication_grants` | `consume_key ==` + `consumed_at == null`; `session_id ==`; `user_id ==` | `(created_at, id)` ascending | `Consume` — **BUILT (N3b)** — is `consume_key == AND consumed_at == null ORDER BY created_at ASC, id ASC LIMIT 1`; `consumed_at == null` is a Firestore IS_NULL filter and the shape needs the four-field COMPOSITE the manifest already carries. `session_id ==` (`DeleteBySession`) is **BUILT (N3b)** and equality-only, so no composite. `user_id ==` (`readGrantsForUser`, the user half of the lifecycle cascade) is **BUILT (N2b)** and equality-only, so no composite; `SetStatus` issues it once plus one `session_id ==` per revoked session. **N4d adds no shape**: passwordless adoption issues `user_id ==` ALONE, because both SQL adapters revoke `WHERE user_id = ?` there — the wider session-linked disjunction is `SetStatus`'s, whose SQL spells it out |
 
 Every direction a store serves — PLUS the reversed direction the List helper's
 `HasPrev` probe issues, which needs the same index with all directions flipped —
-belongs in the manifest. The emulator enforces NONE of it.
+belongs in the manifest (§8.2). The emulator enforces NONE of it.
 
 ### 7.1 The point-read access paths (no index, by construction)
 
@@ -879,20 +881,213 @@ carries — `(created_at, id)` and `(service_account_id, created_at, id)`, each 
 both directions — and `req.Search` contributes NONE, because it is evaluated in
 Go over the parent-scoped page fill (R4).
 
-## 8. Index manifest
+## 8. Index manifest (N5)
 
-`firestore.indexes.json` ships PROVISIONAL at N1: 16 composites covering the
-shapes above that are already certain. N5 derives the complete set from the
-matrix, adds the field overrides this store's single-field dependencies need, and
-verifies every row against a real database; `indexes_test.go` will then assert
-the correspondence both ways (a query with no index, and an index no query needs,
-both fail the build).
+`firestore.indexes.json` declares **32 composite indexes** — 16 on
+`security_events`, 4 on `invitations`, 2 each on `users`, `service_accounts`,
+`api_keys` and `oauth_accounts`, 2 on `challenges`, 1 each on `user_identifiers`
+and `authentication_grants` — all at `COLLECTION` scope (every collection is
+top-level), plus **36 field overrides** (§8.4). It is no longer provisional:
+every entry is derived from §7 by the rules below, and `indexes_test.go` fails if
+the two disagree in either direction.
 
-Firestore allows 200 composite indexes per database without billing enabled. The
-security-events matrix alone is the largest contributor — 8 equality subsets ×
-one range × two directions is the upper bound before pruning — and the
-`platform-sre` review at N7 checks the total against that cap, shared with
-whatever the host and the authorization store deploy.
+The other ten of this store's twenty collections carry NO index entry at all,
+because they answer
+point reads only (§7.1): `user_passwords`, `oauth_states`, `contact_changes`, and
+the seven claim collections. That is the design paying off — a claim resolves an
+address by document id, so unbounded address text is never an indexed filter
+value (§4.2) and the manifest is far smaller than the SQL adapters' index list.
+
+**The count against the cap.** A database allows 200 composite indexes without
+billing enabled (1,000 with it), shared across every store a host mounts. This
+store's 32 is its share; the authorization store's is 28. A host that mounts both
+pockets spends 60 and keeps **140** for its own collections.
+`TestIndexManifestParses` states both numbers (`indexManifestCount`,
+`compositeBudget`) so a change has to move a number a reviewer can see.
+
+The provisional N1 manifest carried 16 composites and no field overrides. N5
+ADDED 16 and REMOVED or RESPELLED none: **14** security-events entries (N1 shipped
+only the `user_id` subset in both directions; §7.3 had projected all eight
+subsets, and this is where the projection became the file), plus the
+`(user_id, provider)` oauth delete and the `(user_id, purpose)` challenge
+revocation that rule 2 turned from "no composite" into two. The 36 field
+overrides are entirely new.
+
+### 8.1 The derivation rules, with sources
+
+From [index-overview](https://firebase.google.com/docs/firestore/query-data/index-overview)
+and [queries](https://firebase.google.com/docs/firestore/query-data/queries):
+
+1. **A single filter field needs nothing.** "You can combine constraints with a
+   logical AND by chaining multiple equality operators (`==` or
+   `array-contains`). However, you must create a composite index to combine
+   equality operators with the inequality operators, `<`, `<=`, `>`, and `!=`." A
+   single `in` likewise: "You can also create `in` and compound equality (`==`)
+   queries" appears under *Queries supported by single-field indexes*.
+2. **`in` is an equality for index selection** — "`in` and `==` clauses use the
+   same index". Rule 1 is therefore narrowed to a SINGLE filter field: this store
+   declares a composite for **any query with two or more filter fields**, `in` or
+   not. The server may serve multi-equality queries by MERGING automatic
+   single-field indexes, but merging is an optimization the docs recommend, not a
+   guarantee, and the cost asymmetry is the whole argument (a surplus index costs
+   storage; a missing one is a production `FAILED_PRECONDITION` on a request no
+   emulator run would have failed). This is the rule that corrected two §7 rows:
+   the oauth `Delete` (`user_id ==` + `provider ==`) and the challenge revocation
+   cascade (`user_id ==` + `purpose in`). It matches the authorization store's
+   post-A7 rule exactly, so the two manifests are derived by one rule.
+3. **Filter + sort on another field, or any two-field sort, needs one.** "If you
+   need to run a compound query that uses a range comparison … or if you need to
+   sort by a different field, you must create a manual index for that query."
+   This is why the two UNFILTERED lists (`users`, `service_accounts`) still take
+   composites: their sort is `(created_at, id)`, two fields.
+4. **Field order.** "The start position is prefixed with the query's equality
+   filters and ends with the range and inequality filters on the first `orderBy`
+   field" — equality-class fields first, then the range/order fields in the
+   query's direction. Firestore accepts any order WITHIN the equality prefix, so
+   the manifest pins one (`equalityPrecedence` in `indexes_test.go`, which is the
+   order the store's query builders apply their filters in) and every shape obeys
+   it, or two spellings of one index would both have to be deployed.
+5. **A range on the leading order field adds nothing.** `security_events`'
+   `Since`/`Until` and `PurgeExpired`'s `expires_at <= before` constrain the
+   field the sort already leads with, which is also what Firestore REQUIRES
+   ("your first ordering must be on the same field as the inequality"). So the
+   time window costs no index field and no extra entry — the eight equality
+   subsets are eight indexes, not sixteen (§7.3).
+6. **`__name__` is implicit and unused here.** "By default, the `__name__` field
+   is sorted in the same direction of the last sorted field in the index
+   definition." No shape in this store orders by `__name__` at all: every paged
+   list pins the DOMAIN `id` field as its PK (`ListQuery.PK`), so the cursor a
+   caller receives is the domain id rather than the document-name hash, and both
+   sort clauses are real index fields. The `__name__` rule stays in
+   `requiredIndex` because the connector's `List` orders by `__name__` for any
+   `ListQuery` that leaves `PK` empty.
+7. **An aggregation uses the index of the query underneath it.** `WithCount`
+   counts the ORDERED query (connector `List.count`), and the search count
+   iterates that same population, so neither adds an entry.
+
+### 8.2 Both directions are listed — Firestore has no automatic reverse index
+
+Every PAGED list in §7 is served in both directions: the port's order is
+caller-supplied (`created_at ASC` or `DESC`), and the connector List's HasPrev
+probe re-issues the page query with EVERY direction flipped
+(`ListQuery.ordered(…, reverse: true)`). The vendor does not derive one from the
+other:
+
+> To run the same queries but with a descending sort order, you need an
+> additional index in the descending direction for `population`.
+> — [index-overview](https://firebase.google.com/docs/firestore/query-data/index-overview),
+> *Queries supported by manual indexes*
+
+So each paged shape contributes an all-ASCENDING entry and an all-DESCENDING one
+(the equality prefix stays `ASCENDING` in both — the prefix's mode is free for
+equality fields, so pinning it keeps the two entries comparable). **The ruling is
+that a reverse index is never automatic and never assumed: both directions are
+declared for every paged list, and ONLY for paged lists.**
+
+Four shapes are the exception that states the rule, and each contributes ONE
+direction because it has no cursor to page backwards from:
+
+- `Identifiers.ListByUser` (`created_at ASC, id ASC`) — the port returns a slice.
+- `OAuthAccounts.ListByUser` (`linked_at DESC, provider_user_id DESC`) — a slice
+  again, and the only DESCENDING-led entry in the manifest with no ascending twin.
+- `AuthenticationGrants.Consume` (`created_at ASC, id ASC LIMIT 1`) — "oldest
+  unspent", one direction by definition.
+- `Challenges.PurgeExpired` (`expires_at ASC, id ASC`) — the port returns a
+  count.
+
+### 8.3 The entries
+
+| Collection | Fields (all `ASCENDING` unless marked) | Serves |
+|---|---|---|
+| `users` | `created_at`, `id` — 2 directions | `UserAdmin.List` + its HasPrev probe |
+| `service_accounts` | `created_at`, `id` — 2 directions | `ServiceAccounts.List` + probe |
+| `api_keys` | `service_account_id`, `created_at`, `id` — 2 directions | `APIKeys.ListByServiceAccount` + probe; the searched page fill scans this same ordering (R4) |
+| `invitations` | `resource_key`, `created_at`, `id` — 2 directions | `Invitations.ListByResource` + probe |
+| `invitations` | `subject_key`, `created_at`, `id` — 2 directions | `Invitations.ListBySubject` + probe |
+| `security_events` | [`user_id`][, `event_type`][, `event_status`], `created_at`, `id` — 8 subsets × 2 directions = **16** | `SecurityEvents.List`, every legal filter combination, with or without the `Since`/`Until` window (§7.3) |
+| `user_identifiers` | `user_id`, `active`, `created_at`, `id` | `Identifiers.ListByUser`, and the credential `Snapshot` that reuses it |
+| `oauth_accounts` | `user_id`, `linked_at` DESC, `provider_user_id` DESC | `OAuthAccounts.ListByUser`, and `Snapshot`'s link inventory |
+| `oauth_accounts` | `user_id`, `provider` | `OAuthAccounts.Delete`, `CredentialMutations.UnlinkOAuth` (rule 2) |
+| `challenges` | `expires_at`, `id` | `Challenges.PurgeExpired`, inside the purge's transaction |
+| `challenges` | `user_id`, `purpose` | the reset/adoption revocation cascade, chunked at 30 (rule 2) |
+| `authentication_grants` | `consume_key`, `consumed_at`, `created_at`, `id` | `AuthenticationGrants.Consume` — `consumed_at == null` is an IS_NULL equality |
+
+FOUR shapes appear in no row at all, because each is a single-field equality that
+Firestore's automatic index serves: `sessions` by `user_id` (the revocation
+cascade), `sessions` by `previous_refresh_token_hash` (the grace refresh lookup),
+`authentication_grants` by `session_id`, and `authentication_grants` by
+`user_id`. Their dependencies are declared as field overrides instead (§8.4) —
+that is the point of the overrides, not an oversight.
+
+### 8.4 Field overrides — the single-field indexes this store depends on
+
+A composite index is not the only index the store needs. The four shapes just
+listed derive none at all, and each is served by Firestore's AUTOMATIC
+single-field indexing.
+
+Automatic is not the same as guaranteed. A host, or a later manifest of this
+store's own, can disable a field's single-field indexes with a `fieldOverride`,
+and those queries would then fail with `FAILED_PRECONDITION` in production while
+every emulator run stayed green (the emulator enforces no index at all). The
+manifest is the specification and `ProbeIndexes` checks only what the manifest
+DECLARES (connector C5), so an undeclared dependency is an unchecked one.
+
+So the manifest declares them. The rule is uniform rather than minimal: **every
+field any matrix row filters or orders on**, on the collection that queries it —
+36 entries across the ten queried collections (`authentication_grants` 6,
+`security_events` 5, `user_identifiers`/`oauth_accounts`/`invitations`/
+`challenges` 4 each, `api_keys` 3, `users`/`service_accounts`/`sessions` 2 each).
+`TestCompositeFreeShapesDeclareTheirSingleFieldIndexes` enforces both directions:
+a composite-free shape whose field is undeclared fails, and a declared override
+no query uses fails.
+
+Each entry asks for ONE index — `ASCENDING` at `COLLECTION` scope. **Declaring an
+override REPLACES a field's default set** (ascending + descending +
+array-contains). That is deliberate, and the justification is per field class:
+
+| Field class | Fields | Why ASCENDING/COLLECTION alone is enough |
+|---|---|---|
+| Identity and derived keys | `user_id`, `session_id`, `service_account_id`, `consume_key`, `resource_key`, `subject_key`, `previous_refresh_token_hash`, `provider`, `provider_user_id`, `purpose`, `event_type`, `event_status`, `id` | Only ever `==`, `in`, or a sort TIEBREAK inside a composite. A tiebreak's direction lives in the composite entry, never in a single-field index. None is an array. |
+| Booleans | `active` | Only ever `== true`, and only inside the `user_identifiers` composite. |
+| Timestamps | `created_at`, `linked_at`, `expires_at` | Every ordering that uses one is a two-field sort and therefore a composite (rule 3); no query sorts a timestamp alone, in either direction. The `>=`/`<`/`<=` windows ride the composite's leading field. |
+| Nullable timestamp | `consumed_at` | Only ever `== null`, inside the grant composite. Firestore indexes null as a value, so the IS_NULL filter is an ordinary equality. |
+| Arrays | *(none)* | No queried collection carries an array field. `security_events.details` and `invitations.metadata` are MAPS, and no query touches either — which also means their subfields keep their default automatic indexing, and a host that wants to stop paying for a large `details` bag may add its own override. |
+
+The effect on a deployed database is fewer single-field indexes, not fewer served
+queries — and on an append-only rail like `security_events` that is a write-cost
+saving as well. A host that adds its OWN queries against these collections must
+extend the manifest rather than rely on the defaults.
+
+### 8.5 Export, probe, and what live still owes
+
+`ExportIndexes(dst)` merges this fragment into the host's own manifest (the
+connector's `ExportIndexes`: union by index identity, byte-stable, atomic
+rename), which is why a host's unrelated indexes survive and a re-export is an
+empty diff. The checked-in file is byte-identical to that output
+(`TestIndexManifestIsSortedAsMergeSorts`), so it is also directly deployable by
+the connector README's `gcloud firestore indexes composite create` loop.
+
+`Repositories` probes the manifest at construction
+(`firestoredb.ProbeIndexesFS`) unless `WithoutIndexProbe()` is passed. The
+constructor takes no `context.Context` — the SQL siblings' table probes do not
+either — so the probe runs on `context.Background()` and is bounded by the
+connector's `ProbeTimeout` (30 s), which is what an Admin API that never answers
+hits instead of hanging a host's boot. Against the emulator the probe is
+`ErrProbeUnavailableOnEmulator` rather than a silent skip
+(`indexes_integration_test.go` asserts both sides, including that all eighteen
+slots wire under the opt-out).
+
+**Owed, and not satisfiable on an emulator:** `indexes_live_test.go` deploys
+nothing but requires this manifest deployed and READY on the target database
+(CI: `FIRESTORE_LIVE_INDEXES=pockets/authentication/stores/firestore/firestore.indexes.json`,
+wired by N6). It then proves (a) the probe accepts the deployment and the
+constructor succeeds with the probe ENABLED, and (b) every matrix row executes
+without a `*firestoredb.MissingIndexError`. As of N5 it has NOT run — no live GCP
+project existed in that session — so the manifest is derived, reviewed, and
+hermetically consistent with the code, but the index set itself is UNPROVEN until
+that leg runs. Anything rule 2's conservatism over-declared can only be pruned by
+that run, and the security-events sixteen are the entries most worth re-examining
+against real operator filter usage.
 
 ## 9. Known family differences (R1)
 

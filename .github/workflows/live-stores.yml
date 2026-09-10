@@ -190,15 +190,17 @@ jobs:
 
   # Job C — the Firestore emulator suites: the CONNECTOR
   # (integrations/datastores/firestore) and every pocket store train built on it
-  # (pockets/authorization/stores/firestore), both -tags=integration. The
-  # connector is in MODULES and the stores in STORE_MODULES, so `make test-stores`
-  # reaches them, but this job runs the modules directly — the postgres/turso legs
-  # have no business gating the Firestore ones.
+  # (pockets/authorization/stores/firestore, pockets/authentication/stores/firestore),
+  # all -tags=integration. The connector is in MODULES and the stores in
+  # STORE_MODULES, so `make test-stores` reaches them, but this job runs the
+  # modules directly — the postgres/turso legs have no business gating the
+  # Firestore ones.
   #
   # Each module opens its OWN emulator database (the connector its default one,
-  # the authorization store "authorization"): firestoretest.Reset clears a WHOLE
-  # database, so two suites sharing one would delete each other's rows and the
-  # failure would arrive as a flake.
+  # the authorization store "authorization", the authentication store
+  # "authentication"): firestoretest.Reset clears a WHOLE database, so two suites
+  # sharing one would delete each other's rows and the failure would arrive as a
+  # flake.
   #
   # The emulator is a background docker step (see the header) with a readiness
   # wait against its HTTP root; the tests themselves skip loudly if
@@ -255,6 +257,19 @@ jobs:
           FIRESTORE_EMULATOR_HOST: 127.0.0.1:8080
           FIRESTORE_PROJECT_ID: gopernicus-test
         run: go test -tags=integration -count=1 -timeout 30m ./...
+      # 45 minutes, not the authorization store's 30: this suite is 212
+      # conformance leaves plus ~70 document-level roots, each resetting a
+      # 20-collection database with a DELETE sweep, and its contended families
+      # sit directly on the emulator's thirty-second lock release —
+      # ConcurrentDeactivateVersusMint alone measures 20–29 s. Locally the whole
+      # package runs in ~72 s; the ceiling is for a loaded shared runner. The
+      # Makefile's test-stores leg carries the same timeout for the same reason.
+      - name: authentication firestore store emulator suite (-tags=integration)
+        working-directory: pockets/authentication/stores/firestore
+        env:
+          FIRESTORE_EMULATOR_HOST: 127.0.0.1:8080
+          FIRESTORE_PROJECT_ID: gopernicus-test
+        run: go test -tags=integration -count=1 -timeout 45m ./...
       - name: stop the Firestore emulator
         if: always()
         run: docker rm -f firestore-emulator || true
@@ -336,7 +351,9 @@ jobs:
       # explicitly). A store train appends its manifest here in the same change
       # that adds its live step, because a store whose composites were never
       # deployed fails live as FAILED_PRECONDITION that reads like a store bug.
-      FIRESTORE_LIVE_INDEXES: pockets/authorization/stores/firestore/firestore.indexes.json
+      FIRESTORE_LIVE_INDEXES: >-
+        pockets/authorization/stores/firestore/firestore.indexes.json
+        pockets/authentication/stores/firestore/firestore.indexes.json
       # Force-unset. Nothing else in this job writes FIRESTORE_EMULATOR_HOST —
       # this line exists so that a value inherited from anywhere (a future
       # repo-level env, a runner image default) cannot point the "live" leg at an
@@ -788,6 +805,135 @@ jobs:
             exit 1
           fi
 
+      # ---------------------------------------------------------------------
+      # The authentication pocket's Firestore STORE (train 3). Its own test step
+      # and its own audit step, same convention as the two above — and the first
+      # module here whose allow-list is EMPTY. This pocket ships no
+      # RunTransactional conformance family, so ruling R1 appears only as the
+      # ambient REFUSAL, which is asserted, not skipped: on a required run every
+      # derived root must pass.
+      #
+      # 45 minutes, not 30: the shared authentication suite is 212 conformance
+      # leaves, each resetting a 20-collection database, and its contended
+      # families (deactivate-versus-mint, concurrent redemption, concurrent grant
+      # consume) sit on real transaction serialization here rather than the
+      # emulator's lock timing.
+      # ---------------------------------------------------------------------
+      - name: authentication firestore store live suite (-tags='integration,live')
+        if: env.LIVE_CONFIGURED == '1'
+        working-directory: pockets/authentication/stores/firestore
+        run: |
+          set +e
+          go test -json -count=1 -tags='integration,live' -timeout 45m -run 'Live$' ./... \
+            > "$RUNNER_TEMP/firestore-authentication-live.json"
+          status=$?
+          set -e
+          echo "go test exit status: $status"
+          echo "AUTHN_GO_TEST_STATUS=$status" >> "$GITHUB_ENV"
+          exit 0
+
+      # The same C-D8 audit over THIS module's roots, with an allow-list that is
+      # deliberately EMPTY.
+      #
+      # An empty allow-list is not a missing one: the file is CREATED empty, the
+      # validation loop over it runs zero times, and the awk BEGIN block reads
+      # zero names into ok_to_skip — so every skipped root on a required run is
+      # an ERROR, with nothing waved through. It is written out and uploaded with
+      # the evidence precisely so "this module allows no skip" is a recorded fact
+      # rather than the absence of one.
+      - name: audit the authentication store's live test/skip counts
+        if: env.LIVE_CONFIGURED == '1'
+        working-directory: pockets/authentication/stores/firestore
+        env:
+          # This module's own floor, overriding the job-level connector one. The
+          # four roots it declares today: the conformance entrypoint
+          # (TestConformanceLive), R1's ambient refusal across all fifty-eight
+          # port methods (TestAmbientTransactionRefusedLive), and the index
+          # manifest's two live proofs
+          # (TestIndexProbeAcceptsTheDeployedManifestLive,
+          # TestQueryMatrixExecutesAgainstTheDeployedIndexesLive). BUMP IT in the
+          # same change that adds a live root.
+          FIRESTORE_LIVE_MIN_ROOTS: "4"
+        run: |
+          expected_file="$RUNNER_TEMP/firestore-authentication-live-expected.txt"
+          allowed_file="$RUNNER_TEMP/firestore-authentication-live-allowed.txt"
+          audit_file="$RUNNER_TEMP/firestore-authentication-live-audit.txt"
+          set +e
+          grep -rl '//go:build integration && live' --include='*_test.go' . \
+            | xargs -r grep -hoE '^func Test[A-Za-z0-9_]*Live\(' \
+            | sed -E 's/^func //; s/\($//' \
+            | sort -u > "$expected_file"
+          set -e
+          roots=$(wc -l < "$expected_file" | tr -d ' ')
+          echo "expected live roots ($roots):"
+          cat "$expected_file"
+          if [ "$roots" -eq 0 ]; then
+            echo "ERROR: the derived expected-root set is EMPTY — either the live tests are gone or the derivation broke. An empty set makes this audit vacuously green, which is the exact false-positive it exists to prevent."
+            exit 1
+          fi
+          if [ "$FIRESTORE_LIVE_REQUIRED" = "1" ] && [ "$roots" -lt "$FIRESTORE_LIVE_MIN_ROOTS" ]; then
+            echo "ERROR: only $roots live roots were derived, fewer than the recorded minimum FIRESTORE_LIVE_MIN_ROOTS=$FIRESTORE_LIVE_MIN_ROOTS — live coverage shrank, or the derivation is matching fewer files than it should. If roots were removed on purpose, lower FIRESTORE_LIVE_MIN_ROOTS in this workflow in the SAME change."
+            exit 1
+          fi
+
+          # EMPTY BY DESIGN. This pocket has no ambient-transaction conformance
+          # family, so ruling R1 costs it no skip and nothing else may claim one.
+          # Adding a name here requires a plan ruling, exactly as the
+          # authorization store's single entry did.
+          : > "$allowed_file"
+          while read -r allowed; do
+            [ -n "$allowed" ] || continue
+            if ! grep -qx "$allowed" "$expected_file"; then
+              echo "ERROR: the allow-list names $allowed, which is not a live root of this module — an allow-list entry that matches nothing silently stops allowing anything and would wave a REAL skip through later"
+              exit 1
+            fi
+          done < "$allowed_file"
+          echo "allowed skips: NONE (this module has no ambient-transaction family; every derived root must pass)"
+
+          set +e
+          awk -v required="$FIRESTORE_LIVE_REQUIRED" \
+              -v expected="$expected_file" \
+              -v allowed="$allowed_file" '
+            BEGIN {
+              while ((getline root < expected) > 0) { if (root != "") want[root] = 1 }
+              while ((getline root < allowed) > 0) { if (root != "") ok_to_skip[root] = 1 }
+            }
+            {
+              if (!match($0, /"Test":"[^"]+"/)) next
+              test = substr($0, RSTART + 8, RLENGTH - 9)
+              if (index(test, "/") > 0) next
+              if (!match($0, /"Action":"[^"]+"/)) next
+              action = substr($0, RSTART + 10, RLENGTH - 11)
+              if (action == "pass" || action == "fail" || action == "skip") saw[test] = action
+            }
+            END {
+              bad = 0
+              for (root in want) {
+                state = (root in saw) ? saw[root] : "ABSENT"
+                printf "  %-52s %s\n", root, state
+                if (state == "ABSENT") { print "ERROR: " root " never ran — the live leg proved nothing about it"; bad = 1 }
+                else if (state == "fail") { bad = 1 }
+                else if (state == "skip") {
+                  if (root in ok_to_skip) { print "ALLOWED SKIP: " root }
+                  else if (required == "1") { print "ERROR: " root " SKIPPED while FIRESTORE_LIVE_REQUIRED=1"; bad = 1 }
+                  else { print "WARNING: " root " skipped (not a release verification run)" }
+                }
+              }
+              exit bad
+            }
+          ' "$RUNNER_TEMP/firestore-authentication-live.json" > "$audit_file"
+          audit_status=$?
+          set -e
+          cat "$audit_file"
+          if [ "$audit_status" != "0" ]; then
+            echo "ERROR: the authentication store's live test/skip audit failed (see the table above)"
+            exit 1
+          fi
+          if [ "${AUTHN_GO_TEST_STATUS:-1}" != "0" ]; then
+            echo "ERROR: the authentication store's live suite itself failed (go test exit status ${AUTHN_GO_TEST_STATUS:-unset})"
+            exit 1
+          fi
+
       # The release evidence. RELEASING.md's firestore gate cites THIS artifact
       # by run id instead of a count pasted into a document by hand: the JSON the
       # audit read, the roots it derived, the table it printed, and the index
@@ -811,6 +957,10 @@ jobs:
             ${{ runner.temp }}/firestore-authorization-live-expected.txt
             ${{ runner.temp }}/firestore-authorization-live-allowed.txt
             ${{ runner.temp }}/firestore-authorization-live-audit.txt
+            ${{ runner.temp }}/firestore-authentication-live.json
+            ${{ runner.temp }}/firestore-authentication-live-expected.txt
+            ${{ runner.temp }}/firestore-authentication-live-allowed.txt
+            ${{ runner.temp }}/firestore-authentication-live-audit.txt
             ${{ runner.temp }}/firestore-indexes.json
           if-no-files-found: warn
           retention-days: 400

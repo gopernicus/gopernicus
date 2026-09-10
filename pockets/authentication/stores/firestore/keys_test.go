@@ -179,22 +179,3 @@ func TestCollectionNamesMirrorTheSQLTables(t *testing.T) {
 		t.Errorf("the store declares %d claim collections, SCHEMA.md §5 pins 7", len(claims))
 	}
 }
-
-// TestIndexManifestParses proves the embedded fragment is a manifest the
-// connector accepts — strictly, so a misspelled key fails here and not at a
-// host's boot. It is PROVISIONAL until N5 derives the complete matrix; this test
-// asserts well-formedness, never coverage.
-func TestIndexManifestParses(t *testing.T) {
-	m, err := firestoredb.ParseIndexManifest(IndexesFS, IndexesFile)
-	if err != nil {
-		t.Fatalf("ParseIndexManifest: %v", err)
-	}
-	if len(m.Indexes) == 0 {
-		t.Fatal("the embedded manifest declares no composite index")
-	}
-	for _, idx := range m.Indexes {
-		if idx.QueryScope != firestoredb.ScopeCollection {
-			t.Errorf("index on %s has query scope %q: every collection in this store is top-level", idx.CollectionGroup, idx.QueryScope)
-		}
-	}
-}

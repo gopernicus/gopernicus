@@ -16,11 +16,15 @@ import (
 // with [ExportIndexes] and deploys it; the constructor probes the live database
 // for it at wiring time.
 //
-// PROVISIONAL at task N1. The shipped fragment covers the query shapes SCHEMA.md
-// §7 already pins, but the manifest's specification is the COMPLETE supported
-// query matrix, which task N5 derives (and proves live). Until N5 lands, treat a
-// green emulator run as no evidence at all about index coverage: the emulator
-// enforces no composite index.
+// The fragment is DERIVED from the complete supported query matrix (ruling R5),
+// not from the queries the tests happen to issue: queryMatrix in indexes_test.go
+// is the specification, and the derivation is checked both ways — a query with
+// no index and an index no query needs both fail the build. SCHEMA.md §8 states
+// the entry set, the derivation rules, and the 32-of-200 composite budget.
+//
+// A green EMULATOR run is still no evidence about index coverage — the emulator
+// enforces no composite index and keeps no index registry. Only the live leg
+// (indexes_live_test.go) proves the set, and as of N5 it has not run.
 //
 //go:embed firestore.indexes.json
 var IndexesFS embed.FS
@@ -69,11 +73,15 @@ func WithoutIndexProbe() Option {
 
 // Repositories returns the authentication repository set backed by db — ALL
 // EIGHTEEN slots wired — after probing the embedded index manifest against the
-// live database. The probe is this store's analogue of the SQL siblings' table
-// probe: a missing or still-building composite index fails at WIRING TIME,
-// naming the index and the console page, instead of failing the first production
-// query. Pass [WithoutIndexProbe] on the emulator (which keeps no index
-// registry, so the probe refuses) or where the credential cannot list indexes.
+// live database — every composite index AND every single-field override it
+// declares (SCHEMA.md §8.4). The probe is this store's analogue of the SQL
+// siblings' table probe: a missing or still-building composite index fails at
+// WIRING TIME, naming the index and the console page, instead of failing the
+// first production query. It runs on context.Background bounded by the
+// connector's ProbeTimeout, because a constructor takes no context. Pass
+// [WithoutIndexProbe] on the emulator (which keeps no index registry, so the
+// probe refuses with ErrProbeUnavailableOnEmulator rather than a silent skip) or
+// where the credential cannot list indexes.
 //
 // UserAdmin, ActiveSessions, and Passwordless are returned UNCONDITIONALLY,
 // mirroring turso (N-D4): a store adapter that can serve a capability always

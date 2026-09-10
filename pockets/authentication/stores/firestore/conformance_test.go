@@ -12,14 +12,17 @@
 // registry (R5).
 //
 // What an emulator green does NOT prove: composite index coverage (nothing here
-// enforces one) and exact transaction/lock timing. Task N5's live query matrix
-// and the live-project leg (N6) are the truth for both.
+// enforces one) and exact transaction/lock timing. Task N5's query matrix and
+// the live leg next door (conformance_live_test.go, integration && live, which
+// constructs WITH the probe) are the truth for both.
 //
 // There is NO RunTransactional family in this pocket, so ruling R1 appears here
 // only as TestAmbientTransactionRefused.
 package firestore
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/gopernicus/gopernicus/integrations/datastores/firestore/firestoretest"
@@ -49,14 +52,57 @@ func newRepos(t *testing.T) auth.Repositories {
 
 // TestConformance runs the shared authentication conformance suite — every port
 // group plus the search and concurrency families — against the emulator. It is
-// the executable form of all eighteen ports' contracts.
+// the executable form of all eighteen ports' contracts, and the whole suite is
+// green as of task N4d (212 leaves, 0 failures, 0 skips).
 //
-// At task N1 it is EXPECTED TO FAIL: every port method answers
-// errNotImplemented, and the N1 execution record archives the leaf-failure count
-// as the baseline N2–N4 drive to zero. It is wired now, rather than at the end,
-// so no slice can be declared complete without the suite's judgment.
+// It was wired at N1, when every port method still answered errNotImplemented
+// and it failed wholesale, rather than at the end — so no slice could be
+// declared complete without the suite's judgment.
+//
+// The 45-minute timeout the Makefile and CI carry is not padding. Two hundred
+// leaves each reset the emulator database (a DELETE sweep, not a TRUNCATE), and
+// the contended families pay the emulator's documented thirty-second lock
+// release: ConcurrentDeactivateVersusMint alone runs 20–29 s.
 func TestConformance(t *testing.T) {
 	storetest.Run(t, newRepos)
+}
+
+// TestExportIndexes is the scaffold half of ruling R5, and it needs no emulator:
+// it exports this store's embedded manifest into an empty t.TempDir(), which is
+// the FIRST thing a host does with this module, before it has a database at all.
+// A broken export would otherwise surface as a missing composite index on a live
+// deployment — a FAILED_PRECONDITION at request time, far from its cause.
+//
+// Two properties, both of which the merge (not copy) semantics require: an
+// absent destination is CREATED, and a second export of the same fragment is
+// byte-identical, so a host re-running its scaffold step gets an empty diff
+// rather than a duplicated index list. The manifest's CONTENT — which composites
+// it declares and which query each one serves — is task N5's, asserted in
+// SCHEMA.md and this module's index tests.
+func TestExportIndexes(t *testing.T) {
+	dst := filepath.Join(t.TempDir(), "firestore.indexes.json")
+
+	if err := ExportIndexes(dst); err != nil {
+		t.Fatalf("ExportIndexes into a directory with no manifest: %v", err)
+	}
+	first, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("ExportIndexes reported success but wrote no manifest: %v", err)
+	}
+	if len(first) == 0 {
+		t.Fatal("ExportIndexes wrote an EMPTY manifest — a host deploying it would deploy no indexes and every composite query would fail live")
+	}
+
+	if err := ExportIndexes(dst); err != nil {
+		t.Fatalf("re-exporting into the manifest this store just wrote: %v", err)
+	}
+	second, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("read back the re-exported manifest: %v", err)
+	}
+	if string(second) != string(first) {
+		t.Errorf("ExportIndexes is not idempotent — a host's scaffold step would produce a diff on every run:\n--- first ---\n%s\n--- second ---\n%s", first, second)
+	}
 }
 
 // TestAmbientTransactionRefused is ruling R1: a store method handed a context

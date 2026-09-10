@@ -35,4 +35,11 @@
 // Firestore has no unique constraints either, so each of the thirteen tables'
 // UNIQUE indexes becomes a deterministic document id or a CLAIM document
 // written in the same transaction as its row (ruling R3, SCHEMA.md §5).
+//
+// README.md is the host-facing document: the full surface, the index
+// manifest's scaffold/deploy/probe cycle, the complete list of family
+// differences this store takes from the SQL siblings, why a Firestore TTL policy
+// is never a substitute for the ports' counted purges, the measured emulator
+// costs, and how to run the hermetic, emulator and live legs. SCHEMA.md is the
+// tracked derivation behind it.
 package firestore
