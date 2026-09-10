@@ -151,7 +151,11 @@ obligations follow:
 
 `(*DB).Transact` implements `sdk/foundation/crud.Transactor`. It commits when
 the callback returns nil, rolls back and returns the callback's error
-**unwrapped** when it does not, and — when the callback panics — recovers,
+**unwrapped** when it does not — with one narrowing: an error carrying a bare
+gRPC status and no sdk sentinel goes through `MapError`, so a vendor status a
+callback forwarded cannot escape unclassified. A domain sentinel, a plain error
+and an already-mapped value all come back byte-identical, so `==` still holds.
+And — when the callback panics — it recovers,
 lets the vendor roll back, then **re-panics with the original value** (the
 vendor has no deferred rollback, so an escaping panic would leave the
 transaction open until the server released its locks; the panic value survives,
@@ -174,11 +178,20 @@ the caller is the contention loser and may retry the whole workflow. Lower
 `Config.MaxAttempts` to 1 to get that immediately; raise it for a hot document
 (each retry re-runs the callback, so the cost is real reads).
 
-One sharp edge: the vendor decides whether to retry by asking whether the error
-IS or WRAPS a gRPC `Aborted` status — **including an error the callback
-returned**. Pass vendor errors through `MapError` before returning them and it
-is settled: `MapError` keeps the server's message but not its status, so a
-mapped error ends the transaction instead of re-running it.
+**A contended READ inside the callback is retried too.** The vendor decides
+whether to retry by asking whether the error IS or WRAPS a gRPC `Aborted`
+status — **including an error the callback returned** — and `MapError` PRESERVES
+that status in the chain. So a transactional read that loses a race, mapped to
+`sdk.ErrConflict` the way a store maps every read, is still recognized as
+contention and re-runs the callback (up to `Config.MaxAttempts`). That is what
+makes contention on transactional READS recoverable: without it, only a losing
+COMMIT would ever be retried, and the same condition would get two different
+answers depending on which RPC noticed it first.
+
+The consequence to design for is the one already stated: the callback may run
+more than once, so reset its attempt-local state at the top. If a callback must
+end the transaction on an error that happens to carry an `Aborted` status,
+return a value that does not — a domain sentinel of its own.
 
 ### A committed outcome is not the callback's error
 
@@ -255,7 +268,7 @@ errors with it at the iteration boundary.
 |---|---|
 | `NotFound` | `sdk.ErrNotFound` (`Get` also returns the snapshot, `Exists() == false`) |
 | `AlreadyExists` | `sdk.ErrAlreadyExists` |
-| `Aborted` (transaction retries exhausted) | `sdk.ErrConflict` |
+| `Aborted` (transaction retries exhausted) | `sdk.ErrConflict`, with the `Aborted` status still recoverable through `status.Code` |
 | `FailedPrecondition`, missing index | `*MissingIndexError` → `ErrMissingIndex` → `sdk.ErrUnavailable`, carrying the server's message and its index-creation URL |
 | `FailedPrecondition`, index still BUILDING (different wording, same link) | the same `*MissingIndexError` |
 | `FailedPrecondition`, otherwise | `sdk.ErrConflict` |
@@ -269,16 +282,30 @@ errors with it at the iteration boundary.
 | nested transaction / invalid read time (vendor) | `sdk.ErrInvalidInput` |
 | `nil`, `iterator.Done`, anything already carrying an sdk sentinel | returned byte-identical |
 
-Two properties worth knowing. **It wraps rather than replaces**: the result is
-`firestore: <server message>: %w<sentinel>`, where the SQL connectors return a
+Three properties worth knowing.
+
+**It wraps rather than replaces**: the result is
+`firestore: <the vendor error>: %w<sentinel>`, where the SQL connectors return a
 bare sentinel and drop the driver message. Firestore's message carries the
 document path, the failed precondition, and the index-creation URL; discarding
-it makes production failures unreadable. `errors.Is` is unaffected. And it is
-**idempotent** — mapping an already-mapped error changes nothing, so a store may
-map an error a helper already mapped without flattening a domain outcome into a
-generic sentinel. Anything unrecognized comes back wrapped with a `firestore:`
-prefix and NO sentinel, so an unknown failure surfaces as a 500 instead of a
-plausible-looking domain answer.
+it makes production failures unreadable. `errors.Is` is unaffected.
+
+**The gRPC status survives the mapping.** Every status row wraps BOTH the
+original error and the sentinel (multi-`%w`), so the mapped value answers
+`errors.Is(err, sdk.ErrConflict)` AND `status.Code(err) == codes.Aborted`.
+Recover it with `status.Code(err)` or `status.FromError(err)`; both walk the
+chain through `errors.As`. This is load-bearing rather than decorative: the
+vendor's transaction retry gate asks `status.FromError` about the error a
+callback returned, so an `Aborted` flattened into a bare sentinel would tell the
+vendor "settled" when the truth is contention, and a store that maps its
+transactional reads — the only honest thing to do with them — would lose the
+retry. `*MissingIndexError` carries the server status the same way.
+
+And it is **idempotent** — mapping an already-mapped error changes nothing, so a
+store may map an error a helper already mapped without flattening a domain
+outcome into a generic sentinel. Anything unrecognized comes back wrapped with a
+`firestore:` prefix and NO sentinel, so an unknown failure surfaces as a 500
+instead of a plausible-looking domain answer.
 
 The two missing-index recognizers are **host-agnostic**: the canonical "requires
 an index" phrasing, and `index` plus a `https://console.` link. The console HOST

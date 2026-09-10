@@ -100,6 +100,12 @@ type MissingIndexError struct {
 	// Empty when neither is available (a still-building index sometimes omits
 	// the link).
 	URL string
+
+	// cause is the server status this was mapped from, kept in the chain so
+	// status.Code recovers FailedPrecondition — the same status-preserving rule
+	// every other MapError row follows. A ProbeIndexes gap has no status and
+	// leaves it nil.
+	cause error
 }
 
 // Error names the condition and repeats the server's own message.
@@ -111,8 +117,14 @@ func (e *MissingIndexError) Error() string {
 }
 
 // Unwrap chains to ErrMissingIndex, which itself wraps sdk.ErrUnavailable — so
-// both errors.Is checks hold on one linear chain.
-func (e *MissingIndexError) Unwrap() error { return ErrMissingIndex }
+// both errors.Is checks hold — and, when the value came from a server response,
+// to that response, so status.Code still reports FailedPrecondition.
+func (e *MissingIndexError) Unwrap() []error {
+	if e.cause == nil {
+		return []error{ErrMissingIndex}
+	}
+	return []error{ErrMissingIndex, e.cause}
+}
 
 // MapError translates a Firestore error into the sdk sentinel vocabulary the
 // pockets' ports are written against (C-D5). It is the ONLY place vendor error
@@ -146,6 +158,19 @@ func (e *MissingIndexError) Unwrap() error { return ErrMissingIndex }
 // Anything else is returned wrapped with a "firestore:" prefix and NO sentinel,
 // so an unrecognized failure surfaces as a 500 rather than being flattened into
 // a plausible-looking domain outcome.
+//
+// # The gRPC status SURVIVES the mapping
+//
+// Every status-code row wraps BOTH the original error and the sdk sentinel (Go
+// 1.20 multi-%w), so the mapped value answers `errors.Is(err, sdk.ErrConflict)`
+// AND `status.Code(err)` still reports Aborted. That is not a nicety: the
+// vendor's transaction retry gate asks `status.FromError` about the error a
+// callback returned (transaction.go:245), so an Aborted flattened into a bare
+// sentinel would tell the vendor "this transaction is settled" when the truth
+// is contention. A store that maps a transactional read's error — the only
+// honest thing to do with it — must not lose the retry that way. Recover the
+// code with `status.Code(err)` or `status.FromError(err)`; both walk the chain
+// through errors.As.
 func MapError(err error) error {
 	if err == nil {
 		return nil
@@ -179,24 +204,24 @@ func MapError(err error) error {
 	msg := st.Message()
 	switch st.Code() {
 	case codes.NotFound:
-		return fmt.Errorf("firestore: %s: %w", msg, sdk.ErrNotFound)
+		return fmt.Errorf("firestore: %w: %w", err, sdk.ErrNotFound)
 	case codes.AlreadyExists:
-		return fmt.Errorf("firestore: %s: %w", msg, sdk.ErrAlreadyExists)
+		return fmt.Errorf("firestore: %w: %w", err, sdk.ErrAlreadyExists)
 	case codes.Aborted:
-		return fmt.Errorf("firestore: %s: %w", msg, sdk.ErrConflict)
+		return fmt.Errorf("firestore: %w: %w", err, sdk.ErrConflict)
 	case codes.FailedPrecondition:
 		if isMissingIndex(msg) {
-			return &MissingIndexError{Message: msg, URL: indexURL(msg)}
+			return &MissingIndexError{Message: msg, URL: indexURL(msg), cause: err}
 		}
-		return fmt.Errorf("firestore: %s: %w", msg, sdk.ErrConflict)
+		return fmt.Errorf("firestore: %w: %w", err, sdk.ErrConflict)
 	case codes.InvalidArgument:
-		return fmt.Errorf("firestore: %s: %w", msg, sdk.ErrInvalidInput)
+		return fmt.Errorf("firestore: %w: %w", err, sdk.ErrInvalidInput)
 	case codes.DeadlineExceeded, codes.Unavailable, codes.ResourceExhausted:
-		return fmt.Errorf("firestore: %s: %w", msg, sdk.ErrUnavailable)
+		return fmt.Errorf("firestore: %w: %w", err, sdk.ErrUnavailable)
 	case codes.PermissionDenied:
-		return fmt.Errorf("firestore: %s: %w", msg, sdk.ErrForbidden)
+		return fmt.Errorf("firestore: %w: %w", err, sdk.ErrForbidden)
 	case codes.Unauthenticated:
-		return fmt.Errorf("firestore: %s: %w", msg, sdk.ErrUnauthorized)
+		return fmt.Errorf("firestore: %w: %w", err, sdk.ErrUnauthorized)
 	}
 	return fmt.Errorf("firestore: %w", err)
 }
