@@ -26,6 +26,7 @@ use (
 	./pockets/authentication/stores/turso
 	./pockets/authentication/views/goth
 	./pockets/authorization
+	./pockets/authorization/stores/firestore
 	./pockets/authorization/stores/pgx
 	./pockets/authorization/stores/turso
 	./pockets/cms

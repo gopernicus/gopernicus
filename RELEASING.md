@@ -616,6 +616,78 @@ degraded — passes `WithoutIndexProbe()` and takes ownership of deploying and
 verifying the manifest itself (`ExportIndexes` writes it; the CI leg in
 `live-stores.yml` shows the deploy-and-wait shape).
 
+### pockets/authorization/stores/firestore — v0.1.0 (FIRST TAG; not yet cut — the owner cuts it after a passing required live run): the authorization pocket's Firestore store (new module; no existing consumer)
+
+Plan of record `.claude/plans/firestore-stores/authorization.md` (train 2 of
+three; the milestone's rulings R1–R5 govern). A NEW module — nothing existing
+depends on it, so adopting is opt-in and nothing breaks by not adopting. It is
+the authorization pocket's THIRD store family, beside `stores/pgx` and
+`stores/turso`, and the first non-SQL one in the repository.
+
+**What it is.** All three outbound ports over Google Cloud Firestore in Native
+mode: `relationship.Storer` (18 methods, including v0.12.0's `FilterRelation`
+and `RelationTargetsFor`), `role.Storer` (7), and the atomic
+`mutation.MutationRepository` with its tx-bound `StoreDecisionView`.
+`Repositories` / `RelationshipRepository` / `WithGuardianPolicy` /
+`WithoutIndexProbe` / `ExportIndexes` / `IndexesFS`. The shared
+`storetest.Run` suite passes in full. Surface, ceilings and testing:
+[`pockets/authorization/stores/firestore/README.md`](pockets/authorization/stores/firestore/README.md);
+the document layout is its tracked `SCHEMA.md`.
+
+**Pins.** `pockets/authorization v0.12.0` and
+`integrations/datastores/firestore v0.1.0` (the connector tag must be cut
+FIRST — this store's `go.mod` carries a relative `replace` to the connector
+until it exists, and **dropping that `replace` line is part of cutting this
+tag**, followed by a `GOWORK=off` cold verification that the published connector
+really satisfies it). MVS takes `sdk v0.7.0` (the pocket core's pin) over the
+connector's `v0.4.0`. Direct vendor requires:
+`cloud.google.com/go/firestore v1.25.0`, `google.golang.org/api`, and
+`google.golang.org/grpc` (test-only: one retry test returns a raw `Aborted`
+status the way the connector's own does). No existing module's pin moves.
+
+**Known family difference (ruling R1) — state it when you announce the tag.**
+This store does **not** join a host's ambient `crud.Transactor` transaction. A
+Firestore transaction requires all reads before all writes and never observes
+its own pending writes, so `storetest.RunTransactional` — which proves the join
+from both sides — cannot pass; the store supplies no transactor and the family
+**skips loudly**, and any port method handed a connector transaction fails loud
+with `ErrAmbientTransactionUnsupported` (the mutation pair also wrapping
+`mutation.ErrGuardedInsideTransaction`) rather than silently running beside the
+host's transaction. A host that needs cross-repository atomicity uses the
+pocket's own atomic `Apply`/`ApplyGuarded`, makes its own half idempotent, or
+stays on `pgx`/`turso`. It is a family property — Redis and DynamoDB fail the
+same spec — not a defect, and it is the FIRST screen of the module README.
+
+**Three Firestore-only ceilings a SQL adopter has never had**, all documented in
+the README and `SCHEMA.md` §8, all failing loud BEFORE any write rather than
+splitting an operation: at most **166 tuples** per `CreateRelationships` /
+`SetRelationTargets` / delete (`ErrTupleWriteLimit`), the same 500-document
+commit limit on one mutation `Command` (`ErrMutationWriteLimit`), and
+`ListEffectiveByResource` with `WithCount` reading O(population) because
+Firestore's aggregation counts documents and cannot group.
+
+**Migrations are an index manifest.** There is no DDL and no migration tree:
+`ExportIndexes` MERGES the embedded `firestore.indexes.json` into the host's own
+manifest, the host deploys it pre-boot (`firebase deploy --only
+firestore:indexes`, or `gcloud firestore indexes composite create` per entry),
+and the constructor PROBES it through the Admin API at wiring time, refusing to
+construct when an index is missing or still building. `WithoutIndexProbe()` is
+the documented escape for the emulator and for a credential that cannot be
+granted `datastore.indexes.list`. The v1 → v3 `CONVERSION.md`/`UPGRADE.md`
+runbooks are SQL-only and do not apply: a Firestore host is greenfield by
+construction and starts from the manifest.
+
+**Release gate — a live run precedes the tag, and an emulator green does not
+substitute.** The emulator enforces no composite index and keeps no index
+registry, so it cannot show that the shipped manifest covers this store's
+queries — which is the whole claim `v0.1.0` makes. Before this tag is cut, the
+milestone requires a passing `live-stores` dispatch with
+`firestore_live_required: true` whose **`audit the authorization store's live
+test/skip counts`** step is green: seven derived live roots, all `pass` except
+`TestRunTransactionalLive`, which is allowed BY NAME as ruling R1's one
+permitted skip. **Cite the workflow run id and its
+`firestore-live-evidence-<run id>-<attempt>` artifact**, not a pasted count.
+
 ### pockets/authorization — v0.12.0 @ `1439407` (+ stores/pgx v0.7.0, stores/turso v0.6.0 @ `340f6f2`) — tagged 2026-09-09: `FilterAuthorized` decides the candidate SET in one evaluation (minor; BREAKING store port; no schema)
 
 Plan of record `plans/authorization-batch-decision.md` (originating host
