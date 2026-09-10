@@ -208,15 +208,49 @@ unknown, consumed, or expired — is `sdk.ErrNotFound` with nothing applied.
 
 ### `passwordless.Repository` — 1
 
-`Redeem`: N-D2's largest operation, in ONE transaction — consume the token
-challenge, decode and validate the versioned binding, re-read the CURRENT active
-claim for the bound address, then branch login / adopt / provision. Adoption is
-the anti-takeover branch: revoke the pre-proof password, every session and its
-refresh claim, every grant, and the named challenge purposes BEFORE inserting the
-new session, verify the identifier, maintain claims and the projection, and
-advance `auth_revision`. A stable bad outcome is `passwordless.ErrRedemption`
-with NOTHING written; an infrastructure error rolls back the token consumption
-itself.
+**BUILT (N4d).** N-D2's largest operation, in ONE `retryTransact`, staged as a
+read half and a write half (`stage` → `redemptionWrites.write`) so the vendor's
+reads-before-writes rule is structural: the staged value holds documents, not a
+reader, so the write phase CANNOT read.
+
+READ SET, in order — `challenge_digests/h(purpose, digest)` → the challenge row
+it names (the token, with its captured binding); then, once the binding is
+decoded and its version accepted, `identifier_claims/h(kind, value)` → the
+identifier row it names (the CURRENT owner of the bound address, never the ids
+the binding recorded at issue); then, for an existing owner, `users/h(user_id)`.
+An ADOPTION widens it to every session of that user (each carrying the refresh
+claim its deletion releases), every grant the user owns, and every challenge of
+`RevokeChallengePurposes`. Provisioning reads nothing further: every key it takes
+is a document that does not yet exist, and `Create`'s precondition is evaluated
+by the SERVER at commit (R3). The password is never read — its document id is
+derived from the user id and an unconditional delete is idempotent.
+
+WRITE SET — the token row and its digest claim always (through `dropChallenges`
+TOGETHER with the adoption's revoked set, because a host may name the link's own
+purpose among them and Firestore refuses a document written twice in one
+transaction); then, per branch: LOGIN writes only the session and its
+current-hash claim; ADOPT drops the password, the grants, every session with its
+refresh claim, and the revoked challenges with their digest claims, moves the
+identifier through `updateIdentifier` (verified, uses per `AdoptedIdentifierUses`,
+claims following the stored predicate), advances `auth_revision` with the
+recomputed projection, then writes the session; PROVISION writes the user with
+its projection, the verified primary identifier with both claims, then the
+session.
+
+OUTCOME POLICY — a stable bad outcome (unknown/expired/replayed token, absent,
+malformed or unknown-version binding, blank bound value, login-disabled or
+missing identifier, missing or deactivated subject, a would-be provision without
+the captured intent) returns `passwordless.ErrRedemption` FROM the callback, so
+the transaction aborts and the token is retained. An infrastructure error rolls
+the WHOLE transaction back including the token consumption. A commit-time
+`sdk.ErrAlreadyExists` — a key this redemption tried to take was taken between
+its read phase and its commit — is answered `ErrRedemption` too: Firestore
+evaluates every `Create` precondition at commit, so the candidates (the address's
+authentication and primary claims, the new subject's id, the proposed session's
+credentials) cannot be told apart afterwards, and every one of them is a stable
+bad outcome of THIS redemption with nothing written. Two concurrent redemptions
+both read the token's digest claim and the row it names, so the loser aborts,
+re-runs, finds the claim gone, and answers `ErrRedemption`.
 
 ## 3. SQL schema of record → document layout
 
@@ -677,15 +711,16 @@ projection fields, and they recompute rather than assume.
 | 7 | `CredentialMutations.Apply` / `RetireIdentifier` with `ReplacementPrimaryID` | **BUILT (N2b)**; the promoted row becomes the projection (its own `verified_at` decides the flag) |
 | 8 | `CredentialMutations.Apply` / `ChangeIdentifierUses` with `MakePrimary` | **BUILT (N2b)**; promotion demotes the current primary of that kind → recompute |
 | 9 | `CredentialMutations.Apply` / `RemovePassword`, `UnlinkOAuth` | **BUILT (N2b)**; NO projection change (listed so the enumeration is complete rather than silent) |
-| 10 | `Passwordless.Redeem` — provision | the new user's verified primary identifier IS the projection |
-| 11 | `Passwordless.Redeem` — adopt | the adopted identifier becomes verified; when it is the active primary email, `email_verified` flips true |
-| 12 | `Passwordless.Redeem` — login | NO projection change |
+| 10 | `Passwordless.Redeem` — provision | **BUILT (N4d)**; the new user's verified primary identifier IS the projection, resolved from the row about to be written and stamped by `putUser` |
+| 11 | `Passwordless.Redeem` — adopt | **BUILT (N4d)**; adoption changes neither the row's kind, nor its value, nor its primary flag, so the ONLY reachable change is `email_verified` flipping true on an active primary email — every other shape rewrites the user's STORED pair unchanged |
+| 12 | `Passwordless.Redeem` — login | **BUILT (N4d)**; NO projection change, and no revision bump either — a login writes exactly the session and its claim |
 | 13 | `PasswordResets.Redeem` | NO projection change (no identifier is touched) |
 | 14 | `UserAdmin.SetStatus` | **BUILT (N2b)**; writes `status`, `status_changed_at`, `updated_at`, `auth_revision` — all Summary fields — and MUST NOT disturb the two projection fields (§6.2) |
 | 15 | `Users.Update` | writes `display_name`, `updated_at` — same rule |
 
 Rows 1–8 and 10–11 are the ones that WRITE the projection; 9, 12, 13 are audited
-no-ops; 14 and 15 are the whole-document-Set hazard. N2c proves the update
+no-ops (row 12 is audited, not assumed: the login branch touches no identifier,
+so recomputing would be the only way to get it wrong); 14 and 15 are the whole-document-Set hazard. N2c proves the update
 semantics AND the absence semantics (no active primary email → empty, verified
 false), and that a page costs no per-user identifier read.
 
@@ -699,16 +734,16 @@ projection of what the unbuilt tasks will issue.
 
 | Collection | Filters | Order | Notes |
 |---|---|---|---|
-| `users` | — | `(created_at, id)` both directions | `UserAdmin.List` — **BUILT (N2c)**, through the connector `List` helper with `user.OrderFields`/`user.DefaultOrder` and PK `id`; the reverse direction is the `HasPrev` probe's |
-| `user_identifiers` | `user_id ==`, `active ==` | `(created_at, id)` ascending | `ListByUser` — **BUILT (N2a)**, exactly one shape: `user_id == AND active == true ORDER BY created_at ASC, id ASC`. It is NOT paged (the port returns a slice), so it needs no reversed direction of its own. Credential `Snapshot` **reuses it verbatim (N2b)** — no new shape |
-| `sessions` | `user_id ==` \| `previous_refresh_token_hash ==` | — | **BUILT (N3a)**, exactly two shapes, both a SINGLE equality with NO order: `user_id ==` (`DeleteByUser`, the N2b lifecycle cascade — **BUILT** — and N4d's adoption) and `previous_refresh_token_hash == … LIMIT 1` (`GetByRefreshHash`'s grace half, under a `ReadSnapshot`). Firestore serves a single-field equality from the automatic index, so NEITHER needs a composite. The CURRENT hash issues no query at all — its claim is the access path (§7.1) |
+| `users` | — | `(created_at, id)` both directions | `UserAdmin.List` — **BUILT (N2c)**, through the connector `List` helper with `user.OrderFields`/`user.DefaultOrder` and PK `id`; the reverse direction is the `HasPrev` probe's. **N4d adds no shape**: a redemption reaches every users document by id (§7.1) |
+| `user_identifiers` | `user_id ==`, `active ==` | `(created_at, id)` ascending | `ListByUser` — **BUILT (N2a)**, exactly one shape: `user_id == AND active == true ORDER BY created_at ASC, id ASC`. It is NOT paged (the port returns a slice), so it needs no reversed direction of its own. Credential `Snapshot` **reuses it verbatim (N2b)** — no new shape. **N4d adds none either**: a redemption resolves the bound address through its authentication CLAIM and never queries identifier text (§7.1) |
+| `sessions` | `user_id ==` \| `previous_refresh_token_hash ==` | — | **BUILT (N3a)**, exactly two shapes, both a SINGLE equality with NO order: `user_id ==` (`DeleteByUser`, the N2b lifecycle cascade and N4d's passwordless adoption — all three **BUILT**, all three the same shape) and `previous_refresh_token_hash == … LIMIT 1` (`GetByRefreshHash`'s grace half, under a `ReadSnapshot`). Firestore serves a single-field equality from the automatic index, so NEITHER needs a composite. The CURRENT hash issues no query at all — its claim is the access path (§7.1) |
 | `oauth_accounts` | `user_id ==` (+ `provider ==` for Delete) | `(linked_at DESC, provider_user_id DESC)` | **BUILT (N3b)**, two shapes: `ListByUser` = `user_id == ORDER BY linked_at DESC, provider_user_id DESC` (a COMPOSITE — already in the manifest — with no reversed direction, because the port returns a slice, not a page) and `Delete` = `user_id == AND provider ==`, equality-only and therefore served without a composite (Firestore merges the two automatic single-field indexes). **N2b adds no shape**: `CredentialMutations.UnlinkOAuth` reuses `Delete`'s query, and `Snapshot` reuses `ListByUser`'s and re-sorts the handful of links by provider IN GO rather than asking Firestore for a `(user_id, provider)` ordering — the SQL adapters' `ORDER BY provider` on a per-user inventory is not worth a composite index of its own |
 | `service_accounts` | — | `(created_at, id)` both directions | `List` — **BUILT (N4a)**, one shape: the unfiltered collection ordered `(created_at, id)`, through the connector `List` with `serviceaccount.OrderFields`/`DefaultOrder` and PK `id`. The reverse direction is the `HasPrev` probe's. No `PostFilter`, so a non-blank `Search` is `sdk.ErrInvalidInput` |
 | `api_keys` | `service_account_id ==` | `(created_at, id)` both directions | `ListByServiceAccount` — **BUILT (N4a)**, ONE query shape in both directions: `service_account_id == … ORDER BY created_at, id`. `req.Search` adds NO query shape — it is a client-side `PostFilter` from `firestoredb.SearchFilter(apikey.SearchFields, …)` applied while page-filling, which is exactly why R4 restricts it to this parent-scoped list. `GetByHash` issues no query (§7.1) |
 | `security_events` | any subset of `user_id`, `event_type`, `event_status` × `created_at` range | `(created_at, id)` both directions | `List` — **BUILT (N4a)**; the widest set in the store, enumerated exhaustively in §7.3. The range field IS the leading order field, so a subset costs one composite per direction and not two |
 | `invitations` | `resource_key ==` \| `subject_key ==` \| `resolved_subject_id ==` | `(created_at, id)` both directions | **BUILT (N4b)**, exactly two shapes, both through the connector `List` helper with `invitation.OrderFields`/`DefaultOrder` and PK `id`: `resource_key == ORDER BY created_at, id` and `subject_key == ORDER BY created_at, id`, each in BOTH directions (the reverse is the `HasPrev` probe's) — the four composites the manifest already carries. `resolved_subject_id ==` is NOT issued by any port today (the pocket drives resolve-on-registration through `ListBySubject`); it stays a documented access path for N5 to decide on. Neither list declares a `PostFilter`, so a non-blank `Search` is `sdk.ErrInvalidInput` (R4) |
 | `challenges` | `expires_at <=` (purge); `user_id ==` + `purpose in` (reset/adoption revocation) | `expires_at`, then `id` | **BUILT (N4c)**, exactly two shapes. `PurgeExpired` is `expires_at <= before ORDER BY expires_at ASC, id ASC [LIMIT n]` — the two-field COMPOSITE the manifest already carries, one direction only (the port returns a count, not a page), and the query runs INSIDE the purge's transaction so its candidates are the contention set. The revocation cascade is `user_id == AND purpose in [...]`, equality-only and therefore served without a composite; the `in` list is chunked at 30 (the DNF disjunction cap) even though this pocket's purge sets are two or three purposes. **N4d adds no shape**: passwordless adoption reuses the revocation query |
-| `authentication_grants` | `consume_key ==` + `consumed_at == null`; `session_id ==`; `user_id ==` | `(created_at, id)` ascending | `Consume` — **BUILT (N3b)** — is `consume_key == AND consumed_at == null ORDER BY created_at ASC, id ASC LIMIT 1`; `consumed_at == null` is a Firestore IS_NULL filter and the shape needs the four-field COMPOSITE the manifest already carries. `session_id ==` (`DeleteBySession`) is **BUILT (N3b)** and equality-only, so no composite. `user_id ==` (`readGrantsForUser`, the user half of the lifecycle cascade) is **BUILT (N2b)** and equality-only, so no composite; `SetStatus` issues it once plus one `session_id ==` per revoked session |
+| `authentication_grants` | `consume_key ==` + `consumed_at == null`; `session_id ==`; `user_id ==` | `(created_at, id)` ascending | `Consume` — **BUILT (N3b)** — is `consume_key == AND consumed_at == null ORDER BY created_at ASC, id ASC LIMIT 1`; `consumed_at == null` is a Firestore IS_NULL filter and the shape needs the four-field COMPOSITE the manifest already carries. `session_id ==` (`DeleteBySession`) is **BUILT (N3b)** and equality-only, so no composite. `user_id ==` (`readGrantsForUser`, the user half of the lifecycle cascade) is **BUILT (N2b)** and equality-only, so no composite; `SetStatus` issues it once plus one `session_id ==` per revoked session. **N4d adds no shape**: passwordless adoption issues `user_id ==` ALONE, because both SQL adapters revoke `WHERE user_id = ?` there — the wider session-linked disjunction is `SetStatus`'s, whose SQL spells it out |
 
 Every direction a store serves — PLUS the reversed direction the List helper's
 `HasPrev` probe issues, which needs the same index with all directions flipped —
@@ -737,6 +772,8 @@ document id:
 | `Invitations.GetByTokenHash` | `invitation_token_hashes/h(hash)` → the row it names (**two point reads under ONE `ReadSnapshot`**, so a resend cannot report a live invitation as unknown while its token is moving) |
 | `Challenges.Replace`'s read of the row it displaces, and `ConsumeCode`'s read | `challenges/h(subject_key, purpose)` |
 | `Challenges.ConsumeToken`, and `PasswordResets.Redeem`'s resolution of the reset token | `challenge_digests/h(purpose, digest)` → the row it names (the claim carries the row's DOCUMENT id, because this collection is keyed by its replacement tuple rather than by its surrogate id — §5.10) |
+| `Passwordless.Redeem`'s token resolution | `challenge_digests/h(purpose, digest)` → the row it names — the SAME two point reads, and the two documents whose intersection makes two concurrent redemptions serialize (the winner deletes both; the loser aborts, re-runs and finds them gone) |
+| `Passwordless.Redeem`'s decision — which subject, if any, owns the bound address | `identifier_claims/h(kind, value)` → the row it names, then `users/h(user_id)`. **No `ReadSnapshot`**: this already runs inside the redemption's read-write transaction, which is one snapshot AND takes read locks — the seam `ReadSnapshot` would provide is already held |
 | `ContactChanges.Create` / `Consume` | `contact_changes/h(user_id, kind)` |
 | `ServiceAccounts.Get`, and `Delete`'s existence read | `service_accounts/h(id)` |
 | `APIKeys.GetByHash` | `api_key_hashes/h(key_hash)` → the row it names (**two point reads, NO snapshot**: the pair is written in one transaction and neither document is ever deleted or re-pointed, so a visible claim proves a committed row — unlike the identifier and session claims, which MOVE and therefore need one) |
@@ -782,10 +819,20 @@ document's `email_verified` projection — is not a violation.
 | `apikeys_doc.go` (N4a) | `api_keys`, `api_key_hashes` | `putAPIKey` (the only claim writer), `revokeAPIKey`, `touchAPIKey` — and NO drop helper, because the claim is never released (§5.4) |
 | `securityevents_doc.go` (N4a) | `security_events` | `putSecurityEvent` — the ONLY writer; the rail is append-only in the store as well as in the port |
 
-The revocation helpers (`dropSessionsForUser`, `dropAuthGrants`) take
-ALREADY-READ documents and read nothing, which is what lets N2b's `SetStatus` and
-N4d's adoption finish a multi-collection read phase before they write — the
-vendor refuses any read issued after a transaction's first write.
+The revocation helpers (`dropSessionsForUser`, `dropAuthGrants`,
+`dropChallenges`) take ALREADY-READ documents and read nothing, which is what
+lets N2b's `SetStatus`, N4c's `PasswordResets.Redeem` and N4d's passwordless
+adoption finish a multi-collection read phase before they write — the vendor
+refuses any read issued after a transaction's first write.
+
+`passwordresets.go` and `passwordless.go` own NO collection: they are
+COMPOSITIONS, and each reaches every foreign collection through that
+collection's owner pair. `Passwordless.Redeem` composes seven of them —
+`putUser`/`advanceUserRevision`, `putIdentifier`/`updateIdentifier`,
+`dropPassword`, `putSession`/`readSessionsForUser`/`dropSessionsForUser`,
+`readGrantsForUser`/`dropAuthGrants`, and the challenge pair — which is the
+largest read/write set in the store and exactly why the rule is executable
+rather than advisory: a composition composes owners, it never bypasses them.
 
 ### 7.3 `security_events` — the complete composite enumeration (N4a)
 
