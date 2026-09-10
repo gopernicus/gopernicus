@@ -221,35 +221,51 @@ func TestTransactRetriesAnAbortedCallbackError(t *testing.T) {
 	}
 }
 
-// TestTransactDoesNotRetryAMappedAbortedError is the other half of N4, and the
-// reason the store rule is "map before you return": MapError keeps the server's
-// message but not its status, so a mapped Aborted ends the transaction instead
-// of silently re-running the callback — and comes back unwrapped.
-func TestTransactDoesNotRetryAMappedAbortedError(t *testing.T) {
-	ctx, db, _ := transactFixture(t, 0)
+// TestTransactRetriesAMappedAbortedError is the other half of N4, and it
+// asserts the OPPOSITE of what this test asserted before the A7 review fold:
+// MapError PRESERVES the gRPC status in the chain, so a mapped Aborted is still
+// contention and the vendor re-runs the callback.
+//
+// The old behavior — a mapped Aborted ending the transaction — was the bug. A
+// store maps the error of every transactional read (that is the only honest
+// thing to do with it: the caller wants sdk sentinels, not gRPC codes), so
+// flattening the status meant a READ that lost a race was reported to the
+// caller as a conflict while a losing COMMIT was retried. Same condition, two
+// answers. Now both retry, which is what makes contention on transactional
+// reads recoverable.
+func TestTransactRetriesAMappedAbortedError(t *testing.T) {
+	ctx, db, collection := transactFixture(t, 0)
+	committed := db.Doc(collection, "after-the-mapped-abort")
 
-	mapped := firestore.MapError(status.Error(codes.Aborted, "already interpreted"))
+	mapped := firestore.MapError(status.Error(codes.Aborted, "a transactional read lost its race"))
+	if !errors.Is(mapped, sdk.ErrConflict) {
+		t.Fatalf("the mapped Aborted must still wrap sdk.ErrConflict: %v", mapped)
+	}
 	attempts := 0
-	err := db.Transact(ctx, func(context.Context) error {
+	err := db.Transact(ctx, func(txCtx context.Context) error {
 		attempts++
-		return mapped
+		if attempts == 1 {
+			return mapped
+		}
+		return db.WriterFrom(txCtx).Create(txCtx, committed, map[string]any{"n": 2})
 	})
-	if attempts != 1 {
-		t.Fatalf("the callback ran %d times, want 1 (a mapped error must not be retried)", attempts)
+	if err != nil {
+		t.Fatalf("Transact: %v", err)
 	}
-	if err != mapped {
-		t.Fatalf("Transact = %v, want the identical mapped error", err)
+	if attempts != 2 {
+		t.Fatalf("the callback ran %d times, want 2 (a MAPPED Aborted keeps its status and must be retried)", attempts)
 	}
-	if !errors.Is(err, sdk.ErrConflict) {
-		t.Errorf("the mapped Aborted no longer wraps sdk.ErrConflict: %v", err)
+	if !documentExists(t, ctx, db, committed) {
+		t.Error("the retried attempt's write is absent")
 	}
 }
 
 // TestTransactExhaustsAttemptsOnAPersistentAbortedCallback bounds the retry
 // loop at Config.MaxAttempts and pins what a caller gets when the loop ends on
-// a CALLBACK error: that error, unwrapped, never remapped into a generic
-// conflict. (Exhaustion on a losing COMMIT is the other case; it maps to
-// sdk.ErrConflict — see TestTransactCommitContentionOutcome and the live leg.)
+// a CALLBACK error carrying a bare vendor status: the classified value, still
+// carrying its status, never a silently unclassified 500. (Exhaustion on a
+// losing COMMIT is the other case and maps identically — see
+// TestTransactCommitContentionOutcome and the live leg.)
 func TestTransactExhaustsAttemptsOnAPersistentAbortedCallback(t *testing.T) {
 	ctx, db, _ := transactFixture(t, 3)
 
@@ -262,8 +278,32 @@ func TestTransactExhaustsAttemptsOnAPersistentAbortedCallback(t *testing.T) {
 	if attempts != 3 {
 		t.Fatalf("the callback ran %d times, want MaxAttempts (3)", attempts)
 	}
-	if err != aborted {
-		t.Fatalf("Transact = %v, want the identical callback error", err)
+	if !errors.Is(err, sdk.ErrConflict) {
+		t.Fatalf("Transact = %v, want an error wrapping sdk.ErrConflict", err)
+	}
+	if code := status.Code(err); code != codes.Aborted {
+		t.Fatalf("status.Code(Transact) = %s, want Aborted", code)
+	}
+}
+
+// TestTransactReturnsADomainSentinelUnwrapped is the other side of the
+// narrowing above: an error that already carries an sdk sentinel is the
+// callback's ANSWER, not a vendor condition, so it comes back byte-identical
+// and a caller's == still holds.
+func TestTransactReturnsADomainSentinelUnwrapped(t *testing.T) {
+	ctx, db, _ := transactFixture(t, 0)
+
+	domain := fmt.Errorf("passwordless rejected: %w", sdk.ErrForbidden)
+	attempts := 0
+	err := db.Transact(ctx, func(context.Context) error {
+		attempts++
+		return domain
+	})
+	if attempts != 1 {
+		t.Fatalf("the callback ran %d times, want 1 (a domain refusal is not contention)", attempts)
+	}
+	if err != domain {
+		t.Fatalf("Transact = %v, want the identical domain error", err)
 	}
 }
 

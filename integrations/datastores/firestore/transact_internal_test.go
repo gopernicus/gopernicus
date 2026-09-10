@@ -3,6 +3,7 @@ package firestore
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	gcfs "cloud.google.com/go/firestore"
@@ -120,9 +121,12 @@ func TestAttemptStateOutcomes(t *testing.T) {
 		}
 	})
 
-	t.Run("callback error survives an Aborted-driven retry", func(t *testing.T) {
-		// The vendor retries a callback error that IS a gRPC Aborted status; the
-		// LAST attempt's error is the one that comes back, still unwrapped.
+	t.Run("a callback's raw status is classified rather than leaked", func(t *testing.T) {
+		// The vendor retries a callback error that IS a gRPC Aborted status, and
+		// the LAST attempt's error is the one that comes back. It is the ONE
+		// narrowing of "returned unwrapped" (callbackError): a bare vendor
+		// status carries no domain meaning, so it is mapped instead of reaching
+		// a host as an unclassified 500 — while the status stays in the chain.
 		aborted := status.Error(codes.Aborted, "forced")
 		s := &attemptState{}
 		for range 2 {
@@ -131,8 +135,27 @@ func TestAttemptStateOutcomes(t *testing.T) {
 				defer s.beginAttempt(&rerr)()
 			}()
 		}
-		if got := s.result(aborted); got != aborted {
-			t.Fatalf("result = %v, want the identical Aborted callback error", got)
+		got := s.result(aborted)
+		if !errors.Is(got, sdk.ErrConflict) {
+			t.Fatalf("result = %v, want an error wrapping sdk.ErrConflict", got)
+		}
+		if code := status.Code(got); code != codes.Aborted {
+			t.Fatalf("status.Code(result) = %s, want Aborted — the retry gate reads it", code)
+		}
+	})
+
+	t.Run("a callback's domain sentinel is returned byte-identical", func(t *testing.T) {
+		// The other side of the narrowing: a domain refusal that already
+		// carries an sdk sentinel is NOT remapped, so `errors.Is`/`==` against
+		// the caller's own value still holds.
+		domain := fmt.Errorf("passwordless rejected: %w", sdk.ErrForbidden)
+		s := &attemptState{}
+		func() {
+			rerr := domain
+			defer s.beginAttempt(&rerr)()
+		}()
+		if got := s.result(domain); got != domain {
+			t.Fatalf("result = %v, want the identical domain error", got)
 		}
 	})
 

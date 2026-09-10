@@ -5,7 +5,9 @@ import (
 	"errors"
 
 	gcfs "cloud.google.com/go/firestore"
+	"google.golang.org/grpc/status"
 
+	"github.com/gopernicus/gopernicus/sdk"
 	"github.com/gopernicus/gopernicus/sdk/foundation/crud"
 )
 
@@ -95,22 +97,29 @@ var _ crud.Transactor = (*DB)(nil)
 //
 // # Errors
 //
-//   - fn's error is returned UNWRAPPED — the identical value, never remapped.
-//     A caller can compare it with == or errors.Is against its own sentinel.
+//   - fn's error is returned UNWRAPPED — the identical value, never remapped —
+//     with ONE narrowing: an error that carries a bare gRPC status and no sdk
+//     sentinel is run through MapError, so a vendor status a callback forwarded
+//     cannot escape as an unclassified 500. A domain sentinel, a plain error,
+//     and an already-mapped error all come back byte-identical, so a caller can
+//     still compare with == or errors.Is against its own sentinel.
 //   - A vendor error (begin, commit, or the read-after-write re-check) is
 //     returned through MapError. Retries exhausted by a losing COMMIT surface
 //     as the server's Aborted, hence sdk.ErrConflict: the caller is the
 //     contention loser and may retry the whole workflow.
 //   - Nesting returns ErrNestedTransact, before the vendor is called.
 //
-// One sharp edge, worth knowing before it bites (C0 finding N4): the vendor
-// decides whether to retry by asking whether the error IS or WRAPS a gRPC
-// Aborted status — including an error fn returned. A callback that hands back a
-// raw vendor Aborted status therefore causes a retry, which is usually what a
-// contention-aware store wants but is surprising if the error came from
-// somewhere unrelated. Passing vendor errors through MapError before returning
-// them settles it: MapError keeps the server's message but not its status, so a
-// mapped error ends the transaction instead of re-running it.
+// # A contended READ inside fn is retried too (C0 finding N4)
+//
+// The vendor decides whether to retry by asking whether the error IS or WRAPS a
+// gRPC Aborted status — including an error fn returned — and MapError PRESERVES
+// that status in the chain. So a transactional read that loses a race, mapped
+// to sdk.ErrConflict the way every store maps its reads, is still recognized as
+// contention and re-runs fn. That is what makes contention on transactional
+// READS recoverable rather than a caller-visible conflict: without it, only a
+// losing COMMIT would ever be retried. The consequence to design for is the one
+// stated above — fn may run more than once, so reset its attempt-local state at
+// the top.
 func (d *DB) Transact(ctx context.Context, fn func(ctx context.Context) error) error {
 	if _, ok := ambientTxFrom(ctx); ok {
 		return ErrNestedTransact
@@ -237,7 +246,24 @@ func (s *attemptState) result(err error) error {
 		// callback error anyway. That is deliberate: the callback error is why
 		// the transaction did not commit, and ctx.Err() still tells the caller
 		// the rest.
-		return s.err
+		return callbackError(s.err)
+	}
+	return MapError(err)
+}
+
+// callbackError is the ONE narrowing of "fn's error is returned unwrapped": an
+// error carrying a raw gRPC status and no sdk sentinel is mapped, so a vendor
+// status a callback forwarded (a read whose error was passed straight through)
+// cannot leave Transact unclassified and reach a host as a 500 with no domain
+// meaning. Everything else — a domain sentinel, a plain error, an
+// already-mapped value — is returned byte-identical, which is what keeps the
+// documented `return ErrPasswordlessRejected` shape comparable with ==.
+func callbackError(err error) error {
+	if err == nil || sdk.IsExpected(err) {
+		return err
+	}
+	if _, ok := status.FromError(err); !ok {
+		return err
 	}
 	return MapError(err)
 }

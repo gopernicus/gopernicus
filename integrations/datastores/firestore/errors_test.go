@@ -35,6 +35,12 @@ func TestMapError(t *testing.T) {
 		in       error
 		want     error // errors.Is target; nil means "no sdk sentinel"
 		wantSame bool  // the returned error must be the input, byte-identical
+		// wantCode is the gRPC code status.Code must still recover from the
+		// MAPPED value. Every status-carrying row states one: the sentinel is
+		// added to the chain, the status is never removed from it, because the
+		// vendor's transaction retry gate reads the status of the error a
+		// callback returns (A7 fold, connector C1).
+		wantCode codes.Code
 	}{
 		{name: "nil maps to nil", in: nil},
 		{
@@ -54,16 +60,16 @@ func TestMapError(t *testing.T) {
 			want:     sdk.ErrConflict,
 			wantSame: true,
 		},
-		{name: "NotFound", in: status.Error(codes.NotFound, `"users/u1" not found`), want: sdk.ErrNotFound},
-		{name: "AlreadyExists", in: status.Error(codes.AlreadyExists, "entity already exists: users/u1"), want: sdk.ErrAlreadyExists},
-		{name: "Aborted (retries exhausted)", in: status.Error(codes.Aborted, "Too much contention"), want: sdk.ErrConflict},
-		{name: "FailedPrecondition without an index message", in: status.Error(codes.FailedPrecondition, "the stored document version does not match"), want: sdk.ErrConflict},
-		{name: "InvalidArgument", in: status.Error(codes.InvalidArgument, "Collection id is reserved"), want: sdk.ErrInvalidInput},
-		{name: "DeadlineExceeded", in: status.Error(codes.DeadlineExceeded, "context deadline exceeded"), want: sdk.ErrUnavailable},
-		{name: "Unavailable", in: status.Error(codes.Unavailable, "connection reset"), want: sdk.ErrUnavailable},
-		{name: "ResourceExhausted", in: status.Error(codes.ResourceExhausted, "quota exceeded"), want: sdk.ErrUnavailable},
-		{name: "PermissionDenied", in: status.Error(codes.PermissionDenied, "Missing or insufficient permissions"), want: sdk.ErrForbidden},
-		{name: "Unauthenticated", in: status.Error(codes.Unauthenticated, "invalid credentials"), want: sdk.ErrUnauthorized},
+		{name: "NotFound", in: status.Error(codes.NotFound, `"users/u1" not found`), want: sdk.ErrNotFound, wantCode: codes.NotFound},
+		{name: "AlreadyExists", in: status.Error(codes.AlreadyExists, "entity already exists: users/u1"), want: sdk.ErrAlreadyExists, wantCode: codes.AlreadyExists},
+		{name: "Aborted (retries exhausted)", in: status.Error(codes.Aborted, "Too much contention"), want: sdk.ErrConflict, wantCode: codes.Aborted},
+		{name: "FailedPrecondition without an index message", in: status.Error(codes.FailedPrecondition, "the stored document version does not match"), want: sdk.ErrConflict, wantCode: codes.FailedPrecondition},
+		{name: "InvalidArgument", in: status.Error(codes.InvalidArgument, "Collection id is reserved"), want: sdk.ErrInvalidInput, wantCode: codes.InvalidArgument},
+		{name: "DeadlineExceeded", in: status.Error(codes.DeadlineExceeded, "context deadline exceeded"), want: sdk.ErrUnavailable, wantCode: codes.DeadlineExceeded},
+		{name: "Unavailable", in: status.Error(codes.Unavailable, "connection reset"), want: sdk.ErrUnavailable, wantCode: codes.Unavailable},
+		{name: "ResourceExhausted", in: status.Error(codes.ResourceExhausted, "quota exceeded"), want: sdk.ErrUnavailable, wantCode: codes.ResourceExhausted},
+		{name: "PermissionDenied", in: status.Error(codes.PermissionDenied, "Missing or insufficient permissions"), want: sdk.ErrForbidden, wantCode: codes.PermissionDenied},
+		{name: "Unauthenticated", in: status.Error(codes.Unauthenticated, "invalid credentials"), want: sdk.ErrUnauthorized, wantCode: codes.Unauthenticated},
 		{name: "Unknown status gets no sentinel", in: status.Error(codes.Unknown, "surprise")},
 		{name: "Internal gets no sentinel", in: status.Error(codes.Internal, "internal error")},
 		{name: "a plain non-status error gets no sentinel", in: errors.New("dial tcp: connection refused")},
@@ -98,14 +104,16 @@ func TestMapError(t *testing.T) {
 			want: sdk.ErrUnavailable,
 		},
 		{
-			name: "FailedPrecondition, missing composite index",
-			in:   status.Error(codes.FailedPrecondition, requiresIndexMessage),
-			want: firestore.ErrMissingIndex,
+			name:     "FailedPrecondition, missing composite index",
+			in:       status.Error(codes.FailedPrecondition, requiresIndexMessage),
+			want:     firestore.ErrMissingIndex,
+			wantCode: codes.FailedPrecondition,
 		},
 		{
-			name: "FailedPrecondition, index still building",
-			in:   status.Error(codes.FailedPrecondition, buildingIndexMessage),
-			want: firestore.ErrMissingIndex,
+			name:     "FailedPrecondition, index still building",
+			in:       status.Error(codes.FailedPrecondition, buildingIndexMessage),
+			want:     firestore.ErrMissingIndex,
+			wantCode: codes.FailedPrecondition,
 		},
 	}
 
@@ -134,10 +142,24 @@ func TestMapError(t *testing.T) {
 			if !tc.wantSame && !strings.HasPrefix(got.Error(), "firestore:") {
 				t.Errorf("MapError(%v) = %q, want a firestore: prefix naming the source", tc.in, got)
 			}
+			// The status SURVIVES the mapping. Without it, an Aborted a store
+			// mapped inside a transaction callback would tell the vendor's
+			// retry gate that the transaction is settled — which is the bug
+			// this assertion exists to keep fixed.
+			if tc.wantCode != codes.OK {
+				if code := status.Code(got); code != tc.wantCode {
+					t.Errorf("status.Code(MapError(%v)) = %s, want %s — the sentinel is ADDED to the chain, the status is never removed from it", tc.in, code, tc.wantCode)
+				}
+			}
 			// Idempotence: the mapped value maps to itself, so a store may map
 			// an error a helper already mapped without flattening it.
 			if again := firestore.MapError(got); !errors.Is(again, got) {
 				t.Errorf("MapError is not idempotent: MapError(%v) = %v", got, again)
+			}
+			if tc.wantCode != codes.OK {
+				if code := status.Code(firestore.MapError(got)); code != tc.wantCode {
+					t.Errorf("re-mapping lost the status: status.Code = %s, want %s", code, tc.wantCode)
+				}
 			}
 		})
 	}
