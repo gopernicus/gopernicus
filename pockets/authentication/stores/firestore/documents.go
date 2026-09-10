@@ -171,17 +171,25 @@ type apiKeyDoc struct {
 // append-only audit rail. Details is a NATIVE map where SQL stores JSON text —
 // the round-trip contract is uniform (nil or empty in, non-nil empty out), and
 // the storage shape is each family's choice.
+//
+// Its element type is `any`, matching securityevent.SecurityEvent.Details
+// exactly: the bag is OPEN, and narrowing it to string here would either drop or
+// refuse a value the SQL adapters happily JSON-encode. Firestore's own type
+// system is what a value round-trips through, so a number comes back as int64 or
+// float64 where the SQL families return JSON's float64 — the same family
+// difference their JSON encoding already has, and the audit writer stores
+// identifiers and key prefixes (§5.1's content hygiene), which are strings.
 type securityEventDoc struct {
-	ID          string            `firestore:"id"`
-	UserID      string            `firestore:"user_id"`
-	ActorType   string            `firestore:"actor_type"`
-	ActorID     string            `firestore:"actor_id"`
-	EventType   string            `firestore:"event_type"`
-	EventStatus string            `firestore:"event_status"`
-	Details     map[string]string `firestore:"details"`
-	IPAddress   string            `firestore:"ip_address"`
-	UserAgent   string            `firestore:"user_agent"`
-	CreatedAt   time.Time         `firestore:"created_at"`
+	ID          string         `firestore:"id"`
+	UserID      string         `firestore:"user_id"`
+	ActorType   string         `firestore:"actor_type"`
+	ActorID     string         `firestore:"actor_id"`
+	EventType   string         `firestore:"event_type"`
+	EventStatus string         `firestore:"event_status"`
+	Details     map[string]any `firestore:"details"`
+	IPAddress   string         `firestore:"ip_address"`
+	UserAgent   string         `firestore:"user_agent"`
+	CreatedAt   time.Time      `firestore:"created_at"`
 }
 
 // invitationDoc is one invitations document (migrations 0009, 0016).

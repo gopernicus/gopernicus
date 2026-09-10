@@ -224,10 +224,171 @@ func TestGrantCollectionIsOwnedByGrantsDoc(t *testing.T) {
 		"step-up grants are owned by grants_doc.go (putAuthGrant/spendAuthGrant/dropAuthGrants) — route the change through them instead")
 }
 
+// invitationOwners are the only non-test files allowed to name the invitation
+// row's collection or either of its two claim collections.
+var invitationOwners = map[string]bool{
+	"keys.go":            true,
+	"documents.go":       true,
+	"invitations_doc.go": true,
+}
+
+var invitationSymbols = []string{
+	"collectionInvitations",
+	"collectionInvitationTokens",
+	"collectionInvitationPending",
+	"invitations",
+	"invitation_token_hashes",
+	"invitation_pending",
+}
+
+// TestInvitationCollectionsAreOwnedByInvitationsDoc is the R3 discipline for the
+// pending-tuple PARTIAL index (SCHEMA.md §5.6), which is the one claim in this
+// store whose predicate a reader is most likely to get wrong: it is the STORED
+// status, never the clock. A write path that released the tuple because it
+// noticed the invitation had expired would let a second pending invite exist for
+// a tuple the SQL adapters still consider taken, and no read would notice.
+// Keeping putInvitation/updateInvitation the only way in is what makes the
+// predicate a property of the code rather than of each call site's memory.
+func TestInvitationCollectionsAreOwnedByInvitationsDoc(t *testing.T) {
+	assertOwnership(t, invitationOwners, invitationSymbols,
+		"invitation rows and their token/pending claims are owned by invitations_doc.go (putInvitation/updateInvitation) — route the change through them instead")
+}
+
+// challengeOwners are the only non-test files allowed to name the challenge row's
+// collection or its digest claim collection.
+var challengeOwners = map[string]bool{
+	"keys.go":           true,
+	"documents.go":      true,
+	"challenges_doc.go": true,
+}
+
+var challengeSymbols = []string{
+	"collectionChallenges",
+	"collectionChallengeDigests",
+	"challenges",
+	"challenge_digests",
+}
+
+// TestChallengeCollectionsAreOwnedByChallengesDoc guards the store's most
+// fragile claim relationship (SCHEMA.md §5.7). The challenge document is keyed by
+// (subject_key, purpose), so a Replace DISPLACES the previous row instead of
+// deleting it — and the displaced row's digest claim therefore has no other
+// chance to be released. A write path that Set a challenge document without
+// going through putChallenge would strand the old digest as claimed forever, and
+// the only symptom would be an ErrAlreadyExists months later for a secret no
+// live row explains. The purge and the reset composition write this collection
+// too, which is exactly why the rule is enforced rather than documented.
+func TestChallengeCollectionsAreOwnedByChallengesDoc(t *testing.T) {
+	assertOwnership(t, challengeOwners, challengeSymbols,
+		"challenge rows and their digest claim are owned by challenges_doc.go (putChallenge/updateChallengeAttempts/dropChallenge) — route the change through them instead")
+}
+
+// contactChangeOwners are the only non-test files allowed to name the pending
+// contact-change collection. It carries no claim: its uniqueness IS the document
+// id, which is precisely why every reference must go through the file that
+// derives it.
+var contactChangeOwners = map[string]bool{
+	"keys.go":               true,
+	"documents.go":          true,
+	"contactchanges_doc.go": true,
+}
+
+var contactChangeSymbols = []string{
+	"collectionContactChanges",
+	"contact_changes",
+}
+
+// TestContactChangeCollectionIsOwnedByContactChangesDoc keeps the id-derived
+// replacement in one place. A write path that reached this collection with any
+// other document id — the row's surrogate id, say — would silently drop the "one
+// pending change per user and kind" rule that makes Create an atomic replace,
+// and the confirm step would then have two pending values to choose from.
+func TestContactChangeCollectionIsOwnedByContactChangesDoc(t *testing.T) {
+	assertOwnership(t, contactChangeOwners, contactChangeSymbols,
+		"pending contact changes are owned by contactchanges_doc.go — the document id IS the replacement key, so route the change through it")
+}
+
+// serviceAccountOwners are the only non-test files allowed to name the
+// machine-identity collection. It carries no claim — `name` is deliberately not
+// unique (SCHEMA.md §5.9) — so the rule protects the opposite property from the
+// claim rules above: that no future write path INVENTS a constraint the SQL
+// siblings do not have.
+var serviceAccountOwners = map[string]bool{
+	"keys.go":                true,
+	"documents.go":           true,
+	"serviceaccounts_doc.go": true,
+}
+
+var serviceAccountSymbols = []string{
+	"collectionServiceAccounts",
+	"service_accounts",
+}
+
+// TestServiceAccountCollectionIsOwnedByServiceAccountsDoc keeps the audited
+// NON-constraint auditable. A second write path is where a name claim, or a
+// whole-document Set that rewrote created_at and silently reordered the
+// directory, would arrive.
+func TestServiceAccountCollectionIsOwnedByServiceAccountsDoc(t *testing.T) {
+	assertOwnership(t, serviceAccountOwners, serviceAccountSymbols,
+		"service accounts are owned by serviceaccounts_doc.go (putServiceAccount/updateServiceAccountProfile/dropServiceAccount) — route the change through them instead")
+}
+
+// apiKeyOwners are the only non-test files allowed to name the API-key row's
+// collection or its key-hash claim collection.
+var apiKeyOwners = map[string]bool{
+	"keys.go":        true,
+	"documents.go":   true,
+	"apikeys_doc.go": true,
+}
+
+var apiKeySymbols = []string{
+	"collectionAPIKeys",
+	"collectionAPIKeyHashClaims",
+	"api_keys",
+	"api_key_hashes",
+}
+
+// TestAPIKeyCollectionsAreOwnedByAPIKeysDoc is the R3 discipline for a claim
+// whose predicate is UNCONDITIONAL (SCHEMA.md §5.4) — the asymmetry that makes it
+// worth enforcing. Every other claim in this store is released when its row
+// leaves a predicate; this one is never released at all, because
+// `idx_api_keys_key_hash` has no `WHERE revoked_at IS NULL`. A well-meaning
+// write path that "cleaned up" the claim on revocation would make a revoked
+// credential's hash mintable again, and no port case would notice.
+func TestAPIKeyCollectionsAreOwnedByAPIKeysDoc(t *testing.T) {
+	assertOwnership(t, apiKeyOwners, apiKeySymbols,
+		"API keys and their key-hash claim are owned by apikeys_doc.go (putAPIKey/revokeAPIKey/touchAPIKey) — the claim is never released, so route the change through them instead")
+}
+
+// securityEventOwners are the only non-test files allowed to name the audit
+// rail.
+var securityEventOwners = map[string]bool{
+	"keys.go":               true,
+	"documents.go":          true,
+	"securityevents_doc.go": true,
+}
+
+var securityEventSymbols = []string{
+	"collectionSecurityEvents",
+	"security_events",
+}
+
+// TestSecurityEventCollectionIsOwnedBySecurityEventsDoc keeps the rail
+// APPEND-ONLY in the store as well as in the port. The port offers no Update and
+// no Delete, and this rule is what keeps that structural: the only writer in the
+// package is putSecurityEvent, so a rewrite path cannot be added quietly beside
+// it. An audit trail a store can rewrite is not an audit trail.
+func TestSecurityEventCollectionIsOwnedBySecurityEventsDoc(t *testing.T) {
+	assertOwnership(t, securityEventOwners, securityEventSymbols,
+		"audit events are owned by securityevents_doc.go (putSecurityEvent is its ONLY writer — the rail is append-only) — route the change through it")
+}
+
 // TestOwnerFilesExist keeps every allow-list honest: a renamed or deleted owner
 // must fail here rather than silently widening the rule it appears in.
 func TestOwnerFilesExist(t *testing.T) {
-	for _, owners := range []map[string]bool{identifierOwners, userOwners, passwordOwners, projectionOwners, sessionOwners, oauthOwners, grantOwners} {
+	for _, owners := range []map[string]bool{identifierOwners, userOwners, passwordOwners, projectionOwners, sessionOwners, oauthOwners, grantOwners,
+		invitationOwners, challengeOwners, contactChangeOwners,
+		serviceAccountOwners, apiKeyOwners, securityEventOwners} {
 		for name := range owners {
 			if _, err := os.Stat(name); err != nil {
 				t.Errorf("owner file %s: %v", name, err)

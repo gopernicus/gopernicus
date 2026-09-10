@@ -127,6 +127,11 @@ transaction locks what it read — which is why every row states it.
 
 ### `invitation.InvitationRepository` — 6
 
+**BUILT (N4b).** `Create` performs NO read — every rule it can break is a
+document that does not yet exist, and each is written with `Create` so the SERVER
+arbitrates (R3). The `Create` row below therefore lists what the operation
+CLAIMS, not what it reads.
+
 | Method | Reads | Writes | Claims |
 |---|---|---|---|
 | `Create` | token-hash claim, pending-tuple claim (when the stored status is pending) | invitations doc | takes the token claim, and the pending claim while pending |
@@ -138,6 +143,11 @@ transaction locks what it read — which is why every row states it.
 
 ### `challenge.Repository` — 4
 
+**BUILT (N4c).** `ConsumeCode`'s `Consumed` is projected from the ROW rather than
+from the caller's arguments, so it carries both `SubjectKey` and `UserID` — a
+superset of what the SQL adapters return, which fill `UserID` from the argument
+and leave `SubjectKey` blank. For every code purpose the two are the same value.
+
 | Method | Reads | Writes | Claims |
 |---|---|---|---|
 | `Replace` | the `(subject_key, purpose)` doc (for the displaced row's digest), the new digest claim | Set the doc | releases the displaced digest claim, takes the new one |
@@ -146,6 +156,11 @@ transaction locks what it read — which is why every row states it.
 | `PurgeExpired` | query `expires_at <= before`, ordered and bounded, re-read INSIDE the transaction with each row's digest claim | delete rows + claims | releases every purged row's claim |
 
 ### `contactchange.Repository` — 2
+
+**BUILT (N4c).** `Create` is ONE `Set` with no read and no transaction: the
+document id IS the (user, kind) uniqueness rule, so a single write both stores
+the new state and displaces the old one atomically, where the SQL adapters need a
+delete-before-insert inside a transaction to say the same thing.
 
 `Create` (Set on the `(user_id, kind)` doc id — replacement is structural),
 `Consume` (single-use read-and-delete; expired → the deletion COMMITS, then
@@ -179,6 +194,11 @@ erroring, and this store reproduces that rather than inventing a `sdk.ErrNotFoun
 the port does not describe.
 
 ### `passwordreset.Repository` — 1
+
+**BUILT (N4c).** It writes four collections it does not own and reaches each one
+through that collection's owner file (`putPassword`, `readSessionsForUser`/
+`dropSessionsForUser`, `readGrantsForUser`/`dropAuthGrants`, and the challenge
+helpers) — a composition composes owners, it never bypasses them (§7.2).
 
 `Redeem`: one transaction — consume the live `(purpose, digest)` challenge
 through its digest claim, resolve the user from it, Set the password doc, delete
@@ -295,6 +315,19 @@ store stricter than its SQL siblings, so none is written (§5.9).
 round-trip contract is uniform (nil or empty in, non-nil empty out) and the
 storage shape is each family's choice. Append-only: no update or delete path
 exists in the port, so none exists here.
+
+**N4a correction:** the document field is `map[string]any`, matching
+`securityevent.SecurityEvent.Details` exactly. The N1 skeleton typed it
+`map[string]string`, which would have narrowed an OPEN bag — a non-string value
+the SQL adapters JSON-encode without comment would have been dropped or refused
+here. `normalizeDetails` writes an EMPTY MAP for a nil or empty bag (never a
+null, never an absent field) and copies the caller's map, so the read-back is a
+non-nil empty map on every path and a caller mutating its own map afterwards
+cannot change what was stored. Residual family difference: a stored NUMBER comes
+back as Firestore's `int64`/`float64` where the SQL families return JSON's
+`float64` — the same kind of encoding difference their JSON text already has, and
+outside the rail's documented content (identifiers and key prefixes, §5.1's
+content hygiene).
 
 Indexes `idx_security_events_created_at_id`, `_user_id`, `_event_type`,
 `_event_status` become the composite matrix of §7.
@@ -495,6 +528,23 @@ serving `GetByHash`. Predicate: the key row exists (revocation and expiry are
 service branches, so a revoked key KEEPS its claim — its hash must never be
 re-mintable).
 
+**BUILT (N4a).** The predicate above was re-read from the migration rather than
+assumed, because it is the one claim in this store that is never released:
+
+```sql
+-- 0007_api_keys.sql
+CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys (key_hash);
+```
+
+It is UNCONDITIONAL — no `WHERE revoked_at IS NULL` — so nothing takes a row out
+of it. `Revoke` therefore stamps `revoked_at` and touches NO claim, and there is
+deliberately **no `dropAPIKey`**: the port declares no `Delete`, so a release
+path would be dead code whose only reachable effect would be to make a revoked
+credential's hash mintable again. `apikeys_doc.go` owns the pair
+(`putAPIKey` takes the claim; `revokeAPIKey`/`touchAPIKey` are field updates),
+and `TestAPIKeyHashClaimSurvivesRevocation` asserts both the retained claim and
+its consequence (a re-mint of a revoked hash is `sdk.ErrAlreadyExists`).
+
 ### 5.5 `invitation_token_hashes`
 
 `h(token_hash)` → `{doc_id, invitation_id}`, enforcing
@@ -653,11 +703,11 @@ projection of what the unbuilt tasks will issue.
 | `user_identifiers` | `user_id ==`, `active ==` | `(created_at, id)` ascending | `ListByUser` — **BUILT (N2a)**, exactly one shape: `user_id == AND active == true ORDER BY created_at ASC, id ASC`. It is NOT paged (the port returns a slice), so it needs no reversed direction of its own. Credential `Snapshot` **reuses it verbatim (N2b)** — no new shape |
 | `sessions` | `user_id ==` \| `previous_refresh_token_hash ==` | — | **BUILT (N3a)**, exactly two shapes, both a SINGLE equality with NO order: `user_id ==` (`DeleteByUser`, the N2b lifecycle cascade — **BUILT** — and N4d's adoption) and `previous_refresh_token_hash == … LIMIT 1` (`GetByRefreshHash`'s grace half, under a `ReadSnapshot`). Firestore serves a single-field equality from the automatic index, so NEITHER needs a composite. The CURRENT hash issues no query at all — its claim is the access path (§7.1) |
 | `oauth_accounts` | `user_id ==` (+ `provider ==` for Delete) | `(linked_at DESC, provider_user_id DESC)` | **BUILT (N3b)**, two shapes: `ListByUser` = `user_id == ORDER BY linked_at DESC, provider_user_id DESC` (a COMPOSITE — already in the manifest — with no reversed direction, because the port returns a slice, not a page) and `Delete` = `user_id == AND provider ==`, equality-only and therefore served without a composite (Firestore merges the two automatic single-field indexes). **N2b adds no shape**: `CredentialMutations.UnlinkOAuth` reuses `Delete`'s query, and `Snapshot` reuses `ListByUser`'s and re-sorts the handful of links by provider IN GO rather than asking Firestore for a `(user_id, provider)` ordering — the SQL adapters' `ORDER BY provider` on a per-user inventory is not worth a composite index of its own |
-| `service_accounts` | — | `(created_at, id)` both directions | `List` |
-| `api_keys` | `service_account_id ==` | `(created_at, id)` both directions | + `PostFilter` search (R4) |
-| `security_events` | any subset of `user_id`, `event_type`, `event_status` × `created_at` range | `(created_at, id)` both directions | the widest set: every equality subset × the range × both directions |
-| `invitations` | `resource_key ==` \| `subject_key ==` \| `resolved_subject_id ==` | `(created_at, id)` both directions | |
-| `challenges` | `expires_at <=` (purge); `user_id ==` + `purpose in` (reset/adoption revocation) | `expires_at`, then `id` | |
+| `service_accounts` | — | `(created_at, id)` both directions | `List` — **BUILT (N4a)**, one shape: the unfiltered collection ordered `(created_at, id)`, through the connector `List` with `serviceaccount.OrderFields`/`DefaultOrder` and PK `id`. The reverse direction is the `HasPrev` probe's. No `PostFilter`, so a non-blank `Search` is `sdk.ErrInvalidInput` |
+| `api_keys` | `service_account_id ==` | `(created_at, id)` both directions | `ListByServiceAccount` — **BUILT (N4a)**, ONE query shape in both directions: `service_account_id == … ORDER BY created_at, id`. `req.Search` adds NO query shape — it is a client-side `PostFilter` from `firestoredb.SearchFilter(apikey.SearchFields, …)` applied while page-filling, which is exactly why R4 restricts it to this parent-scoped list. `GetByHash` issues no query (§7.1) |
+| `security_events` | any subset of `user_id`, `event_type`, `event_status` × `created_at` range | `(created_at, id)` both directions | `List` — **BUILT (N4a)**; the widest set in the store, enumerated exhaustively in §7.3. The range field IS the leading order field, so a subset costs one composite per direction and not two |
+| `invitations` | `resource_key ==` \| `subject_key ==` \| `resolved_subject_id ==` | `(created_at, id)` both directions | **BUILT (N4b)**, exactly two shapes, both through the connector `List` helper with `invitation.OrderFields`/`DefaultOrder` and PK `id`: `resource_key == ORDER BY created_at, id` and `subject_key == ORDER BY created_at, id`, each in BOTH directions (the reverse is the `HasPrev` probe's) — the four composites the manifest already carries. `resolved_subject_id ==` is NOT issued by any port today (the pocket drives resolve-on-registration through `ListBySubject`); it stays a documented access path for N5 to decide on. Neither list declares a `PostFilter`, so a non-blank `Search` is `sdk.ErrInvalidInput` (R4) |
+| `challenges` | `expires_at <=` (purge); `user_id ==` + `purpose in` (reset/adoption revocation) | `expires_at`, then `id` | **BUILT (N4c)**, exactly two shapes. `PurgeExpired` is `expires_at <= before ORDER BY expires_at ASC, id ASC [LIMIT n]` — the two-field COMPOSITE the manifest already carries, one direction only (the port returns a count, not a page), and the query runs INSIDE the purge's transaction so its candidates are the contention set. The revocation cascade is `user_id == AND purpose in [...]`, equality-only and therefore served without a composite; the `in` list is chunked at 30 (the DNF disjunction cap) even though this pocket's purge sets are two or three purposes. **N4d adds no shape**: passwordless adoption reuses the revocation query |
 | `authentication_grants` | `consume_key ==` + `consumed_at == null`; `session_id ==`; `user_id ==` | `(created_at, id)` ascending | `Consume` — **BUILT (N3b)** — is `consume_key == AND consumed_at == null ORDER BY created_at ASC, id ASC LIMIT 1`; `consumed_at == null` is a Firestore IS_NULL filter and the shape needs the four-field COMPOSITE the manifest already carries. `session_id ==` (`DeleteBySession`) is **BUILT (N3b)** and equality-only, so no composite. `user_id ==` (`readGrantsForUser`, the user half of the lifecycle cascade) is **BUILT (N2b)** and equality-only, so no composite; `SetStatus` issues it once plus one `session_id ==` per revoked session |
 
 Every direction a store serves — PLUS the reversed direction the List helper's
@@ -683,6 +733,13 @@ document id:
 | `OAuthAccounts.GetByProvider` | `oauth_accounts/h(provider, provider_user_id)` |
 | `OAuthStates.Consume` | `oauth_states/h(token)` |
 | `ActiveSessions.CreateForActiveUser`'s status proof | `users/h(user_id)` — the read that FENCES the mint against a concurrent `SetStatus` |
+| `Invitations.Get`, and `UpdateStatus`'s read of the row it transitions | `invitations/h(id)` |
+| `Invitations.GetByTokenHash` | `invitation_token_hashes/h(hash)` → the row it names (**two point reads under ONE `ReadSnapshot`**, so a resend cannot report a live invitation as unknown while its token is moving) |
+| `Challenges.Replace`'s read of the row it displaces, and `ConsumeCode`'s read | `challenges/h(subject_key, purpose)` |
+| `Challenges.ConsumeToken`, and `PasswordResets.Redeem`'s resolution of the reset token | `challenge_digests/h(purpose, digest)` → the row it names (the claim carries the row's DOCUMENT id, because this collection is keyed by its replacement tuple rather than by its surrogate id — §5.10) |
+| `ContactChanges.Create` / `Consume` | `contact_changes/h(user_id, kind)` |
+| `ServiceAccounts.Get`, and `Delete`'s existence read | `service_accounts/h(id)` |
+| `APIKeys.GetByHash` | `api_key_hashes/h(key_hash)` → the row it names (**two point reads, NO snapshot**: the pair is written in one transaction and neither document is ever deleted or re-pointed, so a visible claim proves a committed row — unlike the identifier and session claims, which MOVE and therefore need one) |
 
 This is why the CLAIM documents are described as access paths and not only as
 constraints (§5.1, §5.2): resolving an address through its claim keeps the lookup
@@ -718,11 +775,62 @@ document's `email_verified` projection — is not a violation.
 | `sessions_doc.go` (N3a) | `sessions`, `session_refresh_hashes` | `putSession`, `updateSession`, `dropSession`, `dropSessionsForUser` |
 | `oauth_doc.go` (N3b) | `oauth_accounts`, `oauth_states` | `putOAuthAccount`, `dropOAuthAccounts`, `putOAuthState`, `dropOAuthState` |
 | `grants_doc.go` (N3b) | `authentication_grants` | `putAuthGrant`, `spendAuthGrant`, `dropAuthGrants`; `readGrantsForRevocation` (N2b) is its read half |
+| `invitations_doc.go` (N4b) | `invitations`, `invitation_token_hashes`, `invitation_pending` | `putInvitation`, `updateInvitation` |
+| `challenges_doc.go` (N4c) | `challenges`, `challenge_digests` | `putChallenge`, `updateChallengeAttempts`, `dropChallenge`/`dropChallenges` |
+| `contactchanges_doc.go` (N4c) | `contact_changes` | `putContactChange`, `dropContactChange` |
+| `serviceaccounts_doc.go` (N4a) | `service_accounts` | `putServiceAccount`, `updateServiceAccountProfile`, `dropServiceAccount` |
+| `apikeys_doc.go` (N4a) | `api_keys`, `api_key_hashes` | `putAPIKey` (the only claim writer), `revokeAPIKey`, `touchAPIKey` — and NO drop helper, because the claim is never released (§5.4) |
+| `securityevents_doc.go` (N4a) | `security_events` | `putSecurityEvent` — the ONLY writer; the rail is append-only in the store as well as in the port |
 
 The revocation helpers (`dropSessionsForUser`, `dropAuthGrants`) take
 ALREADY-READ documents and read nothing, which is what lets N2b's `SetStatus` and
 N4d's adoption finish a multi-collection read phase before they write — the
 vendor refuses any read issued after a transaction's first write.
+
+### 7.3 `security_events` — the complete composite enumeration (N4a)
+
+`SecurityEventRepository.List` takes a `ListFilter` whose three equalities are
+each independently optional, plus a half-open `created_at` window, and pages in
+either direction. Every combination is a legal call, so every combination is a
+query shape N5's manifest must carry — the emulator enforces none of them, and
+the shape a host discovers as a production `FAILED_PRECONDITION` is whichever one
+its first operator filter happens to use.
+
+The full set is EIGHT equality subsets × ONE range field × TWO directions = **16
+composites**, listed here so N5 derives rather than guesses:
+
+| # | Equality prefix (all `==`) | Index fields |
+|---|---|---|
+| 1 | — | `created_at`, `id` |
+| 2 | `user_id` | `user_id`, `created_at`, `id` |
+| 3 | `event_type` | `event_type`, `created_at`, `id` |
+| 4 | `event_status` | `event_status`, `created_at`, `id` |
+| 5 | `user_id`, `event_type` | `user_id`, `event_type`, `created_at`, `id` |
+| 6 | `user_id`, `event_status` | `user_id`, `event_status`, `created_at`, `id` |
+| 7 | `event_type`, `event_status` | `event_type`, `event_status`, `created_at`, `id` |
+| 8 | `user_id`, `event_type`, `event_status` | `user_id`, `event_type`, `event_status`, `created_at`, `id` |
+
+Each row appears TWICE in the manifest: once with `created_at` and `id` both
+ASCENDING and once with both DESCENDING. The equality fields are ASCENDING in
+both (an equality clause is direction-free); the DESCENDING variant is the
+default order `created_at DESC, id DESC`, and the ASCENDING variant serves BOTH
+an explicit ascending request AND the `HasPrev` reverse probe of a descending
+page.
+
+Three facts keep this from being larger than it looks:
+
+- **The range field is the leading order field.** `Since`/`Until` constrain
+  `created_at`, which the order already leads with, so a window adds no field and
+  no row to the table above.
+- **Firestore's field order within an index is `equalities → range/order`**, so
+  the eight prefixes are genuinely eight indexes rather than one per permutation.
+- **Nothing else in this collection queries.** There is no `GetByID` query
+  (the document id is `h(id)`), no claim, and no search.
+
+`service_accounts` and `api_keys` contribute the two pairs the manifest already
+carries — `(created_at, id)` and `(service_account_id, created_at, id)`, each in
+both directions — and `req.Search` contributes NONE, because it is evaluated in
+Go over the parent-scoped page fill (R4).
 
 ## 8. Index manifest
 
