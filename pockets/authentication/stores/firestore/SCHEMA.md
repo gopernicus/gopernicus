@@ -632,10 +632,13 @@ false), and that a page costs no per-user identifier read.
 The manifest's specification is the COMPLETE supported query matrix, derived and
 proven live at N5. What the audit already pins:
 
+Rows the implementation has REACHED are marked; the rest are still the audit's
+projection of what the unbuilt tasks will issue.
+
 | Collection | Filters | Order | Notes |
 |---|---|---|---|
-| `users` | — | `(created_at, id)` both directions | `UserAdmin.List` |
-| `user_identifiers` | `user_id ==`, `active ==` | `(created_at, id)` | `ListByUser`, credential `Snapshot` |
+| `users` | — | `(created_at, id)` both directions | `UserAdmin.List` — **BUILT (N2c)**, through the connector `List` helper with `user.OrderFields`/`user.DefaultOrder` and PK `id`; the reverse direction is the `HasPrev` probe's |
+| `user_identifiers` | `user_id ==`, `active ==` | `(created_at, id)` ascending | `ListByUser` — **BUILT (N2a)**, exactly one shape: `user_id == AND active == true ORDER BY created_at ASC, id ASC`. It is NOT paged (the port returns a slice), so it needs no reversed direction of its own. Credential `Snapshot` (N2b) reuses it |
 | `sessions` | `user_id ==` \| `previous_refresh_token_hash ==` | — | revocation cascades, grace lookup |
 | `oauth_accounts` | `user_id ==` (+ `provider ==` for Delete) | `(linked_at DESC, provider_user_id DESC)` | `ListByUser` |
 | `service_accounts` | — | `(created_at, id)` both directions | `List` |
@@ -648,6 +651,37 @@ proven live at N5. What the audit already pins:
 Every direction a store serves — PLUS the reversed direction the List helper's
 `HasPrev` probe issues, which needs the same index with all directions flipped —
 belongs in the manifest. The emulator enforces NONE of it.
+
+### 7.1 The point-read access paths (no index, by construction)
+
+A large part of this store's read surface issues NO QUERY at all, which is a
+deliberate design property rather than an omission, and N5 must not go looking
+for indexes to cover it. Every one of these is a `Get` on a deterministic
+document id:
+
+| Read | Path |
+|---|---|
+| `Users.Get`, `UserAdmin.GetSummary`, every `auth_revision` CAS | `users/h(user_id)` |
+| `Passwords.Get` | `user_passwords/h(user_id)` |
+| `Identifiers.Get`, and every retirement's read of the row it retires | `user_identifiers/h(identifier_id)` |
+| `Identifiers.GetLogin` / `GetRecovery` | `identifier_claims/h(kind, value)` → the row it names (**two point reads under ONE `ReadSnapshot`**, so the claim and the row agree) |
+| the active primary of a `(user, kind)` — the primary switch's demotion target AND the directory projection's only input | `identifier_primaries/h(user_id, kind)` → the row it names |
+
+This is why the CLAIM documents are described as access paths and not only as
+constraints (§5.1, §5.2): resolving an address through its claim keeps the lookup
+off an equality filter on unbounded address text, whose index entry truncates
+past 1500 bytes (§4.2), AND keeps the composite manifest smaller than the SQL
+index list would suggest.
+
+Two shapes deliberately do NOT appear above and must not appear at N5 either:
+
+- **No query resolves the directory projection.** `UserAdmin.List` answers
+  `PrimaryEmail`/`EmailVerified` from the users document it already read — the
+  port forbids one identifier read per user, and `TestDirectoryPageReadsNoIdentifiers`
+  counts the document reads to prove it (one query, zero point reads).
+- **No query enforces uniqueness.** A claim is taken with `Create`, whose
+  precondition the SERVER evaluates at commit; nothing reads a claim to decide
+  whether it is free (ruling R3).
 
 ## 8. Index manifest
 

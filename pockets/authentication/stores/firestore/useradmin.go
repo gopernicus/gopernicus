@@ -25,19 +25,35 @@ func newUserAdminStore(db *firestoredb.DB) *userAdminStore {
 }
 
 // List pages the directory, ordered (created_at DESC, id DESC) by default.
+//
+// It is ONE query over the users collection and reads NOTHING else: the active
+// primary email and its verification come from the row's own projection fields,
+// which is how this store satisfies the port's explicit rule that an
+// implementation must not issue one identifier read per user (SCHEMA.md §6.1).
+//
+// A non-blank req.Search is refused with sdk.ErrInvalidInput by the connector's
+// List, because this ListQuery declares no PostFilter: user.OrderFields exposes
+// nothing searchable, and a top-level users-directory search is a plan-level
+// decision rather than an accidental full collection scan (ruling R4).
 func (s *userAdminStore) List(ctx context.Context, req crud.ListRequest) (crud.Page[user.Summary], error) {
 	if err := refuseAmbient(ctx); err != nil {
 		return crud.Page[user.Summary]{}, err
 	}
-	return crud.Page[user.Summary]{}, errNotImplemented
+	return firestoredb.List(ctx, s.db.ReaderFrom(ctx), listUsers(s.db), req)
 }
 
-// GetSummary returns one user's directory projection, or sdk.ErrNotFound.
+// GetSummary returns one user's directory projection, or sdk.ErrNotFound. It
+// reads the SAME projection the page does, from the same document, so the two
+// can never disagree.
 func (s *userAdminStore) GetSummary(ctx context.Context, id string) (user.Summary, error) {
 	if err := refuseAmbient(ctx); err != nil {
 		return user.Summary{}, err
 	}
-	return user.Summary{}, errNotImplemented
+	row, err := readUser(ctx, s.db, s.db.ReaderFrom(ctx), id)
+	if err != nil {
+		return user.Summary{}, err
+	}
+	return row.summary()
 }
 
 // SetStatus transitions the lifecycle status in ONE transaction: the status and
